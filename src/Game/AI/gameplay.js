@@ -250,6 +250,7 @@ import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from
 import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
 import { findUnitByRef, newestTwinByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedAreas.js";
+import { repairWarSides } from "./warSidesRepair.js";
 import { CAPTURE_REACH_KM, findNarratedCaptures, mayNarrateCapture, statedAnnexations, statesCapture } from "./narratedCapture.js";
 import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, placesAsWritten, readEventPlace } from "./eventPlaces.js";
 import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
@@ -1282,6 +1283,20 @@ const withDiplomaticLedgerMigration = (bundle) => {
     relationsAdded: migration.relationsAdded,
   }, { verbose: true });
   return { ...bundle, world: migration.world };
+};
+
+// A save from before joins named the side they fight can carry a polity on
+// the wrong side of a war (#892). Read the sides against the ledgers once
+// (warSidesRepair.js), after the ledgers are seeded, so they can be read.
+// `log`: only where the repaired world is then written (a time skip), so the
+// forecast, which reads the save without writing, does not repeat the lines.
+const withWarSidesRepair = (bundle, { log = true } = {}) => {
+  const repair = repairWarSides(bundle.world);
+  if (repair.world === bundle.world) return bundle;
+  for (const entry of log ? repair.moved : []) {
+    logDebugEvent("turn", `War sides repaired: ${entry.polity} moved to side ${entry.to} of ${entry.warId}, ${entry.reason}.`, entry);
+  }
+  return { ...bundle, world: repair.world };
 };
 
 // ---- Native country stats (Continuum C7) ------------------------------------
@@ -13871,7 +13886,7 @@ export const warRoomRouteAttacks = ({ world, game, record } = {}) =>
 // made (runtime/fronts/mind/trained.js), so a skip that fights these days has
 // them again rather than thinking them through.
 const foreseeFrom = async ({ days, signal }) => {
-  const bundle = withDiplomaticLedgerMigration(await readGameStateBundle({ force: true }));
+  const bundle = withWarSidesRepair(withDiplomaticLedgerMigration(await readGameStateBundle({ force: true })), { log: false });
   const fromDate = normalizeString(bundle.game.gameDate);
   const span = Math.max(0, Number(days) || 0);
   if (!(span >= 1)) return null;
@@ -18922,7 +18937,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   const phases = createSkipPhases({ requestsUsed: () => budgetForPhases?.used ?? 0, onChange: onProgress });
   phases.enter("reading");
   try {
-  const bundle = withDiplomaticLedgerMigration(await readGameStateBundle({ force: true }));
+  const bundle = withWarSidesRepair(withDiplomaticLedgerMigration(await readGameStateBundle({ force: true })));
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the game
   // date only advances in whole days, so a sub-day skip keeps the same date.

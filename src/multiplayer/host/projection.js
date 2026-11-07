@@ -63,7 +63,7 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "labelTextColor", "language", "lastJumpMode", "lastJumpTargetDate", "mapCredit", "markers",
   "ownBasemaps", "ownerCodes", "ownerSchema", "polityOverrides", "powerStatus", "regionClaimants",
   "regionOwnershipOverrides", "regionRenames", "regionSovereigntyOverrides", "settledRegionClaims",
-  "simulationRules", "startingTimelineText", "unitSystem", "wars", "agreements",
+  "simulationRules", "startingTimelineText", "unitSystem", "wars", "warSidesRepairVersion", "agreements",
   // Transporters are seen as fleets are: what crosses the sea is not hidden.
   "transports",
   // And what an event's strike looked like: every map plays it.
