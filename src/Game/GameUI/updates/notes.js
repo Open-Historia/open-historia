@@ -55,7 +55,8 @@ import { RELEASES } from "./notesReleases.js";
 const NEW_UPDATES = [
   {
     // The prompt budget (docs/prompt-budget.md): the skip's unchanging rules first and cached, nothing sent twice,
-    // older events by a one-line digest, a slimmer output function.
+    // older events by a one-line digest, a slimmer output function. Phase 2 (promptFocus.js, runtime/historyTiers.js):
+    // what the turn is about in full and the rest in a line, compact tables, the history in tiers and its canon.
     id: "2026-11-time-skips-cost-less",
     kind: "minor",
     date: "2026-11-07",
@@ -65,6 +66,7 @@ const NEW_UPDATES = [
         title: "Time skips cost less",
         items: [
           "Time skips send the AI less: nothing is sent twice, older events go as one line each, and the part of the request that never changes is kept by the AI service, so each skip costs less and runs faster.",
+          "Long campaigns send even less: each skip gives the AI in full what the turn is about (your country, your neighbours, every war, everything your orders name, and a few distant countries in turn, so they keep making news) and the rest of the world in a line. Your campaign's treaties, deaths, changes of government and borders are now kept for good, however long it runs.",
         ],
       },
     ],
