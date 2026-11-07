@@ -262,6 +262,11 @@ export const eventDigestOf = (event) => {
 // digest (eventDigestOf). They were told in full when they were the newest, and
 // the history document carries what they set in motion. A world with no
 // recorded skip tells every event in full.
+//
+// `alsoListed`: the events the ranking left out (selectRankedEvents) are not
+// yet in the history document either, so without this they were in neither:
+// the newest of them, up to this many and ALSO_LISTED_MAX_CHARS, follow as one
+// line each (date, title, digest), and the rest are counted.
 export const buildEventHistoryText = (
   events,
   {
@@ -272,6 +277,7 @@ export const buildEventHistoryText = (
     maxChars = 0,
     world = null,
     digests = false,
+    alsoListed = 0,
   } = {},
 ) => {
   const normalizedEvents = world ? getUnconsolidatedEvents(events, world) : normalizeEvents(events);
@@ -283,7 +289,8 @@ export const buildEventHistoryText = (
     : null;
   const inFull = (event) => !newest || newest.size === 0 || newest.has(event.id);
 
-  const rendered = selectRankedEvents(normalizedEvents, { limit, world, currentDate })
+  const selected = selectRankedEvents(normalizedEvents, { limit, world, currentDate });
+  const rendered = selected
     .map((event) => {
       const date = normalizeString(event.date) || "undated";
       const description = inFull(event) ? normalizeString(event.description) : eventDigestOf(event);
@@ -328,13 +335,38 @@ export const buildEventHistoryText = (
       ].filter(Boolean).join("\n");
     });
 
-  return joinWithinCharBudget(rendered, {
+  const told = joinWithinCharBudget(rendered, {
     maxChars,
     separator: "\n",
     take: "tail",
     omissionMarker: "- [${count} earlier event record(s) omitted from this task context; canonical save history is unchanged.]",
   });
+  if (!(alsoListed > 0)) return told;
+  const shown = new Set(selected);
+  const others = normalizedEvents.filter((event) => !shown.has(event));
+  if (!others.length) return told;
+  const lines = [];
+  let room = ALSO_LISTED_MAX_CHARS;
+  for (const event of others.slice().reverse()) {
+    if (lines.length >= alsoListed) break;
+    const digest = normalizeString(event.digest);
+    const line = `- ${normalizeString(event.date) || "undated"}: ${event.title}${digest ? ` — ${digest}` : ""}`;
+    if (line.length + 1 > room) break;
+    room -= line.length + 1;
+    lines.unshift(line);
+  }
+  const unlisted = others.length - lines.length;
+  return [
+    told,
+    "",
+    `ALSO RECENT (the other events since the story so far, which are not told above; one line each):`,
+    ...(unlisted > 0 ? [`- (${unlisted} earlier of them not listed)`] : []),
+    ...lines,
+  ].join("\n");
 };
+
+// The most the "also recent" lines of a skip's history take (buildEventHistoryText alsoListed).
+const ALSO_LISTED_MAX_CHARS = 6000;
 
 const renderConsolidatedHistoryEntry = (entry) =>
   `Through ${entry.throughDate || "an earlier date"}: ${entry.summary}`;
@@ -2128,8 +2160,11 @@ export const buildPromptContext = async (bundle, {
         limit: lookups ? Math.min(longEventLimit, leanLookups ? LEAN_RECENT_EVENTS : 8) : longEventLimit,
         maxChars: lookups && !longEventHistoryMaxChars ? 3000 : longEventHistoryMaxChars,
         world: bundle.world,
-        // A skip: the newest skip's events in full, the older ones by digest.
+        // A skip: the newest skip's events in full, the older ones by digest,
+        // and a line each for those the ranking left out (with the lookup
+        // functions, recent_events has them).
         digests: SKIP_TASKS.has(taskKey),
+        alsoListed: SKIP_TASKS.has(taskKey) && !lookups ? 40 : 0,
       });
       result.recentEventsLong = [
         "STORY SO FAR:",

@@ -297,3 +297,40 @@ test("a skip's history: the newest skip's events in full, older ones by their di
   assert.ok(buildEventHistoryText(events, { world, limit: 10 }).includes(story("Old")));
   assert.ok(buildEventHistoryText(events, { world: {}, digests: true, limit: 10 }).includes(story("Old")));
 });
+
+// The ranking keeps the events a turn is most about; the rest are not yet in
+// the history document either, so without a line each they were in neither.
+test("a skip lists in a line each the recent events its ranking left out, newest kept, the rest counted", () => {
+  const events = Array.from({ length: 60 }, (_, index) => ({
+    id: `e${index}`,
+    date: `1930-0${1 + Math.floor(index / 20)}-${String(1 + (index % 20)).padStart(2, "0")}`,
+    title: `Event number ${index}`,
+    description: `The story of event ${index}.`,
+    ...(index % 2 ? { digest: `Digest of event ${index}.` } : {}),
+    importance: index % 7 === 0 ? "major" : "minor",
+    impacts: {},
+  }));
+  const text = buildEventHistoryText(events, { limit: 10, alsoListed: 40 });
+  const [told, also] = text.split("ALSO RECENT (the other events since the story so far, which are not told above; one line each):");
+  assert.ok(also, "the list is there");
+  const listed = also.trim().split("\n").filter((line) => /^- \d{4}-/.test(line));
+  assert.equal(listed.length, 40);
+  assert.match(also, /^- \(10 earlier of them not listed\)$/m);
+  for (let index = 0; index < 60; index += 1) {
+    const inHistory = told.includes(`: Event number ${index}\n`) || told.trimEnd().endsWith(`: Event number ${index}`) || told.includes(`Event number ${index}\n  The story`);
+    const inList = also.includes(`: Event number ${index}`);
+    assert.equal(inHistory && inList, false, `event ${index} is told twice`);
+  }
+  // Each by its title and its digest where it has one.
+  for (const line of listed) {
+    const index = Number(/Event number (\d+)/.exec(line)[1]);
+    assert.equal(line.endsWith(index % 2 ? ` — Digest of event ${index}.` : `Event number ${index}`), true, line);
+  }
+  // The newest of those left out are the ones listed.
+  const newestLeftOut = Math.max(...listed.map((line) => Number(/Event number (\d+)/.exec(line)[1])));
+  assert.ok(events.slice(newestLeftOut + 1).every((event) => told.includes(`: ${event.title}`)), "every newer event is told above");
+  assert.equal(also.includes("The story of event"), false, "one line each, no story");
+  // Nothing left out, nothing added; and only a skip asks for it.
+  assert.equal(buildEventHistoryText(events.slice(0, 5), { limit: 10, alsoListed: 40 }).includes("ALSO RECENT"), false);
+  assert.equal(buildEventHistoryText(events, { limit: 10 }).includes("ALSO RECENT"), false);
+});
