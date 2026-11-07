@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The prompt budget (docs/prompt-budget.md): the skip's unchanging rules first and cached, nothing sent twice,
+    // older events by a one-line digest, a slimmer output function.
+    id: "2026-11-time-skips-cost-less",
+    kind: "minor",
+    date: "2026-11-07",
+    channel: "beta",
+    banners: [
+      {
+        title: "Time skips cost less",
+        items: [
+          "Time skips send the AI less: nothing is sent twice, older events go as one line each, and the part of the request that never changes is kept by the AI service, so each skip costs less and runs faster.",
+        ],
+      },
+    ],
+  },
+  {
     // Unlimited requests (AI/requestBudget.js; Settings → AI → AI requests), for a paid key or a local model: a skip may
     // be up to eight requests with six rounds of lookups, the prompt is slimmer (promptContext.js leanLookups), and on
     // Anthropic each round reads the one before from the cache (toolTurns.js withCachedHistory).
