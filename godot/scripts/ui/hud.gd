@@ -132,12 +132,36 @@ func _flat_button(text: String, size := 13, weight := 600, ink := UI.BUTTON_INK)
 	return button
 
 
+func _theme_rim(frame: Control, source: Control, corner: float) -> Panel:
+	var rim := Panel.new()
+	rim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	rim.visible = false
+	rim.set_meta("theme_rim", true)
+	frame.add_child(rim)
+	var paint := func() -> void:
+		var ring := UI.box(Color(0, 0, 0, 0), UiTheme.pick("accent", Color(0, 0, 0, 0)), int(corner) + 2, 1)
+		ring.set_expand_margin_all(2)
+		rim.add_theme_stylebox_override("panel", ring)
+		rim.visible = UiTheme.themed() and bool(rim.get_meta("hovered", false)) and not (source is BaseButton and (source as BaseButton).disabled)
+	source.mouse_entered.connect(func() -> void:
+		rim.set_meta("hovered", true)
+		paint.call())
+	source.mouse_exited.connect(func() -> void:
+		rim.set_meta("hovered", false)
+		rim.visible = false)
+	UiTheme.events().changed.connect(paint)
+	paint.call()
+	return rim
+
+
 func _build_top_left() -> void:
 	var menu := _glass(UI.HUD_BUTTON, 12, Rect2(8, 8, 46, 46)).theme_as("glass_pill", "hud_border")
 	var menu_button := _flat_button("☰", 19, 800, UI.WHITE)
 	menu_button.tooltip_text = "Game menu"
 	menu_button.pressed.connect(func() -> void: open_menu.emit())
 	menu.add_child(menu_button)
+	_theme_rim(menu, menu_button, 12)
 	var pill := _glass(UI.HUD_PILL, 12, Rect2(61, 8, 240, 46), Vector4(0, 0, 0, 0), Vector4(12, 0, 12, 0)).theme_as("glass_pill", "hud_border")
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 9)
@@ -379,7 +403,7 @@ func _build_bottom_right() -> void:
 	_right_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_right_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_right_layer)
-	_flag_frame = _glass(UI.HUD_BUTTON, 14, Rect2(-72, -180, 64, 64), Vector4(1, 1, 1, 1), Vector4(8, 8, 8, 8), _right_layer).theme_as("", "hud_border")
+	_flag_frame = _glass(UI.HUD_BUTTON, 14, Rect2(-72, -180, 64, 64), Vector4(1, 1, 1, 1), Vector4(8, 8, 8, 8), _right_layer)
 	_flag = TextureRect.new()
 	_flag.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_flag.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
@@ -404,7 +428,8 @@ func _build_bottom_right() -> void:
 		open_country.emit()
 		show_country(str(_game.get("country", ""))))
 	_flag_frame.add_child(flag_button)
-	_advisor_frame = _glass(UI.HUD_BUTTON, 14, Rect2(-72, -112, 64, 64), Vector4(1, 1, 1, 1), Vector4(0, 0, 0, 0), _right_layer).theme_as("", "hud_border")
+	_theme_rim(_flag_frame, flag_button, 14)
+	_advisor_frame = _glass(UI.HUD_BUTTON, 14, Rect2(-72, -112, 64, 64), Vector4(1, 1, 1, 1), Vector4(0, 0, 0, 0), _right_layer)
 	var advisor := _flat_button("", 12)
 	_advisor_button = advisor
 	advisor.tooltip_text = "Advisor"
@@ -414,6 +439,7 @@ func _build_bottom_right() -> void:
 		open_advisor.emit()
 		toggle_drawer("advisor"))
 	_advisor_frame.add_child(advisor)
+	_theme_rim(_advisor_frame, advisor, 14)
 	var toggle := _glass(UI.HUD_BG, 12, Rect2(-206, -44, 198, 36), Vector4(1, 1, 1, 1), Vector4(4, 4, 4, 4), _right_layer).theme_as("hud_bg", "hud_border")
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
@@ -433,6 +459,7 @@ func _build_bottom_right() -> void:
 		button.tooltip_text = "Political map mode" if mode == "political" else "Diplomatic map mode"
 		_mode_buttons[mode] = button
 		row.add_child(button)
+		_theme_rim(button, button, 8)
 	toggle.add_child(row)
 	set_map_mode("political")
 
@@ -856,8 +883,11 @@ func _refresh_flag_badge() -> void:
 		return
 	var open := open_drawer == "country"
 	_flag_frame.set_tint(UiTheme.pick("glass_active", Color(75 / 255.0, 143 / 255.0, 251 / 255.0, 0.17)) if open else UiTheme.pick("glass_pill", UI.HUD_BUTTON))
+	var rest_edge := UiTheme.pick("hud_border", UI.HUD_BORDER)
+	_flag_frame.set_border(UiTheme.pick("glass_active_line", rest_edge) if open else rest_edge)
 	if _advisor_frame:
 		_advisor_frame.set_tint(UiTheme.pick("glass_active", Color(1, 1, 1, 0.085)) if open_drawer == "advisor" else UiTheme.pick("glass_pill", UI.HUD_BUTTON))
+		_advisor_frame.set_border(UiTheme.pick("glass_active_line", rest_edge) if open_drawer == "advisor" else rest_edge)
 	var name := str(_game.get("countryName", ""))
 	if name.is_empty():
 		name = str(date_widget.status.get("playerCountry", _game.get("country", "")))

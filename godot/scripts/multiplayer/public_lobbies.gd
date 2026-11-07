@@ -96,7 +96,7 @@ func _init() -> void:
 
 
 func _field_style() -> StyleBoxFlat:
-	return UI.box(FIELD_BG, FIELD_BORDER, 9, 1, Vector4(11, 8, 11, 8))
+	return UI.box(UiTheme.pick("overlay_card", FIELD_BG), UiTheme.pick("line", FIELD_BORDER), 9, 1, Vector4(11, 8, 11, 8))
 
 
 func _build_list() -> void:

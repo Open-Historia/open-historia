@@ -181,6 +181,7 @@ func _on_theme_changed() -> void:
 	for child in _content.get_children():
 		if child is PanelContainer and child.has_meta("settings_section"):
 			child.add_theme_stylebox_override("panel", _section_style())
+	_repaint_controls(_content)
 
 
 func setup(engine_link: EngineLink, setup_context: Dictionary) -> void:
@@ -909,9 +910,9 @@ func _button(text: String, on_press: Callable, kind := "small", tooltip := "") -
 	var weight := 600
 	match kind:
 		"primary":
-			bg = Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.22)
-			border = Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.45)
-			ink = BLUE_TEXT
+			bg = UiTheme.pick("active", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.22))
+			border = UiTheme.pick("accent", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.45))
+			ink = UiTheme.pick("text", BLUE_TEXT)
 		"row":
 			pad = Vector4(8, 4, 8, 4)
 			size = _fs(0.72)
@@ -945,9 +946,36 @@ func _button(text: String, on_press: Callable, kind := "small", tooltip := "") -
 	for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
 		node.add_theme_color_override(name, ink)
 	node.add_theme_color_override("font_disabled_color", Color(ink, ink.a * 0.5))
+	if kind == "primary":
+		node.set_meta("settings_primary", true)
 	if on_press.is_valid():
 		node.pressed.connect(func() -> void: on_press.call())
 	return node
+
+
+func _repaint_primary(node: Button) -> void:
+	var bg := UiTheme.pick("active", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.22))
+	var border := UiTheme.pick("accent", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.45))
+	var ink := UiTheme.pick("text", BLUE_TEXT)
+	var pad := Vector4(12, 7.2, 12, 7.2)
+	var normal := UI.box(bg, border, 8, 1, pad)
+	var hover := UI.box(Color(bg.r, bg.g, bg.b, minf(1.0, bg.a + 0.05)), Color(border.r, border.g, border.b, minf(1.0, border.a + 0.08)), 8, 1, pad)
+	for state in ["normal", "focus", "disabled"]:
+		node.add_theme_stylebox_override(state, normal)
+	for state in ["hover", "pressed", "hover_pressed"]:
+		node.add_theme_stylebox_override(state, hover)
+	for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		node.add_theme_color_override(name, ink)
+	node.add_theme_color_override("font_disabled_color", Color(ink, ink.a * 0.5))
+
+
+func _repaint_controls(node: Node) -> void:
+	for child in node.get_children():
+		if child is Switch:
+			(child as Switch).queue_redraw()
+		elif child is Button and child.has_meta("settings_primary"):
+			_repaint_primary(child as Button)
+		_repaint_controls(child)
 
 
 func _square_button(text: String, size: int) -> Button:
@@ -3035,6 +3063,6 @@ class Switch extends Button:
 	func _draw() -> void:
 		var track := Color(1, 1, 1, 0.14)
 		if on:
-			track = Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.35) if inactive else Color("#3b82f6")
+			track = UiTheme.pick("hover", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.35)) if inactive else UiTheme.pick("active", Color("#3b82f6"))
 		draw_style_box(UI.box(track, Color(0, 0, 0, 0), 12, 0), Rect2(Vector2.ZERO, Vector2(44, 24)))
 		draw_circle(Vector2(12.0 + 20.0 * knob, 12.0), 10.0, Color.WHITE, true, -1.0, true)
