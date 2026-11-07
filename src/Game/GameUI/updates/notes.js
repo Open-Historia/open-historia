@@ -89,7 +89,8 @@ const NEW_UPDATES = [
   {
     // On-device similar-event search (the token-cutting plan's item 13, 2026-11-07): first an opt-in setting that
     // downloaded the model, then the same day built in and always on: all-MiniLM-L6-v2 (24 MB) ships in
-    // public/models/ (AI/relatedEvents.js, relatedEventsSearch.js, runtime/embeddingWorker.js).
+    // public/models/ (AI/relatedEvents.js, relatedEventsSearch.js, runtime/embeddingWorker.js). Older
+    // conversations the same day (AI/chatArchive.js): not used for over a game year and four skips, kept on file.
     id: "2026-11-related-past-events",
     kind: "minor",
     date: "2026-11-07",
@@ -100,6 +101,7 @@ const NEW_UPDATES = [
         items: [
           "Related past events is built into the game and always on: a small model that ships with the game (24 MB, nothing to download or turn on) finds the old events closest to each time skip’s orders, wars and storylines, and the skip is shown up to six of them, so threads from long ago are picked up again.",
           "It makes no AI requests, and your events never leave your device for it. With AI lookup functions on, the AI can also search your past events itself.",
+          "Older conversations are now remembered too: a conversation untouched for over a game year and four time skips is kept on your device and brought back when it matters to a time skip, a leader’s reply or the advisor, and what was agreed or promised in it is never dropped.",
         ],
       },
     ],

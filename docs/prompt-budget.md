@@ -415,6 +415,45 @@ chats indexed and searched under Node by the model that ships with the game).
   is read to 128 (72 ms an event), so a few seconds for the round-130 save,
   once, while the game is idle; the skip's own search stays within its 1.5 s.
 
+### The quality check
+
+Gemini's free tier for gemini-3.5-flash-lite was spent for the day (500
+requests, shared with other work), so the check ran on the owner's ArliAI key,
+**DeepSeek-V4.1-Flash-1017** for every request of both arms, through the game's
+own openai-compatible path (the requests captured from the game, as for the
+earlier A/B). Beta `c8a0bdbe` against the chats kept on file with the search
+(`--past-talks`), on the three saves that hold old chats; 14 requests in all
+(a cap of 15), none on the Gemini key.
+
+**Recall**: five questions each about what the old chats say, asked against
+each arm's system prompt (temperature 0):
+
+| Save | Beta | Kept on file, recalled | Misses |
+|---|---:|---:|---|
+| New Dawn, Germany, r30 | 5/5 | 4/5 | kept on file: the city of the 2027 summit (Bratislava), in a chunk the search did not pick |
+| Modern Day (built-in), Brazil, r67 | 4/5 | 5/5 | beta: which land Russia held ("unknown": the line was outside the last ten messages beta sends) |
+| Modern Day 2026 (copy), Italy, r130 | 2/5 | 2/5 | both: the dates and individual ballots of the United Nations' 188 recorded votes |
+
+**One skip each** (temperature 0, streamed, the skip's function required):
+
+| Save | Beta | Kept on file, recalled |
+|---|---|---|
+| New Dawn, Germany, r30 | twice an answer with a summary and no events (537 characters of arguments) | 12 events, one of them Slovakia buying German armour: the 2027 alliance carried on |
+| Modern Day (built-in), Brazil, r67 | once cut off at the provider's length limit with nothing written, once an empty `{}` | 13 events, a peace probe through Turkey among them |
+| Modern Day 2026 (copy), Italy, r130 | cut off at the length limit, nothing written | cut off at the length limit, nothing written |
+
+- Recall is even: 11 of 15 with the old chats sent whole, 11 of 15 with them
+  kept on file. What was lost is a detail of a chunk the search did not pick;
+  what was won is a line beta's last-ten-messages cut had dropped. The
+  binding word carried the Germany–Slovakia pact's date, which is in no ledger
+  and no canon fact.
+- The skips say little about the change: DeepSeek on ArliAI failed every beta
+  skip (four tries) and the round-130 skip on both arms, and answered the two
+  others in full. The two arms' prompts differ by under 1%, so this reads as
+  the provider's variance at 170k-character prompts (each request took 11 to
+  12 minutes), not as the archive helping the skip; it does show the archived
+  prompt is answered in full and continues the old talks.
+
 ## By section
 
 Sections of at least 1,000 characters in any run, the rest summed: before the
