@@ -48,10 +48,13 @@ var _tab_buttons := {}
 var _body: Control
 
 
+func _on_theme_changed() -> void:
+	if _open:
+		_render()
+
+
 func _ready() -> void:
-	UiTheme.events().changed.connect(func() -> void:
-		if _open:
-			_render())
+	UiTheme.events().changed.connect(_on_theme_changed)
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	visible = false

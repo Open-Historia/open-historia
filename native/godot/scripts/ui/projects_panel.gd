@@ -133,10 +133,13 @@ func _init() -> void:
 	_render()
 
 
+func _on_theme_changed() -> void:
+	if _open:
+		_render()
+
+
 func _ready() -> void:
-	UiTheme.events().changed.connect(func() -> void:
-		if _open:
-			_render())
+	UiTheme.events().changed.connect(_on_theme_changed)
 	get_viewport().size_changed.connect(func() -> void:
 		if _menu_open:
 			_place_menu.call_deferred())

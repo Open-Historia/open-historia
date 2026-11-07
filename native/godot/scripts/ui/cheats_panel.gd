@@ -118,10 +118,13 @@ var _live_timer: Timer
 var _live_kinds: Dictionary = {}
 
 
+func _on_theme_changed() -> void:
+	if _open:
+		_render()
+
+
 func _ready() -> void:
-	UiTheme.events().changed.connect(func() -> void:
-		if _open:
-			_render())
+	UiTheme.events().changed.connect(_on_theme_changed)
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_panel = GlassPanel.new(UiTheme.pick("overlay", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.96)), 18.0, Vector4(14, 14, 12, 14), UiTheme.pick("line", Color(1, 1, 1, 0.1)))
