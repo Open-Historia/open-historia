@@ -33,7 +33,7 @@ const TABLE_HEAD := Color(129 / 255.0, 184 / 255.0, 251 / 255.0, 0.202)
 const CHART_COLORS := ["#60a5fa", "#34d399", "#f472b6", "#fbbf24", "#94a3b8", "#f87171", "#38bdf8"]
 const SAVE_TIP := "Saves the diagnostics log as a file, with this error's details at the top. Attach the file to your bug report."
 const COPY_TIP := "Copies this error's details. Diagnostics logging is off — turn it on in Settings → Diagnostics to save the full log instead."
-const RETRY_PROJECTS_TEXT := "Continue putting my projects and operations on the board — the last reply was cut off. Pick up from where you stopped and skip anything already on the board. Send no more than ten, one sentence each. Only include efforts that genuinely appear in our history — if everything real is already on the board, just tell me that and add nothing."
+const RETRY_PROJECTS_TEXT := "Recover only the specific Project operations missing from your immediately previous reply. Its Projects block was malformed or incomplete; this is not a request to backfill history or open new programmes. Skip entries already on the board, and do not turn old reviews, agreements or frameworks into new active projects. Send at most ten concise entries. If you cannot identify exactly what was missed, tell me and add nothing."
 const CHECK_SVG := "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'><path d='M5.5 12.5l4.2 4.2 8.8-9.4'/></svg>"
 const RETRY_SVG :="<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><path d='M21 12a9 9 0 1 1-2.64-6.36'/><path d='M21 3v6h-6'/></svg>"
 const PARAGRAPH := Vector2(0.0, 12.48)
@@ -1042,12 +1042,14 @@ func _render(follow := true) -> void:
 		var key := ("n:" + id) if notice and not id.is_empty() else "i:%d" % index
 		var kind := "notice" if notice else "row"
 		var retry_here := index == last and str(message.get("role", "")) == "error"
+		var newest := index == last
 		var entry: Dictionary = _rows.get(key, {})
 		var stale := entry.is_empty() \
 			or str(entry["kind"]) != kind \
 			or not is_same(entry["message"], message) \
 			or not is_same(entry["view"], view) \
 			or bool(entry["retry"]) != retry_here \
+			or bool(entry.get("newest", false)) != newest \
 			or (not notice and bool(entry["loading"]) != _loading) \
 			or (not notice and str(entry.get("speaker", "")) != speaker) \
 			or (not notice and bool(entry.get("review", false)) != review) \
@@ -1059,9 +1061,9 @@ func _render(follow := true) -> void:
 				if str(entry["kind"]) != kind:
 					_states.erase(key)
 			_build_hooks = []
-			var control: Control = _notice_row(message, view, _state(key)) if notice else _message_row(message, view, index, retry_here, _state(key))
+			var control: Control = _notice_row(message, view, _state(key)) if notice else _message_row(message, view, index, retry_here, _state(key), newest)
 			control.set_meta("advisor_row", true)
-			entry = {"kind": kind, "message": message, "view": view, "retry": retry_here, "loading": _loading, "speaker": speaker, "review": review, "dir": _chat_dir, "control": control, "hooks": _build_hooks}
+			entry = {"kind": kind, "message": message, "view": view, "retry": retry_here, "newest": newest, "loading": _loading, "speaker": speaker, "review": review, "dir": _chat_dir, "control": control, "hooks": _build_hooks}
 			_build_hooks = []
 			_rows[key] = entry
 		used[key] = true
@@ -1989,7 +1991,7 @@ func _tagged(emoji: String, text: String, size: int, color: Color, weight := 400
 	return row
 
 
-func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here: bool, state: Dictionary) -> Control:
+func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here: bool, state: Dictionary, newest := false) -> Control:
 	var role := str(message.get("role", ""))
 	var user := role == "user"
 	var row := VBoxContainer.new()
@@ -2101,7 +2103,7 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 		full = true
 	if not str(message.get("projectsProblem", "")).is_empty():
 		content.add_child(_gap(12))
-		content.add_child(_projects_problem(message, state))
+		content.add_child(_projects_problem(message, state, newest))
 		full = true
 	if role == "error":
 		content.add_child(_gap(8))
@@ -2638,7 +2640,7 @@ func _projects_card(items: Array) -> Control:
 	return card
 
 
-func _projects_problem(message: Dictionary, state: Dictionary) -> Control:
+func _projects_problem(message: Dictionary, state: Dictionary, newest := false) -> Control:
 	var kind := str(message.get("projectsProblem", ""))
 	var detail := str(message.get("projectsDetail", ""))
 	var excerpt := str(message.get("projectsExcerpt", ""))
@@ -2661,13 +2663,14 @@ func _projects_problem(message: Dictionary, state: Dictionary) -> Control:
 	var buttons := HFlowContainer.new()
 	buttons.add_theme_constant_override("h_separation", 6)
 	buttons.add_theme_constant_override("v_separation", 6)
-	var ask := _chip("Ask for the next batch", Color(0, 0, 0, 0), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.5), AMBER_INK)
-	ask.pressed.connect(func() -> void:
-		_input.text = RETRY_PROJECTS_TEXT
-		_input.grab_focus()
-		_resize_input()
-		_update_send())
-	buttons.add_child(ask)
+	if newest:
+		var ask := _chip("Retry missing entries", Color(0, 0, 0, 0), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.5), AMBER_INK)
+		ask.pressed.connect(func() -> void:
+			_input.text = I18n.now(RETRY_PROJECTS_TEXT)
+			_input.grab_focus()
+			_resize_input()
+			_update_send())
+		buttons.add_child(ask)
 	var pre: Control = null
 	if not excerpt.is_empty():
 		var open := bool(state.get("broke_open", false))

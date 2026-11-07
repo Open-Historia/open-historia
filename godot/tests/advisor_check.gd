@@ -94,6 +94,14 @@ func _find_button(node: Node, text: String) -> Button:
 	return null
 
 
+func _find_all_buttons(node: Node, text: String, into: Array = []) -> Array:
+	if node is Button and (node as Button).text == text and (node as Button).is_visible_in_tree():
+		into.append(node)
+	for child in node.get_children():
+		_find_all_buttons(child, text, into)
+	return into
+
+
 func _receipt_status(index: int) -> String:
 	if panel.messages.size() <= index:
 		return ""
@@ -492,6 +500,39 @@ func _run() -> void:
 		await _shoot("advisor-13-paper-notice")
 	panel.messages.pop_back()
 	panel.views.pop_back()
+	panel._render()
+
+	var broken := [
+		{"role": "advisor", "text": "I put what I could on the board.", "time": "2016-01-08", "projectsProblem": "unusable", "projectsDetail": "The projects block was not valid JSON."},
+		{"role": "advisor", "text": "Here is the rest.", "time": "2016-01-09", "projectsProblem": "partial", "projectsDetail": "2 entries were skipped.", "projectsExcerpt": "[{\"title\": \"Energy hub\""},
+	]
+	var broken_views: Dictionary = (await main.engine.request("advisor.views", {"json": JSON.stringify(broken, "", false, true)})).get("result", {})
+	for index in range(broken.size()):
+		panel.messages.append(broken[index])
+		panel.views.append((broken_views.get("views", [{}, {}]) as Array)[index])
+	panel._render()
+	await _wait(0.6)
+	var retries := _find_all_buttons(panel, "Retry missing entries", [])
+	_check("only the newest reply with a broken board offers Retry missing entries", retries.size() == 1 and _find_all_buttons(panel, "Ask for the next batch", []).is_empty(), str(retries.size()))
+	if retries.size() == 1:
+		panel._input.text = ""
+		(retries[0] as Button).pressed.emit()
+		await _frames(2)
+		_check("Retry missing entries asks only for what the last reply lost", panel._input.text == "Recover only the specific Project operations missing from your immediately previous reply. Its Projects block was malformed or incomplete; this is not a request to backfill history or open new programmes. Skip entries already on the board, and do not turn old reviews, agreements or frameworks into new active projects. Send at most ten concise entries. If you cannot identify exactly what was missed, tell me and add nothing." and not panel._loading, panel._input.text.left(60))
+		panel.scroll.scroll_vertical = int(panel.scroll.get_v_scroll_bar().max_value)
+		await _frames(3)
+		await _shoot("advisor-13b-retry-missing-entries")
+		panel._input.text = ""
+		panel._resize_input()
+		panel._update_send()
+	panel.messages.append({"role": "user", "text": "Thanks.", "time": "2016-01-09"})
+	panel.views.append({})
+	panel._render()
+	await _wait(0.4)
+	_check("a newer message takes the retry off older replies", _find_all_buttons(panel, "Retry missing entries", []).is_empty())
+	for index in range(3):
+		panel.messages.pop_back()
+		panel.views.pop_back()
 	panel._render()
 
 	var sample_text := "# Briefing\nA line with `inline code`, ~~struck~~ words and a [link](https://example.org).\n\n### Steps\n1. First step\n2. Second step\n   - nested point\n- [x] done item\n- [ ] open item\n\n#### Small label\n```\ncode block line\n```\n---\nAfter the rule.\n```chart\n{\"type\":\"line\",\"data\":{\"labels\":[\"Jan\",\"Feb\",\"Mar\",\"Apr\",\"May\"],\"datasets\":[{\"label\":\"Approval\",\"data\":[41,44,39,47,52]}]},\"options\":{\"unit\":\"percent\"}}\n```"
