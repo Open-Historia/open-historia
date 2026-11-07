@@ -36,6 +36,7 @@ import { unitsOffBattlefields } from "./frontsGate.js";
 import { readingLanguageName } from "../../runtime/i18n.js";
 import { advisorMessagesFor, CHIEF_ADVISOR_THREAD } from "../../runtime/advisorThreads.js";
 import { renderRelatedPastEvents } from "./relatedEvents.js";
+import { leaderOf } from "../../runtime/socialFeed.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -2134,6 +2135,93 @@ const regionBordersOfThisMap = () => {
 //     only where it moved since the reference the cached opening carries;
 //   - the tags grouped, so every tagged country fits.
 const TIERED_TERRITORY_REGIONS = 120;
+
+// What a skip's one-line list says of a power out of view, after its region
+// count: who leads it, whom it is at war with, its alliances and agreements,
+// its latest peace, and who holds its land or whose land it holds. These are
+// what a model is asked of a power it is not shown in full: in the quality A/B
+// of 2026-11-07 the new prompt answered "unknown" for five of six such facts
+// that the old one, which listed more powers' regions, had right. Each field
+// only where the records have it; a power with nothing on record is its name
+// and count, as before. `regions`: the rendered catalog, whose `country` is a
+// region's owner on the scenario's map.
+const ONE_LINE_NAMES = 3;
+const ALLIANCE_TYPES = /alliance|defen[cs]e|military|security|mutual/i;
+export const buildOneLineDetail = (world, regions, { polityNames = {}, bakedAliases = buildOwnerAliasMap(world?.polityOverrides) } = {}) => {
+  const fold = (value) => normalizeString(value).toLowerCase();
+  const overrides = world?.regionOwnershipOverrides ?? {};
+  // Every name a power goes by, as the ledgers write it.
+  const records = Object.entries(world?.polityOverrides ?? {});
+  const namesOf = (label) => {
+    const names = new Set([fold(label), fold(polityNames[fold(label)])]);
+    for (const [key, record] of records) {
+      const own = [key, record?.name, record?.code, toCountryName(normalizeString(record?.code))].map(fold);
+      if (!own.includes(fold(label))) continue;
+      for (const name of [...own, ...normalizeArray(record?.aliases).map(fold), ...normalizeArray(record?.formerNames).map(fold)]) names.add(name);
+    }
+    names.delete("");
+    return names;
+  };
+  const listed = (items) => (items.length > ONE_LINE_NAMES
+    ? `${items.slice(0, ONE_LINE_NAMES).join(", ")} and ${items.length - ONE_LINE_NAMES} more`
+    : items.join(", "));
+  // Who holds whose land: by each region's owner on the scenario's map.
+  const lost = new Map();
+  const taken = new Map();
+  for (const region of regions) {
+    const base = region?.country ? canonicalOwnerName(region.country, bakedAliases) : "";
+    const holder = regionOwnerName(region, overrides);
+    if (!base || !holder || fold(base) === fold(holder)) continue;
+    const add = (map, key, other) => {
+      const counts = map.get(fold(key)) ?? new Map();
+      counts.set(other, (counts.get(other) ?? 0) + 1);
+      map.set(fold(key), counts);
+    };
+    add(lost, base, holder);
+    add(taken, holder, base);
+  }
+  const counted = (counts, say) => [...(counts ?? new Map())]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 2)
+    .map(([other, count]) => say(count, other));
+  const activeWars = normalizeArray(world?.wars).filter((war) => !/ended|concluded|closed/i.test(String(war?.status ?? "")));
+  const agreements = normalizeArray(world?.agreements).filter((entry) => !normalizeString(entry?.status) || /active|in force/i.test(entry.status));
+  const treaties = normalizeArray(world?.peaceTreaties);
+  return (label) => {
+    const names = namesOf(label);
+    const is = (name) => names.has(fold(name));
+    const parts = [];
+    const leader = leaderOf(world, label);
+    if (leader?.name) parts.push(`led by ${leader.name}`);
+    const foes = [];
+    for (const war of activeWars) {
+      const sideA = normalizeArray(war?.sideA).map(normalizeString);
+      const sideB = normalizeArray(war?.sideB).map(normalizeString);
+      const other = sideA.some(is) ? sideB : sideB.some(is) ? sideA : null;
+      for (const name of other ?? []) if (name && !foes.includes(name)) foes.push(name);
+    }
+    if (foes.length) parts.push(`at war with ${listed(foes)}`);
+    const allies = [];
+    const pacts = [];
+    for (const entry of agreements) {
+      const parties = normalizeArray(entry?.parties).map(normalizeString);
+      if (!parties.some(is)) continue;
+      const others = parties.filter((name) => name && !is(name));
+      if (ALLIANCE_TYPES.test(`${entry?.type ?? ""}`)) for (const name of others) { if (!allies.includes(name)) allies.push(name); }
+      else if (normalizeString(entry?.title)) pacts.push(`${normalizeString(entry.title)}${others.length ? ` with ${listed(others)}` : ""}`);
+    }
+    if (allies.length) parts.push(`allied with ${listed(allies)}`);
+    if (pacts.length) parts.push(`${pacts.length === 1 ? "agreement" : "agreements"}: ${listed(pacts)}`);
+    const peace = [...treaties].reverse().find((treaty) => normalizeArray(treaty?.sides).flat().some(is) || is(treaty?.from) || is(treaty?.to));
+    if (peace) {
+      const other = normalizeArray(peace.sides).flat().map(normalizeString).find((name) => name && !is(name)) || (is(peace.from) ? peace.to : peace.from);
+      if (normalizeString(other)) parts.push(`at peace with ${normalizeString(other)} since ${normalizeString(peace.date) || "the treaty"}`);
+    }
+    parts.push(...counted(lost.get(fold(label)), (count, other) => `${count} of its regions held by ${other}`));
+    parts.push(...counted(taken.get(fold(label)), (count, other) => `holds ${count} of ${other}'s`));
+    return parts.join("; ");
+  };
+};
 // The powers in view whose regions the budget left out. Where a place in one is
 // named: a skip is one request, and a region name the map does not have is
 // dropped, not corrected.
@@ -2147,8 +2235,13 @@ const TIERED_POLITIES = 24;
 const buildTieredWorldSummary = async (bundle, world, regions, { regionListsViaTools = false, countsOnly = false, nationTags = null, briefed = false, focus: given = null } = {}) => {
   const regionLookup = new Map(regions.map((region) => [region.id, region]));
   const bakedAliases = buildOwnerAliasMap(world.polityOverrides);
+  // The regions of this map that changed hands. An override for a region the
+  // map does not have (a save carried over from an older map) names nothing a
+  // skip can use, and would be printed as its id.
   const territoryEntries = Object.entries(world.regionOwnershipOverrides).filter(([regionId, ownerCode]) => {
-    const baked = normalizeString(regionLookup.get(regionId)?.country);
+    const region = regionLookup.get(regionId);
+    if (!region) return false;
+    const baked = normalizeString(region.country);
     if (!baked) return true;
     return canonicalOwnerName(baked, bakedAliases).toLowerCase() !== canonicalOwnerName(ownerCode, bakedAliases).toLowerCase();
   });
@@ -2170,7 +2263,7 @@ const buildTieredWorldSummary = async (bundle, world, regions, { regionListsViaT
     const from = region?.country ? canonicalOwnerName(region.country, bakedAliases) : "";
     const key = `${from.toLowerCase()}|${normalizeString(ownerCode).toLowerCase()}`;
     const move = byMove.get(key) ?? { from, to: ownerCode, names: [] };
-    move.names.push(region?.name || regionId);
+    move.names.push(region.name || regionId);
     byMove.set(key, move);
   }
   const moves = [...byMove.values()].sort((a, b) =>
@@ -2207,13 +2300,14 @@ const buildTieredWorldSummary = async (bundle, world, regions, { regionListsViaT
     rosterDetail: inView,
     rosterIntro: TIERED_ROSTER_INTRO,
     restIntro: unchanged
-      ? "Every other power, none of them changed since the last skip, with the regions it holds:"
-      : "Every other power, with the regions it holds:",
+      ? "Every other power, none of them changed since the last skip, with the regions it holds and what the records say of it:"
+      : "Every other power, with the regions it holds and what the records say of it:",
+    restDetail: buildOneLineDetail(world, regions, { polityNames, bakedAliases }),
     ...(regionListsViaTools
       ? {
           focusTotalCap: 0,
           ...(countsOnly ? { territories: false } : {}),
-          restLine: (count) => `${unchanged ? "Unchanged since the last skip and not in play" : "Not in play this turn"}: ${count} other power${count === 1 ? "" : "s"}; list_regions and country_info give any of them.`,
+          restLine: (count) => `${unchanged ? "Unchanged since the last skip and not in play" : "Not in play this turn"}: ${count} other power${count === 1 ? "" : "s"}; list_regions and power_info give any of them.`,
         }
       : { rosterCap: TIERED_REST_POWERS }),
   });
@@ -2290,6 +2384,12 @@ const buildTieredWorldSummary = async (bundle, world, regions, { regionListsViaT
       : "Map ownership (this IS the comma-separated region list referenced above — the "
         + "region vocabulary for regionTransfers):",
     regionOwnershipCatalog,
+    // Who holds a region this description never names: the scenario's map
+    // says, but for the changes above (the quality A/B of 2026-11-07: asked who
+    // holds a region of a power shown in a line, the model said "unknown").
+    ...(regionListsViaTools ? [] : ["", unlisted > 0
+      ? `A region named nowhere in this description is held by the power it belongs to on the scenario's map, unless it is one of the ${unlisted} changed regions left out of the territorial changes above.`
+      : "A region named nowhere in this description is held by the power it belongs to on the scenario's map: every region that changed hands is among the territorial changes above."]),
     ...(unruledBorders ? ["", unruledBorders] : []),
     ...(politySummary
       ? ["", "Polity codes and other names for the powers in view, and any lore written since the [Polity Lore] above:", politySummary]

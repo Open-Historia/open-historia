@@ -13,6 +13,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildOneLineDetail,
   buildPolityLoreReference,
   buildPromptContext,
   buildPromptFocus,
@@ -83,10 +84,46 @@ test("a skip's world summary lists the player, every belligerent and every power
   assert.match(text, /Treat these as binding/);
 });
 
+// What the one-line list says of a power out of view (the quality A/B of
+// 2026-11-07: the facts a model was asked of such a power came back "unknown").
+test("a power out of view is its count, leader, alliances, agreements, peace and land in one entry", async () => {
+  const { regions, world, actions } = bigWorld();
+  // A small filler, so the region names' budget does not reach it.
+  const far = "Filler State 9";
+  const record = (name) => ({ code: name, name });
+  const recorded = {
+    ...world,
+    polityOverrides: { ...world.polityOverrides, [far]: { ...record(far), leader: { name: "Queen Ilsa" } } },
+    countryStats: { [far]: { leader: "Queen Ilsa" } },
+    agreements: [
+      { id: "a1", title: "Northern Pact", type: "mutual_defense", status: "active", parties: [far, "Filler State 58"] },
+      { id: "a2", title: "Grain Treaty", type: "trade_economic", status: "active", parties: [far, "Filler State 57"] },
+      { id: "a3", title: "Old Accord", type: "trade_economic", status: "ended", parties: [far, "Filler State 56"] },
+    ],
+    peaceTreaties: [{ id: "t1", warId: "w0", title: "The Short War", date: "1929-03-01", from: far, to: "Filler State 55", sides: [[far], ["Filler State 55"]] }],
+    // Two of its provinces are held by Filler State 54.
+    // And one override for a region this map does not have (a save carried over from an older map).
+    regionOwnershipOverrides: { ...world.regionOwnershipOverrides, "FillerState9-0": "Filler State 54", "FillerState9-1": "Filler State 54", "ghost-17": "Ruritania" },
+  };
+  const text = await buildWorldSummary({ game, world: recorded, events: [], actions, chats: [] }, regions, { tiers: true, briefed: true });
+  const rest = text.split("\n").find((line) => line.startsWith("Every other power"));
+  assert.match(rest, /what the records say of it:/);
+  const entry = rest.slice(rest.indexOf(`${far} (`), rest.indexOf(")", rest.indexOf(`${far} (`)) + 1);
+  assert.equal(entry, `${far} (6; led by Queen Ilsa; allied with Filler State 58; agreement: Grain Treaty with Filler State 57; at peace with Filler State 55 since 1929-03-01; 2 of its regions held by Filler State 54)`);
+  // A power at war is in view, so the flag says so only where a ledger names it otherwise; it is still read.
+  const detail = buildOneLineDetail({ ...recorded, wars: [{ id: "w2", status: "active", sideA: [far], sideB: ["Filler State 59", "Filler State 53"] }] }, regions);
+  assert.match(detail(far), /^led by Queen Ilsa; at war with Filler State 59, Filler State 53; /);
+  assert.match(detail("Filler State 54"), /holds 2 of Filler State 9's$/);
+  assert.equal(buildOneLineDetail(world, regions)("Filler State 33"), "", "nothing on record: the name and count alone");
+  assert.match(text, /A region named nowhere in this description is held by the power it belongs to on the scenario's map: every region that changed hands is among the territorial changes above\./);
+  assert.doesNotMatch(text, /ghost-17/, "a region the map does not have is never named by its id");
+});
+
 test("with the lookup functions, the powers out of view are one line", async () => {
   const { regions, world, actions } = bigWorld();
   const text = await buildWorldSummary({ game, world, events: [], actions, chats: [] }, regions, { tiers: true, briefed: true, regionListsViaTools: true });
-  assert.match(text, /Not in play this turn: \d+ other powers; list_regions and country_info give any of them\./);
+  assert.match(text, /Not in play this turn: \d+ other powers; list_regions and power_info give any of them\./);
+  assert.doesNotMatch(text, /A region named nowhere/, "the lookups say who holds any region");
   assert.match(text, /- Slavonia — 12 regions/);
   assert.doesNotMatch(text, /Slavonia province 0/, "region names come from the lookups");
 });
@@ -130,7 +167,7 @@ test("a power that changed since the last skip comes into view, and the rest say
   assert.deepEqual([...next.changed].sort(), ["filler state 7", "filler state 8"]);
   assert.ok(next.inView.has("filler state 7") && next.inView.has("filler state 8"));
   const text = await buildWorldSummary({ ...bundle, world: moved }, regions, { tiers: true, briefed: true });
-  assert.match(text, /Every other power, none of them changed since the last skip, with the regions it holds:/);
+  assert.match(text, /Every other power, none of them changed since the last skip, with the regions it holds and what the records say of it:/);
   assert.match(text, /- Filler State 7 \[\d+ regions\]: Filler State 7 province 0, /);
 });
 
