@@ -13,7 +13,8 @@ import {
   normalizeWorldState,
 } from "../../runtime/gameState.js";
 import { buildRegionOwnershipText, buildUnruledBordersText, hasUnruledLand, ownerRoster, regionOwnerName, regionTouchingMapSliced } from "./regionVocab.js";
-import { buildPromptSnapshot, changedSinceSnapshot, neighbourPowers, pickSpotlight, splitInView, storylinePowers } from "./promptFocus.js";
+import { buildPromptSnapshot, changedSinceSnapshot, neighbourPowers, splitInView, storylinePowers } from "./promptFocus.js";
+import { IDLE_BACKGROUND_LIMIT, rankRelevantPolities } from "./idlePoliticalDiplomacyContext.js";
 import { HISTORY_TIERS, hasHistoryTiers, renderCanonFacts, renderHistoryTiers } from "../../runtime/historyTiers.js";
 import { waterTypeIds } from "../../runtime/regionTypes.js";
 import { isPendingAction, selectFocusPowers } from "./regionFocus.js";
@@ -1833,8 +1834,8 @@ export const rankFocusPowers = (regions, world, bundle, options = {}) =>
 
 // The same ranking with each power's score and reasons (regionFocus.js), which a
 // time skip splits into the powers it shows in full and the rest
-// (buildPromptFocus). `signals`: the neighbours, changed powers, storyline
-// parties and spotlight a skip adds.
+// (buildPromptFocus). `signals`: the neighbours, relevant countries, changed
+// powers and storyline parties a skip adds.
 const rankFocusEntries = (regions, world, bundle, { playerName, actorNames = [], polityNames = {}, signals = {} } = {}) => {
   const overrides = world.regionOwnershipOverrides ?? {};
   const groups = new Map();
@@ -1883,9 +1884,9 @@ const rankFocusEntries = (regions, world, bundle, { playerName, actorNames = [],
 
 // What a time skip shows in full and what in a line (promptFocus.js): the
 // powers in view (the player, its neighbours, every power at war, every power
-// the orders name, those that changed since the last skip or are in a live
-// storyline, the chat partners and the powers the recent events moved), plus a
-// spotlight on a few distant powers that rotates with the round. Also the
+// the orders name, its relevant countries, those that changed since the last
+// skip or are in a live storyline, the chat partners and the powers the recent
+// events moved). Also the
 // snapshot of the world as this skip reads it, which the skip stores when it is
 // written (gameplay.js applySimulationResult), so the next one can tell what
 // changed.
@@ -1905,27 +1906,25 @@ export const buildPromptFocus = (bundle, regions, world, {
   const changed = changedKeys ? [...changedKeys] : [];
   const neighbours = neighbourPowers(regionRows ?? regions, (row) => regionOwnerName(row, overrides), playerName);
   const storylines = storylinePowers(world.storylines);
+  // Idle diplomacy's relevant countries, as many as it gives the background of;
+  // on a map without political profiles, ranked among the map's own powers.
+  const owners = [...new Set(regions.map((region) => regionOwnerName(region, overrides)).filter(Boolean))];
+  const relevant = rankRelevantPolities({ ...bundle, world }, { candidates: owners })
+    .slice(0, IDLE_BACKGROUND_LIMIT)
+    .map((entry) => entry.name);
   const ranked = rankFocusEntries(regions, world, bundle, {
     playerName,
     actorNames,
     polityNames,
-    signals: { neighbours, changed, storylines },
+    signals: { neighbours, relevant, changed, storylines },
   });
-  const { inView, rest } = splitInView(ranked);
-  const spotlight = pickSpotlight(rest.map((entry) => ({ label: entry.label, regions: entry.regions })), {
-    round: Number(bundle?.game?.round) || 0,
-  });
-  const spotlit = new Set(spotlight.map((label) => label.toLowerCase()));
-  const viewed = [
-    ...inView,
-    ...rest.filter((entry) => spotlit.has(entry.label.toLowerCase())).map((entry) => ({ ...entry, reasons: [...entry.reasons, "spotlight"] })),
-  ];
+  const { inView } = splitInView(ranked);
   return {
     ranked,
     labels: ranked.map((entry) => entry.label),
-    inView: new Set(viewed.map((entry) => entry.label.toLowerCase())),
-    inViewLabels: viewed.map((entry) => entry.label),
-    spotlight,
+    inView: new Set(inView.map((entry) => entry.label.toLowerCase())),
+    inViewLabels: inView.map((entry) => entry.label),
+    relevant,
     changed: changedKeys,
     snapshot,
   };
@@ -2128,8 +2127,8 @@ const regionBordersOfThisMap = () => {
 //   - the territorial changes, grouped by who lost and who gained, the moves of
 //     the powers in view first;
 //   - region names in full for the powers in view (the region vocabulary for
-//     regionTransfers), a roster line for the other powers in view (and the
-//     spotlight), and every other power by name and size in one paragraph, or
+//     regionTransfers), a roster line for the other powers in view, and every
+//     other power by name and size in one paragraph, or
 //     in one line where the lookup functions can give any of them;
 //   - the polities' codes and former names for the powers in view, and the lore
 //     only where it moved since the reference the cached opening carries;
@@ -2204,9 +2203,6 @@ const buildTieredWorldSummary = async (bundle, world, regions, { regionListsViaT
         }
       : { rosterCap: TIERED_REST_POWERS }),
   });
-  const spotlight = focus.spotlight.length
-    ? `Spotlight this period, powers the story has not followed lately: ${focus.spotlight.join(", ")}. Where it fits, give each a development of its own.`
-    : "";
 
   const waterTypes = waterTypeIds(world.regionTypes);
   const touching = hasUnruledLand(regionRows, world.regionOwnershipOverrides, { waterTypes })
@@ -2280,7 +2276,6 @@ const buildTieredWorldSummary = async (bundle, world, regions, { regionListsViaT
       : "Map ownership (this IS the comma-separated region list referenced above — the "
         + "region vocabulary for regionTransfers):",
     regionOwnershipCatalog,
-    ...(spotlight ? ["", spotlight] : []),
     ...(unruledBorders ? ["", unruledBorders] : []),
     ...(politySummary
       ? ["", "Polity codes and other names for the powers in view, and any lore written since the [Polity Lore] above:", politySummary]

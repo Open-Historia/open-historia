@@ -4,9 +4,11 @@
 //
 // A time skip shows in full what the turn is about and the rest in a line
 // (promptFocus.js). These hold that nothing the turn needs is ever cut: the
-// player, every power at war, every power the orders name, their units, their
-// contested land, and a distant power or two in the spotlight; and that what is
-// cut is still named or counted.
+// player, every power at war, every power the orders name, the relevant
+// countries idle diplomacy keeps, their units and their contested land; that no
+// distant power is singled out for a turn of its own (the spotlight, removed
+// after the quality A/B of 2026-11-07); and that what is cut is still named or
+// counted.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -70,7 +72,7 @@ test("a skip's world summary lists the player, every belligerent and every power
   assert.ok(rest, "the powers out of view in one paragraph");
   const named = fillers.filter((name) => text.includes(name));
   assert.equal(named.length, fillers.length, "no power is left unnamed");
-  assert.match(text, /Spotlight this period, powers the story has not followed lately: Filler State \d+, Filler State \d+, Filler State \d+\./);
+  assert.doesNotMatch(text, /Spotlight|development of its own/, "no distant power is singled out for a turn");
   assert.match(text, /Treat these as binding/);
 });
 
@@ -80,6 +82,34 @@ test("with the lookup functions, the powers out of view are one line", async () 
   assert.match(text, /Not in play this turn: \d+ other powers; list_regions and country_info give any of them\./);
   assert.match(text, /- Slavonia — 12 regions/);
   assert.doesNotMatch(text, /Slavonia province 0/, "region names come from the lookups");
+});
+
+// Idle diplomacy's relevant countries (idlePoliticalDiplomacyContext.js
+// rankRelevantPolities): here, a filler state the latest event names, and one
+// the player has a chat with. Each is shown as a neighbour is: its regions in
+// full, its units in the table.
+test("the relevant countries idle diplomacy keeps are in view, as a neighbour is", async () => {
+  const { regions, world, actions } = bigWorld();
+  const politicalActors = { byPolity: Object.fromEntries(Object.keys(world.polityOverrides).map((name) => [name, { government: {} }])) };
+  const related = { ...world, politicalActors };
+  const bundle = {
+    game,
+    world: related,
+    events: [{ id: "e1", date: "1930-05-01", title: "Filler State 41 recalls its ambassador", description: "Filler State 41 recalls its ambassador from Ruritania.", countries: ["Filler State 41"] }],
+    actions,
+    chats: [{ id: "c1", countries: [{ name: "Filler State 52" }], messages: [{ time: "1930-04-20", text: "Greetings." }] }],
+  };
+  const focus = buildPromptFocus(bundle, regions, related, {});
+  assert.ok(focus.relevant.includes("Filler State 41") && focus.relevant.includes("Filler State 52"), focus.relevant.join(", "));
+  assert.ok(focus.inView.has("filler state 41") && focus.inView.has("filler state 52"));
+  const reasons = Object.fromEntries(focus.ranked.map((entry) => [entry.label, entry.reasons]));
+  assert.ok(reasons["Filler State 41"].includes("relevant country"));
+  const text = await buildWorldSummary(bundle, regions, { tiers: true, briefed: true });
+  assert.match(text, /- Filler State 41 \[\d regions?\]: Filler State 41 province 0/);
+  // Without a political world they are ranked among the map's own powers.
+  const plain = buildPromptFocus({ ...bundle, world }, regions, world, {});
+  assert.deepEqual(plain.relevant.slice(0, 2), ["Filler State 41", "Filler State 52"]);
+  assert.ok(plain.inView.has("filler state 41"));
 });
 
 test("a power that changed since the last skip comes into view, and the rest say they did not change", async () => {
@@ -175,7 +205,7 @@ test("a skip's prompt context carries its focus and the lore reference, and othe
   assert.match(skip.polityLoreReference, /^\[Polity Lore\]\n.*\n- Slavonia: A militarist republic\.\n\n$/);
   const other = await buildPromptContext(bundle, { requiredKeys: ["worldSummaryNoCity"], taskKey: "actions" });
   assert.equal(other.promptFocus, undefined);
-  assert.doesNotMatch(other.worldSummaryNoCity, /Spotlight this period/);
+  assert.doesNotMatch(other.worldSummaryNoCity, /Spotlight|development of its own/);
 });
 
 test("the air strikes a skip is told are capped, the heaviest kept, and the rest counted", () => {

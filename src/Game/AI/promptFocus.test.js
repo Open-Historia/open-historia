@@ -1,8 +1,9 @@
 // Run: node --test src/Game/AI/promptFocus.test.js
 //
 // What a time skip shows in full: the powers it can never leave out, the
-// snapshot that says what changed, the neighbours, and the spotlight that gives
-// distant powers their turn.
+// snapshot that says what changed, the neighbours and the relevant countries.
+// There is no spotlight on distant powers any more (the quality A/B of
+// 2026-11-07): nothing names a power for the model to give a turn to.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -13,7 +14,6 @@ import {
   hashText,
   neighbourPowers,
   normalizePromptSnapshot,
-  pickSpotlight,
   splitInView,
   storylinePowers,
 } from "./promptFocus.js";
@@ -60,26 +60,6 @@ test("the hash is stable and short", () => {
   assert.equal(hashText("Ruritania"), hashText("Ruritania"));
   assert.notEqual(hashText("Ruritania"), hashText("Ruritania "));
   assert.match(hashText(""), /^[0-9a-f]{8}$/);
-});
-
-test("the spotlight rotates through every distant power and is the same for the same round", () => {
-  const candidates = Array.from({ length: 20 }, (_, index) => ({ label: `Distant Land ${index + 1}`, regions: 5 }));
-  assert.deepEqual(pickSpotlight(candidates, { round: 9 }), pickSpotlight(candidates, { round: 9 }));
-  assert.notDeepEqual(pickSpotlight(candidates, { round: 9 }), pickSpotlight(candidates, { round: 10 }));
-  const seen = new Set();
-  for (let round = 1; round <= Math.ceil(20 / 3); round += 1) {
-    const picked = pickSpotlight(candidates, { round });
-    assert.equal(picked.length, 3);
-    picked.forEach((label) => seen.add(label));
-  }
-  assert.equal(seen.size, 20, "every distant power has had the spotlight within ceil(20 / 3) rounds");
-});
-
-test("the spotlight leaves specks of land out unless nothing else is left", () => {
-  const picked = pickSpotlight([{ label: "Big", regions: 40 }, { label: "Bigger", regions: 50 }, { label: "Biggest", regions: 60 }, { label: "Speck", regions: 1 }], { round: 2 });
-  assert.equal(picked.includes("Speck"), false);
-  assert.deepEqual(pickSpotlight([{ label: "Speck", regions: 1 }], { round: 2 }), ["Speck"]);
-  assert.deepEqual(pickSpotlight([], { round: 2 }), []);
 });
 
 test("neighbours are the powers whose regions touch the player's, by box or declared adjacency", () => {
@@ -143,14 +123,32 @@ test("the new signals each give their reason", () => {
     neighbours: ["Slavonia"],
     changed: ["borduria"],
     storylines: ["Syldavia"],
-    spotlight: ["Atlantis"],
+    relevant: ["Atlantis"],
+    // Anything else a caller passes names no power into view.
+    spotlight: ["Nowhere"],
   });
   const reasons = Object.fromEntries(ranked.map((entry) => [entry.label, entry.reasons]));
   assert.deepEqual(reasons.Slavonia, ["neighbour"]);
   assert.deepEqual(reasons.Borduria, ["changed since the last skip"]);
   assert.deepEqual(reasons.Syldavia, ["in a live storyline"]);
-  assert.deepEqual(reasons.Atlantis, ["spotlight"]);
+  assert.deepEqual(reasons.Atlantis, ["relevant country"]);
   assert.deepEqual(reasons.Nowhere, []);
   const { rest } = splitInView(ranked);
   assert.deepEqual(rest.map((entry) => entry.label), ["Nowhere"]);
+});
+
+test("a relevant country weighs what a neighbour does, and is in view as a neighbour is", () => {
+  const ranked = selectFocusPowers({
+    owners: [
+      { key: "Ruritania", label: "Ruritania", regions: 3 },
+      { key: "Slavonia", label: "Slavonia", regions: 3 },
+      { key: "Atlantis", label: "Atlantis", regions: 3 },
+    ],
+    player: "Ruritania",
+    neighbours: ["Slavonia"],
+    relevant: ["Atlantis"],
+  });
+  const score = Object.fromEntries(ranked.map((entry) => [entry.label, entry.score]));
+  assert.equal(score.Atlantis, score.Slavonia);
+  assert.deepEqual(splitInView(ranked).inView.map((entry) => entry.label).sort(), ["Atlantis", "Ruritania", "Slavonia"]);
 });

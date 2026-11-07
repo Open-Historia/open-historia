@@ -109,13 +109,15 @@ export const FOCUS_WEIGHTS = Object.freeze({
   sizeCap: 15,
   sizeDivisor: 20,
   // What a time skip adds to put the powers it shows in full in view
-  // (promptFocus.js): the player's neighbours, the powers that changed since the
-  // last skip, the parties to a storyline still running, and the rotating
-  // spotlight on a few distant powers.
+  // (promptFocus.js): the player's neighbours, its relevant countries (idle
+  // diplomacy's: those that had something happen or dealt with the player
+  // lately), the powers that changed since the last skip, and the parties to a
+  // storyline still running. A relevant country weighs what a neighbour does:
+  // the owner asked for it to be shown as a neighbour is.
   neighbour: 50,
+  relevant: 50,
   changed: 40,
   storyline: 55,
-  spotlight: 30,
 });
 
 /**
@@ -143,13 +145,13 @@ export const selectFocusPowers = ({
   ownerOfRegion = () => "",
   regions = [],
   recentEvents = 12,
-  // Names (any case) of the player's neighbours, the powers changed since the
-  // last skip, those in a live storyline and those in the spotlight. Each is
+  // Names (any case) of the player's neighbours, its relevant countries, the
+  // powers changed since the last skip and those in a live storyline. Each is
   // matched by the power's exact names, as everything else here is.
   neighbours = [],
+  relevant = [],
   changed = [],
   storylines = [],
-  spotlight = [],
   weights = FOCUS_WEIGHTS,
 } = {}) => {
   const entries = owners
@@ -242,9 +244,9 @@ export const selectFocusPowers = ({
     }
   };
   creditNames(neighbours, weights.neighbour ?? 0, "neighbour");
+  creditNames(relevant, weights.relevant ?? 0, "relevant country");
   creditNames(changed, weights.changed ?? 0, "changed since the last skip");
   creditNames(storylines, weights.storyline ?? 0, "in a live storyline");
-  creditNames(spotlight, weights.spotlight ?? 0, "spotlight");
 
   for (const entry of entries) {
     entry.score += Math.min(weights.sizeCap, Math.floor((Number(entry.owner.regions) || 0) / weights.sizeDivisor));
