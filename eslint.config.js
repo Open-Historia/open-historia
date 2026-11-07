@@ -18,7 +18,7 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 // ignored. They are visible, and the correctness rules that matter — no-undef
 // above all — are hard errors.
 export default defineConfig([
-  globalIgnores(['dist', 'dist-web', 'dist-site', 'dist-android', 'release', 'server/data', 'mobile/www', 'mobile/android', 'fmg', 'node-content']),
+  globalIgnores(['dist', 'dist-web', 'dist-site', 'dist-android', 'release', 'server/data', 'mobile/www', 'mobile/android', 'fmg', 'node-content', 'site/story/**']),
   {
     files: ['**/*.{js,jsx,ts,tsx}'],
     extends: [
@@ -32,6 +32,8 @@ export default defineConfig([
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
     rules: {
+      // Allow empty catch blocks for graceful degradation / fallbacks.
+      'no-empty': ['error', { allowEmptyCatch: true }],
       // Pre-existing, and each needs a human decision about the dependency list
       // rather than a blind fix — a wrong dep array causes stale renders or
       // infinite loops, both worse than the warning.
@@ -53,6 +55,13 @@ export default defineConfig([
       'react-hooks/refs': 'warn',
       'react-hooks/set-state-in-effect': 'warn',
       'react-hooks/globals': 'warn',
+    },
+  },
+  {
+    files: ['**/*.test.{js,jsx,ts,tsx}'],
+    rules: {
+      'no-regex-spaces': 'off',
+      'no-sparse-arrays': 'off',
     },
   },
   {
