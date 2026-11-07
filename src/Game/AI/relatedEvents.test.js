@@ -169,3 +169,13 @@ test("the worker loads the pinned model like the translator's: kept store, wasm,
   const { EMBEDDING_MODEL_CACHE } = await import("../../runtime/embeddingModels.js");
   assert.equal(EMBEDDING_MODEL_CACHE, "oh-embed-model-v1");
 });
+
+test("with the skip's 'also recent' lines every unfolded event is shown, so only the folded history is searched", async () => {
+  const bundle = { game: { gameDate: "1940-10-20", country: "Italy" }, world, events, actions: [], chats: [], advisor: [] };
+  const relatedEvents = events.map((event) => ({ id: event.id, score: 0.5 })).reverse();
+  const { recentEventsLong } = await buildPromptContext(bundle, { requiredKeys: ["recentEventsLong"], relatedEvents, longEventLimit: 4, taskKey: "jumpForward" });
+  const related = recentEventsLong.split(`${RELATED_EVENTS_HEADER}\n`)[1];
+  assert.ok(related, "the block is there");
+  const relatedIds = [...related.matchAll(/Event (\d+)/g)].map((match) => Number(match[1]));
+  assert.ok(relatedIds.length > 0 && relatedIds.every((id) => id <= 12), `only folded events: ${relatedIds}`);
+});
