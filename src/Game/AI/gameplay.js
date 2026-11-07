@@ -3919,6 +3919,8 @@ const runJsonTask = async (taskKey, {
           systemPrompt,
           userMessage,
           variables,
+          tool,
+          staticPrefixEnd: staticPrefixEndOf(systemPrompt, staticPromptPrefix),
         }), { verbose: true });
       }
       // Telemetry: the record for THIS attempt comes back through the sink, so
