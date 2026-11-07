@@ -138,8 +138,8 @@ for the 70.6k prefix and the functions, where it paid full price for 233.7k and 
 tenth for 35.8k. On OpenAI the same prefix is cached implicitly (and now routed by
 `prompt_cache_key`); on Gemini the implicit cache takes it when the opening is
 identical, which it now is from skip to skip and between the two kinds of skip.
-None of this has been run against a live API (the quality A/B waits for the
-owner's permission); the sizes are the requests as the game builds them.
+The sizes are the requests as the game builds them; how the skips read with them
+is in [the quality A/B](prompt-compression-ab.md).
 
 ## Phase 2: what the turn is about in full, the rest in a line
 
@@ -247,8 +247,8 @@ storylines in motion (6.4k).
 
 ### What the quality A/B should check
 
-None of this has been run against a model yet; the A/B waits for the owner's
-permission. For each change, what it should look at:
+It has since been run: [the quality A/B](prompt-compression-ab.md) (2026-11-07,
+five saves, gemini-3.5-flash-lite). What it was asked to look at, change by change:
 
 - **Powers out of view in a line.** Do off-screen powers still act (count the
   events that name only powers out of view, and the spotlight's three)? Are
