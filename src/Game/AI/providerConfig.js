@@ -358,10 +358,30 @@ export function setReasoningEnabled(enabled) {
     logDebugEvent("setting", `Model reasoning turned ${enabled ? "on" : "off"}.`);
 }
 
+// Command Code (commandcode.ai), the start-of-game prompt's "Best quality
+// option": its provider API speaks OpenAI Chat Completions with a Bearer key
+// (commandcode.ai/docs/provider), so it is an OpenAI Compatible Connection with
+// the address and the model filled in and only the key left to paste. The key
+// is made at COMMANDCODE_KEYS_URL; the API needs a plan with API access (the
+// $10 GOAT plan has it, the Go plan does not: commandcode.ai/docs/plans/goat).
+// The model id is the one its /models list gives GLM-5.3 Flash (checked
+// 2026-11-07); a renamed model only needs this line changed.
+export const COMMANDCODE_BASE_URL = "https://api.commandcode.ai/provider/v1";
+export const COMMANDCODE_MODEL = "z-ai/glm-5.3-flash";
+export const COMMANDCODE_PRICING_URL = "https://commandcode.ai/pricing";
+export const COMMANDCODE_KEYS_URL = "https://commandcode.ai/settings/keys";
+export const COMMANDCODE_TEMPLATE = Object.freeze({
+    name: "Command Code",
+    provider: "openai-compatible",
+    endpoint: COMMANDCODE_BASE_URL,
+    suggestedModel: COMMANDCODE_MODEL,
+});
+
 // Starting points offered when adding a Connection: the stock profiles, as they
 // were (ported from the abdulrahman-2005 fork), so a Groq or OpenRouter key is
 // one click and a paste away.
 export const CONNECTION_TEMPLATES = [
+    COMMANDCODE_TEMPLATE,
     { name: "Groq", provider: "openai-compatible", endpoint: "https://api.groq.com/openai/v1", suggestedModel: "llama-3.3-70b-versatile" },
     { name: "OpenRouter", provider: "openai-compatible", endpoint: "https://openrouter.ai/api/v1", suggestedModel: "" },
     { name: "Local Ollama", provider: "openai-compatible", endpoint: "http://localhost:11434/v1", suggestedModel: "" },
@@ -823,6 +843,33 @@ export function applyQuickAiSetup({ provider, apiKey = "", endpoint = "", model 
     logDebugEvent("setting", `Quick AI setup: ${getProviderMeta(normalized).label} ${requirement === "endpoint" ? "endpoint" : "key"} saved from the start-of-game prompt.`, {
         model: modelName || "(unchanged)",
     });
+    return { connectionId, entryId };
+}
+
+// The start-of-game prompt's set-up-for-you path (Command Code): a template's
+// provider, address and model, with the key the player pasted. The Connection
+// already pointed at that address gets the new key rather than a twin; the
+// template's model on it goes to the TOP of the list, added if it is not there.
+// Throws without a key. Returns { connectionId, entryId }.
+export function applyTemplateAiSetup(template, apiKey = "") {
+    const key = String(apiKey ?? "").trim();
+    if (!key) throw new Error("Paste an API key first.");
+    const provider = normalizeProvider(template?.provider);
+    const endpoint = String(template?.endpoint ?? "").trim();
+    const model = String(template?.suggestedModel ?? "").trim();
+    const address = (value) => String(value ?? "").trim().replace(/\/+$/, "").toLowerCase();
+    const existing = getConnections().find((connection) => connection.provider === provider && address(connection.endpoint) === address(endpoint));
+    let connectionId;
+    if (existing) {
+        updateConnection(existing.id, { apiKey: key });
+        connectionId = existing.id;
+    } else {
+        connectionId = addConnection({ name: template?.name, provider, endpoint, apiKey: key, suggestedModel: model });
+    }
+    const entry = getFallbackList().find((candidate) => candidate.connectionId === connectionId && candidate.model.trim() === model);
+    const entryId = entry ? entry.id : addEntry({ connectionId, model });
+    if (getFallbackList().findIndex((candidate) => candidate.id === entryId) > 0) moveEntry(entryId, 0);
+    logDebugEvent("setting", `Quick AI setup: ${connectionName(connectionId)} key saved from the start-of-game prompt.`, { model });
     return { connectionId, entryId };
 }
 
