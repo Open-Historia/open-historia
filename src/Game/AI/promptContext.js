@@ -34,6 +34,7 @@ import { openPolls } from "../../runtime/socialFeed.js";
 import { unitsOffBattlefields } from "./frontsGate.js";
 import { readingLanguageName } from "../../runtime/i18n.js";
 import { advisorMessagesFor, CHIEF_ADVISOR_THREAD } from "../../runtime/advisorThreads.js";
+import { renderRelatedPastEvents } from "./relatedEvents.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -369,6 +370,17 @@ export const buildEventHistoryText = (
 
 // The most the "also recent" lines of a skip's history take (buildEventHistoryText alsoListed).
 const ALSO_LISTED_MAX_CHARS = 6000;
+
+// What a skip's window of recent events shows, for the related past events
+// (relatedEvents.js) to leave out: the events not yet folded into the history,
+// and those of them the window shows. With the "also recent" lines
+// (`alsoListed`) every one of them is shown, a line at least, so only the
+// folded history is left to find related events in.
+const relatedEventsWindow = (bundle, { currentDate, limit, alsoListed = 0 }) => {
+  const unfolded = getUnconsolidatedEvents(bundle.events, bundle.world);
+  const shown = alsoListed > 0 ? unfolded : selectRankedEvents(unfolded, { limit, world: bundle.world, currentDate });
+  return { events: bundle.events, unfolded, shown };
+};
 
 const renderConsolidatedHistoryEntry = (entry) =>
   `Through ${entry.throughDate || "an earlier date"}: ${entry.summary}`;
@@ -2479,6 +2491,10 @@ export const buildPromptContext = async (bundle, {
   gameMasterRequest = "",
   longEventHistoryMaxChars = 0,
   longEventLimit = 24,
+  // The past events found nearest to this turn on the player's device
+  // ([{ id, score }], relatedEventsSearch.js), or null: rendered under the
+  // recent events, never one shown there (relatedEvents.js).
+  relatedEvents = null,
   // The task has the lookup functions: the prompt keeps the overview and the
   // functions carry the detail (region lists, older events, full chats).
   lookups = false,
@@ -2653,23 +2669,30 @@ export const buildPromptContext = async (bundle, {
     put("historicalAttentionStatus", historicalAttentionStatus);
 
     if (wants("recentEventsLong")) {
+      // With lookups, the last eight events in view and recent_events for
+      // the rest (four with Unlimited requests on); a caller's own tighter
+      // cap still wins.
+      const recentEventLimit = lookups ? Math.min(longEventLimit, leanLookups ? LEAN_RECENT_EVENTS : 8) : longEventLimit;
+      const recentAlsoListed = SKIP_TASKS.has(taskKey) && !lookups ? 40 : 0;
       const campaignRecentEvents = buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate,
-        // With lookups, the last eight events in view and recent_events for
-        // the rest (four with Unlimited requests on); a caller's own tighter
-        // cap still wins.
-        limit: lookups ? Math.min(longEventLimit, leanLookups ? LEAN_RECENT_EVENTS : 8) : longEventLimit,
+        limit: recentEventLimit,
         maxChars: lookups && !longEventHistoryMaxChars ? 3000 : longEventHistoryMaxChars,
         world: bundle.world,
         // A skip: the newest skip's events in full, the older ones by digest,
         // and a line each for those the ranking left out (with the lookup
         // functions, recent_events has them).
         digests: SKIP_TASKS.has(taskKey),
-        alsoListed: SKIP_TASKS.has(taskKey) && !lookups ? 40 : 0,
+        alsoListed: recentAlsoListed,
       });
       // A time skip carries the story so far in its cached opening
       // (${CAMPAIGN_HISTORY}, below): it changes only when a fold rewrites it,
       // so the skips between two folds read it from the provider's cache.
       const storyAbove = SKIP_TASKS.has(taskKey) && wants("campaignHistory");
+      const relatedPastEvents = relatedEvents ? renderRelatedPastEvents(relatedEvents, relatedEventsWindow(bundle, {
+        currentDate: bundle.game?.gameDate,
+        limit: recentEventLimit,
+        alsoListed: recentAlsoListed,
+      })) : "";
       result.recentEventsLong = [
         "STORY SO FAR:",
         storyAbove ? "Under [The Story So Far] above." : consolidatedHistory,
@@ -2684,6 +2707,7 @@ export const buildPromptContext = async (bundle, {
         "",
         "RECENT EVENTS:",
         campaignRecentEvents,
+        ...(relatedPastEvents ? ["", relatedPastEvents] : []),
       ].join("\n");
     }
   }

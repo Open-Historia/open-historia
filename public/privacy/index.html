@@ -40,7 +40,7 @@
     <img class="logo" src="/logo.png" alt="Open Historia logo" width="64" height="64" />
 
     <h1>Privacy Policy</h1>
-    <p class="tagline">Last updated and in effect from 6 November 2026</p>
+    <p class="tagline">Last updated and in effect from 7 November 2026</p>
 
     <p>Open Historia is a free, open-source strategy game. It runs on your own device: in the browser at openhistoria.com, as a desktop app for Windows, macOS and Linux, and as an Android app. This policy covers all of them, in their stable and beta versions. It explains what the game keeps on your device, what it sends elsewhere and to whom, what the project itself holds about you, and the rights you have.</p>
     <p><strong>Who is responsible.</strong> "We" means Nicholas Krol, an individual in the United States who runs the Open Historia project and its servers, and who is the data controller for what this policy describes. You can reach us at <a href="mailto:nichojkrol@gmail.com">nichojkrol@gmail.com</a>. Open Historia is a non-commercial project: it has no advertising, sells nothing and has no paid accounts.</p>
@@ -72,6 +72,7 @@
       <li>detailed maps you download (beta versions, desktop app): each is downloaded from the community hub once, checked, and kept in the app's data folder for every scenario that uses it;</li>
       <li>the speech model for the Advisor's microphone, if you downloaded one (beta versions; see <a href="#microphone">The Advisor's Microphone</a>), kept in the game's storage until you clear it;</li>
       <li>the translation model, if you downloaded one (beta versions; see <a href="#translation-model">Translation on Your Device</a>): one language's, kept in the game's storage until you clear it, and, if you turn on "Translate with my AI", what your AI provider translated, kept beside it;</li>
+      <li>the related-events model and what it found, if you turned on "Find related past events on this device" (beta versions; see <a href="#related-events">Related Past Events</a>): the model, and a list of numbers for each event of your games, kept in the game's storage until you turn the setting off or delete the game;</li>
       <li>if you use your own Agent (beta versions, on the desktop; see <a href="#your-ai">Your AI Provider</a>): a folder in the app's data folder holding the instructions the game writes for your Agent, and each prompt waiting for it, deleted as soon as it is answered or cancelled;</li>
       <li>for shared games (beta versions): the name you chose, a key that identifies your installation to the hosts you join, and, if you host, your invite codes;</li>
       <li>your answer about counting visits (see <a href="#choices">Counting Visits</a>).</li>
@@ -141,6 +142,7 @@
           <tr><td>Speech recognition in the desktop app (Microsoft on Windows; Apple on macOS where the Mac cannot do it itself; beta versions)</td><td>While the Advisor's microphone listens through the system's own speech recognition (see <a href="#microphone">The Advisor's Microphone</a>)</td><td>Your voice while it listens, sent by Windows or macOS, not by the game</td></tr>
           <tr><td>Speech model for the Advisor's microphone (Hugging Face, United States; beta versions)</td><td>Where the microphone runs a model on your device (see <a href="#microphone">The Advisor's Microphone</a>): once, after you press Download</td><td>Which model is downloaded. Nothing you say</td></tr>
           <tr><td>Translation model (Hugging Face, or the game's own copy on GitHub; United States; beta versions)</td><td>Once, after you press Download when you choose a language that needs it (see <a href="#translation-model">Translation on Your Device</a>)</td><td>Which language's model is downloaded. Nothing you translate</td></tr>
+          <tr><td>Related-events model (Hugging Face, United States; beta versions)</td><td>Once, after you press Download when you turn on "Find related past events on this device" (see <a href="#related-events">Related Past Events</a>)</td><td>That the model is downloaded. None of your events</td></tr>
         </tbody>
       </table>
     </div>
@@ -162,6 +164,9 @@
 
     <h3 id="translation-model">Translation on Your Device (beta versions)</h3>
     <p>In some languages (Arabic, Chinese, Dutch, French, German, Indonesian, Italian, Portuguese, Russian, Spanish and Swedish, and Czech, Danish, Estonian, Finnish, Greek, Hebrew, Hungarian, Irish, Latvian, Lithuanian, Maltese, Romanian and Slovak) what the game's language packs do not cover is translated on your device, by an <a href="https://github.com/Helsinki-NLP/Opus-MT">Opus-MT</a> model from the University of Helsinki (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>). The game asks first, with the size of the download (110 to 150 MB, for your language only). The model is downloaded once, after you press Download, from Hugging Face or, for some languages, from the game's own copy on GitHub, and kept in the game's storage; it runs in the game, so <strong>the text it translates never leaves your device</strong>, and nothing is sent to your AI provider to be translated. If you prefer your AI provider's translations, Settings → General → Language has a switch, "Translate with my AI", which is off unless you turn it on, and is offered only once the model is downloaded. On, the text the model would translate is sent to your AI provider instead, as above, a few large requests at a time that count against your AI requests; what it translates is kept on your device, and the model translates whatever your provider does not answer. Off again, the model translates it all, and nothing more is sent.</p>
+
+    <h3 id="related-events">Related Past Events (beta versions)</h3>
+    <p>Settings → AI has a switch, "Find related past events on this device", which is off unless you turn it on. On, a small model, <a href="https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2">all-MiniLM-L6-v2</a> (<a href="https://www.apache.org/licenses/LICENSE-2.0">Apache 2.0</a>), turns each event of your game into a list of numbers, and each time skip uses them to find the past events closest to your orders, wars and storylines; those events are then included in that skip's request to your AI provider, which already receives your game's history. The game asks first, with the size of the download (24 MB). The model is downloaded once, after you press Download, from Hugging Face, and kept in the game's storage with the numbers; it runs in the game, so <strong>your events never leave your device for it</strong>, and no AI request is made for it. Turning the switch off removes the model and the numbers; deleting a game removes that game's.</p>
 
     <h3>The World Map (website only)</h3>
     <p>On the website, the world map is part of the site: its files are loaded from openhistoria.com itself, like the rest of the page, and nothing else is contacted for them.</p>

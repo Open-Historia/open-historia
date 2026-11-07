@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // On-device similar-event search (the token-cutting plan's item 13, 2026-11-07): Settings → AI → Find related
+    // past events on this device, off by default (AI/relatedEvents.js, relatedEventsSearch.js,
+    // runtime/embeddingWorker.js; all-MiniLM-L6-v2, 24 MB, downloaded after a yes).
+    id: "2026-11-related-past-events",
+    kind: "minor",
+    date: "2026-11-07",
+    channel: "beta",
+    banners: [
+      {
+        title: "Related past events",
+        items: [
+          "A new setting in Settings → AI, Find related past events on this device, off unless you turn it on: a small model on your device (a 24 MB download, after you say yes) finds the old events closest to each time skip’s orders, wars and storylines, and the skip is shown up to six of them, so threads from long ago are picked up again.",
+          "It makes no AI requests, and your events never leave your device for it. With AI lookup functions on, the AI can also search your past events itself.",
+        ],
+      },
+    ],
+  },
+  {
     // The prompt budget (docs/prompt-budget.md): the skip's unchanging rules first and cached, nothing sent twice,
     // older events by a one-line digest, a slimmer output function. Phase 2 (promptFocus.js, runtime/historyTiers.js):
     // what the turn is about in full and the rest in a line, compact tables, the history in tiers and its canon.
