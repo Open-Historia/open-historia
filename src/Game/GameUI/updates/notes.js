@@ -54,95 +54,125 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
-    // The owner, 2026-11-07: "add a character limit to prompts so they can at most be 20% larger than the built in
-    // defaults" (AI/promptGuidance.js guidanceCharLimit; the Prompts tab's counter; runtime/promptLimitNotice.js).
-    id: "2026-11-prompt-length-limit",
-    kind: "minor",
+    // "make a major update annoucement for the whole ai optimization before I release it" (the owner, 2026-11-07).
+    // It folds in the day's five minor notices, which had reached only the beta: time skips cost less (the prompt
+    // budget, docs/prompt-budget.md: the cached opening, nothing sent twice, one-line digests, what the turn is about in
+    // full, the history in tiers and its canon), related past events and older conversations kept on file
+    // (AI/relatedEvents.js, AI/chatArchive.js), the AI setup's three choices (GameUI/apiSetupPrompt.jsx), My key has
+    // no request limit (AI/requestBudget.js) and the limit on edited prompts (AI/promptGuidance.js). The savings: the
+    // part of a skip a provider bills in full fell 39 to 54% on seven real saves, the whole request a median of 4%
+    // (the free Gemini tier's request barely changed); the owner's words for it are "about half as much on providers
+    // other than Gemini". The languages section recalls the 2026-11-06 work (Translate with my AI, scenario
+    // languages, the 1,111-string sweep).
+    id: "2026-11-ai-overhaul",
+    kind: "major",
     date: "2026-11-07",
     channel: "beta",
     banners: [
       {
-        title: "A length limit for edited prompts",
-        items: [
-          "An edited prompt passage can now be up to 20% longer than the built-in one. The Prompts tab counts each passage as you type, and Save waits until a passage that is too long is shortened or reset.",
-          "A passage that was already longer, in a save, a scenario or an imported prompt pack, is never cut: the AI uses the built-in passage in its place until you shorten it, and the game tells you once.",
+        theme: "aiOverhaul",
+        scene: "skips",
+        title: "Leaner Time Skips",
+        subtitle: "Less to send, nothing forgotten",
+        lead: "Time skips cost about half as much on providers other than Gemini (Claude, OpenAI, DeepSeek, Command Code and others), and long campaigns keep their history for good.",
+        sections: [
+          {
+            heading: "Cheaper skips",
+            icon: "gear",
+            items: [
+              "What never changes from skip to skip now opens the request, so after the first skip the AI service keeps it and charges much less for it.",
+              "Nothing is sent twice, and older events go to the AI as one line each.",
+              "On Gemini's free tier a request is about as large as before: the savings are on the other providers.",
+            ],
+          },
+          {
+            heading: "What the turn is about",
+            icon: "eye",
+            items: [
+              "Each skip gives the AI in full your country, your neighbours, the countries most in the news or in dealings with you, every war and everything your orders name.",
+              "The rest of the world goes in a line each, with its leader, its wars, its alliances and who holds its land.",
+            ],
+          },
+          {
+            heading: "A history that lasts",
+            icon: "book",
+            items: [
+              "Your campaign's history is kept in tiers: the latest years in detail, older eras told more briefly.",
+              "Treaties, deaths, changes of government and borders go into a record of facts that is never forgotten, however long the campaign runs.",
+            ],
+          },
         ],
       },
-    ],
-  },
-  {
-    // The AI setup prompt's three choices (GameUI/apiSetupPrompt.jsx, the owner 2026-11-07): Gemini, Command Code
-    // (its GOAT plan, GLM-5.3 Flash filled in: AI/providerConfig.js COMMANDCODE_TEMPLATE) and Custom.
-    id: "2026-11-ai-setup-three-choices",
-    kind: "minor",
-    date: "2026-11-07",
-    channel: "beta",
-    banners: [
       {
-        title: "Three ways to set up the AI",
-        items: [
-          "Setting up the AI now offers three choices: Gemini, the best free option; Command Code, the best quality option, where you only paste a key from its $10 GOAT plan and GLM 5.3 Flash is set up for you; and Custom, for any provider and any model, or a local model.",
+        theme: "aiOverhaul",
+        scene: "memory",
+        title: "A Longer Memory",
+        subtitle: "Old threads picked up again",
+        lead: "The game now finds the past that matters to each turn, on your own device and with no extra AI requests.",
+        sections: [
+          {
+            heading: "Related past events",
+            icon: "star",
+            items: [
+              "A small model that ships with the game finds the old events closest to each skip's orders, wars and storylines, and shows the AI up to six of them.",
+              "It is built in and always on, with nothing to download, and your events never leave your device for it.",
+            ],
+          },
+          {
+            heading: "Old diplomacy kept",
+            icon: "people",
+            items: [
+              "A conversation untouched for over a game year and four time skips is kept on your device, and brought back when it matters to a skip, a leader's reply or the Advisor.",
+              "What was agreed, promised or threatened in it always stays in view, so promises and grudges are never lost.",
+            ],
+          },
         ],
       },
-    ],
-  },
-  {
-    // On-device similar-event search (the token-cutting plan's item 13, 2026-11-07): first an opt-in setting that
-    // downloaded the model, then the same day built in and always on: all-MiniLM-L6-v2 (24 MB) ships in
-    // public/models/ (AI/relatedEvents.js, relatedEventsSearch.js, runtime/embeddingWorker.js). Older
-    // conversations the same day (AI/chatArchive.js): not used for over a game year and four skips, kept on file.
-    id: "2026-11-related-past-events",
-    kind: "minor",
-    date: "2026-11-07",
-    channel: "beta",
-    banners: [
       {
-        title: "Related past events",
-        items: [
-          "Related past events is built into the game and always on: a small model that ships with the game (24 MB, nothing to download or turn on) finds the old events closest to each time skip’s orders, wars and storylines, and the skip is shown up to six of them, so threads from long ago are picked up again.",
-          "It makes no AI requests, and your events never leave your device for it. With AI lookup functions on, the AI can also search your past events itself.",
-          "Older conversations are now remembered too: a conversation untouched for over a game year and four time skips is kept on your device and brought back when it matters to a time skip, a leader’s reply or the advisor, and what was agreed or promised in it is never dropped.",
+        theme: "aiOverhaul",
+        scene: "setup",
+        title: "Your AI, Your Way",
+        subtitle: "Three choices and one switch",
+        lead: "Setting up the AI is now three clear choices, and one switch tunes the game to a key without a request limit.",
+        sections: [
+          {
+            heading: "Three ways to set up",
+            icon: "gear",
+            items: [
+              "Gemini, the best free option.",
+              "Command Code, recommended for the best quality: paste a key from its $10 GOAT plan and GLM 5.3 Flash is set up for you.",
+              "Custom, for any provider and any model, or a model on your own computer.",
+            ],
+          },
+          {
+            heading: "My key has no request limit",
+            icon: "plane",
+            items: [
+              "One switch at the top of Settings → AI → AI requests, for a paid key or a local model: My key has no request limit.",
+              "With it on, the AI looks things up as it needs them: a time skip can use up to 8 requests, each sending less, and Background AI has no daily cap.",
+              "It replaces Save AI requests and Unlimited requests. If you had Save AI requests off or Unlimited requests on, it is on. AI lookup functions are under Advanced.",
+              "Setting up Command Code, or a model on your own computer, turns it on for you.",
+            ],
+          },
+          {
+            heading: "Edited prompts",
+            icon: "note",
+            items: [
+              "An edited prompt passage can now be up to 20% longer than the built-in one. The Prompts tab counts each passage as you type, and Save waits until a passage that is too long is shortened or reset.",
+              "A passage that was already longer, in a save, a scenario or an imported prompt pack, is never cut: the AI uses the built-in passage in its place until you shorten it, and the game tells you once.",
+            ],
+          },
+          {
+            heading: "In your language",
+            icon: "book",
+            items: [
+              "The interface is in 36 languages, and 1,111 more of its lines are now translated.",
+              "Translate with my AI, in Settings → General → Language, lets your own AI translate what the model on your device would.",
+              "Scenarios can ship their own translations, made with your AI in the Workshop's Languages tab.",
+            ],
+          },
         ],
-      },
-    ],
-  },
-  {
-    // The prompt budget (docs/prompt-budget.md): the skip's unchanging rules first and cached, nothing sent twice,
-    // older events by a one-line digest, a slimmer output function. Phase 2 (promptFocus.js, runtime/historyTiers.js):
-    // what the turn is about in full and the rest in a line, compact tables, the history in tiers and its canon.
-    id: "2026-11-time-skips-cost-less",
-    kind: "minor",
-    date: "2026-11-07",
-    channel: "beta",
-    banners: [
-      {
-        title: "Time skips cost less",
-        items: [
-          "Time skips send the AI less: nothing is sent twice, older events go as one line each, and the part of the request that never changes is kept by the AI service, so each skip costs less and runs faster.",
-          "Long campaigns send even less: each skip gives the AI in full what the turn is about (your country, your neighbours, the countries most in the news or in dealings with you, every war, everything your orders name) and the rest of the world in a line. Your campaign's treaties, deaths, changes of government and borders are now kept for good, however long it runs.",
-        ],
-      },
-    ],
-  },
-  {
-    // My key has no request limit (AI/requestBudget.js; Settings → AI → AI requests), for a paid key or a local model:
-    // a skip may be up to eight requests with six rounds of lookups, the prompt is slimmer (promptContext.js
-    // leanLookups), on Anthropic each round reads the one before from the cache (toolTurns.js withCachedHistory), and
-    // Background AI has no cap. The owner, 2026-11-07: "make there be one toggle that does all the optimal stuff for
-    // non request limited keys so its simple" — it replaced Save AI requests and Unlimited requests the same day.
-    id: "2026-11-unlimited-requests",
-    kind: "minor",
-    date: "2026-11-07",
-    channel: "beta",
-    banners: [
-      {
-        title: "My key has no request limit",
-        items: [
-          "One switch at the top of Settings → AI → AI requests, for a paid key or a local model: My key has no request limit.",
-          "With it on, the AI looks things up and works in more steps: a time skip can use up to 8 requests, with up to 6 rounds of questions, each request sends less, and Background AI has no daily cap.",
-          "It replaces Save AI requests and Unlimited requests. If you had Save AI requests off or Unlimited requests on, it is on. AI lookup functions are under Advanced.",
-          "Setting up Command Code, or a model on your own computer, turns it on for you.",
-        ],
+        button: "To the main menu",
       },
     ],
   },
