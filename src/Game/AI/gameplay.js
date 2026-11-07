@@ -4,7 +4,7 @@ import { callAI, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDip
 import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { clampTimelineDates, validatePregameEvents, validateTimelineDates } from "./timelineDates.js";
-import { buildMilitaryFeasibilityText } from "./militaryFeasibility.js";
+import { MILITARY_FEASIBILITY, buildMilitaryFeasibilityText } from "./militaryFeasibility.js";
 import { looksLikeChatRequest } from "./chatHints.js";
 import { FALLBACK_SUGGESTION_TOPICS, fallbackTurnText } from "../../runtime/fallbackTurnText.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
@@ -1606,7 +1606,8 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (wants("playerPolityMilitaryContext")) {
     variables.playerPolityMilitaryContext = describeMilitaryStanding(bundle.world && typeof bundle.world === "object" ? bundle.world : {}, normalizeString(bundle.game.country));
   }
-  if (wants("unitsSummary")) {
+  // A time skip states the doctrine once, among its standing rules.
+  if (wants("unitsSummary") && !JUMP_TASK_KEYS.has(taskKey)) {
     variables.unitsSummary =
       normalizeString(variables.unitsSummary) +
       buildMilitaryFeasibilityText(bundle.world, bundle.actions);
@@ -2876,6 +2877,7 @@ const buildJumpStaticRules = async (variables = {}) => {
     // One request, so the events finish themselves.
     variables?.foldedSkip ? FOLDED_SKIP_CONSEQUENCES : "",
     unitsOnTheMapBlock(game?.gameDate, eraSettingOf(world)),
+    `[Military Feasibility]\n${MILITARY_FEASIBILITY}`,
     TAKING_GROUND_BLOCK,
     isActiveFeatureEnabled("groups") ? `${GROUPS_RULE_HEADING}\n${GROUPS_RULE}` : "",
     `${WAR_LEDGER_RULES_HEADING}\n${warLedgerRules(playerName)}`,

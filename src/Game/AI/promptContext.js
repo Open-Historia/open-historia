@@ -1099,6 +1099,33 @@ const unitSummaryRow = (unit, handles) => {
     `${unit.covert ? " [unconfirmed]" : ""} at ${coords}`;
 };
 
+// A time skip's table of the units in view: grouped by owner, the order of the
+// fields said once (UNITS_TABLE_HEADER), and a field left out where it says
+// what it would say of most units (full strength, idle).
+export const UNITS_TABLE_HEADER = "By owner; each unit: name: type[, strength when under 100%][, posture or status when not idle]; what it is; lat, lng";
+const unitTableRow = (unit, handles) => {
+  const lat = Number(unit.lat);
+  const lng = Number(unit.lng);
+  const where = Number.isFinite(lat) && Number.isFinite(lng) ? `${lat.toFixed(2)}, ${lng.toFixed(2)}` : "location unknown";
+  const strength = Number(unit.strength);
+  const state = normalizeString(unit.posture) || (normalizeString(unit.status) && normalizeString(unit.status) !== "idle" ? normalizeString(unit.status) : "");
+  const head = [
+    normalizeString(unit.type) || "unit",
+    Number.isFinite(strength) && strength !== 100 ? `${Math.round(strength)}%` : "",
+    state,
+  ].filter(Boolean).join(", ");
+  return `- ${handles.get(unit.id) || unit.name}: ${head}${unit.covert ? " [unconfirmed]" : ""}; ${normalizeString(unit.composition) ? `${normalizeString(unit.composition)}; ` : ""}${where}`;
+};
+const unitTable = (units, handles) => {
+  const byOwner = new Map();
+  for (const unit of units) {
+    const owner = normalizeString(unit.ownerCode) || "unknown";
+    if (!byOwner.has(owner)) byOwner.set(owner, []);
+    byOwner.get(owner).push(unitTableRow(unit, handles));
+  }
+  return [UNITS_TABLE_HEADER, ...[...byOwner].flatMap(([owner, rows]) => [`${owner}:`, ...rows])];
+};
+
 // When the map holds more units than the list does, the list keeps the
 // player's first, then those of the powers the turn is about (the ranking the
 // region lists use, regionFocus.js: orders, wars, chats, recent events), then
@@ -1147,7 +1174,7 @@ export const buildUnitsSummaryText = (world, {
     const full = viewed.slice(0, limit);
     const shownFull = new Set(full);
     const brief = ordered.filter((unit) => !shownFull.has(unit));
-    const lines = full.map((unit) => unitSummaryRow(unit, handles));
+    const lines = full.length ? unitTable(full, handles) : [];
     if (brief.length) {
       const byOwner = new Map();
       let named = 0;
@@ -1278,6 +1305,7 @@ const buildMarkerAttentionEvidence = (bundle, { chat = null } = {}) => {
   };
 };
 
+export const MARKERS_TABLE_HEADER = "Each: name: kind, owner[, status when not active]; lat, lng[; dates][ — what it is]";
 export const buildMarkersSummaryText = (
   worldLike,
   {
@@ -1339,7 +1367,7 @@ export const buildMarkersSummaryText = (
     : new Set();
   const rows = selected.map((marker) => {
     if (briefOnly.has(marker)) {
-      return `- ${marker.name} (${marker.kind}${marker.ownerCode ? `, owner ${marker.ownerCode}` : ""}${normalizeString(marker.status) && normalizeString(marker.status) !== "active" ? `, status ${normalizeString(marker.status)}` : ""})`;
+      return `- ${marker.name}: ${marker.kind}${marker.ownerCode ? `, ${marker.ownerCode}` : ""}${normalizeString(marker.status) && normalizeString(marker.status) !== "active" ? `, ${normalizeString(marker.status)}` : ""}`;
     }
     const lat = Number(marker.lat);
     const lng = Number(marker.lng);
@@ -1355,6 +1383,11 @@ export const buildMarkersSummaryText = (
       changed && changed !== founded ? `last changed ${changed}` : "",
     ].filter(Boolean).join(", ");
     const note = compactMarkerNote(marker.note, 180);
+    // A time skip's table: kind and owner, the status where it is not
+    // active, then lat, lng, said once where the list opens (MARKERS_TABLE_HEADER).
+    if (inView instanceof Set) {
+      return `- ${marker.name}: ${marker.kind}${marker.ownerCode ? `, ${marker.ownerCode}` : ""}${status !== "active" ? `, ${status}` : ""}; ${coords.replace(/lat |lng /g, "")}${dates ? `; ${dates}` : ""}${aliases.length ? `; former name${aliases.length === 1 ? "" : "s"}: ${aliases.join(" / ")}` : ""}${note ? ` — ${note}` : ""}`;
+    }
     return `- ${marker.name} (${marker.kind}${marker.ownerCode ? `, owner ${marker.ownerCode}` : ""}, status ${status}) at ${coords}${dates ? `; ${dates}` : ""}${aliases.length ? `; former name${aliases.length === 1 ? "" : "s"}: ${aliases.join(" / ")}` : ""}${note ? ` — ${note}` : ""}`;
   });
 
@@ -1362,6 +1395,7 @@ export const buildMarkersSummaryText = (
   if (omitted > 0) {
     rows.push(`[${omitted} additional persistent world feature${omitted === 1 ? "" : "s"} omitted from this task context; they remain canonical in the save.]`);
   }
+  if (inView instanceof Set) rows.unshift(MARKERS_TABLE_HEADER);
   return rows.join("\n");
 };
 
@@ -1607,8 +1641,9 @@ let _stockCityCatalogCache = null;
 // folder, on every build (runtime/worldFiles.js).
 const CITY_SEED_URL = worldFileUrl("cities");
 
+// "lat, lng" is said once, where the list opens (the skip templates' [City Coordinates]).
 const formatCityLine = (name, country, lat, lng, extra = "") =>
-  `- ${name}${country ? ` (${country})` : ""}: lat ${Number(lat).toFixed(2)}, lng ${Number(lng).toFixed(2)}${extra}`;
+  `- ${name}${country ? ` (${country})` : ""}${extra}: ${Number(lat).toFixed(2)}, ${Number(lng).toFixed(2)}`;
 
 export const buildCityCatalogText = async (world) => {
   try {

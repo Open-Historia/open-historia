@@ -14,8 +14,11 @@ import {
   buildPolityLoreReference,
   buildPromptContext,
   buildPromptFocus,
+  buildMarkersSummaryText,
   buildUnitsSummaryText,
   buildWorldSummary,
+  MARKERS_TABLE_HEADER,
+  UNITS_TABLE_HEADER,
   refreshPromptReference,
   PROMPT_REFERENCE_REFRESH,
 } from "./promptContext.js";
@@ -99,12 +102,15 @@ test("the player's units, its enemies' and those of the powers the orders name a
   const units = [
     ...Array.from({ length: 30 }, (_, index) => unit(`f${index}`, `Filler State ${index + 1}`)),
     unit("r1", "Ruritania"),
-    unit("s1", "Slavonia", { type: "armor" }),
+    unit("s1", "Slavonia", { type: "armor", strength: 64, posture: "attack", composition: "two tank brigades" }),
     unit("y1", "Syldavia"),
   ];
   const inView = new Set(["ruritania", "slavonia", "syldavia"]);
   const text = buildUnitsSummaryText({ units }, { player: "Ruritania", inView });
-  for (const id of ["r1", "s1", "y1"]) assert.match(text, new RegExp(`unit ${id} \\((infantry|armor), owner `), `${id} in full`);
+  assert.ok(text.startsWith(UNITS_TABLE_HEADER), "the fields are named once");
+  assert.match(text, /^Ruritania:\n- Ruritania unit r1: infantry; 50\.00, 10\.00$/m, "full strength and idle go without saying");
+  assert.match(text, /^Slavonia:\n- Slavonia unit s1: armor, 64%, attack; two tank brigades; 50\.00, 10\.00$/m);
+  assert.match(text, /^- Syldavia unit y1: infantry; 50\.00, 10\.00$/m);
   assert.match(text, /^Other formations, by owner/m);
   for (let index = 0; index < 30; index += 1) assert.ok(text.includes(`Filler State ${index + 1} unit f${index} (infantry)`), `f${index} still named`);
   assert.doesNotMatch(text, /omitted/);
@@ -184,4 +190,18 @@ test("the air strikes a skip is told are capped, the heaviest kept, and the rest
   assert.match(block, /Bomber Wing 39 struck/);
   assert.match(block, /\(\+\d+ more air strikes? this period, of lesser effect, not listed\)$/);
   assert.equal(airStrikesBlock(strikes.slice(0, 3)).includes("more air strike"), false);
+});
+
+test("a skip's structures are a table too: what they are, whose, where; the rotation's others in a line", () => {
+  const markers = [
+    { id: "m1", name: "Fort Brod", kind: "fortress", ownerCode: "Ruritania", status: "active", lat: 51.2, lng: 23.4, note: "The border's anchor." },
+    { id: "m2", name: "Zenda Dam", kind: "dam", ownerCode: "Atlantis", status: "under_construction", lat: 40, lng: 10 },
+    { id: "m3", name: "Old Lighthouse", kind: "landmark", ownerCode: "Atlantis", status: "active", lat: 41, lng: 11 },
+  ];
+  const text = buildMarkersSummaryText({ markers }, { inView: new Set(["ruritania"]), limit: 10 });
+  const lines = text.split("\n");
+  assert.equal(lines[0], MARKERS_TABLE_HEADER);
+  assert.ok(lines.includes("- Fort Brod: fortress, Ruritania; 51.20, 23.40 — The border's anchor."));
+  assert.ok(lines.includes("- Zenda Dam: dam, Atlantis, under_construction; 40.00, 10.00"), "an open structure is in full wherever it is");
+  assert.ok(lines.includes("- Old Lighthouse: landmark, Atlantis"), "a quiet one out of view is named");
 });
