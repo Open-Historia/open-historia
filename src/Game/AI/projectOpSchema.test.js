@@ -221,7 +221,9 @@ test("the board no longer costs the jump anything", () => {
   // one answer, where a feed of its own would have been a request a skip.
   // The strikes an event tells of (impacts.strikes) raised it by about 190, on purpose: a strike was a battlefield
   // line only, and with Fronts off or no war under way none was ever drawn.
-  assert.ok(jumpChars < 29850, `the jump schema grew back to ${jumpChars} chars`);
+  // An event's one-line digest raised it by about 160, on purpose: later skips
+  // read an older event by it instead of by its whole story.
+  assert.ok(jumpChars < 29990, `the jump schema grew back to ${jumpChars} chars`);
 
   // ...and the game master, which has no second pass to hand the board to, keeps
   // it on its authored events (the provider sees a shallow transport; the

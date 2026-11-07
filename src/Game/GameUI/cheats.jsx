@@ -2683,6 +2683,11 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                                         quote: quote || null,
                                                         npcReaction: nextReaction(entry),
                                                         title,
+                                                        // The one-line digest later skips read
+                                                        // (runtime/gameState.js normalizeEventDigest)
+                                                        // was the old story's: a rewritten event
+                                                        // drops it, and is read by its own opening.
+                                                        ...(cleanEventBody(entry.description) !== description || cleanEventText(entry.title) !== title ? { digest: "" } : {}),
                                                     }),
                                                 });
                                                 const persistedEvent = persisted.find((candidate) => eventReactionIdentity(candidate) === eventReactionIdentity(event));

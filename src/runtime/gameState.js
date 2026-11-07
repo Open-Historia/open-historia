@@ -3723,6 +3723,20 @@ const normalizeEventNpcReaction = (value) => {
   };
 };
 
+// An event's one-line digest (the time skip writes one beside each event): the
+// line a later skip's history shows of it once it is no longer the newest
+// (promptContext.js buildEventHistoryText). One line, at most
+// EVENT_DIGEST_MAX_CHARS; "" when there is none, as on every event written
+// before digests and every event of the Event Editor.
+export const EVENT_DIGEST_MAX_CHARS = 140;
+export const normalizeEventDigest = (value) => {
+  const line = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  if (line.length <= EVENT_DIGEST_MAX_CHARS) return line;
+  const cut = line.slice(0, EVENT_DIGEST_MAX_CHARS - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > EVENT_DIGEST_MAX_CHARS * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+};
+
 export const normalizeEventEntry = (entry, index = 0) => {
   if (typeof entry === "string") {
     const title = normalizeString(entry);
@@ -3772,11 +3786,14 @@ export const normalizeEventEntry = (entry, index = 0) => {
   // The places the event said it is about, as the engine found them on the
   // map (runtime/eventPlaces.js): what its card links to.
   const places = normalizeEventPlaces(entry.places);
+  const digest = normalizeEventDigest(entry.digest);
 
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
     date: normalizeOptionalString(entry.date),
     description: presentation.description,
+    // Only when present, so an event without one saves exactly as before.
+    ...(digest ? { digest } : {}),
     ...(presentation.quote ? { quote: presentation.quote } : {}),
     // Only when present, so an event without one saves exactly as before.
     ...(npcReaction ? { npcReaction } : {}),

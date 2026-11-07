@@ -49,7 +49,8 @@ test("polity rename re-keys Political Actors and the pre-existing 28k schema gua
   // And by about 560 for a letter's peaceOffer and the peaceTreaties lines: peace when the skip says so (2026-10-30).
   // And by about 400 for Rostra's socialPosts: the period's posts in the skip's one answer (2026-11-02).
   // And by about 190 for an event's strikes: missiles and bombing runs drawn in every game, not only on a battlefield (2026-11-05).
-  assert.match(schemaGuard, /assert\.ok\(jumpChars < 29850,/);
+  // And by about 140 for an event's one-line digest: later skips read an older event by it (2026-11-07).
+  assert.match(schemaGuard, /assert\.ok\(jumpChars < 29990,/);
   assert.doesNotMatch(schemaGuard, /jumpChars < 3[01]000|jumpChars < 32000/, "CP28.8.11 must not silently raise the separate pre-existing schema-size guard");
 });
 

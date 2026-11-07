@@ -244,6 +244,24 @@ const describeGroupOp = (op) => {
   return `${op.name} changed${op.newName ? ` (now ${op.newName})` : ""}`;
 };
 
+// What an event's line in the history says when it is not shown in full: the
+// digest it was written with, or the opening of its story where it has none.
+export const EVENT_DIGEST_FALLBACK_CHARS = 200;
+export const eventDigestOf = (event) => {
+  const digest = normalizeString(event?.digest);
+  if (digest) return digest;
+  const story = normalizeString(event?.description).replace(/\s+/g, " ");
+  if (story.length <= EVENT_DIGEST_FALLBACK_CHARS) return story;
+  const cut = story.slice(0, EVENT_DIGEST_FALLBACK_CHARS - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > EVENT_DIGEST_FALLBACK_CHARS * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+};
+
+// `digests`: only the newest skip's events (the last entry of
+// world.simulationHistory) are told in full; older ones by their one-line
+// digest (eventDigestOf). They were told in full when they were the newest, and
+// the history document carries what they set in motion. A world with no
+// recorded skip tells every event in full.
 export const buildEventHistoryText = (
   events,
   {
@@ -253,17 +271,22 @@ export const buildEventHistoryText = (
     limit = 10,
     maxChars = 0,
     world = null,
+    digests = false,
   } = {},
 ) => {
   const normalizedEvents = world ? getUnconsolidatedEvents(events, world) : normalizeEvents(events);
   if (normalizedEvents.length === 0) {
     return "No unconsolidated events have been recorded yet.";
   }
+  const newest = digests && world
+    ? new Set(normalizeArray(normalizeWorldState(world).simulationHistory?.[0]?.eventIds).map(normalizeString).filter(Boolean))
+    : null;
+  const inFull = (event) => !newest || newest.size === 0 || newest.has(event.id);
 
   const rendered = selectRankedEvents(normalizedEvents, { limit, world, currentDate })
     .map((event) => {
       const date = normalizeString(event.date) || "undated";
-      const description = normalizeString(event.description);
+      const description = inFull(event) ? normalizeString(event.description) : eventDigestOf(event);
       const impactNotes = [];
 
       if (event.impacts.regionTransfers.length > 0) {
@@ -2105,6 +2128,8 @@ export const buildPromptContext = async (bundle, {
         limit: lookups ? Math.min(longEventLimit, leanLookups ? LEAN_RECENT_EVENTS : 8) : longEventLimit,
         maxChars: lookups && !longEventHistoryMaxChars ? 3000 : longEventHistoryMaxChars,
         world: bundle.world,
+        // A skip: the newest skip's events in full, the older ones by digest.
+        digests: SKIP_TASKS.has(taskKey),
       });
       result.recentEventsLong = [
         "STORY SO FAR:",

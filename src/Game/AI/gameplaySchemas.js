@@ -1238,6 +1238,9 @@ const eventSchema = {
     date: textSchema("In-game date of the event."),
     title: textSchema("The headline: one sentence saying what happened."),
     description: textSchema("The story under the headline: what happened, how, where, by whom and with what result, told with its specifics - never the headline said again."),
+    // What later skips' history shows of the event once it is no longer the
+    // newest (promptContext.js buildEventHistoryText); optional in a save.
+    digest: textSchema("One line of at most 140 characters: what happened and what it changed, for the history later turns read."),
     quote: jumpEventQuoteSchema,
     importance: textSchema("Importance, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
@@ -3727,17 +3730,22 @@ export const withWarFigures = (tool) => {
 // then never wrote; ten events, no impacts on any). Required, the same request
 // came back with impacts on every event, {} on the seven that changed nothing.
 // The answer is still read without it (the task's own schema).
+//
+// And its one-line digest, for the same reason: optional, a small model leaves
+// it off, and a later skip then shows that event's history as a cut of its
+// story instead (promptContext.js). Both stay optional in a save.
 export const withEventImpacts = (tool) => {
   const event = tool?.schema?.properties?.events?.items;
   if (!tool?.schema?.properties?.stopDate || !event?.properties?.impacts) return tool;
   const required = Array.isArray(event.required) ? event.required : [];
-  if (required.includes("impacts")) return tool;
+  const asked = ["impacts", ...(event.properties.digest ? ["digest"] : [])].filter((name) => !required.includes(name));
+  if (!asked.length) return tool;
   const events = tool.schema.properties.events;
   return {
     ...tool,
     schema: {
       ...tool.schema,
-      properties: { ...tool.schema.properties, events: { ...events, items: { ...event, required: [...required, "impacts"] } } },
+      properties: { ...tool.schema.properties, events: { ...events, items: { ...event, required: [...required, ...asked] } } },
     },
   };
 };

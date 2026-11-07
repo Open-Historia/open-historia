@@ -13,7 +13,8 @@ test("a skip's events are sent with impacts required", () => {
   const tool = getGameplayTool("jumpForward");
   assert.ok(!(tool.schema.properties.events.items.required ?? []).includes("impacts"), "the stored contract leaves it optional");
   const sent = withEventImpacts(tool);
-  assert.deepEqual(sent.schema.properties.events.items.required, [...(tool.schema.properties.events.items.required ?? []), "impacts"]);
+  // (And its one-line digest, for the same reason: below.)
+  assert.deepEqual(sent.schema.properties.events.items.required, [...(tool.schema.properties.events.items.required ?? []), "impacts", "digest"]);
   assert.equal(withEventImpacts(sent), sent, "asked twice, the same tool");
   const other = getGameplayTool("countryStatSheet");
   assert.equal(withEventImpacts(other), other, "a tool with no events is handed back as it is");
@@ -28,4 +29,14 @@ test("an event that changes nothing answers with an empty impacts, and one witho
 test("every skip's tool goes through it", () => {
   const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
   assert.match(gameplay, /const shown = withEventImpacts\(withEventAudience\(grouped, hostingSharedGame\(\)\)\);/);
+});
+
+test("every event of a skip is asked for its one-line digest, and an answer without one is still read", () => {
+  const sent = withEventImpacts(getGameplayTool("jumpForward"));
+  const event = sent.schema.properties.events.items;
+  assert.ok(event.required.includes("digest"));
+  assert.ok(event.properties.digest.description.includes("140"));
+  const keys = Object.keys(event.properties);
+  assert.equal(keys.indexOf("digest"), keys.indexOf("description") + 1, "written after the story it sums up");
+  assert.equal(getGameplayTool("jumpForward").schema.properties.events.items.required.includes("digest"), false, "optional in the task's own schema");
 });

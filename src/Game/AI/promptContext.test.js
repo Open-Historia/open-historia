@@ -8,9 +8,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  EVENT_DIGEST_FALLBACK_CHARS,
   buildAdvisorHistoryText,
   buildDetailedChatHistoryText,
   buildEventHistoryText,
+  eventDigestOf,
   buildHistoricalAnchorText,
   buildPlayerPolityRegionsText,
   buildPromptContext,
@@ -272,4 +274,26 @@ test("a skip's diplomacy gives each thread once: its memory, then its last words
   assert.match(skip.chatHistoryLong, /Partner old was promised a withdrawal by June/);
   const withLookups = await buildPromptContext(bundle, { requiredKeys: ["chatHistoryLong", "diplomaticContinuity"], taskKey: "jumpForward", lookups: true });
   assert.match(withLookups.diplomaticContinuity, /Partner old was promised a withdrawal by June/, "the short view keeps its memory block");
+});
+
+// A skip's history tells the newest skip's events in full and the older ones
+// by their one-line digest (or the opening of their story, where they have none).
+test("a skip's history: the newest skip's events in full, older ones by their digest or the start of their story", () => {
+  const story = (word) => `${word} ${"and the story went on at length about who did what to whom. ".repeat(8)}`.trim();
+  const events = [
+    { id: "old-1", date: "1930-01-05", title: "The old crisis", description: story("Old"), digest: "Slavonia closed the border after the old crisis.", importance: "major", impacts: {} },
+    { id: "old-2", date: "1930-02-05", title: "An undigested event", description: story("Undigested"), importance: "major", impacts: {} },
+    { id: "new-1", date: "1930-05-01", title: "The newest event", description: story("Newest"), digest: "Never shown: this one is told in full.", importance: "major", impacts: {} },
+  ];
+  const world = { simulationHistory: [{ date: "1930-05-12", eventIds: ["new-1"] }, { date: "1930-03-01", eventIds: ["old-1", "old-2"] }] };
+  const skip = buildEventHistoryText(events, { world, digests: true, limit: 10 });
+  assert.match(skip, /- 1930-01-05: The old crisis\n {2}Slavonia closed the border after the old crisis\./);
+  assert.ok(skip.includes(story("Newest")), "the newest skip's event in full");
+  assert.equal(skip.includes("Never shown"), false);
+  assert.equal(skip.includes(story("Undigested")), false);
+  assert.ok(skip.includes(eventDigestOf(events[1])), "an event with no digest by the opening of its story");
+  assert.ok(eventDigestOf(events[1]).length <= EVENT_DIGEST_FALLBACK_CHARS && eventDigestOf(events[1]).startsWith("Undigested and the story"));
+  // Every other task, and a world with no recorded skip, still tells every event in full.
+  assert.ok(buildEventHistoryText(events, { world, limit: 10 }).includes(story("Old")));
+  assert.ok(buildEventHistoryText(events, { world: {}, digests: true, limit: 10 }).includes(story("Old")));
 });
