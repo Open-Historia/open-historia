@@ -2799,6 +2799,10 @@ const JUMP_RULES_ABOVE_POINTER = "How each change is recorded (the levers, what 
 const unitsOnTheMapBlock = (gameDate, era) => `[Units and Structures on the Map]
 When an event raises, moves, reinforces or wears down a force, that event carries the unitOps that show it. When an event builds or establishes something that stands in one place, it carries a markerOps build at a place the map knows, with its country.
 ${describeTravelPace(gameDate, era)}`;
+// What the player's chats bind: the rule of the old [Diplomatic Memory] block,
+// whose data is now each thread's memory in [Diplomacy So Far].
+const WHAT_CHATS_BIND_HEADING = "[What Chats Bind]";
+const WHAT_CHATS_BIND = "What earlier chats agreed, promised, threatened or declared, and what still binds. Carry each through when its time comes: an agreed meeting, withdrawal or hand-over happens on its date, or an event says why it did not; a declared intention is acted on or visibly dropped; a credible threat is answered by the power it threatens, before its deadline. Where a summary and the exact words differ, follow the words, and a later pleasantry does not cancel an earlier threat or promise. A proposal nobody accepted is not an agreement.";
 const TAKING_GROUND_BLOCK = `[Taking Ground]
 An army may take a region in this period wherever what has led up to it makes that likely, or where history took it at this time and nothing in this game has turned that aside. Tell it in the event that takes it, and put the region in the taker's hands on that event: a regionControlOps control entry, basis occupation, the region by name. Move the formation that took it there in the same event when it has one on the map. A region is taken only where enough of the taker's troops stand near it, more for a larger region: where too few do, move them up first, in an earlier event, or the region stays where it was. From that event's date the map follows: the taker's nearest troops stand in the region, and the other side's fall back out of it.`;
 const whoSpiesOnThePlayerBlock = (spiedOn) => `[Who Spies on the Player]
@@ -2844,6 +2848,7 @@ const buildJumpStaticRules = async (variables = {}) => {
     `${WAR_LEDGER_RULES_HEADING}\n${warLedgerRules(playerName)}`,
     `${DIPLOMATIC_LEDGER_RULES_HEADING}\n${diplomaticLedgerRules(playerName)}`,
     `[Reading the Diplomatic Ledger]\n${DIPLOMATIC_SLICE_RULES}`,
+    `${WHAT_CHATS_BIND_HEADING}\n${WHAT_CHATS_BIND} A thread's standing memory comes with its latest words below.`,
     frontsOn() ? FRONT_ORDER_LINES_BLOCK : "",
     espionage && spiedOn ? whoSpiesOnThePlayerBlock(spiedOn) : "",
     espionage ? buildSpyOrdersDirective(playerName) : "",
@@ -2941,12 +2946,15 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
     ? { ...variables, canonicalDiplomaticContext: normalizeString(variables.canonicalDiplomaticContext).replace(`\n${DIPLOMATIC_SLICE_RULES}`, "") }
     : variables, { rulesAbove }));
 
-  // What earlier chats agreed, promised, threatened or declared.
+  // What earlier chats agreed, promised, threatened or declared. Without the
+  // lookup functions each thread's memory rides with its last words in
+  // [Diplomacy So Far] and this is empty (promptContext.js); the rule is
+  // above, with the others, where the template has a place for them.
   const continuity = normalizeString(variables.diplomaticContinuity);
   if (continuity) {
-    blocks.push(`[Diplomatic Memory]
-What earlier chats agreed, promised, threatened or declared, and what still binds. Carry each through when its time comes: an agreed meeting, withdrawal or hand-over happens on its date, or an event says why it did not; a declared intention is acted on or visibly dropped; a credible threat is answered by the power it threatens, before its deadline. Where a summary and the exact words differ, follow the words, and a later pleasantry does not cancel an earlier threat or promise. A proposal nobody accepted is not an agreement.
-${continuity}`);
+    blocks.push(rulesAbove
+      ? `[Diplomatic Memory]\nCarried through as ${WHAT_CHATS_BIND_HEADING} above says.\n${continuity}`
+      : `[Diplomatic Memory]\n${WHAT_CHATS_BIND}\n${continuity}`);
   }
 
   // Passed resolutions still to be carried out (runtime/institutionalAuthority.js).
@@ -17552,6 +17560,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           worldShare: direction?.worldShare,
           material: playerMaterial,
           playerName: focusContext.playerName,
+          // [This Round] lists them with their ids and words (promptContext.js).
+          ordersAbove: true,
         }),
         worldInitiativeContext: worldInitiative.text,
         ...(segmentCount > 1 ? { targetDate: segmentTarget, targetDateReadable: formatDateReadable(segmentTarget) } : {}),

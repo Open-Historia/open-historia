@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 import {
   buildAdvisorHistoryText,
+  buildDetailedChatHistoryText,
   buildEventHistoryText,
   buildHistoricalAnchorText,
   buildPlayerPolityRegionsText,
@@ -216,4 +217,59 @@ test("a conversation's world summary gives counts, and names only for the player
   assert.match(jump, /Ruritania province 0, Ruritania province 1/, "the jump keeps its vocabulary");
   assert.equal(jump.includes("(Ruritania-0)"), false, "by name, with no region ids");
   assert.match(jump, /region vocabulary for regionTransfers/);
+});
+
+// A time skip's template states the player, the round, the date, the language,
+// the difficulty, the briefing and the rules itself.
+test("a skip's world summary leaves out the briefing its template gives, and keeps the player's tags", async () => {
+  const { regions, world } = authoredWorld();
+  const briefedWorld = { ...world, startingTimelineText: "The long lore of the scenario.", simulationRules: "No poison gas." };
+  const bundle = { game: { ...game, difficulty: "hard" }, world: briefedWorld, events: [], actions: [], chats: [] };
+  const full = await buildWorldSummary(bundle, regions);
+  const skip = await buildWorldSummary(bundle, regions, { briefed: true });
+  for (const line of ["Current round: 4", "Current date: 1930-05-12", "Difficulty: hard", "World before round one: The long lore", "Simulation rules: No poison gas."]) {
+    assert.ok(full.includes(line), `the full summary still says ${line}`);
+    assert.equal(skip.includes(line), false, `a skip's does not repeat ${line}`);
+  }
+  assert.equal(skip.includes("Language:"), false);
+  assert.ok(full.endsWith(skip.slice(skip.indexOf("Territorial changes from the base scenario:"))), "the rest is the same");
+  const variables = await buildPromptContext(bundle, { requiredKeys: ["worldSummaryNoCity"], taskKey: "jumpForward" });
+  assert.equal(variables.worldSummaryNoCity.includes("Current round: 4"), false);
+  const others = await buildPromptContext(bundle, { requiredKeys: ["worldSummaryNoCity"], taskKey: "actions" });
+  assert.ok(others.worldSummaryNoCity.includes("Current round: 4"), "the tasks whose only briefing it is keep it");
+});
+
+// A skip once had each chat thread's memory and last words twice: in
+// [Diplomacy So Far] and again in [Diplomatic Memory].
+const thread = (id, day, { memory = "", messages = 2 } = {}) => ({
+  id,
+  countries: [{ name: "Ruritania" }, { name: `Partner ${id}` }],
+  messages: [
+    ...Array.from({ length: messages }, (_, index) => ({
+      role: index % 2 ? "leader" : "user",
+      speaker: index % 2 ? `Partner ${id}` : "Ruritania",
+      text: `${id} message ${index}`,
+      time: `1930-05-${String(day).padStart(2, "0")}`,
+      // The rolling memory rides on the message it was written after.
+      ...(memory && index === messages - 1 ? { memorySummary: memory } : {}),
+    })),
+  ],
+});
+
+test("a skip's diplomacy gives each thread once: its memory, then its last words, older threads with a memory after", async () => {
+  const chats = [
+    ...Array.from({ length: 9 }, (_, index) => thread(`t${index}`, 20 - index, { memory: index === 0 ? "Ruritania promised Partner t0 a port." : "" })),
+    thread("old", 2, { memory: "Partner old was promised a withdrawal by June." }),
+  ];
+  const text = buildDetailedChatHistoryText(chats, { limit: 8, memoryThreads: 12 });
+  assert.match(text, /Chat 1: Ruritania, Partner t0\nDurable diplomatic memory through [^:]+: Ruritania promised Partner t0 a port\./);
+  assert.match(text, /Chat 9: Ruritania, Partner old \(an older thread with a standing memory\)\nDurable diplomatic memory through [^:]+: Partner old was promised a withdrawal by June\.\nold message 0\nold message 1|Partner old was promised a withdrawal by June\./);
+  assert.equal(text.includes("Partner t8"), false, "an older thread with no memory is in the history, not here");
+  assert.equal(buildDetailedChatHistoryText(chats, { limit: 8 }).includes("Partner old"), false, "only a skip asks for them");
+  const bundle = { game, world: {}, events: [], actions: [], chats, advisor: [] };
+  const skip = await buildPromptContext(bundle, { requiredKeys: ["chatHistoryLong", "diplomaticContinuity"], taskKey: "jumpForward" });
+  assert.equal(skip.diplomaticContinuity, "", "no second copy");
+  assert.match(skip.chatHistoryLong, /Partner old was promised a withdrawal by June/);
+  const withLookups = await buildPromptContext(bundle, { requiredKeys: ["chatHistoryLong", "diplomaticContinuity"], taskKey: "jumpForward", lookups: true });
+  assert.match(withLookups.diplomaticContinuity, /Partner old was promised a withdrawal by June/, "the short view keeps its memory block");
 });

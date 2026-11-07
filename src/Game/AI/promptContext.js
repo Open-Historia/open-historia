@@ -88,6 +88,10 @@ const joinWithinCharBudget = (
   return kept.join(separator);
 };
 
+// The time skip's two tasks, whose templates state some of what other tasks
+// get only from these variables (the briefing, an order's id).
+const SKIP_TASKS = new Set(["jumpForward", "autoJumpForward"]);
+
 export const renderTemplate = (template, variables) =>
   String(template ?? "").replace(/\$\{([^}]+)\}/g, (_match, key) => {
     const value = variables[key];
@@ -789,6 +793,12 @@ export const buildChatSummaryText = (chats, { limit = 4 } = {}) => {
 // Distinct wording per case: "this polity has no correspondence" is a very
 // different fact from "nothing happened this round", and a leader told the
 // latter when the former is true may invent a conversation to fill the gap.
+//
+// `memoryThreads`: a time skip's [Diplomacy So Far] is also its diplomatic
+// memory (it once had both, the memory and the last words of each thread sent
+// twice): the threads with a standing memory beyond the `limit` shown in full
+// follow, up to this many threads with a memory in all, each with its memory
+// and its last few words, as buildDiplomaticContinuityText gave them.
 export const buildDetailedChatHistoryText = (
   chats,
   {
@@ -796,6 +806,7 @@ export const buildDetailedChatHistoryText = (
     maxChars = 0,
     messageLimit = 10,
     visibleTo = "",
+    memoryThreads = 0,
   } = {},
 ) => {
   // sortDiplomaticChatsByRecentActivity normalizes; filterChatsVisibleTo takes
@@ -811,12 +822,32 @@ export const buildDetailedChatHistoryText = (
       : "No chats occurred in these rounds.";
   }
 
-  const rendered = normalizedChats.slice(0, limit).map((chat, index) => {
+  const headerOf = (chat, index) => {
     // A shared game's thread is one person's: say whose (AI/sharedLetters.js).
     const owner = hostingSharedGame() ? normalizeString(chat.player) || sharedGameHostCountry() : "";
-    const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}${owner ? ` (with ${owner})` : ""}`;
-    return `${header}\n${buildSingleChatHistoryText(chat, { messageLimit })}`;
-  });
+    return `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}${owner ? ` (with ${owner})` : ""}`;
+  };
+  const rendered = normalizedChats.slice(0, limit).map((chat, index) => `${headerOf(chat, index)}\n${buildSingleChatHistoryText(chat, { messageLimit })}`);
+  if (memoryThreads > 0) {
+    const shownWithMemory = normalizedChats.slice(0, limit).filter((chat) => getLatestDiplomaticMemory(chat)).length;
+    const older = normalizedChats.slice(limit).filter((chat) => getLatestDiplomaticMemory(chat));
+    let room = MEMORY_THREADS_MAX_CHARS;
+    for (const chat of older.slice(0, Math.max(0, memoryThreads - shownWithMemory))) {
+      const recent = normalizeArray(chat.messages)
+        .filter((message) => ["user", "leader"].includes(normalizeString(message?.role)))
+        .slice(-4)
+        .map(buildDiplomaticMessageLine)
+        .join("\n");
+      const row = [
+        `${headerOf(chat, rendered.length)} (an older thread with a standing memory)`,
+        buildDiplomaticMemoryLine(chat, { maxChars: 1000 }),
+        recent.length > 1800 ? `…${recent.slice(-1799).trimStart()}` : recent,
+      ].filter(Boolean).join("\n");
+      if (row.length > room) break;
+      room -= row.length;
+      rendered.push(row);
+    }
+  }
 
   return joinWithinCharBudget(rendered, {
     maxChars,
@@ -827,6 +858,11 @@ export const buildDetailedChatHistoryText = (
       + "their canonical chat records remain in the save.]",
   });
 };
+
+// The most the older threads with a memory add to a skip's [Diplomacy So Far]
+// (buildDetailedChatHistoryText memoryThreads): the budget the separate memory
+// block had.
+const MEMORY_THREADS_MAX_CHARS = 12000;
 
 // Compact diplomatic continuity ledger for the world simulator. Long-term meaning
 // comes from rolling memory, while a tiny recent verbatim tail preserves exact
@@ -916,14 +952,19 @@ export { joinPolityNames };
 // already carried out (PLAYER_EVERY_ACTION_NOT_PREVIOUS). The planned ones are
 // given beside it (PLAYER_ACTIONS_THIS_ROUND), and a skip that read them under
 // that label could treat a live order as done, or carry it out twice.
-export const buildActionHistoryText = (actions, { includeResolved = false, includePlanned = true, limit = ACTION_HISTORY_LIMIT } = {}) => {
+//
+// `ids`: a planned order opens with its id in brackets. A time skip cites an
+// order by it (impacts.actionIds), and its [Player Focus] list names the
+// orders by id alone, so their words are sent once (playerFocus.js).
+export const buildActionHistoryText = (actions, { includeResolved = false, includePlanned = true, limit = ACTION_HISTORY_LIMIT, ids = false } = {}) => {
   const normalizedActions = normalizeActions(actions)
     .filter((action) => includePlanned || action.status !== "planned");
   const renderAction = (action) => {
     // In a shared game every order names the polity that gave it.
     const kindLabel = `${action.kind === "chat" ? "chat" : "action"}${action.ownerCode ? `, ${action.ownerCode}` : ""}`;
     const statusLabel = action.status !== "planned" ? ` [${action.status}]` : "";
-    return `- (${kindLabel}) ${action.title}${statusLabel}: ${buildActionDisplayText(action)}`;
+    const id = ids && action.status === "planned" && action.id ? `[${action.id}] ` : "";
+    return `- ${id}(${kindLabel}) ${action.title}${statusLabel}: ${buildActionDisplayText(action)}`;
   };
 
   if (!includeResolved) {
@@ -1713,12 +1754,19 @@ const regionBordersOfThisMap = () => {
   return work;
 };
 
+//
+// `briefed`: the prompt states the player, the round, the date, the language,
+// the difficulty, the briefing and the scenario's rules itself (a time skip's
+// template does), so the summary leaves them out and keeps only the player's
+// tags. The tasks whose only briefing is this summary (actions,
+// countryStatSheet, idleDiplomacy: promptDedupe.js) keep them.
 export const buildWorldSummary = async (bundle, regionCatalog = null, {
   regionListsViaTools = false,
   countsOnly = false,
   conversation = false,
   speakingAs = "",
   nationTags = null,
+  briefed = false,
 } = {}) => {
   const world = normalizeWorldState(bundle.world);
   const regions = filterToRenderedRegions(regionCatalog ?? await loadRegions(), world);
@@ -1841,15 +1889,20 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
     unruledBorders = buildUnruledBordersText(regionRows, world.regionOwnershipOverrides, { waterTypes, touching });
   }
 
+  const header = briefed
+    ? (playerTags.length ? [`${bundle.game.country || "The player's polity"} is: ${playerTags.join(", ")}`, ""] : [])
+    : [
+      `Player polity: ${bundle.game.country || "Unknown polity"}${playerTags.length ? ` (${playerTags.join(", ")})` : ""}`,
+      `Current round: ${bundle.game.round || 1}`,
+      `Current date: ${bundle.game.gameDate || "unknown"}`,
+      `Language: ${readingLanguageName(world.language || bundle.game.language, { chat: conversation })}`,
+      `Difficulty: ${bundle.game.difficulty || "standard"}`,
+      `World before round one: ${world.startingTimelineText || "No world briefing provided."}`,
+      `Simulation rules: ${world.simulationRules || "No extra simulation rules were provided."}`,
+      "",
+    ];
   return [
-    `Player polity: ${bundle.game.country || "Unknown polity"}${playerTags.length ? ` (${playerTags.join(", ")})` : ""}`,
-    `Current round: ${bundle.game.round || 1}`,
-    `Current date: ${bundle.game.gameDate || "unknown"}`,
-    `Language: ${readingLanguageName(world.language || bundle.game.language, { chat: conversation })}`,
-    `Difficulty: ${bundle.game.difficulty || "standard"}`,
-    `World before round one: ${world.startingTimelineText || "No world briefing provided."}`,
-    `Simulation rules: ${world.simulationRules || "No extra simulation rules were provided."}`,
-    "",
+    ...header,
     "Territorial changes from the base scenario:",
     territorySummary,
     "",
@@ -1966,6 +2019,8 @@ export const buildPromptContext = async (bundle, {
       conversation,
       speakingAs: respondingPolityName,
       nationTags: mapSource?.nationTags ?? null,
+      // A skip's template states the briefing, the round and the date itself.
+      briefed: SKIP_TASKS.has(taskKey),
     });
   }
 
@@ -2079,7 +2134,7 @@ export const buildPromptContext = async (bundle, {
     result.resolvedActions = buildActionHistoryText(bundle.actions, { includeResolved: true, includePlanned: false });
   }
   if (wants("plannedActions")) {
-    result.plannedActions = buildActionHistoryText(bundle.actions);
+    result.plannedActions = buildActionHistoryText(bundle.actions, { ids: SKIP_TASKS.has(taskKey) });
   }
 
   // Chat normalization/sorting can become substantial in long campaigns. Do it
@@ -2119,12 +2174,18 @@ export const buildPromptContext = async (bundle, {
       ? buildSingleChatHistoryText(currentChat, { messageLimit: 18 })
       : "No chat history.";
   }
+  // A time skip without the lookup functions gets each thread once: its memory
+  // and its last words in [Diplomacy So Far], and no separate memory block
+  // repeating both (buildDetailedChatHistoryText memoryThreads). With them, the
+  // short view stays short and the memory keeps its own block.
+  const chatsOnce = SKIP_TASKS.has(taskKey) && !lookups;
   if (wants("chatHistoryLong")) {
     result.chatHistoryLong = buildDetailedChatHistoryText(promptChats, {
       limit: chatLimit,
       // With lookups, a short view; chat_history has the transcripts.
       maxChars: lookups && !chatHistoryLongMaxChars ? 1500 : chatHistoryLongMaxChars,
       visibleTo: chatVisibleTo,
+      ...(chatsOnce ? { memoryThreads: 12 } : {}),
     });
   }
   if (wants("chatParticipants")) {
@@ -2133,7 +2194,7 @@ export const buildPromptContext = async (bundle, {
   }
   if (wants("chatSummary")) result.chatSummary = buildChatSummaryText(promptChats);
   if (wants("diplomaticContinuity")) {
-    result.diplomaticContinuity = buildDiplomaticContinuityText(promptChats);
+    result.diplomaticContinuity = chatsOnce ? "" : buildDiplomaticContinuityText(promptChats);
   }
   if (wants("lastSpeaker")) {
     result.lastSpeaker = currentChat?.messages?.at(-1)?.speaker || "";
