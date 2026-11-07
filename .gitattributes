@@ -19,3 +19,8 @@ public/flags/** -text
 # ever added to. Merging alpha into beta or beta into main keeps both sides'
 # lines instead of conflicting, so no branch forgets the other's old defaults.
 src/Game/AI/shippedGuidance.js merge=union
+
+# The related-past-events model (public/models/all-MiniLM-L6-v2, src/runtime/embeddingModels.js):
+# stored exactly as the model host serves it at the pinned revision, so a checkout on
+# any platform ships the same bytes the sizes in the test are pinned to.
+public/models/** -text

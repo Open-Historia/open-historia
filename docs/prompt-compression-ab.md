@@ -26,7 +26,7 @@ document, as it did before Phase 2.
   It builds the same prompt as `ad26ec16`, whose only change is the
   unlimited-requests mode, and that mode is off by default.
 - **New:** beta `9b599e23` (Phase 1, Phase 2 and related past events).
-  Related past events is opt-in and needs the on-device model, so it is not in
+  Related past events needs the on-device model (opt-in then; built in and always on since), so it is not in
   these requests: this measures Phases 1 and 2.
 - The later beta commit `40a19bd5` (prompts name regions, never their ids) is
   not covered.

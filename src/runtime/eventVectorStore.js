@@ -1,7 +1,6 @@
 /*! Open Historia — the related-events vectors kept on this device © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// One vector per event of a game, for Find related past events
-// (Game/AI/relatedEvents.js), in IndexedDB beside the model's own store
-// (modelStore.js). Each record is keyed "<gameId>:<eventId>" and holds the
+// One vector per event of a game, for related past events
+// (Game/AI/relatedEvents.js), in IndexedDB. Each record is keyed "<gameId>:<eventId>" and holds the
 // hash of what was embedded (embeddingModels.js contentHash), so an event
 // that changed, or a vector of another model, is embedded again.
 //
@@ -39,7 +38,7 @@ export const openEventVectorStore = (idb = globalThis.indexedDB) => {
         };
         open.onsuccess = () => {
           const database = open.result;
-          // Deleted elsewhere (the setting turned off in another window): let it.
+          // Deleted elsewhere (a newer version's store replacing it): let it.
           database.onversionchange = () => {
             database.close();
             opening = null;
@@ -93,29 +92,11 @@ export const openEventVectorStore = (idb = globalThis.indexedDB) => {
   });
 };
 
-// Every game's vectors, when the setting is turned off.
-export const deleteEventVectors = async (idb = globalThis.indexedDB) => {
-  if (!idb) return;
-  try {
-    await request(idb.deleteDatabase(EVENT_VECTOR_DB));
-  } catch {
-    // Nothing kept.
-  }
-};
-
 let shared = null;
 // The page's one store.
 export const eventVectorStore = () => {
   if (!shared) shared = openEventVectorStore();
   return shared;
-};
-
-// Forget the page's store before its database is deleted (a deletion waits for
-// every connection to close).
-export const closeEventVectorStore = async () => {
-  const store = shared;
-  shared = null;
-  await store?.close();
 };
 
 // A deleted game's vectors. Never throws: a game's deletion must not fail on it.

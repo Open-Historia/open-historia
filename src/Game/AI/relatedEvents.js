@@ -1,11 +1,11 @@
 /*! Open Historia — related past events, found on this device © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Settings → AI → Find related past events on this device (off by default).
+// Related past events: always on, on this device (the model ships with the game).
 //
 // A long campaign's old events leave the prompt: they are folded into the
 // story so far, or fall out of the window of recent events. The war the
 // player restarts three years later, the treaty an order now breaks, the
 // rebellion a storyline grew out of, are then known to the model only as a
-// line of summary. With this on, each event is turned into a vector on the
+// line of summary. So each event is turned into a vector on the
 // device (runtime/embeddingModels.js, embeddingWorker.js), and a time skip is
 // given the six past events nearest to what this turn is about: the player's
 // orders, the live wars, the storylines and the powers in focus. They go

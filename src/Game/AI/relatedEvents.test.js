@@ -11,7 +11,7 @@ import {
   renderRelatedPastEvents,
   similarEventsAnswer,
 } from "./relatedEvents.js";
-import { contentHash, eventEmbeddingText, meanPoolNormalize, EMBEDDING_MODEL, embeddingFileUrl } from "../../runtime/embeddingModels.js";
+import { contentHash, eventEmbeddingText, meanPoolNormalize, EMBEDDING_MODEL, embeddingFileUrl, embeddingModelRoot } from "../../runtime/embeddingModels.js";
 import { buildPromptContext } from "./promptContext.js";
 
 const unit = (...values) => {
@@ -19,12 +19,18 @@ const unit = (...values) => {
   return Float32Array.from(values.map((value) => value / norm));
 };
 
-test("the model is pinned: revision, files and their byte size", () => {
+test("the model is pinned: revision, files and their byte size, served from the game's own address", () => {
   assert.match(EMBEDDING_MODEL.revision, /^[0-9a-f]{40}$/);
   assert.equal(Object.values(EMBEDDING_MODEL.files).reduce((sum, bytes) => sum + bytes, 0), EMBEDDING_MODEL.bytes);
   assert.equal(EMBEDDING_MODEL.bytes, 23685047);
-  assert.equal(embeddingFileUrl("onnx/model_quantized.onnx"),
-    "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/751bff37182d3f1213fa05d7196b954e230abad9/onnx/model_quantized.onnx");
+  // The desktop's local server and the Android app serve the build at the root,
+  // the website under /play/.
+  assert.equal(embeddingFileUrl("onnx/model_quantized.onnx", { base: "/", origin: "http://localhost:3000" }),
+    "http://localhost:3000/models/all-MiniLM-L6-v2/onnx/model_quantized.onnx");
+  assert.equal(embeddingFileUrl("tokenizer.json", { base: "/play/", origin: "https://openhistoria.com" }),
+    "https://openhistoria.com/play/models/all-MiniLM-L6-v2/tokenizer.json");
+  assert.equal(embeddingModelRoot("/play", "https://openhistoria.com"), "https://openhistoria.com/play/models/");
+  assert.equal(embeddingModelRoot(), "/models/");
 });
 
 test("an event is embedded as its title and description; the hash follows the text", () => {
@@ -155,19 +161,20 @@ test("similar_events answers date, title and summary, closest first", () => {
   assert.deepEqual(similarEventsAnswer([], events).events, []);
 });
 
-test("the worker loads the pinned model like the translator's: kept store, wasm, int8; the cache survives the sweep", async () => {
+test("the worker loads the bundled model from the game's own files only: no model host, no cache, wasm, int8", async () => {
   const { readFileSync } = await import("node:fs");
   const worker = readFileSync(new URL("../../runtime/embeddingWorker.js", import.meta.url), "utf8");
-  assert.match(worker, /env\.useCustomCache = true;\s*env\.customCache = store;/);
-  assert.match(worker, /new BertTokenizer\(tokenizerJson, tokenizerConfig\)/, "the tokenizer from the cached files, at the pinned revision");
-  assert.match(worker, /revision: EMBEDDING_MODEL\.revision/);
+  assert.match(worker, /env\.allowRemoteModels = false;/);
+  assert.match(worker, /env\.allowLocalModels = true;/);
+  assert.match(worker, /env\.localModelPath = embeddingModelRoot\(BASE, ORIGIN\);/);
+  assert.match(worker, /env\.useBrowserCache = false;/);
+  assert.match(worker, /from_pretrained\(EMBEDDING_MODEL\.dir, \{\s*local_files_only: true,/);
+  assert.match(worker, /new BertTokenizer\(tokenizerJson, tokenizerConfig\)/, "the tokenizer from the game's own files");
   assert.match(worker, /device: "wasm",\s*dtype: "q8"/);
-  assert.doesNotMatch(worker, /\bcaches\.(open|delete)\(/, "through modelStore.js, so the Android app's http origin works");
+  assert.doesNotMatch(worker, /huggingface\.co|githubusercontent|remoteHost|modelStore/, "nothing fetched from a model host, nothing kept");
+  // The copy an older version downloaded is no longer kept from the sweep.
   const assets = readFileSync(new URL("../../runtime/assets.js", import.meta.url), "utf8");
-  assert.match(assets, /EMBEDDING_MODEL_CACHE_NAME = "oh-embed-model-v1"/);
-  assert.match(assets, /KEPT_CACHE_NAMES = new Set\(\[[^\]]*EMBEDDING_MODEL_CACHE_NAME/);
-  const { EMBEDDING_MODEL_CACHE } = await import("../../runtime/embeddingModels.js");
-  assert.equal(EMBEDDING_MODEL_CACHE, "oh-embed-model-v1");
+  assert.doesNotMatch(assets, /EMBEDDING_MODEL_CACHE_NAME/);
 });
 
 test("with the skip's 'also recent' lines every unfolded event is shown, so only the folded history is searched", async () => {

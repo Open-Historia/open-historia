@@ -70,7 +70,6 @@ import {
     getStoredLanguage,
     setStoredChatLanguage,
 } from "../../runtime/i18n.js";
-import { formatEmbeddingSize } from "../../runtime/embeddingModels.js";
 import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSetting, useMapSettingDefaultOn, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
 import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
 // The Map Editor's basemap window, opened here to browse, download and manage
@@ -2675,100 +2674,6 @@ const ExperimentalPill = ({ children = "Experimental" }) => (
 
 const settingsHelper = { ...helperStyle, marginTop: "-0.45rem", marginBottom: "0.75rem" };
 
-// --- Find related past events on this device ------------------------------------
-// Off by default (AI/relatedEvents.js). Turning it on asks first: the model is a
-// download, so the card says how big and waits for Download, as the
-// translator's model card does (runtime/translator.js askForModel). Declining
-// leaves the setting off. A model already on this device needs no asking.
-// Turning it off removes the model and the vectors from this device.
-const RelatedEventsSetting = () => {
-    const on = useMapSetting(MAP_SETTING_KEYS.relatedEvents);
-    // null, or the card: "ask", "downloading", "failed".
-    const [card, setCard] = useState(null);
-    const [progress, setProgress] = useState(0);
-    const size = formatEmbeddingSize();
-    const modelModule = () => import("../../runtime/embeddingModel.js");
-
-    const download = async () => {
-        setCard("downloading");
-        setProgress(0);
-        try {
-            const { loadEmbeddingModel } = await modelModule();
-            await loadEmbeddingModel(({ loaded, total }) => setProgress(total ? Math.max(0, Math.min(100, Math.floor((loaded / total) * 100))) : 0));
-            setCard(null);
-            setMapSetting(MAP_SETTING_KEYS.relatedEvents, true);
-        } catch (error) {
-            console.warn(`[related events] the model did not download (${error?.message || "unknown"}).`);
-            setCard("failed");
-        }
-    };
-    const decline = () => {
-        setCard(null);
-        setMapSetting(MAP_SETTING_KEYS.relatedEvents, false);
-    };
-    const toggle = async () => {
-        if (card) return;
-        if (on) {
-            setMapSetting(MAP_SETTING_KEYS.relatedEvents, false);
-            const [{ forgetEmbeddingModel }, { closeEventVectorStore, deleteEventVectors }] = await Promise.all([modelModule(), import("../../runtime/eventVectorStore.js")]);
-            await closeEventVectorStore();
-            await Promise.all([forgetEmbeddingModel(), deleteEventVectors()]).catch(() => {});
-            return;
-        }
-        const { embeddingModelCached } = await modelModule();
-        if (await embeddingModelCached()) setMapSetting(MAP_SETTING_KEYS.relatedEvents, true);
-        else setCard("ask");
-    };
-
-    const cardButton = (label, primary, onClick) => (
-        <button
-        type="button"
-        onClick={onClick}
-        style={{ ...smallButtonStyle, fontWeight: 650, ...(primary ? { backgroundColor: "var(--oh-ui-text, #f4f4f5)", color: "var(--oh-ui-bg, #0b0b0d)", border: "1px solid var(--oh-ui-text, #f4f4f5)" } : null) }}
-        >
-        {label}
-        </button>
-    );
-    return (
-        <>
-        <Toggle label="Find related past events on this device" enabled={on || Boolean(card)} onToggle={toggle} />
-        {card && (
-            <div role="group" style={{ background: "var(--oh-ui-surface, #1b1b1e)", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.14))", borderRadius: "10px", color: "var(--oh-ui-text, #f4f4f5)", fontSize: "0.8rem", lineHeight: 1.45, margin: "-0.3rem 0 0.75rem", padding: "0.8rem 0.9rem" }}>
-            {card === "ask" && (
-                <>
-                <p style={{ margin: "0 0 0.7rem" }}>{`Finding related past events needs a one-time download of a small model (${size}) from Hugging Face. It runs on this device, and your events never leave it.`}</p>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "flex-end" }}>
-                {cardButton("Cancel", false, decline)}
-                {cardButton("Download", true, download)}
-                </div>
-                </>
-            )}
-            {card === "downloading" && (
-                <div role="status">
-                <p style={{ margin: "0 0 0.6rem" }}>{`Downloading the related-events model… ${progress}%`}</p>
-                <div style={{ background: "rgba(255,255,255,0.12)", borderRadius: "2px", height: "4px", overflow: "hidden" }}>
-                <span style={{ background: "var(--oh-ui-text, #f4f4f5)", display: "block", height: "100%", transition: "width .25s", width: `${progress}%` }} />
-                </div>
-                </div>
-            )}
-            {card === "failed" && (
-                <>
-                <p style={{ margin: "0 0 0.7rem" }}>The related-events model could not be downloaded.</p>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "flex-end" }}>
-                {cardButton("Cancel", false, decline)}
-                {cardButton("Try again", true, download)}
-                </div>
-                </>
-            )}
-            </div>
-        )}
-        <div style={settingsHelper}>
-        {`Off (default): nothing is downloaded. On: a small model on this device (${size}, downloaded once) finds the past events closest to each time skip's orders, wars and storylines, and the skip is shown up to six of them beside the history, so old threads are not forgotten. No AI request is made for it, and with AI lookup functions on the model can search past events too. Turning it off removes the model and what it found from this device.`}
-        </div>
-        </>
-    );
-};
-
 // --- Sound ---------------------------------------------------------------------
 // The music a scenario played is downloaded once and kept on this device, so
 // the same song is not fetched again for another scenario (runtime/keptMusic.js;
@@ -3272,7 +3177,6 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     Off (default): the whole skip is generated in a single request. On: skips of more than a few months are generated in several shorter requests and merged into one round — slower and costlier in tokens, but far less likely to time out on a hosted provider.
                     </div>
-                    <RelatedEventsSetting />
                     <Toggle label="Show time skip events as they are written" enabled={mapSettings.liveSkipEvents} onToggle={() => updateMapSetting("liveSkipEvents", MAP_SETTING_KEYS.liveSkipEvents, !mapSettings.liveSkipEvents)} />
                     <div style={settingsHelper}>
                     On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (My key has no request limit on) still arrives all at once.

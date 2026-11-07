@@ -1,25 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAP_SETTING_KEYS } from "../../runtime/mapSettings.js";
-import { contentHash } from "../../runtime/embeddingModels.js";
+import { OLD_EMBEDDING_MODEL_CACHE, contentHash } from "../../runtime/embeddingModels.js";
 import { LOOKUP_TOOLS, SIMILAR_EVENTS_FUNCTION, SIMILAR_EVENTS_TOOL, withSimilarEvents } from "./lookupTools.js";
 import {
+  OLD_SETTING_KEY,
   findRelatedForSkip,
+  forgetOldDownload,
   indexOpenGame,
-  relatedEventsOn,
   relatedEventsReady,
   setRelatedEventsDepsForTests,
   similarEventsSearch,
 } from "./relatedEventsSearch.js";
 
-// The setting lives in localStorage; node has none.
+// localStorage, which node has none of: the old setting's key lived there.
 const storage = new Map();
-globalThis.localStorage = {
+const fakeStorage = {
   getItem: (key) => (storage.has(key) ? storage.get(key) : null),
   setItem: (key, value) => storage.set(key, String(value)),
   removeItem: (key) => storage.delete(key),
 };
-const setting = (on) => storage.set(MAP_SETTING_KEYS.relatedEvents, on ? "1" : "0");
+globalThis.localStorage = fakeStorage;
 
 // A fake model: a text's vector is which of three words it holds.
 const WORDS = ["war", "treaty", "harvest"];
@@ -69,21 +69,48 @@ const bundle = {
   world: { wars: [], storylines: [] },
 };
 
-test("off by default: no search, no lookup, the model never touched", async () => {
-  storage.clear();
-  const model = fakeModel();
-  setRelatedEventsDepsForTests({ model: model.module, store: fakeStore, focusPowers: async () => [] });
-  assert.equal(relatedEventsOn(), false);
-  assert.equal(await findRelatedForSkip(bundle, { campaignId: "g1" }), null);
-  assert.equal(similarEventsSearch(bundle, { campaignId: "g1" }), null);
-  await indexOpenGame();
-  assert.deepEqual(model.calls, []);
+test("always on: a player who had the old setting off (or never touched it) is indexed with no setting at all", async () => {
+  for (const before of [null, "0", "1"]) {
+    storage.clear();
+    if (before !== null) storage.set(OLD_SETTING_KEY, before);
+    const model = fakeModel();
+    const store = fakeStore();
+    setRelatedEventsDepsForTests({ model: model.module, store: () => store, campaign: () => "g1", readEvents: async () => events, busy: () => false });
+    await indexOpenGame();
+    assert.equal(store.games.get("g1")?.size, 3, `indexed with the old setting ${before}`);
+    assert.ok(model.calls.length > 0);
+  }
   setRelatedEventsDepsForTests(null);
 });
 
-test("the index embeds new and changed events while idle, and drops deleted ones", async () => {
+test("the old download goes once: the old setting's key and the model an older version downloaded", async () => {
+  const deleted = [];
+  const deleteCache = async (name) => { deleted.push(name); };
+  // Never had the setting: nothing to delete, nothing touched.
   storage.clear();
-  setting(true);
+  assert.equal(await forgetOldDownload({ storage: fakeStorage, deleteCache }), false);
+  assert.deepEqual(deleted, []);
+  // Had it on (the model downloaded) or off: the key goes, the old store with it.
+  for (const before of ["1", "0"]) {
+    storage.clear();
+    storage.set(OLD_SETTING_KEY, before);
+    storage.set("ai_lookup_functions", "1");
+    assert.equal(await forgetOldDownload({ storage: fakeStorage, deleteCache }), true);
+    assert.equal(storage.has(OLD_SETTING_KEY), false);
+    assert.equal(storage.get("ai_lookup_functions"), "1", "other settings stay");
+  }
+  assert.deepEqual(deleted, [OLD_EMBEDDING_MODEL_CACHE, OLD_EMBEDDING_MODEL_CACHE]);
+  assert.equal(OLD_EMBEDDING_MODEL_CACHE, "oh-embed-model-v1");
+  // Once: the key is gone, so the next start does nothing.
+  assert.equal(await forgetOldDownload({ storage: fakeStorage, deleteCache }), false);
+  assert.equal(deleted.length, 2);
+  // A store that fails to delete never throws into the game's start.
+  storage.set(OLD_SETTING_KEY, "1");
+  assert.equal(await forgetOldDownload({ storage: fakeStorage, deleteCache: async () => { throw new Error("blocked"); } }), false);
+});
+
+test("the index embeds new and changed events only while idle, and drops deleted ones", async () => {
+  storage.clear();
   const model = fakeModel();
   const store = fakeStore();
   let busy = 2;
@@ -118,7 +145,6 @@ test("the index embeds new and changed events while idle, and drops deleted ones
 
 test("the index stops when the player switches games", async () => {
   storage.clear();
-  setting(true);
   const model = fakeModel();
   const store = fakeStore();
   const many = Array.from({ length: 40 }, (_, at) => ({ id: `e${at}`, title: `War ${at}`, description: "x" }));
@@ -137,9 +163,8 @@ test("the index stops when the player switches games", async () => {
   setRelatedEventsDepsForTests(null);
 });
 
-test("a skip gets ranked candidates, quickly, or nothing", async () => {
+test("a skip gets ranked candidates, quickly, or nothing: it never waits on the model", async () => {
   storage.clear();
-  setting(true);
   const store = fakeStore();
   await store.write("g1", events.map((event) => ({ eventId: event.id, hash: "h", vector: vectorOf(`${event.title} ${event.description}`) })));
   setRelatedEventsDepsForTests({ model: fakeModel().module, store: () => store, focusPowers: async () => ["France"] });
@@ -165,9 +190,8 @@ test("a skip gets ranked candidates, quickly, or nothing", async () => {
   setRelatedEventsDepsForTests(null);
 });
 
-test("similar_events is offered only with the setting on and the model loaded, and answers from this game", async () => {
+test("similar_events is offered once the model has loaded, and answers from this game", async () => {
   storage.clear();
-  setting(true);
   const store = fakeStore();
   await store.write("g1", events.map((event) => ({ eventId: event.id, hash: "h", vector: vectorOf(`${event.title} ${event.description}`) })));
   setRelatedEventsDepsForTests({ model: fakeModel().module, store: () => store, focusPowers: async () => [] });
@@ -188,9 +212,8 @@ test("similar_events is offered only with the setting on and the model loaded, a
   assert.deepEqual(answer.events.map((event) => event.title), ["The war begins"]);
   assert.ok((await lookups.execute(SIMILAR_EVENTS_FUNCTION, {})).error, "a query is required");
 
-  // Off again: not offered.
-  setting(false);
-  assert.equal(similarEventsSearch(bundle, { campaignId: "g1" }), null);
+  // No game, no search; no search, the lookups unchanged.
+  assert.equal(similarEventsSearch(bundle, {}), null);
   assert.equal(withSimilarEvents(base, null), base);
   assert.equal(withSimilarEvents(null, search), null, "no lookups at all (Save AI requests), nothing added");
   setRelatedEventsDepsForTests(null);
@@ -201,5 +224,5 @@ test("the tool has the lookup shape: a name, a description and an object schema 
   assert.equal(SIMILAR_EVENTS_TOOL.schema.type, "object");
   assert.deepEqual(SIMILAR_EVENTS_TOOL.schema.required, ["query"]);
   assert.equal(SIMILAR_EVENTS_TOOL.schema.additionalProperties, false);
-  assert.ok(!LOOKUP_TOOLS.some((tool) => tool.name === "similar_events"), "never declared unless the setting is on");
+  assert.ok(!LOOKUP_TOOLS.some((tool) => tool.name === "similar_events"), "never declared before the model has loaded");
 });
