@@ -503,11 +503,23 @@ test("an update made over an earlier one reads that one's list instead of every 
   const third = newer().map((entry) => (entry.path === "electron/build-id.json" ? { ...entry, data: Buffer.from('{"build":"300"}') } : entry));
   const second = await publish(t, third, { build: "300", version: "0.0.300" });
   const reads = [];
-  const counting = { ...fs, readFileSync: (target, ...rest) => {
-    const name = String(target);
-    if (name.startsWith(done.root) && !name.endsWith(boot.MANIFEST_FILE)) reads.push(name);
-    return fs.readFileSync(target, ...rest);
-  } };
+  const counting = {
+    ...fs,
+    linkSync: (from, to) => {
+      try {
+        fs.linkSync(from, to);
+      } catch {
+        // Filesystems that forbid hard links (e.g. Android / data partition)
+        // copy instead of link, without reading whole via readFileSync.
+        fs.copyFileSync(from, to);
+      }
+    },
+    readFileSync: (target, ...rest) => {
+      const name = String(target);
+      if (name.startsWith(done.root) && !name.endsWith(boot.MANIFEST_FILE)) reads.push(name);
+      return fs.readFileSync(target, ...rest);
+    },
+  };
   const updater = updaterFor({ ...place, app: done.root }, second, { currentBuild: "200", fs: counting });
   const found = await updater.check();
   const next = await updater.apply(found.manifest);

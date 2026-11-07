@@ -1039,8 +1039,34 @@ const findFreePort = async (start, attempts = 20) => {
     }
     if (free) return port;
   }
-  throw new Error(`No free port found in ${start}-${start + attempts - 1}.`);
+  // Every port near the usual one is taken: rather than an app that does not
+  // open, one the system picks, checked on the same addresses as above. It is a
+  // new address each launch, so what the window keeps for itself (its settings)
+  // starts afresh there; the games are the server's, in DATA_DIR, and stay.
+  for (let tries = 0; tries < 5; tries += 1) {
+    const port = await systemPickedPort();
+    if (!port) break;
+    let free = true;
+    for (const host of hosts) {
+      free = await canBind(port, host);
+      if (!free) break;
+    }
+    if (free) return port;
+  }
+  throw new Error(`No free port found in ${start}-${start + attempts - 1}, nor one the system picked.`);
 };
+
+// A port the system has free on loopback (listen on 0), or 0 where it gives none.
+const systemPickedPort = () =>
+  new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.once("error", () => resolve(0));
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address() ?? {};
+      probe.close(() => resolve(Number(port) || 0));
+    });
+  });
 
 // The port this launch asked for, before the search moved on from a taken one.
 let requestedPort = 3000;

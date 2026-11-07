@@ -96,3 +96,17 @@ test("OH_HOST is probed too when it names one interface", () => {
   assert.deepEqual(probeHostsWith("127.0.0.1"), ["127.0.0.1", null]);
   assert.deepEqual(probeHostsWith("   "), ["127.0.0.1", null]);
 });
+
+// Every port the search covers is taken: the app still opens, on a port the
+// system picks and the same probe passes, instead of failing to start (PR #969).
+test("with every searched port taken, a port the system picks is used", async () => {
+  const held = await holdOnLoopback();
+  try {
+    const port = await findFreePort(held.port, 1);
+    assert.notEqual(port, held.port);
+    assert.ok(port > 0);
+    assert.equal(await canBind(port, "127.0.0.1"), true);
+  } finally {
+    await held.release();
+  }
+});
