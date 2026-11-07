@@ -22,7 +22,7 @@ import {
   providerRefusedContract,
   withoutBoardOps,
 } from "./foldedSkip.js";
-import { foldJumpTool, getGameplayTool, validateGameplayPayload, AGENT_REPORTS_FIELD, HISTORY_FIELD } from "./gameplaySchemas.js";
+import { foldJumpTool, getGameplayTool, validateGameplayPayload, AGENT_REPORTS_FIELD, GAMEPLAY_SCHEMAS, HISTORY_FIELD } from "./gameplaySchemas.js";
 
 const gameplaySource = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const functionBody = (name) => {
@@ -162,6 +162,15 @@ test("the history fold is the last field of the contract, and only when a fold i
   assert.deepEqual(Object.keys(all.schema.properties).slice(-2), [AGENT_REPORTS_FIELD, HISTORY_FIELD], "after the reports: the one an answer cut short can best do without");
   assert.deepEqual(all.schema.properties[HISTORY_FIELD].required, ["summary"]);
   assert.deepEqual(Object.keys(all.schema.properties[HISTORY_FIELD].properties), ["summary", "years", "canon", "eras", "document"], "the consolidator's own fields, the history in tiers among them");
+  // Each tier's entries name their fields, as the consolidator's do: an object
+  // with no properties came back from Gemini as {} (the quality A/B of 2026-11-07).
+  const tiers = all.schema.properties[HISTORY_FIELD].properties;
+  for (const tier of ["years", "canon", "eras"]) {
+    assert.deepEqual(tiers[tier].items, GAMEPLAY_SCHEMAS.eventConsolidator.properties[tier].items, `${tier}: the consolidator's entry shape`);
+  }
+  assert.deepEqual(Object.keys(tiers.years.items.properties), ["year", "text"]);
+  assert.deepEqual(Object.keys(tiers.canon.items.properties), ["date", "kind", "text", "key"]);
+  assert.deepEqual(Object.keys(tiers.eras.items.properties), ["from", "to", "text"]);
   const historyOnly = foldJumpTool(lean, { board: false, history: true });
   assert.equal(HISTORY_FIELD in historyOnly.schema.properties, true, "a skip with no board and no agents still carries a fold that is due");
   assert.equal("projectOps" in historyOnly.schema.properties.events.items.properties.impacts.properties, false);
