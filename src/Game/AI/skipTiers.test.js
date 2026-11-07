@@ -142,11 +142,11 @@ test("a group out of view keeps its name and area and loses its long description
     groups: { "Red Hand": { description: long }, "Blue Band": { description: long } },
     groupAreas: { r1: "Red Hand", b1: "Blue Band" },
   };
-  const text = describeGroupsForPrompt(world, { inView: (name) => name === "Blue Band" });
+  const text = describeGroupsForPrompt(world, { inView: (name) => name === "Blue Band", regionName: (id) => ({ r1: "Ruhr", b1: "Saar" })[id] ?? "" });
   const [first, second] = text.split("\n");
   assert.ok(first.startsWith("- Blue Band — The first sentence"), "the group in view comes first");
   assert.ok(first.includes("Then a great deal of lore follows."));
-  assert.equal(second, "- Red Hand — The first sentence says what it is. [controls 1 region: r1 (r1)]");
+  assert.equal(second, "- Red Hand — The first sentence says what it is. [controls 1 region: Ruhr]");
 });
 
 test("the polities' lore rides in the cached opening, and lore written since rides in the live part", async () => {

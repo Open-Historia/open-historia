@@ -141,10 +141,19 @@ test("the prompt names each group exactly, says what it is, and where it control
   };
   const text = describeGroupsForPrompt(world, { regionName: (id) => id.toUpperCase(), maxRegions: 2 });
   assert.equal(text, [
-    "- Cartel — Runs the border towns. [controls 3 regions: R1 (r1), R2 (r2), +1 more]",
+    "- Cartel — Runs the border towns. [controls 3 regions: R1, R2, +1 more]",
     "- Exiles [controls no area on the map]",
   ].join("\n"));
   assert.equal(describeGroupsForPrompt({}), "");
+  // A region the map has no name for is counted, never shown by its id.
+  assert.equal(
+    describeGroupsForPrompt(world, { regionName: (id) => (id === "r2" ? "Sonora" : ""), maxRegions: 2 }).split("\n")[0],
+    "- Cartel — Runs the border towns. [controls 3 regions: Sonora, +2 more]",
+  );
+  assert.equal(
+    describeGroupsForPrompt(world, { maxRegions: 2 }).split("\n")[0],
+    "- Cartel — Runs the border towns. [controls 3 regions]",
+  );
 });
 
 test("the world keeps its groups through every read, and an event's groupOps land on the map", () => {

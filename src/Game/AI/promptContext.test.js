@@ -192,6 +192,27 @@ test("recent events note occupations and groups, not only sovereignty transfers"
   assert.match(renamed, /Polity changes: Slavonia renamed to Greater Slavonia/, "the older notes keep their wording");
 });
 
+test("an impact note names its regions by the map's name, never by the id it was saved with", () => {
+  const saved = {
+    ...occupationAndGroup(),
+    impacts: {
+      regionControlOps: [
+        { op: "control", regionId: "2102", fromCode: "Ukraine", toCode: "Russian Federation" },
+        { op: "control", regionId: "9999", fromCode: "Ukraine", toCode: "Russian Federation" },
+      ],
+      regionTransfers: [{ regionId: "USA.11_1", toCode: "Georgia" }],
+    },
+  };
+  const name = (id) => ({ 2102: "Donetsk", "USA.11_1": "region: Georgia" })[id] ?? "";
+  const text = buildEventHistoryText([saved], { regionName: name });
+  assert.match(text, /Territorial shifts: region: Georgia -> Georgia/);
+  assert.match(text, /Control: Donetsk -> Russian Federation \(from Ukraine\), an unnamed region -> Russian Federation \(from Ukraine\)/);
+  assert.doesNotMatch(text, /2102|9999|USA\.11_1/);
+  // Without the map, the name the operation was written with, and still no id.
+  assert.doesNotMatch(buildEventHistoryText([saved]), /2102|9999|USA\.11_1/);
+  assert.match(buildEventHistoryText([occupationAndGroup()], { regionName: () => "" }), /Control: Kharkiv -> Russian Federation/);
+});
+
 test("a group founding or an occupation is a durable anchor for a long campaign", () => {
   const events = [
     occupationAndGroup(),

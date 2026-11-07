@@ -19,7 +19,7 @@ import { waterTypeIds } from "../../runtime/regionTypes.js";
 import { isPendingAction, selectFocusPowers } from "./regionFocus.js";
 import { filterChatsVisibleTo } from "./chatVisibility.js";
 import { buildForcePostureText } from "./forcePosture.js";
-import { unitHandles } from "./nameRefs.js";
+import { regionNamer, unitHandles } from "./nameRefs.js";
 import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
@@ -231,8 +231,14 @@ const compactImpactList = (entries) => {
   return `${shown.join(", ")}${more > 0 ? `, (+${more} more)` : ""}`;
 };
 
-const describeControlOp = (op) => {
-  const place = op.regionName || op.regionId;
+// A region in an impact note, by name (nameRefs.js regionNamer): the map's
+// name for it, else the name the operation was written with, never its id.
+const UNNAMED_REGION = "an unnamed region";
+const impactRegion = (entry, regionName) =>
+  (regionName ? regionName(entry?.regionId) : "") || normalizeString(entry?.regionName) || UNNAMED_REGION;
+
+const describeControlOp = (op, regionName) => {
+  const place = impactRegion(op, regionName);
   if (op.op === "contest") return `${place} contested by ${op.actorCode} (held by ${op.fromCode})`;
   if (op.op === "clear_contest") return `${place} contest by ${op.clearAll ? "all claimants" : op.claimantCode} ended`;
   return `${place} -> ${op.toCode} (from ${op.fromCode})`;
@@ -266,6 +272,9 @@ export const eventDigestOf = (event) => {
 // the history document carries what they set in motion. A world with no
 // recorded skip tells every event in full.
 //
+// `regionName(id)`: what a region of an impact note is called
+// (promptRegionNamer); without it the name the operation was written with.
+//
 // `alsoListed`: the events the ranking left out (selectRankedEvents) are not
 // yet in the history document either, so without this they were in neither:
 // the newest of them, up to this many and ALSO_LISTED_MAX_CHARS, follow as one
@@ -281,6 +290,7 @@ export const buildEventHistoryText = (
     world = null,
     digests = false,
     alsoListed = 0,
+    regionName = null,
   } = {},
 ) => {
   const normalizedEvents = world ? getUnconsolidatedEvents(events, world) : normalizeEvents(events);
@@ -302,13 +312,13 @@ export const buildEventHistoryText = (
       if (event.impacts.regionTransfers.length > 0) {
         impactNotes.push(
           `Territorial shifts: ${event.impacts.regionTransfers
-            .map((entry) => `${entry.regionName || entry.regionId} -> ${entry.toCode}`)
+            .map((entry) => `${impactRegion(entry, regionName)} -> ${entry.toCode}`)
             .join(", ")}`,
         );
       }
 
       if (event.impacts.regionControlOps.length > 0) {
-        impactNotes.push(`Control: ${compactImpactList(event.impacts.regionControlOps.map(describeControlOp))}`);
+        impactNotes.push(`Control: ${compactImpactList(event.impacts.regionControlOps.map((op) => describeControlOp(op, regionName)))}`);
       }
 
       if (event.impacts.groupOps.length > 0) {
@@ -1740,8 +1750,6 @@ const LANDLESS_PLAYER_TEXT =
   + "and its story is about influence, alliances, insurgency, and the fight to gain "
   + "or retake territory — not about administering provinces it does not have.";
 
-const regionNameById = (catalog, id) => (Array.isArray(catalog) ? catalog.find((region) => region?.id === id)?.name : null) || id;
-
 // `groups` false while groups are switched off for the game
 // (server/gameFeatures.js): a player leading one reads as a landless polity.
 export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null, { groups = isActiveFeatureEnabled("groups") } = {}) => {
@@ -1759,7 +1767,7 @@ export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null,
     // area it controls, and what it is.
     const groupCatalog = groups && world.groups && Object.keys(world.groups).length ? (regionCatalog ?? await loadRegions()) : [];
     const groupText = groups ? describePlayerGroupForPrompt(world, playerCode, {
-      regionName: (id) => regionNameById(groupCatalog, id),
+      regionName: groupCatalog.length ? await promptRegionNamer(world, groupCatalog) : () => "",
     }) : "";
     if (groupText) return `None — ${playerCode} is a group, not a country.\n${groupText}`;
     return isPolityLandless(world, playerCode)
@@ -1777,6 +1785,19 @@ export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null,
   // not read as the whole holding.
   const more = owned.length - names.length;
   return `${names.join(", ")}${more > 0 ? `, (+${more} more)` : ""}`;
+};
+
+// What a prompt calls a region its record keys by id (an event's impact notes,
+// a group's area, the World Director's pressures): the map's name for it,
+// "region: X" where the name alone could be read as another region or a
+// country (nameRefs.js regionNamer), and "" for one the map does not have.
+// The polities the game knows count as countries beside those the map's rows
+// carry.
+export const promptRegionNamer = async (worldLike, catalog = null) => {
+  const world = normalizeWorldState(worldLike);
+  const rows = Array.isArray(catalog) && catalog.length ? catalog : await loadRegions();
+  const countries = Object.entries(world.polityOverrides ?? {}).flatMap(([key, entry]) => [key, entry?.name]);
+  return regionNamer(filterToRenderedRegions(rows, world), { countries });
 };
 
 const STOCK_REGION_ID = /^[A-Z]{3}\.\d+(?:_\d+)?$/;
@@ -2544,6 +2565,9 @@ export const buildPromptContext = async (bundle, {
     "numberOfRegions",
   );
   const regionCatalog = needsRegionCatalog ? (mapSource?.regionCatalog ?? await loadRegions()) : [];
+  // The region names of the events' impact notes, made once when first wanted.
+  let eventNamer = null;
+  const eventRegionName = async () => (eventNamer ??= await promptRegionNamer(bundle.world, mapSource?.regionCatalog ?? regionCatalog));
 
   // A time skip shows in full what the turn is about and the rest in a line
   // (buildPromptFocus): the world summary, the units and the structures here,
@@ -2596,6 +2620,7 @@ export const buildPromptContext = async (bundle, {
   await pause?.();
   if (wants("recentEvents")) {
     result.recentEvents = buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate,
+      regionName: await eventRegionName(),
       limit: eventLimit,
       maxChars: eventHistoryMaxChars,
       world: bundle.world,
@@ -2675,6 +2700,7 @@ export const buildPromptContext = async (bundle, {
       const recentEventLimit = lookups ? Math.min(longEventLimit, leanLookups ? LEAN_RECENT_EVENTS : 8) : longEventLimit;
       const recentAlsoListed = SKIP_TASKS.has(taskKey) && !lookups ? 40 : 0;
       const campaignRecentEvents = buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate,
+        regionName: await eventRegionName(),
         limit: recentEventLimit,
         maxChars: lookups && !longEventHistoryMaxChars ? 3000 : longEventHistoryMaxChars,
         world: bundle.world,
@@ -2801,7 +2827,7 @@ export const buildPromptContext = async (bundle, {
 
   if (wants("eventsToConsolidate")) {
     result.eventsToConsolidate =
-      eventsToConsolidate || buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate, limit: 12 });
+      eventsToConsolidate || buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate, limit: 12, regionName: await eventRegionName() });
   }
 
   if (wants("advisorMessages")) {

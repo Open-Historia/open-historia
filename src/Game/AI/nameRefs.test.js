@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { findUnitByRef, foldName, kindOfName, plainName, readNameRef, stripKindTags, unitHandles } from "./nameRefs.js";
+import { findUnitByRef, foldName, kindOfName, plainName, readNameRef, regionNamer, stripKindTags, unitHandles } from "./nameRefs.js";
 
 test("a name is read with the kind it was given", () => {
     assert.deepEqual(readNameRef("region: Georgia"), { kind: "region", name: "Georgia", bracket: "", written: "region: Georgia" });
@@ -170,4 +170,27 @@ test("the templates and the schema ask for names", () => {
     assert.ok(!schemas.includes("Existing unit identifier."));
     assert.ok(!schemas.includes("Existing marker id"));
     assert.match(schemas, /region: Hamhung/);
+});
+
+test("a region is named by its name, with its kind where the name alone could be something else", () => {
+    const regions = [
+        { id: "2102", name: "Donetsk", country: "Ukraine" },
+        { id: "USA.11_1", name: "Georgia", country: "United States" },
+        { id: "4441", name: "Lincoln", country: "United States" },
+        { id: "4442", name: "Lincoln", country: "United Kingdom" },
+        { id: "77", name: "Ruritania", country: "Graustark" },
+        { id: "78", name: "Unnamed" },
+    ];
+    const name = regionNamer(regions, { countries: ["Ruritania"] });
+    assert.equal(name("2102"), "Donetsk");
+    assert.equal(name("4441"), "region: Lincoln", "a name two regions share");
+    assert.equal(name("4442"), "region: Lincoln");
+    // Georgia is a country only by a row of another map; here it is no country.
+    assert.equal(name("USA.11_1"), "Georgia");
+    assert.equal(regionNamer([...regions, { id: "GEO.1_1", name: "Tbilisi", country: "Georgia" }])("USA.11_1"), "region: Georgia", "named like a country of the map");
+    assert.equal(name("77"), "region: Ruritania", "named like a polity the game knows");
+    assert.equal(name("9999"), "", "an id the map does not have is never handed back");
+    assert.equal(regionNamer(null)("2102"), "");
+    // A lookup row's base country counts as its country.
+    assert.equal(regionNamer([{ id: "a", name: "Poland", base: "Poland" }])("a"), "region: Poland");
 });

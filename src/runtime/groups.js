@@ -228,7 +228,9 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
 // ---- what the AI and the player are shown -----------------------------------
 
 // One line per group for a prompt: exact name, what it is, where it holds.
-// `regionName(id)` turns an id into the name the model should read.
+// `regionName(id)` turns an id into the name the model should read
+// (nameRefs.js regionNamer), "" for a region the map does not have: such a
+// region is counted and never named, and its id is never shown.
 //
 // `inView(name, regionIds)`: a time skip's test for a group the turn is about
 // (gameplay.js buildGroupsContext). A group out of view keeps its name and its
@@ -242,7 +244,19 @@ export const briefDescription = (text, max = GROUP_BRIEF_DESCRIPTION) => {
   if (sentence && sentence.length <= max) return sentence;
   return `${flat.slice(0, max - 1).replace(/\s+\S*$/, "")}…`;
 };
-export const describeGroupsForPrompt = (world, { regionName = (id) => id, maxRegions = 12, inView = null } = {}) => {
+// "N regions: A, B, +M more", the first `maxRegions` the map has a name for.
+const describeArea = (regions, regionName, maxRegions) => {
+  const shown = [];
+  for (const id of regions) {
+    if (shown.length >= maxRegions) break;
+    const name = regionName(id);
+    if (name) shown.push(name);
+  }
+  const more = regions.length - shown.length;
+  const list = shown.length ? `: ${shown.join(", ")}${more > 0 ? `, +${more} more` : ""}` : "";
+  return `${regions.length} region${regions.length === 1 ? "" : "s"}${list}`;
+};
+export const describeGroupsForPrompt = (world, { regionName = () => "", maxRegions = 12, inView = null } = {}) => {
   const groups = normalizeGroups(world?.groups);
   const names = Object.keys(groups);
   if (!names.length) return "";
@@ -254,9 +268,8 @@ export const describeGroupsForPrompt = (world, { regionName = (id) => id, maxReg
   return ordered.map((name) => {
     const group = groups[name];
     const regions = areas[name] ?? [];
-    const shown = regions.slice(0, maxRegions).map((id) => `${regionName(id)} (${id})`);
     const where = regions.length
-      ? `controls ${regions.length} region${regions.length === 1 ? "" : "s"}: ${shown.join(", ")}${regions.length > shown.length ? `, +${regions.length - shown.length} more` : ""}`
+      ? `controls ${describeArea(regions, regionName, maxRegions)}`
       : "controls no area on the map";
     const description = !group.description
       ? ""
@@ -311,15 +324,14 @@ export const groupsOnTerritory = (world, polity, { ownerOf = () => "" } = {}) =>
 
 // What every task that concerns the player is told when the player leads a group.
 // Empty for a country, so nothing changes for anyone else.
-export const describePlayerGroupForPrompt = (world, playerName, { regionName = (id) => id, maxRegions = 12 } = {}) => {
+export const describePlayerGroupForPrompt = (world, playerName, { regionName = () => "", maxRegions = 12 } = {}) => {
   const key = playerGroupKey(world, playerName);
   if (!key) return "";
   const groups = normalizeGroups(world?.groups);
   const group = groups[key];
   const regions = groupRegions(normalizeGroupAreas(world?.groupAreas, groups))[key] ?? [];
-  const shown = regions.slice(0, maxRegions).map((id) => `${regionName(id)} (${id})`);
   const area = regions.length
-    ? `It controls ${regions.length} region${regions.length === 1 ? "" : "s"}: ${shown.join(", ")}${regions.length > shown.length ? `, +${regions.length - shown.length} more` : ""}.`
+    ? `It controls ${describeArea(regions, regionName, maxRegions)}.`
     : "It controls no area on the map yet.";
   const description = group.description ? `: ${group.description.replace(/\n+/g, " ")}` : "";
   return [
