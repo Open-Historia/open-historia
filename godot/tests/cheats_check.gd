@@ -278,10 +278,52 @@ func _run() -> void:
 		var long_preview: bool = cheats._body.get_combined_minimum_size().y > cheats._scroll.size.y + 40.0
 		_check(not long_preview or (button_rect.end.y <= view_rect.end.y + 0.5 and button_rect.position.y >= view_rect.position.y), "Apply stays pinned in view over a long preview", "%s in %s" % [str(button_rect), str(view_rect)])
 		await _shoot("cheats-06-gm-apply-pinned")
+		_check(_find_button(cheats, "Generate New Preview") != null and _find_button(cheats, "Edit Preview") != null and not _has_text(cheats, "Revision "), "a pending preview offers Edit Preview and Generate New Preview")
+		var before: Dictionary = cheats._sd("gm_view").duplicate(true)
+		_find_button(cheats, "Edit Preview").pressed.emit()
+		await _wait(0.4)
+		var edit_go := _find_button(cheats, "Generate Edited Preview")
+		_check(_find_button(cheats, "Cancel Edit") != null and _has_text(cheats, "WHAT SHOULD CHANGE?") and _has_text(cheats, "Unmentioned operations stay in the preview. Nothing is applied until you approve the full revised transaction.") and edit_go != null and edit_go.disabled, "Edit Preview opens the revision box, its button waiting for words")
+		await _gm_scroll(cheats)
+		await _shoot("cheats-07-gm-edit-open")
+		var revised: Dictionary = await cheats.gm_revise("Make it a reading room, not an annex.")
+		await _wait(0.6)
+		var after: Dictionary = cheats._sd("gm_view")
+		var titles: Array = (after.get("events", []) as Array).map(func(event: Dictionary) -> String: return str(event.get("title", "")))
+		_check(revised.get("ok", false) and int(revised.get("revision", 0)) == 1 and str(after.get("id", "")) == str(before.get("id", "")) and titles == ["France opens a national library reading room"], "a revision edits the pending preview and keeps its transaction", "%s %s" % [str(revised), str(titles)])
+		_check(JSON.stringify(after.get("chips", [])) == JSON.stringify(before.get("chips", [])) and JSON.stringify(after.get("sections", [])) == JSON.stringify(before.get("sections", [])), "the operations the revision did not name stay in the preview")
+		_check(cheats._status == "Edited preview ready - Adds one event: France opens a national library reading room." and _has_text(cheats, "Revision 1") and _find_button(cheats, "Edit Preview") != null and _find_button(cheats, "Generate Edited Preview") == null, "the revised preview says so and counts its revision", cheats._status)
+		await _gm_scroll(cheats)
+		await _shoot("cheats-08-gm-revised")
+		UiTheme.select("forest")
+		await _wait(0.6)
+		await _gm_scroll(cheats)
+		await _shoot("cheats-08b-gm-revised-forest")
+		_find_button(cheats, "Edit Preview").pressed.emit()
+		await _wait(0.4)
+		await _gm_scroll(cheats)
+		await _shoot("cheats-07b-gm-edit-open-forest")
+		_find_button(cheats, "Cancel Edit").pressed.emit()
+		UiTheme.reset()
+		await _wait(0.4)
+		var applied: Dictionary = await cheats._run("cheats.gm.apply", {"id": str(after.get("id", ""))})
+		_check(applied.get("ok", false), "the revised preview applies", str(applied.get("error", "")))
+		var applied_reply: Dictionary = await main.engine.request("cheats.gm.apply", {"id": str(after.get("id", ""))})
+		_check(not applied_reply.get("ok", false), "an applied preview is not applied twice")
+		var stale: Dictionary = await main.engine.request("cheats.gm.revise", {"id": str(after.get("id", "")), "text": "Change the date."})
+		_check(not stale.get("ok", false), "an applied preview cannot be edited", str(stale.get("error", "")))
 	cheats.close()
 	await _console()
 	_say("done: %d failure(s) %s" % [failures.size(), ", ".join(failures)])
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _gm_scroll(cheats: Node) -> void:
+	await _frames(2)
+	var node: Control = cheats._gm_preview_node
+	if node:
+		cheats._scroll.scroll_vertical = int(node.position.y) - 40
+	await _wait(0.3)
 
 
 func _option_after(node: Node, label: String) -> OptionButton:

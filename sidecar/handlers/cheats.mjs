@@ -867,6 +867,7 @@ export const register = (ctx) => {
       date: preview?.date || "",
       mode: preview?.mode || "",
       source: preview?.generation?.source || "unknown",
+      revisionCount: Math.max(0, Number(preview?.revisionCount) || 0),
       applied: Boolean(applied?.applied),
       transactionId: applied?.transactionId || "",
       chips,
@@ -891,6 +892,19 @@ export const register = (ctx) => {
   const standInState = { date: "", country: "" };
 
   if (standIn && typeof addStandIn === "function") {
+    addStandIn(({ tool }) => {
+      if (tool !== "submit_game_master_preview_edits") return null;
+      const country = standInState.country || "France";
+      const title = `${country} opens a national library reading room`;
+      return {
+        args: {
+          edits: [
+            { op: "replace", path: "/events/0/title", valueJson: JSON.stringify(title) },
+            { op: "replace", path: "/summary", valueJson: JSON.stringify(`Adds one event: ${title}.`) },
+          ],
+        },
+      };
+    });
     addStandIn(({ tool, text: prompt }) => {
       if (tool !== "submit_game_master") return null;
       const mode = /Generate a (direct|exact-event|world-intervention) GM transaction preview/.exec(prompt)?.[1] || "world-intervention";
@@ -1348,6 +1362,17 @@ export const register = (ctx) => {
       standInState.date = clean(game?.gameDate || game?.startDate);
       standInState.country = clean(game?.country);
       const preview = await engine.gameplay.previewGameMasterCommand(clean(requestText), { mode });
+      previews.set(preview.id, preview);
+      return { view: describePreview(preview), summary: clean(preview?.summary) };
+    },
+
+    "cheats.gm.revise": async ({ id, text: revision = "" }) => {
+      const prior = previews.get(clean(id));
+      if (!prior) throw new Error("The previous GM preview is missing its validated transaction. Generate a fresh preview.");
+      const game = await readGame();
+      standInState.date = clean(game?.gameDate || game?.startDate);
+      standInState.country = clean(game?.country);
+      const preview = await engine.gameplay.previewGameMasterRevision(prior, clean(revision));
       previews.set(preview.id, preview);
       return { view: describePreview(preview), summary: clean(preview?.summary) };
     },
