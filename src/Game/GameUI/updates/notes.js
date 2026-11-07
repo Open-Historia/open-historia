@@ -106,20 +106,23 @@ const NEW_UPDATES = [
     ],
   },
   {
-    // Unlimited requests (AI/requestBudget.js; Settings → AI → AI requests), for a paid key or a local model: a skip may
-    // be up to eight requests with six rounds of lookups, the prompt is slimmer (promptContext.js leanLookups), and on
-    // Anthropic each round reads the one before from the cache (toolTurns.js withCachedHistory).
+    // My key has no request limit (AI/requestBudget.js; Settings → AI → AI requests), for a paid key or a local model:
+    // a skip may be up to eight requests with six rounds of lookups, the prompt is slimmer (promptContext.js
+    // leanLookups), on Anthropic each round reads the one before from the cache (toolTurns.js withCachedHistory), and
+    // Background AI has no cap. The owner, 2026-11-07: "make there be one toggle that does all the optimal stuff for
+    // non request limited keys so its simple" — it replaced Save AI requests and Unlimited requests the same day.
     id: "2026-11-unlimited-requests",
     kind: "minor",
     date: "2026-11-07",
     channel: "beta",
     banners: [
       {
-        title: "Unlimited requests",
+        title: "My key has no request limit",
         items: [
-          "A new setting in Settings → AI → AI requests, for a paid key or a local model: Unlimited requests. It is off unless you turn it on.",
-          "With it on, the AI looks things up as it needs them instead of being sent everything up front: a time skip can use up to 8 requests, with up to 6 rounds of questions, and each request sends less.",
-          "Save AI requests is off while Unlimited requests is on.",
+          "One switch at the top of Settings → AI → AI requests, for a paid key or a local model: My key has no request limit.",
+          "With it on, the AI looks things up and works in more steps: a time skip can use up to 8 requests, with up to 6 rounds of questions, each request sends less, and Background AI has no daily cap.",
+          "It replaces Save AI requests and Unlimited requests. If you had Save AI requests off or Unlimited requests on, it is on. AI lookup functions are under Advanced.",
+          "Setting up Command Code, or a model on your own computer, turns it on for you.",
         ],
       },
     ],

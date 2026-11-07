@@ -1354,7 +1354,7 @@ const perfNow = () =>
     : Date.now();
 
 // The rows are standingContext.js's, which the advisor and the leaders read too.
-// With lookups 24 of them, and with Unlimited requests on fewer still: the rest
+// With lookups 24 of them, and with no request limit fewer still: the rest
 // are behind the functions either way.
 const LEAN_TERRITORIAL_ROWS = 12;
 // A time skip's `inView` (promptContext.js buildPromptFocus): the rows grouped
@@ -1549,7 +1549,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   // A task that declares the lookup functions gets the slim prompt (the
   // functions carry the detail); with the setting off it gets the full one.
   const lookups = Boolean(options?.lookups) && lookupFunctionsEnabled();
-  // With Unlimited requests on, slimmer still: the model may ask more rounds, so
+  // With no request limit, slimmer still: the model may ask more rounds, so
   // less is sent up front (promptContext.js `leanLookups`).
   const leanLookups = lookups && unlimitedRequests();
   // Background work hands in nextTask: nobody is waiting on it, and the map may be moving.
@@ -1803,7 +1803,8 @@ const abortableWait = (ms, signal) => new Promise((resolve, reject) => {
 // out again — and the budget is three per TASK and per ATTEMPT, so a time skip
 // with its passes was measured at 23 requests where the player expected three.
 // The full prompt costs more characters and no extra request, which on a free
-// key is the right way round. The toggle takes effect once saving is off.
+// key is the right way round. The toggle takes effect once the player's key has
+// no request limit (Settings → AI → AI requests, the one switch).
 //
 // Inside a time skip the rounds are the skip's own budget's to give
 // (requestBudget.js, runJsonTask below): two for an ordinary skip, so the skip
@@ -1815,8 +1816,8 @@ const abortableWait = (ms, signal) => new Promise((resolve, reject) => {
 // answers (ADR 0008), so they are on for it exactly as for an API entry.
 const lookupFunctionsEnabled = () => !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
 
-// Unlimited requests (requestBudget.js): more rounds, and the directive says how
-// many. Off, the directive is the one it always was.
+// My key has no request limit (requestBudget.js): more rounds, and the
+// directive says how many. Off, the directive is the one it always was.
 const activeLookupDirective = () => (unlimitedRequests()
   ? lookupDirective({ rounds: lookupRoundLimit({ unlimited: true }) })
   : LOOKUP_DIRECTIVE);
@@ -16991,7 +16992,7 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
 
 // The checks a Scene outcome goes through: units, territory, Structures and the
 // Board — never the timeline, agent reports or order attribution. They are ONE
-// review request, whatever "Save AI requests" says, and none when nothing in
+// review request, whether requests are saved or not, and none when nothing in
 // the Scene qualifies. A review that fails leaves the Scene outcome as written.
 const SCENE_REVIEW_SECTIONS = Object.freeze(["units", "territory", "structures", "board"]);
 const sceneMapConsequences = async ({ bundle, outcome, generation }) => {
@@ -17256,7 +17257,7 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
 //
 // What can still make a skip more than one request (requestBudget.js
 // SKIP_SPENDERS), never past the cap of three:
-//   - function calling, with Save AI requests off and the lookup functions on:
+//   - function calling, with no request limit and the lookup functions on:
 //     a round of questions is a request, and a skip may ask two;
 //   - an answer that could not be used at all is asked for once more;
 //   - a provider that refuses the folded request (below);
@@ -17536,7 +17537,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   const gmChangeNarration = renderGmChangeNarration(gmChangesForRound(bundle.world, bundle.game?.round));
 
   // Whether this skip is the folded one (see "The folded time skip" above):
-  // every skip is, with Save AI requests on or off, unless a provider has
+  // every skip is, with requests saved or not, unless a provider has
   // refused the folded request this session. Decided once, when the skip starts,
   // and kept through a held segment's retry: the segments already in hand were
   // written under it.
@@ -18218,7 +18219,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 // Every request a skip makes is asked of the skip's budget first and counted on
 // the way back (requestBudget.js). The budget is real in every mode: ONE
 // request, the skip itself; more only for what SKIP_SPENDERS names, function
-// calling first among it; never past the cap. Save AI requests decides whether
+// calling first among it; never past the cap. Whether requests are saved decides whether
 // the model may look things up at all (lookupFunctionsEnabled), not how many
 // requests a skip's checks are: there are none of those any more.
 //
@@ -18235,7 +18236,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 // for being asked again.
 const createJumpRequests = ({ segments = 1, reserveInstitutionBallot = false, upkeep = null } = {}) => {
   const saving = savingRequests();
-  // Unlimited requests: up to eight, for six rounds of lookups (requestBudget.js).
+  // No request limit: up to eight, for six rounds of lookups (requestBudget.js).
   const unlimited = unlimitedRequests();
   const pieces = Math.max(1, Math.round(Number(segments) || 1));
   const budget = createJumpBudget({ cap: jumpRequestCap({ segments: pieces, unlimited }), only: SKIP_SPENDERS });

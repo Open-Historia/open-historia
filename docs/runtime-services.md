@@ -341,7 +341,7 @@ Small localStorage-backed settings read reactively instead of threaded as props 
 | `limitAiGeneration` | `ai_limit_generation` | off | `getMapSetting` | An AI task gives up after 5 minutes of silence part-way through an answer, or 15 with no answer, and falls back to canned events; off waits as long as the model needs |
 | `batchBackgroundTasks` | `ai_batch_background_tasks` | off | `getMapSetting` | Anthropic only: the event consolidator rides the Message Batches API at about half the price |
 | `chunkLongJumps` | `ai_chunk_long_jumps` | off | `getMapSetting` / `useMapSetting` | Long time skips are generated in several shorter requests, one per segment |
-| `lookupFunctions` | `ai_lookup_functions` | **on** | `getMapSettingDefaultOn` | Structured tasks declare the lookup functions (only while Save AI requests is off) |
+| `lookupFunctions` | `ai_lookup_functions` | **on** | `getMapSettingDefaultOn` | Structured tasks declare the lookup functions (only while My key has no request limit is on; Settings → AI → AI requests → Advanced) |
 | `liveSkipEvents` | `ai_live_skip_events` | **on** | `getMapSettingDefaultOn` | A skip fills the Events panel as the model writes |
 | `relatedEvents` | `ai_related_events` | off | `getMapSetting` / `useMapSetting` | **Find related past events on this device**: on only after the player said yes to the model's download ([Related past events](#related-past-events--srcgameairelatedeventsjs)) |
 

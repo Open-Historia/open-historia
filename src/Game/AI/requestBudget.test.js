@@ -45,6 +45,7 @@ const setup = ({ stored = {}, at = NOON_PACIFIC } = {}) => {
 
 test("a fresh install saves requests, runs background AI within its cap, and assumes a free key", () => {
     const { settings } = setup();
+    assert.equal(settings.noRequestLimit(), false);
     assert.equal(settings.saveRequests(), true);
     assert.equal(settings.backgroundAi(), true);
     assert.equal(settings.dailyLimit(), DEFAULT_DAILY_REQUEST_LIMIT);
@@ -55,7 +56,7 @@ test("a fresh install saves requests, runs background AI within its cap, and ass
 
 test("only an explicit choice changes a default", () => {
     const { settings, storage } = setup();
-    settings.setSaveRequests(false);
+    settings.setNoRequestLimit(true);
     settings.setBackgroundAi(false);
     assert.equal(settings.saveRequests(), false);
     assert.equal(settings.backgroundAi(), false);
@@ -99,7 +100,8 @@ test("a storage that throws reads as the defaults", () => {
     const settings = createRequestSettings({ storage: broken });
     assert.equal(settings.saveRequests(), true);
     assert.equal(settings.backgroundAi(), true);
-    assert.equal(settings.setSaveRequests(false), false);
+    assert.equal(settings.setNoRequestLimit(true), false);
+    assert.equal(settings.noRequestLimit(), false);
     const ledger = createRequestLedger({ storage: broken, now: () => NOON_PACIFIC });
     assert.equal(ledger.note({ status: 200 }).used, 1, "the count is still returned, it just is not kept");
     assert.equal(ledger.today().used, 0);

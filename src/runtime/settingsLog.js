@@ -56,11 +56,11 @@ const storedBoolean = (key, fallback) => {
     }
 };
 
-// Stored on, lookups still run only while requests are not being saved
+// Stored on, lookups still run only while My key has no request limit is on
 // (gameplay.js lookupFunctionsEnabled), so the file says when they are not.
 const lookupFunctionsState = () => {
     const on = getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
-    return on && requestSettings.saveRequests() ? "on (inactive: Save AI requests)" : onOff(on);
+    return on && requestSettings.saveRequests() ? "on (inactive: the key has a request limit)" : onOff(on);
 };
 
 registerSettingsSnapshot("Display", () => [
@@ -191,12 +191,11 @@ registerSettingsSnapshot("AI requests", () => {
     const day = requestDay();
     const tasks = Object.entries(day.byTask).sort((a, b) => b[1] - a[1]).map(([task, count]) => `${task} ${count}`).join(", ");
     return [
-        ["Save AI requests", onOff(requestSettings.saveRequests())],
-        ["Unlimited requests", onOff(requestSettings.unlimited())],
-        ["Requests a day your key allows", String(day.limit)],
+        ["My key has no request limit", onOff(requestSettings.noRequestLimit())],
+        ["Requests a day your key allows", day.noLimit ? `${day.limit} (not used: no request limit)` : String(day.limit)],
         ["Background AI", onOff(requestSettings.backgroundAi())],
-        ["Background requests a day, at most", String(day.backgroundCap)],
-        ["Used today", `${day.used} of ${day.limit} (background ${day.background}, refused by rate limit ${day.refused}, failed ${day.failed})`],
+        ["Background requests a day, at most", day.noLimit ? `${day.backgroundCap} (not used: no request limit)` : String(day.backgroundCap)],
+        ["Used today", `${day.noLimit ? day.used : `${day.used} of ${day.limit}`} (background ${day.background}, refused by rate limit ${day.refused}, failed ${day.failed})`],
         ["Used today, by task", tasks || "nothing yet"],
         ["Last time skip", day.lastJump ? `${day.lastJump.used} request(s)${day.lastJump.refused ? `, ${day.lastJump.refused} refused` : ""}` : "none yet"],
     ];

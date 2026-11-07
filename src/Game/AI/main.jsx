@@ -2962,7 +2962,7 @@ const entryOutputLimit = (entry, maxTokens, koboldCpp) => {
 // Three, not more: every round re-sends the whole prompt, and a model that
 // asks one question per round spent seven rounds and three hundred thousand
 // prompt tokens on one jump. The directive tells it to ask everything at once.
-// Six with Unlimited requests on (requestBudget.js lookupRoundLimit): the
+// Six with no request limit (requestBudget.js lookupRoundLimit): the
 // prompt is slimmer there, and on Anthropic every round reads the one before
 // from the cache (withCachedHistory).
 const defaultLookupRounds = () => lookupRoundLimit({ unlimited: unlimitedRequests() });
@@ -3789,7 +3789,7 @@ ${lines.length ? lines.join("\n") : "No country is known to direct another."}`;
 // being saved: the narrator's lookups follow the same rule
 // (gameplay.js lookupFunctionsEnabled), since each round is a request.
 // Otherwise the advisor is handed the list itself (describeAdvisorGroups), as
-// Save AI requests promises: the names it needs instead of looking them up.
+// a key with a request limit gets: the names it needs instead of looking them up.
 // Neither while groups are switched off for the game (server/gameFeatures.js).
 const advisorGroupCount = (world) => (isActiveFeatureEnabled("groups") ? Object.keys(normalizeGroups(world?.groups)).length : 0);
 const advisorGroupFunctionsAllowed = () => !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);

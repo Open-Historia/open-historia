@@ -416,8 +416,10 @@ test("the time panel says one request, and three only while function calling can
   assert.equal(/twenty/.test(caption), false, "no mode in which a skip is twenty requests is left to describe");
 
   const settings = readFileSync(new URL("../GameUI/settings.jsx", import.meta.url), "utf8");
-  assert.match(settings, /"On \(default\): a time skip is one request\. /);
-  assert.match(settings, /`Off: for a key with no daily limit\. A time skip is still one request, [^`]*so a skip never uses more than \$\{lookupCap\}\. /);
-  assert.match(settings, /const lookupCap = describeJumpCost\(\{ lookups: true \}\)\.max;/);
+  // One switch, My key has no request limit: off, a skip is one request; on,
+  // the most it may use is said from the same rule as the time panel's.
+  assert.match(settings, /"Off \(default\): for a free key, where requests run out\. A time skip is one request /);
+  assert.match(settings, /`On: for a paid key or a local model\. [^`]*A time skip may use up to \$\{noLimitCap\} requests, with up to \$\{noLimitRounds\} rounds of questions/);
+  assert.match(settings, /const noLimitCost = describeJumpCost\(\{ lookups: true, unlimited: true \}\);/);
   assert.equal(/each checked by a request of their own|twenty requests or more/.test(settings), false);
 });
