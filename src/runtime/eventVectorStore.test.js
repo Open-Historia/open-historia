@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EVENT_VECTOR_DB, openEventVectorStore, vectorKey } from "./eventVectorStore.js";
+import {
+  CHAT_VECTOR_DB,
+  EVENT_VECTOR_DB,
+  chatVectorKey,
+  forgetGameVectors,
+  openChatVectorStore,
+  openEventVectorStore,
+  vectorKey,
+} from "./eventVectorStore.js";
 
 // Just enough IndexedDB for the store: object stores by key, and an index on
 // one field of the value (getAll and getAllKeys by that field).
@@ -101,4 +109,49 @@ test("deleting a game removes only its vectors", async () => {
 
 test("no IndexedDB, no store: the feature finds nothing instead of failing", () => {
   assert.equal(openEventVectorStore(null), null);
+  assert.equal(openChatVectorStore(null), null);
+});
+
+test("the older conversations' chunks have a store of their own, keyed gameId:chatId:chunk", async () => {
+  const idb = fakeIndexedDb();
+  const store = openChatVectorStore(idb);
+  await store.write("game-a", [
+    { chatId: "chat-1", chunk: 0, hash: "h0", vector: vector(1, 0) },
+    { chatId: "chat-1", chunk: 1, hash: "h1", vector: vector(0, 1) },
+    { chatId: "chat:2", chunk: 0, hash: "h2", vector: vector(0.6, 0.8) },
+  ]);
+  await store.write("game-b", [{ chatId: "chat-1", chunk: 0, hash: "x", vector: vector(1, 0) }]);
+  const rows = idb.databases.get(CHAT_VECTOR_DB).get("vectors").rows;
+  assert.deepEqual([...rows.keys()].sort(), ["game-a:chat-1:0", "game-a:chat-1:1", "game-a:chat:2:0", "game-b:chat-1:0"]);
+  assert.equal(chatVectorKey("game-a", "chat-1", 1), "game-a:chat-1:1");
+  assert.equal(idb.databases.has(EVENT_VECTOR_DB), false, "never in the events' database");
+
+  const a = await store.readGame("game-a");
+  assert.deepEqual([...a.keys()].sort(), ["chat-1:0", "chat-1:1", "chat:2:0"]);
+  assert.deepEqual({ ...a.get("chat:2:0"), vector: [...a.get("chat:2:0").vector].map((v) => Math.round(v * 10) / 10) },
+    { chatId: "chat:2", chunk: 0, hash: "h2", vector: [0.6, 0.8] });
+
+  await store.remove("game-a", ["chat-1:1"]);
+  assert.deepEqual([...(await store.readGame("game-a")).keys()].sort(), ["chat-1:0", "chat:2:0"]);
+  await store.close();
+});
+
+test("deleting a game deletes its event and chat vectors, and only its", async () => {
+  const idb = fakeIndexedDb();
+  const events = openEventVectorStore(idb);
+  const chats = openChatVectorStore(idb);
+  await events.write("game-a", [{ eventId: "e1", hash: "h", vector: vector(1) }]);
+  await events.write("game-b", [{ eventId: "e1", hash: "h", vector: vector(1) }]);
+  await chats.write("game-a", [{ chatId: "c", chunk: 0, hash: "h", vector: vector(1) }]);
+  await chats.write("game-b", [{ chatId: "c", chunk: 0, hash: "h", vector: vector(1) }]);
+  await forgetGameVectors("game-a", { stores: [events, chats] });
+  assert.equal((await events.readGame("game-a")).size, 0);
+  assert.equal((await chats.readGame("game-a")).size, 0);
+  assert.equal((await events.readGame("game-b")).size, 1);
+  assert.equal((await chats.readGame("game-b")).size, 1);
+  // A store that fails never stops a game's deletion, nor the other store.
+  const failing = { removeGame: async () => { throw new Error("blocked"); } };
+  await forgetGameVectors("game-b", { stores: [failing, chats] });
+  assert.equal((await chats.readGame("game-b")).size, 0);
+  await forgetGameVectors("", { stores: [failing] });
 });

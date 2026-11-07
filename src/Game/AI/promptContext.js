@@ -36,6 +36,8 @@ import { unitsOffBattlefields } from "./frontsGate.js";
 import { readingLanguageName } from "../../runtime/i18n.js";
 import { advisorMessagesFor, CHIEF_ADVISOR_THREAD } from "../../runtime/advisorThreads.js";
 import { renderRelatedPastEvents } from "./relatedEvents.js";
+import { chatArchiveContext, partitionChats, renderArchivedChats } from "./chatArchive.js";
+import { openConversationId } from "../../runtime/openConversation.js";
 import { leaderOf } from "../../runtime/socialFeed.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
@@ -2625,6 +2627,13 @@ export const buildPromptContext = async (bundle, {
   // ([{ id, score }], relatedEventsSearch.js), or null: rendered under the
   // recent events, never one shown there (relatedEvents.js).
   relatedEvents = null,
+  // The chunks of the older conversations kept on file found nearest to this
+  // task ([{ id: "chatId:chunk", score }], relatedEventsSearch.js findPastTalks),
+  // or null: rendered after the chats sent, as PAST DIPLOMACY (chatArchive.js).
+  pastTalks = null,
+  // The conversation the player has open, which is never put away
+  // (runtime/openConversation.js); the panel's own by default.
+  openChatId = null,
   // The task has the lookup functions: the prompt keeps the overview and the
   // functions carry the detail (region lists, older events, full chats).
   lookups = false,
@@ -2875,6 +2884,10 @@ export const buildPromptContext = async (bundle, {
   ) || (wants("chatsToConsolidate") && !chatsToConsolidate);
 
   let promptChats = [];
+  // The chats kept on file (chatArchive.js): not sent, but counted, their
+  // binding word kept, and the excerpts that bear on this task recalled.
+  let archivedChats = [];
+  let unfoldedVisibleChats = [];
   let currentChat = null;
   if (needsChatState) {
     const normalizedChat =
@@ -2887,7 +2900,14 @@ export const buildPromptContext = async (bundle, {
     // Every chat-derived variable - chat, chatHistory, chatSummary,
     // diplomaticContinuity, chatHistoryLong - comes from this one list, so the
     // visibility rule is applied once, here, and they cannot disagree.
-    promptChats = filterChatsVisibleTo(sortDiplomaticChatsByRecentActivity(unconsolidatedChats), chatVisibleTo);
+    unfoldedVisibleChats = filterChatsVisibleTo(sortDiplomaticChatsByRecentActivity(unconsolidatedChats), chatVisibleTo);
+    // A chat not used in more than a game year and for at least four skips is
+    // kept on file instead of sent (chatArchive.js isArchivedChat).
+    const split = partitionChats(unfoldedVisibleChats, chatArchiveContext(bundle, {
+      openChatId: openChatId ?? (normalizedChat?.id || openConversationId()),
+    }));
+    promptChats = split.active;
+    archivedChats = split.archived;
     currentChat = normalizedChat ?? promptChats[0] ?? null;
   }
 
@@ -2910,6 +2930,8 @@ export const buildPromptContext = async (bundle, {
       visibleTo: chatVisibleTo,
       ...(chatsOnce ? { memoryThreads: 12 } : {}),
     });
+    const onFile = renderArchivedChats(archivedChats, pastTalks, { player: bundle.game?.country, lookups });
+    if (onFile) result.chatHistoryLong = `${result.chatHistoryLong}\n\n${onFile}`;
   }
   if (wants("chatParticipants")) {
     result.chatParticipants =
@@ -2931,7 +2953,8 @@ export const buildPromptContext = async (bundle, {
   if (wants("chatsToConsolidate")) {
     result.chatsToConsolidate =
       chatsToConsolidate ||
-      buildDetailedChatHistoryText(promptChats, { limit: 12, messageLimit: 50 });
+      // Every chat not yet folded, those kept on file too: a fold must not lose them.
+      buildDetailedChatHistoryText(unfoldedVisibleChats, { limit: 12, messageLimit: 50 });
   }
 
   if (wants("eventsToConsolidate")) {

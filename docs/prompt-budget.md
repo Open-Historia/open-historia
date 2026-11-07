@@ -359,6 +359,62 @@ Measured with `scripts/prompt-size.mjs` on the same seven requests, beta
   239,462 prompt tokens over the five, against 249,998 for the old prompt and
   236,662 for round 1's new one.
 
+## Older conversations kept on file (2026-11-07)
+
+A chat not used in more than a game year and for at least four skips is kept
+on the player's device and recalled when it bears on the turn
+([ai-prompts.md §5.3](ai-prompts.md#53-older-conversations-kept-on-file-since-2026-11-07-beta)).
+The saves above already hold such chats, so no aged-chat scenario had to be
+built:
+
+| Save | Kept on file | Sent as before, though old |
+|---|---|---|
+| Modern Day 2026 (copy), Italy, r130 | the United Nations channel (188 messages, all recorded ballots on Italy's application, 19.6k characters; last used 2028-06-04) and the European Union channel (2026-03-27) | none (the Peace and Unity channel was used 2029-06-17, under a year) |
+| Modern Day (built-in), Brazil, r67 | Ukraine (16 messages, 2033-03-29) | Russia (2034-10-24): Brazil is at war with it |
+| New Dawn, Germany, r30 | Slovakia (13 messages, 2027-07-18), Austria (2026-03-10) | the Protectorate of Bohemia and Moravia (2028-08-05): over a year, but two skips ago, and at war with Germany |
+| Battle of Europe, Poland, 1836 | none: their chats are this year's, or there are none | |
+
+Measured with `scripts/prompt-size.mjs` on the same seven requests: beta
+`c8a0bdbe` (before), the chats kept on file without a search (counted, their
+binding word kept: what a skip sends before the model has loaded, or when the
+search misses its 1.5 s), and with the search (`--past-talks`: the archived
+chats indexed and searched under Node by the model that ships with the game).
+`[Diplomacy So Far]` is the section the chats are in.
+
+| Save | Run | System prompt | [Diplomacy So Far] | Whole request | Not cacheable |
+|---|---|---:|---:|---:|---:|
+| Modern Day 2026 (copy), Italy, r130 | before | 226.7k | 11.6k | 272.8k | 143.4k |
+| | kept on file, no search | 220.5k | 5407 | 266.5k (-2.3%) | 137.2k (-4.3%) |
+| | kept on file, recalled | 222.7k | 7565 | 268.7k (-1.5%) | 139.3k (-2.8%) |
+| Modern Day (built-in), Brazil, r67 | before | 170.5k | 3353 | 205.5k | 99.3k |
+| | kept on file, no search | 168.7k | 1628 | 203.8k (-0.8%) | 97.5k (-1.7%) |
+| | kept on file, recalled | 170.9k | 3807 | 206.0k (+0.2%) | 99.7k (+0.5%) |
+| New Dawn, Germany, r30 | before | 168.8k | 5160 | 207.0k | 70.6k |
+| | kept on file, no search | 165.8k | 2221 | 204.1k (-1.4%) | 67.6k (-4.2%) |
+| | kept on file, recalled | 167.8k | 4216 | 206.1k (-0.5%) | 69.6k (-1.3%) |
+| New Dawn, Germany, r30 — auto-jump | before | 170.4k | 5160 | 208.8k | 70.7k |
+| | kept on file, no search | 167.5k | 2221 | 205.8k (-1.4%) | 67.7k (-4.2%) |
+| | kept on file, recalled | 169.5k | 4216 | 207.8k (-0.5%) | 69.7k (-1.3%) |
+| Battle of Europe, UK, r7 | all three | 118.9k | 2218 | 152.4k | 54.5k |
+| Modern Day, Poland, r2 | all three | 90.9k | 183 | 124.1k | 37.3k |
+| 1836 Victorian Era, Ottomans, r1 | all three | 246.0k | 388 | 289.6k | 44.2k |
+
+- The cacheable opening is unchanged on every save (the chats are in the live
+  part), so every character saved is one the provider bills in full.
+- Where a chat kept on file is long, it pays: the United Nations channel's
+  ballots go from 6.2k of the skip to 2.2k of excerpts. Where it is short, the
+  recall can cost what the chat did: Brazil's Ukraine thread was sent as its
+  memory and its last ten lines (1.7k); recalled, it is its memory and all
+  sixteen lines (2.2k), so that skip is 0.2% larger. The excerpts have a
+  budget of their own (2,500 characters) and do not grow with the archive:
+  a campaign with fifty old threads sends a line naming them, their binding
+  word (1,500 at most) and 2,500 of excerpts.
+- Indexing under Node (ONNX Runtime's native build): the round-130 save's 40
+  chunks, the map's load included, in 5.3 s; New Dawn's 6 in 2.4 s; Brazil's
+  4 in 0.3 s. In the browser a chunk is read to 256 word pieces where an event
+  is read to 128 (72 ms an event), so a few seconds for the round-130 save,
+  once, while the game is idle; the skip's own search stays within its 1.5 s.
+
 ## By section
 
 Sections of at least 1,000 characters in any run, the rest summed: before the

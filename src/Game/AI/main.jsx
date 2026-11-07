@@ -134,6 +134,7 @@ import {
     resolveHelperValues,
     sortDiplomaticChatsByRecentActivity,
 } from "./promptContext.js";
+import { findPastTalks } from "./relatedEventsSearch.js";
 import { collapseRepeatedWorldContext } from "./promptDedupe.js";
 import { promptVariableDemand } from "./contextDiagnostics.js";
 import { filterChatsVisibleTo, isChatVisibleTo } from "./chatVisibility.js";
@@ -3487,6 +3488,7 @@ async function buildPromptVariables({
     chatData,
     eventData,
     gameData,
+    pastTalks = null,
     requiredKeys = null,
     speakingAs = "",
     worldData,
@@ -3510,6 +3512,9 @@ async function buildPromptVariables({
         // speakingAs and therefore sees everything, which is correct — it is the
         // player's own staff, and the player is in every chat.
         chatVisibleTo: speakingAs,
+        // The passages of the older conversations kept on file that bear on
+        // this message (AI/chatArchive.js), found on this device.
+        pastTalks,
         // Only what the prompt can show (chatPromptDemand). Without it every
         // advisor and leader message built the whole context, the force
         // posture's border geometry and the city catalog among it.
@@ -3907,6 +3912,14 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
         game: savedGame, chats: savedChats, world: savedWorld, events: savedEvents,
     });
 
+    // The older conversations kept on file nearest to what the player asks
+    // (AI/chatArchive.js): a moment at most, on this device.
+    const lastQuestion = [...(Array.isArray(advisorData) ? advisorData : [])].reverse()
+        .find((message) => message?.role === "user" && String(message?.text || "").trim());
+    const pastTalks = await findPastTalks({ game: gameData, world: worldData, chats: chatData, actions: actionData }, {
+        about: lastQuestion ? [String(lastQuestion.text)] : [],
+        focus: false,
+    });
     const variables = {
         ...(await buildPromptVariables({
             actionData,
@@ -3914,6 +3927,7 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
             chatData,
             eventData,
             gameData,
+            pastTalks,
             worldData,
             requiredKeys: chatPromptDemand(promptPack.advisor, {
                 extra: ["plannedActionsWithIds", "projectsSummary"],
@@ -4067,11 +4081,22 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     const ownChats = speaker ? filterChatsVisibleTo(chats, speaker) : [];
     const threadId = String(chatId || "");
     const otherOwnChats = threadId ? ownChats.filter((chat) => String(chat?.id || "") !== threadId) : ownChats;
+    // Of this leader's older conversations kept on file (AI/chatArchive.js),
+    // the passages nearest to what the thread is saying now: only chats it was
+    // in, a moment at most, on this device.
+    const thread = threadId ? ownChats.find((chat) => String(chat?.id || "") === threadId) : null;
+    const pastTalks = await findPastTalks({ game: gameData, world: worldData, chats: otherOwnChats, actions: actionData }, {
+        addressed: speaker ? [participantName(speaker)].filter(Boolean) : [],
+        about: (thread?.messages || []).slice(-3).map((message) => String(message?.text || "")).filter(Boolean),
+        openChatId: threadId,
+        focus: false,
+    });
     const variables = {
         ...(await buildPromptVariables({
             actionData,
             advisorData,
             chatData: otherOwnChats,
+            pastTalks,
             eventData,
             gameData,
             speakingAs: speaker,

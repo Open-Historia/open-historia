@@ -40,7 +40,14 @@ export const EMBEDDING_MODEL = Object.freeze({
   // The model was trained on pieces of 128; longer ones cost a phone time (the
   // work grows faster than the length) and add little to what an event is about.
   maxTokens: 128,
+  // The most word pieces the model was tuned to read (sentence-transformers'
+  // max_seq_length for it): what a chunk of an older conversation is read to.
+  maxSequence: 256,
 });
+
+// A chunk of an archived conversation (Game/AI/chatArchive.js), about 800
+// characters, is about 200 word pieces: read whole, to the model's tuned length.
+export const CHAT_CHUNK_MAX_TOKENS = EMBEDDING_MODEL.maxSequence;
 
 // The folder the game serves its models from: public/models/ in the source,
 // models/ beside index.html in every build (the desktop's local server, the

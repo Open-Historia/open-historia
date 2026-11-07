@@ -15,16 +15,33 @@
 //   is not loaded yet, or a device that is slow, leaves the skip as it was.
 // - LOOKUP (similarEventsSearch): the similar_events function
 //   (lookupTools.js), offered once the model has loaded this session.
+//
+// The same three for the older conversations kept on file (chatArchive.js):
+// the archived chats' chunks indexed after the events (indexArchivedChats),
+// found for a skip, a leader's reply or the advisor (findPastTalks), and the
+// past_talks lookup (pastTalksSearch).
 
 import { logDebugEvent } from "../../runtime/debugLog.js";
-import { OLD_EMBEDDING_MODEL_CACHE, contentHash } from "../../runtime/embeddingModels.js";
-import { eventVectorStore } from "../../runtime/eventVectorStore.js";
+import { CHAT_CHUNK_MAX_TOKENS, OLD_EMBEDDING_MODEL_CACHE, contentHash } from "../../runtime/embeddingModels.js";
+import { chatVectorStore, eventVectorStore } from "../../runtime/eventVectorStore.js";
+import { clearOpenConversation, openConversationId } from "../../runtime/openConversation.js";
 import { loadRegionCatalog } from "../../runtime/assets.js";
 import { getLibraryState } from "../../runtime/library.js";
 import { hasEnteredGame, subscribeGameEntry } from "../../runtime/gameEntry.js";
-import { normalizeWorldState, readEventsState } from "../../runtime/gameState.js";
+import { normalizeChats, normalizeWorldState, readChatsState, readEventsState, readGameData, readWorldState } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
-import { rankFocusPowers } from "./promptContext.js";
+import { rankFocusPowers, sortDiplomaticChatsByRecentActivity } from "./promptContext.js";
+import {
+  PAST_TALKS_CANDIDATES,
+  PAST_TALKS_DEFAULT,
+  PAST_TALKS_MAX,
+  archivedChunkRows,
+  buildPastTalksQueries,
+  chatArchiveContext,
+  partitionChats,
+  pastTalksAnswer,
+  unfoldedChats,
+} from "./chatArchive.js";
 import { isGenerating, isSimulationBusy } from "./simulationStatus.js";
 import {
   SIMILAR_EVENTS_DEFAULT,
@@ -42,6 +59,8 @@ export const LOOKUP_SEARCH_TIMEOUT_MS = 8000;
 // Events a message to the worker: a fraction of a second of its time, so a skip
 // that starts meanwhile waits behind at most that for its own search.
 const INDEX_BATCH = 4;
+// A chunk of an older conversation is about three events' reading.
+const CHAT_INDEX_BATCH = 2;
 const IDLE_POLL_MS = 3000;
 const INDEX_DELAY_MS = 2500;
 
@@ -53,6 +72,18 @@ const defaultDeps = () => ({
   // endpoints that follow it.
   campaign: () => String(getLibraryState()?.activeGameId ?? "").trim(),
   readEvents: () => readEventsState({ force: true }),
+  // The archived chats' store, and what eligibility reads: the chats, the
+  // game's date and round, the world's skips, wars and peace offers.
+  chatStore: () => chatVectorStore(),
+  readChatBundle: async () => {
+    const [chats, game, world] = await Promise.all([
+      readChatsState({ force: true }),
+      readGameData({ force: true }),
+      readWorldState({ force: true }),
+    ]);
+    return { chats, game, world };
+  },
+  openChat: () => openConversationId(),
   // The powers the prompt lists in full (promptContext.js rankFocusPowers),
   // from the region catalog the skip loads anyway.
   focusPowers: async (bundle) => {
@@ -76,8 +107,8 @@ export const setRelatedEventsDepsForTests = (overrides) => {
 let modelLoaded = false;
 export const relatedEventsReady = () => modelLoaded;
 
-const embed = async (texts) => {
-  const vectors = await (await deps.model()).embedTexts(texts);
+const embed = async (texts, options) => {
+  const vectors = await (await deps.model()).embedTexts(texts, options);
   modelLoaded = true;
   return vectors;
 };
@@ -141,6 +172,82 @@ export const similarEventsSearch = (bundle, { campaignId } = {}) => {
 };
 
 // ---------------------------------------------------------------------------
+// Older conversations kept on file (chatArchive.js).
+
+// The chats as a prompt splits them: { active, archived }, the active newest first.
+const splitChats = (bundle, openChatId) => partitionChats(
+  sortDiplomaticChatsByRecentActivity(unfoldedChats(normalizeChats(bundle?.chats), bundle?.world)),
+  chatArchiveContext(bundle, { openChatId }),
+);
+
+// The archived chunks nearest to what a skip, a reply or an answer is about
+// ([{ id: "chatId:chunk", score }], best first), or null: no chat archived,
+// nothing indexed, the model not ready within the time. Never throws.
+//   bundle      { game, world, chats, actions }: for a leader, the chats it was in
+//   openChatId  the conversation on screen (never archived)
+//   addressed   the leaders being addressed
+//   about       the request's own words (the thread's last lines, a question)
+//   focus       rank the powers in view into the query (a skip)
+export const findPastTalks = async (bundle, {
+  openChatId = deps.openChat(),
+  addressed = [],
+  about = [],
+  focus = true,
+  timeoutMs = SKIP_SEARCH_TIMEOUT_MS,
+} = {}) => {
+  const started = Date.now();
+  const search = (async () => {
+    const campaignId = await deps.campaign();
+    if (!campaignId) return null;
+    const { active, archived } = splitChats(bundle, openChatId);
+    if (!archived.length) return null;
+    const focusPowers = focus ? await Promise.resolve().then(() => deps.focusPowers(bundle)).catch(() => []) : [];
+    const queries = buildPastTalksQueries(bundle, { focusPowers, activeChats: active, addressed, about });
+    if (!queries.length) return null;
+    const stored = await deps.chatStore()?.readGame(campaignId);
+    if (!stored?.size) return null;
+    const ids = new Set(archived.map((chat) => String(chat.id)));
+    const vectors = new Map([...stored].filter(([, row]) => ids.has(String(row.chatId))));
+    if (!vectors.size) return null;
+    return relatedScores(await embed(queries), vectors, { limit: PAST_TALKS_CANDIDATES });
+  })().catch((error) => {
+    logDebugEvent("ai-call", `Older conversations: the search failed (${error?.message || "unknown"}); the prompt goes without excerpts.`);
+    return null;
+  });
+  const result = await within(search, timeoutMs);
+  if (result === TIMED_OUT) {
+    logDebugEvent("ai-call", `Older conversations: not ready within ${timeoutMs} ms; the prompt goes without excerpts.`);
+    return null;
+  }
+  if (result?.length) logDebugEvent("ai-call", `Older conversations: ${result.length} candidate chunk(s) in ${Date.now() - started} ms.`, null, { verbose: true });
+  return result;
+};
+
+// The past_talks lookup for the open game: a function of the model's
+// arguments, or null when it is not offered (the model not loaded this
+// session, or no chat kept on file).
+export const pastTalksSearch = (bundle, { campaignId, openChatId = deps.openChat() } = {}) => {
+  if (!relatedEventsReady() || !campaignId) return null;
+  const { archived } = splitChats(bundle, openChatId);
+  if (!archived.length) return null;
+  const player = String(bundle?.game?.country ?? "");
+  return async (args = {}) => {
+    const query = String(args?.query ?? "").trim();
+    if (!query) return { error: "Say what to look for: query is required." };
+    const limit = Math.min(PAST_TALKS_MAX, Math.max(1, Math.floor(Number(args?.limit) || PAST_TALKS_DEFAULT)));
+    const ids = new Set(archived.map((chat) => String(chat.id)));
+    const result = await within((async () => {
+      const stored = await deps.chatStore()?.readGame(campaignId);
+      const vectors = new Map([...(stored ?? [])].filter(([, row]) => ids.has(String(row.chatId))));
+      if (!vectors.size) return null;
+      return relatedScores(await embed([query.slice(0, 1000)]), vectors, { limit: PAST_TALKS_CANDIDATES });
+    })().catch(() => null), LOOKUP_SEARCH_TIMEOUT_MS);
+    if (result === TIMED_OUT || result === null) return { talks: [], note: "The search on this device is not available right now; use chat_history." };
+    return pastTalksAnswer(result, archived, { player, limit, withPower: String(args?.with ?? "") });
+  };
+};
+
+// ---------------------------------------------------------------------------
 // Index.
 
 let indexing = null;
@@ -150,8 +257,74 @@ const waitForIdle = async () => {
   while (deps.busy()) await deps.sleep(IDLE_POLL_MS);
 };
 
-// Brings the open game's vectors up to date: new and changed events embedded,
-// those of deleted events dropped. Resolves when done, stopped or failed.
+const SWITCHED = Symbol("switched games");
+
+// The open game's events: new and changed ones embedded, those of deleted
+// events dropped. SWITCHED when the player opened another game meanwhile.
+const indexEvents = async (campaignId) => {
+  const store = deps.store();
+  if (!store) return null;
+  const events = await deps.readEvents();
+  if ((await deps.campaign()) !== campaignId) return SWITCHED;
+  const wanted = embeddableEvents(events).map((entry) => ({ ...entry, hash: contentHash(entry.text) }));
+  const ids = new Set(wanted.map((entry) => entry.id));
+  const have = await store.readGame(campaignId);
+  const gone = [...have.keys()].filter((id) => !ids.has(id));
+  if (gone.length) await store.remove(campaignId, gone);
+  const todo = wanted.filter((entry) => have.get(entry.id)?.hash !== entry.hash);
+  if (!todo.length) return null;
+  const started = Date.now();
+  let done = 0;
+  for (let at = 0; at < todo.length; at += INDEX_BATCH) {
+    await waitForIdle();
+    // The player left this game: stop; the next opening or turn picks up
+    // where this left off.
+    if ((await deps.campaign()) !== campaignId) break;
+    const batch = todo.slice(at, at + INDEX_BATCH);
+    const vectors = await embed(batch.map((entry) => entry.text));
+    await store.write(campaignId, batch.map((entry, index) => ({ eventId: entry.id, hash: entry.hash, vector: vectors[index] })));
+    done += batch.length;
+  }
+  logDebugEvent("ai-call", `Related past events: ${done} event(s) indexed on this device in ${Date.now() - started} ms.`, { indexed: done, waiting: todo.length - done });
+  return null;
+};
+
+// The chats kept on file (chatArchive.js), as eligibility stands now: each
+// archived chat's chunks embedded (again when the chat changed), and the
+// chunks of a chat no longer archived (used again, or deleted) dropped, so a
+// chat that comes back into use leaves the archive by itself.
+const indexArchivedChats = async (campaignId) => {
+  const store = deps.chatStore();
+  if (!store) return null;
+  const bundle = await deps.readChatBundle();
+  if ((await deps.campaign()) !== campaignId) return SWITCHED;
+  const { archived } = partitionChats(
+    unfoldedChats(normalizeChats(bundle?.chats), bundle?.world),
+    chatArchiveContext(bundle, { openChatId: deps.openChat() }),
+  );
+  const wanted = archivedChunkRows(archived, { player: bundle?.game?.country });
+  const keys = new Set(wanted.map((row) => row.key));
+  const have = await store.readGame(campaignId);
+  const gone = [...have.keys()].filter((key) => !keys.has(key));
+  if (gone.length) await store.remove(campaignId, gone);
+  const todo = wanted.filter((row) => have.get(row.key)?.hash !== row.hash);
+  if (!todo.length) return null;
+  const started = Date.now();
+  let done = 0;
+  for (let at = 0; at < todo.length; at += CHAT_INDEX_BATCH) {
+    await waitForIdle();
+    if ((await deps.campaign()) !== campaignId) return SWITCHED;
+    const batch = todo.slice(at, at + CHAT_INDEX_BATCH);
+    const vectors = await embed(batch.map((row) => row.text), { maxTokens: CHAT_CHUNK_MAX_TOKENS });
+    await store.write(campaignId, batch.map((row, index) => ({ chatId: row.chatId, chunk: row.chunk, hash: row.hash, vector: vectors[index] })));
+    done += batch.length;
+  }
+  logDebugEvent("ai-call", `Older conversations: ${done} chunk(s) of ${archived.length} chat(s) kept on file indexed on this device in ${Date.now() - started} ms.`, { indexed: done, waiting: todo.length - done });
+  return null;
+};
+
+// Brings the open game's vectors up to date: its events', then its archived
+// chats'. Resolves when done, stopped or failed.
 export const indexOpenGame = () => {
   if (indexing) {
     again = true;
@@ -162,33 +335,12 @@ export const indexOpenGame = () => {
       again = false;
       await waitForIdle();
       const campaignId = await deps.campaign();
-      const store = deps.store();
-      if (!campaignId || !store) return;
-      const events = await deps.readEvents();
-      if ((await deps.campaign()) !== campaignId) {
+      if (!campaignId) return;
+      if (await indexEvents(campaignId) === SWITCHED) {
         again = true;
         continue;
       }
-      const wanted = embeddableEvents(events).map((entry) => ({ ...entry, hash: contentHash(entry.text) }));
-      const ids = new Set(wanted.map((entry) => entry.id));
-      const have = await store.readGame(campaignId);
-      const gone = [...have.keys()].filter((id) => !ids.has(id));
-      if (gone.length) await store.remove(campaignId, gone);
-      const todo = wanted.filter((entry) => have.get(entry.id)?.hash !== entry.hash);
-      if (!todo.length) continue;
-      const started = Date.now();
-      let done = 0;
-      for (let at = 0; at < todo.length; at += INDEX_BATCH) {
-        await waitForIdle();
-        // The player left this game: stop; the next opening or turn picks up
-        // where this left off.
-        if ((await deps.campaign()) !== campaignId) break;
-        const batch = todo.slice(at, at + INDEX_BATCH);
-        const vectors = await embed(batch.map((entry) => entry.text));
-        await store.write(campaignId, batch.map((entry, index) => ({ eventId: entry.id, hash: entry.hash, vector: vectors[index] })));
-        done += batch.length;
-      }
-      logDebugEvent("ai-call", `Related past events: ${done} event(s) indexed on this device in ${Date.now() - started} ms.`, { indexed: done, waiting: todo.length - done });
+      if (await indexArchivedChats(campaignId) === SWITCHED) again = true;
     } while (again);
   })()
     .catch((error) => {
@@ -242,6 +394,8 @@ export const installRelatedEventsIndexer = () => {
   };
   window.addEventListener("oh:turn-complete", kick);
   window.addEventListener("oh:active-game-changed", kick);
+  // Another game's open thread means nothing in this one.
+  window.addEventListener("oh:active-game-changed", clearOpenConversation);
   subscribeGameEntry(kick);
   kick();
 };

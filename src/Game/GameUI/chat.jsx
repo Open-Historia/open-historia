@@ -65,6 +65,7 @@ import { commitInstitutionLifecycleCommand, institutionLifecycleCasesForPolity, 
 import { buildLifecycleReplyRevealPlan } from "./institutionLifecyclePresentation.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { askHostForInstitution } from "../../runtime/sharedInstitutions.js";
+import { setOpenConversation } from "../../runtime/openConversation.js";
 
 // Who the player is and when it is: all this panel reads of game.json.
 const selectGameIdentity = (game) => ({
@@ -4430,6 +4431,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     const activeChatIdForWatcher = activeChat && !activeChat.institutionId
         ? String(activeChat.id)
         : visibleCouncilChatId;
+    // The thread on screen is also the one a time skip never puts away among the
+    // older conversations (runtime/openConversation.js, AI/chatArchive.js).
+    const openConversationId = activeChat && !activeChat.institutionId ? String(activeChat.id) : "";
+    useEffect(() => {
+        if (isOpen && openConversationId) setOpenConversation(openConversationId);
+    }, [isOpen, openConversationId]);
     useEffect(() => {
         activeDiplomaticChatId = isOpen ? activeChatIdForWatcher : "";
         return () => {
