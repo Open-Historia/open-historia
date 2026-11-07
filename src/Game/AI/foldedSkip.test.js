@@ -22,7 +22,7 @@ import {
   providerRefusedContract,
   withoutBoardOps,
 } from "./foldedSkip.js";
-import { foldJumpTool, getGameplayTool, validateGameplayPayload, AGENT_REPORTS_FIELD, HISTORY_FIELD } from "./gameplaySchemas.js";
+import { foldJumpTool, getGameplayTool, validateGameplayPayload, AGENT_REPORTS_FIELD, GAMEPLAY_SCHEMAS, HISTORY_FIELD, NO_SKIP_HISTORY_JOB } from "./gameplaySchemas.js";
 
 const gameplaySource = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const functionBody = (name) => {
@@ -162,6 +162,15 @@ test("the history fold is the last field of the contract, and only when a fold i
   assert.deepEqual(Object.keys(all.schema.properties).slice(-2), [AGENT_REPORTS_FIELD, HISTORY_FIELD], "after the reports: the one an answer cut short can best do without");
   assert.deepEqual(all.schema.properties[HISTORY_FIELD].required, ["summary"]);
   assert.deepEqual(Object.keys(all.schema.properties[HISTORY_FIELD].properties), ["summary", "years", "canon", "eras", "document"], "the consolidator's own fields, the history in tiers among them");
+  // Each tier's entries name their fields, as the consolidator's do: an object
+  // with no properties came back from Gemini as {} (the quality A/B of 2026-11-07).
+  const tiers = all.schema.properties[HISTORY_FIELD].properties;
+  for (const tier of ["years", "canon", "eras"]) {
+    assert.deepEqual(tiers[tier].items, GAMEPLAY_SCHEMAS.eventConsolidator.properties[tier].items, `${tier}: the consolidator's entry shape`);
+  }
+  assert.deepEqual(Object.keys(tiers.years.items.properties), ["year", "text"]);
+  assert.deepEqual(Object.keys(tiers.canon.items.properties), ["date", "kind", "text", "key"]);
+  assert.deepEqual(Object.keys(tiers.eras.items.properties), ["from", "to", "text"]);
   const historyOnly = foldJumpTool(lean, { board: false, history: true });
   assert.equal(HISTORY_FIELD in historyOnly.schema.properties, true, "a skip with no board and no agents still carries a fold that is due");
   assert.equal("projectOps" in historyOnly.schema.properties.events.items.properties.impacts.properties, false);
@@ -391,7 +400,10 @@ test("the folded rules reach the prompt only for a folded skip", () => {
   assert.match(rules, /Nothing checks your events afterwards\./);
   // The history fold is the last block of the prompt: nothing of the skip's follows it.
   assert.match(body, /const historyJob = foldedSkip \? normalizeString\(variables\.foldedHistoryJob\) : "";/);
-  assert.match(body, /if \(historyJob\) blocks\.push\(historyJob\);\s*\n\s*\n\s*return blocks\.filter\(Boolean\)\.join\("\\n\\n"\);/);
+  assert.match(body, /if \(historyJob\) blocks\.push\(historyJob\);\n\s*else if \(foldedSkip\) blocks\.push\(NO_SKIP_HISTORY_JOB\);\s*\n\s*\n\s*return blocks\.filter\(Boolean\)\.join\("\\n\\n"\);/);
+  // Without a job, the field the function offers on every turn is to be left out (the quality A/B of 2026-11-07).
+  assert.match(NO_SKIP_HISTORY_JOB, new RegExp(`leave the "${HISTORY_FIELD}" field out`));
+  assert.match(foldJumpTool(getGameplayTool("jumpForward"), { history: true }).schema.properties[HISTORY_FIELD].description, /With no such job, leave this field out/);
 });
 
 // What the player is told a skip costs, under the skip buttons and in Settings.

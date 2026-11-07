@@ -17,6 +17,7 @@ import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
 import { IDEOLOGIES, PARTY_ROLES } from "../../runtime/politics.js";
 import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
 import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
+import { CANON_KINDS } from "../../runtime/historyTiers.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -1135,6 +1136,14 @@ export const AGENT_REPORTS_FIELD = "agentReports";
 // And the one its fold of the history document comes back in, when one is due
 // (historyConsolidation.js buildSkipHistoryJob).
 export const HISTORY_FIELD = "history";
+// What a folded skip with no fold due is told, last, where the job would be
+// (gameplay.js buildJumpLiveState). The function offers the field on every turn
+// (a function that changed on the turns a fold rides would throw the
+// provider's cached prompt away on each of them, functions and opening alike),
+// and flash-lite filled it on 3 skips of 4 that had no job (the quality A/B of
+// 2026-11-07): an answer the game throws away, at the price of its output
+// tokens. One line in the live part costs less than either.
+export const NO_SKIP_HISTORY_JOB = `No history job rides on this answer: leave the "${HISTORY_FIELD}" field out. Anything written in it is thrown away.`;
 
 // And Rostra's posts of the period (runtime/socialFeed.js readSkipPosts): the
 // people who make the news on its events, their answers to the player's posts,
@@ -2082,6 +2091,25 @@ export const CHAT_ACTIONS_SCHEMA = {
   additionalProperties: false,
 };
 
+// The history's tiers, entry by entry (runtime/historyTiers.js): the shapes the
+// consolidator and a skip's history fold both answer in. Every entry is judged
+// when it is read (historyConsolidation.js judgeHistoryTiers), so the shapes
+// carry no descriptions; but each names its fields, because Gemini answers an
+// object with none as {} (the quality A/B of 2026-11-07: every year and canon
+// fact of a skip's fold came back empty).
+const HISTORY_YEAR_ITEM = { type: "object", properties: { year: { type: "integer" }, text: { type: "string" } }, required: ["year", "text"] };
+const HISTORY_CANON_ITEM = {
+  type: "object",
+  properties: {
+    date: { type: "string" },
+    kind: { type: "string", enum: [...CANON_KINDS] },
+    text: { type: "string" },
+    key: { type: "string" },
+  },
+  required: ["date", "kind", "text"],
+};
+const HISTORY_ERA_ITEM = { type: "object", properties: { from: { type: "integer" }, to: { type: "integer" }, text: { type: "string" } }, required: ["from", "to", "text"] };
+
 export const EVENT_CONSOLIDATOR_SCHEMA = {
   type: "object",
   description: "A continuity-safe summary of the supplied events and diplomatic chats, and the campaign's living history document revised to include them.",
@@ -2092,26 +2120,17 @@ export const EVENT_CONSOLIDATOR_SCHEMA = {
     years: {
       type: "array",
       description: "A paragraph for each game year the supplied material covers: the whole paragraph as that year should read from now on.",
-      items: { type: "object", properties: { year: { type: "integer" }, text: { type: "string" } }, required: ["year", "text"] },
+      items: HISTORY_YEAR_ITEM,
     },
     canon: {
       type: "array",
       description: "New standing facts from the supplied material that must never fade (treaties, deaths, regime and border changes, office holders, wars begun or ended), each dated.",
-      items: {
-        type: "object",
-        properties: {
-          date: { type: "string" },
-          kind: { type: "string", enum: ["treaty", "death", "regime", "border", "office", "war", "other"] },
-          text: { type: "string" },
-          key: { type: "string" },
-        },
-        required: ["date", "kind", "text"],
-      },
+      items: HISTORY_CANON_ITEM,
     },
     eras: {
       type: "array",
       description: "Only where the directive asks: the earlier years condensed, the whole list, an era a paragraph.",
-      items: { type: "object", properties: { from: { type: "integer" }, to: { type: "integer" }, text: { type: "string" } }, required: ["from", "to", "text"] },
+      items: HISTORY_ERA_ITEM,
     },
     document: textSchema("Only for a directive that asks for a single document: the WHOLE history document as it should read from now on."),
   },
@@ -3899,16 +3918,18 @@ export const foldJumpTool = (tool, { board = true, agentReports = false, history
           [HISTORY_FIELD]: {
             type: "object",
             description:
-              "The answer to the job fenced off at the end of the prompt (THE HISTORY DOCUMENT), written last: only what that job lists. "
-              + "Left out when there is no such job.",
-            // The consolidator's fields, loose: the skip's contract is near the
-            // size Gemini takes, and each entry is judged when it is read
-            // (historyConsolidation.js judgeSkipHistoryAnswer).
+              "Only for the job fenced off at the end of the prompt (THE HISTORY DOCUMENT), written last: what that job lists. "
+              + "With no such job, leave this field out: it is thrown away.",
+            // The consolidator's fields and entry shapes, without their
+            // descriptions: the skip's contract is near the size Gemini takes,
+            // the job in the prompt says what each tier is, and each entry is
+            // judged when it is read (historyConsolidation.js
+            // judgeSkipHistoryAnswer).
             properties: {
               summary: { type: "string" },
-              years: { type: "array", items: { type: "object" } },
-              canon: { type: "array", items: { type: "object" } },
-              eras: { type: "array", items: { type: "object" } },
+              years: { type: "array", items: HISTORY_YEAR_ITEM },
+              canon: { type: "array", items: HISTORY_CANON_ITEM },
+              eras: { type: "array", items: HISTORY_ERA_ITEM },
               document: { type: "string" },
             },
             required: ["summary"],

@@ -395,8 +395,9 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   // A time skip's tiers (promptContext.js buildWorldSummary): the powers in
   // view (`rosterDetail`, lower-case names) keep their line with its
   // territories; every other power is a name and a count in one paragraph
-  // (`restIntro`), or, where the lookup functions can give any of them, one
-  // line saying how many there are (`restLine(count)`).
+  // (`restIntro`), with what `restDetail(label)` says of it after the count,
+  // or, where the lookup functions can give any of them, one line saying how
+  // many there are (`restLine(count)`).
   if (options.rosterDetail instanceof Set) {
     const detail = rosterEntries.filter(([key]) => options.rosterDetail.has(key));
     const rest = rosterEntries.filter(([key]) => !options.rosterDetail.has(key));
@@ -413,7 +414,12 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
       } else {
         const shown = rest.slice(0, rosterCap);
         const omitted = rest.length - shown.length;
-        out.push(`${options.restIntro || "Every other power, with the regions it holds:"} ${shown.map(([key, group]) => `${headerLabel(key, group.label)} (${group.total})`).join(", ")}`
+        const restDetail = typeof options.restDetail === "function" ? options.restDetail : () => "";
+        const entry = ([key, group]) => {
+          const detail = norm(restDetail(group.label));
+          return `${headerLabel(key, group.label)} (${group.total}${detail ? `; ${detail}` : ""})`;
+        };
+        out.push(`${options.restIntro || "Every other power, with the regions it holds:"} ${shown.map(entry).join(", ")}`
           + (omitted > 0 ? `, (+${omitted} more power${omitted === 1 ? "" : "s"} not listed for brevity)` : ""));
       }
     }

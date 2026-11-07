@@ -4,13 +4,16 @@
 //
 // A time skip shows in full what the turn is about and the rest in a line
 // (promptFocus.js). These hold that nothing the turn needs is ever cut: the
-// player, every power at war, every power the orders name, their units, their
-// contested land, and a distant power or two in the spotlight; and that what is
-// cut is still named or counted.
+// player, every power at war, every power the orders name, the relevant
+// countries idle diplomacy keeps, their units and their contested land; that no
+// distant power is singled out for a turn of its own (the spotlight, removed
+// after the quality A/B of 2026-11-07); and that what is cut is still named or
+// counted.
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildOneLineDetail,
   buildPolityLoreReference,
   buildPromptContext,
   buildPromptFocus,
@@ -29,10 +32,11 @@ import { AIR_STRIKES_MAX_CHARS, airStrikesBlock } from "../../runtime/fronts/air
 const game = { country: "Ruritania", gameDate: "1930-05-12", round: 4, startDate: "1930-01-01" };
 
 // Ruritania (the player) and Borduria fight Slavonia and Carpathia; the orders
-// name Syldavia; sixty filler states hold a region or two each.
+// name Syldavia; sixty filler states hold eight to eleven regions each, more
+// than the region names a skip lists (buildRegionOwnershipText focusTotalCap).
 const bigWorld = () => {
   const fillers = Array.from({ length: 60 }, (_, index) => `Filler State ${index + 1}`);
-  const holdings = [["Ruritania", 30], ["Slavonia", 12], ["Borduria", 6], ["Carpathia", 5], ["Syldavia", 4], ...fillers.map((name, index) => [name, 1 + (index % 4)])];
+  const holdings = [["Ruritania", 30], ["Slavonia", 12], ["Borduria", 6], ["Carpathia", 5], ["Syldavia", 4], ...fillers.map((name, index) => [name, 8 + (index % 4)])];
   const regions = [];
   const regionOwnershipOverrides = {};
   const polityOverrides = {};
@@ -70,16 +74,86 @@ test("a skip's world summary lists the player, every belligerent and every power
   assert.ok(rest, "the powers out of view in one paragraph");
   const named = fillers.filter((name) => text.includes(name));
   assert.equal(named.length, fillers.length, "no power is left unnamed");
-  assert.match(text, /Spotlight this period, powers the story has not followed lately: Filler State \d+, Filler State \d+, Filler State \d+\./);
+  // The region names listed fill the budget: the powers in view, then the next by rank.
+  const listed = text.split("\n").filter((line) => /^- .+ \[\d+ regions?\]: /.test(line));
+  assert.ok(listed.some((line) => line.startsWith("- Filler State")), "powers out of view fill what the budget leaves");
+  const names = listed.reduce((sum, line) => sum + line.split(": ").slice(1).join(": ").split(", ").length, 0);
+  assert.ok(names >= 480 && names < 480 + 12, `${names} region names listed`);
+  assert.ok(!rest.includes(listed.at(-1).slice(2, listed.at(-1).indexOf(" ["))), "a power listed in full is not in the paragraph too");
+  assert.doesNotMatch(text, /Spotlight|development of its own/, "no distant power is singled out for a turn");
   assert.match(text, /Treat these as binding/);
+});
+
+// What the one-line list says of a power out of view (the quality A/B of
+// 2026-11-07: the facts a model was asked of such a power came back "unknown").
+test("a power out of view is its count, leader, alliances, agreements, peace and land in one entry", async () => {
+  const { regions, world, actions } = bigWorld();
+  // A small filler, so the region names' budget does not reach it.
+  const far = "Filler State 9";
+  const record = (name) => ({ code: name, name });
+  const recorded = {
+    ...world,
+    polityOverrides: { ...world.polityOverrides, [far]: { ...record(far), leader: { name: "Queen Ilsa" } } },
+    countryStats: { [far]: { leader: "Queen Ilsa" } },
+    agreements: [
+      { id: "a1", title: "Northern Pact", type: "mutual_defense", status: "active", parties: [far, "Filler State 58"] },
+      { id: "a2", title: "Grain Treaty", type: "trade_economic", status: "active", parties: [far, "Filler State 57"] },
+      { id: "a3", title: "Old Accord", type: "trade_economic", status: "ended", parties: [far, "Filler State 56"] },
+    ],
+    peaceTreaties: [{ id: "t1", warId: "w0", title: "The Short War", date: "1929-03-01", from: far, to: "Filler State 55", sides: [[far], ["Filler State 55"]] }],
+    // Two of its provinces are held by Filler State 54.
+    // And one override for a region this map does not have (a save carried over from an older map).
+    regionOwnershipOverrides: { ...world.regionOwnershipOverrides, "FillerState9-0": "Filler State 54", "FillerState9-1": "Filler State 54", "ghost-17": "Ruritania" },
+  };
+  const text = await buildWorldSummary({ game, world: recorded, events: [], actions, chats: [] }, regions, { tiers: true, briefed: true });
+  const rest = text.split("\n").find((line) => line.startsWith("Every other power"));
+  assert.match(rest, /what the records say of it:/);
+  const entry = rest.slice(rest.indexOf(`${far} (`), rest.indexOf(")", rest.indexOf(`${far} (`)) + 1);
+  assert.equal(entry, `${far} (6; led by Queen Ilsa; allied with Filler State 58; agreement: Grain Treaty with Filler State 57; at peace with Filler State 55 since 1929-03-01; 2 of its regions held by Filler State 54)`);
+  // A power at war is in view, so the flag says so only where a ledger names it otherwise; it is still read.
+  const detail = buildOneLineDetail({ ...recorded, wars: [{ id: "w2", status: "active", sideA: [far], sideB: ["Filler State 59", "Filler State 53"] }] }, regions);
+  assert.match(detail(far), /^led by Queen Ilsa; at war with Filler State 59, Filler State 53; /);
+  assert.match(detail("Filler State 54"), /holds 2 of Filler State 9's$/);
+  assert.equal(buildOneLineDetail(world, regions)("Filler State 33"), "", "nothing on record: the name and count alone");
+  assert.match(text, /A region named nowhere in this description is held by the power it belongs to on the scenario's map: every region that changed hands is among the territorial changes above\./);
+  assert.doesNotMatch(text, /ghost-17/, "a region the map does not have is never named by its id");
 });
 
 test("with the lookup functions, the powers out of view are one line", async () => {
   const { regions, world, actions } = bigWorld();
   const text = await buildWorldSummary({ game, world, events: [], actions, chats: [] }, regions, { tiers: true, briefed: true, regionListsViaTools: true });
-  assert.match(text, /Not in play this turn: \d+ other powers; list_regions and country_info give any of them\./);
+  assert.match(text, /Not in play this turn: \d+ other powers; list_regions and power_info give any of them\./);
+  assert.doesNotMatch(text, /A region named nowhere/, "the lookups say who holds any region");
   assert.match(text, /- Slavonia — 12 regions/);
   assert.doesNotMatch(text, /Slavonia province 0/, "region names come from the lookups");
+});
+
+// Idle diplomacy's relevant countries (idlePoliticalDiplomacyContext.js
+// rankRelevantPolities): here, a filler state the latest event names, and one
+// the player has a chat with. Each is shown as a neighbour is: its regions in
+// full, its units in the table.
+test("the relevant countries idle diplomacy keeps are in view, as a neighbour is", async () => {
+  const { regions, world, actions } = bigWorld();
+  const politicalActors = { byPolity: Object.fromEntries(Object.keys(world.polityOverrides).map((name) => [name, { government: {} }])) };
+  const related = { ...world, politicalActors };
+  const bundle = {
+    game,
+    world: related,
+    events: [{ id: "e1", date: "1930-05-01", title: "Filler State 41 recalls its ambassador", description: "Filler State 41 recalls its ambassador from Ruritania.", countries: ["Filler State 41"] }],
+    actions,
+    chats: [{ id: "c1", countries: [{ name: "Filler State 52" }], messages: [{ time: "1930-04-20", text: "Greetings." }] }],
+  };
+  const focus = buildPromptFocus(bundle, regions, related, {});
+  assert.ok(focus.relevant.includes("Filler State 41") && focus.relevant.includes("Filler State 52"), focus.relevant.join(", "));
+  assert.ok(focus.inView.has("filler state 41") && focus.inView.has("filler state 52"));
+  const reasons = Object.fromEntries(focus.ranked.map((entry) => [entry.label, entry.reasons]));
+  assert.ok(reasons["Filler State 41"].includes("relevant country"));
+  const text = await buildWorldSummary(bundle, regions, { tiers: true, briefed: true });
+  assert.match(text, /- Filler State 41 \[\d+ regions?\]: Filler State 41 province 0/);
+  // Without a political world they are ranked among the map's own powers.
+  const plain = buildPromptFocus({ ...bundle, world }, regions, world, {});
+  assert.deepEqual(plain.relevant.slice(0, 2), ["Filler State 41", "Filler State 52"]);
+  assert.ok(plain.inView.has("filler state 41"));
 });
 
 test("a power that changed since the last skip comes into view, and the rest say they did not change", async () => {
@@ -93,8 +167,8 @@ test("a power that changed since the last skip comes into view, and the rest say
   assert.deepEqual([...next.changed].sort(), ["filler state 7", "filler state 8"]);
   assert.ok(next.inView.has("filler state 7") && next.inView.has("filler state 8"));
   const text = await buildWorldSummary({ ...bundle, world: moved }, regions, { tiers: true, briefed: true });
-  assert.match(text, /Every other power, none of them changed since the last skip, with the regions it holds:/);
-  assert.match(text, /- Filler State 7 \[4 regions\]: Filler State 7 province 0, /);
+  assert.match(text, /Every other power, none of them changed since the last skip, with the regions it holds and what the records say of it:/);
+  assert.match(text, /- Filler State 7 \[\d+ regions\]: Filler State 7 province 0, /);
 });
 
 test("the player's units, its enemies' and those of the powers the orders name are in full; the rest by name, none dropped", () => {
@@ -175,7 +249,7 @@ test("a skip's prompt context carries its focus and the lore reference, and othe
   assert.match(skip.polityLoreReference, /^\[Polity Lore\]\n.*\n- Slavonia: A militarist republic\.\n\n$/);
   const other = await buildPromptContext(bundle, { requiredKeys: ["worldSummaryNoCity"], taskKey: "actions" });
   assert.equal(other.promptFocus, undefined);
-  assert.doesNotMatch(other.worldSummaryNoCity, /Spotlight this period/);
+  assert.doesNotMatch(other.worldSummaryNoCity, /Spotlight|development of its own/);
 });
 
 test("the air strikes a skip is told are capped, the heaviest kept, and the rest counted", () => {

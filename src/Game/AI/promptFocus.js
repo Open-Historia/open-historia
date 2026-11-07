@@ -3,9 +3,18 @@
 // time: two hundred powers, sixty formations, three hundred contested regions.
 // Most of it did not move since the last skip and is not what this one is
 // about. So a skip shows in full what the turn is about (the player, its
-// neighbours, every power at war, every power the orders name, every power that
-// changed since the last skip or is in a live storyline, and a few distant
-// powers in a rotating spotlight) and the rest in a line each.
+// neighbours, its relevant countries, every power at war, every power the
+// orders name, every power that changed since the last skip or is in a live
+// storyline) and the rest in a line each.
+//
+// The relevant countries are idle diplomacy's (idlePoliticalDiplomacyContext.js
+// rankRelevantPolities): the governments that have had something happen to
+// them or have dealt with the player, latest first, the first twenty of them.
+// The owner, 2026-11-07: "don't do the filler events at all, instead just
+// provide the same amount of info for relevant countries to bordering
+// countries". A skip used to name three distant powers in a rotating spotlight
+// and ask for "a development of its own" for each; the model read it as a quota
+// and spent a quarter of a skip on San Marino and Bhutan (the quality A/B).
 //
 // What changed is read against `world.promptSnapshot`, which a skip stores when
 // it is written: each power's region count and a hash of what the prompt said
@@ -75,28 +84,6 @@ export const changedSinceSnapshot = (snapshot, current) => {
   return changed;
 };
 
-// A few powers the story has not been following, a different few each round,
-// so that distant powers still get turns. Deterministic: the same round and the
-// same powers give the same spotlight, which keeps a retried skip identical.
-// The candidates (powers not already in view) stand in a fixed order, a shuffle
-// by their names, and each round takes the next `count` of them, so a set that
-// does not change is gone through whole every ceil(n / count) rounds.
-// `minRegions` keeps specks of land out of it unless nothing else is left.
-export const SPOTLIGHT_POWERS = 3;
-export const pickSpotlight = (candidates = [], { round = 0, count = SPOTLIGHT_POWERS, minRegions = 3 } = {}) => {
-  const list = (Array.isArray(candidates) ? candidates : [])
-    .map((entry) => (typeof entry === "string" ? { label: entry, regions: Infinity } : entry))
-    .filter((entry) => norm(entry?.label));
-  const sizable = list.filter((entry) => (Number(entry.regions) || 0) >= minRegions);
-  const pool = (sizable.length >= count ? sizable : list)
-    .map((entry) => ({ label: norm(entry.label), order: hashText(fold(entry.label)) }))
-    .sort((a, b) => (a.order < b.order ? -1 : a.order > b.order ? 1 : a.label.localeCompare(b.label)));
-  const take = Math.min(Math.max(0, count), pool.length);
-  if (!take) return [];
-  const start = ((Math.trunc(Number(round) || 0) * take) % pool.length + pool.length) % pool.length;
-  return Array.from({ length: take }, (_, index) => pool[(start + index) % pool.length].label);
-};
-
 // The powers whose regions touch the player's, most contacts first. Two regions
 // touch when their boxes do (a region row's `bounds`, [[west, south], [east,
 // north]]), or when the map declares them adjacent. Rows without either say
@@ -162,13 +149,13 @@ export const IN_VIEW_REASONS = Object.freeze(new Set([
   "named in recent events",
   "claims the player's land",
   "neighbour",
+  "relevant country",
   "changed since the last skip",
   "in a live storyline",
-  "spotlight",
 ]));
 
 // How many powers a skip shows in full beyond the player: enough for a world
-// war's two coalitions, the neighbours and the spotlight.
+// war's two coalitions, the neighbours and the relevant countries.
 export const POWERS_IN_VIEW = 28;
 
 // The ranked powers (selectFocusPowers' answer) split into those in view and the

@@ -100,7 +100,7 @@ const NEW_UPDATES = [
         title: "Time skips cost less",
         items: [
           "Time skips send the AI less: nothing is sent twice, older events go as one line each, and the part of the request that never changes is kept by the AI service, so each skip costs less and runs faster.",
-          "Long campaigns send even less: each skip gives the AI in full what the turn is about (your country, your neighbours, every war, everything your orders name, and a few distant countries in turn, so they keep making news) and the rest of the world in a line. Your campaign's treaties, deaths, changes of government and borders are now kept for good, however long it runs.",
+          "Long campaigns send even less: each skip gives the AI in full what the turn is about (your country, your neighbours, the countries most in the news or in dealings with you, every war, everything your orders name) and the rest of the world in a line. Your campaign's treaties, deaths, changes of government and borders are now kept for good, however long it runs.",
         ],
       },
     ],
