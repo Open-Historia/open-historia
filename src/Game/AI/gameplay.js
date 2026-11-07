@@ -2077,13 +2077,27 @@ const buildPlacementGazetteer = (context, world) => {
     return label || iso3 || area ? { label, iso3, area } : null;
   };
   // 2 for a region the country holds, 1 for one that is geographically its, 0 for neither.
+  // Geographically its: by a stock map's ISO3 id, or by the country the region
+  // lies in on the base map (the row's base: its gid0's country, or the owner
+  // the map was drawn with), whoever holds it now. A scenario's own map says it
+  // only there: "region: Métropole du Grand Paris, country: France" on a map
+  // where Italy holds Paris was found nowhere (the quality A/B of 2026-11-07).
+  const baseCodes = new Map();
+  const baseIso3 = (row) => {
+    const base = normalizeString(row.base);
+    if (!base) return "";
+    if (!baseCodes.has(base)) baseCodes.set(base, normalizeString(resolveStockCountryCode(base) || countryGidFromIdentity(base)).toUpperCase());
+    return baseCodes.get(base);
+  };
   const countryRank = (row, want) => {
     if (!row || !want) return 0;
     if (want.label && fold(row.owner) === fold(want.label)) return 2;
     if (want.area && fold(row.base) === fold(want.area)) return 1;
     if (!want.iso3) return 0;
     const gid = normalizeString(row.id).split(".")[0].toUpperCase();
-    return gid === want.iso3 || normalizeString(countryGidFromIdentity(row.owner)).toUpperCase() === want.iso3 ? 1 : 0;
+    return gid === want.iso3
+      || normalizeString(countryGidFromIdentity(row.owner)).toUpperCase() === want.iso3
+      || baseIso3(row) === want.iso3 ? 1 : 0;
   };
   // A name said to be a city, without the article the map writes it with or
   // with one the map leaves off: "Raqqa" for the map's "Ar-Raqqa". Only for a

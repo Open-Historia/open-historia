@@ -31,10 +31,11 @@ import { AIR_STRIKES_MAX_CHARS, airStrikesBlock } from "../../runtime/fronts/air
 const game = { country: "Ruritania", gameDate: "1930-05-12", round: 4, startDate: "1930-01-01" };
 
 // Ruritania (the player) and Borduria fight Slavonia and Carpathia; the orders
-// name Syldavia; sixty filler states hold a region or two each.
+// name Syldavia; sixty filler states hold eight to eleven regions each, more
+// than the region names a skip lists (buildRegionOwnershipText focusTotalCap).
 const bigWorld = () => {
   const fillers = Array.from({ length: 60 }, (_, index) => `Filler State ${index + 1}`);
-  const holdings = [["Ruritania", 30], ["Slavonia", 12], ["Borduria", 6], ["Carpathia", 5], ["Syldavia", 4], ...fillers.map((name, index) => [name, 1 + (index % 4)])];
+  const holdings = [["Ruritania", 30], ["Slavonia", 12], ["Borduria", 6], ["Carpathia", 5], ["Syldavia", 4], ...fillers.map((name, index) => [name, 8 + (index % 4)])];
   const regions = [];
   const regionOwnershipOverrides = {};
   const polityOverrides = {};
@@ -72,6 +73,12 @@ test("a skip's world summary lists the player, every belligerent and every power
   assert.ok(rest, "the powers out of view in one paragraph");
   const named = fillers.filter((name) => text.includes(name));
   assert.equal(named.length, fillers.length, "no power is left unnamed");
+  // The region names listed fill the budget: the powers in view, then the next by rank.
+  const listed = text.split("\n").filter((line) => /^- .+ \[\d+ regions?\]: /.test(line));
+  assert.ok(listed.some((line) => line.startsWith("- Filler State")), "powers out of view fill what the budget leaves");
+  const names = listed.reduce((sum, line) => sum + line.split(": ").slice(1).join(": ").split(", ").length, 0);
+  assert.ok(names >= 480 && names < 480 + 12, `${names} region names listed`);
+  assert.ok(!rest.includes(listed.at(-1).slice(2, listed.at(-1).indexOf(" ["))), "a power listed in full is not in the paragraph too");
   assert.doesNotMatch(text, /Spotlight|development of its own/, "no distant power is singled out for a turn");
   assert.match(text, /Treat these as binding/);
 });
@@ -105,7 +112,7 @@ test("the relevant countries idle diplomacy keeps are in view, as a neighbour is
   const reasons = Object.fromEntries(focus.ranked.map((entry) => [entry.label, entry.reasons]));
   assert.ok(reasons["Filler State 41"].includes("relevant country"));
   const text = await buildWorldSummary(bundle, regions, { tiers: true, briefed: true });
-  assert.match(text, /- Filler State 41 \[\d regions?\]: Filler State 41 province 0/);
+  assert.match(text, /- Filler State 41 \[\d+ regions?\]: Filler State 41 province 0/);
   // Without a political world they are ranked among the map's own powers.
   const plain = buildPromptFocus({ ...bundle, world }, regions, world, {});
   assert.deepEqual(plain.relevant.slice(0, 2), ["Filler State 41", "Filler State 52"]);
@@ -124,7 +131,7 @@ test("a power that changed since the last skip comes into view, and the rest say
   assert.ok(next.inView.has("filler state 7") && next.inView.has("filler state 8"));
   const text = await buildWorldSummary({ ...bundle, world: moved }, regions, { tiers: true, briefed: true });
   assert.match(text, /Every other power, none of them changed since the last skip, with the regions it holds:/);
-  assert.match(text, /- Filler State 7 \[4 regions\]: Filler State 7 province 0, /);
+  assert.match(text, /- Filler State 7 \[\d+ regions\]: Filler State 7 province 0, /);
 });
 
 test("the player's units, its enemies' and those of the powers the orders name are in full; the rest by name, none dropped", () => {

@@ -2134,6 +2134,13 @@ const regionBordersOfThisMap = () => {
 //     only where it moved since the reference the cached opening carries;
 //   - the tags grouped, so every tagged country fits.
 const TIERED_TERRITORY_REGIONS = 120;
+// The powers in view whose regions the budget left out. Where a place in one is
+// named: a skip is one request, and a region name the map does not have is
+// dropped, not corrected.
+export const TIERED_ROSTER_INTRO =
+  "Other powers in play, by full name (every owner field takes the name exactly as written here). Their regions are not listed: "
+  + "place an event in one by a city of [City Coordinates] or as \"country: <name>\", and name a region of it that changes hands "
+  + "as the map would spell it.";
 const TIERED_REST_POWERS = 80;
 const TIERED_TAG_CHARS = 4000;
 const TIERED_POLITIES = 24;
@@ -2188,10 +2195,17 @@ const buildTieredWorldSummary = async (bundle, world, regions, { regionListsViaT
     ].join("\n");
 
   const unchanged = Boolean(focus.changed);
+  // The region names a regionTransfers entry or an event's place copies: the
+  // powers in view first, then, while the names listed stay under the budget
+  // (buildRegionOwnershipText focusTotalCap), the next powers by rank, as the
+  // untiered summary does. A small campaign whose powers in view hold few
+  // regions otherwise listed far fewer names than it may, and its events named
+  // regions of powers it never listed (the quality A/B of 2026-11-07).
   const regionOwnershipCatalog = buildRegionOwnershipText(regions, world.regionOwnershipOverrides, {
-    focusCodes: focus.labels.filter(isInView),
+    focusCodes: [...focus.labels.filter(isInView), ...focus.labels.filter((label) => !isInView(label))],
     polityNames,
     rosterDetail: inView,
+    rosterIntro: TIERED_ROSTER_INTRO,
     restIntro: unchanged
       ? "Every other power, none of them changed since the last skip, with the regions it holds:"
       : "Every other power, with the regions it holds:",
