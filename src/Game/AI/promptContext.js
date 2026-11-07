@@ -12,7 +12,8 @@ import {
   normalizeEvents,
   normalizeWorldState,
 } from "../../runtime/gameState.js";
-import { buildRegionOwnershipText, buildUnruledBordersText, hasUnruledLand, regionOwnerName, regionTouchingMapSliced } from "./regionVocab.js";
+import { buildRegionOwnershipText, buildUnruledBordersText, hasUnruledLand, ownerRoster, regionOwnerName, regionTouchingMapSliced } from "./regionVocab.js";
+import { buildPromptSnapshot, changedSinceSnapshot, neighbourPowers, pickSpotlight, splitInView, storylinePowers } from "./promptFocus.js";
 import { waterTypeIds } from "../../runtime/regionTypes.js";
 import { isPendingAction, selectFocusPowers } from "./regionFocus.js";
 import { filterChatsVisibleTo } from "./chatVisibility.js";
@@ -1079,6 +1080,24 @@ export const buildRecentRoundsWithDates = (bundle) => {
 };
 
 export const UNITS_SUMMARY_LIMIT = 60;
+// The most units of powers out of view a skip names, by name and type.
+export const UNITS_BRIEF_LIMIT = 240;
+
+const unitSummaryRow = (unit, handles) => {
+  const lat = Number(unit.lat);
+  const lng = Number(unit.lng);
+  const coords = Number.isFinite(lat) && Number.isFinite(lng)
+    ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
+    : "unknown location";
+  const detail = [
+    `${unit.type}`,
+    `owner ${unit.ownerCode}`,
+    `${unit.strength}% of established strength`,
+    unit.posture ? `posture ${unit.posture}` : `status ${unit.status}`,
+  ].join(", ");
+  return `- ${handles.get(unit.id) || unit.name} (${detail})${unit.composition ? ` — ${unit.composition}` : ""}` +
+    `${unit.covert ? " [unconfirmed]" : ""} at ${coords}`;
+};
 
 // When the map holds more units than the list does, the list keeps the
 // player's first, then those of the powers the turn is about (the ranking the
@@ -1093,11 +1112,14 @@ export const buildUnitsSummaryText = (world, {
   chats = [],
   events = [],
   limit = UNITS_SUMMARY_LIMIT,
+  // A time skip's powers in view (buildPromptFocus), lower-case: their units in
+  // full, every other unit by name and type in a line per owner.
+  inView = null,
 } = {}) => {
   const units = normalizeArray(world?.units);
   if (units.length === 0) return "No military units are currently deployed on the map.";
   let ordered = units;
-  if (units.length > limit) {
+  if (inView instanceof Set || units.length > limit) {
     const counts = new Map();
     for (const unit of units) {
       const owner = normalizeString(unit?.ownerCode);
@@ -1117,25 +1139,34 @@ export const buildUnitsSummaryText = (world, {
       .sort((a, b) => a.rank - b.rank || a.index - b.index)
       .map((entry) => entry.unit);
   }
-  const omitted = Math.max(0, units.length - limit);
   // Each unit by its name, which is what an order on it writes (nameRefs.js);
   // its owner follows in brackets only where another unit shares the name.
   const handles = unitHandles(units);
-  const rows = ordered.slice(0, limit).map((unit) => {
-    const lat = Number(unit.lat);
-    const lng = Number(unit.lng);
-    const coords = Number.isFinite(lat) && Number.isFinite(lng)
-      ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
-      : "unknown location";
-    const detail = [
-      `${unit.type}`,
-      `owner ${unit.ownerCode}`,
-      `${unit.strength}% of established strength`,
-      unit.posture ? `posture ${unit.posture}` : `status ${unit.status}`,
-    ].join(", ");
-    return `- ${handles.get(unit.id) || unit.name} (${detail})${unit.composition ? ` — ${unit.composition}` : ""}` +
-      `${unit.covert ? " [unconfirmed]" : ""} at ${coords}`;
-  });
+  if (inView instanceof Set) {
+    const viewed = ordered.filter((unit) => inView.has(normalizeString(unit?.ownerCode).toLowerCase()));
+    const full = viewed.slice(0, limit);
+    const shownFull = new Set(full);
+    const brief = ordered.filter((unit) => !shownFull.has(unit));
+    const lines = full.map((unit) => unitSummaryRow(unit, handles));
+    if (brief.length) {
+      const byOwner = new Map();
+      let named = 0;
+      for (const unit of brief) {
+        if (named >= UNITS_BRIEF_LIMIT) break;
+        const owner = normalizeString(unit.ownerCode) || "unknown";
+        if (!byOwner.has(owner)) byOwner.set(owner, []);
+        byOwner.get(owner).push(`${handles.get(unit.id) || unit.name} (${unit.type})`);
+        named += 1;
+      }
+      lines.push(`${full.length ? "Other formations" : "Formations"}, by owner (powers not in play this turn; each is on the map):`);
+      for (const [owner, names] of byOwner) lines.push(`- ${owner}: ${names.join(", ")}`);
+      const left = brief.length - named;
+      if (left > 0) lines.push(left === 1 ? "[1 more unit omitted; it remains on the map]" : `[${left} more units omitted; they remain on the map]`);
+    }
+    return lines.join("\n");
+  }
+  const omitted = Math.max(0, units.length - limit);
+  const rows = ordered.slice(0, limit).map((unit) => unitSummaryRow(unit, handles));
   if (omitted > 0) {
     rows.push(omitted === 1
       ? "[1 more unit omitted; it remains on the map]"
@@ -1255,6 +1286,7 @@ export const buildMarkersSummaryText = (
     limit = 16,
     recentEventIds = new Set(),
     seed = "",
+    inView = null,
   } = {},
 ) => {
   const markers = normalizeArray(worldLike?.markers);
@@ -1294,8 +1326,21 @@ export const buildMarkersSummaryText = (
     || a.rotation - b.rotation
     || a.index - b.index);
 
-  const selected = scored.slice(0, boundedLimit).map(({ marker }) => marker);
+  const chosen = scored.slice(0, boundedLimit);
+  const selected = chosen.map(({ marker }) => marker);
+  // A time skip's powers in view (buildPromptFocus): a feature the turn is
+  // about (its score) or one a power in view owns is told in full; one the
+  // rotation brought up for another power's sake is named, with its kind and
+  // owner, in a line.
+  const briefOnly = inView instanceof Set
+    ? new Set(chosen
+      .filter(({ marker, score }) => score <= 0 && !inView.has(normalizeString(marker.ownerCode).toLowerCase()))
+      .map(({ marker }) => marker))
+    : new Set();
   const rows = selected.map((marker) => {
+    if (briefOnly.has(marker)) {
+      return `- ${marker.name} (${marker.kind}${marker.ownerCode ? `, owner ${marker.ownerCode}` : ""}${normalizeString(marker.status) && normalizeString(marker.status) !== "active" ? `, status ${normalizeString(marker.status)}` : ""})`;
+    }
     const lat = Number(marker.lat);
     const lng = Number(marker.lng);
     const coords = Number.isFinite(lat) && Number.isFinite(lng)
@@ -1686,7 +1731,14 @@ const recentEventList = (events, count = 12) => {
 // active wars, chat partners, the powers the recent events moved or mentioned,
 // claimants of contested land, then size (regionFocus.js). Declared scenario
 // actors that scored nothing are appended so a scripted power is never lost.
-export const rankFocusPowers = (regions, world, bundle, { playerName, actorNames = [], polityNames = {} } = {}) => {
+export const rankFocusPowers = (regions, world, bundle, options = {}) =>
+  rankFocusEntries(regions, world, bundle, options).map((entry) => entry.label);
+
+// The same ranking with each power's score and reasons (regionFocus.js), which a
+// time skip splits into the powers it shows in full and the rest
+// (buildPromptFocus). `signals`: the neighbours, changed powers, storyline
+// parties and spotlight a skip adds.
+const rankFocusEntries = (regions, world, bundle, { playerName, actorNames = [], polityNames = {}, signals = {} } = {}) => {
   const overrides = world.regionOwnershipOverrides ?? {};
   const groups = new Map();
   const ownerById = new Map();
@@ -1721,12 +1773,176 @@ export const rankFocusPowers = (regions, world, bundle, { playerName, actorNames
     claimants: world.regionClaimants ?? {},
     ownerOfRegion: (regionId) => ownerById.get(String(regionId)) ?? "",
     regions,
+    ...signals,
   });
-  const labels = ranked.map((entry) => entry.label);
+  const entries = ranked.map((entry) => ({ ...entry, regions: groups.get(entry.label.toLowerCase())?.regions ?? 0 }));
   for (const name of actorNames) {
-    if (name && !labels.some((label) => label.toLowerCase() === name.toLowerCase())) labels.push(name);
+    if (name && !entries.some((entry) => entry.label.toLowerCase() === name.toLowerCase())) {
+      entries.push({ label: name, score: 0, reasons: [], regions: 0 });
+    }
   }
-  return labels;
+  return entries;
+};
+
+// What a time skip shows in full and what in a line (promptFocus.js): the
+// powers in view (the player, its neighbours, every power at war, every power
+// the orders name, those that changed since the last skip or are in a live
+// storyline, the chat partners and the powers the recent events moved), plus a
+// spotlight on a few distant powers that rotates with the round. Also the
+// snapshot of the world as this skip reads it, which the skip stores when it is
+// written (gameplay.js applySimulationResult), so the next one can tell what
+// changed.
+//   regions     the rendered region catalog (filterToRenderedRegions)
+//   regionRows  the scenario's own rows, with their boxes and adjacencies
+//   baseTags    the map's nation tags (getNationTags)
+export const buildPromptFocus = (bundle, regions, world, {
+  playerName = toCountryName(normalizeString(bundle?.game?.country)),
+  actorNames = [],
+  polityNames = {},
+  regionRows = null,
+  baseTags = {},
+} = {}) => {
+  const overrides = world.regionOwnershipOverrides ?? {};
+  const snapshot = worldSnapshotOf(bundle, regions, world, { polityNames, baseTags });
+  const changedKeys = changedSinceSnapshot(world.promptSnapshot, snapshot);
+  const changed = changedKeys ? [...changedKeys] : [];
+  const neighbours = neighbourPowers(regionRows ?? regions, (row) => regionOwnerName(row, overrides), playerName);
+  const storylines = storylinePowers(world.storylines);
+  const ranked = rankFocusEntries(regions, world, bundle, {
+    playerName,
+    actorNames,
+    polityNames,
+    signals: { neighbours, changed, storylines },
+  });
+  const { inView, rest } = splitInView(ranked);
+  const spotlight = pickSpotlight(rest.map((entry) => ({ label: entry.label, regions: entry.regions })), {
+    round: Number(bundle?.game?.round) || 0,
+  });
+  const spotlit = new Set(spotlight.map((label) => label.toLowerCase()));
+  const viewed = [
+    ...inView,
+    ...rest.filter((entry) => spotlit.has(entry.label.toLowerCase())).map((entry) => ({ ...entry, reasons: [...entry.reasons, "spotlight"] })),
+  ];
+  return {
+    ranked,
+    labels: ranked.map((entry) => entry.label),
+    inView: new Set(viewed.map((entry) => entry.label.toLowerCase())),
+    inViewLabels: viewed.map((entry) => entry.label),
+    spotlight,
+    changed: changedKeys,
+    snapshot,
+  };
+};
+
+// The polities' lore, by lower-case name: what the reference block and the
+// snapshot read.
+const polityNotesOf = (world) => {
+  const notes = {};
+  for (const entry of Object.values(world?.polityOverrides ?? {})) {
+    const note = normalizeString(entry?.note);
+    if (!note) continue;
+    const name = normalizeString(entry?.name) || toCountryName(normalizeString(entry?.code));
+    if (name) notes[name.toLowerCase()] = { name, note };
+  }
+  return notes;
+};
+
+const worldSnapshotOf = (bundle, regions, world, { polityNames = {}, baseTags = {} } = {}) => {
+  const tagged = resolveAllCountryTags(baseTags, world);
+  const tagsByName = new Map();
+  for (const [code, tags] of Object.entries(tagged)) {
+    for (const name of [code, toCountryName(code)]) {
+      if (normalizeString(name)) tagsByName.set(normalizeString(name).toLowerCase(), tags);
+    }
+  }
+  const notes = polityNotesOf(world);
+  return buildPromptSnapshot({
+    round: Number(bundle?.game?.round) || 0,
+    date: normalizeString(bundle?.game?.gameDate),
+    powers: ownerRoster(regions, world.regionOwnershipOverrides ?? {}, { polityNames }).map((power) => ({
+      label: power.label,
+      regions: power.regions,
+      line: power.line,
+      tags: tagsByName.get(power.key) ?? [],
+      note: notes[power.key]?.note ?? "",
+    })),
+  });
+};
+
+// Owner name -> display name: base country names from the catalog, with the
+// dynamic polity overrides layered on top (a re-owned or renamed power wins).
+const polityNamesOf = (regions, polities) => {
+  const polityNames = {};
+  for (const region of regions) {
+    const name = String(region.country || toCountryName(region.countryCode) || "").toLowerCase();
+    if (name && !polityNames[name]) polityNames[name] = region.country || toCountryName(region.countryCode);
+  }
+  for (const entry of polities) {
+    if (entry?.code) polityNames[toCountryName(String(entry.code)).toLowerCase()] = entry.name || toCountryName(entry.code);
+  }
+  return polityNames;
+};
+
+// The snapshot a time skip stores when it is written (world.promptSnapshot):
+// the world it started from, as its prompt read it. `bundle` is that world's
+// { world, game }.
+export const buildWorldPromptSnapshot = async (bundle, regionCatalog = null) => {
+  const world = normalizeWorldState(bundle?.world);
+  const regions = filterToRenderedRegions(regionCatalog ?? await loadRegions(), world);
+  const baseTags = await getNationTags().catch(() => ({}));
+  return worldSnapshotOf(bundle, regions, world, { polityNames: polityNamesOf(regions, Object.values(world.polityOverrides)), baseTags });
+};
+
+// The polity lore a time skip carries in its cached opening
+// (${POLITY_LORE_REFERENCE}): every polity's note as of world.promptReference,
+// the reference a skip refreshes now and then (refreshPromptReference), so the
+// opening stays the same from skip to skip while the notes do not move. A note
+// written since is in the live part (buildWorldSummary). Without a reference,
+// the notes as they stand.
+export const POLITY_LORE_REFERENCE_MAX_CHARS = 8000;
+export const buildPolityLoreReference = (worldLike) => {
+  const reference = worldLike?.promptReference?.notes;
+  const notes = reference && typeof reference === "object"
+    ? Object.values(reference).filter((entry) => normalizeString(entry?.name) && normalizeString(entry?.note))
+    : Object.values(polityNotesOf(worldLike));
+  if (!notes.length) return "";
+  const lines = [];
+  let used = 0;
+  for (const entry of [...notes].sort((a, b) => a.name.localeCompare(b.name))) {
+    const line = `- ${entry.name}: ${normalizeString(entry.note).replace(/\s+/g, " ")}`;
+    if (used + line.length > POLITY_LORE_REFERENCE_MAX_CHARS) break;
+    lines.push(line);
+    used += line.length + 1;
+  }
+  return lines.join("\n");
+};
+
+// When the reference the cached opening carries is renewed, after a skip: when
+// there is none, when this many notes have moved since it, or when it is this
+// many rounds old and anything moved at all. Between renewals the opening is
+// the same, and the notes that moved ride in the live part.
+export const PROMPT_REFERENCE_REFRESH = Object.freeze({ changedNotes: 6, rounds: 25 });
+export const refreshPromptReference = (worldLike, round = 0) => {
+  const current = polityNotesOf(worldLike);
+  const reference = worldLike?.promptReference;
+  const stored = reference?.notes && typeof reference.notes === "object" ? reference.notes : null;
+  const fresh = { round: Math.max(0, Math.trunc(Number(round) || 0)), notes: current };
+  if (!stored) return fresh;
+  const keys = new Set([...Object.keys(current), ...Object.keys(stored)]);
+  let moved = 0;
+  for (const key of keys) if (normalizeString(current[key]?.note) !== normalizeString(stored[key]?.note)) moved += 1;
+  if (moved >= PROMPT_REFERENCE_REFRESH.changedNotes) return fresh;
+  if (moved > 0 && fresh.round - (Number(reference.round) || 0) >= PROMPT_REFERENCE_REFRESH.rounds) return fresh;
+  return reference;
+};
+
+// The notes that differ from the reference the opening carries: what the live
+// part says of the polities' lore.
+const notesSinceReference = (world) => {
+  const current = polityNotesOf(world);
+  const stored = world?.promptReference?.notes && typeof world.promptReference.notes === "object" ? world.promptReference.notes : null;
+  if (!stored) return {};
+  return Object.fromEntries(Object.entries(current).filter(([key, entry]) => normalizeString(stored[key]?.note) !== entry.note));
 };
 
 export const POLITY_SUMMARY_LIMIT = 16;
@@ -1810,6 +2026,180 @@ const regionBordersOfThisMap = () => {
 };
 
 //
+// A time skip's world summary (buildWorldSummary `tiers`). Everything the
+// untiered one says is here; what changes is how much of each part is in full:
+//   - the territorial changes, grouped by who lost and who gained, the moves of
+//     the powers in view first;
+//   - region names in full for the powers in view (the region vocabulary for
+//     regionTransfers), a roster line for the other powers in view (and the
+//     spotlight), and every other power by name and size in one paragraph, or
+//     in one line where the lookup functions can give any of them;
+//   - the polities' codes and former names for the powers in view, and the lore
+//     only where it moved since the reference the cached opening carries;
+//   - the tags grouped, so every tagged country fits.
+const TIERED_TERRITORY_REGIONS = 120;
+const TIERED_REST_POWERS = 80;
+const TIERED_TAG_CHARS = 4000;
+const TIERED_POLITIES = 24;
+const buildTieredWorldSummary = async (bundle, world, regions, { regionListsViaTools = false, countsOnly = false, nationTags = null, briefed = false, focus: given = null } = {}) => {
+  const regionLookup = new Map(regions.map((region) => [region.id, region]));
+  const bakedAliases = buildOwnerAliasMap(world.polityOverrides);
+  const territoryEntries = Object.entries(world.regionOwnershipOverrides).filter(([regionId, ownerCode]) => {
+    const baked = normalizeString(regionLookup.get(regionId)?.country);
+    if (!baked) return true;
+    return canonicalOwnerName(baked, bakedAliases).toLowerCase() !== canonicalOwnerName(ownerCode, bakedAliases).toLowerCase();
+  });
+  const polities = Object.values(world.polityOverrides);
+  const playerName = toCountryName(normalizeString(bundle.game.country));
+  const actorNames = polities.map((entry) => toCountryName(normalizeString(entry?.code))).filter(Boolean);
+  const polityNames = polityNamesOf(regions, polities);
+  const baseTags = nationTags ?? await getNationTags().catch(() => ({}));
+  const regionRows = await loadScenarioRegionCatalog().catch(() => null) ?? regions;
+  const focus = given ?? buildPromptFocus(bundle, regions, world, { playerName, actorNames, polityNames, regionRows, baseTags });
+  const inView = focus.inView;
+  const isInView = (name) => inView.has(normalizeString(name).toLowerCase());
+
+  // Who lost what to whom, the moves of the powers in view first.
+  const leanSummary = regionListsViaTools && countsOnly;
+  const byMove = new Map();
+  for (const [regionId, ownerCode] of territoryEntries) {
+    const region = regionLookup.get(regionId);
+    const from = region?.country ? canonicalOwnerName(region.country, bakedAliases) : "";
+    const key = `${from.toLowerCase()}|${normalizeString(ownerCode).toLowerCase()}`;
+    const move = byMove.get(key) ?? { from, to: ownerCode, names: [] };
+    move.names.push(region?.name || regionId);
+    byMove.set(key, move);
+  }
+  const moves = [...byMove.values()].sort((a, b) =>
+    Number(isInView(b.to) || isInView(b.from)) - Number(isInView(a.to) || isInView(a.from))
+    || b.names.length - a.names.length);
+  let room = leanSummary ? LEAN_TERRITORY_CHANGES : TIERED_TERRITORY_REGIONS;
+  let unlisted = 0;
+  const moveLines = [];
+  for (const move of moves) {
+    const shown = move.names.slice(0, Math.max(0, room));
+    room -= shown.length;
+    unlisted += move.names.length - shown.length;
+    if (shown.length) moveLines.push(`- ${move.from || "no former owner"} -> ${move.to}: ${shown.join(", ")}${move.names.length > shown.length ? `, (+${move.names.length - shown.length} more)` : ""}`);
+  }
+  const territorySummary = territoryEntries.length === 0
+    ? "No territorial changes from the base scenario are currently recorded."
+    : [
+      ...moveLines,
+      ...(unlisted > 0
+        ? [`(+${unlisted} more changed region${unlisted === 1 ? "" : "s"}; ${regionListsViaTools ? "region_info and map_around say who holds a region now" : "the ownership below is the map as it stands"})`]
+        : []),
+    ].join("\n");
+
+  const unchanged = Boolean(focus.changed);
+  const regionOwnershipCatalog = buildRegionOwnershipText(regions, world.regionOwnershipOverrides, {
+    focusCodes: focus.labels.filter(isInView),
+    polityNames,
+    rosterDetail: inView,
+    restIntro: unchanged
+      ? "Every other power, none of them changed since the last skip, with the regions it holds:"
+      : "Every other power, with the regions it holds:",
+    ...(regionListsViaTools
+      ? {
+          focusTotalCap: 0,
+          ...(countsOnly ? { territories: false } : {}),
+          restLine: (count) => `${unchanged ? "Unchanged since the last skip and not in play" : "Not in play this turn"}: ${count} other power${count === 1 ? "" : "s"}; list_regions and country_info give any of them.`,
+        }
+      : { rosterCap: TIERED_REST_POWERS }),
+  });
+  const spotlight = focus.spotlight.length
+    ? `Spotlight this period, powers the story has not followed lately: ${focus.spotlight.join(", ")}. Where it fits, give each a development of its own.`
+    : "";
+
+  const waterTypes = waterTypeIds(world.regionTypes);
+  const touching = hasUnruledLand(regionRows, world.regionOwnershipOverrides, { waterTypes })
+    ? await regionBordersOfThisMap()
+    : null;
+  const unruledBorders = buildUnruledBordersText(regionRows, world.regionOwnershipOverrides, { waterTypes, touching, firstOwners: inView });
+
+  // A polity's code, its other names and its lore: the lore is in the cached
+  // opening (buildPolityLoreReference) unless it moved since; a code that is
+  // the name and no other name say nothing, and a colour is the map's.
+  const since = notesSinceReference(world);
+  const polityLines = [];
+  for (const entry of orderByFocus(polities, (record) => [record.code, toCountryName(normalizeString(record.code)), record.name], focus.labels)) {
+    const name = normalizeString(entry.name) || normalizeString(entry.code);
+    const fold = (value) => normalizeString(value).toLowerCase();
+    const aliases = normalizeArray(entry.aliases).map(normalizeString)
+      .filter((alias) => alias && fold(alias) !== fold(name) && fold(alias) !== fold(entry.code));
+    const moved = since[fold(name)] ?? null;
+    const named = isInView(name) || isInView(toCountryName(normalizeString(entry.code)));
+    const coded = fold(entry.code) !== fold(name);
+    if (!moved && !(named && (coded || aliases.length))) continue;
+    polityLines.push(`- ${entry.code}${coded ? `: ${name}` : ""}${aliases.length ? ` (also called ${aliases.join(", ")})` : ""}${moved ? ` — ${moved.note}` : ""}`);
+  }
+  const politySummary = polityLines.slice(0, TIERED_POLITIES).join("\n")
+    + (polityLines.length > TIERED_POLITIES ? `\n(+${polityLines.length - TIERED_POLITIES} more polities not listed)` : "");
+
+  // What each country is, grouped by the same tags, the powers in view first.
+  const tagged = resolveAllCountryTags(baseTags, world);
+  const byTags = new Map();
+  for (const code of orderByFocus(Object.keys(tagged), (key) => [key, toCountryName(key)], focus.labels)) {
+    const key = tagged[code].join(", ");
+    if (!byTags.has(key)) byTags.set(key, []);
+    byTags.get(key).push(code);
+  }
+  const tagLines = [];
+  let tagChars = 0;
+  let tagsLeft = 0;
+  for (const [key, codes] of byTags) {
+    const line = `- ${key}: ${codes.join(", ")}`;
+    if (tagChars + line.length > TIERED_TAG_CHARS) {
+      tagsLeft += codes.length;
+      continue;
+    }
+    tagLines.push(line);
+    tagChars += line.length + 1;
+  }
+  const tagSummary = byTags.size === 0
+    ? "No countries have defining tags."
+    : tagLines.join("\n") + (tagsLeft ? `\n(+${tagsLeft} more tagged countries not listed)` : "");
+  const playerTags = resolveCountryTags(baseTags, world, bundle.game.country);
+
+  const header = briefed
+    ? (playerTags.length ? [`${bundle.game.country || "The player's polity"} is: ${playerTags.join(", ")}`, ""] : [])
+    : [
+      `Player polity: ${bundle.game.country || "Unknown polity"}${playerTags.length ? ` (${playerTags.join(", ")})` : ""}`,
+      `Current round: ${bundle.game.round || 1}`,
+      `Current date: ${bundle.game.gameDate || "unknown"}`,
+      `Language: ${readingLanguageName(world.language || bundle.game.language)}`,
+      `Difficulty: ${bundle.game.difficulty || "standard"}`,
+      `World before round one: ${world.startingTimelineText || "No world briefing provided."}`,
+      `Simulation rules: ${world.simulationRules || "No extra simulation rules were provided."}`,
+      "",
+    ];
+  return [
+    ...header,
+    "Territorial changes from the base scenario (former owner -> holder now: regions):",
+    territorySummary,
+    "",
+    regionListsViaTools
+      ? "Map ownership by power (region counts only; region names and ids come from the lookup functions find_region, list_regions and map_around):"
+      : "Map ownership (this IS the comma-separated region list referenced above — the "
+        + "region vocabulary for regionTransfers):",
+    regionOwnershipCatalog,
+    ...(spotlight ? ["", spotlight] : []),
+    ...(unruledBorders ? ["", unruledBorders] : []),
+    ...(politySummary
+      ? ["", "Polity codes and other names for the powers in view, and any lore written since the [Polity Lore] above:", politySummary]
+      : []),
+    "",
+    "What each country is (ideology, alignment, posture), countries grouped by their tags. Treat these as binding "
+      + "characterisation: act, speak and react in keeping with them, and only change "
+      + "them via polityChanges when events genuinely reshape a country.",
+    tagSummary,
+    "",
+    world.activeInteractive
+      ? `Interactive event in progress: ${world.activeInteractive.title || "untitled"} - ${world.activeInteractive.premise || world.activeInteractive.opening || ""}`
+      : "No interactive event in progress.",
+  ].join("\n");
+};
+
 // `briefed`: the prompt states the player, the round, the date, the language,
 // the difficulty, the briefing and the scenario's rules itself (a time skip's
 // template does), so the summary leaves them out and keeps only the player's
@@ -1822,9 +2212,18 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
   speakingAs = "",
   nationTags = null,
   briefed = false,
+  // A time skip's tiers (buildPromptFocus): the powers in view in full, every
+  // other power in a line, the territorial changes and tags grouped, and the
+  // polities' lore once, in the cached opening (buildPolityLoreReference). A
+  // focus the caller already built is passed as `focus`.
+  tiers = false,
+  focus = null,
 } = {}) => {
   const world = normalizeWorldState(bundle.world);
   const regions = filterToRenderedRegions(regionCatalog ?? await loadRegions(), world);
+  if (tiers && !conversation) {
+    return buildTieredWorldSummary(bundle, world, regions, { regionListsViaTools, countsOnly, nationTags, briefed, focus });
+  }
   const regionLookup = new Map(regions.map((region) => [region.id, region]));
   // Only overrides that CHANGE an owner are changes: on a hand-drawn world every
   // region carries an override equal to its baked owner, and listing sixty of
@@ -2066,9 +2465,39 @@ export const buildPromptContext = async (bundle, {
   );
   const regionCatalog = needsRegionCatalog ? (mapSource?.regionCatalog ?? await loadRegions()) : [];
 
+  // A time skip shows in full what the turn is about and the rest in a line
+  // (buildPromptFocus): the world summary, the units and the structures here,
+  // the occupied regions and the groups in gameplay.js, all from one focus.
+  const skipTiers = SKIP_TASKS.has(taskKey) && !mapSource;
+  let focus = null;
+  if (skipTiers && wants("worldSummary", "worldSummaryNoCity", "unitsSummary", "markersSummary")) {
+    const world = normalizeWorldState(bundle.world);
+    const tierCatalog = needsRegionCatalog ? regionCatalog : await loadRegions();
+    const regions = filterToRenderedRegions(tierCatalog, world);
+    const polities = Object.values(world.polityOverrides);
+    focus = buildPromptFocus(bundle, regions, world, {
+      actorNames: polities.map((entry) => toCountryName(normalizeString(entry?.code))).filter(Boolean),
+      polityNames: polityNamesOf(regions, polities),
+      regionRows: await loadScenarioRegionCatalog().catch(() => null),
+      baseTags: await getNationTags().catch(() => ({})),
+    });
+    // Not a template variable: kept off the variables' keys (and so off what
+    // diagnostics and the demand checks count), for gameplay.js to read.
+    Object.defineProperty(result, "promptFocus", { value: focus, enumerable: false });
+  }
+  // Ends with its own blank line, or is "": the template runs it into the next heading.
+  if (wants("polityLoreReference")) {
+    const lore = buildPolityLoreReference(normalizeWorldState(bundle.world));
+    result.polityLoreReference = lore
+      ? `[Polity Lore]\nWho each polity is, in its own lore. Lore written since is under [Game Map Description].\n${lore}\n\n`
+      : "";
+  }
+
   let worldSummary = "";
   if (wants("worldSummary", "worldSummaryNoCity")) {
     worldSummary = await buildWorldSummary(bundle, regionCatalog, {
+      tiers: skipTiers,
+      focus,
       regionListsViaTools: lookups,
       countsOnly: Boolean(lookups && leanLookups),
       conversation,
@@ -2320,6 +2749,7 @@ export const buildPromptContext = async (bundle, {
     const markerAttention = buildMarkerAttentionEvidence(bundle, { chat });
     result.markersSummary = buildMarkersSummaryText(bundle.world, {
       ...markerAttention,
+      inView: focus?.inView ?? null,
       limit: markerAttentionLimitForTask(taskKey),
       seed: `${taskKey || "compatibility"}|${target}|${bundle.game.round || 1}|${bundle.game.country || ""}`,
     });
@@ -2378,6 +2808,7 @@ export const buildPromptContext = async (bundle, {
       actions: bundle.actions,
       chats: bundle.chats,
       events: bundle.events,
+      inView: focus?.inView ?? null,
     });
     put("playerBattalionSummaries", unitsText);
     put("unitsSummary", unitsText);

@@ -106,6 +106,8 @@ export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   "gmAudit", "gmChanges", "historyDocument", "idlePulseTick", "lastJumpSummary", "naviesRaised", "notes",
   "pendingEventOutreach", "politicalSimulation", "seatBoards", "simulationReminders",
   "storylines",
+  // What the last time skip's prompt read (runtime/promptSnapshot.js).
+  "promptSnapshot", "promptReference",
 ]);
 
 // The host seat's single-player features (a scene in progress, the key its own

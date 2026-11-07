@@ -45,6 +45,14 @@ export const STATIC_PROMPT_KEYS = Object.freeze(new Set([
   "JUMP_STATIC_RULES",
   // Where a prefix shared by several tasks ends (CACHE_BREAK_KEY below).
   "CACHE_BREAK",
+  // The city catalog: the map's own, never moved by a turn.
+  "citiesSummary",
+  "CITY_COORDINATES",
+  // The polity lore a time skip's opening carries: the reference the save
+  // keeps (promptContext.js buildPolityLoreReference), renewed only now and
+  // then, never by a turn's own events.
+  "polityLoreReference",
+  "POLITY_LORE_REFERENCE",
 ]));
 
 // A placeholder that renders as nothing and marks where the part of a prompt

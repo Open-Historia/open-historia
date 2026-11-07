@@ -314,9 +314,11 @@ import {
   buildDetailedChatHistoryText,
   buildEventHistoryText,
   buildPromptContext,
+  buildWorldPromptSnapshot,
   filterToRenderedRegions,
   formatDateReadable,
   joinPolityNames,
+  refreshPromptReference,
   resolveHelperValues,
 } from "./promptContext.js";
 import { SHARED_WORLD_TASKS } from "./sharedGameDirective.js";
@@ -527,11 +529,13 @@ import { unseenEvents, withoutUnseenMessages } from "../../runtime/unseenEvents.
 import { canRewindInteractiveTo, isSceneInProgress, openInteractive, recordInteractiveBeat, rewindInteractive } from "./interactiveRewind.js";
 import { chooseInteractiveOffer, offeredEvent } from "../../runtime/interactiveOffer.js";
 import { buildCrossChatKnowledge } from "./crossChatKnowledge.js";
+import { isPendingAction } from "./regionFocus.js";
 import {
   describeIntelligenceStanding,
   describeLeaderStanding,
   describeReputationStanding,
   describeTerritorialRows,
+  describeTerritorialRowsGrouped,
   describeTerritoryForConversation,
   territorialControlRows,
 } from "./standingContext.js";
@@ -1344,9 +1348,30 @@ const perfNow = () =>
 // With lookups 24 of them, and with Unlimited requests on fewer still: the rest
 // are behind the functions either way.
 const LEAN_TERRITORIAL_ROWS = 12;
-const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLookups = false } = {}) => {
+// A time skip's `inView` (promptContext.js buildPromptFocus): the rows grouped
+// by who holds what, those of the powers in view in full.
+const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLookups = false, inView = null } = {}) => {
   const catalog = await loadRegionCatalog().catch(() => []);
-  return describeTerritorialRows(territorialControlRows(normalizeWorldState(worldLike), catalog), { maxRows, viaLookups });
+  const rows = territorialControlRows(normalizeWorldState(worldLike), catalog);
+  return inView instanceof Set
+    ? describeTerritorialRowsGrouped(rows, { inView, maxNames: Math.max(maxRows * 3, 60), viaLookups })
+    : describeTerritorialRows(rows, { maxRows, viaLookups });
+};
+
+// Whether a group is one a time skip is about: it holds land in a power in view,
+// or the recent events, the orders still waiting, a war or a live storyline name
+// it. `world` is normalised.
+const groupInViewTest = (bundle, world, catalog, inView) => {
+  const owners = new Map(catalog.map((region) => [region.id, normalizeString(region.country)]));
+  const ownerOf = (id) => normalizeString(world.regionOwnershipOverrides?.[id]) || owners.get(id) || "";
+  const text = [
+    ...normalizeArray(bundle?.events).slice(-12).map((event) => `${event?.title ?? ""} ${event?.description ?? ""}`),
+    ...normalizeArray(bundle?.actions).filter(isPendingAction).map((action) => `${action?.title ?? ""} ${action?.description ?? ""} ${action?.rawInput ?? action?.text ?? ""}`),
+    ...normalizeArray(world.wars).filter((war) => normalizeString(war?.status).toLowerCase() !== "ended").map((war) => JSON.stringify(war)),
+    ...normalizeArray(world.storylines).filter((entry) => ["active", "dormant"].includes(normalizeString(entry?.status).toLowerCase() || "active")).map((entry) => JSON.stringify(entry)),
+  ].join("\n").toLowerCase();
+  return (name, regionIds) => regionIds.some((id) => inView.has(ownerOf(id).toLowerCase()))
+    || (normalizeString(name).length >= 3 && text.includes(normalizeString(name).toLowerCase()));
 };
 
 // Groups (runtime/groups.js) as the model reads them: each exact name, what it
@@ -1359,7 +1384,7 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
 // A group larger than its share ends "+N more" (list_regions with a group when
 // lookups are on).
 const GROUP_REGIONS_IN_PROMPT = 400;
-const buildGroupsContext = async (worldLike, { regionCatalog = null } = {}) => {
+const buildGroupsContext = async (worldLike, { regionCatalog = null, inView = null, bundle = null } = {}) => {
   if (!worldLike?.groups || !Object.keys(worldLike.groups).length) return "";
   const world = normalizeWorldState(worldLike);
   const count = Object.keys(world.groups).length;
@@ -1369,6 +1394,7 @@ const buildGroupsContext = async (worldLike, { regionCatalog = null } = {}) => {
   return describeGroupsForPrompt(world, {
     regionName: (id) => names.get(id) || id,
     maxRegions: Math.max(12, Math.floor(GROUP_REGIONS_IN_PROMPT / count)),
+    ...(inView instanceof Set ? { inView: groupInViewTest(bundle, world, catalog, inView) } : {}),
   });
 };
 
@@ -1539,14 +1565,20 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   }
   await pause?.();
   if (wants("territorialControlContext")) {
-    variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: leanLookups ? LEAN_TERRITORIAL_ROWS : 24, viaLookups: true } : {});
+    variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, {
+      ...(lookups ? { maxRows: leanLookups ? LEAN_TERRITORIAL_ROWS : 24, viaLookups: true } : {}),
+      // A time skip: grouped, the powers it has in view in full (promptContext.js buildPromptFocus).
+      inView: variables.promptFocus?.inView ?? null,
+    });
   }
   // Groups switched off for this game (server/gameFeatures.js): no task is
   // given them, which also leaves out the time skip's [Groups] rule and the
   // Game Master's block (both read these).
   await pause?.();
   const groupsOn = isActiveFeatureEnabled("groups");
-  variables.groupsContext = groupsOn ? await buildGroupsContext(bundle.world, { regionCatalog: options?.mapSource?.regionCatalog }) : "";
+  variables.groupsContext = groupsOn
+    ? await buildGroupsContext(bundle.world, { regionCatalog: options?.mapSource?.regionCatalog, inView: variables.promptFocus?.inView ?? null, bundle })
+    : "";
   await pause?.();
   variables.playerGroupContext = groupsOn
     ? await buildPlayerGroupContext(bundle.world, bundle.game?.country, { regionCatalog: options?.mapSource?.regionCatalog })
@@ -2845,6 +2877,7 @@ const buildJumpStaticRules = async (variables = {}) => {
     variables?.foldedSkip ? FOLDED_SKIP_CONSEQUENCES : "",
     unitsOnTheMapBlock(game?.gameDate, eraSettingOf(world)),
     TAKING_GROUND_BLOCK,
+    isActiveFeatureEnabled("groups") ? `${GROUPS_RULE_HEADING}\n${GROUPS_RULE}` : "",
     `${WAR_LEDGER_RULES_HEADING}\n${warLedgerRules(playerName)}`,
     `${DIPLOMATIC_LEDGER_RULES_HEADING}\n${diplomaticLedgerRules(playerName)}`,
     `[Reading the Diplomatic Ledger]\n${DIPLOMATIC_SLICE_RULES}`,
@@ -2898,9 +2931,13 @@ const describeWarsWithoutFormations = (world) => {
   ].join("\n");
 };
 
-const buildJumpGroupsBlock = (groupsContext) => [
+const GROUPS_RULE = "Groups are actors that are not countries — an insurgency, a cartel, a militia, a warlord's band, a cult, a zombie outbreak — each controlling an area of regions that stay their countries'. Found, change, move or erase them with groupOps whenever an event has one appear, spread, lose ground, change or be destroyed. A group taking a region moves no border; when a group becomes a state that governs its land, found the state with regionTransfers instead. A side in a war or a rising that is not a country on the map is a group too, even when none is listed below yet: found it the first time an event has it holding ground, so that its later gains and losses have something on the map to change.";
+const GROUPS_RULE_HEADING = "[How Groups Are Recorded]";
+// `rulesAbove`: the rule is in the skip's standing rules (buildJumpStaticRules),
+// and the live block points at it.
+const buildJumpGroupsBlock = (groupsContext, { rulesAbove = false } = {}) => [
   "[Groups]",
-  "Groups are actors that are not countries — an insurgency, a cartel, a militia, a warlord's band, a cult, a zombie outbreak — each controlling an area of regions that stay their countries'. Found, change, move or erase them with groupOps whenever an event has one appear, spread, lose ground, change or be destroyed. A group taking a region moves no border; when a group becomes a state that governs its land, found the state with regionTransfers instead. A side in a war or a rising that is not a country on the map is a group too, even when none is listed below yet: found it the first time an event has it holding ground, so that its later gains and losses have something on the map to change.",
+  rulesAbove ? `Recorded as ${GROUPS_RULE_HEADING} above says.` : GROUPS_RULE,
   normalizeString(groupsContext) || "No groups exist yet.",
 ].join("\n");
 
@@ -2930,7 +2967,7 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
   // priority line opens the system prompt (main.jsx callAI).
 
   blocks.push(`[Occupied and Contested Regions]\n${normalizeString(variables.territorialControlContext) || "None."}`);
-  if (isActiveFeatureEnabled("groups")) blocks.push(buildJumpGroupsBlock(variables.groupsContext));
+  if (isActiveFeatureEnabled("groups")) blocks.push(buildJumpGroupsBlock(variables.groupsContext, { rulesAbove }));
   // The player leads a group rather than a country (runtime/groups.js).
   if (normalizeString(variables.playerGroupContext)) blocks.push(`${variables.playerGroupContext}\n${PLAYER_GROUP_JUMP_RULE}`);
 
@@ -10519,6 +10556,21 @@ const applySimulationResult = async ({
   }
 
   if (result.mode === "jump" || result.mode === "auto") {
+    // What the next skip reads as changed since this one: the world this one
+    // started from, as its prompt read it (promptContext.js buildPromptFocus),
+    // and the polity lore the cached opening carries, renewed now and then
+    // (refreshPromptReference). Neither is needed for the turn itself.
+    try {
+      const snapshot = await buildWorldPromptSnapshot({ world: baseWorld, game: baseGame });
+      worldWithImpacts = {
+        ...worldWithImpacts,
+        promptSnapshot: snapshot,
+        promptReference: refreshPromptReference(normalizeWorldState(baseWorld), Number(baseGame?.round) || 0),
+      };
+      nextWorld = worldWithImpacts;
+    } catch (error) {
+      console.warn("[ai] the next skip will read nothing as unchanged: the world could not be measured.", error);
+    }
     try {
       phases?.enter("history");
       nextWorld = await compactHistoryIfNeeded({
