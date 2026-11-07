@@ -108,6 +108,8 @@ export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   "storylines",
   // What the last time skip's prompt read (runtime/promptSnapshot.js).
   "promptSnapshot", "promptReference",
+  // The campaign's canon, kept beside the history document (runtime/historyTiers.js).
+  "canonFacts",
 ]);
 
 // The host seat's single-player features (a scene in progress, the key its own

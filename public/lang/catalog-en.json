@@ -12767,6 +12767,7 @@
  "The headline and the story under it: specifics, length, quotes, what counts as an event.",
  "The higher the level, the longer troops take to break through. At 10 it never breaks.",
  "The higher the level, the slower troops cross it. At 10 nobody can cross.",
+ "The history document is unchanged.",
  "The host and the services that connect you (public relay servers, and Google's and Cloudflare's address-lookup servers) see your network address. The game does not show it to other players, but anyone who has the invite code could find it out.",
  "The host answered, but its computer could not be reached. Trying again (try {{value}})…",
  "The host answered, but no connection between your computer and theirs could be opened. Players connect to the host directly, and one of the two networks does not allow it (some routers, mobile and campus networks, and VPNs).{{whichNetwork}}",

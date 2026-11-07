@@ -2087,7 +2087,33 @@ export const EVENT_CONSOLIDATOR_SCHEMA = {
   description: "A continuity-safe summary of the supplied events and diplomatic chats, and the campaign's living history document revised to include them.",
   properties: {
     summary: textSchema("Concise history of the supplied period preserving major events, map changes, and diplomatic commitments."),
-    document: textSchema("The WHOLE history document as it should read from now on: the current document with this period folded in, condensed or pruned of unimportant older material where needed to stay within the stated word budget."),
+    // The history in tiers (runtime/historyTiers.js), judged entry by entry
+    // when it is read (historyConsolidation.js), so loose here.
+    years: {
+      type: "array",
+      description: "A paragraph for each game year the supplied material covers: the whole paragraph as that year should read from now on.",
+      items: { type: "object", properties: { year: { type: "integer" }, text: { type: "string" } }, required: ["year", "text"] },
+    },
+    canon: {
+      type: "array",
+      description: "New standing facts from the supplied material that must never fade (treaties, deaths, regime and border changes, office holders, wars begun or ended), each dated.",
+      items: {
+        type: "object",
+        properties: {
+          date: { type: "string" },
+          kind: { type: "string", enum: ["treaty", "death", "regime", "border", "office", "war", "other"] },
+          text: { type: "string" },
+          key: { type: "string" },
+        },
+        required: ["date", "kind", "text"],
+      },
+    },
+    eras: {
+      type: "array",
+      description: "Only where the directive asks: the earlier years condensed, the whole list, an era a paragraph.",
+      items: { type: "object", properties: { from: { type: "integer" }, to: { type: "integer" }, text: { type: "string" } }, required: ["from", "to", "text"] },
+    },
+    document: textSchema("Only for a directive that asks for a single document: the WHOLE history document as it should read from now on."),
   },
   required: ["summary"],
   additionalProperties: false,
@@ -3872,8 +3898,17 @@ export const foldJumpTool = (tool, { board = true, agentReports = false, history
             description:
               "The answer to the job fenced off at the end of the prompt (THE HISTORY DOCUMENT), written last: only what that job lists. "
               + "Left out when there is no such job.",
-            properties: EVENT_CONSOLIDATOR_SCHEMA.properties,
-            required: ["summary", "document"],
+            // The consolidator's fields, loose: the skip's contract is near the
+            // size Gemini takes, and each entry is judged when it is read
+            // (historyConsolidation.js judgeSkipHistoryAnswer).
+            properties: {
+              summary: { type: "string" },
+              years: { type: "array", items: { type: "object" } },
+              canon: { type: "array", items: { type: "object" } },
+              eras: { type: "array", items: { type: "object" } },
+              document: { type: "string" },
+            },
+            required: ["summary"],
             additionalProperties: false,
           },
         } : {}),

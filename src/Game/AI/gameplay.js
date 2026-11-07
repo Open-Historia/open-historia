@@ -327,6 +327,7 @@ import { SHARED_WORLD_TASKS } from "./sharedGameDirective.js";
 import { SEAT_ADVICE_FIELD, mergeSeatAdvice, withSeatAdvice } from "./seatAdvice.js";
 import {
   HISTORY_CONSOLIDATION,
+  HISTORY_TIERS_OUTPUT,
   applyHistoryDocumentUpdate,
   buildHistoryDocumentDirective,
   HISTORY_JOB_FENCES,
@@ -336,7 +337,9 @@ import {
   judgeSkipHistoryAnswer,
   planHistoryConsolidation,
   seedHistoryDocumentText,
+  yearSpanOf,
 } from "./historyConsolidation.js";
+import { eraWordCount, yearOfDate } from "../../runtime/historyTiers.js";
 import {
   expandBakedRegionsForRename,
   renamePolityInActions,
@@ -3301,7 +3304,7 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
     systemPrompt = `${systemPrompt}\n\n[Durable Canon]\nThe history document REPLACES the material it covers: once consolidated, those events, conversations and player orders are never sent to the simulation again, so whatever the document omits is lost permanently. Carry forward explicitly, as standing facts rather than narration:\n1. How this world has DIVERGED from real history — states that never formed, wars that never happened, rulers who never fell, borders that never moved. Name them. A later model that sees only a gap fills it from real history and invents powers this campaign does not contain.\n2. The lasting CONSEQUENCES of the player's own orders, not the orders themselves.\n3. Commitments still in force: treaties, alliances, occupations, debts, standing grievances.\nBrevity matters, but never at the cost of a divergence or a commitment that is still true.`;
     const documentDirective = normalizeString(variables?.historyDocumentContext);
     if (documentDirective) {
-      systemPrompt = `${systemPrompt}\n\n${documentDirective}\n\nOutput both fields, always: {"summary": "<this period's compressed history>", "document": "<the whole revised history document>"}.`;
+      systemPrompt = `${systemPrompt}\n\n${documentDirective}\n\nOutput: ${HISTORY_TIERS_OUTPUT}, with "eras" too where the directive above asks for them.`;
     }
     const resolvedOrders = normalizeString(variables?.actionsToConsolidate);
     if (resolvedOrders && !resolvedOrders.startsWith("No ")) {
@@ -5249,7 +5252,15 @@ const historyConsolidationVariables = async (bundle, events, chats, actions = []
     chatsToConsolidate: buildDetailedChatHistoryText(chats, { limit: chats.length || 1, messageLimit: 100 }),
     eventsToConsolidate: buildEventHistoryText(events, { limit: events.length || 1 }),
   })),
-  historyDocumentContext: buildHistoryDocumentDirective(bundle.world),
+  historyDocumentContext: buildHistoryDocumentDirective(bundle.world, { span: yearSpanOf(events) }),
+});
+
+// What a pass in tiers needs besides its answer (runtime/historyTiers.js): the
+// years its material covers, and the year the campaign began (a document from
+// before the tiers becomes the era up to the first year written).
+const historyTierContext = (bundle, events) => ({
+  span: yearSpanOf(events),
+  startYear: yearOfDate(bundle?.game?.startDate),
 });
 
 // A pass's boundary as plain JSON: what its ledger entry records, and what a
@@ -5263,6 +5274,7 @@ const consolidationResume = (plan, bundle, { campaignId, world }) => ({
   throughEventId: plan.throughEvent?.id || "",
   throughRound: bundle.game.round,
   baseRevision: world.historyDocument?.revision ?? 0,
+  ...historyTierContext(bundle, plan.eventsToConsolidate),
   eventCount: plan.eventsToConsolidate.length,
   chatCount: plan.closedChats.length,
 });
@@ -5299,8 +5311,16 @@ const prepareSkipHistoryFold = async (bundle, { campaignId = activeCampaignId() 
     resume: consolidationResume(plan, bundle, { campaignId, world }),
     baseRevision: world.historyDocument?.revision ?? 0,
     currentText: seedHistoryDocumentText(world),
+    span: yearSpanOf(plan.eventsToConsolidate),
+    eraWords: eraWordCount(world.historyDocument),
   };
 };
+
+// A pass's tiers as its answer gave them, or null (applyHistoryDocumentUpdate
+// judges each entry).
+const historyTiersOf = (payload) => (payload && (Array.isArray(payload.years) || Array.isArray(payload.eras) || Array.isArray(payload.canon))
+  ? { years: payload.years ?? [], eras: payload.eras ?? null, canon: payload.canon ?? [] }
+  : null);
 
 const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, batchResume = null, onRequest, signal, campaignId = "", spender = "" } = {}) => {
   // The document this pass revises, and the revision it was read at: a pass
@@ -5337,6 +5357,7 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
     generation,
     summary: normalizeString(payload?.summary),
     document: normalizeString(payload?.document),
+    tiers: historyTiersOf(payload),
     baseRevision,
   };
 };
@@ -5393,12 +5414,16 @@ const deferredConsolidationApplier = (resume) => async (resultPayload, source) =
       throughEventId: entry.throughEventId,
       throughRound: entry.throughRound,
       baseRevision: resume?.baseRevision ?? 0,
+      tiers: historyTiersOf(resultPayload),
+      span: Array.isArray(resume?.span) ? resume.span : null,
+      startYear: Number(resume?.startYear),
     });
     appliedMode = documentUpdate.mode;
     return normalizeWorldState({
       ...latestWorld,
       consolidatedHistory: [...latestWorld.consolidatedHistory, entry],
       historyDocument: documentUpdate.historyDocument,
+      canonFacts: documentUpdate.canonFacts,
     });
   });
   if (appliedMode) {
@@ -5438,12 +5463,16 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, 
         throughEventId: entry.throughEventId,
         throughRound: entry.throughRound,
         baseRevision: skipFold.baseRevision,
+        tiers: skipFold.tiers ?? null,
+        span: Array.isArray(skipFold.resume?.span) ? skipFold.resume.span : null,
+        startYear: Number(skipFold.resume?.startYear),
       });
       logDebugEvent("ai", `History consolidated in the time skip's own answer: ${skipFold.resume?.eventCount ?? 0} events, ${skipFold.resume?.chatCount ?? 0} chats folded; history document ${documentUpdate.mode}.${skipFold.reason ? ` (${skipFold.reason})` : ""}`);
       return normalizeWorldState({
         ...world,
         consolidatedHistory: [...world.consolidatedHistory, entry],
         historyDocument: documentUpdate.historyDocument,
+        canonFacts: documentUpdate.canonFacts,
       });
     }
     const waiting = planHistoryConsolidation(bundle).unconsolidatedEvents.length;
@@ -5505,7 +5534,7 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, 
     );
   });
   if (!consolidated?.summary) return world;
-  const { generation, summary, document, baseRevision } = consolidated;
+  const { generation, summary, document, baseRevision, tiers = null } = consolidated;
 
   const entry = consolidationEntryFor(resume, summary, generation.source, world.consolidatedHistory);
   const documentUpdate = applyHistoryDocumentUpdate(world, {
@@ -5516,12 +5545,16 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, 
     throughEventId: entry.throughEventId,
     throughRound: entry.throughRound,
     baseRevision,
+    tiers,
+    span: Array.isArray(resume?.span) ? resume.span : null,
+    startYear: Number(resume?.startYear),
   });
   logDebugEvent("ai", `History consolidated (${generation.source}): ${eventsToConsolidate.length} events, ${closedChats.length} chats folded; history document ${documentUpdate.mode}.`);
   return normalizeWorldState({
     ...world,
     consolidatedHistory: [...world.consolidatedHistory, entry],
     historyDocument: documentUpdate.historyDocument,
+    canonFacts: documentUpdate.canonFacts,
   });
 };
 
@@ -16624,6 +16657,7 @@ export const consolidateHistoryNow = async () => {
           ...latest,
           consolidatedHistory: [...history, ...nextWorld.consolidatedHistory.slice(before)],
           historyDocument: nextWorld.historyDocument,
+          canonFacts: nextWorld.canonFacts,
         });
       });
     }
@@ -16632,7 +16666,7 @@ export const consolidateHistoryNow = async () => {
       events: plan.eventsToConsolidate.length,
       chats: plan.closedChats.length,
       retained,
-      documentWords: countWords(nextWorld.historyDocument?.text),
+      documentWords: countWords(seedHistoryDocumentText(nextWorld)),
       documentRevision: nextWorld.historyDocument?.revision ?? 0,
     };
   } finally {
@@ -17338,7 +17372,7 @@ const foldedTurnReview = ({ context, merged, state }) => {
       due: true,
       resume: fold.resume,
       baseRevision: fold.baseRevision,
-      ...judgeSkipHistoryAnswer(state.foldedHistoryAnswer, { currentText: fold.currentText }),
+      ...judgeSkipHistoryAnswer(state.foldedHistoryAnswer, { currentText: fold.currentText, span: fold.span, eraWords: fold.eraWords }),
     };
   }
 

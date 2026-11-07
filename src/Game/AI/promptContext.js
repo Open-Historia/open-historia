@@ -14,6 +14,7 @@ import {
 } from "../../runtime/gameState.js";
 import { buildRegionOwnershipText, buildUnruledBordersText, hasUnruledLand, ownerRoster, regionOwnerName, regionTouchingMapSliced } from "./regionVocab.js";
 import { buildPromptSnapshot, changedSinceSnapshot, neighbourPowers, pickSpotlight, splitInView, storylinePowers } from "./promptFocus.js";
+import { HISTORY_TIERS, hasHistoryTiers, renderCanonFacts, renderHistoryTiers } from "../../runtime/historyTiers.js";
 import { waterTypeIds } from "../../runtime/regionTypes.js";
 import { isPendingAction, selectFocusPowers } from "./regionFocus.js";
 import { filterChatsVisibleTo } from "./chatVisibility.js";
@@ -530,10 +531,26 @@ export const buildConsolidatedHistoryText = (
   } = {},
 ) => {
   const normalizedWorld = normalizeWorldState(world);
+  // The history in tiers (runtime/historyTiers.js): the canon first, which
+  // never fades, then the eras and the years, each within its own share of
+  // `maxChars` (all of their budgets when there is none).
+  const budget = Math.max(0, Math.trunc(Number(maxChars) || 0));
+  const scale = budget ? budget / (HISTORY_TIERS.canonChars + HISTORY_TIERS.eraChars + HISTORY_TIERS.yearChars) : 1;
+  const canon = renderCanonFacts(normalizedWorld.canonFacts, { maxChars: Math.max(600, HISTORY_TIERS.canonChars * Math.min(1, scale)) });
+  const withCanon = (text) => (canon ? `${canon}\n\n${text}` : text);
+  const document = normalizedWorld.historyDocument;
+  if (hasHistoryTiers(document)) {
+    const notes = normalizeString(document.text);
+    return withCanon([
+      `History (maintained across consolidations${document.throughDate ? `, through ${document.throughDate}` : ""}):`,
+      renderHistoryTiers(document, { scale }),
+      ...(notes ? ["", `Since then:\n${notes}`] : []),
+    ].join("\n"));
+  }
   // Once the document exists it IS the older history; the pass ledger behind
   // it is bookkeeping, and rendering both would tell the story twice.
-  if (normalizedWorld.historyDocument?.text) {
-    return fitHistoryDocumentWithinCharBudget(normalizedWorld.historyDocument, { maxChars });
+  if (document?.text) {
+    return withCanon(fitHistoryDocumentWithinCharBudget(document, { maxChars: budget && canon ? Math.max(1, budget - canon.length) : maxChars }));
   }
   const entries = normalizedWorld.consolidatedHistory;
   if (entries.length === 0) return "No earlier campaign history has been consolidated yet.";
@@ -2572,6 +2589,7 @@ export const buildPromptContext = async (bundle, {
   // Long-history attention is computed only for tasks that actually render one of
   // its outputs. The selection/budget semantics are unchanged from 9.4A.
   const needsLongHistory = wants(
+    "campaignHistory",
     "consolidatedHistory",
     "historicalAnchors",
     "historicalAttentionStatus",
@@ -2625,6 +2643,12 @@ export const buildPromptContext = async (bundle, {
         : `inactive: full consolidated history ${fullConsolidatedHistory.length} chars${historicalAnchorThreshold ? ` <= ${historicalAnchorThreshold} activation chars` : ""}`;
 
     put("consolidatedHistory", consolidatedHistory);
+    // Ends with its own blank line: the template runs it into the next heading.
+    if (wants("campaignHistory")) {
+      result.campaignHistory = SKIP_TASKS.has(taskKey)
+        ? `[The Story So Far]\nThe campaign's history before the recent events below, kept across consolidations.\n${consolidatedHistory}\n\n`
+        : "";
+    }
     put("historicalAnchors", historicalAnchors);
     put("historicalAttentionStatus", historicalAttentionStatus);
 
@@ -2642,9 +2666,13 @@ export const buildPromptContext = async (bundle, {
         digests: SKIP_TASKS.has(taskKey),
         alsoListed: SKIP_TASKS.has(taskKey) && !lookups ? 40 : 0,
       });
+      // A time skip carries the story so far in its cached opening
+      // (${CAMPAIGN_HISTORY}, below): it changes only when a fold rewrites it,
+      // so the skips between two folds read it from the provider's cache.
+      const storyAbove = SKIP_TASKS.has(taskKey) && wants("campaignHistory");
       result.recentEventsLong = [
         "STORY SO FAR:",
-        consolidatedHistory,
+        storyAbove ? "Under [The Story So Far] above." : consolidatedHistory,
         ...(historicalAnchors
           ? [
               "",

@@ -53,6 +53,11 @@ export const STATIC_PROMPT_KEYS = Object.freeze(new Set([
   // then, never by a turn's own events.
   "polityLoreReference",
   "POLITY_LORE_REFERENCE",
+  // A time skip's story so far (the history document in tiers, its canon):
+  // rewritten only when a fold is written, a few times in a campaign's dozen
+  // rounds, never by the turn reading it.
+  "campaignHistory",
+  "CAMPAIGN_HISTORY",
 ]));
 
 // A placeholder that renders as nothing and marks where the part of a prompt
