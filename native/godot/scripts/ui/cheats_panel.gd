@@ -105,6 +105,7 @@ var _render_serial := 0
 var _ticker: Timer
 var _gm_preview_node: Control
 var _gm_generate_button: Button
+var _gm_edit_button: Button
 var _list_holder: VBoxContainer
 var _trait_inputs: Dictionary = {}
 var _trait_tags: Dictionary = {}
@@ -385,6 +386,7 @@ func _render() -> void:
 	_clear(_body)
 	_gm_preview_node = null
 	_gm_generate_button = null
+	_gm_edit_button = null
 	_list_holder = null
 	_trait_inputs = {}
 	_trait_tags = {}
@@ -1069,6 +1071,8 @@ func _render_gm() -> void:
 				return
 			_s["gm_mode"] = id
 			_s["gm_view"] = {}
+			_s["gm_edit_open"] = false
+			_s["gm_edit_text"] = ""
 			_s["gm_expanded"] = {}
 			_render())
 		grid.add_child(card)
@@ -1077,6 +1081,8 @@ func _render_gm() -> void:
 	_body.add_child(_field_label("GM request", 6))
 	var request := _area(_sv("gm_text"), _gm_placeholder(mode), 5, func(text: String) -> void:
 		_s["gm_text"] = text
+		_s["gm_edit_open"] = false
+		_s["gm_edit_text"] = ""
 		if not _sd("gm_view").is_empty():
 			_s["gm_view"] = {}
 			_s["gm_expanded"] = {}
@@ -1104,7 +1110,7 @@ func _gm_sync_button() -> void:
 	if not is_instance_valid(_gm_generate_button):
 		return
 	var has_text := not _sv("gm_text").strip_edges().is_empty()
-	_gm_generate_button.text = "Planning canonical transaction…" if _busy else ("Regenerate Preview" if not _sd("gm_view").is_empty() else "Generate Preview")
+	_gm_generate_button.text = "Planning canonical transaction…" if _busy else ("Generate New Preview" if not _sd("gm_view").is_empty() else "Generate Preview")
 	_enable(_gm_generate_button, not _busy and has_text)
 	if not has_text and not _busy:
 		_gm_generate_button.modulate = Color(1, 1, 1, 0.6)
@@ -1120,11 +1126,97 @@ func _gm_generate() -> void:
 	if reply.get("ok", false):
 		var result: Dictionary = reply["result"]
 		_s["gm_view"] = result.get("view", {})
+		_s["gm_edit_open"] = false
+		_s["gm_edit_text"] = ""
 		var summary := str(result.get("summary", ""))
 		_status = "Preview ready — %s" % summary if not summary.is_empty() else "GM transaction preview ready. Nothing has been applied."
 	else:
 		_status = "Failed: %s" % str(reply.get("error", ""))
 	_set_busy(false)
+
+
+func gm_revise(text: String) -> Dictionary:
+	_s["gm_edit_open"] = true
+	_s["gm_edit_text"] = text
+	_render()
+	await _gm_revise()
+	await get_tree().process_frame
+	var view: Dictionary = _s.get("gm_view", {})
+	return {"ok": _status.begins_with("Edited preview ready"), "error": _status, "summary": str(view.get("summary", "")), "revision": int(view.get("revisionCount", 0))}
+
+
+func _gm_sync_edit_button() -> void:
+	if not is_instance_valid(_gm_edit_button):
+		return
+	var has_text := not _sv("gm_edit_text").strip_edges().is_empty()
+	_gm_edit_button.text = "Editing Preview…" if _busy else "Generate Edited Preview"
+	_enable(_gm_edit_button, not _busy and has_text)
+	if _busy or not has_text:
+		_gm_edit_button.modulate = Color(1, 1, 1, 0.55)
+
+
+func _gm_revise() -> void:
+	var view := _sd("gm_view")
+	var text := _sv("gm_edit_text").strip_edges()
+	if view.is_empty() or text.is_empty() or _busy:
+		return
+	_set_busy(true)
+	var reply: Dictionary = await engine.request("cheats.gm.revise", {"id": str(view.get("id", "")), "text": text})
+	if reply.get("ok", false):
+		var result: Dictionary = reply["result"]
+		_s["gm_view"] = result.get("view", view)
+		_s["gm_edit_open"] = false
+		_s["gm_edit_text"] = ""
+		_s["gm_expanded"] = {}
+		var summary := str(result.get("summary", ""))
+		_status = "Edited preview ready - %s" % summary if not summary.is_empty() else "Edited preview ready. Nothing applied."
+	else:
+		_status = "Failed: %s" % str(reply.get("error", ""))
+	_set_busy(false)
+
+
+func _gm_edit_section() -> Control:
+	var holder := VBoxContainer.new()
+	holder.add_theme_constant_override("separation", 0)
+	holder.add_child(_gap(10))
+	var editing := bool(_s.get("gm_edit_open", false))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 7)
+	var toggle := _btn("Cancel Edit" if editing else "Edit Preview", "plain", 11)
+	toggle.custom_minimum_size.y = 26
+	_enable(toggle, not _busy)
+	toggle.pressed.connect(func() -> void:
+		_s["gm_edit_open"] = not bool(_s.get("gm_edit_open", false))
+		_s["gm_edit_text"] = ""
+		_render())
+	row.add_child(toggle)
+	row.add_child(UI.spacer())
+	var revisions := int(_sd("gm_view").get("revisionCount", 0))
+	if revisions > 0:
+		var count := UI.label("Revision %d" % revisions, 10, Color(1, 1, 1, 0.45))
+		count.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(count)
+	holder.add_child(row)
+	if not editing:
+		return holder
+	holder.add_child(_gap(8))
+	var box: Array = _box(Color(1, 1, 1, 0.035), Color(1, 1, 1, 0.1), 8, Vector4(9, 9, 9, 9), 0)
+	var column: VBoxContainer = box[1]
+	column.add_child(_field_label("What should change?"))
+	var area := _area(_sv("gm_edit_text"), "Example: Change only the REPLACE-LEADER office to headOfState. Preserve the coalition, strategy and event.", 3, func(value: String) -> void:
+		_s["gm_edit_text"] = value
+		_gm_sync_edit_button())
+	area.tooltip_text = "GM preview revision instructions"
+	column.add_child(area)
+	column.add_child(_gap(6))
+	column.add_child(_note("Unmentioned operations stay in the preview. Nothing is applied until you approve the full revised transaction.", 10, Color(1, 1, 1, 0.48)))
+	column.add_child(_gap(9))
+	_gm_edit_button = _btn("", "primary")
+	_gm_edit_button.pressed.connect(func() -> void: _gm_revise())
+	column.add_child(_gm_edit_button)
+	_gm_sync_edit_button()
+	holder.add_child(box[0])
+	return holder
 
 
 func _gm_apply() -> void:
@@ -1166,6 +1258,8 @@ func _gm_preview_box(view: Dictionary) -> Control:
 	if not summary.is_empty():
 		summary_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	column.add_child(summary_label)
+	if not applied:
+		column.add_child(_gm_edit_section())
 	var notes: Array = view.get("notes", [])
 	if not notes.is_empty():
 		column.add_child(_gap(9))
