@@ -39,7 +39,7 @@ it.
 ## The official presets
 
 | Scenario | Start |
-|---|---|
+| --- | --- |
 | Rome | 117 AD |
 | Medieval | 1200 AD |
 | Mongol World | 1300 AD |

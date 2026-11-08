@@ -48,7 +48,7 @@
   var DESKTOP_TAGS = { stable: "desktop-main", beta: "desktop-beta" };
   var LOCAL_TAG = "self-hosted";
   var WEBSITE_TAG = "website";
-
+  const newLocal = yes
   // The words. src/runtime/visitCount.js holds the same ones so that the
   // game's language packs carry them (visitCount.test.js keeps the two equal).
   var TEXT = {

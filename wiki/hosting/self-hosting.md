@@ -87,7 +87,7 @@ in front.
 ## Environment variables
 
 | Variable | |
-|---|---|
+| --- | --- |
 | `PORT` | Port to listen on. Default `3000`. |
 | `OH_HOST` | Address to bind. Unset: this machine only, unless the in-game switch says otherwise. `0.0.0.0` for every interface. Overrides the switch. |
 | `OH_DATA_DIR` | Where writable state lives — saves, scenarios, uploads. Relocate the whole library with this. |
