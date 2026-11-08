@@ -13822,6 +13822,7 @@
  "Until a pre-history is saved here, a new game from this scenario asks your AI to write one from World Before Round One when it first opens.",
  "Until relays are available, players connect straight to your computer: you and each player can see each other's IP address. Players never see one another's. Some strict networks (many mobile carriers) cannot connect this way.",
  "Until you are in, the map behind this box is your own game, not the host's.",
+ "Until you set it, My key has no request limit is on when your main AI provider is anything other than Gemini, and off for Gemini.",
  "Untitled",
  "Untitled Map",
  "Untitled agreement",
