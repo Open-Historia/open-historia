@@ -10,9 +10,9 @@ panel.
 <b>Contacts</b> (your threads, with Start New Chat), <b>Institutions</b> and <b>Intelligence</b>.</p>
 
 ## Talking to a country
+
 ![The diplomacy tab](/wiki/img/diplomacy-threads.jpg)
 *Threads you are part of. Germany opened this one unprompted after a time skip.*
-
 
 Every country is played by its leader, in that leader's voice, shaped by their country's
 situation and by how they see you. Ask questions, make offers, issue threats, propose terms.
@@ -53,7 +53,6 @@ probing.
 ![Starting a group conversation](/wiki/img/diplomacy-group-picker.jpg)
 *Starting a thread. Select as many countries as you want in it — one for a private line, several
 for a summit.*
-
 
 You can open a thread with several countries at once. When you speak, **one request answers for
 the whole table**: every other participant can reply, react, rename the thread, bring someone in
@@ -100,9 +99,9 @@ Open one and it has tabs of its own: **Overview**, **Council**, **Agenda**, **De
 Your [advisor](/wiki/advisor/) knows your institutions and can draft your business in them.
 
 ## They contact you
+
 ![A diplomatic exchange](/wiki/img/diplomacy-thread.jpg)
 *Germany's opening message, in its government's voice and grounded in what the world had just done.*
-
 
 Countries open conversations with you on their own initiative, in three ways:
 

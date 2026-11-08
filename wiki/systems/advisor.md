@@ -5,9 +5,9 @@ Open it with the **Advisor** button in the bottom-right corner. Drag the drawer'
 width is remembered.
 
 ## What it is good for
+
 ![The advisor answering](/wiki/img/advisor-reply.jpg)
 *The advisor reads the real game state — here, Poland's energy exposure and its friction with Brussels.*
-
 
 **Orientation.** The fastest way to understand a country you have just picked up:
 

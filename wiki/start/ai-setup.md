@@ -8,7 +8,7 @@ key and paste it in.**
 ## What the AI actually does
 
 | | |
-|---|---|
+| --- | --- |
 | **Diplomacy** | Every other country's leader replies to you in their own voice, and remembers what was said before. |
 | **Events** | Each time you skip time, the model writes what happened — and those events carry machine-readable changes that move borders, units and countries. |
 | **Advisor** | Answers questions about your own position, with charts. |
@@ -49,7 +49,7 @@ box, in the prompt and in Settings, shows or hides what you pasted.</p>
 ## The five provider types
 
 | Provider | What it is |
-|---|---|
+| --- | --- |
 | **Gemini** | Google AI Studio's native API. The default. |
 | **OpenAI** | The official OpenAI API. |
 | **Anthropic** | Claude via the Messages API. |
@@ -165,7 +165,7 @@ All through **OpenAI Compatible** — paste the endpoint, your key from that ser
 name.
 
 | Service | Endpoint |
-|---|---|
+| --- | --- |
 | DeepSeek | `https://api.deepseek.com/v1` |
 | Groq | `https://api.groq.com/openai/v1` |
 | Together.ai | `https://api.together.xyz/v1` |
@@ -228,7 +228,7 @@ Keys stay on this device, as they always have. Each key is used under its provid
 ### What each entry says
 
 | The entry says | Meaning |
-|---|---|
+| --- | --- |
 | **Ready** | Tried in its turn. |
 | **Spent until …** | Its allowance is used up. Skipped until the time shown. |
 | **Unusable: …** | Something is wrong with it, such as `key rejected (401)` or `model not found (404)`. Skipped until you fix it. |

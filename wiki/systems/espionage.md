@@ -38,7 +38,7 @@ below 30, Developing from 30, Limited from 50, Capable from 70 and Advanced from
 ## Limits
 
 | | |
-|---|---|
+| --- | --- |
 | Agents you can have active | **3** |
 | Foreign agents inside you at once | **3** |
 | Agents per target country | **1** |
@@ -60,7 +60,6 @@ much of it you can actually read.
 ![Choosing a target for an agent](/wiki/img/espionage-deploy.jpg)
 *The target picker. Countries you already have an agent in are not offered again — one agent per
 country, and never yourself.*
-
 
 You can **recall** an agent at any time, and see everything it has sent.
 
@@ -93,7 +92,7 @@ caught on day one.
 Some worked numbers, per jump:
 
 | Your service | Their service | Chance your agent is caught |
-|---|---|---|
+| --- | --- | --- |
 | 40 | 40 | 8% |
 | 40 | 80 | 22% |
 | 80 | 20 | 2% (the floor) |
@@ -209,7 +208,7 @@ tell the shape of what was said even when you cannot read it. Raising your intel
 only ever reveals *more* of a message you have already seen — it never re-hides anything.
 
 | Your service | Their service | How much you can read |
-|---|---|---|
+| --- | --- | --- |
 | 40 | 40 | 33% |
 | 80 | 40 | 68% |
 | 20 | 80 | 6% (the floor — essentially nothing) |
@@ -234,7 +233,7 @@ A world-class service reads nearly every word; a weak one gets scraps. The inter
 above would read at 36%.
 
 | Your service | Their service | Stable build | Beta |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 40 | 40 | 33% | 24% |
 | 60 | 40 | 51% | 44% |
 | 80 | 40 | 68% | 67% |
@@ -323,7 +322,7 @@ Here *detection* is the per-jump chance from [Getting caught](#getting-caught), 
 operation has its own base and risk:
 
 | Operation | Base | Risk |
-|---|---|---|
+| --- | --- | --- |
 | Sabotage | 50% | × 2.2 |
 | Recruit | 45% | × 1.6 |
 | Assassinate | 30% | × 3 |
