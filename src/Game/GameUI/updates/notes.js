@@ -160,6 +160,7 @@ const NEW_UPDATES = [
             items: [
               "An edited prompt passage can now be up to 20% longer than the built-in one. The Prompts tab counts each passage as you type, and Save waits until a passage that is too long is shortened or reset.",
               "A passage that was already longer, in a save, a scenario or an imported prompt pack, is never cut: the AI uses the built-in passage in its place until you shorten it, and the game tells you once.",
+              "A scenario can switch on Bypass prompt length limit in its Prompts tab to keep longer passages. A new game started from it says first that it will use a lot more tokens than other scenarios.",
             ],
           },
           {

@@ -201,9 +201,9 @@ test("the final guard where a template is rendered", () => {
   }
   // The guard sits where the templates are rendered.
   const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
-  assert.match(read("./gameplay.js"), /guardPromptTemplate\(taskKey, prompts\.tasks\[taskKey\]\)/);
-  assert.match(read("./main.jsx"), /renderConversationTemplate\(guardPromptTemplate\("advisor", promptPack\.advisor\)/);
-  assert.match(read("./main.jsx"), /renderConversationTemplate\(guardPromptTemplate\("leader", promptPack\.leader\)/);
+  assert.match(read("./gameplay.js"), /guardPromptTemplate\(taskKey, prompts\.tasks\[taskKey\], prompts\.bypassLengthLimit === true\)/);
+  assert.match(read("./main.jsx"), /renderConversationTemplate\(guardPromptTemplate\("advisor", promptPack\.advisor, promptPack\.bypassLengthLimit === true\)/);
+  assert.match(read("./main.jsx"), /renderConversationTemplate\(guardPromptTemplate\("leader", promptPack\.leader, promptPack\.bypassLengthLimit === true\)/);
 });
 
 test("the Prompts tab keeps an over-limit passage in the form, counts it, and holds Save", () => {
@@ -294,4 +294,68 @@ test("the translated lengths are current, and merge without losing a line", () =
   assert.deepEqual(body.split("\n").filter((line) => line.trim() && !/^ {2}\["[0-9a-z]+", \d+\],$/.test(line)), [], "one entry per line");
   const attributes = readFileSync(new URL("../../../.gitattributes", import.meta.url), "utf8");
   assert.match(attributes, /^src\/Game\/AI\/guidanceLengths\.js\s+merge=union\s*$/m);
+});
+
+// The owner, 2026-11-07: "add a bypass prompt limit toggle but it warns the
+// player when they start a game under that scenario".
+test("bypass: the switch is carried through normalisation, save and export; off by default", () => {
+  const over = longText(guidanceCharLimit(GUIDANCE_DEFAULTS.advisor.reminders) + 40);
+  const raw = { ...packWith("advisor", "reminders", over), bypassLengthLimit: true };
+  assert.equal(gameplayPrompts.normalizePromptPack(raw).bypassLengthLimit, true);
+  assert.equal(gameplayPrompts.editablePromptPack(raw).bypassLengthLimit, true);
+  assert.equal(gameplayPrompts.serializePromptPack(raw).bypassLengthLimit, true);
+  assert.equal(gameplayPrompts.materializePromptPack(raw).bypassLengthLimit, true);
+  // Round trip: what is saved loads the same.
+  assert.equal(gameplayPrompts.normalizePromptPack(gameplayPrompts.serializePromptPack(raw)).bypassLengthLimit, true);
+  assert.equal("bypassLengthLimit" in gameplayPrompts.serializePromptPack(packWith("advisor", "reminders", over)), false);
+  assert.equal(gameplayPrompts.promptPackBypassesLimit({ bypassLengthLimit: "yes" }), false, "only true");
+});
+
+test("bypass on: an over-limit passage is kept, composed, guarded through and not marked", () => {
+  const over = longText(guidanceCharLimit(GUIDANCE_DEFAULTS.advisor.reminders) + 40);
+  const raw = { ...packWith("advisor", "reminders", over), bypassLengthLimit: true };
+  const pack = gameplayPrompts.normalizePromptPack(raw);
+  assert.deepEqual(pack.overLimit, []);
+  assert.ok(pack.advisor.includes(over), "composed into the prompt");
+  assert.equal(gameplayPrompts.serializePromptPack(raw).guidance.advisor.reminders, over, "saved");
+  assert.deepEqual(overLimitPackGuidance(raw, GUIDANCE_DEFAULTS), []);
+  assert.deepEqual(gameplayPrompts.overLimitEdits(pack.guidance, true), []);
+  assert.equal(gameplayPrompts.guardPromptTemplate("advisor", pack.advisor, true), pack.advisor);
+  assert.ok(composePrompt("advisor", defaultPrompts.advisor, { reminders: over }, { bypassLimit: true }).includes(over));
+});
+
+test("bypass off: the cap is kept exactly as before", () => {
+  const over = longText(guidanceCharLimit(GUIDANCE_DEFAULTS.advisor.reminders) + 40);
+  const raw = { ...packWith("advisor", "reminders", over), bypassLengthLimit: false };
+  const pack = gameplayPrompts.normalizePromptPack(raw);
+  assert.equal(pack.advisor, defaultPrompts.advisor);
+  assert.equal(pack.overLimit.length, 1);
+  assert.equal(gameplayPrompts.overLimitEdits({ advisor: { reminders: over } }).length, 1);
+  assert.ok(!composePrompt("advisor", defaultPrompts.advisor, { reminders: over }).includes(over));
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    assert.equal(gameplayPrompts.guardPromptTemplate("advisor", `${defaultPrompts.advisor}${longText(gameplayPrompts.promptTemplateLimit("advisor"))}`), defaultPrompts.advisor);
+  } finally {
+    console.warn = warn;
+  }
+});
+
+test("bypass: the Prompts tab's switch, and the warning on starting a new game", () => {
+  const source = readFileSync(new URL("../GameUI/libraryBar.jsx", import.meta.url), "utf8");
+  assert.match(source, />Bypass prompt length limit</);
+  assert.match(source, /onChangeBypassLimit=\{kind === "scenario"/, "a scenario's switch");
+  assert.match(source, /const over = bypassLimit \? 0 : count - limit;/, "counted, never red");
+  assert.match(source, /overLimitEdits\(prompts\?\.guidance, promptsBypassLimit\(prompts\)\)/, "Save not held");
+  assert.match(source, /"This scenario's prompts are longer than the built-in ones, so it will use a lot more tokens than other scenarios\."/);
+  // Shown from New Game on a scenario (handleScenarioPlay), never on loading a game.
+  const play = source.slice(source.indexOf("const handleScenarioPlay"), source.indexOf("const handleScenarioPlay") + 2500);
+  assert.match(play, /if \(promptsBypassLimit\(details\?\.data\?\.prompts\)\) setBypassWarning\(scenario\);/);
+  assert.equal((source.match(/setBypassWarning\(scenario\)/g) ?? []).length, 1, "nowhere else");
+  const card = source.slice(source.indexOf('data-testid="bypass-limit-warning"'), source.indexOf('data-testid="bypass-limit-warning"') + 2000);
+  assert.match(card, /\{BYPASS_LIMIT_WARNING\}/);
+  assert.match(card, /onClick=\{\(\) => setBypassWarning\(null\)\}[\s\S]*Continue/);
+  assert.match(card, /onClick=\{cancelBypassStart\}[\s\S]*Cancel/);
+  assert.match(source, /const cancelBypassStart = \(\) => \{ setBypassWarning\(null\); closeCountryPicker\(\); \};/);
+  assert.doesNotMatch(play + card, /confirm\(/, "no native confirm");
 });

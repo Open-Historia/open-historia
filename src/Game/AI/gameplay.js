@@ -3249,7 +3249,7 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   // Groups switched off for this game: the contract without its groups rule.
   const promptTemplate = taskKey === "gameMaster"
     ? (isActiveFeatureEnabled("groups") ? NATIVE_GAME_MASTER_PROMPT : gameMasterPromptWithoutGroups())
-    : guardPromptTemplate(taskKey, prompts.tasks[taskKey]);
+    : guardPromptTemplate(taskKey, prompts.tasks[taskKey], prompts.bypassLengthLimit === true);
   // A time skip's live records go INTO its template, at ${JUMP_LIVE_STATE}.
   const jumpTask = JUMP_TASK_KEYS.has(taskKey);
   if (jumpTask) {
