@@ -3943,7 +3943,7 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
     // The briefing and the rules also ride inside the world summary; keep one
     // copy of each, as runJsonTask does for the gameplay tasks.
     const rendered = collapseRepeatedWorldContext(
-        renderConversationTemplate(guardPromptTemplate("advisor", promptPack.advisor), { ...variables, ...helperValues }),
+        renderConversationTemplate(guardPromptTemplate("advisor", promptPack.advisor, promptPack.bypassLengthLimit === true), { ...variables, ...helperValues }),
         variables,
     );
     const groupLookups = advisorGroupLookups({ world: worldData, player: gameData?.country || "" });
@@ -4143,7 +4143,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
 
     // One copy each of the briefing and the rules (see buildAdvisorSystemPrompt).
     const rendered = collapseRepeatedWorldContext(
-        renderConversationTemplate(guardPromptTemplate("leader", promptPack.leader), { ...variables, ...helperValues }),
+        renderConversationTemplate(guardPromptTemplate("leader", promptPack.leader, promptPack.bypassLengthLimit === true), { ...variables, ...helperValues }),
         variables,
     );
     const politicalDecision = buildDiplomaticPoliticalContext({

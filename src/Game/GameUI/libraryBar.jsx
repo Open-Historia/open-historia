@@ -665,7 +665,12 @@ const saveJsonBundleToDisk = async (bundle, fileName) => {
 // Save waits until it is shortened or reset, so nothing the author wrote is
 // cut or thrown away behind their back.
 const PROMPT_TOO_LONG_TEXT = "A prompt passage is longer than its limit. Shorten it or reset it in the Prompts tab to save.";
-const promptsOverLimit = (prompts) => overLimitEdits(prompts?.guidance).length > 0;
+// A scenario may bypass the limit (the Prompts tab's switch, bypassLengthLimit
+// on its prompt pack): nothing of it is over, and a new game from it warns the
+// player that it will use a lot more tokens (handleScenarioPlay).
+const promptsBypassLimit = (prompts) => prompts?.bypassLengthLimit === true;
+const promptsOverLimit = (prompts) => overLimitEdits(prompts?.guidance, promptsBypassLimit(prompts)).length > 0;
+export const BYPASS_LIMIT_WARNING = "This scenario's prompts are longer than the built-in ones, so it will use a lot more tokens than other scenarios.";
 
 // Prompt-pack files intentionally contain only scenario-author editable guidance.
 // The technical/tooling portions of prompts are app-owned and are recomposed from
@@ -697,6 +702,7 @@ const promptPackFromImport = (value) => {
 // passage stores nothing. The technical text never reaches the author, so it
 // cannot be broken here and it stays current as the game changes.
 const PromptSectionEditor = ({
+  onChangeBypassLimit = null,
   onChangePrompt,
   onExportPromptPack,
   onImportPromptPack,
@@ -735,7 +741,8 @@ const PromptSectionEditor = ({
     && edits[segment.id].trim() !== (englishDefaults[segment.id] ?? "").trim();
   const editedCount = segments.filter(isEdited).length;
   // The sections with a passage over its limit, marked on their buttons.
-  const sectionsOverLimit = new Set(overLimitEdits(promptPack.guidance).map((entry) => entry.sectionKey));
+  const bypassLimit = promptsBypassLimit(promptPack);
+  const sectionsOverLimit = new Set(overLimitEdits(promptPack.guidance, bypassLimit).map((entry) => entry.sectionKey));
   const smallButtonStyle = { ...themeButtonStyle, fontSize: "0.72rem", minHeight: "1.7rem", padding: "0 0.6rem" };
 
   const handlePromptImportFile = async (event) => {
@@ -915,13 +922,30 @@ const PromptSectionEditor = ({
         <span>Each passage can be up to 20% longer than the built-in one.</span>
       </div>
 
+      {onChangeBypassLimit ? (
+        <label style={{ alignItems: "flex-start", cursor: "pointer", display: "flex", gap: "0.55rem", marginBottom: "0.9rem" }}>
+          <input
+            checked={bypassLimit}
+            onChange={(event) => onChangeBypassLimit(event.target.checked)}
+            style={{ marginTop: "0.2rem" }}
+            type="checkbox"
+          />
+          <span>
+            <span style={{ color: "rgba(255,255,255,0.9)", display: "block", fontSize: "0.82rem", fontWeight: 700 }}>Bypass prompt length limit</span>
+            <span style={{ color: "rgba(255,255,255,0.48)", display: "block", fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.15rem" }}>
+              Passages can be any length. Players are warned when they start a game that it will use a lot more tokens.
+            </span>
+          </span>
+        </label>
+      ) : null}
+
       <div style={{ display: "grid", gap: "0.9rem" }}>
         {segments.map((segment) => {
           const value = typeof edits[segment.id] === "string" ? edits[segment.id] : defaults[segment.id] ?? "";
           const edited = isEdited(segment);
           const count = promptCharCount(value);
           const limit = guidanceLimitFor(currentSection.key, segment.id);
-          const over = count - limit;
+          const over = bypassLimit ? 0 : count - limit;
           return (
             <div key={segment.id}>
               <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
@@ -2503,6 +2527,7 @@ const EditorDrawer = ({
 
       {editorSection === "prompts" && (
         <PromptSectionEditor
+          onChangeBypassLimit={kind === "scenario" ? (on) => onChange("prompts", { ...formState.prompts, bypassLengthLimit: on }) : null}
           onChangePrompt={onChangePrompt}
           onExportPromptPack={kind === "scenario" ? onExportPrompts : null}
           onImportPromptPack={kind === "scenario" ? onImportPrompts : null}
@@ -3068,6 +3093,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setPlayGameId(null);
     setPickerTab("country");
     setPickerGroups([]);
+    setBypassWarning(null);
     setCountryPicker(scenario);
     // A community basemap the import could not download is tried again (once a
     // session), and shown in the picker when it lands.
@@ -3077,6 +3103,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     Promise.all([loadCountryNames().catch(() => []), loadScenarioDetails(scenario.id).catch(() => null)])
       .then(([allCountries, details]) => {
         if (!isCurrent()) return;
+        if (promptsBypassLimit(details?.data?.prompts)) setBypassWarning(scenario);
         setCountryOptions(buildScenarioCountryOptions(
           details?.data?.world,
           [...getBaseCountryOptions(), ...allCountries],
@@ -3148,6 +3175,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // scenario they have edited, which the Update would replace (the question
   // is drawn below, beside the missing-map prompt).
   const [replaceEditsTarget, setReplaceEditsTarget] = useState(null);
+  // The scenario a new game is being started from, while its "will use a lot more
+  // tokens" warning is up (its prompts bypass the length limit).
+  const [bypassWarning, setBypassWarning] = useState(null);
 
   // Pull the post's current bundle and replace this scenario in place. The
   // scenario keeps its local id, so existing games keep pointing at it; the
@@ -4194,6 +4224,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   useBackToClose(Boolean(countryPicker && difficultyPick), () => setDifficultyPick(null));
   useBackToClose(Boolean(missingScenarioGame), () => setMissingScenarioGame(null));
   useBackToClose(Boolean(replaceEditsTarget), () => setReplaceEditsTarget(null));
+  const cancelBypassStart = () => { setBypassWarning(null); closeCountryPicker(); };
+  useBackToClose(Boolean(bypassWarning), cancelBypassStart);
 
   // Write a map built in the editor into its scenario (region geometry + ownership
   // + colors), then immediately spin up and activate a fresh game from it so the
@@ -5187,6 +5219,49 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           hub's file in the scenario's place, so their changes go with it: it is
           asked here first, in the prompt above's own dress, and nothing happens
           on any answer but the first button's. */}
+      <Presence open={Boolean(bypassWarning && countryPicker)} value={bypassWarning}>
+        {(pending) => (
+          <div
+            onClick={cancelBypassStart}
+            style={{ alignItems: "center", background: "rgba(0,0,0,0.55)", display: "flex", inset: 0, justifyContent: "center", position: "fixed", zIndex: 10060 }}
+          >
+            <div
+              aria-modal="true"
+              data-testid="bypass-limit-warning"
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+              style={{ ...themeSurfaceStyle, borderRadius: 16, color: "#fff", fontFamily: "sans-serif", padding: "1.1rem", width: "min(430px, 92vw)" }}
+            >
+              <div style={{ fontSize: "1rem", fontWeight: 800 }}>Longer prompts</div>
+              <div data-no-translate style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.86rem", fontWeight: 700, marginTop: "0.35rem", overflowWrap: "anywhere" }}>
+                {pending.name}
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.82rem", lineHeight: 1.5, margin: "0.5rem 0 1rem" }}>
+                {BYPASS_LIMIT_WARNING}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+                <button
+                  className="oh-tap-row"
+                  onClick={() => setBypassWarning(null)}
+                  style={touchFit({ ...themeButtonStyle, minHeight: "2.6rem" }, touch)}
+                  type="button"
+                >
+                  Continue
+                </button>
+                <button
+                  className="oh-tap-row"
+                  onClick={cancelBypassStart}
+                  style={touchFit({ ...themeButtonStyle, minHeight: "2.6rem" }, touch)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </Presence>
+
       <Presence open={Boolean(replaceEditsTarget)} value={replaceEditsTarget}>
         {(pending) => (
           <div

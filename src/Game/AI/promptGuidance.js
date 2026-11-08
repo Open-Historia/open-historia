@@ -353,6 +353,7 @@ export const isWithinGuidanceLimit = (text, englishDefault) => promptCharCount(t
 // notice a game shows and for the editor, which shows them to be shortened.
 export const overLimitPackGuidance = (rawPack, guidanceDefaults) => {
   const pack = isRecord(rawPack) ? rawPack : {};
+  if (pack.bypassLengthLimit === true) return [];
   const source = Number(pack.promptModel) === PROMPT_MODEL_VERSION && isRecord(pack.guidance) ? pack.guidance : {};
   const tasks = isRecord(source.tasks) ? source.tasks : {};
   const found = [];
@@ -389,13 +390,13 @@ export const overLimitPackGuidance = (rawPack, guidanceDefaults) => {
 // With the defaults given, a passage longer than its limit (guidanceCharLimit)
 // is left out too, whole: the default runs in its place, and nothing is cut
 // to fit. overLimitPackGuidance names them, so the player is told.
-export const normalizePackGuidance = (rawPack, guidanceDefaults = null) => {
+export const normalizePackGuidance = (rawPack, guidanceDefaults = null, { bypassLimit = false } = {}) => {
   const pack = isRecord(rawPack) ? rawPack : {};
   const source = Number(pack.promptModel) === PROMPT_MODEL_VERSION && isRecord(pack.guidance) ? pack.guidance : {};
   const tasks = isRecord(source.tasks) ? source.tasks : {};
   const edits = (sectionKey, raw, defaults) => Object.fromEntries(
     Object.entries(normalizeSectionGuidance(sectionKey, raw, defaults)).filter(([id, text]) =>
-      !isShippedGuidanceDefault(text) && (!guidanceDefaults || isWithinGuidanceLimit(text, defaults?.[id]))),
+      !isShippedGuidanceDefault(text) && (!guidanceDefaults || bypassLimit || isWithinGuidanceLimit(text, defaults?.[id]))),
   );
   const taskGuidance = {};
   for (const key of Object.keys(PROMPT_GUIDANCE.tasks)) {
@@ -412,9 +413,9 @@ export const normalizePackGuidance = (rawPack, guidanceDefaults = null) => {
 // Materialize every editable passage for an explicit transfer/export. Stored
 // scenario packs stay sparse via normalizePackGuidance; this helper is only for
 // moving the complete author-editable layer between scenarios/files.
-export const materializePackGuidance = (rawPack, guidanceDefaults = null) => {
+export const materializePackGuidance = (rawPack, guidanceDefaults = null, { bypassLimit = false } = {}) => {
   const defaults = isRecord(guidanceDefaults) ? guidanceDefaults : {};
-  const overrides = normalizePackGuidance(rawPack, guidanceDefaults);
+  const overrides = normalizePackGuidance(rawPack, guidanceDefaults, { bypassLimit });
   const defaultTasks = isRecord(defaults.tasks) ? defaults.tasks : {};
   return {
     advisor: { ...(isRecord(defaults.advisor) ? defaults.advisor : {}), ...overrides.advisor },
@@ -434,7 +435,11 @@ export const materializePackGuidance = (rawPack, guidanceDefaults = null) => {
 // The last word on the limit: a passage longer than its limit is never put in
 // a prompt, whatever handed it here, and the default stays in its place. A
 // default some version shipped (a translation) is a default, not an edit.
-export const composePrompt = (sectionKey, defaultText, guidance) => {
+//
+// A scenario that bypasses the limit (bypassLengthLimit on its prompt pack,
+// the Prompts tab's switch) passes { bypassLimit: true }: its passages go in
+// whatever their length.
+export const composePrompt = (sectionKey, defaultText, guidance, { bypassLimit = false } = {}) => {
   const overrides = normalizeSectionGuidance(sectionKey, guidance);
   if (!Object.keys(overrides).length) return String(defaultText ?? "");
   let text = String(defaultText ?? "");
@@ -443,7 +448,7 @@ export const composePrompt = (sectionKey, defaultText, guidance) => {
     const found = locateSegment(text, seg, cursor);
     if (!found) continue;
     const written = overrides[seg.id];
-    const replacement = written !== undefined && (isShippedGuidanceDefault(written) || isWithinGuidanceLimit(written, found.text))
+    const replacement = written !== undefined && (bypassLimit || isShippedGuidanceDefault(written) || isWithinGuidanceLimit(written, found.text))
       ? written
       : found.text;
     text = text.slice(0, found.start) + replacement + text.slice(found.end);

@@ -449,3 +449,66 @@ test("a request kept for the history fold and not needed goes to the Stats refre
     assert.equal(budget.take("stats"), true);
     assert.equal(budget.spent, 3);
 });
+
+// The owner, 2026-11-07: "My key has no request limit" on by default when the
+// main provider is anything other than Gemini.
+{
+    const { createRequestSettings: settingsOver, defaultNoRequestLimit: defaultOver, readMainProvider: mainOver } = await import("./requestBudget.js");
+    const withMain = (provider, extra = {}) => createMemoryStorage({
+        ai_connections: JSON.stringify([{ id: "a", provider }, { id: "b", provider: "gemini" }]),
+        ai_fallback_list: JSON.stringify([{ id: "e1", connectionId: "a" }, { id: "e2", connectionId: "b" }]),
+        ...extra,
+    });
+    const agree = (settings, on) => {
+        assert.equal(settings.noRequestLimit(), on);
+        assert.equal(settings.unlimited(), on);
+        assert.equal(settings.saveRequests(), !on);
+    };
+
+    test("no request limit: off by default with Gemini as the main provider", () => {
+        const storage = withMain("gemini");
+        assert.equal(mainOver(storage), "gemini");
+        agree(settingsOver({ storage }), false);
+        agree(settingsOver({ storage: createMemoryStorage() }), false);
+    });
+
+    test("no request limit: on by default with any other main provider", () => {
+        for (const provider of ["openai", "anthropic", "openai-compatible", "openrouter"]) {
+            const storage = withMain(provider);
+            assert.equal(defaultOver(storage), true);
+            agree(settingsOver({ storage }), true);
+        }
+        agree(settingsOver({ storage: createMemoryStorage({ api_provider: "openai" }) }), true);
+    });
+
+    test("no request limit: an explicit choice wins, and the default follows the main provider", () => {
+        const off = withMain("openai", { ai_no_request_limit: "0" });
+        agree(settingsOver({ storage: off }), false);
+        const on = withMain("gemini", { ai_no_request_limit: "1" });
+        agree(settingsOver({ storage: on }), true);
+        // Old switches count as a choice.
+        agree(settingsOver({ storage: withMain("openai", { ai_save_requests: "1" }) }), false);
+        // Set off through the switch, it stays off.
+        const storage = withMain("openai");
+        const settings = settingsOver({ storage });
+        agree(settings, true);
+        settings.setNoRequestLimit(false);
+        agree(settings, false);
+        // Never touched: follows a change of main provider.
+        const follow = withMain("openai");
+        const followed = settingsOver({ storage: follow });
+        agree(followed, true);
+        follow.setItem("ai_fallback_list", JSON.stringify([{ id: "e2", connectionId: "b" }, { id: "e1", connectionId: "a" }]));
+        agree(followed, false);
+    });
+
+    test("no request limit: the game's getters and the time panel read the same value", async () => {
+        const fs = await import("node:fs");
+        const time = fs.readFileSync(new URL("../GameUI/time.jsx", import.meta.url), "utf8");
+        assert.match(time, /import \{[^}]*savingRequests[^}]*\} from "\.\.\/AI\/requestBudget\.js"/);
+        const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+        assert.match(gameplay, /const lookupFunctionsEnabled = \(\) => !savingRequests\(\)/);
+        const settingsUi = fs.readFileSync(new URL("../GameUI/settings.jsx", import.meta.url), "utf8");
+        assert.match(settingsUi, /useState\(\(\) => requestSettings\.noRequestLimit\(\)\)/);
+    });
+}

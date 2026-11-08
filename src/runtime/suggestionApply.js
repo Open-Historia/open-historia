@@ -347,6 +347,6 @@ export const buildDetailSave = (accepted, details, { guidanceDefaults = null } =
   if (Object.keys(worldPatch).length) patch.worldPatch = worldPatch;
   if (Object.keys(gamePatch).length) patch.gamePatch = gamePatch;
   if (features) patch.features = features;
-  if (guidance) patch.prompts = { promptModel: PROMPT_MODEL_VERSION, guidance };
+  if (guidance) patch.prompts = { promptModel: PROMPT_MODEL_VERSION, ...(data?.prompts?.bypassLengthLimit === true ? { bypassLengthLimit: true } : null), guidance };
   return { patch, uploads, clears };
 };

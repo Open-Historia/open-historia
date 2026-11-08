@@ -149,6 +149,7 @@ const NEW_UPDATES = [
             icon: "plane",
             items: [
               "One switch at the top of Settings → AI → AI requests, for a paid key or a local model: My key has no request limit.",
+              "Until you set it, My key has no request limit is on when your main AI provider is anything other than Gemini, and off for Gemini.",
               "With it on, the AI looks things up as it needs them: a time skip can use up to 8 requests, each sending less, and Background AI has no daily cap.",
               "It replaces Save AI requests and Unlimited requests. If you had Save AI requests off or Unlimited requests on, it is on. AI lookup functions are under Advanced.",
               "Setting up Command Code, or a model on your own computer, turns it on for you.",
@@ -160,6 +161,7 @@ const NEW_UPDATES = [
             items: [
               "An edited prompt passage can now be up to 20% longer than the built-in one. The Prompts tab counts each passage as you type, and Save waits until a passage that is too long is shortened or reset.",
               "A passage that was already longer, in a save, a scenario or an imported prompt pack, is never cut: the AI uses the built-in passage in its place until you shorten it, and the game tells you once.",
+              "A scenario can switch on Bypass prompt length limit in its Prompts tab to keep longer passages. A new game started from it says first that it will use a lot more tokens than other scenarios.",
             ],
           },
           {

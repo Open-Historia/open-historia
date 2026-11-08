@@ -34,9 +34,11 @@ export const BACKGROUND_RESERVE_SHARE = 0.1;
 // two rounds of function calling.
 export const JUMP_REQUEST_CAP = 3;
 
-// "My key has no request limit" (Settings → AI → AI requests; off unless the
-// player turns it on, or the first-run setup does for Command Code or a local
-// server): for a paid key or a local model, where requests do not run out and
+// "My key has no request limit" (Settings → AI → AI requests). Until the
+// player sets it, it follows their main provider (the first entry of the
+// Fallback list): off for Gemini, whose free key runs out of requests, on for
+// any other provider (defaultNoRequestLimit). The first-run setup sets it for
+// each choice, and a value the player or the setup set always wins: for a paid key or a local model, where requests do not run out and
 // what each one sends is what costs. The model looks things up as it needs them
 // instead of being handed everything, so a skip may ask more rounds and its
 // prompt is slimmer (promptContext.js `leanLookups`). A skip is still one
@@ -182,12 +184,48 @@ const wholeNumber = (value, { min, max, fallback }) => {
 // Turning it on also turns on what a limited key does without, Background AI
 // and the AI lookup functions, and keeps them as they were, so turning the
 // switch off again puts back what the player had chosen.
-const readNoRequestLimit = (storage) => {
+//
+// Never set (the key and both switches it replaced absent), it is its default:
+// on unless the player's main provider is Gemini. The default is read at every
+// read, so it follows a change of main provider until the player sets it.
+export const MAIN_PROVIDER_KEYS = Object.freeze({
+    // providerConfig.js's Fallback list and Connections (not imported: that
+    // module imports this one). The first entry whose Connection exists is
+    // the main provider; before the list exists, the old api_provider.
+    fallbackList: "ai_fallback_list",
+    connections: "ai_connections",
+    legacyProvider: "api_provider",
+});
+const readJsonArray = (storage, key) => {
+    try {
+        const value = JSON.parse(readItem(storage, key) ?? "null");
+        return Array.isArray(value) ? value : null;
+    } catch {
+        return null;
+    }
+};
+export const readMainProvider = (storage = defaultStorage()) => {
+    const list = readJsonArray(storage, MAIN_PROVIDER_KEYS.fallbackList);
+    const connections = readJsonArray(storage, MAIN_PROVIDER_KEYS.connections);
+    if (list && connections) {
+        const byId = new Map(connections.filter((c) => c && typeof c === "object").map((c) => [c.id, c]));
+        for (const entry of list) {
+            const connection = byId.get(entry?.connectionId);
+            if (connection) return String(connection.provider || "gemini").trim().toLowerCase() || "gemini";
+        }
+    }
+    return String(readItem(storage, MAIN_PROVIDER_KEYS.legacyProvider) || "gemini").trim().toLowerCase() || "gemini";
+};
+export const defaultNoRequestLimit = (storage = defaultStorage()) => readMainProvider(storage) !== "gemini";
+
+const readNoRequestLimit = (storage, { withDefault = true } = {}) => {
     const stored = readItem(storage, REQUEST_BUDGET_KEYS.noRequestLimit);
     if (stored === "1") return true;
     if (stored === "0") return false;
-    return readItem(storage, LEGACY_REQUEST_KEYS.unlimited) === "1"
-        || readItem(storage, LEGACY_REQUEST_KEYS.saveRequests) === "0";
+    const unlimited = readItem(storage, LEGACY_REQUEST_KEYS.unlimited);
+    const saveRequests = readItem(storage, LEGACY_REQUEST_KEYS.saveRequests);
+    if (unlimited !== null || saveRequests !== null) return unlimited === "1" || saveRequests === "0";
+    return withDefault ? defaultNoRequestLimit(storage) : false;
 };
 
 // What turning the switch on sets to on.
@@ -220,7 +258,9 @@ export const createRequestSettings = ({ storage = defaultStorage() } = {}) => ({
     // what was kept put back (null, an absent key: its default). Only a change
     // of the switch does either.
     setNoRequestLimit: (on) => {
-        const was = readNoRequestLimit(storage);
+        // What the player or the setup set, the default aside: setting it on
+        // over a default that was on still turns on what it turns on.
+        const was = readNoRequestLimit(storage, { withDefault: false });
         if (!writeItem(storage, REQUEST_BUDGET_KEYS.noRequestLimit, on ? "1" : "0")) return false;
         removeItem(storage, LEGACY_REQUEST_KEYS.saveRequests);
         removeItem(storage, LEGACY_REQUEST_KEYS.unlimited);

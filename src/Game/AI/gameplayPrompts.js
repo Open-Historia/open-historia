@@ -343,8 +343,15 @@ export const localizedGuidanceDefaults = () => {
 
 // An edit identical to the default in the player's language is no edit
 // (withoutLocalizedDefaults), as one identical to the English default is not.
+// A pack may bypass the length limit (bypassLengthLimit: true, the Prompts
+// tab's "Bypass prompt length limit" switch): its passages are kept and run
+// whatever their length, and a new game started from it warns the player first.
+export const promptPackBypassesLimit = (rawPack) =>
+  Boolean(rawPack && typeof rawPack === "object" && rawPack.bypassLengthLimit === true);
+const bypassField = (rawPack) => (promptPackBypassesLimit(rawPack) ? { bypassLengthLimit: true } : {});
+
 export const normalizePromptGuidance = (rawPack) => {
-  const guidance = normalizePackGuidance(rawPack, PROMPT_GUIDANCE_DEFAULTS);
+  const guidance = normalizePackGuidance(rawPack, PROMPT_GUIDANCE_DEFAULTS, { bypassLimit: promptPackBypassesLimit(rawPack) });
   const localized = localizedGuidanceDefaults();
   return localized === PROMPT_GUIDANCE_DEFAULTS ? guidance : withoutLocalizedDefaults(guidance, localized);
 };
@@ -362,15 +369,18 @@ export const normalizePromptPack = (rawPrompts) => {
   const guidance = normalizePromptGuidance(rawPrompts);
   const localized = localizedGuidanceDefaults();
   const passages = (defaults, edits) => (localized === PROMPT_GUIDANCE_DEFAULTS ? edits : localizedPassages(defaults, edits));
+  const bypassLimit = promptPackBypassesLimit(rawPrompts);
+  const compose = (key, text, edits) => composePrompt(key, text, edits, { bypassLimit });
   return {
     promptModel: PROMPT_MODEL_VERSION,
+    ...bypassField(rawPrompts),
     guidance,
     overLimit: overLimitPromptPassages(rawPrompts),
-    advisor: composePrompt("advisor", PROMPT_ADVISOR_DEFAULT, passages(localized.advisor, guidance.advisor)),
+    advisor: compose("advisor", PROMPT_ADVISOR_DEFAULT, passages(localized.advisor, guidance.advisor)),
     helpers: { ...PROMPT_HELPER_DEFAULTS },
-    leader: composePrompt("leader", PROMPT_LEADER_DEFAULT, passages(localized.leader, guidance.leader)),
+    leader: compose("leader", PROMPT_LEADER_DEFAULT, passages(localized.leader, guidance.leader)),
     tasks: Object.fromEntries(
-      PROMPT_TASK_KEYS.map((key) => [key, composePrompt(key, PROMPT_TASK_DEFAULTS[key], passages(localized.tasks?.[key], guidance.tasks[key]))]),
+      PROMPT_TASK_KEYS.map((key) => [key, compose(key, PROMPT_TASK_DEFAULTS[key], passages(localized.tasks?.[key], guidance.tasks[key]))]),
     ),
   };
 };
@@ -423,8 +433,10 @@ export const editablePromptPack = (rawPrompts) => {
 
 // The passages of an editor's guidance ({ advisor, leader, tasks }, as typed,
 // untrimmed) that are over their limit: [{ sectionKey, segmentId, length, limit }].
-export const overLimitEdits = (guidance) => {
+// A pack that bypasses the limit has none (overLimitEdits(guidance, true)).
+export const overLimitEdits = (guidance, bypassLimit = false) => {
   const found = [];
+  if (bypassLimit) return found;
   const check = (sectionKey, bucket) => {
     for (const [segmentId, text] of Object.entries(bucket ?? {})) {
       if (typeof text !== "string") continue;
@@ -469,8 +481,9 @@ export const promptTemplateLimit = (sectionKey) => {
 // than its section's limit never goes out; the default template does. Every
 // pack the game loads is composed within the limit (normalizePromptPack), so
 // this only ever catches a template that came some other way.
-export const guardPromptTemplate = (sectionKey, template) => {
-  if (typeof template !== "string") return template;
+// A pack that bypasses the limit passes bypassLimit: its template goes out.
+export const guardPromptTemplate = (sectionKey, template, bypassLimit = false) => {
+  if (typeof template !== "string" || bypassLimit) return template;
   const limit = promptTemplateLimit(sectionKey);
   if (!limit || promptCharCount(template) <= limit) return template;
   console.warn(`[prompts] the ${sectionKey} prompt is ${promptCharCount(template)} characters, over its limit of ${limit}; the default is used`);
@@ -480,6 +493,7 @@ export const guardPromptTemplate = (sectionKey, template) => {
 // What a scenario or game stores: the edits alone.
 export const serializePromptPack = (rawPack) => ({
   promptModel: PROMPT_MODEL_VERSION,
+  ...bypassField(rawPack),
   guidance: normalizePromptGuidance(rawPack),
 });
 
@@ -490,5 +504,6 @@ export const serializePromptPack = (rawPack) => ({
 // author-requested export is a complete portable snapshot of the editable layer.
 export const materializePromptPack = (rawPack) => ({
   promptModel: PROMPT_MODEL_VERSION,
-  guidance: materializePackGuidance(rawPack, PROMPT_GUIDANCE_DEFAULTS),
+  ...bypassField(rawPack),
+  guidance: materializePackGuidance(rawPack, PROMPT_GUIDANCE_DEFAULTS, { bypassLimit: promptPackBypassesLimit(rawPack) }),
 });
