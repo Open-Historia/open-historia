@@ -48,7 +48,7 @@ const EDITOR_SEEDS = [
 // The Android bundle drops both sets as well: mobile/scripts/stage-www.mjs lays
 // the trimmed archives and the web-sized seeds under www/assets itself, from the
 // pinned map-data release, never from whatever a developer's public/ holds.
-const dropMapBinaries = (isWeb) => {
+const dropMapBinaries = (isWeb: boolean) => {
   // Take outDir from the resolved config rather than assuming: --outDir varies
   // (dist for the desktop, dist-web for build:web/build:site).
   let outDir = 'dist'
