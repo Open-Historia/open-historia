@@ -433,6 +433,11 @@ const readJsonSetting = (key, fallback) => {
 const writeJsonSetting = (key, value) => {
     if (typeof localStorage === "undefined") return;
     localStorage.setItem(key, JSON.stringify(value));
+    // "My key has no request limit" follows the main provider until it is set
+    // (requestBudget.js defaultNoRequestLimit): Settings hears the change.
+    if (key === FALLBACK_LIST_KEY || key === CONNECTIONS_KEY) {
+        try { window.dispatchEvent(new CustomEvent("ai:request-budget")); } catch { /* no window */ }
+    }
 };
 
 // The kinds an Agent Connection ticks, in AGENT_KINDS order. One saved before

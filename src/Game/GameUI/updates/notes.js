@@ -149,6 +149,7 @@ const NEW_UPDATES = [
             icon: "plane",
             items: [
               "One switch at the top of Settings → AI → AI requests, for a paid key or a local model: My key has no request limit.",
+              "Until you set it, My key has no request limit is on when your main AI provider is anything other than Gemini, and off for Gemini.",
               "With it on, the AI looks things up as it needs them: a time skip can use up to 8 requests, each sending less, and Background AI has no daily cap.",
               "It replaces Save AI requests and Unlimited requests. If you had Save AI requests off or Unlimited requests on, it is on. AI lookup functions are under Advanced.",
               "Setting up Command Code, or a model on your own computer, turns it on for you.",
