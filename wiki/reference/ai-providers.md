@@ -18,7 +18,7 @@ quality, then speed.
 ## Choosing a provider
 
 | Provider | Cost | Works in the browser build | Good for |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Gemini** | Free tier | Yes | Getting started, and most people's permanent answer |
 | **Anthropic** | Pay per token | Yes | Richest diplomacy and narrative |
 | **OpenAI** | Pay per token | Desktop only | Strong all-round |
@@ -41,7 +41,7 @@ your agent, not in the game.</p>
 ## Defaults
 
 | Provider | Default |
-|---|---|
+| --- | --- |
 | Gemini | `gemini-3.5-flash-lite`, with `gemini-3.1-flash-lite` as its backup |
 | Anthropic | `claude-haiku-4-5` |
 | OpenAI | `gpt-6-luna` |
@@ -83,7 +83,7 @@ Rough guidance rather than a price list:
 
 - **Gemini free tier** genuinely covers solo play. Watch the rate limits on the larger models —
   hitting one mid-jump stalls the turn. A
-  [backup model](/wiki/ai-setup/#backup-models) takes over when one runs out.
+  [backup model][def] takes over when one runs out.
 - **Cheap tiers** (Haiku, Flash, DeepSeek) run a campaign for small change.
 - **Frontier models** are noticeably better and noticeably more expensive per turn. Long jumps
   cost more than short ones because there is more to write.
@@ -161,3 +161,5 @@ where to look.
 - [Connecting an AI provider](/wiki/ai-setup/) — the setup steps.
 - [Troubleshooting](/wiki/troubleshooting/) — when it will not connect.
 - [Settings](/wiki/settings/) — where all of this lives.
+
+[def]: /wiki/ai-setup/#backup-models

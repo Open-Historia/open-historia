@@ -97,7 +97,7 @@ default** — whatever the scenario's author chose, which for Modern Day is Ocea
 fourteen others:
 
 | | |
-|---|---|
+| --- | --- |
 | Atlas Relief | Bathymetry and shaded land relief, graded as a political canvas |
 | Atlas Relief - Dark | The same, darker |
 | Satellite | Photographic imagery |
@@ -193,7 +193,7 @@ without weather, and then none is drawn. What the weather does to armies is on t
 ## Clicking things
 
 | Click | You get |
-|---|---|
+| --- | --- |
 | **A region** | A card naming the country and the region, with **💬** to open a chat, **⧉** to copy the name and **ⓘ** to open the country's panel. An occupied or contested region also shows who is sovereign, who controls it and who claims it, and a region in a group's area names the group. |
 | **A country's panel** | Flag, details, alternative names, related events filtered by importance, and an AI report on request. |
 | **A unit** | An intelligence card — what the formation is, whose, how strong, what it appears to be doing. Not a command panel. |
