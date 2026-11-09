@@ -9491,6 +9491,12 @@ const applySimulationResult = async ({
       `integrity kept ${repairScreened.events.length}; curator kept ${repairCuratedEvents.length}.`,
     );
   }
+  // A war as the receipts name it: its name, never its id (the ledger gives every war one, nativeWarLedger.js); every war a receipt here tells is in the ledger the turn began with.
+  const warNameOf = (id) => {
+    const war = normalizeArray(baseWorld?.wars).find((item) => normalizeString(item?.id).toLowerCase() === normalizeString(id).toLowerCase());
+    const sides = [normalizeArray(war?.sideA), normalizeArray(war?.sideB)].map((side) => normalizeString(side[0]));
+    return normalizeString(war?.title) || (sides[0] && sides[1] ? `the war between ${sides[0]} and ${sides[1]}` : "the war");
+  };
   // A war a player fights ends only by a peace that player makes or accepts
   // (playersWarsHold.js): the skip's end, ceasefire or a player's leaving is
   // refused, with the events that told it and what they changed on the map. One
@@ -9506,7 +9512,7 @@ const applySimulationResult = async ({
       // (An end that answers the player's own offer of peace: the game makes that peace below.)
       if (normalizeString(update?.op).toLowerCase() === "end" && peaceIn.has(normalizeString(update?.id).toLowerCase())) continue;
       logDebugEvent("turn", `The skip's ${update.op} for ${update.id} was refused: a war a player fights ends only by a peace that player makes or accepts.`, update);
-      noteReceipt(receipt, "dropped", `"${update.op}" for ${update.id}, and the events that told it: a war a player fights ends only by a peace that player makes or accepts. To bring them to peace, offer it in a letter.`);
+      noteReceipt(receipt, "dropped", `"${update.op}" for ${warNameOf(update.id)}, and the events that told it: a war a player fights ends only by a peace that player makes or accepts. To bring them to peace, offer it in a letter.`);
     }
   }
   // A ledger record bound to an event the curator removed goes with it.
@@ -10070,7 +10076,7 @@ const applySimulationResult = async ({
     onProposed: ({ warId, from, to, offer, reason }) => {
       if (offer) {
         logDebugEvent("turn", `${from}'s order to end ${warId} was put to ${to} as an offer of peace.`, offer);
-        noteReceipt(receipt, "dropped", `The end of ${warId}: ${from}'s order offers ${to} peace instead, each keeping what it holds. A peace line of this skip's accepting it ended the war; without one, ${to}'s answer comes with the next skip.`);
+        noteReceipt(receipt, "dropped", `The end of ${warNameOf(warId)}: ${from}'s order offers ${to} peace instead, each keeping what it holds. A peace line of this skip's accepting it ended the war; without one, ${to}'s answer comes with the next skip.`);
       } else {
         logDebugEvent("turn", `${from}'s order to end ${warId} offered nothing: ${reason}.`);
       }
@@ -10082,10 +10088,10 @@ const applySimulationResult = async ({
     const war = normalizeArray(worldWithImpacts?.wars).find((item) => normalizeString(item?.id).toLowerCase() === normalizeString(entry.warId).toLowerCase());
     if (normalizeString(war?.status).toLowerCase() === "ended") {
       logDebugEvent("turn", `The skip's end for ${entry.warId} is ${entry.to} accepting ${entry.from}'s offer of peace.`, entry.update);
-      noteReceipt(receipt, "adjusted", `The end of ${entry.warId}: ${entry.to} accepted ${entry.from}'s offer of peace, on the terms offered.`);
+      noteReceipt(receipt, "adjusted", `The end of ${warNameOf(entry.warId)}: ${entry.to} accepted ${entry.from}'s offer of peace, on the terms offered.`);
     } else {
       logDebugEvent("turn", `The skip's end for ${entry.warId} accepted ${entry.from}'s offer of peace, but the peace was not made.`, entry.update);
-      noteReceipt(receipt, "dropped", `"end" for ${entry.warId}: ${entry.to} took ${entry.from}'s offer of peace, but the peace could not be made, and the war goes on.`);
+      noteReceipt(receipt, "dropped", `"end" for ${warNameOf(entry.warId)}: ${entry.to} took ${entry.from}'s offer of peace, but the peace could not be made, and the war goes on.`);
     }
   }
   // A war's end and a country's fall clear the map (nativeUnitDirector.js

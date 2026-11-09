@@ -171,3 +171,15 @@ test("the events that tell an accepted end keep their story and lose the land th
   assert.deepEqual(peace.impacts.statChanges, [{ code: "Ukraine", stability: 60 }]);
   assert.equal(told[0].impacts.regionTransfers.length, 2, "the skip's own event is not changed in place");
 });
+
+// Names, never ids: the receipts of a player's war told "The end of war-russia-ukraine".
+test("the receipts of a player's war name the war, never its id", () => {
+  const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  const receipts = gameplay.match(/noteReceipt\(receipt, "(?:dropped|adjusted)", `[^`]*(?:offer of peace|order offers|a war a player fights ends only)[^`]*`\)/g) ?? [];
+  assert.ok(receipts.length >= 4, `the war's receipts: ${receipts.length}`);
+  for (const line of receipts) {
+    assert.doesNotMatch(line, /\$\{(?:entry\.warId|warId|update\.id)\}/, line);
+    assert.match(line, /\$\{warNameOf\((?:entry\.warId|warId|update\.id)\)\}/, line);
+  }
+  assert.match(gameplay, /return normalizeString\(war\?\.title\) \|\| \(sides\[0\] && sides\[1\] \? `the war between \$\{sides\[0\]\} and \$\{sides\[1\]\}` : "the war"\);/);
+});
