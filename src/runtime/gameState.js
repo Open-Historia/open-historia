@@ -2894,7 +2894,14 @@ const normalizeUnitOp = (entry) => {
   }
 
   if (op === "strength") {
-    return { op, unitId, strength: clampUnitStrength(entry.strength ?? 0), note: normalizeOptionalString(entry.note) };
+    // A refit: the formation's ships or equipment replaced, said by its new
+    // make-up ("Made new ships ... the ship make-up list when clicked on still
+    // show old ships", a player's report, 2026-11-09). A refit that gives no
+    // strength keeps the one the formation has.
+    const composition = normalizeOptionalString(entry.composition);
+    const given = entry.strength !== undefined && entry.strength !== null && entry.strength !== "";
+    if (composition && !given) return { op, unitId, strength: null, composition, note: normalizeOptionalString(entry.note) };
+    return { op, unitId, strength: clampUnitStrength(entry.strength ?? 0), ...(composition ? { composition } : {}), note: normalizeOptionalString(entry.note) };
   }
 
   if (op === "remove") {
@@ -3216,17 +3223,19 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
     }
 
     if (op.op === "strength") {
-      next = next.map((unit) =>
-        unit.id === op.unitId
-          ? {
-              ...unit,
-              strength: op.strength,
-              status: op.strength <= 0 ? "defeated" : unit.status,
-              ...(eventId ? { eventId } : {}),
-              updatedAt: stamp(),
-            }
-          : unit,
-      );
+      next = next.map((unit) => {
+        if (unit.id !== op.unitId) return unit;
+        // (A refit that gave no strength keeps the formation's own.)
+        const strength = op.strength === null ? unit.strength : op.strength;
+        return {
+          ...unit,
+          strength,
+          status: strength <= 0 ? "defeated" : unit.status,
+          ...(op.composition ? { composition: op.composition } : {}),
+          ...(eventId ? { eventId } : {}),
+          updatedAt: stamp(),
+        };
+      });
       continue;
     }
 

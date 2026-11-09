@@ -412,6 +412,8 @@ const unitOpSchema = {
           minimum: 0,
           maximum: 100,
         },
+        // A refit: what the formation is made of once ships or equipment are replaced (gameState.js normalizeUnitOp).
+        composition: textSchema("Its new make-up, when refitted."),
         note: textSchema("Brief explanation of the operation."),
       },
       required: ["op", "unitId", "strength"],
