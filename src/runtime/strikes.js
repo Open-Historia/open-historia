@@ -14,6 +14,8 @@
 //            | "nuclear bomber" | "bombing run"
 //   count    how many missiles or aircraft
 //   down     how many of them were intercepted before they got there
+//   spreadKm how wide the bombs of a bombing run scatter round the place, in km, where
+//            it was set (a war room strike's radius: fronts/airStrike.js airStrikeVisuals); else as always
 //
 // It changes nothing in the world by itself: what a strike DID is whatever
 // its event's own operations say. This is only what is drawn (Map/StrikeLayers.jsx).
@@ -74,6 +76,7 @@ export const normalizeStrike = (entry) => {
     down: Math.max(0, Math.min(count, Math.round(Number(entry.down) || 0))),
     from: readPlace(entry.from),
     to,
+    ...(Number(entry.spreadKm) > 0 ? { spreadKm: Math.min(200, Math.round(Number(entry.spreadKm) * 10) / 10) } : {}),
   };
 };
 

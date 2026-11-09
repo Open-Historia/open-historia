@@ -16,6 +16,7 @@
 // through runtime/warRoomWrites.js.
 
 import React, { useEffect } from "react";
+import { AIR_STRIKE_RADII } from "../../runtime/fronts/airStrike.js";
 import { useWarRoom } from "../Map/warRoomStore.js";
 import { placeName } from "./warRoomData.js";
 import { besideRailStyle } from "./warRoomFortify.jsx";
@@ -81,12 +82,14 @@ const Heading = ({ children, style = null }) => (
 
 //   wings      the player's air units (runtime/fronts/airStrikeOps.js airUnitsOf); picked, the id of the one picked out
 //   kind       what a click on the map is to strike: "troops", "structure" or "city"
+//   radius     the strike radius set, one of runtime/fronts/airStrike.js AIR_STRIKE_RADII; blast, how far the bombs
+//              of one strike fall at the default radius, in km (none: no radius to set)
 //   reach      how far an air unit reaches, in km
 //   flown      the player's strikes of the last turn (runtime/fronts/airStrike.js normalizeAirStrikes)
 //   locked     nothing can be ordered now
 //   tool       the tool in hand
-//   onPick(id), onKind(kind), onAim(), onCallOff(id), onClose()
-export const AircraftPlate = ({ isMobile, wings, picked, kind, reach, flown, locked, tool, onPick, onKind, onAim, onCallOff, onClose }) => {
+//   onPick(id), onKind(kind), onRadius(radius), onAim(), onCallOff(id), onClose()
+export const AircraftPlate = ({ isMobile, wings, picked, kind, radius = 1, blast = 0, reach, flown, locked, tool, onPick, onKind, onRadius = () => {}, onAim, onCallOff, onClose }) => {
   const rail = useWarRoom((state) => state.rail);
   const wing = wings.find((entry) => entry.id === picked) ?? null;
   // The first is picked out while none is (and when the one picked is gone).
@@ -140,6 +143,29 @@ export const AircraftPlate = ({ isMobile, wings, picked, kind, reach, flown, loc
               ><KindKey kind={entry} /></button>
             ))}
           </div>
+          {blast > 0 && (
+            <>
+              <div role="radiogroup" aria-label="Strike radius" style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem" }}>
+                {AIR_STRIKE_RADII.map((step) => {
+                  const km = Math.round(blast * step).toLocaleString();
+                  return (
+                    <button
+                      key={step}
+                      type="button"
+                      role="radio"
+                      className="oh-tap"
+                      aria-checked={radius === step}
+                      data-oh-war-room-strike-radius={step}
+                      disabled={off}
+                      onClick={() => onRadius(step)}
+                      style={smallKey(radius === step, off)}
+                    >{km} km</button>
+                  );
+                })}
+              </div>
+              <div style={softText}>Smaller is deadlier; wider touches more, each less.</div>
+            </>
+          )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem" }}>
             <button type="button" className="oh-tap" aria-pressed={aiming} disabled={off} data-oh-war-room-aim-key="" onClick={onAim} style={smallKey(aiming, off)}>{aiming ? <>Cancel</> : <>Choose target</>}</button>
             {wing.order && <button type="button" className="oh-tap" disabled={locked} onClick={() => onCallOff(wing.id)} style={smallKey(false, locked)}>Call off</button>}

@@ -20,6 +20,7 @@ import { addGameDays, compareGameDates } from "../../runtime/gameDates.js";
 import { arrowHead } from "./warRoomGeometry.js";
 import { mapRing } from "../../../server/mapDistance.js";
 import { currentMapMeasure } from "../../runtime/mapMeasure.js";
+import { strikeRadiusOf } from "../../runtime/fronts/airStrike.js";
 
 export const LINE_COLOURS = Object.freeze({ 3: "#d8c27a", 4: "#d9ad4f", 5: "#e09440", 6: "#e07a36", 7: "#d95f30", 8: "#c9452c", 9: "#b02d2a", 10: "#f4f7fb" });
 export const FLEET_COLOURS = Object.freeze({ fleet: "#c9a54c", picked: "#e9b949", course: "#f4f7fb" });
@@ -99,20 +100,22 @@ export const ringAround = (lng, lat, km, points = RING_POINTS) => {
 //   wing      the air unit picked out ({ lng, lat }), or null; reach, how far it reaches, in km
 //   orders    the player's strikes waiting (runtime/fronts/airStrike.js normalizeAirStrikeOrders)
 //   flown     the player's strikes of the last turn (normalizeAirStrikes)
-//   blast     how far the bombs of one fall, in km
+//   blast     how far the bombs of one fall at the default strike radius, in km: each is ringed as far as its own
+//             strike radius takes them (runtime/fronts/airStrike.js strikeRadiusOf)
 export const airFeatures = ({ wing = null, reach = 0, orders = [], flown = [], blast = 0 } = {}) => {
   const features = [];
   const base = wing ? placeOf([wing.lng, wing.lat]) : null;
   if (base && reach > 0) features.push({ type: "Feature", geometry: { type: "LineString", coordinates: ringAround(base[0], base[1], reach) }, properties: { what: "reach", colour: AIR_COLOURS.reach } });
-  const ring = (lng, lat, what, colour) => {
-    if (blast > 0) features.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ringAround(lng, lat, blast)] }, properties: { what, colour } });
-    features.push({ type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: { what: `${what}-at`, colour } });
+  const ring = (entry, what, colour) => {
+    const km = blast * strikeRadiusOf(entry.radius);
+    if (km > 0) features.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ringAround(entry.lng, entry.lat, km)] }, properties: { what, colour } });
+    features.push({ type: "Feature", geometry: { type: "Point", coordinates: [entry.lng, entry.lat] }, properties: { what: `${what}-at`, colour } });
   };
-  for (const order of list(orders)) if (placeOf([order?.lng, order?.lat])) ring(order.lng, order.lat, "aim", AIR_COLOURS.waiting);
+  for (const order of list(orders)) if (placeOf([order?.lng, order?.lat])) ring(order, "aim", AIR_COLOURS.waiting);
   for (const strike of list(flown)) {
     if (!placeOf([strike?.lng, strike?.lat]) || strike.outcome === "gone" || strike.outcome === "out of reach") continue;
     const colour = strike.outcome === "turned back" ? AIR_COLOURS.missed : strike.outcome === "partly" ? AIR_COLOURS.partly : AIR_COLOURS.hit;
-    ring(strike.lng, strike.lat, "struck", colour);
+    ring(strike, "struck", colour);
   }
   return { type: "FeatureCollection", features };
 };

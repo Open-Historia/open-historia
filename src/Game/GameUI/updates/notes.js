@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "bombing should be able to adjust the strike radius: smaller radii result in greater lethality, while larger
+    // radii reduce the overall threat level" (the owner, 2026-11-09). runtime/fronts/airStrike.js AIR_STRIKE_RADII:
+    // the bombs fall on a circle of the era's blast times the radius, each thing under them hit 1 / radius² as hard.
+    id: "2026-11-strike-radius",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Set a bombing’s strike radius",
+        items: [
+          "Deploy Aircraft now lets you set how wide a strike’s bombs fall, from half to twice the usual circle.",
+          "A tighter circle hits what is inside it much harder; a wider one reaches more, each a little less.",
+          "The circle is drawn on the map where the strike will fall and where it fell.",
+        ],
+      },
+    ],
+  },
+  {
     // "make a major update annoucement for the whole ai optimization before I release it" (the owner, 2026-11-07).
     // It folds in the day's five minor notices, which had reached only the beta: time skips cost less (the prompt
     // budget, docs/prompt-budget.md: the cached opening, nothing sent twice, one-line digests, what the turn is about in

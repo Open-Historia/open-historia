@@ -34,7 +34,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateWarRoomReply, warRoomChart, warRoomRouteAttacks, warRoomTransportWays } from "../AI/gameplayLazy.js";
-import { normalizeAirStrikeOrders, normalizeAirStrikes } from "../../runtime/fronts/airStrike.js";
+import { normalizeAirStrikeOrders, normalizeAirStrikes, strikeRadiusOf } from "../../runtime/fronts/airStrike.js";
 import { airReachOf, airUnitsOf, strikableStructures } from "../../runtime/fronts/airStrikeOps.js";
 import { kmBetween, measureOptions } from "../../runtime/fronts/worldGrid.js";
 import { engineMapOf } from "../../../server/mapDistance.js";
@@ -233,10 +233,11 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   const pickedFleet = useWarRoom((state) => state.fleet);
   const station = useWarRoom((state) => state.station);
   const deployForm = useWarRoom((state) => state.deployForm);
-  // The aircraft's plate, the air unit picked out on it, and what it is to strike.
+  // The aircraft's plate, the air unit picked out on it, what it is to strike, and over how wide a circle.
   const aircraftOut = useWarRoom((state) => state.aircraft);
   const pickedWing = useWarRoom((state) => state.wing);
   const strikeKind = useWarRoom((state) => state.strikeKind);
+  const strikeRadius = useWarRoom((state) => state.strikeRadius);
 
   // ---- which battlefield ---------------------------------------------------------------
   const fronts = useMemo(() => playerFronts(world?.battlefields, game.country, world?.wars), [world?.battlefields, game.country, world?.wars]);
@@ -459,9 +460,16 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aircraft, world?.airStrikes, game.country]);
   const wingName = (id) => wings.find((entry) => entry.id === id)?.name ?? (world?.units ?? []).find((unit) => unit?.id === id)?.name ?? "";
+  // The ring that follows the pointer is as wide as the strike radius set; an air unit picked out with a strike
+  // waiting shows that strike's radius.
   useEffect(() => {
-    if (open) setWarRoom({ blast: airBlast });
-  }, [open, airBlast]);
+    if (open) setWarRoom({ blast: airBlast * strikeRadiusOf(strikeRadius) });
+  }, [open, airBlast, strikeRadius]);
+  const pickedOrder = wings.find((entry) => entry.id === pickedWing)?.order ?? null;
+  const pickedOrderRadius = pickedOrder ? strikeRadiusOf(pickedOrder.radius) : 0;
+  useEffect(() => {
+    if (pickedOrderRadius > 0) setWarRoom({ strikeRadius: pickedOrderRadius });
+  }, [pickedWing, pickedOrderRadius]);
   const convoys = useMemo(() => convoysOf({ transports: world?.transports }, game.country), [world?.transports, game.country]);
   // What the nearest town to a place on the map is called, if one is near: a
   // transporter is told where it is bound in words as well.
@@ -547,7 +555,7 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
         setWarRoom({ draft: way });
       } else if (drawn === "aircraft" && extra?.wing && way[0]) {
         // What was clicked: the air unit picked out is to strike it when time next passes.
-        await orderWith(sendAirStrikeOp, await strikeAtRef.current(extra.wing, extra.kind, way[0]));
+        await orderWith(sendAirStrikeOp, { ...(await strikeAtRef.current(extra.wing, extra.kind, way[0])), radius: strikeRadiusOf(extra.radius) });
       } else if (drawn === "fleet" && extra?.fleet && way[0]) {
         // The place clicked at sea: the fleet picked out sails there, or patrols it.
         await orderWith(sendFleetOp, { op: "station", unit: extra.fleet, to: way[0], order: extra.station === "patrol" ? "patrol" : "move" });
@@ -714,7 +722,27 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
     setWarRoom({ wing: id, aircraft: true, fleets: false });
     if (isMobile) setFolded(true);
   }, [isMobile]);
-  const nameOf = (command) => generals.find((general) => general.command === command)?.name || "";
+  // The strike radius set on the aircraft's plate: a strike waiting for the air unit picked out is ordered again
+  // with it, at the same target (and where that is refused, the plate shows the strike's own radius again).
+  const setStrikeRadius = async (radius) => {
+    setWarRoom({ strikeRadius: strikeRadiusOf(radius) });
+    const order = pickedOrder;
+    if (!order || strikeRadiusOf(order.radius) === strikeRadiusOf(radius)) return;
+    const done = await orderWith(sendAirStrikeOp, {
+      op: "airstrike",
+      unit: order.unit,
+      kind: order.kind,
+      to: [order.lng, order.lat],
+      target: order.target,
+      country: order.country,
+      battlefield: order.battlefield,
+      marker: order.marker,
+      people: order.people,
+      radius: strikeRadiusOf(radius),
+    });
+    if (!done) setWarRoom({ strikeRadius: strikeRadiusOf(order.radius) });
+  };
+  const nameOf =(command) => generals.find((general) => general.command === command)?.name || "";
   const locked = turnRunning || busy;
   const other = record ? record.sides[1 - side] ?? [] : [];
   const mine = record ? record.sides[side] ?? [] : [];
@@ -869,12 +897,15 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
           wings={wings}
           picked={pickedWing}
           kind={strikeKind}
+          radius={strikeRadiusOf(strikeRadius)}
+          blast={airBlast}
           reach={airReach}
           flown={strikesFlown}
           locked={locked}
           tool={tool}
           onPick={pickWing}
           onKind={(kind) => setWarRoom({ strikeKind: kind })}
+          onRadius={setStrikeRadius}
           onAim={() => takeTool("aircraft")}
           onCallOff={(unit) => orderWith(sendAirStrikeOp, { op: "unairstrike", unit })}
           onClose={() => setWarRoom({ aircraft: false })}

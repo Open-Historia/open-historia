@@ -57,12 +57,14 @@ const CLOSED = Object.freeze({
   station: "",
   // Whether the aircraft's plate is out beside the rail (Deploy Aircraft), the
   // air unit picked out on it (its id), what a click on the map is to strike
-  // with it ("troops", "structure" or "city"), and how far the bombs of one
-  // strike fall, in km, for the ring drawn where the pointer is
-  // (GameUI/warRoomAircraft.jsx; runtime/fronts/airStrike.js).
+  // with it ("troops", "structure" or "city"), the strike radius set for it (a
+  // share of the era's blast: runtime/fronts/airStrike.js AIR_STRIKE_RADII), and
+  // how far the bombs of one strike fall at that radius, in km, for the ring
+  // drawn where the pointer is (GameUI/warRoomAircraft.jsx; runtime/fronts/airStrike.js).
   aircraft: false,
   wing: "",
   strikeKind: "troops",
+  strikeRadius: 1,
   blast: 0,
   // The ways found for the player's transporters that have not set out, by
   // their ids: { way, km, days, from } or { error, from } (AI/frontApply.js transportWaysFor).
