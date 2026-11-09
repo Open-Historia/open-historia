@@ -12874,6 +12874,7 @@
  "The host did not write the stat sheet.",
  "The host has banned this device from the game.",
  "The host has closed the game.",
+ "The host has not sent the new conversation yet. It will appear here when it does.",
  "The host has not sent {{key}} yet.",
  "The host is on another version of the game. Both of you need the same version: update the game, then join again.",
  "The host is playing \"{{slice}}\", and that scenario is not in your library, so its map cannot be shown here. Add it from the Community tab, or import the host's copy of it, then join again.",

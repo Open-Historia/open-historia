@@ -38,3 +38,45 @@ export const sayRequestFor = (chat, text) => (isPendingSharedThread(chat)
 // line (the ack's `result`), or "" when the host did not say (a host from
 // before it did).
 export const openedThreadOf = (answer) => clean(answer?.result?.chatId);
+
+// What the screen does once the host has answered a line said in `chat`. The
+// composer stays shut from the line until this answer (and, for a pending
+// thread the host opened, until the thread itself arrives): a second line typed
+// before the ack opened a second thread on the host, and every further one
+// another.
+// - "refused": say `error`; the composer opens again.
+// - "said": a thread the host keeps took it; the composer opens again.
+// - "follow": a pending thread the host opened as `thread`; wait for it in the view.
+// - "leave": a pending thread the host did not name (a host from before it did);
+//   back to the list, where it arrives.
+export const afterSharedSay = (chat, answer) => {
+  if (!answer?.ok) return { kind: "refused", error: clean(answer?.error) };
+  if (!isPendingSharedThread(chat)) return { kind: "said" };
+  const thread = openedThreadOf(answer);
+  return thread ? { kind: "follow", thread } : { kind: "leave" };
+};
+
+// How long a pending thread waits for the host's view to bring the thread it
+// opened before the screen gives up on it and goes back to the list.
+export const SHARED_THREAD_FOLLOW_MS = 20_000;
+
+// A thread to follow, from the ack that named it.
+export const followSharedThread = (thread, { now = Date.now, waitMs = SHARED_THREAD_FOLLOW_MS } = {}) => (clean(thread)
+  ? { thread: clean(thread), until: now() + waitMs }
+  : null);
+
+// One step of following `follow` ({ thread, until }) while `activeChat` is on
+// screen and `chats` are the threads the view holds:
+// - "none": nothing to follow;
+// - "drop": the player left the pending thread; stop following;
+// - "open": the view holds it; open `chat`;
+// - "wait": not there yet; look again within `delayMs` (sooner when the view changes);
+// - "late": it never came in time; back to the list with a word why.
+export const sharedFollowStep = (follow, { activeChat, chats = [], now = Date.now } = {}) => {
+  if (!follow?.thread) return { kind: "none" };
+  if (!isPendingSharedThread(activeChat)) return { kind: "drop" };
+  const chat = (Array.isArray(chats) ? chats : []).find((entry) => entry != null && clean(entry.id) === follow.thread);
+  if (chat) return { kind: "open", chat };
+  const delayMs = Number(follow.until) - now();
+  return delayMs > 0 ? { kind: "wait", delayMs } : { kind: "late" };
+};

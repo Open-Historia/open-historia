@@ -215,6 +215,7 @@ test("with the 3D terrain on the ground is drawn into the terrain's tiles, made 
     const calls = {};
     const drawn = [];
     const tiles = [];
+    const lines = [];
     const count = (name, result) => (...args) => {
       calls[name] = (calls[name] ?? 0) + 1;
       return typeof result === "function" ? result(...args) : result;
@@ -226,6 +227,11 @@ test("with the 3D terrain on the ground is drawn into the terrain's tiles, made 
         if (name === "uniform4f") {
           return (location, ...values) => {
             if (locations.get(location) === "u_tile") tiles.push(values);
+          };
+        }
+        if (name === "uniform3f") {
+          return (location, ...values) => {
+            if (locations.get(location) === "u_line") lines.push(values);
           };
         }
         if (name === "getUniformLocation") {
@@ -273,6 +279,15 @@ test("with the 3D terrain on the ground is drawn into the terrain's tiles, made 
     assert.deepEqual(drawn, [6, 6], "drawn into the tile under it, not the other");
     assert.deepEqual(tiles[0], [35 / 64, 21 / 64, 64, 0]);
     assert.equal(calls.texImage2D, 2, "the picture and the field taken up once, not once a tile");
+    // A 1024-pixel tile at its own zoom: two of its pixels a screen pixel, so every width drawn doubled.
+    const widths = groundBorderWidths(6);
+    assert.deepEqual(lines[0], [widths.core * 2, widths.casing * 2, widths.blur * 2]);
+    // A 512-pixel DEM makes the fork's tile manager 1024: the tile still covers MapLibre's 512-pixel world
+    // tile on screen, so the widths are the same, not halved.
+    map.terrain.tileManager.tileSize = 1024;
+    layer.renderToTerrainTile(gl, { tileID: under, width: 1024, height: 1024 });
+    assert.deepEqual(lines.at(-1), lines[0]);
+    map.terrain.tileManager.tileSize = 512;
     assert.equal(calls.bufferData, 2);
     // Painted again: a new number, so MapLibre draws the tiles again, and the picture is taken up anew.
     area.version = 2;
@@ -283,7 +298,7 @@ test("with the 3D terrain on the ground is drawn into the terrain's tiles, made 
     area.ready = false;
     assert.ok(layer.terrainTileRevision > revision + 1);
     layer.renderToTerrainTile(gl, { tileID: under, width: 1024, height: 1024 });
-    assert.equal(drawn.length, 3);
+    assert.equal(drawn.length, 4);
     layer.onRemove(map, gl);
   } finally {
     if (had) globalThis.WebGL2RenderingContext = before;

@@ -132,11 +132,15 @@ void main() {
   gl_Position = vec4(at.x * 2.0 - 1.0, 1.0 - at.y * 2.0, 0.0, 1.0);
 }`;
 
+// MapLibre's world tile: a tile covers this many screen pixels at its own zoom,
+// whatever the size of the DEM tiles under the terrain.
+export const WORLD_TILE_SIZE = 512;
+
 // How many of a terrain tile's pixels one of the screen's is, the tile being
-// `width` pixels and drawn `tileSize` (MapLibre's terrain tiles: 512) at its
-// own zoom: as the map's own borders are drawn into the tile (a line's width
-// in the tile's pixels at the map's zoom).
-export const tilePixelsPerScreenPixel = (width, tileZoom, zoom, tileSize = 512) => width / (tileSize * 2 ** (zoom - tileZoom));
+// `width` pixels and drawn `tileSize` (MapLibre's world tile: 512) at its own
+// zoom: as the map's own borders are drawn into the tile (a line's width in
+// the tile's pixels at the map's zoom).
+export const tilePixelsPerScreenPixel = (width, tileZoom, zoom, tileSize = WORLD_TILE_SIZE) => width / (tileSize * 2 ** (zoom - tileZoom));
 
 // The copies of the world (-1, 0, 1) in which a box on the sheet,
 // [left, top, right, bottom], lies over a terrain tile's, [x0, y0, x1, y1].
@@ -561,8 +565,12 @@ export const createFrontGroundLayer = ({ id = FRONT_GROUND_LAYER_ID, areas, stre
         const tile = [canonical.x / across, canonical.y / across, (canonical.x + 1) / across, (canonical.y + 1) / across];
         const program = this._tile;
         const zoom = this._map?.getZoom?.() ?? canonical.z;
-        const tileSize = Number(this._map?.terrain?.tileManager?.tileSize) || 512;
-        const scale = tilePixelsPerScreenPixel(Number(width) || tileSize * 2, canonical.z, zoom, tileSize);
+        // The terrain's tile manager sizes its tiles from the DEM's (the fork: the
+        // DEM tileSize x 2), which is only the world tile while the DEM is 256 px
+        // (World.jsx terrain-source). A tile covers the world tile on screen, so
+        // that is the divisor; the manager's size only stands in for a missing width.
+        const tileSize = Number(this._map?.terrain?.tileManager?.tileSize) || WORLD_TILE_SIZE;
+        const scale = tilePixelsPerScreenPixel(Number(width) || tileSize * 2, canonical.z, zoom, WORLD_TILE_SIZE);
         const widths = groundBorderWidths(zoom);
         const laid = Number(typeof strength === "function" ? strength(zoom) : 0.62);
         gl.bindVertexArray(null);

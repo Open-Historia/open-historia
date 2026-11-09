@@ -466,6 +466,11 @@ select option:disabled {
 [data-oh-scrolling] * {
   pointer-events: none !important;
 }
+/* A list nested inside the one scrolling still takes the wheel itself (its
+   rows still take no hover), or the wheel would land on the outer panel. */
+[data-oh-scrolling] [data-oh-scroll-inner] {
+  pointer-events: auto !important;
+}
 
 button,
 [role="button"],
