@@ -392,6 +392,21 @@ test("the finish reads a folded skip's review off its own answer, and a skip ask
   const strip = body.slice(body.indexOf("if (!folded) {"), body.indexOf("const review ="));
   assert.match(strip, /merged\.events = normalizeArray\(merged\.events\)\.map\(withoutBoardOps\);/, "a board op is never left on an event the board pass will also move");
   assert.match(strip, /state\.hiddenEvents = normalizeArray\(state\.hiddenEvents\)\.map\(withoutBoardOps\);/);
+  assert.doesNotMatch(strip, /moved by its own pass/, "no pass after the skip moves the board any more");
+});
+
+// A major event that rests only on a board entry is let through the segment
+// check as provisional, to be proved by the board's ops. A skip asked the old
+// way, or one whose function had no room for the board, has no board part, so
+// nothing proves it: until 2026-11-09 every such event was judged unbacked
+// (boardPassApply.js) and taken off the timeline.
+test("with no board part, no event is provisional, and none leaves the timeline for want of board ops", () => {
+  const finish = functionBody("finishTimelineJump");
+  assert.match(finish, /boardProvisionalEventIds: review\.parts\?\.board \? state\.boardProvisionalEventIds : \[\],/);
+  const apply = functionBody("applySimulationResult");
+  assert.match(apply, /const boardAnswers = !review \|\| Boolean\(review\.parts\?\.board\);/, "the board's own request (no review) still proves them");
+  assert.match(apply, /const provisionalIds = new Set\(boardAnswers\n\s*\? normalizeArray\(result\.boardProvisionalEventIds\)/);
+  assert.match(gameplaySource, /impacts\.projectOps was not part of this answer: the Projects board did not move this time\./);
 });
 
 test("nothing after a skip is a request of its own: no director, no agent, no attribution, in any mode", () => {

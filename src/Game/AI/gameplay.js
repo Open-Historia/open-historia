@@ -10271,10 +10271,14 @@ const applySimulationResult = async ({
     // event has since gained a consequence of its own (the unit and territory
     // directors add ops after the segment check), in which case it stands on that
     // and is not the board pass's to prove.
-    const provisionalIds = new Set(
-      normalizeArray(result.boardProvisionalEventIds)
-        .map((id) => canonicalEventIdentity.idMap.get(id) || id),
-    );
+    // Only where something will answer for the board: a review with a board
+    // part, or the board's own request (no review). A review without one moves
+    // nothing, and every provisional event would be judged unbacked by ops
+    // nobody was asked to write, and taken off the timeline.
+    const boardAnswers = !review || Boolean(review.parts?.board);
+    const provisionalIds = new Set(boardAnswers
+      ? normalizeArray(result.boardProvisionalEventIds).map((id) => canonicalEventIdentity.idMap.get(id) || id)
+      : []);
     const provisionalIndexes = new Set(freshEvents
       .map((event, index) => (provisionalIds.has(event.id) && !eventCarriesOwnConsequence(event) ? index : -1))
       .filter((index) => index >= 0));
@@ -18205,14 +18209,16 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // skip is a request of its own any more.
   const folded = Boolean(state.folded);
   if (!folded) {
-    // Not this skip's to write: the board is moved by its own pass, and an op
-    // left on an event would be applied a second time by the event itself.
+    // Not this skip's to write: the old way's contract has no board, nothing
+    // after the skip moves it any more, and an op left on an event would be
+    // applied by the event itself, outside the board's own machinery. The
+    // board stands still this skip.
     const before = [...normalizeArray(merged.events), ...normalizeArray(state.hiddenEvents)];
     merged.events = normalizeArray(merged.events).map(withoutBoardOps);
     state.hiddenEvents = normalizeArray(state.hiddenEvents).map(withoutBoardOps);
     const after = [...merged.events, ...state.hiddenEvents];
     if (before.some((event, index) => event !== after[index])) {
-      noteReceipt(state.receipt, "dropped", "impacts.projectOps is not part of this answer: the Projects board is moved by its own pass after the events. The ops you wrote there were left out.");
+      noteReceipt(state.receipt, "dropped", "impacts.projectOps was not part of this answer: the Projects board did not move this time. The ops you wrote there were left out; the events stand, and a later period can move the board.");
     }
   } else {
     // A held turn is finished again on this same state (one held on the
@@ -18315,7 +18321,12 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     generation: state.generation,
     hiddenEvents: state.hiddenEvents,
     filedEvents: state.filedEvents,
-    boardProvisionalEventIds: state.boardProvisionalEventIds,
+    // A major event that rests only on a board entry is proved by the board's
+    // ops, which only a folded skip's board part carries. Without one (a skip
+    // asked the old way, or one whose function had no room for the board)
+    // nothing writes ops for it, so it is no longer provisional: it stands as
+    // written, as it would on a board that did not move.
+    boardProvisionalEventIds: review.parts?.board ? state.boardProvisionalEventIds : [],
     receipt: state.receipt,
     covertOperations: normalizeString(state.generation?.source) === "fallback" ? [] : normalizeArray(state.covertOperations),
     scriptedEventState: state.scriptedEventState,
