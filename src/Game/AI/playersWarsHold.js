@@ -35,14 +35,26 @@ const eventIdsOf = (update) => [
 // seat); "" where it does not, as a game with one player's never does.
 const orderCountryOf = (order) => clean(order?.country ?? order?.seatCountry ?? order?.polity);
 
+// A player's offer of peace that waits for its answer IS the peace the war
+// may end by. The skip is told to accept one with a peaceTreaties line, and a
+// skip that ends the war instead is the other side saying yes: a player's 1973
+// game offered North Vietnam peace on the old borders, and twice the skip
+// wrote the war's end, "Formal peace treaty ratified, restoring pre-war
+// borders", and twice it was refused, with the event that told it, and the
+// player was told to offer the peace he had already offered. Such an end is
+// handed back in `accepted` (the offer: its own terms, whatever the record
+// says), and its events stay: the game makes that peace (warAndPeace.js
+// turnWarAndPeace) and ends the war in the ledger itself.
+
 // updates: the skip's war records, bound to their events. events: the turn's
 // events. wars: world.wars before the turn. players: the countries people play.
 // orders: the players' orders the turn carried out ({ id, country? }).
-// Hands back what is kept, what was refused, and the offers of peace the players' orders make
-// ([{ warId, from, update }]).
-export const holdPlayersWars = ({ updates = [], events = [], wars = [], players = [], orders = [] } = {}) => {
+// offers: world.peaceOffers before the turn.
+// Hands back what is kept, what was refused, the offers of peace the players' orders make
+// ([{ warId, from, update }]) and the players' offers the skip's end accepts ([{ warId, from, to, update }]).
+export const holdPlayersWars = ({ updates = [], events = [], wars = [], players = [], orders = [], offers = [] } = {}) => {
   const played = new Set(list(players).map(fold).filter(Boolean));
-  if (!played.size) return { updates: list(updates), events: list(events), refused: [], proposals: [] };
+  if (!played.size) return { updates: list(updates), events: list(events), refused: [], proposals: [], accepted: [] };
   const warOf = new Map(list(wars).map((war) => [fold(war?.id), war]));
   const sidesOf = (war) => [...list(war?.sideA), ...list(war?.sideB)];
   const fights = (war) => sidesOf(war).some((name) => played.has(fold(name)));
@@ -63,20 +75,34 @@ export const holdPlayersWars = ({ updates = [], events = [], wars = [], players 
     return "";
   };
 
+  // A player's open offer in a war, to a country nobody plays on the other side of it.
+  const sideOf = (war, name) => (list(war?.sideA).some((member) => fold(member) === fold(name)) ? 0 : list(war?.sideB).some((member) => fold(member) === fold(name)) ? 1 : -1);
+  const offerIn = (war) => list(offers).find((offer) => fold(offer?.status) === "open" && fold(offer?.warId) === fold(war?.id)
+    && played.has(fold(offer?.from)) && !played.has(fold(offer?.to))
+    && sideOf(war, offer?.from) >= 0 && sideOf(war, offer?.to) === 1 - sideOf(war, offer?.from)) ?? null;
+
   const proposals = [];
+  const accepted = [];
   const refused = list(updates).filter((update) => {
     const war = warOf.get(fold(update?.id));
     if (!war || !fights(war)) return false;
     const op = fold(update?.op);
     const ending = ENDING.has(op) || (op === "leave" && list(update?.actors).some((name) => played.has(fold(name))));
     if (!ending) return false;
+    const offer = op === "end" ? offerIn(war) : null;
+    if (offer) {
+      if (!accepted.some((entry) => entry.warId === clean(war.id))) accepted.push({ warId: clean(war.id), from: clean(offer.from), to: clean(offer.to), update });
+      return true;
+    }
     const by = orderedBy(update, war);
     if (by && !proposals.some((entry) => entry.warId === clean(war.id) && fold(entry.from) === fold(by))) proposals.push({ warId: clean(war.id), from: by, update });
     return true;
   });
-  if (!refused.length) return { updates: list(updates), events: list(events), refused, proposals };
+  if (!refused.length) return { updates: list(updates), events: list(events), refused, proposals, accepted };
 
-  const telling = new Set(refused.flatMap(eventIdsOf));
+  // (The events that tell an accepted peace stay: it is made.)
+  const peaceIn = new Set(accepted.map((entry) => fold(entry.warId)));
+  const telling = new Set(refused.filter((update) => !(fold(update?.op) === "end" && peaceIn.has(fold(update?.id)))).flatMap(eventIdsOf));
   const kept = list(events).filter((event) => !telling.has(clean(event?.id)));
-  return { updates: list(updates).filter((update) => !refused.includes(update)), events: kept, refused, proposals };
+  return { updates: list(updates).filter((update) => !refused.includes(update)), events: kept, refused, proposals, accepted };
 };

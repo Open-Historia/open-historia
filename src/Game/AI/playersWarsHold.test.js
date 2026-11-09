@@ -51,7 +51,7 @@ test("a war that is not in the ledger yet is left to the ledger", () => {
 
 test("the turn holds a player's wars before it keeps the ledger records, and the skip is told the rule", () => {
   const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  assert.match(gameplay, /const playersWars = holdPlayersWars\(\{ updates: result\.warUpdates, events: curatedEvents, wars: baseWorld\?\.wars, players: humanCountriesOf\(baseGame\), orders: baseActions \}\);/);
+  assert.match(gameplay, /const playersWars = holdPlayersWars\(\{ updates: result\.warUpdates, events: curatedEvents, wars: baseWorld\?\.wars, players: humanCountriesOf\(baseGame\), orders: baseActions, offers: baseWorld\?\.peaceOffers \}\);/);
   assert.match(gameplay, /filterBoundLedgerUpdatesToKeptEvents\(playersWars\.updates, dedupedEvents, curatedEvents\)/);
   const prompt = fs.readFileSync(new URL("./peacePrompt.js", import.meta.url), "utf8");
   assert.match(prompt, /A player's order to end their war is their offer of peace/);
@@ -73,4 +73,31 @@ test("an ending the player's own order brought about is refused too, and handed 
   const theirs = holdPlayersWars({ updates: [{ ...update, eventIds: ["evt-5"] }], events: ordered, wars, players: ["Ukraine"], orders });
   assert.deepEqual(theirs.proposals, [], "an order given for a country that is not in the war offers nothing");
   assert.deepEqual(holdPlayersWars({ updates: [{ ...update, eventIds: ["evt-1"] }], events: ordered, wars, players: ["Ukraine"], orders }).proposals, []);
+});
+
+// A player's offer of peace waiting in the war is the peace it may end by: a
+// skip that ends the war over it is the other side saying yes (a player's 1973
+// game, 2026-11-08: North Vietnam's end refused twice over the US's own offer).
+test("a skip's end of a player's war over that player's open offer of peace accepts the offer, and its events stay", () => {
+  const offers = [{ id: "peace:war-russia-ukraine:ukraine:3", warId: "war-russia-ukraine", from: "Ukraine", to: "Russian Federation", terms: { territory: "restored", reparations: null }, status: "open" }];
+  const update = { id: "war-russia-ukraine", op: "end", actors: ["Russian Federation"], opponents: ["Ukraine"], eventIds: ["evt-1"] };
+  const held = holdPlayersWars({ updates: [update], events, wars, players: ["Ukraine"], offers });
+  assert.deepEqual(held.updates, [], "the game ends the war by the peace, not by the record");
+  assert.deepEqual(held.accepted, [{ warId: "war-russia-ukraine", from: "Ukraine", to: "Russian Federation", update }]);
+  assert.deepEqual(held.proposals, []);
+  assert.deepEqual(held.events.map((event) => event.id), ["evt-1", "evt-2", "evt-3"], "the event that tells the peace stays");
+
+  // A ceasefire is not the peace offered, and an offer already answered, made by the other side or in another war accepts nothing.
+  assert.deepEqual(holdPlayersWars({ updates: [{ ...update, op: "ceasefire" }], events, wars, players: ["Ukraine"], offers }).accepted, []);
+  for (const other of [{ ...offers[0], status: "declined" }, { ...offers[0], from: "Russian Federation", to: "Ukraine" }, { ...offers[0], warId: "war-france-belgium" }]) {
+    const none = holdPlayersWars({ updates: [update], events, wars, players: ["Ukraine"], offers: [other] });
+    assert.deepEqual(none.accepted, []);
+    assert.deepEqual(none.events.map((event) => event.id), ["evt-2", "evt-3"]);
+  }
+});
+
+test("the turn makes the accepted peace beside the skip's own treaties", () => {
+  const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.match(gameplay, /\.\.\.playersWars\.accepted\.filter\(\(entry\) => !toldTreaties\.some\(\(line\) => samePair\(line, entry\)\)\)\.map\(\(\{ from, to \}\) => \(\{ from, to, terms: null \}\)\)/);
+  assert.match(gameplay, /treaties: turnTreaties,/);
 });

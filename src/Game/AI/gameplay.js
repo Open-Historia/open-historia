@@ -9629,12 +9629,15 @@ const applySimulationResult = async ({
   // refused, with the events that told it and what they changed on the map. One
   // the player's own order brought about is put to the other side as their offer
   // of peace instead (turnWarAndPeace below).
-  const playersWars = holdPlayersWars({ updates: result.warUpdates, events: curatedEvents, wars: baseWorld?.wars, players: humanCountriesOf(baseGame), orders: baseActions });
+  const playersWars = holdPlayersWars({ updates: result.warUpdates, events: curatedEvents, wars: baseWorld?.wars, players: humanCountriesOf(baseGame), orders: baseActions, offers: baseWorld?.peaceOffers });
   if (playersWars.refused.length) {
     curatedEvents = playersWars.events;
     const offered = new Set(playersWars.proposals.map((entry) => entry.update));
+    const peaceIn = new Set(playersWars.accepted.map((entry) => normalizeString(entry.warId).toLowerCase()));
     for (const update of playersWars.refused) {
       if (offered.has(update)) continue;
+      // (An end that answers the player's own offer of peace: the game makes that peace below.)
+      if (normalizeString(update?.op).toLowerCase() === "end" && peaceIn.has(normalizeString(update?.id).toLowerCase())) continue;
       logDebugEvent("turn", `The skip's ${update.op} for ${update.id} was refused: a war a player fights ends only by a peace that player makes or accepts.`, update);
       noteReceipt(receipt, "dropped", `"${update.op}" for ${update.id}, and the events that told it: a war a player fights ends only by a peace that player makes or accepts. To bring them to peace, offer it in a letter.`);
     }
@@ -10175,6 +10178,16 @@ const applySimulationResult = async ({
   // attacked; every country's weariness moves by what the turn did to it; and
   // the peaces the skip says two sides nobody plays made are made. Nobody
   // offers anybody peace here: a country does in the skip's letters (below).
+  const toldTreaties = readTreatyLines(result.peaceTreaties);
+  const samePair = (line, entry) => [line.from, line.to].map((name) => normalizeString(name).toLowerCase()).sort().join("|") === [entry.from, entry.to].map((name) => normalizeString(name).toLowerCase()).sort().join("|");
+  const turnTreaties = [
+    ...toldTreaties,
+    ...playersWars.accepted.filter((entry) => !toldTreaties.some((line) => samePair(line, entry))).map(({ from, to }) => ({ from, to, terms: null })),
+  ];
+  for (const entry of playersWars.accepted) {
+    logDebugEvent("turn", `The skip's end for ${entry.warId} is ${entry.to} accepting ${entry.from}'s offer of peace.`, entry.update);
+    noteReceipt(receipt, "adjusted", `The end of ${entry.warId}: ${entry.to} accepted ${entry.from}'s offer of peace, on the terms offered.`);
+  }
   worldWithImpacts = turnWarAndPeace({
     world: worldWithImpacts,
     baseWorld,
@@ -10184,9 +10197,10 @@ const applySimulationResult = async ({
     players: humanCountriesOf(nextGame),
     fronts: turnFronts,
     held: await regionHoldingsOf(worldWithImpacts, nextGame, campaignId),
-    treaties: readTreatyLines(result.peaceTreaties),
+    // (With a player's offer of peace the skip ended the war over: that offer accepted, on its own terms, playersWarsHold.js.)
+    treaties: turnTreaties,
     // (The map's regions, for a peace that annexes a country or cedes regions by name.)
-    regions: readTreatyLines(result.peaceTreaties).length > 0 ? filterToRenderedRegions(await peaceRegionCatalog(), worldWithImpacts) : [],
+    regions: turnTreaties.length > 0 ? filterToRenderedRegions(await peaceRegionCatalog(), worldWithImpacts) : [],
     onRefused: (treaty) => logDebugEvent("turn", `The skip's peace between ${treaty.from} and ${treaty.to} was not made: ${treaty.reason}.`),
     // A player's order to end their war: their offer of peace, put to the other side.
     proposals: playersWars.proposals,
