@@ -82,11 +82,11 @@ test("the block says how an order is written, what it sets aside, who may not be
   assert.match(block, /Sent in peace to another country's land it is an attack on it: the war begins the day its troops are put down\./);
   assert.match(block, /A war begun in this answer has none yet: name its battlefield yourself in its first order\./);
   // Its own examples are lines the ledger reads without a complaint.
-  const examples = lines.filter((line) => line.startsWith("Eastern Ukraine~"));
+  const examples = lines.filter((line) => ["NAME~A~spearhead~north~2,3~city: X~~major", "NAME~A~~south~5~city: Y~captured"].includes(line));
   assert.equal(examples.length, 2);
   assert.deepEqual(decodeFrontOrders(examples.join("\n")).map(({ side, order, sector, objective, result, effort, problem }) => [side, order, sector, objective, result, effort, problem]), [
-    ["Russia", "spearhead", "north", "city: Kharkiv", "", "major", undefined],
-    ["Russia", "", "south", "city: Mariupol", "captured", "", undefined],
+    ["A", "spearhead", "north", "city: X", "", "major", undefined],
+    ["A", "", "south", "city: Y", "captured", "", undefined],
   ]);
   // A person's side.
   assert.ok(lines.some((line) => line.startsWith("Neutralia is played by a person: write no order for it of your own.")));

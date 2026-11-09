@@ -54,6 +54,28 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player's 1973 save (2026-11-08): the fall of Saigon carried the Vietnam War's end and was refused as fighting
+    // in a war already ended (AI/nativeWarLedger.js); the US player's own offer of peace was answered twice with the
+    // war's end and both were refused (AI/playersWarsHold.js); the US withdrawal and the Khmer Rouge sieges were told as
+    // history with no records (the war ledger's rules, AI/gameplay.js). And the owner's fallback log (2026-11-04): a
+    // refused skip asked again was refused for want of a request (AI/requestBudget.js keepForRefusedSkip).
+    id: "2026-11-wars-follow-the-story",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Wars end on the map when the story ends them",
+        items: [
+          "A war whose last battle ends it, such as a capital falling, now ends in the game too, instead of going on with its front still open.",
+          "When you have offered peace and the other side ends the war in a time skip, your offer is accepted on its own terms instead of being thrown away.",
+          "A country the story pulls out of a war now leaves it, so its troops stop fighting on the map, and events follow the game's own wars where they have parted from real history.",
+          "A time skip the AI service refuses is asked again even when few requests are left for it, instead of ending in the stand-in events.",
+        ],
+      },
+    ],
+  },
+  {
     // The owner, 2026-11-09: "the dont play music wind up when entering a game that is open is broken because if you
     // have an open game but then switch games it still doesnt do the wind up" (runtime/ambientMusic.js
     // reopensDrawnGame: only the game drawn last, and only when it is the one being opened; GameUI/main.jsx asks with

@@ -277,6 +277,7 @@ import {
   backgroundAiAllowance,
   createJumpBudget,
   jumpRequestCap,
+  keepForRefusedSkip,
   lookupRoundLimit,
   requestLedger,
   savingRequests,
@@ -702,6 +703,7 @@ const relationStatusForScore = (value) => {
 // (buildJumpStaticRules), and its [Wars] block points there (`rulesAbove`).
 const WAR_LEDGER_RULES_HEADING = "[How Wars Are Recorded]";
 const warLedgerRules = (playerName) => `Only this ledger makes polities belligerents: tension or a mobilisation does not, and an alliance does only through the game, which itself enters here those bound to defend a country that is attacked (see ${PEACE_BLOCK_HEADING} below). A war real history holds begins here only when you open it, with a warUpdates record and the event that starts it. Every battle, offensive, invasion, bombardment, siege or front carries event.warId and event.combatants naming both sides. If you write fighting, open the war in the same answer: a declaration, an entry, an exit, a ceasefire, a resumption or a peace each needs a warUpdates record and an event carrying the same warId, or the engine strips the war from the fighting and records peace. Two sides genuinely trading blows are at war; if you cannot say who is fighting whom, it is unrest, a raid or a deployment, so write it as that. A polity at peace does not live under war conditions — rationing, war taxes, mobilisation — because others are fighting, unless the war reaches it through something concrete (lost imports, refugees, sanctions). Nobody may join a war on ${playerName}'s behalf; another power declaring war on ${playerName} is that power's decision, and yours to write.
+A country nobody plays that the story takes out of a war (its forces pulled out under an accord, a separate peace, its last troops brought home) leaves it in that event, with a leave record: without one it is still at war, and its troops stay on the battlefield and fight on. The battle or surrender that ends a war carries its end record. History yields to this game's record: a war the ledger shows ended, or never opened, is fought by nobody, and where the wars, the battlefields or who holds a region differ from what history had at this time, history has been turned aside here. Events follow the record, not the history: no fighting in a war that ended here, and no siege or offensive where the game's lines do not put one.
 warUpdates is one string, one record per line, fields separated by ~ (never inside a field): warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note. op is start, join-a, join-b, leave, ceasefire, resume or end; for start the actors are side A and the opponents side B; for join and leave the actors are the polities joining or leaving, and for a join the opponents are the polities it fights (join-a joins SIDE A, against SIDE B); eventNumbersCSV is the number in this answer's events (1 for the first) of the event that makes the change, never a date or an id. A start's note may open with the war's name, as Title: <name>; then its cause. Give a war a stable id (war-france-germany-1914) and reuse it. An empty string when nothing changes.`;
 
 const buildWarLedgerDirective = (variables, { rulesAbove = false } = {}) => {
@@ -9629,12 +9631,15 @@ const applySimulationResult = async ({
   // refused, with the events that told it and what they changed on the map. One
   // the player's own order brought about is put to the other side as their offer
   // of peace instead (turnWarAndPeace below).
-  const playersWars = holdPlayersWars({ updates: result.warUpdates, events: curatedEvents, wars: baseWorld?.wars, players: humanCountriesOf(baseGame), orders: baseActions });
+  const playersWars = holdPlayersWars({ updates: result.warUpdates, events: curatedEvents, wars: baseWorld?.wars, players: humanCountriesOf(baseGame), orders: baseActions, offers: baseWorld?.peaceOffers });
   if (playersWars.refused.length) {
     curatedEvents = playersWars.events;
     const offered = new Set(playersWars.proposals.map((entry) => entry.update));
+    const peaceIn = new Set(playersWars.accepted.map((entry) => normalizeString(entry.warId).toLowerCase()));
     for (const update of playersWars.refused) {
       if (offered.has(update)) continue;
+      // (An end that answers the player's own offer of peace: the game makes that peace below.)
+      if (normalizeString(update?.op).toLowerCase() === "end" && peaceIn.has(normalizeString(update?.id).toLowerCase())) continue;
       logDebugEvent("turn", `The skip's ${update.op} for ${update.id} was refused: a war a player fights ends only by a peace that player makes or accepts.`, update);
       noteReceipt(receipt, "dropped", `"${update.op}" for ${update.id}, and the events that told it: a war a player fights ends only by a peace that player makes or accepts. To bring them to peace, offer it in a letter.`);
     }
@@ -10175,6 +10180,16 @@ const applySimulationResult = async ({
   // attacked; every country's weariness moves by what the turn did to it; and
   // the peaces the skip says two sides nobody plays made are made. Nobody
   // offers anybody peace here: a country does in the skip's letters (below).
+  const toldTreaties = readTreatyLines(result.peaceTreaties);
+  const samePair = (line, entry) => [line.from, line.to].map((name) => normalizeString(name).toLowerCase()).sort().join("|") === [entry.from, entry.to].map((name) => normalizeString(name).toLowerCase()).sort().join("|");
+  const turnTreaties = [
+    ...toldTreaties,
+    ...playersWars.accepted.filter((entry) => !toldTreaties.some((line) => samePair(line, entry))).map(({ from, to }) => ({ from, to, terms: null })),
+  ];
+  for (const entry of playersWars.accepted) {
+    logDebugEvent("turn", `The skip's end for ${entry.warId} is ${entry.to} accepting ${entry.from}'s offer of peace.`, entry.update);
+    noteReceipt(receipt, "adjusted", `The end of ${entry.warId}: ${entry.to} accepted ${entry.from}'s offer of peace, on the terms offered.`);
+  }
   worldWithImpacts = turnWarAndPeace({
     world: worldWithImpacts,
     baseWorld,
@@ -10184,9 +10199,10 @@ const applySimulationResult = async ({
     players: humanCountriesOf(nextGame),
     fronts: turnFronts,
     held: await regionHoldingsOf(worldWithImpacts, nextGame, campaignId),
-    treaties: readTreatyLines(result.peaceTreaties),
+    // (With a player's offer of peace the skip ended the war over: that offer accepted, on its own terms, playersWarsHold.js.)
+    treaties: turnTreaties,
     // (The map's regions, for a peace that annexes a country or cedes regions by name.)
-    regions: readTreatyLines(result.peaceTreaties).length > 0 ? filterToRenderedRegions(await peaceRegionCatalog(), worldWithImpacts) : [],
+    regions: turnTreaties.length > 0 ? filterToRenderedRegions(await peaceRegionCatalog(), worldWithImpacts) : [],
     onRefused: (treaty) => logDebugEvent("turn", `The skip's peace between ${treaty.from} and ${treaty.to} was not made: ${treaty.reason}.`),
     // A player's order to end their war: their offer of peace, put to the other side.
     proposals: playersWars.proposals,
@@ -18026,8 +18042,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             segmentIndex,
           });
           state.folded = false;
-          // (Its checks are a request of their own now: kept for them, as above.)
-          state.requests?.budget?.reserve?.("review", 1);
+          // (The skip asked again keeps a request first, then its checks, which are a request of their own now; upkeep waits: requestBudget.js keepForRefusedSkip.)
+          keepForRefusedSkip(state.requests?.budget);
           segmentDraft = null;
           segmentComplaints.length = 0;
           statuses.length = 0;
