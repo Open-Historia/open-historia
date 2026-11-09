@@ -101,8 +101,9 @@ export const FOLDED_SKIP_SCHEMA_BUDGET = 30400;
 // The riders a skip carries: { board, agentReports, history }, and which of
 // them to leave out until the function fits under `ceiling`. `sizeOf(riders)`
 // is the size of the function with those riders. Left out first:
-//   - the history field when no fold is due: it has no job, and is offered
-//     only so the function stays the same from turn to turn;
+//   - a rider with no job: the history field when no fold is due, and the
+//     board's ops when the skip is shown no board (`boardShown` false). Each
+//     is offered only so the function stays the same from turn to turn;
 //   - then the history fold that IS due, and the agents' reports. Neither is
 //     lost: a fold left out waits for the next skip, and so do the agents (the
 //     ones left out are the longest silent next time: agentReports.js
@@ -110,18 +111,25 @@ export const FOLDED_SKIP_SCHEMA_BUDGET = 30400;
 //     work (gameplay.js maybeGatherIntelligence). Whichever of the two was left
 //     out last skip (`waited`) goes after the other, so neither waits twice
 //     running for the other;
-//   - the board last of all: its ops are the record of this skip's events,
-//     and nothing writes them later. A skip without it has its board stand
-//     still, as a skip that is not folded always had.
+//   - then the board: its ops are the record of this skip's events, and
+//     nothing writes them later. A skip without it has its board stand still,
+//     as a skip that is not folded always had;
+//   - and last a due fold that already waited a skip. On the games that ship
+//     the board and a fold always fit together (foldedSkipSent.test.js); only
+//     under a ceiling a refusal has lowered (ceilingAfterRefusal) can they
+//     not, and then the board stands still on every other fold rather than
+//     the history document never folding again in the session.
 // Returns the riders kept, the names left out in the order they were, the
 // size, and whether it fits at all (a lean contract over the ceiling does not).
-export const fitSkipRiders = ({ wanted = {}, historyDue = false, sizeOf, ceiling = FOLDED_SKIP_SCHEMA_BUDGET, waited = [] } = {}) => {
+export const fitSkipRiders = ({ wanted = {}, historyDue = false, boardShown = true, sizeOf, ceiling = FOLDED_SKIP_SCHEMA_BUDGET, waited = [] } = {}) => {
     const riders = { board: Boolean(wanted.board), agentReports: Boolean(wanted.agentReports), history: Boolean(wanted.history) };
     const measure = typeof sizeOf === "function" ? () => Number(sizeOf({ ...riders })) || 0 : () => 0;
     const waiting = new Set(asArray(waited));
-    const contested = (historyDue ? ["history", "agentReports"] : ["agentReports"])
+    const idle = [...(historyDue ? [] : ["history"]), ...(boardShown ? [] : ["board"])];
+    const foldWaited = historyDue && waiting.has("history");
+    const contested = (historyDue && !foldWaited ? ["history", "agentReports"] : ["agentReports"])
         .sort((a, b) => Number(waiting.has(a)) - Number(waiting.has(b)));
-    const order = [...(historyDue ? [] : ["history"]), ...contested, "board"];
+    const order = [...idle, ...contested, ...(boardShown ? ["board"] : []), ...(foldWaited ? ["history"] : [])];
     const leftOut = [];
     let chars = measure();
     for (const name of order) {

@@ -139,6 +139,38 @@ test("a refusal lowers the ceiling below what was refused, so the next skip fold
   assert.ok(next.chars < 30100);
 });
 
+// The history may never fold for a session (review of 2026-11-09): a skip
+// asked the old way never carried the fold, the request of its own the
+// consolidator once made past 96 events is gone, and after a refusal every
+// skip of the session was asked the old way. Now every skip folds again, and a
+// fold cannot be crowded out for good.
+test("a board with no entries gives way before anything with a job", () => {
+  const fit = fitSkipRiders({ wanted: { board: true, agentReports: true, history: true }, historyDue: true, boardShown: false, sizeOf: sizes(28000, ADD) });
+  assert.deepEqual(fit.leftOut, ["board"]);
+  assert.deepEqual(fit.riders, { board: false, agentReports: true, history: true });
+});
+
+test("under a ceiling a refusal lowered, a fold that waited goes ahead of the board, so the history keeps folding", () => {
+  // Room for the lean contract and one of the board and the fold.
+  const ceiling = 28400;
+  let waited = [];
+  const folded = [];
+  for (let skip = 0; skip < 6; skip += 1) {
+    const fit = fitSkipRiders({ wanted: { board: true, agentReports: true, history: true }, historyDue: true, sizeOf: sizes(27000, ADD), ceiling, waited });
+    assert.ok(fit.chars <= ceiling);
+    folded.push(fit.riders.history);
+    waited = ridersThatWaited(fit.leftOut, { historyDue: true });
+  }
+  assert.deepEqual(folded, [false, true, false, true, false, true], "the fold waits one skip at most");
+  // And the board is kept whenever no waiting fold needs its room.
+  const fresh = fitSkipRiders({ wanted: { board: true, history: true }, historyDue: true, sizeOf: sizes(27000, ADD), ceiling, waited: [] });
+  assert.deepEqual(fresh.leftOut, ["history"]);
+});
+
+test("a skip shown no board does not keep the board's ops over a rider with a job", () => {
+  assert.match(functionBody("runJumpSegments"), /boardShown: Boolean\(state\.foldedPrep\?\.board\),/);
+});
+
 test("a refused folded skip no longer turns folding off for the session", () => {
   assert.equal(gameplaySource.includes("foldedSkipRefused"), false);
   assert.match(gameplaySource, /let foldedSkipCeiling = FOLDED_SKIP_SCHEMA_BUDGET;/);

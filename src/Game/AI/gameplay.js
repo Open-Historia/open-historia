@@ -17083,6 +17083,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         const fit = fitSkipRiders({
           wanted: { board: true, agentReports: dueAgentJobs.length > 0, history: true },
           historyDue: Boolean(dueHistoryJob),
+          // A skip shown no board has no use for its ops beyond keeping the function the same.
+          boardShown: Boolean(state.foldedPrep?.board),
           sizeOf: (carried) => geminiFunctionChars(foldJumpTool(baseTool, carried)),
           ceiling: foldedSkipCeiling,
           waited: skipRidersWaiting,
