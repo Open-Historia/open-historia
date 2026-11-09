@@ -206,6 +206,7 @@ export const RELEASES = [
           "2026-10-country-picker-cards",
           "2026-10-community-dates",
           "2026-11-reimports-not-imports",
+          "2026-11-imports-counted-in-game",
           "2026-11-suggestion-regions",
         ],
       },

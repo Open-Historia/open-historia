@@ -100,7 +100,7 @@ import {
   latestOfficialVersion,
 } from "./officialBasemaps.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
-import { HUB_IMPORTED_KEY, mergeHubImported } from "./hubImported.js";
+import { HUB_COUNT_KEY, HUB_IMPORTED_KEY, keepHubCountKey, mergeHubImported } from "./hubImported.js";
 import { HUB_CACHE_NAMES_MARKER, renameHubCacheBundles, renameScenarioBundleBytes, writeFileAtomic } from "./scenarioBundleNames.js";
 import {
   clearHubCache,
@@ -544,6 +544,9 @@ app.put("/api/ui-settings", jsonParser, (req, res) => {
     if (Array.isArray(req.body?.[HUB_IMPORTED_KEY])) {
       next[HUB_IMPORTED_KEY] = mergeHubImported(next[HUB_IMPORTED_KEY], req.body[HUB_IMPORTED_KEY]);
     }
+    // The install's counting key (hubImported.js): set once, never replaced.
+    const countKey = keepHubCountKey(next[HUB_COUNT_KEY], req.body?.[HUB_COUNT_KEY]);
+    if (countKey) next[HUB_COUNT_KEY] = countKey;
     fs.mkdirSync(path.dirname(uiSettingsFile), { recursive: true });
     fs.writeFileSync(uiSettingsFile, JSON.stringify(next, null, 2));
     res.json(next);
@@ -2062,14 +2065,11 @@ app.delete("/api/music", (req, res) => {
   }
 });
 
-// Imports are no longer reported from here. A scenario's import count is how many
-// times its file has been downloaded from the hub's releases, as GitHub counts
-// it; the page reads the counts from the hub's own index (src/runtime/hubFiles.js).
-// The routes that pinged and read the old counter on Cloudflare
-// (/api/hub/import-log, /api/hub/import-counts, OH_IMPORT_COUNTER_URL) are gone:
-// its free allowance was spent within hours of every day. /api/hub/file above
-// serves a file it has already downloaded from its cache, so importing the same
-// file again on this machine does not count twice.
+// Imports are not reported from here. The page reports a post's first import
+// to the import counter itself and reads the counts from it
+// (src/runtime/hubImportCount.js, tools/import-counter/worker.js); downloading
+// a hub file, here or anywhere, counts nothing. The old routes
+// (/api/hub/import-log, /api/hub/import-counts, OH_IMPORT_COUNTER_URL) stay gone.
 
 // ---- Map editor documents ------------------------------------------------
 app.get("/api/mapeditor/documents", (_req, res) => {
