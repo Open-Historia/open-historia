@@ -1828,6 +1828,27 @@ const marchInto = (run, battle, region, taker, day) => {
   fallBackOverland(battle, 1 - side, run.dateOf(day), region, field.cols + field.rows);
 };
 
+// A region the world gave someone during a run (a change of control, or a group's area): every battlefield it lies
+// on is brought into step and the taker's troops walk in (marchInto). And land handed to a side of a war outside
+// its battlefields (a treaty, a capture the story told far off) may touch the other side where nothing did: that
+// war is added to `handed`, to be looked at again once the day's moments are in. Returns `handed`.
+const landChanged = (run, id, taker, day, handed) => {
+  for (const battle of run.battles) {
+    if (battle.status === "closed" || !battle.arena.indexOf.has(id)) continue;
+    reconcile(battle, run);
+    // And the troops follow: the taker's nearest stand in it, the other side's fall back out of it.
+    if (battle.status === "active") marchInto(run, battle, battle.arena.indexOf.get(id), taker, day);
+    battle.planKey = "";
+    battle.touched = true;
+  }
+  let wars = handed;
+  for (const war of run.wars.values()) {
+    if (war.status !== "active" || warSideOf(run, war, id) < 0) continue;
+    if (!run.battles.some((battle) => battle.warId === war.id && battle.status !== "closed" && battle.arena.indexOf.has(id) && battle.arena.outside[battle.arena.indexOf.get(id)] === 0)) (wars ??= new Set()).add(war);
+  }
+  return wars;
+};
+
 // Applies every moment dated up to a day, in the order they were given.
 const applyMoments = (run, day) => {
   let handed = null;
@@ -1850,20 +1871,17 @@ const applyMoments = (run, day) => {
         continue;
       }
       run.setController(id, moment.to);
-      for (const battle of run.battles) {
-        if (battle.status === "closed" || !battle.arena.indexOf.has(id)) continue;
-        reconcile(battle, run);
-        // And the troops follow: the taker's nearest stand in it, the other side's fall back out of it.
-        if (battle.status === "active") marchInto(run, battle, battle.arena.indexOf.get(id), moment.to, day);
-        battle.planKey = "";
-        battle.touched = true;
-      }
-      // Land handed to a side of a war outside its battlefields (a treaty, a capture the story told far off) may
-      // touch the other side where nothing did: that war is looked at again once the day's moments are in.
-      for (const war of run.wars.values()) {
-        if (war.status !== "active" || warSideOf(run, war, id) < 0) continue;
-        if (!run.battles.some((battle) => battle.warId === war.id && battle.status !== "closed" && battle.arena.indexOf.has(id) && battle.arena.outside[battle.arena.indexOf.get(id)] === 0)) (handed ??= new Set()).add(war);
-      }
+      handed = landChanged(run, id, moment.to, day, handed);
+    } else if (moment.type === "group") {
+      // A group took a region into its area, or let one go (a groupOps entry of the story's): the world wins here
+      // too, and the troops follow as for a change of control. Told to nobody before, the area changed between
+      // runs: the next run painted it at once, far behind the line and with nobody there.
+      const id = clean(moment.regionId);
+      const group = clean(moment.group);
+      const held = run.groupOf(id);
+      if (!id || fold(held) === fold(group) || (!group && moment.from && fold(held) !== fold(moment.from))) continue;
+      run.setGroup(id, group);
+      handed = landChanged(run, id, group || run.controllerOf(id), day, handed);
     }
   }
   for (const war of handed ?? []) examineWar(run, war, day);
