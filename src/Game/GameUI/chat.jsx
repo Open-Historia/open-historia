@@ -64,7 +64,7 @@ import { buildPlayerPoliticalKnowledgeView } from "../../runtime/politicalKnowle
 import { commitInstitutionLifecycleCommand, institutionLifecycleCasesForPolity, institutionLifecycleConversationState, institutionPortfolioForPolity } from "../../runtime/institutionLifecycle.js";
 import { buildLifecycleReplyRevealPlan } from "./institutionLifecyclePresentation.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
-import { isPendingSharedThread, openedThreadOf, pendingSharedThread, sayRequestFor } from "../../multiplayer/client/sharedThreads.js";
+import { afterSharedSay, followSharedThread, pendingSharedThread, sayRequestFor, sharedFollowStep } from "../../multiplayer/client/sharedThreads.js";
 import { askHostForInstitution } from "../../runtime/sharedInstitutions.js";
 import { setOpenConversation } from "../../runtime/openConversation.js";
 
@@ -1740,6 +1740,37 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // someone in, who calls a vote — instead of a separate speaker-selection
         // request followed by one request per leader. This is the only group-chat
         // response path; failure is surfaced rather than reviving the old sequence.
+        // A line said in a shared game goes to the host (host/gameHost.js "say").
+        // The composer stays shut until its ack (client/sharedThreads.js
+        // afterSharedSay): a second line before it opened a second thread on the
+        // host. A pending thread the host opened is followed until the view
+        // brings it, and stays shut till then; one it did not name leaves for the
+        // list, where it arrives.
+        const sayToHost = async (target, text, baseMessages) => {
+            setIsLoading(true);
+            let waiting = false;
+            try {
+                let answer;
+                try {
+                    answer = await requestFromHost("say", sayRequestFor(target, text));
+                } catch (error) {
+                    answer = { ok: false, error: error?.message || "" };
+                }
+                const outcome = afterSharedSay(target, answer);
+                if (outcome.kind === "refused") {
+                    pushMessages([...baseMessages, { role: "error", speaker: "System", text: outcome.error || "The host did not take the message.", time: gameDate }]);
+                } else if (outcome.kind === "follow" && onSharedThreadOpened) {
+                    waiting = true;
+                    onSharedThreadOpened(outcome.thread);
+                } else if (outcome.kind === "follow" || outcome.kind === "leave") {
+                    waiting = true;
+                    onBack?.();
+                }
+            } finally {
+                if (!waiting) setIsLoading(false);
+            }
+        };
+
         const runGroupTurn = async (text, nextMessages, { lifecycleResponseRequested = false, formalBusinessRequested = false, formalBusinessInteractive = false, institutionDebateRequested = false, institutionProposalId = "", chatOverride = null } = {}) => {
             // In a shared game the host's computer runs every table: a line is
             // sent to it, as a typed one is (submitPlayerText), and anything
@@ -1758,12 +1789,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     }
                     return true;
                 }
-                const answer = text
-                    ? await requestFromHost("say", sayRequestFor(chatOverride || chat, text))
-                    : { ok: false, error: new SharedGameRefusal().message };
-                if (!answer.ok) {
-                    pushMessages([...nextMessages, { role: "error", speaker: "System", text: answer.error || "The host did not take the message.", time: gameDate }]);
+                if (!text) {
+                    pushMessages([...nextMessages, { role: "error", speaker: "System", text: new SharedGameRefusal().message, time: gameDate }]);
+                    return true;
                 }
+                // A line from a pending thread (a vote called in it) opens it on
+                // the host, and is followed there as a typed one is.
+                await sayToHost(chatOverride || chat, text, nextMessages);
                 return true;
             }
             setIsLoading(true);
@@ -2097,16 +2129,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             // view holds it; a host that does not say which it opened leaves the
             // player at the list, where it arrives.
             if (inSharedGame()) {
-                const answer = await requestFromHost("say", sayRequestFor(chat, text));
-                if (!answer.ok) {
-                    pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: answer.error || "The host did not take the message.", time: gameDate }]);
-                    return;
-                }
-                if (isPendingSharedThread(chat)) {
-                    const opened = openedThreadOf(answer);
-                    if (opened && onSharedThreadOpened) onSharedThreadOpened(opened);
-                    else onBack?.();
-                }
+                await sayToHost(chat, text, messagesRef.current);
                 return;
             }
             // What the world did since this thread last spoke, told to the
@@ -3978,16 +4001,32 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // A thread begun here in a shared game (client/sharedThreads.js): the host
     // opened it with its first line, and it takes the pending one's place as
     // soon as the host's view brings it, the AI's answer arriving in it there.
-    // Only while the player is still on the pending thread.
-    const [followThreadId, setFollowThreadId] = useState("");
+    // Only while the player is still on the pending thread, and only for
+    // SHARED_THREAD_FOLLOW_MS: a view that never brings it sends the player
+    // back to the list with a word why, instead of a pending thread that waits
+    // forever with its composer shut.
+    const [followThread, setFollowThread] = useState(null);
+    const [sharedThreadLate, setSharedThreadLate] = useState("");
+    const followThreadFromAck = useMemo(() => (id) => setFollowThread(followSharedThread(id)), []);
     useEffect(() => {
-        if (!followThreadId) return;
-        if (!isPendingSharedThread(activeChat)) { setFollowThreadId(""); return; }
-        const opened = chats.find((entry) => sameChatId(entry.id, followThreadId));
-        if (!opened) return;
-        setFollowThreadId("");
-        setActiveChat(opened);
-    }, [followThreadId, chats, activeChat]);
+        const step = sharedFollowStep(followThread, { activeChat, chats });
+        if (step.kind === "none") return undefined;
+        if (step.kind === "drop") { setFollowThread(null); return undefined; }
+        if (step.kind === "open") { setFollowThread(null); setActiveChat(step.chat); return undefined; }
+        const late = () => {
+            setFollowThread(null);
+            setSharedThreadLate(followThread.thread);
+            setActiveChat(null);
+        };
+        if (step.kind === "late") { late(); return undefined; }
+        const timer = setTimeout(late, step.delayMs);
+        return () => clearTimeout(timer);
+    }, [followThread, chats, activeChat]);
+    // The word goes once the thread arrives in the list, or the player opens one.
+    useEffect(() => {
+        if (!sharedThreadLate) return;
+        if (activeChat || chats.some((entry) => sameChatId(entry.id, sharedThreadLate))) setSharedThreadLate("");
+    }, [sharedThreadLate, chats, activeChat]);
 
     useEffect(() => {
         if (!isOpen || hasLoadedInitialData) return;
@@ -4500,11 +4539,16 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             ) : chatsSaveFailed ? (
                 <StorageProblemNotice title="Your latest messages were not saved." detail="They are kept here until a save works." onRetry={retryChatsSave} retrying={chatsRetrying} retryIcon={<RetryIcon />} />
             ) : null}
+            {sharedThreadLate && !activeChat ? (
+                <div role="status" data-shared-thread-late="true" style={{ margin: ".55rem .85rem 0", padding: ".5rem .7rem", borderRadius: 8, border: "1px solid rgba(239,68,68,.25)", background: "rgba(239,68,68,.08)", color: "#fca5a5", fontSize: ".66rem", lineHeight: 1.4, flexShrink: 0 }}>
+                    The host has not sent the new conversation yet. It will appear here when it does.
+                </div>
+            ) : null}
 
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
             {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
-                <ConversationView key={String(activeChat.id)} chat={activeChat} puppetMarkers={puppetMarkers} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onSharedThreadOpened={setFollowThreadId} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
+                <ConversationView key={String(activeChat.id)} chat={activeChat} puppetMarkers={puppetMarkers} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onSharedThreadOpened={followThreadFromAck} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
                 unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => toggleActiveChatRead(activeChat)}
                 draft={sameChatId(composerDraft?.chatId, activeChat.id) ? composerDraft.text : ""}
                 onDraftApplied={() => setComposerDraft(null)}
