@@ -1110,17 +1110,40 @@ const jumpImpactsSchema = {
 // provider that compiles the schema (geminiSchema.js), on a contract every
 // event of every skip carries. Its field notes are in the prompt
 // ([Projects & Operations]), as the other compact families' are.
+//
+// Its checkpoints are the ones the rules teach, too: a milestone op's
+// {title, date, status} (and the id of one that exists), and a create's plan as
+// [{title, date}]. A recurring checkpoint (`repeat`) and a checkpoint's note are
+// the board pass's and the Game Master's to set; offered here they were the
+// same sub-schema twice over on every event, some 400 characters of a contract
+// held under the size Gemini takes (foldedSkipSent.test.js).
 const FOLDED_PROJECT_OP_OMITS = new Set(["priority", "startedAt", "linkedUnitIds", "linkedMarkerIds", "focus", "project", "onComplete"]);
+const FOLDED_MILESTONE_OMITS = new Set(["repeat", "note"]);
+const foldedMilestoneSchema = {
+  ...projectMilestoneSchema,
+  properties: Object.fromEntries(
+    Object.entries(projectMilestoneSchema.properties).filter(([key]) => !FOLDED_MILESTONE_OMITS.has(key)),
+  ),
+};
+const foldedMilestonePlanSchema = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: { title: projectMilestoneSchema.properties.title, date: projectMilestoneSchema.properties.date },
+    required: ["title"],
+    additionalProperties: false,
+  },
+};
 
 const foldedProjectOpsSchema = compactJumpImpactSchema({
   type: "array",
-  description:
-    "The board, moved by THIS event: one op per effort it started, advanced, set back, completed or ended. "
-    + "Rules under [Projects & Operations]. Most events have none.",
+  description: "The board ops of THIS event; rules under [Projects & Operations]. Most events have none.",
   items: {
     ...projectOpSchema,
     properties: Object.fromEntries(
-      Object.entries(projectOpSchema.properties).filter(([key]) => !FOLDED_PROJECT_OP_OMITS.has(key)),
+      Object.entries(projectOpSchema.properties)
+        .filter(([key]) => !FOLDED_PROJECT_OP_OMITS.has(key))
+        .map(([key, schema]) => [key, key === "milestone" ? foldedMilestoneSchema : key === "milestones" ? foldedMilestonePlanSchema : schema]),
     ),
   },
 });
@@ -1182,7 +1205,7 @@ const SOCIAL_POSTS_SENT_SCHEMA = {
 export const POLL_RESULTS_FIELD = "pollResults";
 const POLL_RESULTS_SENT_SCHEMA = {
   type: "array",
-  description: "The public's votes on the player's open Rostra polls; rules under [Social Media]. Empty when no poll is open.",
+  description: "Votes on the player's open polls; rules under [Social Media]. Empty if none.",
   items: {
     type: "object",
     properties: {
@@ -3870,6 +3893,53 @@ export const AUTO_JUMP_FORWARD_TOOL = makeTool(
   JUMP_FORWARD_LEAN_SCHEMA,
 );
 
+// The agents' reports as a folded skip is SENT them: the agents' own shape
+// (SPY_INTERCEPT_SCHEMA) with the agent's key, and none of its field notes.
+// The [Agents' Reports] block says what each field holds (gameplay.js
+// buildFoldedAgentReportsBlock) and each agent's brief says how to judge it;
+// in the contract the notes were 1,300 of its 2,200 characters, on a request
+// held under the size Gemini takes (foldedSkipSent.test.js). So is a text's
+// minLength: each report is checked against the full schema when it is filed
+// (foldedTurnReview), and one with an empty field costs that report only.
+const withoutMinLength = (schema) => {
+  if (Array.isArray(schema)) return schema.map(withoutMinLength);
+  if (!schema || typeof schema !== "object") return schema;
+  return Object.fromEntries(Object.entries(schema)
+    .filter(([key]) => key !== "minLength")
+    .map(([key, value]) => [key, withoutMinLength(value)]));
+};
+const FOLDED_AGENT_REPORTS_SCHEMA = {
+  type: "array",
+  description: "One report per agent under [Agents' Reports]; rules there.",
+  items: withoutMinLength(stripNestedSchemaDescriptions({
+    type: "object",
+    properties: {
+      agent: { type: "string" },
+      ...SPY_INTERCEPT_SCHEMA.properties,
+    },
+    required: ["agent", "exchanges"],
+    additionalProperties: false,
+  })),
+};
+
+// And the history fold: the consolidator's fields and entry shapes, without
+// their descriptions. The job in the prompt says what each tier is, and each
+// entry is judged when it is read (historyConsolidation.js
+// judgeSkipHistoryAnswer).
+const FOLDED_HISTORY_SCHEMA = {
+  type: "object",
+  description: "Only for the history job at the end of the prompt; else leave it out.",
+  properties: {
+    summary: { type: "string" },
+    years: { type: "array", items: HISTORY_YEAR_ITEM },
+    canon: { type: "array", items: HISTORY_CANON_ITEM },
+    eras: { type: "array", items: HISTORY_ERA_ITEM },
+    document: { type: "string" },
+  },
+  required: ["summary"],
+  additionalProperties: false,
+};
+
 // A skip's tool as the folded contract (see "The folded time skip"): the board
 // under each event's impacts when `board` is set (a skip with nothing on the
 // board is not asked to keep one), the agents' reports when `agentReports` is,
@@ -3899,45 +3969,8 @@ export const foldJumpTool = (tool, { board = true, agentReports = false, history
             },
           },
         } : events,
-        ...(agentReports ? {
-          [AGENT_REPORTS_FIELD]: {
-            type: "array",
-            description:
-              "One report per agent under [Agents' Reports], after the events and consistent with them; "
-              + "none for any other, and empty without [Agents' Reports].",
-            items: {
-              type: "object",
-              properties: {
-                agent: nonEmptyTextSchema("The agent's key, copied exactly from [Agents' Reports], such as agent_1."),
-                ...SPY_INTERCEPT_SCHEMA.properties,
-              },
-              required: ["agent", "exchanges"],
-              additionalProperties: false,
-            },
-          },
-        } : {}),
-        ...(history ? {
-          [HISTORY_FIELD]: {
-            type: "object",
-            description:
-              "Only for the job fenced off at the end of the prompt (THE HISTORY DOCUMENT), written last: what that job lists. "
-              + "With no such job, leave this field out: it is thrown away.",
-            // The consolidator's fields and entry shapes, without their
-            // descriptions: the skip's contract is near the size Gemini takes,
-            // the job in the prompt says what each tier is, and each entry is
-            // judged when it is read (historyConsolidation.js
-            // judgeSkipHistoryAnswer).
-            properties: {
-              summary: { type: "string" },
-              years: { type: "array", items: HISTORY_YEAR_ITEM },
-              canon: { type: "array", items: HISTORY_CANON_ITEM },
-              eras: { type: "array", items: HISTORY_ERA_ITEM },
-              document: { type: "string" },
-            },
-            required: ["summary"],
-            additionalProperties: false,
-          },
-        } : {}),
+        ...(agentReports ? { [AGENT_REPORTS_FIELD]: FOLDED_AGENT_REPORTS_SCHEMA } : {}),
+        ...(history ? { [HISTORY_FIELD]: FOLDED_HISTORY_SCHEMA } : {}),
       },
     },
   };

@@ -79,5 +79,5 @@ test("a skip's board points at its rules in the cached opening instead of repeat
   assert.match(pointed, /These doubted entries can now be settled/);
   const fs = await import("node:fs");
   const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  assert.ok(source.includes("${JUMP_PROJECTS_RULES_HEADING}\\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) })}"), "the standing rules carry them");
+  assert.ok(source.includes("${JUMP_PROJECTS_RULES_HEADING}\\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) && variables?.foldedBoard !== false })}"), "the standing rules carry them, folded where the skip's function offers the board's ops");
 });

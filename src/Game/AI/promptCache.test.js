@@ -63,7 +63,11 @@ test("the advisor's and the leaders' prompts are sent with the prefix they were 
   assert.match(main, /if \(providerOpts\.staticPrefixEnd == null\) \{\n\s*const known = conversationPrefixEnd\(systemPrompt\);/);
 });
 
+// Where it fits: a rider that would take the function past the size Gemini
+// takes is left out of that skip (foldedSkip.js fitSkipRiders), and the board
+// and the history field are otherwise offered every time.
 test("the skip's function is the same from turn to turn", () => {
-  assert.match(gameplay, /foldJumpTool\(tool, \{ board: true, agentReports: agentJobs\.length > 0, history: true \}\)/);
+  assert.match(gameplay, /wanted: \{ board: true, agentReports: dueAgentJobs\.length > 0, history: true \},/);
+  assert.match(gameplay, /foldJumpTool\(tool, riders\)/);
   assert.match(gameplay, /withSocialPosts\(advisedTool, isActiveFeatureEnabled\("socialMedia"\), \{ polls: true \}\)/);
 });

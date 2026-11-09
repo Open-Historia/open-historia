@@ -16,10 +16,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  FOLDED_SKIP_SCHEMA_BUDGET,
   assignAgentReports,
   boardOpsOf,
+  ceilingAfterRefusal,
+  fitSkipRiders,
   liftBoardOps,
   providerRefusedContract,
+  ridersThatWaited,
   withoutBoardOps,
 } from "./foldedSkip.js";
 import { foldJumpTool, getGameplayTool, validateGameplayPayload, AGENT_REPORTS_FIELD, GAMEPLAY_SCHEMAS, HISTORY_FIELD, NO_SKIP_HISTORY_JOB } from "./gameplaySchemas.js";
@@ -74,6 +78,85 @@ test("a call that ended on the connection was not refused, whatever statuses cam
   assert.equal(providerRefusedContract([400], { transportFailure: false }), true);
   assert.equal(providerRefusedContract([400], {}), true);
   assert.equal(providerRefusedContract([400, 400]), true, "refused as JSON text and again as a function call");
+});
+
+// ---------------------------------------------------------------------------
+// What a skip's function can carry (the sizes themselves: foldedSkipSent.test.js)
+
+// A size function from what each rider adds to a lean contract.
+const sizes = (base, add) => (riders) => base + Object.entries(add).reduce((sum, [name, chars]) => sum + (riders[name] ? chars : 0), 0);
+const ADD = { board: 1300, agentReports: 1000, history: 800 };
+
+test("a skip carries every rider that fits, and leaves none out that does", () => {
+  const fit = fitSkipRiders({ wanted: { board: true, agentReports: true, history: true }, historyDue: true, sizeOf: sizes(27000, ADD) });
+  assert.deepEqual(fit.riders, { board: true, agentReports: true, history: true });
+  assert.deepEqual(fit.leftOut, []);
+  assert.equal(fit.chars, 30100);
+  assert.equal(fit.fits, true);
+  // Nothing is added that was not wanted.
+  assert.deepEqual(fitSkipRiders({ wanted: { board: true }, sizeOf: sizes(27000, ADD) }).riders, { board: true, agentReports: false, history: false });
+});
+
+test("over the ceiling, the history field with no fold due goes first: nothing is lost", () => {
+  const fit = fitSkipRiders({ wanted: { board: true, agentReports: true, history: true }, historyDue: false, sizeOf: sizes(28000, ADD) });
+  assert.deepEqual(fit.leftOut, ["history"]);
+  assert.deepEqual(fit.riders, { board: true, agentReports: true, history: false });
+  assert.ok(fit.chars <= FOLDED_SKIP_SCHEMA_BUDGET);
+});
+
+test("a due fold goes before the agents, and the next skip the agents go before it", () => {
+  const ask = (waited) => fitSkipRiders({ wanted: { board: true, agentReports: true, history: true }, historyDue: true, sizeOf: sizes(28000, ADD), waited });
+  const first = ask([]);
+  assert.deepEqual(first.leftOut, ["history"]);
+  const waited = ridersThatWaited(first.leftOut, { historyDue: true });
+  assert.deepEqual(waited, ["history"], "a due fold left out has waited");
+  const second = ask(waited);
+  assert.deepEqual(second.leftOut, ["agentReports"], "so it goes after the agents next time");
+  assert.equal(second.riders.history, true);
+  assert.deepEqual(ask(ridersThatWaited(second.leftOut, { historyDue: true })).leftOut, ["history"], "and the skip after, the agents are owed");
+  // A history field with no job left out has not waited for anything.
+  assert.deepEqual(ridersThatWaited(["history"], { historyDue: false }), []);
+});
+
+test("the board goes last, and a lean contract over the ceiling still asks, with nothing added", () => {
+  const tight = fitSkipRiders({ wanted: { board: true, agentReports: true, history: true }, historyDue: true, sizeOf: sizes(28000, ADD), ceiling: 29400 });
+  assert.deepEqual(tight.leftOut, ["history", "agentReports"]);
+  assert.equal(tight.riders.board, true);
+  const none = fitSkipRiders({ wanted: { board: true, agentReports: true, history: true }, sizeOf: sizes(31000, ADD) });
+  assert.deepEqual(none.leftOut, ["history", "agentReports", "board"]);
+  assert.deepEqual(none.riders, { board: false, agentReports: false, history: false });
+  assert.equal(none.fits, false);
+});
+
+test("a refusal lowers the ceiling below what was refused, so the next skip folds with less, and never raises it", () => {
+  assert.equal(ceilingAfterRefusal(FOLDED_SKIP_SCHEMA_BUDGET, 30100), 30099);
+  assert.equal(ceilingAfterRefusal(29000, 30100), 29000, "a ceiling already lower stays");
+  assert.equal(ceilingAfterRefusal(29000, undefined), 29000, "a refusal of unknown size changes nothing");
+  // The skip after a refusal of all three riders folds again with two of them.
+  const ceiling = ceilingAfterRefusal(FOLDED_SKIP_SCHEMA_BUDGET, 30100);
+  const next = fitSkipRiders({ wanted: { board: true, agentReports: true, history: true }, historyDue: false, sizeOf: sizes(27000, ADD), ceiling });
+  assert.deepEqual(next.riders, { board: true, agentReports: true, history: false });
+  assert.ok(next.chars < 30100);
+});
+
+test("a refused folded skip no longer turns folding off for the session", () => {
+  assert.equal(gameplaySource.includes("foldedSkipRefused"), false);
+  assert.match(gameplaySource, /let foldedSkipCeiling = FOLDED_SKIP_SCHEMA_BUDGET;/);
+  const body = functionBody("runJumpSegments");
+  assert.match(body, /ceiling: foldedSkipCeiling,/);
+  assert.match(body, /waited: skipRidersWaiting,/);
+  assert.match(body, /skipRidersWaiting = ridersThatWaited\(fit\.leftOut, \{ historyDue: Boolean\(dueHistoryJob\) \}\);/);
+  // Weighed against the function the request will really carry: the task's
+  // own tool for this segment's variables, as runJsonTask builds it.
+  assert.match(body, /const baseTool = await jumpToolSent\(mode === "auto" \? "autoJumpForward" : "jumpForward", segmentVariables\);/);
+  assert.match(body, /sizeOf: \(carried\) => geminiFunctionChars\(foldJumpTool\(baseTool, carried\)\),/);
+  assert.match(functionBody("runJsonTask"), /const ratedTool = taskToolFor\(taskKey, statContract, variables\);/);
+  // And the prompt asks for nothing the function leaves out.
+  assert.match(body, /foldedBoard: riders\.board,/);
+  assert.match(body, /foldedBoardDoubts: riders\.board \?/);
+  assert.match(body, /foldedHistoryField: riders\.history,/);
+  // A fold left out was never asked: it waits, and is no failure of the skip.
+  assert.match(functionBody("foldedTurnReview"), /const fold = state\.foldedHistoryCarried \? \(state\.foldedPrep\?\.history \?\? null\) : null;/);
 });
 
 // ---------------------------------------------------------------------------
@@ -227,16 +310,20 @@ test("an answer written to either contract passes the skip's validation", () => 
 
 test("every skip is folded, with Save AI requests on or off, decided once", () => {
   const body = functionBody("runJumpSegments");
-  // No setting is read: only a provider that refused the folded request this
-  // session is asked the old way.
-  assert.match(body, /if \(state\.folded === undefined\) state\.folded = !foldedSkipRefused;/);
+  // No setting is read, and no refusal earlier in the session: every skip
+  // starts folded, carrying what fits (fitSkipRiders).
+  assert.match(body, /if \(state\.folded === undefined\) state\.folded = true;/);
   assert.equal(/state\.requests\?\.saving/.test(body), false, "whether requests are being saved no longer decides what a skip asks");
   assert.match(body, /if \(state\.folded && !state\.foldedPrep\) state\.foldedPrep = await prepareFoldedSkip\(/);
-  // The same contract on every folded skip of a game (a provider caches the function with the prompt).
-  assert.match(body, /toolTransform: \(tool\) => foldJumpTool\(tool, \{ board: true, agentReports: agentJobs\.length > 0, history: true \}\)/);
+  // The same contract on every folded skip of a game where it fits (a provider caches the function with the prompt).
+  assert.match(body, /wanted: \{ board: true, agentReports: dueAgentJobs\.length > 0, history: true \},/);
+  assert.match(body, /toolTransform: \(tool\) => foldJumpTool\(tool, riders\)/);
   assert.match(body, /if \(state\.folded && agentJobs\.length && segmentGeneration\?\.source !== "fallback"\) state\.foldedAgentAnswer = payload\[AGENT_REPORTS_FIELD\];/, "reports are read only where agents were due");
-  assert.match(body, /const agentJobs = state\.folded && isFinalSegment \?/, "the agents report once, with the last segment");
-  assert.match(body, /const historyJob = state\.folded && isFinalSegment \? buildSkipHistoryJob\(state\.foldedPrep\?\.history\?\.brief\) : "";/, "and so does the history fold");
+  assert.match(body, /const dueAgentJobs = state\.folded && isFinalSegment \?/, "the agents report once, with the last segment");
+  assert.match(body, /const dueHistoryJob = state\.folded && isFinalSegment \? buildSkipHistoryJob\(state\.foldedPrep\?\.history\?\.brief\) : "";/, "and so does the history fold");
+  // The prompt asks only for what the function carries.
+  assert.match(body, /const agentJobs = riders\.agentReports \? dueAgentJobs : \[\];/);
+  assert.match(body, /const historyJob = riders\.history \? dueHistoryJob : "";/);
   // One request in every mode: a flawed answer is cut down, never sent back.
   assert.match(body, /salvage: true,/);
 });
@@ -278,8 +365,11 @@ test("a refused folded request is asked again the old way, and only a refusal is
   const retry = body.slice(body.indexOf("if (refused) {"), body.indexOf("const { generation: segmentGeneration"));
   assert.match(retry, /state\.folded = false;/);
   assert.match(retry, /answer = await askSegment\(false\);/);
-  assert.match(retry, /if \(answer\.generation\?\.source !== "fallback"\) foldedSkipRefused = true;/, "remembered only once the old way has worked");
+  assert.match(retry, /if \(answer\.generation\?\.source !== "fallback"\) \{\n\s*foldedSkipCeiling = ceilingAfterRefusal\(foldedSkipCeiling, state\.foldedChars\);/, "the ceiling drops only once the old way has worked");
   assert.ok(retry.indexOf("state.folded = false;") < retry.indexOf("answer = await askSegment(false);"));
+  // A segment whose function carries no rider sends the lean contract, so
+  // there is no folded request to refuse.
+  assert.match(body, /if \(state\.folded && \(riders\.board \|\| riders\.agentReports \|\| riders\.history\)\) \{/);
 });
 
 // How the skip knows a call ended on the connection: the task runner says so,
@@ -358,7 +448,7 @@ test("the folded review takes the ops off the events before anything applies the
   assert.match(body, /review\.boardShownEvents = shown;/);
   assert.match(body, /validateGameplayPayload\("projects", candidate\)/, "held to the board's own schema");
   assert.match(body, /validateGameplayPayload\("spyIntercept", candidate\)/, "and each report to the agents' own");
-  assert.match(body, /if \(state\.foldedPrep\?\.board\) \{/, "an empty board is not looked at");
+  assert.match(body, /if \(state\.foldedPrep\?\.board && state\.foldedBoardCarried\) \{/, "an empty board is not looked at, nor one the function had no room for");
 });
 
 test("every check a Scene's map check makes always runs: no switch is read anywhere in the turn", () => {
@@ -396,7 +486,8 @@ test("the folded rules reach the prompt only for a folded skip", () => {
   assert.match(body, /if \(foldedSkip && !rulesAbove\) blocks\.push\(FOLDED_SKIP_CONSEQUENCES\);/);
   // Where the template has a place for the standing rules, they are stated there instead, folded or not.
   assert.match(functionBody("buildJumpStaticRules"), /variables\?\.foldedSkip \? FOLDED_SKIP_CONSEQUENCES : "",/);
-  assert.match(body, /folded: foldedSkip,/);
+  assert.match(body, /const foldedBoard = foldedSkip && variables\.foldedBoard !== false;/);
+  assert.match(body, /folded: foldedBoard,/, "the board's folded rules only where the function offers its ops");
   assert.match(body, /const agentReports = foldedSkip \? normalizeString\(variables\.foldedAgentReports\) : "";/);
   const rules = gameplaySource.slice(gameplaySource.indexOf("const FOLDED_SKIP_CONSEQUENCES = ["), gameplaySource.indexOf("].join(\"\\n\");", gameplaySource.indexOf("const FOLDED_SKIP_CONSEQUENCES = [")));
   for (const lever of ["regionControlOps", "regionTransfers", "Current Military Units", "markerOps", "actionIds", "projectOps"]) {
@@ -405,10 +496,10 @@ test("the folded rules reach the prompt only for a folded skip", () => {
   assert.match(rules, /Nothing checks your events afterwards\./);
   // The history fold is the last block of the prompt: nothing of the skip's follows it.
   assert.match(body, /const historyJob = foldedSkip \? normalizeString\(variables\.foldedHistoryJob\) : "";/);
-  assert.match(body, /if \(historyJob\) blocks\.push\(historyJob\);\n\s*else if \(foldedSkip\) blocks\.push\(NO_SKIP_HISTORY_JOB\);\s*\n\s*\n\s*return blocks\.filter\(Boolean\)\.join\("\\n\\n"\);/);
+  assert.match(body, /if \(historyJob\) blocks\.push\(historyJob\);\n\s*else if \(foldedSkip && variables\.foldedHistoryField !== false\) blocks\.push\(NO_SKIP_HISTORY_JOB\);\s*\n\s*\n\s*return blocks\.filter\(Boolean\)\.join\("\\n\\n"\);/);
   // Without a job, the field the function offers on every turn is to be left out (the quality A/B of 2026-11-07).
   assert.match(NO_SKIP_HISTORY_JOB, new RegExp(`leave the "${HISTORY_FIELD}" field out`));
-  assert.match(foldJumpTool(getGameplayTool("jumpForward"), { history: true }).schema.properties[HISTORY_FIELD].description, /With no such job, leave this field out/);
+  assert.match(foldJumpTool(getGameplayTool("jumpForward"), { history: true }).schema.properties[HISTORY_FIELD].description, /else leave it out/);
 });
 
 // What the player is told a skip costs, under the skip buttons and in Settings.
