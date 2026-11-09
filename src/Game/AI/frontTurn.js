@@ -38,7 +38,7 @@ import { hashKey } from "../../runtime/fronts/codec.js";
 import { forcesFunding, middleFundingPerHead } from "../../runtime/militaryFunding.js";
 import { countryWeight, middleWeight } from "../../runtime/countryWeight.js";
 import { populationFigureOf } from "../../runtime/populationFigure.js";
-import { normalizeGroupOp } from "../../runtime/groups.js";
+import { forceGroupDescription, groupOwnerOf, normalizeGroupOp } from "../../runtime/groups.js";
 import { arenaFor } from "../../runtime/fronts/arena.js";
 import { REINFORCE_ORDER, SCENARIO_MARK } from "../../runtime/fronts/constants.js";
 import { anyMechanic } from "../../runtime/fronts/mechanics.js";
@@ -388,6 +388,8 @@ export const frontWorldReaders = (world, { baseOwners = null, groups = true } = 
     sovereignOf,
     groupAreas,
     isGroup: (name) => groupNames.has(fold(name)),
+    // The country whose force a group is, where it is one (runtime/groups.js `owner`).
+    groupOwnerOf: (name) => (groups ? groupOwnerOf(world?.groups, name) : ""),
     strengthOf,
     // A country's own military figures, where its author or its sheet gives them (runtime/militaryStats.js;
     // what they do: runtime/fronts/military.js).
@@ -785,7 +787,11 @@ export const attachFrontFlips = (events, flips, { dayOf = () => 0, aboutOf = nul
     const note = clean(flip?.battlefield);
     if (flip?.kind === "groupTake" || flip?.kind === "groupRelease") {
       const name = clean(flip.kind === "groupTake" ? flip.to : flip.from);
-      if (name) ops.groupOps.push({ op: flip.kind === "groupTake" ? "take" : "release", name, regionIds: [regionId], note, by: FRONT_MARK });
+      // A country's force taking ground from a group on a third country's land (runtime/fronts/day.js
+      // settleRegions) is founded by its first take as that country's, and told what it is.
+      const owner = flip.kind === "groupTake" ? clean(flip.owner) : "";
+      const force = owner ? { owner, description: forceGroupDescription(owner, flip.land, flip.from) } : {};
+      if (name) ops.groupOps.push({ op: flip.kind === "groupTake" ? "take" : "release", name, regionIds: [regionId], note, by: FRONT_MARK, ...force });
     } else if (clean(flip?.from) && clean(flip?.to)) {
       ops.regionControlOps.push({ op: "control", regionId, fromCode: clean(flip.from), toCode: clean(flip.to), basis: "occupation", note, by: FRONT_MARK });
     }
@@ -1263,6 +1269,7 @@ export const runTurnFronts = async ({
       sovereignOf: readers.sovereignOf,
       groupAreas: readers.groupAreas,
       isGroup: (name) => readers.isGroup(name) || foundedGroups.has(fold(name)),
+      groupOwnerOf: readers.groupOwnerOf,
       units: flown,
       transports: normalizeTransports(world?.transports),
       // (With the ground the scenario made harder to cross, where it weighs terrain: runtime/fronts/arena.js;

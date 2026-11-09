@@ -16,6 +16,9 @@ import {
   defaultGroupColor,
   describeGroupsForPrompt,
   findGroupKey,
+  forceGroupDescription,
+  forceGroupName,
+  groupOwnerOf,
   groupsOnTerritory,
   normalizeGroupAreas,
   normalizeGroupColor,
@@ -241,4 +244,26 @@ test("a polity that is a group sees its own area first, even an empty one", () =
   assert.deepEqual(rows.map((row) => [row.name, row.own, row.regionIds]), [["Cartel del Norte", true, ["r1"]]]);
   const empty = groupsOnTerritory({ ...world, groupAreas: {} }, "Cartel del Norte");
   assert.deepEqual(empty.map((row) => [row.name, row.regionIds]), [["Cartel del Norte", []]]);
+});
+
+test("a country's force: its owner is kept, said once when founded, and an old save without one loads as before", () => {
+  const before = normalizeGroups({ Cartel: { description: "Runs the towns." } });
+  assert.equal("owner" in before.Cartel, false, "no owner where none was given");
+  assert.equal(normalizeGroups({ "Aland Forces in Neutralia": { owner: " Aland " } })["Aland Forces in Neutralia"].owner, "Aland");
+  assert.equal(groupOwnerOf({ "Aland Forces in Neutralia": { owner: "Aland" } }, "aland forces in neutralia"), "Aland");
+  assert.equal(groupOwnerOf(before, "Cartel"), "");
+  assert.equal(forceGroupName("Aland", "Neutralia"), "Aland Forces in Neutralia");
+  assert.equal(forceGroupName("Aland", "N".repeat(80)), "Aland Forces", "a name too long for a group says whose force it is");
+  // The front engine's take founds it with its owner and what it is...
+  const take = { op: "take", name: "Aland Forces in Neutralia", regionIds: ["n1"], by: "front", owner: "Aland", description: forceGroupDescription("Aland", "Neutralia", "Free Hills") };
+  assert.equal(normalizeGroupOp(take).owner, "Aland");
+  const founded = applyGroupOps({ groups: {}, groupAreas: { n1: "Free Hills" } }, [take]);
+  assert.equal(founded.groups["Aland Forces in Neutralia"].owner, "Aland");
+  assert.match(founded.groups["Aland Forces in Neutralia"].description, /Neutralia's: Aland holds it without annexing it/);
+  assert.equal(founded.groupAreas.n1, "Aland Forces in Neutralia");
+  // ...and its later takes leave what the story has since said of it alone.
+  const told = { groups: { ...founded.groups, "Aland Forces in Neutralia": { ...founded.groups["Aland Forces in Neutralia"], description: "Dug in for the winter." } }, groupAreas: founded.groupAreas };
+  const later = applyGroupOps(told, [{ ...take, regionIds: ["n2"] }]);
+  assert.equal(later.groups["Aland Forces in Neutralia"].description, "Dug in for the winter.");
+  assert.deepEqual(later.changes, [{ op: "take", name: "Aland Forces in Neutralia", regionIds: ["n2"] }]);
 });

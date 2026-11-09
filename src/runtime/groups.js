@@ -6,8 +6,13 @@
 // light tint over the countries' own colours — and it carries a description,
 // which is what the AI is told the group is.
 //
-//   world.groups     { [name]: { name, description, color, formerNames? } }
+//   world.groups     { [name]: { name, description, color, formerNames?, owner? } }
 //   world.groupAreas { [regionId]: groupName }   one group per region, sparse
+//
+// `owner`, where there is one, is the country whose force the group is: a
+// country at war with a group on a third country's land takes that ground as
+// such a group of its own, and annexes nothing (runtime/fronts/day.js
+// settleRegions). In a war its owner is in, its area is its owner's side's.
 //
 // Groups are keyed by their exact name, like countries, so the name the model
 // reads is the name it writes back. Pure: no IO, shared by the game, the
@@ -76,6 +81,7 @@ const normalizeGroup = (key, value) => {
   if (!name) return null;
   const record = isRecord(value) ? value : {};
   const formerNames = [...new Set((Array.isArray(record.formerNames) ? record.formerNames : []).map(normalizeGroupName).filter((former) => former && fold(former) !== fold(name)))].slice(0, 12);
+  const owner = normalizeGroupName(record.owner);
   return {
     name,
     description: normalizeGroupDescription(record.description ?? record.note),
@@ -85,8 +91,26 @@ const normalizeGroup = (key, value) => {
     // Its own military figures, where its author gives them (militaryStats.js).
     ...(normalizeMilitaryStats(record.military) ? { military: normalizeMilitaryStats(record.military) } : {}),
     ...(formerNames.length ? { formerNames } : {}),
+    // The country whose force it is, where it is one (above).
+    ...(owner && fold(owner) !== fold(name) ? { owner } : {}),
   };
 };
+
+// The country a group is the force of, or "" (above).
+export const groupOwnerOf = (groups, name) => {
+  const key = findGroupKey(groups, name);
+  return key ? normalizeGroupName(groups[key]?.owner) : "";
+};
+
+// What a country's force holding ground taken from a group on another country's land is called, and what the AI
+// is told it is. In English, as every name the story writes; the land stays its country's.
+export const forceGroupName = (owner, land) => {
+  const full = clean(`${clean(owner)} Forces in ${clean(land)}`);
+  return full.length <= GROUP_NAME_MAX ? full : normalizeGroupName(`${clean(owner)} Forces`);
+};
+export const forceGroupDescription = (owner, land, from) => normalizeGroupDescription(
+  `${clean(owner)}'s forces holding ground in ${clean(land)}${clean(from) ? ` taken from ${clean(from)}` : ""}. The land is still ${clean(land)}'s: ${clean(owner)} holds it without annexing it.`,
+);
 
 export const normalizeGroups = (raw) => {
   const out = {};
@@ -141,6 +165,7 @@ export const normalizeGroupOp = (entry) => {
   const newName = normalizeGroupName(entry.newName);
   const description = normalizeGroupDescription(entry.description);
   const color = normalizeGroupColor(entry.color);
+  const owner = normalizeGroupName(entry.owner);
   return {
     op,
     name,
@@ -151,6 +176,8 @@ export const normalizeGroupOp = (entry) => {
     note: clean(entry.note).slice(0, 300),
     // An area the front engine moved with the line (see normalizeRegionControlOp).
     ...(entry.by === "front" ? { by: "front" } : {}),
+    // The country whose force a group this op founds is (above): given only when it is created.
+    ...(owner && fold(owner) !== fold(name) ? { owner } : {}),
   };
 };
 
@@ -186,9 +213,11 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
         name: key,
         description: op.description ?? "",
         color: op.color || defaultGroupColor(key),
+        ...(op.owner ? { owner: op.owner } : {}),
       };
       changes.push({ op: "create", name: key });
-    } else if (op.description || op.color) {
+    } else if ((op.description || op.color) && op.by !== "front") {
+      // (What the front engine says of a force it founds is said once, when it founds it.)
       nextGroups[key] = {
         ...nextGroups[key],
         ...(op.description ? { description: op.description } : {}),

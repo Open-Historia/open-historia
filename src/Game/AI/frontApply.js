@@ -688,9 +688,12 @@ export const routesIntoOthers = async ({ world = {}, game = {}, campaignId = "",
     const readers = frontWorldReaders(world, { baseOwners: front.baseOwners, groups: isActiveFeatureEnabled("groups") });
     const members = new Set(asArray(record.sides).flat().map(fold));
     const inWar = (name) => members.has(fold(name));
+    // (As the engine reads it: a country's force holds for its country, runtime/fronts/engine.js holderIn.)
     const holderOf = (id) => {
       const group = clean(readers.groupAreas?.[id]);
-      return group && inWar(group) ? group : clean(readers.controllerOf(id));
+      if (group && inWar(group)) return group;
+      const owner = group ? clean(readers.groupOwnerOf(group)) : "";
+      return owner && inWar(owner) ? owner : clean(readers.controllerOf(id));
     };
     const place = projectorOf(record.frame);
     const under = asArray(record.brief?.carry?.under);
@@ -764,7 +767,10 @@ export const transportWaysFor = async ({ world = {}, game = {}, campaignId = "",
       if (mine < 0) continue;
       const holderOf = (id) => {
         const group = clean(readers.groupAreas?.[id]);
-        return group && sides.some((members) => members.includes(fold(group))) ? group : clean(readers.controllerOf(id));
+        const inWar = (name) => sides.some((members) => members.includes(fold(name)));
+        if (group && inWar(group)) return group;
+        const owner = group ? clean(readers.groupOwnerOf(group)) : "";
+        return owner && inWar(owner) ? owner : clean(readers.controllerOf(id));
       };
       const troops = decodeTroops(record.troops?.[transport.embark.side]);
       let x = 0;
