@@ -60,7 +60,7 @@ import {
   worldShareNote,
 } from "../../runtime/receiptPlayerNotes.js";
 import { normalizeFiledEvents, previewFiledMark, toFiledEvent } from "../../runtime/filedEvents.js";
-import { buildUnitDirectorInput, directGeneratedUnitOps, landHolders, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, pickCombatantPlace, pruneWarUnits } from "./nativeUnitDirector.js";
+import { buildUnitDirectorInput, directGeneratedUnitOps, landHolders, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, pickCombatantPlace, pruneWarUnits, strengthGiven } from "./nativeUnitDirector.js";
 import { applyMapConsequences, markOrderedEvents, markSceneOutcome } from "./mapConsequences.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nativeStructureDirector.js";
@@ -689,7 +689,7 @@ const relationStatusForScore = (value) => {
 // (buildJumpStaticRules), and its [Wars] block points there (`rulesAbove`).
 const WAR_LEDGER_RULES_HEADING = "[How Wars Are Recorded]";
 const warLedgerRules = (playerName) => `Only this ledger makes polities belligerents: tension or a mobilisation does not, and an alliance does only through the game, which itself enters here those bound to defend a country that is attacked (see ${PEACE_BLOCK_HEADING} below). A war real history holds begins here only when you open it, with a warUpdates record and the event that starts it. Every battle, offensive, invasion, bombardment, siege or front carries event.warId and event.combatants naming both sides. If you write fighting, open the war in the same answer: a declaration, an entry, an exit, a ceasefire, a resumption or a peace each needs a warUpdates record and an event carrying the same warId, or the engine strips the war from the fighting and records peace. Two sides genuinely trading blows are at war; if you cannot say who is fighting whom, it is unrest, a raid or a deployment, so write it as that. A polity at peace does not live under war conditions — rationing, war taxes, mobilisation — because others are fighting, unless the war reaches it through something concrete (lost imports, refugees, sanctions). Nobody may join a war on ${playerName}'s behalf; another power declaring war on ${playerName} is that power's decision, and yours to write.
-A country nobody plays that the story takes out of a war (its forces pulled out under an accord, a separate peace, its last troops brought home) leaves it in that event, with a leave record: without one it is still at war, and its troops stay on the battlefield and fight on. The battle or surrender that ends a war carries its end record. History yields to this game's record: a war the ledger shows ended, or never opened, is fought by nobody, and where the wars, the battlefields or who holds a region differ from what history had at this time, history has been turned aside here. Events follow the record, not the history: no fighting in a war that ended here, and no siege or offensive where the game's lines do not put one.
+A country nobody plays that the story takes out of a war (its forces pulled out under an accord, a separate peace, its last troops brought home) leaves it in that event, with a leave record: without one it is still at war, and its troops stay on the battlefield and fight on. The battle or surrender that ends a war between countries nobody plays carries its end record; a war a player fights ends only by a peace (see ${PEACE_BLOCK_HEADING} below), so no battle in it tells its end. History yields to this game's record: a war the ledger shows ended, or never opened, is fought by nobody, and where the wars, the battlefields or who holds a region differ from what history had at this time, history has been turned aside here. Events follow the record, not the history: no fighting in a war that ended here, and no siege or offensive where the game's lines do not put one.
 warUpdates is one string, one record per line, fields separated by ~ (never inside a field): warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note. op is start, join-a, join-b, leave, ceasefire, resume or end; for start the actors are side A and the opponents side B; for join and leave the actors are the polities joining or leaving, and for a join the opponents are the polities it fights (join-a joins SIDE A, against SIDE B); eventNumbersCSV is the number in this answer's events (1 for the first) of the event that makes the change, never a date or an id. A start's note may open with the war's name, as Title: <name>; then its cause. Give a war a stable id (war-france-germany-1914) and reuse it. An empty string when nothing changes.`;
 
 const buildWarLedgerDirective = (variables, { rulesAbove = false } = {}) => {
@@ -1645,7 +1645,7 @@ const JUMP_LEVERS = [
   `When an election or a new government is the first settled politics of a young polity, set up its parties, governing force, system, goals and traits in the same event; while results are still being counted, narrate the count, not a result. Traits use only these keys: ${POLITICAL_TRAIT_KEYS.join(", ")}. Never use set-political-pressures or set-behavioral-disposition.`,
   "• institutionLifecycleOps: found, invite, apply, respond, withdraw, expel, suspend, reinstate or dissolve, each naming its actorPolity by exact current name; an existing institution by its exact institutionId, and respond with the pending caseId. Governments join, refuse or leave by their own interests and politics, never because relations are friendly, and never for the human player's own membership. An invitation or application is not membership: the institution's own rules decide it. A government that is already an observer, candidate, participant or associate may be invited to, or apply for, a higher status in the same institution; one that holds that status already, a full member and a suspended member may not.",
   "• markerOps: build (a specific name, a short kind such as city, military base, port, embassy or airfield, the owner's full name, `at`, a note), remove, rename (to newName) and population (the new total), each naming its place exactly. rename and population work on every city on the map.",
-  "• strikes: a missile launch or a bombing run the event tells of, one line each: side~weapon~from~target~count~shot down. weapon: silo missile | submarine missile | nuclear bomber (these three are nuclear) | missile strike | bombing run. from: where it is launched (city: X, structure: X, unit: X) or blank for the game to pick; target: the place hit; count: how many missiles or aircraft; shot down: how many were intercepted on the way, a number or all | most | half | some | none, which an event telling of interceptions owes. It is drawn on the map and changes nothing itself: what it destroyed or took is the event's other operations. Example: Russia~missile strike~~city: Kyiv~12~some",
+  "• strikes: a missile launch or a bombing run the event tells of, one line each: side~weapon~from~target~count~shot down. weapon: silo missile | submarine missile | nuclear bomber (these three are nuclear) | missile strike | bombing run. from: where it is launched (city: X, structure: X, unit: X) or blank for the game to pick; target: the place hit; count: how many missiles or aircraft; shot down: how many were intercepted on the way, a number or all | most | half | some | none, which an event telling of interceptions owes. It is drawn on the map and changes nothing itself: what it destroyed or took is the event's other operations. Example: A~missile strike~~city: X~12~some",
   "• groupOps: create founds a group (with its first regions if it holds any), update changes its name, description or colour, take adds regions to its area, release gives them back (all of them when regionIds is empty), dissolve erases it; regions as \"region: <name>\".",
   "• regionClaims: the claimant by full name, and drop true when a claim is given up; the region stays striped until a transfer or a drop settles it.",
   "• actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
@@ -2395,7 +2395,7 @@ const canonicalizeNamedThings = (containers, world) => {
         || normalizeString(op.unitName)
         || normalizeString(op.name);
       if (!written || unitIds.has(written)) continue;
-      const removes = normalizeString(op.op).toLowerCase() === "remove" || (normalizeString(op.op).toLowerCase() === "strength" && Number(op.strength) === 0);
+      const removes = normalizeString(op.op).toLowerCase() === "remove" || (normalizeString(op.op).toLowerCase() === "strength" && strengthGiven(op) && Number(op.strength) === 0);
       const unit = findUnitByRef(written, units, { owner: normalizeString(op.ownerCode ?? op.owner), context })
         || (removes ? newestTwinByRef(written, units) : null);
       if (!unit) continue;
@@ -9491,6 +9491,12 @@ const applySimulationResult = async ({
       `integrity kept ${repairScreened.events.length}; curator kept ${repairCuratedEvents.length}.`,
     );
   }
+  // A war as the receipts name it: its name, never its id (the ledger gives every war one, nativeWarLedger.js); every war a receipt here tells is in the ledger the turn began with.
+  const warNameOf = (id) => {
+    const war = normalizeArray(baseWorld?.wars).find((item) => normalizeString(item?.id).toLowerCase() === normalizeString(id).toLowerCase());
+    const sides = [normalizeArray(war?.sideA), normalizeArray(war?.sideB)].map((side) => normalizeString(side[0]));
+    return normalizeString(war?.title) || (sides[0] && sides[1] ? `the war between ${sides[0]} and ${sides[1]}` : "the war");
+  };
   // A war a player fights ends only by a peace that player makes or accepts
   // (playersWarsHold.js): the skip's end, ceasefire or a player's leaving is
   // refused, with the events that told it and what they changed on the map. One
@@ -9506,7 +9512,7 @@ const applySimulationResult = async ({
       // (An end that answers the player's own offer of peace: the game makes that peace below.)
       if (normalizeString(update?.op).toLowerCase() === "end" && peaceIn.has(normalizeString(update?.id).toLowerCase())) continue;
       logDebugEvent("turn", `The skip's ${update.op} for ${update.id} was refused: a war a player fights ends only by a peace that player makes or accepts.`, update);
-      noteReceipt(receipt, "dropped", `"${update.op}" for ${update.id}, and the events that told it: a war a player fights ends only by a peace that player makes or accepts. To bring them to peace, offer it in a letter.`);
+      noteReceipt(receipt, "dropped", `"${update.op}" for ${warNameOf(update.id)}, and the events that told it: a war a player fights ends only by a peace that player makes or accepts. To bring them to peace, offer it in a letter.`);
     }
   }
   // A ledger record bound to an event the curator removed goes with it.
@@ -10051,10 +10057,6 @@ const applySimulationResult = async ({
     ...toldTreaties,
     ...playersWars.accepted.filter((entry) => !toldTreaties.some((line) => samePair(line, entry))).map(({ from, to }) => ({ from, to, terms: null })),
   ];
-  for (const entry of playersWars.accepted) {
-    logDebugEvent("turn", `The skip's end for ${entry.warId} is ${entry.to} accepting ${entry.from}'s offer of peace.`, entry.update);
-    noteReceipt(receipt, "adjusted", `The end of ${entry.warId}: ${entry.to} accepted ${entry.from}'s offer of peace, on the terms offered.`);
-  }
   worldWithImpacts = turnWarAndPeace({
     world: worldWithImpacts,
     baseWorld,
@@ -10074,12 +10076,24 @@ const applySimulationResult = async ({
     onProposed: ({ warId, from, to, offer, reason }) => {
       if (offer) {
         logDebugEvent("turn", `${from}'s order to end ${warId} was put to ${to} as an offer of peace.`, offer);
-        noteReceipt(receipt, "dropped", `The end of ${warId}: ${from}'s order offers ${to} peace instead, each keeping what it holds. A peace line of this skip's accepting it ended the war; without one, ${to}'s answer comes with the next skip.`);
+        noteReceipt(receipt, "dropped", `The end of ${warNameOf(warId)}: ${from}'s order offers ${to} peace instead, each keeping what it holds. A peace line of this skip's accepting it ended the war; without one, ${to}'s answer comes with the next skip.`);
       } else {
         logDebugEvent("turn", `${from}'s order to end ${warId} offered nothing: ${reason}.`);
       }
     },
   });
+  // The player's offers the skip's end accepted, told once the peace is made: the war ended by it (or by a peace
+  // in its twin, makePeace). One that was not made is told as refused, like any other end of a player's war.
+  for (const entry of playersWars.accepted) {
+    const war = normalizeArray(worldWithImpacts?.wars).find((item) => normalizeString(item?.id).toLowerCase() === normalizeString(entry.warId).toLowerCase());
+    if (normalizeString(war?.status).toLowerCase() === "ended") {
+      logDebugEvent("turn", `The skip's end for ${entry.warId} is ${entry.to} accepting ${entry.from}'s offer of peace.`, entry.update);
+      noteReceipt(receipt, "adjusted", `The end of ${warNameOf(entry.warId)}: ${entry.to} accepted ${entry.from}'s offer of peace, on the terms offered.`);
+    } else {
+      logDebugEvent("turn", `The skip's end for ${entry.warId} accepted ${entry.from}'s offer of peace, but the peace was not made.`, entry.update);
+      noteReceipt(receipt, "dropped", `"end" for ${warNameOf(entry.warId)}: ${entry.to} took ${entry.from}'s offer of peace, but the peace could not be made, and the war goes on.`);
+    }
+  }
   // A war's end and a country's fall clear the map (nativeUnitDirector.js
   // pruneWarUnits): the counters raised for a war that has ended, and the units
   // of a power that held land when the turn began and holds none now.
@@ -10473,8 +10487,12 @@ const applySimulationResult = async ({
   // was attacked, in the thread with it (folded into one already open), and the person answers it there
   // (GameUI/warAndPeace.jsx CallToArmsCard): "have the country send you a message requesting assistance and the
   // buttons appear there" (the owner, 2026-11-06). In the game's language, from the packs, and never a request.
+  // Every open call that has no message yet gets one: one opened this turn, one asked before calls had messages (an
+  // old save) and one whose message could not be sent when it opened. Until it has one the player cannot have heard
+  // it, and its silence breaks no treaty (alliances.js callsForTurn); from the turn it is asked (askedRound) it stands
+  // CALL_STANDS_ROUNDS turns.
   for (const call of normalizeArray(worldWithImpacts?.callsToArms)) {
-    if (call?.status !== "open" || Number(call.round) !== Number(nextGame.round) || normalizeString(call.messageId)) continue;
+    if (call?.status !== "open" || normalizeString(call.messageId)) continue;
     if (!people.some((person) => regionKey(person) === regionKey(call.ally))) continue;
     const attackers = normalizeArray(call.attackers).map(normalizeString).filter(Boolean);
     const enemy = attackers.length > 1 ? `${attackers.slice(0, -1).join(", ")} & ${attackers[attackers.length - 1]}` : attackers[0] || "";
@@ -10499,7 +10517,7 @@ const applySimulationResult = async ({
     if (!nextChat) continue;
     nextChats.unshift(nextChat);
     generatedChats.unshift(nextChat);
-    worldWithImpacts = { ...worldWithImpacts, callsToArms: normalizeArray(worldWithImpacts.callsToArms).map((entry) => (entry?.id === call.id ? { ...entry, messageId } : entry)) };
+    worldWithImpacts = { ...worldWithImpacts, callsToArms: normalizeArray(worldWithImpacts.callsToArms).map((entry) => (entry?.id === call.id ? { ...entry, messageId, askedRound: Number(nextGame.round) || 0 } : entry)) };
     nextWorld = worldWithImpacts;
   }
 

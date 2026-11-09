@@ -153,7 +153,7 @@ const opKey = (op) => {
     return `attack|${normalizeString(op?.unitId)}|${normalizeString(op?.targetUnitId)}`;
   }
   if (kind === "strength") {
-    return `strength|${normalizeString(op?.unitId)}|${Number(op?.strength)}`;
+    return `strength|${normalizeString(op?.unitId)}|${strengthGiven(op) ? Number(op.strength) : `kept|${normalizeString(op?.composition)}`}`;
   }
   if (kind === "remove") {
     return `remove|${normalizeString(op?.unitId)}`;
@@ -189,6 +189,10 @@ export const eventNeedsNativeUnitDirector = (event) => {
     || orderedForces(event) || storyShipSails(event);
 };
 
+// Whether a strength op says a strength: a refit gives only the formation's new make-up, and its strength, missing
+// or null, is unchanged (gameState.js normalizeUnitOp). Number(null) is 0, which destroyed the refitted formation.
+export const strengthGiven = (op) => op?.strength !== undefined && op?.strength !== null && String(op.strength).trim() !== "" && Number.isFinite(Number(op.strength));
+
 const makeWorkingUnitMap = (units) =>
   new Map(normalizeUnits(units).map((unit) => [unit.id, { ...unit }]));
 
@@ -211,6 +215,7 @@ const applyWorkingOp = (unitMap, op) => {
       status: "moving",
     });
   } else if (op.op === "strength") {
+    if (!strengthGiven(op)) return;
     if (Number(op.strength) <= 0) unitMap.delete(op.unitId);
     else unitMap.set(op.unitId, { ...unit, strength: Number(op.strength) });
   } else if (op.op === "remove") {

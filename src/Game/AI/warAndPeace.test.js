@@ -277,8 +277,9 @@ test("a person bound to defend a country is asked, and nobody joins a war for th
   assert.deepEqual([act("honour", "Cisland").error, act("honour", "Cisland").accepted, act("honour", "Cisland").to], ["", true, "Borduria"]);
   assert.equal(act("refuse", "Aland").error, "not-yours");
   assert.equal(answerCallToArms(honoured, call.id, false, { round: 4 }), honoured);
-  // Left unanswered, it is a treaty broken two turns on.
-  const later = turnWarAndPeace({ world: asked, baseWorld: asked, days: 30, date: "1914-05-01", round: 4, players: ["Cisland"] });
+  // Left unanswered once its message has asked it (the turn sends it: gameplay.js), it is a treaty broken two turns on.
+  const sent = { ...asked, callsToArms: asked.callsToArms.map((entry) => ({ ...entry, messageId: `msg-${entry.id}` })) };
+  const later = turnWarAndPeace({ world: sent, baseWorld: sent, days: 30, date: "1914-05-01", round: 4, players: ["Cisland"] });
   assert.equal(later.callsToArms[0].status, "open");
   const lapsed = turnWarAndPeace({ world: later, baseWorld: later, days: 30, date: "1914-06-01", round: 5, players: ["Cisland"] });
   assert.deepEqual([lapsed.callsToArms[0].status, lapsed.internationalReputation.Cisland], ["refused", 50 - TREATY_BROKEN_REPUTATION]);
@@ -477,4 +478,28 @@ test("a peace can annex a country whole, cede regions by name, make a puppet, an
   assert.equal(holder(third, "c1"), "Cisland");
   assert.deepEqual(third.puppets.filter((entry) => entry.status === "active"), []);
   assert.deepEqual(third.peaceTreaties[0].terms.conditions, ["Cisland is annexed", "Cisland becomes Aland's puppet"]);
+});
+
+// Two wars between the same pair, the player's offer waiting in the second: the skip's line accepting it was
+// refused ("a person is in that war") because warBetween found the first, and the peace ff199dc1 meant to end both
+// was never made.
+test("a skip's line accepting a player's offer is taken in whichever twin war the offer waits in", () => {
+  const twins = world({
+    wars: [WAR, { ...WAR, id: "war-2", sideA: ["Borduria"], sideB: ["Aland"] }],
+    peaceOffers: [{ id: "peace:war-2:aland:3", warId: "war-2", from: "Aland", to: "Borduria", terms: { territory: TERRITORY_RESTORED, reparations: null }, status: "open", round: 3 }],
+  });
+  const refused = [];
+  const made = turnWarAndPeace({
+    world: twins,
+    baseWorld: twins,
+    days: 180,
+    date: "1915-03-01",
+    round: 4,
+    players: ["Aland"],
+    treaties: [{ from: "Borduria", to: "Aland", terms: null }],
+    onRefused: (entry) => refused.push(entry),
+  });
+  assert.deepEqual(refused, []);
+  assert.deepEqual(made.wars.map((entry) => [entry.id, entry.status]).sort(), [["war-1", "ended"], ["war-2", "ended"]]);
+  assert.equal(made.peaceOffers.find((entry) => entry.id === "peace:war-2:aland:3")?.status, "accepted");
 });

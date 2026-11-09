@@ -861,7 +861,27 @@ test("the battle that ends a war may carry its end, and fighting before the end 
 test("the skip is told that a country pulled out of a war leaves it, and that history yields to the record", () => {
   const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
   assert.match(gameplay, /A country nobody plays that the story takes out of a war \(its forces pulled out under an accord, a separate peace, its last troops brought home\) leaves it in that event, with a leave record: without one it is still at war, and its troops stay on the battlefield and fight on\./);
-  assert.match(gameplay, /The battle or surrender that ends a war carries its end record\./);
+  // (Never in a player's war, which the peace rules say no surrender ends: the two rules agree.)
+  assert.match(gameplay, /The battle or surrender that ends a war between countries nobody plays carries its end record; a war a player fights ends only by a peace \(see \$\{PEACE_BLOCK_HEADING\} below\), so no battle in it tells its end\./);
+  assert.doesNotMatch(gameplay, /The battle or surrender that ends a war carries its end record/);
   assert.match(gameplay, /History yields to this game's record: a war the ledger shows ended, or never opened, is fought by nobody/);
   assert.match(gameplay, /Events follow the record, not the history: no fighting in a war that ended here, and no siege or offensive where the game's lines do not put one\./);
+});
+
+// An end told by an event with no date: compareGameDates(date, "") is -1, so every later battle read as fought
+// before the end, and the whole of the fighting after it passed against the war as it was.
+test("an end told by an undated event does not let later fighting pass as fought before it", () => {
+  const vietnam = { polityOverrides: {}, wars: [{ id: "war-vietnam", status: "active", sideA: ["Democratic Republic of Vietnam"], sideB: ["Republic of Vietnam", "United States"], startedDate: "1965-03-08" }] };
+  const accord = { id: "e1", date: "", title: "The War Is Declared Over", description: "Hanoi and Saigon sign the final accord.", kind: "diplomacy", warId: "war-vietnam" };
+  const later = {
+    id: "e2",
+    date: "1975-08-10",
+    title: "People's Army of Vietnam Storms Hue",
+    description: "Armored columns of the People's Army of Vietnam storm Hue after a final assault.",
+    kind: "military",
+    combatants: ["Democratic Republic of Vietnam", "Republic of Vietnam"],
+    warId: "war-vietnam",
+  };
+  const payload = { events: [accord, later], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Accord" };
+  assert.match(validateWarLedgerPayload(payload, { world: vietnam }), /is ended, not active/);
 });

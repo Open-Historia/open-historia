@@ -16688,6 +16688,8 @@
  "{{unitName}} moves to {{region}}{{note}}",
  "{{unitName}} moves{{note}}",
  "{{unitName}} removed{{note}}",
+ "{{unitName}}: refitted: {{composition}}{{note}}",
+ "{{unitName}}: strength {{strength}}%, refitted: {{composition}}{{note}}",
  "{{unitName}}: strength {{strength}}%{{note}}",
  "{{unitsCount}} unit at the start of the scenario",
  "{{unitsCount}} units at the start of the scenario",
