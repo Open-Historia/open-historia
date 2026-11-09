@@ -18,9 +18,11 @@
 //            how many live there, where the page knew it)
 //   target   what is struck, by its name; `country`, whose it is
 //   radius   the STRIKE RADIUS the player set, as a share of the era's
-//            AIR_BLAST_KM: one of AIR_STRIKE_RADII. Kept only when it is not
-//            AIR_STRIKE_RADIUS_DEFAULT (1, the strike as it always was), so an
-//            order saved before there was a radius reads as the default.
+//            AIR_BLAST_KM: from AIR_STRIKE_RADIUS_LEAST to AIR_STRIKE_RADIUS_MOST,
+//            in steps of AIR_STRIKE_RADIUS_STEP (strikeRadiusOf). Kept only when
+//            it is not AIR_STRIKE_RADIUS_DEFAULT (1, the strike as it always
+//            was), so an order saved before there was a radius reads as the
+//            default.
 //
 // "bombing should be able to adjust the strike radius: smaller radii result in
 // greater lethality, while larger radii reduce the overall threat level" (the
@@ -90,8 +92,12 @@ export const AIR_STRIKE_KINDS = Object.freeze(["troops", "structure", "city"]);
 export const AIR_STRIKE_OUTCOMES = Object.freeze(["unopposed", "through", "partly", "turned back", "out of reach", "gone"]);
 // How far the bombs of one strike fall from where it was aimed, by era (before 1500, 1500-1849, 1850-1944, from 1945).
 export const AIR_BLAST_KM = Object.freeze([0, 0, 15, 20]);
-// The strike radii a player may set, as shares of AIR_BLAST_KM, and the one an order without one has.
-export const AIR_STRIKE_RADII = Object.freeze([0.5, 0.75, 1, 1.5, 2]);
+// The strike radius a player may set, as a share of AIR_BLAST_KM: anywhere from the least to the most, kept to
+// the nearest step (the war room's slider moves in the same steps), and the one an order without one has.
+// "make the bombing radius be a slider not buttons" (the owner, 2026-11-09).
+export const AIR_STRIKE_RADIUS_LEAST = 0.5;
+export const AIR_STRIKE_RADIUS_MOST = 2;
+export const AIR_STRIKE_RADIUS_STEP = 0.05;
 export const AIR_STRIKE_RADIUS_DEFAULT = 1;
 // The chance a defender's air unit within reach finds a raid, by era (radar from 1945).
 export const AIR_FIND = Object.freeze([0, 0, 0.6, 0.85]);
@@ -131,12 +137,15 @@ const within = (value, least, most) => (value < least ? least : value > most ? m
 
 // ---- the strike radius -----------------------------------------------------------------------
 
-// A strike radius as it is kept: the nearest of AIR_STRIKE_RADII (the smaller where two are as near), or the
-// default for what is none.
+// A strike radius as it is kept: held between the least and the most and rounded to the nearest step (so 0.75,
+// 1.5 and the other radii the war room once offered as keys are kept as they were), or the default for what is
+// none. Divided rather than multiplied by the step, so that a radius is the number it reads as (0.65, never
+// 0.6500000000000001).
+const RADIUS_STEPS_PER_UNIT = Math.round(1 / AIR_STRIKE_RADIUS_STEP);
 export const strikeRadiusOf = (value) => {
   if (!finite(value) || !(Number(value) > 0)) return AIR_STRIKE_RADIUS_DEFAULT;
-  const wanted = Number(value);
-  return AIR_STRIKE_RADII.reduce((best, step) => (Math.abs(step - wanted) < Math.abs(best - wanted) ? step : best), AIR_STRIKE_RADII[0]);
+  const wanted = within(Number(value), AIR_STRIKE_RADIUS_LEAST, AIR_STRIKE_RADIUS_MOST);
+  return Math.round(wanted * RADIUS_STEPS_PER_UNIT) / RADIUS_STEPS_PER_UNIT;
 };
 
 // How concentrated the bombs of a strike of that radius fall: 1 / radius² (4 at half the radius, 1/4 at twice it).
@@ -567,6 +576,10 @@ const OUTCOME_WORDS = {
   partly: "the bombers got through only in part",
   "turned back": "the bombers turned back without bombing",
 };
+// A strike radius the story is told as narrow (at most this) or wide (at least this): a slider set a step or two
+// off the usual circle is told as the usual strike. (Each is the other's reciprocal: 0.8 = 1 / 1.25.)
+export const AIR_STRIKE_TOLD_NARROW = 0.8;
+export const AIR_STRIKE_TOLD_WIDE = 1.25;
 
 // One strike, in words, or "" for one that never flew.
 export const describeAirStrike = (strike) => {
@@ -578,7 +591,7 @@ export const describeAirStrike = (strike) => {
     : strike.kind === "structure"
       ? `${whose}${strike.target || "a structure"}`
       : `${strike.country ? `${strike.country}'s troops` : "troops"}${strike.battlefield ? ` on ${strike.battlefield}` : ""}${strike.target ? ` near ${strike.target}` : ""}`;
-  const pattern = strike.radius > AIR_STRIKE_RADIUS_DEFAULT ? ", its bombs spread over a wide area" : strike.radius < AIR_STRIKE_RADIUS_DEFAULT ? ", its bombs concentrated on a narrow area" : "";
+  const pattern = strike.radius >= AIR_STRIKE_TOLD_WIDE ? ", its bombs spread over a wide area" : strike.radius <= AIR_STRIKE_TOLD_NARROW ? ", its bombs concentrated on a narrow area" : "";
   const parts = [`${by} struck ${what}${pattern}`];
   if (strike.intercepted.length > 0) {
     parts.push(`intercepted by ${joined(strike.intercepted.map((entry) => `${entry.owner}'s ${entry.name}`))}; the fighters fought it out and ${OUTCOME_WORDS[strike.outcome] ?? ""}`);

@@ -11,7 +11,7 @@
 //   { op: "unairstrike", unit }     its strike called off
 //
 //   radius            the strike radius, a share of the era's blast (airStrike.js
-//                     AIR_STRIKE_RADII, strikeRadiusOf): none for the default
+//                     strikeRadiusOf, 0.5 to 2 in steps of 0.05): none for the default
 //
 //   kind "troops"     `to` lies on `battlefield`, one the asker fights on;
 //                     `target` names the place near it
