@@ -218,6 +218,59 @@ test("a battlefield that is gone gives back its picture and its mesh", () => {
   assert.equal(calls.texImage2D, 2);
 });
 
+// "3d terrain and warfronts do not seem to work together, the war terrain is not 3d" (the owner, 2026-11-09).
+test("on the 3D terrain the picture is laid on the hills: a finer mesh, each corner lifted, made once", () => {
+  class LngLat {
+    constructor(lng, lat) {
+      this.lng = lng;
+      this.lat = lat;
+    }
+  }
+  let terrainOn = true;
+  const asked = [];
+  const map = {
+    getBounds: () => null,
+    getZoom: () => 6,
+    getCenter: () => new LngLat(24, 49),
+    getTerrain: () => (terrainOn ? { source: "terrain-source", exaggeration: 7.5 } : null),
+    getSource: () => ({ maxzoom: 5, tileSize: 256 }),
+    on: () => {},
+    off: () => {},
+    terrain: {
+      exaggeration: 7.5,
+      tileManager: { deltaZoom: 1 },
+      getElevationForLngLatZoom: (lngLat) => {
+        asked.push(lngLat);
+        return 1000;
+      },
+    },
+  };
+  const layers = createFrontBasemapLayers({ pictures: () => [{ key: "a", canvas: {}, coordinates: CORNERS }] });
+  const { gl, calls } = countingGl();
+  layers.put.onAdd(map);
+  const drawnCounts = [];
+  gl.drawArrays = (mode, first, count) => drawnCounts.push(count);
+  const frame = () => {
+    layers.take.render(gl);
+    layers.put.render(gl, ARGS);
+  };
+  frame();
+  frame();
+  // 8 by 6 degrees at the terrain's finest heights (32 tiles of 256 across the world): 64 by 61 cells.
+  const cells = drawnCounts[0] / 6;
+  assert.ok(cells > MESH_STEPS * MESH_STEPS, "finer than the flat mesh");
+  assert.deepEqual(drawnCounts, [drawnCounts[0], drawnCounts[0]]);
+  assert.equal(calls.bufferData, 2, "the mesh and its heights, once");
+  assert.ok(asked.length > 0 && asked.length <= 65 * 65, "the heights read once, on the grid");
+  assert.ok(asked.every((lngLat) => lngLat instanceof LngLat));
+  assert.ok((calls.enableVertexAttribArray ?? 0) >= 6, "the heights are given to the shader");
+  // The terrain off: flat, as it always was.
+  terrainOn = false;
+  frame();
+  assert.equal(drawnCounts[2], MESH_STEPS * MESH_STEPS * 6);
+  assert.equal(calls.vertexAttrib1f, 1, "at the sea's level");
+});
+
 // The same player, on the same battlefield (its frame told a whole turn of longitude off the map's
 // own): "I can't select troops ... they just don't get selected if I use the selector tool."
 test("the war room's tools look for a troop where the map shows it, and tell a route in the battlefield's own longitudes", () => {

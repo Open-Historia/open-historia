@@ -179,6 +179,7 @@ export const RELEASES = [
           "2026-10-fit-to-background",
           "2026-10-games-and-groups",
           "2026-11-gentler-terrain",
+          "2026-11-battlefields-on-3d-terrain",
           "2026-11-smoother-map",
           "2026-11-lighter-map",
           "2026-11-smoother-zooming",

@@ -16,11 +16,13 @@ import {
   BORDER_CASING,
   BORDER_CORE,
   FRONT_GROUND_LAYER_ID,
+  copiesOverTile,
   cornerColours,
   createFrontGroundLayer,
   groundBorderWidths,
   lineCoverage,
   pictureRect,
+  tilePixelsPerScreenPixel,
 } from "./frontGroundLayer.js";
 import {
   CUSTOM_FILL_SOURCE,
@@ -186,4 +188,105 @@ test("the ground's border has the map's own edge, and is traced from the front's
   assert.ok(source.includes("entry.version !== area.version") && source.includes("entry.frontVersion !== front.version"));
   // No gradient of any kind is drawn: plain colours.
   assert.doesNotMatch(source, /createLinearGradient|createRadialGradient|linear-gradient|radial-gradient/);
+});
+
+// "3d terrain and warfronts do not seem to work together, the war terrain is not 3d" (the owner, 2026-11-09).
+test("a terrain tile's place and the width of a line in it", () => {
+  // A 1024-pixel tile seen at its own zoom: two of its pixels a screen pixel; a zoom in, one.
+  assert.equal(tilePixelsPerScreenPixel(1024, 6, 6), 2);
+  assert.equal(tilePixelsPerScreenPixel(1024, 6, 7), 1);
+  assert.equal(tilePixelsPerScreenPixel(1024, 6, 6.5), 2 / Math.SQRT2);
+  // The copies of the world a mesh lies in over a tile; none when it is above or below it.
+  const tile = [0.5, 0.25, 0.625, 0.375];
+  assert.deepEqual(copiesOverTile([0.55, 0.3, 0.6, 0.35], tile), [0]);
+  assert.deepEqual(copiesOverTile([1.52, 0.3, 1.6, 0.35], tile), [-1]);
+  assert.deepEqual(copiesOverTile([-0.45, 0.3, -0.4, 0.35], tile), [1]);
+  assert.deepEqual(copiesOverTile([0.55, 0.4, 0.6, 0.45], tile), []);
+  assert.deepEqual(copiesOverTile([0.7, 0.3, 0.8, 0.35], tile), []);
+  assert.deepEqual(copiesOverTile(null, tile), [0]);
+});
+
+test("with the 3D terrain on the ground is drawn into the terrain's tiles, made ready once for what it shows", async () => {
+  class FakeWebGL2 {}
+  const had = Object.prototype.hasOwnProperty.call(globalThis, "WebGL2RenderingContext");
+  const before = globalThis.WebGL2RenderingContext;
+  globalThis.WebGL2RenderingContext = FakeWebGL2;
+  try {
+    const calls = {};
+    const drawn = [];
+    const tiles = [];
+    const count = (name, result) => (...args) => {
+      calls[name] = (calls[name] ?? 0) + 1;
+      return typeof result === "function" ? result(...args) : result;
+    };
+    const locations = new Map();
+    const gl = new Proxy(Object.create(FakeWebGL2.prototype), {
+      get(target, name) {
+        if (name === "drawArrays") return (mode, first, number) => drawn.push(number);
+        if (name === "uniform4f") {
+          return (location, ...values) => {
+            if (locations.get(location) === "u_tile") tiles.push(values);
+          };
+        }
+        if (name === "getUniformLocation") {
+          return (program, uniform) => {
+            const location = { uniform };
+            locations.set(location, uniform);
+            return location;
+          };
+        }
+        if (typeof name === "string" && /^[A-Z0-9_]+$/.test(name)) return 1;
+        if (["createTexture", "createBuffer", "createProgram", "createShader"].includes(name)) return count(name, () => ({}));
+        if (name === "getShaderParameter" || name === "getProgramParameter") return count(name, true);
+        if (name === "getAttribLocation") return count(name, 0);
+        if (name === "getParameter") return count(name, false);
+        if (typeof name === "symbol" || name === "then") return undefined;
+        return count(name);
+      },
+    });
+    const map = { getZoom: () => 6, terrain: { tileManager: { tileSize: 512 } } };
+    // One region, two triangles over the whole frame.
+    const corners = [[20, 52], [28, 52], [28, 46], [20, 46]];
+    const [left, top, right, bottom] = pictureRect(corners);
+    const area = {
+      key: "1:Front",
+      canvas: {},
+      version: 1,
+      front: { data: new Uint8Array(4), width: 1, height: 1, version: 1 },
+      coordinates: corners,
+      meshId: "m1",
+      positions: new Float32Array([left, top, right, top, right, bottom, left, top, right, bottom, left, bottom]),
+      regionOf: new Float32Array(6),
+      colours: [[200, 40, 40]],
+      colourKey: "200,40,40",
+      ready: true,
+    };
+    const layer = createFrontGroundLayer({ areas: () => [area] });
+    layer.onAdd(map, gl);
+    const revision = layer.terrainTileRevision;
+    assert.equal(layer.terrainTileRevision, revision, "the same ground, the same number");
+    // The z6 tile under the frame (x 35 of 64: 16.9 to 22.5 degrees east), and one far from it.
+    const under = { canonical: { x: 35, y: 21, z: 6 }, wrap: 0 };
+    layer.renderToTerrainTile(gl, { tileID: under, width: 1024, height: 1024 });
+    layer.renderToTerrainTile(gl, { tileID: under, width: 1024, height: 1024 });
+    layer.renderToTerrainTile(gl, { tileID: { canonical: { x: 10, y: 21, z: 6 }, wrap: 0 }, width: 1024, height: 1024 });
+    assert.deepEqual(drawn, [6, 6], "drawn into the tile under it, not the other");
+    assert.deepEqual(tiles[0], [35 / 64, 21 / 64, 64, 0]);
+    assert.equal(calls.texImage2D, 2, "the picture and the field taken up once, not once a tile");
+    assert.equal(calls.bufferData, 2);
+    // Painted again: a new number, so MapLibre draws the tiles again, and the picture is taken up anew.
+    area.version = 2;
+    assert.ok(layer.terrainTileRevision > revision);
+    layer.renderToTerrainTile(gl, { tileID: under, width: 1024, height: 1024 });
+    assert.equal(calls.texImage2D, 3);
+    // Not yet ready (the map's fills of its regions not hidden): not drawn, so no region is drawn twice.
+    area.ready = false;
+    assert.ok(layer.terrainTileRevision > revision + 1);
+    layer.renderToTerrainTile(gl, { tileID: under, width: 1024, height: 1024 });
+    assert.equal(drawn.length, 3);
+    layer.onRemove(map, gl);
+  } finally {
+    if (had) globalThis.WebGL2RenderingContext = before;
+    else delete globalThis.WebGL2RenderingContext;
+  }
 });
