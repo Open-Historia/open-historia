@@ -173,6 +173,7 @@ A **release** is a version jump on the stable channel (2.5.0 was the first). It 
 - A build with no new entry (a hotfix, or a notice someone forgot) shows nothing: only a new entry is an update here.
 - The newest update shown is remembered the moment it is shown, so closing the game on it does not bring it back.
 - Where the browser refuses storage, nothing is shown, since it could not be remembered and would come back at every opening.
+- The website's browser version shows none (`buildShowsUpdateNotices(import.meta.env)` in `App.jsx`: a web build, `VITE_OH_WEB`, that is not the Android app, `VITE_OH_NATIVE`): "make update announcements not appear on the website beta" (the owner, 2026-11-09). The Android app and the desktop app show them; `?updateNotice=` previews still work there.
 
 The history shows every entry, whatever the device has seen.
 

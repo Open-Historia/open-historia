@@ -79,6 +79,17 @@ export const rememberUpdate = (id, storage = browserStorage()) => {
   }
 };
 
+// Whether this build shows update notices at all. The website's browser version
+// does not: "make update announcements not appear on the website beta" (the
+// owner, 2026-11-09). It is a demo that reloads onto each new build of the
+// site, and a notice there told of updates to the apps. Known by the build's own
+// flags (vite.config.ts, compile-time literals): the website is a web build
+// (VITE_OH_WEB) that is not the Android app, which is a web build too
+// (VITE_OH_NATIVE) and keeps its notices like the desktop app. A preview asked
+// for by the address (?updateNotice=) is shown all the same. Pure: App.jsx hands
+// in import.meta.env.
+export const buildShowsUpdateNotices = (env = {}) => !(env.VITE_OH_WEB && !env.VITE_OH_NATIVE);
+
 // The updates to show at this opening, newest first ([] for none; none where nothing can be kept).
 export const pendingUpdates = ({ updates = NOTICE_UPDATES, seen = seenUpdate(), keeps = canRememberUpdates() } = {}) => {
   if (updates.length === 0 || !keeps) return [];

@@ -8,7 +8,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { NOTICE_UPDATES, UPDATES } from "./notes.js";
 import { PAST_UPDATES } from "./notesPast.js";
 import { RELEASES } from "./notesReleases.js";
-import { UPDATES_SHOWN_MOST, UPDATE_NOTE_KEY, canRememberUpdates, noticePages, pendingUpdates, previewedUpdates, releaseChapterEntries, rememberUpdate, seenUpdate } from "./updateNotices.js";
+import { UPDATES_SHOWN_MOST, UPDATE_NOTE_KEY, buildShowsUpdateNotices, canRememberUpdates, noticePages, pendingUpdates, previewedUpdates, releaseChapterEntries, rememberUpdate, seenUpdate } from "./updateNotices.js";
 
 const memory = () => {
   const kept = new Map();
@@ -33,6 +33,19 @@ test("only an update with a notice is shown, once, and nothing where it could no
   const app = readFileSync(new URL("../../../App.jsx", import.meta.url), "utf8");
   assert.match(app, /if \(noticeShown && !notice\.preview\) rememberUpdate\(notice\.updates\[0\]\.id\);/);
   assert.doesNotMatch(app, /closeNotice = useCallback\([^\n]*rememberUpdate/);
+});
+
+test("the website's browser version shows no update notices; the apps do", () => {
+  // "make update announcements not appear on the website beta" (the owner, 2026-11-09).
+  assert.equal(buildShowsUpdateNotices({ VITE_OH_WEB: true, VITE_OH_NATIVE: false }), false, "the website");
+  assert.equal(buildShowsUpdateNotices({ VITE_OH_WEB: true, VITE_OH_NATIVE: true }), true, "the Android app, a web build too");
+  assert.equal(buildShowsUpdateNotices({ VITE_OH_WEB: false, VITE_OH_NATIVE: false }), true, "the desktop app");
+  assert.equal(buildShowsUpdateNotices({ DEV: true }), true, "a dev server");
+  assert.equal(buildShowsUpdateNotices(), true);
+  const app = readFileSync(new URL("../../../App.jsx", import.meta.url), "utf8");
+  assert.match(app, /updates: buildShowsUpdateNotices\(import\.meta\.env\) \? pendingUpdates\(\) : \[\]/);
+  // Nothing else asks for the pending notices.
+  assert.equal(app.match(/pendingUpdates\(/g)?.length, 1);
 });
 
 test("each update is shown once a device; one that missed several is shown all of them, newest first", () => {
