@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { applyEventImpactsToWorld, normalizeEvents } from "../../runtime/gameState.js";
 import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { enlarge, syntheticMap } from "../../runtime/fronts/syntheticMap.js";
-import { FRONT_MARK, planFrontMoments, runTurnFronts } from "./frontTurn.js";
+import { FRONT_MARK, attachFrontFlips, frontWorldReaders, planFrontMoments, runTurnFronts } from "./frontTurn.js";
 
 const legend = { A: "Aland", B: "Borduria", "~": null };
 const cities = [{ name: "Alba", lng: 20.6, lat: 51.4, capital: true }, { name: "Brod", lng: 23.3, lat: 51.2, capital: true }];
@@ -89,4 +89,46 @@ test("a group the turn founds, fighting in it, takes ground as a group the same 
   assert.equal(Object.values(after.regionOwnershipOverrides).includes("Free East"), false);
   assert.equal(after.polityOverrides["Free East"], undefined);
   assert.ok(Object.values(after.groupAreas).filter((name) => name === "Free East").length > east(map).length);
+});
+
+test("a stray groupOps take or update naming a country does not make it a group to the engine: its captures stay control", async () => {
+  const map = sheet();
+  const war = { id: "war-1", title: "The War", status: "active", sideA: ["Aland"], sideB: ["Borduria"], startedDate: "2024-02-01", lastUpdatedDate: "2024-02-01" };
+  const world = worldOn(map, { wars: [war] });
+  const events = normalizeEvents([
+    { id: "e1", date: "2024-03-02", title: "Aland advances", description: "Aland pushes east.", source: "ai", impacts: { groupOps: [{ op: "take", name: "Aland", regionIds: ["r0-0"] }, { op: "update", name: "aland", description: "A country." }] } },
+    { id: "e2", date: "2024-03-20", title: "The war goes on", description: "The fighting goes on.", source: "ai", impacts: {} },
+  ]);
+  const run = await runTurnFronts(turn(map, world, { events, warStages: [[war]], staff: true, frontOrders: [{ battlefield: "", side: "Aland", order: "advance", sector: "all", effort: "major", date: FROM }] }));
+  const won = run.flips.filter((flip) => flip.to === "Aland");
+  assert.ok(won.length > 0, "Aland takes ground");
+  for (const flip of won) assert.equal(flip.kind, "control", JSON.stringify(flip));
+  const groupOps = run.events.flatMap((event) => event.impacts.groupOps ?? []).filter((op) => op.by === FRONT_MARK);
+  assert.deepEqual(groupOps, [], "nothing of Aland's is a group's area");
+});
+
+test("a country at war with a group on a third country's land: its force is founded as its own, and the land stays that country's", () => {
+  const flips = [
+    { day: 2, date: "2024-03-03", battlefield: "Aland - Free Hills front", regionId: "n1", from: "Free Hills", to: "Aland Forces in Neutralia", kind: "groupTake", owner: "Aland", land: "Neutralia" },
+    { day: 4, date: "2024-03-05", battlefield: "Aland - Free Hills front", regionId: "n2", from: "Free Hills", to: "Aland Forces in Neutralia", kind: "groupTake", owner: "Aland", land: "Neutralia" },
+  ];
+  const events = normalizeEvents([{ id: "e1", date: "2024-03-10", title: "The hills", description: "Aland fights the Free Hills.", source: "ai", impacts: {} }]);
+  const { events: carried } = attachFrontFlips(events, flips, { dayOf: () => 9 });
+  const ops = carried[0].impacts.groupOps;
+  assert.deepEqual(ops.map((op) => [op.op, op.name, op.owner, op.regionIds]), [["take", "Aland Forces in Neutralia", "Aland", ["n1"]], ["take", "Aland Forces in Neutralia", "Aland", ["n2"]]]);
+  assert.deepEqual(carried[0].impacts.regionControlOps ?? [], [], "nothing is annexed");
+  const world = {
+    regionOwnershipOverrides: { n1: "Neutralia", n2: "Neutralia" },
+    polityOverrides: { Aland: { code: "Aland", name: "Aland", aliases: [], color: "", note: "" }, Neutralia: { code: "Neutralia", name: "Neutralia", aliases: [], color: "", note: "" } },
+    groups: { "Free Hills": { name: "Free Hills", description: "Hill clans.", color: "#e11d48" } },
+    groupAreas: { n1: "Free Hills", n2: "Free Hills" },
+  };
+  const after = applyEventImpactsToWorld({ colors: {}, events: carried, world }).world;
+  assert.equal(after.groups["Aland Forces in Neutralia"].owner, "Aland");
+  assert.match(after.groups["Aland Forces in Neutralia"].description, /taken from Free Hills/);
+  assert.deepEqual(after.groupAreas, { n1: "Aland Forces in Neutralia", n2: "Aland Forces in Neutralia" });
+  assert.deepEqual(after.regionOwnershipOverrides, world.regionOwnershipOverrides, "Neutralia keeps its land");
+  // And the engine is told whose force it is next turn.
+  assert.equal(frontWorldReaders(after).groupOwnerOf("aland forces in neutralia"), "Aland");
+  assert.equal(frontWorldReaders(after, { groups: false }).groupOwnerOf("Aland Forces in Neutralia"), "");
 });

@@ -120,6 +120,8 @@ const createRun = (input) => {
   const era = eraOf(fromDate, Number.isInteger(input?.era) ? input.era : null);
   const controller = new Map();
   const group = new Map();
+  // The forces the run founded (day.js settleRegions): folded name -> [name, the country whose force it is].
+  const forces = new Map();
   const areas = input?.groupAreas && typeof input.groupAreas === "object" ? input.groupAreas : {};
   const run = {
     input,
@@ -174,7 +176,11 @@ const createRun = (input) => {
     controllerOf: (id) => (controller.has(id) ? controller.get(id) : clean(input?.controllerOf?.(id))),
     sovereignOf: (id) => clean(input?.sovereignOf?.(id)),
     groupOf: (id) => (group.has(id) ? group.get(id) : clean(areas[id])),
-    isGroup: (name) => input?.isGroup?.(name) === true,
+    isGroup: (name) => forces.has(fold(name)) || input?.isGroup?.(name) === true,
+    // The country whose force a group is (runtime/groups.js `owner`), or "".
+    groupOwnerOf: (name) => (forces.has(fold(name)) ? forces.get(fold(name))[1] : clean(input?.groupOwnerOf?.(name))),
+    // A country's force founded during the run (day.js settleRegions).
+    foundForce: (name, owner) => forces.set(fold(name), [clean(name), clean(owner)]),
     strengthOf: (name) => {
       const weight = Number(input?.strengthOf?.(name));
       return weight > 0 && Number.isFinite(weight) ? weight : 1;
@@ -209,7 +215,7 @@ const createRun = (input) => {
   };
   // (What the run has itself been told or worked out of the world, kept where a copy of it fought on another core
   // can be given it: rehearsalPacket below. Not among its own keys.)
-  Object.defineProperty(run, "lookups", { value: { controller, group, figures, curves } });
+  Object.defineProperty(run, "lookups", { value: { controller, group, figures, curves, forces } });
   // A region changed hands: every battlefield it lies on reads its side again.
   run.regionChanged = (id) => {
     for (const battle of run.battles) {
@@ -245,15 +251,19 @@ const regionsOf = (run) => (Array.isArray(run.input?.map?.regions) ? run.input.m
 const openBattles = (run) => run.battles.filter((battle) => battle.status !== "closed" && !battle.home);
 
 // Which side of a war holds a region: the group in whose area it lies if that
-// group is in the war, else its controller.
+// group is in the war, or the country whose force that group is if that
+// country is (battle.js groupSideOf), else its controller.
 const warSideOf = (run, war, id) => {
   const sideOf = (name) => {
     const wanted = fold(name);
     if (!wanted) return -1;
     return war.sides[0].some((member) => fold(member) === wanted) ? 0 : war.sides[1].some((member) => fold(member) === wanted) ? 1 : -1;
   };
-  const group = sideOf(run.groupOf(id));
-  return group >= 0 ? group : sideOf(run.controllerOf(id));
+  const name = run.groupOf(id);
+  const group = name ? sideOf(name) : -1;
+  if (group >= 0) return group;
+  const owner = name ? sideOf(run.groupOwnerOf(name)) : -1;
+  return owner >= 0 ? owner : sideOf(run.controllerOf(id));
 };
 
 // ---- battlefields opening and closing ------------------------------------------
@@ -813,9 +823,12 @@ const tellAttack = (run, battle, attacker, defender, day) => {
 // Which of two names holds a region, 0 or 1, or -1: the group in whose area it lies where that group is one of
 // them, else its controller, as in a war between the two (warSideOf). A group that is neither of them takes
 // nothing from its country: an attack across a border it holds was refused as no border at all.
+// (A country's force holds for the country whose force it is: battle.js groupSideOf.)
 const pairSideOf = (run, first, second) => (id) => {
+  const one = (name) => name && (name === fold(first) || name === fold(second));
   const group = fold(run.groupOf(id));
-  const holder = group && (group === fold(first) || group === fold(second)) ? group : fold(run.controllerOf(id));
+  const owner = group && !one(group) ? fold(run.groupOwnerOf(group)) : "";
+  const holder = one(group) ? group : one(owner) ? owner : fold(run.controllerOf(id));
   return holder && holder === fold(first) ? 0 : holder && holder === fold(second) ? 1 : -1;
 };
 // Whether two names hold land that touches.
@@ -2145,10 +2158,13 @@ const transportWar = (run, transport) => {
   const named = run.wars.get(transport.warId);
   return fought(named) ? named : [...run.wars.values()].find(fought) ?? null;
 };
-// Who holds a region in name, to a war: the group whose area it is if that group is in it.
+// Who holds a region in name, to a war: the group whose area it is if that group is in it, or the country whose
+// force that group is if that country is (battle.js groupSideOf), else its controller.
 const holderIn = (run, war, id) => {
   const group = run.groupOf(id);
-  return group && warSide(war, group) >= 0 ? group : run.controllerOf(id);
+  if (group && warSide(war, group) >= 0) return group;
+  const owner = group ? run.groupOwnerOf(group) : "";
+  return owner && warSide(war, owner) >= 0 ? owner : run.controllerOf(id);
 };
 const holderAtPoint = (run, grid, war, lng, lat) => {
   const cell = grid.cellOf(lng, lat);
@@ -2825,7 +2841,8 @@ const snapshot = (run) => {
   const closed = records.filter((record) => record.status === "closed").slice(-MAX_CLOSED_BATTLEFIELDS);
   return {
     battlefields: [...open, ...closed],
-    flips: run.flips.map(({ day: on, date, battlefield, regionId, from, to, kind }) => ({ day: on, date, battlefield: battlefield.name, regionId, from, to, kind })),
+    // (A take by a country's force says whose it is, and on whose land: day.js settleRegions.)
+    flips: run.flips.map(({ day: on, date, battlefield, regionId, from, to, kind, owner, land }) => ({ day: on, date, battlefield: battlefield.name, regionId, from, to, kind, ...(owner ? { owner, land } : {}) })),
     // The countries troops were sent into, each with the war it is in from
     // that day and the side of it (0 for its first, 1 for its second).
     joins: run.joins.map(({ day: on, date, battlefield, warId, name, side, by }) => ({ day: on, date, battlefield: battlefield.name, warId, name, side, by })),
@@ -2888,6 +2905,7 @@ export const rehearsal = (run, battle) => {
   copy.grown = 6;
   const controllers = new Map();
   const groups = new Map();
+  const forces = new Map();
   const stub = Object.create(run);
   Object.assign(stub, {
     battles: [copy],
@@ -2911,6 +2929,10 @@ export const rehearsal = (run, battle) => {
     setController: (id, who) => { controllers.set(id, who); },
     groupOf: (id) => (groups.has(id) ? groups.get(id) : run.groupOf(id)),
     setGroup: (id, who) => { groups.set(id, who); },
+    // (A force it founds is its own too.)
+    isGroup: (name) => forces.has(fold(name)) || run.isGroup(name),
+    groupOwnerOf: (name) => (forces.has(fold(name)) ? forces.get(fold(name)) : run.groupOwnerOf(name)),
+    foundForce: (name, owner) => { forces.set(fold(name), clean(owner)); },
     regionChanged: () => {},
     spendFlip: () => {},
     input: { ...run.input, watch: null, staffPolicy: null },

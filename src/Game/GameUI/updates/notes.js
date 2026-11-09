@@ -54,6 +54,28 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "only if the war is against the group. otherwise the group keeps its occupation", and "if someone is at war with
+    // a group on territory they do not own, it should create another group there that takes the area from the group
+    // without actually annexing the territory" (the owner, 2026-11-09): runtime/fronts/day.js settleRegions forceFor,
+    // battle.js groupSideOf, runtime/groups.js `owner`. And a stray groupOps take naming a country no longer makes it a
+    // group to the engine (AI/frontTurn.js runTurnFronts foundedGroups).
+    id: "2026-11-group-occupation",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Wars across a group's ground",
+        items: [
+          "Ground inside a group's area is taken from the group only by a side at war with it: in any other war the group keeps its area there.",
+          "A country at war with a group on another country's land takes that ground as a force of its own, a new group, and annexes nothing: the land stays that country's.",
+          "That force's ground counts for its country in every war the country fights, so the battlefield against the group goes on across it.",
+          "A time skip that named a country as if it were a group no longer turns that country's conquests into a group's area.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it so if there are multiple minor update annoucements, it merges them all into one changelog" (the owner,
     // 2026-11-09): several minor updates owed at one opening are one card (updateNotices.js noticePages). Dated
     // 2026-11-05 so it sorts under the 2.5 release.
