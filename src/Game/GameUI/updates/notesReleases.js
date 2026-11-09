@@ -31,6 +31,7 @@ export const RELEASES = [
       // Multiplayer is not part of 2.5.
       "2026-10-discord-invites": "multiplayer",
       "2026-10-shared-secrets": "multiplayer",
+      "2026-11-shared-game-diplomacy": "multiplayer",
       // Already on the stable channel before 2.5.
       "2026-11-updates-not-imports": "already released",
       "2026-11-install-count": "already released",

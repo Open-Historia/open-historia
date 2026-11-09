@@ -54,6 +54,26 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "in multiplayer you cant do diplomacy if you arent the host": a thread a player began from a country's panel,
+    // the map, the advisor or the War Room was made up and saved on the player's own screen, where a shared game
+    // saves nothing, and the host refused its first line ("You are not in that conversation"). The host had threads
+    // of its own to fall back on; a guest had none. Such a thread now waits on the screen until its first line opens
+    // it on the host (multiplayer/client/sharedThreads.js), and opens there once the host's view brings it back.
+    id: "2026-11-shared-game-diplomacy",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Diplomacy for every player in shared games",
+        items: [
+          "In a shared game, a conversation you start from a country’s panel, the map, your advisor or the War Room now reaches the host, and the AI’s governments answer you in it. Players who were not hosting were told they were not in that conversation.",
+          "Your first message opens the conversation, and it stays open on your screen for the answer.",
+        ],
+      },
+    ],
+  },
+  {
     // The owner, 2026-11-09: "3d terrain and warfronts do not seem to work together, the war terrain is not 3d". A
     // battlefield's ground and the bare map put back under it are layers that draw themselves, which MapLibre does not
     // lay on the terrain as it does its fills: they were drawn at the sea's level, apart from the country round them.
