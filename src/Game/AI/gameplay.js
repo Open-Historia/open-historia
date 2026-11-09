@@ -277,6 +277,7 @@ import {
   backgroundAiAllowance,
   createJumpBudget,
   jumpRequestCap,
+  keepForRefusedSkip,
   lookupRoundLimit,
   requestLedger,
   savingRequests,
@@ -18041,8 +18042,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             segmentIndex,
           });
           state.folded = false;
-          // (Its checks are a request of their own now: kept for them, as above.)
-          state.requests?.budget?.reserve?.("review", 1);
+          // (The skip asked again keeps a request first, then its checks, which are a request of their own now; upkeep waits: requestBudget.js keepForRefusedSkip.)
+          keepForRefusedSkip(state.requests?.budget);
           segmentDraft = null;
           segmentComplaints.length = 0;
           statuses.length = 0;

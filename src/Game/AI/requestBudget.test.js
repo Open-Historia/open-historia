@@ -28,6 +28,7 @@ import {
     describeDay,
     describeJumpCost,
     jumpRequestCap,
+    keepForRefusedSkip,
     requestsByTask,
 } from "./requestBudget.js";
 
@@ -512,3 +513,34 @@ test("a request kept for the history fold and not needed goes to the Stats refre
         assert.match(settingsUi, /useState\(\(\) => requestSettings\.noRequestLimit\(\)\)/);
     });
 }
+
+// The owner's log, 2026-11-04: the folded skip refused (400), one request
+// spent, and the skip asked again was "Not asked: this time skip has used its
+// 3 requests": the review and the Stats refresh held the other two.
+test("a refused folded skip is asked again before its checks, and its upkeep waits", () => {
+    const budget = createJumpBudget({ cap: JUMP_REQUEST_CAP, only: SKIP_SPENDERS });
+    budget.reserve("jump", 1);
+    budget.reserve("stats", 1);
+    assert.equal(budget.take("jump"), true, "the folded skip, refused");
+    assert.equal(keepForRefusedSkip(budget), 1);
+    assert.equal(budget.take("jump"), true, "asked again the old way");
+    assert.equal(budget.take("review"), true, "its checks");
+    assert.equal(budget.take("stats"), false, "the Stats refresh is put off to the next skip");
+    assert.equal(budget.spent, 3);
+
+    // With room for everything nothing is put off.
+    const roomy = createJumpBudget({ cap: 5, only: SKIP_SPENDERS });
+    roomy.reserve("jump", 1);
+    roomy.reserve("stats", 1);
+    roomy.take("jump");
+    keepForRefusedSkip(roomy);
+    assert.deepEqual(["jump", "review", "stats"].map((spender) => roomy.take(spender)), [true, true, true]);
+
+    // A skip in segments: the later segments keep theirs.
+    const pieces = createJumpBudget({ cap: jumpRequestCap({ segments: 3 }), only: SKIP_SPENDERS });
+    pieces.reserve("jump", 3);
+    pieces.take("jump");
+    assert.equal(keepForRefusedSkip(pieces), 1);
+    assert.deepEqual([1, 2, 3].map(() => pieces.take("jump")), [true, true, true], "this segment again, and the two after it");
+    assert.equal(keepForRefusedSkip(null), 0);
+});

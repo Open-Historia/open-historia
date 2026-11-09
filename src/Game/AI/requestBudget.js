@@ -529,6 +529,34 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null, state = 
     };
 };
 
+// A folded skip refused as a request (gameplay.js, "The folded time skip") is
+// asked again the old way, and then its checks need a request of their own.
+// The skip asked again comes first, the checks next, and upkeep last: upkeep
+// put off is due again on the next skip, but a skip with no request is the
+// canned events. The refused request was spent, and the review used to be
+// reserved before the skip was asked again, so on a budget of three that also
+// kept a request for the Stats refresh the skip itself was refused (the
+// owner's log, 2026-11-04: "Not asked: this time skip has used its 3
+// requests", one request spent, the turn fell back). Returns what it kept for
+// the skip (1, or 0 when nothing could be freed).
+export const UPKEEP_SPENDERS = Object.freeze(["stats", "history"]);
+export const keepForRefusedSkip = (budget) => {
+    if (!budget || typeof budget.reserve !== "function") return 0;
+    // (reserve(spender, 0) reads what the spender holds: a skip in segments holds one for each segment still to come.)
+    const keep = (spender) => {
+        const held = budget.reserve(spender, 0);
+        if (budget.reserve(spender, 1) > held) return true;
+        for (const upkeep of UPKEEP_SPENDERS) {
+            if (!budget.release?.(upkeep)) continue;
+            if (budget.reserve(spender, 1) > held) return true;
+        }
+        return false;
+    };
+    const kept = keep("jump") ? 1 : 0;
+    keep("review");
+    return kept;
+};
+
 // What the time panel says a skip will cost before the player presses it: one
 // request (one per segment), and up to the cap only when function calling may
 // add rounds to it (`lookups`: the switch on, with the lookup functions on);
