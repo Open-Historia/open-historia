@@ -2904,8 +2904,10 @@ const normalizeUnitOp = (entry) => {
     // show old ships", a player's report, 2026-11-09). A refit that gives no
     // strength keeps the one the formation has.
     const composition = normalizeOptionalString(entry.composition);
-    const given = entry.strength !== undefined && entry.strength !== null && entry.strength !== "";
+    const given = entry.strength !== undefined && entry.strength !== null && String(entry.strength).trim() !== "";
     if (composition && !given) return { op, unitId, strength: null, composition, note: normalizeOptionalString(entry.note) };
+    // (Nor does one that says neither: a missing strength is unchanged, never 0, which destroys the formation.)
+    if (!given) return null;
     return { op, unitId, strength: clampUnitStrength(entry.strength ?? 0), ...(composition ? { composition } : {}), note: normalizeOptionalString(entry.note) };
   }
 

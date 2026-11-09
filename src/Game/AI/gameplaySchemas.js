@@ -408,7 +408,7 @@ const unitOpSchema = {
         unitId: nonEmptyTextSchema("The existing unit's NAME, exactly as Current Military Units lists it."),
         strength: {
           type: "integer",
-          description: "The formation's remaining percentage of established strength. 0 destroys it.",
+          description: "The formation's remaining percentage of established strength. 0 destroys it; omit for a refit.",
           minimum: 0,
           maximum: 100,
         },
@@ -416,7 +416,7 @@ const unitOpSchema = {
         composition: textSchema("Its new make-up, when refitted."),
         note: textSchema("Brief explanation of the operation."),
       },
-      required: ["op", "unitId", "strength"],
+      required: ["op", "unitId"],
       additionalProperties: false,
     },
     {

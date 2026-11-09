@@ -60,7 +60,7 @@ import {
   worldShareNote,
 } from "../../runtime/receiptPlayerNotes.js";
 import { normalizeFiledEvents, previewFiledMark, toFiledEvent } from "../../runtime/filedEvents.js";
-import { buildUnitDirectorInput, directGeneratedUnitOps, landHolders, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, pickCombatantPlace, pruneWarUnits } from "./nativeUnitDirector.js";
+import { buildUnitDirectorInput, directGeneratedUnitOps, landHolders, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, pickCombatantPlace, pruneWarUnits, strengthGiven } from "./nativeUnitDirector.js";
 import { applyMapConsequences, markOrderedEvents, markSceneOutcome } from "./mapConsequences.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nativeStructureDirector.js";
@@ -2395,7 +2395,7 @@ const canonicalizeNamedThings = (containers, world) => {
         || normalizeString(op.unitName)
         || normalizeString(op.name);
       if (!written || unitIds.has(written)) continue;
-      const removes = normalizeString(op.op).toLowerCase() === "remove" || (normalizeString(op.op).toLowerCase() === "strength" && Number(op.strength) === 0);
+      const removes = normalizeString(op.op).toLowerCase() === "remove" || (normalizeString(op.op).toLowerCase() === "strength" && strengthGiven(op) && Number(op.strength) === 0);
       const unit = findUnitByRef(written, units, { owner: normalizeString(op.ownerCode ?? op.owner), context })
         || (removes ? newestTwinByRef(written, units) : null);
       if (!unit) continue;

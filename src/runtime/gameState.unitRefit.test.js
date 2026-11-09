@@ -10,6 +10,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 import { applyEventImpactsToWorld, applyUnitOpBatch, normalizeWorldState } from "./gameState.js";
 import { getGameplayTool } from "../Game/AI/gameplaySchemas.js";
@@ -58,4 +59,56 @@ test("the time skip's schema lets a strength op carry the new composition", () =
   const strength = ops.find((entry) => entry.properties.op.enum.includes("strength"));
   assert.equal(strength.properties.composition?.type, "string");
   assert.ok(!strength.required.includes("composition"), "a strength op without a refit needs none");
+});
+
+// A refit could destroy the fleet it refitted: the schema required a strength, the prompt's example showed
+// "strength":0 beside the new make-up, and a provider that does not hold to the schema sends strength null, which
+// the unit director read as 0 (deleting the formation from its working map), the turn read as a removal and the
+// reveal told as "strength null%". A missing or null strength is "unchanged" wherever a refit is read.
+test("a refit with no strength, or a null one, keeps the formation and its strength everywhere it is read", async () => {
+  for (const strength of [undefined, null, ""]) {
+    const refit = { op: "strength", unitId: "fleet-1", strength, composition: "1 carrier, 4 Akizuki-class destroyers" };
+    const { units } = applyUnitOpBatch([fleet], [], [refit]);
+    assert.equal(units.length, 1, `strength ${strength}`);
+    assert.equal(units[0].strength, 80);
+    assert.equal(units[0].composition, "1 carrier, 4 Akizuki-class destroyers");
+  }
+  // One that says neither a strength nor a make-up changes nothing; it no longer sinks the fleet.
+  assert.equal(applyUnitOpBatch([fleet], [], [{ op: "strength", unitId: "fleet-1" }]).units[0]?.strength, 80);
+
+  // The unit director's working map keeps the refitted formation, so its later orders still find it.
+  const { sanitizeDirectorOrders, strengthGiven } = await import("../Game/AI/nativeUnitDirector.js");
+  assert.deepEqual([undefined, null, "", "abc", 0, "40"].map((strength) => strengthGiven({ strength })), [false, false, false, false, true, true]);
+  const event = {
+    title: "Japanese Carrier Escort Group sails for Truk after its refit",
+    description: "The navy's carrier escort group, its destroyers replaced, sails south.",
+    kind: "military",
+    impacts: { unitOps: [{ op: "strength", unitId: "fleet-1", strength: null, composition: "1 carrier, 4 Akizuki-class destroyers" }] },
+  };
+  const { acceptedByEvent } = sanitizeDirectorOrders({
+    events: [event],
+    orders: [{ eventIndex: 0, unitOps: [{ op: "move", unitId: "fleet-1", toLng: 151.8, toLat: 7.4, posture: "transit" }] }],
+    units: [fleet],
+    game: {},
+  });
+  assert.equal(acceptedByEvent.get(0)?.length, 1, "the refitted fleet is still there to move");
+
+  // The reveal tells the refit, not "strength null%".
+  const { describeEventMapChanges } = await import("../Game/GameUI/turnReveal.js");
+  const [line] = describeEventMapChanges({ impacts: { unitOps: [event.impacts.unitOps[0]] } }, { unitName: () => "Carrier Escort Group" });
+  assert.equal(line.text, "Carrier Escort Group: refitted: 1 carrier, 4 Akizuki-class destroyers");
+
+  // The turn binds a written name: only a strength of 0 is a removal.
+  const gameplay = fs.readFileSync(new URL("../Game/AI/gameplay.js", import.meta.url), "utf8");
+  assert.match(gameplay, /normalizeString\(op\.op\)\.toLowerCase\(\) === "strength" && strengthGiven\(op\) && Number\(op\.strength\) === 0\);/);
+});
+
+test("the time skip's schema and prompt let a refit give no strength, and never show it a strength of 0", () => {
+  const schema = getGameplayTool("jumpForward").schema;
+  const ops = schema.properties.events.items.properties.impacts.properties.unitOps.items.anyOf;
+  const strength = ops.find((entry) => entry.properties.op.enum.includes("strength"));
+  assert.ok(!strength.required.includes("strength"), "a refit gives only the make-up");
+  const prompts = fs.readFileSync(new URL("../Game/AI/gameplayPrompts.js", import.meta.url), "utf8");
+  assert.doesNotMatch(prompts, /"strength":0,"composition"/);
+  assert.match(prompts, /for a refit \{"op":"strength","unitId":"<the unit's name>","composition":"<its new make-up>","note":""\}/);
 });
