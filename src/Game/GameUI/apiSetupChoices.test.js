@@ -258,8 +258,8 @@ test("Command Code turns the switch on, and its steps say so without asking", ()
   assert.equal(store.get(SWITCH_KEY), undefined, "drawing the steps sets nothing");
   saveSetupChoice("commandcode", { apiKey: "fake-command-code-key-4" });
   assert.equal(store.get(SWITCH_KEY), "1");
-  assert.equal(store.get("ai_background_activity"), "1", "with everything it turns on");
-  assert.equal(store.get("ai_lookup_functions"), "1");
+  assert.equal(store.get("ai_lookup_functions"), "1", "with what it turns on");
+  assert.equal(store.get("ai_background_activity"), undefined, "Background AI is no switch any more");
 });
 
 test("a local server through Custom turns it on; a hosted one leaves it as it was", () => {
@@ -286,8 +286,7 @@ test("Gemini's free key leaves it off, and its steps show nothing about it", () 
   assert.equal(switchRow.test(render({ initialChoice: "gemini" })), false);
   saveSetupChoice("gemini", { apiKey: "AIzaFAKEKEYFORTHETEST000" });
   assert.equal(store.get(SWITCH_KEY), "0");
-  assert.equal(store.get("ai_background_activity"), undefined, "nothing else is touched for a limited key");
-  assert.equal(store.get("ai_lookup_functions"), undefined);
+  assert.equal(store.get("ai_lookup_functions"), undefined, "nothing else is touched for a limited key");
   // A player who had turned it on and then sets up a free key is back on the free key's settings.
   store.set(SWITCH_KEY, "1");
   saveSetupChoice("gemini", { apiKey: "AIzaFAKEKEYFORTHETEST000" });

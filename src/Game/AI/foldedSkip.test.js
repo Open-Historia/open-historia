@@ -245,8 +245,9 @@ test("the history a skip folds is planned before it and written from its own ans
   const prepare = functionBody("prepareSkipHistoryFold");
   assert.match(prepare, /planHistoryConsolidation\(bundle, \{ round: \(Number\(bundle\.game\?\.round\) \|\| 0\) \+ 1 \}\)/, "for the round the skip is about to produce");
   assert.match(prepare, /if \(!plan\.due\) return null;/);
-  assert.match(prepare, /if \(hasPendingBatch\("eventConsolidator", campaignId\)\) return \{ separate: true \};/);
-  assert.match(prepare, /if \(batchBackgroundTasksEnabled\(\) && providerSupportsBatch\("eventConsolidator"\)\) return \{ separate: true \};/, "a player who sends this pass as a batch still does");
+  // A batch sent before the consolidator's own request went folds these events when it lands.
+  assert.match(prepare, /if \(hasPendingBatch\("eventConsolidator", campaignId\)\) return null;/);
+  assert.doesNotMatch(prepare, /separate/);
   assert.match(prepare, /buildTaskSystemPrompt\("eventConsolidator", \{ variables, lookups: null, reminders: false \}\)/, "the consolidator's own prompt, whole");
 
   const segments = functionBody("runJumpSegments");
@@ -254,17 +255,20 @@ test("the history a skip folds is planned before it and written from its own ans
   assert.match(segments, /delete payload\[HISTORY_FIELD\];/, "the fold never reaches anything that applies events");
 
   const review = functionBody("foldedTurnReview");
-  assert.match(review, /if \(!fold\?\.separate\) review\.history = \{ due: false \};/);
+  assert.match(review, /\n {2}review\.history = \{ due: false \};/);
   assert.ok(review.indexOf("review.history = { due: false }") < review.indexOf("if (normalizeString(state.generation?.source) === \"fallback\") return review;"), "a canned turn folds nothing and asks for nothing");
   assert.match(review, /\.\.\.judgeSkipHistoryAnswer\(state\.foldedHistoryAnswer, \{ currentText: fold\.currentText, span: fold\.span, eraWords: fold\.eraWords \}\),/);
 
-  // Read by the pass that used to make the request.
-  assert.match(gameplaySource, /\{ requests, signal: projects\?\.signal, campaignId, replay, skipFold: review\?\.history \?\? null \}\);/);
-  const pass = functionBody("compactHistoryIfNeeded");
-  assert.match(pass, /if \(skipFold && !force\) \{\s*\n\s*if \(!skipFold\.due\) return world;/, "nothing was due before the skip: nothing is asked after it");
-  const written = pass.slice(pass.indexOf("if (skipFold.ok) {"), pass.indexOf("const waiting ="));
-  assert.equal(/runJsonTask|consolidateHistoryBatch|budget\.take/.test(written), false, "a carried fold is written with no request");
-  assert.match(pass, /if \(waiting <= HISTORY_CONSOLIDATION\.ownRequestThreshold\) \{/, "a fold that failed waits for the next skip");
+  // Written from the skip's answer, and only from it: the event consolidator,
+  // a request of its own after a skip, went on 2026-11-07.
+  assert.match(gameplaySource, /nextWorld = applySkipHistoryFold\(\{[\s\S]{0,200}?\}, review\?\.history \?\? null\);/);
+  const pass = functionBody("applySkipHistoryFold");
+  assert.match(pass, /if \(!skipFold\?\.due\) return world;/, "nothing was due before the skip: nothing is folded after it");
+  assert.match(pass, /if \(!skipFold\.ok\) \{[\s\S]*?return world;\s*\n\s*\}/, "a fold that failed waits for the next skip");
+  assert.equal(/runJsonTask|callAI|budget\.take/.test(pass), false, "a carried fold is written with no request");
+  for (const gone of ["consolidateHistoryBatch", "compactHistoryIfNeeded", "consolidateHistoryNow"]) {
+    assert.equal(gameplaySource.includes(gone), false, `${gone} is gone`);
+  }
 });
 
 test("a refused folded request is asked again the old way, and only a refusal is", () => {
@@ -289,12 +293,12 @@ test("the task runner says when a call ended on the connection, on its result an
   assert.match(gameplaySource, /import \{ OUTPUT_LIMIT_MESSAGE, [^}]*\bisUnreachableError \} from "\.\/providerErrors\.js";/);
 });
 
-test("the finish reads a folded skip's review off its own answer, and asks for one only when it was not folded", () => {
+test("the finish reads a folded skip's review off its own answer, and a skip asked the old way has none", () => {
   const body = functionBody("finishTimelineJump");
   assert.match(body, /const folded = Boolean\(state\.folded\);/);
-  // A review that has to be asked is one of the turn's checks (turnChecks.js):
-  // a failed one holds the turn. The folded one makes no request and cannot fail.
-  assert.match(body, /const review = folded\s*\n\s*\? foldedTurnReview\(\{ context, merged, state \}\)\s*\n\s*: await checks\.run\("review", \(\) => runTurnReview\(\{ context, merged, signal, state \}\), reviewFailure, \{ copy: copyReviewParts \}\);/);
+  // The folded one makes no request and cannot fail. The turn review a skip
+  // asked the old way got went on 2026-11-07: its record is the empty one.
+  assert.match(body, /const review = folded\s*\n\s*\? foldedTurnReview\(\{ context, merged, state \}\)\s*\n\s*: \{ asked: false, folded: false, parts: \{\}, reasons: \[\], boardShownEvents: \[\], agentReports: \[\], actionOutcomePlan: null \};/);
   const strip = body.slice(body.indexOf("if (!folded) {"), body.indexOf("const review ="));
   assert.match(strip, /merged\.events = normalizeArray\(merged\.events\)\.map\(withoutBoardOps\);/, "a board op is never left on an event the board pass will also move");
   assert.match(strip, /state\.hiddenEvents = normalizeArray\(state\.hiddenEvents\)\.map\(withoutBoardOps\);/);
@@ -325,10 +329,9 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
   assert.match(requests, /const unlimited = unlimitedRequests\(\);/);
   assert.equal(/createJumpBudget\(\{(?![^}]*cap:)/.test(gameplaySource), false, "every budget has a cap");
   assert.match(requests, /budget\.reserve\("jump", pieces\);/, "every segment keeps its own request");
-  // Upkeep already due keeps its request, one at a time, the history first.
-  assert.ok(requests.includes('if (upkeep?.history) budget.reserve("history", 1);') && requests.includes('else if (upkeep?.stats) budget.reserve("stats", 1);'));
-  assert.equal(gameplaySource.split("upkeep: skipUpkeepDue(").length - 1, 4, "every budget a skip is given");
-  assert.ok(functionBody("trackedStatsPutOff").includes('requests?.budget.release?.("history");'));
+  // There is no upkeep after a skip to keep a request for: the Stats refresh
+  // and the event consolidator went on 2026-11-07.
+  assert.equal(/skipUpkeepDue|upkeep\?\.|reserve\("(?:history|stats|review)"/.test(gameplaySource), false);
   // The two that asked outside the list are told no before they build anything.
   assert.match(gameplaySource, /const insideSkip = Boolean\(requests\?\.budget\) && !requests\.budget\.allows\("geography"\);/);
   assert.match(functionBody("repairSkipStorylineMotion"), /const noRepairRequests = Boolean\(state\?\.requests\?\.budget\) && !state\.requests\.budget\.allows\("repair"\);/);
@@ -358,13 +361,15 @@ test("the folded review takes the ops off the events before anything applies the
   assert.match(body, /if \(state\.foldedPrep\?\.board\) \{/, "an empty board is not looked at");
 });
 
-test("every check after a skip always runs: no switch is read anywhere in the turn", () => {
+test("every check a Scene's map check makes always runs: no switch is read anywhere in the turn", () => {
   assert.equal(/reviewSection\(/.test(gameplaySource), false);
   assert.equal(/requestSettings\b/.test(gameplaySource), false, "the settings module is no longer needed here at all");
-  const review = functionBody("runTurnReview");
-  for (const builder of ["buildUnitDirectorInput(", "buildTerritoryDirectorInput(", "buildStructureDirectorInput(", "buildCuratorInput("]) {
+  const review = functionBody("runSceneReview");
+  for (const builder of ["buildUnitDirectorInput(", "buildTerritoryDirectorInput(", "buildStructureDirectorInput("]) {
     assert.ok(review.includes(`= ${builder}`) || review.includes(`= await ${builder}`), `${builder} is called unconditionally`);
   }
+  // A time skip's own checks (the timeline, the agents, order attribution) are no part of it.
+  assert.equal(/buildCuratorInput\(|spyIntercept|requests\.budget/.test(review), false);
 });
 
 // A scenario's region types can carry rules for moving and placing (an

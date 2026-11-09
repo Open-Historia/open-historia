@@ -335,7 +335,9 @@ test("the first document a campaign gets must be a document too", () => {
   assert.equal(judgeSkipHistoryAnswer({ summary: "Nothing.", document: "Not much happened." }, { currentText: "" }).ok, false);
 });
 
-test("a fold that fails only waits so long", () => {
-  assert.equal(HISTORY_CONSOLIDATION.ownRequestThreshold, sizeThreshold * 2, "twice the pile that makes a turn fold by itself");
-  assert.ok(HISTORY_CONSOLIDATION.ownRequestThreshold > sizeThreshold + batchSize - retainEvents);
+// A fold that failed was asked for as a request of its own once the pile was
+// twice its size, until the event consolidator went (2026-11-07): it waits for
+// the next skip's fold, however long.
+test("a fold that fails waits for the next skip, however long", () => {
+  assert.equal("ownRequestThreshold" in HISTORY_CONSOLIDATION, false);
 });

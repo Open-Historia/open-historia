@@ -227,6 +227,7 @@ export const RELEASES = [
           { heading: "Lighter app", text: "About 40 MB less to download on Windows, 100 MB less on disk, and updates that finish in seconds." },
         ],
         updates: [
+          "2026-11-no-background-ai",
           "2026-11-faster-turns",
           "2026-11-smoother-scrolling",
           "2026-11-long-campaign-fixes",

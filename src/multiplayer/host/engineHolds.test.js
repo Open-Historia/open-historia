@@ -42,9 +42,10 @@ test("in the host's engine a failed check lands the turn as written, and is deci
   const finish = gameplay.slice(gameplay.indexOf("const finishTimelineJump = async"));
   const made = finish.indexOf("const checks = state.checks ?? (state.checks = createTurnChecks());");
   const accepted = finish.indexOf("if (hostingSharedGame()) checks.accept();");
-  const review = finish.indexOf('checks.run("review"');
+  // Every check is asked inside the apply (the turn review that came first went on 2026-11-07).
+  const applied = finish.indexOf("applySimulationResult(");
   assert.ok(made > -1 && accepted > made, "after the turn's checks are made");
-  assert.ok(review > accepted, "and before the first of them is asked");
+  assert.ok(applied > accepted, "and before the first of them is asked");
 });
 
 test("a shared round never stops on the host's own \"Stop when my events fail\"", () => {

@@ -239,12 +239,13 @@ function getProviderField(provider, field) {
 export const AI_TASK_ROUTING = [
     { key: "jumpForward", label: "Time skip", hint: "Strongest model — the main simulation call", group: "Simulation" },
     { key: "autoJumpForward", label: "Auto time skip", hint: "Strongest model — the main simulation call", group: "Simulation" },
-    // While AI requests are being saved (requestBudget.js) the time skip itself
-    // does the work of the curator, the three directors, the projects pass and
-    // every spy intercept below, and their own picks are not used. This task is
-    // those checks as one request after the skip, asked only when a provider
-    // refused the skip that carries them (gameplay.js runTurnReview).
-    { key: "turnReview", label: "After-skip checks", hint: "Rarely asked: the checks as one request, only when a provider refuses the single-request time skip", group: "Simulation" },
+    // The time skip itself does the work of the curator, the three directors,
+    // the projects pass and every spy intercept below, and their own picks are
+    // not used for it. This task is a Scene's map check: the directors and the
+    // board as one request after a Scene's outcome (gameplay.js runSceneReview).
+    // It was also the checks after a skip a provider refused in its folded form,
+    // until that went (2026-11-07); the key stays so a pick a player made is kept.
+    { key: "turnReview", label: "Scene map check", hint: "Mid-tier: moves units, marks held land and builds structures after a Scene, in one request", group: "Simulation" },
     { key: "worldMotionRepair", label: "World motion repair", hint: "Mid-tier: rewrites a static jump", group: "Simulation" },
     { key: "worldBreadthRepair", label: "World breadth repair", hint: "Mid-tier: widens a narrow jump", group: "Simulation" },
     { key: "politicalClaimRepair", label: "Political claim repair", hint: "Mid/high-tier: reconcile generated political outcomes with Political World", group: "Simulation" },
@@ -253,7 +254,6 @@ export const AI_TASK_ROUTING = [
     { key: "territoryDirector", label: "Territory director", hint: "Mid-tier: front outcomes", group: "Simulation" },
     { key: "structureDirector", label: "Structure director", hint: "Mid-tier: new structures on the map", group: "Simulation" },
     { key: "geographyResolver", label: "Geography resolver", hint: "Small model: place-name matching", group: "Simulation" },
-    { key: "eventConsolidator", label: "Event consolidator", hint: "Small/mid-tier: pure summarization", group: "Simulation" },
     { key: "projects", label: "Projects & operations", hint: "Mid-tier model", group: "Simulation" },
     { key: "pregameHistory", label: "Pre-game history", hint: "Mid-tier model", group: "Simulation" },
     { key: "politicalWorldGeneration", label: "Political world generation", hint: "Mid/high-tier: bounded scenario political seeding", group: "Simulation" },

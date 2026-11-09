@@ -39,7 +39,8 @@ test("My key has no request limit: one line, off on a fresh install; on, the lim
     requestSettings.setNoRequestLimit(true);
     assert.equal(await line("My key has no request limit"), "My key has no request limit: on");
     assert.equal(await line("Requests a day your key allows"), "Requests a day your key allows: 500 (not used: no request limit)");
-    assert.equal(await line("Background requests a day, at most"), "Background requests a day, at most: 30 (not used: no request limit)");
+    assert.equal(await line("Background requests a day, at most"), "Background requests a day, at most: 30", "a fixed cap, with or without a limit");
+    assert.equal(await line("Background AI"), "", "no switch any more");
     assert.match(await line("Used today"), /^Used today: \d+ \(background /);
     requestSettings.setNoRequestLimit(false);
     assert.equal(await line("My key has no request limit"), "My key has no request limit: off");

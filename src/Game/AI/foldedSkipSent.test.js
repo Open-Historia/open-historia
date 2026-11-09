@@ -32,8 +32,11 @@ test("the folded skip's turn-to-turn contract stays under what Gemini took", () 
   assert.ok(size < 30435, `the folded skip's stable contract is ${size} characters`);
 });
 
-test("a skip asked the old way keeps a request for its checks", () => {
+// A skip asked the old way kept a request for the turn review after it, until
+// that went (2026-11-07): it keeps nothing for checks now.
+test("a skip asked the old way keeps no request for checks after it", () => {
   const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").split("\r\n").join("\n");
-  assert.match(gameplay, /if \(state\.folded === undefined\) state\.folded = !foldedSkipRefused;\n[^\n]*\n[^\n]*\n  if \(!state\.folded\) state\.requests\?\.budget\?\.reserve\?\.\("review", 1\);/);
+  assert.match(gameplay, /if \(state\.folded === undefined\) state\.folded = !foldedSkipRefused;\n/);
+  assert.equal(/reserve\?\.\("review"/.test(gameplay), false);
   assert.match(gameplay, /state\.folded = false;\n[^\n]*\n          keepForRefusedSkip\(state\.requests\?\.budget\);/);
 });

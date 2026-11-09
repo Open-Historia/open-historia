@@ -192,8 +192,7 @@ registerSettingsSnapshot("AI requests", () => {
     return [
         ["My key has no request limit", onOff(requestSettings.noRequestLimit())],
         ["Requests a day your key allows", day.noLimit ? `${day.limit} (not used: no request limit)` : String(day.limit)],
-        ["Background AI", onOff(requestSettings.backgroundAi())],
-        ["Background requests a day, at most", day.noLimit ? `${day.backgroundCap} (not used: no request limit)` : String(day.backgroundCap)],
+        ["Background requests a day, at most", String(day.backgroundCap)],
         ["Used today", `${day.noLimit ? day.used : `${day.used} of ${day.limit}`} (background ${day.background}, refused by rate limit ${day.refused}, failed ${day.failed})`],
         ["Used today, by task", tasks || "nothing yet"],
         ["Last time skip", day.lastJump ? `${day.lastJump.used} request(s)${day.lastJump.refused ? `, ${day.lastJump.refused} refused` : ""}` : "none yet"],
