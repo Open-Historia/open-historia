@@ -93,7 +93,7 @@ import { authoredName } from "./scenarioFronts.js";
 import { breakthroughAnswer, sideIsPlayed, staffDecision, staffMayOrder, staffStanding } from "./staff.js";
 import { findPockets } from "./supply.js";
 import { SWARM_FORM, gatherNewcomers } from "./swarms.js";
-import { EMBARK_PORTS_MOST, TRANSPORT_ENDED, TRANSPORT_START_FAILS, boundFor, departuresFor, interceptionOf, loadOf, moveOn, normalizeTransports, setOut, struck, transportChance } from "./transports.js";
+import { EMBARK_PORTS_MOST, TRANSPORT_ENDED, TRANSPORT_START_FAILS, airliftIntercepts, boundFor, departuresFor, interceptionOf, loadOf, moveOn, normalizeTransports, setOut, stretchOf, struck, transportBar, transportChance, transportLoadMost } from "./transports.js";
 import { describePoint, findPlace, inSector, resolveSector } from "./sectors.js";
 import { STATE_HOLDING, createTroop, isLive, kindsFor, liveCount, troopsCap, troopsFactor, troopsLeast, troopsWanted } from "./troops.js";
 import { buildWorldGrid, kmBetween, measureOptions, placeAlong, worldSheetKey } from "./worldGrid.js";
@@ -2255,6 +2255,11 @@ const departTransport = (run, index, day) => {
   // air arm nothing by air: military.js.)
   if (run.mech.military && transport.medium === "sea" && seaWorth(run.militaryOf(transport.owner)) === 0) return refuse("no-navy");
   if (run.mech.military && transport.medium === "air" && airWorth(run.militaryOf(transport.owner)) === 0) return refuse("no-air-force");
+  // (Nor by a medium the game's features switched off: transports.js transportBar.)
+  if (transportBar(transport.medium, { media: Array.isArray(run.input?.transportMedia) ? run.input.transportMedia : null })) return refuse("switched-off");
+  // The most it carries: an airlift fewer than a train or a ship (transports.js transportLoadMost).
+  const year = yearInEra(gameDateYear(run.dateOf(0)), Number.isInteger(run.input?.era) ? run.input.era : null);
+  const most = Math.max(1, transportLoadMost(transport.medium, year, run.mech.military ? run.militaryOf(transport.owner) : null));
   let war = transportWar(run, transport);
   const grid = worldGridOf(run);
   // Its owner is fighting no war: bound for land of a country it is at peace
@@ -2286,7 +2291,7 @@ const departTransport = (run, index, day) => {
   if (transport.embark) {
     const battle = run.battles.find((entry) => entry.status !== "closed" && foldBattlefieldName(entry.name) === foldBattlefieldName(transport.embark.battlefield));
     const side = transport.embark.side;
-    const picked = battle ? transport.embark.troops.filter((at) => battle.troops[side][at] && isLive(battle.troops[side][at]) && !battle.named.some((entry) => entry.s === side && entry.i === at)) : [];
+    const picked = (battle ? transport.embark.troops.filter((at) => battle.troops[side][at] && isLive(battle.troops[side][at]) && !battle.named.some((entry) => entry.s === side && entry.i === at)) : []).slice(0, most);
     if (picked.length === 0) return refuse("no-troops");
     let x = 0;
     let y = 0;
@@ -2299,20 +2304,20 @@ const departTransport = (run, index, day) => {
     load = picked.map((at) => [Math.round(battle.troops[side][at].strength), battle.troops[side][at].kind]);
     boarding = { battle, side, picked };
   } else if (load.length === 0) {
-    load = kindsFor(Math.max(1, transport.raise || 1), run.era, run.mech.military ? mixOf(run.militaryOf(transport.owner)) : null).map((kind) => [100, kind]);
+    load = kindsFor(Math.min(most, Math.max(1, transport.raise || 1)), run.era, run.mech.military ? mixOf(run.militaryOf(transport.owner)) : null).map((kind) => [100, kind]);
     draw(run, transport.owner, load.length * menOf(run, transport.owner));
     if (origins.length === 0) origins = originsOf(run, grid, war, transport);
   }
   if (origins.length === 0) return refuse("no-origin");
   const { embark: _embark, raise: _raise, ...bare } = transport;
-  const loaded = { ...bare, load, warId: war.id };
+  const loaded = { ...bare, load: load.slice(0, most), warId: war.id };
   const fromHere = (origin) => setOut({ ...loaded, from: { lng: origin.lng, lat: origin.lat, name: clean(origin.name) } }, {
     grid,
     from: [origin.lng, origin.lat],
     holderOf: (id) => holderIn(run, war, id),
     friendly,
     hostile,
-    year: yearInEra(gameDateYear(run.dateOf(0)), Number.isInteger(run.input?.era) ? run.input.era : null),
+    year,
     date,
     dateOf: (days) => run.dateOf(day + days),
   });
@@ -2434,6 +2439,35 @@ const beginTransports = (run) => {
   for (let index = 0; index < run.transports.length; index += 1) if (run.transports[index].status === "ordered") departTransport(run, index, 0);
 };
 
+// An airlift's day over what it flew over: each that found it over its enemies'
+// ground (transports.js airliftIntercepts) is a hit, told where and by whom.
+// True when nothing is left of it.
+const airliftDay = (run, index, before, moved, war, mine, day, options) => {
+  const grid = worldGridOf(run);
+  const seen = airliftIntercepts(moved, {
+    over: stretchOf(moved.way, before.gone, moved.gone, options),
+    holderAt: (lng, lat) => (grid ? holderAtPoint(run, grid, war, lng, lat) : ""),
+    // (Nobody rises against what nobody is at war with.)
+    enemy: (name) => war.peace !== true && warSide(war, name) === 1 - mine,
+    units: run.input.units,
+    era: run.era,
+    worthOf: (name) => airWorth(run.militaryOf(name)),
+    roll: (what) => transportChance(run.seed, moved.id, day, `airlift|${what}`),
+    ...options,
+  });
+  const date = run.dateOf(day);
+  let left = moved;
+  for (const [n, finder] of seen.found.entries()) {
+    const hit = struck(left, transportChance(run.seed, moved.id, day, `airlift|hurt|${n}`), date);
+    const near = cityNear(run, finder.at[0], finder.at[1], 250);
+    tellVoyage(run, day, hit.transport.status === "lost" ? "lost" : "intercepted", left, { by: finder.by, with: finder.with, lost: hit.lost, at: near, where: finder.at });
+    left = hit.transport;
+    if (left.status === "lost") break;
+  }
+  run.transports[index] = left;
+  return left.status === "lost";
+};
+
 // A day of every transporter under way: it goes on along its way, whoever can
 // reach it may catch it, and at the end of its way it puts its troops down.
 const moveTransports = (run, day) => {
@@ -2454,8 +2488,14 @@ const moveTransports = (run, day) => {
     }
     const { transport: moved, arrived } = moveOn(before, options);
     run.transports[index] = moved;
-    // Caught on the day's stretch, at the middle of it.
     const mine = warSide(war, moved.owner);
+    // An airlift is caught only over its enemies' ground, as an air strike is (transports.js airliftIntercepts).
+    if (moved.medium === "air") {
+      if (airliftDay(run, index, before, moved, war, mine, day, options)) continue;
+      if (arrived) landTransport(run, index, day);
+      continue;
+    }
+    // Caught on the day's stretch, at the middle of it.
     const middle = placeAlong(moved.way, (before.gone + moved.gone) / 2, options);
     const grid = worldGridOf(run);
     const risk = interceptionOf(moved, middle ? [middle.lng, middle.lat] : moved.at, {
