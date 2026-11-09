@@ -20,13 +20,36 @@
 // from the game's own pages; see the Worker for all of it.
 //
 // The counts are read from the counter too (fetchImportCounts). The download
-// counts the hub's index still carries are never shown: the counter froze them
-// as each post's starting number the first time it ran.
+// counts the hub's index still carries are shown only when the counter cannot
+// be read ("make sure the import counter worker falls back to the old method if
+// my usage runs out", the owner, 2026-11-09): when the counter's free plan is
+// used up for the day, Cloudflare answers for it with an error page.
 
 import { HUB_COUNT_KEY, normalizeHubCountKey, normalizeHubImported } from "../../server/hubImported.js";
+import { fetchHubIndex } from "./hubFiles.js";
 
 export const IMPORT_COUNTER_URL = "https://oh-import-counter.nichojkrol.workers.dev";
-const CACHE_TTL_MS = 5 * 60 * 1000;
+// Kept 30 minutes, and between sessions (localStorage): the counter keeps them an hour anyway, and every read is a
+// request on its free plan ("optimize it to use as little resources and bandwith ... as possible", the owner, 2026-11-09).
+const CACHE_TTL_MS = 30 * 60 * 1000;
+// How long the hub index's counts stand in for a counter that could not be read, before it is asked again.
+const FALLBACK_TTL_MS = 5 * 60 * 1000;
+const STORED_COUNTS_KEY = "oh-hub-import-counts";
+const storedCounts = () => {
+  try {
+    const kept = JSON.parse(globalThis.localStorage?.getItem(STORED_COUNTS_KEY) ?? "null");
+    return kept && typeof kept.at === "number" && kept.counts && typeof kept.counts === "object" ? kept : null;
+  } catch {
+    return null;
+  }
+};
+const storeCounts = (at, counts) => {
+  try {
+    globalThis.localStorage?.setItem(STORED_COUNTS_KEY, JSON.stringify({ at, counts }));
+  } catch {
+    // Not kept: read again next session.
+  }
+};
 const TIMEOUT_MS = 15_000;
 // The Community tab's list waits for the counts (hubPosts.js fetchHubPosts), so
 // a counter that does not answer is given up on sooner.
@@ -72,68 +95,119 @@ export const importToken = async (key, postId) => {
   return hex(await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(`open-historia-import/${key}/${post}`)));
 };
 
-// The counts the page has read, kept five minutes (fetchImportCounts).
-let cache = { at: 0, counts: null, pending: null };
+// The counts the page has read (fetchImportCounts); `fallback` when they are the hub index's.
+let cache = { at: 0, counts: null, pending: null, fallback: false };
 const inflight = new Set();
 
-// Tells the counter that this install has imported `postId` for the first
-// time. Never throws and never holds the import up: a count that cannot be
-// sent (offline, no settings, the counter down) is a count lost, never an
-// error. Resolves to the counter's answer ({ counted, reason? }) or null.
-export const countHubImport = (postId) => {
-  const sending = (async () => {
-    try {
-      const post = normalizeHubImported([postId])[0];
-      if (!post) return null;
-      const token = await importToken(await installCountKey(), post);
-      if (!token) return null;
-      const response = await fetch(`${importCounterUrl()}/import`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ post, token }),
-        signal: timeout(),
-      });
-      const answer = await response.json().catch(() => null);
-      // The next read of the counts asks the counter again.
-      if (answer?.counted) cache = { ...cache, at: 0 };
-      return answer && typeof answer === "object" ? answer : null;
-    } catch {
-      return null;
-    }
-  })();
+// The counter's answers that may be different a while later: a scenario released
+// minutes ago that the counter's copy of the hub's index does not list yet (it
+// reads the index again at most every five minutes, and GitHub keeps the file
+// five), the index unreadable, or the rate limiter. Such a report is sent once
+// more, IMPORT_RETRY_MS later, with the same token, so it can count at most
+// once; never a third time, and never for anything else.
+const RETRY_REASONS = new Set(["not a released scenario", "hub unreadable", "slow down"]);
+export const IMPORT_RETRY_MS = 6 * 60 * 1000;
+
+const track = (sending) => {
   inflight.add(sending);
   sending.finally(() => inflight.delete(sending));
   return sending;
 };
 
+const sendImport = async (post, token, retry) => {
+  try {
+    const response = await fetch(`${importCounterUrl()}/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ post, token }),
+      signal: timeout(),
+    });
+    const answer = await response.json().catch(() => null);
+    // The next read of the counts asks the counter again.
+    if (answer?.counted) cache = { ...cache, at: 0 };
+    if (retry && answer && !answer.counted && RETRY_REASONS.has(answer.reason)) {
+      const later = setTimeout(() => track(sendImport(post, token, false)), IMPORT_RETRY_MS);
+      later?.unref?.();
+    }
+    return answer && typeof answer === "object" ? answer : null;
+  } catch {
+    return null;
+  }
+};
+
+// Tells the counter that this install has imported `postId` for the first
+// time. Never throws and never holds the import up: a count that cannot be
+// sent (offline, no settings, the counter down) is a count lost, never an
+// error. Resolves to the counter's answer ({ counted, reason? }) or null.
+export const countHubImport = (postId) =>
+  track((async () => {
+    try {
+      const post = normalizeHubImported([postId])[0];
+      if (!post) return null;
+      const token = await importToken(await installCountKey(), post);
+      if (!token) return null;
+      return await sendImport(post, token, true);
+    } catch {
+      return null;
+    }
+  })());
+
 // For tests: resolves once every count sent so far has had its answer; and
 // forgets the counts read.
 export const hubImportCountsSettled = () => Promise.all([...inflight]);
 export const resetImportCountsCache = () => {
-  cache = { at: 0, counts: null, pending: null };
+  cache = { at: 0, counts: null, pending: null, fallback: false };
+};
+
+// The old method: the hub index's `imports` (its files' downloads, summed by the
+// hub), or null when the index could not be read either. The Community tab reads
+// the index at the same time (hubPosts.js fetchHubPosts), so this is the same
+// request, not another.
+const indexImportCounts = async () => {
+  const index = await fetchHubIndex().catch(() => null);
+  return index && !index.unread && index.imports && typeof index.imports === "object" ? index.imports : null;
 };
 
 // { "<post number>": count } as the counter keeps them, or null when they
 // could not be read (the Community tab then shows no counts, as it did when the
 // old counter was down). The counter answers { "<post>": { count } }, the shape
-// the oldest builds read; a bare number is read too. Kept five minutes, one
-// request shared between callers; after a failed read the last good one stays.
+// the oldest builds read; a bare number is read too. Kept 30 minutes, one
+// request shared between callers. When the counter cannot be read (an error
+// page, not JSON, no answer in time, offline) the last good read stays while it
+// is under 30 minutes old; past that the hub index's counts stand in, kept in
+// memory only and FALLBACK_TTL_MS, until the counter answers again.
 export const fetchImportCounts = async ({ force = false } = {}) => {
-  if (!force && cache.counts && Date.now() - cache.at < CACHE_TTL_MS) return cache.counts;
+  if (!force && !cache.counts) {
+    const kept = storedCounts();
+    if (kept) cache = { ...cache, at: kept.at, counts: kept.counts, fallback: false };
+  }
+  const ttl = cache.fallback ? FALLBACK_TTL_MS : CACHE_TTL_MS;
+  if (!force && cache.counts && Date.now() - cache.at < ttl) return cache.counts;
   if (cache.pending) return cache.pending;
   const pending = (async () => {
     try {
-      const response = await fetch(`${importCounterUrl()}/counts`, { cache: "no-store", signal: timeout(COUNTS_TIMEOUT_MS) });
+      // (The browser's own copy is fine but for a Refresh: the counter keeps them an hour anyway.)
+      const response = await fetch(`${importCounterUrl()}/counts`, { cache: force ? "no-cache" : "default", signal: timeout(COUNTS_TIMEOUT_MS) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const raw = await response.json();
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("not the counts");
       const counts = {};
-      for (const [post, entry] of Object.entries(raw && typeof raw === "object" ? raw : {})) {
+      for (const [post, entry] of Object.entries(raw)) {
         const count = typeof entry === "number" ? entry : entry?.count;
         if (/^\d{1,15}$/.test(post) && Number.isSafeInteger(count) && count >= 0) counts[post] = count;
       }
-      cache = { at: Date.now(), counts, pending: null };
+      cache = { at: Date.now(), counts, pending: null, fallback: false };
+      storeCounts(cache.at, counts);
       return counts;
     } catch {
+      const good = cache.counts && !cache.fallback && Date.now() - cache.at < CACHE_TTL_MS;
+      if (!good) {
+        const imports = await indexImportCounts();
+        if (imports) {
+          cache = { at: Date.now(), counts: imports, pending: null, fallback: true };
+          return imports;
+        }
+      }
       cache = { ...cache, pending: null };
       return cache.counts;
     }

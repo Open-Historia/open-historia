@@ -11,10 +11,11 @@ compatibility_date = "2024-09-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "oh-import-counts"
-database_id = "PASTE_D1_DATABASE_ID"
+database_id = "97121bc6-2c01-4d8d-afa5-221df335a5b3"
 
-# At most 10 import reports a minute from one address, kept by Cloudflare in
-# memory only. namespace_id is any number unique to this account's limiters.
+# At most 10 import reports a minute from one address (an IPv6 address's whole
+# /64), kept by Cloudflare in memory only. namespace_id is any number unique to
+# this account's limiters.
 [[ratelimits]]
 name = "LIMITER"
 namespace_id = "1971"

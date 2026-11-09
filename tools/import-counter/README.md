@@ -8,7 +8,8 @@ been downloaded from the community hub's releases, as GitHub counts it, and anyo
 post's count by downloading its file's address over and over. Before that, this Worker kept the
 counts in KV, and the free plan's daily KV allowance was spent within hours of every day. It now
 keeps them in D1, where a counted import is three rows written and a read of the counts is served
-from the edge cache for five minutes.
+from the isolate's memory for five minutes. (The Cache API does nothing on a `workers.dev` address,
+where the Worker is; on a custom domain the counts would also be kept an hour at the edge.)
 
 ## What it counts
 
@@ -19,19 +20,33 @@ post's number. The import is counted only when:
 - the request comes from one of the game's pages (`Origin`: openhistoria.com, its Pages previews,
   the Android app's `http://app.openhistoria`, the desktop app's `http://localhost:<port>`), so no
   other website can make its visitors count for it;
-- the post is a scenario the hub has released (its `index.json`);
+- the post is a scenario the hub has released (its `index.json`; a post the Worker does not know
+  reads the index again, past every cache, at most every five minutes, and the game sends such a
+  report once more six minutes later);
 - that token has not counted that post before (one count per install per post);
 - that internet address has not counted that post today (UTC), and has counted fewer than
   20 posts today;
 - the rate limiter lets it through (10 reports a minute per address).
 
-Fresh tokens cost nothing to make; the address rules are what bound one person to one count per
-post per day. The address is kept only as an HMAC of it and the day under the `COUNT_KEY` secret,
+An IPv6 address counts as its whole /64 (a home or a phone is given one), and `::ffff:a.b.c.d` as
+the IPv4 address. The address's row for the post is taken first, by one statement that also checks
+the 20-a-day cap, so a burst of reports sent together counts once. Fresh tokens cost nothing to
+make; the address rules are what bound one person to one count per post per day. The address is kept only as an HMAC of it and the day under the `COUNT_KEY` secret,
 in rows the daily cron deletes after a day; tokens cannot be matched between posts.
 
 `GET /counts` → `{ "<post number>": { "count": n }, ... }` and `GET /count/<post>` →
 `{ "id": "...", "count": n }`, where `count` is the post's frozen `legacy` count plus the imports
 counted here. `POST /hit`, which the oldest builds still send, is answered and never counted.
+
+## When the free plan runs out
+
+- **D1's day used up** (5M rows read / 100k written) or D1 failing: `/counts`, `/count/<post>` and
+  `/hit` answer the hub index's `imports` (the old method), kept at the edge and by the browser only
+  5 minutes so D1 is tried again; `POST /import` answers 503 `{ counted: false, reason: "over limit" }`.
+  The legacy counts are never frozen again from such an error.
+- **Workers' day used up** (100k requests): Cloudflare answers with its own error page and the
+  Worker never runs. The game then reads the hub index's `imports` itself
+  (`src/runtime/hubImportCount.js`), in memory only, and asks the counter again 5 minutes later.
 
 ## The old numbers
 
