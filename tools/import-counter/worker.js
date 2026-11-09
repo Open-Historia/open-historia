@@ -55,6 +55,17 @@
  *   - the tables are made at deploy (README), so a fresh isolate reads one row
  *     (the legacy marker) and nothing more.
  *
+ * When the free plan runs out ("make sure the import counter worker falls back
+ * to the old method if my usage runs out", the owner, 2026-11-09):
+ *   - D1's day used up (5M rows read, 100k written) or D1 failing: the reads
+ *     answer the hub index's `imports`, the old method, kept at the edge only
+ *     FALLBACK_TTL_SECONDS so D1 is tried again soon; an import answers 503
+ *     { counted: false, reason: "over limit" }. The legacy counts are never
+ *     frozen again from such an error (ensureReady, and the freeze's own SQL);
+ *   - the Workers day used up (100k requests): Cloudflare answers for this
+ *     Worker with an error page and it never runs, so the game falls back to
+ *     the index itself (src/runtime/hubImportCount.js fetchImportCounts).
+ *
  * Bindings (wrangler.toml): DB (D1), COUNT_KEY (a secret: `wrangler secret put
  * COUNT_KEY`), LIMITER (rate limiting; optional). Without DB it answers the
  * counts from the hub's index as the retired Worker did and counts nothing;
@@ -69,6 +80,9 @@ const INDEX_RETRY_MS = 5 * 60 * 1000;
 // How long the edge keeps the answer to /counts, and the browser.
 export const COUNTS_TTL_SECONDS = 3600;
 const COUNTS_BROWSER_SECONDS = 600;
+// How long the index's answer is kept, at the edge and by the browser, when D1 could not be read: then D1 is tried again.
+export const FALLBACK_TTL_SECONDS = 300;
+const SOURCE_HEADER = "X-Counts-Source";
 // How many different posts one address can count in a UTC day.
 export const MAX_POSTS_PER_ADDRESS_PER_DAY = 20;
 const DAY_MS = 86_400_000;
@@ -170,23 +184,28 @@ const isReleasedScenario = async (env, ctx, post) => {
 
 // The tables, made once per database per isolate, and the legacy counts frozen
 // once per database for good. Rejects (and is tried again next time) when the
-// index cannot be read for the freeze.
+// index cannot be read for the freeze (an error marked `hubUnreadable`), or
+// when D1 fails (its day used up, or down).
 const ready = new WeakMap();
 const ensureReady = (env, ctx) => {
   if (!ready.has(env.DB)) {
     const pending = (async () => {
-      // Made at deploy (README); made here only when they are not there yet.
-      const frozen = await env.DB.prepare("SELECT value FROM meta WHERE key = 'legacy'").first().catch(async () => {
+      // Made at deploy (README); made here only when they are not there yet. Any other error (D1 over its day's
+      // limits, or down) is no answer at all: never taken for "not frozen yet", which would freeze them again.
+      const frozen = await env.DB.prepare("SELECT value FROM meta WHERE key = 'legacy'").first().catch(async (error) => {
+        if (!/no such table/i.test(String(error?.message ?? error))) throw error;
         await env.DB.batch(SCHEMA.map((sql) => env.DB.prepare(sql)));
         return null;
       });
       if (frozen) return;
       const index = await readIndex(ctx);
-      if (!index) throw new Error("the hub's index could not be read to freeze the old counts");
+      if (!index) throw Object.assign(new Error("the hub's index could not be read to freeze the old counts"), { hubUnreadable: true });
       const legacy = indexImports(index);
       await env.DB.batch([
+        // (Only while no freeze is recorded: a second one, whatever led to it, changes nothing.)
         env.DB.prepare(
-          "INSERT INTO counts (post, legacy) SELECT CAST(key AS INTEGER), value FROM json_each(?1) WHERE true " +
+          "INSERT INTO counts (post, legacy) SELECT CAST(key AS INTEGER), value FROM json_each(?1) " +
+          "WHERE NOT EXISTS (SELECT 1 FROM meta WHERE key = 'legacy') " +
           "ON CONFLICT(post) DO UPDATE SET legacy = excluded.legacy",
         ).bind(JSON.stringify(legacy)),
         env.DB.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('legacy', ?1)")
@@ -207,38 +226,55 @@ const addressKey = async (secret, day, address) => {
   return [...new Uint8Array(mac)].slice(0, 16).map((byte) => byte.toString(16).padStart(2, "0")).join("");
 };
 
+// { counts: { "<post>": count }, fallback }: D1's, or the hub index's `imports` (the old method, `fallback`) when D1
+// fails. Throws only when neither can be read.
 const readCounts = async (env, ctx) => {
   if (!env.DB) {
     // Not set up yet: the retired Worker's answer.
     const index = await readIndex(ctx).catch(() => null);
-    return index ? indexImports(index) : {};
+    return { counts: index ? indexImports(index) : {}, fallback: false };
   }
-  await ensureReady(env, ctx);
-  const { results } = await env.DB.prepare("SELECT post, legacy + counted AS count FROM counts").all();
-  const out = {};
-  for (const row of results ?? []) out[String(row.post)] = Number(row.count);
-  return out;
+  try {
+    await ensureReady(env, ctx);
+    const { results } = await env.DB.prepare("SELECT post, legacy + counted AS count FROM counts").all();
+    const out = {};
+    for (const row of results ?? []) out[String(row.post)] = Number(row.count);
+    return { counts: out, fallback: false };
+  } catch (error) {
+    const index = await readIndex(ctx).catch(() => null);
+    if (!index) throw error;
+    return { counts: indexImports(index), fallback: true };
+  }
 };
 
-// { "<post>": { count } }, the one read every endpoint answers from: kept at the edge for COUNTS_TTL_SECONDS, so
-// D1 is read at most once an hour per Cloudflare location.
+// { counts: { "<post>": { count } }, fallback }, the one read every endpoint answers from: kept at the edge for
+// COUNTS_TTL_SECONDS, so D1 is read at most once an hour per Cloudflare location; the index's answer when D1 failed
+// only FALLBACK_TTL_SECONDS.
 const cachedCounts = async (url, env, ctx) => {
   const cache = typeof caches !== "undefined" ? caches.default : null;
   const cacheKey = new Request(`${url.origin}/counts`);
   const cached = cache ? await cache.match(cacheKey) : null;
   if (cached) {
     const kept = await cached.json().catch(() => null);
-    if (kept && typeof kept === "object") return kept;
+    if (kept && typeof kept === "object") return { counts: kept, fallback: cached.headers.get(SOURCE_HEADER) === "index" };
   }
+  const { counts, fallback } = await readCounts(env, ctx);
   const out = {};
-  for (const [post, count] of Object.entries(await readCounts(env, ctx))) out[post] = { count };
+  for (const [post, count] of Object.entries(counts)) out[post] = { count };
   if (cache) {
     ctx?.waitUntil?.(cache.put(cacheKey, new Response(JSON.stringify(out), {
-      headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${COUNTS_TTL_SECONDS}` },
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": `public, max-age=${fallback ? FALLBACK_TTL_SECONDS : COUNTS_TTL_SECONDS}`,
+        ...(fallback ? { [SOURCE_HEADER]: "index" } : {}),
+      },
     })));
   }
-  return out;
+  return { counts: out, fallback };
 };
+
+// What the browser may keep a read for.
+const browserCache = (fallback) => ({ "Cache-Control": `public, max-age=${fallback ? FALLBACK_TTL_SECONDS : COUNTS_BROWSER_SECONDS}` });
 
 const countImport = async (request, env, ctx, cors) => {
   const origin = request.headers.get("Origin") || "";
@@ -267,25 +303,31 @@ const countImport = async (request, env, ctx, cors) => {
   if (scenario === null) return json({ post, counted: false, reason: "hub unreadable" }, 503, cors);
   if (!scenario) return json({ post, counted: false, reason: "not a released scenario" }, 404, cors);
   // (The old counts are frozen the first time; until the index can be read for that, nothing is counted.)
-  if (!(await ensureReady(env, ctx).then(() => true, () => false))) return json({ post, counted: false, reason: "hub unreadable" }, 503, cors);
+  const readiness = await ensureReady(env, ctx).then(() => null, (error) => error);
+  if (readiness) return json({ post, counted: false, reason: readiness.hubUnreadable ? "hub unreadable" : "over limit" }, 503, cors);
 
-  // (A repeat from the same install is told by the insert below, not by a read first.)
   const day = Math.floor(Date.now() / DAY_MS);
   const who = await addressKey(env.COUNT_KEY, day, address);
-  const seen = await env.DB.prepare("SELECT COUNT(*) AS posts, COALESCE(SUM(post = ?3), 0) AS same FROM addresses WHERE day = ?1 AND who = ?2")
-    .bind(day, who, post)
-    .first();
-  if (Number(seen?.same) > 0) return json({ post, counted: false, reason: "address" }, 200, cors);
-  if (Number(seen?.posts) >= MAX_POSTS_PER_ADDRESS_PER_DAY) return json({ post, counted: false, reason: "address limit" }, 200, cors);
+  try {
+    // (A repeat from the same install is told by the insert below, not by a read first.)
+    const seen = await env.DB.prepare("SELECT COUNT(*) AS posts, COALESCE(SUM(post = ?3), 0) AS same FROM addresses WHERE day = ?1 AND who = ?2")
+      .bind(day, who, post)
+      .first();
+    if (Number(seen?.same) > 0) return json({ post, counted: false, reason: "address" }, 200, cors);
+    if (Number(seen?.posts) >= MAX_POSTS_PER_ADDRESS_PER_DAY) return json({ post, counted: false, reason: "address limit" }, 200, cors);
 
-  // The token first: its key is what makes one install's import count once,
-  // however many of its requests arrive together.
-  const inserted = await env.DB.prepare("INSERT OR IGNORE INTO installs (post, token) VALUES (?1, ?2)").bind(post, token).run();
-  if (!Number(inserted?.meta?.changes)) return json({ post, counted: false, reason: "again" }, 200, cors);
-  await env.DB.batch([
-    env.DB.prepare("INSERT OR IGNORE INTO addresses (day, who, post) VALUES (?1, ?2, ?3)").bind(day, who, post),
-    env.DB.prepare("INSERT INTO counts (post, counted) VALUES (?1, 1) ON CONFLICT(post) DO UPDATE SET counted = counted + 1").bind(post),
-  ]);
+    // The token first: its key is what makes one install's import count once,
+    // however many of its requests arrive together.
+    const inserted = await env.DB.prepare("INSERT OR IGNORE INTO installs (post, token) VALUES (?1, ?2)").bind(post, token).run();
+    if (!Number(inserted?.meta?.changes)) return json({ post, counted: false, reason: "again" }, 200, cors);
+    await env.DB.batch([
+      env.DB.prepare("INSERT OR IGNORE INTO addresses (day, who, post) VALUES (?1, ?2, ?3)").bind(day, who, post),
+      env.DB.prepare("INSERT INTO counts (post, counted) VALUES (?1, 1) ON CONFLICT(post) DO UPDATE SET counted = counted + 1").bind(post),
+    ]);
+  } catch {
+    // D1's day used up (or D1 down): this import is not counted.
+    return json({ post, counted: false, reason: "over limit" }, 503, cors);
+  }
   return json({ post, counted: true }, 200, cors);
 };
 
@@ -303,19 +345,19 @@ export default {
         const body = await request.json().catch(() => ({}));
         const id = String(body?.id ?? "").trim().slice(0, 120);
         if (!id) return json({ error: "missing id" }, 400, cors);
-        const counts = await cachedCounts(url, env, ctx).catch(() => ({}));
+        const { counts } = await cachedCounts(url, env, ctx).catch(() => ({ counts: {} }));
         return json({ id, count: counts[id]?.count ?? 0, retired: true }, 200, cors);
       }
 
       if (request.method === "GET" && url.pathname === "/counts") {
-        const counts = await cachedCounts(url, env, ctx);
-        return json(counts, 200, cors, { "Cache-Control": `public, max-age=${COUNTS_BROWSER_SECONDS}` });
+        const { counts, fallback } = await cachedCounts(url, env, ctx);
+        return json(counts, 200, cors, browserCache(fallback));
       }
 
       if (request.method === "GET" && url.pathname.startsWith("/count/")) {
         const id = decodeURIComponent(url.pathname.slice("/count/".length));
-        const counts = await cachedCounts(url, env, ctx);
-        return json({ id, count: counts[id]?.count ?? 0 }, 200, cors, { "Cache-Control": `public, max-age=${COUNTS_BROWSER_SECONDS}` });
+        const { counts, fallback } = await cachedCounts(url, env, ctx);
+        return json({ id, count: counts[id]?.count ?? 0 }, 200, cors, browserCache(fallback));
       }
 
       return json({ ok: true, usage: "POST /import (the game only) · GET /counts · GET /count/:id" }, 200, cors);

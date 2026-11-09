@@ -15,6 +15,7 @@ import {
   importCounterUrl,
   resetImportCountsCache,
 } from "./hubImportCount.js";
+import { HUB_INDEX_URL, resetHubIndexCache } from "./hubFiles.js";
 
 const COUNTS = `${IMPORT_COUNTER_URL}/counts`;
 
@@ -30,10 +31,21 @@ const mockFetch = (t, answer) => {
   t.after(() => {
     globalThis.fetch = original;
     resetImportCountsCache();
+    resetHubIndexCache();
   });
   resetImportCountsCache();
+  resetHubIndexCache();
   return calls;
 };
+
+// The hub's index with its download counts: the old method.
+const INDEX = { version: 2, files: {}, posts: [], imports: { 12: 400, 7: 3 } };
+// What Cloudflare answers for a Worker whose free plan is used up for the day.
+const LIMIT_PAGE = () =>
+  new Response("<!DOCTYPE html><html><head><title>Worker exceeded resource limits | Cloudflare</title></head><body>Error 1027</body></html>", {
+    status: 429,
+    headers: { "Content-Type": "text/html" },
+  });
 
 test("the counter's address is ours unless the build names another", () => {
   assert.equal(importCounterUrl({}), "https://oh-import-counter.nichojkrol.workers.dev");
@@ -65,6 +77,47 @@ test("a counter that cannot be read is no counts, and the last good read stays",
   assert.deepEqual(good, { 12: 5 });
   up = false;
   assert.equal(await fetchImportCounts({ force: true }), good);
+});
+
+test("a counter over its free plan falls back to the hub index's counts, and a later answer replaces them", async (t) => {
+  let counter = LIMIT_PAGE;
+  const calls = mockFetch(t, (url) => (url === HUB_INDEX_URL ? Response.json(INDEX) : counter()));
+  assert.deepEqual(await fetchImportCounts(), { 12: 400, 7: 3 }, "Cloudflare's 429 error page: the index's imports");
+  assert.deepEqual(calls.map((call) => call.url), [COUNTS, HUB_INDEX_URL]);
+  await fetchImportCounts();
+  assert.equal(calls.length, 2, "kept a while, without asking either again");
+  counter = () => Response.json({ 12: { count: 351 } });
+  assert.deepEqual(await fetchImportCounts({ force: true }), { 12: 351 }, "the counter's answer replaces them");
+  assert.equal(calls.filter((call) => call.url === HUB_INDEX_URL).length, 1);
+});
+
+test("an error page with status 200, or no answer in time, falls back to the index too", async (t) => {
+  const answers = [
+    () => new Response("<html><body>Error 1015: You are being rate limited</body></html>", { status: 200, headers: { "Content-Type": "text/html" } }),
+    () => new Response("Service Unavailable", { status: 503 }),
+    () => Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }),
+  ];
+  let answer = null;
+  mockFetch(t, (url) => (url === HUB_INDEX_URL ? Response.json(INDEX) : answer()));
+  for (answer of answers) {
+    resetImportCountsCache();
+    resetHubIndexCache();
+    assert.deepEqual(await fetchImportCounts(), { 12: 400, 7: 3 });
+  }
+});
+
+test("good counts under half an hour old stay when the counter fails; the index is not read for them", async (t) => {
+  let up = true;
+  const calls = mockFetch(t, (url) => (url === HUB_INDEX_URL ? Response.json(INDEX) : up ? Response.json({ 12: { count: 9 } }) : LIMIT_PAGE()));
+  const good = await fetchImportCounts();
+  up = false;
+  assert.equal(await fetchImportCounts({ force: true }), good);
+  assert.equal(calls.some((call) => call.url === HUB_INDEX_URL), false);
+});
+
+test("neither the counter nor the index: no counts", async (t) => {
+  mockFetch(t, (url) => (url === HUB_INDEX_URL ? new Response("", { status: 503 }) : LIMIT_PAGE()));
+  assert.equal(await fetchImportCounts(), null);
 });
 
 test("a report that fails is no error and holds nothing up", async (t) => {

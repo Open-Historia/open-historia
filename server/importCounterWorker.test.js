@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-import worker, { HUB_INDEX_URL, MAX_POSTS_PER_ADDRESS_PER_DAY } from "../tools/import-counter/worker.js";
+import worker, { FALLBACK_TTL_SECONDS, HUB_INDEX_URL, MAX_POSTS_PER_ADDRESS_PER_DAY } from "../tools/import-counter/worker.js";
 
 const sqlite = await import("node:sqlite").catch(() => null);
 const skip = sqlite ? false : "node:sqlite is not available in this Node";
@@ -53,6 +53,20 @@ const fakeD1 = () => {
       }
     },
   };
+};
+
+// The same database as D1 answers it once the free plan's day is used up: the
+// listed calls throw. (A new object each time, as a new isolate sees D1.)
+const D1_LIMIT = "D1_ERROR: Exceeded maximum rows read for the day";
+const overLimit = (DB, { on = ["first", "all", "run", "batch"], message = D1_LIMIT } = {}) => {
+  const fail = async () => { throw new Error(message); };
+  const wrap = (statement) => ({
+    bind: (...args) => wrap(statement.bind(...args)),
+    run: on.includes("run") ? fail : statement.run,
+    first: on.includes("first") ? fail : statement.first,
+    all: on.includes("all") ? fail : statement.all,
+  });
+  return { db: DB.db, prepare: (sql) => wrap(DB.prepare(sql)), batch: on.includes("batch") ? fail : DB.batch };
 };
 
 // The Workers runtime's globals, as much of them as the Worker uses. No edge
@@ -179,6 +193,58 @@ test("an index that cannot be read freezes nothing and counts nothing, and is tr
   state.status = 200;
   assert.equal((await counts())[12].count, 345);
   assert.equal((await (await report(12, token(1))).json()).counted, true);
+});
+
+test("D1 over its day's limits: the reads answer the hub index's counts a short while, an import is refused, nothing is frozen again", { skip }, async (t) => {
+  const { state, env, report, call, counts } = runtime(t);
+  const DB = env.DB;
+  assert.equal((await (await report(12, token(1))).json()).counted, true);
+  assert.equal((await counts())[12].count, 346);
+  // The downloads have gone on since the freeze; the index says so.
+  state.index = { ...INDEX, imports: { 12: 500, 7: 4 } };
+
+  env.DB = overLimit(DB);
+  const answer = await call("/counts");
+  assert.equal(answer.status, 200);
+  assert.deepEqual(await answer.json(), { 7: { count: 4 }, 12: { count: 500 } }, "the old method");
+  assert.equal(answer.headers.get("cache-control"), `public, max-age=${FALLBACK_TTL_SECONDS}`);
+  assert.deepEqual(await (await call("/count/12")).json(), { id: "12", count: 500 });
+  const hit = await call("/hit", { method: "POST", body: JSON.stringify({ id: "7" }) });
+  assert.deepEqual(await hit.json(), { id: "7", count: 4, retired: true });
+  const refused = await report(7, token(2));
+  assert.equal(refused.status, 503);
+  assert.deepEqual(await refused.json(), { post: 7, counted: false, reason: "over limit" });
+
+  // Reads failing while writes still go through: never taken for "not frozen yet".
+  env.DB = overLimit(DB, { on: ["first", "all"] });
+  assert.equal((await counts())[12].count, 500);
+  assert.equal((await report(7, token(3))).status, 503);
+  // Writes failing after the day's address read: the import is refused, not thrown.
+  env.DB = overLimit(DB, { on: ["run", "batch"] });
+  assert.deepEqual(await (await report(7, token(4))).json(), { post: 7, counted: false, reason: "over limit" });
+
+  // And should the freeze run again anyway (here: a "missing table" that is not), it changes nothing.
+  env.DB = overLimit(DB, { on: ["first"], message: "D1_ERROR: no such table: meta: SQLITE_ERROR" });
+  await call("/counts");
+  env.DB = DB;
+  assert.deepEqual(await counts(), { 7: { count: 0 }, 12: { count: 346 } }, "D1 back: its counts, the legacy ones as frozen");
+});
+
+test("the index's answer for a failing D1 is kept at the edge only a short while", { skip }, async (t) => {
+  const { state, env, call } = runtime(t, { edgeCache: true });
+  env.DB = overLimit(env.DB);
+  await call("/counts");
+  const kept = state.cached.get("https://oh-import-counter.example/counts");
+  assert.equal(kept.headers.get("cache-control"), `public, max-age=${FALLBACK_TTL_SECONDS}`);
+  assert.equal((await call("/counts")).headers.get("cache-control"), `public, max-age=${FALLBACK_TTL_SECONDS}`, "the browser too");
+});
+
+test("D1 failing and the index unreadable: an error, never kept", { skip }, async (t) => {
+  const { env, call } = runtime(t, { status: 503 });
+  env.DB = overLimit(env.DB);
+  const response = await call("/counts");
+  assert.equal(response.status, 500);
+  assert.equal(response.headers.get("cache-control"), "no-store");
 });
 
 test("/hit from the oldest builds is answered and never counted", { skip }, async (t) => {

@@ -99,9 +99,9 @@ export const parsePost = (issue, hubIndex, importCounts = null) => {
   const coverImageUrl = releaseCopyOf(hubIndex, firstHubImage(body));
   // The import count is the import counter's (hubImportCount.js): the first
   // imports the game itself reported, on top of what the post had when the
-  // counter started keeping them. Never the hub index's `imports`, which is how
-  // many times the file was downloaded, and anyone can download it. null when
-  // the counter could not be read.
+  // counter started keeping them. The hub index's `imports`, which is how many
+  // times the file was downloaded (and anyone can download it), only while the
+  // counter cannot be read (fetchImportCounts). null when neither could be.
   const installs = importCountIn(importCounts, issue.number);
   return {
     id: issue.number,

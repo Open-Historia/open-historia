@@ -33,6 +33,16 @@ in rows the daily cron deletes after a day; tokens cannot be matched between pos
 `{ "id": "...", "count": n }`, where `count` is the post's frozen `legacy` count plus the imports
 counted here. `POST /hit`, which the oldest builds still send, is answered and never counted.
 
+## When the free plan runs out
+
+- **D1's day used up** (5M rows read / 100k written) or D1 failing: `/counts`, `/count/<post>` and
+  `/hit` answer the hub index's `imports` (the old method), kept at the edge and by the browser only
+  5 minutes so D1 is tried again; `POST /import` answers 503 `{ counted: false, reason: "over limit" }`.
+  The legacy counts are never frozen again from such an error.
+- **Workers' day used up** (100k requests): Cloudflare answers with its own error page and the
+  Worker never runs. The game then reads the hub index's `imports` itself
+  (`src/runtime/hubImportCount.js`), in memory only, and asks the counter again 5 minutes later.
+
 ## The old numbers
 
 The first time the Worker runs with its database it copies the hub index's `imports` (the
