@@ -816,3 +816,41 @@ test("a join goes against the opponents it names, whatever its letter says (#892
   // Opponents on both sides say nothing: the letter again.
   assert.deepEqual(join("war-ukraine~join-a~Belarus~Ukraine,Russia~~").sideA, ["Russia", "Belarus"]);
 });
+
+// The battle that ends a war is fought in it. A player's 1973 game had the
+// fall of Saigon carry the end of the Vietnam War; the battle was refused as
+// fighting in a war already ended, the repair dropped the end, and the war
+// and its battlefield ran on for years after the story had closed it.
+test("the battle that ends a war may carry its end, and fighting before the end stands", () => {
+  const vietnam = { polityOverrides: {}, wars: [{ id: "war-vietnam", status: "active", sideA: ["Democratic Republic of Vietnam"], sideB: ["Republic of Vietnam", "United States"], startedDate: "1965-03-08" }] };
+  const fall = {
+    id: "e1",
+    date: "1975-04-30",
+    title: "People's Army of Vietnam Overruns Saigon",
+    description: "Armored columns of the People's Army of Vietnam storm Saigon after a final assault and the Republic of Vietnam surrenders.",
+    kind: "military",
+    combatants: ["Democratic Republic of Vietnam", "Republic of Vietnam"],
+    warId: "war-vietnam",
+  };
+  const same = { events: [fall], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Saigon falls" };
+  assert.equal(validateWarLedgerPayload(same, { world: vietnam }), "", "the end rides on the battle that ends it");
+
+  // The end tied to a later event the answer lists first: the earlier battle is still the war's.
+  const recognition = { id: "e0", date: "1975-07-25", title: "Washington Recognizes Hanoi", description: "The United States recognizes the reunified government.", kind: "diplomacy" };
+  const listedFirst = { events: [recognition, fall], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Reunification" };
+  assert.equal(validateWarLedgerPayload(listedFirst, { world: vietnam }), "");
+
+  // One record tied to both events ends the war once.
+  const twice = { events: [fall, recognition], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1,2~Reunification" };
+  assert.equal(validateWarLedgerPayload(twice, { world: vietnam }), "");
+
+  // Fighting dated AFTER the end is still refused.
+  const later = { ...fall, id: "e2", date: "1975-08-10", title: "Fresh Assault on Hue", description: "Armies clash again in a new assault on Hue." };
+  const after = { events: [fall, later], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Saigon falls" };
+  assert.match(validateWarLedgerPayload(after, { world: vietnam }), /is ended, not active/);
+
+  // A war ended before this answer is still over for any battle in it.
+  const over = { polityOverrides: {}, wars: [{ ...vietnam.wars[0], status: "ended", endedDate: "1975-04-30" }] };
+  assert.match(validateWarLedgerPayload({ events: [{ ...fall, date: "1975-04-20" }], warUpdates: "" }, { world: over }), /is ended, not active/);
+  assert.match(validateWarLedgerPayload(same, { world: over }), /already ended/);
+});
