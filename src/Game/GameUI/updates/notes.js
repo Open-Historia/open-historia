@@ -54,6 +54,29 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "why are all the agents that run after a time skip running now ... remove the stuff relating to those things
+    // entirely" and "get rid of the background agent" (the owner, 2026-11-07). The Background AI switch went, with the
+    // three requests after a skip: the Stats refresh of tracked countries, the event consolidator and the turn review.
+    // What ran in the background stays, under a fixed cap ("dont remove idle diplomacy", "same with background spy
+    // stuff", "also do the intelligence ratings, and stats and military figures written ahead of time"). Dated
+    // 2026-11-05 so it sorts under the 2.5 release.
+    id: "2026-11-no-background-ai",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Nothing asked after a time skip",
+        items: [
+          "A time skip no longer makes requests after it: the automatic Stats refresh, the separate history summary and the after-skip checks are gone.",
+          "Your campaign's history is still folded into its history document, inside the time skip itself.",
+          "The Background AI switch is gone. What the game does while you are not pressing anything (countries writing to you, your agents' reports, first readings of a country) always runs, and stops at 30 requests a day, or sooner when less than a tenth of your day's requests is left.",
+          "Historical tracking is gone from Stats: refresh a country's sheet from its own ↻ menu.",
+        ],
+      },
+    ],
+  },
+  {
     // "in multiplayer you cant do diplomacy if you arent the host": a thread a player began from a country's panel,
     // the map, the advisor or the War Room was made up and saved on the player's own screen, where a shared game
     // saves nothing, and the host refused its first line ("You are not in that conversation"). The host had threads

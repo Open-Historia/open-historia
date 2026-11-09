@@ -1512,13 +1512,13 @@ const RequestBudgetSection = () => {
     const tasks = requestsByTask(day.byTask, REQUEST_TASK_LABELS);
     const [activeAiRequests, setActiveAiRequests] = useState(() => getActiveAiRequestCount());
     const [cancelNotice, setCancelNotice] = useState("");
-    // One switch (requestBudget.js): on, nothing is saved, Background AI has no
-    // cap, and the lookup functions are on unless turned off under Advanced.
+    // One switch (requestBudget.js): on, nothing is saved, and the lookup
+    // functions are on unless turned off under Advanced. What the game does in
+    // the background has no switch of its own (2026-11-07): it is always on,
+    // under a fixed cap for the day.
     const [noLimit, setNoLimit] = useState(() => requestSettings.noRequestLimit());
-    const [background, setBackground] = useState(() => requestSettings.backgroundAi());
     const lookupsOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
-    const [backgroundCap, setBackgroundCap] = useState(() => String(requestSettings.backgroundDailyCap()));
 
     useEffect(() => {
         const refresh = () => setActiveAiRequests(getActiveAiRequestCount());
@@ -1527,10 +1527,7 @@ const RequestBudgetSection = () => {
     }, []);
     // The first-run setup sets the switch too.
     useEffect(() => {
-        const refresh = () => {
-            setNoLimit(requestSettings.noRequestLimit());
-            setBackground(requestSettings.backgroundAi());
-        };
+        const refresh = () => setNoLimit(requestSettings.noRequestLimit());
         window.addEventListener("ai:request-budget", refresh);
         return () => window.removeEventListener("ai:request-budget", refresh);
     }, []);
@@ -1557,9 +1554,6 @@ const RequestBudgetSection = () => {
     const noLimitRounds = noLimitCost.rounds;
     const share = day.limit > 0 ? Math.min(1, day.used / day.limit) : 0;
     const barColor = share >= 0.9 ? "#f87171" : share >= 0.7 ? "#fbbf24" : "#60a5fa";
-    // Advanced: the lookup functions with the switch on, Background AI's cap
-    // with it off; nothing at all when neither applies.
-    const advanced = noLimit || background;
 
     return (
         <SettingsSection
@@ -1573,14 +1567,13 @@ const RequestBudgetSection = () => {
                 const next = !noLimit;
                 apply(`My key has no request limit turned ${next ? "on" : "off"}.`, () => setNoRequestLimit(next));
                 setNoLimit(requestSettings.noRequestLimit());
-                setBackground(requestSettings.backgroundAi());
             }}
             />
             {/* One sentence group per state, each a single string, so a language
                 pack translates it whole (docs/i18n.md). */}
             <div style={settingsHelper}>
                 {noLimit
-                    ? `On: for a paid key or a local model. The AI looks things up and works in more steps, for better turns with less sent in each request. A time skip may use up to ${noLimitCap} requests, with up to ${noLimitRounds} rounds of questions, and Background AI has no daily cap.`
+                    ? `On: for a paid key or a local model. The AI looks things up and works in more steps, for better turns with less sent in each request. A time skip may use up to ${noLimitCap} requests, with up to ${noLimitRounds} rounds of questions.`
                     : "Off (default): for a free key, where requests run out. A time skip is one request and the AI is handed what it needs. Turn this on for a paid key or a local model: the AI looks things up and works in more steps, for better turns with less sent in each request."}
             </div>
 
@@ -1611,7 +1604,7 @@ const RequestBudgetSection = () => {
                 )}
                 <div style={{ ...helperStyle, marginTop: "0.4rem" }}>
                     {day.lastJump ? <>Your last time skip used <span data-no-translate>{day.lastJump.used}</span>. </> : null}
-                    {day.background > 0 && !noLimit ? <>Background AI has used <span data-no-translate>{day.background}</span> of its <span data-no-translate>{day.backgroundCap}</span>. </> : null}
+                    {day.background > 0 ? <>Requests nobody pressed a button for have used <span data-no-translate>{day.background}</span> of the <span data-no-translate>{day.backgroundCap}</span> they may use today. </> : null}
                     {day.refused > 0 ? <>The provider turned away <span data-no-translate>{day.refused}</span> for coming too fast; those cost a wait, not allowance. </> : null}
                     {day.failed > 0 ? <>{day.failed === 1 ? "1 request failed with an error." : `${day.failed} requests failed with an error.`} </> : null}
                     Counted on this device, from midnight Pacific time, which is when a Gemini key&apos;s day begins.
@@ -1673,62 +1666,23 @@ const RequestBudgetSection = () => {
                         setDailyLimit(String(requestSettings.dailyLimit()));
                     }}
                     />
-                    <div style={helperStyle}>Only used for the count above and to keep background AI from spending the end of your day. The game never stops you at the limit; your provider does.</div>
+                    <div style={helperStyle}>Only used for the count above and to keep requests nobody pressed a button for from spending the end of your day. The game never stops you at the limit; your provider does.</div>
                 </div>
             )}
 
-            <Toggle
-            label="Background AI"
-            enabled={background}
-            onToggle={() => {
-                const next = !background;
-                setBackground(next);
-                apply(`Background AI turned ${next ? "on" : "off"}.`, () => requestSettings.setBackgroundAi(next));
-            }}
-            />
-            {/* The section ends on this line when there is nothing under Advanced. */}
-            <div style={{ ...settingsHelper, ...(advanced ? null : { marginBottom: 0 }) }}>
-                {!background
-                    ? <>Off: the game only calls the model when you do something.</>
-                    : noLimit
-                    ? <>On: while you are not skipping time, countries may write to you unprompted, forces may reposition, agents may file extra reports, and a country you look at gets its first intelligence reading.</>
-                    : <>On (default): while you are not skipping time, countries may write to you unprompted, forces may reposition, agents may file extra reports, and a country you look at gets its first intelligence reading — each of those is a request nobody pressed a button for, and together they stop at the daily cap below.</>}
-            </div>
-
-            {advanced && (
+            {noLimit && (
                 <details style={{ marginBottom: 0 }}>
                     <summary style={{ cursor: "pointer", fontSize: "0.74rem", color: "rgba(255,255,255,0.62)", marginBottom: "0.6rem", ...(touch ? TOUCH_SUMMARY : null) }}>Advanced</summary>
-                    {noLimit ? (
-                        <>
-                            <Toggle
-                            label="AI lookup functions"
-                            enabled={lookupsOn}
-                            onToggle={() => setMapSetting(MAP_SETTING_KEYS.lookupFunctions, !lookupsOn)}
-                            />
-                            <div style={{ ...settingsHelper, marginBottom: 0 }}>
-                                {lookupsOn
-                                    ? `On (default): before it answers, the model can look up the exact power and region names, a region's neighbours, the war ledger or a chat, in up to ${noLimitRounds} extra requests a task. Needs a provider that supports function calling.`
-                                    : "Off: one request per task, with the region lists and ledgers written into the prompt instead. For a model that does not handle function calling well."}
-                            </div>
-                        </>
-                    ) : (
-                        <div style={{ ...fieldGroupStyle, marginBottom: 0 }}>
-                            <label style={labelStyle} htmlFor="ai-background-daily-cap">Background requests a day, at most</label>
-                            <input
-                            id="ai-background-daily-cap"
-                            data-no-translate
-                            inputMode="numeric"
-                            style={{ ...inputStyle, maxWidth: "9rem" }}
-                            value={backgroundCap}
-                            onChange={(event) => setBackgroundCap(event.target.value.replace(/[^\d]/g, ""))}
-                            onBlur={() => {
-                                apply(`Background AI daily cap set to ${backgroundCap || "the default"}.`, () => requestSettings.setBackgroundDailyCap(backgroundCap));
-                                setBackgroundCap(String(requestSettings.backgroundDailyCap()));
-                            }}
-                            />
-                            <div style={helperStyle}>It also stops by itself once less than a tenth of your day is left.</div>
-                        </div>
-                    )}
+                    <Toggle
+                    label="AI lookup functions"
+                    enabled={lookupsOn}
+                    onToggle={() => setMapSetting(MAP_SETTING_KEYS.lookupFunctions, !lookupsOn)}
+                    />
+                    <div style={{ ...settingsHelper, marginBottom: 0 }}>
+                        {lookupsOn
+                            ? `On (default): before it answers, the model can look up the exact power and region names, a region's neighbours, the war ledger or a chat, in up to ${noLimitRounds} extra requests a task. Needs a provider that supports function calling.`
+                            : "Off: one request per task, with the region lists and ledgers written into the prompt instead. For a model that does not handle function calling well."}
+                    </div>
                 </details>
             )}
         </SettingsSection>

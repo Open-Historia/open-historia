@@ -44,9 +44,8 @@ export const HISTORY_CONSOLIDATION = Object.freeze({
   documentWordBudget: 1500,
   documentWordCeiling: 1800,
   // A fold a time skip carried and got no usable answer for simply waits for
-  // the next skip. Past this many unfolded events it has waited long enough,
-  // and is asked for as a request of its own (gameplay.js compactHistoryIfNeeded).
-  ownRequestThreshold: 96,
+  // the next skip, however many events pile up: the request of its own it was
+  // once asked as went on 2026-11-07 (gameplay.js applySkipHistoryFold).
   // What a skip's answer has to give for its fold to be taken at all
   // (judgeSkipHistoryAnswer): a document of at least this many words, or
   // failing that a summary of this many, which is then appended.

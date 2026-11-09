@@ -47,11 +47,18 @@ test("a player who turns it off has turned it off, and it stays off through ever
   assert.equal(normalizeCountryStatsTracking({ ...on, intervalMonths: 24 }, { playerCountry: "Aland" }).intervalMonths, 24);
 });
 
-test("the player's country is given its first sheet for the tracking to begin from, asked for once as any first reading is", () => {
+// The automatic refresh the tracking drove went on 2026-11-07 ("remove the
+// stuff relating to those things entirely", the owner), and with it the first
+// sheet asked for the player's country and the Stats pane's tracking list. A
+// save's countryStatsTracking still loads, and nothing reads it.
+test("nothing refreshes or asks for a tracked country's sheet after a skip, and the Stats pane has no tracking list", () => {
   const source = read("../Game/AI/gameplay.js");
-  // (With what the war reads on it: runtime/statsBackend.js.)
-  assert.ok(source.includes('if (waiting) agentClient.holdSkip(ensureCountryStatSheet(waiting, { reason: "historical tracking", needBackend: true, agentKind: "skip" }));'));
-  assert.equal(source.split("  requestTrackedBaseline(pendingBaseline, game);\n").length - 1, 2, "in the standard sheet's runner and the custom sheet's");
+  for (const gone of ["refreshTrackedCountryStatsIfDue", "requestTrackedBaseline", "normalizeCountryStatsTracking"]) {
+    assert.equal(source.includes(gone), false, gone);
+  }
+  const stats = read("../Game/GameUI/stats.jsx");
+  assert.equal(/HistoricalTrackingModal|normalizeCountryStatsTracking|Auto-refresh/.test(stats), false);
+  assert.equal(read("../Game/AI/advisorLedgers.js").includes("countryStatsTracking"), false);
 });
 
 // ---- cities -----------------------------------------------------------------------------
@@ -107,11 +114,11 @@ test("a city something happened to follows from what was left of it, and not on 
   assert.deepEqual(citiesFollowing({ cityPopulations: { alba: 1 }, cities: [{ name: "Arn", population: 5, holder: "Aland" }], due: [] }), { cityPopulations: { alba: 1 }, moved: 0 });
 });
 
-test("the turn does it after the statistics are brought up to date, with no request, and leaves what its own events set", () => {
+test("the turn does it once the statistics are settled, with no request, and leaves what its own events set", () => {
   const turn = read("../Game/AI/gameplay.js");
-  const refreshed = turn.indexOf("nextWorld = await refreshTrackedCountryStatsIfDue({");
+  const settled = turn.indexOf("nextWorld = applySkipHistoryFold({");
   const followed = turn.indexOf("nextWorld = await citiesFollowCountries({ world: nextWorld, baseWorld, game: nextGame, campaignId, loadRegions: createRenderedRegionsReader() });");
-  assert.ok(refreshed > 0 && followed > refreshed);
+  assert.ok(settled > 0 && followed > settled);
   const apply = read("../Game/AI/frontApply.js");
   assert.ok(apply.includes("if (moves.due.length === 0) return noted ? { ...world, cityPopulationBasis: moves.basis } : world;"), "the map is read only when a country is due");
   assert.ok(apply.includes("const skip = new Set(Object.keys(now).filter((key) => Number(now[key]) !== Number(before[key])).map(cityPopulationKey));"));

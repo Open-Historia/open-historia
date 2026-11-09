@@ -14,8 +14,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+    BACKGROUND_DAILY_CAP,
     BACKGROUND_REQUEST,
-    DEFAULT_BACKGROUND_DAILY_CAP,
     DEFAULT_DAILY_REQUEST_LIMIT,
     JUMP_REQUEST_CAP,
     REQUEST_BUDGET_KEYS,
@@ -44,24 +44,30 @@ const setup = ({ stored = {}, at = NOON_PACIFIC } = {}) => {
     return { storage, clock, settings, ledger };
 };
 
-test("a fresh install saves requests, runs background AI within its cap, and assumes a free key", () => {
+test("a fresh install saves requests, caps what runs in the background, and assumes a free key", () => {
     const { settings } = setup();
     assert.equal(settings.noRequestLimit(), false);
     assert.equal(settings.saveRequests(), true);
-    assert.equal(settings.backgroundAi(), true);
     assert.equal(settings.dailyLimit(), DEFAULT_DAILY_REQUEST_LIMIT);
     assert.equal(settings.dailyLimit(), 500);
-    assert.equal(settings.backgroundDailyCap(), DEFAULT_BACKGROUND_DAILY_CAP);
+    assert.equal(BACKGROUND_DAILY_CAP, 30);
     assert.equal(JUMP_REQUEST_CAP, 3);
 });
 
 test("only an explicit choice changes a default", () => {
-    const { settings, storage } = setup();
+    const { settings } = setup();
     settings.setNoRequestLimit(true);
-    settings.setBackgroundAi(false);
     assert.equal(settings.saveRequests(), false);
-    assert.equal(settings.backgroundAi(), false);
-    assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.backgroundAi), "0");
+});
+
+// "get rid of the background agent" (the owner, 2026-11-07): Background AI's
+// switch and cap are gone, and a value a player once stored for them is never read.
+test("Background AI is not a setting any more: no switch, no cap of the player's", () => {
+    const { settings } = setup({ stored: { ai_background_activity: "0", ai_background_daily_cap: "2" } });
+    for (const gone of ["backgroundAi", "setBackgroundAi", "backgroundDailyCap", "setBackgroundDailyCap"]) {
+        assert.equal(settings[gone], undefined, gone);
+    }
+    assert.equal(Object.values(REQUEST_BUDGET_KEYS).some((key) => key.startsWith("ai_background")), false);
 });
 
 // The six switches for the checks after a time skip are gone: the checks are
@@ -87,10 +93,6 @@ test("the limits are whole numbers inside their range, whatever was typed", () =
     assert.equal(settings.dailyLimit(), 1, "a limit of nothing would lock the player out");
     settings.setDailyLimit("lots");
     assert.equal(settings.dailyLimit(), DEFAULT_DAILY_REQUEST_LIMIT);
-    settings.setBackgroundDailyCap(12.6);
-    assert.equal(settings.backgroundDailyCap(), 13);
-    settings.setBackgroundDailyCap(-4);
-    assert.equal(settings.backgroundDailyCap(), 0);
 });
 
 test("a storage that throws reads as the defaults", () => {
@@ -100,7 +102,6 @@ test("a storage that throws reads as the defaults", () => {
     };
     const settings = createRequestSettings({ storage: broken });
     assert.equal(settings.saveRequests(), true);
-    assert.equal(settings.backgroundAi(), true);
     assert.equal(settings.setNoRequestLimit(true), false);
     assert.equal(settings.noRequestLimit(), false);
     const ledger = createRequestLedger({ storage: broken, now: () => NOON_PACIFIC });
@@ -181,27 +182,22 @@ test("what the last skip cost is kept for the time panel", () => {
     assert.deepEqual(ledger.today().lastJump, { used: 2, refused: 1, at: NOON_PACIFIC });
 });
 
-test("background AI runs from the start within its cap, and spends nothing once turned off", () => {
+test("what runs in the background runs from the start, within its cap", () => {
     const { settings, ledger } = setup();
-    assert.deepEqual(backgroundAllowance({ settings, ledger }), { allowed: true, reason: "", remaining: DEFAULT_BACKGROUND_DAILY_CAP });
-    settings.setBackgroundAi(false);
-    assert.deepEqual(backgroundAllowance({ settings, ledger }), { allowed: false, reason: "off", remaining: 0 });
+    assert.deepEqual(backgroundAllowance({ settings, ledger }), { allowed: true, reason: "", remaining: BACKGROUND_DAILY_CAP });
 });
 
-test("background AI stops at its daily cap", () => {
+test("what runs in the background stops at the day's fixed cap", () => {
     const { settings, ledger } = setup();
-    settings.setBackgroundAi(true);
-    settings.setBackgroundDailyCap(2);
-    assert.equal(backgroundAllowance({ settings, ledger }).allowed, true);
-    ledger.note({ status: 200, kind: BACKGROUND_REQUEST });
+    settings.setDailyLimit(10000);
+    for (let request = 0; request < BACKGROUND_DAILY_CAP - 1; request += 1) ledger.note({ status: 200, kind: BACKGROUND_REQUEST });
     assert.deepEqual(backgroundAllowance({ settings, ledger }), { allowed: true, reason: "", remaining: 1 });
     ledger.note({ status: 200, kind: BACKGROUND_REQUEST });
     assert.deepEqual(backgroundAllowance({ settings, ledger }), { allowed: false, reason: "cap", remaining: 0 });
 });
 
-test("background AI never spends the last tenth of the day", () => {
+test("what runs in the background never spends the last tenth of the day", () => {
     const { settings, ledger } = setup();
-    settings.setBackgroundAi(true);
     settings.setDailyLimit(20);
     for (let request = 0; request < 17; request += 1) ledger.note({ status: 200 });
     assert.equal(backgroundAllowance({ settings, ledger }).allowed, true);
@@ -210,12 +206,6 @@ test("background AI never spends the last tenth of the day", () => {
     assert.equal(backgroundAllowance({ settings, ledger }).reason, "reserve");
 });
 
-test("a cap of zero is background AI switched on and allowed nothing", () => {
-    const { settings, ledger } = setup();
-    settings.setBackgroundAi(true);
-    settings.setBackgroundDailyCap(0);
-    assert.equal(backgroundAllowance({ settings, ledger }).reason, "cap");
-});
 
 test("a skip spends at most its cap, in the order it is asked", () => {
     const budget = createJumpBudget();
@@ -293,15 +283,17 @@ test("a skip with no function calling is one request, with two left that only it
     assert.equal(budget.take("jump"), true);
     assert.equal(budget.spent, 1);
     assert.equal(budget.free, 2);
-    // What used to be asked after a skip, each a request of its own.
-    for (const gone of ["geography", "repair", "spies", "unitDirector", "timelineCurator", "projects"]) {
+    // What used to be asked after a skip, each a request of its own: the last
+    // three (the turn review, the event consolidator and the Stats refresh)
+    // went on 2026-11-07.
+    for (const gone of ["geography", "repair", "spies", "unitDirector", "timelineCurator", "projects", "review", "history", "stats"]) {
         assert.equal(budget.allows(gone), false, gone);
         assert.equal(budget.take(gone), false, gone);
     }
     assert.equal(budget.spent, 1, "none of them cost anything");
     assert.deepEqual(budget.skipped, [], "nor were they put off for the cap: a skip does not ask for them at all");
-    assert.deepEqual(budget.denied, ["geography", "repair", "spies", "unitDirector", "timelineCurator", "projects"]);
-    assert.deepEqual(SKIP_SPENDERS, ["jump", "review", "history", "stats", "institutionBallots"]);
+    assert.deepEqual(budget.denied, ["geography", "repair", "spies", "unitDirector", "timelineCurator", "projects", "review", "history", "stats"]);
+    assert.deepEqual(SKIP_SPENDERS, ["jump", "institutionBallots"]);
 });
 
 test("function calling is the skip asking again: two rounds make three requests, and then it answers", () => {
@@ -314,8 +306,8 @@ test("function calling is the skip asking again: two rounds make three requests,
     assert.equal(budget.free, 0, "the next request has to be the answer");
     assert.equal(budget.spent, JUMP_REQUEST_CAP);
     assert.equal(budget.take("jumpRetry"), false, "and a flawed answer is not asked for again on top of that");
-    assert.equal(budget.take("stats"), false);
-    assert.deepEqual(budget.skipped, ["jumpRetry", "stats"]);
+    assert.equal(budget.take("institutionBallots"), false);
+    assert.deepEqual(budget.skipped, ["jumpRetry", "institutionBallots"]);
     assert.deepEqual(budget.denied, []);
 });
 
@@ -357,7 +349,8 @@ test("what a skip spends on survives a restart with the rest of its budget", () 
     const carried = JSON.parse(JSON.stringify({ cap: budget.cap, only: budget.only, state: budget.state }));
     const resumed = createJumpBudget({ cap: carried.cap, only: carried.only, state: carried.state });
     assert.equal(resumed.allows("repair"), false);
-    assert.equal(resumed.allows("history"), true);
+    assert.equal(resumed.allows("history"), false);
+    assert.equal(resumed.allows("institutionBallots"), true);
     assert.deepEqual(resumed.denied, ["geography"]);
     assert.equal(resumed.spent, 1);
 });
@@ -407,49 +400,10 @@ test("Settings lists today's requests by task, most first, under their names", (
     assert.deepEqual(requestsByTask({ toString: 3 }), [{ label: "toString", named: false, count: 3 }], "a key is never read off the prototype");
 });
 
-// A player's log, 2026-10-12: Stats last refreshed in 1921 with the date at
-// 1929. The model looked things up on every skip, the rounds used the budget,
-// and the refresh was put off on every skip for good.
-test("upkeep that is due keeps its request: function calling cannot starve it", () => {
-    const starved = createJumpBudget({ cap: jumpRequestCap({ segments: 1 }), only: SKIP_SPENDERS });
-    starved.reserve("jump", 1);
-    assert.equal(starved.take("jump"), true);
-    assert.equal(starved.take("jumpLookup"), true);
-    assert.equal(starved.take("jumpLookup"), true);
-    assert.equal(starved.take("stats"), false, "what happened on every skip before");
-
-    const kept = createJumpBudget({ cap: jumpRequestCap({ segments: 1 }), only: SKIP_SPENDERS });
-    kept.reserve("jump", 1);
-    kept.reserve("stats", 1);
-    assert.equal(kept.free, 1, "one request is still free for a lookup or for being asked again");
-    assert.equal(kept.take("jump"), true);
-    assert.equal(kept.take("jumpLookup"), true);
-    assert.equal(kept.take("jumpLookup"), false);
-    assert.equal(kept.take("stats"), true);
-    assert.equal(kept.spent, 3, "never past the cap");
-
-    // In segments too: four segments, the model looking up twice.
-    const segmented = createJumpBudget({ cap: jumpRequestCap({ segments: 4 }), only: SKIP_SPENDERS });
-    segmented.reserve("jump", 4);
-    segmented.reserve("stats", 1);
-    for (let index = 0; index < 4; index += 1) assert.equal(segmented.take("jump"), true);
-    assert.equal(segmented.take("jumpLookup"), true);
-    assert.equal(segmented.take("jumpLookup"), false);
-    assert.equal(segmented.take("stats"), true);
-});
-
-test("a request kept for the history fold and not needed goes to the Stats refresh", () => {
-    const budget = createJumpBudget({ cap: jumpRequestCap({ segments: 1 }), only: SKIP_SPENDERS });
-    budget.reserve("jump", 1);
-    budget.reserve("history", 1);
-    assert.equal(budget.take("jump"), true);
-    assert.equal(budget.take("jumpLookup"), true);
-    assert.equal(budget.take("stats"), false, "held for the history while it may still ask");
-    assert.equal(budget.release("history"), 1);
-    assert.equal(budget.release("history"), 0);
-    assert.equal(budget.take("stats"), true);
-    assert.equal(budget.spent, 3);
-});
+// Upkeep after a skip (the Stats refresh, a history fold of its own) kept a
+// request of the skip's so function calling could not starve it. Both went on
+// 2026-11-07, and with them the reservation: a skip keeps requests only for its
+// own segments and an open ballot.
 
 // The owner, 2026-11-07: "My key has no request limit" on by default when the
 // main provider is anything other than Gemini.
@@ -516,25 +470,14 @@ test("a request kept for the history fold and not needed goes to the Stats refre
 
 // The owner's log, 2026-11-04: the folded skip refused (400), one request
 // spent, and the skip asked again was "Not asked: this time skip has used its
-// 3 requests": the review and the Stats refresh held the other two.
-test("a refused folded skip is asked again before its checks, and its upkeep waits", () => {
+// 3 requests". Nothing is asked after a skip now, so the retry keeps its request.
+test("a refused folded skip is asked again with a request of its own", () => {
     const budget = createJumpBudget({ cap: JUMP_REQUEST_CAP, only: SKIP_SPENDERS });
     budget.reserve("jump", 1);
-    budget.reserve("stats", 1);
     assert.equal(budget.take("jump"), true, "the folded skip, refused");
     assert.equal(keepForRefusedSkip(budget), 1);
     assert.equal(budget.take("jump"), true, "asked again the old way");
-    assert.equal(budget.take("review"), true, "its checks");
-    assert.equal(budget.take("stats"), false, "the Stats refresh is put off to the next skip");
-    assert.equal(budget.spent, 3);
-
-    // With room for everything nothing is put off.
-    const roomy = createJumpBudget({ cap: 5, only: SKIP_SPENDERS });
-    roomy.reserve("jump", 1);
-    roomy.reserve("stats", 1);
-    roomy.take("jump");
-    keepForRefusedSkip(roomy);
-    assert.deepEqual(["jump", "review", "stats"].map((spender) => roomy.take(spender)), [true, true, true]);
+    assert.equal(budget.spent, 2);
 
     // A skip in segments: the later segments keep theirs.
     const pieces = createJumpBudget({ cap: jumpRequestCap({ segments: 3 }), only: SKIP_SPENDERS });

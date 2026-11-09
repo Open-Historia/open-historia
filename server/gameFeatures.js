@@ -75,7 +75,7 @@ export const FEATURE_DEFINITIONS = Object.freeze([
   Object.freeze({
     key: "idleDiplomacy",
     label: "Idle diplomacy",
-    description: "While the game sits open between turns, a polity with a live reason to speak may send the player an unprompted note. Every attempt is an AI request nobody pressed a button for, so it only runs while Background AI is on (Settings, AI, AI requests; on by default), and stops at that player's daily cap.",
+    description: "While the game sits open between turns, a polity with a live reason to speak may send the player an unprompted note. Every attempt is an AI request nobody pressed a button for, so it stops at the day's cap of such requests, and while less than a tenth of the player's daily request limit is left.",
     settings: Object.freeze([
       Object.freeze({
         key: "averageMinutes",
@@ -85,7 +85,7 @@ export const FEATURE_DEFINITIONS = Object.freeze([
         max: 720,
         step: 1,
         defaultValue: 8,
-        description: "How often, on average, the model is asked whether some polity would write. Most attempts send nothing; the roll only runs while the game is on screen, and only while Background AI is on.",
+        description: "How often, on average, the model is asked whether some polity would write. Most attempts send nothing; the roll only runs while the game is on screen.",
       }),
     ]),
   }),

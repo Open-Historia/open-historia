@@ -6,16 +6,17 @@
 // "make there be one toggle that does all the optimal stuff for non request
 // limited keys so its simple" (the owner, 2026-11-07). One switch in Settings →
 // AI → AI requests replaced Save AI requests and Unlimited requests. On, it
-// turns off everything that saves requests, raises the caps, and turns
-// Background AI and the lookup functions on; off, it puts back what the player
-// had. A player on a free key, who never touches it, sees nothing change.
+// turns off everything that saves requests, raises the caps, and turns the
+// lookup functions on; off, it puts back what the player had. A player on a
+// free key, who never touches it, sees nothing change. (It turned Background AI
+// on too, until that switch went, 2026-11-07.)
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
-    DEFAULT_BACKGROUND_DAILY_CAP,
+    BACKGROUND_DAILY_CAP,
     JUMP_REQUEST_CAP,
     LEGACY_REQUEST_KEYS,
     LOOKUP_FUNCTIONS_KEY,
@@ -102,25 +103,22 @@ test("the new key wins over the old ones, and setting it removes them", () => {
 });
 
 test("reading writes nothing, and a migrated player's own choices are left alone", () => {
-    const stored = { [LEGACY_REQUEST_KEYS.saveRequests]: "0", [REQUEST_BUDGET_KEYS.backgroundAi]: "0", [LOOKUP_FUNCTIONS_KEY]: "0" };
+    const stored = { [LEGACY_REQUEST_KEYS.saveRequests]: "0", [LOOKUP_FUNCTIONS_KEY]: "0" };
     const { settings, storage } = setup(stored);
     assert.deepEqual(readings(settings), ON);
-    assert.equal(settings.backgroundAi(), false, "the switch only changes these when it is turned");
-    assert.equal(storage.getItem(LOOKUP_FUNCTIONS_KEY), "0");
+    assert.equal(storage.getItem(LOOKUP_FUNCTIONS_KEY), "0", "the switch only changes these when it is turned");
     assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.noRequestLimit), null);
     assert.equal(storage.getItem(LEGACY_REQUEST_KEYS.saveRequests), "0");
 });
 
 // ---- What turning it on and off does ---------------------------------------
 
-test("on: Background AI and the lookup functions on; off: both put back as the player had them", () => {
-    const { settings, storage } = setup({ [REQUEST_BUDGET_KEYS.backgroundAi]: "0", [LOOKUP_FUNCTIONS_KEY]: "0" });
+test("on: the lookup functions on; off: put back as the player had them", () => {
+    const { settings, storage } = setup({ ai_background_activity: "0", [LOOKUP_FUNCTIONS_KEY]: "0" });
     settings.setNoRequestLimit(true);
-    assert.equal(settings.backgroundAi(), true);
     assert.equal(storage.getItem(LOOKUP_FUNCTIONS_KEY), "1");
+    assert.equal(storage.getItem("ai_background_activity"), "0", "Background AI's old key is not touched");
     settings.setNoRequestLimit(false);
-    assert.equal(settings.backgroundAi(), false, "Background AI was off before");
-    assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.backgroundAi), "0");
     assert.equal(storage.getItem(LOOKUP_FUNCTIONS_KEY), "0");
     assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.beforeNoRequestLimit), null, "nothing kept once put back");
 });
@@ -128,24 +126,22 @@ test("on: Background AI and the lookup functions on; off: both put back as the p
 test("defaults are put back as defaults: an absent key goes back to absent", () => {
     const { settings, storage } = setup();
     settings.setNoRequestLimit(true);
-    assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.backgroundAi), "1");
+    assert.equal(storage.getItem(LOOKUP_FUNCTIONS_KEY), "1");
     settings.setNoRequestLimit(false);
-    assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.backgroundAi), null);
     assert.equal(storage.getItem(LOOKUP_FUNCTIONS_KEY), null);
-    assert.equal(settings.backgroundAi(), true, "Background AI ships on");
+    assert.equal(storage.getItem("ai_background_activity"), null, "nothing is written for Background AI");
 });
 
-test("Background AI set while the switch is on is the player's choice, and stays", () => {
-    const { settings } = setup({ [REQUEST_BUDGET_KEYS.backgroundAi]: "0" });
-    settings.setNoRequestLimit(true);
-    settings.setBackgroundAi(false);
+test("a record kept from when the switch turned Background AI on puts back only the lookups", () => {
+    const { settings, storage } = setup({
+        [REQUEST_BUDGET_KEYS.noRequestLimit]: "1",
+        [REQUEST_BUDGET_KEYS.beforeNoRequestLimit]: JSON.stringify({ backgroundAi: "0", lookups: "0" }),
+        ai_background_activity: "1",
+        [LOOKUP_FUNCTIONS_KEY]: "1",
+    });
     settings.setNoRequestLimit(false);
-    assert.equal(settings.backgroundAi(), false);
-    const again = setup({ [REQUEST_BUDGET_KEYS.backgroundAi]: "0" }).settings;
-    again.setNoRequestLimit(true);
-    again.setBackgroundAi(true);
-    again.setNoRequestLimit(false);
-    assert.equal(again.backgroundAi(), true);
+    assert.equal(storage.getItem(LOOKUP_FUNCTIONS_KEY), "0");
+    assert.equal(storage.getItem("ai_background_activity"), "1", "a key nothing reads is left alone");
 });
 
 test("setting the switch to what it already is changes nothing else", () => {
@@ -153,15 +149,15 @@ test("setting the switch to what it already is changes nothing else", () => {
     settings.setNoRequestLimit(true);
     assert.equal(storage.getItem(LOOKUP_FUNCTIONS_KEY), "0", "a lookup choice made under Advanced stands");
     assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.beforeNoRequestLimit), null);
-    const off = setup({ [REQUEST_BUDGET_KEYS.backgroundAi]: "0" });
+    const off = setup({ [LOOKUP_FUNCTIONS_KEY]: "0" });
     off.settings.setNoRequestLimit(false);
-    assert.equal(off.settings.backgroundAi(), false);
+    assert.equal(off.storage.getItem(LOOKUP_FUNCTIONS_KEY), "0");
 });
 
 test("a kept record that is not an object puts nothing back and does not throw", () => {
-    const { settings, storage } = setup({ [REQUEST_BUDGET_KEYS.noRequestLimit]: "1", [REQUEST_BUDGET_KEYS.beforeNoRequestLimit]: "{broken", [REQUEST_BUDGET_KEYS.backgroundAi]: "1" });
+    const { settings, storage } = setup({ [REQUEST_BUDGET_KEYS.noRequestLimit]: "1", [REQUEST_BUDGET_KEYS.beforeNoRequestLimit]: "{broken", [LOOKUP_FUNCTIONS_KEY]: "1" });
     settings.setNoRequestLimit(false);
-    assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.backgroundAi), "1");
+    assert.equal(storage.getItem(LOOKUP_FUNCTIONS_KEY), "1");
     assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.beforeNoRequestLimit), null);
 });
 
@@ -175,16 +171,17 @@ test("on: the higher caps and rounds; off: the free key's, exactly as before", (
     assert.deepEqual(describeJumpCost({ lookups: false }), { min: 1, max: 1, lookups: false, rounds: 0, unlimited: false });
 });
 
-test("on: Background AI has no daily cap and keeps no reserve; off: both, as before", () => {
+// The background cap is fixed now, and holds with the switch on too; only the
+// reserve, a share of a day's limit, goes with the limit.
+test("on: the background keeps no reserve but still stops at its cap; off: both", () => {
     const { settings, ledger } = setup({ [REQUEST_BUDGET_KEYS.dailyLimit]: "100" });
-    for (let index = 0; index < DEFAULT_BACKGROUND_DAILY_CAP; index += 1) ledger.note({ status: 200, kind: "background" });
-    assert.deepEqual(backgroundAllowance({ settings, ledger }), { allowed: false, reason: "cap", remaining: 0 });
-    for (let index = 0; index < 80; index += 1) ledger.note({ status: 200 });
+    // 90 used of 100: the last tenth.
+    for (let index = 0; index < 90; index += 1) ledger.note({ status: 200 });
+    assert.equal(backgroundAllowance({ settings, ledger }).reason, "reserve");
     settings.setNoRequestLimit(true);
-    assert.equal(backgroundAllowance({ settings, ledger }).allowed, true, "past the cap and into the reserve");
-    settings.setBackgroundAi(false);
-    assert.deepEqual(backgroundAllowance({ settings, ledger }), { allowed: false, reason: "off", remaining: 0 }, "and still off when the player turns it off");
-    settings.setBackgroundAi(true);
+    assert.equal(backgroundAllowance({ settings, ledger }).allowed, true, "no limit, no reserve");
+    for (let index = 0; index < BACKGROUND_DAILY_CAP; index += 1) ledger.note({ status: 200, kind: "background" });
+    assert.deepEqual(backgroundAllowance({ settings, ledger }), { allowed: false, reason: "cap", remaining: 0 });
     settings.setNoRequestLimit(false);
     assert.equal(backgroundAllowance({ settings, ledger }).allowed, false);
 });
@@ -214,7 +211,7 @@ test("the callers read the switch through the getters, and nothing reads the old
     }
 });
 
-test("Settings: the switch first, the daily limit only when it is off, the lookups and the background cap under Advanced", () => {
+test("Settings: the switch first, the daily limit only when it is off, the lookups under Advanced, and no Background AI", () => {
     const settings = source("../GameUI/settings.jsx");
     const section = settings.slice(settings.indexOf("const RequestBudgetSection = () => {"), settings.indexOf("const SocialLinks = ("));
     const at = (text) => {
@@ -224,8 +221,9 @@ test("Settings: the switch first, the daily limit only when it is off, the looku
     };
     assert.ok(at('label="My key has no request limit"') < at("used today"), "the switch at the top");
     assert.ok(at("{!noLimit && (") < at('htmlFor="ai-daily-request-limit"'));
-    assert.ok(at("{advanced && (") < at('label="AI lookup functions"'));
-    assert.ok(at('label="AI lookup functions"') < at('htmlFor="ai-background-daily-cap"'));
+    assert.ok(at("{noLimit && (") < at('label="AI lookup functions"'));
+    assert.equal(section.includes('label="Background AI"'), false);
+    assert.equal(section.includes("ai-background-daily-cap"), false);
     assert.match(section, /apply\(`My key has no request limit turned \$\{next \? "on" : "off"\}\.`, \(\) => setNoRequestLimit\(next\)\);/);
     assert.equal(section.includes('label="Save AI requests"'), false);
     assert.equal(section.includes('label="Unlimited requests"'), false);

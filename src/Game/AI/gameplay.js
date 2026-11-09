@@ -98,7 +98,7 @@ import {
   verifyGameMasterTerritoryPostconditions,
 } from "./gameMasterValidation.js";
 import { gameMasterWarNames, settleGameMasterWars } from "./gameMasterWars.js";
-import { buildCuratorInput, candidatesWorthJudging, curateGeneratedEventsWithHidden } from "./nativeTimelineCurator.js";
+import { curateGeneratedEventsWithHidden } from "./nativeTimelineCurator.js";
 import {
   applyWorldStorylineUpdates,
   boardProvisionalConsequenceIndexes,
@@ -289,11 +289,10 @@ import {
   buildTurnReviewPrompt,
   buildTurnReviewTool,
   readTurnReviewAnswer,
-  reviewFailure,
   remapBoardOps,
   shareRepeatedBlocks,
 } from "./turnReview.js";
-import { checksHeldError, checksHoldTurn, copyReviewParts, createTurnChecks } from "./turnChecks.js";
+import { checksHeldError, checksHoldTurn, createTurnChecks } from "./turnChecks.js";
 import { acknowledgeFailures, buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, keepRetryBoundRecords, restrictToRetriedOrders } from "./playerTurnFailures.js";
 import {
   describeDoubtedForPrompt,
@@ -312,13 +311,12 @@ import { foldLandscapeIntoActor } from "../../runtime/politicalLandscapeFold.js"
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
 import { FRONT_ORDER_LINES_BLOCK } from "./frontPrompt.js";
 import { collectionOrders, covertOperationsBlock, untracedTargets } from "./covertOperationsDirective.js";
-import { AGENT_REPORT_EVERY_ROUNDS, agentsDueToReport, agentsReportingWithSkip } from "./agentReports.js";
+import { agentsReportingWithSkip } from "./agentReports.js";
 import { assignAgentReports, boardOpsOf, liftBoardOps, providerRefusedContract, withoutBoardOps } from "./foldedSkip.js";
 import { renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment, spySealingWorks } from "../../runtime/spySeal.js";
 import {
   buildActionHistoryText,
-  buildChatSummaryText,
   buildDetailedChatHistoryText,
   buildEventHistoryText,
   buildPromptContext,
@@ -339,7 +337,6 @@ import {
   buildHistoryDocumentDirective,
   HISTORY_JOB_FENCES,
   buildSkipHistoryJob,
-  countWords,
   deferredConsolidationStillDue,
   judgeSkipHistoryAnswer,
   planHistoryConsolidation,
@@ -415,13 +412,7 @@ import {
 import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "../../runtime/politicalBackground.js";
 import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
-import {
-  ACTION_OUTCOME_ASSOCIATION_SCHEMA,
-  applyActionOutcomeAssociations,
-  buildActionOutcomeAssociationPlan,
-  normalizeActionOutcomeAssociationAnswer,
-  validateQueuedActionIds,
-} from "./actionOutcomeAssociations.js";
+import { validateQueuedActionIds } from "./actionOutcomeAssociations.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 import { sortTimelineEventsChronologically } from "../../runtime/timelineOrder.js";
 import { EVENT_IMPACT_KEYS, eventHasImpacts } from "../../runtime/eventImpactKeys.js";
@@ -462,16 +453,12 @@ import {
   buildCompactEconomicContext,
   captureCountryStatsHistory,
   COUNTRY_STATS_POPULATION_CALIBRATION_VERSION,
-  COUNTRY_STATS_TRACKING_MAX_POLITIES,
-  countryStatsTrackingMonthsElapsed,
   finalizeCountryStatSheet,
   guardCountryStatContinuity,
   isCompleteCountryStatSheet,
   isCompleteCustomCountryStatSheet,
-  isTrackedStatSheetReady,
   mergeCountryStatPatch,
   normalizeCountryStatSheet,
-  normalizeCountryStatsTracking,
   resolveCountryStatsPopulationCalibration,
   decodeTerritorialComponentSplit,
   expandTerritorialMacroEstimates,
@@ -497,7 +484,6 @@ import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline, runWi
 import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
 import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
-import { agentClient } from "./agentConnection.js";
 import { assertCampaignUnchanged, campaignChanged } from "../../runtime/campaignGuard.js";
 import { HELD_TURN_STALE_NOTE, heldTurnOutdated, mergeActionsAtCommit, restorePointProblem, restorePointsFor, storedActionsForMerge } from "../../runtime/turnCommit.js";
 import { getLibraryState, readGameParkedTurn, removeGameParkedTurn, writeGameParkedTurn } from "../../runtime/library.js";
@@ -2817,12 +2803,12 @@ const noteUndeployedPosts = ({ placing, world, gazetteer, formations, receipt })
 // The system prompt a task is sent: its template rendered with the variables,
 // then every directive that task carries at call time (they are appended here
 // rather than written into defaultPrompts.json because existing campaigns carry
-// frozen copies of the templates). Its own function so that the turn review
-// (runTurnReview below) can put several tasks into ONE request and still show
-// each of them exactly the prompt it would have been sent alone.
+// frozen copies of the templates). Its own function so that a Scene's map
+// check (runSceneReview below) can put several tasks into ONE request and still
+// show each of them exactly the prompt it would have been sent alone.
 //
 // `reminders: false` leaves out the Game Master's reminders and the author's
-// priority rules; the turn review adds them once to the whole request instead
+// priority rules; a Scene's map check adds them once to the whole request instead
 // of once per job.
 // A scenario's own stats sheet, or its own strategic indices, as every task that
 // authors stats is told them.
@@ -4896,7 +4882,8 @@ const runJsonTask = async (taskKey, {
 // progress is exactly what moves a standing Operation, so the Board reads them:
 // numbered after the visible events, and marked, so a lastUpdate written from one
 // does not point the player at a timeline card that is not there.
-// The board's ops when the turn review already asked for them (runTurnReview).
+// The board's ops when a review already holds them: the folded skip's own
+// answer (foldedTurnReview), or a Scene's map check (runSceneReview).
 // `skipped` is what it is for generateProjectOps below: the board was not looked
 // at, so nothing on it moves and nothing is proven against it.
 const reviewedProjectOps = ({ review, visibleEvents, hiddenEvents, idMap }) => {
@@ -4915,7 +4902,7 @@ const reviewedProjectOps = ({ review, visibleEvents, hiddenEvents, idMap }) => {
   return { ops, skipped: false };
 };
 
-const generateProjectOps = async (bundle, events, { signal, hiddenEvents = [], requests = null } = {}) => {
+const generateProjectOps = async (bundle, events, { signal, hiddenEvents = [] } = {}) => {
   const board = normalizeArray(bundle.world?.projects);
   const hidden = normalizeArray(hiddenEvents);
   // Nothing to keep in step, and nothing an event could plausibly open against
@@ -4958,7 +4945,6 @@ const generateProjectOps = async (bundle, events, { signal, hiddenEvents = [], r
   const { generation, payload } = await runJsonTask("projects", {
     lookups: buildTaskLookups(bundle),
     signal,
-    ...jumpTaskOptions(requests, "review"),
     userMessage:
       `These events have just been simulated. Move the board to match them, and return `
       + `{"projectOps":[]} if nothing on it genuinely moved.${BOARD_MILESTONE_NOTE}${hiddenNote}\n\n${eventList}${doubtBlock}`,
@@ -5320,24 +5306,20 @@ const consolidationResume = (plan, bundle, { campaignId, world }) => ({
 // (historyConsolidation.js buildSkipHistoryJob) and a field of its answer.
 //
 // Planned HERE, before the skip, on the campaign as it stands and for the round
-// the skip is about to produce, so the cadence is the one a pass after the skip
-// kept, and nothing the skip writes is in it. Three things come back:
-//   null                nothing is due: nothing is asked, and nothing is asked
-//                       after the skip either. Whatever the skip adds waits
-//                       for the next one.
-//   { separate: true }  due, but not the skip's to carry: the player sends
-//                       this pass through the provider's batch endpoint
-//                       (Settings → Batch background AI tasks), or a batch is
-//                       already out for these events. The pass after the skip
-//                       handles it, as it always has.
+// the skip is about to produce, and nothing the skip writes is in it. Two
+// things come back:
+//   null                nothing is due, or a batch sent before the
+//                       consolidator's own request went (2026-11-07) is still
+//                       out for these events and folds them when it lands:
+//                       nothing is asked. Whatever the skip adds waits for the
+//                       next one.
 //   { brief, resume, baseRevision, currentText }
 //                       due and carried: the consolidator's own prompt, whole,
 //                       and the boundary the fold will record.
 const prepareSkipHistoryFold = async (bundle, { campaignId = activeCampaignId() } = {}) => {
   const plan = planHistoryConsolidation(bundle, { round: (Number(bundle.game?.round) || 0) + 1 });
   if (!plan.due) return null;
-  if (hasPendingBatch("eventConsolidator", campaignId)) return { separate: true };
-  if (batchBackgroundTasksEnabled() && providerSupportsBatch("eventConsolidator")) return { separate: true };
+  if (hasPendingBatch("eventConsolidator", campaignId)) return null;
   const world = normalizeWorldState(bundle.world);
   const variables = await historyConsolidationVariables(bundle, plan.eventsToConsolidate, plan.closedChats, plan.actionsToConsolidate);
   const { systemPrompt } = await buildTaskSystemPrompt("eventConsolidator", { variables, lookups: null, reminders: false });
@@ -5357,50 +5339,10 @@ const historyTiersOf = (payload) => (payload && (Array.isArray(payload.years) ||
   ? { years: payload.years ?? [], eras: payload.eras ?? null, canon: payload.canon ?? [] }
   : null);
 
-const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, batchResume = null, onRequest, signal, campaignId = "", spender = "" } = {}) => {
-  // The document this pass revises, and the revision it was read at: a pass
-  // that lands against a different revision (a hand edit in the meantime)
-  // appends rather than overwrites (applyHistoryDocumentUpdate).
-  const baseRevision = normalizeWorldState(bundle.world).historyDocument?.revision ?? 0;
-  const variables = await historyConsolidationVariables(bundle, events, chats, actions);
-  const { generation, payload, deferred } = await runJsonTask("eventConsolidator", {
-    // The deterministic digest cannot judge importance, so it carries no
-    // document: the pass appends it to the document instead of rewriting.
-    fallback: () => ({
-      document: "",
-      summary: [
-        events.map((event) => `${event.date || "undated"} ${event.title}: ${event.description}`).join("; "),
-        buildChatSummaryText(chats, { limit: chats.length || 1 }),
-        actions.length ? `Player orders resolved: ${actions.map((action) => action.title).join("; ")}` : "",
-      ].filter(Boolean).join("\n"),
-    }),
-    userMessage: "Consolidate the supplied campaign history with the required tool.",
-    ...(typeof onRequest === "function" ? { onRequest } : {}),
-    // Inside a time skip: the skip's own task, which the player's Agent answers.
-    ...(spender ? { spender } : {}),
-    ...(signal ? { signal } : {}),
-    variables,
-    // Off the critical path when the caller supplies an applier: the summary
-    // may land later through the batch poller.
-    sync: typeof onBatchResult !== "function",
-    onBatchResult,
-    batchCampaignId: campaignId,
-    batchResume,
-  });
-  if (deferred) return { deferred: true, generation, summary: "", document: "", baseRevision };
-  return {
-    generation,
-    summary: normalizeString(payload?.summary),
-    document: normalizeString(payload?.document),
-    tiers: historyTiersOf(payload),
-    baseRevision,
-  };
-};
-
-// One shape for both writers — the synchronous pass and the deferred applier —
-// so a batch-consolidated entry reads exactly like a live one. `resume` is the
-// pass's boundary as plain JSON (see compactHistoryIfNeeded), so the applier
-// can be rebuilt after a reload.
+// One shape for both writers — the fold a skip carried and the deferred
+// applier — so a batch-consolidated entry reads exactly like a live one.
+// `resume` is the pass's boundary as plain JSON (consolidationResume), so the
+// applier can be rebuilt after a reload.
 const consolidationEntryFor = (resume, summary, source, priorHistory) => ({
   actionIds: normalizeArray(resume?.actionIds),
   chatIds: normalizeArray(resume?.chatIds),
@@ -5413,7 +5355,9 @@ const consolidationEntryFor = (resume, summary, source, priorHistory) => ({
 });
 
 // Batch routing (Settings → Batch background AI tasks): the summary lands later
-// through the poller and is written here out of band. Declines (false: kept for
+// through the poller and is written here out of band. No pass is sent as a
+// batch any more, since the consolidator's own request is gone (2026-11-07);
+// this is kept so that a batch sent before then still lands. Declines (false: kept for
 // the next poll) while a simulation runs or while another campaign is open: the
 // summary belongs to the campaign that asked, and the runtime endpoints follow
 // the open campaign and would fold this campaign's history into that one.
@@ -5467,124 +5411,46 @@ const deferredConsolidationApplier = (resume) => async (resultPayload, source) =
   return true;
 };
 
-// Consolidation never edits the event log: a pass appends its record to
+// Consolidation never edits the event log: a fold appends its record to
 // world.consolidatedHistory (whose throughEventId is the boundary the prompt
 // reads from, getUnconsolidatedEvents) and rewrites the living history document
 // the AI is shown in place of the folded events. Every event stays in the save.
-// `skipFold`: what the time skip this turn came from did about the fold itself
-// (foldedTurnReview's `review.history`), when it was a folded skip:
-//   { due: false }                  nothing was due before the skip, so nothing
-//                                   is folded now either;
+//
+// The fold rides in the time skip's own answer, and only there. There used to
+// be a request of its own for it too, the event consolidator, asked after a
+// skip that could not carry the fold, and by a button in Cheats: "remove the
+// stuff relating to those things entirely, they dont need to be part of the
+// game" (the owner, 2026-11-07). `skipFold` is what the skip did about the
+// fold (foldedTurnReview's `review.history`):
+//   absent, or { due: false }       nothing was due, or the skip carried no
+//                                   fold (asked the old way, or a batch from
+//                                   before was still out): nothing is folded;
 //   { due: true, ok: true, ... }    the skip's own answer carried the fold, and
 //                                   it is written here with no request;
-//   { due: true, ok: false, ... }   the answer's fold could not be used. It
-//                                   waits for the next skip, unless the pile
-//                                   has outgrown HISTORY_CONSOLIDATION's
-//                                   ownRequestThreshold, when it is asked for
-//                                   below like any pass.
-// Absent, this is a pass of its own, as it is for everything that is not a
-// folded skip.
-const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, signal = null, campaignId = activeCampaignId(), replay = null, skipFold = null } = {}) => {
+//   { due: true, ok: false, ... }   the answer's fold could not be used.
+// Whatever is not folded waits for the next skip's fold.
+const applySkipHistoryFold = (bundle, skipFold = null) => {
   const world = normalizeWorldState(bundle.world);
-  if (skipFold && !force) {
-    if (!skipFold.due) return world;
-    if (skipFold.ok) {
-      const entry = consolidationEntryFor(skipFold.resume, skipFold.summary, "ai", world.consolidatedHistory);
-      const documentUpdate = applyHistoryDocumentUpdate(world, {
-        document: skipFold.document,
-        summary: skipFold.summary,
-        source: "ai",
-        throughDate: entry.throughDate,
-        throughEventId: entry.throughEventId,
-        throughRound: entry.throughRound,
-        baseRevision: skipFold.baseRevision,
-        tiers: skipFold.tiers ?? null,
-        span: Array.isArray(skipFold.resume?.span) ? skipFold.resume.span : null,
-        startYear: Number(skipFold.resume?.startYear),
-      });
-      logDebugEvent("ai", `History consolidated in the time skip's own answer: ${skipFold.resume?.eventCount ?? 0} events, ${skipFold.resume?.chatCount ?? 0} chats folded; history document ${documentUpdate.mode}.${skipFold.reason ? ` (${skipFold.reason})` : ""}`);
-      return normalizeWorldState({
-        ...world,
-        consolidatedHistory: [...world.consolidatedHistory, entry],
-        historyDocument: documentUpdate.historyDocument,
-        canonFacts: documentUpdate.canonFacts,
-      });
-    }
+  if (!skipFold?.due) return world;
+  if (!skipFold.ok) {
     const waiting = planHistoryConsolidation(bundle).unconsolidatedEvents.length;
-    if (waiting <= HISTORY_CONSOLIDATION.ownRequestThreshold) {
-      logDebugEvent("turn", `History consolidation waits for the next skip: this skip's answer ${skipFold.reason || "gave no usable fold"}.`, { unfoldedEvents: waiting }, { problem: true });
-      return world;
-    }
-    logDebugEvent("turn", `History consolidation is asked for on its own: ${waiting} events are unfolded and this skip's answer ${skipFold.reason || "gave no usable fold"}.`, undefined, { problem: true });
+    logDebugEvent("turn", `History consolidation waits for the next skip: this skip's answer ${skipFold.reason || "gave no usable fold"}.`, { unfoldedEvents: waiting }, { problem: true });
+    return world;
   }
-  // What to fold — the thresholds, the retained tail, the closed chats and the
-  // resolved orders riding along — is the planner's call, shared with the
-  // Cheats tool and the tests.
-  const plan = planHistoryConsolidation(bundle, { force });
-  const { eventsToConsolidate, closedChats, actionsToConsolidate } = plan;
-
-  if (eventsToConsolidate.length === 0 && closedChats.length === 0) return world;
-  const resume = consolidationResume(plan, bundle, { campaignId, world });
-  // Whether to ask and the answer, together in a time skip's replay
-  // (heldTurnReplay.js): a skip kept for its campaign and written later neither
-  // asks nor spends again, and decides the same way even when a batch has been
-  // sent since.
-  const consolidated = await replayAnswer(replay, "historyConsolidation", async () => {
-    // A consolidation already sent as a batch covers these events: sending them
-    // again would pay twice and, when both land, remember those weeks twice.
-    if (hasPendingBatch("eventConsolidator", campaignId)) {
-      logDebugEvent("turn", "History consolidation waits for the batch already submitted for this campaign.", {
-        events: eventsToConsolidate.length,
-        chats: closedChats.length,
-      });
-      return null;
-    }
-    // The skip's budget is asked HERE, not inside the task: a refused task falls
-    // back to its deterministic digest, and folding history with a digest is
-    // permanent — those events are never shown to the simulator again. Refused,
-    // the fold simply waits; it is due again on the next skip.
-    if (requests && !requests.budget.take("history")) {
-      logDebugEvent("turn", `History consolidation put off: this time skip has used its ${requests.budget.cap} requests. It is due again next skip.`, {
-        events: eventsToConsolidate.length,
-        chats: closedChats.length,
-      });
-      return null;
-    }
-    return consolidateHistoryBatch(
-      bundle,
-      eventsToConsolidate,
-      closedChats,
-      actionsToConsolidate,
-      {
-        onRequest: jumpTaskOptions(requests, "history").onRequest,
-        ...(requests ? { spender: "history" } : {}),
-        signal,
-        campaignId,
-        // The jump that asked for it carries on with the events unconsolidated
-        // while a batched summary is outstanding (deferredConsolidationApplier),
-        // which belongs to the campaign that asked.
-        onBatchResult: deferredConsolidationApplier(resume),
-        batchResume: resume,
-      },
-    );
-  });
-  if (!consolidated?.summary) return world;
-  const { generation, summary, document, baseRevision, tiers = null } = consolidated;
-
-  const entry = consolidationEntryFor(resume, summary, generation.source, world.consolidatedHistory);
+  const entry = consolidationEntryFor(skipFold.resume, skipFold.summary, "ai", world.consolidatedHistory);
   const documentUpdate = applyHistoryDocumentUpdate(world, {
-    document,
-    summary,
-    source: generation.source,
+    document: skipFold.document,
+    summary: skipFold.summary,
+    source: "ai",
     throughDate: entry.throughDate,
     throughEventId: entry.throughEventId,
     throughRound: entry.throughRound,
-    baseRevision,
-    tiers,
-    span: Array.isArray(resume?.span) ? resume.span : null,
-    startYear: Number(resume?.startYear),
+    baseRevision: skipFold.baseRevision,
+    tiers: skipFold.tiers ?? null,
+    span: Array.isArray(skipFold.resume?.span) ? skipFold.resume.span : null,
+    startYear: Number(skipFold.resume?.startYear),
   });
-  logDebugEvent("ai", `History consolidated (${generation.source}): ${eventsToConsolidate.length} events, ${closedChats.length} chats folded; history document ${documentUpdate.mode}.`);
+  logDebugEvent("ai", `History consolidated in the time skip's own answer: ${skipFold.resume?.eventCount ?? 0} events, ${skipFold.resume?.chatCount ?? 0} chats folded; history document ${documentUpdate.mode}.${skipFold.reason ? ` (${skipFold.reason})` : ""}`);
   return normalizeWorldState({
     ...world,
     consolidatedHistory: [...world.consolidatedHistory, entry],
@@ -5687,11 +5553,10 @@ installRelatedEventsIndexer();
 // written. Held so the player is told which segment failed and can retry just
 // that segment or discard the turn (see runJumpSegments).
 //
-// HELD_TURN.checks: a jump whose every segment is in hand but whose turn
-// review (runTurnReview) did not come back, so the units, territory,
-// structures, board and agents' reports it answers for were never decided.
-// Nothing is written. The player retries the review, takes the turn without it
-// (the review failing open, as it always did), or discards.
+// HELD_TURN.checks: a jump whose every segment is in hand but one of whose
+// checks (turnChecks.js) did not come back. Nothing is written. The player
+// retries the checks, takes the turn without them (each failing open, as it
+// always did), or discards.
 
 // Storyline motion repairs that failed, keyed by campaign and storyline id (see
 // recordMotionRepairOutcome). Memory only: it keeps a storyline that fails the
@@ -9447,9 +9312,10 @@ const applySimulationResult = async ({
     }
   }
 
-  // The turn review's answers, when this is a time skip made while requests are
-  // being saved (runTurnReview): the curator and the board below read their
-  // parts of it instead of making a request each. Null otherwise.
+  // The review's answers: a time skip's (foldedTurnReview, or the empty record
+  // of a skip asked the old way, which has no review: finishTimelineJump) and a
+  // Scene's map check (runSceneReview). The curator and the board below read
+  // their parts of it instead of making a request each. Null otherwise.
   const review = projects?.review ?? null;
   const requests = projects?.requests ?? null;
   // A time skip's checks (turnChecks.js); null for every other kind of turn.
@@ -9479,7 +9345,6 @@ const applySimulationResult = async ({
         signal: projects?.signal,
         userMessage: TIMELINE_CURATOR_INSTRUCTION,
         variables: curatorVariables(input),
-        ...jumpTaskOptions(requests, "review"),
       });
       // By the candidates judged: the breadth repair's supplemental events are
       // curated too, and a retried repair may bring different ones.
@@ -10365,7 +10230,7 @@ const applySimulationResult = async ({
       .filter((index) => index >= 0));
     try {
       const { ops, skipped } = review
-        // Answered already, by the turn review's board job — which numbered the
+        // Answered already, by the review's board part — which numbered the
         // events as the skip WROTE them, so its ops are moved onto the list the
         // turn ended with (turnReview.js remapBoardOps). No board part means the
         // board does not move this turn; it never holds the turn, because the
@@ -10384,7 +10249,7 @@ const applySimulationResult = async ({
           // impacts and none of the covert-operation sync just above.
           { ...projects.bundle, game: nextGame, world: worldWithImpacts },
           freshEvents,
-          { signal: projects.signal, hiddenEvents: boardHiddenEvents, requests },
+          { signal: projects.signal, hiddenEvents: boardHiddenEvents },
         )), { rememberFailure: false });
       // The board was looked at this round, whatever it found (projects.js
       // boardPassReasons counts the quiet rounds from here).
@@ -10666,44 +10531,21 @@ const applySimulationResult = async ({
     } catch (error) {
       console.warn("[ai] the next skip will read nothing as unchanged: the world could not be measured.", error);
     }
+    // The history fold the skip's own answer carried (foldedTurnReview): no
+    // request. A skip that carried none leaves the events for the next one.
     try {
-      phases?.enter("history");
-      nextWorld = await compactHistoryIfNeeded({
+      nextWorld = applySkipHistoryFold({
         actions: nextActions,
         chats: nextChats,
         events: nextEvents,
         game: nextGame,
         world: worldWithImpacts,
-        // A folded skip did the fold itself, or planned that none was due
-        // (foldedTurnReview): no request of its own then.
-      }, { requests, signal: projects?.signal, campaignId, replay, skipFold: review?.history ?? null });
+      }, review?.history ?? null);
     } catch (error) {
-      if (projects?.signal?.aborted) throw error;
-      console.warn("[ai] campaign history consolidation failed; the completed turn will still be saved.", error);
+      console.warn("[ai] the history fold could not be applied; the completed turn will still be saved.", error);
     }
     // Everything after this is the writing of the turn itself.
     phases?.enter("applying");
-  }
-
-  // Bounded automatic Stats tracking: only when the player's configured calendar
-  // interval is due, and one compact AI batch for every initialised tracked
-  // country. A failure never invalidates the completed turn.
-  try {
-    nextWorld = await refreshTrackedCountryStatsIfDue({
-      bundle: {
-        actions: nextActions,
-        chats: nextChats,
-        events: nextEvents,
-        game: nextGame,
-        world: nextWorld,
-      },
-      signal: projects?.signal,
-      requests,
-      replay,
-    });
-  } catch (error) {
-    if (projects?.signal?.aborted) throw error;
-    console.warn("[stats auto] unexpected scheduler failure; the completed turn is preserved.", error);
   }
 
   // And the cities of every country whose people have moved go with them
@@ -10947,10 +10789,10 @@ const applySimulationResult = async ({
 
   // Spies report on the world the turn just produced. Awaited so the reports are
   // there when the player opens the Spy tab, but never allowed to fail the turn.
-  // The reports came in the time skip's own answer (foldedTurnReview; or with
-  // the turn review, when a provider refused that skip) and are only filed
-  // here. A turn with neither (a resolved interactive event, a game-master
-  // command) waits for the next skip's. No agent makes a request of its own
+  // The reports came in the time skip's own answer (foldedTurnReview) and are
+  // only filed here. A turn without them (a skip a provider refused in that
+  // form, a resolved interactive event, a game-master command) waits for the
+  // next skip's. No agent makes a request of its own
   // after a skip any more: with Save AI requests off each one due a report
   // used to, a request apiece.
   if (review) await fileReviewedAgentReports(review, { campaignId });
@@ -13031,173 +12873,10 @@ const buildTargetEconomicEvidence = ({ bundle, statCode, previous, normalizedWor
 };
 
 
-const TRACKED_STATS_BATCH_VERSION = "8B.3.1";
-const TRACKED_STATS_RECENT_EVENT_LIMIT = 8;
-const TRACKED_STATS_SCAN_LIMIT = 80;
-
-const compactTrackedStatsSheet = (sheetInput, statIndexRows = DEFAULT_STAT_INDEX_ROWS) => {
-  const sheet = finalizeCountryStatSheet(sheetInput);
-  if (!sheet) return null;
-  const indices = Object.fromEntries(
-    normalizeArray(statIndexRows)
-      .map((row) => normalizeString(row?.key))
-      .filter(Boolean)
-      .map((key) => [key, Number(sheet.indices?.[key])])
-      .filter(([, value]) => Number.isFinite(value)),
-  );
-  return {
-    stability: Number(sheet.stability),
-    indices,
-    population: {
-      total: Number(sheet.population?.total),
-      coreIntegrated: Number(sheet.population?.coreIntegrated),
-      otherTerritories: Number(sheet.population?.otherTerritories),
-    },
-    economy: {
-      gdp: Number(sheet.economy?.gdp),
-      gdpPerCapita: Number(sheet.economy?.gdpPerCapita),
-      gdpGrowth: Number(sheet.economy?.gdpGrowth),
-      inflation: Number(sheet.economy?.inflation),
-      unemployment: Number(sheet.economy?.unemployment),
-      publicDebt: Number(sheet.economy?.publicDebt),
-      budgetBalance: Number(sheet.economy?.budgetBalance),
-      currency: normalizeString(sheet.economy?.currency),
-    },
-    gdpBreakdown: {
-      agriculture: Number(sheet.gdpBreakdown?.agriculture),
-      industry: Number(sheet.gdpBreakdown?.industry),
-      services: Number(sheet.gdpBreakdown?.services),
-    },
-  };
-};
-
-const buildTrackedStatsNarrativeEvidence = ({ bundle, statCode, normalizedWorld }) => {
-  const world = normalizedWorld || normalizeWorldState(bundle?.world);
-  const aliases = statsPolityAliases(world, statCode);
-  const targetKey = normalizeString(canonicalStatsPolity(statCode, world)).toLowerCase();
-
-  const sameTarget = (value) =>
-    normalizeString(canonicalStatsPolity(value, world)).toLowerCase() === targetKey;
-
-  return normalizeEvents(bundle?.events)
-    .slice(-TRACKED_STATS_SCAN_LIMIT)
-    .filter((event) => {
-      const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-      const directStats = normalizeArray(impacts.polityChanges)
-        .some((change) => change?.stats && sameTarget(change?.code || change?.name));
-      const territory = normalizeArray(impacts.regionTransfers)
-        .some((change) => sameTarget(change?.fromCode) || sameTarget(change?.toCode));
-      const control = normalizeArray(impacts.regionControlOps)
-        .some((change) => sameTarget(change?.fromCode) || sameTarget(change?.toCode) || sameTarget(change?.actorCode));
-      const combatant = normalizeArray(event?.combatants).some(sameTarget);
-      const prose = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-      return directStats || territory || control || combatant || statsTextMentionsTarget(prose, aliases);
-    })
-    .slice(-TRACKED_STATS_RECENT_EVENT_LIMIT)
-    .map((event) => {
-      const detail = normalizeString(event?.description);
-      return `- ${normalizeString(event?.date) || "undated"} — ${normalizeString(event?.title) || "Untitled event"}${detail ? `: ${detail.slice(0, 320)}` : ""}`;
-    })
-    .join("\n");
-};
-
-const trackedStatsLatestHistoryDate = (world, polity) => {
-  const rows = normalizeArray(world?.countryStatsHistory?.[polity]);
-  return rows
-    .map((row) => normalizeString(row?.date))
-    .filter((date) => parseIsoDate(date))
-    .sort()
-    .at(-1) || "";
-};
-
-const sanitizeTrackedStatsPatch = (value, statIndexRows = DEFAULT_STAT_INDEX_ROWS) => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-
-  const percent = (raw) => {
-    const number = Number(raw);
-    return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : null;
-  };
-  const signed = (raw, min = -1000, max = 1000) => {
-    const number = Number(raw);
-    return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : null;
-  };
-  const positive = (raw) => {
-    const number = Number(raw);
-    return Number.isFinite(number) && number > 0 ? number : null;
-  };
-
-  const patch = {};
-  const stability = percent(value.stability);
-  if (stability != null) patch.stability = stability;
-
-  const indices = {};
-  for (const row of normalizeArray(statIndexRows)) {
-    const key = normalizeString(row?.key);
-    if (!key) continue;
-    const number = percent(value?.indices?.[key]);
-    if (number != null) indices[key] = number;
-  }
-  if (Object.keys(indices).length) patch.indices = indices;
-
-  const population = {};
-  const totalPopulation = positive(value?.population?.total);
-  if (totalPopulation != null) population.total = Math.round(totalPopulation);
-  if (Object.keys(population).length) patch.population = population;
-
-  const economy = {};
-  const gdp = positive(value?.economy?.gdp);
-  const gdpPerCapita = positive(value?.economy?.gdpPerCapita);
-  if (gdp != null) economy.gdp = gdp;
-  else if (gdpPerCapita != null) economy.gdpPerCapita = gdpPerCapita;
-  for (const key of ["gdpGrowth", "inflation", "unemployment", "publicDebt", "budgetBalance"]) {
-    const number = signed(value?.economy?.[key]);
-    if (number != null) economy[key] = number;
-  }
-  if (Object.keys(economy).length) patch.economy = economy;
-
-  const breakdown = {};
-  for (const key of ["agriculture", "industry", "services"]) {
-    const number = percent(value?.gdpBreakdown?.[key]);
-    if (number != null) breakdown[key] = number;
-  }
-  if (Object.keys(breakdown).length === 3) patch.gdpBreakdown = breakdown;
-
-  return Object.keys(patch).length ? patch : null;
-};
-
-// The tracked Stats refresh's one request asks the time skip it rides on first
-// (createJumpRequests), on both paths — the standard sheet and a scenario's own.
-// Refused, the refresh stays due for the next skip. No skip, no budget.
-const trackedStatsPutOff = (requests, due) => {
-  // The history pass runs before this one: a request kept for it and not used
-  // (the skip's own answer carried the fold) is the refresh's to take.
-  requests?.budget.release?.("history");
-  if (!requests || requests.budget.take("stats")) return false;
-  logDebugEvent("turn", `Tracked Stats refresh put off: this time skip has used its ${requests.budget.cap} requests. It is due again next skip.`, {
-    countries: due.map((entry) => entry.polity),
-  });
-  return true;
-};
-
-// The refresh's one request, with the budget's say on it, asked of a time
-// skip's replay (heldTurnReplay.js): a skip kept for its campaign and written
-// later neither asks nor spends again. `{ putOff: true }` when the budget said no.
-const askTrackedStats = (replay, requests, due, ask) => replayAnswer(replay, "trackedStats", () => (
-  trackedStatsPutOff(requests, due) ? { putOff: true } : ask()
-));
-
-// "Historical tracking on for player by default": the player's own country is
-// tracked from the first skip, and a country cannot be tracked before it has a
-// sheet to track. Its first one is asked for here, once, as any first reading
-// is (ensureCountryStatSheet: after the turn, never twice, and nothing when the
-// sheet is there). The other countries a player adds get theirs when he does.
-const requestTrackedBaseline = (pending, game) => {
-  const player = normalizeString(game?.country).toLowerCase();
-  const waiting = player ? normalizeArray(pending).find((polity) => normalizeString(polity).toLowerCase() === player) : "";
-  // Asked as the skip lands, so it is the skip's follow-up: the player's Agent
-  // answers it in the same /answer, which waits for it (ADR 0008).
-  if (waiting) agentClient.holdSkip(ensureCountryStatSheet(waiting, { reason: "historical tracking", needBackend: true, agentKind: "skip" }));
-};
+// The automatic Stats refresh of tracked countries, a request after the skips
+// it fell due on, is gone: "remove the stuff relating to those things
+// entirely, they dont need to be part of the game" (the owner, 2026-11-07). A
+// save's countryStatsTracking is left as it is and no longer read.
 
 // "Stats should be generated for countries you're going into conflict with,
 // either if you deploy a front on them, if you redirect a front to attack them
@@ -13287,388 +12966,6 @@ const keepWarFigures = (world, lines) => {
   if (kept.length === 0) return world;
   logDebugEvent("turn", `The skip gave the war's figures of ${kept.join(", ")} in its own answer.`, { countries: kept });
   return next;
-};
-
-const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition, requests = null, replay = null } = {}) => {
-  const game = normalizeGameData(bundle?.game);
-  let world = normalizeWorldState(bundle?.world);
-  const currentDate = normalizeString(game?.gameDate || game?.startDate);
-  if (!parseIsoDate(currentDate)) return world;
-
-  const keys = statSheetKeys(definition);
-  const rows = flattenStatSheetRows(definition);
-  if (!keys.length) return world;
-
-  const tracking = normalizeCountryStatsTracking(world?.countryStatsTracking, { playerCountry: game?.country });
-  const intervalMonths = Number(tracking.intervalMonths) || 0;
-  if (!intervalMonths || !tracking.trackedPolities.length) {
-    if (world?.countryStatsTracking) world.countryStatsTracking = tracking;
-    return world;
-  }
-
-  const due = [];
-  const pendingBaseline = [];
-  for (const rawPolity of tracking.trackedPolities.slice(0, COUNTRY_STATS_TRACKING_MAX_POLITIES)) {
-    const polity = canonicalStatsPolity(rawPolity, world) || normalizeString(rawPolity);
-    const previous = normalizeCountryStatSheet(world?.countryStats?.[polity]);
-    if (!isTrackedStatSheetReady(previous, keys)) {
-      pendingBaseline.push(polity);
-      continue;
-    }
-    const lastAuto = normalizeString(tracking.lastAutoRefreshByPolity?.[polity]);
-    const baselineDate =
-      (parseIsoDate(lastAuto) && lastAuto) ||
-      (parseIsoDate(previous?.continuity?.assessedDate) && normalizeString(previous.continuity.assessedDate)) ||
-      trackedStatsLatestHistoryDate(world, polity) ||
-      normalizeString(game?.startDate);
-    const elapsedMonths = countryStatsTrackingMonthsElapsed(baselineDate, currentDate);
-    if (elapsedMonths < intervalMonths) continue;
-    due.push({
-      polity,
-      previous,
-      baselineDate,
-      elapsedMonths,
-      narrative: buildTrackedStatsNarrativeEvidence({ bundle, statCode: polity, normalizedWorld: world }),
-    });
-  }
-
-  world.countryStatsTracking = normalizeCountryStatsTracking({
-    ...tracking,
-    pendingBaselinePolities: pendingBaseline,
-  }, { playerCountry: game?.country });
-  requestTrackedBaseline(pendingBaseline, game);
-  if (!due.length) return world;
-
-  const systemPrompt = `You are Open Historia's bounded periodic scenario-defined National Stats auditor.
-
-The scenario owns the entire Stats vocabulary. The current values are campaign canon. Update conservatively from that baseline using ONLY supplied campaign evidence and the exact machine keys below. Absence of evidence means continuity. Values are absolute, not deltas. Never invent hidden modern GDP, unemployment, debt, population, or strategic-index fields that the scenario did not define. Return plain JSON numbers; prefixes/suffixes are display metadata.
-
-SCENARIO STATS:
-${describeStatSheetDefinition(definition)}
-
-Return exactly one JSON object and no markdown:
-{"updates":[{"country":"exact supplied canonical key","customStats":{"oneDefinedKey":0},"backend":{"population":0,"gdp":0,"budgetBalance":0,"publicDebt":0}}]}
-
-For each country include only values that genuinely changed.
-Each country also has a HIDDEN BACKEND the player never sees, which the game's own arithmetic reads: population (a count), gdp (its economy in a year, in the one unit used for every polity of this world), budgetBalance and publicDebt (percentages of that economy). Move it FIRST by what happened in the period, and return it whole in "backend"; the scenario's own values then say the same thing. A country shown with no backend has none yet: establish one that fits the era and its size.`;
-
-  const userMessage = [
-    `Campaign date: ${currentDate}`,
-    `Periodic Stats batch version: ${TRACKED_STATS_BATCH_VERSION}-custom`,
-    "",
-    ...due.flatMap((entry, index) => [
-      `=== COUNTRY ${index + 1}: ${entry.polity} ===`,
-      `Elapsed since last dedicated Stats audit: ${entry.elapsedMonths} month(s) (baseline ${entry.baselineDate || "unknown"}).`,
-      `CURRENT CANONICAL CUSTOM STATS:`,
-      JSON.stringify(normalizeCustomStatValues(entry.previous?.customStats, definition, { partial: true })),
-      `HIDDEN BACKEND: ${statsBackendOf(entry.previous) ? JSON.stringify(statsBackendOf(entry.previous)) : "none yet"}`,
-      `RECENT RELEVANT CAMPAIGN CONTEXT:`,
-      normalizeString(entry.narrative) || "None.",
-      "",
-    ]),
-  ].join("\n");
-
-  try {
-    const response = await askTrackedStats(replay, requests, due, () => callAIWithTaskLimit(
-      systemPrompt,
-      [{ role: "user", parts: [{ text: userMessage }] }],
-      {
-        signal,
-        reasoningEnabled: false,
-        taskKey: "countryStatSheet",
-        ...(requests ? { onRequest: jumpTaskOptions(requests, "stats").onRequest } : {}),
-      },
-    ));
-    if (response?.putOff === true) return world;
-    const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
-    const parsed = response?.toolInput ?? extractJsonPayload(rawText);
-    const updates = normalizeArray(parsed?.updates);
-    const dueByKey = new Map(due.map((entry) => [entry.polity.toLocaleLowerCase(), entry]));
-    const refreshed = { ...(tracking.lastAutoRefreshByPolity || {}) };
-    let applied = 0;
-
-    for (const update of updates) {
-      const polity = canonicalStatsPolity(update?.country, world) || normalizeString(update?.country);
-      const entry = dueByKey.get(polity.toLocaleLowerCase());
-      if (!entry) continue;
-      const patchValues = normalizeCustomStatValues(update?.customStats, definition, { partial: true });
-      const backend = statsBackendPatch(update?.[STATS_BACKEND_FIELD]);
-      if (!Object.keys(patchValues).length && !Object.keys(backend).length) continue;
-      const unknown = Object.keys(update?.customStats || {}).filter((key) => !keys.includes(key));
-      if (unknown.length) continue;
-      const merged = mergeCountryStatPatch(entry.previous, { ...(Object.keys(patchValues).length ? { customStats: patchValues } : {}), ...backend }, {
-        continuity: {
-          assessedDate: currentDate,
-          assessedRound: Math.max(0, Math.trunc(Number(game?.round) || 0)),
-        },
-      });
-      if (!isCompleteCustomCountryStatSheet(merged, keys)) continue;
-      world.countryStats = { ...(world.countryStats || {}), [entry.polity]: merged };
-      refreshed[entry.polity] = currentDate;
-      applied += 1;
-    }
-
-    world.countryStatsTracking = normalizeCountryStatsTracking({
-      ...tracking,
-      lastAutoRefreshByPolity: refreshed,
-      pendingBaselinePolities: pendingBaseline,
-      lastBatchDate: applied > 0 ? currentDate : tracking.lastBatchDate,
-    }, { playerCountry: game?.country });
-
-    if (applied > 0) {
-      console.info(`[stats auto ${TRACKED_STATS_BATCH_VERSION}-custom] refreshed ${applied}/${due.length} due tracked countries in one AI batch.`);
-    }
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    console.warn(`[stats auto ${TRACKED_STATS_BATCH_VERSION}-custom] refresh failed; completed world turn is preserved.`, error);
-  }
-
-  return world;
-};
-
-const refreshTrackedCountryStatsIfDue = async ({
-  bundle,
-  signal,
-  // The time skip this refresh rides on (createJumpRequests), so its one request
-  // asks the skip's budget first. Refused, the refresh stays due.
-  requests = null,
-  // And its replay (heldTurnReplay.js), so a skip written later asks again for
-  // nothing it was already answered.
-  replay = null,
-} = {}) => {
-  const game = normalizeGameData(bundle?.game);
-  let world = normalizeWorldState(bundle?.world);
-  const currentDate = normalizeString(game?.gameDate || game?.startDate);
-  if (!parseIsoDate(currentDate)) return world;
-  let statSheetDefinition;
-  try {
-    statSheetDefinition = await loadStatSheetDefinition();
-  } catch (error) {
-    // Refreshing against the standard sheet would overwrite a custom-stats
-    // scenario's numbers with the wrong ones. The refresh stays due.
-    logDebugEvent("turn", "Tracked stats refresh skipped this turn: the scenario's Stats definition could not be read.", error, { problem: true });
-    return world;
-  }
-  if (statSheetDefinition.custom) {
-    return refreshTrackedCustomStatsIfDue({ bundle, signal, definition: statSheetDefinition, requests, replay });
-  }
-  const statIndexDefinition = await loadStatIndexDefinition({ definition: statSheetDefinition });
-  const statIndexRows = normalizeArray(statIndexDefinition?.rows).length
-    ? normalizeArray(statIndexDefinition.rows)
-    : DEFAULT_STAT_INDEX_ROWS;
-  const statIndexExample = Object.fromEntries(
-    statIndexRows.map((row) => normalizeString(row?.key)).filter(Boolean).map((key) => [key, 0]),
-  );
-
-  const tracking = normalizeCountryStatsTracking(world?.countryStatsTracking, {
-    playerCountry: game?.country,
-  });
-  const intervalMonths = Number(tracking.intervalMonths) || 0;
-  if (!intervalMonths || !tracking.trackedPolities.length) {
-    if (world?.countryStatsTracking) world.countryStatsTracking = tracking;
-    return world;
-  }
-
-  const due = [];
-  const pendingBaseline = [];
-
-  for (const rawPolity of tracking.trackedPolities.slice(0, COUNTRY_STATS_TRACKING_MAX_POLITIES)) {
-    const polity = canonicalStatsPolity(rawPolity, world) || normalizeString(rawPolity);
-    const previous = normalizeCountryStatSheet(world?.countryStats?.[polity]);
-    if (!isTrackedStatSheetReady(previous)) {
-      pendingBaseline.push(polity);
-      continue;
-    }
-
-    const lastAuto = normalizeString(tracking.lastAutoRefreshByPolity?.[polity]);
-    const baselineDate =
-      (parseIsoDate(lastAuto) && lastAuto) ||
-      (parseIsoDate(previous?.continuity?.assessedDate) && normalizeString(previous.continuity.assessedDate)) ||
-      trackedStatsLatestHistoryDate(world, polity) ||
-      normalizeString(game?.startDate);
-
-    if (countryStatsTrackingMonthsElapsed(baselineDate, currentDate) < intervalMonths) continue;
-
-    const economic = buildTargetEconomicEvidence({
-      bundle,
-      statCode: polity,
-      previous,
-      normalizedWorld: world,
-    });
-    const narrative = buildTrackedStatsNarrativeEvidence({
-      bundle,
-      statCode: polity,
-      normalizedWorld: world,
-    });
-    due.push({
-      polity,
-      previous,
-      baselineDate,
-      elapsedMonths: countryStatsTrackingMonthsElapsed(baselineDate, currentDate),
-      economic,
-      narrative,
-    });
-  }
-
-  world.countryStatsTracking = normalizeCountryStatsTracking({
-    ...tracking,
-    pendingBaselinePolities: pendingBaseline,
-  }, { playerCountry: game?.country });
-  requestTrackedBaseline(pendingBaseline, game);
-
-  if (!due.length) return world;
-
-  const systemPrompt = `You are Open Historia's bounded periodic national-statistics auditor.
-
-You are refreshing EXISTING persistent country stat sheets for a running alternate-history campaign. This is a continuity update, NOT a fresh historical lookup and NOT a territorial rebase.
-
-RULES:
-- The supplied current sheet is canonical. Change it conservatively from that baseline.
-- Respect the campaign date and supplied campaign evidence. Real-world outcomes after the campaign start are not automatically canonical.
-- Absence of evidence is a strong reason for continuity, not a reason to reroll numbers.
-- Current sheets may already include explicit event stat patches from this same turn. Do not double-apply those effects.
-- Population and GDP should evolve plausibly over the elapsed interval. Keep GDP, population, GDP/capita, growth, inflation, unemployment, debt and budget balance mutually coherent.
-- Strategic indices are 0..100 and should normally move gradually unless evidence clearly supports a shock.
-- Use ONLY the scenario's exact strategic-index keys listed below; do not substitute modern defaults or invent extras.
-- Resource-like indices are broad availability/autonomy pressures, not literal stockpile quantities.
-- GDP sector shares must sum to 100 if supplied.
-
-SCENARIO STRATEGIC INDICES:
-${describeStatIndexRows(statIndexRows)}
-- Do not invent territorial changes. This lightweight periodic audit deliberately preserves the existing territorial component ledger.
-- Return exactly one JSON object and no markdown/prose outside it.
-
-OUTPUT:
-{
-  "updates": [
-    {
-      "country": "exact supplied canonical key",
-      "stability": 0,
-      "indices": ${JSON.stringify(statIndexExample)},
-      "population": { "total": 0 },
-      "economy": {
-        "gdp": 0,
-        "gdpPerCapita": 0,
-        "gdpGrowth": 0,
-        "inflation": 0,
-        "unemployment": 0,
-        "publicDebt": 0,
-        "budgetBalance": 0
-      },
-      "gdpBreakdown": { "agriculture": 0, "industry": 0, "services": 0 }
-    }
-  ]
-}
-
-You may omit a field when the existing value should remain exactly unchanged.`;
-
-  const userMessage = [
-    `Campaign date: ${currentDate}`,
-    `Periodic Stats batch version: ${TRACKED_STATS_BATCH_VERSION}`,
-    "",
-    ...due.flatMap((entry, index) => [
-      `=== COUNTRY ${index + 1}: ${entry.polity} ===`,
-      `Elapsed since last dedicated Stats audit: ${entry.elapsedMonths} month(s) (baseline ${entry.baselineDate || "unknown"}).`,
-      `CURRENT CANONICAL SHEET:`,
-      JSON.stringify(compactTrackedStatsSheet(entry.previous, statIndexRows)),
-      `FRESH TARGET-SPECIFIC ECONOMIC EVIDENCE:`,
-      normalizeString(entry.economic?.text) || "None.",
-      `RECENT RELEVANT CAMPAIGN CONTEXT:`,
-      normalizeString(entry.narrative) || "None.",
-      "",
-    ]),
-  ].join("\n");
-
-  try {
-    const response = await askTrackedStats(replay, requests, due, () => callAIWithTaskLimit(
-      systemPrompt,
-      [{ role: "user", parts: [{ text: userMessage }] }],
-      {
-        signal,
-        reasoningEnabled: false,
-        taskKey: "countryStatSheet",
-        ...(requests ? { onRequest: jumpTaskOptions(requests, "stats").onRequest } : {}),
-      },
-    ));
-    if (response?.putOff === true) return world;
-    const rawText = typeof response === "string"
-      ? response
-      : normalizeString(response?.rawText);
-    const parsed = response?.toolInput ?? extractJsonPayload(rawText);
-    const updates = normalizeArray(parsed?.updates);
-    const dueByKey = new Map(due.map((entry) => [entry.polity.toLocaleLowerCase(), entry]));
-
-    let applied = 0;
-    const refreshed = { ...(tracking.lastAutoRefreshByPolity || {}) };
-
-    for (const update of updates) {
-      const polity = canonicalStatsPolity(update?.country, world) || normalizeString(update?.country);
-      const entry = dueByKey.get(polity.toLocaleLowerCase());
-      if (!entry) continue;
-
-      const patch = sanitizeTrackedStatsPatch(update, statIndexRows);
-      if (!patch) continue;
-
-      const merged = mergeCountryStatPatch(entry.previous, patch, {
-        continuity: {
-          assessedDate: currentDate,
-          assessedRound: Math.max(0, Math.trunc(Number(game?.round) || 0)),
-          accountedEventIds: entry.economic?.relevantIds || [],
-        },
-      });
-      const guarded = guardCountryStatContinuity(
-        entry.previous,
-        merged,
-        {
-          elapsedYears: Math.max(0, entry.elapsedMonths / 12),
-          evidenceText: [entry.economic?.text, entry.narrative].filter(Boolean).join("\n"),
-          territoryChanged: false,
-        },
-      )?.sheet || merged;
-
-      if (!guarded || !isCompleteCountryStatSheet(guarded)) continue;
-
-      world.countryStats = {
-        ...(world.countryStats || {}),
-        [entry.polity]: guarded,
-      };
-      const reputation = Number(guarded?.indices?.internationalReputation);
-      if (Number.isFinite(reputation)) {
-        world.internationalReputation = {
-          ...(world.internationalReputation || {}),
-          [entry.polity]: Math.max(0, Math.min(100, Math.round(reputation))),
-        };
-      }
-      refreshed[entry.polity] = currentDate;
-      applied += 1;
-    }
-
-    world.countryStatsTracking = normalizeCountryStatsTracking({
-      ...tracking,
-      lastAutoRefreshByPolity: refreshed,
-      pendingBaselinePolities: pendingBaseline,
-      lastBatchDate: applied > 0 ? currentDate : tracking.lastBatchDate,
-    }, { playerCountry: game?.country });
-
-    if (applied > 0) {
-      console.info(
-        `[stats auto ${TRACKED_STATS_BATCH_VERSION}] refreshed ${applied}/${due.length} due tracked countr${due.length === 1 ? "y" : "ies"} in one AI batch; ` +
-        `${pendingBaseline.length} tracked countr${pendingBaseline.length === 1 ? "y needs" : "ies need"} a baseline.`,
-      );
-    } else {
-      console.warn(
-        `[stats auto ${TRACKED_STATS_BATCH_VERSION}] batch returned no usable tracked-country updates; completed world turn is preserved.`,
-      );
-    }
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    console.warn(
-      `[stats auto ${TRACKED_STATS_BATCH_VERSION}] periodic tracked-country refresh failed; completed world turn is preserved.`,
-      error,
-    );
-  }
-
-  return world;
 };
 
 // 8B.2.18 — causal population calibration context.
@@ -14335,8 +13632,8 @@ const buildCollectedPoliticalSignals = (world, polity, { clarity = 0, seed = "" 
 
 // One agent's report, in three steps — what the task is sent, the request, and
 // what is kept of the answer — so that the request can be the task's own
-// (gatherIntelligence below) or a job inside the turn review, which carries every
-// agent's report in the one request it makes (runTurnReview).
+// (gatherIntelligence below) or a job inside the folded time skip, which carries
+// every due agent's report in its one request (prepareFoldedSkip).
 //
 // `sharedVariables` lets several agents share one build of the template
 // variables; only the target and the disinformation line differ between them.
@@ -14610,9 +13907,9 @@ const revealInProgress = async () => {
 export const maybeGatherIntelligence = async ({ chance = SPY_REPORT_CHANCE } = {}) => {
   if (spyReportInFlight || isSimulationBusy()) return null;
   if (!isActiveFeatureEnabled("espionage")) return null;
-  // Nobody pressed anything: this is background AI (requestBudget.js), capped
-  // for the day, and nothing at all once the player turns it off. The agents
-  // still report after every time skip either way.
+  // Nobody pressed anything: this is background work (requestBudget.js),
+  // always on, under the day's fixed cap ("same with background spy stuff",
+  // the owner, 2026-11-07). The agents still report in the time skip either way.
   if (!backgroundAiAllowance().allowed) return null;
   if (Math.random() >= chance) return null;
   if (await revealInProgress()) return null;
@@ -14690,8 +13987,8 @@ const firstReading = (kind, target, reason, work) => {
   const name = normalizeString(target);
   if (!name || typeof window === "undefined" || !isFallbackListConfigured()) return Promise.resolve(null);
   // The player opened a tab or read a report; they did not ask for a model call,
-  // and a first reading is up to two. That makes it background AI
-  // (requestBudget.js): off until turned on, capped when it is. Without it a
+  // and a first reading is up to two. That makes it background work
+  // (requestBudget.js): always on, under the day's fixed cap. Past the cap a
   // service keeps the default rating until a turn gives it one, which is how
   // every service behaved before first readings existed.
   if (!backgroundAiAllowance().allowed) return Promise.resolve(null);
@@ -16675,56 +15972,6 @@ export const checkDemandReply = async ({ chat, speaker, reply, answering = "", m
   return events;
 };
 
-// Cheats → History Document: fold the older unconsolidated history now —
-// everything but the retained tail, one batch — regardless of the round and
-// size thresholds, and write the pass and the revised document. Refused while
-// a turn is in flight: that turn's own pass would fold the same events again.
-export const consolidateHistoryNow = async () => {
-  if (isSimulationBusy()) {
-    throw new Error("A turn is being generated; wait for it to finish before folding history.");
-  }
-  beginSimulation();
-  try {
-    const bundle = await readGameStateBundle({ force: true });
-    const plan = planHistoryConsolidation(bundle, { force: true });
-    const retained = plan.unconsolidatedEvents.length - plan.eventsToConsolidate.length;
-    if (!plan.due) return { consolidated: false, events: 0, chats: 0, retained };
-    const before = normalizeWorldState(bundle.world).consolidatedHistory.length;
-    const nextWorld = await compactHistoryIfNeeded(bundle, { force: true });
-    let consolidated = nextWorld.consolidatedHistory.length > before;
-    // Folding only ever adds history entries and rewrites the document, so only
-    // those go onto the world as it is now; whatever else changed while the
-    // model was writing stays. A deferred fold that landed meanwhile already
-    // covers these weeks, and two summaries of them would double the campaign's
-    // memory of them: then this one is dropped.
-    if (consolidated) {
-      await mutateWorldState((latest) => {
-        const history = normalizeArray(latest.consolidatedHistory);
-        if (history.length !== before) {
-          consolidated = false;
-          return null;
-        }
-        return normalizeWorldState({
-          ...latest,
-          consolidatedHistory: [...history, ...nextWorld.consolidatedHistory.slice(before)],
-          historyDocument: nextWorld.historyDocument,
-          canonFacts: nextWorld.canonFacts,
-        });
-      });
-    }
-    return {
-      consolidated,
-      events: plan.eventsToConsolidate.length,
-      chats: plan.closedChats.length,
-      retained,
-      documentWords: countWords(seedHistoryDocumentText(nextWorld)),
-      documentRevision: nextWorld.historyDocument?.revision ?? 0,
-    };
-  } finally {
-    endSimulation();
-  }
-};
-
 // ---- Interactive events: a moment played out as a scene ---------------------
 //
 // The player does not ask for one. Now and then a time skip offers one of its
@@ -17048,12 +16295,11 @@ const sceneMapConsequences = async ({ bundle, outcome, generation }) => {
   const merged = { events: [outcome], stopDate: normalizeString(bundle.game?.gameDate), clearActions: false };
   let review = null;
   try {
-    review = await runTurnReview({
+    review = await runSceneReview({
       context: { bundle, mode: "interactive", targetDate: merged.stopDate },
       merged,
       signal: null,
-      state: { requests: null, generation, hiddenEvents: [] },
-      sections: SCENE_REVIEW_SECTIONS,
+      state: { generation, hiddenEvents: [] },
       // The scene's own map check: part of the interactive event the player plays.
       agentKind: "interactive",
     });
@@ -17286,8 +16532,8 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
 // A skip is ONE request, whatever the settings. Until 2026-10 it was two on
 // most turns while requests were being saved (the skip, and a "turn review"
 // that read its events back and asked for the units they moved, the fronts, the
-// structures, the repeats, the Projects board and the agents' reports,
-// runTurnReview), and with saving off it was a request for each of those, and
+// structures, the repeats, the Projects board and the agents' reports), and
+// with saving off it was a request for each of those, and
 // for each agent: twenty or more. The checks existed because the simulator
 // narrated a town falling and wrote no op for it. The answer to that is a
 // prompt that says so, not more requests to catch it: now each event carries
@@ -17303,8 +16549,7 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
 //     a round of questions is a request, and a skip may ask two;
 //   - an answer that could not be used at all is asked for once more;
 //   - a provider that refuses the folded request (below);
-//   - two things a player switches on: the automatic Stats refresh, and NPC
-//     votes in an institution, on the skips where they fall due.
+//   - NPC votes in an institution, on the skips where they fall due.
 //
 // What the review's parts became:
 //   units, territory, structures   the event's own unitOps, regionControlOps,
@@ -17324,8 +16569,11 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
 // The folded contract is larger than the one it replaces, and a provider can
 // refuse a function declaration for its size alone (geminiSchema.js). So a
 // folded request that a provider refuses outright is asked again the old way,
-// with the review after it as ONE request, and the rest of the session's skips
-// are asked that way from the start. A player loses nothing but a request.
+// and the rest of the session's skips are asked that way from the start. Its
+// events are then written as they come: the turn review that checked them in
+// one request after it is gone ("remove the stuff relating to those things
+// entirely", the owner, 2026-11-07), so the board does not move and no agent
+// reports on those skips, and nothing is folded into the history document.
 let foldedSkipRefused = false;
 
 // What a folded skip carries besides its events, gathered once before its first
@@ -17385,7 +16633,7 @@ const prepareFoldedSkip = async ({ bundle, originDate, variables, campaignId }) 
 };
 
 // The review a folded skip needs no request for (see "The folded time skip"):
-// the same record runTurnReview returns, filled from the skip's own answer, so
+// the record a review always was, filled from the skip's own answer, so
 // everything downstream reads it as it always read a review.
 //
 // The board's ops are LIFTED OFF the events here and handed to the board's own
@@ -17402,12 +16650,10 @@ const prepareFoldedSkip = async ({ bundle, originDate, variables, campaignId }) 
 const foldedTurnReview = ({ context, merged, state }) => {
   const { bundle } = context;
   const review = { asked: false, folded: true, parts: {}, reasons: [], boardShownEvents: [], agentReports: [], actionOutcomePlan: null };
-  // The history fold (compactHistoryIfNeeded reads this as `skipFold`). Nothing
-  // due before the skip means nothing is folded after it either. A fold this
-  // skip did not carry (`separate`) is the pass after it's own business, so the
-  // record says nothing about it.
+  // The history fold (applySkipHistoryFold reads this as `skipFold`). Nothing
+  // due before the skip means nothing is folded after it either.
   const fold = state.foldedPrep?.history ?? null;
-  if (!fold?.separate) review.history = { due: false };
+  review.history = { due: false };
   const rawEvents = normalizeArray(merged.events);
   const rawHidden = normalizeArray(state.hiddenEvents);
   const eventOps = rawEvents.map(boardOpsOf);
@@ -17418,7 +16664,7 @@ const foldedTurnReview = ({ context, merged, state }) => {
   // and no history is folded (or asked for: the model is not answering).
   if (normalizeString(state.generation?.source) === "fallback") return review;
 
-  if (fold && !fold.separate) {
+  if (fold) {
     review.history = {
       due: true,
       resume: fold.resume,
@@ -17584,9 +16830,6 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // and kept through a held segment's retry: the segments already in hand were
   // written under it.
   if (state.folded === undefined) state.folded = !foldedSkipRefused;
-  // A skip asked the old way keeps a request for its checks (the turn review): a round of function calling cannot
-  // spend it, or the turn is held for the checks it had no request left for (the owner's log, 2026-11-03).
-  if (!state.folded) state.requests?.budget?.reserve?.("review", 1);
   if (state.folded && !state.foldedPrep) state.foldedPrep = await prepareFoldedSkip({ bundle, originDate, variables, campaignId: context.campaignId });
   if (!Array.isArray(state.covertOperations)) {
     state.covertOperations = isActiveFeatureEnabled("espionage")
@@ -18031,18 +17274,18 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           refusal = error;
         }
         if (refused) {
-          // Asked again the way a skip always was, the checks a request of their
-          // own after it (finishTimelineJump). Nothing of the refused attempt
-          // is kept: it never produced an answer.
+          // Asked again the way a skip always was, with nothing asked after it
+          // (finishTimelineJump). Nothing of the refused attempt is kept: it
+          // never produced an answer.
           const reason = normalizeString(refusal?.message) || normalizeString(answer?.generation?.fallbackReason) || "the provider refused the request";
-          console.warn(`[ai] the folded time skip was refused (${reason}) — asking again with its checks as a request of their own.`);
-          logDebugEvent("warn", "[turn] The folded time skip was refused; asked again with its checks as a request of their own.", {
+          console.warn(`[ai] the folded time skip was refused (${reason}) — asking again the old way.`);
+          logDebugEvent("warn", "[turn] The folded time skip was refused; asked again the old way.", {
             reason,
             statuses: [...statuses],
             segmentIndex,
           });
           state.folded = false;
-          // (The skip asked again keeps a request first, then its checks, which are a request of their own now; upkeep waits: requestBudget.js keepForRefusedSkip.)
+          // (The skip asked again keeps its request: requestBudget.js keepForRefusedSkip.)
           keepForRefusedSkip(state.requests?.budget);
           segmentDraft = null;
           segmentComplaints.length = 0;
@@ -18269,14 +17512,10 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 // round of function calling or a retry in one segment never costs a later
 // segment its skip.
 //
-// Upkeep that is already due when the skip starts keeps its one request too
-// (skipUpkeepDue). Without that a model that looks things up on every skip
-// spent the whole budget on function calling, and the automatic Stats refresh
-// and an overgrown history were put off on every skip for good (a player's
-// log, 2026-10-12: Stats last refreshed in 1921, the date 1929). One at a
-// time, the history first, so a skip always keeps a request for a lookup or
-// for being asked again.
-const createJumpRequests = ({ segments = 1, reserveInstitutionBallot = false, upkeep = null } = {}) => {
+// There is no upkeep after a skip to keep a request for any more: the
+// automatic Stats refresh and the event consolidator were the last of it, and
+// went on 2026-11-07.
+const createJumpRequests = ({ segments = 1, reserveInstitutionBallot = false } = {}) => {
   const saving = savingRequests();
   // No request limit: up to eight, for six rounds of lookups (requestBudget.js).
   const unlimited = unlimitedRequests();
@@ -18284,50 +17523,12 @@ const createJumpRequests = ({ segments = 1, reserveInstitutionBallot = false, up
   const budget = createJumpBudget({ cap: jumpRequestCap({ segments: pieces, unlimited }), only: SKIP_SPENDERS });
   budget.reserve("jump", pieces);
   if (reserveInstitutionBallot) budget.reserve("institutionBallots", 1);
-  if (upkeep?.history) budget.reserve("history", 1);
-  else if (upkeep?.stats) budget.reserve("stats", 1);
   return {
     saving,
     budget,
     used: 0,
     refused: 0,
   };
-};
-
-// What upkeep a skip ending on `date` owes before it has asked anything:
-//   history  the pile of unfolded events is already past the size at which the
-//            fold is asked for on its own (compactHistoryIfNeeded);
-//   stats    the automatic Stats refresh will be due for a tracked country
-//            that has a sheet (refreshTrackedCountryStatsIfDue decides which).
-// Read from the save alone, so it costs nothing and never fails a skip.
-const skipUpkeepDue = (bundle, date) => {
-  const upkeep = { history: false, stats: false };
-  try {
-    upkeep.history = planHistoryConsolidation(bundle).unconsolidatedEvents.length > HISTORY_CONSOLIDATION.ownRequestThreshold;
-  } catch { /* nothing kept */ }
-  try {
-    const game = normalizeGameData(bundle?.game);
-    const world = bundle?.world ?? {};
-    const endDate = normalizeString(date) || normalizeString(game?.gameDate || game?.startDate);
-    const tracking = normalizeCountryStatsTracking(world?.countryStatsTracking, { playerCountry: game?.country });
-    const intervalMonths = Number(tracking.intervalMonths) || 0;
-    if (intervalMonths && parseIsoDate(endDate)) {
-      const waiting = new Set(normalizeArray(tracking.pendingBaselinePolities).map((entry) => normalizeString(entry)));
-      upkeep.stats = tracking.trackedPolities.slice(0, COUNTRY_STATS_TRACKING_MAX_POLITIES).some((rawPolity) => {
-        const polity = canonicalStatsPolity(rawPolity, world) || normalizeString(rawPolity);
-        const sheet = world?.countryStats?.[polity];
-        if (!sheet || waiting.has(polity)) return false;
-        const lastAuto = normalizeString(tracking.lastAutoRefreshByPolity?.[polity]);
-        const assessed = normalizeString(sheet?.continuity?.assessedDate);
-        const baselineDate = (parseIsoDate(lastAuto) && lastAuto)
-          || (parseIsoDate(assessed) && assessed)
-          || trackedStatsLatestHistoryDate(world, polity)
-          || normalizeString(game?.startDate);
-        return countryStatsTrackingMonthsElapsed(baselineDate, endDate) >= intervalMonths;
-      });
-    }
-  } catch { /* nothing kept */ }
-  return upkeep;
 };
 
 const jumpTaskOptions = (requests, spender) => (requests ? {
@@ -18358,21 +17559,15 @@ const reportJumpRequests = (requests) => {
   });
 };
 
-// ---- The turn review -------------------------------------------------------------
+// ---- A Scene's map check -----------------------------------------------------------
 //
-// The checks a skip gets after it is written — units, territory, structures,
-// timeline, the Projects board, the agents' reports — as ONE request instead of
-// one each (turnReview.js says how several jobs share a prompt safely).
-//
-// No longer what a skip normally does. A skip is folded, in every mode: its
-// events carry their own consequences and nothing is asked after it (see "The
-// folded time skip"). This is what is left for the one case where that cannot
-// be: a provider that refused the folded request, whose skip was asked again
-// the way it always was and is checked here, in one request. Every check that
-// has something to look at rides on it: the six switches that turned them off
-// one by one are gone (2026-10), since a check left off only ever meant a map
-// that did not match the story, and so is the mode in which each was a request
-// of its own.
+// The checks a Scene outcome gets — units, territory, structures and the
+// Projects board — as ONE request (turnReview.js says how several jobs share a
+// prompt safely). A time skip had the same review, as the turn review, when a
+// provider refused the folded skip; that went with the other requests after a
+// skip ("remove the stuff relating to those things entirely, they dont need to
+// be part of the game", the owner, 2026-11-07). A skip's events carry their own
+// consequences (see "The folded time skip").
 //
 // Nothing here decides what a check DOES. Each job is built from the input its
 // own native director would have sent (buildUnitDirectorInput and the rest), its
@@ -18382,12 +17577,10 @@ const reportJumpRequests = (requests) => {
 //
 // Whether to ask at all is decided first, natively, per check:
 //   units / territory  the director found events it would ask about;
-//   timeline           some candidate could actually be removed (candidatesWorthJudging);
-//   board              an event concerns an entry, or the calendar is due (boardPassReasons);
-//   agents             a report has gone AGENT_REPORT_EVERY_ROUNDS rounds unrefreshed.
-// No reason from any of them means no request: the skip cost one. When there IS
-// a reason, every check with something to look at rides along — it is the same
-// request either way.
+//   structures         an event may have built something;
+//   board              an event concerns an entry (boardPassReasons).
+// No reason from any of them means no request. When there IS a reason, every
+// check with something to look at rides along — it is the same request either way.
 const UNIT_DIRECTOR_INSTRUCTION =
   "Reconcile EVERY supplied military event against the existing persistent units. When an event clearly changes an identifiable supplied formation's location, posture, strength or existence, emit the matching unit operation; do not leave that event untouched. "
   // Said here as well as in the rules: a live run wrote "HMS Dauntless
@@ -18533,8 +17726,9 @@ const placeStructureOrders = async (payload, world, events, receipt = null) => {
   return payload;
 };
 
-// How each Director is answered, for mapConsequences.js: from the turn review's
-// part, the one request that asked everything. A Director the review holds no
+// How each Director is answered, for mapConsequences.js: from the review's
+// part (a Scene's map check, the one request that asked everything, or a
+// folded skip's, which holds none). A Director the review holds no
 // part for adds nothing, which is its ordinary "no analyst"; none asks a request
 // of its own, after a time skip or after a Scene. Each analyser is handed the
 // events as they stand when its Director runs, since an answer is placed
@@ -18655,13 +17849,9 @@ const BOARD_HIDDEN_NOTE = "\n\nEvents marked (kept off the timeline) happened, b
   + "Move the board from them exactly like any other event, and write lastUpdate so it stands on its own "
   + "without pointing at a timeline entry.";
 
-// `sections`: only these checks are asked about (a Scene asks units, territory,
-// structures and the board; never the timeline, agents or order attribution).
-// A Scene has no time skip's request budget (`state.requests` is null) and is
-// simply one request when anything qualifies.
-const runTurnReview = async ({ context, merged, signal, state, sections = null, agentKind = "" }) => {
-  const { bundle, mode } = context;
-  const requests = state.requests;
+// One request when anything qualifies; none otherwise.
+const runSceneReview = async ({ context, merged, signal, state, agentKind = "" }) => {
+  const { bundle } = context;
   // `failure` is the error when the request itself failed; `missing` names the
   // jobs asked of it that came back with no usable part.
   const review = { asked: false, parts: {}, reasons: [], boardShownEvents: [], agentReports: [], failure: null, missing: [] };
@@ -18669,9 +17859,6 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null, 
   // cost a request to learn that again.
   if (normalizeString(state.generation?.source) === "fallback") return review;
 
-  // A Scene names the checks it is asked about (`sections`); a time skip names
-  // none and is asked about every one. Not a setting: those are gone.
-  const wants = (section) => !sections || sections.includes(section);
   const round = (Number(bundle.game?.round) || 1) + 1;
   const stopDate = normalizeString(merged.stopDate) || context.targetDate;
   const playerCountry = normalizeString(bundle.game?.country);
@@ -18712,28 +17899,11 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null, 
       structureDirectorVariables(structureInput, { ...bundle.game, gameDate: stopDate }, await typeRulesOnce()));
   }
 
-  // --- timeline ---
-  const priorEvents = normalizeEvents(bundle.events);
-  const curatorInput = buildCuratorInput({ events: candidates, priorEvents, mode });
-  const worthJudging = curatorInput ? candidatesWorthJudging({ events: candidates, priorEvents, mode }) : [];
-  if (worthJudging.length) reasons.push(`${worthJudging.length} event(s) may repeat the record or be filler`);
-
   // --- board ---
   const board = normalizeArray(bundle.world?.projects);
   const segmentHidden = normalizeArray(state.hiddenEvents)
     .map((entry, index) => normalizeGeneratedEvent(entry, index))
     .filter(Boolean);
-
-  // A narrated outcome with no actionId is not safe to settle natively by text,
-  // but it is cheap to repair semantically while this combined review request
-  // is already available. The plan exposes only exact current ids + numbered
-  // retained candidates; native code validates the returned pairings again.
-  const actionOutcomePlan = merged.clearActions === false || sections ? null : buildActionOutcomeAssociationPlan({
-    actions: bundle.actions,
-    events: candidates,
-  });
-  review.actionOutcomePlan = actionOutcomePlan;
-  if (actionOutcomePlan) reasons.push(`${actionOutcomePlan.pendingActions.length} queued order(s) need exact outcome attribution`);
 
   const boardHasWork = board.length > 0 && (candidates.length > 0 || segmentHidden.length > 0);
   let pendingDoubts = [];
@@ -18755,53 +17925,13 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null, 
     if (boardReasons.length) reasons.push(`the Projects board: ${boardReasons.slice(0, 3).join("; ")}${boardReasons.length > 3 ? `; and ${boardReasons.length - 3} more` : ""}`);
   }
 
-  // --- agents ---
-  const agents = wants("spies") && isActiveFeatureEnabled("espionage")
-    ? activeSpies(normalizeWorldState(bundle.world), playerCountry)
-    : [];
-  if (agents.length) {
-    // An agent asks for a review of its own in two cases only, and both are
-    // bounded by the calendar rather than by whether the last attempt worked — a
-    // report that keeps failing must not buy a request every skip:
-    //   - it was placed since the last skip and has never reported (once);
-    //   - its report is AGENT_REPORT_EVERY_ROUNDS rounds old, and this is one of
-    //     the rounds reports are collected on.
-    // Every other skip it simply rides along when something else asks.
-    // The calendar is agentReports.js's, which a folded skip's agents keep to
-    // as well (agentsReportingWithSkip).
-    const filed = normalizeIntercepts(await readInterceptsState({ force: false }).catch(() => ({})));
-    const { justPlaced, overdue } = agentsDueToReport({
-      agents,
-      filed,
-      round,
-      originDate: normalizeString(bundle.game?.gameDate),
-      collectionRounds: true,
-    });
-    if (justPlaced.length) reasons.push(`${justPlaced.length} newly placed agent(s) have not reported yet`);
-    else if (overdue.length) reasons.push(`${overdue.length} agent report(s) are ${AGENT_REPORT_EVERY_ROUNDS}+ rounds old`);
-  }
-
   review.reasons = reasons;
   if (!reasons.length) {
-    logDebugEvent("turn", "Turn review not needed: nothing to move, mark, tidy or report.", undefined, { verbose: true });
+    logDebugEvent("turn", "Scene map check not needed: nothing to move, mark or build.", undefined, { verbose: true });
     return review;
   }
 
   // There is a reason to ask, so everything with something to look at rides along.
-  if (actionOutcomePlan) {
-    jobs.push({
-      key: "actions",
-      title: "queued order outcomes",
-      prompt: actionOutcomePlan.prompt,
-      instruction: `Return only exact associations supported by the candidate events. Empty is correct when none qualify.`,
-      schema: ACTION_OUTCOME_ASSOCIATION_SCHEMA,
-      actionOutcome: true,
-    });
-  }
-  if (curatorInput) {
-    await addJob({ key: "timeline", taskKey: "timelineCurator", title: "repeats and filler", instruction: TIMELINE_CURATOR_INSTRUCTION },
-      curatorVariables(curatorInput));
-  }
   if (boardHasWork) {
     const boardBundle = { ...bundle, game: { ...bundle.game, gameDate: stopDate, round } };
     const doubtBlock = pendingDoubts.length
@@ -18817,34 +17947,8 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null, 
         + `${boardEventList(candidates, segmentHidden)}${doubtBlock}`,
     }, await buildTemplateVariables(boardBundle, { taskKey: "projects" }));
   }
-  if (agents.length) {
-    // The world the agents report from is the one this skip wrote.
-    const agentBundle = {
-      ...bundle,
-      events: normalizeEvents([...priorEvents, ...candidates]),
-      game: { ...bundle.game, gameDate: stopDate, round },
-    };
-    const sharedVariables = await buildTemplateVariables(agentBundle, { taskKey: "spyIntercept" });
-    for (const [index, spy] of agents.entries()) {
-      const prepared = await prepareSpyReport(agentBundle, spy, { sharedVariables });
-      const key = `agent_${index + 1}`;
-      review.agentReports.push({ key, spy, bundle: agentBundle });
-      await addJob({ key, taskKey: "spyIntercept", title: `the agent in ${prepared.name}`, instruction: prepared.userMessage }, prepared.variables);
-    }
-  }
-
   const usable = jobs.filter((job) => job.schema);
-  if (!usable.length || (requests && !requests.budget.take("review"))) {
-    if (usable.length) {
-      logDebugEvent("turn", `Turn review not made: this time skip has used its ${requests.budget.cap} requests.`, { reasons });
-      // Something needed checking and was not: the turn would land with none of
-      // it done, as a failed review did. A Retry gives the checks a budget of
-      // their own (retryPendingChecksJump).
-      review.failure = new Error(`this time skip used all ${requests.budget.cap} of its requests before the checks`);
-      review.missing = usable.map((job) => job.key);
-    }
-    return review;
-  }
+  if (!usable.length) return review;
 
   const { jobs: shared, savedChars } = shareRepeatedBlocks(usable, sharedBlocks);
   // The author's priority rules and the Game Master's reminders once for the
@@ -18891,17 +17995,13 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null, 
       logLabel: `task "${TURN_REVIEW_TASK}"`,
       taskKey: TURN_REVIEW_TASK,
       __debug: { taskKey: TURN_REVIEW_TASK, attempt: 1, maxAttempts: 1, simulatedDays: null },
-      onRequest: jumpTaskOptions(requests, "review").onRequest,
-      ...(requests ? { spender: "review" } : {}),
       ...(agentKind ? { agentKind } : {}),
     });
     const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
     answer = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool.name);
   } catch (error) {
     if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : new DOMException("Timeline jump cancelled.", "AbortError"));
-    logDebugEvent("turn", "Turn review failed; every check falls back to leaving the turn as written.", error, { problem: true });
-    // Said on the review, not only in the log: a time skip holds the turn on
-    // it (finishTimelineJump) rather than landing it with nothing moved.
+    logDebugEvent("turn", "Scene map check failed; every check falls back to leaving the Scene as written.", error, { problem: true });
     review.failure = error;
     review.missing = shared.map((job) => job.key);
     return review;
@@ -18916,14 +18016,6 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null, 
     const part = parts[job.key];
     if (!part) {
       logDebugEvent("turn", `Turn review: no usable "${job.key}" part; that check leaves the turn as written.`, undefined, { problem: true });
-      continue;
-    }
-    if (job.actionOutcome) {
-      const normalized = normalizeActionOutcomeAssociationAnswer(part, actionOutcomePlan);
-      if (normalized.removed) {
-        logDebugEvent("turn", `Turn review: ${normalized.removed} invalid queued-order association(s) were ignored; only exact current action ids and candidate indexes are accepted.`, undefined, { verbose: true });
-      }
-      review.parts[job.key] = { associations: normalized.associations };
       continue;
     }
     const normalized = normalizeGameplayPayload(job.taskKey, part);
@@ -18941,7 +18033,7 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null, 
   return review;
 };
 
-// The agents' reports the review carried, filed once the turn is written — and
+// The agents' reports the folded skip carried, filed once the turn is written — and
 // only for agents who are still in place after it: one caught this turn did not
 // get a report out.
 const fileReviewedAgentReports = async (review, { campaignId = "" } = {}) => {
@@ -18983,9 +18075,11 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // (see "The folded time skip"): the review is read off the skip's own answer,
   // with no request. Each director below then runs exactly as it always has, on
   // a review that holds no part for it, which is its ordinary "nothing to add".
-  // Only a skip whose folded request the provider refused still asks for a
-  // review here, as one request (runTurnReview). There is always a review
-  // record: no check after a skip is a request of its own any more.
+  // A skip whose folded request the provider refused has no review at all: the
+  // turn review it once asked for went on 2026-11-07, and its record is the
+  // one a review that was not needed always gave, so the turn is written as
+  // the simulator wrote it. There is always a review record: no check after a
+  // skip is a request of its own any more.
   const folded = Boolean(state.folded);
   if (!folded) {
     // Not this skip's to write: the board is moved by its own pass, and an op
@@ -19025,33 +18119,12 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // again whole. A check that fails lands the turn as written.
   if (hostingSharedGame()) checks.accept();
   // A folded skip's review makes no request, so it is not one of the checks:
-  // nothing in it can fail, hold the turn or be asked again. The review a
-  // refused folded skip still asks for is one. There is always a review
-  // record: no check after a skip is a request of its own any more.
+  // nothing in it can fail, hold the turn or be asked again. (A skip's events
+  // cite the orders they answer themselves, so there is no order attribution
+  // to repair either.)
   const review = folded
     ? foldedTurnReview({ context, merged, state })
-    : await checks.run("review", () => runTurnReview({ context, merged, signal, state }), reviewFailure, { copy: copyReviewParts });
-  // Held here rather than at the write when the one request is what failed:
-  // nothing after it has anything to go on.
-  if (checksHoldTurn(checks)) {
-    holdTurn(HELD_TURN.checks, { context, state });
-    throw checksHeldError(checks.failures());
-  }
-
-  // A current order whose outcome event omitted actionIds gets one bounded
-  // semantic association pass, as a job of the combined review when there is
-  // one (a folded skip's events cite their own orders). Native application
-  // accepts exact ids/indexes only, then the normal curator sees the repaired
-  // actionIds and protects a genuine order outcome from filler removal.
-  const actionPlan = review.actionOutcomePlan ?? null;
-  const actionAnswer = review.parts?.actions ?? null;
-  if (actionPlan && actionAnswer) {
-    const repaired = applyActionOutcomeAssociations({ events: merged.events, plan: actionPlan, answer: actionAnswer });
-    merged.events = repaired.events;
-    if (repaired.applied.length) {
-      logDebugEvent("turn", `Restored exact actionId attribution on ${repaired.applied.length} queued order outcome${repaired.applied.length === 1 ? "" : "s"}.`, repaired.applied, { verbose: true });
-    }
-  }
+    : { asked: false, folded: false, parts: {}, reasons: [], boardShownEvents: [], agentReports: [], actionOutcomePlan: null };
 
   // The surviving military events then make the persistent order of battle
   // move: the unit director proposes ops for existing units, native rules keep
@@ -19072,8 +18145,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     game: bundle.game,
     playerCountry: normalizeString(bundle.game?.country),
     analyze: directorAnalyzers({ bundle, review, receipt: state.receipt }),
-    // No places to look up here: a skip's directors never ask (the review,
-    // when there was one, was handed them where it was built, runTurnReview).
+    // No places to look up here: a skip's directors never ask.
     findPlaces: null,
     resolveControl: (containers) => resolveRegionControlOps(containers, bundle.world, { requests: state.requests }),
     // A region on a battlefield is the front engine's to decide (frontApply.js).
@@ -19145,9 +18217,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // events too. All this side does is hold the turn when it fails, because this
   // is where the arguments a retry needs are held.
   // `review` carries what the skip's own answer gave for the board, the agents
-  // and the history (or the turn review's answers, for a skip a provider
-  // refused folded), and `requests` the skip's budget, for the little the apply
-  // may still ask.
+  // and the history (nothing, for a skip a provider refused folded), and
+  // `requests` the skip's budget, for the little the apply may still ask.
   applyArgs.projects = { bundle, signal, review, requests: state.requests, checks };
   applyArgs.phases = state.phases;
   // Held with the turn, so a retry of the board gets the curator's and the
@@ -19364,7 +18435,6 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     requests: createJumpRequests({
       segments: segmentCount,
       reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(bundle.world, bundle.game?.country || "", { maxInstitutions: 1 }).length > 0,
-      upkeep: skipUpkeepDue(bundle, targetDate),
     }),
     phases,
   };
@@ -19400,7 +18470,6 @@ export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } =
       ...createJumpRequests({
         segments: Math.max(1, context.segmentDays.length - state.nextSegment),
         reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, context.bundle?.game?.country || "", { maxInstitutions: 1 }).length > 0,
-        upkeep: skipUpkeepDue(context.bundle, context.targetDate),
       }),
       used: spentSoFar.used,
       refused: spentSoFar.refused,
@@ -19442,7 +18511,6 @@ export const retryPendingChecksJump = async ({ onProgress, signal, withoutFailed
       ...createJumpRequests({
         segments: 1,
         reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, context.bundle?.game?.country || "", { maxInstitutions: 1 }).length > 0,
-        upkeep: skipUpkeepDue(context.bundle, context.targetDate),
       }),
       used: spentSoFar.used,
       refused: spentSoFar.refused,
@@ -19545,7 +18613,6 @@ export const retryHeldPlayerEvents = async ({ keep = false, onEvents, onProgress
       ...createJumpRequests({
         segments: 1,
         reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, context.bundle?.game?.country || "", { maxInstitutions: 1 }).length > 0,
-        upkeep: skipUpkeepDue(context.bundle, context.targetDate),
       }),
       used: spentSoFar.used,
       refused: spentSoFar.refused,
@@ -22212,8 +21279,9 @@ const appendSightingEvent = async (bundle, sighting, unitOps, campaign = "") => 
 
 export const maybeSendIdleDiplomacy = async () => {
   if (idleDiplomacyInFlight || isSimulationBusy()) return null;
-  // Nobody pressed anything, so this is background AI (requestBudget.js): it
-  // stops at its daily cap, and spends nothing once the player turns it off.
+  // Nobody pressed anything, so this is background work (requestBudget.js):
+  // always on, and it stops at the day's fixed cap ("dont remove idle
+  // diplomacy", the owner, 2026-11-07).
   if (!backgroundAiAllowance().allowed) return null;
   // One cadence, the feature's own (see the comment above idleDiplomacyInFlight),
   // for the whole pulse: zero when idle diplomacy is off for this game, and then

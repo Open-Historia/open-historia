@@ -43,8 +43,8 @@ import { PUPPET_COUP_LOYALTY, puppetKindLabel } from "../../runtime/puppets.js";
 import { PUPPET_KIND_OPTIONS, PUPPET_SECRECY_OPTIONS } from "../../Editor/scenarioPuppets.js";
 import { applyGmPuppetChange, gmPuppetRows } from "./puppetStatesTool.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
-import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand, previewGameMasterRevision } from "../AI/gameplayLazy.js";
-import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation, seedHistoryDocumentText } from "../AI/historyConsolidation.js";
+import { applyGameMasterPreview, previewGameMasterCommand, previewGameMasterRevision } from "../AI/gameplayLazy.js";
+import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, seedHistoryDocumentText } from "../AI/historyConsolidation.js";
 import {
     POLITICAL_TRAIT_REGISTRY,
     canonicalPoliticalTraitKey,
@@ -3304,7 +3304,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const data = {
             document: world?.historyDocument ?? null,
             passes: Array.isArray(world?.consolidatedHistory) ? world.consolidatedHistory : [],
-            status: { ...describeHistoryConsolidation(bundle), canFoldNow: planHistoryConsolidation(bundle, { force: true }).due },
+            status: describeHistoryConsolidation(bundle),
             totalEvents: Array.isArray(events) ? events.length : 0,
         };
         setItems(data);
@@ -3408,7 +3408,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             loadMapFeatureData().catch(() => setItems({ customCities: false, markers: [], cities: [] }));
         }
         if (tool === "history-document") {
-            loadHistoryDocument().catch((error) => setItems({ document: null, passes: [], status: { text: `Could not read the campaign: ${error.message}`, canFoldNow: false }, totalEvents: 0 }));
+            loadHistoryDocument().catch((error) => setItems({ document: null, passes: [], status: { text: `Could not read the campaign: ${error.message}` }, totalEvents: 0 }));
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tool]);
@@ -4317,22 +4317,6 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <div style={{ ...editorFieldStyle, color: "rgba(255,255,255,0.72)", fontSize: "0.74rem", lineHeight: 1.45, marginBottom: "0.5rem" }}>
                 <div>{data.totalEvents} events in the timeline. {data.status.text}</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.45rem" }}>
-                <button
-                type="button"
-                className="oh-tap-row"
-                disabled={busy || !data.status.canFoldNow}
-                title={data.status.canFoldNow ? "Runs the AI consolidator on the older events now" : "Only the retained tail is waiting; there is nothing older to fold"}
-                style={{ ...primaryButtonStyle, opacity: busy || !data.status.canFoldNow ? 0.55 : 1, padding: "0.3rem 0.6rem" }}
-                onClick={() => runBusy(async () => {
-                    const result = await consolidateHistoryNow();
-                    await loadHistoryDocument();
-                    return result.consolidated
-                        ? `Folded ${result.events} event${result.events === 1 ? "" : "s"} and ${result.chats} chat${result.chats === 1 ? "" : "s"}; the document is now revision ${result.documentRevision}, ${result.documentWords} words. The newest ${result.retained} events stay in full.`
-                        : "Nothing was folded: only the retained tail is waiting, or the consolidator came back empty.";
-                })}
-                >
-                Fold the older events now
-                </button>
                 {confirmingReset ? (
                     <>
                     <button type="button" className="oh-tap-row" disabled={busy} style={{ ...primaryButtonStyle, padding: "0.3rem 0.6rem" }} onClick={() => runBusy(resetCompression)}>Confirm reset</button>

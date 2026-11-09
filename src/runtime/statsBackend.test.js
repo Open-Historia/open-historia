@@ -74,10 +74,8 @@ test("a scenario's own sheet is asked for WITH its backend, in the same request"
   const turn = read("../Game/AI/gameplay.js");
   assert.ok(turn.includes("      statsBackendInstruction(statsBackendOf(previous)),"));
   assert.ok(turn.includes("const sheet = mergeCountryStatPatch(previous, { customStats, ...statsBackendPatch(payload?.[STATS_BACKEND_FIELD]) }, {"));
-  // And the periodic refresh of a scenario's own sheets shows it and moves it with them.
-  assert.ok(turn.includes('`HIDDEN BACKEND: ${statsBackendOf(entry.previous) ? JSON.stringify(statsBackendOf(entry.previous)) : "none yet"}`,'));
-  assert.ok(turn.includes("const backend = statsBackendPatch(update?.[STATS_BACKEND_FIELD]);"));
-  assert.ok(turn.includes("if (!Object.keys(patchValues).length && !Object.keys(backend).length) continue;"));
+  // (The periodic refresh of a scenario's own sheets moved it too, until that refresh went, 2026-11-07.)
+  assert.equal(turn.includes("refreshTrackedCustomStatsIfDue"), false);
 });
 
 test("a sheet keeps both layers, and the war reads the one under the scenario's own", () => {
@@ -138,8 +136,8 @@ test("it is asked after a turn, when a scenario's fronts are built, and when a r
   assert.ok(turn.includes("    if (attacked.length > 0) requestConflictSheets(world, game, attacked);"), "when a route is drawn into a country");
   // A sheet wanted for the war is one with a backend: a scenario's own sheet written before it kept one is written again.
   assert.ok(turn.includes("if (complete && (!needBackend || hasStatsBackend(persisted))) return persisted;"));
-  // And the player's own country, tracked from the first skip, is asked for the same.
-  assert.ok(turn.includes('if (waiting) agentClient.holdSkip(ensureCountryStatSheet(waiting, { reason: "historical tracking", needBackend: true, agentKind: "skip" }));'));
+  // (The player's own country, tracked from the first skip, was asked for the same, until tracking went, 2026-11-07.)
+  assert.equal(turn.includes('reason: "historical tracking"'), false);
 });
 
 // "I meant update both layers of the stats in one request."
