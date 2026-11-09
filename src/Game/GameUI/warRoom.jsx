@@ -736,10 +736,13 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
     setWarRoom({ wing: id, aircraft: true, fleets: false });
     if (isMobile) setFolded(true);
   }, [isMobile]);
-  // The strike radius set on the aircraft's plate: a strike waiting for the air unit picked out is ordered again
-  // with it, at the same target (and where that is refused, the plate shows the strike's own radius again).
-  const setStrikeRadius = async (radius) => {
-    setWarRoom({ strikeRadius: strikeRadiusOf(radius) });
+  // The strike radius set on the aircraft's slider: as it moves, the circles on the map follow it (the pointer's
+  // ring, and a strike waiting for the air unit picked out: WarRoomMarks.jsx); once it is let go, that strike is
+  // ordered again with it, at the same target (and where that is refused, the slider goes back to the strike's own
+  // radius).
+  const setStrikeRadius = (radius) => setWarRoom({ strikeRadius: strikeRadiusOf(radius) });
+  const orderStrikeRadius = async (radius) => {
+    setStrikeRadius(radius);
     const order = pickedOrder;
     if (!order || strikeRadiusOf(order.radius) === strikeRadiusOf(radius)) return;
     const done = await orderWith(sendAirStrikeOp, {
@@ -916,10 +919,13 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
           reach={airReach}
           flown={strikesFlown}
           locked={locked}
+          radiusLocked={turnRunning}
           tool={tool}
           onPick={pickWing}
           onKind={(kind) => setWarRoom({ strikeKind: kind })}
           onRadius={setStrikeRadius}
+          onRadiusSet={orderStrikeRadius}
+          onSizing={(sizing) => setWarRoom({ sizing })}
           onAim={() => takeTool("aircraft")}
           onCallOff={(unit) => orderWith(sendAirStrikeOp, { op: "unairstrike", unit })}
           onClose={() => setWarRoom({ aircraft: false })}

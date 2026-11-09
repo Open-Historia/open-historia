@@ -102,15 +102,19 @@ export const ringAround = (lng, lat, km, points = RING_POINTS) => {
 //   flown     the player's strikes of the last turn (normalizeAirStrikes)
 //   blast     how far the bombs of one fall at the default strike radius, in km: each is ringed as far as its own
 //             strike radius takes them (runtime/fronts/airStrike.js strikeRadiusOf)
-export const airFeatures = ({ wing = null, reach = 0, orders = [], flown = [], blast = 0 } = {}) => {
+//   sizing    { lng, lat, radius } while the strike radius is being set on the aircraft's slider with no strike
+//             waiting to show it: a circle of that radius there, with no target in it (its size is told by nothing
+//             else: GameUI/warRoomAircraft.jsx), or null
+export const airFeatures = ({ wing = null, reach = 0, orders = [], flown = [], blast = 0, sizing = null } = {}) => {
   const features = [];
   const base = wing ? placeOf([wing.lng, wing.lat]) : null;
   if (base && reach > 0) features.push({ type: "Feature", geometry: { type: "LineString", coordinates: ringAround(base[0], base[1], reach) }, properties: { what: "reach", colour: AIR_COLOURS.reach } });
-  const ring = (entry, what, colour) => {
+  const ring = (entry, what, colour, at = true) => {
     const km = blast * strikeRadiusOf(entry.radius);
     if (km > 0) features.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ringAround(entry.lng, entry.lat, km)] }, properties: { what, colour } });
-    features.push({ type: "Feature", geometry: { type: "Point", coordinates: [entry.lng, entry.lat] }, properties: { what: `${what}-at`, colour } });
+    if (at) features.push({ type: "Feature", geometry: { type: "Point", coordinates: [entry.lng, entry.lat] }, properties: { what: `${what}-at`, colour } });
   };
+  if (sizing && placeOf([sizing.lng, sizing.lat])) ring(sizing, "sizing", AIR_COLOURS.waiting, false);
   for (const order of list(orders)) if (placeOf([order?.lng, order?.lat])) ring(order, "aim", AIR_COLOURS.waiting);
   for (const strike of list(flown)) {
     if (!placeOf([strike?.lng, strike?.lat]) || strike.outcome === "gone" || strike.outcome === "out of reach") continue;
