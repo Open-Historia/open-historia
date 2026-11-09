@@ -54,6 +54,28 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The owner, 2026-11-09: "the dont play music wind up when entering a game that is open is broken because if you
+    // have an open game but then switch games it still doesnt do the wind up" (runtime/ambientMusic.js
+    // reopensDrawnGame: only the game drawn last, and only when it is the one being opened; GameUI/main.jsx asks with
+    // the game the library announced, gameLoadingScreen.jsx `opening`). A player, the same day: "in the Beta version,
+    // every time I open a game, 'Translating to Arabic...' appears and never disappears" (runtime/translationModel.js:
+    // every request to the worker ends, a dead worker is replaced, three minutes of silence give up; the worker answers
+    // every load; translator.js: the pill only while the queue runs). Dated with the 2.5 release it is told in.
+    id: "2026-11-music-and-translation-fixes",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Opening music and translation fixes",
+        items: [
+          "Opening another game than the one you had open plays the opening music’s build-up again: only going back into the game you left skips it.",
+          "The “Translating to…” notice no longer stays on the screen for good when the translation model cannot start or stops answering: it goes once the translation is done or has given up, and says so when the model could not be loaded.",
+        ],
+      },
+    ],
+  },
+  {
     // "lets find a way so people cant manually download scenarios from the workshop in github to inflate import counts"
     // (the owner, 2026-11-09). A post's first import on an install is reported to the import counter
     // (runtime/hubImportCount.js, tools/import-counter/worker.js): once per install, once a day per address, from the
@@ -219,7 +241,7 @@ const NEW_UPDATES = [
   },
   {
     // The owner, 2026-11-06: "when entering a game thats already opened ... dont do the whole music ramp up
-    // thing. make it just go to the ingame music once your in" (runtime/ambientMusic.js gameDrawnBefore,
+    // thing. make it just go to the ingame music once your in" (runtime/ambientMusic.js reopensDrawnGame,
     // GameUI/main.jsx reopening).
     id: "2026-11-straight-back-into-the-music",
     kind: "minor",

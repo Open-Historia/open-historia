@@ -30,7 +30,7 @@ import { VaultDoor } from "./Game/GameUI/VaultDoor.jsx";
 import { holdMusicBehindDoor } from "./runtime/ambientMusic.js";
 import { vaultDoorAlways } from "./runtime/mapSettings.js";
 import { decideVaultDoor, rememberVaultDoorBuild } from "./runtime/vaultDoorDue.js";
-import { pendingUpdates, previewedUpdates, rememberUpdate } from "./Game/GameUI/updates/updateNotices.js";
+import { buildShowsUpdateNotices, pendingUpdates, previewedUpdates, rememberUpdate } from "./Game/GameUI/updates/updateNotices.js";
 import { firstSetupDue } from "./runtime/firstSetupDue.js";
 import { appBuildId } from "./runtime/buildId.js";
 import { announceMapRerender } from "./runtime/mapReadiness.js";
@@ -121,10 +121,11 @@ function GameApp() {
   }, [door]);
   // What the update brings (Game/GameUI/updates/notes.js): each new update once a device, behind the door, so
   // the door opens onto it; shown as the leaves part (or at once, with the door off). ?updateNotice=<id> shows
-  // one whatever was seen, and keeps nothing.
+  // one whatever was seen, and keeps nothing. The website shows none (buildShowsUpdateNotices).
   const [notice, setNotice] = useState(() => {
     const asked = typeof window === "undefined" ? null : previewedUpdates(window.location.search);
-    return asked ? { updates: asked, preview: true } : { updates: pendingUpdates(), preview: false };
+    if (asked) return { updates: asked, preview: true };
+    return { updates: buildShowsUpdateNotices(import.meta.env) ? pendingUpdates() : [], preview: false };
   });
   const [parting, setParting] = useState(false);
   const closeNotice = useCallback(() => setNotice((now) => ({ updates: [], preview: now.preview })), []);
