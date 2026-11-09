@@ -109,6 +109,7 @@ import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, decodeAllowedBasemaps, decodeOwnBase
 import { DEFAULT_BASEMAP_KEY, DEFAULT_BASEMAP_ON_KEY, basemapShownFor, scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
 import { useGameBasemapPick } from "../Map/useBasemapPick.js";
 import UiThemeSettings from "./UiThemeSettings.jsx";
+import { isWebsiteBuild } from "../../runtime/websiteBuild.js";
 import { formatBytes, subscribeTiledBasemaps } from "../../runtime/tiledBasemaps.js";
 import { detailedMapOffers, detailedMapsDownloadLine, lookUpDetailedMaps } from "../Map/detailedMapOffers.js";
 import DetailedMapsInstallOffer from "../Map/DetailedMapsInstallOffer.jsx";
@@ -2971,19 +2972,26 @@ const SettingsWorkspace = ({
                 </SettingsSection>
                 <SettingsSection title="Display" description="Window and presentation preferences that apply to the game client.">
                     <DisplayModeSelector isFullscreenEnabled={isFullscreenEnabled} onToggleFullscreen={onToggleFullscreen} />
-                    {/* The vault door shows the first time the game opens after an
-                        update (runtime/vaultDoorDue.js); this shows it at every
-                        opening. */}
-                    <Toggle
-                    label="Show the vault door every time"
-                    enabled={mapSettings.vaultDoorAlways}
-                    onToggle={() => updateMapSetting("vaultDoorAlways", MAP_SETTING_KEYS.vaultDoorAlways, !mapSettings.vaultDoorAlways)}
-                    />
-                    <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>{"On: the vault door appears every time you start the game. Off: only the first time you start it after an update."}</div>
+                    {/* The website's demo has no vault door and no themes (runtime/websiteBuild.js). */}
+                    {!isWebsiteBuild(import.meta.env) && (
+                    <>
+                        {/* The vault door shows the first time the game opens after an
+                            update (runtime/vaultDoorDue.js); this shows it at every
+                            opening. */}
+                        <Toggle
+                        label="Show the vault door every time"
+                        enabled={mapSettings.vaultDoorAlways}
+                        onToggle={() => updateMapSetting("vaultDoorAlways", MAP_SETTING_KEYS.vaultDoorAlways, !mapSettings.vaultDoorAlways)}
+                        />
+                        <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>{"On: the vault door appears every time you start the game. Off: only the first time you start it after an update."}</div>
+                    </>
+                    )}
                 </SettingsSection>
+                {!isWebsiteBuild(import.meta.env) && (
                 <SettingsSection title="Interface appearance" description="Choose the colours of the main menu, the panels and the popups.">
                     <UiThemeSettings />
                 </SettingsSection>
+                )}
                 <SettingsSection title="Accessibility" description="Reduce automatic camera motion and map animations without changing simulation behavior.">
                     <Toggle
                     label="Reduce motion"

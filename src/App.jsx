@@ -30,6 +30,7 @@ import { VaultDoor } from "./Game/GameUI/VaultDoor.jsx";
 import { holdMusicBehindDoor } from "./runtime/ambientMusic.js";
 import { vaultDoorAlways } from "./runtime/mapSettings.js";
 import { decideVaultDoor, rememberVaultDoorBuild } from "./runtime/vaultDoorDue.js";
+import { isWebsiteBuild } from "./runtime/websiteBuild.js";
 import { buildShowsUpdateNotices, pendingUpdates, previewedUpdates, rememberUpdate } from "./Game/GameUI/updates/updateNotices.js";
 import { firstSetupDue } from "./runtime/firstSetupDue.js";
 import { appBuildId } from "./runtime/buildId.js";
@@ -88,7 +89,11 @@ function GameApp() {
   // whether this opening is one is decided first ("deciding"): the running
   // build is asked of the desktop app's own server (runtime/buildId.js), and
   // the music is held meanwhile.
+  //
+  // The website's demo has no door (runtime/websiteBuild.js): it opens on the
+  // menu, and its music is never held.
   const [door, setDoor] = useState(() => {
+    if (isWebsiteBuild(import.meta.env)) return "open";
     holdMusicBehindDoor(true);
     return "deciding";
   });
