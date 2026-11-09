@@ -99,35 +99,58 @@ export const importToken = async (key, postId) => {
 let cache = { at: 0, counts: null, pending: null, fallback: false };
 const inflight = new Set();
 
+// The counter's answers that may be different a while later: a scenario released
+// minutes ago that the counter's copy of the hub's index does not list yet (it
+// reads the index again at most every five minutes, and GitHub keeps the file
+// five), the index unreadable, or the rate limiter. Such a report is sent once
+// more, IMPORT_RETRY_MS later, with the same token, so it can count at most
+// once; never a third time, and never for anything else.
+const RETRY_REASONS = new Set(["not a released scenario", "hub unreadable", "slow down"]);
+export const IMPORT_RETRY_MS = 6 * 60 * 1000;
+
+const track = (sending) => {
+  inflight.add(sending);
+  sending.finally(() => inflight.delete(sending));
+  return sending;
+};
+
+const sendImport = async (post, token, retry) => {
+  try {
+    const response = await fetch(`${importCounterUrl()}/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ post, token }),
+      signal: timeout(),
+    });
+    const answer = await response.json().catch(() => null);
+    // The next read of the counts asks the counter again.
+    if (answer?.counted) cache = { ...cache, at: 0 };
+    if (retry && answer && !answer.counted && RETRY_REASONS.has(answer.reason)) {
+      const later = setTimeout(() => track(sendImport(post, token, false)), IMPORT_RETRY_MS);
+      later?.unref?.();
+    }
+    return answer && typeof answer === "object" ? answer : null;
+  } catch {
+    return null;
+  }
+};
+
 // Tells the counter that this install has imported `postId` for the first
 // time. Never throws and never holds the import up: a count that cannot be
 // sent (offline, no settings, the counter down) is a count lost, never an
 // error. Resolves to the counter's answer ({ counted, reason? }) or null.
-export const countHubImport = (postId) => {
-  const sending = (async () => {
+export const countHubImport = (postId) =>
+  track((async () => {
     try {
       const post = normalizeHubImported([postId])[0];
       if (!post) return null;
       const token = await importToken(await installCountKey(), post);
       if (!token) return null;
-      const response = await fetch(`${importCounterUrl()}/import`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ post, token }),
-        signal: timeout(),
-      });
-      const answer = await response.json().catch(() => null);
-      // The next read of the counts asks the counter again.
-      if (answer?.counted) cache = { ...cache, at: 0 };
-      return answer && typeof answer === "object" ? answer : null;
+      return await sendImport(post, token, true);
     } catch {
       return null;
     }
-  })();
-  inflight.add(sending);
-  sending.finally(() => inflight.delete(sending));
-  return sending;
-};
+  })());
 
 // For tests: resolves once every count sent so far has had its answer; and
 // forgets the counts read.

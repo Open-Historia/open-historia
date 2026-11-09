@@ -9,8 +9,10 @@ import assert from "node:assert/strict";
 
 import {
   IMPORT_COUNTER_URL,
+  IMPORT_RETRY_MS,
   countHubImport,
   fetchImportCounts,
+  hubImportCountsSettled,
   importCountIn,
   importCounterUrl,
   resetImportCountsCache,
@@ -124,4 +126,49 @@ test("a report that fails is no error and holds nothing up", async (t) => {
   mockFetch(t, new TypeError("Failed to fetch"));
   assert.equal(await countHubImport(12), null);
   assert.equal(await countHubImport("not a post"), null);
+});
+
+// The counter's answers to the reports, in turn; the install's key is stored.
+const counterAnswering = (t, answers) =>
+  mockFetch(t, (url) =>
+    url === "/api/ui-settings"
+      ? Response.json({ hubCountKey: "a".repeat(64) })
+      : Response.json(answers.length > 1 ? answers.shift() : answers[0]));
+
+test("a scenario the counter does not list yet is reported once more, a while later, with the same token", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const calls = counterAnswering(t, [{ post: 12, counted: false, reason: "not a released scenario" }, { post: 12, counted: true }]);
+  const reports = () => calls.filter((call) => call.url === `${IMPORT_COUNTER_URL}/import`);
+  assert.deepEqual(await countHubImport(12), { post: 12, counted: false, reason: "not a released scenario" });
+  t.mock.timers.tick(IMPORT_RETRY_MS - 1);
+  await hubImportCountsSettled();
+  assert.equal(reports().length, 1, "not at once");
+  t.mock.timers.tick(1);
+  await hubImportCountsSettled();
+  assert.equal(reports().length, 2);
+  assert.equal(reports()[1].body, reports()[0].body, "the same post and token: it can count once at most");
+  t.mock.timers.tick(IMPORT_RETRY_MS * 10);
+  await hubImportCountsSettled();
+  assert.equal(reports().length, 2, "counted: nothing more");
+});
+
+test("a report is sent at most twice, and only again for an answer that can change", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const answers = [{ post: 12, counted: false, reason: "not a released scenario" }];
+  const calls = counterAnswering(t, answers);
+  const reports = () => calls.filter((call) => call.url === `${IMPORT_COUNTER_URL}/import`).length;
+  await countHubImport(12);
+  for (let n = 0; n < 5; n += 1) {
+    t.mock.timers.tick(IMPORT_RETRY_MS);
+    await hubImportCountsSettled();
+  }
+  assert.equal(reports(), 2, "refused twice: given up");
+  for (const reason of ["address", "address limit", "again", "over limit", "origin"]) {
+    answers[0] = { post: 7, counted: false, reason };
+    const before = reports();
+    await countHubImport(7);
+    t.mock.timers.tick(IMPORT_RETRY_MS * 2);
+    await hubImportCountsSettled();
+    assert.equal(reports() - before, 1, reason);
+  }
 });
