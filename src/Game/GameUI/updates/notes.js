@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "make it so if there are multiple minor update annoucements, it merges them all into one changelog" (the owner,
+    // 2026-11-09): several minor updates owed at one opening are one card (updateNotices.js noticePages). Dated
+    // 2026-11-05 so it sorts under the 2.5 release.
+    id: "2026-11-minor-changelog",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "One changelog for small updates",
+        items: [
+          "When you missed several small updates, they are now listed together on one card, newest first, instead of one card each.",
+          "Major updates still open on their own pages first.",
+        ],
+      },
+    ],
+  },
+  {
     // "why are all the agents that run after a time skip running now ... remove the stuff relating to those things
     // entirely" and "get rid of the background agent" (the owner, 2026-11-07). The Background AI switch went, with the
     // three requests after a skip: the Stats refresh of tracked countries, the event consolidator and the turn review.

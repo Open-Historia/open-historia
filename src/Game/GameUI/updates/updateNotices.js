@@ -132,8 +132,22 @@ export const previewedUpdates = (search = "", updates = UPDATES) => {
   return update ? [update] : null;
 };
 
+// The changelog page's own banner: what several minor updates shown together are titled (UpdateNotice.jsx ChangelogBanner).
+export const CHANGELOG_BANNER = Object.freeze({ title: "What's new" });
+
 // The pages of a notice: every banner of every update in it, each with its update. A major update's pages come
 // before every minor one's ("make major update popups always appear in front of the minor update popups": the owner,
 // 2026-11-03), newest first within each; the list itself stays newest first, for which one is remembered as seen.
-export const noticePages = (updates = []) => [...updates.filter((update) => update.kind === "major"), ...updates.filter((update) => update.kind !== "major")].flatMap((update) => (Array.isArray(update.banners) ? update.banners : [])
-  .map((banner, index) => ({ key: `${update.id}#${index}`, update, banner })));
+// Several minor updates are ONE page, a changelog of them all, newest first ("make it so if there are multiple minor
+// update annoucements, it merges them all into one changelog": the owner, 2026-11-09): its `changelog` is those
+// updates, its `update` the newest of them (dressed as a minor one), and it comes after the major pages as each minor
+// page did. A single minor update keeps its own pages.
+const bannerPages = (update) => (Array.isArray(update.banners) ? update.banners : []).map((banner, index) => ({ key: `${update.id}#${index}`, update, banner }));
+export const noticePages = (updates = []) => {
+  const majors = updates.filter((update) => update.kind === "major");
+  const minors = updates.filter((update) => update.kind !== "major" && Array.isArray(update.banners) && update.banners.length > 0);
+  const merged = minors.length > 1
+    ? [{ key: `changelog#${minors[0].id}`, update: minors[0], banner: CHANGELOG_BANNER, changelog: minors }]
+    : minors.flatMap(bannerPages);
+  return [...majors.flatMap(bannerPages), ...merged];
+};

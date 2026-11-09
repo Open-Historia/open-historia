@@ -11,7 +11,7 @@ Both read one list: `src/Game/GameUI/updates/notes.js`. **Writing that list is p
 | `src/Game/GameUI/updates/notes.js` | `NEW_UPDATES`, where new updates go, newest first. `UPDATES` is every update, merged with the past and ordered by date. **The only file most updates touch.** |
 | `src/Game/GameUI/updates/notesPast.js` | `PAST_UPDATES`: the two months of updates from before notices existed (2026-08-15 to 2026-10-14), written from what reached players. Never add to it. |
 | `src/Game/GameUI/updates/updateNotices.js` | Which updates a device is shown (`pendingUpdates`), what it has seen (`rememberUpdate`, localStorage `oh-update-note-seen`), and the `?updateNotice=` preview. |
-| `src/Game/GameUI/updates/UpdateNotice.jsx` | The notice. It pages through banners (‹ › arrows, markers, Skip, Next and the last banner's button), and draws a minor banner (`MinorBanner`), a major banner without a theme (`DefaultBanner`), or a theme's own page. |
+| `src/Game/GameUI/updates/UpdateNotice.jsx` | The notice. It pages through banners (‹ › arrows, markers, Skip, Next and the last banner's button), and draws a minor banner (`MinorBanner`), several minor updates as one changelog (`ChangelogBanner`), a major banner without a theme (`DefaultBanner`), or a theme's own page. |
 | `src/Game/GameUI/updates/UpdateHistory.jsx` | The timeline opened from the menu's logo (`libraryBar.jsx` `MenuRail`). |
 | `src/Game/GameUI/updates/updateKit.jsx` | The parts a theme is built from (see [The kit](#the-kit)). |
 | `src/Game/GameUI/updates/notesReleases.js`, `ReleaseNotice.jsx`, `releaseNotice.css` | Releases: a version jump told as a page that scrolls (see [Releases](#releases-a-version-jump-told-in-full)). |
@@ -167,7 +167,7 @@ A **release** is a version jump on the stable channel (2.5.0 was the first). It 
 `pendingUpdates()` decides which updates a device sees:
 
 - A device that has seen the newest update is shown nothing.
-- One that missed several updates is shown all it missed, newest first, at most `UPDATES_SHOWN_MOST`.
+- One that missed several updates is shown all it missed, newest first, at most `UPDATES_SHOWN_MOST`. The major ones come first, each on its own pages. Several minor ones are one card after them, a changelog headed "What's new" listing each with its date, titles and lines, newest first (`noticePages`, `ChangelogBanner`): "make it so if there are multiple minor update annoucements, it merges them all into one changelog" (the owner, 2026-11-09). A single minor update is its own card, as before.
 - A device that has never been shown a notice is shown the newest update and the major ones released within `FIRST_LOOK_DAYS` of it.
 - Only entries of `NEW_UPDATES` are ever shown behind the door (`NOTICE_UPDATES`); the history from before notices (`notesPast.js`) is never shown as a notice, only in the history.
 - A build with no new entry (a hotfix, or a notice someone forgot) shows nothing: only a new entry is an update here.
