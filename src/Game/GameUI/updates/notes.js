@@ -54,6 +54,28 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "it looks like there are alot of issues involving wars with groups including issues with the dynamic borders and
+    // duel occupied territory" (the owner), and a player at war with Türkiye who could deploy only in the west while
+    // holding Syria (runtime/fronts/engine.js examineWar, landChanged, pairSideOf; runtime/fronts/warRoomOps.js
+    // deployBattlefieldOf; AI/frontTurn.js planFrontMoments).
+    id: "2026-11-fronts-on-every-border",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "A front on every border",
+        items: [
+          "A war fought along two borders far apart has a battlefield on each, including one the world had no room for until another war ended.",
+          "Land handed over during a time skip opens its front in that same skip.",
+          "A deployment line drawn over your war's other battlefield goes to that battlefield, and the War Room turns to it.",
+          "A group's gains and losses move its front the day they happen, and a group that rises in a time skip takes ground as a group, never as a new country.",
+          "A group in nobody's war no longer stops a war across the border it holds.",
+        ],
+      },
+    ],
+  },
+  {
     // A player's report (2026-11-09): a war with the Netherlands went on six months after its peace, a bomber
     // squadron turned up on the equator, and a refitted carrier escort kept its old ships. The enemy may now take a
     // player's order of peace in the same skip, and a peace ends the war's twins (AI/warAndPeace.js); a lost place is

@@ -57,6 +57,7 @@ export const RELEASES = [
         ],
         updates: [
           "2026-10-battlefields",
+          "2026-11-fronts-on-every-border",
           "2026-11-wars-follow-the-story",
           "2026-10-wars-and-fronts-2",
           "2026-10-swarms",

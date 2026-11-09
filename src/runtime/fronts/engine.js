@@ -265,7 +265,8 @@ const nameFor = (run, battle) => {
   const lead = [HOLDER_SIDE_A, HOLDER_SIDE_B].map((side) => {
     const cells = new Float64Array(battle.sides[side].length);
     for (let region = 1; region < arena.ids.length; region += 1) {
-      const holder = run.groupOf(arena.ids[region]) || run.controllerOf(arena.ids[region]);
+      // (A group outside the war holds nothing on it: its regions are its country's, holderOf.)
+      const holder = holderOf(battle, run, arena.ids[region]);
       const index = battle.sides[side].findIndex((member) => fold(member) === fold(holder));
       if (index >= 0) cells[index] += arena.cells[region];
     }
@@ -438,13 +439,19 @@ const examineWar = (run, war, day) => {
   landWhereTroopsStand(run, war, day);
   const key = contactKey(run, war);
   if (key && run.cache?.get(key) === true) return;
+  // A stretch the world had no room for is looked at again once it has: "I have the south eastern borders and the
+  // west, however the game only allows me to attack from the west" (a player, 2026-11-05). That answer was kept as
+  // the war's whole answer, and the stretch never opened after other battlefields closed.
+  if (key && run.cache?.get(`${key}|full`) === true && openBattles(run).length >= MAX_BATTLEFIELDS) return;
   const regions = landRegionsOf(run);
   if (!regions) throw REGIONS_NEEDED;
   const map = run.input.map;
+  let full = false;
   for (const contact of findContacts(regions, (id) => warSideOf(run, war, id), map)) {
     if (run.battles.some((battle) => battle.warId === war.id && battle.status !== "closed" && pointInFrame(battle.frame, contact.lng, contact.lat))) continue;
     if (openBattles(run).length >= MAX_BATTLEFIELDS) {
       run.notes.push({ kind: "too-many-battlefields", detail: war.title || war.id });
+      full = true;
       break;
     }
     const frame = frameForContact(contact, map);
@@ -457,7 +464,7 @@ const examineWar = (run, war, day) => {
     startBattle(run, battle, day);
   }
   const after = contactKey(run, war);
-  if (after && run.cache) run.cache.set(after, true);
+  if (after && run.cache) run.cache.set(full ? `${after}|full` : after, true);
 };
 
 // ---- a war changing ------------------------------------------------------------
@@ -803,15 +810,19 @@ const tellAttack = (run, battle, attacker, defender, day) => {
   const side = sideOfName(battle, attacker);
   if (side >= 0) battle.log.push({ d: run.dateOf(day), k: "attacked", s: side, at: `${run.isGroup(defender) ? "group" : "country"}: ${defender}` });
 };
+// Which of two names holds a region, 0 or 1, or -1: the group in whose area it lies where that group is one of
+// them, else its controller, as in a war between the two (warSideOf). A group that is neither of them takes
+// nothing from its country: an attack across a border it holds was refused as no border at all.
+const pairSideOf = (run, first, second) => (id) => {
+  const group = fold(run.groupOf(id));
+  const holder = group && (group === fold(first) || group === fold(second)) ? group : fold(run.controllerOf(id));
+  return holder && holder === fold(first) ? 0 : holder && holder === fold(second) ? 1 : -1;
+};
 // Whether two names hold land that touches.
 const landsTouch = (run, first, second) => {
   const regions = landRegionsOf(run);
   if (!regions) throw REGIONS_NEEDED;
-  const sideOf = (id) => {
-    const holder = run.groupOf(id) || run.controllerOf(id);
-    return fold(holder) === fold(first) ? 0 : fold(holder) === fold(second) ? 1 : -1;
-  };
-  return findContacts(regions, sideOf, run.input.map).length > 0;
+  return findContacts(regions, pairSideOf(run, first, second), run.input.map).length > 0;
 };
 
 // An order that names no battlefield there is, but aims its side's troops at a
@@ -1280,11 +1291,7 @@ const applyBorderMoment = (run, moment, day, first, second) => {
     const regions = landRegionsOf(run);
     if (!regions) throw REGIONS_NEEDED;
     const map = run.input.map;
-    const sideOf = (id) => {
-      const holder = run.groupOf(id) || run.controllerOf(id);
-      return fold(holder) === fold(first) ? 0 : fold(holder) === fold(second) ? 1 : -1;
-    };
-    for (const contact of findContacts(regions, sideOf, map)) {
+    for (const contact of findContacts(regions, pairSideOf(run, first, second), map)) {
       const frame = frameForContact(contact, map);
       const arena = frame ? arenaFor(run.cache, map, frame, run.input.regionTypes) : null;
       battle = arena ? openBattle(run, { name: names[0], warId: "", sides: [[first], [second]], frame, arena, day }) : null;
@@ -1821,8 +1828,30 @@ const marchInto = (run, battle, region, taker, day) => {
   fallBackOverland(battle, 1 - side, run.dateOf(day), region, field.cols + field.rows);
 };
 
+// A region the world gave someone during a run (a change of control, or a group's area): every battlefield it lies
+// on is brought into step and the taker's troops walk in (marchInto). And land handed to a side of a war outside
+// its battlefields (a treaty, a capture the story told far off) may touch the other side where nothing did: that
+// war is added to `handed`, to be looked at again once the day's moments are in. Returns `handed`.
+const landChanged = (run, id, taker, day, handed) => {
+  for (const battle of run.battles) {
+    if (battle.status === "closed" || !battle.arena.indexOf.has(id)) continue;
+    reconcile(battle, run);
+    // And the troops follow: the taker's nearest stand in it, the other side's fall back out of it.
+    if (battle.status === "active") marchInto(run, battle, battle.arena.indexOf.get(id), taker, day);
+    battle.planKey = "";
+    battle.touched = true;
+  }
+  let wars = handed;
+  for (const war of run.wars.values()) {
+    if (war.status !== "active" || warSideOf(run, war, id) < 0) continue;
+    if (!run.battles.some((battle) => battle.warId === war.id && battle.status !== "closed" && battle.arena.indexOf.has(id) && battle.arena.outside[battle.arena.indexOf.get(id)] === 0)) (wars ??= new Set()).add(war);
+  }
+  return wars;
+};
+
 // Applies every moment dated up to a day, in the order they were given.
 const applyMoments = (run, day) => {
+  let handed = null;
   while (run.cursor < run.moments.length && run.moments[run.cursor].day <= day) {
     const { moment } = run.moments[run.cursor];
     run.cursor += 1;
@@ -1842,16 +1871,20 @@ const applyMoments = (run, day) => {
         continue;
       }
       run.setController(id, moment.to);
-      for (const battle of run.battles) {
-        if (battle.status === "closed" || !battle.arena.indexOf.has(id)) continue;
-        reconcile(battle, run);
-        // And the troops follow: the taker's nearest stand in it, the other side's fall back out of it.
-        if (battle.status === "active") marchInto(run, battle, battle.arena.indexOf.get(id), moment.to, day);
-        battle.planKey = "";
-        battle.touched = true;
-      }
+      handed = landChanged(run, id, moment.to, day, handed);
+    } else if (moment.type === "group") {
+      // A group took a region into its area, or let one go (a groupOps entry of the story's): the world wins here
+      // too, and the troops follow as for a change of control. Told to nobody before, the area changed between
+      // runs: the next run painted it at once, far behind the line and with nobody there.
+      const id = clean(moment.regionId);
+      const group = clean(moment.group);
+      const held = run.groupOf(id);
+      if (!id || fold(held) === fold(group) || (!group && moment.from && fold(held) !== fold(moment.from))) continue;
+      run.setGroup(id, group);
+      handed = landChanged(run, id, group || run.controllerOf(id), day, handed);
     }
   }
+  for (const war of handed ?? []) examineWar(run, war, day);
   for (const battle of run.battles) if (battle.closing && battle.status !== "closed") closeBattle(run, battle, day);
   // What a moment did to the orders or the ground is read at once: which
   // places are besieged, and what is cut off.

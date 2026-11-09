@@ -38,6 +38,7 @@ import { hashKey } from "../../runtime/fronts/codec.js";
 import { forcesFunding, middleFundingPerHead } from "../../runtime/militaryFunding.js";
 import { countryWeight, middleWeight } from "../../runtime/countryWeight.js";
 import { populationFigureOf } from "../../runtime/populationFigure.js";
+import { normalizeGroupOp } from "../../runtime/groups.js";
 import { arenaFor } from "../../runtime/fronts/arena.js";
 import { REINFORCE_ORDER, SCENARIO_MARK } from "../../runtime/fronts/constants.js";
 import { anyMechanic } from "../../runtime/fronts/mechanics.js";
@@ -186,6 +187,17 @@ export const planFrontMoments = ({ events = [], frontOrders = [], warsBefore = [
       const regionId = clean(transfer?.regionId);
       const to = clean(transfer?.toCode);
       if (regionId && to) moments.push({ day, type: "control", regionId, to, ref: clean(event?.id) });
+    }
+    // A group taking a region into its area, or letting one go, is told the same way (engine.js, a "group" moment).
+    // (A release of its whole area, or a group dissolved, names no region: the next run finds the area as it stands.)
+    for (const raw of asArray(impacts.groupOps)) {
+      const op = raw?.by === FRONT_MARK ? null : normalizeGroupOp(raw);
+      if (!op || (op.op !== "take" && op.op !== "create" && op.op !== "release")) continue;
+      for (const regionId of op.regionIds) {
+        moments.push(op.op === "release"
+          ? { day, type: "group", regionId, group: "", from: op.name, ref: clean(event?.id) }
+          : { day, type: "group", regionId, group: op.name, ref: clean(event?.id) });
+      }
     }
   }
 
@@ -1109,6 +1121,13 @@ export const runTurnFronts = async ({
     ...Object.keys(groups && isRecord(world?.groups) ? world.groups : {}),
   ]);
 
+  // The groups the turn's events found or give ground to are groups to the engine too: a group the world did not
+  // have as the turn began, fighting in it, took what it captured as a COUNTRY does, by a control operation to its
+  // name, which founded a landless country of that name owning the ground beside the group holding it.
+  const foundedGroups = new Set(groups ? list.flatMap((event) => asArray(event?.impacts?.groupOps))
+    .filter((op) => op?.by !== FRONT_MARK).map(normalizeGroupOp).filter((op) => op && op.op !== "dissolve" && op.op !== "release")
+    .map((op) => fold(nameOf(op.name))) : []);
+
   // The map's shapes, read once and only if something needs them.
   let regions = null;
   let asked = false;
@@ -1196,6 +1215,7 @@ export const runTurnFronts = async ({
     .map((moment) => {
       if (moment.type === "order") return { ...moment, side: nameOf(withoutKind(moment.side)) };
       if (moment.type === "control") return { ...moment, to: nameOf(moment.to) };
+      if (moment.type === "group") return { ...moment, group: moment.group ? nameOf(moment.group) : "", ...(moment.from ? { from: nameOf(moment.from) } : {}) };
       if (moment.type === "war") return { ...moment, names: asArray(moment.names).map(nameOf), ...(moment.opponents ? { opponents: asArray(moment.opponents).map(nameOf) } : {}) };
       return moment;
     })];
@@ -1233,7 +1253,7 @@ export const runTurnFronts = async ({
       controllerOf: readers.controllerOf,
       sovereignOf: readers.sovereignOf,
       groupAreas: readers.groupAreas,
-      isGroup: readers.isGroup,
+      isGroup: (name) => readers.isGroup(name) || foundedGroups.has(fold(name)),
       units: flown,
       transports: normalizeTransports(world?.transports),
       // (With the ground the scenario made harder to cross, where it weighs terrain: runtime/fronts/arena.js;
