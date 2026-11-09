@@ -92,8 +92,11 @@ test("the Wars feature is listed, always on, with Fronts, Air units and Navies s
     ["battlefields", "toggle", undefined, undefined, true],
     ["air", "toggle", undefined, undefined, true],
     ["navies", "toggle", undefined, undefined, true],
+    ["railTransport", "toggle", undefined, undefined, true],
+    ["seaTransport", "toggle", undefined, undefined, true],
+    ["airTransport", "toggle", undefined, undefined, true],
   ]);
-  const all = { enabled: true, battlefields: true, air: true, navies: true };
+  const all = { enabled: true, battlefields: true, air: true, navies: true, railTransport: true, seaTransport: true, airTransport: true };
   assert.deepEqual(featureDefaults().fronts, all);
   // A scenario saved before the feature existed has it on.
   assert.deepEqual(normalizeFeatureSettings({ espionage: false }).fronts, all);

@@ -12,7 +12,7 @@
 // whose FEATURE_DEFINITIONS has no "fronts", fronts are off.
 
 import { FRONT_PACE_SHARE } from "../../runtime/fronts/constants.js";
-import { FEATURE_KEYS, activeWars, getActiveFeatures } from "../../runtime/gameFeatures.js";
+import { FEATURE_KEYS, activeTransportMedia, activeWars, getActiveFeatures } from "../../runtime/gameFeatures.js";
 
 export const FRONTS_FEATURE = "fronts";
 
@@ -23,6 +23,9 @@ export const frontsOn = () => FEATURE_KEYS.includes(FRONTS_FEATURE) && activeWar
 export const airOn = () => !FEATURE_KEYS.includes(FRONTS_FEATURE) || activeWars().air;
 // Navies: fleets raised, fighting, blockading and carrying troops by sea. Off, none is.
 export const naviesOn = () => !FEATURE_KEYS.includes(FRONTS_FEATURE) || activeWars().navies;
+// What may carry troops: "sea", "land" (rail) and "air", less what the Wars feature switched off
+// (server/gameFeatures.js transportMediaOf: nothing by sea without navies, nor by air without air units).
+export const transportMediaOn = () => (FEATURE_KEYS.includes(FRONTS_FEATURE) ? activeTransportMedia() : ["sea", "land", "air"]);
 
 // What a time skip is told of the parts of war the scenario has switched off:
 // "" when it has all of them, so the prompt is then what it always was. The game
