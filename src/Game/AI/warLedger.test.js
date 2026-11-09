@@ -854,3 +854,14 @@ test("the battle that ends a war may carry its end, and fighting before the end 
   assert.match(validateWarLedgerPayload({ events: [{ ...fall, date: "1975-04-20" }], warUpdates: "" }, { world: over }), /is ended, not active/);
   assert.match(validateWarLedgerPayload(same, { world: over }), /already ended/);
 });
+
+// The same game told the US pulling its last troops out of Vietnam, and
+// Khmer Rouge sieges of Phnom Penh after the game's Cambodian war had ended,
+// as history had them: no record, and the map never followed.
+test("the skip is told that a country pulled out of a war leaves it, and that history yields to the record", () => {
+  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.match(gameplay, /A country nobody plays that the story takes out of a war \(its forces pulled out under an accord, a separate peace, its last troops brought home\) leaves it in that event, with a leave record: without one it is still at war, and its troops stay on the battlefield and fight on\./);
+  assert.match(gameplay, /The battle or surrender that ends a war carries its end record\./);
+  assert.match(gameplay, /History yields to this game's record: a war the ledger shows ended, or never opened, is fought by nobody/);
+  assert.match(gameplay, /Events follow the record, not the history: no fighting in a war that ended here, and no siege or offensive where the game's lines do not put one\./);
+});
