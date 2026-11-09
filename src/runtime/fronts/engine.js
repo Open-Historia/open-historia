@@ -438,13 +438,19 @@ const examineWar = (run, war, day) => {
   landWhereTroopsStand(run, war, day);
   const key = contactKey(run, war);
   if (key && run.cache?.get(key) === true) return;
+  // A stretch the world had no room for is looked at again once it has: "I have the south eastern borders and the
+  // west, however the game only allows me to attack from the west" (a player, 2026-11-05). That answer was kept as
+  // the war's whole answer, and the stretch never opened after other battlefields closed.
+  if (key && run.cache?.get(`${key}|full`) === true && openBattles(run).length >= MAX_BATTLEFIELDS) return;
   const regions = landRegionsOf(run);
   if (!regions) throw REGIONS_NEEDED;
   const map = run.input.map;
+  let full = false;
   for (const contact of findContacts(regions, (id) => warSideOf(run, war, id), map)) {
     if (run.battles.some((battle) => battle.warId === war.id && battle.status !== "closed" && pointInFrame(battle.frame, contact.lng, contact.lat))) continue;
     if (openBattles(run).length >= MAX_BATTLEFIELDS) {
       run.notes.push({ kind: "too-many-battlefields", detail: war.title || war.id });
+      full = true;
       break;
     }
     const frame = frameForContact(contact, map);
@@ -457,7 +463,7 @@ const examineWar = (run, war, day) => {
     startBattle(run, battle, day);
   }
   const after = contactKey(run, war);
-  if (after && run.cache) run.cache.set(after, true);
+  if (after && run.cache) run.cache.set(full ? `${after}|full` : after, true);
 };
 
 // ---- a war changing ------------------------------------------------------------
