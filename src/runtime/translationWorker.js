@@ -133,13 +133,10 @@ const load = () => {
       model = await AutoModelForSeq2SeqLM.from_pretrained(source.model, { ...options, device: "wasm", dtype: "q8" });
       languageId = entry.token ? tokenizer.get_vocab().get(entry.token) : undefined;
       prune();
-    })()
-      .then(() => post({ type: "ready" }))
-      .catch((error) => {
-        loading = null;
-        post({ type: "error", message: String(error?.message || error) });
-        throw error;
-      });
+    })().catch((error) => {
+      loading = null;
+      throw error;
+    });
   }
   return loading;
 };
@@ -206,7 +203,13 @@ self.onmessage = (event) => {
   if (message.type === "status") {
     cached().then((value) => post({ type: "status", cached: value }));
   } else if (message.type === "load") {
-    load().catch(() => {});
+    // Every load is answered, the model already loaded included: a page that
+    // asks again (the language started over) is told it is ready, rather than
+    // waiting for the one "ready" sent before it asked.
+    load().then(
+      () => post({ type: "ready" }),
+      (error) => post({ type: "error", message: String(error?.message || error) }),
+    );
   } else if (message.type === "forget") {
     forget().then(() => post({ type: "forgotten" }));
   } else if (message.type === "translate") {
