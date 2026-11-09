@@ -44,6 +44,22 @@ test("a war whose sides touch in two places far apart opens a battlefield on eac
   assert.notEqual(covers(battlefields, WEST)[0].name, covers(battlefields, SOUTH)[0].name);
 });
 
+test("land the story hands a side during the run, touching the other side, opens a battlefield there that run", () => {
+  // The south-east is Sudland's as the run begins; the war with Borduria begins, and on the same day a peace
+  // with Sudland hands its land to Aland (wars are told before the map on a day, frontTurn.js planFrontMoments).
+  const sheet = syntheticMap({ layout, legend: { ...legend, S: "Sudland" }, west: 20, north: 46, step: 1 });
+  const southern = sheet.regions.filter((region) => sheet.controllerOf(region.id) === "Sudland").map((region) => region.id);
+  const moments = [
+    { day: 0, type: "war", warId: "war-1", op: "start", names: ["Aland"], opponents: ["Borduria"], title: "aland-war" },
+    ...southern.map((regionId) => ({ day: 0, type: "control", regionId, to: "Aland", ref: "peace" })),
+  ];
+  const { battlefields } = runFronts(frontInput(sheet, { days: 0, wars: [], moments, arenas: new Map() }));
+  const ours = battlefields.filter((record) => record.warId === "war-1" && record.status !== "closed");
+  assert.equal(ours.length, 2);
+  assert.equal(covers(ours, WEST).length, 1);
+  assert.equal(covers(ours, SOUTH).length, 1);
+});
+
 test("a stretch left without a battlefield for want of room gets one once there is room", () => {
   const sheet = world();
   const arenas = new Map();

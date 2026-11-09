@@ -1829,6 +1829,7 @@ const marchInto = (run, battle, region, taker, day) => {
 
 // Applies every moment dated up to a day, in the order they were given.
 const applyMoments = (run, day) => {
+  let handed = null;
   while (run.cursor < run.moments.length && run.moments[run.cursor].day <= day) {
     const { moment } = run.moments[run.cursor];
     run.cursor += 1;
@@ -1856,8 +1857,15 @@ const applyMoments = (run, day) => {
         battle.planKey = "";
         battle.touched = true;
       }
+      // Land handed to a side of a war outside its battlefields (a treaty, a capture the story told far off) may
+      // touch the other side where nothing did: that war is looked at again once the day's moments are in.
+      for (const war of run.wars.values()) {
+        if (war.status !== "active" || warSideOf(run, war, id) < 0) continue;
+        if (!run.battles.some((battle) => battle.warId === war.id && battle.status !== "closed" && battle.arena.indexOf.has(id) && battle.arena.outside[battle.arena.indexOf.get(id)] === 0)) (handed ??= new Set()).add(war);
+      }
     }
   }
+  for (const war of handed ?? []) examineWar(run, war, day);
   for (const battle of run.battles) if (battle.closing && battle.status !== "closed") closeBattle(run, battle, day);
   // What a moment did to the orders or the ground is read at once: which
   // places are besieged, and what is cut off.
