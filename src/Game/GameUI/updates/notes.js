@@ -54,6 +54,19 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-stats-missing-values",
+    kind: "minor",
+    date: "2026-11-09",
+    banners: [{
+      title: "Missing statistics stay unknown",
+      items: [
+        "Unavailable values on a scenario's national sheet appear as a dash; recorded zeros remain visible.",
+        "Historical charts leave gaps where observations are missing, and rankings include only recorded figures.",
+        "Blank or invalid custom values no longer replace recorded figures with zero.",
+      ],
+    }],
+  },
+  {
     // MapLibre 6.16 with the game's own changes (Open-Historia/maplibre-gl-js, OPEN-HISTORIA.md): placement paced, sources
     // sharing their tile walks, clipping masks kept, tiles stored compactly. Measured on the production builds with the CPU
     // slowed 6x: panning 24 to 46 fps with terrain, 29 to 49 without; memory 3.1 GB to 1.9 GB. The land mask waits until the

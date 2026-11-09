@@ -5,6 +5,9 @@ import {
   buildHistoricalTrackingIndex,
   filterHistoricalTrackingCandidateRows,
   historySamplesInRange,
+  historyMetricValue,
+  historyMetricPath,
+  historyMetricChange,
 } from "./statsHistoricalTracking.js";
 
 const world = {
@@ -103,4 +106,22 @@ test("every land-holding polity can be tracked, not only those already opened in
   const stockWorld = { polityOverrides: {}, countryStats: {}, regionOwnershipOverrides: {}, regionSovereigntyOverrides: {} };
   const stock = buildHistoricalTrackingCandidateRows({ world: stockWorld, playerCountry: "France", stockNames: ["France", "Germany", "Spain"] });
   assert.deepEqual(stock.rows.map((row) => row.key), ["France", "Germany", "Spain"]);
+});
+
+test("sparse medieval observations leave chart gaps and retain genuine zeros", () => {
+  const samples = [
+    { date: "1200-01-01", x: 0, customStats: { grain: 5 } },
+    { date: "1200-02-01", x: 1, customStats: { grain: null } },
+    { date: "1200-03-01", x: 2, customStats: { grain: 0 } },
+    { date: "1200-04-01", x: 3, customStats: { grain: 3 } },
+  ];
+  assert.equal(historyMetricPath(samples, "grain", (s) => s.x, (v) => v), "M0.00,5.00 M2.00,0.00 L3.00,3.00");
+  assert.deepEqual(historyMetricChange(samples, "grain"), { end: 3, delta: -2 });
+  assert.deepEqual(historyMetricChange(samples.slice(0, 2), "grain"), { end: 5, delta: null });
+  assert.deepEqual(historyMetricChange(samples, "unrecorded"), { end: null, delta: null });
+  for (const value of [null, "", " ", false, [], undefined]) {
+    assert.equal(historyMetricValue({ customStats: { grain: value } }, "grain"), null);
+  }
+  assert.equal(historyMetricValue({ indices: { security: 0 } }, "security"), 0);
+  assert.equal(historyMetricValue({ population: 1200 }, "population"), 1200);
 });

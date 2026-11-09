@@ -355,3 +355,40 @@ relation and treaty ledgers — so it can answer about your figures rather than 
 - [The advisor](/wiki/advisor/) — asking someone to interpret all this for you.
 - [Espionage](/wiki/espionage/) — the intelligence rating in practice.
 - [Military](/wiki/military/) — what the military figures do in a war.
+
+### Missing values and a medieval example
+
+An unavailable custom metric displays **—**, without a unit. A recorded **0** still
+means zero. Missing observations leave gaps in charts and do not enter rankings.
+A saved custom sheet with at least one recorded scenario metric can be opened
+without regenerating its missing figures. Blank or invalid values are omitted when normalizing a custom-value patch; they do
+not clear or replace a previously recorded figure. This does not identify whether
+a recorded number is a historical fact or an AI estimate, and cannot recover zeros
+that earlier versions recorded incorrectly.
+
+For a reusable medieval sheet, import the following as the scenario's `stats.json`
+(or enter these sections in the Stats editor). It uses the existing sheet format:
+
+```json
+{
+  "version": 2,
+  "sections": [
+    { "key": "finances", "label": "Treasury and obligations", "stats": [
+      { "key": "treasury", "label": "Treasury", "kind": "currency", "suffix": "silver marks", "decimals": 0, "minimum": 0 }
+    ] },
+    { "key": "resources", "label": "Resources", "stats": [
+      { "key": "grain", "label": "Grain reserves", "kind": "number", "suffix": "sacks", "decimals": 0, "minimum": 0 }
+    ] },
+    { "key": "military", "label": "Military", "stats": [
+      { "key": "garrisons", "label": "Garrisons", "kind": "number", "suffix": "soldiers", "decimals": 0, "minimum": 0 }
+    ] }
+  ]
+}
+```
+
+Synthetic demonstration data for a fictional realm in AD 1200 might be
+`customStats: { treasury: 1200, garrisons: 0 }`. The sheet shows **1,200 silver marks**,
+**—** for grain reserves, and **0 soldiers**. These are test values, not historical
+estimates. Choose units appropriate to the scenario; a shared label does not make
+medieval currencies interchangeable. Existing AI generation still requests complete
+sheets; this example demonstrates sparse saved data, not a new AI unknown-value policy.

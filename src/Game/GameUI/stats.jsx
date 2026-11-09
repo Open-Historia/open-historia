@@ -14,7 +14,7 @@ import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { resolveChosenPolityFlag, resolvePolityFlag } from "../../runtime/polityFlags.js";
-import { buildHistoricalTrackingCandidateRows, buildHistoricalTrackingIndex, filterHistoricalTrackingCandidateRows, historySamplesInRange } from "./statsHistoricalTracking.js";
+import { buildHistoricalTrackingCandidateRows, buildHistoricalTrackingIndex, filterHistoricalTrackingCandidateRows, historyMetricValue, historyMetricPath, historyMetricChange, historySamplesInRange } from "./statsHistoricalTracking.js";
 import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView, buildPublicPoliticalViewOfActor } from "../../runtime/politicalKnowledge.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
 import { powerTierForPolity } from "../../runtime/powerStatus.js";
@@ -62,7 +62,10 @@ import {
     flattenStatSheetRows,
     loadStatSheetDefinition,
     statSheetKeys,
+    readCustomStatNumber,
+    hasRecordedCustomStatValues,
 } from "../../runtime/statsSheet.js";
+import { formatCustomStatValue } from "./customStatFormatting.js";
 import { onMemoryPressure } from "../../runtime/memoryPressure.js";
 
 // Sheets are regenerated when the game date moves; within a date they persist
@@ -128,10 +131,10 @@ const withoutBackendFields = (sheet) => {
     return checked;
 };
 
-const isValidStatSheet = (value, definition) => {
+const isDisplayableStatSheet = (value, definition) => {
     const sheet = finalizeCountryStatSheet(value);
     if (definition?.custom) {
-        return isCompleteCustomCountryStatSheet(sheet, statSheetKeys(definition));
+        return hasRecordedCustomStatValues(sheet?.customStats, definition);
     }
     return isCompleteCountryStatSheet(sheet) && validateGameplayPayload("countryStatSheet", withoutBackendFields(sheet)).valid;
 };
@@ -296,25 +299,6 @@ const formatPercent = (value, { signed = false } = {}) => {
     return `${prefix}${rounded}%`;
 };
 
-const formatCustomStatValue = (stat, value) => {
-    const number = Number(value);
-    if (!Number.isFinite(number)) return "—";
-    const decimals = Math.max(0, Math.min(4, Math.trunc(Number(stat?.decimals) || 0)));
-    let body;
-    if (stat?.compact) {
-        body = formatCompactNumber(number, { digits: Math.min(2, decimals || 1) });
-    } else {
-        body = number.toLocaleString(undefined, {
-            minimumFractionDigits: decimals,
-            maximumFractionDigits: decimals,
-        });
-    }
-    const prefix = String(stat?.prefix || "");
-    const suffix = String(stat?.suffix || "");
-    const suffixText = suffix ? (/^[%°]/.test(suffix) ? suffix : ` ${suffix}`) : "";
-    return `${prefix}${body}${suffixText}`;
-};
-
 const customMetricUnit = (stat) => [
     "custom",
     stat?.kind || "number",
@@ -342,7 +326,7 @@ const EconomyCard = ({ label, value, sub, tone }) => (
 // All 0–100 indices share one compact treatment. The surrounding section grid
 // retains each scenario author's exact section and metric order.
 const IndexMetricCard = ({ icon = "", label, value, color = "#a1a1aa" }) => {
-    const numeric = value === null || value === undefined || value === "" ? NaN : Number(value);
+    const numeric = readCustomStatNumber(value);
     const bounded = clamp01(numeric);
     return (
         <div className="oh-country-index-datum" style={{ ...cardStyle, background: "none", border: 0, borderBottom: "1px solid rgba(156,188,211,0.13)", borderRadius: 0, minWidth: 0, padding: "0.6rem 0.48rem" }}>
@@ -359,8 +343,7 @@ const IndexMetricCard = ({ icon = "", label, value, color = "#a1a1aa" }) => {
 };
 
 const CustomStatCard = ({ stat, value }) => {
-    const numeric = Number(value);
-    const formatted = formatCustomStatValue(stat, numeric);
+    const formatted = formatCustomStatValue(stat, value);
     if (stat.kind === "index") {
         return <IndexMetricCard icon={stat.icon} label={stat.label} value={value} color={stat.color || "#a1a1aa"} />;
     }
@@ -1186,8 +1169,6 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
     ];
 };
 
-const historyMetricValue = (sample, key) => sample?.[key] ?? sample?.indices?.[key] ?? sample?.customStats?.[key];
-
 const ADVANCED_UNIT_LABELS = {
     gdp: "GDP · 2026-EUR equivalent",
     gdpPerCapita: "GDP per capita · 2026-EUR equivalent",
@@ -1232,9 +1213,11 @@ const advancedRangeStyle = (active) => ({
 const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false, fill = false }) => {
     const [hoverIndex, setHoverIndex] = useState(null);
     const metrics = metricKeys.map((key) => metricsByKey[key]).filter(Boolean);
-    const validSamples = samples.filter((sample) => metrics.some((metric) => Number.isFinite(Number(historyMetricValue(sample, metric.key)))));
+    // Keep dated missing observations so a line cannot bridge an unknown interval.
+    const validSamples = samples.filter((sample) => Number.isFinite(historyDateMs(sample.date)));
+    const hasValues = validSamples.some((sample) => metrics.some((metric) => Number.isFinite(historyMetricValue(sample, metric.key))));
 
-    if (!validSamples.length || !metrics.length) {
+    if (!hasValues || !metrics.length) {
         return (
             <div style={{ alignItems: "center", color: "rgba(255,255,255,0.38)", display: "flex", flex: 1, fontSize: "0.82rem", justifyContent: "center", minHeight: compact || fill ? "8rem" : "330px", textAlign: "center" }}>
                 No historical samples are available for this selection yet.
@@ -1251,7 +1234,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
     const minTime = Math.min(...times);
     const maxTime = Math.max(...times);
     const timeSpan = Math.max(1, maxTime - minTime);
-    const values = validSamples.flatMap((sample) => metrics.map((metric) => Number(historyMetricValue(sample, metric.key))).filter(Number.isFinite));
+    const values = validSamples.flatMap((sample) => metrics.map((metric) => historyMetricValue(sample, metric.key)).filter(Number.isFinite));
     let minValue = Math.min(...values);
     let maxValue = Math.max(...values);
     const unit = metrics[0]?.unit;
@@ -1279,21 +1262,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
     const hovered = hoverIndex == null ? null : validSamples[hoverIndex];
     const hoverX = hovered ? xFor(hovered) : null;
 
-    const pathFor = (metric) => {
-        let path = "";
-        let started = false;
-        validSamples.forEach((sample) => {
-            const value = Number(historyMetricValue(sample, metric.key));
-            if (!Number.isFinite(value)) {
-                started = false;
-                return;
-            }
-            const command = started ? "L" : "M";
-            path += `${command}${xFor(sample).toFixed(2)},${yFor(value).toFixed(2)} `;
-            started = true;
-        });
-        return path.trim();
-    };
+    const pathFor = (metric) => historyMetricPath(validSamples, metric.key, xFor, yFor);
 
     return (
         <div style={{ minHeight: 0, position: "relative", width: "100%" }}>
@@ -1322,7 +1291,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
                     <path key={metric.key} d={pathFor(metric)} fill="none" stroke={metric.color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ filter: `drop-shadow(0 0 5px ${metric.color}44)` }} />
                 ))}
                 {validSamples.length <= 24 && metrics.map((metric) => validSamples.map((sample) => {
-                    const value = Number(historyMetricValue(sample, metric.key));
+                    const value = historyMetricValue(sample, metric.key);
                     if (!Number.isFinite(value)) return null;
                     return <circle key={`${metric.key}-${sample.date}`} cx={xFor(sample)} cy={yFor(value)} r="3.7" fill={metric.color} stroke="#141417" strokeWidth="2" />;
                 }))}
@@ -1330,7 +1299,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
                     <>
                         <line x1={hoverX} x2={hoverX} y1={pad.top} y2={pad.top + plotHeight} stroke="rgba(255,255,255,0.34)" strokeWidth="1" />
                         {metrics.map((metric) => {
-                            const value = Number(historyMetricValue(hovered, metric.key));
+                            const value = historyMetricValue(hovered, metric.key);
                             if (!Number.isFinite(value)) return null;
                             return <circle key={`hover-${metric.key}`} cx={hoverX} cy={yFor(value)} r="6" fill={metric.color} stroke="#141417" strokeWidth="3" />;
                         })}
@@ -1350,7 +1319,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
                 <div style={{ backgroundColor: "rgba(16,16,18,0.96)", border: "1px solid rgba(148,163,184,0.22)", borderRadius: "10px", boxShadow: "0 12px 35px rgba(0,0,0,0.35)", left: `min(calc(${((hoverX / width) * 100).toFixed(2)}% + 10px), calc(100% - 190px))`, padding: "0.55rem 0.65rem", pointerEvents: "none", position: "absolute", top: "1.1rem", width: "180px", zIndex: 2 }}>
                     <div data-no-translate style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.64rem", fontWeight: 800, letterSpacing: "0.04em", marginBottom: "0.45rem", textTransform: "uppercase" }}>{formatHistoryDate(hovered.date)}</div>
                     {metrics.map((metric) => {
-                        const value = Number(historyMetricValue(hovered, metric.key));
+                        const value = historyMetricValue(hovered, metric.key);
                         if (!Number.isFinite(value)) return null;
                         return (
                             <div key={metric.key} style={{ alignItems: "center", display: "flex", gap: "0.45rem", justifyContent: "space-between", marginTop: "0.28rem" }}>
@@ -1492,9 +1461,7 @@ const AdvancedStatsModal = ({
                         {first && last && (
                             <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: `repeat(${Math.min(isMobile ? 2 : 4, selectedMetrics.length)}, minmax(0, 1fr))`, marginTop: "0.7rem" }}>
                                 {selectedMetrics.map((metric) => {
-                                    const start = Number(historyMetricValue(first, metric.key));
-                                    const end = Number(historyMetricValue(last, metric.key));
-                                    const delta = Number.isFinite(start) && Number.isFinite(end) ? end - start : null;
+                                    const { end, delta } = historyMetricChange(visibleSamples, metric.key);
                                     const deltaText = delta == null
                                         ? "—"
                                         : String(metric.unit || "").startsWith("custom:")
@@ -1509,7 +1476,7 @@ const AdvancedStatsModal = ({
                                     return (
                                         <div key={metric.key} style={{ backgroundColor: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "9px", minWidth: 0, padding: "0.55rem 0.65rem" }}>
                                             <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.55rem", fontWeight: 800, letterSpacing: "0.05em", overflow: "hidden", textOverflow: "ellipsis", textTransform: "uppercase", whiteSpace: "nowrap" }}>{metric.label}</div>
-                                            <div data-no-translate style={{ color: metric.color, fontSize: "0.92rem", fontWeight: 900, marginTop: "0.16rem" }}>{metric.format(end)}</div>
+                                            <div data-no-translate style={{ color: metric.color, fontSize: "0.92rem", fontWeight: 900, marginTop: "0.16rem" }}>{end === null ? "—" : metric.format(end)}</div>
                                             <div style={{ color: delta == null ? "rgba(255,255,255,0.3)" : delta > 0 ? "#86efac" : delta < 0 ? "#fca5a5" : "rgba(255,255,255,0.42)", fontSize: "0.58rem", marginTop: "0.08rem" }}>{deltaText} over range</div>
                                         </div>
                                     );
@@ -2332,7 +2299,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             try {
                 const world = worldSnapshotRef.current || await readWorldStateView({ force: false });
                 const persisted = world?.countryStats?.[code];
-                const persistedIsValid = persisted && isValidStatSheet(persisted, statSheetDefinition);
+                const persistedIsValid = persisted && isDisplayableStatSheet(persisted, statSheetDefinition);
                 const persistedNeedsCapAudit = !statSheetDefinition.custom && persistedIsValid && needsLegacyComponentCapAudit(persisted);
                 const persistedNeedsPopulationAudit = !statSheetDefinition.custom && persistedIsValid && needsStartPopulationCalibrationAudit(persisted, player);
                 const persistedNeedsNativeAudit = persistedNeedsCapAudit || persistedNeedsPopulationAudit;
@@ -2351,7 +2318,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             const cached = memoryCache.get(cacheKey) ?? readStoredSheets()[cacheKey];
             if (
                 cached &&
-                isValidStatSheet(cached.sheet, statSheetDefinition) &&
+                isDisplayableStatSheet(cached.sheet, statSheetDefinition) &&
                 (statSheetDefinition.custom || !needsLegacyComponentCapAudit(cached.sheet)) &&
                 (statSheetDefinition.custom || !needsStartPopulationCalibrationAudit(cached.sheet, player))
             ) {
@@ -2399,7 +2366,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 const pending = await pendingCountryStatSheet(code).catch(() => null);
                 if (statsLoadRef.current.sequence !== sequence || controller.signal.aborted) return;
                 const pendingUsable = pending &&
-                    isValidStatSheet(pending, statSheetDefinition) &&
+                    isDisplayableStatSheet(pending, statSheetDefinition) &&
                     (statSheetDefinition.custom || (!needsLegacyComponentCapAudit(pending) && !needsStartPopulationCalibrationAudit(pending, player)));
                 if (pendingUsable) {
                     const sheet = finalizeCountryStatSheet(pending);

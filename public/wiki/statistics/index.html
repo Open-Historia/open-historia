@@ -112,7 +112,7 @@
     <h1>National Statistics</h1>
     <p class="tagline">The stat sheet: strategic indices, population, GDP and the rest — where the numbers come from and how to track them.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#national-stability">National stability</a></li><li class="d2"><a href="#strategic-indices">Strategic indices</a></li><li class="d2"><a href="#intelligence-service">Intelligence service</a></li><li class="d2"><a href="#population-and-economy">Population and economy</a></li><li class="d2"><a href="#military-power">Military power</a></li><li class="d2"><a href="#there-is-no-treasury">There is no treasury</a></li><li class="d2"><a href="#where-the-numbers-come-from">Where the numbers come from</a></li><li class="d2"><a href="#reading-someone-else39s">Reading someone else&#39;s</a></li><li class="d2"><a href="#the-politics-tab">The Politics tab</a></li><li class="d2"><a href="#the-ranking-tab">The Ranking tab</a></li><li class="d2"><a href="#a-record-not-a-snapshot">A record, not a snapshot</a></li><li class="d3"><a href="#tracked-history">Tracked history</a></li><li class="d3"><a href="#advanced-statistics">Advanced Statistics</a></li><li class="d3"><a href="#the-diplomacy-block">The diplomacy block</a></li><li class="d3"><a href="#territory-overseas-and-landless">Territory, overseas and landless</a></li><li class="d2"><a href="#scenario-stat-sheets">Scenario stat sheets</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#national-stability">National stability</a></li><li class="d2"><a href="#strategic-indices">Strategic indices</a></li><li class="d2"><a href="#intelligence-service">Intelligence service</a></li><li class="d2"><a href="#population-and-economy">Population and economy</a></li><li class="d2"><a href="#military-power">Military power</a></li><li class="d2"><a href="#there-is-no-treasury">There is no treasury</a></li><li class="d2"><a href="#where-the-numbers-come-from">Where the numbers come from</a></li><li class="d2"><a href="#reading-someone-else39s">Reading someone else&#39;s</a></li><li class="d2"><a href="#the-politics-tab">The Politics tab</a></li><li class="d2"><a href="#the-ranking-tab">The Ranking tab</a></li><li class="d2"><a href="#a-record-not-a-snapshot">A record, not a snapshot</a></li><li class="d3"><a href="#tracked-history">Tracked history</a></li><li class="d3"><a href="#advanced-statistics">Advanced Statistics</a></li><li class="d3"><a href="#the-diplomacy-block">The diplomacy block</a></li><li class="d3"><a href="#territory-overseas-and-landless">Territory, overseas and landless</a></li><li class="d2"><a href="#scenario-stat-sheets">Scenario stat sheets</a></li><li class="d2"><a href="#next">Next</a></li><li class="d3"><a href="#missing-values-and-a-medieval-example">Missing values and a medieval example</a></li></ul></nav>
     <p>Every country has a <strong>stat sheet</strong> — relations, agreements and conflicts, then leader,
 government, stability, six strategic indices, population and a set of economic figures. Open it
 from the <strong>Stats</strong> tab of the advisor drawer (the <strong>Advisor</strong> button, bottom right). It has two
@@ -508,6 +508,37 @@ relation and treaty ledgers — so it can answer about your figures rather than 
 <li><a href="/wiki/espionage/">Espionage</a> — the intelligence rating in practice.</li>
 <li><a href="/wiki/military/">Military</a> — what the military figures do in a war.</li>
 </ul>
+<h3 id="missing-values-and-a-medieval-example">Missing values and a medieval example</h3>
+<p>An unavailable custom metric displays <strong>—</strong>, without a unit. A recorded <strong>0</strong> still
+means zero. Missing observations leave gaps in charts and do not enter rankings.
+A saved custom sheet with at least one recorded scenario metric can be opened
+without regenerating its missing figures. Blank or invalid values are omitted when normalizing a custom-value patch; they do
+not clear or replace a previously recorded figure. This does not identify whether
+a recorded number is a historical fact or an AI estimate, and cannot recover zeros
+that earlier versions recorded incorrectly.</p>
+<p>For a reusable medieval sheet, import the following as the scenario&#39;s <code>stats.json</code>
+(or enter these sections in the Stats editor). It uses the existing sheet format:</p>
+<pre><code class="language-json">{
+  &quot;version&quot;: 2,
+  &quot;sections&quot;: [
+    { &quot;key&quot;: &quot;finances&quot;, &quot;label&quot;: &quot;Treasury and obligations&quot;, &quot;stats&quot;: [
+      { &quot;key&quot;: &quot;treasury&quot;, &quot;label&quot;: &quot;Treasury&quot;, &quot;kind&quot;: &quot;currency&quot;, &quot;suffix&quot;: &quot;silver marks&quot;, &quot;decimals&quot;: 0, &quot;minimum&quot;: 0 }
+    ] },
+    { &quot;key&quot;: &quot;resources&quot;, &quot;label&quot;: &quot;Resources&quot;, &quot;stats&quot;: [
+      { &quot;key&quot;: &quot;grain&quot;, &quot;label&quot;: &quot;Grain reserves&quot;, &quot;kind&quot;: &quot;number&quot;, &quot;suffix&quot;: &quot;sacks&quot;, &quot;decimals&quot;: 0, &quot;minimum&quot;: 0 }
+    ] },
+    { &quot;key&quot;: &quot;military&quot;, &quot;label&quot;: &quot;Military&quot;, &quot;stats&quot;: [
+      { &quot;key&quot;: &quot;garrisons&quot;, &quot;label&quot;: &quot;Garrisons&quot;, &quot;kind&quot;: &quot;number&quot;, &quot;suffix&quot;: &quot;soldiers&quot;, &quot;decimals&quot;: 0, &quot;minimum&quot;: 0 }
+    ] }
+  ]
+}
+</code></pre>
+<p>Synthetic demonstration data for a fictional realm in AD 1200 might be
+<code>customStats: { treasury: 1200, garrisons: 0 }</code>. The sheet shows <strong>1,200 silver marks</strong>,
+<strong>—</strong> for grain reserves, and <strong>0 soldiers</strong>. These are test values, not historical
+estimates. Choose units appropriate to the scenario; a shared label does not make
+medieval currencies interchangeable. Existing AI generation still requests complete
+sheets; this example demonstrates sparse saved data, not a new AI unknown-value policy.</p>
 
     <nav class="wiki-pager" aria-label="Pagination">
         <a class="prev" href="/wiki/projects/"><span>← Previous</span><b>Projects &amp; operations</b></a>
