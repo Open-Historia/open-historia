@@ -265,7 +265,8 @@ const nameFor = (run, battle) => {
   const lead = [HOLDER_SIDE_A, HOLDER_SIDE_B].map((side) => {
     const cells = new Float64Array(battle.sides[side].length);
     for (let region = 1; region < arena.ids.length; region += 1) {
-      const holder = run.groupOf(arena.ids[region]) || run.controllerOf(arena.ids[region]);
+      // (A group outside the war holds nothing on it: its regions are its country's, holderOf.)
+      const holder = holderOf(battle, run, arena.ids[region]);
       const index = battle.sides[side].findIndex((member) => fold(member) === fold(holder));
       if (index >= 0) cells[index] += arena.cells[region];
     }
@@ -809,15 +810,19 @@ const tellAttack = (run, battle, attacker, defender, day) => {
   const side = sideOfName(battle, attacker);
   if (side >= 0) battle.log.push({ d: run.dateOf(day), k: "attacked", s: side, at: `${run.isGroup(defender) ? "group" : "country"}: ${defender}` });
 };
+// Which of two names holds a region, 0 or 1, or -1: the group in whose area it lies where that group is one of
+// them, else its controller, as in a war between the two (warSideOf). A group that is neither of them takes
+// nothing from its country: an attack across a border it holds was refused as no border at all.
+const pairSideOf = (run, first, second) => (id) => {
+  const group = fold(run.groupOf(id));
+  const holder = group && (group === fold(first) || group === fold(second)) ? group : fold(run.controllerOf(id));
+  return holder && holder === fold(first) ? 0 : holder && holder === fold(second) ? 1 : -1;
+};
 // Whether two names hold land that touches.
 const landsTouch = (run, first, second) => {
   const regions = landRegionsOf(run);
   if (!regions) throw REGIONS_NEEDED;
-  const sideOf = (id) => {
-    const holder = run.groupOf(id) || run.controllerOf(id);
-    return fold(holder) === fold(first) ? 0 : fold(holder) === fold(second) ? 1 : -1;
-  };
-  return findContacts(regions, sideOf, run.input.map).length > 0;
+  return findContacts(regions, pairSideOf(run, first, second), run.input.map).length > 0;
 };
 
 // An order that names no battlefield there is, but aims its side's troops at a
@@ -1286,11 +1291,7 @@ const applyBorderMoment = (run, moment, day, first, second) => {
     const regions = landRegionsOf(run);
     if (!regions) throw REGIONS_NEEDED;
     const map = run.input.map;
-    const sideOf = (id) => {
-      const holder = run.groupOf(id) || run.controllerOf(id);
-      return fold(holder) === fold(first) ? 0 : fold(holder) === fold(second) ? 1 : -1;
-    };
-    for (const contact of findContacts(regions, sideOf, map)) {
+    for (const contact of findContacts(regions, pairSideOf(run, first, second), map)) {
       const frame = frameForContact(contact, map);
       const arena = frame ? arenaFor(run.cache, map, frame, run.input.regionTypes) : null;
       battle = arena ? openBattle(run, { name: names[0], warId: "", sides: [[first], [second]], frame, arena, day }) : null;
