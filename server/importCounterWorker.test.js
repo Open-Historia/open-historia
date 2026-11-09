@@ -206,7 +206,8 @@ test("no address is stored, only a day's key of it, and the cron deletes old day
 test("the counts are kept at the edge for a while", { skip }, async (t) => {
   const { call } = runtime(t, { edgeCache: true });
   const first = await call("/counts");
-  assert.equal(first.headers.get("cache-control"), "public, max-age=300");
+  // (The edge keeps it an hour; the browser ten minutes.)
+  assert.equal(first.headers.get("cache-control"), "public, max-age=600");
   assert.equal(first.headers.get("access-control-allow-origin"), "*");
   assert.deepEqual(await (await call("/counts")).json(), await first.json());
 });

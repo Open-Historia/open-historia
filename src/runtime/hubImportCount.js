@@ -26,7 +26,25 @@
 import { HUB_COUNT_KEY, normalizeHubCountKey, normalizeHubImported } from "../../server/hubImported.js";
 
 export const IMPORT_COUNTER_URL = "https://oh-import-counter.nichojkrol.workers.dev";
-const CACHE_TTL_MS = 5 * 60 * 1000;
+// Kept 30 minutes, and between sessions (localStorage): the counter keeps them an hour anyway, and every read is a
+// request on its free plan ("optimize it to use as little resources and bandwith ... as possible", the owner, 2026-11-09).
+const CACHE_TTL_MS = 30 * 60 * 1000;
+const STORED_COUNTS_KEY = "oh-hub-import-counts";
+const storedCounts = () => {
+  try {
+    const kept = JSON.parse(globalThis.localStorage?.getItem(STORED_COUNTS_KEY) ?? "null");
+    return kept && typeof kept.at === "number" && kept.counts && typeof kept.counts === "object" ? kept : null;
+  } catch {
+    return null;
+  }
+};
+const storeCounts = (at, counts) => {
+  try {
+    globalThis.localStorage?.setItem(STORED_COUNTS_KEY, JSON.stringify({ at, counts }));
+  } catch {
+    // Not kept: read again next session.
+  }
+};
 const TIMEOUT_MS = 15_000;
 // The Community tab's list waits for the counts (hubPosts.js fetchHubPosts), so
 // a counter that does not answer is given up on sooner.
@@ -119,11 +137,16 @@ export const resetImportCountsCache = () => {
 // the oldest builds read; a bare number is read too. Kept five minutes, one
 // request shared between callers; after a failed read the last good one stays.
 export const fetchImportCounts = async ({ force = false } = {}) => {
+  if (!force && !cache.counts) {
+    const kept = storedCounts();
+    if (kept) cache = { ...cache, at: kept.at, counts: kept.counts };
+  }
   if (!force && cache.counts && Date.now() - cache.at < CACHE_TTL_MS) return cache.counts;
   if (cache.pending) return cache.pending;
   const pending = (async () => {
     try {
-      const response = await fetch(`${importCounterUrl()}/counts`, { cache: "no-store", signal: timeout(COUNTS_TIMEOUT_MS) });
+      // (The browser's own copy is fine but for a Refresh: the counter keeps them an hour anyway.)
+      const response = await fetch(`${importCounterUrl()}/counts`, { cache: force ? "no-cache" : "default", signal: timeout(COUNTS_TIMEOUT_MS) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const raw = await response.json();
       const counts = {};
@@ -132,6 +155,7 @@ export const fetchImportCounts = async ({ force = false } = {}) => {
         if (/^\d{1,15}$/.test(post) && Number.isSafeInteger(count) && count >= 0) counts[post] = count;
       }
       cache = { at: Date.now(), counts, pending: null };
+      storeCounts(cache.at, counts);
       return counts;
     } catch {
       cache = { ...cache, pending: null };

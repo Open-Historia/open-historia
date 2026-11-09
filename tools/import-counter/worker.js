@@ -41,6 +41,20 @@
  * count; the count shown is legacy + counted. Downloads after that are never
  * read again.
  *
+ * What it costs, for Cloudflare's free plan ("optimize it to use as little
+ * resources and bandwith and everything as possible so my cloudflare freeplan
+ * can keep up", the owner, 2026-11-09):
+ *   - every read (/counts, /count/<post>, /hit) is the one /counts answer, kept
+ *     an hour at the edge (and ten minutes by the browser): D1 is read at most
+ *     once an hour per Cloudflare location, never per player;
+ *   - the hub's index is kept in the isolate as the set of released scenario
+ *     posts, an hour at a time; a post it does not know reads it again, at most
+ *     every five minutes, so a scenario released this minute still counts;
+ *   - an import is one D1 read (the address's day) and one write round of
+ *     three rows; a repeat is told by the insert itself, not by a read first;
+ *   - the tables are made at deploy (README), so a fresh isolate reads one row
+ *     (the legacy marker) and nothing more.
+ *
  * Bindings (wrangler.toml): DB (D1), COUNT_KEY (a secret: `wrangler secret put
  * COUNT_KEY`), LIMITER (rate limiting; optional). Without DB it answers the
  * counts from the hub's index as the retired Worker did and counts nothing;
@@ -49,10 +63,12 @@
 
 export const HUB_INDEX_URL =
   "https://raw.githubusercontent.com/Open-Historia/Open-historia-scenarios/hub-index/index.json";
-// raw.githubusercontent.com holds the file five minutes itself; so does the edge.
-const INDEX_TTL_SECONDS = 300;
-// How long the edge keeps an answer to /counts.
-export const COUNTS_TTL_SECONDS = 300;
+// How long the released posts are kept, and how soon a post they do not know may read the index again.
+const INDEX_TTL_SECONDS = 3600;
+const INDEX_RETRY_MS = 5 * 60 * 1000;
+// How long the edge keeps the answer to /counts, and the browser.
+export const COUNTS_TTL_SECONDS = 3600;
+const COUNTS_BROWSER_SECONDS = 600;
 // How many different posts one address can count in a UTC day.
 export const MAX_POSTS_PER_ADDRESS_PER_DAY = 20;
 const DAY_MS = 86_400_000;
@@ -93,13 +109,13 @@ const postNumber = (value) => {
   return Number.isSafeInteger(number) && number > 0 && number < 1e9 ? number : null;
 };
 
-// The hub's index, kept at the edge; null when it cannot be read.
-const readIndex = async (ctx) => {
+// The hub's index, kept at the edge; null when it cannot be read. `fresh` skips the edge's copy.
+const readIndex = async (ctx, { fresh = false } = {}) => {
   const cache = typeof caches !== "undefined" ? caches.default : null;
   const cacheKey = new Request(HUB_INDEX_URL);
-  let response = cache ? await cache.match(cacheKey) : null;
+  let response = cache && !fresh ? await cache.match(cacheKey) : null;
   if (!response) {
-    const upstream = await fetch(HUB_INDEX_URL, { headers: { Accept: "application/json" } });
+    const upstream = await fetch(HUB_INDEX_URL, { headers: { Accept: "application/json" }, cf: { cacheTtl: INDEX_TTL_SECONDS } });
     if (!upstream.ok) return null;
     response = new Response(await upstream.text(), {
       headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${INDEX_TTL_SECONDS}` },
@@ -128,6 +144,30 @@ const releasedScenario = (index, post) =>
     entry?.number === post &&
     (entry.kind === "scenario" || (Array.isArray(entry.labels) && entry.labels.some((label) => (label?.name ?? label) === "scenario"))));
 
+// The released scenario posts, kept in the isolate per database: { posts: Set, at, tried }. A post it does not know
+// reads the index again, at most every INDEX_RETRY_MS, so a scenario released since is counted.
+const releasedBy = new WeakMap();
+const isReleasedScenario = async (env, ctx, post) => {
+  const holder = env.DB ?? env;
+  let released = releasedBy.get(holder) ?? { posts: null, at: 0, tried: 0 };
+  const now = Date.now();
+  const stale = !released.posts || now - released.at > INDEX_TTL_SECONDS * 1000;
+  const unknown = released.posts && !released.posts.has(post) && now - released.tried > INDEX_RETRY_MS;
+  if (stale || unknown) {
+    released = { ...released, tried: now };
+    const index = await readIndex(ctx, { fresh: unknown && !stale });
+    if (index) {
+      const posts = new Set();
+      for (const entry of Array.isArray(index.posts) ? index.posts : []) {
+        if (releasedScenario({ posts: [entry] }, entry?.number)) posts.add(entry.number);
+      }
+      released = { posts, at: now, tried: now };
+    }
+    releasedBy.set(holder, released);
+  }
+  return released.posts ? released.posts.has(post) : null;
+};
+
 // The tables, made once per database per isolate, and the legacy counts frozen
 // once per database for good. Rejects (and is tried again next time) when the
 // index cannot be read for the freeze.
@@ -135,8 +175,11 @@ const ready = new WeakMap();
 const ensureReady = (env, ctx) => {
   if (!ready.has(env.DB)) {
     const pending = (async () => {
-      await env.DB.batch(SCHEMA.map((sql) => env.DB.prepare(sql)));
-      const frozen = await env.DB.prepare("SELECT value FROM meta WHERE key = 'legacy'").first();
+      // Made at deploy (README); made here only when they are not there yet.
+      const frozen = await env.DB.prepare("SELECT value FROM meta WHERE key = 'legacy'").first().catch(async () => {
+        await env.DB.batch(SCHEMA.map((sql) => env.DB.prepare(sql)));
+        return null;
+      });
       if (frozen) return;
       const index = await readIndex(ctx);
       if (!index) throw new Error("the hub's index could not be read to freeze the old counts");
@@ -177,6 +220,26 @@ const readCounts = async (env, ctx) => {
   return out;
 };
 
+// { "<post>": { count } }, the one read every endpoint answers from: kept at the edge for COUNTS_TTL_SECONDS, so
+// D1 is read at most once an hour per Cloudflare location.
+const cachedCounts = async (url, env, ctx) => {
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+  const cacheKey = new Request(`${url.origin}/counts`);
+  const cached = cache ? await cache.match(cacheKey) : null;
+  if (cached) {
+    const kept = await cached.json().catch(() => null);
+    if (kept && typeof kept === "object") return kept;
+  }
+  const out = {};
+  for (const [post, count] of Object.entries(await readCounts(env, ctx))) out[post] = { count };
+  if (cache) {
+    ctx?.waitUntil?.(cache.put(cacheKey, new Response(JSON.stringify(out), {
+      headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${COUNTS_TTL_SECONDS}` },
+    })));
+  }
+  return out;
+};
+
 const countImport = async (request, env, ctx, cors) => {
   const origin = request.headers.get("Origin") || "";
   if (!GAME_ORIGIN.test(origin)) return json({ counted: false, reason: "origin" }, 403, cors);
@@ -200,13 +263,13 @@ const countImport = async (request, env, ctx, cors) => {
     const { success } = await env.LIMITER.limit({ key: address });
     if (!success) return json({ post, counted: false, reason: "slow down" }, 429, cors, { "Retry-After": "60" });
   }
-  const index = await readIndex(ctx);
-  if (!index) return json({ post, counted: false, reason: "hub unreadable" }, 503, cors);
-  if (!releasedScenario(index, post)) return json({ post, counted: false, reason: "not a released scenario" }, 404, cors);
-  await ensureReady(env, ctx);
+  const scenario = await isReleasedScenario(env, ctx, post);
+  if (scenario === null) return json({ post, counted: false, reason: "hub unreadable" }, 503, cors);
+  if (!scenario) return json({ post, counted: false, reason: "not a released scenario" }, 404, cors);
+  // (The old counts are frozen the first time; until the index can be read for that, nothing is counted.)
+  if (!(await ensureReady(env, ctx).then(() => true, () => false))) return json({ post, counted: false, reason: "hub unreadable" }, 503, cors);
 
-  const known = await env.DB.prepare("SELECT 1 AS known FROM installs WHERE post = ?1 AND token = ?2").bind(post, token).first();
-  if (known) return json({ post, counted: false, reason: "again" }, 200, cors);
+  // (A repeat from the same install is told by the insert below, not by a read first.)
   const day = Math.floor(Date.now() / DAY_MS);
   const who = await addressKey(env.COUNT_KEY, day, address);
   const seen = await env.DB.prepare("SELECT COUNT(*) AS posts, COALESCE(SUM(post = ?3), 0) AS same FROM addresses WHERE day = ?1 AND who = ?2")
@@ -240,27 +303,19 @@ export default {
         const body = await request.json().catch(() => ({}));
         const id = String(body?.id ?? "").trim().slice(0, 120);
         if (!id) return json({ error: "missing id" }, 400, cors);
-        const counts = await readCounts(env, ctx).catch(() => ({}));
-        return json({ id, count: counts[id] ?? 0, retired: true }, 200, cors);
+        const counts = await cachedCounts(url, env, ctx).catch(() => ({}));
+        return json({ id, count: counts[id]?.count ?? 0, retired: true }, 200, cors);
       }
 
       if (request.method === "GET" && url.pathname === "/counts") {
-        const cache = typeof caches !== "undefined" ? caches.default : null;
-        const cacheKey = new Request(`${url.origin}/counts`);
-        const cached = cache ? await cache.match(cacheKey) : null;
-        if (cached) return cached;
-        const counts = await readCounts(env, ctx);
-        const out = {};
-        for (const [post, count] of Object.entries(counts)) out[post] = { count };
-        const response = json(out, 200, cors, { "Cache-Control": `public, max-age=${COUNTS_TTL_SECONDS}` });
-        if (cache) ctx?.waitUntil?.(cache.put(cacheKey, response.clone()));
-        return response;
+        const counts = await cachedCounts(url, env, ctx);
+        return json(counts, 200, cors, { "Cache-Control": `public, max-age=${COUNTS_BROWSER_SECONDS}` });
       }
 
       if (request.method === "GET" && url.pathname.startsWith("/count/")) {
         const id = decodeURIComponent(url.pathname.slice("/count/".length));
-        const counts = await readCounts(env, ctx);
-        return json({ id, count: counts[id] ?? 0 }, 200, cors);
+        const counts = await cachedCounts(url, env, ctx);
+        return json({ id, count: counts[id]?.count ?? 0 }, 200, cors, { "Cache-Control": `public, max-age=${COUNTS_BROWSER_SECONDS}` });
       }
 
       return json({ ok: true, usage: "POST /import (the game only) · GET /counts · GET /count/:id" }, 200, cors);
@@ -273,7 +328,6 @@ export default {
   async scheduled(_event, env, ctx) {
     if (!env?.DB) return;
     const work = (async () => {
-      await env.DB.batch(SCHEMA.map((sql) => env.DB.prepare(sql)));
       await env.DB.prepare("DELETE FROM addresses WHERE day < ?1").bind(Math.floor(Date.now() / DAY_MS) - 1).run();
     })();
     ctx?.waitUntil?.(work);
