@@ -233,6 +233,7 @@ export const RELEASES = [
           "2026-11-lighter-desktop",
           "2026-11-mac-opening",
           "2026-11-straight-into-the-demo",
+          "2026-11-music-and-translation-fixes",
         ],
       },
     ],
