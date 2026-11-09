@@ -165,7 +165,8 @@ test("a skip's answer with a peace offer lands as a chat message carrying its te
   const gameplay = read("gameplay.js");
   assert.ok(gameplay.includes("const terms = peaceOffer && typeof peaceOffer === \"object\" ? termsOfLetter(peaceOffer) : null;"));
   assert.ok(gameplay.includes("const nextChat = await opening({ ...letter, source: \"outreach\", ...(offerMessageId ? { openingMessageId: offerMessageId } : {}) }, \"\", { revealWith: lastTurnEventId });"));
-  assert.ok(gameplay.includes("treaties: readTreatyLines(result.peaceTreaties),"));
+  // The skip's treaty lines, with the offers its end of a player's war accepted (playersWarsHold.js), reach the turn.
+  assert.ok(gameplay.includes("const toldTreaties = readTreatyLines(result.peaceTreaties);") && gameplay.includes("treaties: turnTreaties,"));
   assert.ok(gameplay.includes("peaceTreaties: merged.peaceTreaties,"));
   // Weariness 90 alone sends nothing.
   const spent = turnWarAndPeace({ world: world({ warWeariness: [{ country: "Borduria", value: 90 }] }), baseWorld: world(), days: 30, date: "1915-02-01", round: 9, players: ["Aland"] });
