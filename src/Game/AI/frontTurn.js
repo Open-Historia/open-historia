@@ -1124,8 +1124,17 @@ export const runTurnFronts = async ({
   // The groups the turn's events found or give ground to are groups to the engine too: a group the world did not
   // have as the turn began, fighting in it, took what it captured as a COUNTRY does, by a control operation to its
   // name, which founded a landless country of that name owning the ground beside the group holding it.
+  // Only a create founds one, and a take naming a group nobody has (applyGroupOps creates it): a stray take or
+  // update naming a COUNTRY made it a group to the engine, and its captures that turn were recorded as a group's area.
+  const countries = new Set([
+    ...Object.entries(isRecord(world?.polityOverrides) ? world.polityOverrides : {}).flatMap(([key, record]) => [key, record?.name]),
+    ...(baseOwners instanceof Map ? baseOwners.values() : []),
+    ...Object.values(isRecord(world?.regionOwnershipOverrides) ? world.regionOwnershipOverrides : {}),
+    ...Object.values(isRecord(world?.regionSovereigntyOverrides) ? world.regionSovereigntyOverrides : {}),
+  ].map(clean).filter(Boolean).map((name) => fold(nameOf(name))));
   const foundedGroups = new Set(groups ? list.flatMap((event) => asArray(event?.impacts?.groupOps))
-    .filter((op) => op?.by !== FRONT_MARK).map(normalizeGroupOp).filter((op) => op && op.op !== "dissolve" && op.op !== "release")
+    .filter((op) => op?.by !== FRONT_MARK).map(normalizeGroupOp)
+    .filter((op) => op && (op.op === "create" || (op.op === "take" && !countries.has(fold(nameOf(op.name))))))
     .map((op) => fold(nameOf(op.name))) : []);
 
   // The map's shapes, read once and only if something needs them.

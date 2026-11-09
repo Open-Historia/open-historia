@@ -90,3 +90,19 @@ test("a group the turn founds, fighting in it, takes ground as a group the same 
   assert.equal(after.polityOverrides["Free East"], undefined);
   assert.ok(Object.values(after.groupAreas).filter((name) => name === "Free East").length > east(map).length);
 });
+
+test("a stray groupOps take or update naming a country does not make it a group to the engine: its captures stay control", async () => {
+  const map = sheet();
+  const war = { id: "war-1", title: "The War", status: "active", sideA: ["Aland"], sideB: ["Borduria"], startedDate: "2024-02-01", lastUpdatedDate: "2024-02-01" };
+  const world = worldOn(map, { wars: [war] });
+  const events = normalizeEvents([
+    { id: "e1", date: "2024-03-02", title: "Aland advances", description: "Aland pushes east.", source: "ai", impacts: { groupOps: [{ op: "take", name: "Aland", regionIds: ["r0-0"] }, { op: "update", name: "aland", description: "A country." }] } },
+    { id: "e2", date: "2024-03-20", title: "The war goes on", description: "The fighting goes on.", source: "ai", impacts: {} },
+  ]);
+  const run = await runTurnFronts(turn(map, world, { events, warStages: [[war]], staff: true, frontOrders: [{ battlefield: "", side: "Aland", order: "advance", sector: "all", effort: "major", date: FROM }] }));
+  const won = run.flips.filter((flip) => flip.to === "Aland");
+  assert.ok(won.length > 0, "Aland takes ground");
+  for (const flip of won) assert.equal(flip.kind, "control", JSON.stringify(flip));
+  const groupOps = run.events.flatMap((event) => event.impacts.groupOps ?? []).filter((op) => op.by === FRONT_MARK);
+  assert.deepEqual(groupOps, [], "nothing of Aland's is a group's area");
+});
