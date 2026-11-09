@@ -250,15 +250,46 @@ const applyTo = (record, side, op, { player, date }) => {
   return { error: REFUSED.nothing };
 };
 
+// The battlefield a deployment drawn in the war room goes to: the one it was drawn on where it crosses that one,
+// else the battlefield of the same war, with the asker on it, that holds most of what was drawn. "If I do want to
+// deploy troops in the Southern region it says it is too far from the battlefront" (a player, 2026-11-05): a war
+// fought on two stretches of border far apart is two battlefields, and a line drawn over the other stretch is
+// that battlefield's line. The name of the battlefield as `op.battlefield` names it otherwise.
+export const deployBattlefieldOf = (battlefields, op, player = "") => {
+  const named = clean(op?.battlefield, 120);
+  const drawn = list(op?.way);
+  if (op?.op !== "deploy" || drawn.length === 0) return named;
+  const swarm = op.form === SWARM_FORM;
+  const least = swarm ? 1 : 2;
+  const rows = list(battlefields).map((row) => (row ? normalizeBattlefield(row) : null));
+  const record = rows.find((row) => row && foldBattlefieldName(row.name) === foldBattlefieldName(named));
+  if (!record?.frame || !record.warId || wayOn(record, swarm ? drawn.slice(0, 1) : drawn).length >= least) return named;
+  let best = null;
+  let most = 0;
+  for (const row of rows) {
+    if (!row?.frame || row === record || row.home === true || row.warId !== record.warId || !isOpenBattlefield(row)) continue;
+    const side = battlefieldSideOf(row, player);
+    if (side !== HOLDER_SIDE_A && side !== HOLDER_SIDE_B) continue;
+    if (wayOn(row, swarm ? drawn.slice(0, 1) : drawn).length < least) continue;
+    const inside = drawn.filter((point) => pointInFrame(row.frame, Number(point?.[0]), Number(point?.[1]))).length;
+    if (inside > most) {
+      best = row;
+      most = inside;
+    }
+  }
+  return best ? best.name : named;
+};
+
 // The world's battlefields with one op applied, for the country or group that
 // asked. Returns { battlefields } with the one record changed, or { error } in
 // words a person can read. `date` is the game's date, written on what is kept.
 // An op for a transporter leaves the battlefields as they are and returns
 // `transports` as well: the world's (`transports`, handed in) with the op applied.
+// A deployment goes to the battlefield of the war it was drawn over (deployBattlefieldOf).
 //   era   the era the scenario set (runtime/warSettings.js), or null: what carries a transport
 export const applyWarRoomOp = (battlefields, op, { player = "", date = "", transports = [], era = null } = {}) => {
   if (!op || !WAR_ROOM_OPS.includes(op.op)) return { error: REFUSED.nothing };
-  const wanted = foldBattlefieldName(op.battlefield);
+  const wanted = foldBattlefieldName(op.op === "deploy" ? deployBattlefieldOf(battlefields, op, player) : op.battlefield);
   const rows = list(battlefields);
   const at = rows.findIndex((row) => foldBattlefieldName(row?.name) === wanted && wanted !== "");
   const record = at >= 0 ? normalizeBattlefield(rows[at]) : null;

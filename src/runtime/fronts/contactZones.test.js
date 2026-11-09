@@ -9,6 +9,8 @@ import { runFronts } from "./engine.js";
 import { pointInFrame } from "./frame.js";
 import { frontInput, syntheticMap } from "./syntheticMap.js";
 import { battlefieldOn } from "./testKit.js";
+import { deployLinesOf } from "./deploy.js";
+import { applyWarRoomOp, deployBattlefieldOf } from "./warRoomOps.js";
 
 // Aland holds its own land in the north-west and land it took in the south-east, both touching Borduria a
 // thousand kilometres apart (Greece in Thrace and in Syria, Türkiye between). Cisland and Dravia fight a
@@ -82,4 +84,26 @@ test("a stretch left without a battlefield for want of room gets one once there 
   assert.equal(ours(second.battlefields).length, 2, "the other stretch is opened");
   assert.equal(covers(ours(second.battlefields), WEST).length, 1);
   assert.equal(covers(ours(second.battlefields), SOUTH).length, 1);
+});
+
+test("a deployment drawn over the war's other stretch of border goes to that stretch's battlefield", () => {
+  const sheet = world();
+  const { battlefields } = runFronts(frontInput(sheet, { days: 0 }));
+  const [west] = covers(battlefields, WEST);
+  const [south] = covers(battlefields, SOUTH);
+  // Drawn with the western battlefield shown, behind the southern line.
+  const line = [[38.6, 41.3], [42.4, 41.3]];
+  const op = { op: "deploy", battlefield: west.name, way: line };
+  assert.equal(deployBattlefieldOf(battlefields, op, "Aland"), south.name);
+  const done = applyWarRoomOp(battlefields, op, { player: "Aland", date: "2024-03-01" });
+  assert.equal(done.error, undefined);
+  assert.equal(done.record.name, south.name);
+  assert.equal(deployLinesOf(done.record, done.side).length, 1);
+  assert.equal(deployLinesOf(done.battlefields.find((row) => row.name === west.name), 0).length, 0, "nothing drawn on the western one");
+  // One drawn over the battlefield shown stays there; one over neither is refused as before.
+  assert.equal(deployBattlefieldOf(battlefields, { ...op, way: [[21, 45.5], [21, 44.5]] }, "Aland"), west.name);
+  assert.match(applyWarRoomOp(battlefields, { ...op, way: [[70, 10], [71, 10]] }, { player: "Aland" }).error, /does not cross the battlefield/);
+  // Nor is a battlefield the asker is not on, or of another war, ever taken for it.
+  assert.equal(deployBattlefieldOf(battlefields, op, "Syldavia"), west.name);
+  assert.equal(deployBattlefieldOf(battlefields.map((row) => (row === south ? { ...row, warId: "war-9" } : row)), op, "Aland"), west.name);
 });

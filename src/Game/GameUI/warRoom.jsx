@@ -49,6 +49,7 @@ import { THRUST_TROOPS } from "../../runtime/fronts/constants.js";
 import { handicapOf } from "../../runtime/fronts/handicap.js";
 import { deployLinesOf } from "../../runtime/fronts/deploy.js";
 import { foldBattlefieldName, normalizeBattlefield } from "../../runtime/fronts/record.js";
+import { deployBattlefieldOf } from "../../runtime/fronts/warRoomOps.js";
 import { TRANSPORT_MEDIA, carrierFor, isUnderWay, loadOf, normalizeTransports } from "../../runtime/fronts/transports.js";
 import { formatGameDateReadable, gameDateYear } from "../../runtime/gameDates.js";
 import { isActiveFeatureEnabled, useActiveFeatures } from "../../runtime/gameFeatures.js";
@@ -533,6 +534,11 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   useEffect(() => {
     placeNearRef.current = placeNear;
   });
+  // What a deployment drawn over another battlefield of the war needs to find it (deployBattlefieldOf).
+  const deployContextRef = useRef({ battlefields: [], country: "", fronts: [] });
+  useEffect(() => {
+    deployContextRef.current = { battlefields: world?.battlefields ?? [], country: game.country, fronts };
+  });
   useEffect(() => {
     if (!open || !name) return undefined;
     return onWarRoomWay(async (drawn, way, extra) => {
@@ -543,7 +549,15 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
       } else if (drawn === "deploy") {
         // Where the player's new troops here come in: one line, drawn again over the last; or a swarm's place. And the
         // fresh formations it calls up there when time next passes, as many as the country can (runtime/fronts/engine.js callUpSize).
-        if (await act({ op: "deploy", battlefield: name, way, ...(extra?.form === "swarm" ? { form: "swarm" } : {}) })) setWarRoom({ tool: "pan" });
+        // Drawn over another battlefield of the same war, it is that battlefield's, and the room turns to it (warRoomOps.js deployBattlefieldOf).
+        const op = { op: "deploy", battlefield: name, way, ...(extra?.form === "swarm" ? { form: "swarm" } : {}) };
+        const { battlefields: rows, country, fronts: mine } = deployContextRef.current;
+        const target = deployBattlefieldOf(rows, op, country);
+        if (await act(op)) {
+          setWarRoom({ tool: "pan" });
+          const turned = foldBattlefieldName(target) !== foldBattlefieldName(name) ? mine.find((entry) => foldBattlefieldName(entry.name) === foldBattlefieldName(target)) : null;
+          if (turned) showBattlefield(turned.name, turned.side);
+        }
       } else if (drawn === "replan" && extra?.replan) {
         await act({ op: "plan", battlefield: name, project: extra.replan, way });
       } else if (drawn === "transport" && extra?.medium && way[0]) {
