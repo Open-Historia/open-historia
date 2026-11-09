@@ -909,7 +909,9 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
         return `Combat event "${normalizeString(event.title)}" has no event.warId. Battles, invasions, offensives, bombardments, active fronts and unit attacks require an active canonical war.`;
       }
       const stopped = halted.get(warId);
-      const fought = stopped && working.get(warId)?.status !== "active" && normalizeString(event.date) && compareGameDates(normalizeString(event.date), stopped.date) <= 0;
+      // (Only against an end with a date: compareGameDates(date, "") is -1, and every battle after an undated end
+      // would pass as fought before it.)
+      const fought = stopped && stopped.date && working.get(warId)?.status !== "active" && normalizeString(event.date) && compareGameDates(normalizeString(event.date), stopped.date) <= 0;
       const war = fought ? stopped.war : working.get(warId);
       if (!war || war.status !== "active") {
         return `Combat event "${normalizeString(event.title)}" cannot occur because canonical war ${warId} is ${war?.status || "missing"}, not active.`;

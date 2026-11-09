@@ -865,3 +865,21 @@ test("the skip is told that a country pulled out of a war leaves it, and that hi
   assert.match(gameplay, /History yields to this game's record: a war the ledger shows ended, or never opened, is fought by nobody/);
   assert.match(gameplay, /Events follow the record, not the history: no fighting in a war that ended here, and no siege or offensive where the game's lines do not put one\./);
 });
+
+// An end told by an event with no date: compareGameDates(date, "") is -1, so every later battle read as fought
+// before the end, and the whole of the fighting after it passed against the war as it was.
+test("an end told by an undated event does not let later fighting pass as fought before it", () => {
+  const vietnam = { polityOverrides: {}, wars: [{ id: "war-vietnam", status: "active", sideA: ["Democratic Republic of Vietnam"], sideB: ["Republic of Vietnam", "United States"], startedDate: "1965-03-08" }] };
+  const accord = { id: "e1", date: "", title: "The War Is Declared Over", description: "Hanoi and Saigon sign the final accord.", kind: "diplomacy", warId: "war-vietnam" };
+  const later = {
+    id: "e2",
+    date: "1975-08-10",
+    title: "People's Army of Vietnam Storms Hue",
+    description: "Armored columns of the People's Army of Vietnam storm Hue after a final assault.",
+    kind: "military",
+    combatants: ["Democratic Republic of Vietnam", "Republic of Vietnam"],
+    warId: "war-vietnam",
+  };
+  const payload = { events: [accord, later], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Accord" };
+  assert.match(validateWarLedgerPayload(payload, { world: vietnam }), /is ended, not active/);
+});
