@@ -61,7 +61,7 @@ const NEW_UPDATES = [
     // group to the engine (AI/frontTurn.js runTurnFronts foundedGroups).
     id: "2026-11-group-occupation",
     kind: "minor",
-    date: "2026-11-05",
+    date: "2026-11-09",
     channel: "beta",
     banners: [
       {
@@ -77,11 +77,10 @@ const NEW_UPDATES = [
   },
   {
     // "make it so if there are multiple minor update annoucements, it merges them all into one changelog" (the owner,
-    // 2026-11-09): several minor updates owed at one opening are one card (updateNotices.js noticePages). Dated
-    // 2026-11-05 so it sorts under the 2.5 release.
+    // 2026-11-09): several minor updates owed at one opening are one card (updateNotices.js noticePages).
     id: "2026-11-minor-changelog",
     kind: "minor",
-    date: "2026-11-05",
+    date: "2026-11-09",
     channel: "beta",
     banners: [
       {
@@ -98,11 +97,10 @@ const NEW_UPDATES = [
     // entirely" and "get rid of the background agent" (the owner, 2026-11-07). The Background AI switch went, with the
     // three requests after a skip: the Stats refresh of tracked countries, the event consolidator and the turn review.
     // What ran in the background stays, under a fixed cap ("dont remove idle diplomacy", "same with background spy
-    // stuff", "also do the intelligence ratings, and stats and military figures written ahead of time"). Dated
-    // 2026-11-05 so it sorts under the 2.5 release.
+    // stuff", "also do the intelligence ratings, and stats and military figures written ahead of time").
     id: "2026-11-no-background-ai",
     kind: "minor",
-    date: "2026-11-05",
+    date: "2026-11-09",
     channel: "beta",
     banners: [
       {
@@ -124,7 +122,7 @@ const NEW_UPDATES = [
     // it on the host (multiplayer/client/sharedThreads.js), and opens there once the host's view brings it back.
     id: "2026-11-shared-game-diplomacy",
     kind: "minor",
-    date: "2026-11-05",
+    date: "2026-11-09",
     channel: "beta",
     banners: [
       {
@@ -144,7 +142,7 @@ const NEW_UPDATES = [
     // drawn where the ground cannot be, is lifted by the terrain's heights (Map/terrainDrape.js).
     id: "2026-11-battlefields-on-3d-terrain",
     kind: "minor",
-    date: "2026-11-05",
+    date: "2026-11-09",
     channel: "beta",
     banners: [
       {
@@ -162,7 +160,7 @@ const NEW_UPDATES = [
     // deployBattlefieldOf; AI/frontTurn.js planFrontMoments).
     id: "2026-11-fronts-on-every-border",
     kind: "minor",
-    date: "2026-11-05",
+    date: "2026-11-09",
     channel: "beta",
     banners: [
       {
@@ -185,7 +183,7 @@ const NEW_UPDATES = [
     // applyFrontUnitChanges); a strength op carries a refit's new composition (runtime/gameState.js normalizeUnitOp).
     id: "2026-11-peace-holds-fleets-refit",
     kind: "minor",
-    date: "2026-11-05",
+    date: "2026-11-09",
     channel: "beta",
     banners: [
       {
@@ -206,7 +204,7 @@ const NEW_UPDATES = [
     // refused skip asked again was refused for want of a request (AI/requestBudget.js keepForRefusedSkip).
     id: "2026-11-wars-follow-the-story",
     kind: "minor",
-    date: "2026-11-05",
+    date: "2026-11-09",
     channel: "beta",
     banners: [
       {
@@ -230,7 +228,7 @@ const NEW_UPDATES = [
     // every load; translator.js: the pill only while the queue runs). Dated with the 2.5 release it is told in.
     id: "2026-11-music-and-translation-fixes",
     kind: "minor",
-    date: "2026-11-05",
+    date: "2026-11-09",
     channel: "beta",
     banners: [
       {
@@ -249,7 +247,7 @@ const NEW_UPDATES = [
     // game's own pages only. Downloads count nothing; what each post had is frozen as its starting number.
     id: "2026-11-imports-counted-in-game",
     kind: "minor",
-    date: "2026-11-05",
+    date: "2026-11-09",
     channel: "beta",
     banners: [
       {
@@ -270,7 +268,7 @@ const NEW_UPDATES = [
     // visual circle" (the owner, 2026-11-09): a slider with no figure, the circle on the map the only measure of it.
     id: "2026-11-strike-radius",
     kind: "minor",
-    date: "2026-11-05",
+    date: "2026-11-09",
     channel: "beta",
     banners: [
       {
