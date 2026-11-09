@@ -6,7 +6,7 @@
 // UI settings persist in IndexedDB. Only bundled into the web build (VITE_OH_WEB).
 
 import { kvGet, kvUpdate } from "./idb.js";
-import { HUB_IMPORTED_KEY, mergeHubImported } from "../../../server/hubImported.js";
+import { HUB_COUNT_KEY, HUB_IMPORTED_KEY, keepHubCountKey, mergeHubImported } from "../../../server/hubImported.js";
 import { jsonResponse, errorResponse } from "./util.js";
 
 const isLangCode = (code) => /^[a-z]{2,3}$/.test(code);
@@ -101,6 +101,9 @@ export const handleUiSettings = async (ctx) => {
       if (Array.isArray(ctx.body?.[HUB_IMPORTED_KEY])) {
         merged[HUB_IMPORTED_KEY] = mergeHubImported(merged[HUB_IMPORTED_KEY], ctx.body[HUB_IMPORTED_KEY]);
       }
+      // The install's counting key (server/hubImported.js): set once, never replaced.
+      const countKey = keepHubCountKey(merged[HUB_COUNT_KEY], ctx.body?.[HUB_COUNT_KEY]);
+      if (countKey) merged[HUB_COUNT_KEY] = countKey;
       return merged;
     }, {});
     return jsonResponse(next);

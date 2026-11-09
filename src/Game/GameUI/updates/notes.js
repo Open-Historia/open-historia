@@ -54,6 +54,26 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "lets find a way so people cant manually download scenarios from the workshop in github to inflate import counts"
+    // (the owner, 2026-11-09). A post's first import on an install is reported to the import counter
+    // (runtime/hubImportCount.js, tools/import-counter/worker.js): once per install, once a day per address, from the
+    // game's own pages only. Downloads count nothing; what each post had is frozen as its starting number.
+    id: "2026-11-imports-counted-in-game",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Import counts you can trust",
+        items: [
+          "A Community scenario's number of imports now counts the players who imported it in the game. Downloading its file from GitHub no longer adds to it.",
+          "Every scenario keeps the number it had and counts on from there.",
+          "The first time you import a scenario, the game tells our counter which one it was, and nothing that says who you are.",
+        ],
+      },
+    ],
+  },
+  {
     // "bombing should be able to adjust the strike radius: smaller radii result in greater lethality, while larger
     // radii reduce the overall threat level" (the owner, 2026-11-09). runtime/fronts/airStrike.js AIR_STRIKE_RADII:
     // the bombs fall on a circle of the era's blast times the radius, each thing under them hit 1 / radius² as hard.

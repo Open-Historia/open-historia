@@ -285,7 +285,10 @@ export const updateCopyOf = (index, release) => {
   return typeof copy === "string" && copy ? copy : null;
 };
 
-// A scenario post's import count, or null when nothing has counted it yet.
+// How many times a scenario post's file has been downloaded, as the hub's
+// index reports it, or null when it reports nothing. Not the import count the
+// game shows, which comes from the import counter (hubImportCount.js): anyone
+// can download a file.
 export const importCountOf = (index, postId) => {
   const count = record(index?.imports) && Object.hasOwn(index.imports, String(postId)) ? index.imports[String(postId)] : null;
   return Number.isSafeInteger(count) ? count : null;

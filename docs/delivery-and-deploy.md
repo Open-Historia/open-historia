@@ -272,22 +272,23 @@ Two Cloudflare Workers deploy alongside the site so merged worker code can never
 
 ## 7. Cloudflare Workers (the control/edge plane)
 
-### 7.1 Import counter — `tools/import-counter/` (retired)
+### 7.1 Import counter — `tools/import-counter/`
 
-A scenario's import count is how many times its file has been downloaded from the community hub's **releases**, as GitHub counts it. The hub repository's workflow checks each post's attachment, puts a checked copy of it in a release, adds the downloads up every half hour, and writes them to `index.json` on its `hub-index` branch, with where each copy is, the list of released posts and the suggestions it has checked; the game reads that file from `raw.githubusercontent.com` (`src/runtime/hubFiles.js`), which costs no API request. That index is also the game's only list of the hub's posts, and the copies it names are the only hub files the game downloads: a post's own attachment is never fetched, and GitHub's API is asked for nothing but a post's comments. See [runtime-services.md](runtime-services.md).
+A scenario's import count is **how many players' games have imported it**, as the game reports it, kept by this Worker in D1. Downloading a scenario's file, from GitHub or through either hub proxy, counts nothing. From 2026-10-05 until 2026-11-09 the count was the downloads of the post's file from the hub's releases (summed by the hub repository's workflow into `index.json` `imports`), and anyone could raise it by downloading the file's address in a loop ("lets find a way so people cant manually download scenarios from the workshop in github to inflate import counts", the owner, 2026-11-09). Before that, this Worker counted in KV and the free plan's daily KV allowance ran out within hours of every day.
 
-Until 2026-10-05 the count was kept by this Worker in KV, pinged once per install through `/api/hub/import-log`. One KV `list()` per read of `/counts` and a write per import spent the free plan's daily KV allowance within hours of every day, after which nobody saw any counts. Those routes, `OH_IMPORT_COUNTER_URL` and the ping are gone from the game.
-
-Builds from before the change still call the Worker, so it still answers them, from the hub's index, and stores nothing (`worker.js`; `server/importCounterWorker.test.js`):
+The game reports a post's first import on an install (`src/runtime/hubImportCount.js`, called from `hubPosts.js downloadHubScenario`; never for an Update, a post the library holds, or a post imported before) and reads the counts back from `/counts` (five minutes in the page, five at the edge). See [runtime-services.md](runtime-services.md#the-hubs-index-its-posts-its-checked-files-its-counts-hubfilesjs).
 
 | Item | Value |
 |---|---|
 | Worker name | `oh-import-counter` (`tools/import-counter/wrangler.toml`) |
-| `GET /counts`, `GET /count/<post>` | The hub index's counts, in the shapes the old builds read; the index is kept five minutes at the edge |
-| `POST /hit` | Accepted and ignored: the download the import made is what counted it |
-| Storage | None. The `IMPORTS` KV binding is unused and can be removed with the namespace; what it had counted is carried in the hub's numbers (`data/legacy-import-counts.json` there) |
+| `POST /import { post, token }` | Counted only from the game's pages (`Origin`: openhistoria.com, `*.open-historia.pages.dev`, `http://app.openhistoria`, `http://localhost:<port>`), for a scenario the hub index lists, once per token (SHA-256 of the install's random `hubCountKey` and the post number: one per install per post, unlinkable across posts), once per post per address per UTC day, at most 20 posts per address per day, at most 10 reports a minute per address (`LIMITER`) |
+| `GET /counts`, `GET /count/<post>` | `legacy + counted` per post, in the shapes every build reads (`{ "<post>": { count } }`) |
+| `POST /hit` | The oldest builds' report: answered, never counted |
+| Storage | D1 `oh-import-counts` (binding `DB`): `counts(post, legacy, counted)`, `installs(post, token)`, `addresses(day, who, post)` where `who` is an HMAC of the address and the day under the `COUNT_KEY` secret (rows deleted by the daily cron after a day), `meta`. The Worker makes the tables itself. No KV: the `IMPORTS` namespace is unbound and can be deleted |
+| Old numbers | Frozen once, the first time the Worker runs with its database: the hub index's `imports` (downloads plus what the KV counter had reached) become `counts.legacy`, and are never read again |
+| Without set-up | No `DB`: answers from the hub index as the retired Worker did and counts nothing. No `COUNT_KEY`: counts nothing |
 
-It takes effect when this `worker.js` is on `main` and the site is deployed (§6.1).
+Set-up before the first deploy (owner, once): `wrangler d1 create oh-import-counts` and paste the id into `wrangler.toml` (until then `wrangler deploy` fails and the Worker already deployed keeps running), `wrangler secret put COUNT_KEY` (long random text). Then it rides the site deploy from `main` (§6.1). The privacy policy's Import Counts section describes all of this and must follow any change.
 
 ### 7.2 Node registry — `open-historia-admin/registry/`
 
@@ -366,7 +367,7 @@ It reads only from `server/seed/default`, which **is** committed (map included),
 | **Android (stable)** | `main` | `open-historia.apk` on `android` | `android-apk.yml` (dispatch from `main` / `android-v*` tag) | Install once; opening the app downloads a waiting update from `android/update.json` and opens Android's installer on it (§11.1) |
 | **Android (beta)** | `beta` | `open-historia-beta.apk` on `android-beta` | `android-apk-beta.yml` (dispatch from `beta` / `android-beta-v*` tag) | Install from the pre-release, beside the stable app; updates the same way from `android-beta/update.json` |
 | **Website** | `main` | `dist-site/` | Admin-panel 🚀 button → clean `upstream/main` worktree → `build:site` → `wrangler pages deploy` (or legacy `deploy-site.yml`) | Nothing — the next page load reloads onto it (§11.1) |
-| **Import counter Worker** | `main` | `tools/import-counter/worker.js` | Rides the admin-panel site deploy from the same worktree | — |
+| **Import counter Worker** | `main` | `tools/import-counter/worker.js` | Rides the admin-panel site deploy from the same worktree, once its D1 database and `COUNT_KEY` are set up (§7.1) | — |
 | **Registry Worker** | admin repo | `registry/worker.js` | Rides the site deploy from the admin repo dir | — |
 | **Map binaries** | *manual* | Release assets | Uploaded to `map-data`; fetched by `fetch-map-assets.mjs` when the desktop app launches, and laid into the website and the APK by `scripts/stage-map-assets.mjs` when they are built | Desktop: downloaded on first run. Website and Android: nothing, the map is part of the build |
 
