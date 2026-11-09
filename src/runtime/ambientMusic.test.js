@@ -59,8 +59,8 @@ import {
   loadSecondsMemory,
   musicAddress,
   musicSceneOf,
-  gameDrawnBefore,
   noteGameDrawn,
+  reopensDrawnGame,
   musicVolumeOf,
   setMusicPlaylists,
   setMusicScene,
@@ -1184,13 +1184,23 @@ test("the scene is where the player is", () => {
   assert.equal(musicSceneOf({ inMenu: true, loading: true, atWar: true, war: true }), "menu");
   // "When entering a game thats already opened ... dont do the whole music ramp up thing": a game drawn once
   // this session is remembered, and the screen reports no loading for it.
-  assert.equal(gameDrawnBefore("game-a"), false);
+  assert.equal(reopensDrawnGame("game-a"), false);
   noteGameDrawn("game-a");
-  assert.equal(gameDrawnBefore("game-a"), true);
-  assert.equal(gameDrawnBefore("game-b"), false);
-  assert.equal(gameDrawnBefore(""), false);
+  assert.equal(reopensDrawnGame("game-a"), true);
+  assert.equal(reopensDrawnGame("game-a", "game-a"), true);
+  assert.equal(reopensDrawnGame("game-b"), false);
+  assert.equal(reopensDrawnGame(""), false);
+  // "if you have an open game but then switch games it still doesnt do the wind up": the open game's
+  // screen is still up while another is being opened, and that opening gets its build...
+  assert.equal(reopensDrawnGame("game-a", "game-b"), false);
+  // ...as does the open game's own screen when it comes up for the second time after another was drawn.
+  noteGameDrawn("game-b");
+  assert.equal(reopensDrawnGame("game-a", "game-a"), false);
+  assert.equal(reopensDrawnGame("game-b", "game-b"), true);
   const gameScreen = read("src/Game/GameUI/main.jsx");
   assert.match(gameScreen, /loading: showGameLoading && !reopening/);
+  assert.match(gameScreen, /const reopening = reopensDrawnGame\(activeGame\?\.id, gameLoading\.opening\);/);
+  assert.match(read("src/Game/GameUI/gameLoadingScreen.jsx"), /setOpening\(String\(event\?\.detail\?\.gameId \?\? openingGameId\(\)\)\)/);
   assert.match(gameScreen, /if \(gameEntered && activeGame\?\.id && !showGameLoading\) noteGameDrawn\(activeGame\.id\);/);
   assert.equal(musicSceneOf({ loading: true, atWar: true, war: true }), "loading");
   assert.equal(musicSceneOf({ atWar: true, war: true }), "war");

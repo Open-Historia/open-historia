@@ -5,6 +5,7 @@ import {
   GAME_OPENING_EVENT,
   MAP_IDLE_EVENT,
   MAP_POLITIES_READY_EVENT,
+  openingGameId,
   politiesReady,
   politiesSettled,
 } from "../../runtime/mapReadiness.js";
@@ -38,6 +39,9 @@ export const useGameLoading = () => {
   const entered = useGameEntered();
   const { worldKnown } = useWorldState({ wait: !entered });
   const [phase, setPhase] = useState(() => (worldKnown && politiesSettled() ? "done" : "world"));
+  // Which game is being opened: the open game's screen is still up while the
+  // library opens another, and the music asks (GameUI/main.jsx reopening).
+  const [opening, setOpening] = useState(openingGameId);
   const knownRef = useRef(worldKnown);
   useEffect(() => {
     knownRef.current = worldKnown;
@@ -65,7 +69,8 @@ export const useGameLoading = () => {
       later(() => setPhase((current) => (current === "world" ? "polities" : current)), 1200);
       later(finish, LOADING_CEILING_MS);
     };
-    const reopen = () => {
+    const reopen = (event) => {
+      setOpening(String(event?.detail?.gameId ?? openingGameId()));
       settled = false;
       timers.splice(0).forEach(clearTimeout);
       setPhase("world");
@@ -100,7 +105,7 @@ export const useGameLoading = () => {
   // Before a game is entered there is no map to wait for. (The cover is up all
   // the same between a press of Play and the game landing: GameUI/main.jsx
   // `awaitingGame`.)
-  return { active: entered && phase !== "done", phase };
+  return { active: entered && phase !== "done", phase, opening };
 };
 
 // The card image the library shows for a scenario with no cover of its own

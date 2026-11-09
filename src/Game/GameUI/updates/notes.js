@@ -219,7 +219,7 @@ const NEW_UPDATES = [
   },
   {
     // The owner, 2026-11-06: "when entering a game thats already opened ... dont do the whole music ramp up
-    // thing. make it just go to the ingame music once your in" (runtime/ambientMusic.js gameDrawnBefore,
+    // thing. make it just go to the ingame music once your in" (runtime/ambientMusic.js reopensDrawnGame,
     // GameUI/main.jsx reopening).
     id: "2026-11-straight-back-into-the-music",
     kind: "minor",
