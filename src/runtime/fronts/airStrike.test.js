@@ -11,8 +11,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  AIR_BLAST_KM,
   AIR_FLAK,
   AIR_FLAK_MODERN,
+  AIR_STRIKE_RADII,
+  AIR_VISUAL_SPREAD_KM,
+  radiusConcentration,
+  strikeRadiusOf,
   airStrikeVisuals,
   airStrikesBlock,
   airWarLine,
@@ -185,6 +190,64 @@ test("bombTroops: within the blast, the nearer the harder, the dug in the less; 
   assert.deepEqual(told[0].hits.map((hit) => hit.country), ["Aland", "Borduria"]);
 });
 
+// ---- the strike radius ---------------------------------------------------------------------
+
+test("the strike radius: a few steps, the default the strike as it was, the bombs concentrated by 1 / radius²", () => {
+  // "smaller radii result in greater lethality, while larger radii reduce the overall threat level" (the owner, 2026-11-09).
+  assert.deepEqual(AIR_STRIKE_RADII, [0.5, 0.75, 1, 1.5, 2]);
+  assert.equal(strikeRadiusOf(undefined), 1, "an order saved before there was a radius");
+  assert.equal(strikeRadiusOf("bogus"), 1);
+  assert.equal(strikeRadiusOf(-2), 1);
+  assert.equal(strikeRadiusOf(0.6), 0.5);
+  assert.equal(strikeRadiusOf(9), 2);
+  assert.equal(radiusConcentration(0.5), 4);
+  assert.equal(radiusConcentration(1), 1);
+  assert.equal(radiusConcentration(2), 0.25);
+  // Kept on an order and a strike only when it is not the default: old saves and default orders are unchanged.
+  assert.equal("radius" in normalizeAirStrikeOrders([order()])[0], false);
+  assert.equal("radius" in normalizeAirStrikeOrders([order({ radius: 1 })])[0], false);
+  assert.equal(normalizeAirStrikeOrders([order({ radius: 2 })])[0].radius, 2);
+});
+
+test("a smaller radius is deadlier to what is under it; a larger one reaches farther and hurts each thing less", () => {
+  const bombers = [air("bombers", "Aland", { name: "1st Bomber Wing" })];
+  const at = (radius, kind = "troops", extra = {}) => fly(bombers, [order({ kind, ...(radius ? { radius } : {}), ...extra })], { peopleOf: () => 5000000, ...extra });
+  const plain = at(undefined);
+  const tight = at(0.5);
+  const wide = at(2);
+  // The same raid flies the same: the radius changes only where and how hard its bombs fall.
+  assert.deepEqual([tight.strikes[0].outcome, tight.strikes[0].power, tight.strikes[0].lost], [plain.strikes[0].outcome, plain.strikes[0].power, plain.strikes[0].lost]);
+  assert.equal(plain.moments[0].km, AIR_BLAST_KM[3]);
+  assert.equal(tight.moments[0].km, AIR_BLAST_KM[3] * 0.5);
+  assert.equal(wide.moments[0].km, AIR_BLAST_KM[3] * 2);
+  assert.ok(Math.abs(tight.moments[0].hit - plain.moments[0].hit * 4) < 1e-9);
+  assert.ok(Math.abs(wide.moments[0].hit - plain.moments[0].hit / 4) < 1e-9);
+  assert.equal(tight.strikes[0].radius, 0.5, "the strike remembers its radius, for the map");
+  assert.equal("radius" in plain.strikes[0], false);
+  // A city: fewer killed, less weariness, the wider the bombs fall.
+  const [cityTight, cityPlain, cityWide] = [0.5, undefined, 2].map((radius) => at(radius, "city", { people: 2000000 }).strikes[0]);
+  assert.ok(cityTight.dead > cityPlain.dead && cityPlain.dead > cityWide.dead, `${cityTight.dead} ${cityPlain.dead} ${cityWide.dead}`);
+  assert.ok(cityTight.weariness >= cityPlain.weariness && cityPlain.weariness > cityWide.weariness);
+  // A structure: a light raid only damages it at the usual radius, destroys it concentrated, leaves it standing spread.
+  const markers = [{ id: "m1", name: "Fort Brod", ownerCode: "Borduria", lng: 23, lat: 51, status: "active" }];
+  const light = [air("bombers", "Aland", { name: "1st Bomber Wing", strength: 30 })];
+  const fort = (radius) => fly(light, [order({ kind: "structure", marker: "m1", target: "Fort Brod", ...(radius ? { radius } : {}) })], { markers }).strikes[0].status;
+  assert.deepEqual([fort(0.5), fort(undefined), fort(2)], ["destroyed", "damaged", "active"]);
+  // On the battlefield: a tight strike hurts the troops at its middle more and reaches fewer.
+  const moment = (radius) => ({ type: "airstrike", day: 0, ref: "air:s1", owner: "Aland", lng: 24, lat: 51, km: 120 * radius, hit: 40 / (radius * radius), at: "the line" });
+  const count = (result) => result.notes.filter((entry) => entry.kind === "airstrike").flatMap((entry) => entry.hits).reduce((sum, hit) => sum + hit.n, 0);
+  const lost = (result) => result.notes.filter((entry) => entry.kind === "airstrike").flatMap((entry) => entry.hits).reduce((sum, hit) => sum + hit.lost, 0) / Math.max(1, count(result));
+  const [narrow, usual, broad] = [0.5, 1, 2].map((radius) => fight([moment(radius)]));
+  assert.ok(count(narrow) <= count(usual) && count(usual) <= count(broad), `${count(narrow)} ${count(usual)} ${count(broad)}`);
+  assert.ok(lost(narrow) > lost(usual) && lost(usual) > lost(broad), `${lost(narrow)} ${lost(usual)} ${lost(broad)}`);
+  // The story is told how the bombs fell, where it was not the usual way; and the map scatters them as wide.
+  assert.match(airStrikesBlock(tight.strikes), /its bombs concentrated on a narrow area/);
+  assert.match(airStrikesBlock(wide.strikes), /its bombs spread over a wide area/);
+  assert.doesNotMatch(airStrikesBlock(plain.strikes), /narrow area|wide area/);
+  assert.equal(airStrikeVisuals(wide.strikes)[0].spreadKm, AIR_VISUAL_SPREAD_KM * 2);
+  assert.equal("spreadKm" in airStrikeVisuals(plain.strikes)[0], false);
+});
+
 // ---- what is kept and told -----------------------------------------------------------------
 
 test("what is kept: one strike a unit, the last given; the strikes of the last rounds", () => {
@@ -309,4 +372,14 @@ test("a country with no air unit of its own strikes with its front's air arm, an
   // Nor one whose air arm is worth nothing, nor one not fighting there.
   assert.deepEqual(airArmsOf({ ...world, polityOverrides: { Aland: { name: "Aland", military: { air: 0 } } } }, "Aland"), []);
   assert.deepEqual(airArmsOf(world, "Cisland"), []);
+});
+
+test("the strike radius in the war room's orders: carried by the op, held to its steps, none for the default", () => {
+  const tight = ask({ op: "airstrike", unit: "bombers", kind: "structure", marker: "m1", radius: 0.5 });
+  assert.equal(tight.order.radius, 0.5);
+  const plain = ask({ op: "airstrike", unit: "bombers", kind: "structure", marker: "m1" });
+  assert.equal("radius" in plain.order, false);
+  assert.notEqual(tight.order.id, plain.order.id);
+  assert.equal(cleanAirStrikeOp({ op: "airstrike", unit: "u", kind: "city", radius: 1.6 }).radius, 1.5);
+  assert.equal("radius" in cleanAirStrikeOp({ op: "airstrike", unit: "u", kind: "city", radius: 1 }), false);
 });

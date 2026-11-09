@@ -72,16 +72,44 @@ test("the tool: a click names what is struck, a drag moves the map, and a ring t
     closeWarRoom();
   }
   assert.deepEqual([getWarRoom().aircraft, getWarRoom().wing, getWarRoom().strikeKind], [false, "", "troops"], "shut, it forgets");
-  assert.match(tools, /if \(tool === "aircraft"\) \{\s*if \(\(done\.moved \?\? 0\) >= CLICK_PX\) return;[\s\S]*?reportWarRoomWay\("aircraft", \[\[unwrapLng\(place\.lng, 0\), place\.lat\]\], \{ wing, kind: strikeKind \}\);/);
+  assert.match(tools, /if \(tool === "aircraft"\) \{\s*if \(\(done\.moved \?\? 0\) >= CLICK_PX\) return;[\s\S]*?reportWarRoomWay\("aircraft", \[\[unwrapLng\(place\.lng, 0\), place\.lat\]\], \{ wing, kind: strikeKind, radius: strikeRadius \}\);/);
   assert.match(tools, /if \(tool === "aircraft"\) setAim\(ringAt\(at\(event\)\)\);/);
   assert.match(tools, /const km = Number\(getWarRoom\(\)\.blast\);/);
   assert.match(tools, /<circle cx=\{aim\.x\} cy=\{aim\.y\} r=\{aim\.r\} fill="rgba\(43, 193, 243, 0\.14\)" stroke=\{ACCENT\}/);
   // The panel sends what was clicked: troops there, the structure or the city nearest it.
-  assert.match(panel, /\} else if \(drawn === "aircraft" && extra\?\.wing && way\[0\]\) \{[\s\S]*?await orderWith\(sendAirStrikeOp, await strikeAtRef\.current\(extra\.wing, extra\.kind, way\[0\]\)\);/);
+  assert.match(panel, /\} else if \(drawn === "aircraft" && extra\?\.wing && way\[0\]\) \{[\s\S]*?await orderWith\(sendAirStrikeOp, \{ \.\.\.\(await strikeAtRef\.current\(extra\.wing, extra\.kind, way\[0\]\)\), radius: strikeRadiusOf\(extra\.radius\) \}\);/);
   assert.match(panel, /return \{ op: "airstrike", unit, kind: "troops", to: \[lng, lat\], battlefield: name, target: placeNear\(lng, lat\) \};/);
   assert.match(panel, /const found = near\(strikableStructures\(world, game\.country\)\);/);
   assert.match(panel, /const country = enemies\.find\(\(name\) => chart\?\.holds\?\.\(name, Number\(city\.lng\), Number\(city\.lat\)\) === true\)/);
-  assert.match(panel, /setWarRoom\(\{ blast: airBlast \}\)/);
+  // The ring is as wide as the strike radius set.
+  assert.match(panel, /setWarRoom\(\{ blast: airBlast \* strikeRadiusOf\(strikeRadius\) \}\)/);
+});
+
+test("the strike radius: set on the plate, carried by the click, a waiting strike ordered again with it; shut, it forgets", () => {
+  try {
+    openWarRoom("The Front", 0);
+    assert.equal(getWarRoom().strikeRadius, 1, "the default: the strike as it always was");
+    setWarRoom({ strikeRadius: 0.5 });
+    assert.equal(getWarRoom().strikeRadius, 0.5);
+  } finally {
+    closeWarRoom();
+  }
+  assert.equal(getWarRoom().strikeRadius, 1);
+  // A step a radius, each the blast's kilometres; the hint is the control's own.
+  assert.match(plate, /<div role="radiogroup" aria-label="Strike radius"[^>]*>\s*\{AIR_STRIKE_RADII\.map\(\(step\) => \{/);
+  assert.match(plate, /onClick=\{\(\) => onRadius\(step\)\}/);
+  assert.match(plate, /\{blast > 0 && \(/, "none in an era whose bombs fall nowhere");
+  assert.match(panel, /onRadius=\{setStrikeRadius\}/);
+  assert.match(panel, /radius=\{strikeRadiusOf\(strikeRadius\)\}\s*blast=\{airBlast\}/);
+  // A strike waiting is ordered again at the same target with the radius set, and its own radius is shown when picked.
+  assert.match(panel, /const setStrikeRadius = async \(radius\) => \{[\s\S]*?const done = await orderWith\(sendAirStrikeOp, \{\s*op: "airstrike",\s*unit: order\.unit,\s*kind: order\.kind,\s*to: \[order\.lng, order\.lat\],[\s\S]*?radius: strikeRadiusOf\(radius\),\s*\}\);\s*if \(!done\) setWarRoom\(\{ strikeRadius: strikeRadiusOf\(order\.radius\) \}\);/);
+  assert.match(panel, /if \(pickedOrderRadius > 0\) setWarRoom\(\{ strikeRadius: pickedOrderRadius \}\);/);
+  // On the map each ring is as wide as its own strike's radius.
+  const ring = (radius) => {
+    const [feature] = airFeatures({ blast: 20, orders: [{ lng: 22, lat: 0, ...(radius ? { radius } : {}) }] }).features;
+    return Math.max(...feature.geometry.coordinates[0].map(([lng]) => lng)) - 22;
+  };
+  assert.ok(Math.abs(ring(2) / ring() - 2) < 0.01 && Math.abs(ring(0.5) / ring() - 0.5) < 0.01, `${ring(0.5)} ${ring()} ${ring(2)}`);
 });
 
 test("on the map: the reach of the air unit picked out, and rings where the bombs of each strike fall, under the units' counters", () => {

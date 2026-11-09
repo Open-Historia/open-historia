@@ -296,10 +296,10 @@ const WarRoomTools = () => {
       if (tool === "aircraft") {
         if ((done.moved ?? 0) >= CLICK_PX) return;
         const place = map.unproject(point);
-        // (Read from the store now: which air unit, and what it is to strike.)
-        const { wing, strikeKind } = getWarRoom();
+        // (Read from the store now: which air unit, what it is to strike, and over how wide a circle.)
+        const { wing, strikeKind, strikeRadius } = getWarRoom();
         takeTool("pan");
-        reportWarRoomWay("aircraft", [[unwrapLng(place.lng, 0), place.lat]], { wing, kind: strikeKind });
+        reportWarRoomWay("aircraft", [[unwrapLng(place.lng, 0), place.lat]], { wing, kind: strikeKind, radius: strikeRadius });
         return;
       }
       if (tool === "fleet") {
