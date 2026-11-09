@@ -277,8 +277,9 @@ test("a person bound to defend a country is asked, and nobody joins a war for th
   assert.deepEqual([act("honour", "Cisland").error, act("honour", "Cisland").accepted, act("honour", "Cisland").to], ["", true, "Borduria"]);
   assert.equal(act("refuse", "Aland").error, "not-yours");
   assert.equal(answerCallToArms(honoured, call.id, false, { round: 4 }), honoured);
-  // Left unanswered, it is a treaty broken two turns on.
-  const later = turnWarAndPeace({ world: asked, baseWorld: asked, days: 30, date: "1914-05-01", round: 4, players: ["Cisland"] });
+  // Left unanswered once its message has asked it (the turn sends it: gameplay.js), it is a treaty broken two turns on.
+  const sent = { ...asked, callsToArms: asked.callsToArms.map((entry) => ({ ...entry, messageId: `msg-${entry.id}` })) };
+  const later = turnWarAndPeace({ world: sent, baseWorld: sent, days: 30, date: "1914-05-01", round: 4, players: ["Cisland"] });
   assert.equal(later.callsToArms[0].status, "open");
   const lapsed = turnWarAndPeace({ world: later, baseWorld: later, days: 30, date: "1914-06-01", round: 5, players: ["Cisland"] });
   assert.deepEqual([lapsed.callsToArms[0].status, lapsed.internationalReputation.Cisland], ["refused", 50 - TREATY_BROKEN_REPUTATION]);

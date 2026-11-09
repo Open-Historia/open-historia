@@ -10487,8 +10487,12 @@ const applySimulationResult = async ({
   // was attacked, in the thread with it (folded into one already open), and the person answers it there
   // (GameUI/warAndPeace.jsx CallToArmsCard): "have the country send you a message requesting assistance and the
   // buttons appear there" (the owner, 2026-11-06). In the game's language, from the packs, and never a request.
+  // Every open call that has no message yet gets one: one opened this turn, one asked before calls had messages (an
+  // old save) and one whose message could not be sent when it opened. Until it has one the player cannot have heard
+  // it, and its silence breaks no treaty (alliances.js callsForTurn); from the turn it is asked (askedRound) it stands
+  // CALL_STANDS_ROUNDS turns.
   for (const call of normalizeArray(worldWithImpacts?.callsToArms)) {
-    if (call?.status !== "open" || Number(call.round) !== Number(nextGame.round) || normalizeString(call.messageId)) continue;
+    if (call?.status !== "open" || normalizeString(call.messageId)) continue;
     if (!people.some((person) => regionKey(person) === regionKey(call.ally))) continue;
     const attackers = normalizeArray(call.attackers).map(normalizeString).filter(Boolean);
     const enemy = attackers.length > 1 ? `${attackers.slice(0, -1).join(", ")} & ${attackers[attackers.length - 1]}` : attackers[0] || "";
@@ -10513,7 +10517,7 @@ const applySimulationResult = async ({
     if (!nextChat) continue;
     nextChats.unshift(nextChat);
     generatedChats.unshift(nextChat);
-    worldWithImpacts = { ...worldWithImpacts, callsToArms: normalizeArray(worldWithImpacts.callsToArms).map((entry) => (entry?.id === call.id ? { ...entry, messageId } : entry)) };
+    worldWithImpacts = { ...worldWithImpacts, callsToArms: normalizeArray(worldWithImpacts.callsToArms).map((entry) => (entry?.id === call.id ? { ...entry, messageId, askedRound: Number(nextGame.round) || 0 } : entry)) };
     nextWorld = worldWithImpacts;
   }
 
