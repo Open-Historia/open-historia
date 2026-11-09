@@ -144,3 +144,30 @@ test("an end that accepts a peace the turn cannot make is refused, and the accep
   assert.ok(peace > 0 && told > peace, "the receipt follows the peace");
   assert.match(gameplay, /if \(normalizeString\(war\?\.status\)\.toLowerCase\(\) === "ended"\) \{/);
 });
+
+// "On the terms offered" holds: the events that tell the accepted end keep their story, but the land they would move
+// between the two sides goes, or the event's own transfers and makePeace's terms would both apply.
+test("the events that tell an accepted end keep their story and lose the land they move between the two sides", () => {
+  const offers = [{ id: "peace:war-russia-ukraine:ukraine:3", warId: "war-russia-ukraine", from: "Ukraine", to: "Russian Federation", terms: { territory: "restored", reparations: null }, status: "open" }];
+  const told = [{
+    id: "evt-1",
+    title: "Russia accepts the Ukrainian terms in Geneva",
+    warId: "war-russia-ukraine",
+    impacts: {
+      regionTransfers: [{ regionId: "region: Donetsk", fromCode: "Ukraine", toCode: "Russian Federation" }, { regionId: "region: Transnistria", fromCode: "Moldova", toCode: "Romania" }],
+      regionControlOps: [{ op: "control", regionId: "region: Kharkiv", fromCode: "Ukraine", toCode: "Russian Federation" }, { op: "clear_contest", regionId: "region: Kharkiv", clearAll: true }],
+      regionClaims: [{ regionId: "region: Crimea", claimantCode: "Russian Federation" }],
+      statChanges: [{ code: "Ukraine", stability: 60 }],
+    },
+  }, ...events.slice(1)];
+  const update = { id: "war-russia-ukraine", op: "end", actors: ["Russian Federation"], opponents: ["Ukraine"], eventIds: ["evt-1"] };
+  const held = holdPlayersWars({ updates: [update], events: told, wars, players: ["Ukraine"], offers });
+  assert.equal(held.accepted.length, 1);
+  const peace = held.events.find((event) => event.id === "evt-1");
+  assert.equal(peace.title, "Russia accepts the Ukrainian terms in Geneva");
+  assert.deepEqual(peace.impacts.regionTransfers, [{ regionId: "region: Transnistria", fromCode: "Moldova", toCode: "Romania" }], "a transfer between others stays");
+  assert.deepEqual(peace.impacts.regionControlOps, [{ op: "clear_contest", regionId: "region: Kharkiv", clearAll: true }]);
+  assert.deepEqual(peace.impacts.regionClaims, []);
+  assert.deepEqual(peace.impacts.statChanges, [{ code: "Ukraine", stability: 60 }]);
+  assert.equal(told[0].impacts.regionTransfers.length, 2, "the skip's own event is not changed in place");
+});

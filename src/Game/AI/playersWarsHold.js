@@ -26,6 +26,21 @@ const list = (value) => (Array.isArray(value) ? value : []);
 
 const ENDING = new Set(["end", "ceasefire"]);
 
+// An event with the land it moves between the given countries (folded names) taken out: transfers, captures,
+// fronts and claims that name one of them. A clear_contest only ends a front, and stays; so does the story.
+const TERRITORY_PARTIES = ["fromCode", "toCode", "actorCode", "claimantCode"];
+const withoutTerritory = (event, sides) => {
+  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : null;
+  if (!impacts) return event;
+  const names = (entry) => TERRITORY_PARTIES.some((field) => sides.has(fold(entry?.[field])));
+  const moves = (entry) => names(entry) && fold(entry?.op) !== "clear_contest";
+  const next = { ...impacts };
+  for (const field of ["regionTransfers", "regionControlOps", "regionClaims"]) {
+    if (Array.isArray(impacts[field])) next[field] = impacts[field].filter((entry) => !moves(entry));
+  }
+  return { ...event, impacts: next };
+};
+
 // The events a ledger record names, by id.
 const eventIdsOf = (update) => [
   ...list(update?.eventIds),
@@ -120,9 +135,15 @@ export const holdPlayersWars = ({ updates = [], events = [], wars = [], players 
   });
   if (!refused.length) return { updates: list(updates), events: list(events), refused, proposals, accepted };
 
-  // (The events that tell an accepted peace stay: it is made.)
+  // (The events that tell an accepted peace stay: it is made. It is made on the offer's own terms, so they tell
+  // it and no more: what they would move between the two sides on the map, makePeace moves by the terms.)
   const peaceIn = new Set(accepted.map((entry) => fold(entry.warId)));
   const telling = new Set(refused.filter((update) => !(fold(update?.op) === "end" && peaceIn.has(fold(update?.id)))).flatMap(eventIdsOf));
-  const kept = list(events).filter((event) => !telling.has(clean(event?.id)));
+  const warsOfPeace = new Map();
+  for (const entry of accepted) for (const id of eventIdsOf(entry.update)) warsOfPeace.set(id, [...(warsOfPeace.get(id) ?? []), warOf.get(fold(entry.warId))]);
+  const kept = list(events).filter((event) => !telling.has(clean(event?.id))).map((event) => {
+    const peaceWars = warsOfPeace.get(clean(event?.id));
+    return peaceWars ? withoutTerritory(event, new Set(peaceWars.flatMap(sidesOf).map(fold))) : event;
+  });
   return { updates: list(updates).filter((update) => !refused.includes(update)), events: kept, refused, proposals, accepted };
 };
