@@ -641,6 +641,7 @@ export const createGameHost = ({
       // a letter between people was shown with no date at all.
       const gameDate = clean((await store.read())?.game?.gameDate);
       let chatId = clean(thread);
+      const opens = !chatId;
       let refusal = "";
       // Everyone at the table: the thread's owner and its members.
       let parties = [];
@@ -697,7 +698,10 @@ export const createGameHost = ({
         pushViews().then(() => replyTo({ chatId, seat: seat.country })).then(() => pushViews())
           .catch((error) => log("warn", "reply failed", { error: String(error?.message || error) }));
       }
-      return "";
+      // A thread opened by this line goes back with the ack, so the screen
+      // that began it can open it as soon as its view holds it
+      // (client/sharedThreads.js).
+      return opens ? { error: "", result: { chatId } } : "";
     },
   };
 

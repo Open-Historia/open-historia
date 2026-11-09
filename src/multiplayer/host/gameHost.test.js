@@ -123,6 +123,8 @@ const setup = (options = {}) => {
     },
     replyTo: async (info) => {
       replies.push(info);
+      // What the AI governments at the table said, written into the game.
+      await options.replyTo?.(info, store);
     },
     readCountry: async (info) => {
       sheets.push(info);
@@ -278,6 +280,60 @@ test("diplomacy between people: each writes their own lines, the model answers f
   await s.request(s.guest, { t: "say", id: id(7), thread: conference.id, to: [], text: "Moscow attends." });
   await s.clock.flush();
   assert.deepEqual(s.replies.at(-1), { chatId: conference.id, seat: RUSSIA });
+});
+
+test("a guest's thread begun from a country's panel reaches the host, and the AI's answer comes back to that guest alone", async () => {
+  const { pendingSharedThread, sayRequestFor, openedThreadOf } = await import("../client/sharedThreads.js");
+  const s = setup({
+    // The AI government at the table answers into the thread (engineMain.js tableTurn).
+    replyTo: async ({ chatId }, store) => {
+      await store.updateChats((chats) => chats.map((chat) => (chat.id === chatId
+        ? { ...chat, messages: [...chat.messages, { id: "reply-1", role: "leader", speaker: ESTONIA, code: ESTONIA, text: "Tallinn hears Moscow." }] }
+        : chat)));
+    },
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+
+  // The panel used to make the thread up and save it on the guest's own screen,
+  // where nothing is saved: its first line named a thread the host never had,
+  // and was refused. A guest has no thread of its own to fall back on.
+  const madeUp = { id: "chat-mz1-abcde", countries: [{ name: ESTONIA, code: ESTONIA }], messages: [], status: "open" };
+  await s.request(s.guest, { t: "say", id: id(2), ...sayRequestFor(madeUp, "Moscow to Tallinn.") });
+  assert.match(s.ack(s.guest, id(2)).error, /not in that conversation/);
+  assert.equal(s.store.docs.chat.length, 1);
+
+  // Now the thread waits on the guest's screen until its first line opens it on the host.
+  const pending = pendingSharedThread([{ name: ESTONIA, code: ESTONIA }], { now: () => 7 });
+  const asked = { t: "say", id: id(3), ...sayRequestFor(pending, "Moscow to Tallinn.") };
+  assert.equal(validate(PLAYER_REQUESTS.say, asked).ok, true);
+  await s.request(s.guest, asked);
+  const answer = s.ack(s.guest, id(3));
+  assert.equal(answer.ok, true);
+  const thread = s.store.docs.chat.find((chat) => chat.player === RUSSIA);
+  assert.equal(openedThreadOf(answer), thread.id, "the ack names the thread, for the screen to open");
+  await s.clock.flush();
+  assert.deepEqual(s.replies, [{ chatId: thread.id, seat: RUSSIA }], "Estonia answers, with Russia as the player");
+
+  const guests = s.shown(s.guest).chat.find((chat) => chat.id === thread.id);
+  assert.deepEqual(guests.countries.map((entry) => entry.name), [ESTONIA]);
+  assert.deepEqual(guests.messages.map((message) => [message.role, message.speaker, message.text]), [
+    ["user", RUSSIA, "Moscow to Tallinn."],
+    ["leader", ESTONIA, "Tallinn hears Moscow."],
+  ]);
+  assert.equal((s.shown(s.hostPlayer).chat ?? []).some((chat) => chat.id === thread.id), false, "the host is not at that table");
+
+  // The guest goes on in it by its id; a thread it opens with the host's own
+  // country, a person's, asks the model nothing.
+  await s.request(s.guest, { t: "say", id: id(4), ...sayRequestFor(guests, "And Riga?") });
+  assert.equal(s.ack(s.guest, id(4)).ok, true);
+  assert.equal(s.ack(s.guest, id(4)).result, undefined, "only a thread a line opens is named back");
+  await s.request(s.guest, { t: "say", id: id(5), ...sayRequestFor(pendingSharedThread([{ name: LATVIA }]), "Moscow to Riga.") });
+  await s.clock.flush();
+  assert.equal(s.replies.length, 2);
+  assert.deepEqual(s.replies.at(-1), { chatId: thread.id, seat: RUSSIA });
 });
 
 test("a guest's thread keeps its owner through the game's own normalizer and reconciler, beside the host's thread with the same country", async () => {
