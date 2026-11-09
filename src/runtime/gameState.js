@@ -399,12 +399,16 @@ export const MAX_UNITS_PER_POLITY = 12;
 // A comma is only read as a decimal point when it is the ONLY separator: "1,234.5"
 // keeps its usual meaning, so a thousands separator can never silently divide a
 // value by a thousand.
+//
+// Nothing that is not a number or a string is one: Number(null) is 0, and a
+// coordinate a save kept as null (JSON writes NaN so) read as 0 sent a standing
+// order to lng 0, lat 0, where the unit flew or sailed, on the equator in the
+// middle of the ocean ("i had an airplane squadron and i tasked them to bomb the
+// enemy but they spawned on the equator in the middle of the ocean", a player's
+// report, 2026-11-09).
 const finiteOrNull = (value) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value !== "string") {
-    const num = Number(value);
-    return Number.isFinite(num) ? num : null;
-  }
+  if (typeof value !== "string") return null;
 
   let text = value.trim();
   if (!text) return null;
@@ -1389,7 +1393,8 @@ const normalizePendingUnitOrderEntry = (entry, index = 0) => {
   const unitId = normalizeOptionalString(entry.unitId);
   const toLng = finiteOrNull(entry.toLng);
   const toLat = finiteOrNull(entry.toLat);
-  if (!unitId || toLng === null || toLat === null) return null;
+  // (Nor to lng 0, lat 0: no place, as no unit stands there, normalizeUnitEntry.)
+  if (!unitId || toLng === null || toLat === null || (toLng === 0 && toLat === 0)) return null;
   const rawKind = normalizeOptionalString(entry.kind).toLowerCase();
   // Saves from before player-issued attacks were removed carry kind "attack".
   // Coerce rather than drop: the destination and targetLabel are still good, so
