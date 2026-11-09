@@ -116,6 +116,7 @@ export const RELEASES = [
           "2026-10-peace-and-weariness",
           "2026-10-peace-in-the-chats",
           "2026-11-peace-on-any-terms",
+          "2026-11-peace-holds-fleets-refit",
           "2026-10-group-diplomacy",
           "2026-10-own-voice",
           "2026-11-chat-opener-speaker",

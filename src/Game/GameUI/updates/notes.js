@@ -54,6 +54,27 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player's report (2026-11-09): a war with the Netherlands went on six months after its peace, a bomber
+    // squadron turned up on the equator, and a refitted carrier escort kept its old ships. The enemy may now take a
+    // player's order of peace in the same skip, and a peace ends the war's twins (AI/warAndPeace.js); a lost place is
+    // no lng 0, lat 0 (runtime/gameState.js finiteOrNull, runtime/unitMotion.js stepToward, AI/frontTurn.js
+    // applyFrontUnitChanges); a strength op carries a refit's new composition (runtime/gameState.js normalizeUnitOp).
+    id: "2026-11-peace-holds-fleets-refit",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Peace that holds, fleets that refit",
+        items: [
+          "When the enemy accepts your offer of peace in the same time skip that you made it, the war ends there and then, along with any second record of the same war.",
+          "Aircraft and other forces whose destination was lost stay where they are instead of heading for the equator in the middle of the ocean, and no longer vanish from the map.",
+          "A fleet refitted with new ships now lists its new ships when you click on it.",
+        ],
+      },
+    ],
+  },
+  {
     // A player's 1973 save (2026-11-08): the fall of Saigon carried the Vietnam War's end and was refused as fighting
     // in a war already ended (AI/nativeWarLedger.js); the US player's own offer of peace was answered twice with the
     // war's end and both were refused (AI/playersWarsHold.js); the US withdrawal and the Khmer Rouge sieges were told as

@@ -356,9 +356,13 @@ export const makePeace = (world, { warId = "", from = "", to = "", terms = null,
     });
   }
   if (read.puppet && !(read.annexed && fold(read.annexed.country) === fold(read.puppet.subject))) next = withTreatyPuppet(next, read.puppet, { warId, date, round: turn });
+  // And every twin of it: a war the ledger started twice between the same sides
+  // (warAndPeace.test.js has the ledger doing so) is the same war, and its
+  // battlefields fought on after the peace that ended the other.
+  const ended = new Set([clean(warId), ...twinWarsOf(world, war).map((entry) => clean(entry.id))]);
   next = applyWarUpdates({
     world: next,
-    updates: [{ id: clean(warId), op: "end", actors: [], opponents: [], eventIds: [], baselineDate: clean(date), note: `Peace: ${describeTerms(read)}` }],
+    updates: [...ended].map((id) => ({ id, op: "end", actors: [], opponents: [], eventIds: [], baselineDate: clean(date), note: `Peace: ${describeTerms(read)}` })),
     events: [],
     stopDate: clean(date),
     round: turn,
@@ -371,9 +375,21 @@ export const makePeace = (world, { warId = "", from = "", to = "", terms = null,
     reparations: normalizeReparations([...list(next.reparations), ...reparationsOf(read, { warId, date })]),
     peaceTreaties: normalizePeaceTreaties([...list(next.peaceTreaties).filter((entry) => entry?.id !== treaty.id), treaty]),
     // Whatever was offered in that war is answered by its ending.
-    peaceOffers: normalizePeaceOffers(list(next.peaceOffers).map((offer) => (clean(offer?.warId) === clean(warId) && offer.status === "open" ? { ...offer, status: "lapsed", answeredRound: turn } : offer))),
-    callsToArms: normalizeCallsToArms(list(next.callsToArms).map((call) => (clean(call?.warId) === clean(warId) && call.status === "open" ? { ...call, status: "lapsed", answeredRound: turn } : call))),
+    peaceOffers: normalizePeaceOffers(list(next.peaceOffers).map((offer) => (ended.has(clean(offer?.warId)) && offer.status === "open" ? { ...offer, status: "lapsed", answeredRound: turn } : offer))),
+    callsToArms: normalizeCallsToArms(list(next.callsToArms).map((call) => (ended.has(clean(call?.warId)) && call.status === "open" ? { ...call, status: "lapsed", answeredRound: turn } : call))),
   };
+};
+
+// The other wars still to be settled that are the same war as this one: fought
+// between countries all of them on its sides, on the same sides as in it.
+const twinWarsOf = (world, war) => {
+  const [a, b] = sidesOf(war).map((members) => new Set(members.map(fold)));
+  const within = (members, side) => members.length > 0 && members.every((name) => side.has(fold(name)));
+  return list(world?.wars).filter((other) => {
+    if (!other || clean(other.id) === clean(war?.id) || !settleable(other)) return false;
+    const [x, y] = sidesOf(other);
+    return (within(x, a) && within(y, b)) || (within(x, b) && within(y, a));
+  });
 };
 
 // ---- the turn -----------------------------------------------------------------------------
@@ -504,6 +520,17 @@ export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "
   }
 
   // ---- peace ----
+  // "an action shouldnt inherently be able to end a war, but it offers peace to the opponent" (the owner,
+  // 2026-11-03): a person's order to end their war is put to the other side as their offer of peace, each keeping
+  // what it holds and nobody paying. Put first, so that the government it is put to may take it in the same answer
+  // (its peace line, below): "a peace treaty was signed with the netherlands ... i simmed 6 months but they still
+  // fought" (a player's report, 2026-11-09). The skip told the treaty the order brought about, and its line
+  // accepting the offer was refused for want of an offer, which was made only after it.
+  for (const { warId, from } of list(proposals)) {
+    const put = proposePeace(next, { warId, from, terms: { territory: TERRITORY_AS_HELD }, players, date, round: turn });
+    if (put.offer) next = put.world;
+    if (typeof onProposed === "function") onProposed({ warId, from, to: put.to, offer: put.offer, reason: put.reason });
+  }
   // Only what the skip says was made. Weariness is a figure the AI is told
   // (warStatsPrompt.js), never what makes a peace.
   for (const told of list(treaties)) {
@@ -516,14 +543,6 @@ export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "
     const { accepts, ...treaty } = checked.treaty;
     next = makePeace(next, { ...treaty, date, round: turn, by: accepts ? "proposal" : "settled", regions });
     if (accepts) next = { ...next, peaceOffers: normalizePeaceOffers(list(next.peaceOffers).map((offer) => (offer?.id === accepts ? { ...offer, status: "accepted", answeredRound: turn } : offer))) };
-  }
-  // "an action shouldnt inherently be able to end a war, but it offers peace to the opponent" (the owner,
-  // 2026-11-03): a person's order to end their war is put to the other side as their offer of peace, each keeping
-  // what it holds and nobody paying, which that side's government answers in the next period (above).
-  for (const { warId, from } of list(proposals)) {
-    const put = proposePeace(next, { warId, from, terms: { territory: TERRITORY_AS_HELD }, players, date, round: turn });
-    if (put.offer) next = put.world;
-    if (typeof onProposed === "function") onProposed({ warId, from, to: put.to, offer: put.offer, reason: put.reason });
   }
   next = endWarsOnPuppets(next, { date, round: turn });
   next = endConqueredWars(next, { held: holdings, date, round: turn });

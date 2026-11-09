@@ -809,12 +809,15 @@ export const applyFrontUnitChanges = (units, changes) => {
     }
     if (change.remove === true) continue;
     const { committedTo: _was, ...rest } = unit;
-    const lng = Number(change.lng);
-    const lat = Number(change.lat);
+    // (A place the change does not have is none: Number(null) is 0, and a unit put at lng 0, lat 0 is taken off the map.)
+    const coordinate = (value) => (typeof value === "number" || (typeof value === "string" && value.trim() !== "") ? Number(value) : NaN);
+    const lng = coordinate(change.lng);
+    const lat = coordinate(change.lat);
+    const placed = Number.isFinite(lng) && Number.isFinite(lat) && !(lng === 0 && lat === 0);
     const strength = Number(change.strength);
     next.push({
       ...rest,
-      ...(Number.isFinite(lng) && Number.isFinite(lat) ? { lng, lat } : {}),
+      ...(placed ? { lng, lat } : {}),
       ...(Number.isFinite(strength) ? { strength: Math.max(1, Math.min(100, Math.round(strength))) } : {}),
       // (A fleet that broke off a battle at sea is withdrawing: runtime/naval/engine.js.)
       ...(clean(change.posture) ? { posture: clean(change.posture) } : {}),

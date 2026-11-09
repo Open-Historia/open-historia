@@ -10209,7 +10209,7 @@ const applySimulationResult = async ({
     onProposed: ({ warId, from, to, offer, reason }) => {
       if (offer) {
         logDebugEvent("turn", `${from}'s order to end ${warId} was put to ${to} as an offer of peace.`, offer);
-        noteReceipt(receipt, "dropped", `The end of ${warId}: ${from}'s order offers ${to} peace instead, each keeping what it holds. ${to}'s answer comes with the next skip.`);
+        noteReceipt(receipt, "dropped", `The end of ${warId}: ${from}'s order offers ${to} peace instead, each keeping what it holds. A peace line of this skip's accepting it ended the war; without one, ${to}'s answer comes with the next skip.`);
       } else {
         logDebugEvent("turn", `${from}'s order to end ${warId} offered nothing: ${reason}.`);
       }

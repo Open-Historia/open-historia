@@ -378,6 +378,42 @@ test("a player's order to end their war is put to the enemy as their offer, whic
   assert.equal(refused.length, 1);
 });
 
+// "After i managed to still win the war a peace treaty was signed with the netherlands and i thought that should end
+// the war so i simmed 6 months but they still fought" (a player's report, 2026-11-09).
+test("the enemy may take a player's order of peace in the same skip, and a peace ends every twin of its war", () => {
+  const base = world();
+  const refused = [];
+  const proposed = [];
+  // The skip carries out the player's order and tells Borduria accepting: its line is taken, on the offer's terms.
+  const same = turnWarAndPeace({
+    world: base,
+    baseWorld: base,
+    days: 180,
+    date: "1915-03-01",
+    round: 4,
+    players: ["Aland"],
+    proposals: [{ warId: "war-1", from: "Aland" }],
+    onProposed: (entry) => proposed.push(entry),
+    treaties: [{ from: "Borduria", to: "Aland", terms: { territory: TERRITORY_RESTORED } }],
+    onRefused: (entry) => refused.push(entry),
+  });
+  assert.deepEqual(refused, []);
+  assert.equal(proposed[0]?.to, "Borduria");
+  assert.equal(war(same).status, "ended");
+  assert.equal(same.peaceOffers.find((entry) => entry.from === "Aland")?.status, "accepted");
+  assert.equal(holder(same, "b8"), "Aland", "as held, the terms the order offered");
+  assert.equal(same.peaceTreaties.at(-1)?.warId, "war-1");
+
+  // A ledger that started the war twice: the peace made in one ends the other, and nothing else.
+  const twice = world({ wars: [WAR, { ...WAR, id: "war-2", sideA: ["Borduria"], sideB: ["Aland"] }, { ...WAR, id: "war-3", sideA: ["Aland"], sideB: ["Cisland"] }] });
+  const peace = makePeace(twice, { warId: "war-1", from: "Borduria", to: "Aland", date: "1915-03-01", round: 4 });
+  assert.deepEqual(peace.wars.map((entry) => [entry.id, entry.status]).sort(), [["war-1", "ended"], ["war-2", "ended"], ["war-3", "active"]]);
+  // Its battlefields are the engine's to close as its war is over (runtime/fronts/engine.js syncWithWar), the twin's with it.
+  const fields = [{ name: "The Border", warId: "war-1", status: "active", sides: [["Aland"], ["Borduria"]] }, { name: "The North", warId: "war-2", status: "active", sides: [["Borduria"], ["Aland"]] }];
+  assert.equal(playerFronts(fields, "Aland", twice.wars).length, 2);
+  assert.equal(playerFronts(fields, "Aland", peace.wars).length, 0);
+});
+
 // "fully conquouring an enemy should end the war" (the owner, 2026-11-03).
 test("a war in which one side's countries hold no land at all ends at the end of the turn, the conqueror keeping it", () => {
   const conquered = world({ regionOwnershipOverrides: { ...regions("a", "Aland", 10), ...regions("b", "Aland", 10), ...regions("c", "Cisland", 4) } });
