@@ -26,9 +26,21 @@
 // same edge, so many screen pixels wide wherever it runs. As the run plays the
 // line moves with the ground.
 //
+// ON THE 3D TERRAIN. MapLibre lays its own fills, lines and pictures over the
+// hills by drawing them into the terrain's own tiles; a layer that draws
+// itself was drawn on the screen instead, at the sea's level, so with the map
+// tilted the battlefield lay flat, apart from the country round it ("the war
+// terrain is not 3d", the owner, 2026-11-09). The game's MapLibre lets such a
+// layer draw into the terrain's tiles too (renderToTerrainTile): with the
+// terrain on, the ground is drawn there, in its place among the fills, and lies
+// on the hills as they do. It is drawn again only when what it shows changes
+// (terrainTileRevision) or the map's own tiles are redrawn. With the terrain
+// off it is drawn as it always was.
+//
 // The pure parts load in plain Node.
 
 import { worldCopies } from "./strikeCustomLayer.js";
+import { meshBounds } from "./terrainDrape.js";
 import { mercatorX, mercatorY } from "./vnext/battlefieldGround.js";
 import {
   POLITY_BOUNDARY_SHADOW_BLUR_STOPS,
@@ -101,6 +113,39 @@ void main() {
   gl_Position = projectTileWithElevation(a_pos + vec2(u_world, 0.0), 0.0);
 }`;
 
+// The same, drawn into one of the 3D terrain's tiles: its corners put in the
+// tile, which is (-1, -1) at its south-west corner and (1, 1) at its north-east.
+const TILE_VERTEX = `#version 300 es
+precision highp float;
+in vec2 a_pos;
+in vec3 a_own;
+// The tile's north-west corner on the sheet (xy), how many tiles the sheet is
+// across at its zoom (z), and the copy of the world the regions are drawn in (w).
+uniform vec4 u_tile;
+uniform vec4 u_rect;
+out vec2 v_uv;
+out vec3 v_own;
+void main() {
+  v_uv = (a_pos - u_rect.xy) / (u_rect.zw - u_rect.xy);
+  v_own = a_own;
+  vec2 at = (a_pos + vec2(u_tile.w, 0.0) - u_tile.xy) * u_tile.z;
+  gl_Position = vec4(at.x * 2.0 - 1.0, 1.0 - at.y * 2.0, 0.0, 1.0);
+}`;
+
+// How many of a terrain tile's pixels one of the screen's is, the tile being
+// `width` pixels and drawn `tileSize` (MapLibre's terrain tiles: 512) at its
+// own zoom: as the map's own borders are drawn into the tile (a line's width
+// in the tile's pixels at the map's zoom).
+export const tilePixelsPerScreenPixel = (width, tileZoom, zoom, tileSize = 512) => width / (tileSize * 2 ** (zoom - tileZoom));
+
+// The copies of the world (-1, 0, 1) in which a box on the sheet,
+// [left, top, right, bottom], lies over a terrain tile's, [x0, y0, x1, y1].
+export const copiesOverTile = (bounds, tile) => {
+  if (!bounds) return [0];
+  if (bounds[1] >= tile[3] || bounds[3] <= tile[1]) return [];
+  return [-1, 0, 1].filter((copy) => bounds[0] + copy < tile[2] && bounds[2] + copy > tile[0]);
+};
+
 // The ground, and the border where the front's field is half-way. The field is
 // read smoothly between the cells' middles, and how fast it changes across the
 // screen (its derivatives) says how many pixels this one is from the half-way
@@ -165,6 +210,20 @@ const link = (gl, vertexSource, fragmentSource, names) => {
 };
 
 const GROUND_UNIFORMS = ["world", "rect", "paint", "front", "strength", "line", "core", "casing"];
+const TILE_UNIFORMS = ["tile", "rect", "paint", "front", "strength", "line", "core", "casing"];
+
+// A number for each thing (a canvas, a field's pixels), so a new one under the same key is told apart.
+let things = 0;
+const thingIds = new WeakMap();
+const thingId = (thing) => {
+  if (!thing || (typeof thing !== "object" && typeof thing !== "function")) return 0;
+  let id = thingIds.get(thing);
+  if (!id) {
+    id = (things += 1);
+    thingIds.set(thing, id);
+  }
+  return id;
+};
 const PROJECTION_UNIFORMS = {
   matrix: "u_projection_matrix",
   fallback: "u_projection_fallback_matrix",
@@ -215,6 +274,10 @@ export const createFrontGroundLayer = ({ id = FRONT_GROUND_LAYER_ID, areas, stre
     const list = typeof areas === "function" ? areas() : [];
     return Array.isArray(list) ? list.filter((area) => area?.canvas && area.positions?.length && area.regionOf?.length) : [];
   };
+  // What the ground shows, in a line: when it changes the terrain's tiles are drawn again.
+  const showing = () => listed()
+    .map((area) => [area.key, area.version, thingId(area.canvas), area.front?.version, thingId(area.front?.data), area.meshId, area.colourKey, area.ready ? 1 : 0].join("|"))
+    .join(";");
 
   return {
     id,
@@ -224,10 +287,32 @@ export const createFrontGroundLayer = ({ id = FRONT_GROUND_LAYER_ID, areas, stre
     _ground: null,
     _variant: "",
     _failed: "",
+    _tile: null,
+    _tileFailed: false,
     _entries: new Map(),
     _matrices: { main: new Float32Array(16), fallback: new Float32Array(16) },
+    _revision: 0,
+    _showing: null,
+    _tilePrepared: [],
+    _tilePreparedFor: -1,
     drawn: 0,
     uploads: 0,
+
+    // Asked by MapLibre each frame while the 3D terrain is on: a new number has
+    // the terrain's tiles under the ground drawn again.
+    get terrainTileRevision() {
+      let now = "";
+      try {
+        now = showing();
+      } catch { /* nothing to read: as it was */
+        now = this._showing;
+      }
+      if (now !== this._showing) {
+        this._showing = now;
+        this._revision += 1;
+      }
+      return this._revision;
+    },
 
     onAdd(map, gl) {
       this._map = map;
@@ -243,13 +328,32 @@ export const createFrontGroundLayer = ({ id = FRONT_GROUND_LAYER_ID, areas, stre
     onRemove(map, gl) {
       try {
         if (this._ground) gl.deleteProgram(this._ground.handle);
+        if (this._tile) gl.deleteProgram(this._tile.handle);
         for (const entry of this._entries.values()) this._release(gl, entry);
       } catch { /* the context is gone */ }
       this._ground = null;
       this._variant = "";
       this._failed = "";
+      this._tile = null;
+      this._tileFailed = false;
+      this._tilePrepared = [];
+      this._tilePreparedFor = -1;
       this._entries = new Map();
       this._map = null;
+    },
+
+    // The program that draws into the terrain's tiles.
+    _ensureTile(gl) {
+      if (this._tile) return true;
+      if (this._tileFailed) return false;
+      try {
+        this._tile = link(gl, TILE_VERTEX, FRAGMENT, TILE_UNIFORMS);
+        return true;
+      } catch (error) {
+        this._tileFailed = true;
+        onError?.(error);
+        return false;
+      }
     },
 
     _ensure(gl, data) {
@@ -291,6 +395,7 @@ export const createFrontGroundLayer = ({ id = FRONT_GROUND_LAYER_ID, areas, stre
         entry.count = area.positions.length / 2;
         entry.meshId = area.meshId;
         entry.colourKey = null;
+        entry.bounds = meshBounds(area.positions);
       }
       if (entry.colourKey !== area.colourKey) {
         entry.colours ??= gl.createBuffer();
@@ -415,6 +520,75 @@ export const createFrontGroundLayer = ({ id = FRONT_GROUND_LAYER_ID, areas, stre
           this._attributes(gl, program, entry);
           for (const copy of copies) {
             if (program.world) gl.uniform1f(program.world, copy);
+            gl.drawArrays(gl.TRIANGLES, 0, entry.count);
+          }
+          this.drawn += entry.count;
+        }
+        gl.disableVertexAttribArray(program.pos);
+        gl.disableVertexAttribArray(program.own);
+        tell(true);
+      } catch (error) {
+        onError?.(error);
+        tell(false);
+      } finally {
+        gl.activeTexture(gl.TEXTURE0);
+      }
+    },
+
+    // With the 3D terrain on, MapLibre asks for the ground here, once for each
+    // of the terrain's tiles it draws, instead of `render`: drawn into the
+    // tile, it lies on the hills with the map's own fills. `tileID` is the
+    // tile, `width` its pixels across.
+    renderToTerrainTile(gl, { tileID, width } = {}) {
+      if (!this._ground && working !== true) return;
+      const canonical = tileID?.canonical;
+      if (!canonical || !Number.isFinite(canonical.z)) return;
+      if (!this._ensureTile(gl)) {
+        tell(false);
+        return;
+      }
+      try {
+        // What is to be drawn is made ready once for each thing shown, not once a tile.
+        if (this._tilePreparedFor !== this._revision) {
+          this._tilePrepared = this._prepareAll(gl);
+          this._tilePreparedFor = this._revision;
+          // (Counted from here: the corners drawn into tiles since it last changed.)
+          this.drawn = 0;
+        }
+        const prepared = this._tilePrepared;
+        if (prepared.length === 0) return;
+        const across = 2 ** canonical.z;
+        const tile = [canonical.x / across, canonical.y / across, (canonical.x + 1) / across, (canonical.y + 1) / across];
+        const program = this._tile;
+        const zoom = this._map?.getZoom?.() ?? canonical.z;
+        const tileSize = Number(this._map?.terrain?.tileManager?.tileSize) || 512;
+        const scale = tilePixelsPerScreenPixel(Number(width) || tileSize * 2, canonical.z, zoom, tileSize);
+        const widths = groundBorderWidths(zoom);
+        const laid = Number(typeof strength === "function" ? strength(zoom) : 0.62);
+        gl.bindVertexArray(null);
+        gl.useProgram(program.handle);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.disable(gl.DEPTH_TEST);
+        gl.disable(gl.STENCIL_TEST);
+        gl.disable(gl.CULL_FACE);
+        gl.uniform1f(program.strength, Number.isFinite(laid) ? Math.max(0, Math.min(1, laid)) : 0.62);
+        gl.uniform3f(program.line, widths.core * scale, widths.casing * scale, widths.blur * scale);
+        gl.uniform4f(program.core, ...BORDER_CORE.rgb, BORDER_CORE.alpha);
+        gl.uniform4f(program.casing, ...BORDER_CASING.rgb, BORDER_CASING.alpha);
+        gl.uniform1i(program.paint, 0);
+        gl.uniform1i(program.front, 1);
+        for (const entry of prepared) {
+          const copies = copiesOverTile(entry.bounds, tile);
+          if (copies.length === 0) continue;
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, entry.paint);
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, entry.front);
+          gl.uniform4f(program.rect, entry.rect[0], entry.rect[1], entry.rect[2], entry.rect[3]);
+          this._attributes(gl, program, entry);
+          for (const copy of copies) {
+            gl.uniform4f(program.tile, tile[0], tile[1], across, copy);
             gl.drawArrays(gl.TRIANGLES, 0, entry.count);
           }
           this.drawn += entry.count;

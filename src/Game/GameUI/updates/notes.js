@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The owner, 2026-11-09: "3d terrain and warfronts do not seem to work together, the war terrain is not 3d". A
+    // battlefield's ground and the bare map put back under it are layers that draw themselves, which MapLibre does not
+    // lay on the terrain as it does its fills: they were drawn at the sea's level, apart from the country round them.
+    // The ground now draws into the terrain's own tiles (renderToTerrainTile, Map/frontGroundLayer.js); the bare map,
+    // drawn where the ground cannot be, is lifted by the terrain's heights (Map/terrainDrape.js).
+    id: "2026-11-battlefields-on-3d-terrain",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Battlefields on the 3D terrain",
+        items: [
+          "With 3D terrain on, a battlefield’s ground and its moving front now lie on the hills like the rest of the map, instead of sitting flat apart from it when you tilt the map.",
+        ],
+      },
+    ],
+  },
+  {
     // "it looks like there are alot of issues involving wars with groups including issues with the dynamic borders and
     // duel occupied territory" (the owner), and a player at war with Türkiye who could deploy only in the west while
     // holding Syria (runtime/fronts/engine.js examineWar, landChanged, pairSideOf; runtime/fronts/warRoomOps.js
