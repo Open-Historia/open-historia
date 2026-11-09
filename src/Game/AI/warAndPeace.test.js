@@ -478,3 +478,27 @@ test("a peace can annex a country whole, cede regions by name, make a puppet, an
   assert.deepEqual(third.puppets.filter((entry) => entry.status === "active"), []);
   assert.deepEqual(third.peaceTreaties[0].terms.conditions, ["Cisland is annexed", "Cisland becomes Aland's puppet"]);
 });
+
+// Two wars between the same pair, the player's offer waiting in the second: the skip's line accepting it was
+// refused ("a person is in that war") because warBetween found the first, and the peace ff199dc1 meant to end both
+// was never made.
+test("a skip's line accepting a player's offer is taken in whichever twin war the offer waits in", () => {
+  const twins = world({
+    wars: [WAR, { ...WAR, id: "war-2", sideA: ["Borduria"], sideB: ["Aland"] }],
+    peaceOffers: [{ id: "peace:war-2:aland:3", warId: "war-2", from: "Aland", to: "Borduria", terms: { territory: TERRITORY_RESTORED, reparations: null }, status: "open", round: 3 }],
+  });
+  const refused = [];
+  const made = turnWarAndPeace({
+    world: twins,
+    baseWorld: twins,
+    days: 180,
+    date: "1915-03-01",
+    round: 4,
+    players: ["Aland"],
+    treaties: [{ from: "Borduria", to: "Aland", terms: null }],
+    onRefused: (entry) => refused.push(entry),
+  });
+  assert.deepEqual(refused, []);
+  assert.deepEqual(made.wars.map((entry) => [entry.id, entry.status]).sort(), [["war-1", "ended"], ["war-2", "ended"]]);
+  assert.equal(made.peaceOffers.find((entry) => entry.id === "peace:war-2:aland:3")?.status, "accepted");
+});

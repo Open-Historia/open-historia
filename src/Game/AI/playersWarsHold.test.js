@@ -126,3 +126,21 @@ test("with the player's offer open, their own order's end stays a proposal, and 
   const theirs = { id: "war-russia-ukraine", op: "end", actors: ["Ukraine"], opponents: ["Russian Federation"], eventIds: ["evt-1"] };
   assert.deepEqual(holdPlayersWars({ updates: [theirs], events: told, wars, players: ["Ukraine"], orders, offers }).accepted, [], "an end the other side is not the doer of accepts nothing");
 });
+
+// The peace an accepted end makes is made only after the turn's story is told (warAndPeace.js turnWarAndPeace):
+// an end that accepts a peace that cannot be made is refused with its events, and the receipt that it was accepted
+// is written only once the war is over.
+test("an end that accepts a peace the turn cannot make is refused, and the accepted receipt waits for the peace", () => {
+  const offers = [{ id: "peace:war-russia-ukraine:ukraine:3", warId: "war-russia-ukraine", from: "Ukraine", to: "Russian Federation", terms: { territory: "restored", reparations: null }, status: "open" }];
+  const update = { id: "war-russia-ukraine", op: "end", actors: ["Russian Federation"], opponents: ["Ukraine"], eventIds: ["evt-1"] };
+  const over = wars.map((war) => (war.id === "war-russia-ukraine" ? { ...war, status: "ended" } : war));
+  const held = holdPlayersWars({ updates: [update], events, wars: over, players: ["Ukraine"], offers });
+  assert.deepEqual(held.accepted, []);
+  assert.deepEqual(held.events.map((event) => event.id), ["evt-2", "evt-3"]);
+
+  const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  const peace = gameplay.indexOf("worldWithImpacts = turnWarAndPeace({");
+  const told = gameplay.indexOf("'s offer of peace, on the terms offered.`);");
+  assert.ok(peace > 0 && told > peace, "the receipt follows the peace");
+  assert.match(gameplay, /if \(normalizeString\(war\?\.status\)\.toLowerCase\(\) === "ended"\) \{/);
+});

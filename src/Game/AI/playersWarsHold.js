@@ -18,6 +18,8 @@
 // war" (a player's report, 2026-11-03): "retreat troops back to germany, the
 // war is over" and "END THE WAR RIGHT NOW" were both thrown away.
 
+import { treatyFromSkip } from "../../runtime/peaceTerms.js";
+
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLowerCase();
 const list = (value) => (Array.isArray(value) ? value : []);
@@ -91,7 +93,10 @@ export const holdPlayersWars = ({ updates = [], events = [], wars = [], players 
     return sides.has(0) && sides.has(1);
   };
   const acceptedBy = (update, war, offer) => list(update?.actors).some((name) => fold(name) === fold(offer?.to))
-    && !eventIdsOf(update).some((id) => fought(eventOf.get(id), war));
+    && !eventIdsOf(update).some((id) => fought(eventOf.get(id), war))
+    // (And only a peace the turn can make, as it will try it, warAndPeace.js turnWarAndPeace: an end that
+    // accepts what cannot be made is refused with its events, for they would tell a peace there is none of.)
+    && treatyFromSkip({ from: offer?.to, to: offer?.from, wars, players, offers }).treaty?.accepts === offer?.id;
 
   const proposals = [];
   const accepted = [];

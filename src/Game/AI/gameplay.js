@@ -10051,10 +10051,6 @@ const applySimulationResult = async ({
     ...toldTreaties,
     ...playersWars.accepted.filter((entry) => !toldTreaties.some((line) => samePair(line, entry))).map(({ from, to }) => ({ from, to, terms: null })),
   ];
-  for (const entry of playersWars.accepted) {
-    logDebugEvent("turn", `The skip's end for ${entry.warId} is ${entry.to} accepting ${entry.from}'s offer of peace.`, entry.update);
-    noteReceipt(receipt, "adjusted", `The end of ${entry.warId}: ${entry.to} accepted ${entry.from}'s offer of peace, on the terms offered.`);
-  }
   worldWithImpacts = turnWarAndPeace({
     world: worldWithImpacts,
     baseWorld,
@@ -10080,6 +10076,18 @@ const applySimulationResult = async ({
       }
     },
   });
+  // The player's offers the skip's end accepted, told once the peace is made: the war ended by it (or by a peace
+  // in its twin, makePeace). One that was not made is told as refused, like any other end of a player's war.
+  for (const entry of playersWars.accepted) {
+    const war = normalizeArray(worldWithImpacts?.wars).find((item) => normalizeString(item?.id).toLowerCase() === normalizeString(entry.warId).toLowerCase());
+    if (normalizeString(war?.status).toLowerCase() === "ended") {
+      logDebugEvent("turn", `The skip's end for ${entry.warId} is ${entry.to} accepting ${entry.from}'s offer of peace.`, entry.update);
+      noteReceipt(receipt, "adjusted", `The end of ${entry.warId}: ${entry.to} accepted ${entry.from}'s offer of peace, on the terms offered.`);
+    } else {
+      logDebugEvent("turn", `The skip's end for ${entry.warId} accepted ${entry.from}'s offer of peace, but the peace was not made.`, entry.update);
+      noteReceipt(receipt, "dropped", `"end" for ${entry.warId}: ${entry.to} took ${entry.from}'s offer of peace, but the peace could not be made, and the war goes on.`);
+    }
+  }
   // A war's end and a country's fall clear the map (nativeUnitDirector.js
   // pruneWarUnits): the counters raised for a war that has ended, and the units
   // of a power that held land when the turn began and holds none now.
