@@ -648,11 +648,10 @@ func _map_controls() -> void:
 	}
 	for preset in ["forest", "oxblood"]:
 		var palette: Dictionary = UiTheme.preset_named(preset)["colors"]
-		var bg := Color(str(palette["background"]))
 		var surface := Color(str(palette["surface"]))
 		var accent := Color(str(palette["accent"]))
 		expected[preset] = {
-			"dock": Color(bg, 0.58), "edge": Color(Color(UiTheme.mix(str(palette["surface"]), "#FFFFFF", 0.55)), 0.2), "pill": Color(surface, 0.6),
+			"dock": Color(surface, 0.6), "edge": Color(Color(UiTheme.mix(str(palette["surface"]), "#FFFFFF", 0.55)), 0.2), "pill": Color(surface, 0.6),
 			"diplo": Color(accent, 0.22), "diplo_ink": Color(UiTheme.mix(str(palette["accent"]), "#FFFFFF", 0.3)), "diplo_line": Color(accent, 0.45),
 			"open": Color(accent, 0.22), "rest": Color(Color(UiTheme.mix(str(palette["surface"]), "#FFFFFF", 0.08)), 0.42),
 		}

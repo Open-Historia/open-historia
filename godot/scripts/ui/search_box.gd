@@ -57,7 +57,7 @@ func _init() -> void:
 	offset_right = COMPACT
 	offset_bottom = COMPACT
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_list_panel = GlassPanel.new(UI.HUD_BG_STRONG, 12.0).theme_as("hud_bg_strong", "hud_border")
+	_list_panel = GlassPanel.new(UI.HUD_BG_STRONG, 12.0).theme_as("overlay_header", "hud_border")
 	_list_panel.visible = false
 	_list_panel.anchor_right = 1.0
 	_list_panel.offset_left = -1.0
@@ -67,7 +67,7 @@ func _init() -> void:
 	_list.add_theme_constant_override("separation", 0)
 	_list_panel.add_child(_list)
 	add_child(_list_panel)
-	_shell = GlassPanel.new(UI.HUD_BG, 12.0).theme_as("hud_bg", "hud_border")
+	_shell = GlassPanel.new(UI.HUD_BG, 12.0).theme_as("glass_pill", "hud_border")
 	_shell.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_shell.clip_contents = true
 	_shell.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -502,7 +502,7 @@ class PlaceRow extends PanelContainer:
 
 	func _draw() -> void:
 		if highlight:
-			draw_rect(Rect2(Vector2.ZERO, size), Color(1, 1, 1, 0.08))
+			draw_rect(Rect2(Vector2.ZERO, size), UiTheme.pick("glass_hover", Color(1, 1, 1, 0.08)))
 		if not last:
 			draw_rect(Rect2(0, size.y - 1, size.x, 1), Color(1, 1, 1, 0.05))
 

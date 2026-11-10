@@ -724,7 +724,7 @@ func _style_field() -> void:
 		focus.shadow_size = 1
 		_field.add_theme_stylebox_override("panel", focus)
 	else:
-		_field.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", Color("#192b3b")), Color(133 / 255.0, 183 / 255.0, 210 / 255.0, 0.3), 6, 1))
+		_field.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", Color("#192b3b")), UiTheme.pick("line", Color(133 / 255.0, 183 / 255.0, 210 / 255.0, 0.3)), 6, 1))
 
 
 func _on_mic_heard(text: String) -> void:
@@ -746,13 +746,13 @@ func _on_mic_send(text: String) -> void:
 
 func _style_send() -> void:
 	var resting := UI.box(UiTheme.pick("active", Color("#326e93")), UiTheme.pick("accent", Color("#4c94b9")), 6, 1)
-	var lifted := UI.box(UiTheme.pick("hover", Color("#4285a9")), Color("#86cce8"), 6, 1)
+	var lifted := UI.box(UiTheme.pick("hover", Color("#4285a9")), UiTheme.pick("accent", Color("#86cce8")), 6, 1)
 	_send_button.add_theme_stylebox_override("normal", resting)
 	_send_button.add_theme_stylebox_override("focus", resting)
 	_send_button.add_theme_stylebox_override("hover", lifted)
 	_send_button.add_theme_stylebox_override("pressed", lifted)
 	_send_button.add_theme_stylebox_override("hover_pressed", lifted)
-	_send_button.add_theme_stylebox_override("disabled", UI.box(UiTheme.pick("surface", Color("#243b4d")), Color("#314c60"), 6, 1))
+	_send_button.add_theme_stylebox_override("disabled", UI.box(UiTheme.pick("surface", Color("#243b4d")), UiTheme.pick("line", Color("#314c60")), 6, 1))
 
 
 func _on_theme_changed() -> void:
@@ -1023,7 +1023,7 @@ func _render(follow := true) -> void:
 	if messages.size() > _visible_limit:
 		var hidden: int = min(messages.size() - _visible_limit, WINDOW_STEP)
 		var earlier := _chip("Show 1 earlier message" if hidden == 1 else "Show %d earlier messages" % hidden, UiTheme.pick("surface", Color("#1b2d3d")), UiTheme.pick("line", EDGE), Color("#b8cddd"), 11, 400, Vector4(12, 6, 12, 6), 5)
-		earlier.add_theme_stylebox_override("hover", UI.box(UiTheme.pick("surface", Color("#1b2d3d")), Color("#779eb5"), 5, 1, Vector4(12, 6, 12, 6)))
+		earlier.add_theme_stylebox_override("hover", UI.box(UiTheme.pick("surface", Color("#1b2d3d")), UiTheme.pick("accent", Color("#779eb5")), 5, 1, Vector4(12, 6, 12, 6)))
 		earlier.add_theme_color_override("font_hover_color", UI.WHITE)
 		earlier.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		earlier.pressed.connect(func() -> void:
@@ -1282,8 +1282,8 @@ func _contact_action(text: String) -> Button:
 	button.custom_minimum_size.y = 34
 	button.add_theme_font_override("font", UI.font(700))
 	button.add_theme_font_size_override("font_size", 11)
-	var resting := UI.box(CLEAR, ACTION_BORDER, 5, 1, Vector4(8, 6, 8, 6))
-	var lifted := UI.box(Color(106 / 255.0, 159 / 255.0, 191 / 255.0, 0.11), Color(141 / 255.0, 194 / 255.0, 222 / 255.0, 0.53), 5, 1, Vector4(8, 6, 8, 6))
+	var resting := UI.box(CLEAR, UiTheme.pick("line", ACTION_BORDER), 5, 1, Vector4(8, 6, 8, 6))
+	var lifted := UI.box(UiTheme.pick("hover", Color(106 / 255.0, 159 / 255.0, 191 / 255.0, 0.11)), UiTheme.pick("accent", Color(141 / 255.0, 194 / 255.0, 222 / 255.0, 0.53)), 5, 1, Vector4(8, 6, 8, 6))
 	for state in [["normal", resting], ["focus", resting], ["disabled", _faded(resting)], ["hover", lifted], ["pressed", lifted], ["hover_pressed", lifted]]:
 		button.add_theme_stylebox_override(state[0], state[1])
 	for name in ["font_color", "font_pressed_color", "font_focus_color"]:
@@ -1296,9 +1296,9 @@ func _contact_action(text: String) -> Button:
 
 
 func _contact_select(current: bool) -> RecipientRow:
-	var resting := UI.box(RECIPIENT_PICKED if current else CLEAR, _accent() if current else CLEAR, 0, 0, Vector4(9, 7, 7, 9))
+	var resting := UI.box(UiTheme.pick("active", RECIPIENT_PICKED) if current else CLEAR, _accent() if current else CLEAR, 0, 0, Vector4(9, 7, 7, 9))
 	resting.border_width_left = 2
-	var lifted := UI.box(RECIPIENT_PICKED if current else Color(131 / 255.0, 182 / 255.0, 211 / 255.0, 0.08), _accent() if current else CLEAR, 0, 0, Vector4(9, 7, 7, 9))
+	var lifted := UI.box(UiTheme.pick("active", RECIPIENT_PICKED) if current else UiTheme.pick("hover", Color(131 / 255.0, 182 / 255.0, 211 / 255.0, 0.08)), _accent() if current else CLEAR, 0, 0, Vector4(9, 7, 7, 9))
 	lifted.border_width_left = 2
 	var pick := RecipientRow.new(resting, lifted)
 	pick.custom_minimum_size.y = 42
@@ -1329,7 +1329,7 @@ func _contact_row() -> HBoxContainer:
 
 func _contact_rule(line: HBoxContainer) -> PanelContainer:
 	var frame := PanelContainer.new()
-	var style := UI.box(CLEAR, Color(141 / 255.0, 194 / 255.0, 222 / 255.0, 0.13), 0, 0, Vector4(0, 3, 0, 3))
+	var style := UI.box(CLEAR, UiTheme.pick("line", Color(141 / 255.0, 194 / 255.0, 222 / 255.0, 0.13)), 0, 0, Vector4(0, 3, 0, 3))
 	style.border_width_bottom = 1
 	frame.add_theme_stylebox_override("panel", style)
 	frame.add_child(line)
@@ -1565,8 +1565,8 @@ func _recipient_toggle(heading: String, archived: bool) -> Button:
 	toggle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toggle.custom_minimum_size = Vector2(1, 38)
 	toggle.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-	var resting := UI.box(UiTheme.pick("surface", Color("#20374a")), Color(141 / 255.0, 194 / 255.0, 222 / 255.0, 0.27), 6, 1, Vector4(10, 7, 10, 7))
-	var open_style := UI.box(UiTheme.pick("hover", Color("#29485e")), Color(133 / 255.0, 203 / 255.0, 230 / 255.0, 0.63), 6, 1, Vector4(10, 7, 10, 7))
+	var resting := UI.box(UiTheme.pick("surface", Color("#20374a")), UiTheme.pick("line", Color(141 / 255.0, 194 / 255.0, 222 / 255.0, 0.27)), 6, 1, Vector4(10, 7, 10, 7))
+	var open_style := UI.box(UiTheme.pick("hover", Color("#29485e")), UiTheme.pick("accent", Color(133 / 255.0, 203 / 255.0, 230 / 255.0, 0.63)), 6, 1, Vector4(10, 7, 10, 7))
 	var face := open_style if _recipients_open else resting
 	for state in [["normal", face], ["focus", face], ["disabled", face], ["hover", open_style], ["pressed", open_style], ["hover_pressed", open_style]]:
 		toggle.add_theme_stylebox_override(state[0], state[1])
@@ -1642,7 +1642,7 @@ func _restore_recipient_scroll(value: int) -> void:
 
 func _recipient_editor_box(busy: bool) -> Control:
 	var frame := PanelContainer.new()
-	frame.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", Color("#192b3b")), Color(133 / 255.0, 203 / 255.0, 230 / 255.0, 0.32), 6, 1, Vector4(12, 12, 12, 12)))
+	frame.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", Color("#192b3b")), UiTheme.pick("line", Color(133 / 255.0, 203 / 255.0, 230 / 255.0, 0.32)), 6, 1, Vector4(12, 12, 12, 12)))
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 7)
 	frame.add_child(box)
@@ -2010,7 +2010,7 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 	var style: StyleBoxFlat
 	var pad := 22.0
 	if user:
-		style = UI.box(UiTheme.pick("active", Color("#27475e")), Color(133 / 255.0, 203 / 255.0, 230 / 255.0, 0.28), 7, 1, Vector4(13, 11, 13, 11))
+		style = UI.box(UiTheme.pick("active", Color("#27475e")), UiTheme.pick("line", Color(133 / 255.0, 203 / 255.0, 230 / 255.0, 0.28)), 7, 1, Vector4(13, 11, 13, 11))
 		style.corner_radius_bottom_right = 3
 		pad = 26.0
 	elif role == "error":
@@ -2020,7 +2020,7 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 		style.corner_radius_bottom_right = 5
 		pad = 28.0
 	else:
-		style = UI.box(CLEAR, Color("#3b6681"), 0, 0, Vector4(15, 1, 7, 2))
+		style = UI.box(CLEAR, UiTheme.pick("line", Color("#3b6681")), 0, 0, Vector4(15, 1, 7, 2))
 		style.border_width_left = 2
 	bubble.add_theme_stylebox_override("panel", style)
 	bubble.set_meta("role", role)

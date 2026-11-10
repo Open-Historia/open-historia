@@ -208,7 +208,7 @@ func _launcher_style(open: bool, hovered: bool) -> StyleBoxFlat:
 
 
 func _build_dock() -> void:
-	var dock := _glass(UI.HUD_BG, 14, Rect2(8, -72, 205, 64), Vector4(0, 1, 0, 1), Vector4(11, 5, 11, 5)).theme_as("hud_bg", "hud_border")
+	var dock := _glass(UI.HUD_BG, 14, Rect2(8, -72, 205, 64), Vector4(0, 1, 0, 1), Vector4(11, 5, 11, 5)).theme_as("glass_pill", "hud_border")
 	_dock = dock
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
@@ -450,7 +450,7 @@ func _build_bottom_right() -> void:
 		toggle_drawer("advisor"))
 	_advisor_frame.add_child(advisor)
 	_theme_rim(_advisor_frame, advisor, 14)
-	var toggle := _glass(UI.HUD_BG, 12, Rect2(-206, -44, 198, 36), Vector4(1, 1, 1, 1), Vector4(4, 4, 4, 4), _right_layer).theme_as("hud_bg", "hud_border")
+	var toggle := _glass(UI.HUD_BG, 12, Rect2(-206, -44, 198, 36), Vector4(1, 1, 1, 1), Vector4(4, 4, 4, 4), _right_layer).theme_as("glass_pill", "hud_border")
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
 	for entry in [["political", "Political", 87], ["diplomatic", "Diplomatic", 99]]:
