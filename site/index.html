@@ -75,12 +75,12 @@
 </script>
 <link rel="stylesheet" href="/fonts/fonts.css" />
 <link rel="stylesheet" href="/story/vendor/maplibre-gl.css?v=761a1130f0" />
-<link rel="stylesheet" href="/story/story.css?v=e8021eda95" />
+<link rel="stylesheet" href="/story/story.css?v=4f1f0a2990" />
 <link rel="stylesheet" href="/story/game-ui.css?v=5abfb562f4" />
 <script defer src="/story/vendor/maplibre-gl.js?v=28ab0f7e9d"></script>
 <script defer src="/story/map-data.js?v=b0c663183f"></script>
 <script defer src="/story/game-ui.js?v=6a36f67c9d"></script>
-<script defer src="/story/story.js?v=f98868daba"></script>
+<script defer src="/story/story.js?v=f7c62d6acd"></script>
 <script defer src="/story/site.js?v=f08d2a3a48"></script>
 </head>
 <body>
@@ -114,108 +114,589 @@
 <main>
 
 <!-- ====================================================================== -->
+<!-- The hero: four ages side by side. Each age is a scene clipped to its
+     slanted frame (.scene) and a layer that is not clipped (.spill): the
+     bombers and the searchlight, the red line, the dragon and the royal
+     ribbon are drawn there, so they cross the seams into the next age. -->
 <section class="hero" id="top">
-  <svg class="hero-map" id="heroMap" aria-hidden="true" preserveAspectRatio="xMidYMid slice"></svg>
-  <div class="hero-veil" aria-hidden="true"></div>
+  <div class="realms">
 
-  <!-- The astrolabe behind the scales: rings of degrees, turning slowly. -->
-  <svg class="astrolabe" viewBox="-400 -400 800 800" aria-hidden="true">
-    <defs>
-      <path id="ringText" d="M0 -318 A318 318 0 1 1 -0.1 -318" />
-      <path id="ringText2" d="M0 -246 A246 246 0 1 1 -0.1 -246" />
-    </defs>
-    <g class="ring r1">
-      <circle r="360" /><circle r="350" />
-      <g class="ticks" id="astroTicks"></g>
-    </g>
-    <g class="ring r2">
-      <circle r="332" /><circle r="304" />
-      <text class="ring-words"><textPath href="#ringText">BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX ·</textPath></text>
-    </g>
-    <g class="ring r3">
-      <circle r="262" /><circle r="232" class="dash" />
-      <text class="ring-words small"><textPath href="#ringText2">MDCCCXV · MCMXIV · MCMXXXIX · MCMXLV · MMXVI · ANNO DOMINI · ANTE CHRISTUM · MMCDLIII ·</textPath></text>
-      <path class="spoke" d="M0 -232 V232 M-232 0 H232 M-164 -164 L164 164 M164 -164 L-164 164" />
-    </g>
-  </svg>
-
-  <!-- Slips of history drifting about the title: events from other games. -->
-  <div class="slips" aria-hidden="true">
-    <div class="slip war" data-depth="0.35" data-rot="-4" style="left:4%;top:16%"><b>1914</b> · War declared at Sarajevo<i>Dispatch Nº 211</i></div>
-    <div class="slip peace" data-depth="0.18" data-rot="3" style="left:7%;top:58%"><b>1648</b> · The Peace of Westphalia, signed twice<i>Archive · Münster</i></div>
-    <div class="slip war" data-depth="0.5" data-rot="5" style="left:2%;top:80%"><b>1588</b> · The Armada lands at Kent<i>Telegram · Dover</i></div>
-    <div class="slip peace" data-depth="0.28" data-rot="-3" style="right:4%;top:14%"><b>1815</b> · A congress at Vienna, without Austria<i>Minutes, p. 3</i></div>
-    <div class="slip war" data-depth="0.42" data-rot="4" style="right:6%;top:46%"><b>1939</b> · Poland and Lithuania stand together<i>Order of battle</i></div>
-    <div class="slip peace" data-depth="0.22" data-rot="-5" style="right:3%;top:76%"><b>1453</b> · Constantinople holds; the Sultan sues for peace<i>Chronicle, vol. II</i></div>
-  </div>
-
-  <div class="hero-in">
-    <p class="kicker"><span class="orn">✦</span> A free, open-source strategy game · AI-driven alternate history <span class="orn">✦</span></p>
-
-    <!-- The scales of history: the sword in one pan, the olive branch in the other. -->
-    <svg class="scales" id="scales" viewBox="0 0 400 250" aria-hidden="true">
-      <rect class="base" x="140" y="232" width="120" height="10" rx="5" />
-      <rect class="base2" x="160" y="224" width="80" height="10" rx="4" />
-      <rect class="post" x="196" y="62" width="8" height="166" rx="3" />
-      <g class="beam">
-        <rect class="beam-bar" x="40" y="58" width="320" height="8" rx="4" />
-        <circle class="beam-end" cx="40" cy="62" r="6" /><circle class="beam-end" cx="360" cy="62" r="6" />
-        <g class="hang-l">
-          <line class="chain" x1="54" y1="62" x2="20" y2="156" />
-          <line class="chain" x1="54" y1="62" x2="88" y2="156" />
-          <line class="chain" x1="54" y1="62" x2="54" y2="156" />
-          <path class="pan" d="M10 156 H98 Q92 182 54 184 Q16 182 10 156 Z" />
-          <g transform="translate(54 150) rotate(-62)">
-            <rect class="sword-steel" x="-3" y="-70" width="6" height="58" rx="1" />
-            <path class="sword-steel" d="M-3 -70 L0 -80 L3 -70 Z" />
-            <rect class="sword" x="-15" y="-13" width="30" height="5" rx="2" />
-            <rect class="sword" x="-2.5" y="-8" width="5" height="14" rx="1.5" />
-            <circle class="sword" cx="0" cy="9" r="4" />
+    <!-- 1939: a rooftop post in the blackout. -->
+    <figure class="realm r-war">
+      <svg class="scene" viewBox="-40 0 480 1000" preserveAspectRatio="xMidYMin slice" aria-hidden="true" focusable="false">
+        <defs>
+          <pattern id="rh-brick" width="24" height="12" patternUnits="userSpaceOnUse"><rect width="24" height="12" fill="#5b3a2c" /><path d="M0 .6H24M0 6.6H24M6 .6V6.6M18 6.6V12" stroke="#3a241b" stroke-width="1.2" /></pattern>
+          <g id="rh-bag"><rect width="46" height="22" rx="10" fill="#b39b69" stroke="#6f5c3c" stroke-width="1.5" /><path d="M9 7Q23 11 37 7M8 16Q23 13 38 16" fill="none" stroke="#8d7a52" stroke-width="1.2" /><path d="M42 6l6-3v7Z" fill="#8d7a52" /></g>
+        </defs>
+        <rect x="-40" width="480" height="1000" fill="#151d33" />
+        <g fill="#1f2944">
+          <polygon points="100,140 600,140 589,244" /><polygon points="100,140 533,390 471,474" /><polygon points="100,140 350,573 254,615" /><polygon points="100,140 100,640 -4,629" />
+          <polygon points="100,140 -150,573 -234,511" /><polygon points="100,140 -333,390 -375,294" /><polygon points="100,140 -400,140 -389,36" /><polygon points="100,140 -333,-110 -271,-194" />
+          <polygon points="100,140 -150,-293 -54,-335" /><polygon points="100,140 100,-360 204,-349" /><polygon points="100,140 350,-293 434,-231" /><polygon points="100,140 533,-110 575,-14" />
+        </g>
+        <rect x="-40" y="196" width="480" height="56" fill="#1b2440" />
+        <rect x="-40" y="252" width="480" height="40" fill="#252b47" />
+        <rect x="-40" y="292" width="480" height="32" fill="#3b3049" />
+        <rect x="-40" y="324" width="480" height="60" fill="#5c3a3c" />
+        <g fill="#efe5c6"><circle cx="20" cy="40" r="1.4" /><circle cx="180" cy="30" r="1.2" /><circle cx="232" cy="84" r="1.6" /><circle cx="300" cy="40" r="1.2" /><circle cx="364" cy="104" r="1.4" /><circle cx="392" cy="30" r="1.1" /><circle cx="250" cy="146" r="1" /><circle cx="330" cy="172" r="1.2" /><circle cx="204" cy="196" r="1" /><circle cx="14" cy="226" r="1.2" /><circle cx="384" cy="214" r="1" /><circle cx="152" cy="62" r="1" /><circle cx="282" cy="112" r="1.3" /><circle cx="60" cy="36" r="1" /><circle cx="420" cy="150" r="1.2" /><circle cx="16" cy="120" r="1" /></g>
+        <circle cx="100" cy="140" r="70" fill="#efe2b4" opacity=".07" />
+        <circle cx="100" cy="140" r="61" fill="none" stroke="#efe2b4" stroke-opacity=".2" stroke-width="3" />
+        <circle cx="100" cy="140" r="52" fill="#ece0b0" />
+        <g fill="#d8c891"><circle cx="84" cy="124" r="9" /><circle cx="120" cy="156" r="12" /><circle cx="112" cy="116" r="5" /><circle cx="78" cy="160" r="6" /><circle cx="128" cy="130" r="4" /></g>
+        <!-- Searchlights over the city. -->
+        <g fill="#f3e7b9">
+          <g transform="translate(262 330) rotate(18)"><g class="sweep s2"><polygon points="-3,0 3,0 30,-440 -30,-440" opacity=".09" /></g></g>
+          <g transform="translate(372 330) rotate(-26)"><g class="sweep"><polygon points="-3,0 3,0 30,-440 -30,-440" opacity=".09" /></g></g>
+          <g transform="translate(-6 330) rotate(24)"><polygon points="-3,0 3,0 28,-440 -28,-440" opacity=".06" /></g>
+        </g>
+        <!-- Barrage balloons on their cables. -->
+        <g transform="translate(304 206)"><g class="bob">
+          <path d="M0 6V180" stroke="#8a93a0" stroke-width=".8" opacity=".5" />
+          <ellipse rx="26" ry="10" fill="#a3abb5" /><path d="M-22 2Q0 12 24 2Q0 9-22 2Z" fill="#7d8692" />
+          <path d="M-20-4L-38-14L-32-2ZM-20 4L-38 14L-32 2ZM-22 0H-40L-32 2Z" fill="#8a93a0" /><path d="M-6-8Q4-10 14-6" fill="none" stroke="#c9d0d7" stroke-width="1.5" />
+        </g></g>
+        <g transform="translate(40 262) scale(.72)"><g class="bob b2">
+          <path d="M0 6V180" stroke="#8a93a0" stroke-width="1" opacity=".5" />
+          <ellipse rx="26" ry="10" fill="#a3abb5" /><path d="M-22 2Q0 12 24 2Q0 9-22 2Z" fill="#7d8692" />
+          <path d="M-20-4L-38-14L-32-2ZM-20 4L-38 14L-32 2ZM-22 0H-40L-32 2Z" fill="#8a93a0" /><path d="M-6-8Q4-10 14-6" fill="none" stroke="#c9d0d7" stroke-width="1.5" />
+        </g></g>
+        <!-- The city in the blackout, two rows deep, with fires. -->
+        <g fill="#1e2438"><rect x="-40" y="330" width="60" height="50" /><rect x="14" y="316" width="30" height="64" /><rect x="40" y="334" width="40" height="46" /><rect x="76" y="300" width="22" height="80" /><rect x="96" y="322" width="50" height="58" /><rect x="140" y="310" width="36" height="70" /><rect x="172" y="328" width="40" height="52" /><rect x="208" y="296" width="26" height="84" /><rect x="230" y="320" width="60" height="60" /><rect x="286" y="306" width="30" height="74" /><rect x="312" y="326" width="50" height="54" /><rect x="356" y="312" width="34" height="68" /><rect x="386" y="330" width="54" height="50" /><path d="M76 300L87 288L98 300ZM208 296L221 280L234 296Z" /></g>
+        <g fill="#0e121f">
+          <path d="M-40 380V346H-6V330L4 322L14 330V346H30V330H60V350H110V380Z" />
+          <path d="M108 380V338L116 344L122 334L130 346L138 340V380Z" />
+          <rect x="136" y="352" width="56" height="28" /><rect x="190" y="318" width="110" height="62" /><rect x="214" y="288" width="62" height="32" />
+          <path d="M214 290Q245 222 276 290Z" /><rect x="240" y="236" width="10" height="18" /><circle cx="245" cy="234" r="6" /><path d="M244 212h2v10h4v2h-4v6h-2v-6h-4v-2h4Z" />
+          <rect x="298" y="340" width="40" height="40" /><rect x="360" y="348" width="80" height="32" /><path d="M298 340L318 326L338 340Z" />
+        </g>
+        <g fill="#c78a3a" opacity=".5"><rect x="22" y="352" width="3" height="5" /><rect x="152" y="360" width="3" height="5" /><rect x="198" y="330" width="3" height="5" /><rect x="268" y="334" width="3" height="5" /><rect x="372" y="358" width="3" height="5" /><rect x="312" y="352" width="3" height="5" /></g>
+        <g class="smoke"><path d="M128 330C120 310 132 296 126 276C120 258 134 246 130 226C142 246 136 262 142 280C148 298 138 312 140 330Z" fill="#2c3346" opacity=".85" /></g>
+        <g class="smoke sm2"><path d="M330 330C324 314 336 302 330 286C326 270 338 260 336 244C346 260 342 276 346 290C350 306 342 318 344 330Z" fill="#2c3346" opacity=".8" /></g>
+        <g class="flame"><path d="M118 340Q122 320 128 328Q132 310 138 324Q146 316 144 340Z" fill="#e0662f" /><path d="M124 340Q127 328 131 332Q134 322 138 340Z" fill="#f2b33a" /></g>
+        <g class="flame f2"><path d="M326 330Q330 314 335 320Q339 306 344 318Q350 312 349 330Z" fill="#e0662f" /><path d="M331 330Q334 320 338 324Q341 316 344 330Z" fill="#f2b33a" /></g>
+        <!-- The rooftop: parapet, chimney stack and its poster. -->
+        <rect x="-40" y="380" width="480" height="620" fill="#1c1b1e" />
+        <rect x="-40" y="378" width="480" height="14" fill="url(#rh-brick)" />
+        <rect x="-40" y="375" width="480" height="4" fill="#6b4a38" />
+        <path d="M-40 440H440M-40 520H440M-40 640H440" stroke="#262529" stroke-width="2" />
+        <rect x="306" y="272" width="84" height="122" fill="url(#rh-brick)" />
+        <rect x="300" y="264" width="96" height="10" fill="#3b2a22" />
+        <g fill="#8a4a32"><rect x="316" y="244" width="14" height="22" /><rect x="342" y="250" width="14" height="16" /><rect x="368" y="240" width="14" height="26" /></g>
+        <g fill="#1d1414"><rect x="316" y="242" width="14" height="4" /><rect x="342" y="248" width="14" height="4" /><rect x="368" y="238" width="14" height="4" /></g>
+        <g transform="rotate(3 348 330)">
+          <rect x="315" y="285" width="66" height="88" fill="#efe2b4" />
+          <rect x="318" y="288" width="60" height="82" fill="#c23a2b" />
+          <rect x="318" y="288" width="60" height="16" fill="#1b2440" />
+          <text x="348" y="300" class="rh-poster">HOLD</text>
+          <path d="M348 310L353 322L366 322L356 330L360 343L348 335L336 343L340 330L330 322L343 322Z" fill="#efe2b4" />
+          <path d="M318 346H378" stroke="#1b2440" stroke-width="2" />
+          <text x="348" y="358" class="rh-poster small">THE LINE</text>
+          <rect x="318" y="362" width="60" height="8" fill="#efe2b4" /><text x="348" y="368.6" class="rh-poster tiny">MCMXXXIX</text>
+          <path d="M381 285L381 297L371 285Z" fill="#8f2a20" />
+          <g fill="#d9d2c1"><circle cx="319" cy="289" r="1.6" /><circle cx="319" cy="369" r="1.6" /><circle cx="377" cy="369" r="1.6" /></g>
+        </g>
+        <!-- The map table: the front, the arrows, the pins. -->
+        <path d="M232 520V640M404 520V640" stroke="#3a2716" stroke-width="10" />
+        <path d="M236 420H402L414 508H222Z" fill="#6b4a2c" />
+        <path d="M222 508H414V518H222Z" fill="#4a321d" />
+        <path d="M244 424H396L404 502H232Z" fill="#dccb9e" />
+        <path d="M244 424H318C312 436 296 440 290 452C284 466 262 474 239 474Z" fill="#9fb2b2" />
+        <path d="M404 502H338C344 490 360 486 372 476C382 468 394 470 401 466Z" fill="#9fb2b2" />
+        <path d="M300 440C316 432 336 436 350 444C362 452 376 452 388 448L392 470C376 476 364 484 352 494L330 500C318 490 310 478 300 470C292 462 292 448 300 440Z" fill="#c2b682" />
+        <path d="M270 424L262 502M300 424L296 502M330 424L330 502M360 424L364 502M240 450H399M236 476H402" stroke="#7d6b48" stroke-width=".6" opacity=".6" />
+        <path d="M318 430C326 446 320 462 334 476C342 486 340 494 346 502" fill="none" stroke="#1d1f16" stroke-width="1.4" stroke-dasharray="3 2" />
+        <path d="M356 488C346 474 342 462 330 452" fill="none" stroke="#b8322a" stroke-width="3" stroke-linecap="round" /><path d="M324 446L337 448L330 459Z" fill="#b8322a" />
+        <path d="M280 464C290 458 300 454 310 452" fill="none" stroke="#2d4a7a" stroke-width="3" stroke-linecap="round" /><path d="M318 450L308 445L309 456Z" fill="#2d4a7a" />
+        <g fill="#1d1f16"><rect x="340" y="456" width="9" height="6" /><rect x="352" y="464" width="9" height="6" /><rect x="364" y="458" width="9" height="6" /></g>
+        <g fill="#b8322a"><rect x="300" y="444" width="9" height="6" /><rect x="290" y="458" width="9" height="6" /></g>
+        <g fill="#c23a2b"><circle cx="262" cy="436" r="2.6" /><circle cx="380" cy="440" r="2.6" /><circle cx="318" cy="492" r="2.6" /></g>
+        <path d="M384 436L376 470M384 436L394 468" stroke="#a9adb2" stroke-width="1.6" /><circle cx="384" cy="436" r="2" fill="#a9adb2" />
+        <rect x="248" y="480" width="14" height="16" rx="2" fill="#e9dfc6" /><path d="M262 484q6 0 6 5t-6 5" fill="none" stroke="#e9dfc6" stroke-width="2" />
+        <path class="smoke sm3" d="M253 476q-4-6 0-12t0-12M258 476q-4-6 0-12" fill="none" stroke="#d6cdb8" stroke-width="1.4" opacity=".5" />
+        <path d="M228 514L338 470" stroke="#8a6a3a" stroke-width="3" stroke-linecap="round" /><path d="M334 471.6L338 470" stroke="#e9dfc6" stroke-width="3" stroke-linecap="round" />
+        <!-- The searchlight, its sandbags, a field radio and a helmet. -->
+        <g transform="translate(140 372)">
+          <path d="M0 0L-26 46M0 0L24 46M0 0V48" stroke="#2c3022" stroke-width="5" />
+          <path d="M-20-6V-30H-14V-10H14V-30H20V-6Z" fill="#3b4130" />
+          <g transform="rotate(-40)">
+            <rect x="-28" y="-24" width="62" height="48" rx="6" fill="#535a3e" />
+            <path d="M-18-24V24M-10-24V24M-2-24V24" stroke="#3b4130" stroke-width="2" />
+            <rect x="30" y="-27" width="8" height="54" rx="3" fill="#2c3022" />
+            <ellipse cx="38" rx="5" ry="22" fill="#fbf1c9" />
           </g>
         </g>
-        <g class="hang-r">
-          <line class="chain" x1="346" y1="62" x2="312" y2="156" />
-          <line class="chain" x1="346" y1="62" x2="380" y2="156" />
-          <line class="chain" x1="346" y1="62" x2="346" y2="156" />
-          <path class="pan" d="M302 156 H390 Q384 182 346 184 Q308 182 302 156 Z" />
-          <g transform="translate(346 152)">
-            <path class="olive" d="M-34 0 Q-6 -6 30 -34" />
-            <ellipse class="leaf" cx="-18" cy="-10" rx="8" ry="3.4" transform="rotate(-38 -18 -10)" />
-            <ellipse class="leaf" cx="-14" cy="3" rx="8" ry="3.4" transform="rotate(20 -14 3)" />
-            <ellipse class="leaf" cx="-2" cy="-17" rx="8" ry="3.4" transform="rotate(-62 -2 -17)" />
-            <ellipse class="leaf" cx="4" cy="-4" rx="8" ry="3.4" transform="rotate(4 4 -4)" />
-            <ellipse class="leaf" cx="12" cy="-27" rx="8" ry="3.4" transform="rotate(-78 12 -27)" />
-            <ellipse class="leaf" cx="18" cy="-15" rx="8" ry="3.4" transform="rotate(-20 18 -15)" />
-            <circle class="leaf" cx="27" cy="-24" r="3.2" />
-          </g>
+        <use href="#rh-bag" x="44" y="412" /><use href="#rh-bag" x="88" y="412" /><use href="#rh-bag" x="132" y="412" />
+        <use href="#rh-bag" x="22" y="432" /><use href="#rh-bag" x="66" y="432" /><use href="#rh-bag" x="110" y="432" /><use href="#rh-bag" x="154" y="432" />
+        <use href="#rh-bag" x="0" y="452" /><use href="#rh-bag" x="44" y="452" /><use href="#rh-bag" x="88" y="452" /><use href="#rh-bag" x="132" y="452" /><use href="#rh-bag" x="176" y="452" />
+        <use href="#rh-bag" x="11" y="472" /><use href="#rh-bag" x="55" y="472" /><use href="#rh-bag" x="99" y="472" /><use href="#rh-bag" x="143" y="472" /><use href="#rh-bag" x="187" y="472" />
+        <g transform="translate(4 390)">
+          <path d="M52 0L80-140" stroke="#22261a" stroke-width="1.6" /><circle cx="80" cy="-141" r="2" fill="#22261a" />
+          <rect width="58" height="40" rx="3" fill="#4b5320" stroke="#2c3016" />
+          <rect x="4" y="6" width="50" height="28" fill="#3c4219" />
+          <circle cx="16" cy="18" r="7" fill="#d9d2c1" /><path d="M16 18L20 12" stroke="#1a1a1a" stroke-width="1.2" />
+          <circle cx="34" cy="18" r="6" fill="#d9d2c1" /><path d="M34 18L30 13" stroke="#1a1a1a" stroke-width="1.2" />
+          <circle cx="48" cy="13" r="3" fill="#1d1f16" /><circle cx="48" cy="25" r="3" fill="#1d1f16" />
+          <path d="M8 29H28M8 31.5H28" stroke="#2a2e14" />
+          <circle class="blink" cx="48" cy="31" r="1.4" fill="#e0662f" />
+          <path d="M6-2Q4-10 12-10H40Q48-10 46-2L40-2Q38-6 34-6H18Q14-6 12-2Z" fill="#1d1f16" />
         </g>
-      </g>
-      <circle class="pivot" cx="200" cy="62" r="11" />
-      <circle class="pivot-in" cx="200" cy="62" r="4" />
-      <path class="finial" d="M200 34 L206 48 L200 44 L194 48 Z" />
+        <path d="M90 412Q112 388 134 412Z" fill="#5b6340" /><ellipse cx="112" cy="412" rx="25" ry="5" fill="#4a5134" /><path d="M100 400Q108 394 116 394" fill="none" stroke="#7d8558" stroke-width="2" />
+      </svg>
+      <svg class="spill" viewBox="0 0 400 1000" preserveAspectRatio="xMidYMin slice" aria-hidden="true" focusable="false">
+        <defs>
+          <g id="rh-bomber" stroke="#1f2418" stroke-width="1">
+            <path d="M-4-48H4L10-6V6L4 48H-4L-12 6V-6Z" fill="#5d6540" />
+            <ellipse cx="6" cy="-37" rx="10" ry="3.6" fill="#454c30" /><ellipse cx="8" cy="-21" rx="12" ry="4" fill="#454c30" /><ellipse cx="8" cy="21" rx="12" ry="4" fill="#454c30" /><ellipse cx="6" cy="37" rx="10" ry="3.6" fill="#454c30" />
+            <path d="M-34-16H-28L-24-3V3L-28 16H-34L-38 3V-3Z" fill="#5d6540" />
+            <path d="M-40 0C-40-4-20-6 0-6S30-4 40 0C30 4 18 6 0 6S-40 4-40 0Z" fill="#6f7850" />
+            <path d="M-36 0H30" stroke="#8a9268" stroke-width="1.2" fill="none" />
+            <ellipse cx="35" rx="5" ry="3.4" fill="#b9c7c9" stroke="none" />
+            <g fill="#e9dfc6" opacity=".35" stroke="none"><ellipse cx="17" cy="-37" rx="1.5" ry="8" /><ellipse cx="21" cy="-21" rx="1.6" ry="9" /><ellipse cx="21" cy="21" rx="1.6" ry="9" /><ellipse cx="17" cy="37" rx="1.5" ry="8" /></g>
+            <g stroke="none"><circle cx="-1" cy="-29" r="4.5" fill="#e9dfc6" /><circle cx="-1" cy="-29" r="2.3" fill="#b8322a" /><circle cx="-1" cy="29" r="4.5" fill="#e9dfc6" /><circle cx="-1" cy="29" r="2.3" fill="#b8322a" /></g>
+          </g>
+        </defs>
+        <!-- The searchlight's beam, out of 1939 and over today. -->
+        <g transform="translate(169 348) rotate(50)"><g class="sweep s3"><polygon points="-5,0 5,0 64,-760 -64,-760" fill="#f6ecc4" opacity=".12" /><polygon points="-2,0 2,0 18,-760 -18,-760" fill="#fff6d6" opacity=".14" /></g></g>
+        <!-- Contrails, and the formation flying out of its own age. -->
+        <g fill="none" stroke="#e8e1cf" stroke-linecap="round">
+          <path d="M447 169L257 231M428 108L238 170M378 227L188 289M360 172L170 234M332 143L142 205M316 94L126 156" stroke-width="2.6" opacity=".45" />
+          <path d="M257 231L67 293M238 170L48 232M188 289L-2 351M170 234L-20 296M142 205L-48 267M126 156L-64 218" stroke-width="2.2" opacity=".22" stroke-dasharray="16 10" />
+        </g>
+        <g class="fly"><use href="#rh-bomber" transform="translate(470 128) rotate(-18) scale(.9)" /></g>
+        <g class="fly f2"><use href="#rh-bomber" transform="translate(398 190) rotate(-18) scale(.8)" /></g>
+        <g class="fly f3"><use href="#rh-bomber" transform="translate(350 110) rotate(-18) scale(.72)" /></g>
+      </svg>
+      <figcaption><b>1939</b> World at war</figcaption>
+    </figure>
+
+    <!-- Today: a summit, a screen, the press. -->
+    <figure class="realm r-now">
+      <svg class="scene" viewBox="-40 0 480 1000" preserveAspectRatio="xMidYMin slice" aria-hidden="true" focusable="false">
+        <defs>
+          <pattern id="rh-glass" width="10" height="8" patternUnits="userSpaceOnUse"><rect width="10" height="8" fill="#172738" /><rect x="2" y="2" width="6" height="3" fill="#f2d38a" opacity=".3" /></pattern>
+          <pattern id="rh-glass2" width="8" height="10" patternUnits="userSpaceOnUse"><rect width="8" height="10" fill="#1d3044" /><rect x="2" y="2" width="4" height="5" fill="#7fc6e0" opacity=".34" /></pattern>
+          <clipPath id="rh-screen"><rect x="22" y="100" width="196" height="136" /></clipPath>
+          <clipPath id="rh-tick"><rect x="60" y="214" width="158" height="22" /></clipPath>
+        </defs>
+        <rect x="-40" width="480" height="1000" fill="#172a3f" />
+        <rect x="-40" y="150" width="480" height="60" fill="#1d334b" />
+        <rect x="-40" y="210" width="480" height="50" fill="#243e59" />
+        <rect x="-40" y="260" width="480" height="40" fill="#2d4b68" />
+        <rect x="-40" y="300" width="480" height="100" fill="#385a78" />
+        <g fill="#cfe6f0" opacity=".5"><circle cx="40" cy="30" r="1" /><circle cx="210" cy="20" r="1.2" /><circle cx="330" cy="110" r="1" /><circle cx="380" cy="40" r="1.2" /><circle cx="260" cy="90" r="1" /><circle cx="110" cy="70" r="1" /></g>
+        <!-- Towers behind the assembly. -->
+        <g><rect x="-40" y="214" width="40" height="180" fill="url(#rh-glass)" /><rect x="2" y="176" width="34" height="220" fill="url(#rh-glass2)" /><rect x="40" y="232" width="30" height="160" fill="url(#rh-glass)" /><rect x="296" y="190" width="38" height="200" fill="url(#rh-glass2)" /><rect x="338" y="222" width="34" height="170" fill="url(#rh-glass)" /><rect x="376" y="168" width="64" height="230" fill="url(#rh-glass2)" /><rect x="238" y="232" width="40" height="160" fill="url(#rh-glass)" /></g>
+        <path d="M19 176V150M408 168V132" stroke="#0f1a26" stroke-width="2" />
+        <circle class="blink" cx="19" cy="149" r="2.2" fill="#ff4d3d" /><circle class="blink b2" cx="408" cy="131" r="2.2" fill="#ff4d3d" />
+        <!-- The assembly: wings, colonnade and a glass dome. -->
+        <rect x="-40" y="268" width="88" height="112" fill="#b2ab9b" /><path d="M-44 270L4 246L52 270Z" fill="#c9c2b2" />
+        <rect x="352" y="268" width="88" height="112" fill="#b2ab9b" /><path d="M348 270L396 246L444 270Z" fill="#c9c2b2" />
+        <g fill="#f2d38a" opacity=".5"><rect x="-24" y="290" width="10" height="18" /><rect x="-4" y="290" width="10" height="18" /><rect x="16" y="290" width="10" height="18" /><rect x="-24" y="326" width="10" height="18" /><rect x="16" y="326" width="10" height="18" /><rect x="368" y="290" width="10" height="18" /><rect x="388" y="290" width="10" height="18" /><rect x="408" y="290" width="10" height="18" /><rect x="368" y="326" width="10" height="18" /><rect x="408" y="326" width="10" height="18" /></g>
+        <g transform="translate(22 0)">
+        <rect x="248" y="250" width="104" height="32" fill="#a39d8f" />
+        <g fill="#f2d38a" opacity=".45"><rect x="256" y="258" width="6" height="16" /><rect x="270" y="258" width="6" height="16" /><rect x="284" y="258" width="6" height="16" /><rect x="298" y="258" width="6" height="16" /><rect x="312" y="258" width="6" height="16" /><rect x="326" y="258" width="6" height="16" /><rect x="340" y="258" width="6" height="16" /></g>
+        <path d="M248 252A52 58 0 0 1 352 252Z" fill="#2c6178" />
+        <path d="M258 252A42 48 0 0 1 342 252Z" fill="#f2d38a" opacity=".22" />
+        <path d="M300 194V252M300 194Q272 206 262 252M300 194Q328 206 338 252M300 194Q258 202 252 252M300 194Q342 202 348 252M252 236Q300 228 348 236M260 216Q300 210 340 216M276 202Q300 198 324 202" fill="none" stroke="#cfe6f0" stroke-opacity=".55" />
+        <rect x="295" y="184" width="10" height="12" fill="#d3ccbc" /><path d="M300 184V150" stroke="#d3ccbc" stroke-width="1.5" />
+        <g transform="translate(300 150)"><g class="wave"><rect x="1" width="22" height="13" fill="#2bc1f3" /><circle cx="12" cy="6.5" r="3.6" fill="none" stroke="#fff" stroke-width="1.2" /></g></g>
+        </g>
+        <rect x="40" y="290" width="320" height="90" fill="#857f72" />
+        <rect x="34" y="280" width="332" height="12" fill="#ddd6c6" />
+        <text x="200" y="289.4" class="rh-ins">ASSEMBLY · OF · THE · NATIONS</text>
+        <g fill="#f2d38a" opacity=".42"><rect x="58" y="318" width="8" height="40" /><rect x="102" y="318" width="8" height="40" /><rect x="146" y="318" width="8" height="40" /><rect x="190" y="318" width="8" height="40" /><rect x="234" y="318" width="8" height="40" /><rect x="278" y="318" width="8" height="40" /><rect x="322" y="318" width="8" height="40" /></g>
+        <g fill="#e6e0d1" stroke="#a59e8f" stroke-width=".8"><rect x="48" y="294" width="9" height="78" /><rect x="70" y="294" width="9" height="78" /><rect x="92" y="294" width="9" height="78" /><rect x="114" y="294" width="9" height="78" /><rect x="136" y="294" width="9" height="78" /><rect x="158" y="294" width="9" height="78" /><rect x="180" y="294" width="9" height="78" /><rect x="202" y="294" width="9" height="78" /><rect x="224" y="294" width="9" height="78" /><rect x="246" y="294" width="9" height="78" /><rect x="268" y="294" width="9" height="78" /><rect x="290" y="294" width="9" height="78" /><rect x="312" y="294" width="9" height="78" /><rect x="334" y="294" width="9" height="78" /></g>
+        <rect x="-40" y="372" width="480" height="7" fill="#d3ccbc" /><rect x="-40" y="379" width="480" height="7" fill="#c2bbab" /><rect x="-40" y="386" width="480" height="7" fill="#b0a999" />
+        <!-- The plaza. -->
+        <rect x="-40" y="392" width="480" height="608" fill="#1b2632" />
+        <path d="M290 392L-40 620M290 392L80 640M290 392L210 660M290 392L340 660M290 392L470 640M-40 420H440M-40 460H440M-40 520H440" stroke="#26384a" stroke-width="1.4" />
+        <!-- The screen: the world, live, with its ticker. -->
+        <g transform="translate(28 0)">
+          <path d="M40 236V392M50 236V392M184 236V392M194 236V392" stroke="#2a3038" stroke-width="3" />
+          <path d="M40 250L50 266L40 282L50 298L40 314L50 330L40 346L50 362L40 378M184 250L194 266L184 282L194 298L184 314L194 330L184 346L194 362L184 378" fill="none" stroke="#2a3038" stroke-width="1.5" />
+          <g fill="#f2d38a"><circle cx="40" cy="89" r="2" /><circle cx="96" cy="89" r="2" /><circle cx="144" cy="89" r="2" /><circle cx="200" cy="89" r="2" /></g>
+          <rect x="14" y="92" width="212" height="152" rx="3" fill="#0d1116" stroke="#3a424c" stroke-width="2" />
+          <rect x="22" y="100" width="196" height="136" fill="#06141e" />
+          <g clip-path="url(#rh-screen)">
+            <path d="M50 100V236M78 100V236M106 100V236M134 100V236M162 100V236M190 100V236M22 124H218M22 148H218M22 172H218M22 196H218" stroke="#2bc1f3" stroke-opacity=".14" />
+            <g fill="#2bc1f3" opacity=".5">
+              <path d="M40 118C52 108 76 110 88 118C96 126 90 136 80 140C74 146 70 156 62 158C56 150 48 142 42 134C36 128 36 122 40 118Z" />
+              <path d="M74 164C82 160 90 166 90 176C88 188 82 200 76 208C72 198 70 186 70 176C70 170 70 166 74 164Z" />
+              <path d="M112 118C122 112 136 114 142 120C138 126 130 128 124 130C118 128 112 124 112 118Z" />
+              <path d="M116 136C128 132 142 136 146 146C148 160 140 176 132 186C126 178 120 166 116 154C112 146 112 140 116 136Z" />
+              <path d="M146 112C164 104 192 106 208 116C214 124 206 134 196 136C188 142 178 146 168 144C158 140 150 132 146 124Z" />
+              <path d="M182 170C190 166 200 168 204 174C202 182 192 184 184 180C180 176 180 172 182 170Z" />
+            </g>
+            <g fill="#e9f6fb"><circle cx="64" cy="128" r="1.6" /><circle cx="134" cy="150" r="1.6" /><circle cx="176" cy="126" r="1.6" /><circle cx="196" cy="128" r="1.6" /><circle cx="80" cy="180" r="1.6" /></g>
+            <circle class="pulse" cx="128" cy="124" r="5" fill="none" stroke="#ff4d3d" stroke-width="1.5" />
+            <circle cx="128" cy="124" r="2.6" fill="#ff4d3d" />
+            <polygon points="22,100 84,100 44,236 22,236" fill="#fff" opacity=".04" />
+          </g>
+          <rect x="28" y="106" width="30" height="12" rx="2" fill="#e2453c" /><text x="43" y="115" class="rh-mono" fill="#fff" text-anchor="middle">LIVE</text>
+          <text x="212" y="115" class="rh-mono" fill="#cfe6f0" text-anchor="end">21:00 GMT</text>
+          <rect x="22" y="198" width="196" height="16" fill="#2bc1f3" /><text x="27" y="209" class="rh-mono small" fill="#04202b">WORLD SUMMIT · LEADERS MEET TONIGHT</text>
+          <rect x="22" y="214" width="196" height="22" fill="#0b0f14" />
+          <rect x="22" y="214" width="38" height="22" fill="#e2453c" /><text x="41" y="228" class="rh-mono" fill="#fff" text-anchor="middle">NEWS</text>
+          <g clip-path="url(#rh-tick)"><g class="ticker">
+            <text x="66" y="228" class="rh-mono" fill="#e9f6fb" textLength="560" lengthAdjust="spacing">BREAKING · DRAGON SIGHTED OVER THE PALACE · BOMBERS CROSS THE CHANNEL · A QUEEN IS CROWNED · A RED LINE IS DRAWN ·</text>
+            <text x="626" y="228" class="rh-mono" fill="#e9f6fb" textLength="560" lengthAdjust="spacing">BREAKING · DRAGON SIGHTED OVER THE PALACE · BOMBERS CROSS THE CHANNEL · A QUEEN IS CROWNED · A RED LINE IS DRAWN ·</text>
+          </g></g>
+        </g>
+        <!-- Flags of the summit (none of them real). -->
+        <g transform="translate(28 0)">
+        <path d="M40 300V404M66 300V404M92 300V404M118 300V404M144 300V404M170 300V404" stroke="#c9cfd4" stroke-width="2" />
+        <g transform="translate(40 300)"><g class="wave"><rect x="1" width="22" height="15" fill="#2a5aa8" /><path d="M12 3L13.4 6.6H17.2L14.1 8.8L15.3 12.4L12 10.2L8.7 12.4L9.9 8.8L6.8 6.6H10.6Z" fill="#fff" /></g></g>
+        <g transform="translate(66 300)"><g class="wave w2"><rect x="1" width="22" height="15" fill="#d8dde2" /><rect x="1" width="22" height="5" fill="#c4232f" /><rect x="1" y="10" width="22" height="5" fill="#c4232f" /></g></g>
+        <g transform="translate(92 300)"><g class="wave w3"><rect x="1" width="22" height="15" fill="#2f7d4f" /><circle cx="12" cy="7.5" r="4" fill="#f2c14e" /></g></g>
+        <g transform="translate(118 300)"><g class="wave"><rect x="1" width="22" height="15" fill="#e07a2f" /><path d="M1 0L11 7.5L1 15Z" fill="#f4ede0" /></g></g>
+        <g transform="translate(144 300)"><g class="wave w2"><rect x="1" width="22" height="15" fill="#f4ede0" /><rect x="1" y="3" width="22" height="3" fill="#23356b" /><rect x="1" y="9" width="22" height="3" fill="#23356b" /></g></g>
+        <g transform="translate(170 300)"><g class="wave w3"><rect x="1" width="22" height="15" fill="#1f8a8a" /><g fill="#fff"><circle cx="6" cy="7.5" r="1.8" /><circle cx="12" cy="7.5" r="1.8" /><circle cx="18" cy="7.5" r="1.8" /></g></g></g>
+        </g>
+        <!-- A drone over the square. -->
+        <g transform="translate(292 168)"><g class="bob b3">
+          <path d="M-16-6L16 6M-16 6L16-6" stroke="#0f141a" stroke-width="2.4" />
+          <rect x="-7" y="-4" width="14" height="8" rx="3" fill="#2a3038" />
+          <g fill="#cfe6f0" opacity=".35"><ellipse cx="-16" cy="-7" rx="9" ry="2" /><ellipse cx="16" cy="-7" rx="9" ry="2" /><ellipse cx="-16" cy="5" rx="9" ry="2" /><ellipse cx="16" cy="5" rx="9" ry="2" /></g>
+          <circle cy="5" r="2.4" fill="#14181d" /><circle class="blink" cx="5" cy="-2" r="1.6" fill="#ff4d3d" />
+        </g></g>
+        <!-- The speaker, the podium and its microphones. -->
+        <path d="M258 398Q262 362 290 358Q318 362 322 398Z" fill="#141c25" /><circle cx="290" cy="344" r="13" fill="#10161d" />
+        <path d="M284 360L290 372L296 360Z" fill="#e9eef2" /><path d="M289 364H291L292 376H288Z" fill="#c4232f" />
+        <g stroke="#3a424c" stroke-width="1.2"><path d="M290 388L262 372M290 388L272 364M290 388L283 360M290 388L295 360M290 388L306 364M290 388L317 370M290 388L278 378" /></g>
+        <g fill="#1b1f25"><rect x="259" y="366" width="6" height="10" rx="3" /><rect x="269" y="358" width="6" height="10" rx="3" /><rect x="280" y="354" width="6" height="10" rx="3" /><rect x="292" y="354" width="6" height="10" rx="3" /><rect x="303" y="358" width="6" height="10" rx="3" /><rect x="314" y="364" width="6" height="10" rx="3" /><rect x="275" y="372" width="6" height="10" rx="3" /></g>
+        <rect x="257" y="374" width="10" height="7" fill="#e2453c" /><rect x="267" y="366" width="10" height="7" fill="#2bc1f3" /><rect x="278" y="362" width="10" height="7" fill="#f2c14e" /><rect x="290" y="362" width="10" height="7" fill="#f4ede0" /><rect x="301" y="366" width="10" height="7" fill="#3fbf6f" /><rect x="312" y="372" width="10" height="7" fill="#e07a2f" />
+        <rect x="240" y="386" width="100" height="8" rx="2" fill="#2c3540" />
+        <path d="M246 394H334L328 520H252Z" fill="#1f262f" />
+        <path d="M252 394V520M328 394V520" stroke="#2c3540" stroke-width="2" />
+        <circle cx="290" cy="440" r="22" fill="#c9a55a" /><circle cx="290" cy="440" r="19" fill="#13233a" />
+        <g fill="#e2c486"><circle cx="290" cy="425" r="1.2" /><circle cx="300.6" cy="429.4" r="1.2" /><circle cx="305" cy="440" r="1.2" /><circle cx="300.6" cy="450.6" r="1.2" /><circle cx="290" cy="455" r="1.2" /><circle cx="279.4" cy="450.6" r="1.2" /><circle cx="275" cy="440" r="1.2" /><circle cx="279.4" cy="429.4" r="1.2" /></g>
+        <path d="M290 432L292.4 437.6H298.4L293.6 441.2L295.4 447L290 443.4L284.6 447L286.4 441.2L281.6 437.6H287.6Z" fill="#e9dfc6" />
+        <rect x="268" y="474" width="44" height="8" fill="#c9a55a" opacity=".7" />
+        <!-- A television camera, live. -->
+        <path d="M378 452L356 548M378 452L400 548M378 452V552" stroke="#2a2f36" stroke-width="3" />
+        <rect x="352" y="424" width="44" height="26" rx="3" fill="#2a2f36" /><rect x="334" y="429" width="20" height="15" fill="#14181d" /><ellipse cx="334" cy="436.5" rx="3" ry="7.5" fill="#3a4450" />
+        <rect x="384" y="414" width="12" height="10" fill="#1d2228" /><circle class="blink" cx="391" cy="430" r="2.5" fill="#ff3b30" />
+        <!-- The press. -->
+        <path d="M2 562Q8 514 40 510Q72 514 78 562Z" fill="#0c1117" /><circle cx="40" cy="494" r="15" fill="#0c1117" />
+        <rect x="26" y="474" width="30" height="20" rx="3" fill="#1a1f26" /><circle cx="41" cy="484" r="7.5" fill="#2a3340" /><circle cx="41" cy="484" r="3.5" fill="#6fa0c8" /><rect x="46" y="462" width="12" height="9" rx="1" fill="#d9dde1" />
+        <path class="flash" d="M52 444L54.4 452.6L62 450L56.6 455.6L64 460L55.4 459L52 468L48.6 459L40 460L47.4 455.6L42 450L49.6 452.6Z" fill="#fff" />
+        <path d="M86 568Q92 522 122 518Q152 522 158 568Z" fill="#0c1117" /><circle cx="122" cy="504" r="14" fill="#0c1117" />
+        <rect x="110" y="478" width="28" height="18" rx="3" fill="#1a1f26" /><circle cx="124" cy="487" r="7" fill="#2a3340" /><circle cx="124" cy="487" r="3.2" fill="#6fa0c8" /><rect x="126" y="466" width="11" height="9" rx="1" fill="#d9dde1" />
+        <path class="flash fl2" d="M132 446L134.4 454.6L142 452L136.6 457.6L144 462L135.4 461L132 470L128.6 461L120 462L127.4 457.6L122 452L129.6 454.6Z" fill="#fff" />
+        <path d="M164 574Q170 532 198 528Q226 532 232 574Z" fill="#0c1117" /><circle cx="198" cy="514" r="14" fill="#0c1117" />
+        <rect x="204" y="482" width="12" height="20" rx="2" fill="#1a1f26" /><rect x="206" y="485" width="8" height="14" fill="#2bc1f3" opacity=".7" />
+        <path class="flash fl3" d="M210 462L211.6 468L217 466L213.2 470L218 473L212 472.6L210 479L208 472.6L202 473L206.8 470L203 466L208.4 468Z" fill="#fff" />
+      </svg>
+      <svg class="spill" viewBox="0 0 400 1000" preserveAspectRatio="xMidYMin slice" aria-hidden="true" focusable="false">
+        <!-- An orbit over all four ages, and a satellite on it. -->
+        <path d="M560 100Q172 30-260 80" fill="none" stroke="#cfe6f0" stroke-width="1" stroke-dasharray="2 5" opacity=".55" />
+        <g transform="translate(161 60) rotate(-8)"><g class="bob b2">
+          <rect x="-56" y="-6" width="40" height="12" fill="#244a7a" stroke="#9cc4e4" stroke-width=".8" /><path d="M-46-6V6M-36-6V6M-26-6V6M-56 0H-16" stroke="#9cc4e4" stroke-width=".6" />
+          <rect x="16" y="-6" width="40" height="12" fill="#244a7a" stroke="#9cc4e4" stroke-width=".8" /><path d="M26-6V6M36-6V6M46-6V6M16 0H56" stroke="#9cc4e4" stroke-width=".6" />
+          <path d="M-16 0H-10M10 0H16" stroke="#9aa3ad" stroke-width="2" />
+          <rect x="-10" y="-9" width="20" height="18" rx="2" fill="#d9b04a" stroke="#8a6a2a" stroke-width=".8" /><path d="M-10-3H10M-10 3H10" stroke="#a8873e" stroke-width=".7" />
+          <path d="M0 9V14" stroke="#9aa3ad" stroke-width="1.4" /><ellipse cy="16" rx="6" ry="2.4" fill="#e6eef2" />
+          <circle class="blink" cx="8" cy="-7" r="1.4" fill="#ff4d3d" />
+        </g></g>
+        <!-- The red line: drawn on today's map, it runs out of the screen and onto the fantasy chart. -->
+        <path d="M156 124C214 60 310 40 390 120C440 170 470 290 520 380C545 420 570 436 596 444" fill="none" stroke="#0d0d0f" stroke-opacity=".45" stroke-width="7" stroke-linecap="round" />
+        <path class="redline" d="M156 124C214 60 310 40 390 120C440 170 470 290 520 380C545 420 570 436 596 444" fill="none" stroke="#ff4d3d" stroke-width="3" stroke-linecap="round" />
+        <circle cx="596" cy="444" r="7" fill="none" stroke="#ff4d3d" stroke-width="2.4" /><circle cx="596" cy="444" r="2.6" fill="#ff4d3d" />
+      </svg>
+      <figcaption><b>Today</b> Modern politics</figcaption>
+    </figure>
+
+    <!-- Any age: a castle, a chart, a candle, and a dragon. -->
+    <figure class="realm r-myth">
+      <svg class="scene" viewBox="-40 0 480 1000" preserveAspectRatio="xMidYMin slice" aria-hidden="true" focusable="false">
+        <defs>
+          <path id="rh-pine" d="M0 0H-10L-4-10H-8L0-28L8-10H4L10 0Z" />
+        </defs>
+        <rect x="-40" width="480" height="1000" fill="#1f4248" />
+        <rect x="-40" y="150" width="480" height="66" fill="#2a5553" />
+        <rect x="-40" y="216" width="480" height="50" fill="#3f6b5c" />
+        <rect x="-40" y="266" width="480" height="40" fill="#a8783a" />
+        <rect x="-40" y="306" width="480" height="40" fill="#cf9444" />
+        <rect x="-40" y="346" width="480" height="60" fill="#e2ad57" />
+        <g fill="#f3e6c4"><circle cx="20" cy="22" r="1.2" /><circle cx="252" cy="18" r="1.4" /><circle cx="362" cy="30" r="1.2" /><circle cx="392" cy="62" r="1" /><circle cx="300" cy="56" r="1" /><circle cx="70" cy="200" r="1" /></g>
+        <circle cx="110" cy="342" r="94" fill="none" stroke="#f3cf73" stroke-opacity=".3" stroke-width="5" />
+        <circle cx="110" cy="342" r="78" fill="#f3cf73" />
+        <path d="M-40 250H160Q170 256 160 262H-40Z" fill="#c98f45" opacity=".85" />
+        <path d="M200 288H440V294H210Q200 291 200 288Z" fill="#e7b866" />
+        <path d="M-40 312H90V317H-40Z" fill="#b67c3a" />
+        <path d="M150 326H300V330H160Q150 328 150 326Z" fill="#f1c272" />
+        <path d="M54 230l5 4 5-4M70 222l4 3 4-3M84 238l4 3 4-3" fill="none" stroke="#1d2b2a" stroke-width="1.4" />
+        <!-- Mountains, snow on the peaks. -->
+        <path d="M-40 392L0 316L28 336L64 282L98 330L130 300L170 346L212 296L250 330L282 292L318 322L352 288L400 330L440 300V420H-40Z" fill="#33544f" />
+        <g fill="#e7ddc6"><path d="M54 296L64 282L74 296L68 292L62 298Z" /><path d="M202 308L212 296L222 308L216 304L210 310Z" /><path d="M342 300L352 288L362 300L356 297L350 302Z" /><path d="M120 312L130 300L140 312L134 309L128 314Z" /></g>
+        <path d="M-40 404Q40 366 110 388Q170 404 210 386L440 404V420H-40Z" fill="#23403b" />
+        <!-- The castle on its crag, and the falls. -->
+        <path d="M196 412L214 360L226 318L250 304L330 300L352 316L372 360L388 412Z" fill="#3e3a33" />
+        <path d="M330 300L352 316L372 360L388 412H350L340 360Z" fill="#2e2b26" />
+        <path d="M226 318L240 340L232 372M262 306L270 330M300 304L296 336L306 360" fill="none" stroke="#56503f" stroke-width="1.4" />
+        <g transform="translate(0 16)">
+          <rect x="228" y="264" width="124" height="42" fill="#c4b394" />
+          <g fill="#c4b394"><rect x="228" y="256" width="8" height="8" /><rect x="242" y="256" width="8" height="8" /><rect x="256" y="256" width="8" height="8" /><rect x="298" y="256" width="8" height="8" /><rect x="312" y="256" width="8" height="8" /><rect x="326" y="256" width="8" height="8" /><rect x="340" y="256" width="8" height="8" /></g>
+          <path d="M276 306V288A12 12 0 0 1 300 288V306Z" fill="#1c2321" /><path d="M280 290V306M288 278V306M296 290V306M276 296H300" stroke="#5a5347" stroke-width="1" />
+          <rect x="214" y="214" width="28" height="92" fill="#b9a888" /><rect x="232" y="214" width="10" height="92" fill="#9a8a6c" />
+          <path d="M210 216L228 168L246 216Z" fill="#8f3a2a" /><path d="M228 168L246 216H236Z" fill="#6c2a1f" />
+          <rect x="262" y="182" width="32" height="124" fill="#c4b394" /><rect x="284" y="182" width="10" height="124" fill="#9a8a6c" />
+          <path d="M258 184L278 124L298 184Z" fill="#8f3a2a" /><path d="M278 124L298 184H288Z" fill="#6c2a1f" />
+          <rect x="300" y="226" width="40" height="80" fill="#b9a888" /><g fill="#b9a888"><rect x="300" y="218" width="8" height="8" /><rect x="316" y="218" width="8" height="8" /><rect x="332" y="218" width="8" height="8" /></g>
+          <rect x="342" y="232" width="20" height="74" fill="#a8977a" /><path d="M338 234L352 198L366 234Z" fill="#8f3a2a" /><path d="M352 198L366 234H358Z" fill="#6c2a1f" />
+          <g fill="#f2c66b"><path d="M224 248V240A3 3 0 0 1 230 240V248Z" /><path d="M274 214V204A3 3 0 0 1 280 204V214Z" /><path d="M274 248V238A3 3 0 0 1 280 238V248Z" /><path d="M314 252V244A3 3 0 0 1 320 244V252Z" /><path d="M348 260V252A3 3 0 0 1 354 252V260Z" /><path d="M244 286V278A3 3 0 0 1 250 278V286Z" /><path d="M326 286V278A3 3 0 0 1 332 278V286Z" /></g>
+          <path d="M228 168V152M278 124V106M352 198V182" stroke="#2a2a26" stroke-width="1.4" />
+          <g class="wave"><path d="M229 152L244 156L229 160Z" fill="#e2c486" /></g>
+          <g class="wave w2"><path d="M279 106L296 110L279 114Z" fill="#c4232f" /></g>
+          <g class="wave w3"><path d="M353 182L366 186L353 190Z" fill="#e2c486" /></g>
+          <path d="M276 306L240 340L248 344L284 310Z" fill="#8a7a5e" />
+        </g>
+        <rect x="352" y="320" width="10" height="92" fill="#d8ecea" />
+        <path class="fall" d="M355 320V412M359 320V412" stroke="#fff" stroke-width="1.2" />
+        <ellipse cx="358" cy="410" rx="20" ry="6" fill="#e9f2ee" opacity=".6" />
+        <!-- The forest and the river. -->
+        <g fill="#22423a"><use href="#rh-pine" transform="translate(-30 398) scale(.9)" /><use href="#rh-pine" transform="translate(-6 396) scale(.8)" /><use href="#rh-pine" transform="translate(18 398) scale(1)" /><use href="#rh-pine" transform="translate(42 394) scale(.85)" /><use href="#rh-pine" transform="translate(66 398) scale(.95)" /><use href="#rh-pine" transform="translate(90 396) scale(.8)" /><use href="#rh-pine" transform="translate(114 398) scale(1)" /><use href="#rh-pine" transform="translate(138 394) scale(.85)" /><use href="#rh-pine" transform="translate(162 398) scale(.9)" /><use href="#rh-pine" transform="translate(186 396) scale(.8)" /></g>
+        <g fill="#18322b"><use href="#rh-pine" transform="translate(-18 408) scale(1.1)" /><use href="#rh-pine" transform="translate(6 410) scale(1.2)" /><use href="#rh-pine" transform="translate(30 406) scale(1)" /><use href="#rh-pine" transform="translate(54 410) scale(1.15)" /><use href="#rh-pine" transform="translate(78 406) scale(1)" /><use href="#rh-pine" transform="translate(102 410) scale(1.2)" /><use href="#rh-pine" transform="translate(126 406) scale(1)" /><use href="#rh-pine" transform="translate(150 410) scale(1.1)" /><use href="#rh-pine" transform="translate(174 408) scale(1)" /><use href="#rh-pine" transform="translate(196 410) scale(.9)" /></g>
+        <path d="M-40 408Q60 398 120 406T260 402T440 410V416Q300 408 200 412T-40 416Z" fill="#5f938c" />
+        <!-- The table, the chart, and what lies on it. -->
+        <rect x="-40" y="412" width="480" height="588" fill="#4a2f1d" />
+        <path d="M-40 440H440M-40 470Q100 466 200 472T440 468M-40 530H440M-40 600H440" stroke="#3a2416" stroke-width="1.5" fill="none" />
+        <path d="M22 416L300 410L308 516L16 524Z" fill="#e8d6a8" stroke="#9b7d4a" stroke-width="1.2" />
+        <path d="M40 430C70 424 96 434 120 428C150 420 176 432 196 440C210 452 236 450 252 462C262 474 250 490 230 494C200 500 170 492 150 500C120 508 84 504 62 494C44 486 38 470 46 458C36 450 34 438 40 430Z" fill="#d9c48e" stroke="#5b4228" stroke-width="1.2" />
+        <path d="M262 430h10M276 436h8M266 442h10M280 448h8M30 506h10M44 512h8M270 500h10M284 506h8M250 418h10" stroke="#8a6e44" stroke-width="1" />
+        <path d="M80 452l8-12 8 12M92 452l7-10 7 10M70 462l6-9 6 9M104 446l6-9 6 9" fill="none" stroke="#5b4228" stroke-width="1.2" />
+        <g fill="none" stroke="#5b4228" stroke-width="1"><circle cx="150" cy="466" r="3" /><circle cx="160" cy="472" r="3" /><circle cx="142" cy="474" r="3" /><circle cx="170" cy="464" r="3" /><circle cx="180" cy="474" r="3" /></g>
+        <path d="M206 462V450L210 446L214 450V462ZM214 462V454H220V462Z" fill="#5b4228" />
+        <path d="M120 440Q130 436 140 442Q136 450 124 448Z" fill="#9ab5b0" stroke="#5b4228" stroke-width=".8" />
+        <path d="M196 444C176 452 160 462 140 462C116 462 104 476 92 486" fill="none" stroke="#5b4228" stroke-width="1.6" stroke-dasharray="2 4" stroke-linecap="round" />
+        <path d="M84 482l12 12M96 482l-12 12" stroke="#a8202c" stroke-width="2.4" stroke-linecap="round" />
+        <text x="146" y="488" class="rh-chart">TERRA INCOGNITA</text>
+        <path d="M26 510q6-10 12 0q6-10 12 0q6-10 12 0" fill="none" stroke="#5b4228" stroke-width="1.4" /><circle cx="25" cy="508" r="2.4" fill="#5b4228" />
+        <g transform="translate(268 486)">
+          <circle r="14" fill="none" stroke="#5b4228" stroke-width=".8" />
+          <path d="M0-20L4-4L20 0L4 4L0 20L-4 4L-20 0L-4-4Z" fill="#5b4228" />
+          <path d="M0-20L4-4L20 0L4 4L0 20L-4 4L-20 0L-4-4Z" transform="rotate(45) scale(.62)" fill="#a8202c" />
+          <text y="-23" class="rh-chart">N</text>
+        </g>
+        <rect x="8" y="412" width="16" height="114" rx="8" fill="#d6bf88" /><path d="M16 416V522" stroke="#b39a62" />
+        <rect x="296" y="406" width="16" height="114" rx="8" fill="#d6bf88" /><path d="M304 410V516" stroke="#b39a62" />
+        <circle cx="342" cy="388" r="28" fill="#f6c64a" opacity=".12" />
+        <ellipse cx="342" cy="452" rx="18" ry="5" fill="#a07b3e" />
+        <rect x="335" y="402" width="14" height="50" fill="#efe6cf" /><path d="M335 408q3 8 0 14M349 410q-3 6 0 10" stroke="#d6cbb0" stroke-width="2" fill="none" />
+        <path d="M342 402V396" stroke="#2a2a26" stroke-width="1.2" />
+        <g class="flame"><path d="M342 398C336 390 338 380 342 370C346 380 348 390 342 398Z" fill="#f6c64a" /><path d="M342 396C339 390 340 384 342 378C344 384 345 390 342 396Z" fill="#fff3c4" /></g>
+        <path d="M358 500V486Q358 478 366 478H378Q386 478 386 486V500Z" fill="#1d2228" /><rect x="364" y="472" width="16" height="8" fill="#2a3038" />
+        <path d="M372 474C380 440 396 420 420 404C404 428 390 452 376 474Z" fill="#efe6d6" /><path d="M374 470L410 414M386 452l-6-4M392 442l-6-4M398 432l-6-4" stroke="#bfb39b" stroke-width="1" />
+        <g fill="#d9b04a" stroke="#8a6a2a" stroke-width="1"><circle cx="322" cy="520" r="6" /><circle cx="334" cy="514" r="6" /><circle cx="346" cy="522" r="6" /></g>
+      </svg>
+      <svg class="spill" viewBox="0 0 400 1000" preserveAspectRatio="xMidYMin slice" aria-hidden="true" focusable="false">
+        <!-- The dragon: its tail and wing reach into today, its fire into the palace. -->
+        <g class="dragon">
+          <g class="wing-far">
+            <path d="M220 146L236 96L242 40Q230 0 204-44Q196-10 168 0Q176 30 170 60Q196 80 206 120Z" fill="#6e2620" />
+            <path d="M220 146L236 96L242 40M242 40L204-44M242 40L168 0M242 40L170 60" fill="none" stroke="#3e120e" stroke-width="3" stroke-linecap="round" />
+          </g>
+          <path d="M132 196C100 206 70 222 40 234C10 246-30 252-70 246C-96 242-112 236-124 230L-122 222C-100 228-76 232-50 232C-10 230 30 214 70 200C92 192 110 186 128 184Z" fill="#7a281f" />
+          <path d="M-118 222L-150 206L-142 226L-156 246L-118 232Z" fill="#5c1c16" />
+          <path d="M100 190l6-9 4 8ZM70 202l5-9 4 8ZM40 216l4-8 4 7ZM10 226l4-7 3 7ZM-20 231l3-7 3 6ZM-50 233l3-6 3 6Z" fill="#4a1712" />
+          <path d="M150 200C160 214 166 228 158 240L146 246L152 238C154 228 146 218 140 208Z" fill="#6a231c" /><path d="M146 246l-6 4M150 246l-3 6M154 244l1 6" stroke="#e8dcc0" stroke-width="1.6" stroke-linecap="round" />
+          <path d="M118 200C132 176 176 148 222 138C244 134 262 142 258 160C252 180 214 200 178 210C152 216 130 214 118 200Z" fill="#8a2e24" />
+          <path d="M256 160C248 182 212 202 176 212C154 216 134 214 122 206L124 200C140 208 160 208 178 204C210 196 240 178 250 156Z" fill="#d9b56a" />
+          <path d="M236 178l-4-7M220 188l-4-7M204 196l-3-7M188 202l-2-7M172 206l-2-7M156 208l-1-7" stroke="#a8873e" stroke-width="1.2" />
+          <path d="M236 136l-4-12 10 9ZM214 142l-4-12 10 9ZM192 152l-4-11 9 8Z" fill="#4a1712" />
+          <path d="M222 140C236 112 262 96 296 90L310 104C284 110 264 124 254 152Z" fill="#8a2e24" />
+          <path d="M254 152C262 128 282 114 308 108L310 104C286 108 266 120 252 146Z" fill="#d9b56a" />
+          <path d="M298 90l-8-10 10 4ZM284 95l-10-8 11 2ZM270 101l-10-6 11 1ZM257 110l-10-4 10 0ZM246 122l-10-2 9-2Z" fill="#4a1712" />
+          <path d="M318 106L364 102L362 124C344 116 326 112 306 112Z" fill="#3a0e0b" />
+          <path d="M292 88C300 78 318 74 336 80C348 84 360 90 368 98L364 102C350 100 334 102 318 106L306 110C300 104 294 96 292 88Z" fill="#8a2e24" />
+          <path d="M302 82C314 76 328 76 338 82L330 86C320 82 312 82 304 86Z" fill="#5c1c16" />
+          <path d="M306 112C322 112 340 116 362 124L358 130C338 128 320 124 304 120Z" fill="#7a281f" />
+          <path d="M332 103l2 5 2-5ZM342 102l2 5 2-5ZM352 101l2 5 2-5ZM330 114l2-5 2 5ZM342 116l2-5 2 5ZM352 119l2-5 2 5Z" fill="#f3ead6" />
+          <ellipse cx="360" cy="96" rx="2" ry="1.2" fill="#3a0e0b" />
+          <ellipse cx="318" cy="90" rx="4.5" ry="2.6" fill="#f6d36b" /><ellipse cx="318.5" cy="90" rx="1" ry="2.4" fill="#1a0a08" />
+          <path d="M300 84C290 70 276 62 258 60C272 68 284 78 292 92Z" fill="#e8dcc0" />
+          <path d="M310 80C306 62 296 50 282 44C294 56 300 68 302 84Z" fill="#d6c8a8" />
+          <path d="M310 118l-4 10 7-6ZM318 120l-2 10 6-7Z" fill="#e8dcc0" />
+          <path d="M232 172C240 184 244 196 238 206L228 210L232 202C232 194 226 186 222 178Z" fill="#7a281f" /><path d="M228 210l-6 3M232 209l-3 5M236 207l1 5" stroke="#e8dcc0" stroke-width="1.6" stroke-linecap="round" />
+          <g class="wing-near">
+            <path d="M206 150L172 98L130 58Q30 18-70 40Q-48 68-40 110Q-14 116 10 150Q42 150 70 172Q110 170 156 198Q186 176 206 150Z" fill="#a8402f" />
+            <polygon points="130,58 -40,110 -14,116 10,150" fill="#93382a" /><polygon points="130,58 70,172 110,170 156,198" fill="#93382a" />
+            <path d="M206 150L172 98L130 58" fill="none" stroke="#4a1712" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M130 58L-70 40M130 58L-40 110M130 58L10 150M130 58L70 172" fill="none" stroke="#4a1712" stroke-width="3" stroke-linecap="round" />
+            <path d="M130 58l-6-10 9 6Z" fill="#e8dcc0" />
+          </g>
+          <g class="fire">
+            <path d="M362 104C410 86 470 98 530 90C572 86 606 96 644 92C612 110 578 108 548 120C584 126 614 140 632 152C584 150 532 140 488 134C440 128 400 124 362 120Z" fill="#e0552b" />
+            <path d="M362 106C404 94 456 104 512 98C548 96 576 104 600 104C572 116 546 116 520 124C548 130 570 138 584 144C544 142 500 134 462 128C422 124 392 120 362 118Z" fill="#f29a38" />
+            <path d="M362 108C398 102 436 108 476 106C500 106 520 110 536 112C512 118 488 120 464 122C430 120 396 118 362 116Z" fill="#f6d36b" />
+          </g>
+          <g fill="#f6c64a"><circle class="blink" cx="560" cy="170" r="2" /><circle class="blink b2" cx="604" cy="80" r="1.6" /><circle class="blink" cx="520" cy="160" r="1.4" /><circle class="blink b2" cx="646" cy="124" r="1.8" /></g>
+        </g>
+      </svg>
+      <figcaption><b>Any age</b> Fantasy worlds</figcaption>
+    </figure>
+
+    <!-- 1837: the throne room, and the smoke of the new age through the window. -->
+    <figure class="realm r-crown">
+      <svg class="scene" viewBox="-40 0 480 1000" preserveAspectRatio="xMidYMin slice" aria-hidden="true" focusable="false">
+        <defs>
+          <pattern id="rh-damask" width="28" height="36" patternUnits="userSpaceOnUse"><rect width="28" height="36" fill="#561820" /><path d="M14 6C18 12 22 14 22 18C22 22 18 24 14 30C10 24 6 22 6 18C6 14 10 12 14 6Z" fill="#64212a" /><circle cx="0" cy="0" r="2" fill="#64212a" /><circle cx="28" cy="0" r="2" fill="#64212a" /><circle cx="0" cy="36" r="2" fill="#64212a" /><circle cx="28" cy="36" r="2" fill="#64212a" /></pattern>
+          <pattern id="rh-floor" width="36" height="36" patternUnits="userSpaceOnUse"><rect width="36" height="36" fill="#d8ccb2" /><rect width="18" height="18" fill="#2a2320" /><rect x="18" y="18" width="18" height="18" fill="#2a2320" /></pattern>
+          <pattern id="rh-dentil" width="10" height="8" patternUnits="userSpaceOnUse"><rect x="1" width="6" height="8" fill="#a8873e" /></pattern>
+          <clipPath id="rh-view"><path d="M32 330V130A78 78 0 0 1 188 130V330Z" /></clipPath>
+        </defs>
+        <rect x="-40" width="480" height="1000" fill="url(#rh-damask)" />
+        <rect x="-40" width="480" height="22" fill="#3a1014" /><rect x="-40" y="22" width="480" height="8" fill="url(#rh-dentil)" /><path d="M-40 21H440M-40 31H440" stroke="#c9a55a" stroke-width="2" />
+        <rect x="204" y="30" width="22" height="310" fill="#4a1419" /><path d="M206 30V340M224 30V340" stroke="#c9a55a" stroke-width="1.2" />
+        <!-- The window: smoke, a clock tower, a train on the viaduct. -->
+        <path d="M22 334V128A88 88 0 0 1 198 128V334Z" fill="#c9a55a" />
+        <g clip-path="url(#rh-view)">
+          <rect x="32" y="40" width="156" height="90" fill="#ecd3a2" /><rect x="32" y="130" width="156" height="70" fill="#e2c493" /><rect x="32" y="200" width="156" height="60" fill="#d4b282" /><rect x="32" y="260" width="156" height="70" fill="#c09a6c" />
+          <circle cx="150" cy="124" r="18" fill="#f6e2b4" />
+          <g transform="translate(66 112)"><g class="bob b2">
+            <path d="M0-14C9-14 13-6 11 2C9 8 4 12 2 14H-2C-4 12-9 8-11 2C-13-6-9-14 0-14Z" fill="#a8202c" />
+            <path d="M0-14V14M-6-12Q-8 0-2 14M6-12Q8 0 2 14" fill="none" stroke="#e2c486" stroke-width=".8" />
+            <path d="M-2 14L-3 20M2 14L3 20" stroke="#5a3a20" stroke-width=".8" /><rect x="-3" y="20" width="6" height="5" fill="#5a3a20" />
+          </g></g>
+          <path d="M32 330V270H44V258H52V270H62V250L67 238L72 250V270H86V262Q94 248 102 262V270H120V256H130V270H150V260H170V270H188V330Z" fill="#9a7f62" />
+          <rect x="84" y="170" width="22" height="160" fill="#6e5640" /><path d="M82 172L95 138L108 172Z" fill="#5e4834" />
+          <circle cx="95" cy="188" r="7.5" fill="#efe2b8" /><path d="M95 188V183M95 188L99 190" stroke="#3a2a1a" stroke-width="1.2" />
+          <g fill="#4a3826"><rect x="91" y="206" width="3" height="10" /><rect x="96" y="206" width="3" height="10" /><rect x="91" y="226" width="3" height="10" /><rect x="96" y="226" width="3" height="10" /></g>
+          <g fill="#5a4430"><rect x="128" y="196" width="10" height="134" /><rect x="150" y="214" width="9" height="116" /><rect x="168" y="204" width="8" height="126" /></g>
+          <g fill="#3e2e20"><rect x="127" y="204" width="12" height="3" /><rect x="149" y="222" width="11" height="3" /><rect x="167" y="212" width="10" height="3" /></g>
+          <g fill="#8f7c66" opacity=".85">
+            <circle class="puff" cx="133" cy="190" r="7" /><circle class="puff p2" cx="133" cy="190" r="7" /><circle class="puff p3" cx="133" cy="190" r="7" />
+            <circle class="puff p2" cx="154" cy="208" r="6" /><circle class="puff p4" cx="154" cy="208" r="6" />
+            <circle class="puff p3" cx="172" cy="198" r="6" /><circle class="puff" cx="172" cy="198" r="6" />
+          </g>
+          <rect x="32" y="294" width="156" height="36" fill="#7a634c" />
+          <g fill="#c09a6c"><path d="M36 330V312a7 7 0 0 1 14 0V330Z" /><path d="M58 330V312a7 7 0 0 1 14 0V330Z" /><path d="M80 330V312a7 7 0 0 1 14 0V330Z" /><path d="M102 330V312a7 7 0 0 1 14 0V330Z" /><path d="M124 330V312a7 7 0 0 1 14 0V330Z" /><path d="M146 330V312a7 7 0 0 1 14 0V330Z" /><path d="M168 330V312a7 7 0 0 1 14 0V330Z" /></g>
+          <path d="M32 294H188" stroke="#5e4834" stroke-width="2" />
+          <g fill="#6a2a24"><rect x="40" y="280" width="32" height="11" /><rect x="76" y="280" width="32" height="11" /></g>
+          <g fill="#f2d38a" opacity=".7"><rect x="44" y="283" width="4" height="3" /><rect x="52" y="283" width="4" height="3" /><rect x="60" y="283" width="4" height="3" /><rect x="80" y="283" width="4" height="3" /><rect x="88" y="283" width="4" height="3" /><rect x="96" y="283" width="4" height="3" /></g>
+          <rect x="112" y="279" width="26" height="12" fill="#2a2420" /><rect x="134" y="273" width="12" height="18" fill="#2a2420" /><rect x="137" y="276" width="6" height="5" fill="#f2d38a" /><rect x="116" y="270" width="6" height="10" fill="#2a2420" /><circle cx="128" cy="279" r="3" fill="#2a2420" />
+          <g fill="#1a1614"><circle cx="118" cy="292" r="3.6" /><circle cx="129" cy="292" r="3.6" /><circle cx="141" cy="292" r="3" /><circle cx="50" cy="292" r="2.6" /><circle cx="64" cy="292" r="2.6" /><circle cx="86" cy="292" r="2.6" /><circle cx="100" cy="292" r="2.6" /></g>
+          <g fill="#f3e8d0" opacity=".85"><circle class="puff" cx="119" cy="264" r="5" /><circle class="puff p2" cx="119" cy="264" r="5" /><circle class="puff p4" cx="119" cy="264" r="5" /></g>
+        </g>
+        <path d="M110 52V330M32 200H188M32 266H188" stroke="#c9a55a" stroke-width="3" />
+        <path d="M71 64V330M149 64V330" stroke="#a8873e" stroke-width="1.2" />
+        <path d="M32 130Q110 60 188 130" fill="none" stroke="#c9a55a" stroke-width="2" />
+        <rect x="16" y="330" width="188" height="10" fill="#c9a55a" />
+        <!-- Curtains and their valance. -->
+        <path d="M8 30H58C50 120 40 220 52 300C56 320 50 340 40 348H8Z" fill="#7a1f2a" /><path d="M20 40C18 140 22 240 18 340M32 40C30 140 36 240 30 340M44 40C40 140 38 240 44 330" fill="none" stroke="#5a141c" stroke-width="2" />
+        <path d="M212 30H162C170 120 180 220 168 300C164 320 170 340 180 348H212Z" fill="#7a1f2a" /><path d="M200 40C202 140 198 240 202 340M188 40C190 140 184 240 190 340M176 40C180 140 182 240 176 330" fill="none" stroke="#5a141c" stroke-width="2" />
+        <ellipse cx="44" cy="250" rx="9" ry="5" fill="#c9a55a" /><path d="M44 254l-4 18h8Z" fill="#e2c486" />
+        <ellipse cx="176" cy="250" rx="9" ry="5" fill="#c9a55a" /><path d="M176 254l-4 18h8Z" fill="#e2c486" />
+        <path d="M0 30H220V48Q200 60 180 48Q160 60 140 48Q120 60 100 48Q80 60 60 48Q40 60 20 48Q10 56 0 48Z" fill="#8f2633" /><path d="M0 48Q10 56 20 48Q40 60 60 48Q80 60 100 48Q120 60 140 48Q160 60 180 48Q200 60 220 48" fill="none" stroke="#e2c486" stroke-width="2" stroke-dasharray="2 2" />
+        <!-- The chandelier and a gas lamp. -->
+        <path d="M216 30V58" stroke="#c9a55a" stroke-width="1.6" />
+        <path d="M192 66Q216 84 240 66M198 62Q216 74 234 62" fill="none" stroke="#c9a55a" stroke-width="2" />
+        <ellipse cx="216" cy="68" rx="26" ry="6" fill="#c9a55a" />
+        <g fill="#efe6cf"><rect x="190" y="54" width="4" height="10" /><rect x="202" y="50" width="4" height="10" /><rect x="214" y="48" width="4" height="10" /><rect x="226" y="50" width="4" height="10" /><rect x="238" y="54" width="4" height="10" /></g>
+        <g fill="#f6c64a" class="flicker"><ellipse cx="192" cy="51" rx="2" ry="3" /><ellipse cx="204" cy="47" rx="2" ry="3" /><ellipse cx="216" cy="45" rx="2" ry="3" /><ellipse cx="228" cy="47" rx="2" ry="3" /><ellipse cx="240" cy="51" rx="2" ry="3" /></g>
+        <g fill="#f3e6c4"><circle cx="196" cy="78" r="2" /><circle cx="206" cy="82" r="2" /><circle cx="216" cy="84" r="2.2" /><circle cx="226" cy="82" r="2" /><circle cx="236" cy="78" r="2" /><path d="M216 86l-3 6 3 4 3-4Z" /></g>
+        <path d="M215 222V232M209 232H221" stroke="#c9a55a" stroke-width="2" /><circle class="flicker f2" cx="215" cy="214" r="7" fill="#f6dca0" />
+        <!-- The portrait of the sovereign. -->
+        <rect x="236" y="64" width="148" height="222" fill="#c9a55a" /><rect x="244" y="72" width="132" height="206" fill="#8f6d2f" /><rect x="250" y="78" width="120" height="194" fill="#e2c486" />
+        <rect x="254" y="82" width="112" height="186" fill="#24362c" />
+        <rect x="346" y="90" width="12" height="178" fill="#2f4436" /><path d="M254 82H306Q290 110 272 116Q262 104 254 112Z" fill="#5a1a20" />
+        <path d="M268 268C272 236 290 220 310 216C334 214 352 226 358 268Z" fill="#1c1a24" />
+        <path d="M290 228L300 222L352 262L340 268Z" fill="#3b5ea8" />
+        <path d="M322 240l1.6 3.6 3.8.4-2.9 2.6.9 3.8-3.4-2-3.4 2 .9-3.8-2.9-2.6 3.8-.4Z" fill="#e2c486" />
+        <rect x="304" y="200" width="14" height="20" fill="#e2c4a4" />
+        <path d="M296 222Q310 234 326 222L322 232Q310 240 300 232Z" fill="#efe6d2" />
+        <path d="M300 168C300 152 312 142 324 144C336 146 342 158 340 172C340 184 334 196 322 200L314 202C308 200 304 196 302 190L296 186L300 182L298 178L302 176C300 172 300 170 300 168Z" fill="#e8cbab" />
+        <path d="M304 160C306 146 320 140 332 144C344 150 346 166 340 178C336 172 330 168 324 168C316 166 308 164 304 160Z" fill="#4a3020" /><circle cx="340" cy="170" r="8" fill="#4a3020" />
+        <path d="M326 148C346 150 356 176 352 214H342C344 188 338 166 326 154Z" fill="#efe6d2" opacity=".9" />
+        <path d="M308 147L310 137L314 143L318 133L322 143L326 137L328 147Z" fill="#e2c486" /><g fill="#c4232f"><circle cx="314" cy="145" r="1" /><circle cx="322" cy="145" r="1" /></g>
+        <path d="M305 170H310" stroke="#4a3020" stroke-width="1.2" /><circle cx="323" cy="184" r="1.5" fill="#efe6d2" />
+        <g fill="#efe6d2"><circle cx="304" cy="214" r="1" /><circle cx="308" cy="216" r="1" /><circle cx="312" cy="217" r="1" /><circle cx="316" cy="216" r="1" /></g>
+        <g fill="#e2c486"><circle cx="240" cy="68" r="8" /><circle cx="380" cy="68" r="8" /><circle cx="240" cy="282" r="8" /><circle cx="380" cy="282" r="8" /><path d="M286 64Q310 34 334 64Z" /></g>
+        <g fill="#a8873e"><circle cx="240" cy="68" r="4" /><circle cx="380" cy="68" r="4" /><circle cx="240" cy="282" r="4" /><circle cx="380" cy="282" r="4" /></g>
+        <path d="M300 52L302 42L306 48L310 38L314 48L318 42L320 52Z" fill="#f3e6c4" />
+        <rect x="288" y="274" width="44" height="9" fill="#a8873e" /><text x="310" y="281" class="rh-plaque">REGINA</text>
+        <!-- Wainscot and floor. -->
+        <rect x="-40" y="340" width="480" height="140" fill="#3a1418" /><rect x="-40" y="338" width="480" height="6" fill="#c9a55a" />
+        <g fill="none" stroke="#7a5a30" stroke-width="1.4"><rect x="-30" y="356" width="60" height="100" /><rect x="40" y="356" width="60" height="100" /><rect x="110" y="356" width="60" height="100" /><rect x="180" y="356" width="60" height="100" /><rect x="250" y="356" width="60" height="100" /><rect x="320" y="356" width="60" height="100" /><rect x="390" y="356" width="60" height="100" /></g>
+        <rect x="-40" y="476" width="480" height="524" fill="url(#rh-floor)" />
+        <rect x="-40" y="474" width="480" height="4" fill="#c9a55a" />
+        <path d="M270 476H350L376 1000H244Z" fill="#8f1d2a" /><path d="M278 476L254 1000M342 476L366 1000" stroke="#e2c486" stroke-width="2" />
+        <!-- The throne on its dais. -->
+        <rect x="206" y="458" width="194" height="18" fill="#4a1419" /><path d="M206 459H400" stroke="#e2c486" stroke-width="2" />
+        <rect x="226" y="444" width="174" height="16" fill="#5a1a20" /><path d="M226 445H400" stroke="#e2c486" stroke-width="2" />
+        <path d="M260 446V318Q260 290 280 284Q296 262 310 258Q324 262 340 284Q360 290 360 318V446Z" fill="#c9a55a" />
+        <path d="M270 420V322Q270 300 286 294Q300 278 310 276Q320 278 334 294Q350 300 350 322V420Z" fill="#8f1d2a" />
+        <g fill="#6a1520"><circle cx="290" cy="312" r="1.6" /><circle cx="310" cy="300" r="1.6" /><circle cx="330" cy="312" r="1.6" /><circle cx="290" cy="336" r="1.6" /><circle cx="310" cy="336" r="1.6" /><circle cx="330" cy="336" r="1.6" /><circle cx="290" cy="360" r="1.6" /><circle cx="310" cy="360" r="1.6" /><circle cx="330" cy="360" r="1.6" /><circle cx="290" cy="384" r="1.6" /><circle cx="310" cy="384" r="1.6" /><circle cx="330" cy="384" r="1.6" /><circle cx="300" cy="324" r="1.6" /><circle cx="320" cy="324" r="1.6" /><circle cx="300" cy="348" r="1.6" /><circle cx="320" cy="348" r="1.6" /><circle cx="300" cy="372" r="1.6" /><circle cx="320" cy="372" r="1.6" /></g>
+        <path d="M298 262L300 248L305 255L310 244L315 255L320 248L322 262Z" fill="#e2c486" /><circle cx="310" cy="241" r="2.4" fill="#e2c486" />
+        <g fill="#e2c486"><circle cx="260" cy="300" r="6" /><circle cx="360" cy="300" r="6" /><path d="M258 296l2-10 2 10ZM358 296l2-10 2 10Z" /></g>
+        <rect x="246" y="384" width="24" height="10" rx="4" fill="#c9a55a" /><rect x="250" y="392" width="14" height="40" fill="#b8913f" /><circle cx="248" cy="388" r="6" fill="#e2c486" />
+        <rect x="350" y="384" width="24" height="10" rx="4" fill="#c9a55a" /><rect x="356" y="392" width="14" height="40" fill="#b8913f" /><circle cx="372" cy="388" r="6" fill="#e2c486" />
+        <rect x="262" y="410" width="96" height="18" rx="6" fill="#a8263a" stroke="#e2c486" stroke-width="1.2" />
+        <rect x="266" y="428" width="88" height="16" fill="#c9a55a" /><path d="M276 436h68" stroke="#8f6d2f" stroke-width="1.2" stroke-dasharray="4 3" />
+        <!-- The royal standard. -->
+        <path d="M26 326V472" stroke="#c9a55a" stroke-width="4" /><circle cx="26" cy="324" r="5" fill="#e2c486" /><path d="M23 320L26 308L29 320Z" fill="#e2c486" />
+        <g transform="translate(28 334)"><g class="wave w2">
+          <rect width="36" height="24" fill="#a8202c" /><rect x="36" width="36" height="24" fill="#23356b" /><rect y="24" width="36" height="24" fill="#23356b" /><rect x="36" y="24" width="36" height="24" fill="#a8202c" />
+          <g fill="#e2c486"><path d="M10 16L11 8L15 12L18 6L21 12L25 8L26 16Z" /><path d="M46 16L47 8L51 12L54 6L57 12L61 8L62 16Z" /><path d="M10 40L11 32L15 36L18 30L21 36L25 32L26 40Z" /><path d="M46 40L47 32L51 36L54 30L57 36L61 32L62 40Z" /></g>
+          <path d="M0 49H72" stroke="#e2c486" stroke-width="3" stroke-dasharray="1.5 2" />
+        </g></g>
+        <!-- The crown on its cushion, and the sceptre. -->
+        <rect x="114" y="456" width="72" height="110" fill="#d8ccb2" /><path d="M124 458V566M136 458V566M148 458V566M160 458V566M172 458V566" stroke="#b8ab90" stroke-width="1.4" />
+        <rect x="106" y="446" width="88" height="12" fill="#e6dcc6" />
+        <path d="M110 446Q106 430 116 426H184Q194 430 190 446Z" fill="#a8202c" /><path d="M112 444Q110 432 118 429H182Q190 432 188 444" fill="none" stroke="#e2c486" stroke-width="1" />
+        <path d="M112 446v8M188 446v8" stroke="#e2c486" stroke-width="1.4" /><path d="M110 454l2 7 2-7ZM186 454l2 7 2-7Z" fill="#e2c486" />
+        <path d="M126 410Q126 376 150 372Q174 376 174 410Z" fill="#8f1d2a" />
+        <path d="M126 410Q128 380 150 374M174 410Q172 380 150 374M150 410V374" fill="none" stroke="#e2c486" stroke-width="3.5" />
+        <g fill="#f3ead6"><circle cx="128" cy="398" r="1.4" /><circle cx="131" cy="388" r="1.4" /><circle cx="137" cy="380" r="1.4" /><circle cx="163" cy="380" r="1.4" /><circle cx="169" cy="388" r="1.4" /><circle cx="172" cy="398" r="1.4" /><circle cx="150" cy="392" r="1.4" /></g>
+        <rect x="122" y="404" width="56" height="14" rx="2" fill="#e2c486" />
+        <circle cx="136" cy="411" r="3" fill="#c4232f" /><circle cx="150" cy="411" r="3.4" fill="#2a5aa8" /><circle cx="164" cy="411" r="3" fill="#2f8a52" /><g fill="#f3ead6"><circle cx="128" cy="411" r="1.2" /><circle cx="143" cy="411" r="1.2" /><circle cx="157" cy="411" r="1.2" /><circle cx="172" cy="411" r="1.2" /></g>
+        <rect x="120" y="416" width="60" height="8" rx="3" fill="#f3ede0" /><path d="M128 418v4M140 418v4M152 418v4M164 418v4M176 418v4" stroke="#1a1a1a" stroke-width="1.6" />
+        <circle cx="150" cy="368" r="5" fill="#e2c486" /><path d="M147 352h6v4h4v6h-4v6h-6v-6h-4v-6h4Z" fill="#e2c486" /><circle cx="150" cy="359" r="1.4" fill="#c4232f" />
+        <path class="glint" d="M162 380L164 386L170 388L164 390L162 396L160 390L154 388L160 386Z" fill="#fff9e6" />
+        <path d="M96 548L112 420" stroke="#e2c486" stroke-width="3.5" stroke-linecap="round" /><circle cx="112" cy="416" r="4.5" fill="#e2c486" /><path d="M111 404h2v4h3v2h-3v3h-2v-3h-3v-2h3Z" fill="#e2c486" />
+      </svg>
+      <svg class="spill" viewBox="0 0 400 1000" preserveAspectRatio="xMidYMin slice" aria-hidden="true" focusable="false">
+        <defs><path id="rh-ribbon-line" d="M-190 326C-120 336-60 308 20 320C110 334 170 290 244 302" /></defs>
+        <!-- The royal ribbon unfurls out of the portrait and into the land of the dragon. -->
+        <g class="ribbon">
+          <path d="M-196 312L-238 308L-222 326L-240 344L-194 338Z" fill="#7a1520" />
+          <path d="M250 288C170 274 110 320 20 306C-60 294-120 322-196 312L-194 338C-118 348-60 320 18 332C108 346 172 302 252 314Z" fill="#a8202c" />
+          <path d="M250 288C170 274 110 320 20 306C-60 294-120 322-196 312M-194 338C-118 348-60 320 18 332C108 346 172 302 252 314" fill="none" stroke="#e2c486" stroke-width="1.6" />
+          <path d="M244 286C254 278 266 286 260 298C254 306 242 302 246 292Z" fill="#7a1520" />
+          <text class="rh-ribbon"><textPath href="#rh-ribbon-line" startOffset="5%">VIVAT REGINA · MDCCCXXXVII · VIVAT</textPath></text>
+        </g>
+      </svg>
+      <figcaption><b>1837</b> Victorian crowns</figcaption>
+    </figure>
+
+    <svg class="seams" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+      <g class="desk"><path class="under" d="M27.5 0L22.5 100M52.5 0L47.5 100M77.5 0L72.5 100" /><path class="line" d="M27.5 0L22.5 100M52.5 0L47.5 100M77.5 0L72.5 100" /></g>
+      <g class="phone"><path class="under" d="M55 0L45 50M55 50L45 100M0 50H100" /><path class="line" d="M55 0L45 50M55 50L45 100M0 50H100" /></g>
     </svg>
-
-    <h1 class="title">
-      <span class="t-small"><span class="rule-l"></span>Open Historia<span class="rule-r"></span></span>
-      <span class="t-big"><span class="w-war">War</span><span class="w-or">or</span><span class="w-peace">Peace</span></span>
-    </h1>
-    <p class="lede">Lead any nation on a living world map. Say what it does in your own words, and an AI plays out the rest of the world. <em>The history you make is yours.</em></p>
-    <div class="cta-row">
-      <a id="primaryDownload" class="btn btn-primary" href="#download" data-download-app><span class="i">⬇</span> Download the App</a>
-      <a class="btn btn-ghost" href="/play/"><span class="i">▶</span> Demo in your browser</a>
-    </div>
-    <p class="hero-note" id="heroNote">The browser version is a demo — it streams the world map over the network, so expect lag. The <a href="#download">desktop app</a> runs locally and is how the game is meant to be played.</p>
-    <ul class="seals" aria-label="At a glance">
-      <li><b>Free</b><span>no price, no ads</span></li>
-      <li><b>AGPL</b><span>open source</span></li>
-      <li><b>36</b><span>languages</span></li>
-      <li><b>Offline</b><span>runs on your machine</span></li>
-    </ul>
   </div>
 
-  <!-- A ruler of years along the foot of the hero. -->
-  <div class="ruler" aria-hidden="true">
-    <span style="left:2%">3000 BC</span><span style="left:12%">753 BC</span><span style="left:22%">AD 1</span><span style="left:32%">476</span><span style="left:42%">1066</span><span style="left:52%">1453</span><span style="left:62%">1648</span><span style="left:70%">1815</span><span style="left:77%">1914</span><span style="left:83%">1939</span><span style="left:90%">2016</span><span style="left:97%">∞</span>
+  <div class="hero-plate">
+    <div class="plate-main">
+      <p class="kicker"><span class="orn">✦</span> A free, open-source strategy game · AI-driven alternate history <span class="orn">✦</span></p>
+      <h1 class="title">
+        <span class="t-small"><span class="rule-l"></span>Open Historia<span class="rule-r"></span></span>
+        <span class="t-big"><span class="w-war">War</span><span class="w-or">or</span><span class="w-peace">Peace</span></span>
+      </h1>
+      <p class="lede">Lead any nation on a living world map. Say what it does in your own words, and an AI plays out the rest of the world. <em>The history you make is yours.</em></p>
+    </div>
+    <div class="plate-side">
+      <div class="cta-row">
+        <a id="primaryDownload" class="btn btn-primary" href="#download" data-download-app><span class="i">⬇</span> Download the App</a>
+        <a class="btn btn-ghost" href="/play/"><span class="i">▶</span> Demo in your browser</a>
+      </div>
+      <p class="hero-note" id="heroNote">The browser version is a demo — it streams the world map over the network, so expect lag. The <a href="#download">desktop app</a> runs locally and is how the game is meant to be played.</p>
+      <ul class="seals" aria-label="At a glance">
+        <li><b>Free</b><span>no price, no ads</span></li>
+        <li><b>AGPL</b><span>open source</span></li>
+        <li><b>36</b><span>languages</span></li>
+        <li><b>Offline</b><span>runs on your machine</span></li>
+      </ul>
+    </div>
   </div>
   <a class="scroll-cue" href="#story">Begin the chronicle</a>
 </section>
