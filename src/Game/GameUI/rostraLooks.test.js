@@ -15,7 +15,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 import { FEATURE_DEFINITIONS, ROSTRA_LOOKS, featureDefaults, resolveFeatures, rostraLookOf } from "../../../server/gameFeatures.js";
-import { ROSTRA_LOOK_VARS, RS } from "./rostraLooks.js";
+import { ROSTRA_LOOK_VARS, RS, roughEdge } from "./rostraLooks.js";
 
 const require = createRequire(import.meta.url);
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
@@ -93,7 +93,7 @@ test("every look gives every colour and face the panel reads", () => {
   for (const look of ROSTRA_LOOKS) assert.deepEqual(Object.keys(ROSTRA_LOOK_VARS[look]), names, look);
   for (const value of Object.values(RS)) assert.match(value, /^var\(--rs-[a-z-]+, .+\)$/);
   // No gradients and no purple, in any look.
-  const source = ["rostraLooks.js", "social.jsx", "rostraSearch.jsx", "rostraRefresh.jsx"].map((file) => fs.readFileSync(new URL(`./${file}`, import.meta.url), "utf8")).join("\n");
+  const source = ["rostraLooks.js", "rostraDress.jsx", "social.jsx", "rostraSearch.jsx", "rostraRefresh.jsx"].map((file) => fs.readFileSync(new URL(`./${file}`, import.meta.url), "utf8")).join("\n");
   assert.doesNotMatch(source, /gradient\(/);
   assert.doesNotMatch(source, /#(?:7c3aed|8b5cf6|a855f7|9333ea)|purple|violet/i);
 });
@@ -112,11 +112,30 @@ test("each look is drawn in its own frame, with the same posts", () => {
   const phoneOnly = (html) => html.includes("width:6.6rem");
   assert.equal(phoneOnly(drawn.phone), true);
   for (const look of ["newspaper", "scroll", "tablet"]) assert.equal(phoneOnly(drawn[look]), false, look);
-  const rolls = (html) => (html.match(/background:#b98a4b/g) ?? []).length;
+  const rolls = (html) => (html.match(/background-color:#dfc285/g) ?? []).length;
   assert.deepEqual(ROSTRA_LOOKS.map((look) => rolls(drawn[look])), [0, 0, 2, 0]);
-  // The tablet's arched top; the newspaper's double rule.
-  assert.match(drawn.tablet, /border-radius:10rem 10rem 1rem 1rem/);
-  assert.match(drawn.newspaper, /border:3px double/);
+  // Each surface has its grain (SVG noise, never a gradient), and the phone none.
+  for (const look of ["newspaper", "scroll", "tablet"]) assert.match(drawn[look], /background-image:url\(&quot;data:image\/svg\+xml,[^)]*feTurbulence/, look);
+  assert.doesNotMatch(drawn.phone, /feTurbulence/);
+  // The newspaper's masthead; the scroll's seal and torn sides; the tablet's arch, laurel, chipped sides and cracks.
+  assert.match(drawn.newspaper, /class="rostra-masthead"/);
+  assert.match(drawn.newspaper, /№ 3/);
+  assert.match(drawn.scroll, /fill="#8f1d14"/);
+  assert.match(drawn.scroll, /clip-path:polygon\(/);
+  assert.match(drawn.tablet, /border-radius:11rem 11rem 0.9rem 0.9rem/);
+  assert.match(drawn.tablet, /fill="#7a561c"/);
+  assert.match(drawn.tablet, /clip-path:polygon\(/);
+  assert.match(drawn.tablet, /stroke="rgba\(30,27,22,0.55\)"/);
+  // The look's rules are on the parts they style.
+  for (const name of ["rostra-author", "rostra-byline", "rostra-text", "rostra-avatar-face", "rostra-tab-label", "rostra-btn"]) assert.match(drawn.newspaper, new RegExp(name), name);
+});
+
+test("a ragged edge is the same each time, and only on the sides named", () => {
+  const edge = roughEdge({ amp: 4, steps: 8, seed: 41, sides: ["left", "right"] });
+  assert.equal(edge, roughEdge({ amp: 4, steps: 8, seed: 41, sides: ["left", "right"] }));
+  assert.match(edge, /^polygon\(/);
+  // Top and bottom straight.
+  assert.ok(edge.includes("calc(0% + 0px)") && edge.includes("calc(100% - 0px)"));
 });
 
 test("on a phone screen there is no frame: the look's paper fills the panel", () => {
@@ -124,9 +143,10 @@ test("on a phone screen there is no frame: the look's paper fills the panel", ()
   try {
     for (const look of ["newspaper", "scroll", "tablet"]) {
       const html = render(look);
-      assert.match(html, /background-color:var\(--rs-screen, #0b0b0d\)/, look);
-      assert.doesNotMatch(html, /background:#b98a4b/);
-      assert.doesNotMatch(html, /border-radius:10rem/);
+      assert.match(html, /background-color:var\(--rs-screen\)/, look);
+      assert.match(html, /feTurbulence/, look);
+      assert.doesNotMatch(html, /background-color:#dfc285/);
+      assert.doesNotMatch(html, /clip-path/);
     }
     assert.match(render("phone"), /background-color:rgba\(11, 11, 13, 0\.97\)/);
   } finally {
