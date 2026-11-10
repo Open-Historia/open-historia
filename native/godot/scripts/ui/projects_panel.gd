@@ -56,6 +56,7 @@ static var _flag_cache := {}
 
 var engine: EngineLink
 var context := {}
+var height_source: Callable
 var _view := {}
 var _last_json := ""
 var _stamp := ""
@@ -184,6 +185,8 @@ func refresh() -> void:
 
 
 func _height() -> float:
+	if height_source.is_valid():
+		return float(height_source.call())
 	var viewport_height := get_viewport_rect().size.y if is_inside_tree() else 900.0
 	return maxf(160.0, minf(viewport_height - 144.0, maxf(viewport_height - 256.0, 480.0)))
 

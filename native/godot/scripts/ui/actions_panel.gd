@@ -74,7 +74,11 @@ var _has_requested := false
 var _is_suggesting := false
 var _suggestion_error := ""
 var _suggestion_fallback := {}
-var _open_section := "submitted"
+var _layout := {"section": "submitted", "goalOpen": true}
+var _panel_px := 0.0
+var _min_rem := 20.0
+var _clearance_rem := 9.0
+var _resize: ActionsResizeHandle
 var _notes_margin: MarginContainer
 var _notes: VBoxContainer
 var _save_error := ""
@@ -108,7 +112,7 @@ func _init() -> void:
 	_material.set_shader_parameter("highlight", 0.06)
 	_material.set_shader_parameter("blur_px", 8.0)
 	_restyle_close()
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
 	var margin := scroll.get_child(0) as MarginContainer
 	for side in [["margin_left", 20], ["margin_right", 20], ["margin_top", 14], ["margin_bottom", 14]]:
 		margin.add_theme_constant_override(side[0], side[1])
@@ -149,6 +153,12 @@ func _init() -> void:
 	column.add_child(_board_holder)
 	column.move_child(_board_holder, at + 1)
 	_build_tabs()
+	var edge_layer := Control.new()
+	edge_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_resize = ActionsResizeHandle.new()
+	_resize.panel = self
+	edge_layer.add_child(_resize)
+	add_child(edge_layer)
 	_poll = Timer.new()
 	_poll.wait_time = 0.8
 	_poll.timeout.connect(_on_poll)
@@ -161,8 +171,7 @@ func _ready() -> void:
 	UiTheme.events().changed.connect(_paint_controls)
 	get_viewport().size_changed.connect(func() -> void:
 		if _open:
-			offset_top = -BOTTOM_GAP - _height()
-			offset_bottom = -BOTTOM_GAP)
+			_place())
 
 
 func setup(link: EngineLink, ctx: Dictionary = {}) -> void:
@@ -170,6 +179,61 @@ func setup(link: EngineLink, ctx: Dictionary = {}) -> void:
 	context = ctx
 	if _board:
 		_board.setup(link, ctx)
+	_load_layout()
+
+
+func _load_layout() -> void:
+	if engine == null:
+		return
+	var reply: Dictionary = await engine.request("actions.layout")
+	if not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY:
+		return
+	var saved: Dictionary = reply["result"]
+	_layout["goalOpen"] = bool(saved.get("goalOpen", true))
+	_panel_px = float(saved["height"]) if saved.get("height") != null else 0.0
+	_min_rem = float(saved.get("minRem", _min_rem))
+	_clearance_rem = float(saved.get("clearanceRem", _clearance_rem))
+	_goal_shown = ""
+	_render_goal()
+	if _open:
+		_place()
+
+
+func _place() -> void:
+	offset_top = -BOTTOM_GAP - _height()
+	offset_bottom = -BOTTOM_GAP
+
+
+func panel_height() -> float:
+	return _height()
+
+
+func set_panel_px(px: float) -> void:
+	_panel_px = px
+	if _open:
+		_place()
+
+
+func commit_panel_px(px: Variant, key := "", shift := false) -> void:
+	if engine == null:
+		return
+	var view := get_viewport_rect().size
+	var args := {"px": px, "viewport": view.y, "rem": 16.0}
+	if not key.is_empty():
+		args = {"key": key, "current": size.y, "shift": shift, "viewport": view.y, "rem": 16.0}
+	var reply: Dictionary = await engine.request("actions.panelHeight", args)
+	if not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY:
+		return
+	var result: Dictionary = reply["result"]
+	if not bool(result.get("handled", true)):
+		return
+	set_panel_px(float(result["height"]) if result.get("height") != null else 0.0)
+
+
+func drag_limits() -> Vector2:
+	var view := get_viewport_rect().size.y if is_inside_tree() else 900.0
+	var most := maxf(0.0, view - _clearance_rem * 16.0)
+	return Vector2(minf(_min_rem * 16.0, most), most)
 
 
 func open() -> void:
@@ -189,6 +253,7 @@ func set_open(open: bool) -> void:
 	tween.tween_property(self, "offset_bottom", -BOTTOM_GAP if open else 200.0 + height, 0.35)
 	tween.tween_property(self, "modulate:a", 1.0 if open else 0.0, 0.35)
 	mouse_filter = Control.MOUSE_FILTER_STOP if open else Control.MOUSE_FILTER_IGNORE
+	_resize.focus_mode = Control.FOCUS_ALL if open else Control.FOCUS_NONE
 	if _board:
 		_board.set_open(open and _tab == "projects")
 	if open and not was:
@@ -341,6 +406,7 @@ func set_tab(key: String) -> void:
 	var on_board := key == "projects"
 	if on_board and _board == null:
 		_board = ProjectsPanel.new()
+		_board.height_source = panel_height
 		_board.setup(engine, context)
 		_board.open_advisor.connect(func(text: String) -> void: open_advisor.emit(text))
 		_board.show_on_map.connect(func(lng: float, lat: float, zoom: float) -> void: show_on_map.emit(lng, lat, zoom))
@@ -358,7 +424,10 @@ func board() -> ProjectsPanel:
 
 func _height() -> float:
 	var viewport_height := get_viewport_rect().size.y if is_inside_tree() else 900.0
-	return maxf(160.0, minf(viewport_height - 144.0, maxf(viewport_height - 256.0, 480.0)))
+	var cap := viewport_height - _clearance_rem * 16.0
+	if _panel_px > 0.0:
+		return maxf(160.0, minf(cap, maxf(roundf(_panel_px), _min_rem * 16.0)))
+	return maxf(160.0, minf(cap, maxf(viewport_height - 256.0, 480.0)))
 
 
 func _apply_view(view: Variant) -> void:
@@ -728,7 +797,7 @@ func _send_report(kind: String, title: String, failure: Dictionary) -> void:
 
 func _render_reports() -> void:
 	_render_notes()
-	if _open_section == "suggested":
+	if _layout["section"] == "suggested":
 		_render_sections()
 
 
@@ -736,7 +805,7 @@ func _render_goal() -> void:
 	var country := str(_view.get("country", ""))
 	var goal := str(_view.get("goal", ""))
 	var mode := "" if country.is_empty() else ("edit" if _goal_editing else ("set" if not goal.is_empty() else "empty"))
-	var key := "%s|%s|%s|%s|%s|%s|%s|%s" % [mode, goal, str(_turn_running), JSON.stringify(_view.get("goalProgress")), str(_progress_busy), _progress_error, str(_progress_open), str(_view.get("round", 0))]
+	var key := "%s|%s|%s|%s|%s|%s|%s|%s|%s" % [mode, goal, str(_turn_running), JSON.stringify(_view.get("goalProgress")), str(_progress_busy), _progress_error, str(_progress_open), str(_view.get("round", 0)), str(_layout["goalOpen"])]
 	if mode == "edit" and _goal_mode == "edit" and is_instance_valid(_goal_edit):
 		_goal_shown = key
 		_update_goal_editor()
@@ -785,16 +854,77 @@ func _goal_label() -> Label:
 	return UI.label("STANDING GOAL", 12, Color(1, 1, 1, 0.9), 700, "Arial", 1)
 
 
+func _goal_header(goal: String, open: bool) -> Button:
+	var button := Button.new()
+	button.name = "GoalHeader"
+	button.flat = false
+	button.focus_mode = Control.FOCUS_NONE
+	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.custom_minimum_size.y = 24
+	button.tooltip_text = "" if open else goal
+	var empty := StyleBoxEmpty.new()
+	for state in ["normal", "hover", "pressed", "focus", "disabled", "hover_pressed"]:
+		button.add_theme_stylebox_override(state, empty)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var arrow := UI.label("▼" if open else "▶", 11, Color(1, 1, 1, 0.5))
+	arrow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	arrow.custom_minimum_size = Vector2(12, 12)
+	arrow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	arrow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(arrow)
+	var label := _goal_label()
+	label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(label)
+	if open:
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	else:
+		var line := UI.label(goal, 12, Color(1, 1, 1, 0.72))
+		line.name = "GoalLine"
+		line.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		line.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		line.clip_text = true
+		line.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(line)
+		var progress: Variant = _view.get("goalProgress")
+		if typeof(progress) == TYPE_DICTIONARY and (progress as Dictionary).get("progress") != null:
+			var percent := UI.label("%d%%" % int((progress as Dictionary)["progress"]), 11, Color(1, 1, 1, 0.6), 700)
+			percent.name = "GoalPercent"
+			percent.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			percent.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			percent.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			row.add_child(percent)
+	button.add_child(row)
+	button.custom_minimum_size.y = maxf(24.0, row.get_combined_minimum_size().y + 4.0)
+	button.pressed.connect(_toggle_goal)
+	return button
+
+
+func _toggle_goal() -> void:
+	_layout_event({"type": "goal"})
+
+
+func goal_open() -> bool:
+	return bool(_layout["goalOpen"])
+
+
 func _goal_card(goal: String) -> Control:
+	var open := bool(_layout["goalOpen"])
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", _style(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.08)), UiTheme.pick("line", Color(1, 1, 1, 0.15)), 10, Vector4(12, 9, 12, 9)))
+	card.name = "GoalCard"
+	card.add_theme_stylebox_override("panel", _style(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.08)), UiTheme.pick("line", Color(1, 1, 1, 0.15)), 10, Vector4(12, 9, 12, 9) if open else Vector4(12, 5.6, 12, 5.6)))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 5)
 	var row := HBoxContainer.new()
-	var label := _goal_label()
-	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.add_child(label)
+	row.add_theme_constant_override("separation", 8)
+	row.add_child(_goal_header(goal, open))
 	var edit := Button.new()
 	edit.text = "Edit"
 	edit.flat = false
@@ -811,13 +941,15 @@ func _goal_card(goal: String) -> Control:
 	edit.tooltip_text = GOAL_LOCKED if _turn_running else "Change or clear the goal"
 	edit.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN if _turn_running else Control.CURSOR_POINTING_HAND
 	edit.pressed.connect(_start_goal_editing)
+	edit.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(edit)
 	column.add_child(row)
-	var words := UI.wrapped("🎯 " + goal, 13, Color(1, 1, 1, 0.82), 400, 3)
-	words.tooltip_text = goal
-	words.mouse_filter = Control.MOUSE_FILTER_PASS
-	column.add_child(_leading(words, 13, 1.45))
-	column.add_child(_goal_progress())
+	if open:
+		var words := UI.wrapped("🎯 " + goal, 13, Color(1, 1, 1, 0.82), 400, 3)
+		words.tooltip_text = goal
+		words.mouse_filter = Control.MOUSE_FILTER_PASS
+		column.add_child(_leading(words, 13, 1.45))
+		column.add_child(_goal_progress())
 	card.add_child(column)
 	return card
 
@@ -1139,15 +1271,14 @@ func _render_sections() -> void:
 	var suggestions: Array = _view.get("suggestions", [])
 	var submitted: Array = _view.get("submitted", [])
 	var show_suggested := _has_requested or _is_suggesting or suggestions.size() > 0
-	var suggested_open := show_suggested and _open_section == "suggested"
+	var suggested_open := show_suggested and str(_layout["section"]) == "suggested"
 	var submitted_open := not suggested_open
 	if show_suggested:
 		var section := VBoxContainer.new()
 		section.add_theme_constant_override("separation", 0)
 		section.size_flags_vertical = Control.SIZE_EXPAND_FILL if suggested_open else Control.SIZE_SHRINK_BEGIN
 		section.add_child(_section_header("Suggested Actions", suggestions.size(), suggested_open, func() -> void:
-			_open_section = "submitted" if suggested_open else "suggested"
-			_render_sections()))
+			_layout_event({"type": "toggle", "showSuggested": show_suggested})))
 		if suggested_open:
 			var list := VBoxContainer.new()
 			list.add_theme_constant_override("separation", 8)
@@ -1169,8 +1300,7 @@ func _render_sections() -> void:
 	mine.size_flags_vertical = Control.SIZE_EXPAND_FILL if submitted_open else Control.SIZE_SHRINK_BEGIN
 	if show_suggested:
 		mine.add_child(_section_header("Your Submitted Actions", submitted.size(), submitted_open, func() -> void:
-			_open_section = "suggested" if submitted_open else "submitted"
-			_render_sections()))
+			_layout_event({"type": "toggle", "showSuggested": show_suggested})))
 	else:
 		var heading := MarginContainer.new()
 		heading.add_theme_constant_override("margin_bottom", 8)
@@ -1311,14 +1441,30 @@ func _action_row(entry: Dictionary) -> Control:
 	return row
 
 
+func _shows_suggested() -> bool:
+	return _has_requested or _is_suggesting or (_view.get("suggestions", []) as Array).size() > 0
+
+
+func _layout_event(event: Dictionary) -> void:
+	if engine == null:
+		return
+	var reply: Dictionary = await engine.request("actions.layoutEvent", {"state": _layout, "event": event})
+	if reply.get("ok", false) and typeof(reply.get("result")) == TYPE_DICTIONARY:
+		var next: Dictionary = reply["result"]
+		_layout = {"section": str(next.get("section", "submitted")), "goalOpen": bool(next.get("goalOpen", true))}
+	_render_goal()
+	_render_sections()
+
+
 func _refresh_suggestions() -> void:
 	if _is_suggesting or engine == null:
 		return
+	var shown := _shows_suggested()
 	_has_requested = true
-	_open_section = "suggested"
 	_is_suggesting = true
 	_suggestion_error = ""
 	_render_sections()
+	await _layout_event({"type": "open", "section": "suggested", "showSuggested": shown})
 	var reply: Dictionary = await engine.request("actions.suggest")
 	_is_suggesting = false
 	if not reply.get("ok", false):
@@ -1385,7 +1531,7 @@ func _submit() -> void:
 	var trimmed := _composer.text.strip_edges()
 	if trimmed.is_empty() or _is_submitting or _is_improving or engine == null:
 		return
-	_open_section = "submitted"
+	_layout_event({"type": "open", "section": "submitted", "showSuggested": _shows_suggested()})
 	_is_submitting = true
 	_update_composer()
 	_render_sections()
@@ -1503,6 +1649,90 @@ class ActionsResizeGrip extends Control:
 			var most := float(ceiling.call()) if ceiling.is_valid() else 100000.0
 			target.custom_minimum_size.y = clampf(_start + (event as InputEventMouseMotion).global_position.y - _from, minimum, maxf(minimum, most))
 			accept_event()
+
+
+class ActionsResizeHandle extends Control:
+	const KEYS := {KEY_UP: "ArrowUp", KEY_DOWN: "ArrowDown", KEY_HOME: "Home", KEY_END: "End"}
+
+	var panel: ActionsPanel
+	var dragging := false
+	var _hover := false
+	var _keyboard := false
+	var _from := 0.0
+	var _start := 0.0
+	var _latest := -1.0
+
+	func _init() -> void:
+		name = "ResizeHandle"
+		anchor_left = 0.0
+		anchor_right = 1.0
+		anchor_top = 0.0
+		anchor_bottom = 0.0
+		offset_left = 0.0
+		offset_right = 0.0
+		offset_top = 0.0
+		offset_bottom = 8.0
+		mouse_filter = Control.MOUSE_FILTER_STOP
+		mouse_default_cursor_shape = Control.CURSOR_VSIZE
+		focus_mode = Control.FOCUS_NONE
+		tooltip_text = "Drag to resize. Double-click for the default height."
+		if "accessibility_name" in self:
+			set("accessibility_name", "Resize the Actions panel")
+		mouse_entered.connect(_on_hover.bind(true))
+		mouse_exited.connect(_on_hover.bind(false))
+		focus_entered.connect(_on_focus)
+		focus_exited.connect(queue_redraw)
+
+	func _on_hover(inside: bool) -> void:
+		_hover = inside
+		queue_redraw()
+
+	func _on_focus() -> void:
+		_keyboard = not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+		queue_redraw()
+
+	func lit() -> bool:
+		return dragging or (has_focus() and _keyboard)
+
+	func _draw() -> void:
+		var ink := UiTheme.pick("accent", Color("#2bc1f3")) if lit() else (Color(1, 1, 1, 0.5) if _hover else Color(1, 1, 1, 0.22))
+		draw_style_box(UI.box(ink, Color(0, 0, 0, 0), 2, 0), Rect2(roundf((size.x - 42.0) * 0.5), roundf((size.y - 3.0) * 0.5), 42.0, 3.0))
+
+	func _gui_input(event: InputEvent) -> void:
+		if panel == null:
+			return
+		if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			var press := event as InputEventMouseButton
+			accept_event()
+			if press.pressed and press.double_click:
+				dragging = false
+				panel.commit_panel_px(null)
+				queue_redraw()
+				return
+			if press.pressed:
+				dragging = true
+				_keyboard = false
+				_from = press.global_position.y
+				_start = panel.size.y
+				_latest = -1.0
+			elif dragging:
+				dragging = false
+				if _latest >= 0.0:
+					panel.commit_panel_px(_latest)
+			queue_redraw()
+		elif event is InputEventMouseMotion and dragging:
+			var limits := panel.drag_limits()
+			_latest = roundf(clampf(_start + (_from - (event as InputEventMouseMotion).global_position.y), limits.x, limits.y))
+			panel.set_panel_px(_latest)
+			accept_event()
+		elif event is InputEventKey and (event as InputEventKey).pressed:
+			var key := event as InputEventKey
+			if key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER:
+				accept_event()
+				panel.commit_panel_px(null)
+			elif KEYS.has(key.keycode):
+				accept_event()
+				panel.commit_panel_px(null, str(KEYS[key.keycode]), key.shift_pressed)
 
 
 class ActionsDashedButton extends Button:

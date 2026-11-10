@@ -302,6 +302,7 @@ export * as ctCountryRanking from "../../src/Game/GameUI/countryRanking.js";
 export * as ctCustomStatFormatting from "../../src/Game/GameUI/customStatFormatting.js";
 export * as edScriptedImpacts from "../../server/scriptedImpacts.js";
 export * as shPromptLimitNotice from "../../src/runtime/promptLimitNotice.js";
+export * as acLayout from "../../src/Game/GameUI/actionsPanelLayout.js";
 export * as ctCountryDiplomacyView from "../../src/Game/GameUI/countryDiplomacyView.js";
 export * as ctPowerStatus from "../../src/runtime/powerStatus.js";
 export * as ctCountryTags from "../../src/runtime/countryTags.js";

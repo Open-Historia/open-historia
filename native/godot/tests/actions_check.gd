@@ -322,7 +322,8 @@ func _actions_checks() -> void:
 		_check(_find_label(panel, "✓ Queued — %s" % str(first.get("title", ""))) != null, "the queued card reads ✓ Queued")
 		await _shoot("actions-5-queued")
 
-	panel._open_section = "submitted"
+	await _goal_and_resize_checks(panel)
+	panel._layout["section"] = "submitted"
 	panel._render_sections()
 	var before := (panel._view.get("submitted", []) as Array).size()
 	var seeded_live: Dictionary = await main.engine.request("actions.testSeed", {"actions": [{"id": "seed-live", "kind": "action", "title": "Recall the ambassador from Rome", "text": "Recall the ambassador from Rome for consultations.", "source": "manual", "status": "planned"}]})
@@ -377,6 +378,77 @@ func _actions_checks() -> void:
 	panel.close()
 	await _wait(0.5)
 	panel.queue_free()
+	await _frames(2)
+
+
+func _goal_and_resize_checks(panel: ActionsPanel) -> void:
+	_check(not panel.goal_open(), "opening the suggested actions minimizes the standing goal")
+	var line := panel.find_child("GoalLine", true, false) as Label
+	_check(line != null and line.text == "Keep out of the war and grow the economy" and line.text_overrun_behavior == TextServer.OVERRUN_TRIM_ELLIPSIS, "the minimized goal shows the goal on one line")
+	var percent := panel.find_child("GoalPercent", true, false) as Label
+	_check(percent != null and percent.text == "46%", "the minimized goal shows how far it has come (46%)")
+	_check(_find_button(panel, "↻") == null and _find_button(panel, "Edit") != null, "the minimized goal folds its reading away and keeps Edit")
+	await _shoot("actions-4b-goal-minimized")
+	var header := panel.find_child("GoalHeader", true, false) as Button
+	header.pressed.emit()
+	await _until(func() -> bool: return panel.goal_open(), 5.0)
+	await _frames(3)
+	_check(panel.goal_open() and str(panel._layout["section"]) == "suggested" and _find_label(panel, "SUGGESTED ACTIONS") != null, "expanding the goal leaves the open list open")
+	_check(_find_button(panel, "↻") != null, "the expanded goal shows its reading again")
+	var saved: Dictionary = await main.engine.request("actions.layout")
+	_check(bool(saved.get("result", {}).get("goalOpen", false)), "the goal card's state is remembered")
+	await _shoot("actions-4c-goal-expanded-list-open")
+	(panel.find_child("GoalHeader", true, false) as Button).pressed.emit()
+	await _until(func() -> bool: return not panel.goal_open(), 5.0)
+	saved = await main.engine.request("actions.layout")
+	_check(not bool(saved.get("result", {}).get("goalOpen", true)), "a minimized goal is remembered too")
+	(panel.find_child("GoalHeader", true, false) as Button).pressed.emit()
+	await _until(func() -> bool: return panel.goal_open(), 5.0)
+	await _frames(3)
+
+	var handle := panel._resize
+	_check(handle != null and handle.tooltip_text == "Drag to resize. Double-click for the default height." and handle.size.y == 8.0, "the panel's top edge is a resize handle")
+	var height_before := panel.size.y
+	var limits := panel.drag_limits()
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.global_position = Vector2(100, 500)
+	handle._gui_input(press)
+	var drag := InputEventMouseMotion.new()
+	drag.global_position = Vector2(100, 440)
+	handle._gui_input(drag)
+	await _frames(2)
+	_check(handle.lit(), "the grip lights while it is dragged")
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	release.global_position = Vector2(100, 440)
+	handle._gui_input(release)
+	var wanted := roundf(clampf(height_before + 60.0, limits.x, limits.y))
+	await _until(func() -> bool:
+		return absf(panel.size.y - wanted) < 1.5, 5.0)
+	_check(absf(panel.size.y - wanted) < 1.5, "dragging the top edge up makes the panel taller (%.0f -> %.0f)" % [height_before, panel.size.y])
+	saved = await main.engine.request("actions.layout")
+	_check(saved.get("result", {}).get("height") != null and absf(float(saved["result"]["height"]) - wanted) < 1.5, "the dragged height is remembered (%s)" % str(saved.get("result", {}).get("height")))
+	await _shoot("actions-9-resized")
+	handle.grab_focus()
+	handle._gui_input(_key(KEY_DOWN))
+	await _until(func() -> bool: return absf(panel.size.y - (wanted - 16.0)) < 1.5, 5.0)
+	_check(absf(panel.size.y - (wanted - 16.0)) < 1.5, "the down arrow on the focused edge takes 16 px off")
+	handle._gui_input(_key(KEY_HOME))
+	await _until(func() -> bool: return absf(panel.size.y - limits.x) < 1.5, 5.0)
+	_check(absf(panel.size.y - limits.x) < 1.5, "Home makes it the shortest (%.0f)" % panel.size.y)
+	var twice := InputEventMouseButton.new()
+	twice.button_index = MOUSE_BUTTON_LEFT
+	twice.pressed = true
+	twice.double_click = true
+	handle._gui_input(twice)
+	await _until(func() -> bool: return absf(panel.size.y - height_before) < 1.5, 5.0)
+	_check(absf(panel.size.y - height_before) < 1.5, "a double-click gives back the usual height (%.0f, was %.0f)" % [panel.size.y, height_before])
+	saved = await main.engine.request("actions.layout")
+	_check(saved.get("result", {}).get("height") == null, "the usual height is no longer stored")
+	handle.release_focus()
 	await _frames(2)
 
 
