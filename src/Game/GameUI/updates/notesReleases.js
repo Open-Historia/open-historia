@@ -211,6 +211,7 @@ export const RELEASES = [
           "2026-10-dates-and-orders",
           "2026-11-display-mode",
           "2026-10-phone-layout",
+          "2026-11-actions-panel-room",
           "2026-10-country-picker-cards",
           "2026-10-community-dates",
           "2026-11-reimports-not-imports",
