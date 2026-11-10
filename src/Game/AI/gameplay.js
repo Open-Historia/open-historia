@@ -244,14 +244,13 @@ import { WAR_FIGURES_WANTED_MOST, buildWarFiguresBlock, readWarFigures } from ".
 import { reshelveJumpAnswer } from "./jumpAnswerShelves.js";
 import { readPeaceVerdict, readTreatyLines, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { PEACE_ANSWERS_FIELD, buildWarStatsBlock, describePeaceTalk, warsOf } from "./warStatsPrompt.js";
-import { takersFor } from "../../runtime/fronts/constants.js";
-import { pointInFrame } from "../../runtime/fronts/frame.js";
-import { normalizeBattlefields } from "../../runtime/fronts/record.js";
 import { readWarRoomAnswer, warRoomRequest, warRoomStanding, warRoomVariables } from "./warRoomContext.js";
 import { bindFrontOrdersToEvents, decodeEventStrikes, describeDroppedFrontOrders, frontOrderProseLines, screenFrontOrders } from "./nativeFrontLedger.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
-import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
+import { editDistance, foldRegionKey, foldedRegionIndex, matchRegionName, nearestRegionNames, regionsFoldedAs, stripRegionAffixes } from "./regionMatch.js";
+import { marchStoryCapturers } from "./storyMarch.js";
+import { countryClaimWithdrawals } from "./claimsByCountry.js";
 import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
 import { findUnitByRef, newestTwinByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedAreas.js";
@@ -259,8 +258,6 @@ import { CAPTURE_REACH_KM, findNarratedCaptures, mayNarrateCapture, statedAnnexa
 import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, placesAsWritten, readEventPlace } from "./eventPlaces.js";
 import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 import { describeTravelPace, eraOf, kmOnMap, seaShareOf } from "../../runtime/unitMotion.js";
-import { kmPerDegreeAt } from "../../../server/mapDistance.js";
-import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 import { eraSettingOf } from "../../runtime/warSettings.js";
 import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, describeOtherKind, distanceKm as placementDistanceKm, hashText as placementHash, homeWaters, isOpenSea, nearestInteriorPoint, nearestSea, pointInGeometry, regionWithinContainer, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
 import { loadWorldCities } from "./worldCities.js";
@@ -391,6 +388,7 @@ import {
   normalizeChats,
   normalizeEvents,
   withoutBattlefieldDisputes,
+  dissolutionHeir,
   normalizeGameData,
   normalizeWorldState,
   readActionsState,
@@ -1655,6 +1653,7 @@ const JUMP_LEVERS = [
   "• strikes: a missile launch or a bombing run the event tells of, one line each: side~weapon~from~target~count~shot down. weapon: silo missile | submarine missile | nuclear bomber (these three are nuclear) | missile strike | bombing run. from: where it is launched (city: X, structure: X, unit: X) or blank for the game to pick; target: the place hit; count: how many missiles or aircraft; shot down: how many were intercepted on the way, a number or all | most | half | some | none, which an event telling of interceptions owes. It is drawn on the map and changes nothing itself: what it destroyed or took is the event's other operations. Example: A~missile strike~~city: X~12~some",
   "• groupOps: create founds a group (with its first regions if it holds any), update changes its name, description or colour, take adds regions to its area, release gives them back (all of them when regionIds is empty), dissolve erases it; regions as \"region: <name>\".",
   "• regionClaims: the claimant by full name, and drop true when a claim is given up; the region stays striped until a transfer or a drop settles it.",
+  "  To end claims on a whole country in one entry, never region by region: regionId \"country: <name>\", drop true, and the claimant's full name, or allClaimants true for every claimant's claims and disputes there.",
   "• actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
 ].join("\n");
 
@@ -6198,6 +6197,22 @@ const resolveRegionTransfers = async (containers, world, {
       addIdAlias(alias, region);
     }
   }
+  // The same names folded further, marks, case and punctuation alike
+  // (regionMatch.js foldedRegionIndex): "Chisinau" is the map's "Chişinău",
+  // "Karbala" its "Karbala'". Asked only where the exact spelling found
+  // nothing, and only one region may answer.
+  const byFold = foldedRegionIndex(catalog);
+  // The map's one region a name means once folded: alone on the map, or alone
+  // among the losing side's when `ownerKey` is given. Null otherwise.
+  const foldedRegion = (written, ownerKey = "") => {
+    const hits = regionsFoldedAs(byFold, written);
+    if (hits.length === 1) return hits[0];
+    if (hits.length > 1 && ownerKey) {
+      const owned = hits.filter((region) => ownerKeyOf(region.id) === ownerKey);
+      if (owned.length === 1) return owned[0];
+    }
+    return null;
+  };
 
   // A region is written by its NAME, and may be written with its kind in front
   // ("region: Hamhung") or with something in brackets after it (nameRefs.js).
@@ -6214,6 +6229,9 @@ const resolveRegionTransfers = async (containers, world, {
   // known: the whole of that polity's land, or the area of that name
   // (namedAreas.js).
   const countryRefs = new WeakMap();
+  // The claims written "country: <name>": a withdrawal of claims on all of
+  // that country's land (the claims loop below).
+  const claimedCountries = new WeakMap();
   const plainRegionRef = (value) => {
     const raw = normalizeString(value);
     if (!raw || byId.has(raw) || byAliasId.has(raw)) return { text: raw, kind: "", bracket: "" };
@@ -6239,6 +6257,7 @@ const resolveRegionTransfers = async (containers, world, {
     }
     for (const claim of normalizeArray(impacts?.regionClaims)) {
       if (!claim || typeof claim !== "object") continue;
+      if (typeof claim.regionId === "string" && plainRegionRef(claim.regionId).kind === "country") claimedCountries.set(claim, plainRegionRef(claim.regionId).text);
       if (typeof claim.regionId === "string") claim.regionId = plainRegionRef(claim.regionId).text;
       if (typeof claim.regionName === "string") claim.regionName = plainRegionRef(claim.regionName).text;
     }
@@ -6577,17 +6596,21 @@ const resolveRegionTransfers = async (containers, world, {
     return [...new Set(hits)];
   };
 
-  const cityAnchoredRegionId = (transfer, candidates) => {
+  // `which`: "note" reads only the operation's note, "name" only the name it
+  // was written with. The note is read before the name is looked up (a
+  // friendly label with the city beside it); the name only after, so a region
+  // written by its own name is never moved to the region a town of that name
+  // stands in: Bălţi, written "Balti", went to the region round it, Rîşcani.
+  const cityAnchoredRegionId = (transfer, candidates, which = "note") => {
     if (!cityAnchorContext || !Array.isArray(candidates) || candidates.length === 0) return "";
 
     // Phase 8B.2.11: city anchoring is intentionally LOCAL to this operation.
     // Never fall through to the whole event description here: one event commonly
     // names several simultaneous captures, and using event-wide prose allowed the
     // Warsaw marker to hijack a perfectly exact "Piotrków" operation.
-    const contexts = [
-      normalizeString(transfer?.note),
-      `${normalizeString(transfer?.regionId)} ${normalizeString(transfer?.regionName)}`,
-    ];
+    const contexts = which === "name"
+      ? [`${normalizeString(transfer?.regionId)} ${normalizeString(transfer?.regionName)}`]
+      : [normalizeString(transfer?.note)];
 
     let anchors = [];
     for (const context of contexts) {
@@ -6684,7 +6707,7 @@ const resolveRegionTransfers = async (containers, world, {
     // or friendly label (e.g. regionId "Masovia" + note "Warsaw"). Crucially this
     // no longer reads the event-wide prose, so another city in the same event
     // cannot hijack an exact rendered region such as Piotrków.
-    const anchored = cityAnchoredRegionId(transfer, ownedCandidates);
+    const anchored = cityAnchoredRegionId(transfer, ownedCandidates, "note");
     if (anchored) return anchored;
 
     for (const candidate of [transfer?.regionId, transfer?.regionName]) {
@@ -6717,6 +6740,17 @@ const resolveRegionTransfers = async (containers, world, {
     if (bracketed && byId.has(bracketed) && ![transfer?.regionId, transfer?.regionName].some((candidate) => (byName.get(regionKey(candidate)) ?? []).length)) {
       return bracketed;
     }
+
+    // The map's name with its marks, case or punctuation written differently:
+    // still that region, where one region alone folds to it.
+    for (const candidate of [transfer?.regionId, transfer?.regionName]) {
+      const folded = foldedRegion(candidate, fromKey);
+      if (folded) return folded.id;
+    }
+
+    // A town of the name written, inside one of the losing side's regions.
+    const namedTown = cityAnchoredRegionId(transfer, ownedCandidates, "name");
+    if (namedTown) return namedTown;
 
     for (const candidate of [transfer?.regionId, transfer?.regionName]) {
       const query = regionKey(candidate);
@@ -7326,6 +7360,26 @@ const resolveRegionTransfers = async (containers, world, {
     if (claims.length === 0) continue;
     const kept = [];
     for (const claim of claims) {
+      // Claims withdrawn from a whole country, "country: <name>" with drop
+      // (one entry, never a list): every region that country holds, as a
+      // transfer's "country: <name>" means it, on which the claimant (or,
+      // with allClaimants, anybody) has a claim or a dispute. "make it so
+      // events can remove all claims on territory on a country" (the owner,
+      // 2026-11-09): a list of regions was as long as the model would write,
+      // about seventy, and the rest stayed claimed.
+      const country = claimedCountries.get(claim) || (claim?.drop === true && !namesARegion(claim?.regionId) && regionsOwnedBy(claim?.regionId).length ? normalizeString(claim?.regionId) : "");
+      if (claim?.drop === true && country) {
+        const everyone = claim.allClaimants === true;
+        const claimantKey = canonicalOwnerKey(toCountryName(claim?.claimantCode)) || regionKey(claim?.claimantCode);
+        const regions = countryClaimWithdrawals(claim, {
+          regions: regionsOwnedBy(country),
+          claimantsOf: (regionId) => normalizeArray(worldState.regionClaimants?.[regionId]),
+          isClaimant: (name) => Boolean(claimantKey) && (canonicalOwnerKey(name) === claimantKey || regionKey(name) === claimantKey),
+        });
+        kept.push(...regions);
+        console.info(`[ai] ${path}.regionClaims: ${everyone ? "every claim" : `${normalizeString(claim?.claimantCode)}'s claims`} on ${country} withdrawn: ${regions.length} region(s).`);
+        continue;
+      }
       if (byId.has(normalizeString(claim?.regionId))) {
         kept.push(claim);
         continue;
@@ -7342,6 +7396,16 @@ const resolveRegionTransfers = async (containers, world, {
         if (pick.length === 1) {
           regionId = pick[0].id;
           break;
+        }
+      }
+      if (!regionId) {
+        for (const candidate of [claim?.regionId, claim?.regionName]) {
+          const hits = regionsFoldedAs(byFold, candidate);
+          const pick = hits.length === 1 ? hits : hits.filter((region) => ownerKeyOf(region.id) !== claimantKey);
+          if (pick.length === 1) {
+            regionId = pick[0].id;
+            break;
+          }
         }
       }
       // A territory claimed by its name ("country: Greenland") is a claim on
@@ -7388,7 +7452,7 @@ const resolveRegionTransfers = async (containers, world, {
         }
         const aliased = byAliasId.get(id) ?? [];
         const named = byName.get(regionKey(token)) ?? [];
-        const matches = aliased.length === 1 ? aliased : named;
+        const matches = aliased.length === 1 ? aliased : named.length ? named : regionsFoldedAs(byFold, token);
         if (matches.length === 1) {
           resolved.push(matches[0].id);
           continue;
@@ -7839,28 +7903,14 @@ const completeNarratedAnnexations = async (containers, { receipt = null, lookupC
   return added;
 };
 
-// A REGION AN EVENT SAYS WAS TAKEN, AWAY FROM ANY BATTLEFIELD. "make sure the
-// simulation ai is able to say that a region is taken by an army which causes
-// the nearest troops to move accordingly so when that event happens, the region
-// has been taken"; "the max number of nearby units redirected should be based
-// on the size of the region. there should also be a minimum number and if that
-// minimum is not met then the region transfer fails" (the owner, 2026-10-28).
-// A control operation giving a region to a power asks as many of its land
-// formations (not garrisons, not covert, not fighting on a battlefield) as the
-// region's size does (fronts/constants.js takersFor): those already in it, those
-// the event itself sends there, and those within STORY_MARCH_KM. With fewer than
-// the least, the operation comes off the event and the region is not taken;
-// otherwise the nearest march in, up to the most. A region on an open
-// battlefield the taker fights on is the front engine's (engine.js
-// captureRefused, marchInto). Mutates the events' impacts; returns how many moved.
-const STORY_MARCH_KM = 800;
-const STORY_MARCHERS = new Set(["infantry", "armor", "artillery"]);
+// A region an event gives a power away from any battlefield: the taker's
+// nearest land formations march in, and with too few near it is not taken
+// (storyMarch.js, where the rule is told in full). The map is read here.
 const marchCapturersIn = async (containers, world, { receipt = null, renderedRegions = null, lookupContext = null } = {}) => {
   const worldState = normalizeWorldState(world);
-  const units = normalizeArray(worldState.units);
-  const pending = normalizeArray(containers).filter(({ impacts }) => normalizeArray(impacts?.regionControlOps)
+  const asks = normalizeArray(containers).some(({ impacts }) => normalizeArray(impacts?.regionControlOps)
     .some((op) => normalizeString(op?.op).toLowerCase() === "control" && op?.wholeCountry !== true && normalizeString(op?.regionId) && normalizeString(op?.toCode)));
-  if (!pending.length || !units.length) return 0;
+  if (!asks || !normalizeArray(worldState.units).length) return 0;
   let context;
   try {
     context = await (lookupContext ?? lazyLookupContext({ world }, { renderedRegions }))();
@@ -7868,109 +7918,7 @@ const marchCapturersIn = async (containers, world, { receipt = null, renderedReg
     console.warn("[story capture] the map could not be read; no formation was moved.", error);
     return 0;
   }
-  const rowById = new Map(context.rows.filter((row) => row.geometry).map((row) => [normalizeString(row.id), row]));
-  const labelOf = (name) => context.resolveOwner(name) || normalizeString(name);
-  const samePower = (a, b) => Boolean(foldRegionKey(labelOf(a))) && foldRegionKey(labelOf(a)) === foldRegionKey(labelOf(b));
-  const pointOf = (unit) => (Number.isFinite(Number(unit?.lng)) && Number.isFinite(Number(unit?.lat)) && !(Number(unit.lng) === 0 && Number(unit.lat) === 0)
-    ? [Number(unit.lng), Number(unit.lat)] : null);
-  const inside = (row, point) => Boolean(point) && point[0] >= row.bbox[0] && point[0] <= row.bbox[2] && point[1] >= row.bbox[1] && point[1] <= row.bbox[3]
-    && pointInGeometry(point, row.geometry);
-  // The open battlefields, by their frames, and who fights on each.
-  const fronts = normalizeBattlefields(world?.battlefields).filter((record) => record.status === "active" && record.frame);
-  const onFront = (row, taker) => {
-    const middle = row.centroid ?? [(row.bbox[0] + row.bbox[2]) / 2, (row.bbox[1] + row.bbox[3]) / 2];
-    return fronts.some((record) => pointInFrame(record.frame, middle[0], middle[1])
-      && record.sides.some((members) => members.some((member) => samePower(member, taker))));
-  };
-  const sent = new Set();
-  let moved = 0;
-  for (const { event, impacts, path } of pending) {
-    const ownMoves = normalizeArray(impacts.unitOps).map((op) => {
-      const kind = normalizeString(op?.op).toLowerCase();
-      if (kind === "move") {
-        const unit = units.find((entry) => entry.id === normalizeString(op.unitId));
-        return unit ? { unit, point: pointOf({ lng: op.toLng, lat: op.toLat }) } : null;
-      }
-      if (kind === "spawn") {
-        const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
-        return { unit: { ...unit, ownerCode: unit.ownerCode ?? unit.owner ?? op.ownerCode }, point: pointOf(unit) };
-      }
-      return null;
-    }).filter(Boolean);
-    const refused = [];
-    for (const op of normalizeArray(impacts.regionControlOps)) {
-      if (normalizeString(op?.op).toLowerCase() !== "control" || op?.wholeCountry === true) continue;
-      const row = rowById.get(normalizeString(op.regionId));
-      const taker = normalizeString(op.toCode);
-      if (!row || !taker || onFront(row, taker)) continue;
-      const centre = nearestInteriorPoint(row.geometry, row.centroid ?? [(row.bbox[0] + row.bbox[2]) / 2, (row.bbox[1] + row.bbox[3]) / 2]);
-      if (!centre) continue;
-      const { least, most } = takersFor(geometryAreaKm2(row.geometry));
-      const arriving = ownMoves.filter(({ unit, point }) => samePower(unit.ownerCode, taker) && LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()) && inside(row, point)).length;
-      const standing = units.filter((unit) => samePower(unit.ownerCode, taker) && STORY_MARCHERS.has(unit.type) && inside(row, pointOf(unit))).length;
-      const near = units
-        .filter((unit) => !sent.has(unit.id) && STORY_MARCHERS.has(unit.type) && !unit.covert && !normalizeString(unit.committedTo) && samePower(unit.ownerCode, taker)
-          && !ownMoves.some((entry) => entry.unit?.id === unit.id) && !inside(row, pointOf(unit)))
-        .map((unit) => ({ unit, from: pointOf(unit) }))
-        .map((entry) => ({ ...entry, km: entry.from ? placementDistanceKm(entry.from, centre) : Infinity }))
-        .filter((entry) => entry.km <= STORY_MARCH_KM)
-        .sort((a, b) => a.km - b.km);
-      const title = normalizeString(event?.title);
-      if (arriving + standing + near.length < least) {
-        refused.push(op);
-        noteReceipt(receipt, "dropped",
-          `${title ? `Event "${title}": ` : ""}${labelOf(taker)} could not take ${row.name}: too few of its troops near `
-          + `(${arriving + standing + near.length} of the ${least} a region that size needs). A region is taken only where enough of the taker's troops stand near it, more for a larger region: move them up first, in an earlier event.`);
-        console.info(`[story capture] ${path}: ${row.name} not taken by ${labelOf(taker)}, ${arriving + standing + near.length} of ${least} near.`);
-        continue;
-      }
-      for (const { unit, from, km } of near.slice(0, Math.max(0, most - arriving - standing))) {
-        const to = nearestInteriorPoint(row.geometry, from) ?? centre;
-        sent.add(unit.id);
-        impacts.unitOps = [...normalizeArray(impacts.unitOps), {
-          op: "move", unitId: unit.id, toLng: to[0], toLat: to[1],
-          note: `Into ${row.name}, which it took.`,
-        }];
-        moved += 1;
-        noteReceipt(receipt, "adjusted",
-          `${title ? `Event "${title}": ` : ""}${row.name} was taken by ${labelOf(taker)}, `
-          + `so its formation ${unit.name} marched in (${Math.round(km)} km). Move the formation that takes a place in the event that takes it.`);
-        console.info(`[story capture] ${path}: ${unit.name} (${labelOf(taker)}) into ${row.name}, ${Math.round(km)} km.`);
-      }
-    }
-    if (refused.length) impacts.regionControlOps = normalizeArray(impacts.regionControlOps).filter((op) => !refused.includes(op));
-  }
-  return moved;
-};
-
-// A region's area in km², near enough: each ring's own shoelace on a plane
-// scaled to the ring's latitude (by the map's measure, server/mapDistance.js,
-// where it is not plain Mercator), holes taken off.
-const geometryAreaKm2 = (geometry) => {
-  const polygons = geometry?.type === "Polygon" ? [geometry.coordinates] : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
-  const ringKm2 = (ring) => {
-    const points = normalizeArray(ring);
-    if (points.length < 3) return 0;
-    const lat = points.reduce((sum, point) => sum + Number(point?.[1] || 0), 0) / points.length;
-    const measure = currentMapMeasure();
-    const per = measure.plain ? null : kmPerDegreeAt(measure, points.reduce((sum, point) => sum + Number(point?.[0] || 0), 0) / points.length, lat);
-    const kx = per ? per.x : 111.32 * Math.cos((lat * Math.PI) / 180);
-    const ky = per ? per.y : 110.57;
-    let twice = 0;
-    for (let index = 0; index < points.length; index += 1) {
-      const [x1, y1] = points[index];
-      const [x2, y2] = points[(index + 1) % points.length];
-      twice += (x1 * kx) * (y2 * ky) - (x2 * kx) * (y1 * ky);
-    }
-    return Math.abs(twice) / 2;
-  };
-  let total = 0;
-  for (const polygon of normalizeArray(polygons)) {
-    normalizeArray(polygon).forEach((ring, index) => {
-      total += index === 0 ? ringKm2(ring) : -ringKm2(ring);
-    });
-  }
-  return Math.max(0, total);
+  return marchStoryCapturers(containers, { ...worldState, battlefields: world?.battlefields }, { receipt, context });
 };
 
 // Where the places a turn's strikes name are (runtime/strikes.js), found on the
@@ -8122,7 +8070,11 @@ const describeUnresolvedTerritory = (entry, family, eventTitle) => {
     return `${where}the ${what} "${label}" was dropped — "${entry.unknownOwner}" is not a power on this map, and the side that loses land must be named exactly as the map spells it.`;
   }
   const owner = normalizeString(entry?.fromCode);
-  return `${where}the ${what} "${label}" was dropped — no map region matches that name${owner ? ` among ${owner}'s regions` : ""}.`;
+  // The map's own spellings nearest the one written, so the next answer can
+  // write the region again by its name ("Al-Basrah" for "Basra").
+  const nearest = nearestRegionNames(label, normalizeArray(entry?.candidates));
+  const offer = nearest.length ? ` Nearest names there: ${nearest.map((name) => `"${name}"`).join(", ")}.` : "";
+  return `${where}the ${what} "${label}" was dropped — no map region matches that name${owner ? ` among ${owner}'s regions` : ""}.${offer}`;
 };
 
 export const validateGeneratedWorldChanges = async (candidate, world, {
@@ -8287,6 +8239,37 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   }
   for (const entry of unresolvedControlOps) {
     noteReceipt(receipt, "dropped", describeUnresolvedTerritory(entry, "regionControlOps", titleAt(entry?.path)), unresolvedTerritoryNote(entry, "regionControlOps", titleAt(entry?.path)));
+  }
+  // A dissolution the engine will refuse (gameState.js dissolvedPolityLand):
+  // the polity still holds land outright that its event gives to nobody, and
+  // nobody is named who could take it. Said now, with the land by name.
+  if (!strict) {
+    for (const { impacts, path } of containers) {
+      const changes = normalizeArray(impacts?.polityChanges);
+      for (const change of changes) {
+        if (normalizeString(change?.operation).toLowerCase() !== "dissolve") continue;
+        const code = normalizeString(change?.code);
+        if (!code) continue;
+        const same = (value) => normalizeString(value).toLowerCase() === code.toLowerCase();
+        const heir = dissolutionHeir({
+          code,
+          polityChanges: changes.map((entry) => ({ change: { operation: normalizeString(entry?.operation).toLowerCase() }, code: normalizeString(entry?.code) })),
+          regionTransfers: impacts.regionTransfers,
+          regionControlOps: impacts.regionControlOps,
+        });
+        if (heir) continue;
+        const moved = new Set([...normalizeArray(impacts.regionTransfers), ...normalizeArray(impacts.regionControlOps)]
+          .filter((entry) => same(entry?.fromCode)).map((entry) => normalizeString(entry?.regionId)));
+        const sovereigns = world?.regionSovereigntyOverrides ?? {};
+        const kept = Object.entries(world?.regionOwnershipOverrides ?? {})
+          .filter(([id, owner]) => same(owner) && (!sovereigns[id] || same(sovereigns[id])) && !moved.has(id))
+          .map(([id]) => id);
+        if (!kept.length) continue;
+        const catalogNames = new Map(normalizeArray(getPrimedScenarioRegionCatalog()).map((region) => [normalizeString(region?.id), normalizeString(region?.name)]));
+        const names = kept.map((id) => catalogNames.get(id)).filter(Boolean).slice(0, 4);
+        noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}` + `${code} was not dissolved: the event gives ${kept.length} of its regions${names.length ? ` (${names.join(", ")}${kept.length > names.length ? ", …" : ""})` : ""} to nobody. Give its land to one polity in the same event.`);
+      }
+    }
   }
   // Units and structures placed by name (`at`), and everything placed kept clear
   // of what already stands (resolvePlacements above). Never an error: a place

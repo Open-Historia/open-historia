@@ -178,6 +178,7 @@ export const RELEASES = [
           "2026-10-globe-and-renames",
           "2026-11-map-distances",
           "2026-11-map-edges",
+          "2026-11-map-changes-land",
           "2026-11-converted-maps-line-up",
           "2026-11-picture-edges-and-strike-targets#0",
           "2026-10-fit-to-background",

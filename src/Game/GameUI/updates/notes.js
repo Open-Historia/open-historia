@@ -54,6 +54,28 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "it seems sometimes events to do with war aren't being represented on the map"; "Script Events ... seem to fail
+    // transfer specifically named regions ... a polity isn't annexed or dismantled completely ... claims staying from
+    // the dismantled polity" (players, 2026-11); "make it so events can remove all claims on territory on a country"
+    // (the owner, 2026-11-09). regionMatch.js foldedRegionIndex, storyMarch.js, gameState.js dissolvedPolityLand,
+    // claimsByCountry.js.
+    id: "2026-11-map-changes-land",
+    kind: "minor",
+    date: "2026-11-09",
+    channel: "beta",
+    banners: [
+      {
+        title: "The map keeps up with the story",
+        items: [
+          "Regions named without their accents, like Chisinau for Chişinău, now change hands on the map.",
+          "An army that takes one city can march on and take the next in the same turn.",
+          "A country that is annexed and dismantled leaves nothing behind: its land, its troops and every claim it made.",
+          "Events can clear every claim on a country's land at once, or one country's claims on it.",
+        ],
+      },
+    ],
+  },
+  {
     // Francesco Inzerillo, PR #988 (ported to beta at the owner's word, 2026-11-09): a scenario's own statistics keep a
     // missing value missing (runtime/statIndexDefinitions.js readCustomStatNumber), never a zero.
     id: "2026-11-stats-missing-values",
