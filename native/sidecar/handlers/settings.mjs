@@ -19,6 +19,7 @@ const MAP_KEYS = {
   chunkLongJumps: "ai_chunk_long_jumps",
   lookupFunctions: "ai_lookup_functions",
   liveSkipEvents: "ai_live_skip_events",
+  idleDiplomacy: "ai_idle_diplomacy",
   stopOnPlayerFailures: "ai_stop_on_player_failures",
   discordPresence: "privacy_discord_presence",
   ambientMusic: "audio_ambient_music",
@@ -31,7 +32,7 @@ const MAP_KEYS = {
 };
 
 const DEFAULT_ON = new Set([
-  MAP_KEYS.lookupFunctions, MAP_KEYS.liveSkipEvents, MAP_KEYS.discordPresence, MAP_KEYS.ambientMusic,
+  MAP_KEYS.lookupFunctions, MAP_KEYS.liveSkipEvents, MAP_KEYS.idleDiplomacy, MAP_KEYS.discordPresence, MAP_KEYS.ambientMusic,
   MAP_KEYS.soundEffects, MAP_KEYS.seasonsWeather, MAP_KEYS.weatherEffects,
 ]);
 
@@ -44,6 +45,7 @@ const FLAG_LABELS = {
   [MAP_KEYS.chunkLongJumps]: "Generate long time skips in segments",
   [MAP_KEYS.lookupFunctions]: "AI lookup functions",
   [MAP_KEYS.liveSkipEvents]: "Show time skip events as they are written",
+  [MAP_KEYS.idleDiplomacy]: "Countries write to me between time skips",
   [MAP_KEYS.stopOnPlayerFailures]: "Stop when my events fail",
   [MAP_KEYS.discordPresence]: "Show what I am playing on Discord",
   [MAP_KEYS.ambientMusic]: "Music",
@@ -438,6 +440,7 @@ export const register = (ctx) => {
     const control = engine.aiRequestControl ?? null;
     const active = control?.getActiveAiRequestCount ? control.getActiveAiRequestCount() : activeRequests;
     const share = day.limit > 0 ? Math.min(1, day.used / day.limit) : 0;
+    const noLimitCost = budget.describeJumpCost({ lookups: true, unlimited: true });
     return {
       used: day.used,
       limit: day.limit,
@@ -449,11 +452,10 @@ export const register = (ctx) => {
       refused: day.refused,
       failed: day.failed,
       tasks: budget.requestsByTask(day.byTask, labels),
-      saving: budget.requestSettings.saveRequests(),
-      backgroundOn: budget.requestSettings.backgroundAi(),
+      noLimit: day.noLimit,
       dailyLimit: String(budget.requestSettings.dailyLimit()),
-      backgroundDailyCap: String(budget.requestSettings.backgroundDailyCap()),
-      lookupCap: budget.describeJumpCost({ lookups: true }).max,
+      noLimitCap: noLimitCost.max,
+      noLimitRounds: noLimitCost.rounds,
       active,
     };
   };
@@ -839,18 +841,12 @@ export const register = (ctx) => {
     "settings.requests.set": async ({ field, value }) => {
       const settings = rb().requestSettings;
       let message = "";
-      if (field === "saveRequests") {
-        settings.setSaveRequests(Boolean(value));
-        message = `Save AI requests turned ${value ? "on" : "off"}.`;
-      } else if (field === "backgroundAi") {
-        settings.setBackgroundAi(Boolean(value));
-        message = `Background AI turned ${value ? "on" : "off"}.`;
+      if (field === "noRequestLimit") {
+        rb().setNoRequestLimit(Boolean(value));
+        message = `My key has no request limit turned ${value ? "on" : "off"}.`;
       } else if (field === "dailyLimit") {
         settings.setDailyLimit(String(value ?? ""));
         message = `Daily request limit set to ${clean(value) || "the default"}.`;
-      } else if (field === "backgroundDailyCap") {
-        settings.setBackgroundDailyCap(String(value ?? ""));
-        message = `Background AI daily cap set to ${clean(value) || "the default"}.`;
       } else {
         throw new Error(`Unknown request setting: ${field}`);
       }
@@ -1018,13 +1014,18 @@ export const register = (ctx) => {
         geminiChain: [...config.GEMINI_DEFAULT_CHAIN],
         openaiDefault: config.OPENAI_DEFAULT_MODEL,
         defaultProvider: config.DEFAULT_PROVIDER,
+        choices: [...engine.aiSetupChoices.SETUP_CHOICES],
+        commandCode: { name: config.COMMANDCODE_TEMPLATE.name, provider: config.COMMANDCODE_TEMPLATE.provider, pricingUrl: config.COMMANDCODE_PRICING_URL, keysUrl: config.COMMANDCODE_KEYS_URL },
       };
     },
-    "settings.quickSetup": async ({ provider, apiKey = "", endpoint = "", model = "" }) => {
-      pc().applyQuickAiSetup({ provider, apiKey, endpoint, model });
+    "settings.quickSetup": async ({ choice = "custom", provider, apiKey = "", endpoint = "", model = "" }) => {
+      engine.aiSetupChoices.saveSetupChoice(choice, { provider, apiKey, endpoint, model });
       storage.flush();
       return { ready: pc().isFallbackListConfigured() };
     },
+    "settings.setupNoRequestLimit": async ({ choice = "custom", provider = "", endpoint = "" } = {}) => ({
+      on: engine.aiSetupChoices.noRequestLimitFor(choice, { provider, endpoint }) === true,
+    }),
     "telemetry.records": async ({ task = "all", model = "", status = "all", search = "", sort = "newest" } = {}) => {
       const records = await telemetryRecords();
       const filtered = filterRecords(records, { task, model, status, search, sort });

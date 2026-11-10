@@ -810,7 +810,8 @@ func _apply_caption() -> void:
 		return
 	var caption: Dictionary = status.get("caption", {}) if typeof(status.get("caption")) == TYPE_DICTIONARY else {}
 	var near: bool = caption.get("nearlyOut", false)
-	var lines := "%s of %s AI requests used today\n%s" % [str(int(caption.get("used", 0))), str(int(caption.get("limit", 0))), str(caption.get("second", ""))]
+	var head := ("%s AI requests used today" % str(int(caption.get("used", 0)))) if bool(caption.get("noLimit", false)) else ("%s of %s AI requests used today" % [str(int(caption.get("used", 0))), str(int(caption.get("limit", 0)))])
+	var lines := "%s\n%s" % [head, str(caption.get("second", ""))]
 	if caption.get("lastUsed") != null:
 		lines += " · the last used %s" % str(int(caption["lastUsed"]))
 	_caption_label.text = lines

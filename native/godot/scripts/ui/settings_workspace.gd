@@ -110,7 +110,6 @@ var _music_busy := false
 var _copied_command := ""
 var _header_bar: Control
 var _daily_limit_draft := ""
-var _background_cap_draft := ""
 var _label_font_draft := ""
 var _pending_writes := {}
 var _write_timer: Timer
@@ -510,7 +509,6 @@ func _load_section_data() -> void:
 			if typeof(requests) == TYPE_DICTIONARY:
 				_requests = requests
 				_daily_limit_draft = str(_requests.get("dailyLimit", ""))
-				_background_cap_draft = str(_requests.get("backgroundDailyCap", ""))
 			if _for_game():
 				var focus: Variant = await _req("settings.focus")
 				if typeof(focus) == TYPE_DICTIONARY:
@@ -2325,31 +2323,40 @@ func _build_requests_section() -> void:
 	if _requests.is_empty():
 		body.add_child(_helper(_last_error))
 		return
+	var no_limit := bool(_requests.get("noLimit", false))
+	var no_limit_cap := int(_requests.get("noLimitCap", 8))
+	var no_limit_rounds := int(_requests.get("noLimitRounds", 6))
+	_add_toggle(body, "My key has no request limit", no_limit, func() -> void: _requests_set("noRequestLimit", not no_limit))
+	if no_limit:
+		_add_settings_helper(body, "On: for a paid key or a local model. The AI looks things up and works in more steps, for better turns with less sent in each request. A time skip may use up to %d requests, with up to %d rounds of questions." % [no_limit_cap, no_limit_rounds])
+	else:
+		_add_settings_helper(body, "Off (default): for a free key, where requests run out. A time skip is one request and the AI is handed what it needs. Turn this on for a paid key or a local model: the AI looks things up and works in more steps, for better turns with less sent in each request.")
 	var used := int(_requests.get("used", 0))
 	var limit := int(_requests.get("limit", 0))
 	var share := float(_requests.get("share", 0.0))
 	var top := HBoxContainer.new()
-	var count := UI.label("%d of %d used today" % [used, limit], _fs(0.82), Color(1, 1, 1, 0.92), 800)
+	var count := UI.label(("%d used today" % used) if no_limit else ("%d of %d used today" % [used, limit]), _fs(0.82), Color(1, 1, 1, 0.92), 800)
 	count.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top.add_child(count)
 	var resets := UI.label("resets at %s" % str(_requests.get("resetText", "")), _fs(0.64), Color(1, 1, 1, 0.4))
 	resets.size_flags_vertical = Control.SIZE_SHRINK_END
 	top.add_child(resets)
 	body.add_child(top)
-	_gap(body, 6.4)
-	var track := PanelContainer.new()
-	track.custom_minimum_size.y = 6
-	track.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.07), Color(0, 0, 0, 0), 999, 0))
-	var fill_color := Color("#f87171") if share >= 0.9 else (Color("#fbbf24") if share >= 0.7 else BLUE_LIGHT)
-	var fill := ShareBar.new(fill_color, share)
-	fill.custom_minimum_size.y = 6
-	track.add_child(fill)
-	body.add_child(track)
+	if not no_limit:
+		_gap(body, 6.4)
+		var track := PanelContainer.new()
+		track.custom_minimum_size.y = 6
+		track.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.07), Color(0, 0, 0, 0), 999, 0))
+		var fill_color := Color("#f87171") if share >= 0.9 else (Color("#fbbf24") if share >= 0.7 else BLUE_LIGHT)
+		var fill := ShareBar.new(fill_color, share)
+		fill.custom_minimum_size.y = 6
+		track.add_child(fill)
+		body.add_child(track)
 	var parts := ""
 	if typeof(_requests.get("lastJump")) != TYPE_NIL:
 		parts += "Your last time skip used %d. " % int(_requests.get("lastJump"))
 	if int(_requests.get("background", 0)) > 0:
-		parts += "Background AI has used %d of its %d. " % [int(_requests.get("background", 0)), int(_requests.get("backgroundCap", 0))]
+		parts += "Requests nobody pressed a button for have used %d of the %d they may use today. " % [int(_requests.get("background", 0)), int(_requests.get("backgroundCap", 0))]
 	if int(_requests.get("refused", 0)) > 0:
 		parts += "The provider turned away %d for coming too fast; those cost a wait, not allowance. " % int(_requests.get("refused", 0))
 	var failed := int(_requests.get("failed", 0))
@@ -2382,7 +2389,7 @@ func _build_requests_section() -> void:
 	stop.add_theme_stylebox_override("panel", UI.box(Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.055), Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.18), 10, 1, Vector4(12, 11.2, 12, 11.2)))
 	var stop_column := VBoxContainer.new()
 	stop_column.add_theme_constant_override("separation", 0)
-	var stop_row := HBoxContainer.new()
+	var stop_row := VBoxContainer.new()
 	stop_row.add_theme_constant_override("separation", 10)
 	var stop_texts := VBoxContainer.new()
 	stop_texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2402,7 +2409,7 @@ func _build_requests_section() -> void:
 	cancel.add_theme_stylebox_override("normal", UI.box(Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.18) if active > 0 else Color(1, 1, 1, 0.06), Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.4) if active > 0 else Color(1, 1, 1, 0.13), 8, 1, Vector4(9.6, 7.2, 9.6, 7.2)))
 	cancel.add_theme_font_override("font", UI.font(800))
 	cancel.add_theme_color_override("font_color", Color("#fecaca") if active > 0 else Color(1, 1, 1, 0.72))
-	cancel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	cancel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	stop_row.add_child(cancel)
 	stop_column.add_child(stop_row)
 	if not _cancel_notice.is_empty():
@@ -2411,27 +2418,28 @@ func _build_requests_section() -> void:
 	stop.add_child(stop_column)
 	body.add_child(stop)
 	_gap(body, 15.2)
-	var saving := bool(_requests.get("saving", true))
-	_add_toggle(body, "Save AI requests", saving, func() -> void: _requests_set("saveRequests", not saving))
-	if saving:
-		_add_settings_helper(body, "On (default): a time skip is one request. Each event arrives as soon as it is written, already carrying what it changed: the map, your units and structures, your orders and your Projects board. Your spies' reports come back in the same answer, and so does the history document when older events are due to be folded into it. The model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again. A skip takes a second request only when its answer could not be used at all, when a provider refuses the single-request form, or on a turn where something you switched on yourself falls due: the automatic Stats refresh, or NPC votes in an institution.")
-	else:
-		_add_settings_helper(body, "Off: for a key with no daily limit. A time skip is still one request, and with AI lookup functions on (below) the model may look things up before it answers: each round of questions is another request, two at most, so a skip never uses more than %d. On Gemini such a skip shows its events together at the end instead of one at a time. Outside a skip, a task may look things up in up to three extra requests, and a flawed answer is sent back to be redone instead of being cut down." % int(_requests.get("lookupCap", 3)))
-	body.add_child(_field_label("Requests a day your key allows"))
-	_gap(body, 6.4)
-	body.add_child(_number_line(_daily_limit_draft, func(text: String) -> void: _daily_limit_draft = text, func() -> void: _requests_set("dailyLimit", _daily_limit_draft)))
-	_add_helper(body, "Only used for the count above and to keep background AI from spending the end of your day. The game never stops you at the limit; your provider does.")
-	_gap(body, 14.4)
-	var background := bool(_requests.get("backgroundOn", true))
-	_add_toggle(body, "Background AI", background, func() -> void: _requests_set("backgroundAi", not background))
-	if background:
-		_add_settings_helper(body, "On (default): while you are not skipping time, countries may write to you unprompted, forces may reposition, agents may file extra reports, and a country you look at gets its first intelligence reading — each of those is a request nobody pressed a button for, and together they stop at the daily cap below.")
-		body.add_child(_field_label("Background requests a day, at most"))
+	if not no_limit:
+		body.add_child(_field_label("Requests a day your key allows"))
 		_gap(body, 6.4)
-		body.add_child(_number_line(_background_cap_draft, func(text: String) -> void: _background_cap_draft = text, func() -> void: _requests_set("backgroundDailyCap", _background_cap_draft)))
-		_add_helper(body, "It also stops by itself once less than a tenth of your day is left.")
-	else:
-		_add_settings_helper(body, "Off: the game only calls the model when you do something.", 0)
+		body.add_child(_number_line(_daily_limit_draft, func(text: String) -> void: _daily_limit_draft = text, func() -> void: _requests_set("dailyLimit", _daily_limit_draft)))
+		_add_helper(body, "Only used for the count above and to keep requests nobody pressed a button for from spending the end of your day. The game never stops you at the limit; your provider does.")
+		_gap(body, 14.4)
+	var idle_on := _flag("ai_idle_diplomacy")
+	_add_toggle(body, "Countries write to me between time skips", idle_on, func() -> void: _set_flag_and_render("ai_idle_diplomacy", not idle_on))
+	_add_settings_helper(body, "Off: between time skips, no country writes to you unless you write first.", 12.0 if no_limit else 0.0)
+	if no_limit:
+		var advanced_open := bool(_details.get("requestsAdvanced", false))
+		body.add_child(_summary_button("Advanced", advanced_open, func() -> void:
+			_details["requestsAdvanced"] = not bool(_details.get("requestsAdvanced", false))
+			_rerender()))
+		_gap(body, 9.6)
+		if advanced_open:
+			var lookups_on := _flag("ai_lookup_functions")
+			_add_toggle(body, "AI lookup functions", lookups_on, func() -> void: _set_flag_and_render("ai_lookup_functions", not lookups_on))
+			if lookups_on:
+				_add_settings_helper(body, "On (default): before it answers, the model can look up the exact power and region names, a region's neighbours, the war ledger or a chat, in up to %d extra requests a task. Needs a provider that supports function calling." % no_limit_rounds, 0.0)
+			else:
+				_add_settings_helper(body, "Off: one request per task, with the region lists and ledgers written into the prompt instead. For a model that does not handle function calling well.", 0.0)
 
 
 func _number_line(value: String, on_change: Callable, on_commit: Callable) -> LineEdit:
@@ -2457,7 +2465,10 @@ func _requests_set(field: String, value: Variant) -> void:
 	if typeof(reply) == TYPE_DICTIONARY:
 		_requests = reply
 		_daily_limit_draft = str(_requests.get("dailyLimit", ""))
-		_background_cap_draft = str(_requests.get("backgroundDailyCap", ""))
+	if field == "noRequestLimit":
+		var values: Variant = await _req("settings.values")
+		if typeof(values) == TYPE_DICTIONARY:
+			_values = values
 	_render.call_deferred()
 
 
@@ -2468,12 +2479,10 @@ func _build_generation_section() -> void:
 	else:
 		body.add_child(_helper("Player focus is set for each game on its own: open the game, then ☰ → Settings → AI."))
 		_gap(body, 12.8)
-	var saving := bool(_requests.get("saving", true))
 	var rows := [
 		["ai_limit_generation", "Limit AI generation", "Off (default): waits as long as the model needs, however stuck. On: the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Cancel works either way.", ""],
 		["ai_chunk_long_jumps", "Generate long time skips in segments", "Off (default): the whole skip is generated in a single request. On: skips of more than a few months are generated in several shorter requests and merged into one round — slower and costlier in tokens, but far less likely to time out on a hosted provider.", ""],
-		["ai_lookup_functions", "AI lookup functions", "Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task, and two inside a time skip. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.", "Paused while Save AI requests is on" if saving else ""],
-		["ai_live_skip_events", "Show time skip events as they are written", "On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (Save AI requests off) still arrives all at once.", ""],
+		["ai_live_skip_events", "Show time skip events as they are written", "On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (My key has no request limit on) still arrives all at once.", ""],
 		["ai_stop_on_player_failures", "Stop when my events fail", "Off (default): an event about your country that the game refuses is left out, and an order of yours that got no outcome carries over to the next skip as overdue. On: the skip stops before anything is saved and lists what failed. Retry the failed events (one more request, for the same dates), retry the whole skip, or keep it and move on.", ""],
 		["ai_batch_background_tasks", "Batch background AI tasks", "Anthropic only. On: history consolidation runs through the Message Batches API at about half the price and lands a little later, applied between turns. Off (default): every task answers in the same call. Other providers are unaffected either way.", ""],
 	]
