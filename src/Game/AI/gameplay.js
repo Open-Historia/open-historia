@@ -229,7 +229,7 @@ import {
 } from "./gameplaySchemas.js";
 import { placeRostraLines, readSkipPollResults, readSkipPosts, rostraRefreshRules, socialFeedPromptBlock, withSkipPosts } from "../../runtime/socialFeed.js";
 import { knownPolityNames } from "../../runtime/countryInfoPanel.js";
-import { airOn, frontsOn, strategyNetOn, warPartsOffBlock } from "./frontsGate.js";
+import { airOn, frontsOn, strategyNetOn, transportMediaOn, warPartsOffBlock } from "./frontsGate.js";
 import { placeStrikes } from "./frontTurn.js";
 import { engineerLines } from "../../runtime/fronts/engineer.js";
 import { foreseeFronts } from "./foreseenFronts.js";
@@ -309,7 +309,7 @@ import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenc
 import { assertPoliticalLandscapeConsistency, describeElectionsDue, ideologyListText, normalizePoliticalLandscape } from "../../runtime/politics.js";
 import { foldLandscapeIntoActor } from "../../runtime/politicalLandscapeFold.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
-import { FRONT_ORDER_LINES_BLOCK } from "./frontPrompt.js";
+import { frontOrderLinesBlock } from "./frontPrompt.js";
 import { collectionOrders, covertOperationsBlock, untracedTargets } from "./covertOperationsDirective.js";
 import { agentsReportingWithSkip } from "./agentReports.js";
 import {
@@ -2923,7 +2923,8 @@ const buildJumpStaticRules = async (variables = {}) => {
     `${DIPLOMATIC_LEDGER_RULES_HEADING}\n${diplomaticLedgerRules(playerName)}`,
     `[Reading the Diplomatic Ledger]\n${DIPLOMATIC_SLICE_RULES}`,
     `${WHAT_CHATS_BIND_HEADING}\n${WHAT_CHATS_BIND} A thread's standing memory comes with its latest words below.`,
-    frontsOn() ? FRONT_ORDER_LINES_BLOCK : "",
+    // (Telling only the transports the Wars feature has on: FRONT_ORDER_LINES_BLOCK with all of them.)
+    frontsOn() ? frontOrderLinesBlock(transportMediaOn()) : "",
     espionage && spiedOn ? whoSpiesOnThePlayerBlock(spiedOn) : "",
     espionage ? buildSpyOrdersDirective(playerName) : "",
   ].filter(Boolean).join("\n\n");

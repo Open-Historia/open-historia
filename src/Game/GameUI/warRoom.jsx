@@ -50,7 +50,8 @@ import { handicapOf } from "../../runtime/fronts/handicap.js";
 import { deployLinesOf } from "../../runtime/fronts/deploy.js";
 import { foldBattlefieldName, normalizeBattlefield } from "../../runtime/fronts/record.js";
 import { deployBattlefieldOf } from "../../runtime/fronts/warRoomOps.js";
-import { TRANSPORT_MEDIA, carrierFor, isUnderWay, loadOf, normalizeTransports } from "../../runtime/fronts/transports.js";
+import { TRANSPORT_MEDIA, carrierFor, isUnderWay, loadOf, normalizeTransports, transportBar, transportLoadMost } from "../../runtime/fronts/transports.js";
+import { transportFiguresOf } from "../../runtime/militaryStats.js";
 import { formatGameDateReadable, gameDateYear } from "../../runtime/gameDates.js";
 import { isActiveFeatureEnabled, useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
@@ -58,11 +59,11 @@ import { useLibraryState } from "../../runtime/library.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { kmOnMap } from "../../runtime/unitMotion.js";
+import { kmOnMap, yearInEra } from "../../runtime/unitMotion.js";
 import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 import { convoysOf, enemiesOf, fleetsOf } from "../../runtime/naval/fleetOps.js";
 import { sendAirStrikeOp, sendFleetOp, sendFortifyOp, sendWarRoomOp } from "../../runtime/warRoomWrites.js";
-import { warSettingsOf, warfareOf } from "../../runtime/warSettings.js";
+import { eraSettingOf, warSettingsOf, warfareOf } from "../../runtime/warSettings.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import { placeName, playerFronts } from "./warRoomData.js";
 import { FleetsList, FleetsPlate } from "./warRoomFleets.jsx";
@@ -72,7 +73,7 @@ import { WarRoomRail } from "./warRoomRail.jsx";
 import { WeatherAhead } from "./warRoomWeather.jsx";
 import { RehearsalTray } from "./warRoomRehearsal.jsx";
 import { supplyShading } from "../Map/warRoomCells.js";
-import { airOn, naviesOn, strategyNetOn } from "../AI/frontsGate.js";
+import { airOn, naviesOn, strategyNetOn, transportMediaOn } from "../AI/frontsGate.js";
 import { scheduleFrontsPrethink } from "../AI/frontPrethink.js";
 import { commanderOf } from "../../runtime/fronts/mind/commanders.js";
 import {
@@ -157,6 +158,7 @@ const WayRefusal = ({ code }) => {
   if (code === "no-war") return <>you are fighting no war</>;
   if (code === "no-navy") return <>your country has no navy to carry them</>;
   if (code === "no-air-force") return <>your country has no air arm to carry them</>;
+  if (code === "switched-off") return <>this game carries no troops that way</>;
   if (code === "railhead") return <>its line ends before that place</>;
   if (code === "too-far" || code === "off-map") return <>that place cannot be reached</>;
   return <>no way was found</>;
@@ -233,6 +235,8 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   const supplyOn = useWarRoom((state) => state.supply);
   const pickedFleet = useWarRoom((state) => state.fleet);
   const station = useWarRoom((state) => state.station);
+  // What the troops picked out are to be carried by, while the transport tool is in hand.
+  const carrying = useWarRoom((state) => state.medium);
   const deployForm = useWarRoom((state) => state.deployForm);
   // The aircraft's plate, the air unit picked out on it, what it is to strike, and over how wide a circle.
   const aircraftOut = useWarRoom((state) => state.aircraft);
@@ -409,11 +413,18 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   // What carries troops this year. (Nothing by sea in a scenario without navies, nor by air in one without air units: the Wars feature.)
   const navies = naviesOn();
   const aircraft = airOn();
+  // ... nor by a transport the Wars feature switched off. One the player's country has no navy or air force for is
+  // shown, and cannot be chosen (`bar`); an airlift carries `most` of the troops picked out (runtime/fronts/transports.js).
+  const media = transportMediaOn();
+  const mediaKey = media.join(",");
+  const figures = useMemo(() => transportFiguresOf(world, game.country), [world?.warSettings, world?.polityOverrides, world?.groups, world?.countryStats, game.country]);
   const carriers = useMemo(() => {
-    const year = gameDateYear(game.gameDate);
-    return TRANSPORT_MEDIA.map((medium) => ({ medium, ...carrierFor(medium, year) }))
-      .filter((carrier) => carrier.kind && (carrier.medium !== "sea" || navies) && (carrier.medium !== "air" || aircraft));
-  }, [game.gameDate, navies, aircraft]);
+    const year = yearInEra(gameDateYear(game.gameDate), eraSettingOf(world));
+    return TRANSPORT_MEDIA.filter((medium) => mediaKey.split(",").includes(medium))
+      .map((medium) => ({ medium, ...carrierFor(medium, year), most: transportLoadMost(medium, year, figures), bar: transportBar(medium, { military: figures }) }))
+      .filter((carrier) => carrier.kind);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [game.gameDate, world?.warSettings, mediaKey, figures]);
   // The way found for each of the player's own that has not set out, so that it
   // is seen on the map before time passes (no request: read from the map).
   const waiting = ownTransports.filter((entry) => entry.status === "ordered").map((entry) => `${entry.id}:${entry.medium}:${entry.to.lng},${entry.to.lat}:${entry.embark?.troops.join(".") ?? ""}`).join("|");
@@ -855,6 +866,7 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
         onClear={() => setWarRoom({ selected: [] })}
         carriers={carriers}
         onCarrier={(medium) => takeTool("transport", { medium })}
+        carrying={carrying}
         canFortify={canFortify}
         drafted={Boolean(draft)}
         navies={navies}

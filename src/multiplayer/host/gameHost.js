@@ -33,7 +33,8 @@ import { applyWarRoomOp, cleanWarRoomOp } from "../../runtime/fronts/warRoomOps.
 import { applyFortifyOp, cleanFortifyOp } from "../../runtime/fronts/fortifyOps.js";
 import { applyFleetOp, cleanFleetOp } from "../../runtime/naval/fleetOps.js";
 import { applyAirStrikeOp, cleanAirStrikeOp } from "../../runtime/fronts/airStrikeOps.js";
-import { activeWars, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { activeTransportMedia, activeWars, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { transportFiguresOf } from "../../runtime/militaryStats.js";
 import { eraSettingOf } from "../../runtime/warSettings.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
 import { playerDiplomacy } from "../../Game/AI/warAndPeace.js";
@@ -417,7 +418,7 @@ export const createGameHost = ({
       if (!sent) return "Nothing was asked.";
       let refusal = "";
       await store.updateForces(({ world, game }) => {
-        const result = applyWarRoomOp(world?.battlefields, sent, { player: seat.country, date: clean(game?.gameDate), transports: world?.transports, era: eraSettingOf(world) });
+        const result = applyWarRoomOp(world?.battlefields, sent, { player: seat.country, date: clean(game?.gameDate), transports: world?.transports, era: eraSettingOf(world), media: activeTransportMedia(), military: transportFiguresOf(world, seat.country) });
         if (result.error) {
           refusal = result.error;
           return null;

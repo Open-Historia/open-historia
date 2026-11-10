@@ -23,8 +23,9 @@ import { inSharedGame, requestFromHost } from "../multiplayer/client/sharedGameB
 import { applyAirStrikeOp, cleanAirStrikeOp } from "./fronts/airStrikeOps.js";
 import { applyFortifyOp, cleanFortifyOp } from "./fronts/fortifyOps.js";
 import { applyWarRoomOp, cleanWarRoomOp } from "./fronts/warRoomOps.js";
-import { activeWars } from "./gameFeatures.js";
+import { activeTransportMedia, activeWars } from "./gameFeatures.js";
 import { mutateWorldState, readGameData } from "./gameState.js";
+import { transportFiguresOf } from "./militaryStats.js";
 import { applyFleetOp, cleanFleetOp } from "./naval/fleetOps.js";
 import { eraSettingOf } from "./warSettings.js";
 
@@ -45,7 +46,8 @@ export const sendWarRoomOp = async (op, { turnRunning = () => false } = {}) => {
   const game = await readGameData();
   let refusal = "";
   await mutateWorldState((world) => {
-    const result = applyWarRoomOp(world?.battlefields, sent, { player: game?.country, date: game?.gameDate || game?.startDate, transports: world?.transports, era: eraSettingOf(world) });
+    // (What may carry troops: the Wars feature's switches, and the player's navy and air force: transports.js transportBar.)
+    const result = applyWarRoomOp(world?.battlefields, sent, { player: game?.country, date: game?.gameDate || game?.startDate, transports: world?.transports, era: eraSettingOf(world), media: activeTransportMedia(), military: transportFiguresOf(world, game?.country) });
     if (result.error) {
       refusal = result.error;
       return null;

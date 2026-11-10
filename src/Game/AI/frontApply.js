@@ -54,7 +54,7 @@ import { engineMapOf, worldMeasureOf } from "../../../server/mapDistance.js";
 import { stolenPlansBlock, turnPlanned, warRoomIntel } from "./frontPlans.js";
 import { battlefieldPowers, buildFrontsBlock } from "./frontPrompt.js";
 import { buildScenarioFronts, scenarioFrontsPending } from "./frontScenario.js";
-import { airOn, frontsOn, frontsPace, naviesOn, strategyNetOn } from "./frontsGate.js";
+import { airOn, frontsOn, frontsPace, naviesOn, strategyNetOn, transportMediaOn } from "./frontsGate.js";
 import { labStaffPolicy, trainedStaffPolicy } from "../../runtime/fronts/mind/trained.js";
 import { applyFrontUnitChanges, battlefieldRegionTest, engineRegionsOf, frontWorldReaders, runTurnFronts, stripFrontOps } from "./frontTurn.js";
 import { applyWarUpdates, eventNarratesHardCombat } from "./nativeWarLedger.js";
@@ -251,6 +251,8 @@ const turnRunInput = ({ world, game, campaignId, loadRegions, signal, round, fro
     // The Wars feature's other parts: fleets at sea, and what flies.
     naval: naviesOn(),
     air: airOn(),
+    // And what may carry troops: rail, sea and air each have a switch.
+    transportMedia: transportMediaOn(),
     // How its wars' troops stand where nobody deploys them otherwise: along fronts, or as swarms (runtime/fronts/swarms.js).
     warfare: warfareOf(world, fromDate),
     // The men a counter stands for and the share of people who can fight, where it set them.
@@ -927,7 +929,7 @@ export const seasLiveBlock = (world, game, foreseen = null) => (frontsOn() && na
   : "");
 
 const landBlock = (world, game, foreseen = null, { orderLines = true } = {}) => (frontsOn()
-  ? buildFrontsBlock({ battlefields: world?.battlefields, players: humanCountriesOf(game), period: foreseen, transports: world?.transports, difficulty: normalizeDifficulty(game?.difficulty), orderFunction: foreseen?.orderFunction === true, orderLines })
+  ? buildFrontsBlock({ battlefields: world?.battlefields, players: humanCountriesOf(game), period: foreseen, transports: world?.transports, difficulty: normalizeDifficulty(game?.difficulty), orderFunction: foreseen?.orderFunction === true, orderLines, transportMedia: transportMediaOn() })
   : "");
 
 // The battlefields of a period fought again with a player's orders, with no

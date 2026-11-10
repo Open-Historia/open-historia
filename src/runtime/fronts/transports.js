@@ -13,7 +13,8 @@
 // Nobody draws its way. It is found when it sets out (wayfinder.js), the same
 // way every time for the same map, and it then goes along it day by day. On
 // the way it may be INTERCEPTED: by its enemies' ships and aircraft near it,
-// from a shore they hold, and above all by whoever was told to go after it.
+// from a shore they hold, and above all by whoever was told to go after it
+// (an aircraft only over its enemies' ground, as an air strike is: airliftIntercepts).
 // What is hit is lost with the troops aboard. What arrives puts its troops
 // down: on their own ground as reinforcements, on the enemy's as a landing
 // that opens a battlefield there, and in a country that was in no war as an
@@ -37,6 +38,8 @@
 // Pure: the engine carries the troops off and puts them down (engine.js).
 
 import { hashSeed } from "../unitMotion.js";
+import { AIR_REACH_KM } from "./air.js";
+import { AIR_FIND, INTERCEPTORS_MOST } from "./airStrike.js";
 import { BATTLEFIELD_NAME_MAX } from "./constants.js";
 import { MEDIA, WAY_POINTS_MOST, findWay } from "./wayfinder.js";
 import { kmBetween, placeAlong } from "./worldGrid.js";
@@ -71,9 +74,10 @@ export const CARRIERS = Object.freeze({
     Object.freeze({ since: 1840, kind: "troop trains", speed: 480, capacity: 4 }),
     Object.freeze({ since: -Infinity, kind: "wagon train", speed: 35, capacity: 2 }),
   ]),
+  // (`most`: the formations one airlift carries in all, at an air figure of 50: airliftMost.)
   air: Object.freeze([
-    Object.freeze({ since: 1960, kind: "transport aircraft", speed: 15000, capacity: 2 }),
-    Object.freeze({ since: 1936, kind: "transport aircraft", speed: 5500, capacity: 1 }),
+    Object.freeze({ since: 1960, kind: "transport aircraft", speed: 15000, capacity: 2, most: 6 }),
+    Object.freeze({ since: 1936, kind: "transport aircraft", speed: 5500, capacity: 1, most: 3 }),
   ]),
 });
 
@@ -90,6 +94,49 @@ export const carrierFor = (medium, year) => {
   const when = Number.isFinite(year) ? year : 2000;
   return rows.find((row) => when >= row.since) ?? null;
 };
+
+// ---- what may carry troops, and how many ------------------------------------------------
+
+// "make it so air transports work like train and boat except they can go over
+// anywhere, but they can carry less troops ... also make different transport
+// types disableable in features and if a country has their airforce or navy
+// disabled by being set to zero they cant use those transports" (the owner,
+// 2026-11-09).
+//
+// What a country may not send, by a medium: one the game's features switched
+// off (server/gameFeatures.js transportMediaOf), by sea with a navy figure of
+// 0, by air with an air figure of 0 (military.js: 0 is none at all).
+export const TRANSPORT_BARS = Object.freeze(["switched-off", "no-navy", "no-air-force"]);
+// A figure as it was given: a number, or null for none (a country nobody gave figures is at 50 in all).
+const figureOf = (military, arm) => {
+  const value = military?.[arm];
+  return value === null || value === undefined || value === "" || !Number.isFinite(Number(value)) ? null : Number(value);
+};
+//   media      what the game lets carry troops (every medium where not given)
+//   military   the country's military figures ({ sea, air, ... }), or null where the game weighs none
+// Returns one of TRANSPORT_BARS, or "" when it may.
+export const transportBar = (medium, { media = null, military = null } = {}) => {
+  if (Array.isArray(media) && !media.includes(medium)) return "switched-off";
+  if (medium === "sea" && figureOf(military, "sea") !== null && figureOf(military, "sea") <= 0) return "no-navy";
+  if (medium === "air" && figureOf(military, "air") !== null && figureOf(military, "air") <= 0) return "no-air-force";
+  return "";
+};
+
+// An airlift carries fewer than a train or a ship: its year's carrier's `most`
+// at an air figure of 50, twice that at 100, a fifth of it at 10, and never
+// under one formation while the country has an air force at all. A train or a
+// ship carries TRANSPORT_LOAD_MOST. (Before any carrier flies troops, one the
+// story names and gives a speed carries what the first that did.) 0 where the
+// country has no air force.
+export const AIRLIFT_FIGURE_USUAL = 50;
+export const airliftMost = (year, military = null) => {
+  const row = carrierFor("air", year) ?? CARRIERS.air.at(-1);
+  const air = figureOf(military, "air") ?? AIRLIFT_FIGURE_USUAL;
+  if (!(air > 0)) return 0;
+  return clamp(Math.round((row.most * Math.min(100, air)) / AIRLIFT_FIGURE_USUAL), 1, TRANSPORT_LOAD_MOST);
+};
+// The most formations one dispatch by a medium carries, for a country in a year.
+export const transportLoadMost = (medium, year, military = null) => (medium === "air" ? airliftMost(year, military) : TRANSPORT_LOAD_MOST);
 
 // (Nothing at all is not zero: a place that is only named has no coordinates yet.)
 const numberOf = (value) => (value === null || value === undefined || value === "" ? NaN : Number(value));
@@ -430,6 +477,102 @@ export const struck = (transport, draw, date = "") => {
   const load = transport.load.slice(0, aboard - lost);
   const next = { ...transport, load, hits: transport.hits + 1, sunk: transport.sunk + lost };
   return { transport: load.length === 0 ? { ...next, status: "lost", ended: date } : next, lost };
+};
+
+// ---- an airlift over enemy ground --------------------------------------------------------
+
+// An AIRLIFT (medium "air") goes over anything, and is caught only where it
+// flies over ground its enemies hold, and there as an air strike is
+// (airStrike.js): each air unit of a country at war with its owner whose base
+// lies within its era's reach (air.js AIR_REACH_KM) of what it flies over of
+// theirs rises, the nearest first and INTERCEPTORS_MOST at most, and finds it at
+// AIR_FIND of the era (radar from 1945). A unit of a country with no air arm
+// (military.js airWorth 0) does not rise. Where no unit on the map finds it,
+// the AIR ARM of whoever holds the ground below and has no air unit of its own
+// on the map (most countries' are on no map: air.js) finds it at
+// AIRLIFT_ARM_FIND of the era, times what that arm is worth (at most
+// AIRLIFT_ARM_WORTH_MOST). Each that finds it is a hit (struck): a share of
+// what is aboard is lost, or all of it. Troops flown into enemy land are put
+// down there all the same, and fight as any landing does (engine.js landTransport).
+export const AIRLIFT_ARM_FIND = Object.freeze([0, 0, 0.2, 0.3]);
+export const AIRLIFT_ARM_WORTH_MOST = 1.5;
+// How finely a day's flight is looked at for the ground under it, and the most points that is.
+export const AIRLIFT_LOOK_KM = 40;
+export const AIRLIFT_LOOKS_MOST = 160;
+
+// The points along a way from `fromKm` to `toKm`: its two ends, and between
+// them none further apart than AIRLIFT_LOOK_KM (fewer on a very long stretch).
+export const stretchOf = (way, fromKm, toKm, options = {}) => {
+  const from = Math.max(0, Number(fromKm) || 0);
+  const to = Math.max(from, Number(toKm) || 0);
+  const parts = clamp(Math.ceil((to - from) / AIRLIFT_LOOK_KM), 1, AIRLIFT_LOOKS_MOST - 1);
+  const points = [];
+  for (let part = 0; part <= parts; part += 1) {
+    const place = placeAlong(way, from + ((to - from) * part) / parts, options);
+    if (place) points.push([round3(place.lng), round3(place.lat)]);
+  }
+  return points;
+};
+
+// Who finds an airlift on a day.
+//   over          [[lng, lat]...]: what it flew over that day (stretchOf)
+//   holderAt      (lng, lat) => who holds the ground there ("" for the sea, or nobody's)
+//   enemy(name)   it is at war with the airlift's owner
+//   units         the world's formations: [{ id, type, ownerCode, lng, lat, strength, name, status }]
+//   era           0 to 3 (unitMotion.js eraOf)
+//   worthOf(name) what a country's air arm is worth (military.js airWorth): 1 where nobody says
+//   roll(what)    a number from 0 up to 1 that is the airlift's own, that day, for `what`
+// Returns { over, found }: `over`, whose ground of its enemies' it flew over, by
+// name; `found`, [{ by, with, at }]: who found it, with which unit ("" for an
+// air arm), and where ([lng, lat]). One that flew over none of its enemies'
+// ground is found by nobody.
+export const airliftIntercepts = (transport, { over = [], holderAt = () => "", enemy = () => false, units = [], era = 3, worthOf = () => 1, roll = () => 1, flat = false, scale } = {}) => {
+  const hostile = [];
+  const holders = [];
+  for (const point of list(over)) {
+    const name = clean(holderAt(point[0], point[1]));
+    if (!name || fold(name) === fold(transport?.owner) || !enemy(name)) continue;
+    hostile.push({ point, name });
+    if (!holders.some((entry) => fold(entry) === fold(name))) holders.push(name);
+  }
+  if (hostile.length === 0) return { over: [], found: [] };
+  const reach = AIR_REACH_KM[era] ?? 0;
+  const find = AIR_FIND[era] ?? 0;
+  const worth = (name) => Math.max(0, Number(worthOf(name)) || 0);
+  const flying = new Set();
+  const rising = [];
+  for (const unit of list(units)) {
+    const owner = clean(unit?.ownerCode);
+    const lng = Number(unit?.lng);
+    const lat = Number(unit?.lat);
+    if (fold(unit?.type) !== "air" || !owner || fold(unit?.status) === "pending" || !Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+    flying.add(fold(owner));
+    if (!(reach > 0) || !enemy(owner) || !((Number(unit.strength) || 0) >= 1) || !(worth(owner) > 0)) continue;
+    let nearest = null;
+    for (const entry of hostile) {
+      const km = kmBetween(lng, lat, entry.point[0], entry.point[1], { flat, scale });
+      if (!nearest || km < nearest.km) nearest = { km, at: entry.point };
+    }
+    if (nearest && nearest.km <= reach) rising.push({ unit, owner, ...nearest });
+  }
+  const idOf = (unit) => clean(unit?.id) || clean(unit?.name);
+  rising.sort((a, b) => a.km - b.km || (idOf(a.unit) < idOf(b.unit) ? -1 : idOf(a.unit) > idOf(b.unit) ? 1 : 0));
+  const found = [];
+  for (const entry of rising) {
+    if (found.length >= INTERCEPTORS_MOST) break;
+    if (roll(`find|${idOf(entry.unit)}`) < find) found.push({ by: entry.owner, with: clean(entry.unit.name), at: entry.at });
+  }
+  if (found.length === 0) {
+    for (const name of holders) {
+      if (flying.has(fold(name))) continue;
+      const chance = (AIRLIFT_ARM_FIND[era] ?? 0) * Math.min(AIRLIFT_ARM_WORTH_MOST, worth(name));
+      if (chance > 0 && roll(`arm|${fold(name)}`) < chance) {
+        found.push({ by: name, with: "", at: hostile.find((entry) => fold(entry.name) === fold(name)).point });
+        break;
+      }
+    }
+  }
+  return { over: holders, found };
 };
 
 // ---- told ---------------------------------------------------------------------------------

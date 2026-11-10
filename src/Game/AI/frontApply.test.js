@@ -92,8 +92,11 @@ test("the Wars feature is listed, always on, with Fronts, Air units and Navies s
     ["battlefields", "toggle", undefined, undefined, true],
     ["air", "toggle", undefined, undefined, true],
     ["navies", "toggle", undefined, undefined, true],
+    ["railTransport", "toggle", undefined, undefined, true],
+    ["seaTransport", "toggle", undefined, undefined, true],
+    ["airTransport", "toggle", undefined, undefined, true],
   ]);
-  const all = { enabled: true, battlefields: true, air: true, navies: true };
+  const all = { enabled: true, battlefields: true, air: true, navies: true, railTransport: true, seaTransport: true, airTransport: true };
   assert.deepEqual(featureDefaults().fronts, all);
   // A scenario saved before the feature existed has it on.
   assert.deepEqual(normalizeFeatureSettings({ espionage: false }).fronts, all);
@@ -365,7 +368,7 @@ test("a time skip's prompt gains the block only with fronts on, after the rules 
   assert.match(read("frontApply.js"), /export const airStrikesLiveBlock = \(foreseen = null\) => \(frontsOn\(\) && airOn\(\) \? airStrikesBlock\(foreseen\?\.airStrikes\) : ""\);/);
   // (The sea's also "" with navies off: the Wars feature.)
   assert.match(read("frontApply.js"), /export const seasLiveBlock = \(world, game, foreseen = null\) => \(frontsOn\(\) && naviesOn\(\)\s*\n\s*\? buildSeasBlock\(/);
-  assert.match(read("frontApply.js"), /const landBlock = \(world, game, foreseen = null, \{ orderLines = true \} = \{\}\) => \(frontsOn\(\)\s*\n\s*\? buildFrontsBlock\(\{ battlefields: world\?\.battlefields, players: humanCountriesOf\(game\), period: foreseen, transports: world\?\.transports, difficulty: normalizeDifficulty\(game\?\.difficulty\), orderFunction: foreseen\?\.orderFunction === true, orderLines \}\)\s*\n\s*: ""\);/);
+  assert.match(read("frontApply.js"), /const landBlock = \(world, game, foreseen = null, \{ orderLines = true \} = \{\}\) => \(frontsOn\(\)\s*\n\s*\? buildFrontsBlock\(\{ battlefields: world\?\.battlefields, players: humanCountriesOf\(game\), period: foreseen, transports: world\?\.transports, difficulty: normalizeDifficulty\(game\?\.difficulty\), orderFunction: foreseen\?\.orderFunction === true, orderLines, transportMedia: transportMediaOn\(\) \}\)\s*\n\s*: ""\);/);
   // The contract carries the field under the same switch.
   assert.match(gameplay, /return frontsOn\(\) \? withWarFigures\(withFrontOrders\(shown\)\) : shown;/);
   // A side of a battlefield is not "at war with nobody on the map"; with fronts off the set is the units' owners alone.
