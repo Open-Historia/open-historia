@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "for themes, it themes the buttons themselfs but not the button tray. or the search button"; "it also doesnt
+    // theme this" (the date bar) (the owner, 2026-11-09). The dock's tray, search, the date bar and the map-mode switch
+    // read --oh-ui-glass-pill (chat.jsx Toolbar, search.jsx, time.jsx widgetSurface, MapModeSelector.jsx); the
+    // Advisor's lines and highlights read --oh-ui-line/-hover/-active (advisorDossier.css).
+    id: "2026-11-themes-reach-the-tray",
+    kind: "minor",
+    date: "2026-11-09",
+    channel: "beta",
+    banners: [
+      {
+        title: "Themes reach the dock and the date",
+        items: [
+          "Your theme now colours the tray round the Chat, Actions and Rostra buttons, the search button, the date bar and the map-mode switch, not only the buttons on them.",
+          "The Advisor's borders and highlighted rows follow your theme too.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it so you can minimize the standing goal and it is auto minimized when suggested actions are opened or
     // submitted actions are opened ... also make the actions tab resizable vertically" (the owner, 2026-11-09):
     // actions.jsx StandingGoal and PanelResizeHandle, actionsPanelLayout.js.

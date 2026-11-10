@@ -204,6 +204,7 @@ export const RELEASES = [
         updates: [
           "2026-11-themes",
           "2026-11-hud-themes",
+          "2026-11-themes-reach-the-tray",
           "2026-11-czech-finnish",
           "2026-10-war-and-peace#2",
           "2026-11-translation-model",
