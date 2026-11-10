@@ -61,6 +61,7 @@ import RostraSearch from "./rostraSearch.jsx";
 import { onRostraPlace, takeRostraPlace } from "./rostraOpen.js";
 import EmptyFeedRefresh from "./rostraRefresh.jsx";
 import { RS, rostraFrame, rostraLookVars } from "./rostraLooks.js";
+import { LookMark, LookMaterial, LookRule, NewspaperMasthead, ScrollRoll, ensureLookStyles } from "./rostraDress.jsx";
 import { useRostraLook } from "../../runtime/gameFeatures.js";
 
 // Rostra's own colours, from the look the scenario gives it (rostraLooks.js):
@@ -268,7 +269,7 @@ const Avatar = ({ name, flagUrl, mine, size = 2.4 }) => {
   useEffect(() => { setFailed(false); }, [flagUrl]);
   return (
     <span aria-hidden="true" style={{ flexShrink: 0, height: `${size}rem`, position: "relative", width: `${size}rem` }}>
-      <span style={{
+      <span className="rostra-avatar-face" style={{
         alignItems: "center",
         background: mine ? ACCENT_SOFT : AVATAR,
         border: `1px solid ${mine ? ACCENT_EDGE : EDGE}`,
@@ -288,6 +289,7 @@ const Avatar = ({ name, flagUrl, mine, size = 2.4 }) => {
       {flagUrl && !failed && (
         <img
           alt=""
+          className="rostra-flag"
           src={bundledFlagUrl(flagUrl)}
           onError={() => setFailed(true)}
           style={{
@@ -398,7 +400,7 @@ const PostCard = memo(({ post, feed, round, flags, mine, onQuote, canPost }) => 
       <Avatar name={post.author} flagUrl={flagFor(post.country, flags.custom, flags.polities)} mine={mine} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ alignItems: "baseline", display: "flex", gap: "0.4rem", minWidth: 0 }}>
-          <span data-no-translate style={{ color: INK, fontSize: "0.84rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{post.author}</span>
+          <span data-no-translate className="rostra-author" style={{ color: INK, fontSize: "0.84rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{post.author}</span>
           {mine && (
             <span style={{ background: ACCENT_SOFT, border: `1px solid ${ACCENT_EDGE}`, borderRadius: "999px", color: ACCENT, flexShrink: 0, fontSize: "0.58rem", fontWeight: 800, letterSpacing: "0.06em", padding: "0.05rem 0.4rem", textTransform: "uppercase" }}>
               You
@@ -407,7 +409,7 @@ const PostCard = memo(({ post, feed, round, flags, mine, onQuote, canPost }) => 
           <span style={{ color: INK_FAINT, flexShrink: 0, fontSize: "0.7rem", marginLeft: "auto" }}>{postDate(post.date)}</span>
         </div>
         {(post.role || post.country || post.poll) && (
-          <div style={{ alignItems: "center", color: INK_FAINT, display: "flex", fontSize: "0.7rem", gap: "0.35rem", marginTop: "0.05rem", minWidth: 0 }}>
+          <div className="rostra-byline" style={{ alignItems: "center", color: INK_FAINT, display: "flex", fontSize: "0.7rem", gap: "0.35rem", marginTop: "0.05rem", minWidth: 0 }}>
             {/* A poll says so under its author's name, as such apps have it. */}
             {post.poll && (
               <span style={{ background: ACCENT_SOFT, border: `1px solid ${ACCENT_EDGE}`, borderRadius: "5px", color: ACCENT, flexShrink: 0, fontSize: "0.6rem", fontWeight: 800, padding: "0 0.3rem" }}>
@@ -419,7 +421,7 @@ const PostCard = memo(({ post, feed, round, flags, mine, onQuote, canPost }) => 
             </span>
           </div>
         )}
-        <div data-no-translate style={{ color: INK, fontSize: "0.84rem", lineHeight: 1.5, marginTop: "0.35rem", overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
+        <div data-no-translate className="rostra-text" style={{ color: INK, fontSize: "0.84rem", lineHeight: 1.5, marginTop: "0.35rem", overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
           {post.text}
         </div>
         {post.poll && <PollCard poll={post.poll} />}
@@ -514,7 +516,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   const boxRef = useRef(null);
   const scrollRef = useRef(null);
 
-  useEffect(() => { ensureStyles(); }, []);
+  useEffect(() => { ensureStyles(); ensureLookStyles(); }, []);
 
   // A place a map card opened Rostra on (rostraOpen.js): Search, showing it.
   const [opened, setOpened] = useState(null);
@@ -688,12 +690,38 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
       width: isMobile ? "calc(100vw - 1rem)" : "31rem",
     };
 
+  const headerButtons = (
+    <>
+    {/* The pen: write a post (and put the box away again). */}
+    <button
+      type="button"
+      className="oh-tap rostra-btn"
+      onClick={composing ? closeComposer : openComposer}
+      disabled={!country}
+      aria-label={composing ? "Put the post away" : "Write a post"}
+      aria-pressed={composing}
+      title={composing ? "Put the post away" : "Write a post"}
+      style={{ alignItems: "center", background: composing ? ACCENT_SOFT : WASH, border: composing ? `1px solid ${ACCENT_EDGE}` : "1px solid transparent", borderRadius: "999px", color: composing ? ACCENT : INK_SOFT, cursor: country ? "pointer" : "default", display: "inline-flex", flex: "0 0 auto", height: "2rem", justifyContent: "center", marginLeft: framed && phone ? "auto" : undefined, padding: 0, width: "2rem" }}
+    >
+      <PenIcon />
+    </button>
+    <button
+      type="button"
+      className="oh-tap rostra-btn"
+      onClick={onClose}
+      aria-label="Close Rostra"
+      style={{ alignItems: "center", background: WASH, border: "none", borderRadius: "999px", color: INK_SOFT, cursor: "pointer", display: "inline-flex", flex: "0 0 auto", height: "2rem", justifyContent: "center", padding: 0, width: "2rem" }}
+    >
+      <CloseIcon />
+    </button>
+    </>
+  );
+
   return (
     <div role="dialog" aria-label="Rostra" data-rostra-look={look} style={{ ...rostraLookVars(look), ...frameStyle }}>
-      {/* A scroll's two rolls, wider than the sheet between them. */}
-      {frame?.ends && ["top", "bottom"].map((end) => (
-        <span key={end} aria-hidden="true" style={{ background: "#b98a4b", border: "1px solid #7c5626", borderRadius: "999px", boxShadow: "inset 0 -3px 0 rgba(0,0,0,0.22), inset 0 2px 0 rgba(255,255,255,0.25), 0 3px 8px rgba(0,0,0,0.35)", height: "1.15rem", left: "-0.7rem", position: "absolute", right: "-0.7rem", [end]: "-1.05rem" }} />
-      ))}
+      {/* What the look is made of (rostraDress.jsx), and a scroll's two rolls. */}
+      {!phone && <LookMaterial look={look} frame={frame} />}
+      {frame?.rolls && ["top", "bottom"].map((end) => <ScrollRoll key={end} end={end} />)}
       {framed && phone && (
         <>
           {/* The side buttons, as the frame's only ornament. */}
@@ -702,41 +730,23 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
           <span aria-hidden="true" style={{ background: FRAME_BUTTON, borderRadius: "0 2px 2px 0", height: "4.4rem", position: "absolute", right: "-3px", top: "9.6rem", width: "3px" }} />
         </>
       )}
-      <div style={{ background: framed ? SCREEN : "transparent", borderRadius: framed ? "2.1rem" : 0, display: "flex", flex: 1, flexDirection: "column", minHeight: 0, minWidth: 0, overflow: "hidden", textShadow: CARVE, ...(frame?.inner ?? {}) }}>
+      <div style={{ background: framed && phone ? SCREEN : "transparent", borderRadius: framed ? "2.1rem" : 0, display: "flex", flex: 1, flexDirection: "column", minHeight: 0, minWidth: 0, overflow: "hidden", position: "relative", textShadow: CARVE, ...(frame?.inner ?? {}) }}>
         {framed && phone && <StatusBar date={postDate(game.gameDate)} />}
 
-        {/* The app's header: the mark, the name, and put away. */}
-        <div style={{ alignItems: "center", borderBottom: `1px solid ${LINE}`, display: "flex", flexShrink: 0, gap: "0.6rem", padding: framed ? "0.25rem 0.95rem 0.6rem" : isTouch ? "0.6rem 0.9rem 0.55rem" : "0.85rem 1.1rem 0.65rem" }}>
-          <RostraMark />
+        {/* The app's header: the mark, the name, and put away; a newspaper's masthead. */}
+        {look === "newspaper" ? <NewspaperMasthead date={postDate(game.gameDate)} round={game.round} actions={headerButtons} /> : (
+        <div style={{ alignItems: "center", borderBottom: phone ? `1px solid ${LINE}` : "none", display: "flex", flexShrink: 0, gap: "0.6rem", padding: framed ? "0.25rem 0.95rem 0.6rem" : isTouch ? "0.6rem 0.9rem 0.55rem" : "0.85rem 1.1rem 0.65rem" }}>
+          {phone ? <RostraMark /> : <LookMark look={look} />}
           <div style={{ minWidth: 0 }}>
-            <div data-no-translate style={{ color: INK, fontFamily: TITLE_FONT, fontSize: phone ? "1.05rem" : "1.3rem", fontWeight: phone ? 900 : 700, letterSpacing: "0.04em", lineHeight: 1.05, textTransform: look === "tablet" ? "uppercase" : undefined }}>Rostra</div>
-            <div style={{ color: INK_FAINT, fontSize: "0.62rem", marginTop: "0.1rem" }}>What the world is saying</div>
+            <div data-no-translate style={{ color: INK, fontFamily: TITLE_FONT, fontSize: phone ? "1.05rem" : look === "scroll" ? "1.55rem" : "1.35rem", fontWeight: phone ? 900 : look === "scroll" ? 400 : 700, letterSpacing: "0.04em", lineHeight: 1.05, textTransform: look === "tablet" ? "uppercase" : undefined }}>Rostra</div>
+            <div style={{ color: INK_FAINT, fontSize: "0.62rem", marginTop: "0.1rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>What the world is saying</div>
           </div>
           {/* In the frame the day is on the status bar. */}
-          {!(framed && phone) && <span style={{ color: INK_FAINT, fontSize: "0.68rem", marginLeft: "auto" }}>{postDate(game.gameDate)}</span>}
-          {/* The pen: write a post (and put the box away again). */}
-          <button
-            type="button"
-            className="oh-tap"
-            onClick={composing ? closeComposer : openComposer}
-            disabled={!country}
-            aria-label={composing ? "Put the post away" : "Write a post"}
-            aria-pressed={composing}
-            title={composing ? "Put the post away" : "Write a post"}
-            style={{ alignItems: "center", background: composing ? ACCENT_SOFT : WASH, border: composing ? `1px solid ${ACCENT_EDGE}` : "1px solid transparent", borderRadius: "999px", color: composing ? ACCENT : INK_SOFT, cursor: country ? "pointer" : "default", display: "inline-flex", flex: "0 0 auto", height: "2rem", justifyContent: "center", marginLeft: framed && phone ? "auto" : undefined, padding: 0, width: "2rem" }}
-          >
-            <PenIcon />
-          </button>
-          <button
-            type="button"
-            className="oh-tap"
-            onClick={onClose}
-            aria-label="Close Rostra"
-            style={{ alignItems: "center", background: WASH, border: "none", borderRadius: "999px", color: INK_SOFT, cursor: "pointer", display: "inline-flex", flex: "0 0 auto", height: "2rem", justifyContent: "center", padding: 0, width: "2rem" }}
-          >
-            <CloseIcon />
-          </button>
+          {!(framed && phone) && <span style={{ color: INK_FAINT, flexShrink: 0, fontSize: "0.68rem", marginLeft: "auto", whiteSpace: "nowrap" }}>{postDate(game.gameDate)}</span>}
+          {headerButtons}
         </div>
+        )}
+        {look !== "newspaper" && <LookRule look={look} />}
 
         <div ref={scrollRef} className="rostra-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", overscrollBehavior: "contain" }}>
           {/* The box, when the pen opened it: the player posts as their country's leader. */}
@@ -916,7 +926,8 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
 
         {/* The tab bar: everything, a search for any place, what answers or
             names them, and their own posts. */}
-        <div role="tablist" style={{ borderTop: `1px solid ${LINE}`, display: "flex", flexShrink: 0, padding: framed ? "0.3rem 0.35rem 0.05rem" : "0.3rem 0.35rem 0.35rem" }}>
+        <LookRule look={look} flip />
+        <div role="tablist" style={{ borderTop: phone ? `1px solid ${LINE}` : "none", display: "flex", flexShrink: 0, padding: framed ? "0.3rem 0.35rem 0.05rem" : "0.3rem 0.35rem 0.35rem" }}>
           {TABS.map(([key, label, Icon]) => {
             const active = tab === key;
             const count = key === "mentions" ? mentionCount : 0;
@@ -953,7 +964,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                     </span>
                   )}
                 </span>
-                <span style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+                <span className="rostra-tab-label" style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
               </button>
             );
           })}
