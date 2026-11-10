@@ -76,6 +76,8 @@ static func way_refusal(code: String) -> String:
 			return "your country has no navy to carry them"
 		"no-air-force":
 			return "your country has no air arm to carry them"
+		"switched-off":
+			return "this game carries no troops that way"
 		"railhead":
 			return "its line ends before that place"
 		"too-far", "off-map":

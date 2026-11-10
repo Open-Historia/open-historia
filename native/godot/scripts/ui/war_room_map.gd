@@ -23,6 +23,8 @@ const TILE_PX := 512.0
 const TEXT_PADDING := 2.0
 const FLEET_COLOURS := {"fleet": Color("#c9a54c"), "picked": Color("#e9b949"), "course": Color("#f4f7fb")}
 const AIR_COLOURS := {"waiting": Color("#2bc1f3"), "reach": Color("#2bc1f3"), "hit": Color("#e0454d"), "partly": Color("#e09440"), "missed": Color("#9aa3ad")}
+const SIZING_PLATE_PX := 360.0
+const SIZING_LEAST_PX := 160.0
 
 var map: MapView
 var store: WarRoomStore
@@ -68,6 +70,9 @@ func _on_store(keys: PackedStringArray) -> void:
 		_draft = null
 	if tool != "aircraft":
 		_aim = null
+	elif "blast" in keys and _aim is Vector3:
+		var aim: Vector3 = _aim
+		_aim = _ring_at(Vector2(aim.x, aim.y))
 	if "open" in keys and not bool(store.value("open")):
 		_fitted = ""
 		_publish([])
@@ -731,7 +736,7 @@ func _draw_fleets() -> void:
 		draw_arc(at, radius_stops.call(lit), 0.0, TAU, 48, colour, 3.0 if lit else 1.8, true)
 
 
-func _air_ring(lng: float, lat: float, colour: Color, blast: float) -> void:
+func _air_ring(lng: float, lat: float, colour: Color, blast: float, at_mark := true) -> void:
 	if blast > 0.0:
 		var ring := _project_way(ring_around(lng, lat, blast))
 		if ring.size() >= 4:
@@ -739,9 +744,31 @@ func _air_ring(lng: float, lat: float, colour: Color, blast: float) -> void:
 			if Geometry2D.triangulate_polygon(fill).size() > 0:
 				draw_colored_polygon(fill, Color(colour, 0.16))
 			draw_polyline(ring, colour, 2.0, true)
+	if not at_mark:
+		return
 	var at := _project_way([[lng, lat]])[0]
 	draw_circle(at, 4.5 + 1.4, Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.9), true, -1.0, true)
 	draw_circle(at, 4.5, colour, true, -1.0, true)
+
+
+func sizing_place(air: Dictionary) -> Variant:
+	var picked := str(store.value("wing"))
+	if not bool(store.value("aircraft")) or picked.is_empty() or not bool(store.value("sizing")) or not (float(air.get("blast", 0.0)) > 0.0):
+		return null
+	var found := false
+	for entry in air.get("wings", []):
+		if str((entry as Dictionary).get("id", "")) == picked:
+			found = true
+	if not found:
+		return null
+	for entry in air.get("orders", []):
+		if str((entry as Dictionary).get("unit", "")) == picked:
+			return null
+	var box := size
+	var right := maxf(0.0, box.x - float(store.value("cover")))
+	var left := minf(right, float(store.value("rail")) + SIZING_PLATE_PX)
+	var spot := Vector2((left + right) * 0.5 if right - left >= SIZING_LEAST_PX else right * 0.5, box.y * 0.5)
+	return screen_to_lnglat(spot)
 
 
 func _draw_air() -> void:
@@ -751,23 +778,30 @@ func _draw_air() -> void:
 	var blast := float(air.get("blast", 0.0))
 	var reach := float(air.get("reach", 0.0))
 	var picked := str(store.value("wing"))
-	if bool(store.value("aircraft")) and not picked.is_empty() and reach > 0.0:
+	var out := bool(store.value("aircraft")) and not picked.is_empty()
+	var radius := float(store.value("strike_radius"))
+	if out and reach > 0.0:
 		for entry in air.get("wings", []):
 			var wing: Dictionary = entry
 			if str(wing.get("id", "")) != picked:
 				continue
 			var ring := _project_way(ring_around(float(wing.get("lng", 0)), float(wing.get("lat", 0)), reach))
 			_draw_dashed(ring, Color(AIR_COLOURS["reach"], 0.8), 1.6, 2.4, 1.8)
+	var sizing: Variant = sizing_place(air)
+	if sizing is Vector2:
+		var spot: Vector2 = sizing
+		_air_ring(spot.x, spot.y, AIR_COLOURS["waiting"], blast * radius, false)
 	for entry in air.get("orders", []):
 		var order: Dictionary = entry
-		_air_ring(float(order.get("lng", 0)), float(order.get("lat", 0)), AIR_COLOURS["waiting"], blast)
+		var own := radius if out and str(order.get("unit", "")) == picked else float(order.get("radius", 1.0))
+		_air_ring(float(order.get("lng", 0)), float(order.get("lat", 0)), AIR_COLOURS["waiting"], blast * own)
 	for entry in air.get("struck", []):
 		var strike: Dictionary = entry
 		var outcome := str(strike.get("outcome", ""))
 		if outcome == "gone" or outcome == "out of reach":
 			continue
 		var colour: Color = AIR_COLOURS["missed"] if outcome == "turned back" else (AIR_COLOURS["partly"] if outcome == "partly" else AIR_COLOURS["hit"])
-		_air_ring(float(strike.get("lng", 0)), float(strike.get("lat", 0)), colour, blast)
+		_air_ring(float(strike.get("lng", 0)), float(strike.get("lat", 0)), colour, blast * float(strike.get("radius", 1.0)))
 
 
 func _ring_at(point: Vector2) -> Variant:
@@ -989,8 +1023,9 @@ func _release(point: Vector2) -> void:
 		var spot := screen_to_lnglat(point)
 		var wing := str(store.value("wing"))
 		var strike_kind := str(store.value("strike_kind"))
+		var radius := float(store.value("strike_radius"))
 		store.take_tool("pan")
-		store.report_way("aircraft", [[unwrap_lng(spot.x, 0.0), spot.y]], {"wing": wing, "kind": strike_kind})
+		store.report_way("aircraft", [[unwrap_lng(spot.x, 0.0), spot.y]], {"wing": wing, "kind": strike_kind, "radius": radius})
 		return
 	if tool == "fleet":
 		if float(done["moved"]) >= CLICK_PX:

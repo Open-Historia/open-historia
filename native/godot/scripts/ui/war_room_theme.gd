@@ -207,6 +207,19 @@ static func style_key(button: Button, on: bool, disabled: bool, margins := Vecto
 	button.mouse_default_cursor_shape = Control.CURSOR_ARROW if disabled else Control.CURSOR_POINTING_HAND
 
 
+static func style_range(slider: HSlider, disabled := false) -> void:
+	var accent := Color("#767676") if disabled else RED
+	var track := UI.box(Color("#efefef"), Color("#b2b2b2"), 4, 1, Vector4(0, 4, 0, 4))
+	var fill := UI.box(accent, Color("#767676") if disabled else Color("#944b50"), 4, 1, Vector4(0, 4, 0, 4))
+	slider.add_theme_stylebox_override("slider", track)
+	slider.add_theme_stylebox_override("grabber_area", fill)
+	slider.add_theme_stylebox_override("grabber_area_highlight", fill)
+	var thumb := svg_icon("range-thumb", "<svg viewBox='0 0 16 16'><circle cx='8' cy='8' r='8' fill='currentColor'/></svg>", 16, accent, 16.0)
+	for name in ["grabber", "grabber_highlight", "grabber_disabled"]:
+		slider.add_theme_icon_override(name, thumb)
+	slider.modulate.a = 0.55 if disabled else 1.0
+
+
 static func link(label_text: String, disabled := false, size_rem := 0.76, color := AMBER) -> Button:
 	var button := Button.new()
 	button.text = label_text.to_upper()
