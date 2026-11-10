@@ -141,9 +141,16 @@ func _theme_rim(frame: Control, source: Control, corner: float) -> Panel:
 	frame.add_child(rim)
 	source.mouse_entered.connect(_rim_hover.bind(rim, source, corner, true))
 	source.mouse_exited.connect(_rim_hover.bind(rim, source, corner, false))
-	UiTheme.events().changed.connect(_paint_rim.bind(rim, source, corner))
+	_rims.append([rim, source, corner])
+	if not UiTheme.events().changed.is_connected(_paint_rims):
+		UiTheme.events().changed.connect(_paint_rims)
 	_paint_rim(rim, source, corner)
 	return rim
+
+
+func _paint_rims() -> void:
+	for entry in _rims:
+		_paint_rim(entry[0], entry[1], entry[2])
 
 
 func _rim_hover(rim: Panel, source: Control, corner: float, hovered: bool) -> void:
@@ -548,6 +555,7 @@ func enter_game() -> void:
 var _chat_unread := 0
 var _chat_generating := false
 var _unavailable := {}
+var _rims: Array = []
 
 
 static func warm_scripts(paths: Array) -> void:
