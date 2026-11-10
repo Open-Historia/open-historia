@@ -93,12 +93,14 @@ pub fn normalize_war_settings(value: &Val) -> Option<Val> {
     }
     let men = number_in(value.get("menPerCounter"), 1.0, MEN_PER_COUNTER_MOST);
     let share = number_in(value.get("manpowerShare"), 1.0, 100.0);
+    let weight = number_in(value.get("technologyWeight"), 0.0, TECHNOLOGY_WEIGHT_MOST);
     let outcomes = normalize_war_outcomes(value.get("outcomes"));
     let mut out = Obj::new();
     out.set("mechanics", Val::Obj(mechanics));
     out.set("era", or_null(normalize_era(value.get("era"))));
     out.set("menPerCounter", or_null(men.map(jsmath::round)));
     out.set("manpowerShare", or_null(share.map(|share| jsmath::round(share * 10.0) / 10.0)));
+    out.set("technologyWeight", or_null(weight.map(|weight| jsmath::round(weight * 10.0) / 10.0)));
     out.set("muster", normalize_muster_points(value.get("muster")).unwrap_or(Val::Null));
     if !outcomes.is_empty() {
         out.set("outcomes", Val::Arr(outcomes));
@@ -109,8 +111,11 @@ pub fn normalize_war_settings(value: &Val) -> Option<Val> {
     Some(Val::Obj(out))
 }
 
+pub const TECHNOLOGY_WEIGHT_MODERN: f64 = 4.5;
+pub const TECHNOLOGY_WEIGHT_MOST: f64 = 10.0;
+
 pub fn war_settings_of(world: &Val) -> Val {
-    let kept = normalize_war_settings(world.get("warSettings")).unwrap_or_else(|| Val::obj([("mechanics", Val::Obj(Obj::new())), ("era", Val::Null), ("menPerCounter", Val::Null), ("manpowerShare", Val::Null), ("muster", Val::Null)]));
+    let kept = normalize_war_settings(world.get("warSettings")).unwrap_or_else(|| Val::obj([("mechanics", Val::Obj(Obj::new())), ("era", Val::Null), ("menPerCounter", Val::Null), ("manpowerShare", Val::Null), ("technologyWeight", Val::Null), ("muster", Val::Null)]));
     let mut mechanics = Obj::new();
     for key in MECHANICS {
         mechanics.set(key, Val::Bool(!matches!(kept.get("mechanics").get(key), Val::Bool(false))));

@@ -8,7 +8,7 @@ use super::js::{self, Obj, Val};
 use super::plans::{same_val, with_diversion, with_project_plan, without_plan};
 use super::record::{battlefield_side_of, fold_battlefield_name, frame_from, is_open_battlefield, normalize_battlefield};
 use super::swarms::{DEPLOY_FORMS, SWARM_FORM};
-use super::transports::{cancel_transport, hunt_transport, is_under_way, normalize_transports, order_transport, transport_val, Transport, TRANSPORT_LOAD_MOST, TRANSPORT_MEDIA};
+use super::transports::{cancel_transport, hunt_transport, is_under_way, normalize_transports, order_transport, transport_bar, transport_load_most, transport_val, Transport, TRANSPORT_LOAD_MOST, TRANSPORT_MEDIA};
 use super::unit_motion::year_in_era;
 use crate::jsmath;
 
@@ -25,6 +25,9 @@ pub const REFUSED_WAY: &str = "That way does not cross the battlefield.";
 pub const REFUSED_ROOM: &str = "There is no room for another order there: release some troops first.";
 pub const REFUSED_PLANS: &str = "There is no room for another plan there: take one off first.";
 pub const REFUSED_CARRIER: &str = "Nothing of that kind carries troops yet.";
+pub const REFUSED_SWITCHED_OFF: &str = "This game carries no troops that way.";
+pub const REFUSED_NO_NAVY: &str = "You have no navy to carry troops by sea.";
+pub const REFUSED_NO_AIR_FORCE: &str = "You have no air force to carry troops by air.";
 pub const REFUSED_PLACE: &str = "Say where they are to be taken.";
 pub const REFUSED_ABOARD: &str = "Those troops are already told to board a transporter.";
 pub const REFUSED_TRANSPORTS: &str = "Too many transporters are out already: wait for one to arrive.";
@@ -126,7 +129,7 @@ pub enum Applied {
     Battlefields { battlefields: Vec<Val>, record: Val, side: usize, transports: Option<Val> },
 }
 
-fn apply_transport_op(record: &Val, side: usize, op: &Val, player: &str, date: &Val, transports: &Val, era: Option<f64>) -> Result<Val, &'static str> {
+fn apply_transport_op(record: &Val, side: usize, op: &Val, player: &str, date: &Val, transports: &Val, era: Option<f64>, media: Option<&[String]>, military: &Val) -> Result<Val, &'static str> {
     let kept = normalize_transports(transports);
     let kept_val = transports_val(&kept);
     let op_name = op.get("op").string_or_empty();
@@ -157,6 +160,12 @@ fn apply_transport_op(record: &Val, side: usize, op: &Val, player: &str, date: &
     if medium.is_empty() {
         return Err(REFUSED_CARRIER);
     }
+    match transport_bar(&medium, media, military) {
+        "switched-off" => return Err(REFUSED_SWITCHED_OFF),
+        "no-navy" => return Err(REFUSED_NO_NAVY),
+        "no-air-force" => return Err(REFUSED_NO_AIR_FORCE),
+        _ => {}
+    }
     if to.as_array().is_none() || !lng.is_finite() || !lat.is_finite() || lat.abs() > 90.0 {
         return Err(REFUSED_PLACE);
     }
@@ -173,7 +182,12 @@ fn apply_transport_op(record: &Val, side: usize, op: &Val, player: &str, date: &
     if asked.is_empty() {
         return Err(REFUSED_TROOPS);
     }
-    let troops: Vec<usize> = asked.into_iter().filter(|&index| !boarding.contains(&(index as f64))).take(TRANSPORT_LOAD_MOST as usize).collect();
+    let year = match game_date_year(&date.string_or_empty()) {
+        Some(year) => Some(year_in_era(year, era)),
+        None => Some(year_in_era(f64::NAN, era)).filter(|year| !year.is_nan()),
+    };
+    let carries = jsmath::max(1.0, jsmath::min(TRANSPORT_LOAD_MOST, transport_load_most(&medium, year, military)));
+    let troops: Vec<usize> = asked.into_iter().filter(|&index| !boarding.contains(&(index as f64))).take(carries as usize).collect();
     if troops.is_empty() {
         return Err(REFUSED_ABOARD);
     }
@@ -185,10 +199,6 @@ fn apply_transport_op(record: &Val, side: usize, op: &Val, player: &str, date: &
         ("embark", Val::obj([("battlefield", record.get("name").clone()), ("side", num(side as f64)), ("troops", indexes_val(&troops))])),
         ("by", player_val.clone()),
     ]);
-    let year = match game_date_year(&date.string_or_empty()) {
-        Some(year) => Some(year_in_era(year, era)),
-        None => Some(year_in_era(f64::NAN, era)).filter(|year| !year.is_nan()),
-    };
     match order_transport(&kept_val, &spec, &clean(date, 40), year) {
         Ok(sent) => Ok(transports_val(&sent.transports)),
         Err("not-yet") => Err(REFUSED_CARRIER),
@@ -344,11 +354,56 @@ fn apply_to(record: &Val, side: usize, op: &Val, player: &str, date: &Val) -> Re
     }
 }
 
-pub fn apply_war_room_op(battlefields: &Val, op: &Val, player: &Val, date: &Val, transports: &Val, era: Option<f64>) -> Applied {
+pub fn deploy_battlefield_of(battlefields: &Val, op: &Val, player: &Val) -> String {
+    let named = clean(op.get("battlefield"), 120);
+    let drawn = list(op.get("way"));
+    if !matches!(op.get("op"), Val::Str(name) if name == "deploy") || drawn.is_empty() {
+        return named;
+    }
+    let swarm = matches!(op.get("form"), Val::Str(form) if form == SWARM_FORM);
+    let least = if swarm { 1 } else { 2 };
+    let first = Val::Arr(drawn.iter().take(1).cloned().collect());
+    let all = Val::Arr(drawn.to_vec());
+    let used = if swarm { &first } else { &all };
+    let rows: Vec<Option<Val>> = list(battlefields).iter().map(|row| if row.truthy() { normalize_battlefield(row) } else { None }).collect();
+    let wanted = fold_battlefield_name(&text(&named));
+    let Some(record_at) = rows.iter().position(|row| row.as_ref().is_some_and(|row| fold_battlefield_name(row.get("name")) == wanted)) else { return named };
+    let record = rows[record_at].as_ref().unwrap();
+    if !record.get("frame").truthy() || !record.get("warId").truthy() || way_on(record, used).len() >= least {
+        return named;
+    }
+    let mut best: Option<usize> = None;
+    let mut most = 0;
+    for (at, row) in rows.iter().enumerate() {
+        let Some(row) = row else { continue };
+        if !row.get("frame").truthy() || at == record_at || row.get("home").is_true() || !js::strict_equals(row.get("warId"), record.get("warId")) || !is_open_battlefield(row) {
+            continue;
+        }
+        let side = battlefield_side_of(row, player);
+        if side != HOLDER_SIDE_A as f64 && side != HOLDER_SIDE_B as f64 {
+            continue;
+        }
+        if way_on(row, used).len() < least {
+            continue;
+        }
+        let frame = frame_from(row.get("frame"));
+        let inside = drawn.iter().filter(|point| point_in_frame(&frame, js::to_number(&point.element(0)), js::to_number(&point.element(1)))).count();
+        if inside > most {
+            best = Some(at);
+            most = inside;
+        }
+    }
+    match best {
+        Some(at) => rows[at].as_ref().unwrap().get("name").string_or_empty(),
+        None => named,
+    }
+}
+
+pub fn apply_war_room_op(battlefields: &Val, op: &Val, player: &Val, date: &Val, transports: &Val, era: Option<f64>, media: Option<&[String]>, military: &Val) -> Applied {
     if !op.truthy() || !matches!(op.get("op"), Val::Str(name) if WAR_ROOM_OPS.contains(&name.as_str())) {
         return Applied::Error(REFUSED_NOTHING);
     }
-    let wanted = fold_battlefield_name(op.get("battlefield"));
+    let wanted = if matches!(op.get("op"), Val::Str(name) if name == "deploy") { fold_battlefield_name(&text(&deploy_battlefield_of(battlefields, op, player))) } else { fold_battlefield_name(op.get("battlefield")) };
     let rows = list(battlefields).to_vec();
     let at = rows.iter().position(|row| fold_battlefield_name(row.get("name")) == wanted && !wanted.is_empty());
     let record = at.and_then(|at| normalize_battlefield(&rows[at]));
@@ -365,7 +420,7 @@ pub fn apply_war_room_op(battlefields: &Val, op: &Val, player: &Val, date: &Val,
         return Applied::Error(REFUSED_HOME);
     }
     if TRANSPORT_OPS.contains(&op_name.as_str()) {
-        return match apply_transport_op(&record, side, op, &player, date, transports, era) {
+        return match apply_transport_op(&record, side, op, &player, date, transports, era, media, military) {
             Ok(transports) => Applied::Battlefields { battlefields: rows, record, side, transports: Some(transports) },
             Err(error) => Applied::Error(error),
         };

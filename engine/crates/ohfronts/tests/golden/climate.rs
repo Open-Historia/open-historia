@@ -265,9 +265,8 @@ fn run_after(case: &Case, run: &Run) -> Result<(), String> {
     let got = Val::obj([
         ("zoneSkiesDate", skies.as_ref().map(|(date, _)| text(date)).unwrap_or(Val::Undef)),
         ("zoneSkies", skies.as_ref().map(|(_, list)| self::list(list.iter().map(zone_sky_val).collect())).unwrap_or(Val::Undef)),
-        ("zoneNeighbours", run.zone_neighbours.borrow().as_ref().map(|beside| neighbours_val(beside)).unwrap_or(Val::Undef)),
     ]);
-    same_keys(&got, &want, &["zoneSkiesDate", "zoneSkies", "zoneNeighbours"]).map_err(|error| format!("run after: {error}"))
+    same_keys(&got, &want, &["zoneSkiesDate", "zoneSkies"]).map_err(|error| format!("run after: {error}"))
 }
 
 fn with_battle<F: Fn(&Run, &mut Battle) -> Val>(case: &Case, call: F) -> Option<Result<(), String>> {

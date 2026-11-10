@@ -213,6 +213,7 @@ pub struct Battle {
     pub answering: Option<[f64; 2]>,
     pub home: bool,
     pub called_on: String,
+    pub mobilised: Option<[String; 2]>,
     pub march_km: Option<[f64; 3]>,
     pub own_pace: f64,
     pub march_depths: Vec<(String, f64)>,
@@ -376,6 +377,7 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         answering: None,
         home: false,
         called_on: String::new(),
+        mobilised: None,
         march_km: None,
         own_pace: 1.0,
         march_depths: Vec::new(),
@@ -407,10 +409,27 @@ pub fn side_of_name(battle: &Battle, name: &str) -> i64 {
     -1
 }
 
+pub fn group_side_of(battle: &Battle, run: &Run, group: &str) -> i64 {
+    let own = side_of_name(battle, group);
+    if own >= 0 || group.is_empty() {
+        return own;
+    }
+    let owner = run.group_owner_of(group);
+    if owner.is_empty() {
+        -1
+    } else {
+        side_of_name(battle, &owner)
+    }
+}
+
 pub fn holder_of(battle: &Battle, run: &Run, id: &str) -> String {
     let group = run.group_of(id);
     if !group.is_empty() && side_of_name(battle, &group) >= 0 {
-        group
+        return group;
+    }
+    let owner = if group.is_empty() { String::new() } else { run.group_owner_of(&group) };
+    if !owner.is_empty() && side_of_name(battle, &owner) >= 0 {
+        owner
     } else {
         run.controller_of(id)
     }
@@ -424,7 +443,7 @@ pub fn read_regions(battle: &mut Battle, run: &Run) {
     let at_peace = battle.status == "standing";
     for index in 1..count {
         let id = &arena.ids[index];
-        let group = side_of_name(battle, &run.group_of(id));
+        let group = group_side_of(battle, run, &run.group_of(id));
         region_side[index] = if group >= 0 { group as i8 } else { side_of_name(battle, &run.controller_of(id)) as i8 };
         home_side[index] = if group >= 0 { group as i8 } else { side_of_name(battle, &run.sovereign_of(id)) as i8 };
         if !battle.shown.has(id) || region_side[index] < 0 || at_peace {
@@ -490,7 +509,7 @@ pub fn read_region(battle: &mut Battle, run: &Run, id: &str) {
     if battle.region_side.is_none() {
         return;
     }
-    let group = side_of_name(battle, &run.group_of(id));
+    let group = group_side_of(battle, run, &run.group_of(id));
     let side = if group >= 0 { group } else { side_of_name(battle, &run.controller_of(id)) };
     battle.region_side.as_mut().unwrap()[index] = side as i8;
     let home = if group >= 0 { group } else { side_of_name(battle, &run.sovereign_of(id)) };
@@ -514,6 +533,19 @@ pub fn member_index(battle: &Battle, side: usize, name: &str) -> i64 {
     battle.sides[side].iter().position(|member| fold_name(member) == wanted).map(|at| at as i64).unwrap_or(-1)
 }
 
+pub fn member_for(battle: &Battle, run: &Run, side: usize, name: &str) -> i64 {
+    let own = member_index(battle, side, name);
+    if own >= 0 || name.is_empty() {
+        return own;
+    }
+    let owner = run.group_owner_of(name);
+    if owner.is_empty() {
+        -1
+    } else {
+        member_index(battle, side, &owner)
+    }
+}
+
 pub fn paint_ground(battle: &mut Battle, run: &Run) {
     let arena = battle.arena.clone();
     let regions = arena.ids.len();
@@ -524,7 +556,7 @@ pub fn paint_ground(battle: &mut Battle, run: &Run) {
         let shown = battle.shown.get(id).map(|name| name.string_or_empty()).unwrap_or_default();
         for side in 0..2 {
             shown_as[side][region] = member_index(battle, side, &shown);
-            let group = member_index(battle, side, &run.group_of(id));
+            let group = member_for(battle, run, side, &run.group_of(id));
             holder[side][region] = if group >= 0 { group } else { member_index(battle, side, &run.controller_of(id)) };
         }
     }
@@ -609,18 +641,29 @@ pub fn reconcile(battle: &mut Battle, run: &Run) -> bool {
             }
         }
         let troops = battle.troops.clone();
-        let sides = battle.sides.clone();
         let cols = field.cols;
+        let named_by: [Vec<i64>; 2] = [0, 1].map(|side| {
+            (0..arena.ids.len())
+                .map(|region| {
+                    if !repaint[region] {
+                        return -1;
+                    }
+                    let id = &arena.ids[region];
+                    let group = run.group_of(id);
+                    if group.is_empty() {
+                        member_index(battle, side, &run.controller_of(id))
+                    } else {
+                        member_for(battle, run, side, &group)
+                    }
+                })
+                .collect()
+        });
         for side in 0..2 {
             if cells[side].is_empty() {
                 continue;
             }
             let mut painter = |index: usize| -> f64 {
-                let id = &arena.ids[arena.region[index] as usize];
-                let group = run.group_of(id);
-                let name = if group.is_empty() { run.controller_of(id) } else { group };
-                let wanted = fold_name(&name);
-                let named = if wanted.is_empty() { -1 } else { sides[side].iter().position(|member| fold_name(member) == wanted).map(|at| at as i64).unwrap_or(-1) };
+                let named = named_by[side][arena.region[index] as usize];
                 if named >= 0 {
                     named as f64
                 } else {
@@ -1149,6 +1192,10 @@ pub fn load_battle(run: &Run, record: &Val, arena: Rc<Arena>) -> Battle {
         Val::Str(text) => text.clone(),
         _ => String::new(),
     };
+    battle.mobilised = Some([0, 1].map(|side| match carry.get("mobilised").as_array().map(|_| carry.get("mobilised").at(side)) {
+        Some(Val::Str(text)) => text.clone(),
+        _ => String::new(),
+    }));
     if carry.get("march").as_array().is_some() {
         for (side, list) in read.iter_mut().enumerate() {
             let goals = read_march(carry.get("march").at(side), list.len());
@@ -1634,7 +1681,10 @@ pub fn save_battle(battle: &mut Battle, run: &Run, day: f64, changes: &mut Vec<V
     record.set("orders", Val::Arr(orders.iter().map(order_record).collect()));
     let replay = match &battle.replay {
         Some(replay) if !replay.is_nullish() => replay.clone(),
-        _ => finished_val(&battle.recorder.as_ref().expect("a recorder").finish(run.input.get("fromDate"), &Val::Num(day))),
+        _ => match battle.recorder.as_ref() {
+            Some(recorder) => finished_val(&recorder.finish(run.input.get("fromDate"), &Val::Num(day))),
+            None => Val::Null,
+        },
     };
     record.set("replay", replay);
     record.set("held", Val::str(""));
@@ -1682,6 +1732,11 @@ pub fn save_battle(battle: &mut Battle, run: &Run, day: f64, changes: &mut Vec<V
     }
     if battle.home && !battle.called_on.is_empty() {
         carry.set("called", Val::str(&battle.called_on));
+    }
+    if let Some(mobilised) = &battle.mobilised {
+        if mobilised.iter().any(|date| !date.is_empty()) {
+            carry.set("mobilised", Val::Arr(mobilised.iter().map(|date| Val::str(date)).collect()));
+        }
     }
     if battle.troops.iter().any(|list| list.iter().any(|troop| is_live(troop) && troop.goal >= 0.0)) {
         carry.set("march", Val::Arr(battle.troops.iter().map(|list| march_kept(list)).collect()));

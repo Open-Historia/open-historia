@@ -16,7 +16,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
-const READERS: [&str; 8] = ["controllerOf", "sovereignOf", "isGroup", "strengthOf", "shortageOf", "militaryOf", "musterOf", "peopleOf"];
+const READERS: [&str; 9] = ["controllerOf", "sovereignOf", "isGroup", "strengthOf", "shortageOf", "militaryOf", "musterOf", "peopleOf", "groupOwnerOf"];
 
 #[derive(Default)]
 struct Answers {
@@ -125,6 +125,9 @@ impl Hooks for Lookups {
     }
     fn people_of(&self, name: &str) -> Val {
         self.look(7, name)
+    }
+    fn group_owner_of(&self, name: &str) -> Val {
+        self.look(8, name)
     }
     fn collate(&self, a: &str, b: &str) -> Option<f64> {
         Some(self.collation.get(a)? - self.collation.get(b)?)

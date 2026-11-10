@@ -1,11 +1,11 @@
-use super::air::wing_changes;
+use super::air::{wing_alive, wing_changes};
 use super::arena::{arena_for, Arena};
 use super::attrition::attrition_report;
 use super::battle::{absorb_unit, finished_val, holder_of, is_land_formation, keep_start, line_length, load_battle, member_index, member_weights, open_battle, paint_ground, raise_troops, reconcile, release_named, save_battle, set_handicap, set_radii, side_of_name, Battle, Opened};
 use super::brief::build_brief;
 use super::codec::hash_key;
 use super::command::assign_commands;
-use super::constants::{takers_for, BATTLEFIELD_NAME_MAX, BREAKTHROUGH_LOOK_DAYS, EFFORT_FACTORS, FRONT_EFFORTS, FRONT_ORDERS, HAND_OVER_REACH_CELLS, INVADE_REACH_KM, LANDING_CELLS, MAX_BATTLEFIELDS, MAX_CLOSED_BATTLEFIELDS, MAX_HOME_FORCES, MAX_SIDE_MEMBERS, MUSTER_STANDING_SHARE, MAX_TROOPS_PER_SIDE, MIND_MARK, OBJECTIVE_BEYOND_KM, POOL_PER_TROOP, REINFORCED_LINE_MOST, REINFORCED_SIZE_MOST, REINFORCE_MOST, REINFORCE_ORDER, REINFORCE_USUAL_SHARE, SCENARIO_MARK, STAFF_MARK, STAFF_REVIEW_DAYS, STANDING_QUIET_DAYS, STORY_TAKER_REACH_KM, TROOPS_PER_STRENGTH, TROOP_KINDS, WAR_EFFORTS, WITHDRAW_DAYS_MOST, WITHDRAW_KM};
+use super::constants::{takers_for, STAFF_CALL_UP_CEILING, STAFF_CALL_UP_DAYS, BATTLEFIELD_NAME_MAX, BREAKTHROUGH_LOOK_DAYS, EFFORT_FACTORS, FRONT_EFFORTS, FRONT_ORDERS, HAND_OVER_REACH_CELLS, INVADE_REACH_KM, LANDING_CELLS, MAX_BATTLEFIELDS, MAX_CLOSED_BATTLEFIELDS, MAX_HOME_FORCES, MAX_SIDE_MEMBERS, MUSTER_STANDING_SHARE, MAX_TROOPS_PER_SIDE, MIND_MARK, OBJECTIVE_BEYOND_KM, POOL_PER_TROOP, REINFORCED_LINE_MOST, REINFORCED_SIZE_MOST, REINFORCE_MOST, REINFORCE_ORDER, REINFORCE_USUAL_SHARE, SCENARIO_MARK, STAFF_MARK, STAFF_REVIEW_DAYS, STANDING_QUIET_DAYS, STORY_TAKER_REACH_KM, TROOPS_PER_STRENGTH, TROOP_KINDS, WAR_EFFORTS, WITHDRAW_DAYS_MOST, WITHDRAW_KM};
 use super::contact::{contact_at, find_contacts, frame_for_contact, middle_of};
 use super::dawn::dawn;
 use super::day::{grow_to_hold, prepare, record_day, settle_regions, simulate_day, start_recorder, RegionsNeeded, Today};
@@ -30,10 +30,10 @@ use super::record::{fold_battlefield_name, frame_from, is_war_id_name, normalize
 use super::region_types::water_type_ids;
 use super::scenario_fronts::authored_name;
 use super::sectors::{describe_point, find_place, in_sector, resolve_sector, Sector};
-use super::staff::{breakthrough_answer, side_is_played, staff_decision, staff_may_order, staff_standing};
+use super::staff::{breakthrough_answer, call_up_need, side_is_played, staff_decision, staff_may_order, staff_standing};
 use super::supply::find_pockets;
 use super::swarms::gather_newcomers;
-use super::transports::{bound_for, departures_for, interception_of, load_of, move_on, normalize_transports, set_out, struck, transport_chance, transport_val, Departures, Place, SetOut, Transport, Watch, EMBARK_PORTS_MOST, TRANSPORT_ENDED, TRANSPORT_START_FAILS};
+use super::transports::{airlift_intercepts, bound_for, departures_for, interception_of, load_of, move_on, normalize_transports, set_out, stretch_of, struck, transport_bar, transport_chance, transport_load_most, transport_val, Airlift, Departures, Place, SetOut, Transport, Watch, EMBARK_PORTS_MOST, TRANSPORT_ENDED, TRANSPORT_START_FAILS};
 use super::troops::{create_troop, is_live, kinds_for, live_count, troops_cap, troops_least, troops_wanted, TroopSeed, STATE_HOLDING};
 use super::unit_motion::year_in_era;
 use super::walls::lines_changed;
@@ -143,9 +143,14 @@ fn war_side_of(run: &Run, war: &War, id: &str) -> i64 {
             war_side(war, name)
         }
     };
-    let group = side_of(&run.group_of(id));
+    let name = run.group_of(id);
+    let group = if name.is_empty() { -1 } else { side_of(&name) };
     if group >= 0 {
-        group
+        return group;
+    }
+    let owner = if name.is_empty() { -1 } else { side_of(&run.group_owner_of(&name)) };
+    if owner >= 0 {
+        owner
     } else {
         side_of(&run.controller_of(id))
     }
@@ -191,9 +196,7 @@ fn name_for(run: &Run, battle: &mut Battle) -> String {
     for side in 0..2 {
         let mut cells = vec![0.0f64; battle.sides[side].len()];
         for region in 1..arena.ids.len() {
-            let id = &arena.ids[region];
-            let group = run.group_of(id);
-            let holder = if group.is_empty() { run.controller_of(id) } else { group };
+            let holder = holder_of(battle, run, &arena.ids[region]);
             let wanted = fold_text(&holder);
             if let Some(index) = battle.sides[side].iter().position(|member| fold_text(member) == wanted) {
                 cells[index] += arena.cells[region] as f64;
@@ -419,7 +422,11 @@ fn contact_key(run: &Run, war: &War) -> String {
 fn holder_in(run: &Run, war: &War, id: &str) -> String {
     let group = run.group_of(id);
     if !group.is_empty() && war_side(war, &group) >= 0 {
-        group
+        return group;
+    }
+    let owner = if group.is_empty() { String::new() } else { run.group_owner_of(&group) };
+    if !owner.is_empty() && war_side(war, &owner) >= 0 {
+        owner
     } else {
         run.controller_of(id)
     }
@@ -494,9 +501,13 @@ fn examine_war(run: &mut Run, id: &str, day: f64) -> Flow<()> {
     if !key.is_empty() && kept(run, &key) {
         return Ok(());
     }
+    if !key.is_empty() && kept(run, &format!("{key}|full")) && open_battles(run) as f64 >= MAX_BATTLEFIELDS {
+        return Ok(());
+    }
     let Some(regions) = land_regions_of(run) else { return Err(RegionsNeeded) };
     let input = run.input.clone();
     let map = input.get("map");
+    let mut full = false;
     let contacts = find_contacts(&regions, |region| side_or_none(war_side_of(run, &war, region)), &map);
     for contact in contacts {
         if run.battles.iter().any(|battle| is_of_war(battle, &war.id) && battle.status != "closed" && point_in_frame(&battle.frame, contact.lng, contact.lat)) {
@@ -505,6 +516,7 @@ fn examine_war(run: &mut Run, id: &str, day: f64) -> Flow<()> {
         if open_battles(run) as f64 >= MAX_BATTLEFIELDS {
             let detail = if war.title.is_empty() { war.id.clone() } else { war.title.clone() };
             run.notes.push(Val::obj([("kind", text("too-many-battlefields")), ("detail", text(&detail))]));
+            full = true;
             break;
         }
         let Some(frame) = frame_for_contact(contact.bounds, &map) else { continue };
@@ -516,7 +528,7 @@ fn examine_war(run: &mut Run, id: &str, day: f64) -> Flow<()> {
     }
     let after = contact_key(run, &war);
     if !after.is_empty() {
-        keep(run, after);
+        keep(run, if full { format!("{after}|full") } else { after });
     }
     Ok(())
 }
@@ -994,11 +1006,20 @@ fn tell_attack(run: &mut Run, at: usize, attacker: &str, defender: &str, day: f6
 }
 
 fn holder_side(run: &Run, id: &str, first: &str, second: &str) -> Option<usize> {
-    let group = run.group_of(id);
-    let holder = if group.is_empty() { run.controller_of(id) } else { group };
-    if fold_text(&holder) == fold_text(first) {
+    let (first, second) = (fold_text(first), fold_text(second));
+    let one = |name: &str| !name.is_empty() && (name == first || name == second);
+    let group = fold_text(&run.group_of(id));
+    let owner = if !group.is_empty() && !one(&group) { fold_text(&run.group_owner_of(&group)) } else { String::new() };
+    let holder = if one(&group) {
+        group
+    } else if one(&owner) {
+        owner
+    } else {
+        fold_text(&run.controller_of(id))
+    };
+    if !holder.is_empty() && holder == first {
         Some(0)
-    } else if fold_text(&holder) == fold_text(second) {
+    } else if !holder.is_empty() && holder == second {
         Some(1)
     } else {
         None
@@ -1436,7 +1457,7 @@ fn reinforce_on_front(run: &mut Run, at: usize, moment: &Val, day: f64) {
     } else {
         format!("in the {}", sector.as_ref().and_then(sector_word).map_or_else(|| clean(moment.get("sector"), 120), |word| word.to_string()))
     };
-    let entry = Val::obj([("d", text(&run.date_of(day))), ("k", text("drafted")), ("s", num(side as f64)), ("at", text(&format!("{} fresh formations {}", count, place))), ("n", num(count as f64))]);
+    let entry = Val::obj([("d", text(&run.date_of(day))), ("k", text(if moment.get("staff").truthy() { "mobilised" } else { "drafted" })), ("s", num(side as f64)), ("at", text(&format!("{} fresh formations {}", count, place))), ("n", num(count as f64))]);
     let battle = &mut run.battles[at];
     battle.log.push(entry);
     battle.quiet = 0.0;
@@ -2447,7 +2468,37 @@ fn march_into(run: &mut Run, at: usize, region: usize, taker: &Val, day: f64) {
     give_way(battle, 1 - side, 0.0, &date, reach);
 }
 
+fn land_changed(run: &mut Run, id: &str, taker: &Val, day: f64, handed: &mut Vec<String>) {
+    for at in 0..run.battles.len() {
+        if run.battles[at].status == "closed" || !run.battles[at].arena.index_of.contains_key(id) {
+            continue;
+        }
+        let mut battle = lend(run, at);
+        reconcile(&mut battle, run);
+        give(run, at, battle);
+        if run.battles[at].status == "active" {
+            let region = run.battles[at].arena.index_of[id];
+            march_into(run, at, region, taker, day);
+        }
+        run.battles[at].plan_key = String::new();
+        run.battles[at].touched = true;
+    }
+    let wars: Vec<War> = run.wars.values().cloned().collect();
+    for war in wars {
+        if war.status != "active" || war_side_of(run, &war, id) < 0 {
+            continue;
+        }
+        let fought = run.battles.iter().any(|battle| {
+            is_of_war(battle, &war.id) && battle.status != "closed" && battle.arena.index_of.get(id).is_some_and(|&index| battle.arena.outside[index] == 0.0)
+        });
+        if !fought && !handed.contains(&war.id) {
+            handed.push(war.id.clone());
+        }
+    }
+}
+
 fn apply_moments(run: &mut Run, day: f64) -> Flow<()> {
+    let mut handed: Vec<String> = Vec::new();
     while (run.cursor as usize) < run.moments.len() && run.moments[run.cursor as usize].day <= day {
         let moment = run.moments[run.cursor as usize].moment.clone();
         run.cursor += 1.0;
@@ -2481,21 +2532,21 @@ fn apply_moments(run: &mut Run, day: f64) -> Flow<()> {
                 continue;
             }
             run.set_controller(&id, &clean(moment.get("to"), 120));
-            for at in 0..run.battles.len() {
-                if run.battles[at].status == "closed" || !run.battles[at].arena.index_of.contains_key(&id) {
-                    continue;
-                }
-                let mut battle = lend(run, at);
-                reconcile(&mut battle, run);
-                give(run, at, battle);
-                if run.battles[at].status == "active" {
-                    let region = run.battles[at].arena.index_of[&id];
-                    march_into(run, at, region, moment.get("to"), day);
-                }
-                run.battles[at].plan_key = String::new();
-                run.battles[at].touched = true;
+            land_changed(run, &id, moment.get("to"), day, &mut handed);
+        } else if kind == "group" {
+            let id = clean(moment.get("regionId"), 120);
+            let group = clean(moment.get("group"), 120);
+            let held = run.group_of(&id);
+            if id.is_empty() || fold_text(&held) == fold_text(&group) || (group.is_empty() && moment.get("from").truthy() && fold_text(&held) != fold(moment.get("from"))) {
+                continue;
             }
+            run.set_group(&id, &group);
+            let taker = if group.is_empty() { run.controller_of(&id) } else { group.clone() };
+            land_changed(run, &id, &text(&taker), day, &mut handed);
         }
+    }
+    for id in handed {
+        examine_war(run, &id, day)?;
     }
     for at in 0..run.battles.len() {
         if !run.battles[at].closing.is_empty() && run.battles[at].status != "closed" {
@@ -2947,6 +2998,25 @@ fn depart_transport(run: &mut Run, index: usize, day: f64) -> Flow<()> {
         refuse(run, index, &transport, "no-air-force", day);
         return Ok(());
     }
+    let media: Option<Vec<String>> = run.input.get("transportMedia").as_array().map(|list| list.iter().map(js::to_string).collect());
+    if !transport_bar(&transport.medium, media.as_deref(), &Val::Null).is_empty() {
+        refuse(run, index, &transport, "switched-off", day);
+        return Ok(());
+    }
+    let year = {
+        let year = game_date_year(&run.date_of(0.0));
+        match run.input.get("era") {
+            Val::Num(era) if era.is_finite() && era.fract() == 0.0 => Some(year_in_era(year.unwrap_or(f64::NAN), Some(*era))),
+            _ => year,
+        }
+    };
+    let figures = if run.mech.military() {
+        let military = run.military_of(&transport.owner);
+        Val::obj([("sea", num(military.sea)), ("air", num(military.air))])
+    } else {
+        Val::Null
+    };
+    let most = jsmath::max(1.0, transport_load_most(&transport.medium, year, &figures));
     let mut war = transport_war(run, &transport);
     let grid = world_grid_of(run)?;
     let mut surprise = String::new();
@@ -2997,6 +3067,7 @@ fn depart_transport(run: &mut Run, index: usize, day: f64) -> Flow<()> {
                     .filter(|&&index| index >= 0.0 && index.fract() == 0.0)
                     .map(|&index| index as usize)
                     .filter(|&index| side < 2 && battle.troops[side].get(index).is_some_and(is_live) && !battle.named.iter().any(|entry| entry.s == side && entry.i == index))
+                    .take(most as usize)
                     .collect()
             }
             None => Vec::new(),
@@ -3018,7 +3089,7 @@ fn depart_transport(run: &mut Run, index: usize, day: f64) -> Flow<()> {
         boarding = Some((at, side, picked));
     } else if load.is_empty() {
         let raise = transport.raise.filter(|raise| *raise != 0.0 && !raise.is_nan()).unwrap_or(1.0);
-        let kinds = kinds_for(jsmath::max(1.0, raise) as usize, run.era, if run.mech.military() { mix_of(&run.military_of(&transport.owner)) } else { None });
+        let kinds = kinds_for(jsmath::min(most, jsmath::max(1.0, raise)) as usize, run.era, if run.mech.military() { mix_of(&run.military_of(&transport.owner)) } else { None });
         load = kinds.iter().map(|&kind| [100.0, kind]).collect();
         draw(run, &transport.owner, load.len() as f64 * men_of(run, &transport.owner));
         if origins.is_empty() {
@@ -3029,15 +3100,9 @@ fn depart_transport(run: &mut Run, index: usize, day: f64) -> Flow<()> {
         refuse(run, index, &transport, "no-origin", day);
         return Ok(());
     }
+    let load: Vec<[f64; 2]> = load.into_iter().take(most as usize).collect();
     let loaded = Transport { embark: None, raise: None, load, war_id: war.id.clone(), ..transport.clone() };
     let mut sheet = run.grids.remove(&grid).unwrap();
-    let year = {
-        let year = game_date_year(&run.date_of(0.0));
-        match run.input.get("era") {
-            Val::Num(era) if era.is_finite() && era.fract() == 0.0 => Some(year_in_era(year.unwrap_or(f64::NAN), Some(*era))),
-            _ => year,
-        }
-    };
     let try_from = |run: &Run, sheet: &mut WorldGrid, places: &[(f64, f64, String)]| -> Option<Transport> {
         let holder = |id: &str| holder_in(run, &war, id);
         let friendly = |name: &str| war_side(&war, name) == mine;
@@ -3237,6 +3302,36 @@ fn begin_transports(run: &mut Run) -> Flow<()> {
     Ok(())
 }
 
+fn airlift_day(run: &mut Run, index: usize, before: &Transport, moved: &Transport, war: &War, mine: i64, peace: bool, day: f64, measure: Surface, surface: Surface) -> Flow<bool> {
+    let grid = world_grid_of(run)?;
+    let over = stretch_of(&moved.way, before.gone, moved.gone, measure);
+    let seen = {
+        let run_ref: &Run = run;
+        let holder_at = |lng: f64, lat: f64| text(&match &grid {
+            Some(key) => holder_at_point(run_ref, key, war, lng, lat),
+            None => String::new(),
+        });
+        let enemy = |name: &str| !peace && war_side(war, name) == 1 - mine;
+        let worth = |name: &str| num(air_worth(&run_ref.military_of(name)));
+        let roll = |what: &str| transport_chance(&run_ref.seed, &moved.id, day, &format!("airlift|{what}"));
+        airlift_intercepts(&moved.owner, Airlift { over: &over, holder_at: &holder_at, enemy: &enemy, units: run_ref.input.get("units").array_or_empty(), era: num(run_ref.era as f64), worth_of: &worth, roll: &roll, surface })
+    };
+    let date = run.date_of(day);
+    let mut left = moved.clone();
+    for (n, finder) in seen.found.iter().enumerate() {
+        let (hit, lost) = struck(&left, transport_chance(&run.seed, &moved.id, day, &format!("airlift|hurt|{n}")), &date);
+        let near = city_near(run, finder.at[0], finder.at[1], 250.0);
+        tell_voyage(run, day, if hit.status == "lost" { "lost" } else { "intercepted" }, &left, vec![("by", text(&finder.by)), ("with", text(&finder.with)), ("lost", num(lost)), ("at", text(&near)), ("where", Val::nums(&finder.at))]);
+        left = hit;
+        if left.status == "lost" {
+            break;
+        }
+    }
+    let gone = left.status == "lost";
+    run.transports[index] = left;
+    Ok(gone)
+}
+
 fn move_transports(run: &mut Run, day: f64) -> Flow<()> {
     let measure = measure_of(run.input.get("map"));
     let surface = Surface::plain(measure.flat, measure.scale);
@@ -3263,6 +3358,15 @@ fn move_transports(run: &mut Run, day: f64) -> Flow<()> {
         let (moved, arrived) = move_on(&before, surface);
         run.transports[index] = moved.clone();
         let mine = war_side(&war, &moved.owner);
+        if moved.medium == "air" {
+            if airlift_day(run, index, &before, &moved, &war, mine, peace, day, measure, surface)? {
+                continue;
+            }
+            if arrived {
+                land_transport(run, index, day)?;
+            }
+            continue;
+        }
         let middle = place_along(&moved.way, (before.gone + moved.gone) / 2.0, measure);
         let grid = world_grid_of(run)?;
         let at = match &middle {
@@ -3554,6 +3658,43 @@ fn order_troops_by_mind(run: &Run, battle: &mut Battle, side: usize, bodies: &[M
     battle.plan_key = String::new();
 }
 
+fn staff_call_up(run: &mut Run, at: usize, side: usize, day: f64) -> bool {
+    if matches!(run.input.get("callUps"), Val::Bool(false)) {
+        return false;
+    }
+    let date = run.date_of(day);
+    let last = run.battles[at].mobilised.get_or_insert_with(|| [String::new(), String::new()])[side].clone();
+    let since = if last.is_empty() { None } else { diff_game_days(&last, &date) };
+    if since.is_some_and(|since| since >= 0.0 && since < STAFF_CALL_UP_DAYS) {
+        return false;
+    }
+    let battle = &run.battles[at];
+    let Some(owner) = (0..battle.sides[side].len()).find(|member| !battle.gone[side].contains(member)) else { return false };
+    let lead = battle.sides[side][owner].clone();
+    let weights = member_weights(battle, run, Some(at), side);
+    let usual = jsmath::max(troops_least(run.troops), jsmath::round(troops_wanted(weights.get(owner).copied().unwrap_or(0.0), &battle.effort[side], run.troops)));
+    let need = call_up_need(battle, side, usual);
+    if !(need.share > 0.0) {
+        return false;
+    }
+    let reserves = js::or_zero(battle.edge[side].reserves);
+    let reserves = if reserves == 0.0 { 1.0 } else { reserves };
+    let ceiling = (usual * STAFF_CALL_UP_CEILING * reserves).floor() - live_count(&battle.troops[side]) as f64;
+    let count = jsmath::min(ceiling, (usual * need.share * (1.0 - run.shortage_of(&lead)) * reserves).floor());
+    if count < 1.0 {
+        return false;
+    }
+    let before = battle.troops[side].len();
+    let name = battle.name.clone();
+    let said = run.notes.len();
+    reinforce_on_front(run, at, &Val::obj([("side", text(&lead)), ("sector", text("all")), ("given", Val::Bool(true)), ("count", num(count)), ("staff", text(need.why))]), day);
+    run.notes.truncate(said);
+    run.battles[at].mobilised.get_or_insert_with(|| [String::new(), String::new()])[side] = date.clone();
+    let came = run.battles[at].troops[side].len() - before;
+    run.staff_calls.push(Val::obj([("d", text(&date)), ("battlefield", text(&name)), ("side", text(&lead)), ("why", text(need.why)), ("asked", num(count)), ("came", num(came as f64))]));
+    came > 0
+}
+
 fn review_staff(run: &mut Run, at: usize, day: f64, regular: bool) {
     if matches!(run.input.get("staff"), Val::Bool(false)) {
         return;
@@ -3599,6 +3740,14 @@ fn review_staff(run: &mut Run, at: usize, day: f64, regular: bool) {
         battle.log.push(Val::obj([("d", text(&date)), ("k", text("offensive")), ("s", num(opener as f64)), ("at", text("the whole line"))]));
     }
     for side in 0..2 {
+        if regular && !battle.away[side] && !side_is_played(&battle, side, &players) {
+            give(run, at, battle);
+            let called = staff_call_up(run, at, side, day);
+            battle = lend(run, at);
+            if called {
+                today = None;
+            }
+        }
         if begun && battle.begun_by == Some(side) {
             continue;
         }
@@ -3794,7 +3943,7 @@ pub fn snapshot(run: &mut Run) -> Val {
     for at in 0..run.battles.len() {
         let mut battle = lend(run, at);
         let since = if battle.opened_day.num() > 0.0 { battle.opened_date.clone() } else { text(&since_first) };
-        let brief = build_brief(&mut battle, &since);
+        let brief = build_brief(&mut battle, &since, &|id| wing_alive(run, id));
         records.push(save_battle(&mut battle, run, day, &mut changes, &brief));
         give(run, at, battle);
     }
@@ -3806,7 +3955,26 @@ pub fn snapshot(run: &mut Run) -> Val {
     let flips: Vec<Val> = run
         .flips
         .iter()
-        .map(|flip| Val::obj([("day", flip.get("day").clone()), ("date", flip.get("date").clone()), ("battlefield", named_at(run, flip.get("battlefield"))), ("regionId", flip.get("regionId").clone()), ("from", flip.get("from").clone()), ("to", flip.get("to").clone()), ("kind", flip.get("kind").clone())]))
+        .map(|flip| {
+            let mut out = Obj::new();
+            for key in ["day", "date"] {
+                out.set(key, flip.get(key).clone());
+            }
+            out.set("battlefield", named_at(run, flip.get("battlefield")));
+            for key in ["regionId", "from", "to", "kind"] {
+                out.set(key, flip.get(key).clone());
+            }
+            if flip.get("owner").truthy() {
+                out.set("owner", flip.get("owner").clone());
+                out.set("land", flip.get("land").clone());
+            }
+            if let Val::Num(at) = flip.get("battlefield").get("battle") {
+                if let Some(battle) = run.battles.get(*at as usize) {
+                    flip_places(battle, &flip.get("regionId").string_or_empty(), &mut out);
+                }
+            }
+            Val::Obj(out)
+        })
         .collect();
     let joins: Vec<Val> = run
         .joins
@@ -3869,7 +4037,43 @@ pub fn snapshot(run: &mut Run) -> Val {
         out.set("fortifications", Val::Arr(walls));
     }
     out.set("stats", Val::obj([("days", num(day)), ("steps", num(run.steps))]));
+    if !run.staff_calls.is_empty() {
+        out.set("staffCalls", Val::Arr(run.staff_calls.iter().map(|call| Val::Obj(js::spread(call))).collect()));
+    }
     Val::Obj(out)
+}
+
+const FLIP_CITIES_MOST: usize = 3;
+
+fn flip_places(battle: &Battle, region_id: &str, out: &mut Obj) {
+    let arena = &battle.arena;
+    let Some(&index) = arena.index_of.get(region_id) else { return };
+    if arena.names[index].is_empty() || arena.names[index] == arena.ids[index] {
+        return;
+    }
+    let mut towns: Vec<&super::arena::City> = arena.cities.iter().filter(|city| city.cell >= 0.0 && (city.cell as usize) < arena.region.len() && arena.region[city.cell as usize] as usize == index).collect();
+    js::stable_sort_by(&mut towns, |a, b| {
+        let capital = (if b.capital { 1.0 } else { 0.0 }) - (if a.capital { 1.0 } else { 0.0 });
+        if capital != 0.0 {
+            return capital;
+        }
+        let people = b.population - a.population;
+        if people != 0.0 && !people.is_nan() {
+            return people;
+        }
+        match js::compare_units(&a.name, &b.name) {
+            std::cmp::Ordering::Less => -1.0,
+            std::cmp::Ordering::Greater => 1.0,
+            std::cmp::Ordering::Equal => 0.0,
+        }
+    });
+    out.set("name", text(&arena.names[index]));
+    if !towns.is_empty() {
+        out.set("cities", Val::Arr(towns.iter().take(FLIP_CITIES_MOST).map(|city| text(&city.name)).collect()));
+    }
+    if towns.iter().any(|city| city.capital) {
+        out.set("capital", Val::Bool(true));
+    }
 }
 
 pub struct FrontRun {

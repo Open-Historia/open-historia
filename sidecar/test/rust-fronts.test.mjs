@@ -15,7 +15,7 @@ import { createFrontsHost, decode as decodeWire, encode, firstDifference, fronts
 const here = path.dirname(fileURLToPath(import.meta.url));
 const host = frontsHostPath();
 const fixture = path.join(here, "..", "..", "engine", "crates", "ohfronts", "tests", "golden", "engine.json");
-const READERS = ["controllerOf", "sovereignOf", "isGroup", "strengthOf", "shortageOf", "militaryOf", "musterOf", "peopleOf"];
+const READERS = ["controllerOf", "sovereignOf", "isGroup", "strengthOf", "shortageOf", "militaryOf", "musterOf", "peopleOf", "groupOwnerOf"];
 
 const labStaff = (config = {}) => {
   const lead = { trained: planner.createPlanner({ params: shippedPlannerParams() }), plainer: planner.createPlainerPlanner(), thorough: planner.createPlanner({ params: shippedPlannerParams(), replies: true }) };

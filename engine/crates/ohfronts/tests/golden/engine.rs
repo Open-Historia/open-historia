@@ -57,6 +57,9 @@ impl Hooks for Told {
     fn people_of(&self, name: &str) -> Val {
         self.find("peopleOf", name)
     }
+    fn group_owner_of(&self, name: &str) -> Val {
+        self.find("groupOwnerOf", name)
+    }
 }
 
 fn kept_shapes(input: &Val) -> bool {

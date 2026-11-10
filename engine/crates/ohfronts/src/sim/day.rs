@@ -1,5 +1,5 @@
 use super::arena::arena_for;
-use super::battle::{holder_of, member_index, paint_ground, read_region, read_regions, side_of_name, Battle};
+use super::battle::{group_side_of, holder_of, member_index, paint_ground, read_region, read_regions, side_of_name, Battle};
 use super::closing::find_prey;
 use super::combat::{close_day, step_forward};
 use super::constants::{CAPTOR_WITHIN_KM, FLIP_AT, GROW_KM, GROW_WITHIN_CELLS, MAX_CELLS, MAX_GRID_SPAN, MIN_DAYS_BETWEEN_FLIPS, OBJECTIVE_GROWS_MOST, PATCH_MAX_KM2, REACH_KM, TRAIT_DRIVE, WHOLE_AT};
@@ -306,6 +306,46 @@ pub fn region_changed(battles: &mut [Battle], run: &Run, id: &str) {
     }
 }
 
+const GROUP_NAME_MAX: usize = 80;
+const FORCE_NAMES_MOST: usize = 9;
+
+fn group_clean(text: &str) -> String {
+    js::trim(&js::collapse_spaces(text)).to_string()
+}
+
+pub fn force_group_name(owner: &str, land: &str) -> String {
+    let full = group_clean(&format!("{} Forces in {}", group_clean(owner), group_clean(land)));
+    if js::utf16_len(&full) <= GROUP_NAME_MAX {
+        return full;
+    }
+    js::trim(&js::slice_units(&group_clean(&format!("{} Forces", group_clean(owner))), 0, GROUP_NAME_MAX)).to_string()
+}
+
+fn force_for(battle: &Battle, run: &mut Run, country: &str, land: &str, side: usize) -> String {
+    let arena = battle.arena.clone();
+    let mine = |run: &Run, name: &str| !name.is_empty() && js::lower(&run.group_owner_of(name)) == js::lower(country);
+    for region in 1..arena.ids.len() {
+        let id = &arena.ids[region];
+        let held = run.group_of(id);
+        if mine(run, &held) && js::lower(&run.controller_of(id)) == js::lower(land) && group_side_of(battle, run, &held) == side as i64 {
+            return held;
+        }
+    }
+    let base = force_group_name(country, land);
+    for count in 1..=FORCE_NAMES_MOST {
+        let name = if count == 1 { base.clone() } else { format!("{base} ({count})") };
+        if mine(run, &name) {
+            return name;
+        }
+        if run.is_group(&name) || side_of_name(battle, &name) >= 0 {
+            continue;
+        }
+        run.found_force(&name, country);
+        return name;
+    }
+    String::new()
+}
+
 pub fn settle_regions(run: &mut Run, battles: &mut [Battle], index: usize, day: f64) {
     let battle = &mut battles[index];
     let turns = battle.field.as_ref().unwrap().turns as f64;
@@ -357,18 +397,34 @@ pub fn settle_regions(run: &mut Run, battles: &mut [Battle], index: usize, day: 
         }
         let group = run.group_of(&id);
         let controller = run.controller_of(&id);
-        let flip = |from: &str, kind: &str| Val::obj([("day", Val::Num(day)), ("date", Val::str(&date)), ("battlefield", Val::obj([("battle", Val::Num(index as f64))])), ("regionId", Val::str(&id)), ("from", Val::str(from)), ("to", Val::str(&captor)), ("kind", Val::str(kind))]);
-        let grouped = !group.is_empty() && side_of_name(&battles[index], &group) == owner as i64;
+        let flip = |from: &str, to: &str, kind: &str| Val::obj([("day", Val::Num(day)), ("date", Val::str(&date)), ("battlefield", Val::obj([("battle", Val::Num(index as f64))])), ("regionId", Val::str(&id)), ("from", Val::str(from)), ("to", Val::str(to)), ("kind", Val::str(kind))]);
+        let against = !group.is_empty() && group_side_of(&battles[index], run, &group) == owner as i64;
         if run.is_group(&captor) {
-            run.flips.push(flip(if grouped { &group } else { &controller }, "groupTake"));
+            if !group.is_empty() && !against {
+                continue;
+            }
+            run.flips.push(flip(if against { &group } else { &controller }, &captor, "groupTake"));
             run.set_group(&id, &captor);
+        } else if against && !controller.is_empty() && side_of_name(&battles[index], &controller) < 0 {
+            let force = force_for(&battles[index], run, &captor, &controller, taker);
+            if force.is_empty() {
+                continue;
+            }
+            let mut taken = match flip(&group, &force, "groupTake") {
+                Val::Obj(obj) => obj,
+                _ => unreachable!(),
+            };
+            taken.set("owner", Val::str(&captor));
+            taken.set("land", Val::str(&controller));
+            run.flips.push(Val::Obj(taken));
+            run.set_group(&id, &force);
         } else {
-            if grouped {
-                run.flips.push(flip(&group, "groupRelease"));
+            if against {
+                run.flips.push(flip(&group, &captor, "groupRelease"));
                 run.set_group(&id, "");
             }
             if side_of_name(&battles[index], &controller) != taker as i64 {
-                run.flips.push(flip(&controller, "control"));
+                run.flips.push(flip(&controller, &captor, "control"));
                 run.set_controller(&id, &captor);
             }
         }

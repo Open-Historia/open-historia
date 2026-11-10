@@ -71,7 +71,21 @@ fn year_of(value: &Val) -> Option<f64> {
 }
 
 fn carrier_val(carrier: Option<Carrier>) -> Val {
-    carrier.map(|c| Val::obj([("since", num(c.since)), ("kind", text(c.kind)), ("speed", num(c.speed)), ("capacity", num(c.capacity))])).unwrap_or(Val::Null)
+    carrier
+        .map(|c| match c.most {
+            Some(most) => Val::obj([("since", num(c.since)), ("kind", text(c.kind)), ("speed", num(c.speed)), ("capacity", num(c.capacity)), ("most", num(most))]),
+            None => Val::obj([("since", num(c.since)), ("kind", text(c.kind)), ("speed", num(c.speed)), ("capacity", num(c.capacity))]),
+        })
+        .unwrap_or(Val::Null)
+}
+
+fn media_of(value: &Val) -> Option<Vec<String>> {
+    value.as_array().map(|list| list.iter().map(js::to_string).collect())
+}
+
+fn airlift_surface(options: &Val) -> ohfronts::sim::world_grid::Surface {
+    let plain = surface_of(&Val::obj([("flat", options.get("flat").clone()), ("scale", options.get("scale").clone())]));
+    ohfronts::sim::world_grid::Surface { flat: plain.flat, scale: plain.scale, factor: 1.0, metric: None }
 }
 
 fn join_text(value: &Val) -> String {
@@ -176,6 +190,46 @@ fn transports_matches_js() {
                 expect(case, num(transport_chance(&join_text(case.arg(0)), &join_text(case.arg(1)), case.arg(2).num(), &join_text(case.arg(3)))))
             }),
             ("transportTitle", &|case| expect(case, text(&transport_title(&transport_of(case.arg(0)))))),
+            ("transportBar", &|case| {
+                let options = case.arg(1);
+                let media = media_of(options.get("media"));
+                expect(case, text(transport_bar(&js::to_string(case.arg(0)), media.as_deref(), options.get("military"))))
+            }),
+            ("airliftMost", &|case| expect(case, num(airlift_most(year_of(case.arg(0)), case.arg(1))))),
+            ("transportLoadMost", &|case| expect(case, num(transport_load_most(&js::to_string(case.arg(0)), year_of(case.arg(1)), case.arg(2))))),
+            ("stretchOf", &|case| {
+                let way: Vec<[f64; 2]> = case.arg(0).array_or_empty().iter().filter_map(pair_of).collect();
+                let points = stretch_of(&way, js::to_number(case.arg(1)), js::to_number(case.arg(2)), surface_of(case.arg(3)));
+                expect(case, list(points.iter().map(|point| Val::nums(point)).collect()))
+            }),
+            ("airliftIntercepts", &|case| {
+                let options = case.arg(1);
+                let holder = Script::new(case, "1.holderAt");
+                let enemy = Script::new(case, "1.enemy");
+                let worth = Script::new(case, "1.worthOf");
+                let roll = Script::new(case, "1.roll");
+                let has = |key: &str| matches!(options.get(key), Val::Fn);
+                let over: Vec<[f64; 2]> = options.get("over").array_or_empty().iter().filter_map(pair_of).collect();
+                let holder_at = |lng: f64, lat: f64| if has("holderAt") { holder.call(&[num(lng), num(lat)]) } else { text("") };
+                let is_enemy = |name: &str| has("enemy") && enemy.call(&[text(name)]).truthy();
+                let worth_of = |name: &str| if has("worthOf") { worth.call(&[text(name)]) } else { num(1.0) };
+                let rolled = |what: &str| if has("roll") { js::to_number(&roll.call(&[text(what)])) } else { 1.0 };
+                let era = if options.get("era").is_undef() { num(3.0) } else { options.get("era").clone() };
+                let got = airlift_intercepts(
+                    &case.arg(0).get("owner").string_or_empty(),
+                    Airlift { over: &over, holder_at: &holder_at, enemy: &is_enemy, units: options.get("units").array_or_empty(), era, worth_of: &worth_of, roll: &rolled, surface: airlift_surface(options) },
+                );
+                let value = Val::obj([
+                    ("over", list(got.over.iter().map(|name| text(name)).collect())),
+                    ("found", list(got.found.iter().map(|finder| Val::obj([("by", text(&finder.by)), ("with", text(&finder.with)), ("at", Val::nums(&finder.at))])).collect())),
+                ]);
+                for script in [&holder, &enemy, &worth, &roll] {
+                    if let Err(error) = script.done() {
+                        return Some(Err(error));
+                    }
+                }
+                expect(case, value)
+            }),
         ],
     );
 }
