@@ -16172,6 +16172,8 @@
  "{{country}} moves from planning into execution, and the world begins adjusting to the turn's most concrete orders.",
  "{{country}} opens a deliberate diplomatic channel over \"{{order}}\", forcing counterparts to weigh terms instead of guessing intent.",
  "{{country}} opens a diplomatic channel",
+ "{{country}} was not dissolved: 1 of its regions was given to no one.",
+ "{{country}} was not dissolved: {{count}} of its regions were given to no one.",
  "{{count}} / {{limit}} characters",
  "{{count}} beats recognised",
  "{{count}} changes this event carried were malformed and were ignored.",

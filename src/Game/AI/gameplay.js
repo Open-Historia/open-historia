@@ -48,6 +48,7 @@ import {
 import {
   basisActionNote,
   countedNote,
+  dissolutionRefusedNote,
   eventCountNote,
   focusShareNote,
   interventionNote,
@@ -8272,7 +8273,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   }
   // A dissolution the engine will refuse (gameState.js dissolvedPolityLand):
   // the polity still holds land outright that its event gives to nobody, and
-  // nobody is named who could take it. Said now, with the land by name.
+  // nobody is named who could take it. Said now, with the land by name, and
+  // to the player in a line of their own (dissolutionRefusedNote).
   if (!strict) {
     for (const { impacts, path } of containers) {
       const changes = normalizeArray(impacts?.polityChanges);
@@ -8297,7 +8299,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         if (!kept.length) continue;
         const catalogNames = new Map(normalizeArray(getPrimedScenarioRegionCatalog()).map((region) => [normalizeString(region?.id), normalizeString(region?.name)]));
         const names = kept.map((id) => catalogNames.get(id)).filter(Boolean).slice(0, 4);
-        noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}` + `${code} was not dissolved: the event gives ${kept.length} of its regions${names.length ? ` (${names.join(", ")}${kept.length > names.length ? ", …" : ""})` : ""} to nobody. Give its land to one polity in the same event.`);
+        noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}` + `${code} was not dissolved: the event gives ${kept.length} of its regions${names.length ? ` (${names.join(", ")}${kept.length > names.length ? ", …" : ""})` : ""} to nobody. Give its land to one polity in the same event.`,
+          dissolutionRefusedNote({ polity: code, count: kept.length }, titleAt(path)));
       }
     }
   }
