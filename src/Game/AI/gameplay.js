@@ -393,6 +393,7 @@ import {
   normalizeChats,
   normalizeEvents,
   withoutBattlefieldDisputes,
+  withoutClaimants,
   dissolutionHeir,
   normalizeGameData,
   normalizeWorldState,
@@ -9816,6 +9817,9 @@ const applySimulationResult = async ({
   // the claimants an earlier turn wrote for such a region come off it
   // (runtime/fronts/heldRegions.js). Nothing is touched with fronts off.
   if (turnFronts) impactedWorld = withoutBattlefieldDisputes(impactedWorld);
+  // And a contest on a battlefield's ground that nothing holds up any more is cleared: its side is nowhere near
+  // (frontTurn.js checkContests). A contest of Brest stood for good deep in the Soviet Union (2026-11-10).
+  if (turnFronts?.expiredContests?.length) impactedWorld = withoutClaimants(impactedWorld, turnFronts.expiredContests);
 
   // Live institution lifecycle effects ride the SAME events that narrate them.
   // Geography/unit/report reducers remain in gameState; membership needs chats

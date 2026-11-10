@@ -918,6 +918,122 @@ export const frontReportEvents = (flips, { records = [], players = [], dateOf = 
 };
 const slugOf = (value) => fold(value).replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "") || "x";
 
+// ---- contests that nothing holds up ---------------------------------------------------
+
+// The regions round each of the regions `wanted`, on the sheet of the whole map
+// (worldGrid.js): those in the cells beside any of its cells, corners too.
+// Map of id -> Set of ids.
+export const regionNeighbours = (sheet, wanted) => {
+  const ask = new Set(asArray(wanted).map(clean).filter(Boolean));
+  const out = new Map([...ask].map((id) => [id, new Set()]));
+  if (!sheet || ask.size === 0) return out;
+  const marks = new Map();
+  sheet.ids.forEach((id, index) => { if (ask.has(id)) marks.set(index, id); });
+  const { cols, rows, region, wrap } = sheet;
+  for (let cell = 0; cell < region.length; cell += 1) {
+    const id = marks.get(region[cell]);
+    if (!id) continue;
+    const col = cell % cols;
+    const row = (cell - col) / cols;
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const y = row + dy;
+        let x = col + dx;
+        if (wrap) x = (x + cols) % cols;
+        if (y < 0 || y >= rows || x < 0 || x >= cols) continue;
+        const next = region[y * cols + x];
+        if (next > 0 && next !== region[cell]) out.get(id).add(sheet.ids[next]);
+      }
+    }
+  }
+  return out;
+};
+
+// What a story's contest of a region is worth, and which contests already on
+// the map nothing holds up any more. A contest is fighting for a region: one
+// the contesting side cannot reach is not fighting. The story put Germany's
+// contest on Brest, deep in the Soviet Union, on a day it told a battle there
+// that never was, and it stood for good (2026-11-10).
+//   - A story's contest of a region on a battlefield of a war between the one
+//     contesting and the one holding it is left out: that battlefield's line is
+//     the engine's, and it is drawn where the troops are.
+//   - Any other is made only where the contesting side holds land next to the
+//     region (or the region itself).
+//   - A claimant of a region on such a battlefield, at war with its holder and
+//     not its lawful sovereign, stands only while its side is on the line there
+//     (the battlefield shows the region contested) or holds land next to it.
+//     Elsewhere a claimant may be a government's claim in peace, and is left.
+// Returns { events, notes, expired: [{ regionId, claimant }] }.
+//   holderOf(id)      who holds a region as the turn leaves it
+//   sovereignOf(id)   whose it lawfully is
+//   neighbours        regionNeighbours for the regions contestRegions names
+//   sidesOf(a, b)     the members of a's side in a war against b, or null when they are at no war
+//   fieldOf(id, a, b) the open battlefield of a war between a and b that has the region on its ground, or null
+//   regionName(id)    a region's name, or ""
+const contestOf = (op) => op && op.by !== FRONT_MARK && fold(op.op) === "contest" && clean(op.regionId);
+// The regions checkContests asks the neighbours of, and the claimants it weighs: none, mostly, and then no map is read.
+export const contestRegions = ({ events = [], claimants = {}, holderOf, sovereignOf, fieldOf } = {}) => {
+  const wanted = new Set();
+  for (const event of asArray(events)) for (const op of asArray(event?.impacts?.regionControlOps)) if (contestOf(op)) wanted.add(clean(op.regionId));
+  const standing = [];
+  for (const [regionId, names] of Object.entries(isRecord(claimants) ? claimants : {})) {
+    const holder = clean(holderOf(regionId));
+    for (const name of asArray(names).map(clean).filter(Boolean)) {
+      if (!holder || fold(name) === fold(holder) || fold(name) === fold(sovereignOf(regionId))) continue;
+      const field = fieldOf(regionId, name, holder);
+      if (!field) continue;
+      standing.push({ regionId, claimant: name, field });
+      wanted.add(regionId);
+    }
+  }
+  return { wanted, standing };
+};
+export const checkContests = ({ events = [], claimants = {}, holderOf, sovereignOf, neighbours = new Map(), sidesOf, fieldOf, regionName } = {}) => {
+  const { wanted, standing } = contestRegions({ events, claimants, holderOf, sovereignOf, fieldOf });
+  if (wanted.size === 0) return { events: asArray(events), notes: [], expired: [] };
+  const reaches = (side, regionId) => {
+    const mine = (id) => side.some((member) => fold(member) === fold(holderOf(id)));
+    return mine(regionId) || [...(neighbours.get(regionId) ?? [])].some(mine);
+  };
+  const named = (regionId, given = "") => clean(given) || clean(regionName(regionId));
+  const ignored = [];
+  const unreachable = [];
+  const next = asArray(events).map((event) => {
+    const ops = asArray(event?.impacts?.regionControlOps);
+    if (!ops.some(contestOf)) return event;
+    const kept = ops.filter((op) => {
+      if (!contestOf(op)) return true;
+      const actor = clean(op.actorCode || op.claimantCode || op.toCode);
+      const holder = clean(holderOf(clean(op.regionId))) || clean(op.fromCode);
+      const where = named(op.regionId, op.regionName);
+      if (fieldOf(clean(op.regionId), actor, holder)) {
+        ignored.push({ actor, where });
+        return false;
+      }
+      if (!reaches(sidesOf(actor, holder) ?? [actor], clean(op.regionId))) {
+        unreachable.push({ actor, where });
+        return false;
+      }
+      return true;
+    });
+    return { ...event, impacts: { ...event.impacts, regionControlOps: kept } };
+  });
+  const expired = standing.filter(({ regionId, claimant, field }) => !asArray(field?.contested).some((entry) => clean(entry?.[0]) === regionId)
+    && !reaches(sidesOf(claimant, holderOf(regionId)) ?? [claimant], regionId));
+  const told = (list) => list.slice(0, 4).map(({ actor, where }) => `${actor} on ${where ? `region: ${where}` : "a region"}`).join("; ");
+  const notes = [];
+  if (ignored.length) {
+    notes.push({ kind: "dropped", text: `${ignored.length === 1 ? "A contest was" : "Contests were"} left out (${told(ignored)}): the region lies on a battlefield of that war, where the fighting decides who holds the ground. Tell the fighting there by its battlefield's account and give its sides front orders.` });
+  }
+  if (unreachable.length) {
+    notes.push({ kind: "dropped", text: `${unreachable.length === 1 ? "A contest was" : "Contests were"} not made (${told(unreachable)}): nothing of the contesting side's is in or next to the region. A side contests only ground it can reach.` });
+  }
+  if (expired.length) {
+    notes.push({ kind: "adjusted", text: `${expired.length === 1 ? "A contest was" : "Contests were"} cleared (${told(expired.map(({ claimant, regionId }) => ({ actor: claimant, where: named(regionId) })))}): none of that side's troops stand in the region or next to it any more.` });
+  }
+  return { events: next, notes, expired: expired.map(({ regionId, claimant }) => ({ regionId, claimant })) };
+};
+
 // The world's formations after the run: one taken onto a battlefield carries its
 // name, one that came back stands where its troop stood with what is left of
 // it, and one that was destroyed there is gone.
@@ -1366,6 +1482,8 @@ export const runTurnFronts = async ({
   const frozen = mechanics?.weather === true && normalizeFreezingRegions(world?.freezingRegions).length > 0
     ? frozenFor({ world, regions: await readRegions(), fromDate, days })
     : [];
+  // (The rough ground and the ice the arenas are drawn with: the same again when an arena is looked up after the run.)
+  const ground = { ...(mechanics?.terrain === true && terrainOf(world) ? { terrain: terrainOf(world) } : {}), ...(frozen.length > 0 ? { frozen: frozen.map((entry) => entry.id) } : {}) };
   const result = await runFrontTurn({
     createFrontRun,
     input: {
@@ -1386,7 +1504,7 @@ export const runTurnFronts = async ({
       ...(Array.isArray(transportMedia) ? { transportMedia } : {}),
       // (With the ground the scenario made harder to cross, where it weighs terrain: runtime/fronts/arena.js;
       // and the water frozen this turn, where it has seasons and weather: runtime/fronts/climate.js.)
-      map: { ...map, regions, ...(mechanics?.terrain === true && terrainOf(world) ? { terrain: terrainOf(world) } : {}), ...(frozen.length > 0 ? { frozen: frozen.map((entry) => entry.id) } : {}) },
+      map: { ...map, regions, ...ground },
       regionTypes: asArray(regionTypes),
       strengthOf: readers.strengthOf,
       peopleOf: readers.peopleOf,
@@ -1603,12 +1721,69 @@ export const runTurnFronts = async ({
     carried.splice(at < 0 ? carried.length : at, 0, report);
   }
 
+  // A contest the story wrote that its side cannot reach, or on a battlefield, is not made; one already on the map
+  // that nothing holds up is cleared (checkContests). The map is read for it only where there is one to weigh.
+  const heldNow = new Map();
+  for (const event of carried) {
+    for (const op of asArray(event?.impacts?.regionControlOps)) if (fold(op?.op) === "control" && clean(op?.regionId) && clean(op?.toCode)) heldNow.set(clean(op.regionId), nameOf(clean(op.toCode)));
+  }
+  const holderNow = (id) => heldNow.get(clean(id)) ?? readers.controllerOf(clean(id));
+  const warsNow = asArray(stages.at(-1)).filter((war) => clean(war?.status) !== "ended");
+  const sidesOf = (a, b) => {
+    const members = new Set();
+    for (const war of warsNow) {
+      const [sideA, sideB] = warSides(war);
+      const has = (side, name) => side.some((member) => fold(member) === fold(name));
+      if (has(sideA, a) && has(sideB, b)) sideA.forEach((member) => members.add(member));
+      if (has(sideB, a) && has(sideA, b)) sideB.forEach((member) => members.add(member));
+    }
+    return members.size ? [...members] : null;
+  };
+  const arenaOf = (record) => (record?.frame ? arenaFor(arenas, { ...map, regions, ...ground }, record.frame, regionTypes) : null);
+  const openFields = asArray(result.battlefields).filter((record) => (record.status === "active" || record.status === "frozen") && !record.home);
+  const fieldOf = (id, a, b) => openFields.find((record) => {
+    const sideOfA = record.sides.findIndex((members) => members.some((member) => fold(member) === fold(a)));
+    const sideOfB = record.sides.findIndex((members) => members.some((member) => fold(member) === fold(b)));
+    return sideOfA >= 0 && sideOfB >= 0 && sideOfA !== sideOfB && Boolean(arenaOf(record)?.indexOf?.has(clean(id)));
+  }) ?? null;
+  const regionName = (id) => {
+    for (const record of openFields) {
+      const arena = arenaOf(record);
+      const index = arena?.indexOf?.get(clean(id));
+      if (index !== undefined && arena.names[index] && arena.names[index] !== arena.ids[index]) return arena.names[index];
+    }
+    const shape = asArray(regions).find((region) => region?.id === clean(id));
+    return shape && shape.name !== shape.id ? clean(shape.name) : "";
+  };
+  const contestInput = { events: carried, claimants: world?.regionClaimants, holderOf: holderNow, sovereignOf: readers.sovereignOf, sidesOf, fieldOf, regionName };
+  const { wanted: contested } = contestRegions(contestInput);
+  let neighbours = new Map();
+  if (contested.size > 0) {
+    try {
+      const water = waterTypeIds(regionTypes);
+      const key = worldSheetKey(clean(map?.key), water);
+      let sheet = clean(map?.key) && arenas ? arenas.get(key) ?? null : null;
+      if (!sheet) {
+        const shapes = await readRegions();
+        sheet = shapes ? buildWorldGrid(shapes, { ...measureOptions(map), water }) : null;
+        if (sheet && clean(map?.key) && arenas) arenas.set(key, sheet);
+      }
+      neighbours = regionNeighbours(sheet, [...contested]);
+    } catch (error) {
+      console.warn("[fronts] the map could not be read for the contests of this turn; each is weighed by the region alone.", error);
+    }
+  }
+  const contests = checkContests({ ...contestInput, neighbours });
+  notes.push(...contests.notes);
+
   return {
     strikes: strikes.map((strike) => ({ ...strike, owner: nameOf(strike.owner) })),
     transports,
     voyages: asArray(result.voyages),
     underWay: transports.filter(isUnderWay).length,
-    events: carried,
+    events: contests.events,
+    // The claimants of regions on a battlefield that nothing holds up any more, to be taken off (gameState.js withoutClaimants).
+    expiredContests: contests.expired,
     // A battlefield whose period the story was told before it was written says
     // so (brief.told): the next turn has nothing of this one left to tell. One
     // that does not (it opened in this answer, or the turn was asked for the
