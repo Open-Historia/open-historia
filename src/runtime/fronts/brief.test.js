@@ -46,20 +46,31 @@ test("the brief says where the line runs, how strong each side is and what moved
   assert.ok(brief.strength[1].pct < 60);
   assert.ok(brief.cities[0].includes("Brod") || brief.taken[0].length > 0);
 
-  const text = describeBattlefield(saved);
+  // Where the line runs, in the regions it crosses, and what each side holds of the other's land (lineGeography).
+  assert.ok(brief.along.length > 0 && brief.along.every((name) => /^(Aland|Borduria) \d/.test(name)), "the regions it crosses, by name");
+  assert.deepEqual(brief.holds[1], { cities: [], regions: [], more: 0 }, "Borduria holds none of Aland's land");
+  assert.ok(brief.holds[0].cities.some((city) => city.name === "Midford"), "Aland's spearhead holds Midford, on Borduria's land");
+
+  const text = describeBattlefield(saved, { max: 1400 });
   const lines = text.split("\n");
   assert.equal(lines[0], `- The front: Aland against Borduria, open since 2024-01-01, line ${brief.km} km`);
   assert.match(lines[1], /^ {2}Strength: Aland 12 formations \(\d+%\), reserves ample; Borduria \d formations \(\d+%\), reserves none$/);
   assert.match(lines[2], /^ {2}Line: north: (city|region): .+; centre: .+; south: .+$/);
-  assert.match(lines[3], /^ {2}Since 2024-03-01: Aland advanced \d+ km in the (north|centre)/);
-  assert.equal(lines[4], "  Standing orders: Aland: centre spearhead toward city: Brod (total); north advance; elsewhere hold. Borduria: all dig in (major).");
-  assert.match(lines[5], /^ {2}Sectors: north, centre, south(, [a-z]+)*, or a place on the line.$/);
-  assert.equal(lines.length, 6);
-  assert.ok(text.length <= BRIEF_TEXT_MAX);
+  assert.match(lines[3], /^ {2}The line runs north to south through region: /);
+  assert.match(lines[4], /^ {2}Occupied: Aland holds city: Midford, .*of Borduria's land\.$/);
+  assert.match(lines[5], /^ {2}Since 2024-03-01: Aland advanced \d+ km in the (north|centre)/);
+  assert.equal(lines[6], "  Standing orders: Aland: centre spearhead toward city: Brod (total); north advance; elsewhere hold. Borduria: all dig in (major).");
+  assert.match(lines[7], /^ {2}Sectors: (north, centre, south(, [a-z]+)*|centre and all eight points of the compass), or a place on the line.$/);
+  assert.equal(lines.length, 8);
+  // In the room a skip gives each of many, where the line runs and who holds whose land are still told.
+  const short = describeBattlefield(saved);
+  assert.ok(short.length <= BRIEF_TEXT_MAX);
+  assert.match(short, /\n {2}The line runs north to south through region: [^\n]+\n {2}Occupied: Aland holds city: Midford/);
+  assert.doesNotMatch(short, /Line: (\n|$)/, "never a line with nothing after it");
   // A leader is told his own side's standing orders and not the other's.
-  assert.equal(describeBattlefield(saved, { viewer: "borduria" }).split("\n")[4], "  Standing orders: Borduria: all dig in (major).");
-  assert.equal(describeBattlefield(saved, { viewer: "Aland" }).split("\n")[4], "  Standing orders: Aland: centre spearhead toward city: Brod (total); north advance; elsewhere hold.");
-  assert.equal(describeBattlefield(saved, { viewer: "Neutralia" }), text, "someone outside it sees what everyone sees");
+  assert.equal(describeBattlefield(saved, { viewer: "borduria", max: 1400 }).split("\n")[6], "  Standing orders: Borduria: all dig in (major).");
+  assert.equal(describeBattlefield(saved, { viewer: "Aland", max: 1400 }).split("\n")[6], "  Standing orders: Aland: centre spearhead toward city: Brod (total); north advance; elsewhere hold.");
+  assert.equal(describeBattlefield(saved, { viewer: "Neutralia", max: 1400 }), text, "someone outside it sees what everyone sees");
   // Nothing in it is an id.
   for (const region of sheet.regions) assert.ok(!text.includes(region.id), `no id (${region.id})`);
   assert.doesNotMatch(text, /\br\d+-\d+\b/);

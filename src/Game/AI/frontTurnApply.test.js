@@ -154,18 +154,21 @@ test("a war between two countries that touch opens a battlefield, and the region
 
   // Every change of hands is an ordinary control operation marked as the engine's.
   assert.ok(run.flips.length >= 10, `${run.flips.length} regions changed hands`);
-  const carried = run.events.flatMap((entry) => entry.impacts.regionControlOps);
+  const carried = run.events.flatMap((entry) => entry.impacts.regionControlOps ?? []);
   assert.equal(carried.length, run.flips.length);
   for (const op of carried) {
     assert.deepEqual([op.op, op.fromCode, op.toCode, op.basis, op.by, op.note], ["control", "Borduria", "Aland", "occupation", FRONT_MARK, "The Border"]);
   }
-  // Each on the first event of its day or later, never earlier.
+  // Each on an event of its day or later, never earlier, and before the story's next event: these name no place, so
+  // the engine tells them itself, in an event of its own for each stretch of days between the story's.
   for (const flip of run.flips) {
-    const carrier = run.events.find((entry) => entry.impacts.regionControlOps.some((op) => op.regionId === flip.regionId));
-    const before = run.events[run.events.indexOf(carrier) - 1];
-    assert.ok(dayOf(carrier) >= flip.day || carrier === run.events.at(-1), `${flip.regionId} taken on day ${flip.day} is told on day ${dayOf(carrier)}`);
-    assert.ok(!before || dayOf(before) < flip.day, "and on the first such event");
+    const carrier = run.events.find((entry) => (entry.impacts.regionControlOps ?? []).some((op) => op.regionId === flip.regionId));
+    assert.equal(carrier.source, FRONT_MARK);
+    const before = run.events.slice(0, run.events.indexOf(carrier)).filter((entry) => entry.source !== FRONT_MARK).at(-1);
+    assert.ok(dayOf(carrier) >= flip.day, `${flip.regionId} taken on day ${flip.day} is told on day ${dayOf(carrier)}`);
+    assert.ok(!before || dayOf(before) < flip.day, "and before the story's next event");
   }
+  assert.deepEqual(run.events.filter((entry) => entry.source !== FRONT_MARK).map((entry) => entry.id), events.map((entry) => entry.id));
   assert.equal(events.every((entry) => entry.impacts.regionControlOps.length === 0), true, "the events handed in are not written to");
 
   // The world the game ends the turn with says what the engine said.
@@ -185,9 +188,10 @@ test("replaying the first k events gives the ownership the engine had on that da
   assert.ok(new Set(run.flips.map((flip) => flip.day)).size >= 3, "the regions fell on several days");
 
   const base = world.regionOwnershipOverrides;
-  for (let k = 1; k <= events.length; k += 1) {
-    // (The last event also carries what fell on the days after it: there is no later one to tell it.)
-    const day = k === events.length ? run.stats.days : dayOf(events[k - 1]);
+  // (Every event, the story's and the engine's own reports of what fell between them: frontReportEvents.)
+  for (let k = 1; k <= run.events.length; k += 1) {
+    // (The last event is the last that carries anything: nothing fell on the days after it.)
+    const day = k === run.events.length ? run.stats.days : dayOf(run.events[k - 1]);
     const expected = { ...base };
     for (const flip of engine.days[day].flips) expected[flip.regionId] = flip.to;
     // What the reveal, and a view of the world as seen, do: the restore point
@@ -203,15 +207,17 @@ test("replaying the first k events gives the ownership the engine had on that da
   // Intervene after the third event: the journal's kept events, with the first
   // run's operations still on them, applied again for the days up to that event.
   const journal = journalTurn({ events: run.events, frontOrders: [advance], stopDate: TO });
-  const cut = truncateTurn(journal, 3, { originDate: FROM });
+  // (After e3, the story's third event, with the engine's reports before it.)
+  const kept = run.events.findIndex((entry) => entry.id === "e3") + 1;
+  const cut = truncateTurn(journal, kept, { originDate: FROM });
   assert.equal(cut.closingDate, "2024-03-15");
   const stopped = await runTurnFronts(turn(map, world, { events: cut.result.events, frontOrders: cut.result.frontOrders, toDate: cut.result.stopDate }));
   const then = engine.days[dayOf(events[2])];
   assert.equal(stopped.stats.days, 14);
   assert.deepEqual(stopped.flips, then.flips, "the same regions on the same days");
   assert.equal(JSON.stringify(withoutReplay(stopped.battlefields)), JSON.stringify(withoutReplay(then.battlefields)), "and the battlefield as the whole turn had it that day");
-  assert.equal(JSON.stringify(stopped.events), JSON.stringify(run.events.slice(0, 3)), "the kept events carry what they carried");
-  assert.deepEqual(applied(world, stopped.events).regionOwnershipOverrides, applied(world, run.events.slice(0, 3)).regionOwnershipOverrides);
+  assert.equal(JSON.stringify(stopped.events), JSON.stringify(run.events.slice(0, kept)), "the kept events carry what they carried");
+  assert.deepEqual(applied(world, stopped.events).regionOwnershipOverrides, applied(world, run.events.slice(0, kept)).regionOwnershipOverrides);
 });
 
 test("a turn applied twice is one turn", async () => {

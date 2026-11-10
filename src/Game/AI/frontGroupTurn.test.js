@@ -37,6 +37,8 @@ const worldOn = (map, extra = {}) => ({
 const turn = (map, world, overrides = {}) => ({
   createFrontRun,
   staff: false,
+  // (The staffs call up no troops of their own here: engine.js staffCallUp is tested by itself.)
+  callUps: false,
   world,
   events: [],
   frontOrders: [],

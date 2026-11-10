@@ -1,6 +1,6 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { nextTask } from "../../runtime/nextTask.js";
-import { callAI, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
+import { callAI, geminiDeclaresTaskFunction, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
 import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { clampTimelineDates, validatePregameEvents, validateTimelineDates } from "./timelineDates.js";
@@ -48,6 +48,7 @@ import {
 import {
   basisActionNote,
   countedNote,
+  dissolutionRefusedNote,
   eventCountNote,
   focusShareNote,
   interventionNote,
@@ -319,7 +320,7 @@ import {
   ridersThatWaited,
   withoutBoardOps,
 } from "./foldedSkip.js";
-import { toGeminiSchema } from "./geminiSchema.js";
+import { geminiDeclaredChars } from "./geminiAnswer.js";
 import { renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment, spySealingWorks } from "../../runtime/spySeal.js";
 import {
@@ -388,6 +389,7 @@ import {
   normalizeChats,
   normalizeEvents,
   withoutBattlefieldDisputes,
+  withoutClaimants,
   dissolutionHeir,
   normalizeGameData,
   normalizeWorldState,
@@ -514,7 +516,7 @@ import {
   idleDiplomacyPoliticalContextText,
   idleDiplomacySpeakerHasContext,
 } from "./idlePoliticalDiplomacyContext.js";
-import { createIdlePulseBackoff, idlePulseEvent, idlePulseFingerprint, idlePulseUnitOps, keepDetectedEvents, sightingEvent } from "./idlePulse.js";
+import { createIdlePulseBackoff, idlePulseChance, idlePulseEvent, idlePulseFingerprint, idlePulseUnitOps, keepDetectedEvents, sightingEvent } from "./idlePulse.js";
 import {
   advanceInstitutionLifecycleCore,
   applyInstitutionLifecycleImpactBatchCore,
@@ -567,7 +569,6 @@ import {
   buildScriptedEventsInstruction,
   buildWorldDirectionDirective,
   dateKey,
-  ensureScriptedEvents,
   firstSkipIncludesScriptedOrigin,
   scriptedBeatsInSpan,
   scriptedBeatsNotAlreadyWritten,
@@ -578,6 +579,12 @@ import {
   normalizeScriptedEventState,
   planScriptedEvents,
 } from "./scriptedEventResolution.js";
+import {
+  buildScriptedImpactsInstruction,
+  ensureScriptedEventsWithImpacts,
+  resolveFallbackScriptedImpacts,
+  scriptedBeatWrittenNote,
+} from "./scriptedEventImpacts.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
   EMPTY_RESPONSE_BODY_NOTE,
@@ -694,7 +701,7 @@ const relationStatusForScore = (value) => {
 // (buildJumpStaticRules), and its [Wars] block points there (`rulesAbove`).
 const WAR_LEDGER_RULES_HEADING = "[How Wars Are Recorded]";
 const warLedgerRules = (playerName) => `Only this ledger makes polities belligerents: tension or a mobilisation does not, and an alliance does only through the game, which itself enters here those bound to defend a country that is attacked (see ${PEACE_BLOCK_HEADING} below). A war real history holds begins here only when you open it, with a warUpdates record and the event that starts it. Every battle, offensive, invasion, bombardment, siege or front carries event.warId and event.combatants naming both sides. If you write fighting, open the war in the same answer: a declaration, an entry, an exit, a ceasefire, a resumption or a peace each needs a warUpdates record and an event carrying the same warId, or the engine strips the war from the fighting and records peace. Two sides genuinely trading blows are at war; if you cannot say who is fighting whom, it is unrest, a raid or a deployment, so write it as that. A polity at peace does not live under war conditions — rationing, war taxes, mobilisation — because others are fighting, unless the war reaches it through something concrete (lost imports, refugees, sanctions). Nobody may join a war on ${playerName}'s behalf; another power declaring war on ${playerName} is that power's decision, and yours to write.
-A country nobody plays that the story takes out of a war (its forces pulled out under an accord, a separate peace, its last troops brought home) leaves it in that event, with a leave record: without one it is still at war, and its troops stay on the battlefield and fight on. The battle or surrender that ends a war between countries nobody plays carries its end record; a war a player fights ends only by a peace (see ${PEACE_BLOCK_HEADING} below), so no battle in it tells its end. History yields to this game's record: a war the ledger shows ended, or never opened, is fought by nobody, and where the wars, the battlefields or who holds a region differ from what history had at this time, history has been turned aside here. Events follow the record, not the history: no fighting in a war that ended here, and no siege or offensive where the game's lines do not put one.
+A country nobody plays that the story takes out of a war (its forces pulled out under an accord, a separate peace, its last troops brought home) leaves it in that event, with a leave record: without one it is still at war, and its troops stay on the battlefield and fight on. The battle or surrender that ends a war between countries nobody plays carries its end record; a war a player fights ends only by a peace (see ${PEACE_BLOCK_HEADING} below), so no battle in it tells its end. History yields to this game's record: a war the ledger shows ended, or never opened, is fought by nobody, and where the wars, the battlefields or who holds a region differ from what history had at this time, history has been turned aside here. Events follow the record, not the history: no fighting in a war that ended here, and no siege or offensive where the game's lines do not put one. A war that has gone otherwise here is told where the map and the battlefields' accounts put it, between the sides that hold what they show, with the places they name: no campaign, siege, offensive or battle that real history had at this date is fought unless an account or the map puts fighting there, and a side whose capital or heartland its enemy holds is losing that war, whatever real history says of it.
 warUpdates is one string, one record per line, fields separated by ~ (never inside a field): warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note. op is start, join-a, join-b, leave, ceasefire, resume or end; for start the actors are side A and the opponents side B; for join and leave the actors are the polities joining or leaving, and for a join the opponents are the polities it fights (join-a joins SIDE A, against SIDE B); eventNumbersCSV is the number in this answer's events (1 for the first) of the event that makes the change, never a date or an id. A start's note may open with the war's name, as Title: <name>; then its cause. Give a war a stable id (war-france-germany-1914) and reuse it. An empty string when nothing changes.`;
 
 const buildWarLedgerDirective = (variables, { rulesAbove = false } = {}) => {
@@ -1187,6 +1194,7 @@ const screenSegmentPayload = (payload, {
     chats,
     analysis,
     agreementUpdates: payload?.agreementUpdates,
+    warUpdates: payload?.warUpdates,
     frontOrders: payload?.frontOrders,
   });
   if (screened.dropped?.length) {
@@ -8242,7 +8250,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   }
   // A dissolution the engine will refuse (gameState.js dissolvedPolityLand):
   // the polity still holds land outright that its event gives to nobody, and
-  // nobody is named who could take it. Said now, with the land by name.
+  // nobody is named who could take it. Said now, with the land by name, and
+  // to the player in a line of their own (dissolutionRefusedNote).
   if (!strict) {
     for (const { impacts, path } of containers) {
       const changes = normalizeArray(impacts?.polityChanges);
@@ -8267,7 +8276,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         if (!kept.length) continue;
         const catalogNames = new Map(normalizeArray(getPrimedScenarioRegionCatalog()).map((region) => [normalizeString(region?.id), normalizeString(region?.name)]));
         const names = kept.map((id) => catalogNames.get(id)).filter(Boolean).slice(0, 4);
-        noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}` + `${code} was not dissolved: the event gives ${kept.length} of its regions${names.length ? ` (${names.join(", ")}${kept.length > names.length ? ", …" : ""})` : ""} to nobody. Give its land to one polity in the same event.`);
+        noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}` + `${code} was not dissolved: the event gives ${kept.length} of its regions${names.length ? ` (${names.join(", ")}${kept.length > names.length ? ", …" : ""})` : ""} to nobody. Give its land to one polity in the same event.`,
+          dissolutionRefusedNote({ polity: code, count: kept.length }, titleAt(path)));
       }
     }
   }
@@ -9779,6 +9789,9 @@ const applySimulationResult = async ({
   // the claimants an earlier turn wrote for such a region come off it
   // (runtime/fronts/heldRegions.js). Nothing is touched with fronts off.
   if (turnFronts) impactedWorld = withoutBattlefieldDisputes(impactedWorld);
+  // And a contest on a battlefield's ground that nothing holds up any more is cleared: its side is nowhere near
+  // (frontTurn.js checkContests). A contest of Brest stood for good deep in the Soviet Union (2026-11-10).
+  if (turnFronts?.expiredContests?.length) impactedWorld = withoutClaimants(impactedWorld, turnFronts.expiredContests);
 
   // Live institution lifecycle effects ride the SAME events that narrate them.
   // Geography/unit/report reducers remain in gameState; membership needs chats
@@ -16545,8 +16558,18 @@ let foldedSkipCeiling = FOLDED_SKIP_SCHEMA_BUDGET;
 // leaves out after the others (fitSkipRiders `waited`).
 let skipRidersWaiting = [];
 
-// A function's size as Gemini is sent it, which is what its limit is on.
-const geminiFunctionChars = (tool) => JSON.stringify(toGeminiSchema(tool?.schema ?? {})).length;
+// What a skip's request declares, as Gemini is sent it, which is what its limit
+// is on (geminiAnswer.js geminiDeclaredChars): the skip's function, and the
+// lookup functions beside it where Gemini is asked for a call of that function
+// (main.jsx geminiDeclaresTaskFunction). A Gemini skip asked for as JSON text
+// declares neither beside the other: its lookup round has the lookup functions
+// alone and its answer none, so only the skip's function is weighed, for the
+// call it falls back on and for every other provider. Not the size the prompt
+// fingerprint logs, which is the schema as written (a 30,234 there was 28,894
+// here), and before 2026-11-10 not the lookup functions either: a player's skips
+// were refused with 25 of them beside a function weighed at 28,894, under a
+// ceiling of 29,684, and the next lowered it by one rider at a time.
+const skipDeclaredChars = (tool, beside = []) => geminiDeclaredChars([tool, ...beside]);
 
 // What a folded skip carries besides its events, gathered once before its first
 // request: the doubted board entries a fresh agent can now settle, the agents
@@ -16983,13 +17006,20 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // the one remembered for the next skip.
       let riders = { board: false, agentReports: false, history: false };
       if (state.folded) {
-        const baseTool = await jumpToolSent(mode === "auto" ? "autoJumpForward" : "jumpForward", segmentVariables);
+        const skipTaskKey = mode === "auto" ? "autoJumpForward" : "jumpForward";
+        const baseTool = await jumpToolSent(skipTaskKey, segmentVariables);
+        // The lookup functions the request will declare beside the skip's
+        // function, the same set askSegment hands it; none where they will not
+        // be beside it (skipDeclaredChars).
+        const declaredBeside = geminiDeclaresTaskFunction(skipTaskKey, { watched: Boolean(showEvents) })
+          ? normalizeArray(withFrontOrderFunction(buildTaskLookups(segmentBundle), frontOrderCall(context))?.tools)
+          : [];
         const fit = fitSkipRiders({
           wanted: { board: true, agentReports: dueAgentJobs.length > 0, history: true },
           historyDue: Boolean(dueHistoryJob),
           // A skip shown no board has no use for its ops beyond keeping the function the same.
           boardShown: Boolean(state.foldedPrep?.board),
-          sizeOf: (carried) => geminiFunctionChars(foldJumpTool(baseTool, carried)),
+          sizeOf: (carried) => skipDeclaredChars(foldJumpTool(baseTool, carried), declaredBeside),
           ceiling: foldedSkipCeiling,
           waited: skipRidersWaiting,
         });
@@ -17004,6 +17034,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             chars: fit.chars,
             ceiling: foldedSkipCeiling,
             leftOut: fit.leftOut,
+            ...(declaredBeside.length ? { lookupFunctionsBeside: declaredBeside.length } : {}),
             segmentIndex,
           }, { verbose: true });
         }
@@ -17080,7 +17111,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           targetDate,
           segmentTargetDate: segmentTarget,
           priorEvents: state.generatedSoFar,
-        }), buildScriptedEventsInstruction(scriptedBeats, { language: scriptedLanguage }), scriptedPoliticalInstruction, WRITING_REMINDER].filter(Boolean).join("\n\n"),
+        }), buildScriptedEventsInstruction(scriptedBeats, { language: scriptedLanguage }), buildScriptedImpactsInstruction(scriptedBeats), scriptedPoliticalInstruction, WRITING_REMINDER].filter(Boolean).join("\n\n"),
         validatePayload: withReceiptDraft(async (candidate, { attempt = 1, finalAttempt } = {}, draft) => {
           // Shape-of-story problems (event count, stray dates) are STRICT while a
           // retry remains — the model gets the exact error and usually fixes its
@@ -17176,36 +17207,20 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
               receiptPlayerNote("datesClamped"),
             );
           }
-          // The map's tempo, an author's ceiling on how many regions change hands
-          // in a period (worldDirection.js): counted in event order, before the
-          // resolver spends anything on entries the period cannot carry. Never a
-          // rejection — the front simply moves this far, and the model is told.
-          if (direction?.territoryTempo > 0) {
-            const tempo = applyTerritoryTempo(candidate?.events, { ceilingPerMonth: direction.territoryTempo, spanDays });
-            if (tempo.withheld > 0) {
-              candidate.events = tempo.events;
-              noteReceipt(
-                draft,
-                "withheld",
-                `${tempo.withheld} territorial change${tempo.withheld === 1 ? " was" : "s were"} withheld: this scenario's map moves no faster than ${Math.round(direction.territoryTempo)} region${Math.round(direction.territoryTempo) === 1 ? "" : "s"} per thirty days (${tempo.allowance} this period), counted in event order. `
-                  + "Carry the rest of that advance into the next period, or write the front as holding.",
-                countedNote(tempo.withheld, "tempoOne", "tempoMany"),
-              );
-            }
-          }
           // The author's scripted events (worldDirection.js): one the answer left
           // out is written by the engine, in the author's words, and the model is
           // told so it carries the consequences. An auto jump that stopped short
-          // owes only the beats up to where it stopped.
+          // owes only the beats up to where it stopped. Before the map's tempo:
+          // the events that tell them are marked, and the tempo leaves them be.
           if (scriptedBeats.length) {
             const stopKey = mode === "auto" ? dateKey(candidate?.stopDate) : null;
             const due = stopKey === null ? scriptedBeats : scriptedBeats.filter((beat) => dateKey(beat.date) <= stopKey);
-            const scripted = ensureScriptedEvents(candidate?.events, due, { language: scriptedLanguage });
+            const scripted = ensureScriptedEventsWithImpacts(candidate?.events, due, { language: scriptedLanguage });
             if (scripted.inserted.length) {
               candidate.events = scripted.events;
               sortTimelineEventsChronologically(candidate);
               for (const beat of scripted.inserted) {
-                noteReceipt(draft, "adjusted", `The scripted event of ${beat.date} — "${beat.title}" — was not in your answer, so the engine wrote it in the author's words, with no impacts. It is history in this world: its consequences are yours to carry forward.`,
+                noteReceipt(draft, "adjusted", `${scriptedBeatWrittenNote(beat)} It is history in this world: its consequences are yours to carry forward.`,
                   receiptPlayerNote("scriptedBeatWritten", { title: beat.title, date: readableReceiptDate(beat.date) }));
               }
             }
@@ -17220,6 +17235,24 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
                   if (beatIsWritten(requirement.beat, [event], { language: scriptedLanguage })) politicalClaimContext.legacyEvents.add(event);
                 }
               }
+            }
+          }
+          // The map's tempo, an author's ceiling on how many regions change hands
+          // in a period (worldDirection.js): counted in event order, before the
+          // resolver spends anything on entries the period cannot carry. Never a
+          // rejection — the front simply moves this far, and the model is told.
+          // A scripted event's own changes are the author's and never withheld.
+          if (direction?.territoryTempo > 0) {
+            const tempo = applyTerritoryTempo(candidate?.events, { ceilingPerMonth: direction.territoryTempo, spanDays });
+            if (tempo.withheld > 0) {
+              candidate.events = tempo.events;
+              noteReceipt(
+                draft,
+                "withheld",
+                `${tempo.withheld} territorial change${tempo.withheld === 1 ? " was" : "s were"} withheld: this scenario's map moves no faster than ${Math.round(direction.territoryTempo)} region${Math.round(direction.territoryTempo) === 1 ? "" : "s"} per thirty days (${tempo.allowance} this period), counted in event order. `
+                  + "Carry the rest of that advance into the next period, or write the front as holding.",
+                countedNote(tempo.withheld, "tempoOne", "tempoMany"),
+              );
             }
           }
           // The war ledger must see the sanitized impacts, so world changes go first.
@@ -17356,15 +17389,31 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 
       // runJsonTask's deterministic fallback bypasses the candidate validator.
       // Preserve the existing scripted-event guarantee there too: an eligible
-      // authored beat omitted by the fallback is inserted in the author's words.
+      // authored beat omitted by the fallback is inserted in the author's words,
+      // and every fired beat carries the impacts its author attached, resolved
+      // like any event's (validateGeneratedWorldChanges, never strict: there is
+      // no attempt to send back) and so applied with the turn.
       if (segmentGeneration?.source === "fallback" && scriptedCommit.fired.length) {
-        const fallbackScripted = ensureScriptedEvents(payload?.events, scriptedCommit.fired);
+        const fallbackScripted = ensureScriptedEventsWithImpacts(payload?.events, scriptedCommit.fired);
         if (fallbackScripted.inserted.length) {
           payload.events = fallbackScripted.events;
           sortTimelineEventsChronologically(payload);
           for (const beat of fallbackScripted.inserted) {
-            noteReceipt(state.receipt, "adjusted", `The scripted event of ${beat.date} — "${beat.title}" — was not in the fallback answer, so the engine wrote it in the author's words, with no impacts.`,
+            noteReceipt(state.receipt, "adjusted", scriptedBeatWrittenNote(beat, { fallback: true }),
               receiptPlayerNote("scriptedBeatWritten", { title: beat.title, date: readableReceiptDate(beat.date) }));
+          }
+        }
+        const authored = await resolveFallbackScriptedImpacts(payload, bundle.world, {
+          validate: validateGeneratedWorldChanges,
+          receipt: state.receipt,
+          requests: state.requests,
+          actions: bundle.actions,
+          playerCountry: bundle.game.country,
+        });
+        if (authored.error) {
+          console.warn(`[ai] the fallback's scripted events kept their story without their authored impacts: ${authored.error}`);
+          for (const event of authored.events) {
+            noteReceipt(state.receipt, "dropped", `Event "${normalizeString(event?.title)}": the impacts its author attached could not be applied — ${firstComplaintLine(authored.error)}`);
           }
         }
       }
@@ -21306,14 +21355,18 @@ const appendSightingEvent = async (bundle, sighting, unitOps, campaign = "") => 
 
 export const maybeSendIdleDiplomacy = async () => {
   if (idleDiplomacyInFlight || isSimulationBusy()) return null;
-  // Nobody pressed anything, so this is background work (requestBudget.js):
-  // always on, and it stops at the day's fixed cap ("dont remove idle
-  // diplomacy", the owner, 2026-11-07).
-  if (!backgroundAiAllowance().allowed) return null;
   // One cadence, the feature's own (see the comment above idleDiplomacyInFlight),
-  // for the whole pulse: zero when idle diplomacy is off for this game, and then
-  // nothing runs, movement included.
-  const pulseChance = idleDiplomacyChancePerMinute();
+  // for the whole pulse: zero when the player turned "Countries write to me
+  // between time skips" off, or idle diplomacy is off for this game, and then
+  // nothing runs, movement included (idlePulse.js idlePulseChance). Nobody
+  // pressed anything, so its requests are background requests, but the day's
+  // background cap does not stop it and does not count it ("no more limiting
+  // it tho, it should be unlimited if its enabled", the owner, 2026-11-09;
+  // requestBudget.js UNCAPPED_BACKGROUND_TASKS).
+  const pulseChance = idlePulseChance({
+    playerSwitch: getMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy),
+    featureChance: idleDiplomacyChancePerMinute(),
+  });
   if (!(pulseChance > 0)) return null;
   const roll = Math.random();
   if (roll >= pulseChance) return null;

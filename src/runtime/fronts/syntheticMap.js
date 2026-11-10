@@ -113,6 +113,8 @@ export const frontInput = (world, overrides = {}) => {
     isGroup: () => false,
     // (A test of something else leaves every side to the orders the test gives it: staff.js is tested by itself.)
     staff: false,
+    // (Nor do its staffs call up troops of their own: engine.js staffCallUp, tested by itself.)
+    callUps: false,
     // (And at the numbers of troops its figures were worked out at: twice the game's own, which were halved since.)
     troops: 2,
     units: [],

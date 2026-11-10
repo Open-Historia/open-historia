@@ -54,6 +54,138 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
+    // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
+    id: "2026-11-setup-choices-alike",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "The AI setup shows its three choices alike",
+        items: [
+          "Command Code is no longer marked as recommended in the AI setup that opens when you start a game without a key.",
+        ],
+      },
+    ],
+  },
+  {
+    // "make it be 7 days" (the owner, 2026-11-10): runtime/fronts/constants.js STAFF_STORY_ORDER_DAYS 45 -> 7; and the air line
+    // says when the sky is held by fewer but stronger wings (fronts/brief.js skyStrongerNote, air.js skyHeld counts only wings with strength).
+    id: "2026-11-commanders-change-course",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Commanders change course sooner",
+        items: [
+          "A country nobody plays keeps an order the story gave its front for a week, then its own commanders may change course.",
+          "A side that holds the sky with fewer wings than the other is told as holding it with fewer but stronger ones, and worn-out wings are no longer counted.",
+        ],
+      },
+    ],
+  },
+  {
+    // "why does fighting the war take 60 seconds ... the whole thing about fighting in brest never happened"; "now ive
+    // captured berlin and the game is still talking about things that happened historically"; "make it so the war
+    // engine makes other countries reinforce more" (a player, 2026-11-10). runtime/fronts/brief.js lineGeography,
+    // AI/frontTurn.js frontPlaceTold, frontReportEvents and checkContests, runtime/fronts/engine.js staffCallUp,
+    // runtime/fronts/climate.js yearOf, AI/frontPrethink.js prethinkLengths.
+    id: "2026-11-fronts-and-story-agree",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "The war and its story agree",
+        items: [
+          "The story is told where each front runs and who holds whose land, so a war that has turned against history is told where it is really fought.",
+          "A captured city appears on the map with the event that reports it. Where no event names it, the war reports it itself.",
+          "A region far behind the front line is no longer left contested, and a side can only contest ground it can reach.",
+          "Countries nobody plays call up fresh troops when their line is thin or they lose ground, and most of all when their capital is at stake. A country that has lost its capital fights to take it back.",
+          "Long skips fight their war faster, and while you read, the next period is worked out for the longer skips too.",
+        ],
+      },
+    ],
+  },
+  {
+    // "readd the idle diplomacy setting so you can disable it (no more limiting it tho, it should be unlimited if its
+    // enabled)" (the owner, 2026-11-09): MAP_SETTING_KEYS.idleDiplomacy in Settings → AI → AI requests, and
+    // requestBudget.js UNCAPPED_BACKGROUND_TASKS keeps idle diplomacy out of the background daily cap.
+    id: "2026-11-idle-diplomacy-switch",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Turn off countries writing to you",
+        items: [
+          "Settings → AI → AI requests has a new switch, Countries write to me between time skips. Turn it off and no country writes to you between time skips unless you write first.",
+          "While it is on, countries writing to you no longer count toward the 30 background requests a day, and are no longer stopped by them.",
+        ],
+      },
+    ],
+  },
+  {
+    // A world event filed "Not recorded: the game could not tell it was your government's order" (a player, 2026-11):
+    // nativeWorldIntegrity.js reads whose choice an event is from its actors, records and operations, never its words.
+    // Scripted events: worldDirection.js applyTerritoryTempo, AI/scriptedEventImpacts.js (the fallback's impacts), and
+    // a refused dissolution in the receipt (receiptPlayerNotes.js dissolutionRefusedNote).
+    id: "2026-11-world-events-and-scripted-beats",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "World events stay, scripted events take effect",
+        items: [
+          "A world event that mentions your country is no longer thrown out as a decision of your government's. Only an event that has your country act is checked against your orders.",
+          "A scripted event's map changes happen in full, even in a scenario that limits how fast the map may change.",
+          "When a time skip falls back to stand-in events, a scripted event still makes the changes its author attached.",
+          "When a country cannot be dissolved because its land was given to no one, the time skip's notes say so.",
+        ],
+      },
+    ],
+  },
+  {
+    // "why does it write all the events now before giving them to you instead of each event appearing as its written" (the owner,
+    // 2026-11-10): AI/geminiAnswer.js asks a Gemini skip's lookups first and its answer as streamed text.
+    id: "2026-11-gemini-live-events",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Events appear as they are written again",
+        items: [
+          "On Gemini with lookup functions on, a time skip's events appear one by one as the AI writes them again, instead of all at once at the end.",
+          "Those skips no longer waste a request on a first attempt Gemini refused.",
+        ],
+      },
+    ],
+  },
+  {
+    // "make it so in the scripted events there is a mini map thing so you can easily select regions for things instead
+    // of needing to manually type out each one"; "upgrade the scripted events editor so there is an easy thing to add
+    // Impacts yourself"; "make it so events can remove all claims on territory on a country" (the owner, 2026-11-09):
+    // ScriptedRegionPicker.jsx, ScriptedImpactsEditor.jsx, server/scriptedImpacts.js, AI/scriptedEventImpacts.js.
+    id: "2026-11-scripted-event-impacts",
+    kind: "minor",
+    date: "2026-11-09",
+    channel: "beta",
+    banners: [
+      {
+        title: "Scripted events: pick regions and impacts on a map",
+        items: [
+          "Pick regions on a map of the scenario and their names go into a scripted event's text, spelled exactly as the map spells them.",
+          "Add impacts to a scripted event or an outcome: regions changing hands, new countries, annexations, claims, occupations and new leaders. They happen on the map exactly as set when the event fires.",
+          "An impact can remove every claim on a country's territory, or only one claimant's.",
+        ],
+      },
+    ],
+  },
+  {
     // "it seems sometimes events to do with war aren't being represented on the map"; "Script Events ... seem to fail
     // transfer specifically named regions ... a polity isn't annexed or dismantled completely ... claims staying from
     // the dismantled polity" (players, 2026-11); "make it so events can remove all claims on territory on a country"

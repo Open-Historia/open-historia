@@ -90,7 +90,7 @@ import { nativeHttpAvailable, nativeHttpFetch } from "../../runtime/native/http.
 import { createRelayOnlyOrigins } from "./relayOrigins.js";
 import { createFirstByteTimer, createStreamUsage, normalizeUsage, sumUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
-import { buildAnswerFormatBlock } from "./schemaOutline.js";
+import { askGeminiAnswer, geminiAnswersAsText } from "./geminiAnswer.js";
 import {
     applyAnthropicFrame,
     applyGeminiFrame,
@@ -102,7 +102,6 @@ import {
     finishGeminiStream,
     finishOpenAIStream,
     readAnthropicStreamedResponse,
-    readGeminiStreamedResponse,
     readOpenAIStreamedResponse,
 } from "./streamAssembly.js";
 import {
@@ -378,20 +377,6 @@ function pickLikelyChatModel(models) {
     return safeFallbackModel ?? modelIds[0] ?? "";
 }
 
-function joinGeminiParts(parts) {
-    return (parts ?? [])
-    .map((part) => part?.text ?? "")
-    .join("")
-    .trim();
-}
-
-function extractGeminiToolInput(data, tool) {
-    const call = (data?.candidates?.[0]?.content?.parts ?? [])
-    .map((part) => part?.functionCall)
-    .find((entry) => entry?.name === tool?.name);
-    return call?.args && typeof call.args === "object" ? call.args : null;
-}
-
 // Qwen/DeepSeek thinking models emit reasoning either in a separate field or inline in
 // <think>...</think>. Strip the think block so we return the actual answer; an unclosed
 // <think> means the stream was cut mid-thought, leaving no answer, so drop it too.
@@ -490,70 +475,25 @@ function getGeminiStreamUrl(model, apiKey) {
     return getGeminiUrl(model, apiKey).replace(":generateContent?", ":streamGenerateContent?alt=sse&");
 }
 
-// How a Gemini skip's events arrive one by one, as every other provider's do
-// (streamedEvents.js).
-//
-// Streaming a tool call's arguments needs partialArgs, and
-// toolConfig.functionCallingConfig.streamFunctionCallArguments is Vertex-only:
-// this API's v1beta discovery doc (revision 20260918) gives FunctionCallingConfig
-// only `mode` and `allowedFunctionNames`. Sending it buys a 400 and costs the
-// player a request, so it is not sent, and a skip asked for as a function call
-// arrives whole.
-//
-// Text does stream, so a watched skip is asked for as JSON text: the answer's
-// mime type set to application/json, and the function's contract written out in
-// the prompt in place of its declaration (schemaOutline.js buildAnswerFormatBlock).
-// Gemini refuses a response mime type alongside tools ("Function calling with a
-// response mime type: 'application/json' is unsupported"), so it is used exactly
-// when nothing else needs the function channel: a watched skip (onToolStream)
-// with no lookup functions, which is every skip while requests are being saved,
-// the default. A skip that has lookup functions keeps the function call and its
-// questions, and arrives whole as before.
-//
-// Not generationConfig.responseSchema, which was built first and measured
-// against the live API on 2026-10-05 (gemini-3.5-flash-lite): the schema is
-// compiled into a grammar with a ceiling on its size, and the skip's contract
-// sits at it. As it stood it was refused, 400 "Request contains an invalid
-// argument"; with its four unions merged into single objects it passed; with the
-// Projects board's ops added it was refused again; and the same weight spent
-// anywhere else (the stats block, the institution ops) tipped it the same way.
-// That ceiling has moved before (geminiSchema.js), so a contract that passes
-// today is no promise. Written into the prompt, the contract's size costs tokens
-// and nothing else: measured the same day, the whole folded contract is about
-// 5,800 tokens there, fewer than its declaration, the answer arrived in 72
-// frames with no gap over 0.2 s, in the order the outline gives its fields, and
-// it passed the task's validation as written. What holds an answer to the
-// contract is that validation, as it does for every model that has no function
-// calling at all.
-//
-// A model that refuses the mime type itself is asked again at once as the
-// function call it always was, and that way for the rest of the session rather
-// than paying a refused request per skip.
-//
-// streamAssembly.js still assembles partialArgs if they ever arrive, so the day
-// the field reaches this API, asking for it is the only change.
-const geminiJsonAnswerRefusals = new Set();
+// How a Gemini task's answer is asked for (as a function call, as streamed JSON
+// text, or split around its lookup round) is geminiAnswer.js's, with why.
 
-// The other way round: a model that refuses a task's function call as a request,
-// 400 "Request contains an invalid argument" before a word is written (a
-// player's log, 2026-11-06: thirty time skips, every one to the canned events),
-// is asked again at once with the contract written into the prompt as JSON text,
-// which has no grammar to outgrow, and that way for the rest of the session. A
-// skip that also declares lookup functions keeps the call: the text form cannot
-// carry their questions.
-const geminiFunctionCallRefusals = new Set();
-
-// The whole answer of a JSON-mode request, or null when it is not one object
-// (cut off, fenced, prose around it): the task's own salvage reads those from
-// the raw text.
-function parseGeminiJsonAnswer(text) {
+// Whether a task's first Fallback entry is Gemini asking for the answer as a
+// call of the output function, the lookup functions declared beside it: the one
+// request whose declarations Gemini can refuse for their size. A time skip
+// weighs its riders against that (gameplay.js fitSkipRiders). `watched`: the
+// skip's events are shown as they are written.
+export const geminiDeclaresTaskFunction = (taskKey, { watched = false } = {}) => {
     try {
-        const value = JSON.parse(text);
-        return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+        const { entries, preferredEntryId } = resolveTaskFallbackEntries(taskKey);
+        const entry = entries.find((candidate) => candidate.id === preferredEntryId) ?? entries[0];
+        if (entry?.provider !== "gemini") return false;
+        const model = normalizeGeminiModel(entry.model) || GEMINI_DEFAULT_MODEL;
+        return !geminiAnswersAsText(model, { watched });
     } catch {
-        return null;
+        return false;
     }
-}
+};
 
 // AI calls go straight from the browser to the provider so the player's API key
 // only ever reaches the provider — never a server or a community node. Direct is
@@ -1198,12 +1138,9 @@ async function callGemini(systemPrompt, history, {
     taskKey = "",
     lookupTools,
     requireOutputTool = false,
+    lookupRoundsAnswered = 0,
 } = {}) {
     const settings = entrySettings;
-    // Lookup functions (lookupTools.js) declared beside the output function.
-    // They stay declared for the whole conversation (the history carries calls
-    // to them); which ones the model may CALL this round is allowedFunctionNames.
-    const lookupDeclarations = tool && Array.isArray(lookupTools) ? lookupTools : [];
     const apiKey = settings.apiKey.trim();
 
     if (!apiKey) {
@@ -1329,203 +1266,46 @@ async function callGemini(systemPrompt, history, {
         }
     }
 
-    let retriedAfterOverload = false;
-    // The answer as JSON text rather than a function call, so a watched skip's
-    // events arrive one at a time (see geminiJsonAnswerRefusals above for when,
-    // and for what happens when it is refused).
-    const canAnswerAsText = Boolean(tool && !lookupDeclarations.length);
-    let jsonAnswer = canAnswerAsText && (geminiFunctionCallRefusals.has(model)
-        || (typeof onToolStream === "function" && !geminiJsonAnswerRefusals.has(model)));
-    let jsonAnswerRefused = false;
-    let functionCallRefused = false;
-    // Events first: they are what the panel shows as they are written. Built the
-    // first time the text form is asked for, which may be after a refused call.
-    let answerFormat = "";
-    const answerFormatBlock = () => {
-        answerFormat ||= buildAnswerFormatBlock(tool.schema, { first: Object.keys(tool.schema?.properties ?? {})[0] || "" });
-        return answerFormat;
-    };
-
-    for (let attempt = 1; attempt <= retries; attempt++) {
-        // Tool calls stream, for the same reason they do on the other three
-        // providers: a timeline jump is the longest request the game makes, and
-        // a buffered one sends nothing over the wire for the whole generation,
-        // which is what an API edge or a proxy cuts. Gemini was the last
-        // provider still sending its tool calls buffered — and it is the
-        // DEFAULT provider, so a jump on a stock install was the one request
-        // most exposed to that. readGeminiStreamedResponse rebuilds the exact
-        // envelope the extractors below already read, so nothing downstream
-        // changes. (The advisor's own streaming is handled above, where the
-        // tokens go to the UI as they arrive.)
-        const requestUrl = tool ? getGeminiStreamUrl(model, apiKey) : getGeminiUrl(model, apiKey);
-        const generationConfig = {
+    // A task's answer, or a reply in words with no output function: the
+    // requests and their forms are geminiAnswer.js's (askGeminiAnswer), the
+    // provider's own rules and errors handed to it here.
+    return askGeminiAnswer({
+        fetch: (url, init) => fetch(url, init),
+        url: (stream) => (stream ? getGeminiStreamUrl(model, apiKey) : getGeminiUrl(model, apiKey)),
+        retryOrFail: (response, attempt) => retryOrFail(response, attempt),
+        sleep: (ms) => sleep(ms, signal),
+        readErrorPayload,
+        readJsonAnswer: (response) => readJsonAnswer(response, "Gemini"),
+        refusedRequestError: (message, failure) => refusedRequestError("Gemini", message, failure),
+        retriesSpentError: () => retriesSpentError("Gemini", retries),
+        failIfClosedEarly: (data, text) => failIfClosedEarly(data, text),
+        keepProseClosedEarly: (closedEarly, text) => keepProseClosedEarly(closedEarly, text, onUnmarkedEnd),
+        canRetryBeforeDeadline: (delayMs) => canRetryBeforeDeadline(deadline, delayMs),
+        waitingCannotFix,
+        retryableStatuses: RETRYABLE_HTTP_STATUSES,
+        overloadedRetryDelay: OVERLOADED_RETRY_DELAY,
+    }, {
+        model,
+        systemPrompt,
+        history,
+        tool,
+        lookupTools,
+        requireOutputTool,
+        lookupRoundsAnswered,
+        retries,
+        generationConfig: {
             ...samplingConfig,
             ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
-            ...(jsonAnswer ? { responseMimeType: "application/json" } : {}),
-        };
-        // The request goes out now: the skip's progress row starts its count
-        // from here, again on every retry (requestActivity.js).
-        onSend?.();
-        const response = await fetch(requestUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                // The contract after the prompt, as a part of its own: nothing
-                // before it changes, so the prompt's cacheable prefix is the
-                // one a function-call request has.
-                system_instruction: { parts: [
-                    { text: systemPrompt },
-                    ...(jsonAnswer ? [{ text: answerFormatBlock() }] : []),
-                ] },
-                contents: geminiContentsFromHistory(history),
-                ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
-                ...customParams,
-                ...(tool && !jsonAnswer ? {
-                    tools: [{ functionDeclarations: [
-                        {
-                            name: tool.name,
-                            description: tool.description,
-                            parameters: toGeminiSchema(tool.schema),
-                        },
-                        ...lookupDeclarations.map((entry) => ({
-                            name: entry.name,
-                            description: entry.description,
-                            parameters: toGeminiSchema(entry.schema),
-                        })),
-                    ] }],
-                    toolConfig: { functionCallingConfig: {
-                        mode: "ANY",
-                        // The final round of a lookup conversation may only answer.
-                        allowedFunctionNames: [tool.name, ...(requireOutputTool ? [] : lookupDeclarations.map((entry) => entry.name))],
-                    } },
-                } : {}),
-            }),
-            signal,
-        });
-        // Every response is one request against the player's allowance, whatever
-        // became of it (requestBudget.js): a lookup round, a retry, a refusal.
-        onRequest?.(response.status);
-
-        // A 429 used to be fatal here while every other provider retried it, so
-        // one per-minute trip on a free-tier key destroyed the turn and dropped
-        // the player to canned events. Only a SPENT quota (daily allowance, or
-        // billing) is worth failing over; a rate limit is what waiting is for —
-        // unless the player chose to move straight to the next Fallback entry.
-        if (RETRYABLE_HTTP_STATUSES.has(response.status)) {
-            await retryOrFail(response, attempt);
-            continue;
-        }
-
-        if (!response.ok) {
-            const payload = await readErrorPayload(response);
-            const failure = classifyProviderFailure({ status: response.status, payload });
-            // The JSON-text form of the answer, refused as a request: asked again
-            // at once as the function call it always was. Not one of the
-            // attempts, which are for a busy model; a key, a missing model or a
-            // request too large fails the same either way and is not asked twice.
-            if (jsonAnswer && !functionCallRefused && [400, 422].includes(response.status) && !waitingCannotFix(failure) && failure.kind !== "tooBig") {
-                jsonAnswer = false;
-                jsonAnswerRefused = true;
-                console.warn("[ai] Gemini refused the skip's JSON-text form; asking again as a function call (its events will arrive together).");
-                logDebugEvent("ai", "Gemini refused a JSON-mode request; asked again as a function call.", {
-                    model,
-                    status: response.status,
-                    detail: extractErrorMessage(payload, "").slice(0, 300),
-                }, { verbose: true });
-                attempt -= 1;
-                continue;
-            }
-            // The function call refused as a request: asked again at once as JSON
-            // text (geminiFunctionCallRefusals above). Once a call, and never after
-            // the text form was itself refused in this one.
-            if (!jsonAnswer && canAnswerAsText && !functionCallRefused && !jsonAnswerRefused
-                && [400, 422].includes(response.status) && failure.kind === "other") {
-                jsonAnswer = true;
-                functionCallRefused = true;
-                console.warn("[ai] Gemini refused the function call; asking again with the answer as JSON text.");
-                logDebugEvent("ai", "Gemini refused a function-call request; asked again as JSON text.", {
-                    model,
-                    status: response.status,
-                    detail: extractErrorMessage(payload, "").slice(0, 300),
-                }, { verbose: true });
-                attempt -= 1;
-                continue;
-            }
-            throw refusedRequestError("Gemini",
-                extractErrorMessage(payload, `Gemini API request failed (${response.status})`),
-                failure,
-            );
-        }
-        // Accepted as a function call straight after being refused as JSON text:
-        // it was the form that was refused, so this model is asked the function
-        // way for the rest of the session.
-        if (jsonAnswerRefused) geminiJsonAnswerRefusals.add(model);
-        if (functionCallRefused) geminiFunctionCallRefusals.add(model);
-
-        // Branch on what actually came back, not on what was asked for: an edge
-        // or proxy that ignored alt=sse still answers plain JSON, and that must
-        // keep working exactly as it did.
-        const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readGeminiStreamedResponse(response, onActivity, onToolStream, onReceived)
-            : await readJsonAnswer(response, "Gemini");
-        onUsage?.(data);
-        if (tool) {
-            // Asked for as JSON text: the text IS the function's arguments. One
-            // that will not parse whole (cut off mid-answer) goes on below as raw
-            // text, where the task's salvage and the busy-retry both read it.
-            const jsonText = jsonAnswer ? joinGeminiParts(data?.candidates?.[0]?.content?.parts) : "";
-            const jsonInput = jsonText ? parseGeminiJsonAnswer(jsonText) : null;
-            // answeredAsText: no function was declared, so a correction asks for
-            // the JSON again and not for a call (gameplay.js runJsonTask).
-            if (jsonInput) return { rawText: jsonText, toolInput: jsonInput, answeredAsText: true };
-            const toolInput = extractGeminiToolInput(data, tool);
-            if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
-            failIfClosedEarly(data, joinGeminiParts(data?.candidates?.[0]?.content?.parts));
-            // Not the answer but a question: the model called lookup functions.
-            // Handed back to callAI, which answers them and asks again.
-            if (lookupDeclarations.length) {
-                const lookupCalls = lookupCallsFromGemini(data, tool.name);
-                if (lookupCalls.length) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput: null, lookupCalls };
-            }
-
-            // Now that tool calls stream, an overloaded model can refuse INSIDE
-            // the stream — HTTP 200, an error frame, no function call — where the
-            // same refusal used to arrive as a 503 and be retried by status code
-            // above. Without this, a hiccup would cost the player a whole turn to
-            // the canned fallback, which is what the buffered path protected them
-            // from. (Mirrors the OpenAI-compatible path.)
-            const streamedError = data?.error;
-            const streamedText = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
-            if (!streamedText && isBusyErrorPayload(streamedError) && !retriedAfterOverload && attempt < retries
-                && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
-                retriedAfterOverload = true;
-                console.warn(`[ai] Gemini reported "${errorPayloadText(streamedError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
-                await sleep(OVERLOADED_RETRY_DELAY, signal);
-                continue;
-            }
-            // Fragments that stopped partway assemble into a valid object missing
-            // half the turn, so streamAssembly.js drops the call and leaves this
-            // for the log alone.
-            if (data?.partialToolJson) {
-                logDebugEvent("warn", `[ai] Gemini tool call was cut off mid-argument.`, {
-                    partialChars: data.partialToolJson.length,
-                }, { verbose: true });
-            }
-            // Still refusing: say so, rather than hand back an empty "answer".
-            if (!streamedText && streamedError) throw toolStreamRefusalError("Gemini", streamedError, retriedAfterOverload);
-
-            return { rawText: streamedText, toolInput: null };
-        }
-        const text = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
-        keepProseClosedEarly(data?.closedEarly, text, onUnmarkedEnd);
-
-        if (!text) {
-            throw new Error("Gemini response did not contain text.");
-        }
-
-        return text;
-    }
-    throw retriesSpentError("Gemini", retries);
+        },
+        customParams,
+        signal,
+        onActivity,
+        onReceived,
+        onRequest,
+        onSend,
+        onToolStream,
+        onUsage,
+    });
 }
 
 // Extra output tokens allowed when reasoning is on, because on an OpenAI-style
@@ -3002,7 +2782,10 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
     for (let round = 0; ; round += 1) {
         const requireOutputTool = outputOnly || carried + round >= maxRounds;
         if (round > 0) lookups.onRound?.(round);
-        const result = await dispatch(conversation, { lookupTools: tools, requireOutputTool });
+        // How many rounds are answered already, carried ones too: Gemini asks a
+        // watched answer after its one lookup round with no function declared
+        // (geminiAnswer.js), so that the answer streams.
+        const result = await dispatch(conversation, { lookupTools: tools, requireOutputTool, lookupRoundsAnswered: carried + round });
         const calls = Array.isArray(result?.lookupCalls) ? result.lookupCalls : [];
         // The answer, or a request that could not be turned into one (a final
         // round still asking questions falls through to the runner's retry).
@@ -3194,7 +2977,9 @@ export async function callAI(systemPrompt, history, opts = {}) {
     if (debugSink && typeof debugSink === "object") debugSink.record = record;
     const callShape = {
         ...conversationShape(systemPrompt, history),
-        streaming: Boolean(providerOpts.onChunk),
+        // A reply shown as it arrives, or a task's answer read as it is written
+        // (a watched time skip).
+        streaming: Boolean(providerOpts.onChunk || providerOpts.onToolStream),
         tool: providerOpts.tool?.name || "(none — raw JSON expected)",
         lookupTools: Array.isArray(lookups?.tools) ? lookups.tools.length : 0,
         maxTokens: providerOpts.maxTokens ?? "(provider maximum)",

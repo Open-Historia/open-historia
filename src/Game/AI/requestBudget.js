@@ -8,7 +8,8 @@
 // function calling is what can make it more, and it is never more than
 // JUMP_REQUEST_CAP. What the game spends while the player is not pressing
 // anything stops at a fixed daily cap (BACKGROUND_DAILY_CAP below); there is no
-// switch for it any more.
+// switch for it any more, except idle diplomacy's own, which is outside the cap
+// (UNCAPPED_BACKGROUND_TASKS).
 //
 // Three parts, all plain data and rules:
 //   - the SETTINGS a player chooses (whether their key has a request limit,
@@ -336,6 +337,18 @@ const normalizeDay = (value, at) => {
 export const BACKGROUND_REQUEST = "background";
 export const PLAYER_REQUEST = "player";
 
+// Background tasks the daily cap does not count (backgroundAllowance below).
+// Idle diplomacy has a switch of its own (Settings → AI → AI requests,
+// runtime/mapSettings.js MAP_SETTING_KEYS.idleDiplomacy), and while it is on
+// it is unlimited: "readd the idle diplomacy setting so you can disable it (no
+// more limiting it tho, it should be unlimited if its enabled)" (the owner,
+// 2026-11-09). Its requests are still background requests (no activity line,
+// no Agent entry) and still counted in `used` and under their task, but not in
+// `background`, which is what the cap is measured against: a chatty day of
+// notes never leaves the agents' reports and first readings without theirs.
+export const UNCAPPED_BACKGROUND_TASKS = Object.freeze(["idleDiplomacy"]);
+const countsAgainstBackgroundCap = (task) => !UNCAPPED_BACKGROUND_TASKS.includes(task);
+
 export const createRequestLedger = ({ storage = defaultStorage(), now = Date.now, onChange = null } = {}) => {
     const read = () => {
         const at = now();
@@ -364,8 +377,9 @@ export const createRequestLedger = ({ storage = defaultStorage(), now = Date.now
             const code = Number(status);
             if (code >= 200 && code < 300) {
                 day.used += 1;
-                if (kind === BACKGROUND_REQUEST) day.background += 1;
                 const task = String(taskKey || "other").slice(0, 60);
+                // `background` is what the cap counts (UNCAPPED_BACKGROUND_TASKS).
+                if (kind === BACKGROUND_REQUEST && countsAgainstBackgroundCap(task)) day.background += 1;
                 if (task in day.byTask || Object.keys(day.byTask).length < TASK_ROWS_KEPT) {
                     day.byTask[task] = (day.byTask[task] || 0) + 1;
                 }
@@ -393,7 +407,7 @@ export const createRequestLedger = ({ storage = defaultStorage(), now = Date.now
 // --- In the background ---
 //
 // Anything the game does with nobody pressing a button: a country writing to
-// the player unprompted (idle diplomacy), an agent filing a report between
+// the player unprompted (idle diplomacy, uncapped: below), an agent filing a report between
 // skips, a first reading of an intelligence service, a stat sheet or military
 // figures written ahead of the first time they are needed. There was a switch
 // for all of it, Background AI, with a cap the player set, and when "My key has
@@ -406,6 +420,11 @@ export const createRequestLedger = ({ storage = defaultStorage(), now = Date.now
 // day's limit, so the last requests of the day are always the player's own.
 // With no request limit there is no allowance to keep, and only the cap
 // applies.
+//
+// Idle diplomacy is the exception (2026-11-09): it does not ask this, and its
+// requests are not counted against the cap (UNCAPPED_BACKGROUND_TASKS). Its
+// own switch, the scenario's idleDiplomacy feature and its chance a minute
+// are what limit it.
 export const BACKGROUND_DAILY_CAP = 30;
 export const BACKGROUND_RESERVE_SHARE = 0.1;
 

@@ -5520,6 +5520,24 @@ const settleRegionClaims = (world, regionId) => {
   if (!world.settledRegionClaims.includes(regionId)) world.settledRegionClaims.push(regionId);
 };
 
+// A world with the claimants given taken off their regions ([{ regionId, claimant }]): contests on a battlefield's
+// ground that nothing holds up any more (AI/frontTurn.js checkContests). The world itself when none is there.
+export const withoutClaimants = (world, expired) => {
+  const list = normalizeArray(expired).filter((entry) => normalizeOptionalString(entry?.regionId) && normalizeOptionalString(entry?.claimant));
+  const held = world?.regionClaimants && typeof world.regionClaimants === "object" ? world.regionClaimants : {};
+  const touched = list.filter((entry) => normalizeArray(held[entry.regionId]).some((name) => samePolity(name, entry.claimant)));
+  if (touched.length === 0) return world;
+  const next = {
+    ...world,
+    regionClaimants: { ...held },
+    settledRegionClaims: Array.isArray(world.settledRegionClaims) ? [...world.settledRegionClaims] : [],
+  };
+  for (const { regionId, claimant } of touched) {
+    writeRegionClaimants(next, regionId, normalizeArray(next.regionClaimants[regionId]).filter((name) => !samePolity(name, claimant)));
+  }
+  return next;
+};
+
 // A world in which no region is disputed for being held on a battlefield
 // (fronts/heldRegions.js): the claimants a battlefield accounts for are taken
 // off the regions its sides have taken from each other. The world itself when

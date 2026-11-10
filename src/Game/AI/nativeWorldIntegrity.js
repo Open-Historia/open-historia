@@ -2250,9 +2250,11 @@ export const bindWorldEventAuthorityRefs = (candidate, {
 
       if (authority === "player-order") {
         // The orders the event carries out, by what it says (one order, or the
-        // several it names); failing that, the one order it cites.
+        // several it names); failing that, the one order it cites, unless the
+        // event carries a sovereign choice of this human's (deriveNativeEventAgencyFor).
         const semantic = resolvePlayerOrderAuthority(eventWithAgency, human.actionRecords, { playerCanonical: human.canonical });
-        const resolved = semantic.match ? semantic : citedCurrentOrder(eventWithAgency, human.actionRecords) || semantic;
+        const choosing = eventMakesStructuredChoiceFor(ledgerActors.length ? { ...eventWithAgency, actors: ledgerActors } : eventWithAgency, resolver, human.canonical);
+        const resolved = semantic.match || choosing ? semantic : citedCurrentOrder(eventWithAgency, human.actionRecords) || semantic;
         next.authorityRef = resolved.match?.id || "";
         for (const id of normalizeArray(resolved.unproven)) unprovenActionIds.add(id);
         if (resolved.match) {
@@ -2386,28 +2388,6 @@ export const bindWorldEventAuthorityRefs = (candidate, {
 };
 
 
-const FRESH_SOVEREIGN_POLICY_RE = new RegExp([
-  "\\bdeclare(?:s|d)?\\s+war\\b",
-  "\\b(?:general\\s+|national\\s+|full\\s+)?mobiliz(?:e|es|ed|ation)\\b",
-  "\\b(?:signs?|ratif(?:y|ies|ied)|accedes?|withdraws?)\\b[\\s\\S]{0,80}\\b(?:treaty|alliance|pact|agreement|convention)\\b",
-  "\\b(?:imposes?|adopts?|expands?|lifts?)\\s+(?:new\\s+)?(?:economic\\s+|targeted\\s+)?sanctions?\\b",
-  "\\bexpels?\\b[\\s\\S]{0,60}\\bdiplomat\\b",
-  "\\brecalls?\\b[\\s\\S]{0,60}\\bambassador\\b",
-  "\\b(?:recognizes?|derecognizes?)\\b[\\s\\S]{0,80}\\b(?:state|government|independence|sovereignty)\\b",
-  "\\b(?:annex(?:es|ed|ation)?|cedes?|transfers?)\\b[\\s\\S]{0,80}\\b(?:territor|province|region|sovereignty|border)\\b",
-  "\\b(?:joins?|leaves?|withdraws?\\s+from)\\b[\\s\\S]{0,80}\\b(?:alliance|treaty\\s+organization|union|bloc)\\b",
-  "\\b(?:passes?|enacts?|adopts?|approves?)\\s+(?:an?\\s+|the\\s+)?(?:law|bill|national\\s+budget|supplementary\\s+budget|constitutional\\s+amendment)\\b",
-  "\\b(?:national|countrywide|armed\\s+forces)\\s+(?:alert|readiness|posture|state\\s+of\\s+emergency)\\b",
-  "\\b(?:deploys?|orders?)\\b[\\s\\S]{0,80}\\b(?:troops|brigade|division|battalion|warships?|fighter\\s+aircraft|missile\\s+units?)\\b",
-].join("|"), "i");
-
-const GOVERNMENT_POLICY_DECISION_RE = /\b(?:government|cabinet|parliament|legislature|president|prime\s+minister|foreign\s+ministry|ministry\s+of\s+foreign\s+affairs|defen[cs]e\s+ministry|ministry\s+of\s+defen[cs]e)\b[\s\S]{0,100}\b(?:approves?|adopts?|passes?|authorizes?|orders?|declares?|signs?|ratifies?|recognizes?|imposes?|withdraws?|expels?|recalls?|allocates?)\b/i;
-
-// A subordinate body may execute standing cross-border procedures, but it may
-// not use delegated-routine to CREATE a new international/security commitment.
-// This catches the semantic boundary rather than trusting mandateBasis prose.
-const NEW_CROSS_BORDER_COMMITMENT_RE = /\b(?:establish(?:es|ed|ing)?|creat(?:e|es|ed|ing)|form(?:s|ed|ing)?|found(?:s|ed|ing)?|launch(?:es|ed|ing)?|signs?|concludes?|agrees?\s+to)\b[\s\S]{0,120}\b(?:new\s+)?(?:bilateral|trilateral|multilateral|cross-border|international|intergovernmental|joint)\b[\s\S]{0,120}\b(?:agreement|protocol|memorandum|framework|mechanism|initiative|partnership|alliance|organization|organisation|institution|union|council|bloc|commission|secretariat|command|task\s+force|coordination\s+arrangement|security\s+arrangement)\b/i;
-
 
 const EVENT_SUBJECT_VERB_RE = /\b(?:signs?|ratif(?:y|ies|ied)|launch(?:es|ed)?|review(?:s|ed)?|detect(?:s|ed)?|complete(?:s|d)?|conduct(?:s|ed)?|introduc(?:e|es|ed)|uncover(?:s|ed)?|report(?:s|ed)?|reject(?:s|ed)?|approv(?:e|es|ed)|adopt(?:s|ed)?|implement(?:s|ed)?|expand(?:s|ed)?|impos(?:e|es|ed)|deploy(?:s|ed)?|arrest(?:s|ed)?|detain(?:s|ed)?|warn(?:s|ed)?|begin(?:s)?|start(?:s|ed)?|open(?:s|ed)?|clos(?:e|es|ed)|rais(?:e|es|ed)|lower(?:s|ed)?|increas(?:e|es|ed)|reduc(?:e|es|ed)|conven(?:e|es|ed)|meet(?:s)?|vote(?:s|d)?|rule(?:s|d)?|order(?:s|ed)?|announce(?:s|d)?|condemn(?:s|ed)?|press(?:es|ed)?|intensif(?:y|ies|ied)|retake(?:s|n)?|advance(?:s|d)?|hold(?:s)?|elect(?:s|ed)?|form(?:s|ed)?|resign(?:s|ed)?|dismiss(?:es|ed)?|suspend(?:s|ed)?|resume(?:s|d)?|withdraw(?:s|n)?|enter(?:s|ed)?|leave(?:s|left)?|join(?:s|ed)?)\b/i;
 
@@ -2418,29 +2398,30 @@ const EXOGENOUS_EVENT_RE = /\b(?:earthquake|storm|hurricane|cyclone|flood|wildfi
 // Bounded multi-polity interactions are not automatically fresh sovereign acts.
 // Intelligence-service consultations, technical working groups, liaison meetings
 // and similar activity can occur under existing mandates without every member
-// government making a new policy choice.  This is deliberately narrower than
-// generic diplomacy language: declarations, treaties, sanctions, deployments
-// and new frameworks are caught by eventCrossesFreshSovereignPolicyBoundary.
+// government making a new policy choice. Who jointly chose a commitment is read
+// from the event's actors (eventMakesStructuredChoiceFor), never from this.
 const ROUTINE_COLLECTIVE_PROCESS_RE = /\b(?:meeting|consultations?|coordination|liaison|working\s+group|workshop|conference|technical\s+talks?|staff\s+talks?|expert\s+talks?|information[-\s]sharing|intelligence[-\s]sharing|threat[-\s]sharing|joint\s+review)\b/i;
 
-// Fresh *shared* sovereign choices can be reconstructed from semantic actors
-// without asking the model to author legal provenance. Keep this deliberately
-// narrower than the general sovereign-policy detector: sanctions, expulsions,
-// deployments and recognition can mention a target polity but are normally
-// unilateral. Treaties and creation of intergovernmental arrangements are the
-// main cases where all explicitly listed semantic actors are co-participants.
-const JOINT_SOVEREIGN_COMMITMENT_RE = /\b(?:sign(?:s|ed|ing)?|ratif(?:y|ies|ied|ication)|conclud(?:e|es|ed|ing)|agree(?:s|d|ing)?\s+to|adopt(?:s|ed|ing)?\s+(?:a\s+)?joint|issue(?:s|d|ing)?\s+(?:a\s+)?joint|establish(?:es|ed|ing)?|creat(?:e|es|ed|ing)|form(?:s|ed|ing)?|found(?:s|ed|ing)?)\b[\s\S]{0,140}\b(?:treaty|agreement|pact|convention|memorandum|joint\s+declaration|alliance|intergovernmental|organization|organisation|institution|union|council|bloc|commission|secretariat|framework|mechanism|task\s+force|command)\b/i;
+// Whether an event makes a polity's own sovereign choice is read from what the
+// event carries, never from its wording (no word lists: a world event that
+// mentions the player's country beside "government" or "approves" is still
+// the world's). The structured signs:
+//   - the polity is one of the event's actors: the parties of an agreement it
+//     starts, the side that starts or joins a war by it, or event.actors;
+//   - a political-actor operation rewrites that government's own choices: its
+//     strategy or how it means to behave. Parties, leaders, coalitions,
+//     pressures and a new political system happen TO a country.
+const SOVEREIGN_CHOICE_POLITICAL_OPS = new Set(["set-strategy", "set-behavioral-disposition"]);
 
-const nativePolicySemantic = (event) => `${normalizeString(event?.title)} ${normalizeString(event?.description)}`
-  .replace(/\bwithout\s+(?:changing|altering|raising|lowering)\s+(?:the\s+)?(?:national\s+|countrywide\s+)?(?:alert|readiness|posture)\b/gi, "")
-  .replace(/\bdoes\s+not\s+(?:change|alter|raise|lower)\s+(?:the\s+)?(?:national\s+|countrywide\s+)?(?:alert|readiness|posture)\b/gi, "");
+const politicalChoiceTargets = (event, resolver) => uniqueStrings(normalizeArray(event?.impacts?.politicalActorOps)
+  .filter((operation) => SOVEREIGN_CHOICE_POLITICAL_OPS.has(normalizeString(operation?.op).toLowerCase()))
+  .map((operation) => resolver.canonical(normalizeString(operation?.polityKey || operation?.polity || operation?.country)))
+  .filter(Boolean));
 
-export const eventCrossesFreshSovereignPolicyBoundary = (event) => {
-  const semantic = nativePolicySemantic(event);
-  return FRESH_SOVEREIGN_POLICY_RE.test(semantic)
-    || GOVERNMENT_POLICY_DECISION_RE.test(semantic)
-    || NEW_CROSS_BORDER_COMMITMENT_RE.test(semantic);
-};
+const eventMakesStructuredChoiceFor = (event, resolver, polity) => Boolean(polity) && (
+  semanticActorPolities(event, resolver).some((actor) => resolver.equivalent(actor, polity))
+  || politicalChoiceTargets(event, resolver).some((target) => resolver.equivalent(target, polity))
+);
 
 const nativeSubjectLabel = (event) => {
   const title = normalizeString(event?.title);
@@ -2457,6 +2438,9 @@ const identityPhraseMatches = (textValue, identityValue) => {
   return text === identity || text.startsWith(`${identity} `) || text.includes(` ${identity} `) || text.endsWith(` ${identity}`);
 };
 
+// Whether a text names a polity (or a word built on its name, "Latvian"). Only
+// ever a place to look for that polity's own orders and messages: being named
+// never makes an event the polity's choice.
 const actorFamilyMentioned = (textValue, aliases = []) => {
   const text = normalizeString(textValue).toLowerCase();
   if (!text) return false;
@@ -2473,16 +2457,23 @@ const actorFamilyMentioned = (textValue, aliases = []) => {
 
 const semanticActorTokens = (event) => uniqueStrings(normalizeArray(event?.actors).map(normalizeString).filter(Boolean));
 
-// The parties of every agreement the event starts (agreementUpdates op
-// "start", bound to it by id or index): the governments that jointly chose it.
-// Relation parties are not actors (a sanction's target is a party too).
+// The polities the answer's own records show choosing in the event (bound to
+// it by id or index): the parties of every agreement it starts, and the side
+// that starts a war by it or joins one. Relation parties are not actors (a
+// sanction's target is a party too), nor is the side a war is started on.
+const WAR_CHOICE_OPS = new Set(["start", "join-a", "join-b"]);
 const agreementPartiesStartedByEvent = (candidate, event, eventIndex) => {
   const eventId = normalizeString(event?.id);
-  return uniqueStrings(normalizeArray(candidate?.agreementUpdates)
-    .filter((update) => normalizeString(update?.op).toLowerCase() === "start")
-    .filter((update) => (eventId && normalizeArray(update?.eventIds).map(normalizeString).includes(eventId))
-      || normalizeArray(update?.eventIndexes).map(Number).includes(eventIndex))
-    .flatMap((update) => normalizeArray(update?.parties)));
+  const tied = (update) => (eventId && normalizeArray(update?.eventIds).map(normalizeString).includes(eventId))
+    || normalizeArray(update?.eventIndexes).map(Number).includes(eventIndex);
+  return uniqueStrings([
+    ...normalizeArray(candidate?.agreementUpdates)
+      .filter((update) => normalizeString(update?.op).toLowerCase() === "start" && tied(update))
+      .flatMap((update) => normalizeArray(update?.parties)),
+    ...normalizeArray(candidate?.warUpdates)
+      .filter((update) => WAR_CHOICE_OPS.has(normalizeString(update?.op).toLowerCase()) && tied(update))
+      .flatMap((update) => normalizeArray(update?.actors)),
+  ].map(normalizeString).filter(Boolean));
 };
 
 const semanticActorPolities = (event, resolver) => uniqueStrings(
@@ -2606,13 +2597,11 @@ const nativeDomesticPrincipal = (event, playerCanonical, authority, resolver) =>
   return cue ? `${playerCanonical} ${cue}` : `${playerCanonical} domestic process`;
 };
 
-// A queued order the event itself cites in impacts.actionIds, when the event
-// makes no fresh sovereign choice: the player's own government carrying out
-// what the player asked for ("Poland Launches Anti-Mafia Operation" answering
-// "Crack down on organised crime"). Citing an order never authorizes a treaty,
-// a war or any other sovereign act; those still need the semantic match.
+// A queued order the event itself cites in impacts.actionIds: the player's own
+// government carrying out what the player asked for ("Poland Launches
+// Anti-Mafia Operation" answering "Crack down on organised crime"). The
+// citation is structured; the event's wording is not read to second-guess it.
 const citedCurrentOrder = (event, actionRecords) => {
-  if (eventCrossesFreshSovereignPolicyBoundary(event)) return null;
   const cited = new Set(normalizeArray(event?.impacts?.actionIds).map(normalizeString).filter(Boolean));
   const matches = normalizeArray(actionRecords).filter((entry) => cited.has(entry.id));
   if (matches.length !== 1) return null;
@@ -2630,7 +2619,7 @@ const nativeDomesticAgency = (event, playerCanonical, authority, resolver) => ({
   sovereignActors: [],
   jurisdictionPolity: playerCanonical,
   ...(authority === "delegated-routine" ? {
-    mandateBasis: "native provenance resolution: bounded execution inside an existing domestic operational/legal mandate; no fresh sovereign-policy signal detected",
+    mandateBasis: "native provenance resolution: bounded execution inside an existing domestic operational/legal mandate; the event's actors and operations carry no sovereign choice",
   } : {}),
 });
 
@@ -2658,25 +2647,33 @@ const deriveNativeEventAgencyFor = (event, {
   const playerIsSemanticActor = Boolean(
     playerCanonical && actorPolities.some((polity) => resolver.equivalent(polity, playerCanonical)),
   );
-  // An explicit semantic actor list is stronger evidence than prose mentions.
-  // This prevents a TARGET polity in "France sanctions Latvia" from being
-  // treated as a Latvian sovereign choice merely because Latvia appears in the
-  // description. Legacy events without semantic actors keep the text fallback.
-  const playerMentioned = hasExplicitPolityActors
+  // Whether the event itself shows the player's government choosing: read from
+  // its actors and operations only (eventMakesStructuredChoiceFor), never from
+  // its wording.
+  const playerChoosing = eventMakesStructuredChoiceFor(event, resolver, playerCanonical);
+  // Where to look for the player's own order or message: an event that names
+  // the player or cites a queued order. Looking never refuses an event; it
+  // only finds the authority an event carries out. An explicit actor list is
+  // the stronger statement of who acts, so a TARGET named in "France sanctions
+  // Latvia" is not searched as Latvia's choice.
+  const playerNamed = Boolean(playerCanonical) && (hasExplicitPolityActors
     ? playerIsSemanticActor
-    : Boolean(playerCanonical && actorFamilyMentioned(fullText, resolver.aliasesFor(playerCanonical)));
-  const crossesSovereign = eventCrossesFreshSovereignPolicyBoundary(event);
-  const jointSovereignChoice = Boolean(
-    crossesSovereign
-    && actorPolities.length >= 2
-    && JOINT_SOVEREIGN_COMMITMENT_RE.test(fullText),
-  );
+    : actorFamilyMentioned(fullText, resolver.aliasesFor(playerCanonical)));
+  const citesOrder = normalizeArray(event?.impacts?.actionIds).some((id) => normalizeString(id));
+  const playerConcerned = Boolean(playerCanonical) && (playerNamed || playerChoosing || citesOrder);
+  // Several polities the event lists as its actors (or the parties of an
+  // agreement it starts) chose it together.
+  const jointSovereignChoice = actorPolities.length >= 2;
 
   let actionMatch = null;
   let commitmentMatch = null;
-  if (playerMentioned) {
+  if (playerConcerned) {
     actionMatch = resolvePlayerOrderAuthority(event, actionRecords, { playerCanonical });
-    if (!actionMatch.match) actionMatch = citedCurrentOrder(event, actionRecords) || actionMatch;
+    // A cited order is the player's own government at work, unless the event
+    // carries a sovereign choice of the player's (an agreement it is party
+    // to, its strategy): citing an order never authorizes one the order's
+    // words did not ask for.
+    if (!actionMatch.match && !playerChoosing) actionMatch = citedCurrentOrder(event, actionRecords) || actionMatch;
     commitmentMatch = resolveUniqueSemanticAuthority(event, commitmentRecords, {
       playerCanonical,
       threshold: 0.28,
@@ -2687,8 +2684,9 @@ const deriveNativeEventAgencyFor = (event, {
   // Shared treaties / agreements / newly established intergovernmental
   // arrangements are one place where semantic participants are materially
   // stronger evidence than a single grammatical subject. Native code owns the
-  // legal rows; event.actors only says WHO jointly chose. Targets and observers
-  // must not be listed there. The player row still requires pre-existing
+  // legal rows; event.actors (or the parties of an agreement the event starts)
+  // only says WHO jointly chose. Targets and observers must not be listed
+  // there. The player row still requires pre-existing
   // authority and therefore fails closed when neither an order nor a prior
   // diplomatic commitment can be proved.
   if (jointSovereignChoice) {
@@ -2729,7 +2727,7 @@ const deriveNativeEventAgencyFor = (event, {
     };
   }
 
-  if (playerMentioned) {
+  if (playerConcerned) {
     if (actionMatch?.match) {
       return {
         source: "native-player-order",
@@ -2779,22 +2777,18 @@ const deriveNativeEventAgencyFor = (event, {
   const subjectPolity = subjectPolityFromEvent(event, resolver);
   if (subjectPolity) {
     if (playerCanonical && resolver.equivalent(subjectPolity, playerCanonical)) {
-      if (!crossesSovereign && DELEGATED_DOMESTIC_ACTOR_RE.test(fullText)) {
+      // The event's own actors or operations show the player's government
+      // choosing, and no order or message of the player's authorizes it.
+      if (playerChoosing) {
+        return { agency: null, reason: "player-fresh-sovereign-choice-without-authority", source: "native-unresolved-player" };
+      }
+      if (DELEGATED_DOMESTIC_ACTOR_RE.test(fullText)) {
         return { source: "native-player-delegated", reason: "bounded-domestic-actor", agency: nativeDomesticAgency(event, playerCanonical, "delegated-routine", resolver) };
       }
-      if (!crossesSovereign && ENDOGENOUS_DOMESTIC_PROCESS_RE.test(fullText)) {
+      if (ENDOGENOUS_DOMESTIC_PROCESS_RE.test(fullText)) {
         return { source: "native-player-endogenous", reason: "endogenous-domestic-process", agency: nativeDomesticAgency(event, playerCanonical, "endogenous-domestic", resolver) };
       }
-      if (!crossesSovereign) return { agency: null, reason: "player-event-not-safely-classifiable", source: "native-unresolved-player" };
-      // The screen drops only the first verdict: the player's country is shown
-      // making the choice, not merely the one country the event names.
-      return {
-        agency: null,
-        reason: resolver.equivalent(leadingSubjectPolity(event, resolver), playerCanonical)
-          ? "player-fresh-sovereign-choice-without-authority"
-          : "fresh-sovereign-choice-mentions-player",
-        source: "native-unresolved-player",
-      };
+      return { agency: null, reason: "player-event-not-safely-classifiable", source: "native-unresolved-player" };
     }
     return {
       source: "native-foreign-polity",
@@ -2812,7 +2806,7 @@ const deriveNativeEventAgencyFor = (event, {
 
   const institution = subjectInstitutionFromEvent(event, world);
   if (institution) {
-    if (playerMentioned && crossesSovereign) {
+    if (playerChoosing) {
       return { agency: null, reason: "institution-event-also-implicates-player-fresh-sovereign-choice", source: "native-unresolved-player" };
     }
     const principal = normalizeString(institution?.name || institution?.shortName || institution?.id);
@@ -2834,10 +2828,11 @@ const deriveNativeEventAgencyFor = (event, {
   // coordination process without the event itself exercising fresh sovereign
   // discretion.  Represent the interaction honestly as a collective process
   // instead of inventing a fake standing institution or pretending one polity
-  // alone owns the meeting.  Any treaty/new framework/etc. remains outside this
-  // path because crossesSovereign is true.
+  // alone owns the meeting. A commitment the event's actors chose together was
+  // taken above (jointSovereignChoice), and one the player's government is
+  // shown choosing is never relabelled a process.
   const mentionedPolities = eventMentionedPolities(event, resolver);
-  if (!crossesSovereign && mentionedPolities.length >= 2 && ROUTINE_COLLECTIVE_PROCESS_RE.test(fullText)) {
+  if (!playerChoosing && mentionedPolities.length >= 2 && ROUTINE_COLLECTIVE_PROCESS_RE.test(fullText)) {
     return {
       source: "native-collective-process",
       reason: "bounded-multi-polity-coordination",
@@ -2852,16 +2847,14 @@ const deriveNativeEventAgencyFor = (event, {
     };
   }
 
-  if (playerMentioned && !crossesSovereign && DELEGATED_DOMESTIC_ACTOR_RE.test(fullText)) {
+  if (playerChoosing) {
+    return { agency: null, reason: "player-fresh-sovereign-choice-without-authority", source: "native-unresolved-player" };
+  }
+  if (playerNamed && DELEGATED_DOMESTIC_ACTOR_RE.test(fullText)) {
     return { source: "native-player-delegated", reason: "bounded-domestic-actor", agency: nativeDomesticAgency(event, playerCanonical, "delegated-routine", resolver) };
   }
-  if (playerMentioned && !crossesSovereign && ENDOGENOUS_DOMESTIC_PROCESS_RE.test(fullText)) {
+  if (playerNamed && ENDOGENOUS_DOMESTIC_PROCESS_RE.test(fullText)) {
     return { source: "native-player-endogenous", reason: "endogenous-domestic-process", agency: nativeDomesticAgency(event, playerCanonical, "endogenous-domestic", resolver) };
-  }
-  if (playerMentioned && crossesSovereign) {
-    // Only mentioned: nothing shows the player's country is the one choosing,
-    // so the screen logs this verdict but never enforces it.
-    return { agency: null, reason: "fresh-sovereign-choice-mentions-player", source: "native-unresolved-player" };
   }
 
   if (EXOGENOUS_EVENT_RE.test(fullText)) {
@@ -2916,13 +2909,11 @@ const deriveNativeEventAgency = (event, { world = {}, resolver, humans = [] } = 
   if (refused) return { ...refused.result, polity: refused.human.canonical };
 
   const isHuman = (polity) => humans.some((human) => resolver.equivalent(polity, human.canonical));
-  const fullText = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  if (eventCrossesFreshSovereignPolicyBoundary(event) && JOINT_SOVEREIGN_COMMITMENT_RE.test(fullText)) {
-    const actorPolities = semanticActorPolities(event, resolver);
-    const explicit = Boolean(semanticActorTokens(event).length && actorPolities.length);
-    const named = humans.filter((human) => (explicit
-      ? actorPolities.some((polity) => resolver.equivalent(polity, human.canonical))
-      : actorFamilyMentioned(fullText, resolver.aliasesFor(human.canonical))));
+  // A commitment several humans chose together: the event lists them among its
+  // actors (or they are parties of an agreement it starts).
+  const actorPolities = semanticActorPolities(event, resolver);
+  if (actorPolities.length >= 2) {
+    const named = humans.filter((human) => actorPolities.some((polity) => resolver.equivalent(polity, human.canonical)));
     if (named.length >= 2) {
       const sovereignActors = [];
       for (const human of named) {
@@ -2947,7 +2938,7 @@ const deriveNativeEventAgency = (event, { world = {}, resolver, humans = [] } = 
         }
         sovereignActors.push({ polity: human.canonical, authority, authorityRef: "" });
       }
-      for (const polity of explicit ? actorPolities : []) {
+      for (const polity of actorPolities) {
         if (!isHuman(polity)) sovereignActors.push({ polity, authority: "autonomous", authorityRef: "" });
       }
       const primary = sovereignActors[0];
@@ -3031,10 +3022,10 @@ const nonSovereignPlayerActivityReason = (event, agency, { world = {}, resolver,
     return `endogenous-domestic principalKind must be domestic-process, domestic-actor, organization, or person; received ${principalKind || "(blank)"}`;
   }
 
-  // Native semantics, not the model's authority label, decide whether a claimed
-  // non-sovereign event actually crosses a fresh sovereign-policy boundary.
-  if (eventCrossesFreshSovereignPolicyBoundary(event)) {
-    return `${authority} event text crosses a fresh sovereign-policy boundary; a non-sovereign label cannot authorize government/parliament policy or a new international commitment`;
+  // What the event carries, not the model's authority label (nor its wording),
+  // decides whether a claimed non-sovereign event is the government's choice.
+  if (eventMakesStructuredChoiceFor(event, resolver, jurisdiction)) {
+    return `${authority} event lists ${jurisdiction} among its actors or sets its strategy; a non-sovereign label cannot authorize that government's choice or a new international commitment`;
   }
   if (authority === "delegated-routine") {
     const structured = delegatedStructuredSovereignReason(event);
@@ -3091,14 +3082,15 @@ const eventAgencyAuthorityReason = (event, {
   const playerCanonical = authorities.primary;
   const sovereignActors = normalizeArray(agency.sovereignActors);
 
-  // Every human polity whose government the event's politicalActorOps rewrite.
+  // Every human polity whose government's own choices (its strategy, how it
+  // means to behave) the event's politicalActorOps rewrite. An election, a
+  // party's rise or a new leader happens TO a country and needs no order.
   const mutatedHumans = [];
-  for (const operation of normalizeArray(event?.impacts?.politicalActorOps)) {
-    const target = resolver.canonical(normalizeString(operation?.polityKey || operation?.polity || operation?.country));
-    const human = target ? authorities.find(target) : null;
+  for (const target of politicalChoiceTargets(event, resolver)) {
+    const human = authorities.find(target);
     if (human && !mutatedHumans.includes(human)) mutatedHumans.push(human);
   }
-  if (mutatedHumans.length && eventCrossesFreshSovereignPolicyBoundary(event)) {
+  if (mutatedHumans.length) {
     for (const human of mutatedHumans) {
       const authorizedPlayerRow = sovereignActors.some((row) => {
         const target = resolver.canonical(normalizeString(row?.polity));
@@ -3193,8 +3185,8 @@ const eventAgencyAuthorityReason = (event, {
 
   if (["autonomous", "independent"].includes(agency.authority)) {
     if (agency.authority === "independent" && agency.principalKind === "collective-process"
-        && eventCrossesFreshSovereignPolicyBoundary(event)) {
-      return "independent collective-process provenance cannot disguise a fresh sovereign-policy choice or new international commitment";
+        && semanticActorPolities(event, resolver).length >= 2) {
+      return "independent collective-process provenance cannot disguise a commitment its listed actors chose together";
     }
     // Own-right discretion is not confined to sovereign governments. Membership
     // in a collective institution is NOT a fresh choice by every member state.
@@ -3253,28 +3245,62 @@ const eventAgencyAuthorityReason = (event, {
 export const playerAgencyViolationReason = (event, options = {}) =>
   eventAgencyAuthorityReason(event, { ...options, requireAgency: false });
 
+// The polities a ledger record of the answer names as its parties: an
+// agreement's parties, a relation's two sides, a war's sides.
+const ledgerRecordPolities = (record) => uniqueStrings([
+  ...normalizeArray(record?.parties),
+  ...normalizeArray(record?.sideA),
+  ...normalizeArray(record?.sideB),
+  ...normalizeArray(record?.actors),
+  ...normalizeArray(record?.opponents),
+  record?.a,
+  record?.b,
+].map(normalizeString).filter(Boolean));
+
+const ledgerRecordsOfEvent = (candidate, event, eventIndex) => {
+  const eventId = normalizeString(event?.id);
+  return [candidate?.agreementUpdates, candidate?.relationUpdates, candidate?.warUpdates]
+    .filter(Array.isArray)
+    .flat()
+    .filter((record) => record && typeof record === "object")
+    .filter((record) => (eventId && normalizeArray(record?.eventIds).map(normalizeString).includes(eventId))
+      || (Number.isInteger(eventIndex) && normalizeArray(record?.eventIndexes).map(Number).includes(eventIndex)));
+};
+
+// Whether an event that failed the agency check stands at a human's sovereign
+// boundary (and so is never quietly dropped), read only from what it carries:
+// an agency claiming a human's sovereignty, the human among its actors, an
+// operation on the human's government or polity, a treaty, war or relation
+// record of the answer tied to it with the human as a party, an order of the
+// human's it cites, or the binder's verdict that it was the human's choice.
+// Never from its wording: a world event that names the player's country
+// beside "government" or "approves" is the world's.
 const eventReferencesPlayerSovereignty = (event, {
   world = {},
   gameCountry = "",
   humanCountries = [],
+  actions = [],
   unresolved = null,
+  candidate = null,
+  eventIndex = -1,
 } = {}) => {
   const resolver = createWorldActorResolver(world, gameCountry, { humans: otherHumans(gameCountry, humanCountries) });
   const humans = uniqueStrings([gameCountry, ...normalizeArray(humanCountries)]
     .map((name) => resolver.canonical(normalizeString(name)))
     .filter(Boolean));
   if (!humans.length) return false;
-  const isHuman = (polity) => humans.some((human) => resolver.equivalent(polity, human));
+  const isHuman = (polity) => Boolean(normalizeString(polity)) && humans.some((human) => resolver.equivalent(polity, human));
   if (humans.some((human) => rawAgencyClaimsPlayerSovereignty(event?.agency, resolver, human))) return true;
-  const playerPoliticalActorMutation = normalizeArray(event?.impacts?.politicalActorOps).some((operation) => {
-    const target = resolver.canonical(normalizeString(operation?.polityKey || operation?.polity || operation?.country));
-    return Boolean(target && isHuman(target));
-  });
-  if (playerPoliticalActorMutation && eventCrossesFreshSovereignPolicyBoundary(event)) return true;
   if (normalizeString(unresolved?.source).includes("player")) return true;
-  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  return humans.some((human) => actorFamilyMentioned(text, resolver.aliasesFor(human)))
-    && eventCrossesFreshSovereignPolicyBoundary(event);
+  if (humans.some((human) => eventMakesStructuredChoiceFor(event, resolver, human))) return true;
+  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
+  if (normalizeArray(impacts.politicalActorOps).some((operation) =>
+    isHuman(operation?.polityKey || operation?.polity || operation?.country))) return true;
+  if (normalizeArray(impacts.polityChanges).some((change) =>
+    [change?.code, change?.fromCode, change?.polity, change?.name].some(isHuman))) return true;
+  if (ledgerRecordsOfEvent(candidate, event, eventIndex).some((record) => ledgerRecordPolities(record).some(isHuman))) return true;
+  const queued = currentActionIds(actions);
+  return normalizeArray(impacts.actionIds).some((id) => queued.has(normalizeString(id)));
 };
 
 const provenanceRecordCollections = (candidate) => [
@@ -3374,7 +3400,10 @@ export const validateWorldPlayerAgencyPayload = (candidate, {
       world,
       gameCountry,
       humanCountries,
+      actions,
       unresolved,
+      candidate,
+      eventIndex: index,
     });
 
     const independent = !eventHasCanonicalProvenanceDependencies(candidate, event, index);
@@ -3636,6 +3665,9 @@ export const screenGeneratedWorldEvents = ({
   // The segment's agreement records, bound to its events by id: the parties
   // of a treaty an event starts are who made that choice.
   agreementUpdates = [],
+  // And its war records: the side that starts or joins a war by an event made
+  // that choice.
+  warUpdates = [],
   // The segment's orders to its battlefields, bound the same way: an event one
   // rests on is not routine military news.
   frontOrders = [],
@@ -3686,13 +3718,15 @@ export const screenGeneratedWorldEvents = ({
     strippedNoOpRegionControlOps += controlSanitized.removed;
 
     const eventId = normalizeString(controlSanitized.event?.id);
+    const recordsOfEvent = (updates) => (eventId
+      ? normalizeArray(updates)
+        .filter((update) => normalizeArray(update?.eventIds).map(normalizeString).includes(eventId))
+        .map((update) => ({ ...update, eventIndexes: [] }))
+      : []);
     const eventWrapper = {
       events: [controlSanitized.event],
-      agreementUpdates: eventId
-        ? normalizeArray(agreementUpdates)
-          .filter((update) => normalizeArray(update?.eventIds).map(normalizeString).includes(eventId))
-          .map((update) => ({ ...update, eventIndexes: [] }))
-        : [],
+      agreementUpdates: recordsOfEvent(agreementUpdates),
+      warUpdates: recordsOfEvent(warUpdates),
     };
     const binding = bindWorldEventAuthorityRefs(eventWrapper, {
       world,

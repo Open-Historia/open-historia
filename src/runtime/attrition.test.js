@@ -52,7 +52,8 @@ test("a run counts what attrition took from each country, and the battle's repor
   assert.equal(of("Aland").days, 20);
   const brief = harsh.battlefields[0].brief;
   assert.ok(Array.isArray(brief.attrition) && brief.attrition[0] > 0);
-  assert.match(describeBattlefield(harsh.battlefields[0]), /Attrition: Aland lost [\d.]+ formations' worth, Borduria lost [\d.]+ formations' worth to the weather and to being cut off this period/);
+  // (As a skip tells one battlefield in full: Game/AI/frontPrompt.js BRIEF_TEXT_FULL_MAX.)
+  assert.match(describeBattlefield(harsh.battlefields[0], { max: 1400 }), /Attrition: Aland lost [\d.]+ formations' worth, Borduria lost [\d.]+ formations' worth to the weather and to being cut off this period/);
   // Without it, the same weather takes nothing from troops in supply, and nothing is counted.
   const plain = runFronts(war({ mechanics: { weather: true }, steering: { weather: "blizzard" } }));
   assert.equal(plain.attrition, undefined);

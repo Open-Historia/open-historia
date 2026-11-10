@@ -1569,6 +1569,14 @@ const TimelineSkipPanel = ({
     const customLanding = Number.isFinite(customDays) && customDays > 0
         ? jumpLandingLabel(currentDate, customDays)
         : "";
+    // A length typed in is thought through while the player decides, a moment after the typing stops, in the land
+    // war's own worker; typing again calls it off and begins again (AI/frontPrethink.js). Only at a war: with none
+    // there is nothing to think through, and nothing is run.
+    useEffect(() => {
+        if (!(Number.isFinite(customDays) && customDays >= 1) || blocked) return undefined;
+        scheduleFrontsPrethink({ days: customDays, delay: 1500 });
+        return undefined;
+    }, [customDays, blocked]);
     const jumpOptions = [
         { label: "6 hours", sublabel: jumpLandingLabel(currentDate, 0.25), days: 0.25 },
         { label: "1 day", sublabel: jumpLandingLabel(currentDate, 1), days: 1 },

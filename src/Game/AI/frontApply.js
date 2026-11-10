@@ -301,9 +301,13 @@ const warGroundOf = (world) => [
     .map(([key, record]) => [key, record?.name ?? "", record.military])),
 ];
 
-// The last period worked out, kept while the same turn is being asked for: a
+// The last periods worked out, kept while the same turn is being asked for: a
 // request that is retried, or asked of the next model on the list, finds it done.
-let foreseen = { key: "", value: null };
+// And a few of them, of different lengths: the next period is thought through
+// ahead of time to the longer skips as well (frontPrethink.js), and a skip of
+// any of those lengths finds its own.
+export const FORESEEN_KEPT = 4;
+const foreseen = new globalThis.Map();
 
 // Runs the front engine over the days a turn is ABOUT to cover, under the
 // orders that already stand (the campaign's, and what was ordered in the war
@@ -343,7 +347,12 @@ export const forecastTurnFronts = async ({ world = {}, game = {}, campaignId = "
       // fought in, and each country's military figures (Wars and Fronts Pt.2).
       hashOf(JSON.stringify(warGroundOf(world))),
     ].join("|");
-    if (foreseen.key === key) return foreseen.value;
+    if (foreseen.has(key)) {
+      const value = foreseen.get(key);
+      foreseen.delete(key);
+      foreseen.set(key, value);
+      return value;
+    }
     const startedAt = Date.now();
     const run = await runFrontsWhere({
       ...turnRunInput({ world, game, campaignId, loadRegions, signal, round, fromDate }),
@@ -359,7 +368,8 @@ export const forecastTurnFronts = async ({ world = {}, game = {}, campaignId = "
     const value = run?.battlefields && days > 0
       ? { fromDate, toDate: target, days, battlefields: run.battlefields, news: asArray(run.news), flips: asArray(run.flips), transports: asArray(run.transports), voyages: asArray(run.voyages), sea: run.sea ?? null, airStrikes: asArray(run.airStrikes), ...(asArray(given).length ? { given: asArray(given) } : {}) }
       : null;
-    foreseen = { key, value };
+    foreseen.set(key, value);
+    while (foreseen.size > FORESEEN_KEPT) foreseen.delete(foreseen.keys().next().value);
     if (value) {
       const told = `the period's land war worked out before its story: ${days} day${days === 1 ? "" : "s"}, ${value.flips.length} region${value.flips.length === 1 ? "" : "s"} changed hands, ${value.news.length} thing${value.news.length === 1 ? "" : "s"} to tell (${Date.now() - startedAt} ms).`;
       console.info(`[OH fronts] ${told}`);

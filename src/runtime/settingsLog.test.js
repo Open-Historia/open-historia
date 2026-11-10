@@ -46,6 +46,13 @@ test("My key has no request limit: one line, off on a fresh install; on, the lim
     assert.equal(await line("My key has no request limit"), "My key has no request limit: off");
 });
 
+test("Countries write to me between time skips: on unless the player turned it off", async () => {
+    assert.equal(await line("Countries write to me between time skips"), "Countries write to me between time skips: on");
+    localStorage.setItem(MAP_SETTING_KEYS.idleDiplomacy, "0");
+    assert.equal(await line("Countries write to me between time skips"), "Countries write to me between time skips: off");
+    localStorage.removeItem(MAP_SETTING_KEYS.idleDiplomacy);
+});
+
 test("Performance mode: the profile running, why, and what a reload would change it to", async () => {
     // Node has no touch screen and reports no memory: the full path.
     assert.equal(await line("Performance mode"), "Performance mode: full (memory not reported)");

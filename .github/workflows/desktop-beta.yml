@@ -45,6 +45,9 @@ on:
 # The release is created and its assets uploaded from here.
 permissions:
   contents: write
+  # SignPath fetches the Windows build's artifacts through this run's token
+  # (docs/code-signing.md). Read-only, and unused while signing is not set up.
+  actions: read
 
 jobs:
   # The suite runs once, on Linux, before any installer is built: run in each of
@@ -93,6 +96,13 @@ jobs:
 
   build:
     needs: test
+    # Windows code signing through SignPath Foundation (docs/code-signing.md). It
+    # runs only on the Windows job, and only once the owner has set the secret and
+    # the three variables; without them every step it adds is skipped and the
+    # build is exactly the unsigned one it always was. Secrets cannot be read in
+    # a step's `if:`, hence this flag.
+    env:
+      SIGNPATH_ENABLED: ${{ matrix.os == 'windows-latest' && secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' && vars.SIGNPATH_PROJECT_SLUG != '' && vars.SIGNPATH_SIGNING_POLICY_SLUG != '' }}
     strategy:
       fail-fast: false # one platform failing must not throw away the other two
       matrix:
@@ -108,7 +118,8 @@ jobs:
             args: --linux
     runs-on: ${{ matrix.os }}
     # A build takes 3 to 15 minutes; a hang stops here instead of at six hours.
-    timeout-minutes: 45
+    # A signed Windows build waits on two manual SignPath approvals as well.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && vars.SIGNPATH_PROJECT_SLUG != '' && 150 || 45 }}
     steps:
       # A dispatch run picks its own branch from a dropdown, and `main` is in that
       # dropdown too — a run from there would package the released code, call it the
@@ -198,9 +209,109 @@ jobs:
       - name: Build the installer
         run: node scripts/package-desktop.mjs ${{ matrix.args }} --config electron-builder.beta.yml --publish never
         env:
-          # No code-signing certificate. Without this electron-builder tries to
+          # electron-builder itself never signs: Windows is signed by SignPath in
+          # the steps below, macOS has no certificate. Without this it tries to
           # discover one and fails the build rather than skipping signing.
           CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      # Windows code signing, when it is set up (env.SIGNPATH_ENABLED above). The
+      # same steps as desktop-installer.yml, with the beta's config and names: the
+      # app's own programs are signed first, the installer is rebuilt around them
+      # and signed in turn, latest.yml is rewritten for the signed installer, and
+      # the update chunks below are cut from the signed app.
+      - name: Collect the app's programs for signing
+        id: unsigned-app
+        if: env.SIGNPATH_ENABLED == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: signpath-app-unsigned
+          path: |
+            release/win-unpacked/*.exe
+            release/win-unpacked/resources/app.asar.unpacked/**/*.exe
+            release/win-unpacked/resources/app.asar.unpacked/**/*.node
+          if-no-files-found: error
+          retention-days: 1
+          # A re-run of the job uploads again under the same name.
+          overwrite: true
+
+      - name: Sign the app's programs
+        if: env.SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned-app.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-app
+
+      - name: Put the signed programs back in the app
+        if: env.SIGNPATH_ENABLED == 'true'
+        shell: bash
+        run: cp -Rv signed-app/. release/win-unpacked/
+
+      # --prepackaged packs the folder as it is (see desktop-installer.yml).
+      - name: Rebuild the installer around the signed app
+        if: env.SIGNPATH_ENABLED == 'true'
+        run: node scripts/package-desktop.mjs --win --prepackaged release/win-unpacked --config electron-builder.beta.yml --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Collect the installer for signing
+        id: unsigned-installer
+        if: env.SIGNPATH_ENABLED == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: signpath-installer-unsigned
+          path: release/Open-Historia-Beta-Setup.exe
+          if-no-files-found: error
+          retention-days: 1
+          # A re-run of the job uploads again under the same name.
+          overwrite: true
+
+      - name: Sign the installer
+        if: env.SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-installer
+
+      - name: Put the signed installer in place and rewrite the update feed for it
+        if: env.SIGNPATH_ENABLED == 'true'
+        shell: bash
+        run: |
+          cp -v signed-installer/Open-Historia-Beta-Setup.exe release/Open-Historia-Beta-Setup.exe
+          node scripts/refresh-update-feed.mjs --feed release/latest.yml --file release/Open-Historia-Beta-Setup.exe
+          cat release/latest.yml
+
+      # Fails the build rather than publish anything unsigned as signed.
+      - name: Check the Windows signatures
+        id: signed
+        if: env.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem release/win-unpacked/*.exe) + @(Get-Item release/Open-Historia-Beta-Setup.exe)
+          if (Test-Path release/win-unpacked/resources/app.asar.unpacked) {
+            $files += @(Get-ChildItem release/win-unpacked/resources/app.asar.unpacked -Recurse -Include *.exe,*.node)
+          }
+          $bad = 0
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file.FullName
+            Write-Host "$($signature.Status)  $($signature.SignerCertificate.Subject)  $($file.FullName)"
+            if ($signature.Status -ne 'Valid') { $bad += 1 }
+          }
+          if ($bad -gt 0) { Write-Error "$bad file(s) are not validly signed"; exit 1 }
+          "signed=true" >> $env:GITHUB_OUTPUT
 
       # The same files a second time, cut into chunks: an installed app updates by
       # fetching the chunks that changed instead of the installer again
@@ -326,6 +437,25 @@ jobs:
           # Announcing only once the installers are in place closes it.
           gh release upload "$TAG" "${files[@]}" --clobber
           gh release upload "$TAG" "${feeds[@]}" --clobber
+
+      # Only when this run's Windows build was signed (steps.signed): the release
+      # page then says so, with the attribution and the policy link SignPath
+      # Foundation asks every download page for. Once per release.
+      - name: Say on the release that the Windows build is signed
+        if: steps.signed.outputs.signed == 'true' && (github.event_name == 'push' || inputs.publish)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || 'desktop-beta' }}
+        shell: bash
+        run: |
+          body="$(gh release view "$TAG" --json body --jq .body)"
+          case "$body" in *"Code signing policy"*) exit 0 ;; esac
+          {
+            printf '%s\n\n' "$body"
+            printf '%s\n' '**Windows:** the installer and the app are code-signed. Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org). [Code signing policy](https://github.com/Open-Historia/open-historia#code-signing-policy)'
+          } > signing-notes.md
+          gh release edit "$TAG" --notes-file signing-notes.md
 
   # Once every system's build of this release is up, the chunks no build names
   # any more come off the chunk release, which holds 1,000 files at most

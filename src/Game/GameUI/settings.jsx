@@ -1519,6 +1519,8 @@ const RequestBudgetSection = () => {
     // under a fixed cap for the day.
     const [noLimit, setNoLimit] = useState(() => requestSettings.noRequestLimit());
     const lookupsOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
+    // Idle diplomacy has a switch of its own, outside that cap (2026-11-09).
+    const idleDiplomacyOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy);
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
 
     useEffect(() => {
@@ -1670,6 +1672,20 @@ const RequestBudgetSection = () => {
                     <div style={helperStyle}>Only used for the count above and to keep requests nobody pressed a button for from spending the end of your day. The game never stops you at the limit; your provider does.</div>
                 </div>
             )}
+
+            {/* Where Background AI's switch was. On, unlimited: the daily cap
+                does not count or stop it (requestBudget.js
+                UNCAPPED_BACKGROUND_TASKS). The scenario's own idle diplomacy
+                still applies. */}
+            <Toggle
+            label="Countries write to me between time skips"
+            enabled={idleDiplomacyOn}
+            onToggle={() => setMapSetting(MAP_SETTING_KEYS.idleDiplomacy, !idleDiplomacyOn)}
+            />
+            {/* The section ends on this line when there is nothing under Advanced. */}
+            <div style={{ ...settingsHelper, ...(noLimit ? null : { marginBottom: 0 }) }}>
+                Off: between time skips, no country writes to you unless you write first.
+            </div>
 
             {noLimit && (
                 <details style={{ marginBottom: 0 }}>

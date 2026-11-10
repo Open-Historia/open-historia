@@ -352,6 +352,7 @@ Small localStorage-backed settings read reactively instead of threaded as props 
 | `chunkLongJumps` | `ai_chunk_long_jumps` | off | `getMapSetting` / `useMapSetting` | Long time skips are generated in several shorter requests, one per segment |
 | `lookupFunctions` | `ai_lookup_functions` | **on** | `getMapSettingDefaultOn` | Structured tasks declare the lookup functions (only while My key has no request limit is on; Settings → AI → AI requests → Advanced) |
 | `liveSkipEvents` | `ai_live_skip_events` | **on** | `getMapSettingDefaultOn` | A skip fills the Events panel as the model writes |
+| `idleDiplomacy` | `ai_idle_diplomacy` | **on** | `getMapSettingDefaultOn` / `useMapSettingDefaultOn` | **Countries write to me between time skips** (Settings → AI → AI requests). Off, no idle diplomacy is scheduled or sent; on, it is outside the background daily cap (`UNCAPPED_BACKGROUND_TASKS`). The scenario's `idleDiplomacy` feature still applies |
 
 | Export | Purpose |
 |---|---|

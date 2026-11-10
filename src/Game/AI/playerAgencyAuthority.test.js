@@ -271,7 +271,7 @@ test("politicalActorOps cannot smuggle a fresh human sovereign-policy choice thr
     impacts: {
       ...baseImpacts(),
       politicalActorOps: [{
-        op: "set-strategic-goals",
+        op: "set-strategy",
         polityKey: "Republic of Latvia",
         argsJson: JSON.stringify({ goals: ["Adopt the generated security doctrine"] }),
       }],
@@ -302,7 +302,7 @@ test("politicalActorOps may encode a fresh human sovereign-policy choice when bo
       ...baseImpacts(),
       actionIds: ["action-doctrine"],
       politicalActorOps: [{
-        op: "set-strategic-goals",
+        op: "set-strategy",
         polityKey: "Republic of Latvia",
         argsJson: JSON.stringify({ goals: ["Implement the Cerulean Security Doctrine"] }),
       }],
