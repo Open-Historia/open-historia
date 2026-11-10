@@ -2871,6 +2871,22 @@ function* stepDay(run) {
   run.day = day;
 }
 
+// A region that changed hands on a battle, by name: { name?, cities?, capital? }, the towns in it the larger first
+// (three at most), and whether one of them is a capital. Nothing for a region with no name of its own.
+const FLIP_CITIES_MOST = 3;
+const flipPlaces = (battle, regionId) => {
+  const arena = battle?.arena;
+  const index = arena?.indexOf?.get(regionId);
+  if (index === undefined || !arena.names[index] || arena.names[index] === arena.ids[index]) return {};
+  const towns = arena.cities.filter((city) => city.cell >= 0 && arena.region[city.cell] === index)
+    .sort((a, b) => (b.capital ? 1 : 0) - (a.capital ? 1 : 0) || b.population - a.population || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return {
+    name: arena.names[index],
+    ...(towns.length ? { cities: towns.slice(0, FLIP_CITIES_MOST).map((city) => city.name) } : {}),
+    ...(towns.some((city) => city.capital) ? { capital: true } : {}),
+  };
+};
+
 // The result of a run as it stands after the days simulated so far.
 const snapshot = (run) => {
   const day = run.day;
@@ -2882,7 +2898,9 @@ const snapshot = (run) => {
   return {
     battlefields: [...open, ...closed],
     // (A take by a country's force says whose it is, and on whose land: day.js settleRegions.)
-    flips: run.flips.map(({ day: on, date, battlefield, regionId, from, to, kind, owner, land }) => ({ day: on, date, battlefield: battlefield.name, regionId, from, to, kind, ...(owner ? { owner, land } : {}) })),
+    // (And what the region is called, with its towns, the larger first: what an event of the story must name to
+    // carry it, Game/AI/frontTurn.js attachFrontFlips. Never its id, which nobody reads.)
+    flips: run.flips.map(({ day: on, date, battlefield, regionId, from, to, kind, owner, land }) => ({ day: on, date, battlefield: battlefield.name, regionId, from, to, kind, ...(owner ? { owner, land } : {}), ...flipPlaces(battlefield, regionId) })),
     // The countries troops were sent into, each with the war it is in from
     // that day and the side of it (0 for its first, 1 for its second).
     joins: run.joins.map(({ day: on, date, battlefield, warId, name, side, by }) => ({ day: on, date, battlefield: battlefield.name, warId, name, side, by })),

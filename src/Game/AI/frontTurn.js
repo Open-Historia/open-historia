@@ -72,7 +72,8 @@ const isRecord = (value) => Boolean(value) && typeof value === "object" && !Arra
 // time (a turn cut short and continued, a held turn retried) works the land war
 // out afresh from the same orders; left in, the first run's changes would be
 // applied beside the second's.
-export const stripFrontOps = (events) => asArray(events).map((event) => {
+// (And the events the engine wrote itself, frontReportEvents: they are written again.)
+export const stripFrontOps = (events) => asArray(events).filter((event) => clean(event?.source) !== FRONT_MARK).map((event) => {
   const impacts = event?.impacts;
   if (!isRecord(impacts)) return event;
   const control = asArray(impacts.regionControlOps);
@@ -765,19 +766,33 @@ export const runFrontTurn = async ({ createFrontRun, input, loadRegions = null, 
 // war on that battlefield), a change rides on such an event where there is
 // one: the first of its day or later, else the last before it. The map then
 // moves with the report of the fighting, not with whatever came next.
-export const attachFrontFlips = (events, flips, { dayOf = () => 0, aboutOf = null } = {}) => {
+//
+// With `tellsOf(event, flip)` (whether an event names the place that changed
+// hands: frontPlaceTold) it rides only on an event of its own war that tells
+// THAT place: the fall of Berlin rode on "Mud and Early Frost Stall
+// Wehrmacht Armor Outside Moscow", the one event of its war on its day or
+// later (2026-11-10). One that no event tells is `unattached`, for the caller
+// to tell itself (frontReportEvents).
+export const attachFrontFlips = (events, flips, { dayOf = () => 0, aboutOf = null, tellsOf = null } = {}) => {
   const list = asArray(events);
   const dated = list.map((event, index) => ({ index, day: dayOf(event), open: asArray(event?.audience).length === 0 && !clean(event?.audience) }));
   const carriers = (dated.some((entry) => entry.open) ? dated.filter((entry) => entry.open) : dated.slice(-1))
     .sort((a, b) => a.day - b.day || a.index - b.index);
   const added = new Map();
   const unattached = [];
+  const nearest = (entries, day) => entries.find((entry) => entry.day >= day) ?? entries[entries.length - 1];
   for (const flip of asArray(flips)) {
     const regionId = clean(flip?.regionId);
     if (!regionId) continue;
     const day = Number(flip?.day) || 0;
     const own = typeof aboutOf === "function" ? carriers.filter((entry) => aboutOf(list[entry.index], clean(flip?.battlefield))) : [];
-    const carrier = own.find((entry) => entry.day >= day) ?? own[own.length - 1] ?? carriers.find((entry) => entry.day >= day) ?? carriers[carriers.length - 1];
+    let carrier;
+    if (typeof tellsOf === "function") {
+      // (Of its own war: Berlin is also where a declaration of war on somebody else is made.)
+      carrier = nearest(own.filter((entry) => tellsOf(list[entry.index], flip)), day);
+    } else {
+      carrier = own.find((entry) => entry.day >= day) ?? own[own.length - 1] ?? carriers.find((entry) => entry.day >= day) ?? carriers[carriers.length - 1];
+    }
     if (!carrier) {
       unattached.push(flip);
       continue;
@@ -811,6 +826,97 @@ export const attachFrontFlips = (events, flips, { dayOf = () => 0, aboutOf = nul
   });
   return { events: next, unattached };
 };
+
+// Whether an event tells the place a change of hands was at: one of its places
+// is that region (by its id or its name) or a town in it, or its title or text
+// names one of them. Names are matched whole, in any case: that is who the
+// place is, and nothing is read of what the event says happened there.
+const wholeName = (name) => new RegExp(`(?<![\\p{L}\\p{N}])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "iu");
+export const frontPlaceTold = (event, flip) => {
+  const names = [clean(flip?.name), ...asArray(flip?.cities).map(clean)].filter(Boolean);
+  const regionId = clean(flip?.regionId);
+  const placed = asArray(event?.places).some((place) => {
+    if (typeof place === "string") return names.some((name) => fold(place).replace(/^[a-z]+\s*:\s*/, "").split(",")[0].trim() === fold(name));
+    return (regionId && clean(place?.regionId) === regionId) || names.some((name) => fold(place?.name) === fold(name));
+  });
+  if (placed) return true;
+  const text = `${clean(event?.title)} ${clean(event?.description)}`;
+  return names.some((name) => wholeName(name).test(text));
+};
+
+// What the engine itself tells of the changes of hands no event of the story
+// told (attachFrontFlips with tellsOf): an event for each battlefield, taker
+// and stretch of days (`windowOf`; a month unless told), dated the day of the
+// last of them, saying in names what was taken from whom and carrying the
+// changes. It is the engine's (source "front"), so
+// a turn applied again takes it out with the rest (stripFrontOps). In place of
+// putting the fall of a capital on a report of mud before another city.
+//   records   the battlefields as the run leaves them
+//   players   the countries and groups people play
+export const FRONT_REPORT_MOST = 3;
+export const FRONT_REPORT_DAYS = 30;
+export const frontReportEvents = (flips, { records = [], players = [], dateOf = (flip) => clean(flip?.date), windowOf = (flip) => Math.floor((Number(flip?.day) || 0) / FRONT_REPORT_DAYS) } = {}) => {
+  const byName = new Map(asArray(records).map((record) => [foldBattlefieldName(record?.name), record]));
+  const human = new Set(asArray(players).map(fold).filter(Boolean));
+  const groups = new Map();
+  for (const flip of asArray(flips)) {
+    if (!clean(flip?.regionId) || !clean(flip?.to)) continue;
+    // (The changes of one stretch of days to an event: the map moves on the day of the last of them.)
+    const key = `${foldBattlefieldName(flip.battlefield)}|${fold(flip.to)}|${fold(flip.from)}|${windowOf(flip)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(flip);
+  }
+  const listed = (names) => (names.length <= FRONT_REPORT_MOST
+    ? names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0] ?? ""
+    : `${names.slice(0, FRONT_REPORT_MOST).join(", ")} and ${names.length - FRONT_REPORT_MOST} more`);
+  const events = [];
+  for (const group of groups.values()) {
+    const first = group[0];
+    const record = byName.get(foldBattlefieldName(first.battlefield));
+    const battlefield = clean(record?.name) || clean(first.battlefield);
+    const taker = clean(first.to);
+    const loser = clean(first.from);
+    const days = group.map((flip) => Number(flip.day) || 0);
+    const last = group[days.indexOf(Math.max(...days))];
+    const dates = [...new Set(group.map(dateOf).filter(Boolean))].sort();
+    // A capital first, then the towns, then the regions by name: never an id.
+    const ordered = [...group].sort((a, b) => (b.capital ? 1 : 0) - (a.capital ? 1 : 0));
+    const regions = [...new Set(ordered.map((flip) => clean(flip.name)).filter(Boolean))];
+    // (Each by its largest town, where it has one: "takes Berlin" before "takes the region of Brandenburg".)
+    const headline = [...new Set(ordered.map((flip) => clean(asArray(flip.cities)[0]) || clean(flip.name)).filter(Boolean))];
+    const groupOp = (flip) => flip.kind === "groupTake" || flip.kind === "groupRelease";
+    const control = group.filter((flip) => !groupOp(flip) && clean(flip.from));
+    const grouped = group.filter(groupOp);
+    const capital = group.some((flip) => flip.capital === true);
+    const when = dates.length > 1 ? `between ${dates[0]} and ${dates.at(-1)}` : dates.length ? `on ${dates[0]}` : "";
+    events.push({
+      id: `front-${slugOf(battlefield)}-${slugOf(taker)}-${clean(dateOf(last)) || "end"}`,
+      date: clean(dateOf(last)),
+      title: headline.length ? `${taker} takes ${listed(headline)}` : `${taker} gains ground on ${battlefield}`,
+      description: `The fighting on ${battlefield} put ${regions.length ? `${regions.length === 1 ? "the region of" : "the regions of"} ${listed(regions)}` : `${group.length} ${group.length === 1 ? "region" : "regions"}`} in ${taker}'s hands${loser ? `, taken from ${loser}` : ""}${when ? ` ${when}` : ""}.`,
+      kind: "military",
+      importance: capital ? "major" : "minor",
+      notable: capital,
+      playerRelated: human.has(fold(taker)) || human.has(fold(loser)),
+      ...(clean(record?.warId) ? { warId: clean(record.warId) } : {}),
+      ...(loser && !grouped.length ? { combatants: [taker, loser] } : {}),
+      ...(regions.length ? { places: ordered.filter((flip) => clean(flip.name)).slice(0, 4).map((flip) => ({ kind: "region", name: clean(flip.name), regionId: clean(flip.regionId) })) } : {}),
+      source: FRONT_MARK,
+      impacts: {
+        ...(control.length ? { regionControlOps: control.map((flip) => ({ op: "control", regionId: clean(flip.regionId), fromCode: clean(flip.from), toCode: clean(flip.to), basis: "occupation", note: battlefield, by: FRONT_MARK })) } : {}),
+        ...(grouped.length ? {
+          groupOps: grouped.map((flip) => {
+            const name = clean(flip.kind === "groupTake" ? flip.to : flip.from);
+            const owner = flip.kind === "groupTake" ? clean(flip.owner) : "";
+            return { op: flip.kind === "groupTake" ? "take" : "release", name, regionIds: [clean(flip.regionId)], note: battlefield, by: FRONT_MARK, ...(owner ? { owner, description: forceGroupDescription(owner, flip.land, flip.from) } : {}) };
+          }),
+        } : {}),
+      },
+    });
+  }
+  return events;
+};
+const slugOf = (value) => fold(value).replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "") || "x";
 
 // The world's formations after the run: one taken onto a battlefield carries its
 // name, one that came back stands where its troop stood with what is left of
@@ -1475,12 +1581,34 @@ export const runTurnFronts = async ({
     return { ...event, impacts: { ...event.impacts, regionControlOps: ops } };
   });
 
+  // Each change of hands rides on an event of its war that tells its place; what none tells, the engine tells
+  // itself, in an event of its own on the day of the last of it (frontReportEvents).
+  const attached = attachFrontFlips(kept, result.flips, { dayOf, aboutOf, tellsOf: frontPlaceTold });
+  // (A report for the days up to each event of the story: the map on that event's date is the engine's on that day, as
+  // it was when every change rode on the first event of its day or later.)
+  const storyDays = [...new Set(kept.filter((event) => asArray(event?.audience).length === 0 && !clean(event?.audience)).map(dayOf))].sort((a, b) => a - b);
+  const reports = frontReportEvents(attached.unattached, {
+    records: result.battlefields,
+    players,
+    windowOf: (flip) => {
+      const at = storyDays.findIndex((day) => day >= (Number(flip?.day) || 0));
+      return at < 0 ? storyDays.length : at;
+    },
+  });
+  const carried = [...attached.events];
+  for (const report of reports) {
+    const day = dayOf(report);
+    // (Before the first event of its day or later: what fell by a day is on the map when that day's story is read.)
+    const at = carried.findIndex((event) => dayOf(event) >= day);
+    carried.splice(at < 0 ? carried.length : at, 0, report);
+  }
+
   return {
     strikes: strikes.map((strike) => ({ ...strike, owner: nameOf(strike.owner) })),
     transports,
     voyages: asArray(result.voyages),
     underWay: transports.filter(isUnderWay).length,
-    events: attachFrontFlips(kept, result.flips, { dayOf, aboutOf }).events,
+    events: carried,
     // A battlefield whose period the story was told before it was written says
     // so (brief.told): the next turn has nothing of this one left to tell. One
     // that does not (it opened in this answer, or the turn was asked for the

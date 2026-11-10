@@ -21,7 +21,7 @@ import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { enlarge, syntheticMap } from "../../runtime/fronts/syntheticMap.js";
 import { decodeFrontOrders } from "./nativeFrontLedger.js";
 import { BRIEF_TEXT_FULL_MAX, FRONTS_BLOCK_MAX, PERIOD_TEXT_MAX, buildFrontsBlock, describePeriod, describeUntold } from "./frontPrompt.js";
-import { FRONT_MARK, attachFrontFlips, frontRunSpan, planFrontMoments, runTurnFronts } from "./frontTurn.js";
+import { FRONT_MARK, attachFrontFlips, frontPlaceTold, frontReportEvents, frontRunSpan, planFrontMoments, runTurnFronts, stripFrontOps } from "./frontTurn.js";
 
 const legend = { A: "Aland", B: "Borduria", "~": null };
 const cities = [
@@ -118,6 +118,54 @@ test("a change of hands rides on an event that tells of its war: the first of it
   assert.ok(next.every((entry) => (entry.impacts.regionControlOps ?? []).every((op) => op.by === FRONT_MARK)));
 });
 
+// "now ive captured berlin": the engine's capture of the capital rode on "Mud and Early Frost Stall Wehrmacht Armor
+// Outside Moscow", the one event of its war on its day or later (2026-11-10). A change of hands rides on an event of
+// its war that names its place, and what none names the engine tells itself, by name and on its own days.
+test("a change of hands rides on the event of its war that tells its place, and the engine tells the rest itself", () => {
+  const events = [
+    event("e1", "2024-03-05", { warId: "war-east", title: "Mud stalls the armour before Eastgate" }),
+    event("e2", "2024-03-12", { warId: "war-east", title: "The capital falls", description: "Aland's troops raise their flag over Brodgrad." }),
+    event("e3", "2024-03-14", { warId: "war-other", title: "A declaration made in Brodgrad", places: [{ kind: "city", name: "Brodgrad" }] }),
+    event("e4", "2024-03-20", { warId: "war-east", places: [{ kind: "region", name: "Lowmark", regionId: "r7" }] }),
+  ];
+  const { dayOf } = frontRunSpan({ fromDate: "2024-03-01", toDate: "2024-03-31", events });
+  const aboutOf = (entry, battlefield) => battlefield === "East" && entry.warId === "war-east";
+  const flip = (day, regionId, extra = {}) => ({ day, date: `2024-03-${String(day + 1).padStart(2, "0")}`, battlefield: "East", regionId, from: "Borduria", to: "Aland", kind: "control", ...extra });
+  const flips = [
+    flip(3, "r1", { name: "Capital District", cities: ["Brodgrad"], capital: true }),
+    flip(15, "r7", { name: "Lowmark" }),
+    flip(16, "r8", { name: "Highmark", cities: ["Hightown"] }),
+    flip(18, "r9", { name: "Fenland" }),
+  ];
+  assert.equal(frontPlaceTold(events[1], flips[0]), true, "by a town of it named in the text");
+  assert.equal(frontPlaceTold(events[3], flips[1]), true, "by its region among the places");
+  assert.equal(frontPlaceTold(events[0], flips[0]), false);
+  assert.equal(frontPlaceTold({ title: "Brodgradians rally" }, flips[0]), false, "a name is matched whole");
+  const { events: next, unattached } = attachFrontFlips(events, flips, { dayOf, aboutOf, tellsOf: frontPlaceTold });
+  const carried = next.map((entry) => (entry.impacts.regionControlOps ?? []).map((op) => op.regionId));
+  // The capital on the report of its fall, a week after it fell in the account, never on the mud before it; nor on
+  // another war's declaration made there.
+  assert.deepEqual(carried, [[], ["r1"], [], ["r7"]]);
+  assert.deepEqual(unattached.map((entry) => entry.regionId), ["r8", "r9"]);
+
+  const reports = frontReportEvents(unattached, { records: [{ name: "East", warId: "war-east", sides: [["Aland"], ["Borduria"]] }], players: ["Borduria"] });
+  assert.equal(reports.length, 1, "one report for the battlefield, taker and stretch of days");
+  const [report] = reports;
+  assert.equal(report.source, FRONT_MARK);
+  assert.equal(report.date, "2024-03-19", "on the day the last of them fell");
+  assert.equal(report.title, "Aland takes Hightown and Fenland");
+  assert.equal(report.description, "The fighting on East put the regions of Highmark and Fenland in Aland's hands, taken from Borduria between 2024-03-17 and 2024-03-19.");
+  assert.equal(report.warId, "war-east");
+  assert.deepEqual(report.combatants, ["Aland", "Borduria"]);
+  assert.equal(report.playerRelated, true);
+  assert.deepEqual(report.places.map((place) => place.name), ["Highmark", "Fenland"]);
+  assert.deepEqual(report.impacts.regionControlOps.map((op) => [op.regionId, op.fromCode, op.toCode, op.by]), [["r8", "Borduria", "Aland", FRONT_MARK], ["r9", "Borduria", "Aland", FRONT_MARK]]);
+  // A turn applied again writes them again: they are taken out with the rest of the engine's.
+  assert.deepEqual(stripFrontOps([...next, report]).map((entry) => entry.id), ["e1", "e2", "e3", "e4"]);
+  // Split by the stretches of days asked for.
+  assert.equal(frontReportEvents(unattached, { windowOf: (entry) => entry.day }).length, 2);
+});
+
 test("the period that was fought before the story is the period that is applied, and the answer's orders are for the one after", async () => {
   const { map, world } = await monthIn();
   assert.deepEqual(world.battlefields.map((record) => [record.name, record.status]), [["The Border", "active"]]);
@@ -147,10 +195,22 @@ test("the period that was fought before the story is the period that is applied,
   // And the record says its period was told, which the one fought beforehand (never saved) does not.
   assert.equal(final.battlefields[0].brief.told, true);
   assert.equal(told.battlefields[0].brief.told, undefined);
-  // Every change of hands is on an event of that war, never on the one about something else.
+  // Every change of hands is on an event of that war that tells its place, never on the one about something else:
+  // these name no place, so the engine tells each stretch of days itself, before the story's next event, in names.
   const carriers = final.events.map((entry) => (entry.impacts.regionControlOps ?? []).filter((op) => op.by === FRONT_MARK).length);
-  assert.equal(carriers[1], 0);
-  assert.equal(carriers[0] + carriers[2], told.flips.length);
+  const story = final.events.filter((entry) => entry.source !== FRONT_MARK);
+  assert.deepEqual(story.map((entry) => entry.id), ["f1", "f2", "f3"]);
+  assert.ok(story.every((entry) => (entry.impacts.regionControlOps ?? []).every((op) => op.by !== FRONT_MARK)));
+  const reports = final.events.filter((entry) => entry.source === FRONT_MARK);
+  assert.ok(reports.length >= 1);
+  assert.equal(carriers.reduce((sum, count) => sum + count, 0), told.flips.length);
+  for (const report of reports) {
+    assert.equal(report.warId, "war-1");
+    assert.deepEqual(report.combatants, ["Aland", "Borduria"]);
+    assert.match(report.title, /^Aland takes /);
+    assert.match(report.description, /^The fighting on The Border put the regions? of .+ in Aland's hands, taken from Borduria (on|between) 2024-03-/);
+    assert.doesNotMatch(`${report.title} ${report.description}`, /\br\d+-\d+\b/, "never an id");
+  }
 
   // Asked for the old way, the same answer stops the advance on its second day: other days altogether.
   const after = await runTurnFronts(turn(map, world, { ...SECOND, events, frontOrders }));
