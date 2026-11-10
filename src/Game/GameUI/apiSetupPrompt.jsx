@@ -33,7 +33,7 @@ import { useBrowserOnline } from "../../runtime/networkStatus.js";
 // (the owner, 2026-11-07). It opens on three choices:
 //   Gemini        best free option: the tutorial video, a button to Google AI
 //                 Studio where the free key is made, and the key;
-//   Command Code  best quality option, recommended: its $10 GOAT plan and its
+//   Command Code  best quality option: its $10 GOAT plan and its
 //                 API keys page, then only the key — the address and GLM-5.3
 //                 Flash are filled in (providerConfig.js COMMANDCODE_TEMPLATE);
 //   Custom        any provider, any model or a local model: provider, key or
@@ -114,7 +114,6 @@ const EyeOffIcon = ({ size = 18 }) => (
   </svg>
 );
 
-const ACCENT = "var(--oh-ui-accent, #2bc1f3)";
 // Wider for the three cards side by side than for one choice's form.
 const DIALOG_WIDTH_STYLE = { chooser: "min(40rem, 100%)", steps: "min(34rem, 100%)" };
 
@@ -198,7 +197,9 @@ const panelStyle = {
 
 // One of the three choices. Side by side on a wide screen (the mark above its
 // words), one under another on a phone (the mark beside them).
-const ChoiceCard = ({ choice, mark, name, brand = false, label, recommended = false, stacked, onChoose }) => (
+// No card is marked or highlighted above the others (the owner, 2026-11-10: "remove the reccomended thing from command
+// code").
+const ChoiceCard = ({ choice, mark, name, brand = false, label, stacked, onChoose }) => (
   <button
     type="button"
     className="oh-tap-row"
@@ -206,10 +207,8 @@ const ChoiceCard = ({ choice, mark, name, brand = false, label, recommended = fa
     onClick={() => onChoose(choice)}
     style={{
       alignItems: "center",
-      background: recommended
-        ? `color-mix(in srgb, ${ACCENT} 10%, var(--oh-ui-overlay-card, rgba(255,255,255,0.05)))`
-        : "var(--oh-ui-overlay-card, rgba(255,255,255,0.05))",
-      border: recommended ? `1.5px solid ${ACCENT}` : "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))",
+      background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.05))",
+      border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))",
       borderRadius: "14px",
       boxSizing: "border-box",
       color: "var(--oh-ui-text, #f4f4f5)",
@@ -226,30 +225,10 @@ const ChoiceCard = ({ choice, mark, name, brand = false, label, recommended = fa
       width: "100%",
     }}
   >
-    {recommended && (
-      <span
-        style={{
-          background: ACCENT,
-          borderRadius: "999px",
-          color: "#0b0d10",
-          fontSize: "0.6rem",
-          fontWeight: 850,
-          letterSpacing: "0.06em",
-          padding: "0.18rem 0.55rem",
-          textTransform: "uppercase",
-          whiteSpace: "nowrap",
-          ...(stacked
-            ? { position: "absolute", right: "0.9rem", top: "-0.62rem" }
-            : { left: "50%", position: "absolute", top: "-0.62rem", transform: "translateX(-50%)" }),
-        }}
-      >
-        Recommended
-      </span>
-    )}
     {mark}
     <span style={{ display: "flex", flexDirection: "column", gap: "0.2rem", minWidth: 0 }}>
       <span data-no-translate={brand || undefined} style={{ fontSize: "0.95rem", fontWeight: 850 }}>{name}</span>
-      <span style={{ color: recommended ? ACCENT : "rgba(255,255,255,0.62)", fontSize: "0.74rem", fontWeight: recommended ? 750 : 600, lineHeight: 1.4 }}>{label}</span>
+      <span style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.74rem", fontWeight: 600, lineHeight: 1.4 }}>{label}</span>
     </span>
   </button>
 );
@@ -456,7 +435,7 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
         }}
       >
         <ChoiceCard choice="gemini" stacked={isMobile} onChoose={open} mark={<BrandMark file="gemini.png" />} name="Gemini" brand label="Best free option" />
-        <ChoiceCard choice="commandcode" stacked={isMobile} onChoose={open} mark={<BrandMark file="commandcode.svg" />} name={COMMANDCODE_TEMPLATE.name} brand label="Best quality option" recommended />
+        <ChoiceCard choice="commandcode" stacked={isMobile} onChoose={open} mark={<BrandMark file="commandcode.svg" />} name={COMMANDCODE_TEMPLATE.name} brand label="Best quality option" />
         <ChoiceCard choice="custom" stacked={isMobile} onChoose={open} mark={<MoreMark />} name="Custom" label="Configure any provider and any model, or a local model" />
       </div>
     </>

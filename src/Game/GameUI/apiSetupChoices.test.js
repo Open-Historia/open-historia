@@ -98,18 +98,18 @@ test("the prompt opens on three cards: Gemini, Command Code, Custom", () => {
   assert.match(custom.inner, /<svg width="40" height="40"/);
   // And its words.
   assert.equal(words(gemini.inner), "Gemini Best free option");
-  assert.equal(words(commandCode.inner), "Recommended Command Code Best quality option");
+  assert.equal(words(commandCode.inner), "Command Code Best quality option");
   assert.equal(words(custom.inner), "Custom Configure any provider and any model, or a local model");
   // Nothing to save until one is chosen; full settings stay one click away.
   assert.equal(html.includes("Save and play"), false);
   assert.match(html, /data-setup-action="full-settings"/);
 });
 
-test("Command Code is the highlighted card, in the theme's accent, and the only one", () => {
-  const [gemini, commandCode, custom] = cards(render());
-  assert.equal(count(render(), "Recommended"), 1);
-  assert.match(commandCode.whole, /border:1\.5px solid var\(--oh-ui-accent, #2bc1f3\)/);
-  for (const plain of [gemini, custom]) {
+test("no card is marked recommended or highlighted: the three are drawn alike", () => {
+  // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured
+  // key" (the owner, 2026-11-10).
+  assert.equal(count(render(), "Recommended"), 0);
+  for (const plain of cards(render())) {
     assert.doesNotMatch(plain.whole, /--oh-ui-accent/);
     assert.match(plain.whole, /border:1px solid var\(--oh-ui-line, rgba\(255,255,255,0\.12\)\)/);
   }
