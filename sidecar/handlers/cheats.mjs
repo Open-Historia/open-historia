@@ -1005,28 +1005,6 @@ export const register = (ctx) => {
     await noteGmChange("feature", describeAdminMarkerOps(markerOps));
   };
 
-  const historyStatus = (bundle) => {
-    const world = gs.normalizeWorldState(bundle?.world);
-    const events = gs.normalizeEvents(bundle?.events);
-    const last = list(world.consolidatedHistory).at(-1);
-    let unconsolidated = events;
-    if (last?.throughEventId) {
-      const boundary = events.findIndex((event) => event.id === last.throughEventId);
-      if (boundary >= 0) unconsolidated = events.slice(boundary + 1);
-      else if (text(last.throughDate)) unconsolidated = events.filter((event) => !event.date || compareGameDates(event.date, text(last.throughDate)) > 0);
-    }
-    const retainEvents = 24;
-    const round = Number(bundle?.game?.round) || 0;
-    const priorChatIds = new Set(list(world.consolidatedHistory).flatMap((entry) => list(entry.chatIds)));
-    const closedChats = gs.normalizeChats(bundle?.chats).filter((chat) => chat.status === "closed" && !priorChatIds.has(chat.id));
-    const canFold = (unconsolidated.length > retainEvents) || closedChats.length > 0;
-    return {
-      text: engine.historyConsolidation.describeHistoryConsolidation(bundle).text,
-      canFoldNow: canFold,
-      round,
-    };
-  };
-
   const historyDocument = async () => {
     const [world, events, chats, actions, game] = await Promise.all([
       readWorld(),
@@ -1035,7 +1013,7 @@ export const register = (ctx) => {
       readJson(URLS.actions, { defaultValue: [], force: true }).catch(() => []),
       readGame(),
     ]);
-    const status = historyStatus({ world, events, chats, actions, game });
+    const status = engine.historyConsolidation.describeHistoryConsolidation({ world, events, chats, actions, game });
     return {
       document: world?.historyDocument ?? null,
       draft: world?.historyDocument ? engine.historyConsolidation.seedHistoryDocumentText(world) : "",
@@ -2236,12 +2214,6 @@ export const register = (ctx) => {
       return "Compression reset: the document and its pass ledger are gone. Every event is still in the timeline, and the AI is shown all of them in full until the next pass.";
     },
 
-    "cheats.history.fold": async () => {
-      const result = await engine.gameplay.consolidateHistoryNow();
-      return result?.consolidated
-        ? `Folded ${result.events} event${result.events === 1 ? "" : "s"} and ${result.chats} chat${result.chats === 1 ? "" : "s"}; the document is now revision ${result.documentRevision}, ${result.documentWords} words. The newest ${result.retained} events stay in full.`
-        : "Nothing was folded: only the retained tail is waiting, or the consolidator came back empty.";
-    },
   };
 
   return methods;

@@ -234,7 +234,6 @@ export const resolveIdentity = (extras, value, world, allowUnknown = true) => {
 };
 
 const STORAGE_KEY = "oh-stat-sheets-v2";
-const TRACKING_STORAGE_KEY = "oh-stat-tracking-v1";
 const MAX_STORED_SHEETS = 20;
 const MAX_LOCAL_CACHE_COMPONENTS = 64;
 const MAX_MEMORY_SHEETS = 24;
@@ -328,12 +327,6 @@ const customMetricUnitLabel = (stat) => {
   if (stat?.kind === "percentage") return stat?.suffix || "Percent";
   const display = [stat?.prefix, stat?.suffix].filter(Boolean).join(" … ");
   return display || "Value";
-};
-
-const countryStatsTrackingIntervalLabel = (months) => {
-  const count = Math.max(0, Math.trunc(Number(months) || 0));
-  if (!count) return "Manual only";
-  return count === 1 ? "Every month" : `Every ${count} months`;
 };
 
 const stabilityColor = (value) => (value < 40 ? "#ef4444ff" : value < 70 ? "#f59e0bff" : "#22c55eff");
@@ -1180,69 +1173,6 @@ export const register = (ctx) => {
     };
   };
 
-  const trackingSettingsOf = async (extras, player) => {
-    const { countryStats } = extras;
-    const fallback = () => {
-      try {
-        const all = JSON.parse(storage.getItem(TRACKING_STORAGE_KEY) || "{}");
-        return countryStats.normalizeCountryStatsTracking(all?.[player.gameKey], { playerCountry: player.code });
-      } catch {
-        return countryStats.normalizeCountryStatsTracking({}, { playerCountry: player.code });
-      }
-    };
-    try {
-      const world = await engine.gameState.readWorldStateView({ force: false });
-      const canonical = world?.countryStatsTracking && typeof world.countryStatsTracking === "object" && !Array.isArray(world.countryStatsTracking);
-      const next = canonical ? countryStats.normalizeCountryStatsTracking(world.countryStatsTracking, { playerCountry: player.code }) : fallback();
-      if (!canonical && (next.intervalMonths > 0 || next.trackedPolities.length > 0)) {
-        try {
-          const raw = await engine.gameState.readWorldState({ force: false });
-          await engine.gameState.writeWorldState({ ...(raw || {}), countryStatsTracking: next });
-        } catch {
-          return next;
-        }
-      }
-      return next;
-    } catch {
-      return fallback();
-    }
-  };
-
-  const persistTracking = async (extras, player, next) => {
-    if (engine.simulationStatus.isSimulationBusy()) return false;
-    const { countryStats } = extras;
-    const normalized = countryStats.normalizeCountryStatsTracking(next, { playerCountry: player.code });
-    try {
-      const all = JSON.parse(storage.getItem(TRACKING_STORAGE_KEY) || "{}");
-      all[player.gameKey] = normalized;
-      storage.setItem(TRACKING_STORAGE_KEY, JSON.stringify(all));
-    } catch {
-      normalized.intervalMonths = normalized.intervalMonths ?? 0;
-    }
-    try {
-      const world = await engine.gameState.readWorldState({ force: false });
-      const prior = countryStats.normalizeCountryStatsTracking(world?.countryStatsTracking, { playerCountry: player.code });
-      const canonical = countryStats.normalizeCountryStatsTracking({
-        ...prior,
-        intervalMonths: normalized.intervalMonths,
-        trackedPolities: normalized.trackedPolities,
-      }, { playerCountry: player.code });
-      await engine.gameState.writeWorldState({ ...(world || {}), countryStatsTracking: canonical });
-    } catch (error) {
-      emit("log", { category: "country", message: `Tracking settings were kept on this device only: ${error?.message ?? error}` });
-    }
-    return true;
-  };
-
-  const trackingSummary = (extras, settings, identity) => {
-    const max = extras.countryStats.COUNTRY_STATS_TRACKING_MAX_POLITIES;
-    const names = asArray(settings?.trackedPolities).map((key) => (identity ? identity.displayName(key) : cleanText(key))).filter(Boolean);
-    return {
-      line: `Auto-refresh: ${countryStatsTrackingIntervalLabel(settings?.intervalMonths)} · Tracked: ${asArray(settings?.trackedPolities).length}/${max}`,
-      preview: !names.length ? "No tracked countries yet" : names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} +${names.length - 3} more`,
-    };
-  };
-
   const drawerFlag = (extras, { world, identity, target, polity, displayName, customFlags, isPlayer, landless }) => {
     const resolvedKey = identity ? (identity.canonicalKey(target) || target) : target;
     const flagArgs = {
@@ -1267,15 +1197,12 @@ export const register = (ctx) => {
     const identity = identityIndexFor(extras, world);
     const asked = cleanText(requested);
     const target = asked ? (identity?.canonicalKey(asked) || asked) : player.code;
-    const busy = engine.simulationStatus.isSimulationBusy();
     const base = {
       player: { code: player.code, date: player.date, round: player.round, gameKey: player.gameKey },
       target,
       custom: Boolean(definition.custom),
       economyTab: definition.custom ? "📊 National" : "📈 Economy",
       definitionError,
-      turnRunning: busy,
-      turnRunningNote: TURN_RUNNING_NOTE,
       refreshHint: definition.custom ? "Uses 1 request." : "Uses a request only if something has changed since the last assessment.",
     };
     if (!target) return { ...base, empty: "No active game. Start one to see national statistics." };
@@ -1327,7 +1254,6 @@ export const register = (ctx) => {
     } catch {
       institutions = [];
     }
-    const settings = await trackingSettingsOf(extras, player);
     const sheet = cachedSheet;
     return {
       ...base,
@@ -1354,7 +1280,6 @@ export const register = (ctx) => {
       diplomacy: world ? diplomacyView(extras, { world, identity, target, viewer: player.code, relationSearch, relationSort }) : null,
       economy: economyView(extras, { sheet, definition, indexRows, intelligence }),
       military: world && sheet && tab === "economy" ? militaryView(extras, world, resolvedKey || target) : null,
-      tracking: trackingSummary(extras, settings, identity),
       generating: generating.has(target),
       worldRead: Boolean(world),
     };
@@ -1717,67 +1642,6 @@ export const register = (ctx) => {
     };
   };
 
-  const trackingView = async ({ target = "", search = "" } = {}) => {
-    const extras = await loadExtras(ctx);
-    const { countryStats } = extras;
-    const player = await readPlayer();
-    const { definition } = await readDefinition();
-    const world = (await engine.gameState.readWorldStateView({ force: false }).catch(() => null)) ?? {};
-    const identity = identityIndexFor(extras, world);
-    const settings = await trackingSettingsOf(extras, player);
-    const stockNames = Object.values(extras.countryNames.default ?? {});
-    const candidates = extras.statsHistoricalTracking.buildHistoricalTrackingCandidateRows({ world, playerCountry: player.code, currentCountry: target, index: identity, stockNames });
-    const index = candidates.index;
-    const customKeys = definition?.custom ? engine.statsSheet.statSheetKeys(definition) : null;
-    const ready = (key) => countryStats.isTrackedStatSheetReady(world?.countryStats?.[index.canonicalKey(key) || key], customKeys);
-    const refreshRecord = countryStats.normalizeCountryStatsTracking(world?.countryStatsTracking, { playerCountry: player.code });
-    const lastRefresh = (key) => refreshRecord.lastAutoRefreshByPolity?.[index.canonicalKey(key) || key] || "";
-    const max = countryStats.COUNTRY_STATS_TRACKING_MAX_POLITIES;
-    const tracked = asArray(settings.trackedPolities);
-    const filtered = extras.statsHistoricalTracking.filterHistoricalTrackingCandidateRows(candidates.rows, search);
-    const interval = Number(settings?.intervalMonths);
-    const intervalLabel = countryStatsTrackingIntervalLabel(settings?.intervalMonths);
-    return {
-      intervals: countryStats.COUNTRY_STATS_TRACKING_INTERVALS.map((months) => ({ months, label: months === 0 ? "Off" : `${months} months`, active: interval === months })),
-      intervalLabel,
-      max,
-      count: `${tracked.length}/${max}`,
-      pickText: `Pick up to ${max} countries to keep historical charts rich without overloading the simulation.`,
-      chips: tracked.map((key) => ({ key, label: index.displayName(key), isPlayer: lowerText(key) === lowerText(player.code), ready: ready(key) })),
-      rows: filtered.map((row) => {
-        const isTracked = tracked.some((item) => lowerText(item) === lowerText(row.key));
-        const isPlayer = lowerText(row.key) === lowerText(player.code);
-        const isViewed = lowerText(row.key) === lowerText(target);
-        const maxed = !isTracked && tracked.length >= max;
-        return {
-          key: row.key,
-          label: row.label,
-          tracked: isTracked,
-          isPlayer,
-          isViewed: isViewed && !isPlayer,
-          keyText: !isPlayer && !isViewed ? cleanText(row.key) : "",
-          ready: ready(row.key),
-          maxed,
-          action: isTracked ? "Tracked" : maxed ? "Full" : "Add",
-        };
-      }),
-      lastBatch: refreshRecord.lastBatchDate
-        ? `The last automatic refresh ran on ${extras.gameDates.formatGameDateReadable(refreshRecord.lastBatchDate)}.`
-        : "No automatic refresh has run yet.",
-      status: tracked.map((key) => {
-        const isReady = ready(key);
-        const last = lastRefresh(key);
-        return {
-          key: index.canonicalKey(key) || key,
-          label: index.displayName(key),
-          ready: isReady,
-          text: !isReady ? "Needs a first reading" : last ? `Last refreshed on ${extras.gameDates.formatGameDateReadable(last)}` : "Not refreshed automatically yet",
-        };
-      }),
-      turnRunning: engine.simulationStatus.isSimulationBusy(),
-    };
-  };
-
   const standInSeed = async ({ blocs = false } = {}) => {
     const game = await engine.gameState.readGameData({ force: true });
     const date = cleanText(game?.gameDate || game?.startDate);
@@ -1892,28 +1756,6 @@ export const register = (ctx) => {
       return relationRoster(extras, relationRows(identity, world, key), { search, sort });
     },
     "country.chart": async (args) => chartView(args),
-    "country.tracking": async (args) => trackingView(args),
-    "country.tracking.interval": async ({ months = 0, target = "", search = "" } = {}) => {
-      const extras = await loadExtras(ctx);
-      const player = await readPlayer();
-      const settings = await trackingSettingsOf(extras, player);
-      await persistTracking(extras, player, { ...(settings || {}), intervalMonths: Number(months) || 0 });
-      return trackingView({ target, search });
-    },
-    "country.tracking.toggle": async ({ key = "", target = "", search = "" } = {}) => {
-      const extras = await loadExtras(ctx);
-      const player = await readPlayer();
-      const world = (await engine.gameState.readWorldStateView({ force: false }).catch(() => null)) ?? {};
-      const identity = identityIndexFor(extras, world);
-      const canonical = identity?.canonicalKey(key) || key;
-      const current = extras.countryStats.normalizeCountryStatsTracking(await trackingSettingsOf(extras, player), { playerCountry: player.code });
-      const already = current.trackedPolities.some((item) => lowerText(item) === lowerText(canonical));
-      const nextTracked = already
-        ? current.trackedPolities.filter((item) => lowerText(item) !== lowerText(canonical))
-        : [...current.trackedPolities, canonical];
-      await persistTracking(extras, player, { ...current, trackedPolities: nextTracked });
-      return trackingView({ target, search });
-    },
     "country.answer": async ({ op = "", ref = "", territory = "", money = "none", theirs = "", country = "free", cede = "", ours = "", more = "", chatId = "", messageId = "" } = {}) => {
       if (op === "propose") {
         const player = await readPlayer();
@@ -1945,6 +1787,5 @@ export const register = (ctx) => {
       const saved = Number(storage.getItem("oh-advisor-width"));
       return { width: Number.isFinite(saved) && saved > 0 ? saved : 0 };
     },
-    "country.busy": async () => ({ busy: engine.simulationStatus.isSimulationBusy(), note: TURN_RUNNING_NOTE }),
   };
 };
