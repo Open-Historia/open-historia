@@ -245,14 +245,12 @@ import { WAR_FIGURES_WANTED_MOST, buildWarFiguresBlock, readWarFigures } from ".
 import { reshelveJumpAnswer } from "./jumpAnswerShelves.js";
 import { readPeaceVerdict, readTreatyLines, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { PEACE_ANSWERS_FIELD, buildWarStatsBlock, describePeaceTalk, warsOf } from "./warStatsPrompt.js";
-import { takersFor } from "../../runtime/fronts/constants.js";
-import { pointInFrame } from "../../runtime/fronts/frame.js";
-import { normalizeBattlefields } from "../../runtime/fronts/record.js";
 import { readWarRoomAnswer, warRoomRequest, warRoomStanding, warRoomVariables } from "./warRoomContext.js";
 import { bindFrontOrdersToEvents, decodeEventStrikes, describeDroppedFrontOrders, frontOrderProseLines, screenFrontOrders } from "./nativeFrontLedger.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, foldedRegionIndex, matchRegionName, nearestRegionNames, regionsFoldedAs, stripRegionAffixes } from "./regionMatch.js";
+import { marchStoryCapturers } from "./storyMarch.js";
 import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
 import { findUnitByRef, newestTwinByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedAreas.js";
@@ -260,8 +258,6 @@ import { CAPTURE_REACH_KM, findNarratedCaptures, mayNarrateCapture, statedAnnexa
 import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, placesAsWritten, readEventPlace } from "./eventPlaces.js";
 import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 import { describeTravelPace, eraOf, kmOnMap, seaShareOf } from "../../runtime/unitMotion.js";
-import { kmPerDegreeAt } from "../../../server/mapDistance.js";
-import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 import { eraSettingOf } from "../../runtime/warSettings.js";
 import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, describeOtherKind, distanceKm as placementDistanceKm, hashText as placementHash, homeWaters, isOpenSea, nearestInteriorPoint, nearestSea, pointInGeometry, regionWithinContainer, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
 import { loadWorldCities } from "./worldCities.js";
@@ -7904,28 +7900,14 @@ const completeNarratedAnnexations = async (containers, { receipt = null, lookupC
   return added;
 };
 
-// A REGION AN EVENT SAYS WAS TAKEN, AWAY FROM ANY BATTLEFIELD. "make sure the
-// simulation ai is able to say that a region is taken by an army which causes
-// the nearest troops to move accordingly so when that event happens, the region
-// has been taken"; "the max number of nearby units redirected should be based
-// on the size of the region. there should also be a minimum number and if that
-// minimum is not met then the region transfer fails" (the owner, 2026-10-28).
-// A control operation giving a region to a power asks as many of its land
-// formations (not garrisons, not covert, not fighting on a battlefield) as the
-// region's size does (fronts/constants.js takersFor): those already in it, those
-// the event itself sends there, and those within STORY_MARCH_KM. With fewer than
-// the least, the operation comes off the event and the region is not taken;
-// otherwise the nearest march in, up to the most. A region on an open
-// battlefield the taker fights on is the front engine's (engine.js
-// captureRefused, marchInto). Mutates the events' impacts; returns how many moved.
-const STORY_MARCH_KM = 800;
-const STORY_MARCHERS = new Set(["infantry", "armor", "artillery"]);
+// A region an event gives a power away from any battlefield: the taker's
+// nearest land formations march in, and with too few near it is not taken
+// (storyMarch.js, where the rule is told in full). The map is read here.
 const marchCapturersIn = async (containers, world, { receipt = null, renderedRegions = null, lookupContext = null } = {}) => {
   const worldState = normalizeWorldState(world);
-  const units = normalizeArray(worldState.units);
-  const pending = normalizeArray(containers).filter(({ impacts }) => normalizeArray(impacts?.regionControlOps)
+  const asks = normalizeArray(containers).some(({ impacts }) => normalizeArray(impacts?.regionControlOps)
     .some((op) => normalizeString(op?.op).toLowerCase() === "control" && op?.wholeCountry !== true && normalizeString(op?.regionId) && normalizeString(op?.toCode)));
-  if (!pending.length || !units.length) return 0;
+  if (!asks || !normalizeArray(worldState.units).length) return 0;
   let context;
   try {
     context = await (lookupContext ?? lazyLookupContext({ world }, { renderedRegions }))();
@@ -7933,109 +7915,7 @@ const marchCapturersIn = async (containers, world, { receipt = null, renderedReg
     console.warn("[story capture] the map could not be read; no formation was moved.", error);
     return 0;
   }
-  const rowById = new Map(context.rows.filter((row) => row.geometry).map((row) => [normalizeString(row.id), row]));
-  const labelOf = (name) => context.resolveOwner(name) || normalizeString(name);
-  const samePower = (a, b) => Boolean(foldRegionKey(labelOf(a))) && foldRegionKey(labelOf(a)) === foldRegionKey(labelOf(b));
-  const pointOf = (unit) => (Number.isFinite(Number(unit?.lng)) && Number.isFinite(Number(unit?.lat)) && !(Number(unit.lng) === 0 && Number(unit.lat) === 0)
-    ? [Number(unit.lng), Number(unit.lat)] : null);
-  const inside = (row, point) => Boolean(point) && point[0] >= row.bbox[0] && point[0] <= row.bbox[2] && point[1] >= row.bbox[1] && point[1] <= row.bbox[3]
-    && pointInGeometry(point, row.geometry);
-  // The open battlefields, by their frames, and who fights on each.
-  const fronts = normalizeBattlefields(world?.battlefields).filter((record) => record.status === "active" && record.frame);
-  const onFront = (row, taker) => {
-    const middle = row.centroid ?? [(row.bbox[0] + row.bbox[2]) / 2, (row.bbox[1] + row.bbox[3]) / 2];
-    return fronts.some((record) => pointInFrame(record.frame, middle[0], middle[1])
-      && record.sides.some((members) => members.some((member) => samePower(member, taker))));
-  };
-  const sent = new Set();
-  let moved = 0;
-  for (const { event, impacts, path } of pending) {
-    const ownMoves = normalizeArray(impacts.unitOps).map((op) => {
-      const kind = normalizeString(op?.op).toLowerCase();
-      if (kind === "move") {
-        const unit = units.find((entry) => entry.id === normalizeString(op.unitId));
-        return unit ? { unit, point: pointOf({ lng: op.toLng, lat: op.toLat }) } : null;
-      }
-      if (kind === "spawn") {
-        const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
-        return { unit: { ...unit, ownerCode: unit.ownerCode ?? unit.owner ?? op.ownerCode }, point: pointOf(unit) };
-      }
-      return null;
-    }).filter(Boolean);
-    const refused = [];
-    for (const op of normalizeArray(impacts.regionControlOps)) {
-      if (normalizeString(op?.op).toLowerCase() !== "control" || op?.wholeCountry === true) continue;
-      const row = rowById.get(normalizeString(op.regionId));
-      const taker = normalizeString(op.toCode);
-      if (!row || !taker || onFront(row, taker)) continue;
-      const centre = nearestInteriorPoint(row.geometry, row.centroid ?? [(row.bbox[0] + row.bbox[2]) / 2, (row.bbox[1] + row.bbox[3]) / 2]);
-      if (!centre) continue;
-      const { least, most } = takersFor(geometryAreaKm2(row.geometry));
-      const arriving = ownMoves.filter(({ unit, point }) => samePower(unit.ownerCode, taker) && LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()) && inside(row, point)).length;
-      const standing = units.filter((unit) => samePower(unit.ownerCode, taker) && STORY_MARCHERS.has(unit.type) && inside(row, pointOf(unit))).length;
-      const near = units
-        .filter((unit) => !sent.has(unit.id) && STORY_MARCHERS.has(unit.type) && !unit.covert && !normalizeString(unit.committedTo) && samePower(unit.ownerCode, taker)
-          && !ownMoves.some((entry) => entry.unit?.id === unit.id) && !inside(row, pointOf(unit)))
-        .map((unit) => ({ unit, from: pointOf(unit) }))
-        .map((entry) => ({ ...entry, km: entry.from ? placementDistanceKm(entry.from, centre) : Infinity }))
-        .filter((entry) => entry.km <= STORY_MARCH_KM)
-        .sort((a, b) => a.km - b.km);
-      const title = normalizeString(event?.title);
-      if (arriving + standing + near.length < least) {
-        refused.push(op);
-        noteReceipt(receipt, "dropped",
-          `${title ? `Event "${title}": ` : ""}${labelOf(taker)} could not take ${row.name}: too few of its troops near `
-          + `(${arriving + standing + near.length} of the ${least} a region that size needs). A region is taken only where enough of the taker's troops stand near it, more for a larger region: move them up first, in an earlier event.`);
-        console.info(`[story capture] ${path}: ${row.name} not taken by ${labelOf(taker)}, ${arriving + standing + near.length} of ${least} near.`);
-        continue;
-      }
-      for (const { unit, from, km } of near.slice(0, Math.max(0, most - arriving - standing))) {
-        const to = nearestInteriorPoint(row.geometry, from) ?? centre;
-        sent.add(unit.id);
-        impacts.unitOps = [...normalizeArray(impacts.unitOps), {
-          op: "move", unitId: unit.id, toLng: to[0], toLat: to[1],
-          note: `Into ${row.name}, which it took.`,
-        }];
-        moved += 1;
-        noteReceipt(receipt, "adjusted",
-          `${title ? `Event "${title}": ` : ""}${row.name} was taken by ${labelOf(taker)}, `
-          + `so its formation ${unit.name} marched in (${Math.round(km)} km). Move the formation that takes a place in the event that takes it.`);
-        console.info(`[story capture] ${path}: ${unit.name} (${labelOf(taker)}) into ${row.name}, ${Math.round(km)} km.`);
-      }
-    }
-    if (refused.length) impacts.regionControlOps = normalizeArray(impacts.regionControlOps).filter((op) => !refused.includes(op));
-  }
-  return moved;
-};
-
-// A region's area in km², near enough: each ring's own shoelace on a plane
-// scaled to the ring's latitude (by the map's measure, server/mapDistance.js,
-// where it is not plain Mercator), holes taken off.
-const geometryAreaKm2 = (geometry) => {
-  const polygons = geometry?.type === "Polygon" ? [geometry.coordinates] : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
-  const ringKm2 = (ring) => {
-    const points = normalizeArray(ring);
-    if (points.length < 3) return 0;
-    const lat = points.reduce((sum, point) => sum + Number(point?.[1] || 0), 0) / points.length;
-    const measure = currentMapMeasure();
-    const per = measure.plain ? null : kmPerDegreeAt(measure, points.reduce((sum, point) => sum + Number(point?.[0] || 0), 0) / points.length, lat);
-    const kx = per ? per.x : 111.32 * Math.cos((lat * Math.PI) / 180);
-    const ky = per ? per.y : 110.57;
-    let twice = 0;
-    for (let index = 0; index < points.length; index += 1) {
-      const [x1, y1] = points[index];
-      const [x2, y2] = points[(index + 1) % points.length];
-      twice += (x1 * kx) * (y2 * ky) - (x2 * kx) * (y1 * ky);
-    }
-    return Math.abs(twice) / 2;
-  };
-  let total = 0;
-  for (const polygon of normalizeArray(polygons)) {
-    normalizeArray(polygon).forEach((ring, index) => {
-      total += index === 0 ? ringKm2(ring) : -ringKm2(ring);
-    });
-  }
-  return Math.max(0, total);
+  return marchStoryCapturers(containers, { ...worldState, battlefields: world?.battlefields }, { receipt, context });
 };
 
 // Where the places a turn's strikes name are (runtime/strikes.js), found on the
