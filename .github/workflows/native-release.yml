@@ -2,7 +2,7 @@ name: Native app
 
 on:
   push:
-    branches: [native/godot-app]
+    branches: [native]
     # A push that touches only what the native app is not made from (the docs,
     # the website, the phone app, the hub templates, the other workflows) builds
     # nothing: every run here spends macOS minutes, which count 10x.
@@ -1048,7 +1048,7 @@ jobs:
       group: native-release-publish
       cancel-in-progress: false
     permissions:
-      contents: read
+      contents: write
       actions: write
     outputs:
       published: ${{ steps.publish.outputs.published }}
@@ -1097,7 +1097,7 @@ jobs:
       - name: Publish the Windows, macOS and Linux apps (a dry run without the release token)
         id: publish
         env:
-          RELEASE_TOKEN: ${{ secrets.OH_PUBLIC_RELEASE_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.OH_PUBLIC_RELEASE_TOKEN || (github.repository == 'Open-Historia/open-historia' && github.token || '') }}
           LAB_TOKEN: ${{ github.token }}
           WANTED: ${{ github.event_name == 'push' || inputs.publish }}
         run: |
@@ -1106,8 +1106,8 @@ jobs:
           if [ -z "$RELEASE_TOKEN" ]; then
             echo "::notice::OH_PUBLIC_RELEASE_TOKEN is not set in this repository; a dry run, nothing is published"
             export GH_TOKEN="$LAB_TOKEN"
-          elif [ "$GITHUB_REF" != refs/heads/native/godot-app ]; then
-            echo "::notice::only native/godot-app publishes; a dry run for $GITHUB_REF"
+          elif [ "$GITHUB_REF" != refs/heads/native ] && [ "$GITHUB_REF" != refs/heads/native/godot-app ]; then
+            echo "::notice::only native publishes; a dry run for $GITHUB_REF"
             export GH_TOKEN="$RELEASE_TOKEN"
           elif [ "$WANTED" != true ]; then
             echo "::notice::publishing was turned off for this run; a dry run"
@@ -1151,6 +1151,8 @@ jobs:
     if: ${{ needs.publish.outputs.published == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1162,5 +1164,5 @@ jobs:
 
       - name: Remove the pieces and file lists no system's feed leads to
         env:
-          GH_TOKEN: ${{ secrets.OH_PUBLIC_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.OH_PUBLIC_RELEASE_TOKEN || github.token }}
         run: node native/prune-chunks.mjs --prune
