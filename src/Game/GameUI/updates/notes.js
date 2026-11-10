@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "make it so you can minimize the standing goal and it is auto minimized when suggested actions are opened or
+    // submitted actions are opened ... also make the actions tab resizable vertically" (the owner, 2026-11-09):
+    // actions.jsx StandingGoal and PanelResizeHandle, actionsPanelLayout.js.
+    id: "2026-11-actions-panel-room",
+    kind: "minor",
+    date: "2026-11-09",
+    channel: "beta",
+    banners: [
+      {
+        title: "More room in the Actions panel",
+        items: [
+          "The standing goal folds down to one line, and folds itself away when you open your suggested or submitted actions.",
+          "Drag the top edge of the Actions panel to make it taller or shorter; double-click the edge for the usual height.",
+          "The panel remembers both the next time you open it.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it so air transports work like train and boat except they can go over anywhere, but they can carry less
     // troops and there is a chance they can be intercepted (when over enemy territory but they can be deployed into
     // enemy territory) also make different transport types disableable in features and if a country has their
