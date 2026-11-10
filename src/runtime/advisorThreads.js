@@ -288,6 +288,34 @@ export const archiveAdvisorContact = (entries, contactId, archived = true) => {
 // Writers always merge only their own thread into the *latest* advisor.json
 // within the canonical document queue. Preserve unrelated contacts, conversations
 // and native document notices (which undo/rollback may have removed).
+// The panel's copy of a conversation with each reply's Action receipts as the saved one has them: added where an
+// approval wrote one, gone where the saved conversation no longer has it (an Undo put it back to before the
+// approval). Receipts are written only by an approval (recordAdvisorActionReceipt), so the saved ones are the truth;
+// a copy that kept a receipt the file lost offered it with every save. Returns current itself when nothing differs.
+export const withSavedActionReceipts = (current, saved) => {
+  if (!Array.isArray(current)) return current;
+  const savedReceipts = new Map();
+  for (const entry of Array.isArray(saved) ? saved : []) {
+    if (entry?.role === "advisor" && entry.id) savedReceipts.set(entry.id, entry.actionReceipts);
+  }
+  let changed = false;
+  const next = current.map((entry) => {
+    if (entry?.role !== "advisor" || !entry.id || entry.streaming) return entry;
+    const receipts = savedReceipts.get(entry.id);
+    const has = receipts && typeof receipts === "object" && !Array.isArray(receipts) && Object.keys(receipts).length > 0;
+    if (!has) {
+      if (entry.actionReceipts === undefined) return entry;
+      changed = true;
+      const { actionReceipts: _gone, ...rest } = entry;
+      return rest;
+    }
+    if (JSON.stringify(entry.actionReceipts ?? null) === JSON.stringify(receipts)) return entry;
+    changed = true;
+    return { ...entry, actionReceipts: { ...receipts } };
+  });
+  return changed ? next : current;
+};
+
 export const replaceAdvisorThread = (entries, threadId, messages, { clearNotices = false } = {}) => {
   const group = advisorGroups(entries).find((entry) => entry.id === threadId);
   if (threadId !== CHIEF_ADVISOR_THREAD && !group && !advisorContacts(entries).some((entry) => entry.id === threadId)) {

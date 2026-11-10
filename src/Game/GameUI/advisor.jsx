@@ -12,7 +12,7 @@ import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
 import { uiString } from "../../runtime/translator.js";
 import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, mutateWorldState, normalizeActionEntry, readAdvisorMessages, viewAsSeen } from "../../runtime/gameState.js";
-import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorGroupForReply, advisorGroups, advisorMessagesFor, advisorOfficeStatus, advisorRecipientType, archiveAdvisorContact, archiveAdvisorGroup, createAdvisorGroup, reviseAdvisorGroup, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, reorderAdvisorContact, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile } from "../../runtime/advisorThreads.js";
+import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorGroupForReply, advisorGroups, advisorMessagesFor, advisorOfficeStatus, advisorRecipientType, archiveAdvisorContact, archiveAdvisorGroup, createAdvisorGroup, reviseAdvisorGroup, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, reorderAdvisorContact, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile, withSavedActionReceipts } from "../../runtime/advisorThreads.js";
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
 import AdvisorRecipients from "./AdvisorRecipients.jsx";
@@ -1192,7 +1192,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // A turn flags new papers in the file while the panel holds the conversation
     // (and an undo takes them back): merge them in (mergeNotices), so they show
     // and the panel's next save keeps them. Before the panel has loaded, the load
-    // itself brings them.
+    // itself brings them. The open conversation's Action receipts follow the file
+    // too (withSavedActionReceipts): an Undo that put the file back to before an
+    // approval left the panel showing the receipt, and every save after offered it.
     useEffect(() => {
         if (!hasBootstrapped) return undefined;
         const onRuntimeUpdate = (event) => {
@@ -1200,9 +1202,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             setContacts(advisorContacts(event.detail.value));
             setGroups(advisorGroups(event.detail.value));
             setChiefProfile(chiefAdvisorProfile(event.detail.value));
-            if (activeThreadIdRef.current === CHIEF_ADVISOR_THREAD) {
-                updateMessages((prev) => mergeNotices(prev, advisorMessagesFor(event.detail.value, CHIEF_ADVISOR_THREAD)));
-            }
+            const threadId = activeThreadIdRef.current;
+            const stored = advisorMessagesFor(event.detail.value, threadId);
+            updateMessages((prev) => {
+                const synced = withSavedActionReceipts(prev, stored);
+                return threadId === CHIEF_ADVISOR_THREAD ? mergeNotices(synced, stored) : synced;
+            });
         };
         window.addEventListener("oh:runtime-json-updated", onRuntimeUpdate);
         return () => window.removeEventListener("oh:runtime-json-updated", onRuntimeUpdate);

@@ -17,6 +17,7 @@ import {
   politicalAdvisorOffices,
   replaceAdvisorThread,
   reviseAdvisorContact,
+  withSavedActionReceipts,
 } from "./advisorThreads.js";
 
 const m = (role, text, threadId) => ({ role, text, ...(threadId ? { threadId } : {}) });
@@ -378,4 +379,24 @@ test("generic conversation saves cannot forge, retarget, duplicate or change Act
     verifiedReply, verifiedReply,
   ]), /duplicate.*Advisor.*message/i);
   assert.throws(() => replaceAdvisorThread([...canonical, canonical[0]], CHIEF_ADVISOR_THREAD, [verifiedReply]), /duplicate.*Advisor.*message/i);
+});
+
+// The root of the 13 failed saves: an Undo put the saved conversation back to before an approval while the panel
+// kept the receipt. The panel now takes each reply's receipts from the file whenever it changes.
+test("the panel's copy takes its Action receipts from the saved conversation", () => {
+  const approved = { ...verifiedReply, actionReceipts: { "proposal-0": verifiedReceipt } };
+  const note = { role: "user", text: "Do it" };
+  // Undone: the file lost the receipt, so the panel's copy loses it too, and nothing else changes.
+  const undone = withSavedActionReceipts([note, approved], [note, verifiedReply]);
+  assert.equal(undone[1].actionReceipts, undefined);
+  assert.equal(undone[0], note);
+  // Approved elsewhere: the file has it, so the panel's copy gains it.
+  assert.deepEqual(withSavedActionReceipts([verifiedReply], [approved])[0].actionReceipts, approved.actionReceipts);
+  // Already the same, or a reply still streaming: the copy itself comes back.
+  const same = [approved];
+  assert.equal(withSavedActionReceipts(same, [approved]), same);
+  const streaming = [{ ...approved, streaming: true }];
+  assert.equal(withSavedActionReceipts(streaming, []), streaming);
+  // And a save of the synced copy goes through.
+  assert.equal(replaceAdvisorThread([note, verifiedReply], CHIEF_ADVISOR_THREAD, undone)[1].actionReceipts, undefined);
 });
