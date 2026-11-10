@@ -42,6 +42,7 @@ const EXTRA_MODULES = Object.freeze({
   gameFlagChoices: "ctGameFlagChoices",
   hubFiles: "ctHubFiles",
   politics: "ctPolitics",
+  customStatFormatting: "ctCustomStatFormatting",
 });
 
 let extrasFound = null;
@@ -304,21 +305,7 @@ const formatPercent = (value, { signed = false } = {}) => {
   return `${prefix}${rounded}%`;
 };
 
-const formatCustomStatValue = (stat, value) => {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "—";
-  const decimals = Math.max(0, Math.min(4, Math.trunc(Number(stat?.decimals) || 0)));
-  let body;
-  if (stat?.compact) {
-    body = formatCompactNumber(number, { digits: Math.min(2, decimals || 1) });
-  } else {
-    body = number.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-  }
-  const prefix = String(stat?.prefix || "");
-  const suffix = String(stat?.suffix || "");
-  const suffixText = suffix ? (/^[%°]/.test(suffix) ? suffix : ` ${suffix}`) : "";
-  return `${prefix}${body}${suffixText}`;
-};
+const formatCustomStatValue = (stat, value) => extrasFound.customStatFormatting.formatCustomStatValue(stat, value);
 
 const customMetricUnit = (stat) => ["custom", stat?.kind || "number", String(stat?.prefix || ""), String(stat?.suffix || "")].join(":");
 
@@ -607,7 +594,7 @@ export const register = (ctx) => {
     const { countryStats } = extras;
     const isValidStatSheet = (value, definition) => {
       const sheet = countryStats.finalizeCountryStatSheet(value);
-      if (definition?.custom) return countryStats.isCompleteCustomCountryStatSheet(sheet, engine.statsSheet.statSheetKeys(definition));
+      if (definition?.custom) return engine.statsSheet.hasRecordedCustomStatValues(sheet?.customStats, definition);
       return countryStats.isCompleteCountryStatSheet(sheet) && extras.gameplaySchemas.validateGameplayPayload("countryStatSheet", withoutBackendFields(sheet)).valid;
     };
     const calibration = (value) => Math.max(0, Math.trunc(Number(value?.continuity?.populationCalibrationVersion) || 0));
@@ -717,8 +704,8 @@ export const register = (ctx) => {
   };
 
   const indexValue = (value) => {
-    const numeric = value === null || value === undefined || value === "" ? NaN : Number(value);
-    return Number.isFinite(numeric) ? clamp01(numeric) : null;
+    const numeric = engine.statsSheet.readCustomStatNumber(value);
+    return numeric === null ? null : clamp01(numeric);
   };
 
   const economyView = (extras, { sheet, definition, indexRows, intelligence }) => {
@@ -732,11 +719,10 @@ export const register = (ctx) => {
         .map((section) => ({
           title: `${section.icon || "◆"} ${section.label}`,
           stats: section.stats.map((stat) => {
-            const numeric = Number(values[stat.key]);
             if (stat.kind === "index") {
               return { kind: "index", label: cleanText(`${stat.icon ?? ""} ${stat.label}`), value: indexValue(values[stat.key]), color: cssHex(stat.color || "#a1a1aa") };
             }
-            return { kind: "value", label: `${stat.icon ?? ""} ${stat.label}`.toUpperCase(), value: formatCustomStatValue(stat, numeric), color: cssHex(stat.color || "#e7e7e9") };
+            return { kind: "value", label: `${stat.icon ?? ""} ${stat.label}`.toUpperCase(), value: formatCustomStatValue(stat, values[stat.key]), color: cssHex(stat.color || "#e7e7e9") };
           }),
         }));
       return { custom: true, intelligence, sections };
@@ -1358,8 +1344,6 @@ export const register = (ctx) => {
     };
   };
 
-  const historyMetricValue = (sample, key) => sample?.[key] ?? sample?.indices?.[key] ?? sample?.customStats?.[key];
-
   const metricGroupsFor = (indexRows, definition) => {
     if (definition?.custom) {
       return asArray(definition.sections).map((section) => ({
@@ -1533,9 +1517,11 @@ export const register = (ctx) => {
     const sampleSpan = visible.length > 1
       ? `${formatHistoryDate(visible[0].date, { compact: true })} – ${formatHistoryDate(visible[visible.length - 1].date, { compact: true })}`
       : visible[0] ? formatHistoryDate(visible[0].date, { compact: true }) : "No history yet";
-    const valid = visible.filter((sample) => selected.some((metric) => Number.isFinite(Number(historyMetricValue(sample, metric.key)))));
+    const { historyMetricValue, historyMetricChange } = extras.statsHistoricalTracking;
+    const valid = visible.filter((sample) => Number.isFinite(dateMs(sample.date)));
+    const hasValues = valid.some((sample) => selected.some((metric) => Number.isFinite(historyMetricValue(sample, metric.key))));
     let chart = null;
-    if (valid.length && selected.length) {
+    if (hasValues && selected.length) {
       const width = 900;
       const height = 470;
       const pad = { left: 78, right: 34, top: 34, bottom: 58 };
@@ -1545,7 +1531,7 @@ export const register = (ctx) => {
       const minTime = Math.min(...times);
       const maxTime = Math.max(...times);
       const timeSpan = Math.max(1, maxTime - minTime);
-      const values = valid.flatMap((sample) => selected.map((metric) => Number(historyMetricValue(sample, metric.key))).filter(Number.isFinite));
+      const values = valid.flatMap((sample) => selected.map((metric) => historyMetricValue(sample, metric.key)).filter(Number.isFinite));
       let minValue = Math.min(...values);
       let maxValue = Math.max(...values);
       const unit = selected[0]?.unit;
@@ -1582,7 +1568,7 @@ export const register = (ctx) => {
           const runs = [];
           let current = [];
           for (const sample of valid) {
-            const value = Number(historyMetricValue(sample, metric.key));
+            const value = historyMetricValue(sample, metric.key);
             if (!Number.isFinite(value)) {
               if (current.length) runs.push(current);
               current = [];
@@ -1598,7 +1584,7 @@ export const register = (ctx) => {
           x: xFor(sample),
           date: formatHistoryDate(sample.date).toUpperCase(),
           values: selected.map((metric) => {
-            const value = Number(historyMetricValue(sample, metric.key));
+            const value = historyMetricValue(sample, metric.key);
             return Number.isFinite(value) ? { label: metric.label, color: cssHex(metric.color), text: metric.format(value), y: yFor(value) } : null;
           }).filter(Boolean),
         })),
@@ -1607,9 +1593,7 @@ export const register = (ctx) => {
     const first = visible[0];
     const last = visible[visible.length - 1];
     const summary = first && last ? selected.map((metric) => {
-      const start = Number(historyMetricValue(first, metric.key));
-      const end = Number(historyMetricValue(last, metric.key));
-      const delta = Number.isFinite(start) && Number.isFinite(end) ? end - start : null;
+      const { end, delta } = historyMetricChange(visible, metric.key);
       const deltaText = delta == null
         ? "—"
         : String(metric.unit || "").startsWith("custom:")
@@ -1624,7 +1608,7 @@ export const register = (ctx) => {
       return {
         label: metric.label.toUpperCase(),
         color: cssHex(metric.color),
-        value: metric.format(end),
+        value: end === null ? "—" : metric.format(end),
         delta: `${deltaText} over range`,
         tone: delta == null ? "#ffffff4d" : delta > 0 ? "#86efacff" : delta < 0 ? "#fca5a5ff" : "#ffffff6b",
       };
