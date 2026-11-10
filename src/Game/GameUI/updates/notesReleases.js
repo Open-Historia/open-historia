@@ -142,6 +142,7 @@ export const RELEASES = [
         ],
         updates: [
           "2026-10-seasons-and-weather",
+          "2026-11-technology-at-its-real-pace",
           "2026-11-season-tint-tiles",
           "2026-11-rostra",
           "2026-11-rostra-search-polls",
