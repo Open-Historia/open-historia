@@ -198,7 +198,7 @@ img { max-width: 100%; display: block; }
 .hero.asleep .realms * { animation-play-state: paused !important; }
 
 /* The plate the words stand on: one even tint, never a fade. */
-.hero-plate { position: relative; z-index: 6; width: min(1180px, 100%); display: grid; grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr); gap: 18px clamp(24px, 3.4vw, 48px); align-items: center; padding: clamp(20px, 2.2vw, 30px) clamp(20px, 2.8vw, 40px); background: rgba(13, 13, 15, 0.92); border: 1px solid var(--line2); border-top: 3px solid var(--gold); box-shadow: 0 22px 60px rgba(0, 0, 0, 0.55); }
+.hero-plate { position: relative; z-index: 6; width: min(1180px, 100%); display: grid; grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr); gap: 18px clamp(24px, 3.4vw, 48px); align-items: center; padding: clamp(20px, 2.2vw, 30px) clamp(20px, 2.8vw, 40px); background: rgba(13, 13, 15, 0.6); border: 1px solid var(--line2); border-top: 3px solid var(--gold); box-shadow: 0 22px 60px rgba(0, 0, 0, 0.35); text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85); }
 .hero-plate::before, .hero-plate::after { content: ""; position: absolute; top: -8px; width: 11px; height: 11px; background: var(--gold); transform: rotate(45deg); }
 .hero-plate::before { left: 22px; }
 .hero-plate::after { right: 22px; }
