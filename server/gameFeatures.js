@@ -95,7 +95,24 @@ export const FEATURE_DEFINITIONS = Object.freeze([
     key: "socialMedia",
     label: "Social media",
     description: "Rostra, the world's social network: a button beside Actions opens posts by the people who make the news, written with each time skip, where the player can post as their country's leader and quote anyone's post. What is posted is public: the next time skip reads it and the world answers. It asks for no AI request of its own. Off: no Rostra button, nothing is posted, and the time skip is neither shown the posts nor asked to write any.",
-    settings: Object.freeze([]),
+    // "make it so rostra can be themed as a phone, newspaper, scroll, and a stone tablet selected by the
+    // scenario designer in features" (the owner, 2026-11-10). Only how it is drawn (src/Game/GameUI/rostraLooks.js):
+    // the posts, and what the time skip is asked for, are the same in every look.
+    settings: Object.freeze([
+      Object.freeze({
+        key: "look",
+        type: "choice",
+        label: "Rostra looks like",
+        defaultValue: "phone",
+        options: Object.freeze([
+          Object.freeze({ value: "phone", label: "Phone", description: "A smartphone's social app." }),
+          Object.freeze({ value: "newspaper", label: "Newspaper", description: "A printed broadsheet, in ink on newsprint." }),
+          Object.freeze({ value: "scroll", label: "Scroll", description: "A parchment scroll, rolled at both ends." }),
+          Object.freeze({ value: "tablet", label: "Stone tablet", description: "Words carved in a stone tablet." }),
+        ]),
+        description: "How Rostra is drawn in games made from this scenario. What is posted is the same in every look.",
+      }),
+    ]),
   }),
   Object.freeze({
     key: "idleDiplomacy",
@@ -538,6 +555,13 @@ export const resolveFeatures = (scenarioFeatures, gameFeatures) => {
 };
 
 export const isFeatureEnabled = (features, key) => features?.[key]?.enabled !== false;
+
+// How Rostra is drawn (the Social media feature's look): "phone", "newspaper", "scroll" or "tablet".
+export const ROSTRA_LOOKS = Object.freeze(["phone", "newspaper", "scroll", "tablet"]);
+export const rostraLookOf = (features) => {
+  const look = features?.socialMedia?.look;
+  return ROSTRA_LOOKS.includes(look) ? look : "phone";
+};
 
 // What of its wars a game fights itself (the Wars feature, key "fronts"): each
 // part on unless switched off, and an older save's "fronts off" is battlefields off.

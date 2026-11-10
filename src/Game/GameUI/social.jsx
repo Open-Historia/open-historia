@@ -60,20 +60,14 @@ import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 import RostraSearch from "./rostraSearch.jsx";
 import { onRostraPlace, takeRostraPlace } from "./rostraOpen.js";
 import EmptyFeedRefresh from "./rostraRefresh.jsx";
+import { RS, rostraFrame, rostraLookVars } from "./rostraLooks.js";
+import { useRostraLook } from "../../runtime/gameFeatures.js";
 
-// Rostra's own colours: the game's grey, and the accent for what is the
-// player's and what can be pressed.
-const ACCENT = "#2bc1f3";
-const ACCENT_SOFT = "rgba(43,193,243,0.14)";
-const ACCENT_EDGE = "rgba(43,193,243,0.45)";
-const INK = "#f4f4f5";
-const INK_SOFT = "rgba(244,244,245,0.62)";
-const INK_FAINT = "rgba(244,244,245,0.38)";
-const LINE = "rgba(255,255,255,0.08)";
-const CARD = "rgba(255,255,255,0.025)";
-const AVATAR = "#2a2a2f";
-// The phone: its screen, and the frame round it.
-const SCREEN = "#0b0b0d";
+// Rostra's own colours, from the look the scenario gives it (rostraLooks.js):
+// on a phone, the game's grey and the accent for what is the player's and what
+// can be pressed; ink on newsprint, sepia on parchment, letters cut in stone.
+const { ACCENT, ACCENT_SOFT, ACCENT_EDGE, ACCENT_BAR, ON_ACCENT, INK, INK_SOFT, INK_FAINT, LINE, EDGE, WASH, WASH_FAINT, AVATAR, SCREEN, WARN, FONT, TITLE_FONT, CARVE } = RS;
+// The phone's frame round its screen.
 const FRAME = "#17171a";
 const FRAME_BUTTON = "#2c2c31";
 
@@ -85,7 +79,7 @@ const ensureStyles = () => {
   style.textContent = `
   @keyframes rostraIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   .rostra-post { animation: rostraIn 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-  .rostra-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.2) transparent; }
+  .rostra-scroll { scrollbar-width: thin; scrollbar-color: ${EDGE} transparent; }
   .rostra-action:hover { color: ${ACCENT}; }
   .rostra-composer::placeholder { color: ${INK_FAINT}; }
   @media (prefers-reduced-motion: reduce) { .rostra-post { animation: none; } }
@@ -97,22 +91,51 @@ const ensureStyles = () => {
 
 const stroke = { fill: "none", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true };
 
-// A modern smartphone.
-const RostraDockIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" strokeWidth="1.9" {...stroke}>
-    <rect x="5.5" y="2" width="13" height="20" rx="3" />
-    <path d="M10.5 5h3" />
-    <path d="M9.5 19h5" />
-  </svg>
-);
+// The dock's mark, in the look Rostra has: a modern smartphone, a folded
+// newspaper, a scroll, or a tablet with a rounded top.
+const RostraDockIcon = ({ look = "phone" }) => {
+  if (look === "newspaper") {
+    return (
+      <svg width="18" height="18" viewBox="0 0 24 24" strokeWidth="1.8" {...stroke}>
+        <path d="M4 4.5h13v15H6a2 2 0 0 1-2-2z" />
+        <path d="M17 8.5h3v9a2 2 0 0 1-2 2h-1" />
+        <path d="M7 8h7M7 11.5h7M7 15h4" />
+      </svg>
+    );
+  }
+  if (look === "scroll") {
+    return (
+      <svg width="18" height="18" viewBox="0 0 24 24" strokeWidth="1.8" {...stroke}>
+        <path d="M6 4h12M6 20h12" />
+        <path d="M7.5 4v16M16.5 4v16" />
+        <path d="M10 8.5h4M10 12h4M10 15.5h3" />
+      </svg>
+    );
+  }
+  if (look === "tablet") {
+    return (
+      <svg width="18" height="18" viewBox="0 0 24 24" strokeWidth="1.8" {...stroke}>
+        <path d="M5 21V9.5a7 6 0 0 1 14 0V21z" />
+        <path d="M9 11h6M9 14.5h6M9 18h4" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" strokeWidth="1.9" {...stroke}>
+      <rect x="5.5" y="2" width="13" height="20" rx="3" />
+      <path d="M10.5 5h3" />
+      <path d="M9.5 19h5" />
+    </svg>
+  );
+};
 
 // Rostra's mark: the lectern in a speech bubble, in the accent.
 const RostraMark = ({ size = 26 }) => (
   <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
     <path d="M6 3h20a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H13l-6 5v-5H6a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4z" fill={ACCENT} />
-    <path d="M12 21h8l-1.2-7.5h-5.6z" fill="#0b1a20" />
-    <path d="M9.5 13.5h13" stroke="#0b1a20" strokeWidth="1.8" strokeLinecap="round" />
-    <circle cx="16" cy="9" r="2" fill="#0b1a20" />
+    <path d="M12 21h8l-1.2-7.5h-5.6z" fill={ON_ACCENT} />
+    <path d="M9.5 13.5h13" stroke={ON_ACCENT} strokeWidth="1.8" strokeLinecap="round" />
+    <circle cx="16" cy="9" r="2" fill={ON_ACCENT} />
   </svg>
 );
 
@@ -248,7 +271,7 @@ const Avatar = ({ name, flagUrl, mine, size = 2.4 }) => {
       <span style={{
         alignItems: "center",
         background: mine ? ACCENT_SOFT : AVATAR,
-        border: `1px solid ${mine ? ACCENT_EDGE : "rgba(255,255,255,0.1)"}`,
+        border: `1px solid ${mine ? ACCENT_EDGE : EDGE}`,
         borderRadius: "999px",
         color: mine ? ACCENT : INK_SOFT,
         display: "flex",
@@ -268,7 +291,7 @@ const Avatar = ({ name, flagUrl, mine, size = 2.4 }) => {
           src={bundledFlagUrl(flagUrl)}
           onError={() => setFailed(true)}
           style={{
-            border: "1.5px solid #18181b",
+            border: `1.5px solid ${SCREEN}`,
             borderRadius: "3px",
             bottom: "-0.12rem",
             height: `${size * 0.36}rem`,
@@ -295,7 +318,7 @@ const QuotedPost = ({ post, gone, flags }) => {
     );
   }
   return (
-    <div style={{ border: `1px solid rgba(255,255,255,0.12)`, borderRadius: "10px", marginTop: "0.55rem", padding: "0.55rem 0.7rem" }}>
+    <div style={{ border: `1px solid ${EDGE}`, borderRadius: "10px", marginTop: "0.55rem", padding: "0.55rem 0.7rem" }}>
       <div style={{ alignItems: "center", display: "flex", gap: "0.45rem", minWidth: 0 }}>
         <Avatar name={post.author} flagUrl={flagFor(post.country, flags.custom, flags.polities)} mine={post.kind === "player"} size={1.3} />
         <span data-no-translate style={{ color: INK, fontSize: "0.76rem", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{post.author}</span>
@@ -318,14 +341,14 @@ const PollCard = ({ poll }) => {
   const winner = pollWinner(poll);
   const votes = results?.votes ? Number(results.votes).toLocaleString() : "";
   return (
-    <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: "12px", marginTop: "0.6rem", padding: "0.6rem 0.65rem 0.55rem" }}>
+    <div style={{ background: WASH_FAINT, border: `1px solid ${EDGE}`, borderRadius: "12px", marginTop: "0.6rem", padding: "0.6rem 0.65rem 0.55rem" }}>
       <div style={{ display: "grid", gap: "0.38rem" }}>
         {poll.choices.map((choice, index) => {
           const share = results ? results.shares[index] ?? 0 : null;
           const won = index === winner;
           return results ? (
-            <div key={choice} style={{ background: "rgba(255,255,255,0.05)", borderRadius: "8px", overflow: "hidden", position: "relative" }}>
-              <div aria-hidden="true" style={{ background: won ? "rgba(43,193,243,0.28)" : "rgba(255,255,255,0.1)", bottom: 0, left: 0, position: "absolute", top: 0, width: `${share}%` }} />
+            <div key={choice} style={{ background: WASH, borderRadius: "8px", overflow: "hidden", position: "relative" }}>
+              <div aria-hidden="true" style={{ background: won ? ACCENT_BAR : EDGE, bottom: 0, left: 0, position: "absolute", top: 0, width: `${share}%` }} />
               <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between", padding: "0.42rem 0.6rem", position: "relative" }}>
                 <span data-no-translate style={{ color: INK, fontSize: "0.8rem", fontWeight: won ? 800 : 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {won ? `✓ ${choice}` : choice}
@@ -351,7 +374,7 @@ const PollCard = ({ poll }) => {
         )}
       </div>
       {results?.consensus && (
-        <div style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${LINE}`, borderRadius: "8px", color: INK_SOFT, fontSize: "0.74rem", lineHeight: 1.45, marginTop: "0.5rem", padding: "0.45rem 0.55rem" }}>
+        <div style={{ background: WASH_FAINT, border: `1px solid ${LINE}`, borderRadius: "8px", color: INK_SOFT, fontSize: "0.74rem", lineHeight: 1.45, marginTop: "0.5rem", padding: "0.45rem 0.55rem" }}>
           <strong style={{ color: INK }}>Public consensus:</strong>{" "}
           <span data-no-translate>{results.consensus}</span>
         </div>
@@ -472,6 +495,9 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   const isTouch = useTouchPrimary();
   const shortTouch = useShortTouchScreen();
   const framed = !isMobile && !shortTouch;
+  const look = useRostraLook();
+  const phone = look === "phone";
+  const frame = framed && !phone ? rostraFrame(look) : null;
   const [tab, setTab] = useState("all");
   // The box to write in is put away until the pen in the header is pressed
   // ("make it so the thing to write a post isnt always there, its only there
@@ -616,7 +642,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
     bottom: shown ? "4.25rem" : "-50rem",
     color: INK,
     display: "flex",
-    fontFamily: "sans-serif",
+    fontFamily: FONT,
     left: "0rem",
     maxWidth: "calc(100vw - 1rem)",
     opacity: shown ? 1 : 0,
@@ -625,7 +651,16 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
     transition: "bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s ease",
     zIndex: 9998,
   };
-  const frameStyle = framed
+  const frameStyle = frame
+    ? {
+      ...rising,
+      ...frame.body,
+      boxSizing: "border-box",
+      height: `min(46rem, calc(${APP_HEIGHT} - 9rem))`,
+      minHeight: "24rem",
+      width: "min(24rem, calc(100vw - 1rem))",
+    }
+    : framed
     ? {
       ...rising,
       // A phone's proportions, as tall as the room above the dock allows,
@@ -642,9 +677,9 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
     }
     : {
       ...rising,
-      backdropFilter: "blur(8px)",
-      backgroundColor: "rgba(11, 11, 13, 0.97)",
-      border: "1px solid rgba(255,255,255,0.1)",
+      backdropFilter: phone ? "blur(8px)" : undefined,
+      backgroundColor: phone ? "rgba(11, 11, 13, 0.97)" : SCREEN,
+      border: `1px solid ${EDGE}`,
       borderRadius: "16px",
       boxShadow: "-4px 0 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)",
       height: `min(calc(${APP_HEIGHT} - 9rem), max(calc(${APP_HEIGHT} - 16rem), 30rem))`,
@@ -654,8 +689,12 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
     };
 
   return (
-    <div role="dialog" aria-label="Rostra" style={frameStyle}>
-      {framed && (
+    <div role="dialog" aria-label="Rostra" data-rostra-look={look} style={{ ...rostraLookVars(look), ...frameStyle }}>
+      {/* A scroll's two rolls, wider than the sheet between them. */}
+      {frame?.ends && ["top", "bottom"].map((end) => (
+        <span key={end} aria-hidden="true" style={{ background: "#b98a4b", border: "1px solid #7c5626", borderRadius: "999px", boxShadow: "inset 0 -3px 0 rgba(0,0,0,0.22), inset 0 2px 0 rgba(255,255,255,0.25), 0 3px 8px rgba(0,0,0,0.35)", height: "1.15rem", left: "-0.7rem", position: "absolute", right: "-0.7rem", [end]: "-1.05rem" }} />
+      ))}
+      {framed && phone && (
         <>
           {/* The side buttons, as the frame's only ornament. */}
           <span aria-hidden="true" style={{ background: FRAME_BUTTON, borderRadius: "2px 0 0 2px", height: "1.8rem", left: "-3px", position: "absolute", top: "6.2rem", width: "3px" }} />
@@ -663,18 +702,18 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
           <span aria-hidden="true" style={{ background: FRAME_BUTTON, borderRadius: "0 2px 2px 0", height: "4.4rem", position: "absolute", right: "-3px", top: "9.6rem", width: "3px" }} />
         </>
       )}
-      <div style={{ background: framed ? SCREEN : "transparent", borderRadius: framed ? "2.1rem" : 0, display: "flex", flex: 1, flexDirection: "column", minHeight: 0, minWidth: 0, overflow: "hidden" }}>
-        {framed && <StatusBar date={postDate(game.gameDate)} />}
+      <div style={{ background: framed ? SCREEN : "transparent", borderRadius: framed ? "2.1rem" : 0, display: "flex", flex: 1, flexDirection: "column", minHeight: 0, minWidth: 0, overflow: "hidden", textShadow: CARVE, ...(frame?.inner ?? {}) }}>
+        {framed && phone && <StatusBar date={postDate(game.gameDate)} />}
 
         {/* The app's header: the mark, the name, and put away. */}
         <div style={{ alignItems: "center", borderBottom: `1px solid ${LINE}`, display: "flex", flexShrink: 0, gap: "0.6rem", padding: framed ? "0.25rem 0.95rem 0.6rem" : isTouch ? "0.6rem 0.9rem 0.55rem" : "0.85rem 1.1rem 0.65rem" }}>
           <RostraMark />
           <div style={{ minWidth: 0 }}>
-            <div data-no-translate style={{ color: INK, fontSize: "1.05rem", fontWeight: 900, letterSpacing: "0.04em", lineHeight: 1.05 }}>Rostra</div>
+            <div data-no-translate style={{ color: INK, fontFamily: TITLE_FONT, fontSize: phone ? "1.05rem" : "1.3rem", fontWeight: phone ? 900 : 700, letterSpacing: "0.04em", lineHeight: 1.05, textTransform: look === "tablet" ? "uppercase" : undefined }}>Rostra</div>
             <div style={{ color: INK_FAINT, fontSize: "0.62rem", marginTop: "0.1rem" }}>What the world is saying</div>
           </div>
           {/* In the frame the day is on the status bar. */}
-          {!framed && <span style={{ color: INK_FAINT, fontSize: "0.68rem", marginLeft: "auto" }}>{postDate(game.gameDate)}</span>}
+          {!(framed && phone) && <span style={{ color: INK_FAINT, fontSize: "0.68rem", marginLeft: "auto" }}>{postDate(game.gameDate)}</span>}
           {/* The pen: write a post (and put the box away again). */}
           <button
             type="button"
@@ -684,7 +723,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
             aria-label={composing ? "Put the post away" : "Write a post"}
             aria-pressed={composing}
             title={composing ? "Put the post away" : "Write a post"}
-            style={{ alignItems: "center", background: composing ? ACCENT_SOFT : "rgba(255,255,255,0.06)", border: composing ? `1px solid ${ACCENT_EDGE}` : "1px solid transparent", borderRadius: "999px", color: composing ? ACCENT : INK_SOFT, cursor: country ? "pointer" : "default", display: "inline-flex", flex: "0 0 auto", height: "2rem", justifyContent: "center", marginLeft: framed ? "auto" : undefined, padding: 0, width: "2rem" }}
+            style={{ alignItems: "center", background: composing ? ACCENT_SOFT : WASH, border: composing ? `1px solid ${ACCENT_EDGE}` : "1px solid transparent", borderRadius: "999px", color: composing ? ACCENT : INK_SOFT, cursor: country ? "pointer" : "default", display: "inline-flex", flex: "0 0 auto", height: "2rem", justifyContent: "center", marginLeft: framed && phone ? "auto" : undefined, padding: 0, width: "2rem" }}
           >
             <PenIcon />
           </button>
@@ -693,7 +732,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
             className="oh-tap"
             onClick={onClose}
             aria-label="Close Rostra"
-            style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "none", borderRadius: "999px", color: INK_SOFT, cursor: "pointer", display: "inline-flex", flex: "0 0 auto", height: "2rem", justifyContent: "center", padding: 0, width: "2rem" }}
+            style={{ alignItems: "center", background: WASH, border: "none", borderRadius: "999px", color: INK_SOFT, cursor: "pointer", display: "inline-flex", flex: "0 0 auto", height: "2rem", justifyContent: "center", padding: 0, width: "2rem" }}
           >
             <CloseIcon />
           </button>
@@ -725,7 +764,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                   border: "none",
                   boxSizing: "border-box",
                   color: INK,
-                  fontFamily: "sans-serif",
+                  fontFamily: FONT,
                   fontSize: "0.9rem",
                   lineHeight: 1.45,
                   marginTop: "0.3rem",
@@ -748,7 +787,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                         onChange={(event) => setChoices((all) => all.map((entry, at) => (at === index ? event.target.value : entry)))}
                         placeholder={`Choice ${index + 1}`}
                         aria-label={`Choice ${index + 1}`}
-                        style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${ACCENT_EDGE}`, borderRadius: "8px", boxSizing: "border-box", color: INK, flex: 1, fontFamily: "sans-serif", fontSize: "0.8rem", minWidth: 0, outline: "none", padding: "0.38rem 0.55rem" }}
+                        style={{ background: WASH_FAINT, border: `1px solid ${ACCENT_EDGE}`, borderRadius: "8px", boxSizing: "border-box", color: INK, flex: 1, fontFamily: FONT, fontSize: "0.8rem", minWidth: 0, outline: "none", padding: "0.38rem 0.55rem" }}
                       />
                       {choices.length > POLL_CHOICES_MIN && (
                         <button
@@ -765,7 +804,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                   ))}
                   <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
                     {choices.length < POLL_CHOICES_MAX ? (
-                      <button type="button" className="oh-tap-row" onClick={() => setChoices((all) => [...all, ""])} style={{ background: "none", border: "none", color: ACCENT, cursor: "pointer", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 700, padding: "0.2rem 0", whiteSpace: "nowrap" }}>
+                      <button type="button" className="oh-tap-row" onClick={() => setChoices((all) => [...all, ""])} style={{ background: "none", border: "none", color: ACCENT, cursor: "pointer", fontFamily: FONT, fontSize: "0.72rem", fontWeight: 700, padding: "0.2rem 0", whiteSpace: "nowrap" }}>
                         Add a choice
                       </button>
                     ) : <span />}
@@ -782,13 +821,13 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                     onClick={() => setQuoting(null)}
                     aria-label="Remove the quote"
                     title="Remove the quote"
-                    style={{ alignItems: "center", background: "#18181b", border: "1px solid rgba(255,255,255,0.18)", borderRadius: "999px", color: INK_SOFT, cursor: "pointer", display: "flex", height: "1.4rem", justifyContent: "center", padding: 0, position: "absolute", right: "-0.35rem", top: "0.2rem", width: "1.4rem" }}
+                    style={{ alignItems: "center", background: SCREEN, border: `1px solid ${EDGE}`, borderRadius: "999px", color: INK_SOFT, cursor: "pointer", display: "flex", height: "1.4rem", justifyContent: "center", padding: 0, position: "absolute", right: "-0.35rem", top: "0.2rem", width: "1.4rem" }}
                   >
                     <CloseIcon />
                   </button>
                 </div>
               )}
-              {error && <div role="alert" style={{ color: "rgba(253,186,116,0.95)", fontSize: "0.72rem", marginTop: "0.45rem" }}>{error}</div>}
+              {error && <div role="alert" style={{ color: WARN, fontSize: "0.72rem", marginTop: "0.45rem" }}>{error}</div>}
               <div style={{ alignItems: "center", borderTop: `1px solid ${LINE}`, display: "flex", gap: "0.6rem", justifyContent: "flex-end", marginTop: "0.5rem", paddingTop: "0.5rem" }}>
                 {/* A poll, or a plain post again. */}
                 <button
@@ -799,12 +838,12 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                   aria-pressed={Boolean(choices)}
                   aria-label={choices ? "Remove the poll" : "Add a poll"}
                   title={choices ? "Remove the poll" : "Add a poll"}
-                  style={{ alignItems: "center", background: choices ? ACCENT_SOFT : "none", border: "none", borderRadius: "999px", color: choices ? ACCENT : INK_SOFT, cursor: canPost ? "pointer" : "default", display: "inline-flex", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 700, gap: "0.3rem", marginRight: "auto", padding: "0.3rem 0.55rem" }}
+                  style={{ alignItems: "center", background: choices ? ACCENT_SOFT : "none", border: "none", borderRadius: "999px", color: choices ? ACCENT : INK_SOFT, cursor: canPost ? "pointer" : "default", display: "inline-flex", fontFamily: FONT, fontSize: "0.72rem", fontWeight: 700, gap: "0.3rem", marginRight: "auto", padding: "0.3rem 0.55rem" }}
                 >
                   <PollIcon />
                   <span>Poll</span>
                 </button>
-                <span data-no-translate style={{ color: tooLong ? "#f87171" : INK_FAINT, fontSize: "0.7rem" }}>
+                <span data-no-translate style={{ color: tooLong ? WARN : INK_FAINT, fontSize: "0.7rem" }}>
                   {length}/{SOCIAL_POST_MAX_CHARS}
                 </span>
                 <button
@@ -813,12 +852,12 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                   onClick={() => void submit()}
                   disabled={!ready || posting}
                   style={{
-                    background: ready ? ACCENT : "rgba(43,193,243,0.25)",
+                    background: ready ? ACCENT : ACCENT_SOFT,
                     border: "none",
                     borderRadius: "999px",
-                    color: "#06171d",
+                    color: ON_ACCENT,
                     cursor: ready && !posting ? "pointer" : "default",
-                    fontFamily: "sans-serif",
+                    fontFamily: FONT,
                     fontSize: "0.78rem",
                     fontWeight: 800,
                     padding: "0.4rem 1.05rem",
@@ -898,7 +937,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                   display: "flex",
                   flex: "1 1 0",
                   flexDirection: "column",
-                  fontFamily: "sans-serif",
+                  fontFamily: FONT,
                   fontSize: "0.6rem",
                   fontWeight: active ? 800 : 650,
                   gap: "0.18rem",
@@ -909,7 +948,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                 <span style={{ display: "inline-flex", position: "relative" }}>
                   <Icon />
                   {count > 0 && (
-                    <span data-no-translate style={{ alignItems: "center", background: ACCENT, border: `1.5px solid ${framed ? SCREEN : "#18181b"}`, borderRadius: 999, color: "#06171d", display: "inline-flex", fontSize: ".55rem", fontWeight: 800, height: "1.05rem", justifyContent: "center", minWidth: "1.05rem", padding: "0 .2rem", position: "absolute", right: "-0.6rem", top: "-0.4rem" }}>
+                    <span data-no-translate style={{ alignItems: "center", background: ACCENT, border: `1.5px solid ${SCREEN}`, borderRadius: 999, color: ON_ACCENT, display: "inline-flex", fontSize: ".55rem", fontWeight: 800, height: "1.05rem", justifyContent: "center", minWidth: "1.05rem", padding: "0 .2rem", position: "absolute", right: "-0.6rem", top: "-0.4rem" }}>
                       {count > 9 ? "9+" : count}
                     </span>
                   )}
@@ -919,7 +958,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
             );
           })}
         </div>
-        {framed && (
+        {framed && phone && (
           <div aria-hidden="true" style={{ display: "flex", flex: "0 0 auto", justifyContent: "center", padding: "0.3rem 0 0.45rem" }}>
             <span style={{ background: "rgba(244,244,245,0.85)", borderRadius: "999px", height: "0.26rem", width: "6.6rem" }} />
           </div>
@@ -961,6 +1000,7 @@ const activeGameId = () => {
 };
 
 const Social = ({ hovered, isOpen, onToggle, setHovered }) => {
+  const look = useRostraLook();
   const [hasOpened, setHasOpened] = useState(false);
   const feed = useRuntimeState("world", selectFeed);
   // Read from storage in an effect, never while rendering: the compiler would
@@ -1024,9 +1064,9 @@ const Social = ({ hovered, isOpen, onToggle, setHovered }) => {
         onClick={onToggle}
       >
         <span style={{ display: "inline-flex", position: "relative" }}>
-          <RostraDockIcon />
+          <RostraDockIcon look={look} />
           {unseen > 0 && (
-            <span data-no-translate style={{ alignItems: "center", background: ACCENT, border: "1px solid rgba(255,255,255,0.35)", borderRadius: "999px", boxShadow: "0 1px 4px rgba(0,0,0,0.5)", color: "#06171d", display: "flex", fontSize: "0.62rem", fontWeight: 800, height: "1.05rem", justifyContent: "center", lineHeight: 1, minWidth: "1.05rem", padding: "0 0.2rem", position: "absolute", right: "-0.8rem", top: "-0.55rem" }}>
+            <span data-no-translate style={{ alignItems: "center", background: "#2bc1f3", border: "1px solid rgba(255,255,255,0.35)", borderRadius: "999px", boxShadow: "0 1px 4px rgba(0,0,0,0.5)", color: "#06171d", display: "flex", fontSize: "0.62rem", fontWeight: 800, height: "1.05rem", justifyContent: "center", lineHeight: 1, minWidth: "1.05rem", padding: "0 0.2rem", position: "absolute", right: "-0.8rem", top: "-0.55rem" }}>
               {unseen > 9 ? "9+" : unseen}
             </span>
           )}

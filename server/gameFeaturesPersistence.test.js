@@ -25,7 +25,7 @@ const GROUPS_DEFAULTS = { enabled: true };
 // (Wars: the fronts feature with a switch each for battlefields, air units, navies and the three transports, all on.)
 const FRONTS_DEFAULTS = { enabled: true, battlefields: true, air: true, navies: true, railTransport: true, seaTransport: true, airTransport: true };
 const PREGAME_HISTORY_DEFAULTS = { enabled: true };
-const SOCIAL_MEDIA_DEFAULTS = { enabled: true };
+const SOCIAL_MEDIA_DEFAULTS = { enabled: true, look: "phone" };
 
 const SERVER_DIR = path.dirname(url.fileURLToPath(import.meta.url));
 const STORE_URL = url.pathToFileURL(path.join(SERVER_DIR, "libraryStore.js")).href;
