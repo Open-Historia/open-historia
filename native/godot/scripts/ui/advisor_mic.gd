@@ -478,7 +478,7 @@ func _close_microphone() -> void:
 
 
 func _note_style(problem_note: bool) -> StyleBoxFlat:
-	var style := UI.box(UiTheme.pick("surface", NOTE_BG), PROBLEM_BORDER if problem_note else NOTE_BORDER, 6, 1, Vector4(0.7 * REM, 0.55 * REM, 0.7 * REM, 0.55 * REM))
+	var style := UI.box(UiTheme.pick("surface", NOTE_BG), PROBLEM_BORDER if problem_note else UiTheme.pick("line", NOTE_BORDER), 6, 1, Vector4(0.7 * REM, 0.55 * REM, 0.7 * REM, 0.55 * REM))
 	style.shadow_color = Color(0, 0, 0, 0.35)
 	style.shadow_size = 9
 	style.shadow_offset = Vector2(0, 6)

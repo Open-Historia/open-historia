@@ -100,6 +100,7 @@ func _ready() -> void:
 	events_panel.closed.connect(func() -> void: set_panel(""))
 	add_child(events_panel)
 	_build_pill()
+	UiTheme.events().changed.connect(_render_pill)
 	_clock = Timer.new()
 	_clock.wait_time = 1.0
 	_clock.timeout.connect(_tick)
@@ -130,7 +131,7 @@ func busy() -> bool:
 
 
 func _build_pill() -> void:
-	var pill := GlassPanel.new(UI.HUD_BG_STRONG, 14, Vector4(8, 0, 8, 0)).theme_as("hud_bg_strong", "hud_border")
+	var pill := GlassPanel.new(UI.HUD_BG_STRONG, 14, Vector4(8, 0, 8, 0)).theme_as("glass_pill", "hud_border")
 	_pill = pill
 	pill.anchor_left = 1.0
 	pill.anchor_right = 1.0
@@ -204,8 +205,9 @@ func _render_pill() -> void:
 		_country_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING
 		_country_label.custom_minimum_size.x = 0
 	_country_label.visible = not country.is_empty()
+	_country_label.add_theme_color_override("font_color", UiTheme.pick("accent", UI.HUD_BLUE))
 	_date_label.text = str(status.get("displayDate", "Loading..."))
-	_back_button.add_theme_color_override("font_color", Color("#bfdbfe") if open_panel == "history" else Color(1, 1, 1, 0.7))
+	_back_button.add_theme_color_override("font_color", UiTheme.pick("glass_active_text", Color("#bfdbfe")) if open_panel == "history" else Color(1, 1, 1, 0.7))
 	_forward_button.add_theme_color_override("font_color", Color("#e4e4e7") if open_panel == "skip" else Color(1, 1, 1, 0.7))
 	_forward_spinner.visible = is_loading
 	_forward_button.text = "" if is_loading else "»"
