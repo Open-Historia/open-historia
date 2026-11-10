@@ -543,10 +543,12 @@ import { isPendingAction } from "./regionFocus.js";
 import {
   describeIntelligenceStanding,
   describeLeaderStanding,
+  describeOccupationsAfterTheirWar,
   describeReputationStanding,
   describeTerritorialRows,
   describeTerritorialRowsGrouped,
   describeTerritoryForConversation,
+  occupationsAfterTheirWar,
   territorialControlRows,
 } from "./standingContext.js";
 import { buildBoundedPoliticalDecisionContextSet } from "./politicalDecisionContext.js";
@@ -1372,6 +1374,17 @@ const perfNow = () =>
 const LEAN_TERRITORIAL_ROWS = 12;
 // A time skip's `inView` (promptContext.js buildPromptFocus): the rows grouped
 // by who holds what, those of the powers in view in full.
+// Occupations whose war is over (standingContext.js occupationsAfterTheirWar), for the time skip to settle. Issue
+// #1000: Germany surrendered in 1945 and Poland was still German on the map in 1947.
+const buildOccupationsAfterWarContext = async (worldLike) => {
+  const world = normalizeWorldState(worldLike);
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const rows = occupationsAfterTheirWar(territorialControlRows(world, catalog), world);
+  if (!rows.length) return "";
+  const namer = await promptRegionNamer(world, catalog).catch(() => null);
+  return describeOccupationsAfterTheirWar(rows, { regionName: namer ? (id, name) => namer(id) || name : null });
+};
+
 const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLookups = false, inView = null } = {}) => {
   const catalog = await loadRegionCatalog().catch(() => []);
   const rows = territorialControlRows(normalizeWorldState(worldLike), catalog);
@@ -1592,6 +1605,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       // A time skip: grouped, the powers it has in view in full (promptContext.js buildPromptFocus).
       inView: variables.promptFocus?.inView ?? null,
     });
+    variables.occupationsAfterWarContext = await buildOccupationsAfterWarContext(bundle.world);
   }
   // Groups switched off for this game (server/gameFeatures.js): no task is
   // given them, which also leaves out the time skip's [Groups] rule and the
@@ -3017,6 +3031,8 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
   // priority line opens the system prompt (main.jsx callAI).
 
   blocks.push(`[Occupied and Contested Regions]\n${normalizeString(variables.territorialControlContext) || "None."}`);
+  const afterWar = normalizeString(variables.occupationsAfterWarContext);
+  if (afterWar) blocks.push(afterWar);
   if (isActiveFeatureEnabled("groups")) blocks.push(buildJumpGroupsBlock(variables.groupsContext, { rulesAbove }));
   // The player leads a group rather than a country (runtime/groups.js).
   if (normalizeString(variables.playerGroupContext)) blocks.push(`${variables.playerGroupContext}\n${PLAYER_GROUP_JUMP_RULE}`);

@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Issue #1000 (a 1947 save): Germany had surrendered and its wars were ended, but 18 regions of Poland were still
+    // under German control, so the map showed Poland German. Nothing ends an occupation when its war ends; the time skip
+    // is now told which occupations outlive their war and settles each (Game/AI/standingContext.js
+    // occupationsAfterTheirWar, gameplay.js buildJumpLiveState).
+    id: "2026-11-occupations-end-with-their-war",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Occupations end with their war",
+        items: [
+          "Land a country still occupied after its war ended, such as Poland held by Germany after its surrender, is now settled by the next time skip: handed back, or kept by treaty or annexation.",
+        ],
+      },
+    ],
+  },
+  {
     // A player's log (Android stable #30, 2026-11-10): "Failed to save advisor conversation" 13 times in a row, each
     // "Action receipts cannot be created by an Advisor conversation save." The panel held a receipt the saved reply no
     // longer had (put back by an Undo after the approval), and the guard refused every save. It now keeps only the saved
