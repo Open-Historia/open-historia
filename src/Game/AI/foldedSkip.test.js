@@ -360,6 +360,17 @@ test("every skip is folded, with Save AI requests on or off, decided once", () =
   assert.match(body, /salvage: true,/);
 });
 
+// A fold that could not be prepared was `{ separate: true }`, which reads as a
+// fold that is due: every such skip logged its history as waiting on an
+// answer it was never asked for, as a problem (review of 2026-11-09).
+test("a fold that could not be prepared is no fold at all, never one that failed", () => {
+  const prepare = functionBody("prepareFoldedSkip");
+  assert.match(prepare, /let history = null;\n\s*try \{\n\s*history = await prepareSkipHistoryFold\(bundle, \{ campaignId \}\);/);
+  assert.doesNotMatch(prepare, /separate: true|the pass after/);
+  // Read only where the skip carried it, and only where one was prepared.
+  assert.match(functionBody("foldedTurnReview"), /if \(fold\) \{\n\s*review\.history = \{\n\s*due: true,/);
+});
+
 test("the history a skip folds is planned before it and written from its own answer", () => {
   const prepare = functionBody("prepareSkipHistoryFold");
   assert.match(prepare, /planHistoryConsolidation\(bundle, \{ round: \(Number\(bundle\.game\?\.round\) \|\| 0\) \+ 1 \}\)/, "for the round the skip is about to produce");

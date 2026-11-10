@@ -16684,14 +16684,17 @@ const prepareFoldedSkip = async ({ bundle, originDate, variables, campaignId }) 
       console.warn(`[spycraft] the brief for the agent in ${normalizeString(spy?.target)} could not be built; it reports next skip.`, error?.message || error);
     }
   }
-  // The fold of the history document, when one is due (prepareSkipHistoryFold).
-  // A fold that cannot be prepared is one the skip does not carry: the pass
-  // after the skip then decides, as it does for any skip that is not folded.
-  let history = { separate: true };
+  // The fold of the history document, when one is due (prepareSkipHistoryFold),
+  // else null. A fold that cannot be prepared is one the skip does not carry,
+  // exactly as when none is due: nothing asks for it after the skip (the pass
+  // that did went on 2026-11-07), so it waits for the next skip, which plans it
+  // again. Null, so nothing downstream reads a fold that was never asked as one
+  // that failed (foldedTurnReview, applySkipHistoryFold).
+  let history = null;
   try {
     history = await prepareSkipHistoryFold(bundle, { campaignId });
   } catch (error) {
-    console.warn("[ai] the history fold could not be prepared for this skip; it is left to the pass after it.", error?.message || error);
+    console.warn("[ai] the history fold could not be prepared for this skip; it waits for the next one.", error?.message || error);
   }
   return {
     board: boardShown,
