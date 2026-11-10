@@ -104,6 +104,8 @@ const GENERATED = {
   // An empty regionsUrl keeps usesBuiltInMap false, so nothing is fetched.
   "defaultScenarioMeta.js": `export const builtInMap = "test-map"; export const builtInRevision = 2; export const regionsUrl = ""; export const earlierMaps = {};`,
   "fallbackColors.js": `export default { Palette: [9, 9, 9] };`,
+  // The seed's [formal, common] names (scripts/seed-web-defaults.mjs).
+  "commonNames.js": `export default [["Kingdom of Spain", "Spain"], ["French Republic", "France"]];`,
 };
 const moduleUrl = (source) => `data:text/javascript,${encodeURIComponent(source)}`;
 
@@ -654,6 +656,78 @@ test("a code-keyed game migrates to names on first read, once, and drops its res
   const migrated = structuredClone(db.get("games").get(id));
   ok(await runtime("GET", "world"));
   assert.deepEqual(db.get("games").get(id), migrated, "a second read changes nothing");
+});
+
+// The owner's website Modern Day (2026-11-09): "Modern Day (your edited copy)"
+// still held the hand-drawn map's first, formally named world, its colours (an
+// upload, stored as the file's text) keyed by the common names, and his game on
+// it read those colours, so "Kingdom of Spain" had none.
+const olderModernDayWorld = (extra = {}) => ({
+  ownerSchema: 4,
+  builtInMap: "fault-lines-2014-v1",
+  polityOverrides: {
+    "Kingdom of Spain": { name: "Kingdom of Spain", aliases: ["Kingdom of Spain"], color: "#c1a66e" },
+    "French Republic": { name: "French Republic", aliases: ["French Republic"], color: "#4d7893" },
+    "United States of America": { name: "United States of America", aliases: ["United States of America"], color: "#557b98" },
+    Algeria: { name: "Algeria", aliases: ["Algeria"], color: "#b79a75" },
+  },
+  regionOwnershipOverrides: { r1: "Kingdom of Spain", r2: "French Republic", r3: "United States of America", r4: "Algeria" },
+  ...extra,
+});
+const SEED_PALETTE = { Spain: [193, 166, 110], France: [77, 120, 147], Algeria: [183, 154, 117] };
+
+test("an older Modern Day copy and its game take the common names when the game is opened, once", async () => {
+  await reset();
+  const scenarioId = ok(await scenarios("POST", "", { id: "modern-day-edited", name: "Modern Day (your edited copy)" })).scenario.id;
+  assert.equal(scenarioId, "modern-day-edited");
+  const id = await newGame("Modern Day Session", { scenarioId });
+  const scenario = db.get("scenarios").get(scenarioId);
+  scenario.json.world = olderModernDayWorld();
+  scenario.json.game = { country: "Kingdom of Spain", gameDate: "2016-01-01" };
+  scenario.colors = JSON.stringify(SEED_PALETTE);
+  const game = db.get("games").get(id);
+  game.json.world = olderModernDayWorld();
+  game.json.game = { country: "United States of America", gameDate: "2016-03-01" };
+  game.json.chat = [{ id: "c1", countries: ["United States of America", "French Republic"] }];
+  delete game.colors;
+
+  const world = ok(await runtime("GET", "world"));
+  assert.deepEqual(Object.keys(world.polityOverrides).sort(), ["Algeria", "France", "Spain", "United States of America"]);
+  assert.deepEqual(world.regionOwnershipOverrides, { r1: "Spain", r2: "France", r3: "United States of America", r4: "Algeria" });
+  assert.ok(world.polityOverrides.Spain.formerNames.includes("Kingdom of Spain"));
+  assert.equal(ok(await runtime("GET", "game")).country, "United States of America", "the United States keep their name");
+  assert.deepEqual(ok(await runtime("GET", "chat"))[0].countries, ["United States of America", "France"]);
+  assert.deepEqual(ok(await runtime("GET", "colors")), SEED_PALETTE, "colours stored as text are read as colours, and now name the game's countries");
+
+  const migratedGame = structuredClone(db.get("games").get(id));
+  ok(await runtime("GET", "world"));
+  assert.deepEqual(db.get("games").get(id), migratedGame, "a second read changes nothing");
+
+  // The copy itself is brought across when it is read as a scenario.
+  ok(await runtime("GET", "regionsGeojson"));
+  const copy = db.get("scenarios").get(scenarioId);
+  assert.ok(copy.json.world.polityOverrides.Spain && !copy.json.world.polityOverrides["Kingdom of Spain"]);
+  assert.equal(copy.json.game.country, "Spain");
+  assert.equal(copy.colors, JSON.stringify(SEED_PALETTE), "colours that already name the countries are left as they were stored");
+});
+
+test("a game with no map stamp on an older Modern Day copy is judged by its copy; any other keeps its names", async () => {
+  await reset();
+  const scenarioId = ok(await scenarios("POST", "", { id: "modern-day-edited", name: "Modern Day (your edited copy)" })).scenario.id;
+  const onCopy = await newGame("On the copy", { scenarioId });
+  db.get("scenarios").get(scenarioId).json.world = olderModernDayWorld();
+  const { builtInMap: _stamp, ...unstamped } = olderModernDayWorld();
+  db.get("games").get(onCopy).json.world = structuredClone(unstamped);
+  assert.ok(ok(await runtime("GET", "world")).polityOverrides.France);
+
+  const community = ok(await scenarios("POST", "", { id: "europe-1900", name: "Europe 1900" })).scenario.id;
+  const onCommunity = await newGame("Belle Epoque", { scenarioId: community });
+  db.get("scenarios").get(community).json.world = structuredClone(unstamped);
+  db.get("games").get(onCommunity).json.world = structuredClone(unstamped);
+  const kept = ok(await runtime("GET", "world"));
+  assert.deepEqual(Object.keys(kept.polityOverrides).sort(), ["Algeria", "French Republic", "Kingdom of Spain", "United States of America"]);
+  ok(await runtime("GET", "regionsGeojson"));
+  assert.ok(db.get("scenarios").get(community).json.world.polityOverrides["French Republic"], "the community scenario too");
 });
 
 test("a game and a scenario that share an id each migrate as their own record", async () => {

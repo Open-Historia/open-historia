@@ -188,6 +188,7 @@ export const RELEASES = [
           "2026-11-lighter-map",
           "2026-11-smoother-zooming",
           "2026-11-less-for-the-gpu",
+          "2026-11-common-country-names",
         ],
       },
       {
