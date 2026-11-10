@@ -54,6 +54,28 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "make it so air transports work like train and boat except they can go over anywhere, but they can carry less
+    // troops and there is a chance they can be intercepted (when over enemy territory but they can be deployed into
+    // enemy territory) also make different transport types disableable in features and if a country has their
+    // airforce or navy disabled by being set to zero they cant use those transports" (the owner, 2026-11-09).
+    id: "2026-11-air-transport",
+    kind: "minor",
+    date: "2026-11-09",
+    channel: "beta",
+    banners: [
+      {
+        title: "Troops by air",
+        items: [
+          "The War Room's Transport flies troops straight over land and sea to any place, into enemy land too, where they land and fight.",
+          "An airlift carries fewer troops than rail or sea: 3 formations from 1936 and 6 from 1960, up to twice that with a strong air force.",
+          "Over enemy ground the enemy's aircraft can intercept it, and part or all of the troops aboard are lost.",
+          "Rail, sea and air transport each have their own switch under Wars in Features.",
+          "A country whose navy is set to 0 cannot send troops by sea, and one whose air force is 0 cannot fly them.",
+        ],
+      },
+    ],
+  },
+  {
     // "make the ai on medium mode be realistic about technological developments because a user was able to make mind
     // control nanobots in 2 months which makes no sense" (the owner, 2026-11-09): runtime/difficulty.js
     // DIFFICULTY_PRIORITY_COMMON, at every level.

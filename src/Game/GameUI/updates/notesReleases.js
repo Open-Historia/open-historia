@@ -74,6 +74,7 @@ export const RELEASES = [
           "2026-11-wars-end-when-won",
           "2026-11-war-figures-in-skip",
           "2026-11-game-master-wars",
+          "2026-11-air-transport",
           "2026-10-ai-mended",
           "2026-10-fixes-from-reports",
         ],
