@@ -384,5 +384,7 @@ export * as scenarioLanguages from "../../server/scenarioLanguages.js";
 export * as scenarioLangPacks from "../../src/runtime/scenarioLanguagePacks.js";
 export * as scenarioTranslation from "../../src/Game/AI/scenarioTranslation.js";
 export * as aiSetupChoices from "../../src/Game/GameUI/apiSetupPrompt.jsx";
+export * as aiOpenConversation from "../../src/runtime/openConversation.js";
+export * as aiGameEntry from "../../src/runtime/gameEntry.js";
 export * as historyConsolidation from "../../src/Game/AI/historyConsolidation.js";
 export * as mpThreads from "../../src/multiplayer/client/sharedThreads.js";

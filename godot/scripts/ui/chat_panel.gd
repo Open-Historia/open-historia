@@ -110,6 +110,7 @@ var _local_edits := 0
 var _last_badge := -1
 var _last_generating := false
 var _list_render_queued := false
+var _open_conversation_sent := ""
 var _dot_labels: Array = []
 var _pulse_labels: Array = []
 var _dots_phase := 0
@@ -1424,10 +1425,20 @@ func conversation_visible() -> bool:
 	return not a(active.get("countries", [])).is_empty()
 
 
+func _note_open_conversation() -> void:
+	var id := t(active.get("id", "")) if is_open() and not active.is_empty() and t(active.get("institutionId", "")).is_empty() else ""
+	if id == _open_conversation_sent:
+		return
+	_open_conversation_sent = id
+	if not id.is_empty() and engine:
+		engine.request("chat.opened", {"id": id})
+
+
 func render_all() -> void:
 	_show_surface()
 	_style_tabs()
 	_show_notice()
+	_note_open_conversation()
 	if conversation_visible():
 		conversation.refresh_chrome()
 		return
