@@ -365,7 +365,12 @@ test("generic conversation saves cannot forge, retarget, duplicate or change Act
   const canonical = [{ ...verifiedReply, actionReceipts: { "proposal-0": verifiedReceipt } }];
   const staleWithoutReceipt = { ...verifiedReply, actionReceipts: undefined };
   assert.deepEqual(replaceAdvisorThread(canonical, CHIEF_ADVISOR_THREAD, [staleWithoutReceipt])[0].actionReceipts, canonical[0].actionReceipts);
-  assert.throws(() => replaceAdvisorThread([verifiedReply], CHIEF_ADVISOR_THREAD, [canonical[0]]), /receipt.*conversation/i);
+  // A receipt the save carries and the saved reply lacks is not written, and the rest of the conversation still is.
+  const forged = replaceAdvisorThread([verifiedReply], CHIEF_ADVISOR_THREAD, [canonical[0], { role: "user", text: "and the rest" }]);
+  assert.equal(forged[0].actionReceipts, undefined);
+  assert.equal(forged[1].text, "and the rest");
+  const extra = replaceAdvisorThread(canonical, CHIEF_ADVISOR_THREAD, [{ ...canonical[0], actionReceipts: { ...canonical[0].actionReceipts, "proposal-1": verifiedReceipt } }]);
+  assert.deepEqual(extra[0].actionReceipts, canonical[0].actionReceipts);
   assert.throws(() => replaceAdvisorThread(canonical, CHIEF_ADVISOR_THREAD, [
     { ...verifiedReply, actionProposals: [{ ...verifiedProposal, actionId: "action-substituted" }] },
   ]), /proposal.*identity|receipt.*identity/i);

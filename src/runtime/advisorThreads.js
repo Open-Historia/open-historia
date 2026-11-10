@@ -361,15 +361,13 @@ export const replaceAdvisorThread = (entries, threadId, messages, { clearNotices
               throw new Error("Advisor Action proposal identity changed since the receipt was saved.");
             }
           }
-          if (Object.keys(incoming || {}).some((id) => !Object.hasOwn(receipts, id))) {
-            throw new Error("Action receipts cannot be created by an Advisor conversation save.");
-          }
           record.actionReceipts = { ...receipts };
-        } else if (incoming && Object.keys(incoming).length) {
-          throw new Error("Action receipts cannot be created by an Advisor conversation save.");
         } else {
           delete record.actionReceipts;
         }
+        // A receipt the panel holds and the saved reply does not is not written: the saved receipts are the only ones
+        // kept. It used to refuse the whole save, and the panel, still holding it (the saved conversation put back by an
+        // Undo after an approval), failed every save after: a player's log, 13 in a row, every reply in between lost.
       }
       if (threadId === CHIEF_ADVISOR_THREAD) delete record.threadId;
       else record.threadId = threadId;

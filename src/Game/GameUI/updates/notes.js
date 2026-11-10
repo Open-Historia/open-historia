@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player's log (Android stable #30, 2026-11-10): "Failed to save advisor conversation" 13 times in a row, each
+    // "Action receipts cannot be created by an Advisor conversation save." The panel held a receipt the saved reply no
+    // longer had (put back by an Undo after the approval), and the guard refused every save. It now keeps only the saved
+    // receipts and saves the rest (runtime/advisorThreads.js replaceAdvisorThread).
+    id: "2026-11-advisor-keeps-saving",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "The Advisor keeps saving",
+        items: [
+          "After an Advisor action you approved was undone, the Advisor could stop saving your conversation, and its replies were lost when the game closed. They are saved again.",
+        ],
+      },
+    ],
+  },
+  {
     // "make them more detailed and look good" (the owner, 2026-11-10, of Rostra's newspaper, scroll and tablet looks):
     // GameUI/rostraDress.jsx; textures are SVG noise, never a gradient.
     id: "2026-11-rostra-looks-detailed",
