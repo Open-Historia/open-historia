@@ -35,6 +35,7 @@ import {
 } from "../Game/AI/providerConfig.js";
 import { isRatingEnabled, isTelemetryEnabled } from "../Game/AI/telemetry.js";
 import { requestDay, requestSettings } from "../Game/AI/requestBudget.js";
+import { readAdvisorGroupSettings } from "../Game/AI/advisorGroupSettings.js";
 import { deviceProfileForLog } from "./deviceProfile.js";
 import { presenceAllowed, presenceAvailable } from "./discordPresence.js";
 import { describeVisitConsent, readVisitConsent } from "./visitConsent.js";
@@ -188,6 +189,7 @@ registerSettingsSnapshot("AI", () => {
 // of the answer to it.
 registerSettingsSnapshot("AI requests", () => {
     const day = requestDay();
+    const groupAi = readAdvisorGroupSettings();
     const tasks = Object.entries(day.byTask).sort((a, b) => b[1] - a[1]).map(([task, count]) => `${task} ${count}`).join(", ");
     return [
         ["My key has no request limit", onOff(requestSettings.noRequestLimit())],
@@ -195,6 +197,8 @@ registerSettingsSnapshot("AI requests", () => {
         ["Background requests a day, at most", String(day.backgroundCap)],
         // Outside that cap while on (requestBudget.js UNCAPPED_BACKGROUND_TASKS).
         ["Countries write to me between time skips", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy))],
+        ["Individual AI responses in group chats", onOff(groupAi.individual)],
+        ["Advisors per AI request", String(groupAi.effectiveBatchSize) + (groupAi.individual ? " (individual mode; saved batch setting " + groupAi.batchSize + ")" : "")],
         ["Used today", `${day.noLimit ? day.used : `${day.used} of ${day.limit}`} (background ${day.background}, refused by rate limit ${day.refused}, failed ${day.failed})`],
         ["Used today, by task", tasks || "nothing yet"],
         ["Last time skip", day.lastJump ? `${day.lastJump.used} request(s)${day.lastJump.refused ? `, ${day.lastJump.refused} refused` : ""}` : "none yet"],

@@ -1,7 +1,7 @@
 /*! Open Historia — portions (drawer close/slide + mobile layout) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useState, useRef, useEffect } from "react";
 import { Chart, registerables } from "chart.js";
-import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
+import { sendMessage, sendAdvisorGroupMessage, startChat, loadHistory } from "../AI/main.jsx";
 import { requestDiplomaticChat } from "./chat.jsx";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { formatReportFields, logDebugEvent } from "../../runtime/debugLog.js";
@@ -12,19 +12,21 @@ import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
 import { uiString } from "../../runtime/translator.js";
 import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, mutateWorldState, normalizeActionEntry, readAdvisorMessages, viewAsSeen } from "../../runtime/gameState.js";
-import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorOfficeStatus, advisorRecipientType, archiveAdvisorContact, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile } from "../../runtime/advisorThreads.js";
+import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorGroupForReply, advisorGroups, advisorMessagesFor, advisorOfficeStatus, advisorRecipientType, archiveAdvisorContact, archiveAdvisorGroup, createAdvisorGroup, reviseAdvisorGroup, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, reorderAdvisorContact, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile } from "../../runtime/advisorThreads.js";
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
 import AdvisorRecipients from "./AdvisorRecipients.jsx";
 import AdvisorMic from "./AdvisorMic.jsx";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
-import { actionProposalsFromReply, advisorActionCardState, mergeAdvisorActionReceiptIntoView } from "./advisorActionReview.js";
+import { reviewAdvisorActionProposals, advisorActionCardState, mergeAdvisorActionReceiptIntoView } from "./advisorActionReview.js";
 import { approveAdvisorAction, cancelApprovedAdvisorAction } from "./advisorActionApproval.js";
 import { applyAdvisorProjectProposal, canAdvisorApplyProjectOps } from "./advisorProjectRouting.js";
 import { sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.js";
 import { repeatedOrder } from "../AI/playerFocus.js";
 import { institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
 import { parseAdvisorReply } from "./advisorReply.js";
+import { prepareAdvisorGroupMemberReply, stageAdvisorGroupBatch } from "./advisorGroupOrders.js";
+import { applyAdvisorGroupProjectBatch } from "./advisorProjectRouting.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import "./advisorDossier.css";
@@ -978,33 +980,38 @@ const ADVISOR_RENDER_WINDOW_STEP = 20;
 // Only the last `visibleLimit` messages are drawn. `i` stays the index into
 // the WHOLE transcript: placedDeployments and completedInstitutionDrafts are
 // written back through it.
-const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", speakerNameFor = null, emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => {
+    // Silent group-participation markers are persisted for resume/idempotence,
+    // but never consume visible history slots or display empty bubbles.
+    const visibleRows = messages.flatMap((msg, i) => msg.silent === true ? [] : [{ msg, i }]);
+    const visibleLastIndex = visibleRows.at(-1)?.i;
+    return (
     <div className="oh-advisor-messages" ref={containerRef} onScroll={onScroll}>
-    {messages.length === 0 && (
+    {visibleRows.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
         {emptyMessage}
         </p>
     )}
 
-    {messages.length > visibleLimit && (
+    {visibleRows.length > visibleLimit && (
         <button
             type="button"
             className="oh-tap-row oh-advisor-message-history"
             onClick={onShowEarlier}
         >
-            {Math.min(messages.length - visibleLimit, ADVISOR_RENDER_WINDOW_STEP) === 1
+            {Math.min(visibleRows.length - visibleLimit, ADVISOR_RENDER_WINDOW_STEP) === 1
                 ? "Show 1 earlier message"
-                : `Show ${Math.min(messages.length - visibleLimit, ADVISOR_RENDER_WINDOW_STEP)} earlier messages`}
+                : `Show ${Math.min(visibleRows.length - visibleLimit, ADVISOR_RENDER_WINDOW_STEP)} earlier messages`}
         </button>
     )}
 
     {/* Retry failed turns and recover missing Project entries only on the
         newest affected reply; older errors must not reissue stale work. */}
-    {messages.map((msg, i) => (i < messages.length - visibleLimit ? null : msg.role === "notice"
+    {visibleRows.map(({ msg, i }, visualIndex) => (visualIndex < visibleRows.length - visibleLimit ? null : msg.role === "notice"
         ? <AdvisorDocumentNotice key={msg.id || i} notice={msg} />
         : (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} actionStates={actionStates} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={i === messages.length - 1 && msg.projectsProblem ? onRetryProjects : undefined} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onCancelAction={onCancelAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
-        onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerNameFor ? speakerNameFor(msg) : speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} actionStates={actionStates} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={i === visibleLastIndex && msg.projectsProblem ? onRetryProjects : undefined} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onCancelAction={onCancelAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
+        onRetry={i === visibleLastIndex && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     )))}
 
     {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
@@ -1017,7 +1024,8 @@ const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, 
     )}
     <div ref={messagesEndRef} />
     </div>
-));
+    );
+});
 
 // The scenario's deployable troop types (world.allowedUnitTypes), joined into
 // one string: a primitive, so the memoized rows re-render only when the list
@@ -1030,6 +1038,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const [typed, setTyped]         = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [contacts, setContacts] = useState([]);
+    const [groups, setGroups] = useState([]);
     const [chiefProfile, setChiefProfile] = useState(null);
     const [activeThreadId, setActiveThreadId] = useState(CHIEF_ADVISOR_THREAD);
     const activeThreadIdRef = useRef(CHIEF_ADVISOR_THREAD);
@@ -1048,7 +1057,17 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     }, [governmentText, playerPolity]);
     const offices = React.useMemo(() => politicalAdvisorOffices(politicalWorld, playerPolity), [politicalWorld, playerPolity]);
     const selectedContact = contacts.find((contact) => contact.id === activeThreadId) || null;
-    const recipientUnavailableReason = selectedContact?.archived
+    const selectedGroup = groups.find((group) => group.id === activeThreadId) || null;
+    const speakerNameFor = React.useCallback((msg) => msg.speakerId === CHIEF_ADVISOR_THREAD
+        ? chiefProfile?.name || "Chief advisor"
+        : msg.speakerId
+            ? contacts.find((contact) => contact.id === msg.speakerId)?.name || "Former group member"
+            : selectedContact?.name || chiefProfile?.name || "Advisor",
+    [chiefProfile?.name, contacts, selectedContact?.name]);
+    const recipientUnavailableReason = selectedGroup?.archived ? "This group chat is retired — restore to reply"
+        : selectedGroup?.memberIds.some((id) => id !== CHIEF_ADVISOR_THREAD && !contacts.some((contact) => contact.id === id && !contact.archived && advisorRecipientType(contact) === ADVISOR_RECIPIENT_TYPES.MINISTER))
+            ? "A group member is retired or no longer eligible — restore them before speaking"
+        : selectedContact?.archived
         ? "This contact is retired — restore to reply"
         : selectedContact && !advisorRecipientType(selectedContact)
             ? "Unsupported recipient type — cannot open conversation"
@@ -1159,6 +1178,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 setLoadFailed(true);
             } else {
                 setContacts(advisorContacts(saved));
+                setGroups(advisorGroups(saved));
                 setChiefProfile(chiefAdvisorProfile(saved));
                 const chiefMessages = advisorMessagesFor(saved, CHIEF_ADVISOR_THREAD);
                 updateMessages(chiefMessages);
@@ -1178,6 +1198,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         const onRuntimeUpdate = (event) => {
             if (event?.detail?.url !== JSON_URLS.advisor) return;
             setContacts(advisorContacts(event.detail.value));
+            setGroups(advisorGroups(event.detail.value));
             setChiefProfile(chiefAdvisorProfile(event.detail.value));
             if (activeThreadIdRef.current === CHIEF_ADVISOR_THREAD) {
                 updateMessages((prev) => mergeNotices(prev, advisorMessagesFor(event.detail.value, CHIEF_ADVISOR_THREAD)));
@@ -1245,7 +1266,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         threadSwitchingRef.current = true;
         try {
             const saved = await readAdvisorMessages({ force: true });
-            if (id !== CHIEF_ADVISOR_THREAD && !advisorContacts(saved).some((contact) => contact.id === id)) {
+            if (id !== CHIEF_ADVISOR_THREAD && !advisorContacts(saved).some((contact) => contact.id === id)
+                && !advisorGroups(saved).some((group) => group.id === id)) {
                 throw new Error("The selected Advisor recipient no longer exists.");
             }
             contactDraftsRef.current.set(activeThreadIdRef.current, input);
@@ -1253,6 +1275,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             activeThreadIdRef.current = id;
             setActiveThreadId(id);
             setContacts(advisorContacts(saved));
+            setGroups(advisorGroups(saved));
             setChiefProfile(chiefAdvisorProfile(saved));
             updateMessages(selectedMessages);
             setInput(contactDraftsRef.current.get(id) || "");
@@ -1282,6 +1305,61 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             setContactsBusy(false);
         }
         await selectRecipient(id);
+    };
+
+    const createGroup = async (draft) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot create a group while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        const random = globalThis.crypto?.randomUUID?.().replace(/-/g, "")
+            || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 15)}`;
+        const id = `advisor-group-${random}`;
+        try {
+            await mutateAdvisorState((all) => createAdvisorGroup(all, { ...draft, id }));
+            setGroups(advisorGroups(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+        await selectRecipient(id);
+    };
+    const reviseGroup = async (id, draft) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot edit a group while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => reviseAdvisorGroup(all, id, draft));
+            setGroups(advisorGroups(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+    };
+    const retireGroup = async (id, archived) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot retire a group while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => archiveAdvisorGroup(all, id, archived));
+            setGroups(advisorGroups(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+        if (archived && activeThreadIdRef.current === id) await selectRecipient(CHIEF_ADVISOR_THREAD);
+    };
+
+    const reorderRecipients = async (sourceId, targetId) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot reorder contacts while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => reorderAdvisorContact(all, sourceId, targetId));
+            setContacts(advisorContacts(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
     };
 
     const reviseRecipient = async (id, draft) => {
@@ -1364,9 +1442,10 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
 
     const askAdvisor = async (text, { replaceTrailingError = false } = {}) => {
         const threadId = activeThreadIdRef.current;
-        const recipient = threadId === CHIEF_ADVISOR_THREAD ? null
+        const group = groups.find((entry) => entry.id === threadId && !entry.archived) || null;
+        const recipient = threadId === CHIEF_ADVISOR_THREAD || group ? null
             : contacts.find((contact) => contact.id === threadId && !contact.archived);
-        if (threadId !== CHIEF_ADVISOR_THREAD && !recipient) throw new Error("This recipient is unavailable.");
+        if (threadId !== CHIEF_ADVISOR_THREAD && !recipient && !group) throw new Error("This recipient is unavailable.");
         // The campaign the question is asked in. Its orders, projects and
         // transcript are written through endpoints that follow the open
         // campaign, so a reply that lands after a switch writes nothing.
@@ -1423,6 +1502,113 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         });
 
         try {
+            if (group) {
+                const speakerChunk = (speakerId, _delta, full) => updateMessages((prev) => {
+                    const next = prev.slice();
+                    const last = next[next.length - 1];
+                    const bubble = { role: "advisor", speakerId, text: stripAdvisorMemory(full), time: askedOn, streaming: true };
+                    if (last?.role === "advisor" && last.streaming && last.speakerId === speakerId) next[next.length - 1] = bubble;
+                    else next.push(bubble);
+                    return next;
+                });
+                const speakerComplete = async (record) => {
+                    if (leftCampaign()) throw new Error("Campaign changed during group chat.");
+                    // Re-read the canonical roster after generation: a member may
+                    // have been retired by another panel while the AI was thinking.
+                    const latest = await readAdvisorMessages({ force: true });
+                    const currentGroup = advisorGroupForReply(latest, threadId);
+                    if (!currentGroup.memberIds.includes(record.speakerId)) {
+                        throw new Error("This speaker is no longer invited to the group chat.");
+                    }
+                    const currentRecipient = record.speakerId === CHIEF_ADVISOR_THREAD ? null
+                        : advisorContacts(latest).find((item) => item.id === record.speakerId && !item.archived
+                            && advisorRecipientType(item) === ADVISOR_RECIPIENT_TYPES.MINISTER);
+                    if (record.speakerId !== CHIEF_ADVISOR_THREAD && !currentRecipient) {
+                        throw new Error("This group participant is no longer an active government Advisor / Minister.");
+                    }
+                    const replyId = `advisor-reply-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`}`;
+                    const completed = {
+                        ...(record.silent === true
+                            ? { role: "advisor", speakerId: record.speakerId, silent: true, text: "", id: replyId }
+                            : await prepareAdvisorGroupMemberReply({
+                                ...record, replyId, recipient: currentRecipient,
+                                allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
+                                gameDate, round: gameRound, mutateWorldState, applyProjectOpsToWorld,
+                                currentActions: await readJson(JSON_URLS.actions, { force: true }),
+                            })),
+                        time: askedOn, at: new Date().toISOString(),
+                    };
+                    if (leftCampaign()) throw new Error("Campaign changed before saving group reply.");
+                    const next = updateMessages((prev) => {
+                        const rows = prev.slice();
+                        const last = rows[rows.length - 1];
+                        if (last?.role === "advisor" && last.streaming && last.speakerId === record.speakerId) {
+                            rows[rows.length - 1] = completed;
+                        } else {
+                            rows.push(completed);
+                        }
+                        return rows;
+                    });
+                    // Persist EACH member before inviting the next to answer.
+                    // A failed save cannot count as a completed participation decision.
+                    if (!(await saveMessages(next, threadId))) {
+                        throw new Error("The group reply was not saved; its participation decision cannot be treated as complete.");
+                    }
+                    return completed;
+                };
+                const batchComplete = async (rawRecords) => {
+                    if (leftCampaign()) throw new Error("Campaign changed during group chat.");
+                    const latest = await readAdvisorMessages({ force: true });
+                    const currentGroup = advisorGroupForReply(latest, threadId);
+                    const members = advisorContacts(latest);
+                    for (const record of rawRecords) {
+                        if (!currentGroup.memberIds.includes(record.speakerId)) {
+                            throw new Error("Uninvited speaker in group batch.");
+                        }
+                        if (record.speakerId !== CHIEF_ADVISOR_THREAD
+                            && !members.some((person) => person.id === record.speakerId && !person.archived
+                                && advisorRecipientType(person) === ADVISOR_RECIPIENT_TYPES.MINISTER)) {
+                            throw new Error("An invited group participant is no longer an active government advisor.");
+                        }
+                    }
+                    // Complete native parsing, stable IDs and per-speaker
+                    // validation BEFORE opening the canonical world write queue.
+                    const staged = stageAdvisorGroupBatch(rawRecords, {
+                        allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
+                        currentActions: await readJson(JSON_URLS.actions, { force: true }),
+                        makeReplyId: () => "advisor-reply-" + (globalThis.crypto?.randomUUID?.()
+                            || Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 14)),
+                    });
+                    if (leftCampaign()) throw new Error("Campaign changed before group Project validation.");
+                    const projectsBySpeaker = await applyAdvisorGroupProjectBatch({
+                        entries: staged.map((record) => ({
+                            speakerId: record.speakerId, proposal: record.projectOps,
+                        })),
+                        gameDate, round: gameRound, mutateWorldState, applyProjectOpsToWorld,
+                    });
+                    const at = new Date().toISOString();
+                    const completed = staged.map(({ projectOps, ...record }) => {
+                        const summary = projectsBySpeaker.get(record.speakerId);
+                        return {
+                            ...record, time: askedOn, at,
+                            ...(summary?.length ? { projectsSummary: summary } : {}),
+                        };
+                    });
+                    if (leftCampaign()) throw new Error("Campaign changed before saving group replies.");
+                    const next = updateMessages((prev) => [...prev, ...completed]);
+                    // All speakers in a shared provider response are persisted
+                    // together, never one at a time while validating peers.
+                    if (!(await saveMessages(next, threadId))) {
+                        throw new Error("The group batch was not saved; its participation decisions cannot be treated as complete.");
+                    }
+                    return completed;
+                };
+                await sendAdvisorGroupMessage({ threadId, messages: messagesRef.current,
+                    onSpeakerChunk: speakerChunk, onSpeakerComplete: speakerComplete,
+                    onBatchComplete: batchComplete, shouldAbort: leftCampaign });
+                if (!leftCampaign()) await saveMessages(messagesRef.current, threadId);
+                return;
+            }
             const raw = await sendMessage(text, { threadId, recipient, onChunk: (_delta, full) => showStreaming(full), catchUp: catchUp.text });
             if (leftCampaign()) {
                 logDebugEvent("advisor", "Advisor reply dropped: the campaign was switched while it was being written, so none of its orders or projects were applied.");
@@ -1443,7 +1629,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             });
             const { proposals: actionProposals, problems: invalidProposals } =
                 (threadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(recipient) === ADVISOR_RECIPIENT_TYPES.MINISTER)
-                    ? actionProposalsFromReply(actionsProposal, replyId)
+                    ? reviewAdvisorActionProposals(actionsProposal, replyId,
+                        await readJson(JSON_URLS.actions, { force: true }))
                     : { proposals: [], problems: [] };
             const actionsProblems = [...actionBlockProblems, ...invalidProposals];
             // Same one-shot treatment for the projects board, with truncation
@@ -1620,7 +1807,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
         const subject = String(proposal?.title || proposal?.text || "this Action").trim().slice(0, 240);
         const prompt = needsNewAction
-            ? `The proposed change "${subject}" targets an Action that is no longer queued. If this is genuinely new work, propose a new Action for my approval instead of editing a missing or resolved order.`
+            ? `Assess whether any separate new work is actually needed concerning "${subject}". If so, propose a fresh Action for my review. Do not reuse an old order ID or treat an Action's normal resolution as a system failure.`
             : `Let's discuss the proposed Action "${subject}" before I authorize it.`;
         setInput((current) => current.trim() ? `${current.replace(/\s+$/, "")}\n\n${prompt}` : prompt);
         inputRef.current?.focus();
@@ -1993,6 +2180,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
 
         <AdvisorRecipients
             contacts={contacts}
+            groups={groups}
             activeId={activeThreadId}
             chiefProfile={chiefProfile}
             offices={offices}
@@ -2002,6 +2190,10 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             onCreate={createRecipient}
             onRevise={reviseRecipient}
             onArchive={retireRecipient}
+            onReorder={reorderRecipients}
+            onCreateGroup={createGroup}
+            onReviseGroup={reviseGroup}
+            onArchiveGroup={retireGroup}
             onSaveChief={saveChiefProfile}
             onResetChief={restoreChiefProfile}
         />
@@ -2018,11 +2210,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             keystroke. See AdvisorMessageRow's comment for why that mattered. */}
         <AdvisorMessageList
         messages={messages}
-        speakerName={selectedContact?.name || chiefProfile?.name || "Advisor"}
-        emptyMessage={selectedContact && advisorRecipientType(selectedContact) !== ADVISOR_RECIPIENT_TYPES.MINISTER ? "No messages yet. Start your conversation." : "No messages yet. Ask your advisor something!"}
+        speakerName={selectedGroup?.name || selectedContact?.name || chiefProfile?.name || "Advisor"}
+        speakerNameFor={speakerNameFor}
+        emptyMessage={selectedGroup ? "No group conversation yet. Ask the participants a question to start." : selectedContact && advisorRecipientType(selectedContact) !== ADVISOR_RECIPIENT_TYPES.MINISTER ? "No messages yet. Start your conversation." : "No messages yet. Ask your advisor something!"}
         canExecute={activeThreadId === CHIEF_ADVISOR_THREAD}
-        canDraft={activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER}
-        canReviewActions={!recipientLocked && (activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER)}
+        canDraft={Boolean(selectedGroup) || activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER}
+        canReviewActions={!recipientLocked && (Boolean(selectedGroup) || activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER)}
         visibleLimit={visibleMessageLimit}
         onShowEarlier={handleShowEarlier}
         isLoading={isLoading}

@@ -3,6 +3,7 @@ import {
   ADVISOR_RECIPIENT_TYPES,
   CHIEF_ADVISOR_THREAD,
   advisorContacts,
+  advisorGroups,
   advisorMessagesFor,
   advisorRecipientType,
 } from "../../runtime/advisorThreads.js";
@@ -21,7 +22,8 @@ const readReviewedProposal = async ({
   }
   const saved = await readAdvisorMessages({ force: true });
   if (!Array.isArray(saved)) throw new Error("The Advisor conversation could not be read.");
-  if (threadId !== CHIEF_ADVISOR_THREAD) {
+  const group = advisorGroups(saved).find((item) => item.id === threadId);
+  if (threadId !== CHIEF_ADVISOR_THREAD && !group) {
     const contact = advisorContacts(saved).find((record) => record.id === threadId);
     if (!contact || contact.archived || advisorRecipientType(contact) !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
       throw new Error("Only an active domestic Advisor / Minister conversation may submit player-approved Actions.");
@@ -31,6 +33,14 @@ const readReviewedProposal = async ({
     .filter((entry) => entry?.role === "advisor" && entry.id === messageId);
   if (messages.length !== 1) throw new Error("The original Advisor reply was not found or was ambiguous.");
   const message = messages[0];
+  if (group) {
+    const member = advisorContacts(saved).find((row) => row.id === message.speakerId);
+    if (group.archived || !group.memberIds?.includes(message.speakerId)
+        || (message.speakerId !== CHIEF_ADVISOR_THREAD
+          && (!member || member.archived || advisorRecipientType(member) !== ADVISOR_RECIPIENT_TYPES.MINISTER))) {
+      throw new Error("Only a current invited Advisor / Minister may submit a group Action for player review.");
+    }
+  }
   const proposals = Array.isArray(message.actionProposals) ? message.actionProposals : [];
   const matches = proposals.filter((proposal) => proposal?.id === proposalId);
   if (matches.length !== 1) throw new Error("The requested Action proposal is missing or ambiguous.");

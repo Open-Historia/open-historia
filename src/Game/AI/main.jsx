@@ -37,7 +37,7 @@ import { createKoboldCppMemory, endpointOriginOf, isKoboldCppModelName, saysKobo
 import { MIN_CACHEABLE_PREFIX_CHARS, renderTemplateCached, splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { RELAY_CUT_OFF_MESSAGE, isRelayRefusal, isRelayUnreachable, relayUnreachableReason, withRelayCutoffHint } from "./relayResponse.js";
-import { attachLookupRound, attachCallMetrics, attachRequestOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
+import { attachLookupRound, attachCallMetrics, attachRequestOutcome, attachAttemptOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord } from "./telemetry.js";
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
@@ -148,7 +148,10 @@ import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { ADVISOR_MEMORY_DIRECTIVE, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
-import { ADVISOR_RECIPIENT_TYPES, advisorOfficeStatus, advisorRecipientForReply, advisorRecipientType, assertAdvisorRecipientCanReply, chiefAdvisorProfile } from "../../runtime/advisorThreads.js";
+import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorGroupForReply, advisorOfficeStatus, advisorRecipientForReply, advisorRecipientType, assertAdvisorRecipientCanReply, chiefAdvisorProfile } from "../../runtime/advisorThreads.js";
+import { advisorGroupSpeakerName, OPTIONAL_GROUP_SPEECH_STANDARD, renderAdvisorGroupHistory, requiredAdvisorGroupSpeakers, selectAdvisorGroupSpeakers } from "./advisorGroupMeetings.js";
+import { groupSpeakerBatches, parseAdvisorGroupBatch, advisorBatchOutputContract, buildAdvisorSharedBatchPrompt } from "./advisorGroupBatching.js";
+import { readAdvisorGroupSettings } from "./advisorGroupSettings.js";
 import { describeChiefAdvisorOverride } from "./advisorPersona.js";
 import { buildCharacterSystemPrompt } from "./characterConversations.js";
 import { createConversationGeneration, removeEntry } from "./liveConversation.js";
@@ -2916,6 +2919,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
     const {
         languageMode = "ui", logLabel = "", __debug: debugMeta = null, __debugSink: debugSink = null, lookups = null,
         requestKind = PLAYER_REQUEST, onRequest: observeRequest = null, spender = "", agentKind = "",
+        groupDebug = null,
         ...providerOpts
     } = opts;
     // The difficulty's priority line opens every system prompt the game sends
@@ -2973,6 +2977,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
             userMessage: Array.isArray(history) ? history.at(-1)?.parts?.[0]?.text ?? "" : "",
             staticPrefixEnd: providerOpts.staticPrefixEnd ?? null,
             awaitingOutcome: Boolean(debugSink),
+            ...(groupDebug ? { groupTurnId: groupDebug.turnId,
+                groupName: groupDebug.name, groupBatchIndex: groupDebug.batchIndex,
+                groupTotalSpeakers: groupDebug.totalSpeakers,
+                groupSpeakerIds: groupDebug.speakerIds } : {}),
         })
         : null;
     if (debugSink && typeof debugSink === "object") debugSink.record = record;
@@ -3661,7 +3669,7 @@ async function describePlayerStatsForAdvisor(worldData, country) {
     });
 }
 
-async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
+async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = false, meetingMode = false, noLookups = false } = {}) {
     if (recipient && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
         // This branch deliberately reads NO actions, private diplomatic chats,
         // Advisor transcripts or prompt pack. World is used only by viewAsSeen
@@ -3731,7 +3739,7 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
         renderConversationTemplate(guardPromptTemplate("advisor", promptPack.advisor, promptPack.bypassLengthLimit === true), { ...variables, ...helperValues }),
         variables,
     );
-    const groupLookups = advisorGroupLookups({ world: worldData, player: gameData?.country || "" });
+    const groupLookups = discussionOnly || noLookups ? null : advisorGroupLookups({ world: worldData, player: gameData?.country || "" });
     const groupsListed = groupLookups ? "" : await describeAdvisorGroups({ world: worldData, player: gameData?.country || "" });
     const advisorPoliticalDiplomacy = buildAdvisorPoliticalDiplomacyContext({
         world: worldData,
@@ -3766,11 +3774,11 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
         describeWeatherForAdvisor({ world: worldData, player: gameData?.country || "", date: gameData?.gameDate || "" }),
         // (The seasons and the weather, which the map shows with no words:
         // advisorWeather.js.)
-        buildAdvisorActionsDirective(variables.plannedActionsWithIds),
-        ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
-        ADVISOR_INSTITUTION_DRAFT_DIRECTIVE,
-        ADVISOR_DEPLOY_DIRECTIVE,
-        buildAdvisorProjectsDirective(variables.projectsSummary),
+        discussionOnly ? "" : buildAdvisorActionsDirective(variables.plannedActionsWithIds),
+        discussionOnly ? "" : ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
+        discussionOnly || meetingMode ? "" : ADVISOR_INSTITUTION_DRAFT_DIRECTIVE,
+        discussionOnly || meetingMode ? "" : ADVISOR_DEPLOY_DIRECTIVE,
+        discussionOnly ? "" : buildAdvisorProjectsDirective(variables.projectsSummary),
         // Subordinations as the PLAYER knows them (runtime/puppets.js). worldData
         // is already the world as the player has been shown it (viewAsSeen), so a
         // subordination a still-unrevealed event installed is not on it yet —
@@ -3813,10 +3821,153 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
         ? `[Advisor Recipient — Persistent Identity]
 You are ${recipient.name}, known to the player as ${recipient.title}. You are speaking to the player as this specific person, NOT as their chief advisor.
 ${officeContext}
-${recipient.personality ? `Personality and operating principles: ${recipient.personality}\n` : ""}Maintain this identity across turns. Speak within your actual knowledge and office; do not invent appointments or authority. You may propose Actions for human review using fenced actions blocks, but they are NOT queued until the player explicitly selects Proceed; never claim to have executed one. You may also create or update Projects with fenced projects blocks once the player has clearly committed to the sustained effort, or when recording substantiated progress; those Project edits go directly to the existing board without an extra approval. Recommend potential Projects freely in prose, but do not open speculative ones or claim institutional powers merely from your typed title. No other canonical government mutations are authorized by this conversation.`
+${recipient.personality ? `Personality and operating principles: ${recipient.personality}\n` : ""}Maintain this identity across turns. Speak within your actual knowledge and office; do not invent appointments or authority. ${discussionOnly
+  ? "This conversation is discussion-only. Propose plans in prose, but do not emit executable blocks or claim that you changed game state."
+  : "You may propose Actions for human review using fenced actions blocks, but they are NOT queued until the player explicitly selects Proceed; never claim to have executed one. You may also create or update Projects with fenced projects blocks once the player has clearly committed to the sustained effort, or when recording substantiated progress; those Project edits go directly to the existing board without an extra approval. Recommend potential Projects freely in prose, but do not open speculative ones or claim institutional powers merely from your typed title."} No other canonical government mutations are authorized by this conversation.`
         : "";
-    const chiefIdentity = recipient ? "" : describeChiefAdvisorOverride(chiefAdvisorProfile(advisorData));
+    const chiefIdentity = recipient || meetingMode === "batch" ? "" : describeChiefAdvisorOverride(chiefAdvisorProfile(advisorData));
     return { systemPrompt: `${rendered}\n\n${[...directives, identity, chiefIdentity].filter(Boolean).join("\n\n")}`, lookups: groupLookups };
+}
+
+// Each group member speaks in their own persistent minister/chief persona.
+// Responses may contain proposals, but the caller must attach them to the
+// specific speaker's saved reply and pass them through native validation.
+// Sequential batches preserve full participation with optional independent generation.
+export async function sendAdvisorGroupMessage({ threadId, messages, onSpeakerChunk, onSpeakerComplete, onBatchComplete, shouldAbort } = {}) {
+    const stored = await readJson(JSON_URLS.advisor, { defaultValue: [], force: true });
+    const group = advisorGroupForReply(stored, threadId);
+    const contacts = advisorContacts(stored);
+    const chiefName = chiefAdvisorProfile(stored)?.name || "Chief advisor";
+    const conversation = (Array.isArray(messages) ? messages : [])
+        .filter((message) => message?.role === "user" || message?.role === "advisor" || message?.role === "error");
+    const question = [...conversation].reverse().find((message) => message.role === "user")?.text || "";
+    if (!String(question).trim()) throw new Error("A group chat needs a question from the player.");
+    const speakers = selectAdvisorGroupSpeakers(group.memberIds, conversation, question, contacts, chiefName);
+    if (!speakers.length) throw new Error("Every group member has already responded or explicitly declined this question.");
+    // One response is always required. Directly named members are mandatory;
+    // every other participant retains an opportunity to intervene or pass.
+    const mustSpeak = new Set(requiredAdvisorGroupSpeakers(group.memberIds, conversation, question, contacts, chiefName));
+    const { effectiveBatchSize } = readAdvisorGroupSettings();
+    const batches = groupSpeakerBatches(speakers, effectiveBatchSize);
+    const groupTurnId = `group-turn-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,14)}`}`;
+    const participants = group.memberIds.map((id) => {
+        const person = id === CHIEF_ADVISOR_THREAD ? null : contacts.find((contact) => contact.id === id);
+        return `- ${advisorGroupSpeakerName(id, contacts, chiefName)} (${person?.title || "Chief advisor"})`;
+    }).join("\n");
+    const result = [];
+    for (const [batchIndex, batch] of batches.entries()) {
+        if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
+        if (batch.length > 1) {
+            const { systemPrompt } = await buildAdvisorSystemPrompt({
+                meetingMode: "batch", noLookups: true,
+            });
+            const chief = chiefAdvisorProfile(stored);
+            const prompt = buildAdvisorSharedBatchPrompt({
+                groupName: group.name, memberIds: batch, contacts,
+                chiefName, chiefTitle: chief?.title || "Chief advisor",
+                chiefPersonality: chief?.personality || "",
+                transcript: renderAdvisorGroupHistory(conversation, contacts, chiefName),
+                question,
+                requiredSpeakerIds: batch.filter((id) => mustSpeak.has(id)),
+            });
+            const sink = {};
+            try {
+                const raw = await callAI(systemPrompt + "\n\n" + prompt,
+                    [{ role: "user", parts: [{ text: "Return all invited group replies as one exact JSON object, preserving speaker identity and order." }] }],
+                    { maxTokens: Math.min(24000, 2400 * batch.length),
+                        languageMode: "chat", logLabel: "advisor group", taskKey: "advisor", agentKind: "advisor",
+                        __debugSink: sink,
+                        groupDebug: { turnId: groupTurnId, name: group.name,
+                            batchIndex: batchIndex + 1, totalSpeakers: speakers.length, speakerIds: batch } });
+                if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
+                const parsed = parseAdvisorGroupBatch(raw, batch, {
+                    requiredSpeakerIds: batch.filter((id) => mustSpeak.has(id)),
+                });
+                if (typeof onBatchComplete !== "function") throw new Error("Group batch validation callback is missing.");
+                const completed = await onBatchComplete(parsed);
+                if (!Array.isArray(completed) || completed.length !== batch.length
+                    || completed.some((entry, index) => entry.speakerId !== batch[index])) {
+                    throw new Error("Group batch completion did not preserve every speaker.");
+                }
+                conversation.push(...completed);
+                result.push(...completed);
+                attachAttemptOutcome(sink.record, { ok: true });
+            } catch (error) {
+                attachAttemptOutcome(sink.record, {
+                    ok: false, validationError: String(error?.message || error),
+                });
+                throw error;
+            }
+            continue;
+        }
+        const speakerId = batch[0];
+        if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
+        // Enforce contact identity at the model boundary; supplied UI profiles
+        // cannot silently elevate a character into privileged government counsel.
+        const recipient = speakerId === CHIEF_ADVISOR_THREAD ? null
+            : advisorRecipientForReply(stored, speakerId, contacts.find((contact) => contact.id === speakerId));
+        if (recipient && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
+            throw new Error("Only government advisors may speak in a government group chat.");
+        }
+        const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient, meetingMode: true, noLookups: true });
+        const name = advisorGroupSpeakerName(speakerId, contacts, chiefName);
+        const privateHistory = advisorMessagesFor(stored, speakerId)
+            .filter((row) => row.role === "user" || row.role === "advisor")
+            .slice(-6)
+            .map((row) => `${row.role === "user" ? "Player" : name}: ${String(row.text || "").slice(0, 440)}`)
+            .join("\n");
+        const meetingDirective = `[Current Group Chat: ${group.name}]
+Participants, with independent voices:
+${participants}
+
+You are ${name}, ONE specific participant in this group conversation. Your own existing personality, values, title, authority and expertise above remain in force; do not speak for colleagues or invent their replies. If you speak, address the latest message or previous speakers from your distinct perspective, and disagree when the facts warrant it. Do not produce a reply merely to acknowledge the player or maintain a group conversation. Your response will be attributed ONLY to you.
+You are authorized to use the normal Advisor / Minister contracts for formal work: fenced actions proposals are saved for the player's explicit Proceed review, never auto-queued. When the player has clearly committed to sustained work, you may open or update Projects through fenced projects operations, which are applied through the game's normal native validation. You may also prepare diplomatic drafts for the player's review. Do NOT issue deployment or institution execution blocks from this group chat. Do not impersonate another speaker or claim an unapproved Action has executed. No reply of yours binds other ministers or the state.
+
+[Your Existing One-to-One Correspondence — private to you]
+${privateHistory || "(No prior private exchanges.)"}
+Only you have seen these private exchanges. Do not attribute their contents to colleagues unless those facts are also public or spoken in this meeting.
+
+[Group Chat Transcript]
+${renderAdvisorGroupHistory(conversation, contacts, chiefName)}
+
+[Group participation decision]
+${mustSpeak.has(speakerId)
+  ? "You are directly addressed or the lead respondent: you MUST provide a substantive answer, not silence."
+  : `${OPTIONAL_GROUP_SPEECH_STANDARD} If no material contribution remains, output ONLY the exact token [[PASS]] and nothing else. That is an intentional pass, not an empty or truncated response.`}
+
+Decide whether you need to speak as ${name}. If required, answer. If optional, speak only to make a material contribution; otherwise return exactly [[PASS]].`;
+        const sink = {};
+        try {
+            const raw = await callAI(`${systemPrompt}\n\n${meetingDirective}`,
+                [{ role: "user", parts: [{ text: "Apply the group participation decision above. A required speaker must answer; an optional speaker must return exactly [[PASS]] unless they have a material new contribution or substantive objection. Do not produce a courtesy reply." }] }],
+                { maxTokens: 2400, languageMode: "chat", logLabel: "advisor group", taskKey: "advisor",
+                    agentKind: "advisor", __debugSink: sink,
+                    groupDebug: { turnId: groupTurnId, name: group.name,
+                        batchIndex: batchIndex + 1, totalSpeakers: speakers.length, speakerIds: batch },
+                    ...(lookups ? { lookups } : {}),
+                    onChunk: (delta, full) => { if (!shouldAbort?.() && !("[[PASS]]".startsWith(String(full || "").trim()))) onSpeakerChunk?.(speakerId, delta, full); } });
+            if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
+            const { reply, memory } = splitAdvisorMemory(raw);
+            if (!reply?.trim()) throw new Error(`Group member ${name} returned an empty reply.`);
+            if (typeof onSpeakerComplete !== "function") throw new Error("Group speaker validation callback is missing.");
+            const pass = reply.trim() === "[[PASS]]";
+            if (pass && mustSpeak.has(speakerId)) throw new Error(`Required group member ${name} must answer.`);
+            if (pass && memory) throw new Error(`Silent group member ${name} cannot write private memory.`);
+            if (reply.includes("[[PASS]]") && !pass) throw new Error(`Group member ${name} returned an invalid partial pass.`);
+            const record = pass
+                ? { role: "advisor", speakerId, silent: true, text: "" }
+                : { role: "advisor", speakerId, text: reply.trim(), ...(memory ? { memory } : {}) };
+            const completed = await onSpeakerComplete(record);
+            if (!completed || completed.speakerId !== speakerId) throw new Error("Group speaker identity changed during completion.");
+            conversation.push(completed);
+            result.push(completed);
+            attachAttemptOutcome(sink.record, { ok: true });
+        } catch (error) {
+            attachAttemptOutcome(sink.record, { ok: false, validationError: String(error?.message || error) });
+            throw error;
+        }
+    }
+    return result;
 }
 
 // `speakingAs` names the polity whose leader is about to reply. It decides both

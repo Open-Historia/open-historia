@@ -202,6 +202,7 @@ import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE, audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
 import { buildTargetDossierKernel, buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
 import { buildTargetLedgerLines } from "./targetDossier.js";
+import { buildCustomStatContinuity, customStatRefreshDecision, describeFreshCustomStatEvidence } from "./customStatContinuity.js";
 import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
 import {
   AGENT_REPORTS_FIELD,
@@ -322,7 +323,7 @@ import {
   withoutBoardOps,
 } from "./foldedSkip.js";
 import { geminiDeclaredChars } from "./geminiAnswer.js";
-import { renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
+import { buildIdleConversationBrief, idleThreadChangedSince } from "../../runtime/idleConversationContext.js";
 import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment, spySealingWorks } from "../../runtime/spySeal.js";
 import {
   buildActionHistoryText,
@@ -14521,11 +14522,80 @@ const generateScenarioCustomStatSheet = async ({
   onRequest,
   rateIntelligence = false,
   onIntelligenceRating = null,
+  forceReassess = false,
 } = {}) => {
   const currentDate = normalizeString(bundle?.game?.gameDate || bundle?.game?.startDate);
   const currentRound = Math.max(0, Math.trunc(Number(bundle?.game?.round) || 0));
   const previous = normalizeCountryStatSheet(worldAtStart?.countryStats?.[statCode]);
   const previousValues = normalizeCustomStatValues(previous?.customStats, definition, { partial: true });
+  const requiredKeys = statSheetKeys(definition);
+
+  // A saved custom sheet is canon, not a fresh opinion poll. The previous
+  // provider path asked for every value on every Refresh, even if no native
+  // evidence whatsoever had changed. Fingerprint only TARGET-relevant facts,
+  // never elapsed calendar time or unrelated countries' news.
+  const aliases = statsPolityAliases(worldAtStart, statCode);
+  const targetMatches = (text) => statsTextMentionsTarget(text, aliases);
+  const currentEvents = normalizeEvents(bundle?.events).filter((event) =>
+    !event?.date || !currentDate || compareGameDates(event.date, currentDate) <= 0);
+  const relevantRecords = (rows) => normalizeArray(rows).filter((row) =>
+    targetMatches(JSON.stringify(row)));
+  const political = getPoliticalProfile(worldAtStart, statCode);
+  const polity = Object.entries(worldAtStart?.polityOverrides || {})
+    .filter(([key, value]) => targetMatches([key, value?.code, value?.name].join(" ")))
+    .map(([key, value]) => ({ key, name: value?.name, note: value?.note, tags: value?.tags, aliases: value?.aliases }));
+  const sourceState = {
+    polity,
+    government: political?.government ?? null,
+    politicalSystem: political?.politicalSystem ?? null,
+    stability: political?.stability ?? null,
+    domesticPressures: political?.domesticPressures ?? null,
+    reputation: Object.entries(worldAtStart?.internationalReputation || {})
+      .filter(([key]) => targetMatches(key)),
+    wars: relevantRecords(worldAtStart?.wars),
+    agreements: relevantRecords(worldAtStart?.agreements),
+    relations: relevantRecords(worldAtStart?.relations),
+    projects: relevantRecords(worldAtStart?.projects).map((row) => ({
+      id: row?.id, title: row?.title, status: row?.status, progress: row?.progress, ownerCode: row?.ownerCode,
+    })),
+  };
+  const evidence = buildCustomStatContinuity({
+    events: currentEvents,
+    prior: previous?.continuity,
+    currentState: sourceState,
+    targetMatches,
+  });
+  const decision = customStatRefreshDecision({
+    previousValues,
+    requiredKeys,
+    prior: previous?.continuity,
+    current: evidence,
+    hardAudit: forceReassess,
+  });
+  const continuity = {
+    assessedDate: currentDate,
+    assessedRound: currentRound,
+    customStatFingerprint: evidence.fingerprint,
+    customStatEvidenceIds: evidence.evidenceIds,
+  };
+
+  if (!decision.regenerate && !rateIntelligence) {
+    // Existing saves have no custom fingerprint. Seal the current evidence
+    // without silently revisiting three years of already-assessed history.
+    if (decision.migrate && statCode) {
+      await beginStatsWrite(campaign, signal);
+      try {
+        await mutateWorldState((world) => {
+          applyCountryStatPatchToWorld(world, statCode, {}, { continuity });
+          return world;
+        }, { emitEvents: false });
+      } finally {
+        endSimulation();
+      }
+    }
+    console.info(`[stats custom] ${target}: reused persistent baseline (${decision.reason}); no AI request.`);
+    return previous;
+  }
   const dossier = await buildTargetDossier(bundle, target, worldAtStart, { statSheet: false });
   const variables = await buildTemplateVariables(bundle, {
     lookups: true,
@@ -14550,6 +14620,12 @@ ${dossier || "(nothing recorded)"}`,
         ? `PREVIOUS PERSISTENT CUSTOM STATS (campaign canon; preserve continuity unless supplied events justify change):
 ${JSON.stringify(previousValues)}`
         : "No previous custom Stats baseline exists; establish scenario-appropriate initial values from the supplied canon.",
+      decision.regenerate && Object.keys(previousValues).length
+        ? `NEW EVIDENCE SINCE THE LAST ASSESSMENT:
+${describeFreshCustomStatEvidence(evidence.freshEvents)}
+
+Reassess existing values only as a response to newly changed canonical evidence. Historical crises already incorporated in the previous sheet are NOT new events. Preserve any index for which no relevant new evidence justifies a difference. Changes can be positive or negative; do not assume ongoing decline.`
+        : "",
       // The layer under the scenario's own sheet (runtime/statsBackend.js).
       statsBackendInstruction(statsBackendOf(previous)),
       rateIntelligence ? intelligenceRatingInstruction(target, currentDate) : "",
@@ -14559,20 +14635,21 @@ ${JSON.stringify(previousValues)}`
   if (rateIntelligence) onIntelligenceRating?.(payload?.[INTELLIGENCE_RATING_FIELD] ?? null);
 
   throwIfAborted(signal);
-  const customStats = normalizeCustomStatValues(payload?.customStats, definition);
-  const expectedKeys = statSheetKeys(definition);
-  const missing = expectedKeys.filter((key) => !Object.prototype.hasOwnProperty.call(customStats, key));
+  // An intelligence-rating-only request has no permission to reassess a
+  // previously complete scenario sheet. Never accept incidental numeric drift.
+  const customStats = decision.regenerate
+    ? normalizeCustomStatValues(payload?.customStats, definition)
+    : previousValues;
+  const missing = requiredKeys.filter((key) => !Object.prototype.hasOwnProperty.call(customStats, key));
   if (missing.length) {
     throw new Error(`Scenario Stats generation omitted required value(s): ${missing.join(", ")}.`);
   }
 
   // (A backend the answer left out, or wrote unusably, leaves the one the sheet had.)
-  const sheet = mergeCountryStatPatch(previous, { customStats, ...statsBackendPatch(payload?.[STATS_BACKEND_FIELD]) }, {
-    continuity: {
-      assessedDate: currentDate,
-      assessedRound: currentRound,
-    },
-  });
+  const sheet = mergeCountryStatPatch(previous, {
+    customStats,
+    ...(decision.regenerate ? statsBackendPatch(payload?.[STATS_BACKEND_FIELD]) : {}),
+  }, { continuity });
 
   if (!statCode || !sheet) return sheet;
 
@@ -14582,7 +14659,7 @@ ${JSON.stringify(previousValues)}`
       const persisted = await persistCountryStatsBackground({
         code: statCode,
         sheet,
-        continuity: { assessedDate: currentDate, assessedRound: currentRound },
+        continuity,
         date: currentDate,
         round: currentRound,
         signal,
@@ -14607,9 +14684,7 @@ ${JSON.stringify(previousValues)}`
 
     let nextSheet = null;
     await mutateWorldState((world) => {
-      nextSheet = applyCountryStatPatchToWorld(world, statCode, sheet, {
-        continuity: { assessedDate: currentDate, assessedRound: currentRound },
-      });
+      nextSheet = applyCountryStatPatchToWorld(world, statCode, sheet, { continuity });
       world.countryStatsHistory = appendCountryStatHistorySample(
         world.countryStatsHistory,
         statCode,
@@ -14674,6 +14749,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       onRequest,
       rateIntelligence,
       onIntelligenceRating,
+      forceReassess,
     });
   }
 
@@ -20391,11 +20467,12 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
     const beforeSignature = eventSignature(event);
 
     const openChats = normalizeChats(bundle.chats);
+    const conversationBrief = buildIdleConversationBrief(openChats);
     const conversationContext = [
       "",
       "These are the conversations already open with the player, oldest message first:",
       "",
-      renderOpenChatsForPrompt(openChats),
+      conversationBrief.text,
       "",
       "If you write to a polity already in an open thread, the note is appended there. Reply to what was actually said; never restart the conversation or parrot an existing message.",
     ].join("\n");
@@ -20520,10 +20597,26 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
 
     const messageDate = normalizeString(event.date) || normalizeString(bundle.game?.gameDate);
     let nextChats = [];
+    let staleConversation = false;
     await mutateChatsState((currentChats) => {
+      const key = chatParticipantNamesKey(built);
+      const previous = openChats.find((chat) => chatParticipantNamesKey(chat) === key);
+      const destination = normalizeChats(currentChats).find((chat) =>
+        chat?.status !== "closed" && chatParticipantNamesKey(chat) === key);
+      if (destination && (!conversationBrief.includedChatIds.includes(String(destination.id || ""))
+          || !previous || idleThreadChangedSince(previous, destination))) {
+        staleConversation = true;
+        return null;
+      }
       nextChats = foldGeneratedChatsIntoStorage(currentChats, [built], { stampTime: messageDate });
       return nextChats;
     });
+    if (staleConversation) {
+      // The model did not see the thread it would answer, or it changed while
+      // the request ran. Silence, not a false "sent" receipt.
+      await removeQueueEntry({ reactionResult: "silent" });
+      return debug ? { processed: 1, reason: "diplomacy-thread-unbriefed-or-changed" } : null;
+    }
 
     const builtParticipantKey = chatParticipantNamesKey(built);
     const mergedChat = builtParticipantKey
@@ -21481,6 +21574,7 @@ export const maybeSendIdleDiplomacy = async () => {
     const bundle = await readGameStateBundle({ force: true });
     if (!normalizeString(bundle.game?.country)) return null; // no active game
     const openChats = normalizeChats(bundle.chats).filter((chat) => !isLifecycleNegotiationChat(chat));
+    const conversationBrief = buildIdleConversationBrief(openChats);
     // The same world the last pulses answered empty on: a second roll, before
     // anything is built or asked.
     const fingerprint = idlePulseFingerprint({
@@ -21529,7 +21623,7 @@ export const maybeSendIdleDiplomacy = async () => {
       "",
       "These are the conversations already open with the player, oldest message first:",
       "",
-      renderOpenChatsForPrompt(openChats),
+      conversationBrief.text,
       "",
       "A note addressed to a polity the player is ALREADY talking to is appended to that"
       + " conversation, so it must read as the next thing that polity says: answer what was"
@@ -21662,6 +21756,17 @@ export const maybeSendIdleDiplomacy = async () => {
       ));
       if (collidesWithLifecycleNegotiation) {
         outcome = "lifecycle";
+        return null;
+      }
+      const key = chatParticipantKey(built.countries);
+      const destination = normalizeChats(chats).find((chat) =>
+        chat?.status !== "closed" && chatParticipantKey(chat.countries) === key);
+      const prior = openChats.find((chat) => chatParticipantKey(chat.countries) === key);
+      if (destination && (!prior || !conversationBrief.includedChatIds.includes(String(destination.id || ""))
+          || idleThreadChangedSince(prior, destination))) {
+        // The conversation was omitted by the bounded prompt or changed while
+        // the model was thinking. Appending would fabricate continuity.
+        outcome = "stale-thread";
         return null;
       }
       // A note from a country the player already has an open thread with (1:1 or a
