@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "make it so rostra can be themed as a phone, newspaper, scroll, and a stone tablet selected by the scenario designer in features"
+    // (the owner, 2026-11-10): server/gameFeatures.js socialMedia setting "look"; GameUI/rostraLooks.js draws each.
+    id: "2026-11-rostra-looks",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Rostra in four looks",
+        items: [
+          "A scenario's author can draw Rostra as a phone, a newspaper, a scroll or a stone tablet, in Features under Social media.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",
