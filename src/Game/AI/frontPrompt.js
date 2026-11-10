@@ -45,13 +45,20 @@ import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 
 // (12500, the line that teaches a country's forces at home and the sentence that it alone calls them up, so that the
 // battlefields keep their room: runtime/fronts/home.js.)
-export const FRONTS_BLOCK_MAX = 12910;
+// (14610: its rules had grown until one battlefield, the only one of a world war, was left about 700 characters and
+// was told with its line cut off ("Line: " and nothing after it). The room now holds one battlefield in full, with
+// where its line runs and who holds whose land: BRIEF_TEXT_FULL_MAX.)
+export const FRONTS_BLOCK_MAX = 14610;
 // The most that is told of transporters in it.
 export const TRANSPORTS_TEXT_MAX = 640;
 export const FRONTS_BLOCK_HEADING = "[Fronts]";
 // The most of what happened on one battlefield in a period that is told by date.
 export const PERIOD_NEWS_MOST = 9;
 export const PERIOD_TEXT_MAX = 560;
+// The most of one battlefield's own lines when it is told in full: room for where its line runs and who holds whose
+// land beside its strengths, orders and weather (runtime/fronts/brief.js). Where there is less room it is told in
+// BRIEF_TEXT_MAX, which keeps where the line runs and drops the weather first.
+export const BRIEF_TEXT_FULL_MAX = 1400;
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -449,7 +456,7 @@ export const buildFrontsBlock = ({ battlefields = [], players = [], max: given =
   const news = fought ? asArray(period.news) : [];
   // In full: the brief, and under it what the period did there by date.
   const inFull = (record) => {
-    const text = describeBattlefield(record);
+    const text = describeBattlefield(record, { max: BRIEF_TEXT_FULL_MAX });
     if (!fought || record.status !== "active") return text;
     const name = foldBattlefieldName(record.name);
     const before = wasOpen.get(name) ?? null;

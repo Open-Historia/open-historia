@@ -41,7 +41,7 @@ test("the side that holds the sky over a battlefield takes more ground; with the
   assert.equal(fight({ mechanics: { air: true, military: true }, militaryOf: (name) => (name === "Aland" ? { air: 0 } : null), units: wings("Aland", 6) }).held,
     fight({ mechanics: { military: true }, militaryOf: (name) => (name === "Aland" ? { air: 0 } : null) }).held);
   // The story is told who held the sky.
-  assert.match(describeBattlefield(aloft.result.battlefields[0]), /Air: Aland holds the sky \(6 wings against 0\)/);
+  assert.match(describeBattlefield(aloft.result.battlefields[0], { max: 1400 }), /Air: Aland holds the sky \(6 wings against 0\)/);
 });
 
 test("in a game's run a country with no wings on the map flies its air arm over its battlefield", () => {
@@ -50,11 +50,11 @@ test("in a game's run a country with no wings on the map flies its air arm over 
   const arms = fight({ mechanics: { air: true, military: true }, militaryOf: strong, airArms: true });
   assert.equal(bare.result.battlefields[0].brief.air, undefined, "without air arms nobody flies");
   assert.ok(arms.held > bare.held, `the better air arm takes more ground: ${arms.held} against ${bare.held}`);
-  assert.match(describeBattlefield(arms.result.battlefields[0]), /Air: Aland holds the sky \(\d+ wings against \d+\)/);
+  assert.match(describeBattlefield(arms.result.battlefields[0], { max: 1400 }), /Air: Aland holds the sky \(\d+ wings against \d+\)/);
   assert.equal(arms.result.unitChanges.some((change) => /^air arm/.test(change.unitId)), false, "an air arm is no unit of the world's");
   // A country with wings of its own on the map flies those and no air arm.
   const own = fight({ mechanics: { air: true, military: true }, militaryOf: strong, airArms: true, units: wings("Borduria", 1).map((unit) => ({ ...unit, lng: 27 })) });
-  assert.match(describeBattlefield(own.result.battlefields[0]), /\(\d+ wings against 1\)|against \d+ wings/);
+  assert.match(describeBattlefield(own.result.battlefields[0], { max: 1400 }), /\(\d+ wings against 1\)|against \d+ wings/);
   assert.deepEqual(fight({ mechanics: { air: true, military: true }, militaryOf: strong, airArms: true }).held, arms.held, "the same run is the same war");
 });
 
@@ -90,7 +90,7 @@ test("a side's wings go where they are sent: to strike the other's troops, to su
   assert.deepEqual(sent("support").result.battlefields, support.result.battlefields, "told nothing, a side's wings support its troops");
   // Striking, Borduria's troops are worn the more, and Aland's own advance has no close support.
   assert.ok(strengthOf(strike, "Borduria") < strengthOf(support, "Borduria"), `${strengthOf(strike, "Borduria")} against ${strengthOf(support, "Borduria")}`);
-  assert.match(describeBattlefield(strike.result.battlefields[0]), /Air: Aland holds the sky/);
+  assert.match(describeBattlefield(strike.result.battlefields[0], { max: 1400 }), /Air: Aland holds the sky/);
   const worn = (run) => run.result.unitChanges.filter((change) => change.unitId.startsWith("Aland-")).reduce((sum, change) => sum + (100 - change.strength), 0);
   assert.ok(worn(strike) > worn(support), "striking wears the wings the more");
   // Grounded (from the staff's first look, after the first morning's flying), they are hardly worn, and the

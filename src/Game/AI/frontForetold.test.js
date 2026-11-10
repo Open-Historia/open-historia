@@ -20,7 +20,7 @@ import { decodeTroops } from "../../runtime/fronts/codec.js";
 import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { enlarge, syntheticMap } from "../../runtime/fronts/syntheticMap.js";
 import { decodeFrontOrders } from "./nativeFrontLedger.js";
-import { FRONTS_BLOCK_MAX, PERIOD_TEXT_MAX, buildFrontsBlock, describePeriod, describeUntold } from "./frontPrompt.js";
+import { BRIEF_TEXT_FULL_MAX, FRONTS_BLOCK_MAX, PERIOD_TEXT_MAX, buildFrontsBlock, describePeriod, describeUntold } from "./frontPrompt.js";
 import { FRONT_MARK, attachFrontFlips, frontRunSpan, planFrontMoments, runTurnFronts } from "./frontTurn.js";
 
 const legend = { A: "Aland", B: "Borduria", "~": null };
@@ -188,8 +188,8 @@ test("the block tells a period that was fought as it leaves the battlefield, by 
   // The battlefield as the period LEAVES it, then how it began and what happened when.
   assert.ok(lines.includes("Battlefields, as the period from 2024-03-11 to 2024-03-21 leaves them:"));
   const [after] = told.battlefields;
-  assert.ok(block.includes(describeBattlefield(after)));
-  assert.equal(block.includes(describeBattlefield(world.battlefields[0])), false, "not as it stood when the period began");
+  assert.ok(block.includes(describeBattlefield(after, { max: BRIEF_TEXT_FULL_MAX })));
+  assert.equal(block.includes(describeBattlefield(world.battlefields[0], { max: BRIEF_TEXT_FULL_MAX })), false, "not as it stood when the period began");
   const began = world.battlefields[0].brief.strength;
   assert.ok(lines.includes(`  It began the period with Aland at ${began[0].n} formations and Borduria at ${began[1].n}.`));
   const dated = lines.find((line) => line.startsWith("  This period, by date: "));
