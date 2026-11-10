@@ -134,7 +134,7 @@ test("an authored dissolution takes the polity's regions and control and dissolv
   assert.equal(Object.values(next.regionSovereigntyOverrides || {}).includes("Alpha"), false);
 });
 
-test("an authored dissolution leaves the dissolved polity no claims", { todo: "the engine's dissolve cleanup of claims is being written in another worktree" }, () => {
+test("an authored dissolution leaves the dissolved polity no claims", () => {
   const next = dissolve();
   assert.equal(Object.values(next.regionClaimants || {}).some((claimants) => claimants.includes("Alpha")), false);
 });
