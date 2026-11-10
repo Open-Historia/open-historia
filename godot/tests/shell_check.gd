@@ -314,6 +314,33 @@ func _languages(shell: ShellBoot) -> void:
 	main._call(main.menu, "_show_page", ["games"])
 	await _wait(0.4)
 	await _shoot("s-26-menu-english-again")
+	await _pill_ends(i18n)
+
+
+func _pill_ends(i18n: I18n) -> void:
+	var kept := {"offer": i18n.offer.duplicate(), "failed": i18n.model_failed, "pending": i18n.pending.duplicate(), "flight": i18n._in_flight, "name": i18n.native_name}
+	i18n.offer = {"has": true, "choice": "yes"}
+	i18n.model_failed = false
+	i18n.native_name = "Deutsch"
+	i18n.pending = {"A line still waiting": true}
+	i18n._in_flight = true
+	i18n._show_pill()
+	i18n._update_progress()
+	_check("the Translating to pill is up while the queue runs", i18n._pill.visible and i18n._pill_label.text == "Translating to Deutsch…", i18n._pill_label.text)
+	i18n._in_flight = false
+	i18n._update_progress()
+	_check("the pill ends when the queue stops, even with lines still waiting", not i18n._pill.visible)
+	i18n._show_notice("The translation model could not be loaded. What it translates stays in English.")
+	i18n._update_progress()
+	_check("a notice stays its time in the pill", i18n._pill.visible and i18n._pill_label.text == "The translation model could not be loaded. What it translates stays in English.", i18n._pill_label.text)
+	i18n._notice_serial += 1
+	i18n._notice_up = false
+	i18n._hide_pill()
+	i18n.offer = kept["offer"]
+	i18n.model_failed = kept["failed"]
+	i18n.pending = kept["pending"]
+	i18n._in_flight = kept["flight"]
+	i18n.native_name = kept["name"]
 
 
 func _find(node: Node, test: Callable) -> Node:

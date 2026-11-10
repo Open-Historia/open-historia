@@ -57,6 +57,7 @@ var _layer: CanvasLayer
 var _pill: PanelContainer
 var _pill_label: Label
 var _pill_up := false
+var _notice_up := false
 var _notice_serial := 0
 var _queue_timer: Timer
 var _rtl_connected := false
@@ -459,6 +460,7 @@ func _reset_queue() -> void:
 	unusable.clear()
 	missing.clear()
 	_in_flight = false
+	_notice_up = false
 	_hide_pill()
 
 
@@ -685,10 +687,10 @@ func _collect_and_translate() -> void:
 		_queue_content(str(value))
 	for value in result.get("regions", []):
 		region_names[str(value)] = true
-	if pending.size() > 10 and translating():
+	_process_queue()
+	if pending.size() > 10 and _in_flight and translating():
 		_show_pill()
 		_update_progress()
-	_process_queue()
 
 
 func _show_pill() -> void:
@@ -703,9 +705,9 @@ func _hide_pill() -> void:
 
 
 func _update_progress() -> void:
-	if not _pill_up or model_downloading:
+	if not _pill_up or model_downloading or _notice_up:
 		return
-	if pending.is_empty() or is_instance_valid(_card_layer) or not translating():
+	if pending.is_empty() or is_instance_valid(_card_layer) or not translating() or not _in_flight:
 		_hide_pill()
 		return
 	var english := PROGRESS_LABEL.replace("{{language}}", native_name)
@@ -717,10 +719,12 @@ func _show_notice(english: String) -> void:
 	_show_pill()
 	var translated: Variant = book.translate(english)
 	_pill_label.text = str(translated) if translated != null else english
+	_notice_up = true
 	_notice_serial += 1
 	var serial := _notice_serial
 	get_tree().create_timer(NOTICE_SECONDS).timeout.connect(func() -> void:
 		if serial == _notice_serial:
+			_notice_up = false
 			_hide_pill())
 
 
