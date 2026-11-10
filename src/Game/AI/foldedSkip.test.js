@@ -589,3 +589,21 @@ test("the time panel says one request, and three only while function calling can
   assert.match(settings, /const noLimitCost = describeJumpCost\(\{ lookups: true, unlimited: true \}\);/);
   assert.equal(/each checked by a request of their own|twenty requests or more/.test(settings), false);
 });
+
+// Background AI's switch, the turn review, the event consolidator's own
+// request and the automatic Stats refresh all went on 2026-11-07. The docs and
+// the comments that still described them as live were put right on 2026-11-09.
+test("the docs and comments no longer describe the passes after a skip, or Background AI's switch, as live", () => {
+  const doc = (name) => readFileSync(new URL(`../../../docs/${name}`, import.meta.url), "utf8");
+  const stale = [
+    ["ai-overview.md", /\| Background AI \| `ai_background_activity`|\| `review` \| The checks as one request|\| `history` \| Folding old events|\| `stats` \| The automatic Stats refresh|\{ separate: true \}|`compactHistoryIfNeeded` (?:reads|supplies)|returns what `runTurnReview` returns|this is what is left for one case|auto `compactHistoryIfNeeded`/],
+    ["ai-prompts.md", /run by `compactHistoryIfNeeded` only for a skip/],
+    ["ai-schemas.md", /\| `consolidateHistoryBatch` \|/],
+    ["game-ui.md", /HistoricalTrackingModal|fold the older events now|`consolidateHistoryNow`, `setRegionClickInterceptor`|\*\*Background AI\*\*, then a folded/],
+    ["world-state.md", /appended by `compactHistoryIfNeeded`/],
+  ];
+  for (const [name, pattern] of stale) assert.doesNotMatch(doc(name), pattern, `docs/${name}`);
+  const budget = readFileSync(new URL("./requestBudget.js", import.meta.url), "utf8");
+  assert.doesNotMatch(budget, /upkeep that is put\s*\n?\s*\/\/ off|leaves its request to the Stats refresh/);
+  assert.doesNotMatch(gameplaySource, /history consolidation, the tracked stats and\s*\n\s*\/\/ every other optional pass/);
+});

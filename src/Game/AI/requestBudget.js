@@ -40,7 +40,7 @@ export const JUMP_REQUEST_CAP = 3;
 // prompt is slimmer (promptContext.js `leanLookups`). A skip is still one
 // request when the model looks nothing up; with lookups it may be up to this
 // many: the skip itself, six rounds of questions, and one more for being asked
-// again or for upkeep. In the code the switch on is `unlimited`, and off is
+// again. In the code the switch on is `unlimited`, and off is
 // saving requests.
 export const UNLIMITED_JUMP_REQUEST_CAP = 8;
 // The rounds of function calling one task may ask (main.jsx runWithLookups),
@@ -424,10 +424,11 @@ export const backgroundAllowance = ({ settings, ledger }) => {
 //
 // Who may spend is SKIP_SPENDERS above, and how much is the cap. The skip
 // itself always runs: every segment's one request is reserved when the skip
-// starts. Everything else asks first, and a "no" is never an error: a lookup
-// round that is refused means the model answers with what it has, a refused
-// retry leaves whatever the first answer can still give, and upkeep that is put
-// off is due again on the next skip.
+// starts, and so are an institution's ballots when they fall due. Everything
+// else asks first, and a "no" is never an error: a lookup round that is
+// refused means the model answers with what it has, and a refused retry leaves
+// whatever the first answer can still give. Nothing is asked after a skip any
+// more (SKIP_SPENDERS above), so nothing is put off to the next one.
 
 // A skip generated in segments (Settings → AI) pays one request per segment:
 // the player chose that, so the cap moves with it rather than breaking the skip.
@@ -470,8 +471,9 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null, state = 
             return reservations.get(key) || 0;
         },
         // Give back a slot that was kept and turned out not to be needed, so the
-        // next in line may have it (the history fold the skip's own answer
-        // carried leaves its request to the Stats refresh).
+        // next in line may have it. Nothing in the game gives one back now (the
+        // fold's request it once released to the Stats refresh went with both,
+        // 2026-11-07); kept for a reservation that may.
         release: (spender) => {
             const key = String(spender || "other");
             const held = reservations.get(key) || 0;

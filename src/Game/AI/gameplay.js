@@ -9122,10 +9122,10 @@ export const interveneAfterEvent = async (keptCount) => {
     const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
     const receipt = mergeReceipts(createApplicationReceipt(), journal.receipt ?? null);
     noteReceipt(receipt, "withheld", describeIntervention({ kept, dropped, closingDate }), interventionNote({ kept, dropped, closingDate }));
-    // A budget with nothing left: history consolidation, the tracked stats and
-    // every other optional pass ask it first and stand down. Shaped like a
-    // skip's (createJumpRequests): the passes read requests.budget, and a bare
-    // budget made each of them throw instead.
+    // A budget with nothing left, so nothing in the apply can make a request:
+    // stopping a round never costs one. Shaped like a skip's
+    // (createJumpRequests): the apply reads requests.budget (the breadth
+    // repair asks whether it may), and a bare budget made it throw instead.
     const requests = { saving: true, budget: createJumpBudget({ cap: 1 }), used: 0, refused: 0 };
     requests.budget.take("intervene");
     const applied = await applySimulationResult({
