@@ -16,6 +16,7 @@ signal open_history
 signal scenario_updated(id: String)
 
 const CARD_WIDTH := 305.0
+const SCENARIO_PILL_MOST := 176.0
 const CARD_GAP := 16
 
 var loader: ImageLoader
@@ -1048,6 +1049,22 @@ func _count_chip(title: String, count: int) -> PanelContainer:
 	return chip
 
 
+func _fit_pill(pill: PanelContainer, most: float, room: float) -> void:
+	var text_label := pill.get_child(0) as Label
+	var font := text_label.get_theme_font("font")
+	var font_size := text_label.get_theme_font_size("font_size")
+	var text_width := ceilf(font.get_string_size(text_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x) if font else 0.0
+	var chrome := pill.get_theme_stylebox("panel").get_minimum_size().x
+	var full := text_width + chrome
+	var width := maxf(0.0, minf(full, minf(most, room)))
+	text_label.clip_text = true
+	text_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	text_label.custom_minimum_size.x = maxf(0.0, width - chrome)
+	text_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	pill.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	pill.visible = width > chrome + 12.0
+
+
 func _game_card(game: Dictionary, active: bool) -> Control:
 	var accent_text := str(game.get("accentColor", ""))
 	var accent := Color(accent_text if not accent_text.is_empty() else "#2bc1f3")
@@ -1066,19 +1083,28 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 	badges.offset_left = 14
 	badges.offset_top = 13
 	badges.offset_right = -13
-	badges.add_theme_constant_override("separation", 6)
+	badges.add_theme_constant_override("separation", 8)
+	var tags := HFlowContainer.new()
+	tags.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tags.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	tags.add_theme_constant_override("h_separation", 6)
+	tags.add_theme_constant_override("v_separation", 6)
+	tags.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badges.add_child(tags)
 	var eyebrow := str(game.get("eyebrow", ""))
-	badges.add_child(UI.pill("Current Game" if active else (eyebrow if not eyebrow.is_empty() else "Game"), Color(accent, 0.8) if active else Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.18), Color(0.973, 0.973, 0.98, 0.96), true))
+	var kind_pill := UI.pill("Current Game" if active else (eyebrow if not eyebrow.is_empty() else "Game"), Color(accent, 0.8) if active else Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.18), Color(0.973, 0.973, 0.98, 0.96), true)
+	kind_pill.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	tags.add_child(kind_pill)
 	var scenario_pill := UI.pill(str(game.get("scenarioName", "")), Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.85))
 	scenario_pill.tooltip_text = str(game.get("scenarioName", ""))
-	scenario_pill.clip_contents = true
-	scenario_pill.custom_minimum_size.x = 0
-	badges.add_child(scenario_pill)
-	badges.add_child(UI.spacer())
+	scenario_pill.mouse_filter = Control.MOUSE_FILTER_PASS
+	_fit_pill(scenario_pill, SCENARIO_PILL_MOST, CARD_WIDTH - 2 - 27 - 32 - 8)
+	tags.add_child(scenario_pill)
 	var menu := Button.new()
 	menu.icon = UI.icon("more", 16)
 	menu.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	menu.custom_minimum_size = Vector2(32, 35)
+	menu.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	menu.focus_mode = Control.FOCUS_NONE
 	menu.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	menu.tooltip_text = "More for %s" % str(game.get("name", ""))
