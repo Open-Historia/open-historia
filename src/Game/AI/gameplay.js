@@ -391,6 +391,7 @@ import {
   normalizeChats,
   normalizeEvents,
   withoutBattlefieldDisputes,
+  dissolutionHeir,
   normalizeGameData,
   normalizeWorldState,
   readActionsState,
@@ -8236,6 +8237,37 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   }
   for (const entry of unresolvedControlOps) {
     noteReceipt(receipt, "dropped", describeUnresolvedTerritory(entry, "regionControlOps", titleAt(entry?.path)), unresolvedTerritoryNote(entry, "regionControlOps", titleAt(entry?.path)));
+  }
+  // A dissolution the engine will refuse (gameState.js dissolvedPolityLand):
+  // the polity still holds land outright that its event gives to nobody, and
+  // nobody is named who could take it. Said now, with the land by name.
+  if (!strict) {
+    for (const { impacts, path } of containers) {
+      const changes = normalizeArray(impacts?.polityChanges);
+      for (const change of changes) {
+        if (normalizeString(change?.operation).toLowerCase() !== "dissolve") continue;
+        const code = normalizeString(change?.code);
+        if (!code) continue;
+        const same = (value) => normalizeString(value).toLowerCase() === code.toLowerCase();
+        const heir = dissolutionHeir({
+          code,
+          polityChanges: changes.map((entry) => ({ change: { operation: normalizeString(entry?.operation).toLowerCase() }, code: normalizeString(entry?.code) })),
+          regionTransfers: impacts.regionTransfers,
+          regionControlOps: impacts.regionControlOps,
+        });
+        if (heir) continue;
+        const moved = new Set([...normalizeArray(impacts.regionTransfers), ...normalizeArray(impacts.regionControlOps)]
+          .filter((entry) => same(entry?.fromCode)).map((entry) => normalizeString(entry?.regionId)));
+        const sovereigns = world?.regionSovereigntyOverrides ?? {};
+        const kept = Object.entries(world?.regionOwnershipOverrides ?? {})
+          .filter(([id, owner]) => same(owner) && (!sovereigns[id] || same(sovereigns[id])) && !moved.has(id))
+          .map(([id]) => id);
+        if (!kept.length) continue;
+        const catalogNames = new Map(normalizeArray(getPrimedScenarioRegionCatalog()).map((region) => [normalizeString(region?.id), normalizeString(region?.name)]));
+        const names = kept.map((id) => catalogNames.get(id)).filter(Boolean).slice(0, 4);
+        noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}` + `${code} was not dissolved: the event gives ${kept.length} of its regions${names.length ? ` (${names.join(", ")}${kept.length > names.length ? ", …" : ""})` : ""} to nobody. Give its land to one polity in the same event.`);
+      }
+    }
   }
   // Units and structures placed by name (`at`), and everything placed kept clear
   // of what already stands (resolvePlacements above). Never an error: a place

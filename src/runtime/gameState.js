@@ -5554,6 +5554,85 @@ const writeRegionSovereign = (world, regionId, sovereign) => {
 
 const POLITY_LIFECYCLE_STORES = ["countryStats", "countryTags", "internationalReputation", "intelligence"];
 
+// WHAT A DISSOLVED POLITY LEAVES. "a polity isn't annexed or dismantled
+// completely despite specific instructions saying so ... claims staying from
+// the dismantled polity (despite it not existing)" (a player, 2026-11). A
+// dissolution used to be refused whenever the polity still had a row on the
+// map, even one it only occupied, and when it went through, every claim and
+// dispute it had stayed drawn. Now it leaves nothing behind.
+//
+// The heir is the one polity the dissolving event hands the polity's land to
+// (its transfers and captures from it), or else the one polity the event
+// creates or restores. None, or several, is no heir.
+export const dissolutionHeir = ({ code, polityChanges = [], regionTransfers = [], regionControlOps = [], resolveOwner = (name) => name }) => {
+  const nameOf = (value) => resolveOwner(value) || normalizeOptionalString(value);
+  const receivers = new Map();
+  for (const entry of [...normalizeArray(regionTransfers), ...normalizeArray(regionControlOps).filter((op) => op?.op === "control")]) {
+    if (!samePolity(nameOf(entry?.fromCode), code)) continue;
+    const to = nameOf(entry?.toCode);
+    if (to && !samePolity(to, code)) receivers.set(to.toLowerCase(), to);
+  }
+  if (receivers.size === 1) return [...receivers.values()][0];
+  if (receivers.size > 1) return "";
+  const founded = normalizeArray(polityChanges)
+    .filter(({ change }) => ["create", "restore"].includes(change?.operation))
+    .map(({ code: heir }) => heir)
+    .filter((heir) => heir && !samePolity(heir, code));
+  return founded.length === 1 ? founded[0] : "";
+};
+
+// The rows a dissolved polity is in, and what becomes of each: `control`
+// rows go to a new controller (its lawful sovereign, or the heir), `title`
+// rows are its sovereignty over land another holds (to the heir, or nobody's
+// once it is gone), `refused` counts land it holds outright with no heir.
+export const dissolvedPolityLand = (world, code, { heir = "" } = {}) => {
+  const owners = world?.regionOwnershipOverrides ?? {};
+  const sovereigns = world?.regionSovereigntyOverrides ?? {};
+  const control = [];
+  const title = [];
+  let refused = 0;
+  for (const [regionId, controller] of Object.entries(owners)) {
+    if (!samePolity(controller, code)) continue;
+    const sovereign = normalizeOptionalString(sovereigns[regionId]);
+    if (sovereign && !samePolity(sovereign, code)) control.push({ regionId, to: sovereign, sovereign });
+    else if (heir) control.push({ regionId, to: heir, sovereign: heir });
+    else refused += 1;
+  }
+  for (const [regionId, sovereign] of Object.entries(sovereigns)) {
+    if (!samePolity(sovereign, code) || samePolity(owners[regionId], code)) continue;
+    title.push({ regionId, to: heir });
+  }
+  return { control, title, refused, heir };
+};
+
+export const applyDissolvedPolityLand = (world, code, { control = [], title = [], heir = "" } = {}) => {
+  for (const { regionId, to, sovereign } of control) {
+    world.regionOwnershipOverrides[regionId] = to;
+    writeRegionSovereign(world, regionId, sovereign);
+    // Its new holder is no claimant of it: an occupation's stripe ends with the occupier.
+    const claimants = normalizeArray(world.regionClaimants?.[regionId]);
+    if (claimants.some((name) => samePolity(name, to) || samePolity(name, code))) {
+      writeRegionClaimants(world, regionId, claimants.filter((name) => !samePolity(name, to) && !samePolity(name, code)));
+    }
+  }
+  for (const { regionId, to } of title) {
+    if (to) writeRegionSovereign(world, regionId, to);
+    else delete world.regionSovereigntyOverrides[regionId];
+  }
+  // Every claim and every dispute it had, everywhere: as the lawful sovereign
+  // of land another occupies its heir stands in its place; otherwise it is
+  // simply gone. A region with nobody left on it is settled.
+  for (const [regionId, claimants] of Object.entries(world.regionClaimants ?? {})) {
+    const list = normalizeArray(claimants);
+    if (!list.some((name) => samePolity(name, code))) continue;
+    const sovereign = normalizeOptionalString(world.regionSovereigntyOverrides[regionId]);
+    const standIn = heir && samePolity(sovereign, heir) ? [heir] : [];
+    const controller = normalizeOptionalString(world.regionOwnershipOverrides[regionId]);
+    writeRegionClaimants(world, regionId, [...list.filter((name) => !samePolity(name, code)), ...standIn]
+      .filter((name) => !samePolity(name, controller)));
+  }
+};
+
 const applyPolityAndTerritoryImpacts = ({
   colors, eventDate = "", eventId = "", polityChanges = [], regionClaims = [], regionControlOps = [], regionTransfers = [], resolveOwner, world,
 }) => {
@@ -5858,14 +5937,17 @@ const applyPolityAndTerritoryImpacts = ({
   // are kept as they were, so the record still says who fought). Its units
   // leave the map with it, and their standing orders with them.
   for (const { code } of dissolutions) {
-    const holdsTerritory = [
-      ...Object.values(world.regionOwnershipOverrides || {}),
-      ...Object.values(world.regionSovereigntyOverrides || {}),
-    ].some((owner) => samePolity(owner, code));
-    if (holdsTerritory) {
-      console.warn(`[polity lifecycle] refusing to dissolve "${code}": it still holds or is sovereign over mapped territory; transfer or settle that territory in the same event first.`);
+    // What its going settles by itself (dissolvedPolityLand): ground it only
+    // occupies goes back to its lawful sovereign, and the rest of its land, and
+    // its title to land another holds, to the one heir this event names. It is
+    // refused only when it still holds land outright and the event names no
+    // heir: then nobody can be said to take it.
+    const settlement = dissolvedPolityLand(world, code, { heir: dissolutionHeir({ code, polityChanges, regionTransfers, regionControlOps, resolveOwner }) });
+    if (settlement.refused) {
+      console.warn(`[polity lifecycle] refusing to dissolve "${code}": it still holds ${settlement.refused} mapped region(s) outright and the event gives them to nobody; transfer that territory in the same event first.`);
       continue;
     }
+    applyDissolvedPolityLand(world, code, settlement);
     world.polityOverrides[code] = {
       ...(world.polityOverrides[code] ?? { aliases: [], code, color: "", name: "", note: "" }),
       status: "dissolved",
