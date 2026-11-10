@@ -898,6 +898,7 @@ const TRANSPORT_REFUSALS = {
   "nothing-aboard": "it was given nothing to carry",
   "no-navy": "its sender has no navy to carry it by sea",
   "no-air-force": "its sender has no air arm to carry it by air",
+  "switched-off": "this game carries no troops that way",
   incomplete: "its order is incomplete",
 };
 export const transportRefusal = (code) => TRANSPORT_REFUSALS[clean(code)] ?? "it could not set out";
@@ -1017,6 +1018,8 @@ export const runTurnFronts = async ({
   naval = true,
   // false: the scenario has no air units (the Wars feature): nothing is airlifted, and no aircraft is drawn striking.
   air = true,
+  // What may carry troops ("sea", "land", "air": frontsGate.js transportMediaOn), or null for all: the Wars feature's switches.
+  transportMedia = null,
   // The most formations a country and the world may have, for a fleet the war at sea commissions.
   unitCaps = null,
   // The era the scenario set, 0 to 3, or null to read it off the date (runtime/warSettings.js).
@@ -1068,7 +1071,8 @@ export const runTurnFronts = async ({
   const orders = written.filter((order) => order.order !== "strike" && !Object.hasOwn(TRANSPORT_ORDERS, order.order));
   const carriedBy = (order) => TRANSPORT_ORDERS[order.order];
   const dispatches = written.filter((order) => Object.hasOwn(TRANSPORT_ORDERS, order.order)
-    && !(naval === false && carriedBy(order) === "sea") && !(air === false && carriedBy(order) === "air"));
+    && !(naval === false && carriedBy(order) === "sea") && !(air === false && carriedBy(order) === "air")
+    && !(Array.isArray(transportMedia) && !transportMedia.includes(carriedBy(order))));
   const atWar = stages.some((wars) => wars.some((war) => clean(war?.status) !== "ended"));
   const committed = asArray(world?.units).some((unit) => clean(unit?.committedTo));
   // No battlefield, no war, no order and nothing at sea: there is nothing for
@@ -1272,6 +1276,8 @@ export const runTurnFronts = async ({
       groupOwnerOf: readers.groupOwnerOf,
       units: flown,
       transports: normalizeTransports(world?.transports),
+      // (What the Wars feature switched off carries nothing: runtime/fronts/transports.js transportBar.)
+      ...(Array.isArray(transportMedia) ? { transportMedia } : {}),
       // (With the ground the scenario made harder to cross, where it weighs terrain: runtime/fronts/arena.js;
       // and the water frozen this turn, where it has seasons and weather: runtime/fronts/climate.js.)
       map: { ...map, regions, ...(mechanics?.terrain === true && terrainOf(world) ? { terrain: terrainOf(world) } : {}), ...(frozen.length > 0 ? { frozen: frozen.map((entry) => entry.id) } : {}) },

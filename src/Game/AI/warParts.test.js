@@ -14,7 +14,8 @@ import { applyUnitOpBatch, normalizeEvents } from "../../runtime/gameState.js";
 import { setActiveFeatures } from "../../runtime/gameFeatures.js";
 import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { syntheticMap } from "../../runtime/fronts/syntheticMap.js";
-import { airOn, frontsOn, naviesOn, warPartsOffBlock } from "./frontsGate.js";
+import { airOn, frontsOn, naviesOn, transportMediaOn, warPartsOffBlock } from "./frontsGate.js";
+import { FRONT_ORDER_LINES_BLOCK, frontOrderLinesBlock } from "./frontPrompt.js";
 import { runTurnFronts } from "./frontTurn.js";
 import { decodeFrontOrders } from "./nativeFrontLedger.js";
 
@@ -88,4 +89,43 @@ test("nothing is shipped with navies off, and nothing airlifted with air units o
   assert.deepEqual(all.transports.map((entry) => entry.medium).sort(), ["air", "land", "sea"]);
   const without = await run({ naval: false, air: false });
   assert.deepEqual(without.transports.map((entry) => entry.medium), ["land"]);
+});
+
+// "make different transport types disableable in features" (the owner, 2026-11-09): rail, sea and air each have a
+// switch under Wars. Off, nothing is sent that way, and the skip is not told it exists.
+test("each transport has its switch: what may carry troops, what the turn sends, and what the skip is told", async () => {
+  try {
+    setActiveFeatures(null, null);
+    assert.deepEqual(transportMediaOn(), ["sea", "land", "air"]);
+    assert.equal(frontOrderLinesBlock(transportMediaOn()), FRONT_ORDER_LINES_BLOCK, "with all of them on the prompt is what it always was");
+    setActiveFeatures({ fronts: { airTransport: false } }, null);
+    assert.deepEqual(transportMediaOn(), ["sea", "land"]);
+    setActiveFeatures({ fronts: { railTransport: false } }, { fronts: { seaTransport: false } });
+    assert.deepEqual(transportMediaOn(), ["air"], "a game's own over its scenario's");
+    setActiveFeatures({ fronts: { navies: false, air: false } }, null);
+    assert.deepEqual(transportMediaOn(), ["land"], "nothing by sea without navies, nor by air without air units");
+  } finally {
+    setActiveFeatures(null, null);
+  }
+  // The order lines tell only what is on.
+  assert.match(FRONT_ORDER_LINES_BLOCK, /- ship \| rail \| airlift send a TRANSPORTER: /);
+  assert.match(FRONT_ORDER_LINES_BLOCK, /an airlift far fewer/);
+  const railOnly = frontOrderLinesBlock(["land"]);
+  assert.match(railOnly, /- rail send a TRANSPORTER: /);
+  assert.doesNotMatch(railOnly, /airlift|ship|aircraft/);
+  assert.match(railOnly, /\nNAME~A~rail~~3~city: X~~~troop trains~10~800\n/);
+  const none = frontOrderLinesBlock([]);
+  assert.doesNotMatch(none, /TRANSPORTER|airlift|~ship~|~rail~/);
+  // And where the skip's prompt and the turn's run read it.
+  assert.match(read("./gameplay.js"), /frontsOn\(\) \? frontOrderLinesBlock\(transportMediaOn\(\)\) : "",/);
+  const apply = read("./frontApply.js");
+  assert.match(apply, /transportMedia: transportMediaOn\(\),/);
+  assert.match(apply, /orderLines, transportMedia: transportMediaOn\(\) \}\)/);
+
+  // A line of orders for a transport that is off is not sent, and what the war room ordered that way is refused.
+  const only = await run({ transportMedia: ["sea"] });
+  assert.deepEqual(only.transports.map((entry) => entry.medium), ["sea"]);
+  const flown = { id: "t7", medium: "air", owner: "Aland", kind: "transport aircraft", to: { lng: 30.5, lat: 51.5, name: "city: Brod" }, speed: 15000, capacity: 2, raise: 2, status: "ordered", by: "Aland" };
+  const refused = await run({ world: { ...world, transports: [flown] }, transportMedia: ["sea", "land"] });
+  assert.ok(refused.voyages.some((voyage) => voyage.id === "t7" && voyage.k === "refused" && voyage.why === "switched-off"), JSON.stringify(refused.voyages));
 });
