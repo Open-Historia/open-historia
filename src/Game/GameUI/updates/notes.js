@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
+    // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
+    id: "2026-11-setup-choices-alike",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "The AI setup shows its three choices alike",
+        items: [
+          "Command Code is no longer marked as recommended in the AI setup that opens when you start a game without a key.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it be 7 days" (the owner, 2026-11-10): runtime/fronts/constants.js STAFF_STORY_ORDER_DAYS 45 -> 7; and the air line
     // says when the sky is held by fewer but stronger wings (fronts/brief.js skyStrongerNote, air.js skyHeld counts only wings with strength).
     id: "2026-11-commanders-change-course",
