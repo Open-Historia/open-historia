@@ -72,7 +72,8 @@ const isRecord = (value) => Boolean(value) && typeof value === "object" && !Arra
 // time (a turn cut short and continued, a held turn retried) works the land war
 // out afresh from the same orders; left in, the first run's changes would be
 // applied beside the second's.
-export const stripFrontOps = (events) => asArray(events).map((event) => {
+// (And the events the engine wrote itself, frontReportEvents: they are written again.)
+export const stripFrontOps = (events) => asArray(events).filter((event) => clean(event?.source) !== FRONT_MARK).map((event) => {
   const impacts = event?.impacts;
   if (!isRecord(impacts)) return event;
   const control = asArray(impacts.regionControlOps);
@@ -765,19 +766,33 @@ export const runFrontTurn = async ({ createFrontRun, input, loadRegions = null, 
 // war on that battlefield), a change rides on such an event where there is
 // one: the first of its day or later, else the last before it. The map then
 // moves with the report of the fighting, not with whatever came next.
-export const attachFrontFlips = (events, flips, { dayOf = () => 0, aboutOf = null } = {}) => {
+//
+// With `tellsOf(event, flip)` (whether an event names the place that changed
+// hands: frontPlaceTold) it rides only on an event of its own war that tells
+// THAT place: the fall of Berlin rode on "Mud and Early Frost Stall
+// Wehrmacht Armor Outside Moscow", the one event of its war on its day or
+// later (2026-11-10). One that no event tells is `unattached`, for the caller
+// to tell itself (frontReportEvents).
+export const attachFrontFlips = (events, flips, { dayOf = () => 0, aboutOf = null, tellsOf = null } = {}) => {
   const list = asArray(events);
   const dated = list.map((event, index) => ({ index, day: dayOf(event), open: asArray(event?.audience).length === 0 && !clean(event?.audience) }));
   const carriers = (dated.some((entry) => entry.open) ? dated.filter((entry) => entry.open) : dated.slice(-1))
     .sort((a, b) => a.day - b.day || a.index - b.index);
   const added = new Map();
   const unattached = [];
+  const nearest = (entries, day) => entries.find((entry) => entry.day >= day) ?? entries[entries.length - 1];
   for (const flip of asArray(flips)) {
     const regionId = clean(flip?.regionId);
     if (!regionId) continue;
     const day = Number(flip?.day) || 0;
     const own = typeof aboutOf === "function" ? carriers.filter((entry) => aboutOf(list[entry.index], clean(flip?.battlefield))) : [];
-    const carrier = own.find((entry) => entry.day >= day) ?? own[own.length - 1] ?? carriers.find((entry) => entry.day >= day) ?? carriers[carriers.length - 1];
+    let carrier;
+    if (typeof tellsOf === "function") {
+      // (Of its own war: Berlin is also where a declaration of war on somebody else is made.)
+      carrier = nearest(own.filter((entry) => tellsOf(list[entry.index], flip)), day);
+    } else {
+      carrier = own.find((entry) => entry.day >= day) ?? own[own.length - 1] ?? carriers.find((entry) => entry.day >= day) ?? carriers[carriers.length - 1];
+    }
     if (!carrier) {
       unattached.push(flip);
       continue;
@@ -810,6 +825,213 @@ export const attachFrontFlips = (events, flips, { dayOf = () => 0, aboutOf = nul
     };
   });
   return { events: next, unattached };
+};
+
+// Whether an event tells the place a change of hands was at: one of its places
+// is that region (by its id or its name) or a town in it, or its title or text
+// names one of them. Names are matched whole, in any case: that is who the
+// place is, and nothing is read of what the event says happened there.
+const wholeName = (name) => new RegExp(`(?<![\\p{L}\\p{N}])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "iu");
+export const frontPlaceTold = (event, flip) => {
+  const names = [clean(flip?.name), ...asArray(flip?.cities).map(clean)].filter(Boolean);
+  const regionId = clean(flip?.regionId);
+  const placed = asArray(event?.places).some((place) => {
+    if (typeof place === "string") return names.some((name) => fold(place).replace(/^[a-z]+\s*:\s*/, "").split(",")[0].trim() === fold(name));
+    return (regionId && clean(place?.regionId) === regionId) || names.some((name) => fold(place?.name) === fold(name));
+  });
+  if (placed) return true;
+  const text = `${clean(event?.title)} ${clean(event?.description)}`;
+  return names.some((name) => wholeName(name).test(text));
+};
+
+// What the engine itself tells of the changes of hands no event of the story
+// told (attachFrontFlips with tellsOf): an event for each battlefield, taker
+// and stretch of days (`windowOf`; a month unless told), dated the day of the
+// last of them, saying in names what was taken from whom and carrying the
+// changes. It is the engine's (source "front"), so
+// a turn applied again takes it out with the rest (stripFrontOps). In place of
+// putting the fall of a capital on a report of mud before another city.
+//   records   the battlefields as the run leaves them
+//   players   the countries and groups people play
+export const FRONT_REPORT_MOST = 3;
+export const FRONT_REPORT_DAYS = 30;
+export const frontReportEvents = (flips, { records = [], players = [], dateOf = (flip) => clean(flip?.date), windowOf = (flip) => Math.floor((Number(flip?.day) || 0) / FRONT_REPORT_DAYS) } = {}) => {
+  const byName = new Map(asArray(records).map((record) => [foldBattlefieldName(record?.name), record]));
+  const human = new Set(asArray(players).map(fold).filter(Boolean));
+  const groups = new Map();
+  for (const flip of asArray(flips)) {
+    if (!clean(flip?.regionId) || !clean(flip?.to)) continue;
+    // (The changes of one stretch of days to an event: the map moves on the day of the last of them.)
+    const key = `${foldBattlefieldName(flip.battlefield)}|${fold(flip.to)}|${fold(flip.from)}|${windowOf(flip)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(flip);
+  }
+  const listed = (names) => (names.length <= FRONT_REPORT_MOST
+    ? names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0] ?? ""
+    : `${names.slice(0, FRONT_REPORT_MOST).join(", ")} and ${names.length - FRONT_REPORT_MOST} more`);
+  const events = [];
+  for (const group of groups.values()) {
+    const first = group[0];
+    const record = byName.get(foldBattlefieldName(first.battlefield));
+    const battlefield = clean(record?.name) || clean(first.battlefield);
+    const taker = clean(first.to);
+    const loser = clean(first.from);
+    const days = group.map((flip) => Number(flip.day) || 0);
+    const last = group[days.indexOf(Math.max(...days))];
+    const dates = [...new Set(group.map(dateOf).filter(Boolean))].sort();
+    // A capital first, then the towns, then the regions by name: never an id.
+    const ordered = [...group].sort((a, b) => (b.capital ? 1 : 0) - (a.capital ? 1 : 0));
+    const regions = [...new Set(ordered.map((flip) => clean(flip.name)).filter(Boolean))];
+    // (Each by its largest town, where it has one: "takes Berlin" before "takes the region of Brandenburg".)
+    const headline = [...new Set(ordered.map((flip) => clean(asArray(flip.cities)[0]) || clean(flip.name)).filter(Boolean))];
+    const groupOp = (flip) => flip.kind === "groupTake" || flip.kind === "groupRelease";
+    const control = group.filter((flip) => !groupOp(flip) && clean(flip.from));
+    const grouped = group.filter(groupOp);
+    const capital = group.some((flip) => flip.capital === true);
+    const when = dates.length > 1 ? `between ${dates[0]} and ${dates.at(-1)}` : dates.length ? `on ${dates[0]}` : "";
+    events.push({
+      id: `front-${slugOf(battlefield)}-${slugOf(taker)}-${clean(dateOf(last)) || "end"}`,
+      date: clean(dateOf(last)),
+      title: headline.length ? `${taker} takes ${listed(headline)}` : `${taker} gains ground on ${battlefield}`,
+      description: `The fighting on ${battlefield} put ${regions.length ? `${regions.length === 1 ? "the region of" : "the regions of"} ${listed(regions)}` : `${group.length} ${group.length === 1 ? "region" : "regions"}`} in ${taker}'s hands${loser ? `, taken from ${loser}` : ""}${when ? ` ${when}` : ""}.`,
+      kind: "military",
+      importance: capital ? "major" : "minor",
+      notable: capital,
+      playerRelated: human.has(fold(taker)) || human.has(fold(loser)),
+      ...(clean(record?.warId) ? { warId: clean(record.warId) } : {}),
+      ...(loser && !grouped.length ? { combatants: [taker, loser] } : {}),
+      ...(regions.length ? { places: ordered.filter((flip) => clean(flip.name)).slice(0, 4).map((flip) => ({ kind: "region", name: clean(flip.name), regionId: clean(flip.regionId) })) } : {}),
+      source: FRONT_MARK,
+      impacts: {
+        ...(control.length ? { regionControlOps: control.map((flip) => ({ op: "control", regionId: clean(flip.regionId), fromCode: clean(flip.from), toCode: clean(flip.to), basis: "occupation", note: battlefield, by: FRONT_MARK })) } : {}),
+        ...(grouped.length ? {
+          groupOps: grouped.map((flip) => {
+            const name = clean(flip.kind === "groupTake" ? flip.to : flip.from);
+            const owner = flip.kind === "groupTake" ? clean(flip.owner) : "";
+            return { op: flip.kind === "groupTake" ? "take" : "release", name, regionIds: [clean(flip.regionId)], note: battlefield, by: FRONT_MARK, ...(owner ? { owner, description: forceGroupDescription(owner, flip.land, flip.from) } : {}) };
+          }),
+        } : {}),
+      },
+    });
+  }
+  return events;
+};
+const slugOf = (value) => fold(value).replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "") || "x";
+
+// ---- contests that nothing holds up ---------------------------------------------------
+
+// The regions round each of the regions `wanted`, on the sheet of the whole map
+// (worldGrid.js): those in the cells beside any of its cells, corners too.
+// Map of id -> Set of ids.
+export const regionNeighbours = (sheet, wanted) => {
+  const ask = new Set(asArray(wanted).map(clean).filter(Boolean));
+  const out = new Map([...ask].map((id) => [id, new Set()]));
+  if (!sheet || ask.size === 0) return out;
+  const marks = new Map();
+  sheet.ids.forEach((id, index) => { if (ask.has(id)) marks.set(index, id); });
+  const { cols, rows, region, wrap } = sheet;
+  for (let cell = 0; cell < region.length; cell += 1) {
+    const id = marks.get(region[cell]);
+    if (!id) continue;
+    const col = cell % cols;
+    const row = (cell - col) / cols;
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const y = row + dy;
+        let x = col + dx;
+        if (wrap) x = (x + cols) % cols;
+        if (y < 0 || y >= rows || x < 0 || x >= cols) continue;
+        const next = region[y * cols + x];
+        if (next > 0 && next !== region[cell]) out.get(id).add(sheet.ids[next]);
+      }
+    }
+  }
+  return out;
+};
+
+// What a story's contest of a region is worth, and which contests already on
+// the map nothing holds up any more. A contest is fighting for a region: one
+// the contesting side cannot reach is not fighting. The story put Germany's
+// contest on Brest, deep in the Soviet Union, on a day it told a battle there
+// that never was, and it stood for good (2026-11-10).
+//   - A story's contest of a region on a battlefield of a war between the one
+//     contesting and the one holding it is left out: that battlefield's line is
+//     the engine's, and it is drawn where the troops are.
+//   - Any other is made only where the contesting side holds land next to the
+//     region (or the region itself).
+//   - A claimant of a region on such a battlefield, at war with its holder and
+//     not its lawful sovereign, stands only while its side is on the line there
+//     (the battlefield shows the region contested) or holds land next to it.
+//     Elsewhere a claimant may be a government's claim in peace, and is left.
+// Returns { events, notes, expired: [{ regionId, claimant }] }.
+//   holderOf(id)      who holds a region as the turn leaves it
+//   sovereignOf(id)   whose it lawfully is
+//   neighbours        regionNeighbours for the regions contestRegions names
+//   sidesOf(a, b)     the members of a's side in a war against b, or null when they are at no war
+//   fieldOf(id, a, b) the open battlefield of a war between a and b that has the region on its ground, or null
+//   regionName(id)    a region's name, or ""
+const contestOf = (op) => op && op.by !== FRONT_MARK && fold(op.op) === "contest" && clean(op.regionId);
+// The regions checkContests asks the neighbours of, and the claimants it weighs: none, mostly, and then no map is read.
+export const contestRegions = ({ events = [], claimants = {}, holderOf, sovereignOf, fieldOf } = {}) => {
+  const wanted = new Set();
+  for (const event of asArray(events)) for (const op of asArray(event?.impacts?.regionControlOps)) if (contestOf(op)) wanted.add(clean(op.regionId));
+  const standing = [];
+  for (const [regionId, names] of Object.entries(isRecord(claimants) ? claimants : {})) {
+    const holder = clean(holderOf(regionId));
+    for (const name of asArray(names).map(clean).filter(Boolean)) {
+      if (!holder || fold(name) === fold(holder) || fold(name) === fold(sovereignOf(regionId))) continue;
+      const field = fieldOf(regionId, name, holder);
+      if (!field) continue;
+      standing.push({ regionId, claimant: name, field });
+      wanted.add(regionId);
+    }
+  }
+  return { wanted, standing };
+};
+export const checkContests = ({ events = [], claimants = {}, holderOf, sovereignOf, neighbours = new Map(), sidesOf, fieldOf, regionName } = {}) => {
+  const { wanted, standing } = contestRegions({ events, claimants, holderOf, sovereignOf, fieldOf });
+  if (wanted.size === 0) return { events: asArray(events), notes: [], expired: [] };
+  const reaches = (side, regionId) => {
+    const mine = (id) => side.some((member) => fold(member) === fold(holderOf(id)));
+    return mine(regionId) || [...(neighbours.get(regionId) ?? [])].some(mine);
+  };
+  const named = (regionId, given = "") => clean(given) || clean(regionName(regionId));
+  const ignored = [];
+  const unreachable = [];
+  const next = asArray(events).map((event) => {
+    const ops = asArray(event?.impacts?.regionControlOps);
+    if (!ops.some(contestOf)) return event;
+    const kept = ops.filter((op) => {
+      if (!contestOf(op)) return true;
+      const actor = clean(op.actorCode || op.claimantCode || op.toCode);
+      const holder = clean(holderOf(clean(op.regionId))) || clean(op.fromCode);
+      const where = named(op.regionId, op.regionName);
+      if (fieldOf(clean(op.regionId), actor, holder)) {
+        ignored.push({ actor, where });
+        return false;
+      }
+      if (!reaches(sidesOf(actor, holder) ?? [actor], clean(op.regionId))) {
+        unreachable.push({ actor, where });
+        return false;
+      }
+      return true;
+    });
+    return { ...event, impacts: { ...event.impacts, regionControlOps: kept } };
+  });
+  const expired = standing.filter(({ regionId, claimant, field }) => !asArray(field?.contested).some((entry) => clean(entry?.[0]) === regionId)
+    && !reaches(sidesOf(claimant, holderOf(regionId)) ?? [claimant], regionId));
+  const told = (list) => list.slice(0, 4).map(({ actor, where }) => `${actor} on ${where ? `region: ${where}` : "a region"}`).join("; ");
+  const notes = [];
+  if (ignored.length) {
+    notes.push({ kind: "dropped", text: `${ignored.length === 1 ? "A contest was" : "Contests were"} left out (${told(ignored)}): the region lies on a battlefield of that war, where the fighting decides who holds the ground. Tell the fighting there by its battlefield's account and give its sides front orders.` });
+  }
+  if (unreachable.length) {
+    notes.push({ kind: "dropped", text: `${unreachable.length === 1 ? "A contest was" : "Contests were"} not made (${told(unreachable)}): nothing of the contesting side's is in or next to the region. A side contests only ground it can reach.` });
+  }
+  if (expired.length) {
+    notes.push({ kind: "adjusted", text: `${expired.length === 1 ? "A contest was" : "Contests were"} cleared (${told(expired.map(({ claimant, regionId }) => ({ actor: claimant, where: named(regionId) })))}): none of that side's troops stand in the region or next to it any more.` });
+  }
+  return { events: next, notes, expired: expired.map(({ regionId, claimant }) => ({ regionId, claimant })) };
 };
 
 // The world's formations after the run: one taken onto a battlefield carries its
@@ -1006,6 +1228,8 @@ export const runTurnFronts = async ({
   players = [],
   // false leaves every side nobody plays to the orders it is given (runtime/fronts/staff.js decides for it otherwise).
   staff = true,
+  // false: the staffs of the sides nobody plays call up no troops of their own (runtime/fronts/engine.js staffCallUp).
+  callUps = true,
   // EXPERIMENT, in the lab (runtime/fronts/mind/policy.js): a staff of the caller's own, asked before the engine's.
   staffPolicy = null,
   // The cores such a staff's plans may be fought on together (runtime/fronts/mind/rehearsers.js), where the caller has them.
@@ -1260,6 +1484,8 @@ export const runTurnFronts = async ({
   const frozen = mechanics?.weather === true && normalizeFreezingRegions(world?.freezingRegions).length > 0
     ? frozenFor({ world, regions: await readRegions(), fromDate, days })
     : [];
+  // (The rough ground and the ice the arenas are drawn with: the same again when an arena is looked up after the run.)
+  const ground = { ...(mechanics?.terrain === true && terrainOf(world) ? { terrain: terrainOf(world) } : {}), ...(frozen.length > 0 ? { frozen: frozen.map((entry) => entry.id) } : {}) };
   const result = await runFrontTurn({
     createFrontRun,
     input: {
@@ -1280,7 +1506,7 @@ export const runTurnFronts = async ({
       ...(Array.isArray(transportMedia) ? { transportMedia } : {}),
       // (With the ground the scenario made harder to cross, where it weighs terrain: runtime/fronts/arena.js;
       // and the water frozen this turn, where it has seasons and weather: runtime/fronts/climate.js.)
-      map: { ...map, regions, ...(mechanics?.terrain === true && terrainOf(world) ? { terrain: terrainOf(world) } : {}), ...(frozen.length > 0 ? { frozen: frozen.map((entry) => entry.id) } : {}) },
+      map: { ...map, regions, ...ground },
       regionTypes: asArray(regionTypes),
       strengthOf: readers.strengthOf,
       peopleOf: readers.peopleOf,
@@ -1311,6 +1537,7 @@ export const runTurnFronts = async ({
       // (runtime/naval/blockade.js): the side it fights on is weighed for it (runtime/fronts/handicap.js).
       ...(short.size > 0 ? { shortageOf: (name) => short.get(fold(name)) ?? 0 } : {}),
       ...(staff === false ? { staff: false } : {}),
+      ...(callUps === false ? { callUps: false } : {}),
       ...(typeof staffPolicy === "function" ? { staffPolicy, ...(rehearsers ? { rehearsers } : {}) } : {}),
       ...(Number(troops) > 0 && Number(troops) !== 1 ? { troops: Number(troops) } : {}),
       pace,
@@ -1475,12 +1702,91 @@ export const runTurnFronts = async ({
     return { ...event, impacts: { ...event.impacts, regionControlOps: ops } };
   });
 
+  // Each change of hands rides on an event of its war that tells its place; what none tells, the engine tells
+  // itself, in an event of its own on the day of the last of it (frontReportEvents).
+  const attached = attachFrontFlips(kept, result.flips, { dayOf, aboutOf, tellsOf: frontPlaceTold });
+  // (A report for the days up to each event of the story: the map on that event's date is the engine's on that day, as
+  // it was when every change rode on the first event of its day or later.)
+  const storyDays = [...new Set(kept.filter((event) => asArray(event?.audience).length === 0 && !clean(event?.audience)).map(dayOf))].sort((a, b) => a - b);
+  const reports = frontReportEvents(attached.unattached, {
+    records: result.battlefields,
+    players,
+    windowOf: (flip) => {
+      const at = storyDays.findIndex((day) => day >= (Number(flip?.day) || 0));
+      return at < 0 ? storyDays.length : at;
+    },
+  });
+  const carried = [...attached.events];
+  for (const report of reports) {
+    const day = dayOf(report);
+    // (Before the first event of its day or later: what fell by a day is on the map when that day's story is read.)
+    const at = carried.findIndex((event) => dayOf(event) >= day);
+    carried.splice(at < 0 ? carried.length : at, 0, report);
+  }
+
+  // A contest the story wrote that its side cannot reach, or on a battlefield, is not made; one already on the map
+  // that nothing holds up is cleared (checkContests). The map is read for it only where there is one to weigh.
+  const heldNow = new Map();
+  for (const event of carried) {
+    for (const op of asArray(event?.impacts?.regionControlOps)) if (fold(op?.op) === "control" && clean(op?.regionId) && clean(op?.toCode)) heldNow.set(clean(op.regionId), nameOf(clean(op.toCode)));
+  }
+  const holderNow = (id) => heldNow.get(clean(id)) ?? readers.controllerOf(clean(id));
+  const warsNow = asArray(stages.at(-1)).filter((war) => clean(war?.status) !== "ended");
+  const sidesOf = (a, b) => {
+    const members = new Set();
+    for (const war of warsNow) {
+      const [sideA, sideB] = warSides(war);
+      const has = (side, name) => side.some((member) => fold(member) === fold(name));
+      if (has(sideA, a) && has(sideB, b)) sideA.forEach((member) => members.add(member));
+      if (has(sideB, a) && has(sideA, b)) sideB.forEach((member) => members.add(member));
+    }
+    return members.size ? [...members] : null;
+  };
+  const arenaOf = (record) => (record?.frame ? arenaFor(arenas, { ...map, regions, ...ground }, record.frame, regionTypes) : null);
+  const openFields = asArray(result.battlefields).filter((record) => (record.status === "active" || record.status === "frozen") && !record.home);
+  const fieldOf = (id, a, b) => openFields.find((record) => {
+    const sideOfA = record.sides.findIndex((members) => members.some((member) => fold(member) === fold(a)));
+    const sideOfB = record.sides.findIndex((members) => members.some((member) => fold(member) === fold(b)));
+    return sideOfA >= 0 && sideOfB >= 0 && sideOfA !== sideOfB && Boolean(arenaOf(record)?.indexOf?.has(clean(id)));
+  }) ?? null;
+  const regionName = (id) => {
+    for (const record of openFields) {
+      const arena = arenaOf(record);
+      const index = arena?.indexOf?.get(clean(id));
+      if (index !== undefined && arena.names[index] && arena.names[index] !== arena.ids[index]) return arena.names[index];
+    }
+    const shape = asArray(regions).find((region) => region?.id === clean(id));
+    return shape && shape.name !== shape.id ? clean(shape.name) : "";
+  };
+  const contestInput = { events: carried, claimants: world?.regionClaimants, holderOf: holderNow, sovereignOf: readers.sovereignOf, sidesOf, fieldOf, regionName };
+  const { wanted: contested } = contestRegions(contestInput);
+  let neighbours = new Map();
+  if (contested.size > 0) {
+    try {
+      const water = waterTypeIds(regionTypes);
+      const key = worldSheetKey(clean(map?.key), water);
+      let sheet = clean(map?.key) && arenas ? arenas.get(key) ?? null : null;
+      if (!sheet) {
+        const shapes = await readRegions();
+        sheet = shapes ? buildWorldGrid(shapes, { ...measureOptions(map), water }) : null;
+        if (sheet && clean(map?.key) && arenas) arenas.set(key, sheet);
+      }
+      neighbours = regionNeighbours(sheet, [...contested]);
+    } catch (error) {
+      console.warn("[fronts] the map could not be read for the contests of this turn; each is weighed by the region alone.", error);
+    }
+  }
+  const contests = checkContests({ ...contestInput, neighbours });
+  notes.push(...contests.notes);
+
   return {
     strikes: strikes.map((strike) => ({ ...strike, owner: nameOf(strike.owner) })),
     transports,
     voyages: asArray(result.voyages),
     underWay: transports.filter(isUnderWay).length,
-    events: attachFrontFlips(kept, result.flips, { dayOf, aboutOf }).events,
+    events: contests.events,
+    // The claimants of regions on a battlefield that nothing holds up any more, to be taken off (gameState.js withoutClaimants).
+    expiredContests: contests.expired,
     // A battlefield whose period the story was told before it was written says
     // so (brief.told): the next turn has nothing of this one left to tell. One
     // that does not (it opened in this answer, or the turn was asked for the
@@ -1502,6 +1808,8 @@ export const runTurnFronts = async ({
     notes,
     flips: asArray(result.flips),
     stats: result.stats ?? null,
+    // What the staffs of the sides nobody plays called up (runtime/fronts/engine.js staffCallUp).
+    staffCalls: asArray(result.staffCalls),
     news: asArray(result.news),
     joins: asArray(result.joins),
     starts: asArray(result.starts),

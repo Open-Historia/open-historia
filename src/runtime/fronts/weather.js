@@ -135,11 +135,30 @@ export const weatherDraw = (seed, place, date) => {
 
 // A zone's weather on a day of a run: every zone's worked out together once a
 // day, so that each fits the zones beside it (climate.js zoneWeathersOn).
+// (Kept for the zones of a run, a date at a time, and had again by every copy of a battle a staff rehearses on it:
+// each copy's stand-in run worked every zone's weather out afresh for each of its days. The same zones, seed and date
+// are the same weather: zoneWeathersOn is pure.)
+const SKIES_KEPT_MOST = 1500;
+const keptSkies = new WeakMap();
+const zoneSkiesOn = (zones, seed, date) => {
+  let kept = keptSkies.get(zones);
+  if (!kept) {
+    kept = { neighbours: zoneNeighbours(zones), dates: new Map() };
+    keptSkies.set(zones, kept);
+  }
+  const key = `${seed}|${date}`;
+  let skies = kept.dates.get(key);
+  if (!skies) {
+    skies = zoneWeathersOn({ seed, zones, date, neighbours: kept.neighbours });
+    if (kept.dates.size >= SKIES_KEPT_MOST) kept.dates.delete(kept.dates.keys().next().value);
+    kept.dates.set(key, skies);
+  }
+  return skies;
+};
 const zoneSkyOn = (run, zone, date, seed) => {
   if (run.zoneSkiesDate !== date) {
     const zones = Array.isArray(run.input?.climateZones) ? run.input.climateZones : [];
-    if (!run.zoneNeighbours) run.zoneNeighbours = zoneNeighbours(zones);
-    run.zoneSkies = zoneWeathersOn({ seed, zones, date, neighbours: run.zoneNeighbours });
+    run.zoneSkies = zoneSkiesOn(zones, seed, date);
     run.zoneSkiesDate = date;
   }
   const found = run.zoneSkies.find((entry) => entry.zone === zone) ?? run.zoneSkies.find((entry) => entry.zone?.id === zone?.id);

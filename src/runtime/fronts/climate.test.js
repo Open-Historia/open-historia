@@ -189,3 +189,20 @@ test("a fleet frozen in neither sails nor fights", () => {
   assert.ok(met);
   assert.deepEqual(sea(met, [[5, 54, 7, 56]]).battles, [], "the one frozen in is not brought to battle");
 });
+
+// A zone's year is worked out once and read a day at a time: every day of every copy of a battle a staff rehearses
+// asked it for every zone, and reading the seasons' dates afresh each time was a sixth of a skip's land war
+// (2026-11-10). The same days come out, and a zone whose seasons are changed in place is read again.
+test("a zone's seasons are read off its year, and read again when its seasons change", () => {
+  const zone = winterZone();
+  const days = ["0300-01-15", "0300-02-28", "0300-03-01", "0300-03-11", "0300-04-30", "0300-05-01", "0300-11-25", "0300-12-01"];
+  const before = days.map((date) => seasonMixOn(zone, date));
+  assert.deepEqual(days.map((date) => seasonMixOn(zone, date)), before, "the same again");
+  zone.seasons[1] = { ...zone.seasons[1], end: "05-31" };
+  assert.deepEqual(seasonMixOn(zone, "0300-05-15"), [{ season: 1, weight: 1 }], "the thaw now lasts into May");
+  assert.deepEqual(seasonMixOn(winterZone(), "0300-05-15"), [{ season: -1, weight: 1 }], "and a zone as it was is as it was");
+  // Every zone's weather on a date is the same whoever asks: two runs of the same zones and seed have the same skies.
+  const zones = [winterZone(), winterZone({ id: "south", name: "The South", rings: [[[23.5, 49], [29, 49], [29, 45], [23.5, 45]]] })];
+  const first = zoneWeathersOn({ seed: "s", zones, date: "0300-01-20" });
+  assert.deepEqual(zoneWeathersOn({ seed: "s", zones, date: "0300-01-20" }).map((entry) => entry.state), first.map((entry) => entry.state));
+});

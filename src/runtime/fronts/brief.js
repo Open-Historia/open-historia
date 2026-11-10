@@ -1,7 +1,8 @@
 /*! Open Historia — battlefields and fronts: what the prompt and the card read © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The model that commands a war never sees the field, a cell or a coordinate.
 // It reads a BRIEF: how long the line is and which way it runs, where each
-// sector of it lies in named places, how strong each side is, what moved since
+// sector of it lies in named places, the regions it runs through and what each
+// side holds of the other's land, how strong each side is, what moved since
 // the last turn, what is cut off, what each side has been told to do, and the
 // sector words it may use. The card a player opens reads the same.
 //
@@ -51,12 +52,99 @@ const frozenNames = (battle) => {
   return [...names].filter(Boolean);
 };
 
+// The most regions named along the line, and of the other's land a side holds.
+export const ALONG_MOST = 10;
+export const HELD_REGIONS_MOST = 12;
+export const HELD_CITIES_MOST = 8;
+const named = (arena, region) => region > 0 && arena.names[region] && arena.names[region] !== arena.ids[region];
+
+// WHERE THE WAR IS, in names: the regions the line runs through, on either side
+// of it, in the order a reader walks it (from the end of the way it mostly runs
+// that its sector words name first), and what each side holds of the land that
+// is lawfully the other's, its towns the larger first. The sectors' "from Kaunas
+// to Danzig" said only which large town was nearest each end, and a story told
+// with nothing else put a war fought deep in one country's land on the other's
+// ("the game is still talking about things that happened historically", a
+// player crushing Germany from Berlin, 2026-11-10).
+//   { along: [names], holds: [{ cities: [{ name, capital? }], regions: [names], more }, ...] }
+// A side is the field's (HOLDER_SIDE_A, HOLDER_SIDE_B); whose land a region is,
+// is the side of its lawful sovereign (battle.homeSide, battle.js readRegions).
+export const lineGeography = (battle, sectors) => {
+  const { field, arena } = battle;
+  const home = battle.homeSide;
+  const { cols, size } = field;
+  const high = sectors?.names?.[1];
+  const axis = high ? sectors.cuts.get(high) : null;
+  const count = arena.names.length;
+  const lineCells = new Float64Array(count);
+  const lineAlong = new Float64Array(count);
+  const mark = (cell) => {
+    const region = arena.region[cell];
+    if (!named(arena, region)) return;
+    const col = cell % cols;
+    lineCells[region] += 1;
+    lineAlong[region] += axis ? (col + 0.5) * axis.x + ((cell - col) / cols + 0.5) * axis.y : 0;
+  };
+  // A cell is on the line where a cell beside it in play is the other side's.
+  for (let cell = 0; cell < size; cell += 1) {
+    const side = field.holders[cell];
+    if (side > HOLDER_SIDE_B || !field.play[cell]) continue;
+    const col = cell % cols;
+    for (const next of [col + 1 < cols ? cell + 1 : -1, cell + cols < size ? cell + cols : -1]) {
+      if (next < 0 || !field.play[next]) continue;
+      const other = field.holders[next];
+      if (other > HOLDER_SIDE_B || other === side) continue;
+      mark(cell);
+      mark(next);
+    }
+  }
+  // The regions with most of the line, in the order a reader walks it.
+  const touched = [];
+  for (let region = 1; region < count; region += 1) if (lineCells[region] > 0) touched.push(region);
+  const along = touched
+    .sort((a, b) => lineCells[b] - lineCells[a] || a - b)
+    .slice(0, ALONG_MOST)
+    .sort((a, b) => lineAlong[b] / lineCells[b] - lineAlong[a] / lineCells[a] || a - b)
+    .map((region) => arena.names[region]);
+  // What each side holds of the other's land: a region whose cells in play are
+  // mostly the other side's, and every town on ground the other side holds.
+  const holds = [HOLDER_SIDE_A, HOLDER_SIDE_B].map(() => ({ cities: [], regions: [], more: 0 }));
+  if (home) {
+    const inPlay = new Float64Array(count);
+    const byOther = new Float64Array(count);
+    for (let cell = 0; cell < size; cell += 1) {
+      if (!field.play[cell]) continue;
+      const region = arena.region[cell];
+      const owner = home[region];
+      if (owner !== HOLDER_SIDE_A && owner !== HOLDER_SIDE_B) continue;
+      inPlay[region] += 1;
+      if (field.holders[cell] === 1 - owner) byOther[region] += 1;
+    }
+    for (const side of [HOLDER_SIDE_A, HOLDER_SIDE_B]) {
+      const taken = [];
+      for (let region = 1; region < count; region += 1) {
+        if (home[region] === 1 - side && inPlay[region] > 0 && byOther[region] * 2 >= inPlay[region] && named(arena, region)) taken.push(region);
+      }
+      taken.sort((a, b) => byOther[b] - byOther[a] || a - b);
+      holds[side].regions = taken.slice(0, HELD_REGIONS_MOST).map((region) => arena.names[region]);
+      holds[side].more = Math.max(0, taken.length - HELD_REGIONS_MOST);
+      holds[side].cities = arena.cities
+        .filter((city) => city.cell >= 0 && city.cell < size && field.holders[city.cell] === side && home[arena.region[city.cell]] === 1 - side)
+        .sort((a, b) => (b.capital ? 1 : 0) - (a.capital ? 1 : 0) || b.population - a.population || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+        .slice(0, HELD_CITIES_MOST)
+        .map((city) => ({ name: city.name, ...(city.capital ? { capital: true } : {}) }));
+    }
+  }
+  return { along, holds };
+};
+
 export const buildBrief = (battle, since) => {
   const { field, arena, place } = battle;
   const { kmAt, rowKm } = place;
   const contour = traceContour(field);
   const line = measureLine(field, contour);
   const sectors = readSectors(line);
+  const geography = lineGeography(battle, sectors);
 
   const rows = [];
   for (const name of sectors.names) {
@@ -179,6 +267,9 @@ export const buildBrief = (battle, since) => {
     km: Math.round(line.total),
     axis: sectors.axis,
     sectors: rows,
+    // The regions the line runs through, and what each side holds of the other's land (lineGeography).
+    along: geography.along,
+    holds: geography.holds,
     commands,
     strength,
     ...(battle.home && homeNear > 0 ? { near: homeNear } : {}),
@@ -310,7 +401,30 @@ export const describeBattlefield = (record, { viewer = "", max = BRIEF_TEXT_MAX 
     .map((side) => `  ${lead[side]} has withdrawn its troops from here: the ground it holds is unguarded until it orders them back.`).join("\n");
   const sectors = Array.isArray(brief.sectors) ? brief.sectors : [];
   const where = sectors.filter((sector) => sector.from && sector.to);
-  const lineText = (most) => (where.length > 0 ? `  Line: ${where.slice(0, most).map((sector) => `${sector.name}: ${sector.from === sector.to ? sector.from : `${sector.from} to ${sector.to}`}`).join("; ")}` : "");
+  // (No sector at all is no line of it: "Line: " with nothing after it told a skip nothing of where the war was.)
+  const lineText = (most) => (where.length > 0 && most > 0 ? `  Line: ${where.slice(0, most).map((sector) => `${sector.name}: ${sector.from === sector.to ? sector.from : `${sector.from} to ${sector.to}`}`).join("; ")}` : "");
+  // The regions it runs through, from the end its first sector word names (lineGeography).
+  const whose = (side) => (record.sides[side].length > 1 ? `${lead[side]}'s side` : lead[side]);
+  const along = Array.isArray(brief.along) ? brief.along.filter((name) => typeof name === "string" && name) : [];
+  const ends = String(brief.axis ?? "").split("-");
+  const runs = where.length > 0 && ends.length === 2 ? ` ${where[0].name === ends[0] ? `${ends[0]} to ${ends[1]}` : `${ends[1]} to ${ends[0]}`}` : "";
+  const alongText = (most) => (along.length > 0 && most > 0 ? `  The line runs${runs} through ${list(along, "region", most)}` : "");
+  // What each side holds of the other's land, capitals and the larger towns first.
+  const holds = Array.isArray(brief.holds) ? brief.holds : null;
+  const heldText = (most) => {
+    if (!holds || most <= 0) return "";
+    const parts = [HOLDER_SIDE_A, HOLDER_SIDE_B].map((side) => {
+      const held = holds[side] ?? {};
+      const cities = (Array.isArray(held.cities) ? held.cities : []).slice(0, most)
+        .map((city) => `city: ${city.name}${city.capital ? " (a capital)" : ""}`);
+      const regions = Array.isArray(held.regions) ? held.regions : [];
+      const more = regions.length - Math.min(regions.length, most) + (Number(held.more) || 0);
+      const shown = [...cities, ...regions.slice(0, most).map((name) => `region: ${name}`)];
+      if (shown.length === 0) return "";
+      return `${whose(side)} holds ${shown.join(", ")}${more > 0 ? ` and ${more} more regions` : ""} of ${whose(1 - side)}'s land`;
+    }).filter(Boolean);
+    return `  Occupied: ${parts.length > 0 ? `${parts.join("; ")}.` : "neither side holds any of the other's land."}`;
+  };
 
   const sinceText = (most) => `  Since ${brief.since ?? ""}: ${describeSince(record, { most }).text}`;
 
@@ -319,14 +433,23 @@ export const describeBattlefield = (record, { viewer = "", max = BRIEF_TEXT_MAX 
     .map((side) => `${lead[side]}: ${ordersOf(record, side)}.`);
   const orders = `  Standing orders: ${standing.join(" ")}`;
   const words = sectors.map((sector) => sector.name);
-  const valid = `  Sectors: ${words.length > 0 ? `${words.join(", ")}, or a place on the line.` : "all, or a place on the line."}`;
+  // (Every word fitting is said in fewer: the room is the line's.)
+  const every = ["north", "south", "east", "west", "northeast", "southwest", "southeast", "northwest", "centre"].every((word) => words.includes(word));
+  const valid = `  Sectors: ${every ? "centre and all eight points of the compass, or a place on the line." : words.length > 0 ? `${words.join(", ")}, or a place on the line.` : "all, or a place on the line."}`;
 
   // The line is told by the three sectors of the way it mostly runs: the other
-  // words are only other cuts of the same line. Too long still: fewer names
-  // are listed, then fewer sectors.
+  // words are only other cuts of the same line. Too long: fewer names are
+  // listed, then the weather, what it wore away and the sky go, then fewer
+  // sectors. Where the line runs and who holds whose land go last of all: a
+  // story told without them was told where real history had the war.
+  //   [sectors, names in what moved, regions along the line, of what is held, with the weather and the rest]
   let text = "";
-  for (const [mostSectors, mostNames] of [[3, 4], [3, 2], [3, 1], [2, 1], [0, 1]]) {
-    text = [head, strength, weather, attrition, ice, air, gone, lineText(mostSectors), sinceText(mostNames), orders, valid].filter(Boolean).join("\n");
+  for (const [mostSectors, mostNames, mostAlong, mostHeld, extras] of [
+    [3, 4, 8, 6, true], [3, 2, 5, 4, true], [3, 1, 3, 2, true], [2, 1, 2, 2, true], [1, 1, 2, 1, true],
+    [3, 2, 5, 4, false], [3, 1, 3, 3, false], [3, 1, 2, 2, false], [2, 1, 2, 2, false], [1, 1, 2, 1, false], [0, 1, 1, 1, false],
+  ]) {
+    const more = extras ? [weather, attrition, ice, air] : [];
+    text = [head, strength, ...more, gone, lineText(mostSectors), alongText(mostAlong), heldText(mostHeld), sinceText(mostNames), orders, valid].filter(Boolean).join("\n");
     if (text.length <= max) return text;
   }
   return text.slice(0, max - 1).trimEnd() + "…";

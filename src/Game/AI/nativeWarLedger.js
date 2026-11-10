@@ -1323,7 +1323,28 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
       continue;
     }
 
-    const combatants = uniquePolities(event.combatants, 8);
+    let combatants = uniquePolities(event.combatants, 8);
+    // Fighting tagged with a war the ledger holds, or one this answer starts, is that war's: who fights it is its
+    // sides, and nothing is guessed. The first of each side stands in for a side the event did not name. A long
+    // skip's battles came tagged and with no combatants, and lost their war (2026-11-10, a world war's 90 days).
+    const taggedWar = normalizeString(event.warId)
+      ? wars.find((war) => war.id === normalizeString(event.warId) && war.status !== "ended")
+        ?? (() => {
+          const start = updates.find((update) => normalizeString(update?.id) === normalizeString(event.warId) && update?.op === "start");
+          return start ? { sideA: normalizeArray(start.actors), sideB: normalizeArray(start.opponents) } : null;
+        })()
+      : null;
+    if (combatants.length < 2 && taggedWar) {
+      const sides = [uniquePolities(taggedWar.sideA, 8), uniquePolities(taggedWar.sideB, 8)];
+      if (sides[0].length && sides[1].length) {
+        const named = sides.map((side) => combatants.filter((name) => side.some((member) => polityKey(member) === polityKey(name))));
+        const filled = uniquePolities([...named[0], ...(named[0].length ? [] : [sides[0][0]]), ...named[1], ...(named[1].length ? [] : [sides[1][0]])], 8);
+        if (filled.length >= 2) {
+          event.combatants = filled;
+          combatants = filled;
+        }
+      }
+    }
     if (combatants.length < 2) {
       unresolved.push({
         index,

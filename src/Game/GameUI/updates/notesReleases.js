@@ -61,6 +61,7 @@ export const RELEASES = [
           "2026-11-fronts-on-every-border",
           "2026-11-group-occupation",
           "2026-11-wars-follow-the-story",
+          "2026-11-fronts-and-story-agree",
           "2026-10-wars-and-fronts-2",
           "2026-10-swarms",
           "2026-10-deploy-calls-up",

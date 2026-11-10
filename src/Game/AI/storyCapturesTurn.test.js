@@ -37,7 +37,7 @@ test("a capture is a capture for the engine; a treaty's transfer is not", () => 
 
 test("a capture the engine refused is not made in the world: its control operation comes off its event, and the receipt says why", () => {
   assert.match(frontTurn, /const failedCaptures = asArray\(result\.notes\)\.filter\(\(note\) => note\?\.kind === "capture-failed" && clean\(note\?\.ref\)\);/);
-  assert.match(frontTurn, /events: attachFrontFlips\(kept, result\.flips, \{ dayOf, aboutOf \}\)\.events,/);
+  assert.match(frontTurn, /const attached = attachFrontFlips\(kept, result\.flips, \{ dayOf, aboutOf, tellsOf: frontPlaceTold \}\);/);
   assert.match(frontTurn, /"capture-failed": \(notes\) => notes\.slice\(0, 4\)\.map\(\(note\) => `\$\{clean\(note\?\.taker\)\} could not take \$\{clean\(note\?\.region\) \|\| "a region"\}: too few of its troops near`\)/);
 });
 
