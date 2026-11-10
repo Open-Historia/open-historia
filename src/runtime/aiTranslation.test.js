@@ -242,6 +242,35 @@ test("a reply is read by position, only when it has one entry per string", () =>
   assert.deepEqual(readAiReply("[\"\", 5]", ["Wessex", "Milan"]).rejected, ["Wessex", "Milan"]);
 });
 
+// A translation is a request nobody pressed anything for: background work,
+// under the day's fixed cap (requestBudget.js BACKGROUND_DAILY_CAP), like idle
+// diplomacy. Until 2026-11-09 it was marked background and never asked the
+// allowance, so a page of new text could spend the whole day's cap.
+test("past the day's background allowance the model translates, and the AI is not asked or given up on", async () => {
+  const ai = fakeAi();
+  const model = fakeModel();
+  let allowed = false;
+  const router = createTranslationRouter({ isAiOn: () => true, mayAskAi: async () => allowed, askAi: ai.askAi, askModel: model.askModel });
+  const refused = await router.step(["Wessex", "Milan"]);
+  assert.equal(ai.calls.length, 0, "no request past the allowance");
+  assert.equal(refused.asked, "model");
+  assert.deepEqual(refused.translated.map((entry) => entry.by), ["model", "model"]);
+  assert.equal(router.halted(), false, "a spent allowance is no failure of the AI");
+  assert.equal(router.tried("Wessex"), false);
+  allowed = true;
+  const asked = await router.step(["Paris"]);
+  assert.equal(ai.calls.length, 1);
+  assert.equal(asked.asked, "ai");
+});
+
+test("the translator asks the background allowance before every request to the AI", () => {
+  const translator = read("./translator.js");
+  const gate = translator.slice(translator.indexOf("const mayAskAi = async"), translator.indexOf("const aiFailed ="));
+  assert.match(gate, /import\("\.\.\/Game\/AI\/requestBudget\.js"\)/, "loaded only on the AI's path");
+  assert.match(gate, /return backgroundAiAllowance\(\)\.allowed;/);
+  assert.match(translator, /isAiOn: \(\) => run === generation && aiShown && aiInUse\(\),\n\s*mayAskAi,\n\s*askAi,/);
+});
+
 test("the translator reaches the AI only from inside the switch's path", () => {
   const translator = read("./translator.js");
   assert.doesNotMatch(translator, /^import[^;]*Game\/AI/m, "no AI module is imported up front");

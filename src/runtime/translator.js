@@ -723,6 +723,16 @@ const askAi = async (batch) => {
   });
 };
 
+// Nobody pressed anything for a translation, so it is background work
+// (requestBudget.js), like idle diplomacy and the agents' reports between
+// turns: it stops at the day's fixed cap and never takes the last tenth of
+// the day's limit, and the translation model on this device translates
+// meanwhile. Loaded only here, as the AI's modules are.
+const mayAskAi = async () => {
+  const { backgroundAiAllowance } = await import("../Game/AI/requestBudget.js");
+  return backgroundAiAllowance().allowed;
+};
+
 const aiFailed = (error, { halted }) => {
   console.warn(
     `[i18n] your AI did not translate (${error?.message || "unknown"}); the translation model on this device did instead` +
@@ -1325,6 +1335,7 @@ const startInLanguage = (code) => {
   shippedKeys = packed ? null : new Set();
   router = createTranslationRouter({
     isAiOn: () => run === generation && aiShown && aiInUse(),
+    mayAskAi,
     askAi,
     askModel: modelAnswers,
     known: modelKnows,
