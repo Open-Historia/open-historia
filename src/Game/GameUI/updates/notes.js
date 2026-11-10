@@ -57,7 +57,8 @@ const NEW_UPDATES = [
     // A player's log (Android stable #30, 2026-11-10): "Failed to save advisor conversation" 13 times in a row, each
     // "Action receipts cannot be created by an Advisor conversation save." The panel held a receipt the saved reply no
     // longer had (put back by an Undo after the approval), and the guard refused every save. It now keeps only the saved
-    // receipts and saves the rest (runtime/advisorThreads.js replaceAdvisorThread).
+    // receipts and saves the rest (runtime/advisorThreads.js replaceAdvisorThread), and the panel takes each reply's
+    // receipts from the file whenever it changes (withSavedActionReceipts), so an Undo no longer leaves one behind.
     id: "2026-11-advisor-keeps-saving",
     kind: "minor",
     date: "2026-11-10",
