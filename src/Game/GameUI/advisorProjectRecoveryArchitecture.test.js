@@ -19,9 +19,13 @@ test("the Projects recovery composer request is scoped to failed operations, not
 });
 
 test("only the newest problematic Advisor reply may invite another Projects recovery request", () => {
+  // Silent group participation markers are not visible messages. Recovery
+  // belongs to the newest visible reply, not the newest stored marker.
+  assert.match(source, /const visibleRows = messages\.flatMap\(\(msg, i\) => msg\.silent === true \? \[\] : \[\{ msg, i \}\]\)/);
+  assert.match(source, /const visibleLastIndex = visibleRows\.at\(-1\)\?\.i/);
   assert.match(
     source,
-    /onRetryProjects=\{i === messages\.length - 1 && msg\.projectsProblem \? onRetryProjects : undefined\}/,
+    /onRetryProjects=\{i === visibleLastIndex && msg\.projectsProblem \? onRetryProjects : undefined\}/,
   );
   assert.match(source, /\{onRetry && \(/, "no retry control when handler is absent");
   assert.match(source, /Retry missing entries/);

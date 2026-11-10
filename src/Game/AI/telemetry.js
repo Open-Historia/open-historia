@@ -326,6 +326,11 @@ export const startAiRecord = (meta = {}) => {
     simulatedDays: Number.isFinite(meta.simulatedDays) ? meta.simulatedDays : null,
     staticPrefixEnd: Number.isFinite(meta.staticPrefixEnd) ? meta.staticPrefixEnd : null,
     batch: Boolean(meta.batch),
+    groupTurnId: typeof meta.groupTurnId === "string" ? meta.groupTurnId.slice(0, 150) : "",
+    groupName: typeof meta.groupName === "string" ? meta.groupName.slice(0, 120) : "",
+    groupBatchIndex: Number.isInteger(meta.groupBatchIndex) ? meta.groupBatchIndex : null,
+    groupTotalSpeakers: Number.isInteger(meta.groupTotalSpeakers) ? meta.groupTotalSpeakers : null,
+    groupSpeakerIds: Array.isArray(meta.groupSpeakerIds) ? meta.groupSpeakerIds.filter((id) => typeof id === "string").slice(0, 10) : [],
     // what was asked
     systemPromptChars: systemPrompt.length,
     userMessageChars: userMessage.length,
