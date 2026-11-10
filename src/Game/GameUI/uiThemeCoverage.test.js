@@ -107,7 +107,7 @@ test("AI Debug console chrome follows theme while status and ratings stay semant
 });
 
 test("Standing Goal card themes chrome but retains original goal state and progress calculation", () => {
-  assert.match(actions, /const StandingGoal = \(\{ country, round, gameDate, isOpen \}\) =>/);
+  assert.match(actions, /const StandingGoal = \(\{ country, round, gameDate, isOpen\b[^}]*\}\) =>/);
   assert.match(actions, /playerGoalOf\(world, country\)/);
   assert.match(actions, /<GoalProgress country=\{country\} round=\{round\} turnRunning=\{turnRunning\} \/>/);
   assert.match(actions, /background: "var\(--oh-ui-overlay-card, rgba\(255,255,255,0\.08\)\)"/);
