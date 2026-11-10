@@ -571,7 +571,6 @@ import {
   buildScriptedEventsInstruction,
   buildWorldDirectionDirective,
   dateKey,
-  ensureScriptedEvents,
   firstSkipIncludesScriptedOrigin,
   scriptedBeatsInSpan,
   scriptedBeatsNotAlreadyWritten,
@@ -582,7 +581,12 @@ import {
   normalizeScriptedEventState,
   planScriptedEvents,
 } from "./scriptedEventResolution.js";
-import { buildScriptedImpactsInstruction, ensureScriptedEventsWithImpacts } from "./scriptedEventImpacts.js";
+import {
+  buildScriptedImpactsInstruction,
+  ensureScriptedEventsWithImpacts,
+  resolveFallbackScriptedImpacts,
+  scriptedBeatWrittenNote,
+} from "./scriptedEventImpacts.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
   EMPTY_RESPONSE_BODY_NOTE,
@@ -17292,7 +17296,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
               candidate.events = scripted.events;
               sortTimelineEventsChronologically(candidate);
               for (const beat of scripted.inserted) {
-                noteReceipt(draft, "adjusted", `The scripted event of ${beat.date} — "${beat.title}" — was not in your answer, so the engine wrote it in the author's words, with no impacts. It is history in this world: its consequences are yours to carry forward.`,
+                noteReceipt(draft, "adjusted", `${scriptedBeatWrittenNote(beat)} It is history in this world: its consequences are yours to carry forward.`,
                   receiptPlayerNote("scriptedBeatWritten", { title: beat.title, date: readableReceiptDate(beat.date) }));
               }
             }
@@ -17467,15 +17471,31 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 
       // runJsonTask's deterministic fallback bypasses the candidate validator.
       // Preserve the existing scripted-event guarantee there too: an eligible
-      // authored beat omitted by the fallback is inserted in the author's words.
+      // authored beat omitted by the fallback is inserted in the author's words,
+      // and every fired beat carries the impacts its author attached, resolved
+      // like any event's (validateGeneratedWorldChanges, never strict: there is
+      // no attempt to send back) and so applied with the turn.
       if (segmentGeneration?.source === "fallback" && scriptedCommit.fired.length) {
-        const fallbackScripted = ensureScriptedEvents(payload?.events, scriptedCommit.fired);
+        const fallbackScripted = ensureScriptedEventsWithImpacts(payload?.events, scriptedCommit.fired);
         if (fallbackScripted.inserted.length) {
           payload.events = fallbackScripted.events;
           sortTimelineEventsChronologically(payload);
           for (const beat of fallbackScripted.inserted) {
-            noteReceipt(state.receipt, "adjusted", `The scripted event of ${beat.date} — "${beat.title}" — was not in the fallback answer, so the engine wrote it in the author's words, with no impacts.`,
+            noteReceipt(state.receipt, "adjusted", scriptedBeatWrittenNote(beat, { fallback: true }),
               receiptPlayerNote("scriptedBeatWritten", { title: beat.title, date: readableReceiptDate(beat.date) }));
+          }
+        }
+        const authored = await resolveFallbackScriptedImpacts(payload, bundle.world, {
+          validate: validateGeneratedWorldChanges,
+          receipt: state.receipt,
+          requests: state.requests,
+          actions: bundle.actions,
+          playerCountry: bundle.game.country,
+        });
+        if (authored.error) {
+          console.warn(`[ai] the fallback's scripted events kept their story without their authored impacts: ${authored.error}`);
+          for (const event of authored.events) {
+            noteReceipt(state.receipt, "dropped", `Event "${normalizeString(event?.title)}": the impacts its author attached could not be applied — ${firstComplaintLine(authored.error)}`);
           }
         }
       }

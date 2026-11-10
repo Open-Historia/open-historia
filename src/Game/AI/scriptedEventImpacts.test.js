@@ -11,6 +11,8 @@ import {
   describeScriptedImpacts,
   ensureScriptedEventsWithImpacts,
   mergeAuthoredImpacts,
+  resolveFallbackScriptedImpacts,
+  scriptedBeatWrittenNote,
   scriptedImpactsOf,
 } from "./scriptedEventImpacts.js";
 import { SCRIPTED_EVENT, applyTerritoryTempo } from "./worldDirection.js";
@@ -178,6 +180,79 @@ test("the map's tempo never withholds what a fired scripted event carries, the a
   const inserted = ensureScriptedEventsWithImpacts([{ date: "1991-01-01", title: "Winter", description: "Snow falls.", impacts: {} }], [beat]);
   assert.equal(inserted.events[1][SCRIPTED_EVENT], true);
   assert.equal(applyTerritoryTempo(inserted.events, { ceilingPerMonth: 1, spanDays: 30 }).withheld, 0);
+});
+
+// --- A skip that fell back still carries the author's impacts ---
+
+const dissolutionBeat = {
+  id: "alpha-ends",
+  date: "2016-05-01",
+  title: "Alpha dissolves",
+  text: "Alpha is dissolved and its provinces pass to Beta.",
+  textMode: "generated",
+  impacts: compileImpactRows([{ type: "dissolve", polity: "Alpha", to: "Beta" }]),
+};
+// Stand-in events of the offline fallback: nothing to resolve.
+const standIns = () => [{ id: "fallback-1", date: "2016-05-10", title: "A quiet month", description: "Nothing of note happens.", impacts: {} }];
+
+test("a fallback's fired scripted event carries its authored impacts, resolved like any event's and applied", async () => {
+  const world = dissolutionWorld();
+  const payload = { events: standIns() };
+  const scripted = ensureScriptedEventsWithImpacts(payload.events, [dissolutionBeat]);
+  payload.events = scripted.events;
+  assert.equal(scripted.inserted.length, 1);
+
+  const calls = [];
+  // The resolver, as validateGeneratedWorldChanges runs it: whole countries expanded to their regions.
+  const validate = async (candidate, givenWorld, options) => {
+    calls.push({ titles: candidate.events.map((event) => event.title), strict: options.strictTransfers, requests: options.requests });
+    candidate.events = candidate.events.map((event) => ({ ...event, impacts: expandWholeCountry(event.impacts, givenWorld) }));
+    return "";
+  };
+  const requests = { budget: "the skip's" };
+  const result = await resolveFallbackScriptedImpacts(payload, world, { validate, requests, receipt: null });
+  assert.equal(result.resolved, 1);
+  assert.deepEqual(calls, [{ titles: ["Alpha dissolves"], strict: false, requests }], "only the scripted event, never strictly, on the skip's own budget");
+  const written = payload.events.find((event) => event.title === "Alpha dissolves");
+  assert.equal(written[SCRIPTED_EVENT], true);
+  assert.deepEqual(written.impacts.regionTransfers.map((entry) => entry.regionId), ["r1", "r2", "r3"]);
+  assert.deepEqual(payload.events.find((event) => event.id === "fallback-1").impacts, {});
+
+  const { world: next } = applyEventImpactsToWorld({ colors: {}, world, events: payload.events });
+  assert.equal(next.polityOverrides.Alpha.status, "dissolved");
+  assert.deepEqual(next.regionOwnershipOverrides, { r1: "Beta", r2: "Beta", r3: "Beta", r4: "Gamma" });
+});
+
+test("a fallback's scripted event the resolver still refuses keeps its story without the author's changes", async () => {
+  const payload = { events: ensureScriptedEventsWithImpacts(standIns(), [dissolutionBeat]).events };
+  const result = await resolveFallbackScriptedImpacts(payload, dissolutionWorld(), { validate: async () => "No region matches." });
+  assert.equal(result.error, "No region matches.");
+  assert.deepEqual(result.events.map((event) => event.title), ["Alpha dissolves"]);
+  const written = payload.events.find((event) => event.title === "Alpha dissolves");
+  assert.equal(written.description, dissolutionBeat.text);
+  assert.equal(written.impacts.regionTransfers, undefined);
+  assert.equal(written.impacts.polityChanges, undefined);
+  // Nothing to resolve, nothing asked.
+  let asked = false;
+  await resolveFallbackScriptedImpacts({ events: standIns() }, dissolutionWorld(), { validate: async () => { asked = true; return ""; } });
+  assert.equal(asked, false);
+});
+
+test("the model is told a beat the engine wrote in carries its author's impacts, by name, and 'no impacts' only when it carries none", () => {
+  const note = scriptedBeatWrittenNote(beat);
+  assert.match(note, /was not in your answer, so the engine wrote it in the author's words, with the impacts its author attached: Republic of Moldova is founded; Chişinău and Ialoveni pass to Republic of Moldova\.$/);
+  assert.doesNotMatch(note, /MDA\.|no impacts/);
+  assert.match(scriptedBeatWrittenNote(dissolutionBeat, { fallback: true }), /was not in the fallback answer, .*with the impacts its author attached: Alpha is dissolved; all of Alpha passes to Beta\./);
+  assert.match(scriptedBeatWrittenNote({ ...beat, impacts: undefined }), /in the author's words, with no impacts\.$/);
+});
+
+test("the fallback path writes its scripted events with their impacts and resolves them; no message says 'no impacts' outright", () => {
+  const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  const fallback = gameplay.slice(gameplay.indexOf('if (segmentGeneration?.source === "fallback" && scriptedCommit.fired.length)'));
+  assert.match(fallback.slice(0, 2000), /ensureScriptedEventsWithImpacts\(payload\?\.events, scriptedCommit\.fired\)/);
+  assert.match(fallback.slice(0, 2000), /resolveFallbackScriptedImpacts\(payload, bundle\.world, \{\s+validate: validateGeneratedWorldChanges,/);
+  assert.doesNotMatch(gameplay, /with no impacts/);
+  assert.doesNotMatch(fs.readFileSync(new URL("./worldDirection.js", import.meta.url), "utf8"), /without its impacts/);
 });
 
 test("the time skip marks its scripted events before it counts the map's tempo", () => {

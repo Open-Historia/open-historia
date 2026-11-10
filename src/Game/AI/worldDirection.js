@@ -353,7 +353,7 @@ export const buildScriptedEventsInstruction = (beats, { language = "" } = {}) =>
         + (inLanguage
             ? `Write each of them in ${language}, on the date given, keeping the names of its people and places as the entry gives them. `
             : "")
-        + "They are history in this world: nothing you write may contradict or pre-empt them. One the answer leaves out is written by the engine in the author's words, without its impacts.\n"
+        + "They are history in this world: nothing you write may contradict or pre-empt them. One the answer leaves out is written by the engine in the author's words, with only the impacts its author attached.\n"
         + rows.join("\n");
 };
 

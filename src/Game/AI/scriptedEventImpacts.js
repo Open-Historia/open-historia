@@ -160,6 +160,59 @@ export const describeScriptedImpacts = (impactsInput) => {
   return parts.join("; ");
 };
 
+// What the model is told when the engine writes in a beat its answer left out
+// (the fallback's, when `fallback`): the impacts it carries are the author's,
+// by name, and only when it carries none does it say so.
+export const scriptedBeatWrittenNote = (beat, { fallback = false } = {}) => {
+  const carries = describeScriptedImpacts(scriptedImpactsOf(beat));
+  return `The scripted event of ${beat?.date} — "${beat?.title}" — was not in ${fallback ? "the fallback answer" : "your answer"}, so the engine wrote it in the author's words, `
+    + (carries ? `with the impacts its author attached: ${carries}.` : "with no impacts.");
+};
+
+// The events of a payload that tell a fired scripted event and carry
+// impacts (ensureScriptedEventsWithImpacts marks them).
+export const scriptedEventsCarryingImpacts = (eventsInput) => array(eventsInput).filter((event) =>
+  event?.[SCRIPTED_EVENT] && event.impacts && typeof event.impacts === "object"
+  && FAMILIES.some((family) => array(event.impacts[family]).length));
+
+// A skip that fell back to stand-in events skips the validator, and with it
+// the resolver every answer's world changes go through. The events that tell
+// its fired scripted events are resolved here instead, by the same
+// `validate` (gameplay.js validateGeneratedWorldChanges, handed in so this
+// file stays import-free of the game), never strictly: a fallback has no
+// attempt to send back. Only those events go: the stand-ins carry nothing to
+// resolve. What it resolved is put back in the payload in place; should it
+// still refuse, those events keep their story and lose the author's changes
+// (`error` says why, for the caller's receipt).
+export const resolveFallbackScriptedImpacts = async (payload, world, {
+  validate,
+  ...options
+} = {}) => {
+  const events = array(payload?.events);
+  const carrying = scriptedEventsCarryingImpacts(events);
+  if (!carrying.length || typeof validate !== "function") return { resolved: 0, error: "", events: [] };
+  const positions = carrying.map((event) => events.indexOf(event));
+  const scripted = { events: [...carrying] };
+  const error = await validate(scripted, world, { ...options, strictTransfers: false });
+  if (error) {
+    for (const position of positions) {
+      const event = events[position];
+      const impacts = { ...event.impacts };
+      for (const family of FAMILIES) delete impacts[family];
+      events[position] = { ...event, impacts };
+    }
+    return { resolved: 0, error: String(error), events: carrying };
+  }
+  positions.forEach((position, offset) => {
+    const event = scripted.events[offset];
+    if (event && typeof event === "object") {
+      markScripted(event);
+      events[position] = event;
+    }
+  });
+  return { resolved: carrying.length, error: "", events: carrying };
+};
+
 // What the period is told: beside the scripted events, which beats carry what.
 export const buildScriptedImpactsInstruction = (beatsInput) => {
   const rows = array(beatsInput)
