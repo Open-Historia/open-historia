@@ -109,17 +109,26 @@ test("missing player domestic provenance is reconstructed as delegated routine w
 });
 
 test("missing provenance cannot turn a fresh Latvian sovereign choice into delegated routine", () => {
+  const signing = () => event(
+    "Latvian Government Signs New Defense Agreement",
+    "The Latvian government signs a new bilateral defense agreement and commits the state to new obligations.",
+    { playerRelated: true, kind: "diplomacy" },
+  );
+  // The agreement the event starts names Latvia a party: Latvia chose it.
   const candidate = {
-    events: [event(
-      "Latvian Government Signs New Defense Agreement",
-      "The Latvian government signs a new bilateral defense agreement and commits the state to new obligations.",
-      { playerRelated: true, kind: "diplomacy" },
-    )],
+    events: [signing()],
+    agreementUpdates: [{ id: "lv-ua-defence", op: "start", type: "military_cooperation", parties: ["Republic of Latvia", "Ukraine"], eventIndexes: [0], title: "Defence Agreement" }],
   };
-
   const reason = validateWorldPlayerAgencyPayload(candidate, opts);
   assert.match(reason, /Player-agency authority violation/i);
-  assert.match(reason, /fresh sovereign choice|missing valid structural agency provenance|human sovereign boundary/i);
+  assert.match(reason, /joint-player-sovereign-choice-without-authority/i);
+  assert.match(reason, /human sovereign boundary/i);
+
+  // With nothing structured of Latvia's in it, its words alone make it no
+  // sovereign choice of the player's: an event whose owner cannot be told.
+  const unbound = validateWorldPlayerAgencyPayload({ events: [signing()] }, opts);
+  assert.match(unbound, /Event provenance resolution failure/i);
+  assert.doesNotMatch(unbound, /Player-agency/i);
 });
 
 test("native provenance binds a missing player sovereign agency only when a current player order semantically authorizes it", () => {
@@ -339,15 +348,27 @@ test("an event that cites the order it answers stays, bound to that order", () =
 
 test("citing an order does not authorize a sovereign act the order never asked for", () => {
   const actions = [{ id: "act-1", status: "planned", text: "Crack down on organised crime in the big cities" }];
+  const declaration = () => event(
+    "Poland Declares War on Germany",
+    "Poland declares war on Germany.",
+    { playerRelated: true, impacts: { actionIds: ["act-1"] } },
+  );
+  // The war record the answer ties to the event has Poland start it.
   const candidate = {
-    events: [event(
-      "Poland Declares War on Germany",
-      "Poland declares war on Germany.",
-      { playerRelated: true, impacts: { actionIds: ["act-1"] } },
-    )],
+    events: [declaration()],
+    warUpdates: [{ id: "pl-de", op: "start", actors: ["Poland"], opponents: ["Germany"], eventIndexes: [0], eventIds: [] }],
   };
   const binding = bindWorldEventAuthorityRefs(candidate, { world: poland, gameCountry: "Poland", actions, chats: [] });
   assert.equal(binding.unresolved[0]?.reason, "player-fresh-sovereign-choice-without-authority");
+  assert.equal(candidate.events[0].agency, undefined);
+
+  // With no such record the event carries nothing but the order it cites,
+  // and the cited order is what binds it (its wording is never read to
+  // second-guess the citation).
+  const cited = { events: [declaration()] };
+  bindWorldEventAuthorityRefs(cited, { world: poland, gameCountry: "Poland", actions, chats: [] });
+  assert.equal(cited.events[0].agency.authority, "player-order");
+  assert.equal(cited.events[0].agency.authorityRef, "act-1");
 });
 
 // The jump never writes event.actors: a treaty's signatories come from the

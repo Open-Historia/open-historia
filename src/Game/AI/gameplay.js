@@ -1192,6 +1192,7 @@ const screenSegmentPayload = (payload, {
     chats,
     analysis,
     agreementUpdates: payload?.agreementUpdates,
+    warUpdates: payload?.warUpdates,
     frontOrders: payload?.frontOrders,
   });
   if (screened.dropped?.length) {
