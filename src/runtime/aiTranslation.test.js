@@ -268,7 +268,7 @@ test("the translator asks the background allowance before every request to the A
   const gate = translator.slice(translator.indexOf("const mayAskAi = async"), translator.indexOf("const aiFailed ="));
   assert.match(gate, /import\("\.\.\/Game\/AI\/requestBudget\.js"\)/, "loaded only on the AI's path");
   assert.match(gate, /return backgroundAiAllowance\(\)\.allowed;/);
-  assert.match(translator, /isAiOn: \(\) => run === generation && aiShown && aiInUse\(\),\n\s*mayAskAi,\n\s*askAi,/);
+  assert.match(translator, /isAiOn: \(\) => run === generation && aiShown && aiInUse\(\),\r?\n\s*mayAskAi,\r?\n\s*askAi,/);
 });
 
 test("the translator reaches the AI only from inside the switch's path", () => {
