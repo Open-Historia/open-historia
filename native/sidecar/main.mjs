@@ -472,6 +472,7 @@ const methods = {
   "game.open": async ({ id }) => {
     await api("/api/games/active", { method: "PUT", body: { gameId: id } });
     await engine.refreshLibraryCatalog({ force: true });
+    engine.aiGameEntry.enterGame();
     regionCache = { sha: "", features: [] };
     return gameView();
   },

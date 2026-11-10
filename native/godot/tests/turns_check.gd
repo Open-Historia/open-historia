@@ -86,6 +86,7 @@ func _run() -> void:
 	_say("after skip: panel=%s visible=%d of %d date=%s" % [widget.open_panel, widget.visible_count, (widget.latest.get("events", []) as Array).size(), widget._date_label.text])
 	_dump("events", widget.events_panel.body)
 	await _shoot("t3-events")
+	await _related_events_indexed()
 	widget.reveal_next()
 	await _wait(0.6)
 	_say("after next: visible=%d staged=%s" % [widget.visible_count, widget._staged])
@@ -113,6 +114,29 @@ func _run() -> void:
 	_say("dock chat: active=%s widget=%s" % [main.hud.active_panel, widget.open_panel])
 	_say("static memory %.1f MB" % (OS.get_static_memory_usage() / 1048576.0))
 	_finish(0)
+
+
+func _related_events_indexed() -> void:
+	var deadline := Time.get_ticks_msec() + 45000
+	var found := ""
+	var stopped := ""
+	while Time.get_ticks_msec() < deadline and found.is_empty() and stopped.is_empty():
+		var reply: Dictionary = await main.engine.request("settings.log.entries")
+		var entries: Array = []
+		if reply.get("ok", false):
+			entries = (reply.get("result", {}) as Dictionary).get("entries", [])
+		for entry: Variant in entries:
+			var message := str((entry as Dictionary).get("message", "")) if entry is Dictionary else ""
+			if message.begins_with("Related past events:") and message.contains("indexed on this device"):
+				found = message
+			elif message.begins_with("Related past events: indexing stopped"):
+				stopped = message
+		if found.is_empty() and stopped.is_empty():
+			await _wait(1.0)
+	if not found.is_empty() and stopped.is_empty():
+		_say("ok   the skip's events are kept as vectors on this device: %s" % found)
+	else:
+		_say("FAIL the related-events model did not index the skip's events (%s)" % (stopped if not stopped.is_empty() else "no index line in 45 s"))
 
 
 func _finish(code: int) -> void:

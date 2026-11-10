@@ -857,6 +857,10 @@ export const register = (ctx) => {
       if (clean(id)) recentOutgoing.set(String(id), Date.now());
       return true;
     },
+    "chat.opened": async ({ id = "" } = {}) => {
+      engine.aiOpenConversation.setOpenConversation(clean(id));
+      return { id: engine.aiOpenConversation.openConversationId() };
+    },
     "chat.sound.get": async () => {
       const raw = storage.getItem(SOUND_KEY);
       return { enabled: raw == null ? true : raw !== "0" };
