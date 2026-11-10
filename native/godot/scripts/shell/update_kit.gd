@@ -817,11 +817,12 @@ static func caption_of(button: Button) -> Label:
 	return button.get_node_or_null("Caption") as Label
 
 
-static func list_item(content: String, size_px: float, colour: Color, stack: String, line_height: float, indent: float) -> Control:
+static func list_item(content: String, size_px: float, colour: Color, stack: String, line_height: float, indent: float, hollow := false) -> Control:
 	var row := hbox(0)
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var marker := Disc.new()
 	marker.colour = colour
+	marker.hollow = hollow
 	marker.font_size = size_px
 	marker.indent = indent
 	marker.top = leading(size_px, stack, 400, false, line_height) + font(stack).get_ascent(roundi(size_px))
@@ -832,6 +833,7 @@ static func list_item(content: String, size_px: float, colour: Color, stack: Str
 
 class Disc extends Control:
 	var colour := Color.WHITE
+	var hollow := false
 	var font_size := 13.0
 	var indent := 17.6
 	var top := 14.0
@@ -846,4 +848,7 @@ class Disc extends Control:
 	func _draw() -> void:
 		var radius := maxf(1.5, roundf(font_size * 0.36) * 0.5)
 		var centre := Vector2(indent - font_size * 0.62 - radius, top - font_size * 0.31)
+		if hollow:
+			draw_arc(centre, radius - 0.5, 0.0, TAU, 24, colour, 1.0, true)
+			return
 		draw_circle(centre, radius, colour, true, -1.0, true)

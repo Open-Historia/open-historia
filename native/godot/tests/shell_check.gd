@@ -49,7 +49,7 @@ func _missed_updates(shell: ShellBoot) -> void:
 	var paged := UpdateNotice.new()
 	shell.overlay.add_child(paged)
 	await paged.setup(main.engine, newest, {"reduceMotion": true})
-	var ids := _update_ids(paged._pages.map(func(page: Dictionary) -> Dictionary: return page.get("update", {})))
+	var ids := _covered_ids(paged._pages)
 	var have := ids.duplicate()
 	have.sort()
 	var want := NEWEST_UPDATES.duplicate()
@@ -65,6 +65,61 @@ func _missed_updates(shell: ShellBoot) -> void:
 	_check("their pages read as written", found.size() == 4, ", ".join(PackedStringArray(found.keys())))
 	await _shoot("s-10c-newest-notices")
 	paged.queue_free()
+	await _frames(3)
+	await _changelog(shell, listed)
+
+
+func _covered_ids(pages: Array) -> Array:
+	var ids := []
+	for page in pages:
+		var told: Array = (page as Dictionary).get("changelog", [(page as Dictionary).get("update", {})])
+		for id in _update_ids(told):
+			if not ids.has(id):
+				ids.append(id)
+	return ids
+
+
+func _changelog(shell: ShellBoot, listed: Array) -> void:
+	var minors := listed.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) == "minor" and not ((update as Dictionary).get("banners", []) as Array).is_empty()).slice(0, 3)
+	var major: Array = listed.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) == "major").slice(0, 1)
+	var owed: Array = [minors[0], major[0], minors[1], minors[2]] if minors.size() == 3 and major.size() == 1 else []
+	_check("three minor updates and a major one to show together", not owed.is_empty())
+	if owed.is_empty():
+		return
+	var notice := UpdateNotice.new()
+	shell.overlay.add_child(notice)
+	await notice.setup(main.engine, owed, {"reduceMotion": true})
+	var majors := ((major[0] as Dictionary).get("banners", []) as Array).size()
+	var last: Dictionary = notice._pages.back() if not notice._pages.is_empty() else {}
+	_check("the major update's pages come first, then one card for the minor ones", notice.page_count() == majors + 1 and notice._pages.slice(0, majors).all(func(page: Dictionary) -> bool: return str((page["update"] as Dictionary).get("id", "")) == str((major[0] as Dictionary).get("id", ""))) and last.has("changelog"), "%d pages" % notice.page_count())
+	_check("the changelog lists the minor updates newest first, as the newest of them", _update_ids(last.get("changelog", [])) == _update_ids(minors) and str((last.get("update", {}) as Dictionary).get("id", "")) == str((minors[0] as Dictionary).get("id", "")), str(_update_ids(last.get("changelog", []))))
+	notice.show_page(notice.page_count() - 1)
+	await _wait(0.6)
+	var texts := Array(_texts(notice, PackedStringArray()))
+	var missing: PackedStringArray = []
+	for wanted in ["What's new", "Updates"]:
+		if not texts.has(wanted):
+			missing.append(wanted)
+	for update in minors:
+		var told: Dictionary = update
+		if not texts.any(func(value: String) -> bool: return value == str(told.get("dateText", ""))):
+			missing.append(str(told.get("dateText", "")))
+		for banner in told.get("banners", []):
+			if not texts.has(str((banner as Dictionary).get("title", ""))):
+				missing.append(str((banner as Dictionary).get("title", "")))
+			for item in (banner as Dictionary).get("items", []):
+				if not texts.any(func(value: String) -> bool: return value.contains(str(item))):
+					missing.append(str(item).left(40))
+	_check("the card is headed What's new and gives each update's date, titles and lines", missing.is_empty(), ", ".join(missing))
+	_check("the changelog's button is Continue", Array(_texts(notice._controls, PackedStringArray())).has("Continue"))
+	await _shoot("s-10d-changelog")
+	notice.queue_free()
+	await _frames(3)
+	var single := UpdateNotice.new()
+	shell.overlay.add_child(single)
+	await single.setup(main.engine, [minors[0]], {"reduceMotion": true})
+	_check("a single minor update keeps its own card", single.page_count() == ((minors[0] as Dictionary).get("banners", []) as Array).size() and not single._pages.any(func(page: Dictionary) -> bool: return page.has("changelog")))
+	single.queue_free()
 	await _frames(3)
 
 
@@ -342,18 +397,70 @@ func _themes(shell: ShellBoot) -> void:
 		every.show_page(index)
 		await _frames(3)
 		var page: Dictionary = every._pages[index]
-		var title := str((page["banner"] as Dictionary).get("title", ""))
-		if not Array(_texts(every, PackedStringArray())).any(func(value: String) -> bool: return value.contains(title)):
-			unread.append(str(page.get("key", "")))
+		var titles := [str((page["banner"] as Dictionary).get("title", ""))]
+		for told in page.get("changelog", []):
+			for banner in (told as Dictionary).get("banners", []):
+				titles.append(str((banner as Dictionary).get("title", "")))
+		var shown := Array(_texts(every, PackedStringArray()))
+		for title in titles:
+			if not shown.any(func(value: String) -> bool: return value.contains(str(title))):
+				unread.append("%s (%s)" % [str(page.get("key", "")), str(title)])
 		if _highest_z(every) > 0:
 			raised.append(str(page.get("key", "")))
-	_check("every notice since the native editor map's renders, %d pages" % every.page_count(), since.size() > 20 and every.page_count() >= since.size() and unread.is_empty(), ", ".join(unread))
+	_check("every notice since the native editor map's renders, %d pages" % every.page_count(), since.size() > 20 and _covered_ids(every._pages).size() == since.size() and unread.is_empty(), ", ".join(unread))
 	_check("no notice page draws above the vault door", raised.is_empty(), ", ".join(raised))
 	every.show_page(0)
 	await _wait(0.4)
 	await _shoot("s-44-every-new-notice-first")
 	every.queue_free()
 	await _frames(3)
+	await _ai_overhaul(shell, listed)
+
+
+func _ai_overhaul(shell: ShellBoot, listed: Array) -> void:
+	var found: Array = listed.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("id", "")) == "2026-11-ai-overhaul")
+	_check("the AI overhaul notice is served", found.size() == 1)
+	if found.is_empty():
+		return
+	var scenes := ["skips", "memory", "setup"]
+	for still in [true, false]:
+		var notice := UpdateNotice.new()
+		shell.overlay.add_child(notice)
+		await notice.setup(main.engine, found, {"reduceMotion": still})
+		_check("the AI overhaul has its three pages (%s)" % ("still" if still else "moving"), notice.page_count() == 3, str(notice.page_count()))
+		for index in range(notice.page_count()):
+			notice.show_page(index)
+			var banner: Dictionary = notice._pages[index]["banner"]
+			_check("page %d is the signal desk's %s scene" % [index + 1, scenes[index]], UpdateNotice.Themes.registered(banner) and str(banner.get("theme", "")) == "aiOverhaul" and str(banner.get("scene", "")) == scenes[index])
+			await _wait(0.8 if still else 3.5)
+			var texts := Array(_texts(notice, PackedStringArray()))
+			var missing: PackedStringArray = []
+			for wanted in [str(banner.get("title", "")), str(banner.get("subtitle", "")), str(banner.get("lead", ""))]:
+				if not texts.any(func(value: String) -> bool: return value.contains(wanted)):
+					missing.append(wanted.left(30))
+			for section in banner.get("sections", []):
+				if not texts.has(str((section as Dictionary).get("heading", ""))):
+					missing.append(str((section as Dictionary).get("heading", "")))
+			_check("page %d reads its title, lead and sections" % (index + 1), missing.is_empty(), ", ".join(missing))
+			if still or index == 0:
+				await _shoot("s-45-ai-overhaul-%s-%d" % ["still" if still else "moving", index + 1])
+		var finish := Array(_texts(notice._controls, PackedStringArray()))
+		_check("the last page's button is To the main menu", finish.has("To the main menu"), str(finish))
+		notice.queue_free()
+		await _frames(3)
+	var window := root.get_window()
+	var before := window.size
+	window.size = Vector2i(400, 860)
+	await _frames(4)
+	var narrow := UpdateNotice.new()
+	shell.overlay.add_child(narrow)
+	await narrow.setup(main.engine, found, {"reduceMotion": true})
+	await _wait(1.0)
+	_check("a phone-wide AI overhaul draws the narrow pages", narrow._narrow)
+	await _shoot("s-46-ai-overhaul-phone")
+	narrow.queue_free()
+	window.size = before
+	await _frames(4)
 
 
 func _parts() -> void:

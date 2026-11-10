@@ -388,6 +388,13 @@ export const register = (ctx) => {
       storage.flush();
       return true;
     },
+    "shell.notice.pages": async ({ updates = [] } = {}) => notices.noticePages(list(updates).filter((update) => update && typeof update === "object")).map((page) => ({
+      key: clean(page.key),
+      id: clean(page.update?.id),
+      index: list(page.update?.banners).indexOf(page.banner),
+      banner: page.changelog ? plain(page.banner) : null,
+      changelog: page.changelog ? list(page.changelog).map((update) => clean(update?.id)) : null,
+    })),
     "shell.state": async () => ({ seen: notices.seenUpdate() ?? "", doorBuild: doorDue.readVaultDoorBuild() ?? "" }),
     "shell.updates": async () => ({ updates: list(notes.UPDATES).filter(onNative).map(updateView) }),
     "shell.prefs": async () => prefs(),
