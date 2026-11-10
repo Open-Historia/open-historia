@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Francesco Inzerillo, PR #988 (ported to beta at the owner's word, 2026-11-09): a scenario's own statistics keep a
+    // missing value missing (runtime/statIndexDefinitions.js readCustomStatNumber), never a zero.
+    id: "2026-11-stats-missing-values",
+    kind: "minor",
+    date: "2026-11-09",
+    channel: "beta",
+    banners: [{
+      title: "Missing statistics stay unknown",
+      items: [
+        "Unavailable values on a scenario's national sheet appear as a dash; recorded zeros remain visible.",
+        "Historical charts leave gaps where observations are missing, and rankings include only recorded figures.",
+        "Blank or invalid custom values no longer replace recorded figures with zero.",
+      ],
+    }],
+  },
+  {
     // "right now in modern day countries go by the kingdom of spain or the french republic, rename all these
     // countries by their more common names ... leave the us's name as it is tho"; "many countries are just gray for no
     // reason sometimes" (the owner, 2026-11-09): server/commonNames.js brings an older Modern Day world across once,

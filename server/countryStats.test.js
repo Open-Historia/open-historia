@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { normalizeWorldState } from "../src/runtime/gameState.js";
+import { normalizeCustomStatValues } from "../src/runtime/statIndexDefinitions.js";
 import { validateGameplayPayload } from "../src/Game/AI/gameplaySchemas.js";
 
 import {
@@ -541,4 +543,24 @@ test("tracking settings are bounded and the player joins the tracked list only w
   assert.equal(countryStatsTrackingMonthsElapsed("2014-01-15", "2014-04-14"), 2);
   assert.equal(countryStatsTrackingMonthsElapsed("2014-01-15", "2014-04-15"), 3);
   assert.equal(countryStatsTrackingMonthsElapsed("2014-01-15", "bad"), 0);
+});
+
+test("medieval custom statistics preserve zero and omission through world save and reload", () => {
+  // Synthetic demonstration values, not historical estimates for a real polity.
+  const definition = { sections: [{ key: "realm", label: "Realm", stats: [
+    { key: "treasury", label: "Treasury", kind: "currency", suffix: "silver marks" },
+    { key: "grain", label: "Grain reserves", kind: "number", suffix: "sacks" },
+    { key: "garrisons", label: "Garrisons", kind: "number", suffix: "soldiers" },
+  ] }] };
+  const base = { customStats: { treasury: 1200, garrisons: 0 } };
+  const patch = normalizeCustomStatValues({ treasury: "", grain: null, garrisons: 0 }, definition, { partial: true });
+  const updated = mergeCountryStatPatch(base, { customStats: patch });
+  assert.deepEqual(updated.customStats, { treasury: 1200, garrisons: 0 });
+  const saved = JSON.stringify(normalizeWorldState({ countryStats: { "Example Realm": updated } }));
+  const reloaded = normalizeWorldState(JSON.parse(saved));
+  assert.deepEqual(reloaded.countryStats["Example Realm"].customStats, { treasury: 1200, garrisons: 0 });
+  assert.equal(Object.hasOwn(reloaded.countryStats["Example Realm"].customStats, "grain"), false);
+  const history = captureCountryStatsHistory(reloaded, { date: "1200-01-01", round: 1 });
+  const historyReloaded = normalizeWorldState(JSON.parse(JSON.stringify(history)));
+  assert.deepEqual(historyReloaded.countryStatsHistory["Example Realm"][0].customStats, { treasury: 1200, garrisons: 0 });
 });
