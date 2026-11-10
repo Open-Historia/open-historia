@@ -9,6 +9,7 @@ const BLUE_MARK := Color("#93c5fd")
 
 var engine: EngineLink
 var borders: BordersFallbackNotice
+var prompt_limit: PromptLimitNotice
 var fallback: FallbackSwitchNotice
 var agent: AgentWaitingNotice
 var rating: GenerationRatingToast
@@ -20,6 +21,8 @@ func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	borders = BordersFallbackNotice.new()
 	add_child(borders)
+	prompt_limit = PromptLimitNotice.new()
+	add_child(prompt_limit)
 	fallback = FallbackSwitchNotice.new()
 	add_child(fallback)
 	agent = AgentWaitingNotice.new()
@@ -30,6 +33,7 @@ func _init() -> void:
 
 func setup(link: EngineLink, _context: Dictionary = {}) -> void:
 	engine = link
+	prompt_limit.setup(link)
 	fallback.setup(link)
 	agent.setup(link)
 	rating.setup(link)
@@ -37,6 +41,7 @@ func setup(link: EngineLink, _context: Dictionary = {}) -> void:
 
 func reset_for_game() -> void:
 	borders.reset()
+	prompt_limit.pull()
 
 
 static func narrow() -> bool:

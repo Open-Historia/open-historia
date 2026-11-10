@@ -161,6 +161,7 @@ export const register = (ctx) => {
         options,
         map: { file: regions.file, sha: regions.sha, regionIds: regions.features.map((feature) => clean(feature?.id ?? feature?.properties?.id)), state: { sha: regions.sha, owners, ownerNames, ownerColors, player: "" }, palette: ownerNames.map((owner) => colorOf({ code: owner, name: owner }, colors, countryNames)) },
         offersGroups: playGameId ? false : offersGroups,
+        bypassWarning: !playGameId && engine.edPrompts.promptPackBypassesLimit(details?.data?.prompts),
         groups: Object.values(groups).map((group) => ({ name: clean(group.name), color: hexToRgb(group.color), hex: clean(group.color), description: clean(group.description), regionCount: list(areas[group.name]).length })),
         difficulties: engine.DIFFICULTY_LEVELS.map((level) => ({ id: level.id, label: level.label, emoji: level.emoji, blurb: level.blurb })),
       };
