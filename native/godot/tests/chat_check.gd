@@ -411,7 +411,43 @@ func _run() -> void:
 				await _shoot("chat-18-council-reply")
 	await _peace_in_chat()
 	await _call_to_arms()
+	await _shared_threads()
 	_finish()
+
+
+func _shared_threads() -> void:
+	var panel: ChatPanel = main.hud.panels.get("chat")
+	main.hud.set_active_panel("chat")
+	panel.view_key = "chats"
+	panel.leave_active()
+	await _wait(0.3)
+	var known: Dictionary = panel.open_chats()[0] if not panel.open_chats().is_empty() else {}
+	_check("a thread is on the list to follow", not known.is_empty())
+	if known.is_empty():
+		return
+	var pending: Dictionary = await panel.pending_shared_thread([{"name": "Germany", "code": "Germany"}])
+	_check("a shared game's new thread is a pending one, never saved", pending.get("pendingShared", false) == true and str(pending.get("id", "")).begins_with("pending-") and panel.find_chat(str(pending.get("id", ""))).is_empty(), JSON.stringify(pending))
+	var now := Time.get_unix_time_from_system() * 1000.0
+	panel.set_active(pending)
+	panel._follow = {"thread": str(known.get("id", "")), "until": now + 20000.0}
+	await panel._follow_step()
+	await _frames(2)
+	_check("the thread the host opened takes the pending one's place once the view holds it", str(panel.active.get("id", "")) == str(known.get("id", "")) and panel._follow.is_empty(), str(panel.active.get("id", "")))
+	panel._follow = {"thread": "never-sent", "until": now + 20000.0}
+	await panel._follow_step()
+	_check("leaving the pending thread stops the follow", panel._follow.is_empty())
+	panel.set_active(pending)
+	panel._follow = {"thread": "never-sent", "until": now - 1.0}
+	await panel._follow_step()
+	await _frames(3)
+	_check("a thread the view never brings is not waited on forever: back to the list", panel.active.is_empty() and panel.shared_thread_late == "never-sent" and panel._follow.is_empty())
+	_check("with a word why", panel._late_notice.visible and Array(_labels(panel._late_notice)).has("The host has not sent the new conversation yet. It will appear here when it does."))
+	await _shoot("chat-19-shared-thread-late")
+	panel.set_active(known)
+	await _frames(2)
+	_check("the word goes once a thread is opened", panel.shared_thread_late.is_empty() and not panel._late_notice.visible)
+	panel.leave_active()
+	await _frames(2)
 
 
 func _close_notice() -> void:

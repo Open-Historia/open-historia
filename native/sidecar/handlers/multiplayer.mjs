@@ -481,6 +481,22 @@ export const register = (ctx) => {
       return true;
     },
     "multiplayer.remaining": async () => Number(shared.sharedRemainingMs()) || 0,
+    "multiplayer.thread.pending": async ({ countries = [] } = {}) => plain(engine.mpThreads.pendingSharedThread(list(countries))),
+    "multiplayer.say": async ({ chat = null, text = "" } = {}) => {
+      const target = chat && typeof chat === "object" ? chat : {};
+      let answer;
+      try {
+        answer = await bridge.requestFromHost("say", engine.mpThreads.sayRequestFor(target, String(text ?? "")));
+      } catch (error) {
+        answer = { ok: false, error: error?.message || "" };
+      }
+      return plain(engine.mpThreads.afterSharedSay(target, answer));
+    },
+    "multiplayer.thread.follow": async ({ thread = "" } = {}) => engine.mpThreads.followSharedThread(String(thread ?? "")),
+    "multiplayer.thread.step": async ({ follow = null, activeChat = null, chats = [] } = {}) => {
+      const step = engine.mpThreads.sharedFollowStep(follow, { activeChat, chats: list(chats) });
+      return { kind: step.kind, delayMs: Number(step.delayMs) || 0, chat: step.chat ? clean(step.chat.id) : "" };
+    },
     "multiplayer.leave": async () => {
       const hosting = shared.getSharedGame()?.role === "host";
       await shared.leaveSharedGame();
