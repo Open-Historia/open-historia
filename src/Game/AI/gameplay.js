@@ -10439,7 +10439,9 @@ const applySimulationResult = async ({
   };
 
   for (const event of freshEvents) {
-    for (const createdChat of event.impacts.createdChats) {
+    // An event whose impacts carry no list of chats opens none, instead of
+    // stopping the turn with "createdChats is not iterable".
+    for (const createdChat of normalizeArray(event?.impacts?.createdChats)) {
       const nextChat = await opening(createdChat, event.id, { fallbackTitle: event.title, revealWith: event.id });
       if (nextChat) { nextChats.unshift(nextChat); generatedChats.push(nextChat); }
     }
