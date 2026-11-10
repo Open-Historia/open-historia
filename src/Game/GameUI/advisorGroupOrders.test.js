@@ -5,6 +5,7 @@ import {
   archiveAdvisorGroup, createAdvisorContact, createAdvisorGroup, replaceAdvisorThread,
 } from "../../runtime/advisorThreads.js";
 import { approveAdvisorAction, cancelApprovedAdvisorAction } from "./advisorActionApproval.js";
+import { actionProposalsFromReply, recordAdvisorActionReceipt } from "./advisorActionReview.js";
 import { prepareAdvisorGroupMemberReply } from "./advisorGroupOrders.js";
 
 const threadId = "advisor-group-cabinet-001";
@@ -130,4 +131,75 @@ test("group order parsing rejects civilian, foreign and retired speakers before 
     }), /Only an active government/);
   }
   assert.equal(called, false);
+});
+
+
+test("a naming revision cannot overwrite another minister's queued Action without an explicit ID from the player", async () => {
+  const borisId = "advisor-boris-001";
+  const boris = {
+    id: borisId, name: "Boris Bondarev", title: "Foreign Minister",
+    recipientType: ADVISOR_RECIPIENT_TYPES.MINISTER, archived: false,
+  };
+  const marinaReply = "advisor-reply-d672397e-a2ba-4342-a4eb-01b6d925f613";
+  const borisReply = "advisor-reply-85e0b514-2061-44e0-b2bb-0a304deb224b";
+  const revisionReply = "advisor-reply-c26c8896-5431-4a0f-8654-c4991bbaf717";
+  const [marinaDraft] = actionProposalsFromReply([{
+    title: "Coordinate Independent Human-Rights Monitoring in Eastern Libya",
+    text: "Coordinate domestic implementation, reporting and safeguards.",
+  }], marinaReply).proposals;
+  const [borisOrder] = actionProposalsFromReply([{
+    title: marinaDraft.title,
+    text: "Consult the OSCE, ICRC and OHCHR on independent detention monitoring.",
+  }], borisReply).proposals;
+  const [wrongRevision] = actionProposalsFromReply([{
+    id: borisOrder.actionId,
+    title: "Administrative Coordination: Eastern Libya Human-Rights Monitoring",
+    text: borisOrder.text,
+  }], revisionReply).proposals;
+  const prior = [
+    { role: "user", text: "Marina, Boris: prepare independent human-rights monitoring Actions." },
+    { role: "advisor", speakerId, id: marinaReply, text: "My proposal.", actionProposals: [marinaDraft] },
+    { role: "advisor", speakerId: borisId, id: borisReply, text: "My diplomatic proposal.",
+      actionProposals: [borisOrder] },
+    { role: "user", text: "Marina - your proposed Action conflicts in name with Boris's proposed action. Please prepare the same Action with a revised name." },
+    { role: "advisor", speakerId, id: revisionReply, text: "I have renamed it.", actionProposals: [wrongRevision] },
+  ];
+  let stored = replaceAdvisorThread(createAdvisorGroup(
+    createAdvisorContact(createAdvisorContact([], contact), boris),
+    { id: threadId, name: "Cabinet", memberIds: [speakerId, borisId] },
+  ), threadId, prior);
+  stored = recordAdvisorActionReceipt(stored, threadId, borisReply, "proposal-0", {
+    status: "queued", actionId: borisOrder.actionId, title: borisOrder.title,
+  });
+  let actions = [normalizeAction({
+    id: borisOrder.actionId, title: borisOrder.title, text: borisOrder.text,
+  })];
+  const original = structuredClone(actions);
+  let actionWrites = 0;
+  let receiptWrites = 0;
+  const api = {
+    threadId, messageId: revisionReply, proposalId: wrongRevision.id,
+    normalizeAction,
+    readAdvisorMessages: async () => stored,
+    mutateActionsState: async (fn) => {
+      const next = fn(actions);
+      if (next) { actions = next; actionWrites++; }
+    },
+    mutateAdvisorState: async (fn) => { stored = fn(stored); receiptWrites++; },
+  };
+  await assert.rejects(approveAdvisorAction(api), /another (?:advisor|group member).*Action/i);
+  assert.deepEqual(actions, original, "Boris's Action is unchanged");
+  assert.equal(actionWrites, 0);
+  assert.equal(receiptWrites, 0);
+
+  // If the player deliberately identifies the existing ID, the same
+  // explicit, reviewed cross-minister edit remains possible.
+  const explicit = prior.map((entry) => entry).slice();
+  explicit[3] = { role: "user", text: "Marina, update the Action with this exact ID: " + borisOrder.actionId };
+  stored = replaceAdvisorThread(stored, threadId, explicit);
+  const confirmed = await approveAdvisorAction(api);
+  assert.equal(confirmed.status, "updated");
+  assert.equal(actions[0].title, wrongRevision.title);
+  assert.equal(actionWrites, 1);
+  assert.equal(receiptWrites, 1);
 });

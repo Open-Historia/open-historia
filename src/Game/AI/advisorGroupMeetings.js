@@ -19,18 +19,17 @@ export const advisorGroupSpeakerName = (id, contacts, chiefName = "Chief advisor
   id === "chief" ? clean(chiefName) || "Chief advisor"
     : clean((Array.isArray(contacts) ? contacts : []).find((row) => row.id === id)?.name) || "Former member";
 
-// A person may be addressed by their full name or a unique first/last name.
-// Name matching is a prioritization/mandatory-reply rule, never an exclusion
-// of other members: the others still have the opportunity to challenge them.
+// Only actual forms of address make a speaker mandatory. Mentioning a
+// colleague's work, including a possessive ("Boris's Action"), is not a
+// request that colleague must answer. Unique first/last names still resolve
+// to stable member IDs; ambiguous aliases do not.
 const escaped = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const mentionedName = (question, name) => {
-  const pattern = escaped(clean(name)).replace(/\s+/g, "\\s+");
-  return pattern.length >= 3 && new RegExp(`(^|[^\\p{L}\\p{N}])${pattern}(?=$|[^\\p{L}\\p{N}])`, "iu").test(question);
-};
+const addressOpeners = /^(?:(?:hey|hi|hello|dear|please|thanks|thank you|good morning|good afternoon|good evening)\b[\s,!:.-]+)*/iu;
+const addressDelimiter = /^\s*(?:[,;:!?]|[-\u2013\u2014]|$)/u;
+const addressJoiner = /^\s*(?:,\s*(?:and\s+)?|and\s+|&\s*|\/\s*)/iu;
 
 export const directlyAddressedAdvisorIds = (memberIds, question, contacts, chiefName) => {
   const ids = Array.isArray(memberIds) ? memberIds : [];
-  const text = String(question || "");
   const names = ids.map((id) => advisorGroupSpeakerName(id, contacts, chiefName));
   const aliases = names.map((name) => {
     const parts = clean(name).split(/\s+/);
@@ -40,8 +39,60 @@ export const directlyAddressedAdvisorIds = (memberIds, question, contacts, chief
   for (const parts of aliases) for (const part of new Set(parts.map((v) => v.toLocaleLowerCase()))) {
     counts.set(part, (counts.get(part) || 0) + 1);
   }
-  return ids.filter((id, index) => mentionedName(text, names[index]) || aliases[index].some((part) =>
-    counts.get(part.toLocaleLowerCase()) === 1 && mentionedName(text, part)));
+  const candidates = ids.flatMap((id, index) => [
+    names[index],
+    ...aliases[index].filter((part) => counts.get(part.toLocaleLowerCase()) === 1),
+  ].filter(Boolean).map((name) => {
+    const patternText = escaped(name).replace(/\s+/g, "\\s+");
+    return {
+      id,
+      length: name.length,
+      patternText,
+      pattern: new RegExp(`^${patternText}(?=$|[^\\p{L}\\p{N}])`, "iu"),
+    };
+  })).sort((a, b) => b.length - a.length);
+  const matchName = (part) => {
+    for (const candidate of candidates) {
+      const matched = candidate.pattern.exec(part);
+      if (matched && !/^['\u2019]s\b/iu.test(part.slice(matched[0].length))) {
+        return { id: candidate.id, length: matched[0].length };
+      }
+    }
+    return null;
+  };
+
+  const addressed = new Set();
+  const sentences = String(question || "").split(/(?:[.!?]\s+|\r?\n+)/u);
+  // Address lists must be complete: "Boris and Marina are working" is a
+  // third-person statement, not a request for either to speak.
+  for (const sentence of sentences) {
+    let part = sentence.trimStart().replace(addressOpeners, "").trimStart();
+    const pending = [];
+    for (let index = 0; index < ids.length; index++) {
+      const candidate = matchName(part);
+      if (!candidate) break;
+      pending.push(candidate.id);
+      const after = part.slice(candidate.length);
+      const join = addressJoiner.exec(after);
+      if (join) {
+        const next = after.slice(join[0].length).trimStart();
+        const nextName = matchName(next);
+        // "Marina, Boris is working" addresses Marina, not Boris.
+        if (nextName && (addressDelimiter.test(next.slice(nextName.length))
+            || addressJoiner.test(next.slice(nextName.length)))) {
+          part = next;
+          continue;
+        }
+      }
+      if (addressDelimiter.test(after)) for (const id of pending) addressed.add(id);
+      break;
+    }
+    // A trailing vocative is also direct: "What do you think, Boris?"
+    for (const candidate of candidates) {
+      if (new RegExp(`,\\s*${candidate.patternText}\\s*[.!?]*$`, "iu").test(sentence.trim())) addressed.add(candidate.id);
+    }
+  }
+  return ids.filter((id) => addressed.has(id));
 };
 
 export const selectAdvisorGroupSpeakers = (memberIds, messages, question, contacts, chiefName) => {

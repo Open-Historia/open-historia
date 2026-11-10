@@ -173,6 +173,14 @@ test("Edit/Remove cards are actionable only while their exact canonical target r
   assert.throws(() => planApprovedAdvisorAction([{ ...plannedTarget, status: "resolved" }], edit, normalize), /no longer awaiting/);
 });
 
+test("edit confirmation identifies the existing queued Action and cannot masquerade as a new queue", () => {
+  const jsx = readFileSync(new URL("./advisor.jsx", import.meta.url), "utf8");
+  assert.match(jsx, /proposal\.operation === "edit" \? "Proceed \/ Update"/);
+  assert.match(jsx, /This updates the existing queued Action/);
+  assert.match(jsx, /targetAction\.title/);
+  assert.match(jsx, /It will not create a separate Action/);
+});
+
 test("the UI observes Edit/Remove target IDs and never exposes Proceed on unavailable targets", () => {
   const jsx = readFileSync(new URL("./advisor.jsx", import.meta.url), "utf8");
   assert.match(jsx, /targetAction=\{actionStates\?\.\[proposal\.targetId\]\}/);

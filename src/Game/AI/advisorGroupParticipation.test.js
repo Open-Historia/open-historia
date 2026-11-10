@@ -99,6 +99,32 @@ test("the same generic rule applies to unrelated names, countries and scripts", 
   assert.deepEqual(directlyAddressedAdvisorIds(colliding.map((p) => p.id), "Anna, answer this", colliding, "Chief"), []);
 });
 
+test("third-person name references and possessives never require unrelated group members", () => {
+  const input = "Marina - your proposed Action conflicts in name with Boris's proposed Action.";
+  const direct = [ids[1]];
+  assert.deepEqual(directlyAddressedAdvisorIds(ids, input, contacts, "Orlov"), direct);
+  assert.deepEqual(requiredAdvisorGroupSpeakers(ids, [{ role: "user", text: input }], input, contacts, "Orlov"), direct);
+  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Marina, I believe Boris has already queued his Action.", contacts, "Orlov"), direct);
+  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Boris's proposal conflicts with the previous plan.", contacts, "Orlov"), []);
+  assert.deepEqual(directlyAddressedAdvisorIds(ids, "I discussed Boris's proposal with Marina yesterday.", contacts, "Orlov"), []);
+  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Boris and Marina are preparing a report.", contacts, "Orlov"), []);
+  const payload = { replies: [
+    { speakerId: ids[0], pass: true, text: "" },
+    { speakerId: ids[1], pass: false, text: "I will rename the administrative Action." },
+    { speakerId: ids[2], pass: true, text: "" },
+  ] };
+  const records = parseAdvisorGroupBatch(JSON.stringify(payload), ids, { requiredSpeakerIds: direct });
+  assert.deepEqual(records.map((row) => row.silent === true), [true, false, true]);
+});
+
+test("group direct address recognizes leading name lists and trailing vocatives", () => {
+  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Viktor and Marina, please review this.", contacts, "Orlov"), [ids[0], ids[1]]);
+  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Viktor, Marina, and Boris - please review this.", contacts, "Orlov"), ids);
+  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Please, Boris, explain the treaty.", contacts, "Orlov"), [ids[2]]);
+  assert.deepEqual(directlyAddressedAdvisorIds(ids, "What is your assessment, Boris?", contacts, "Orlov"), [ids[2]]);
+  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Marina, can you check that? Boris, please check the diplomatic section.", contacts, "Orlov"), [ids[1], ids[2]]);
+});
+
 test("resume keeps participation optional once a required speaker has already answered", () => {
   const initial = [{ role: "user", text: question }];
   assert.deepEqual(requiredAdvisorGroupSpeakers(ids, initial, question, contacts, "Orlov"), [ids[0]]);
