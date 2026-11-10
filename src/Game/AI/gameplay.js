@@ -252,7 +252,7 @@ import { readWarRoomAnswer, warRoomRequest, warRoomStanding, warRoomVariables } 
 import { bindFrontOrdersToEvents, decodeEventStrikes, describeDroppedFrontOrders, frontOrderProseLines, screenFrontOrders } from "./nativeFrontLedger.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
-import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
+import { editDistance, foldRegionKey, foldedRegionIndex, matchRegionName, nearestRegionNames, regionsFoldedAs, stripRegionAffixes } from "./regionMatch.js";
 import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
 import { findUnitByRef, newestTwinByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedAreas.js";
@@ -6222,6 +6222,22 @@ const resolveRegionTransfers = async (containers, world, {
       addIdAlias(alias, region);
     }
   }
+  // The same names folded further, marks, case and punctuation alike
+  // (regionMatch.js foldedRegionIndex): "Chisinau" is the map's "Chişinău",
+  // "Karbala" its "Karbala'". Asked only where the exact spelling found
+  // nothing, and only one region may answer.
+  const byFold = foldedRegionIndex(catalog);
+  // The map's one region a name means once folded: alone on the map, or alone
+  // among the losing side's when `ownerKey` is given. Null otherwise.
+  const foldedRegion = (written, ownerKey = "") => {
+    const hits = regionsFoldedAs(byFold, written);
+    if (hits.length === 1) return hits[0];
+    if (hits.length > 1 && ownerKey) {
+      const owned = hits.filter((region) => ownerKeyOf(region.id) === ownerKey);
+      if (owned.length === 1) return owned[0];
+    }
+    return null;
+  };
 
   // A region is written by its NAME, and may be written with its kind in front
   // ("region: Hamhung") or with something in brackets after it (nameRefs.js).
@@ -6601,17 +6617,21 @@ const resolveRegionTransfers = async (containers, world, {
     return [...new Set(hits)];
   };
 
-  const cityAnchoredRegionId = (transfer, candidates) => {
+  // `which`: "note" reads only the operation's note, "name" only the name it
+  // was written with. The note is read before the name is looked up (a
+  // friendly label with the city beside it); the name only after, so a region
+  // written by its own name is never moved to the region a town of that name
+  // stands in: Bălţi, written "Balti", went to the region round it, Rîşcani.
+  const cityAnchoredRegionId = (transfer, candidates, which = "note") => {
     if (!cityAnchorContext || !Array.isArray(candidates) || candidates.length === 0) return "";
 
     // Phase 8B.2.11: city anchoring is intentionally LOCAL to this operation.
     // Never fall through to the whole event description here: one event commonly
     // names several simultaneous captures, and using event-wide prose allowed the
     // Warsaw marker to hijack a perfectly exact "Piotrków" operation.
-    const contexts = [
-      normalizeString(transfer?.note),
-      `${normalizeString(transfer?.regionId)} ${normalizeString(transfer?.regionName)}`,
-    ];
+    const contexts = which === "name"
+      ? [`${normalizeString(transfer?.regionId)} ${normalizeString(transfer?.regionName)}`]
+      : [normalizeString(transfer?.note)];
 
     let anchors = [];
     for (const context of contexts) {
@@ -6708,7 +6728,7 @@ const resolveRegionTransfers = async (containers, world, {
     // or friendly label (e.g. regionId "Masovia" + note "Warsaw"). Crucially this
     // no longer reads the event-wide prose, so another city in the same event
     // cannot hijack an exact rendered region such as Piotrków.
-    const anchored = cityAnchoredRegionId(transfer, ownedCandidates);
+    const anchored = cityAnchoredRegionId(transfer, ownedCandidates, "note");
     if (anchored) return anchored;
 
     for (const candidate of [transfer?.regionId, transfer?.regionName]) {
@@ -6741,6 +6761,17 @@ const resolveRegionTransfers = async (containers, world, {
     if (bracketed && byId.has(bracketed) && ![transfer?.regionId, transfer?.regionName].some((candidate) => (byName.get(regionKey(candidate)) ?? []).length)) {
       return bracketed;
     }
+
+    // The map's name with its marks, case or punctuation written differently:
+    // still that region, where one region alone folds to it.
+    for (const candidate of [transfer?.regionId, transfer?.regionName]) {
+      const folded = foldedRegion(candidate, fromKey);
+      if (folded) return folded.id;
+    }
+
+    // A town of the name written, inside one of the losing side's regions.
+    const namedTown = cityAnchoredRegionId(transfer, ownedCandidates, "name");
+    if (namedTown) return namedTown;
 
     for (const candidate of [transfer?.regionId, transfer?.regionName]) {
       const query = regionKey(candidate);
@@ -7368,6 +7399,16 @@ const resolveRegionTransfers = async (containers, world, {
           break;
         }
       }
+      if (!regionId) {
+        for (const candidate of [claim?.regionId, claim?.regionName]) {
+          const hits = regionsFoldedAs(byFold, candidate);
+          const pick = hits.length === 1 ? hits : hits.filter((region) => ownerKeyOf(region.id) !== claimantKey);
+          if (pick.length === 1) {
+            regionId = pick[0].id;
+            break;
+          }
+        }
+      }
       // A territory claimed by its name ("country: Greenland") is a claim on
       // each of its regions the claimant does not hold.
       const claimedArea = regionId ? [] : [claim?.regionId, claim?.regionName]
@@ -7412,7 +7453,7 @@ const resolveRegionTransfers = async (containers, world, {
         }
         const aliased = byAliasId.get(id) ?? [];
         const named = byName.get(regionKey(token)) ?? [];
-        const matches = aliased.length === 1 ? aliased : named;
+        const matches = aliased.length === 1 ? aliased : named.length ? named : regionsFoldedAs(byFold, token);
         if (matches.length === 1) {
           resolved.push(matches[0].id);
           continue;
@@ -8146,7 +8187,11 @@ const describeUnresolvedTerritory = (entry, family, eventTitle) => {
     return `${where}the ${what} "${label}" was dropped — "${entry.unknownOwner}" is not a power on this map, and the side that loses land must be named exactly as the map spells it.`;
   }
   const owner = normalizeString(entry?.fromCode);
-  return `${where}the ${what} "${label}" was dropped — no map region matches that name${owner ? ` among ${owner}'s regions` : ""}.`;
+  // The map's own spellings nearest the one written, so the next answer can
+  // write the region again by its name ("Al-Basrah" for "Basra").
+  const nearest = nearestRegionNames(label, normalizeArray(entry?.candidates));
+  const offer = nearest.length ? ` Nearest names there: ${nearest.map((name) => `"${name}"`).join(", ")}.` : "";
+  return `${where}the ${what} "${label}" was dropped — no map region matches that name${owner ? ` among ${owner}'s regions` : ""}.${offer}`;
 };
 
 export const validateGeneratedWorldChanges = async (candidate, world, {

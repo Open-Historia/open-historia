@@ -101,6 +101,65 @@ const unique = (hits) => {
   return ids.size === 1 ? hits[0] : null;
 };
 
+// The whole map by each region's name and aliases as foldRegionKey folds
+// them: "Chisinau", "chişinău" and "CHIŞINĂU" are one key, and so are
+// "Karbala" and "Karbala'". A name the map spells with marks the model left
+// off (or the other way round) is still that region's name, map-wide, as
+// long as one region alone folds to it (regionsFoldedAs); the resolver asks
+// this after the exact spelling and before anything that guesses.
+export const foldedRegionIndex = (regions) => {
+  const index = new Map();
+  for (const region of Array.isArray(regions) ? regions : []) {
+    if (!region?.id) continue;
+    for (const key of namesOf(region)) {
+      const bucket = index.get(key);
+      if (!bucket) index.set(key, [region]);
+      else if (!bucket.some((entry) => entry.id === region.id)) bucket.push(region);
+    }
+  }
+  return index;
+};
+
+export const regionsFoldedAs = (index, query) => {
+  const key = foldRegionKey(query);
+  return key ? index?.get(key) ?? [] : [];
+};
+
+// The map's own names nearest a name it does not know, for telling the model
+// what it may have meant (the receipt of a dropped transfer or capture): from
+// the regions it could have meant, the closest by folded spelling, a shared
+// start counting before edits. Names only, at most `limit`.
+// Only for suggesting: a leading Arabic article ("Al-Basrah", "An-Najaf") is
+// set aside when spellings are compared, never when a region is resolved.
+const ARTICLE = /^(?:al|el|an|ar|as|ash|at|ad|az) (?=\S{3})/;
+export const nearestRegionNames = (query, pool, { limit = 3 } = {}) => {
+  const bareOf = (text) => {
+    const folded = foldRegionKey(text);
+    return (stripRegionAffixes(folded) || folded).replace(ARTICLE, "");
+  };
+  const key = bareOf(query);
+  if (!key || !Array.isArray(pool) || pool.length === 0) return [];
+  const scored = [];
+  const seen = new Set();
+  for (const region of pool) {
+    const name = String(region?.name ?? "").trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const bare = bareOf(name);
+    let shared = 0;
+    while (shared < key.length && shared < bare.length && key[shared] === bare[shared]) shared += 1;
+    const words = containsWords(bare, key) || containsWords(key, bare);
+    const distance = editDistance(key, bare, Math.max(key.length, 3));
+    // A close spelling, a common start of three letters, or one name inside the other.
+    if (distance > Math.max(2, Math.floor(key.length / 2)) && shared < 3 && !words) continue;
+    scored.push({ name, score: (words ? 0 : distance) - Math.min(shared, 4) });
+  }
+  return scored
+    .sort((a, b) => a.score - b.score || a.name.localeCompare(b.name))
+    .slice(0, limit)
+    .map((entry) => entry.name);
+};
+
 // Resolve `query` (a name or id the model wrote) inside `pool` (the regions it
 // could legitimately mean). Returns { region, rule } or null. Rules, in order:
 //   exact      folded name or alias equals the query
