@@ -139,7 +139,36 @@ export const register = (ctx) => {
     ],
   });
 
+  const layout = engine.acLayout;
+  const layoutState = (state) => ({ section: clean(state?.section) || "submitted", goalOpen: state?.goalOpen !== false });
+
   return {
+    "actions.layout": async () => ({
+      goalOpen: layout.readGoalOpen(ctx.storage),
+      height: layout.readPanelHeight(ctx.storage),
+      minRem: layout.PANEL_MIN_HEIGHT_REM,
+      clearanceRem: layout.PANEL_TOP_CLEARANCE_REM,
+    }),
+    "actions.layoutEvent": async ({ state = {}, event = {} } = {}) => {
+      const before = layoutState(state);
+      const next = layout.actionsLayoutReducer(before, event);
+      if (next.goalOpen !== before.goalOpen) {
+        layout.writeGoalOpen(ctx.storage, next.goalOpen);
+        ctx.storage.flush?.();
+      }
+      return next;
+    },
+    "actions.panelHeight": async ({ px = null, key = "", current = 0, shift = false, viewport = 800, rem = 16 } = {}) => {
+      const metrics = { viewport: Number(viewport) || 800, rem: Number(rem) || 16 };
+      let next = px === null || px === undefined ? null : layout.clampPanelHeight(px, metrics);
+      if (clean(key)) {
+        next = layout.keyedPanelHeight(clean(key), { current: Number(current) || 0, shift: shift === true, ...metrics });
+        if (next === null) return { height: layout.readPanelHeight(ctx.storage), handled: false };
+      }
+      layout.writePanelHeight(ctx.storage, next);
+      ctx.storage.flush?.();
+      return { height: layout.readPanelHeight(ctx.storage), handled: true };
+    },
     "actions.read": async ({ force = true } = {}) => view({ force: force !== false }),
     "actions.busy": async () => {
       const [game, actions, world] = await Promise.all([
