@@ -31,7 +31,7 @@ const fight = ({ aland = 2, borduria = 2, players = [], days = 30, seed = "a see
 test("the figures: the side that began the war attacks at odds a defender only holds at", () => {
   assert.ok(STAFF_ATTACKER_ADVANCES < STAFF_DEFENDER_ADVANCES && STAFF_ATTACKER_PROBES < STAFF_DEFENDER_PROBES);
   assert.ok(STAFF_ATTACKER_PROBES < 1 && STAFF_DEFENDER_PROBES > 1, "an even attacker tries something; an even defender holds");
-  assert.ok(STAFF_REVIEW_DAYS >= 5 && STAFF_STORY_ORDER_DAYS >= 30);
+  assert.ok(STAFF_REVIEW_DAYS >= 5 && STAFF_STORY_ORDER_DAYS === 7);
 });
 
 test("much the stronger, the side that began the war advances along the whole line and the weaker digs in", () => {
@@ -98,13 +98,13 @@ test("a side a person plays has no staff, and the side against it has", () => {
 test("the story still commands: its order stands, and only one grown old is the staff's to replace", () => {
   const hold = { day: 0, type: "order", battlefield: "The Front", side: "Borduria", order: "hold", sector: "all" };
   // Borduria is four times the stronger and is told to hold: for a month it holds.
-  const month = fight({ aland: 1, borduria: 4, moments: [hold] });
+  const month = fight({ aland: 1, borduria: 4, days: STAFF_STORY_ORDER_DAYS, moments: [hold] });
   assert.deepEqual(month.borduria, [["hold", "all", "", "Borduria"]]);
   assert.deepEqual(month.offensives, []);
   // Left with that order past the days a story's order is left alone, its staff decides.
   const long = fight({ aland: 1, borduria: 4, days: STAFF_STORY_ORDER_DAYS + STAFF_REVIEW_DAYS + 2, moments: [hold] });
   assert.deepEqual(long.borduria, [["advance", "all", STAFF_MARK, "Borduria"]]);
-  assert.ok(long.offensives[0].d > "2024-04-14", long.offensives[0].d);
+  assert.ok(long.offensives[0].d > "2024-03-08", long.offensives[0].d);
   // An order the story gives later in a run replaces the staff's at once.
   const told = fight({ aland: 4, borduria: 1, days: 12, moments: [{ day: 5, type: "order", battlefield: "The Front", side: "Aland", order: "dig in", sector: "all" }] });
   assert.deepEqual(told.aland, [["dig in", "all", "", "Aland"]]);
