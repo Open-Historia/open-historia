@@ -15,7 +15,7 @@ const button = {
 const blank = () => ({ name: "", title: "", personality: "", recipientType: ADVISOR_RECIPIENT_TYPES.MINISTER, binding: null, officeKey: "" });
 
 export default function AdvisorRecipients({
-  contacts, activeId, chiefProfile, offices, statusOf, busy = false, onSelect, onCreate, onRevise, onArchive, onSaveChief, onResetChief,
+  contacts, groups = [], activeId, chiefProfile, offices, statusOf, busy = false, onSelect, onCreate, onRevise, onArchive, onReorder, onCreateGroup, onReviseGroup, onArchiveGroup, onSaveChief, onResetChief,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editor, setEditor] = useState(null);
@@ -24,11 +24,75 @@ export default function AdvisorRecipients({
   const [confirmArchive, setConfirmArchive] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [draggedId, setDraggedId] = useState("");
+  const [hoverId, setHoverId] = useState("");
+  const [groupEditor, setGroupEditor] = useState(null);
+  const [groupDraft, setGroupDraft] = useState({ name: "", memberIds: [] });
   const selected = contacts.find((item) => item.id === activeId);
+  const selectedGroup = groups.find((item) => item.id === activeId);
+  const groupChoices = [{ id: CHIEF_ADVISOR_THREAD, name: chiefProfile?.name || "Chief advisor", title: chiefProfile?.title || "Chief advisor" }, ...contacts.filter((item) => !item.archived && advisorRecipientType(item) === ADVISOR_RECIPIENT_TYPES.MINISTER)];
   const chiefName = chiefProfile?.name || "Chief advisor";
   const chiefTitle = chiefProfile?.title || "Chief advisor";
-  const visible = contacts.filter((item) => !item.archived || showArchived || item.id === activeId);
+  const baseVisible = contacts.filter((item) => !item.archived || showArchived || item.id === activeId);
+  const visible = baseVisible.slice();
+  if (draggedId && hoverId && draggedId !== hoverId) {
+    const from = visible.findIndex((item) => item.id === draggedId);
+    const to = visible.findIndex((item) => item.id === hoverId);
+    if (from >= 0 && to >= 0) visible.splice(to, 0, ...visible.splice(from, 1));
+  }
+  const reorder = async (sourceId, targetId) => {
+    if (busy || saving || !onReorder || !sourceId || !targetId || sourceId === targetId) return;
+    setSaving(true);
+    setError("");
+    try {
+      await onReorder(sourceId, targetId);
+    } catch (caught) {
+      setError(String(caught?.message || caught));
+    } finally {
+      setSaving(false);
+      setDraggedId("");
+      setHoverId("");
+    }
+  };
+  const openGroupEditor = (group = null) => {
+    if (busy || saving) return;
+    setGroupEditor(group?.id || "new");
+    setGroupDraft(group ? { name: group.name, memberIds: [...group.memberIds] } : { name: "", memberIds: [CHIEF_ADVISOR_THREAD] });
+    setEditor(null);
+    setConfirmArchive("");
+    setError("");
+    setExpanded(true);
+  };
+  const submitGroup = async () => {
+    if (busy || saving || !groupDraft.name.trim() || groupDraft.memberIds.length < 2) return;
+    setSaving(true);
+    setError("");
+    try {
+      if (groupEditor === "new") await onCreateGroup(groupDraft);
+      else await onReviseGroup(groupEditor, groupDraft);
+      setGroupEditor(null);
+    } catch (caught) {
+      setError(String(caught?.message || caught));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const retireGroup = async (group, archived) => {
+    if (busy || saving || (archived && confirmArchive !== group.id)) return;
+    setSaving(true);
+    setError("");
+    try {
+      await onArchiveGroup(group.id, archived);
+      setConfirmArchive("");
+      if (groupEditor === group.id) setGroupEditor(null);
+    } catch (caught) {
+      setError(String(caught?.message || caught));
+    } finally {
+      setSaving(false);
+    }
+  };
   const openEditor = (contact = null) => {
+    setGroupEditor(null);
     if (busy || saving) return;
     setEditor(contact?.id || "new");
     setDraft(contact ? { name: contact.name, title: contact.title, personality: contact.personality || "", recipientType: advisorRecipientType(contact) || "", binding: contact.binding || null, officeKey: "" } : blank());
@@ -38,6 +102,7 @@ export default function AdvisorRecipients({
   };
   const openChiefEditor = () => {
     if (busy || saving) return;
+    setGroupEditor(null);
     setEditor("chief");
     setDraft({
       name: chiefName, title: chiefTitle, personality: chiefProfile?.personality || "",
@@ -102,13 +167,14 @@ export default function AdvisorRecipients({
     <section className="oh-advisor-recipients" aria-label="Advisor conversations">
       <div className="oh-advisor-recipient-top">
         <button type="button" className="oh-advisor-recipient-trigger" aria-expanded={expanded} onClick={() => setExpanded((old) => !old)}>
-          <span className="oh-advisor-recipient-trigger-name">{selected ? selected.name : chiefName}</span>
-          {selected?.archived && <span style={subtle}>(retired)</span>}
+          <span className="oh-advisor-recipient-trigger-name">{selectedGroup?.name || (selected ? selected.name : chiefName)}</span>
+          {(selected?.archived || selectedGroup?.archived) && <span style={subtle}>(retired)</span>}
           <span className="oh-advisor-recipient-chevron" aria-hidden="true">{expanded ? "▴" : "▾"}</span>
         </button>
+        <button type="button" className="oh-advisor-add-contact" disabled={busy || saving} onClick={() => openGroupEditor()} title="Convene multiple advisors with independent voices" aria-label="Create advisor group">+ Group</button>
         <button type="button" className="oh-advisor-add-contact" disabled={busy || saving} onClick={() => openEditor()} title="Add an official or advisor" aria-label="Add advisor recipient">+ Contact</button>
       </div>
-      {(selected || chiefProfile) && <div className="oh-advisor-recipient-title">{selected ? selected.title : chiefTitle}{selected?.binding ? " · Political World" : ""}</div>}
+      {(selectedGroup || selected || chiefProfile) && <div className="oh-advisor-recipient-title">{selectedGroup ? `${selectedGroup.memberIds.length} group members · individual personalities` : selected ? selected.title : chiefTitle}{selected?.binding ? " · Political World" : ""}</div>}
       {selected && advisorRecipientType(selected) !== ADVISOR_RECIPIENT_TYPES.MINISTER && (
         <div role="status" style={{ ...subtle, marginTop: 5 }}>
           This character uses only the public scenario timeline and their own conversation history. Private government records and diplomacy are not shared.
@@ -123,11 +189,97 @@ export default function AdvisorRecipients({
             </button>
             <button type="button" className="oh-advisor-contact-action" disabled={busy || saving} title="Edit chief advisor" onClick={openChiefEditor}>Edit</button>
           </div>
+          {groups.filter((group) => !group.archived || showArchived || group.id === activeId).map((group) => (
+            <div key={group.id}>
+              <div className="oh-advisor-contact-row">
+                <button type="button" className="oh-advisor-contact-select" aria-current={activeId === group.id ? "true" : undefined} disabled={busy || saving} onClick={() => { onSelect(group.id); setGroupEditor(null); setEditor(null); setConfirmArchive(""); setExpanded(false); }}>
+                  <span className="oh-advisor-contact-name">◈ {group.name}{group.archived ? " · Retired" : ""}</span>
+                  <span className="oh-advisor-contact-detail">Group chat · {group.memberIds.length} independently speaking advisors</span>
+                </button>
+                <button type="button" className="oh-advisor-contact-action" disabled={busy || saving} title={`Edit ${group.name}`} onClick={() => openGroupEditor(group)}>Edit</button>
+                <button type="button" className="oh-advisor-contact-action" disabled={busy || saving} onClick={() => group.archived ? retireGroup(group, false) : (setConfirmArchive(group.id), setError(""))}>
+                  {group.archived ? "Restore" : "Retire"}
+                </button>
+              </div>
+              {confirmArchive === group.id && !group.archived && (
+                <div role="alertdialog" aria-label={`Retire ${group.name}?`} style={{ border: "1px solid rgba(248,113,113,0.5)", borderRadius: 8, padding: 10 }}>
+                  <strong style={{ fontSize: "0.76rem" }}>Retire this group chat?</strong>
+                  <div style={subtle}>Its transcript and each participant's existing conversation are preserved.</div>
+                  <div style={{ display: "flex", gap: 7, marginTop: 6 }}>
+                    <button type="button" style={button} onClick={() => setConfirmArchive("")}>Cancel</button>
+                    <button type="button" style={button} onClick={() => retireGroup(group, true)}>Retire group</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+          {groupEditor && (
+            <div className="oh-advisor-contact-editor">
+              <strong style={{ fontSize: "0.75rem" }}>{groupEditor === "new" ? "Create group chat" : "Edit group chat"}</strong>
+              <label style={subtle}>Group name
+                <input style={field} maxLength={100} value={groupDraft.name} onChange={(event) => setGroupDraft((old) => ({ ...old, name: event.target.value }))} placeholder="e.g. Economic Policy Group" />
+              </label>
+              <div style={subtle}>Choose 2 to 10 advisors. Every member has a chance to speak, disagree, or stay silent. Individual requests preserve independent voices; shared requests can generate several speakers together. Government advisors may propose Actions for review and manage authorized Projects.</div>
+              {groupChoices.map((choice) => (
+                <label key={choice.id} style={{ ...subtle, display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="checkbox" checked={groupDraft.memberIds.includes(choice.id)} disabled={busy || saving || (!groupDraft.memberIds.includes(choice.id) && groupDraft.memberIds.length >= 10)}
+                    onChange={(event) => setGroupDraft((old) => ({ ...old,
+                      memberIds: event.target.checked ? [...old.memberIds, choice.id] : old.memberIds.filter((id) => id !== choice.id),
+                    }))} />
+                  <span>{choice.name} <span style={{ opacity: 0.72 }}>· {choice.title}</span></span>
+                </label>
+              ))}
+              {groupEditor !== "new" && <div style={subtle}>Membership becomes fixed after the first group message; create a new group chat to use a different roster.</div>}
+              {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.72rem" }}>{error}</div>}
+              <div style={{ display: "flex", gap: 7 }}>
+                <button type="button" disabled={busy || saving || !groupDraft.name.trim() || groupDraft.memberIds.length < 2} style={button} onClick={submitGroup}>{saving ? "Saving…" : "Save group"}</button>
+                <button type="button" disabled={saving} style={button} onClick={() => { setGroupEditor(null); setError(""); }}>Cancel</button>
+              </div>
+            </div>
+          )}
           {visible.map((contact) => {
             const officeStatus = statusOf(contact);
             return (
               <div key={contact.id}>
-                <div className="oh-advisor-contact-row">
+                <div className="oh-advisor-contact-row" draggable={!busy && !saving}
+                  data-dragging={draggedId === contact.id ? "true" : undefined}
+                  data-drop-target={draggedId && hoverId === contact.id && draggedId !== contact.id ? "true" : undefined}
+                  onDragStart={(event) => {
+                    if (busy || saving) { event.preventDefault(); return; }
+                    setDraggedId(contact.id);
+                    setHoverId("");
+                    event.dataTransfer.setData("text/plain", contact.id);
+                    event.dataTransfer.effectAllowed = "move";
+                    // Native drag ghost depicts the ENTIRE row, not the handle.
+                    event.dataTransfer.setDragImage(event.currentTarget, 20, 20);
+                  }}
+                  onDragOver={(event) => {
+                    if (draggedId && !busy && !saving) {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                      if (draggedId !== contact.id && hoverId !== contact.id) setHoverId(contact.id);
+                    }
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const sourceId = event.dataTransfer.getData("text/plain");
+                    const targetId = hoverId || contact.id;
+                    if (sourceId === draggedId && sourceId !== targetId) void reorder(sourceId, targetId);
+                    else { setDraggedId(""); setHoverId(""); }
+                  }}
+                  onDragEnd={() => { setDraggedId(""); setHoverId(""); }}>
+                  <span role="button" tabIndex={busy || saving ? -1 : 0}
+                    aria-label={`Reorder ${contact.name}: drag the row or use arrow keys`}
+                    title="Drag the row to reorder; Arrow Up or Down moves this contact"
+                    onKeyDown={(event) => {
+                      const index = baseVisible.findIndex((item) => item.id === contact.id);
+                      const next = event.key === "ArrowUp" ? index - 1 : event.key === "ArrowDown" ? index + 1 : -1;
+                      if (next >= 0 && next < baseVisible.length) {
+                        event.preventDefault();
+                        void reorder(contact.id, baseVisible[next].id);
+                      }
+                    }}
+                    style={{ cursor: "grab", color: "var(--oh-advisor-muted)", padding: "0.4rem 0.15rem", alignSelf: "center", userSelect: "none" }}>⠿</span>
                   <button type="button" className="oh-advisor-contact-select" aria-current={activeId === contact.id ? "true" : undefined} disabled={busy || saving} onClick={() => { onSelect(contact.id); setEditor(null); setConfirmArchive(""); setExpanded(false); }}>
                     <span className="oh-advisor-contact-name">{contact.name} {contact.archived ? "· Retired" : ""}</span>
                     <span className="oh-advisor-contact-detail">{contact.title} · {ADVISOR_RECIPIENT_TYPE_LABELS[advisorRecipientType(contact)] || "Unsupported recipient type"}{["changed", "vacant"].includes(officeStatus) ? " · No longer in office" : ""}</span>
@@ -150,9 +302,9 @@ export default function AdvisorRecipients({
               </div>
             );
           })}
-          {contacts.some((contact) => contact.archived) && (
+          {(contacts.some((contact) => contact.archived) || groups.some((group) => group.archived)) && (
             <button type="button" onClick={() => setShowArchived((old) => !old)} style={{ ...button, alignSelf: "flex-start" }}>
-              {showArchived ? "Hide retired contacts" : "Show retired contacts"}
+              {showArchived ? "Hide retired contacts and groups" : "Show retired contacts and groups"}
             </button>
           )}
           {editor && (

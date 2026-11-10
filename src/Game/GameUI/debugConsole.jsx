@@ -24,6 +24,7 @@ import {
     setGenerationRating,
 } from "../AI/telemetry.js";
 import { readWorldState } from "../../runtime/gameState.js";
+import { groupGenerationRows } from "../AI/groupTelemetry.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -415,6 +416,31 @@ const GenerationDetail = ({ record, onRate }) => {
     );
 };
 
+// A group chat is ONE logical player interaction, even when it uses multiple
+// providers. This row only collapses the view; every raw generation remains
+// accessible underneath, in analytics and in the unmodified exports.
+const GroupGenerationRow = ({ group, expanded, onToggle }) => (
+    <button type="button" onClick={() => onToggle(group.key)}
+        aria-expanded={expanded}
+        style={{ width: "100%", display: "flex", alignItems: "center",
+            flexWrap: "wrap", gap: "0.45rem", textAlign: "left", padding: "0.65rem",
+            border: "none", borderBottom: "1px solid var(--oh-ui-line, #262628)",
+            borderLeft: "3px solid var(--oh-ui-accent, #60a5fa)",
+            color: COLORS.text, background: "var(--oh-ui-surface, #192b3b)",
+            cursor: "pointer", fontSize: "0.72rem" }}>
+        <span aria-hidden="true">{expanded ? "▾" : "▸"}</span>
+        <strong>Group Chat: {group.name}</strong>
+        <span style={{ color: COLORS.muted }}>{group.completedSpeakers} of {group.totalSpeakers} speakers completed</span>
+        <span style={{ color: COLORS.muted }}>{group.records.length} AI calls</span>
+        <span style={{ color: COLORS.muted }}>{group.requests} provider requests</span>
+        {group.failedBatches > 0 && <strong style={{ color: COLORS.danger }}>{group.failedBatches} failed</strong>}
+        {group.pendingBatches > 0 && <span style={{ color: COLORS.gold }}>{group.pendingBatches} pending</span>}
+        <span style={{ marginLeft: "auto", color: COLORS.muted, fontFamily: MONO }}>
+            {fmtInt(group.promptTokens)} input tokens / {fmtInt(group.outputTokens)} generated tokens
+        </span>
+    </button>
+);
+
 // --- Aggregation helpers ----------------------------------------------------------
 
 const emptyRow = (label) => ({
@@ -494,6 +520,12 @@ export const DebugConsole = ({ open, onClose }) => {
     const [statusFilter, setStatusFilter] = useState("all");
     const [search, setSearch] = useState("");
     const [sortBy, setSortBy] = useState("newest");
+    const [expandedGroupTurns, setExpandedGroupTurns] = useState(() => new Set());
+    const toggleGroupTurn = (id) => setExpandedGroupTurns((current) => {
+        const next = new Set(current);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+    });
     const isMobile = useIsMobile();
     // A phone held sideways gets the desktop layout, where the list shares the
     // width with an open record; there too the rows wrap instead of running on
@@ -546,6 +578,7 @@ export const DebugConsole = ({ open, onClose }) => {
             .slice(0, 200);
     }, [records, taskFilter, modelFilter, statusFilter, search, sortBy]);
 
+    const displayRows = useMemo(() => groupGenerationRows(filtered), [filtered]);
     const selected = filtered.find((record) => record.id === selectedId) ?? null;
 
     const analytics = useMemo(() => {
@@ -712,10 +745,20 @@ export const DebugConsole = ({ open, onClose }) => {
                                         ) : (
                                             <>
                                                 <div style={{ padding: "0.25rem 0.7rem", fontSize: "0.6rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: COLORS.muted, borderBottom: "1px solid #262628", backgroundColor: COLORS.bg }}>
-                                                    {sortBy === "requests" ? `${filtered.length} shown (most requests first)` : `${filtered.length} shown (newest first)`}
+                                                    {sortBy === "requests" ? `${displayRows.length} interactions, ${filtered.length} calls (most requests first)` : `${displayRows.length} interactions, ${filtered.length} calls (newest first)`}
                                                 </div>
-                                                {filtered.map((record) => (
-                                                    <GenerationRow key={record.id} record={record} selected={selected?.id === record.id} onSelect={setSelectedId} compact={isMobile || (touch && Boolean(selected))} />
+                                                {displayRows.map((row) => row.kind === "record" ? (
+                                                    <GenerationRow key={row.key} record={row.record} selected={selected?.id === row.record.id} onSelect={setSelectedId} compact={isMobile || (touch && Boolean(selected))} />
+                                                ) : (
+                                                    <div key={row.key}>
+                                                        <GroupGenerationRow group={row} expanded={expandedGroupTurns.has(row.key)} onToggle={toggleGroupTurn} />
+                                                        {expandedGroupTurns.has(row.key) && row.records.map((record) => (
+                                                            <div key={record.id} style={{ paddingLeft: "0.85rem", borderLeft: "2px solid var(--oh-ui-line, #262628)" }}>
+                                                                <GenerationRow record={record} selected={selected?.id === record.id}
+                                                                    onSelect={setSelectedId} compact={isMobile || (touch && Boolean(selected))} />
+                                                            </div>
+                                                        ))}
+                                                    </div>
                                                 ))}
                                             </>
                                         )}

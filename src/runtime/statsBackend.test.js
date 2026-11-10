@@ -73,7 +73,10 @@ test("a scenario's own sheet is asked for WITH its backend, in the same request"
 
   const turn = read("../Game/AI/gameplay.js");
   assert.ok(turn.includes("      statsBackendInstruction(statsBackendOf(previous)),"));
-  assert.ok(turn.includes("const sheet = mergeCountryStatPatch(previous, { customStats, ...statsBackendPatch(payload?.[STATS_BACKEND_FIELD]) }, {"));
+  // Fresh assessments still write the numeric backend together with scenario
+  // values. A continuity-only refresh must NOT rewrite a settled backend.
+  assert.match(turn, /const sheet = mergeCountryStatPatch\(previous, \{\s*customStats,\s*\.\.\.\(decision\.regenerate \? statsBackendPatch\(payload\?\.\[STATS_BACKEND_FIELD\]\) : \{\}\),\s*\}, \{ continuity \}\);/);
+  assert.match(turn, /decision\.regenerate\s*\? normalizeCustomStatValues\(payload\?\.customStats, definition\)\s*:\s*previousValues/);
   // (The periodic refresh of a scenario's own sheets moved it too, until that refresh went, 2026-11-07.)
   assert.equal(turn.includes("refreshTrackedCustomStatsIfDue"), false);
 });

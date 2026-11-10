@@ -2420,12 +2420,10 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 style={refreshMenuButtonStyle}
                 >Refresh</button>
                 <div style={refreshMenuHintStyle}>
-                {statSheetDefinition.custom
-                    ? "Uses 1 request."
-                    : "Uses a request only if something has changed since the last assessment."}
+                "Uses a request only if relevant canonical evidence has changed since the last assessment."
                 </div>
                 </div>
-                {!statSheetDefinition.custom && refreshMenuStep === "open" && (
+                {refreshMenuStep === "open" && (
                     <div>
                     <button
                     type="button"
@@ -2438,7 +2436,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                     </div>
                     </div>
                 )}
-                {!statSheetDefinition.custom && refreshMenuStep === "confirm" && (
+                {refreshMenuStep === "confirm" && (
                     <div>
                     <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.74rem", lineHeight: 1.45 }}>
                     Rebuild this country's baseline from scratch? It uses 1 request and replaces the current numbers.
