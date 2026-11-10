@@ -1,9 +1,10 @@
 /*! Open Historia — the jump's read-only view of the Projects & Operations board © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Import-free on purpose: runs under node --test without a build.
 //
-// The board is bookkeeping kept by its own pass after the jump
+// The board was once bookkeeping kept by its own pass after the jump
 // (gameplay.js generateProjectOps), which is why projectOps left the jump's
-// output contract. But that pass can only record what the events say, and the
+// output contract; a folded skip now keeps it itself (below), and a skip that
+// is not folded leaves it as it is. But that pass could only record what the events said, and the
 // jump used to see nothing of the board at all: an order to "move forward
 // with Project Westbird" reached it as a bare name, the model guessed what a
 // Westbird might be (an aerospace test flight, for what the board describes as
@@ -100,17 +101,22 @@ export const buildJumpProjectsRules = ({ folded = false } = {}) => (folded
     FOLDED_BOARD_PROPORTION,
     BOARD_ENTRY_NOT_STORYLINE,
   ]
+  // Not folded: a skip asked the old way, after a provider refused the folded
+  // one, or one whose function had no room for the board's ops
+  // (gameplay.js fitSkipRiders). Nothing reads its events afterwards to move
+  // the board any more (the pass that did went on 2026-11-07): the board stands
+  // as it is until a later jump moves it, and is here as context.
   : [
-    "You do not return projectOps: a separate pass after this jump records the board from the events you write. "
-      + "What you decide is what HAPPENS to these efforts. An effort the player's orders name, "
+    "You do not return projectOps, and nothing records the board from this jump: it stays as it is until a later jump moves it. "
+      + "It is here so that your events treat these efforts as what they are. An effort the player's orders name, "
       + "or one on the \"Needs a decision this jump\" list advances, stalls for a named reason, reaches or misses its "
       + "next checkpoint, or ends - and an event says which, in terms of what the effort actually IS according to its "
       + "summary: a recruitment drive is not a missile test, and a shipyard is not a treaty. "
       + HIGH_PRIORITY_ASSESSMENT_RULE + " "
-      + "Write what happens to an entry as an event however routine it is: the timeline decides what the player is "
-      + "shown, and the board reads every event either way. Entries marked THEIRS "
+      + "Write what happens to an entry as an event however routine it is: that event is the only record this jump keeps of it. "
+      + "Entries marked THEIRS "
       + "belong to another power: report what the player's services observed of them, never narrate them from "
-      + "inside. Name each effort exactly as the board names it, so the pass can find it. "
+      + "inside. Name each effort exactly as the board names it. "
       + BOARD_ENTRY_NOT_STORYLINE,
   ]).join("\n");
 

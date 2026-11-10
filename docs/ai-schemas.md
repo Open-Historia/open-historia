@@ -35,7 +35,7 @@ Diplomatic speaker routing is deliberately absent from this table: one-on-one th
 | `jumpForward` | `JUMP_FORWARD_SCHEMA` | `submit_jump_result` | `simulateTimelineJump` |
 | `autoJumpForward` | `AUTO_JUMP_FORWARD_SCHEMA` (**= `JUMP_FORWARD_SCHEMA`**) | `submit_jump_result` | `simulateAutoJump` |
 | `descriptionToAction` | `DESCRIPTION_TO_ACTION_SCHEMA` | `submit_description_to_action` | freeform-intent → command |
-| `eventConsolidator` | `EVENT_CONSOLIDATOR_SCHEMA` | `submit_event_consolidation` | `consolidateHistoryBatch` |
+| `eventConsolidator` | `EVENT_CONSOLIDATOR_SCHEMA` | `submit_event_consolidation` | none of its own: a time skip carries the fold in its `history` field (`foldJumpTool`, without the field notes); a batch sent before 2026-11-07 still lands through `deferredConsolidationApplier` |
 | `interactiveCreation` | `INTERACTIVE_CREATION_SCHEMA` (**= `interactiveSchema`**) | `submit_interactive_creation` | opening an interactive event's scene |
 | `interactiveExecutor` | `INTERACTIVE_EXECUTOR_SCHEMA` | `submit_interactive_execution` | advance an interactive event |
 | `interactiveSummary` | `INTERACTIVE_SUMMARY_SCHEMA` | `submit_interactive_summary` | finished interactive event → event |

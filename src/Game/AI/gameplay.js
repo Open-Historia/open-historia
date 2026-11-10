@@ -312,7 +312,18 @@ import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
 import { FRONT_ORDER_LINES_BLOCK } from "./frontPrompt.js";
 import { collectionOrders, covertOperationsBlock, untracedTargets } from "./covertOperationsDirective.js";
 import { agentsReportingWithSkip } from "./agentReports.js";
-import { assignAgentReports, boardOpsOf, liftBoardOps, providerRefusedContract, withoutBoardOps } from "./foldedSkip.js";
+import {
+  FOLDED_SKIP_SCHEMA_BUDGET,
+  assignAgentReports,
+  boardOpsOf,
+  ceilingAfterRefusal,
+  fitSkipRiders,
+  liftBoardOps,
+  providerRefusedContract,
+  ridersThatWaited,
+  withoutBoardOps,
+} from "./foldedSkip.js";
+import { toGeminiSchema } from "./geminiSchema.js";
 import { renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment, spySealingWorks } from "../../runtime/spySeal.js";
 import {
@@ -1702,7 +1713,8 @@ const buildFoldedAgentReportsBlock = (jobs, playerName) => {
       + "what that agent intercepted of its target's PRIVATE diplomatic traffic with OTHER polities during this period, consistent with the events you have just written. "
       + "Treat the records in this prompt as ground truth and write what the target actually said in private to its counterparts: intentions, terms, threats, promises, doubts, never public statements or press lines. "
       + `Each report gives \`agent\`, copied exactly from this list, and 2 to 4 exchanges. Each exchange has a counterpart (never the target itself, never ${player}), a date within the period, `
-      + `a short subject, and 2 to 6 alternating messages in the leaders' own voices. Where ${player} is discussed, show what the target really thinks of it.`,
+      + `a short subject, and 2 to 6 alternating messages, each with its speaker (the target or the counterpart) and its text in that leader's own voice. Where ${player} is discussed, show what the target really thinks of it. `
+      + "A politicalAssessment, where the agent's brief allows one, has a summary of the target leadership's decision posture and 1 to 6 findings, each a short topic and its assessment, in prose: never raw numbers or field names.",
     ...list.map((job) => [
       `${job.key}: the agent inside ${job.name}.`,
       job.disinformation,
@@ -2904,7 +2916,7 @@ const buildJumpStaticRules = async (variables = {}) => {
     TAKING_GROUND_BLOCK,
     // How the board is kept, once there is a board (projectsDirective.js).
     normalizeArray(world.projects).length > 0
-      ? `${JUMP_PROJECTS_RULES_HEADING}\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) })}`
+      ? `${JUMP_PROJECTS_RULES_HEADING}\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) && variables?.foldedBoard !== false })}`
       : "",
     isActiveFeatureEnabled("groups") ? `${GROUPS_RULE_HEADING}\n${GROUPS_RULE}` : "",
     `${WAR_LEDGER_RULES_HEADING}\n${warLedgerRules(playerName)}`,
@@ -3074,11 +3086,13 @@ ${pending}`);
     blocks.push(TAKING_GROUND_BLOCK);
   }
 
-  // A folded skip keeps the board itself (projectsDirective.js); otherwise the
-  // board is context, and its own pass moves it.
+  // A folded skip keeps the board itself (projectsDirective.js), unless its
+  // function had no room for the board's ops this time (fitSkipRiders);
+  // otherwise the board is context, and stands still this skip.
   const foldedSkip = Boolean(variables.foldedSkip);
+  const foldedBoard = foldedSkip && variables.foldedBoard !== false;
   const board = buildJumpProjectsDirective(variables.projectsSummary, {
-    folded: foldedSkip,
+    folded: foldedBoard,
     // The rules are above, among the standing ones, when the board had entries
     // as the opening was built (buildJumpStaticRules).
     rulesAbove: rulesAbove && normalizeArray(world.projects).length > 0,
@@ -3198,9 +3212,10 @@ ${brief}`);
   // (The function that gives a player's troops their orders is no lookup: the [Fronts] block says what it is for.)
   if (Array.isArray(lookups?.tools) && lookups.tools.some((tool) => tool?.name !== FRONT_ORDER_FUNCTION)) blocks.push(activeLookupDirective());
   // Without one, a line saying the history field is to be left out: the
-  // function offers it on every turn (gameplaySchemas.js NO_SKIP_HISTORY_JOB).
+  // function offers it on every turn where it fits (gameplaySchemas.js
+  // NO_SKIP_HISTORY_JOB), and where it was left out there is nothing to say.
   if (historyJob) blocks.push(historyJob);
-  else if (foldedSkip) blocks.push(NO_SKIP_HISTORY_JOB);
+  else if (foldedSkip && variables.foldedHistoryField !== false) blocks.push(NO_SKIP_HISTORY_JOB);
 
   return blocks.filter(Boolean).join("\n\n");
 };
@@ -3211,8 +3226,11 @@ const PLAYER_GROUP_TASKS = new Set([
   "interactiveSummary", "idleDiplomacy", "gameMaster", "warRoom",
 ]);
 
-const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, reminders = true, promptPack = null } = {}) => {
-  const prompts = promptPack ?? await loadPromptCatalog();
+// The statistics a task's prompt and its output function are built with: the
+// scenario's own sheet or indices where it has them. Read by
+// buildTaskSystemPrompt, and by a time skip that weighs its function before
+// asking (jumpToolSent).
+const loadTaskStatContract = async (taskKey) => {
   // No fallback to the standard sheet when a scenario's stats.json cannot be
   // read: a custom-stats scenario would then be asked for, and would write,
   // the wrong statistics. The task fails before any request is sent instead.
@@ -3232,6 +3250,42 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
       : (STAT_INDEX_CONTEXT_TASKS.has(taskKey) ? DEFAULT_STAT_INDEX_ROWS : []));
   const statIndexKeys = statIndexRows.map((row) => normalizeString(row?.key)).filter(Boolean);
   const customStatIndices = Boolean(!customFullStatSheet && statIndexDefinition?.custom && statIndexKeys.length);
+  return { statSheetDefinition, customFullStatSheet, customStatRows, customStatKeys, statIndexRows, statIndexKeys, customStatIndices };
+};
+
+// The output function a task is sent, before any reshaping of the call's own
+// (runJsonTask toolTransform): the task's tool for the scenario's statistics
+// and this game's features, the players' advice and the social posts on a time
+// skip, a first reading's rating.
+const taskToolFor = (taskKey, { customFullStatSheet, customStatRows, statIndexRows, customStatIndices }, variables) => {
+  const featureTool = forActiveFeatures(customFullStatSheet
+    ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
+    : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
+  // The players' advice, asked of the time skip whose prompt asks for it.
+  const advisedTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(featureTool) : featureTool;
+  // And the social posts after all of it, or none where the game has no Rostra
+  // (gameplaySchemas.js withSocialPosts).
+  const taskTool = JUMP_TASK_KEYS.has(taskKey)
+    // Its poll answers whether or not a poll is open, so the function stays the
+    // same from turn to turn (a provider caches it with the prompt); answers to
+    // polls that are not open are dropped (socialFeed.js readSkipPollResults).
+    ? withSocialPosts(advisedTool, isActiveFeatureEnabled("socialMedia"), { polls: true })
+    : advisedTool;
+  // A first reading's sheet can carry the service's rating, in the same request
+  // (generateCountryStatSheet rateIntelligence, gameplaySchemas.js
+  // withIntelligenceRating).
+  return taskKey === "countryStatSheet" && variables?.statsRateIntelligence
+    ? withIntelligenceRating(taskTool)
+    : taskTool;
+};
+
+// The function a time skip's request would carry before it is folded, so the
+// skip can weigh what it adds to it before the prompt is built (fitSkipRiders).
+const jumpToolSent = async (taskKey, variables) => taskToolFor(taskKey, await loadTaskStatContract(taskKey), variables);
+
+const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, reminders = true, promptPack = null } = {}) => {
+  const prompts = promptPack ?? await loadPromptCatalog();
+  const { statSheetDefinition, customFullStatSheet, customStatRows, customStatKeys, statIndexRows, statIndexKeys, customStatIndices } = await loadTaskStatContract(taskKey);
   // The GM operational contract is native behaviour: a campaign's frozen
   // gameMaster prompt would silently roll the transaction semantics back.
   // Groups switched off for this game: the contract without its groups rule.
@@ -3934,25 +3988,7 @@ const runJsonTask = async (taskKey, {
     { idleMs, firstByteMs: idleMs ? AI_FIRST_BYTE_TIMEOUT_MS : 0 },
     () => controller.abort(timeoutError),
   );
-  const featureTool = forActiveFeatures(customFullStatSheet
-    ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
-    : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
-  // The players' advice, asked of the time skip whose prompt asks for it.
-  const advisedTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(featureTool) : featureTool;
-  // And the social posts after all of it, or none where the game has no Rostra
-  // (gameplaySchemas.js withSocialPosts).
-  const taskTool = JUMP_TASK_KEYS.has(taskKey)
-    // Its poll answers whether or not a poll is open, so the function stays the
-    // same from turn to turn (a provider caches it with the prompt); answers to
-    // polls that are not open are dropped (socialFeed.js readSkipPollResults).
-    ? withSocialPosts(advisedTool, isActiveFeatureEnabled("socialMedia"), { polls: true })
-    : advisedTool;
-  // A first reading's sheet can carry the service's rating, in the same request
-  // (generateCountryStatSheet rateIntelligence, gameplaySchemas.js
-  // withIntelligenceRating).
-  const ratedTool = taskKey === "countryStatSheet" && variables?.statsRateIntelligence
-    ? withIntelligenceRating(taskTool)
-    : taskTool;
+  const ratedTool = taskToolFor(taskKey, statContract, variables);
   // Reshaped for this call when asked (toolTransform above).
   const defaultTool = typeof toolTransform === "function" ? toolTransform(ratedTool) : ratedTool;
   const tool = toolOverride !== undefined ? toolOverride : defaultTool;
@@ -9086,10 +9122,10 @@ export const interveneAfterEvent = async (keptCount) => {
     const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
     const receipt = mergeReceipts(createApplicationReceipt(), journal.receipt ?? null);
     noteReceipt(receipt, "withheld", describeIntervention({ kept, dropped, closingDate }), interventionNote({ kept, dropped, closingDate }));
-    // A budget with nothing left: history consolidation, the tracked stats and
-    // every other optional pass ask it first and stand down. Shaped like a
-    // skip's (createJumpRequests): the passes read requests.budget, and a bare
-    // budget made each of them throw instead.
+    // A budget with nothing left, so nothing in the apply can make a request:
+    // stopping a round never costs one. Shaped like a skip's
+    // (createJumpRequests): the apply reads requests.budget (the breadth
+    // repair asks whether it may), and a bare budget made it throw instead.
     const requests = { saving: true, budget: createJumpBudget({ cap: 1 }), used: 0, refused: 0 };
     requests.budget.take("intervene");
     const applied = await applySimulationResult({
@@ -10235,10 +10271,14 @@ const applySimulationResult = async ({
     // event has since gained a consequence of its own (the unit and territory
     // directors add ops after the segment check), in which case it stands on that
     // and is not the board pass's to prove.
-    const provisionalIds = new Set(
-      normalizeArray(result.boardProvisionalEventIds)
-        .map((id) => canonicalEventIdentity.idMap.get(id) || id),
-    );
+    // Only where something will answer for the board: a review with a board
+    // part, or the board's own request (no review). A review without one moves
+    // nothing, and every provisional event would be judged unbacked by ops
+    // nobody was asked to write, and taken off the timeline.
+    const boardAnswers = !review || Boolean(review.parts?.board);
+    const provisionalIds = new Set(boardAnswers
+      ? normalizeArray(result.boardProvisionalEventIds).map((id) => canonicalEventIdentity.idMap.get(id) || id)
+      : []);
     const provisionalIndexes = new Set(freshEvents
       .map((event, index) => (provisionalIds.has(event.id) && !eventCarriesOwnConsequence(event) ? index : -1))
       .filter((index) => index >= 0));
@@ -16585,14 +16625,27 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
 //                                  own in the prompt.
 //
 // The folded contract is larger than the one it replaces, and a provider can
-// refuse a function declaration for its size alone (geminiSchema.js). So a
-// folded request that a provider refuses outright is asked again the old way,
-// and the rest of the session's skips are asked that way from the start. Its
-// events are then written as they come: the turn review that checked them in
-// one request after it is gone ("remove the stuff relating to those things
-// entirely", the owner, 2026-11-07), so the board does not move and no agent
-// reports on those skips, and nothing is folded into the history document.
-let foldedSkipRefused = false;
+// refuse a function declaration for its size alone (geminiSchema.js). So each
+// skip weighs its function before it asks (foldedSkip.js fitSkipRiders): the
+// riders that would take it past the ceiling are left out of that skip, the
+// history field with no fold due first, then a due fold or the agents'
+// reports, which wait for the next skip, and the board last. The ceiling is
+// FOLDED_SKIP_SCHEMA_BUDGET, under the size Gemini took.
+//
+// A folded request that a provider refuses outright all the same is asked
+// again the old way, with the lean contract that has always gone through: that
+// skip's board does not move, its agents report next skip, and its fold waits.
+// Once the old way has worked the ceiling drops below what was refused
+// (ceilingAfterRefusal), so the next skip folds again carrying at least one
+// rider fewer, and each refusal after that takes one more off, for the rest of
+// the session.
+let foldedSkipCeiling = FOLDED_SKIP_SCHEMA_BUDGET;
+// The riders the last skip left out that had a job to do, which the next skip
+// leaves out after the others (fitSkipRiders `waited`).
+let skipRidersWaiting = [];
+
+// A function's size as Gemini is sent it, which is what its limit is on.
+const geminiFunctionChars = (tool) => JSON.stringify(toGeminiSchema(tool?.schema ?? {})).length;
 
 // What a folded skip carries besides its events, gathered once before its first
 // request: the doubted board entries a fresh agent can now settle, the agents
@@ -16631,14 +16684,17 @@ const prepareFoldedSkip = async ({ bundle, originDate, variables, campaignId }) 
       console.warn(`[spycraft] the brief for the agent in ${normalizeString(spy?.target)} could not be built; it reports next skip.`, error?.message || error);
     }
   }
-  // The fold of the history document, when one is due (prepareSkipHistoryFold).
-  // A fold that cannot be prepared is one the skip does not carry: the pass
-  // after the skip then decides, as it does for any skip that is not folded.
-  let history = { separate: true };
+  // The fold of the history document, when one is due (prepareSkipHistoryFold),
+  // else null. A fold that cannot be prepared is one the skip does not carry,
+  // exactly as when none is due: nothing asks for it after the skip (the pass
+  // that did went on 2026-11-07), so it waits for the next skip, which plans it
+  // again. Null, so nothing downstream reads a fold that was never asked as one
+  // that failed (foldedTurnReview, applySkipHistoryFold).
+  let history = null;
   try {
     history = await prepareSkipHistoryFold(bundle, { campaignId });
   } catch (error) {
-    console.warn("[ai] the history fold could not be prepared for this skip; it is left to the pass after it.", error?.message || error);
+    console.warn("[ai] the history fold could not be prepared for this skip; it waits for the next one.", error?.message || error);
   }
   return {
     board: boardShown,
@@ -16669,8 +16725,10 @@ const foldedTurnReview = ({ context, merged, state }) => {
   const { bundle } = context;
   const review = { asked: false, folded: true, parts: {}, reasons: [], boardShownEvents: [], agentReports: [], actionOutcomePlan: null };
   // The history fold (applySkipHistoryFold reads this as `skipFold`). Nothing
-  // due before the skip means nothing is folded after it either.
-  const fold = state.foldedPrep?.history ?? null;
+  // due before the skip means nothing is folded after it either, and a fold
+  // the skip's function had no room for (fitSkipRiders) was never asked: it
+  // waits for the next skip, which is no failure of this one.
+  const fold = state.foldedHistoryCarried ? (state.foldedPrep?.history ?? null) : null;
   review.history = { due: false };
   const rawEvents = normalizeArray(merged.events);
   const rawHidden = normalizeArray(state.hiddenEvents);
@@ -16703,7 +16761,10 @@ const foldedTurnReview = ({ context, merged, state }) => {
   shapedHidden.forEach((event, index) => { if (event) written.set(event, hiddenOps[index]); });
   const shown = [...candidates, ...shapedHidden.filter(Boolean)];
 
-  if (state.foldedPrep?.board) {
+  // The board, where it was shown and the function offered its ops. Without
+  // them there is no board part: the board stands still, and no event is
+  // judged by whether it moved it (applySimulationResult provisionalIndexes).
+  if (state.foldedPrep?.board && state.foldedBoardCarried) {
     const lifted = liftBoardOps(shown, (event) => written.get(event));
     const salvaged = salvageBySchema(
       normalizeGameplayPayload("projects", { projectOps: lifted }),
@@ -16749,8 +16810,11 @@ const foldedTurnReview = ({ context, merged, state }) => {
     boardOps: normalizeArray(review.parts.board?.projectOps).length,
     boardKept: Boolean(review.parts.board),
     agentReports: review.agentReports.length,
-    agentsAsked: jobs.length,
-    history: !review.history ? "left to the pass after the skip" : !review.history.due ? "not due" : review.history.ok ? "folded" : `waits (${review.history.reason})`,
+    agentsAsked: normalizeArray(state.foldedLeftOut).includes("agentReports") ? 0 : jobs.length,
+    leftOut: normalizeArray(state.foldedLeftOut),
+    history: review.history.due
+      ? (review.history.ok ? "folded" : `waits (${review.history.reason})`)
+      : state.foldedPrep?.history && !state.foldedHistoryCarried ? "left out to fit; waits for the next skip" : "not due",
   }, { verbose: true });
   return review;
 };
@@ -16843,11 +16907,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   const gmChangeNarration = renderGmChangeNarration(gmChangesForRound(bundle.world, bundle.game?.round));
 
   // Whether this skip is the folded one (see "The folded time skip" above):
-  // every skip is, with requests saved or not, unless a provider has
-  // refused the folded request this session. Decided once, when the skip starts,
-  // and kept through a held segment's retry: the segments already in hand were
-  // written under it.
-  if (state.folded === undefined) state.folded = !foldedSkipRefused;
+  // every skip starts folded, carrying what fits under the session's ceiling
+  // (each segment weighs its own function, below). Decided once, when the skip
+  // starts, and kept through a held segment's retry: the segments already in
+  // hand were written under it. Only a refusal turns it off, for this skip.
+  if (state.folded === undefined) state.folded = true;
   if (state.folded && !state.foldedPrep) state.foldedPrep = await prepareFoldedSkip({ bundle, originDate, variables, campaignId: context.campaignId });
   if (!Array.isArray(state.covertOperations)) {
     state.covertOperations = isActiveFeatureEnabled("espionage")
@@ -17005,16 +17069,57 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // A folded skip's own additions (see "The folded time skip" above). The
       // agents report once, at the end of the last segment, when every event
       // they have to agree with is written.
-      const agentJobs = state.folded && isFinalSegment ? normalizeArray(state.foldedPrep?.agentJobs) : [];
+      const dueAgentJobs = state.folded && isFinalSegment ? normalizeArray(state.foldedPrep?.agentJobs) : [];
       // So does the history fold, when one is due and this skip carries it
       // (prepareSkipHistoryFold): last of all, as a job of its own.
-      const historyJob = state.folded && isFinalSegment ? buildSkipHistoryJob(state.foldedPrep?.history?.brief) : "";
+      const dueHistoryJob = state.folded && isFinalSegment ? buildSkipHistoryJob(state.foldedPrep?.history?.brief) : "";
+      // What this segment's function carries, weighed before the prompt is
+      // built so the prompt asks for nothing the function leaves out
+      // (foldedSkip.js fitSkipRiders). The board and the history field are
+      // offered on every folded segment, so the function is the same from turn
+      // to turn where it fits (a provider caches it with the prompt); the
+      // agents' reports only where agents are due. The last segment's choice is
+      // the one remembered for the next skip.
+      let riders = { board: false, agentReports: false, history: false };
+      if (state.folded) {
+        const baseTool = await jumpToolSent(mode === "auto" ? "autoJumpForward" : "jumpForward", segmentVariables);
+        const fit = fitSkipRiders({
+          wanted: { board: true, agentReports: dueAgentJobs.length > 0, history: true },
+          historyDue: Boolean(dueHistoryJob),
+          // A skip shown no board has no use for its ops beyond keeping the function the same.
+          boardShown: Boolean(state.foldedPrep?.board),
+          sizeOf: (carried) => geminiFunctionChars(foldJumpTool(baseTool, carried)),
+          ceiling: foldedSkipCeiling,
+          waited: skipRidersWaiting,
+        });
+        riders = fit.riders;
+        state.foldedChars = fit.chars;
+        if (isFinalSegment) {
+          skipRidersWaiting = ridersThatWaited(fit.leftOut, { historyDue: Boolean(dueHistoryJob) });
+          state.foldedLeftOut = fit.leftOut;
+        }
+        if (fit.leftOut.length) {
+          logDebugEvent("turn", `Folded skip: ${fit.leftOut.join(", ")} left out of this request to keep its function under ${foldedSkipCeiling} characters; ${fit.leftOut.includes("board") ? "the board stands still this skip, and " : ""}what was left out waits for the next skip.`, {
+            chars: fit.chars,
+            ceiling: foldedSkipCeiling,
+            leftOut: fit.leftOut,
+            segmentIndex,
+          }, { verbose: true });
+        }
+      }
+      const agentJobs = riders.agentReports ? dueAgentJobs : [];
+      const historyJob = riders.history ? dueHistoryJob : "";
       const foldedVariables = {
         foldedSkip: true,
-        foldedBoardDoubts: normalizeString(state.foldedPrep?.boardDoubts),
+        // The board's rules are the folded ones only where its ops can be written.
+        foldedBoard: riders.board,
+        foldedBoardDoubts: riders.board ? normalizeString(state.foldedPrep?.boardDoubts) : "",
         foldedAgentReports: buildFoldedAgentReportsBlock(agentJobs, focusContext.playerName),
         foldedRegionTypeRules: normalizeString(state.foldedPrep?.regionTypeRules),
         foldedHistoryJob: historyJob,
+        // Whether the function offers the history field at all, so the prompt
+        // says to leave it out only where it is there to be left out.
+        foldedHistoryField: riders.history,
       };
       // Every provider response this segment causes, so a contract the provider
       // would not take can be told from an answer that was simply no good.
@@ -17037,16 +17142,14 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           statuses.push(Number(status));
           spend.onRequest?.(status);
         },
-        // The same contract on every folded skip of a game, whether or not this one
-        // has a board to keep or a history fold: a provider caches the functions
-        // with the prompt, and a function that changes from turn to turn throws
-        // the cached prompt away with it. A rider with no job in the prompt is left
-        // empty, and its answer is read only where there is one (the history's
-        // below; foldedTurnReview for the board). The agents' reports are the
-        // exception, offered only on a skip that has agents due: with them every
-        // skip's function would be some 2,200 characters longer, past the size
-        // Gemini refused a skip's function at (foldedSkipSent.test.js).
-        ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, { board: true, agentReports: agentJobs.length > 0, history: true }) } : {}),
+        // The riders weighed above (fitSkipRiders): the same contract on every
+        // folded skip of a game where it fits, whether or not this one has a
+        // board to keep or a history fold, since a provider caches the functions
+        // with the prompt and a function that changes from turn to turn throws
+        // the cached prompt away with it. A rider with no job in the prompt is
+        // left empty, and its answer is read only where there is one (the
+        // history's below; foldedTurnReview for the board).
+        ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, riders) } : {}),
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
@@ -17273,7 +17376,10 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       });
 
       let answer = null;
-      if (state.folded) {
+      // A folded segment that carries no rider sends the lean contract: a
+      // refusal of that is no refusal of the riders, and asking the same thing
+      // again would change nothing.
+      if (state.folded && (riders.board || riders.agentReports || riders.history)) {
         let refused = false;
         let refusal = null;
         // A call that ended on the connection (the server could not be reached,
@@ -17310,12 +17416,20 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           statuses.length = 0;
           answer = await askSegment(false);
           // It was the contract: the same skip went through without it. The
-          // rest of the session's skips start the old way.
-          if (answer.generation?.source !== "fallback") foldedSkipRefused = true;
+          // next skip folds again under a lower ceiling (ceilingAfterRefusal),
+          // so it carries at least one rider fewer than was refused.
+          if (answer.generation?.source !== "fallback") {
+            foldedSkipCeiling = ceilingAfterRefusal(foldedSkipCeiling, state.foldedChars);
+            logDebugEvent("turn", `Folded skip: later skips fold again, carrying what fits under ${foldedSkipCeiling} characters.`, { refusedChars: state.foldedChars }, { verbose: true });
+          }
         }
       } else {
-        answer = await askSegment(false);
+        answer = await askSegment(state.folded);
       }
+      // What the answer taken carried, for foldedTurnReview: the board's ops,
+      // if any segment's function offered them, and the history fold.
+      if (state.folded && riders.board) state.foldedBoardCarried = true;
+      if (isFinalSegment) state.foldedHistoryCarried = state.folded && Boolean(historyJob);
       const { generation: segmentGeneration, payload, removed: removedFromSegment } = answer;
       // The agents' reports leave the payload here (foldedTurnReview files
       // them); nothing between this and the write reads the field.
@@ -18100,14 +18214,16 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // skip is a request of its own any more.
   const folded = Boolean(state.folded);
   if (!folded) {
-    // Not this skip's to write: the board is moved by its own pass, and an op
-    // left on an event would be applied a second time by the event itself.
+    // Not this skip's to write: the old way's contract has no board, nothing
+    // after the skip moves it any more, and an op left on an event would be
+    // applied by the event itself, outside the board's own machinery. The
+    // board stands still this skip.
     const before = [...normalizeArray(merged.events), ...normalizeArray(state.hiddenEvents)];
     merged.events = normalizeArray(merged.events).map(withoutBoardOps);
     state.hiddenEvents = normalizeArray(state.hiddenEvents).map(withoutBoardOps);
     const after = [...merged.events, ...state.hiddenEvents];
     if (before.some((event, index) => event !== after[index])) {
-      noteReceipt(state.receipt, "dropped", "impacts.projectOps is not part of this answer: the Projects board is moved by its own pass after the events. The ops you wrote there were left out.");
+      noteReceipt(state.receipt, "dropped", "impacts.projectOps was not part of this answer: the Projects board did not move this time. The ops you wrote there were left out; the events stand, and a later period can move the board.");
     }
   } else {
     // A held turn is finished again on this same state (one held on the
@@ -18210,7 +18326,12 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     generation: state.generation,
     hiddenEvents: state.hiddenEvents,
     filedEvents: state.filedEvents,
-    boardProvisionalEventIds: state.boardProvisionalEventIds,
+    // A major event that rests only on a board entry is proved by the board's
+    // ops, which only a folded skip's board part carries. Without one (a skip
+    // asked the old way, or one whose function had no room for the board)
+    // nothing writes ops for it, so it is no longer provisional: it stands as
+    // written, as it would on a board that did not move.
+    boardProvisionalEventIds: review.parts?.board ? state.boardProvisionalEventIds : [],
     receipt: state.receipt,
     covertOperations: normalizeString(state.generation?.source) === "fallback" ? [] : normalizeArray(state.covertOperations),
     scriptedEventState: state.scriptedEventState,
