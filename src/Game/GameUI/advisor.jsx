@@ -371,6 +371,11 @@ const AdvisorActionProposalCard = ({ proposal, receipt, queueAction, targetActio
         {proposal.text && proposal.text !== name && (
             <div data-no-translate style={{ fontSize: "0.73rem", opacity: 0.77, marginTop: "0.3rem" }}>{proposal.text}</div>
         )}
+        {proposal.operation === "edit" && targetAction?.status === "planned" && (
+            <div style={{ marginTop: "0.4rem", fontSize: "0.7rem", color: "#fde68a" }}>
+                This updates the existing queued Action <strong data-no-translate>{targetAction.title}</strong>. It will not create a separate Action.
+            </div>
+        )}
         {proposal.targetId && (
             <div style={{ fontSize: "0.65rem", opacity: 0.55, marginTop: "0.3rem" }}>Existing Action: <span data-no-translate>{proposal.targetId}</span></div>
         )}
@@ -382,7 +387,7 @@ const AdvisorActionProposalCard = ({ proposal, receipt, queueAction, targetActio
                 <button type="button" disabled={busy || disabled} onClick={() => doAction(onCancel, "The Action could not be removed from the queue.")} style={{ border: "1px solid rgba(251,191,36,0.4)", borderRadius: "7px", background: "rgba(251,191,36,0.08)", color: "#fde68a", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>{busy ? "Cancelling…" : "Cancel"}</button>
             )}
             {canProceed && (
-                <button type="button" disabled={busy || disabled} onClick={() => doAction(onProceed, "The Action was not queued.")} style={{ border: "1px solid rgba(147,197,253,0.6)", borderRadius: "7px", background: "rgba(59,130,246,0.22)", color: "#dbeafe", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>{busy ? "Queueing…" : proposal.operation === "remove" ? "Proceed / Remove" : "Proceed / Queue"}</button>
+                <button type="button" disabled={busy || disabled} onClick={() => doAction(onProceed, "The Action was not queued.")} style={{ border: "1px solid rgba(147,197,253,0.6)", borderRadius: "7px", background: "rgba(59,130,246,0.22)", color: "#dbeafe", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>{busy ? "Processing…" : proposal.operation === "remove" ? "Proceed / Remove" : proposal.operation === "edit" ? "Proceed / Update" : "Proceed / Queue"}</button>
             )}
             {["resolved", "updated", "removed", "conflict", "no-longer-queued", "target-unavailable", "target-resolved"].includes(state) && onOpenActions && (
                 <button type="button" onClick={onOpenActions} style={{ border: "1px solid rgba(255,255,255,0.22)", borderRadius: "7px", background: "transparent", color: "#e4e4e7", padding: "0.3rem 0.55rem", cursor: "pointer" }}>Open Actions</button>
