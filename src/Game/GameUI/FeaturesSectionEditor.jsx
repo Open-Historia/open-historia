@@ -49,11 +49,12 @@ const ScriptedEventsCheck = ({ text, currentDate, includeOrigin, isGame }) => {
 // `currentDate` is the game's date (the scenario's start in its own editor),
 // and `firstSkipAhead` says the next skip is the game's first, which covers
 // that day too: what the Scripted events check measures a beat against.
+// `scenarioId` is whose map the scripted events' region picker draws.
 // `world` is the world a scripted event's conditions pick their polities and
 // institutions from (ScriptedEventsEditor). `extras` holds what a feature's card
 // shows under its settings, by the feature's key: the scenario editor's war
 // settings, military and fronts under Wars.
-const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, world, onChange, styles, currentDate = "", firstSkipAhead = true, extras = null }) => {
+const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, world, scenarioId = "", onChange, styles, currentDate = "", firstSkipAhead = true, extras = null }) => {
   const isGame = kind === "game";
   const base = normalizeFeatureSettings(scenarioFeatures);
   const effective = isGame ? resolveFeatures(scenarioFeatures, features) : normalizeFeatureSettings(features);
@@ -151,6 +152,7 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, world, onChan
                             isGame={isGame}
                             overridden={!isGame || overridden}
                             world={world}
+                            scenarioId={scenarioId}
                             styles={styles}
                             onChange={(next) => setFeature(definition.key, { [setting.key]: next })}
                             onUseScenarioDefault={() => setFeature(definition.key, { [setting.key]: undefined })}

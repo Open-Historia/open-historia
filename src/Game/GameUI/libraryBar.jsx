@@ -2518,6 +2518,7 @@ const EditorDrawer = ({
           features={formState.features}
           scenarioFeatures={kind === "scenario" ? formState.features : formState.scenarioFeatures}
           world={details?.data?.world ?? {}}
+          scenarioId={details?.scenario?.id || details?.game?.scenarioId || ""}
           onChange={(next) => onChange("features", next)}
           styles={{ actionButtonStyle: themeButtonStyle, fieldLabelStyle, inputStyle }}
           currentDate={formState.gameDate}

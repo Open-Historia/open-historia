@@ -54,6 +54,26 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "make it so in the scripted events there is a mini map thing so you can easily select regions for things instead
+    // of needing to manually type out each one"; "upgrade the scripted events editor so there is an easy thing to add
+    // Impacts yourself"; "make it so events can remove all claims on territory on a country" (the owner, 2026-11-09):
+    // ScriptedRegionPicker.jsx, ScriptedImpactsEditor.jsx, server/scriptedImpacts.js, AI/scriptedEventImpacts.js.
+    id: "2026-11-scripted-event-impacts",
+    kind: "minor",
+    date: "2026-11-09",
+    channel: "beta",
+    banners: [
+      {
+        title: "Scripted events: pick regions and impacts on a map",
+        items: [
+          "Pick regions on a map of the scenario and their names go into a scripted event's text, spelled exactly as the map spells them.",
+          "Add impacts to a scripted event or an outcome: regions changing hands, new countries, annexations, claims, occupations and new leaders. They happen on the map exactly as set when the event fires.",
+          "An impact can remove every claim on a country's territory, or only one claimant's.",
+        ],
+      },
+    ],
+  },
+  {
     // "it seems sometimes events to do with war aren't being represented on the map"; "Script Events ... seem to fail
     // transfer specifically named regions ... a polity isn't annexed or dismantled completely ... claims staying from
     // the dismantled polity" (players, 2026-11); "make it so events can remove all claims on territory on a country"
