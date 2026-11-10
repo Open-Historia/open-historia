@@ -104,6 +104,16 @@ Windows and Linux it offers new versions itself. On macOS, or to update by hand,
 install the newest download from the same release over the top: your saves,
 scenarios and map data are kept.
 
+#### Code signing policy
+
+Windows builds of Open Historia are code-signed through SignPath Foundation. Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org). A release whose Windows build was signed says so on its release page.
+
+- **What is signed:** the Windows installer, the app's program and its system speech program, built from the source in this repository. Electron's own runtime libraries are left as Electron ships them.
+- **Where signed builds come from:** only this repository's release workflows ([desktop-installer.yml](.github/workflows/desktop-installer.yml), [desktop-beta.yml](.github/workflows/desktop-beta.yml)) on GitHub-hosted runners. Nothing built anywhere else is signed.
+- **Team roles:** committers and reviewers: [Arkniem](https://github.com/Arkniem) (owner), who reviews every outside contribution before it is merged. Approvers: [Arkniem](https://github.com/Arkniem), who approves each signing request by hand.
+- **Privacy:** what the app sends, and to whom (the player's own AI provider, the community hub, update checks, the map download), is set out in the [privacy policy](https://openhistoria.com/privacy/).
+- **Other systems:** the macOS app is not signed (see above). The Android app is signed with the project's own release key.
+
 
 #### Android app
 
