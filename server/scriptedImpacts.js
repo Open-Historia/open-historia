@@ -66,19 +66,17 @@ export const normalizeImpactRows = (value) => array(value)
   .filter(Boolean)
   .slice(0, SCRIPTED_IMPACT_LIMIT);
 
-// "Remove all claims on a country's territory" as one regionClaims entry. The
-// engine's op for it may still change shape; this is the one place to follow it.
+// "Remove all claims on a country's territory" as one regionClaims entry, in
+// the engine's own shape: one claimant's claims and disputes on that country's
+// land, or with allClaimants every claimant's (claimantCode then names the
+// country itself, so the field still holds a real name).
 export const clearCountryClaimsEntry = ({ country, claimant = "" } = {}) => {
   const name = text(country, 160);
   if (!name) return null;
   const who = text(claimant, 160);
-  return {
-    regionId: `country: ${name}`,
-    regionIds: [`country: ${name}`],
-    regionName: name,
-    drop: true,
-    ...(who ? { claimantCode: who } : { clearAll: true }),
-  };
+  return who
+    ? { regionId: `country: ${name}`, claimantCode: who, drop: true }
+    : { regionId: `country: ${name}`, claimantCode: name, drop: true, allClaimants: true };
 };
 
 const regionRefs = (row) => array(row.regions).map((region) => ({ regionId: region.id, regionName: region.name }));
@@ -205,7 +203,7 @@ const pickFields = (entry, fields) => {
 const FAMILY_FIELDS = {
   regionTransfers: { fields: ["regionId", "regionName", "fromCode", "toCode", "note", "basis", "wholeCountry"], needs: ["regionId", "toCode"] },
   regionControlOps: { fields: ["op", "regionId", "regionName", "fromCode", "toCode", "actorCode", "claimantCode", "clearAll", "note", "basis", "wholeCountry"], needs: ["op", "regionId"] },
-  regionClaims: { fields: ["regionId", "regionIds", "regionName", "claimantCode", "drop", "clearAll", "note"], needs: ["regionId"] },
+  regionClaims: { fields: ["regionId", "regionName", "claimantCode", "drop", "allClaimants", "note"], needs: ["regionId"] },
   polityChanges: { fields: ["operation", "code", "name", "color", "aliases", "note", "stats"], needs: ["operation", "code"] },
 };
 

@@ -61,17 +61,17 @@ test("an annexation and a dissolution hand over the whole country and then disso
 test("removing every claim on a country's territory is one regionClaims clear entry, with or without a claimant", () => {
   assert.deepEqual(clearCountryClaimsEntry({ country: "Moldova" }), {
     regionId: "country: Moldova",
-    regionIds: ["country: Moldova"],
-    regionName: "Moldova",
+    claimantCode: "Moldova",
     drop: true,
-    clearAll: true,
+    allClaimants: true,
   });
   assert.deepEqual(clearCountryClaimsEntry({ country: "Moldova", claimant: "Romania" }), {
     regionId: "country: Moldova",
-    regionIds: ["country: Moldova"],
-    regionName: "Moldova",
-    drop: true,
     claimantCode: "Romania",
+    drop: true,
+  });
+  assert.deepEqual(normalizeScriptedImpacts({ regionClaims: [clearCountryClaimsEntry({ country: "Moldova" })] }), {
+    regionClaims: [{ regionId: "country: Moldova", claimantCode: "Moldova", drop: true, allClaimants: true }],
   });
   assert.equal(clearCountryClaimsEntry({ country: " " }), null);
   assert.deepEqual(

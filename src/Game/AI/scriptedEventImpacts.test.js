@@ -81,6 +81,19 @@ test("the model is told what each scripted event carries, by name and never by i
     describeScriptedImpacts(compileImpactRows([{ type: "clear_country_claims", polity: "Moldova" }, { type: "annex", polity: "Transnistria", to: "Moldova" }])),
     "Transnistria is dissolved; all of Transnistria passes to Moldova; every claim on Moldova is removed",
   );
+  assert.equal(
+    describeScriptedImpacts(compileImpactRows([{ type: "clear_country_claims", polity: "Moldova", claimant: "Romania" }])),
+    "Romania gives up every claim on Moldova",
+  );
+  const merged = mergeAuthoredImpacts(
+    { regionClaims: [{ regionId: "country: Moldova", claimantCode: "Romania", drop: true }, { regionId: "region: Ialoveni", claimantCode: "Romania" }] },
+    compileImpactRows([{ type: "clear_country_claims", polity: "Moldova" }]),
+  );
+  assert.deepEqual(merged.regionClaims.map((entry) => `${entry.regionId}|${entry.claimantCode}|${entry.allClaimants ? "all" : ""}`), [
+    "country: Moldova|Romania|",
+    "region: Ialoveni|Romania|",
+    "country: Moldova|Moldova|all",
+  ]);
 });
 
 const dissolutionWorld = () => ({

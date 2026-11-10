@@ -30,7 +30,7 @@ export const scriptedImpactsOf = (beat) => {
 
 const bareName = (value) => lower(value).normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/^region:\s*/, "");
 const regionKeys = (entry) => [bareName(entry?.regionId), bareName(entry?.regionName)].filter(Boolean);
-const claimKey = (entry) => `${bareName(entry?.regionId)}|${lower(entry?.claimantCode)}`;
+const claimKey = (entry) => `${bareName(entry?.regionId)}|${entry?.allClaimants ? "*" : lower(entry?.claimantCode)}`;
 const polityKey = (entry) => `${lower(entry?.operation)}|${lower(entry?.code)}`;
 
 // The answer's impacts with the author's added: what the model wrote for the
@@ -138,8 +138,8 @@ export const describeScriptedImpacts = (impactsInput) => {
     else if (op === "contest") parts.push(`${group[0].actorCode} contests ${names}`);
     else if (op === "clear_contest") parts.push(`the fighting over ${names} ends`);
   }
-  for (const group of groupBy(array(impacts.regionClaims), (entry) => `${entry.claimantCode || ""}|${entry.drop ? "drop" : "add"}|${/^country:/i.test(text(entry.regionId)) ? "country" : ""}`)) {
-    const claimant = text(group[0].claimantCode);
+  for (const group of groupBy(array(impacts.regionClaims), (entry) => `${entry.allClaimants ? "*" : entry.claimantCode || ""}|${entry.drop ? "drop" : "add"}|${/^country:/i.test(text(entry.regionId)) ? "country" : ""}`)) {
+    const claimant = group[0].allClaimants ? "" : text(group[0].claimantCode);
     if (/^country:/i.test(text(group[0].regionId))) {
       const countries = listNames(group.map((entry) => text(entry.regionName) || text(entry.regionId).replace(/^country:\s*/i, "")));
       parts.push(claimant ? `${claimant} gives up every claim on ${countries}` : `every claim on ${countries} is removed`);
