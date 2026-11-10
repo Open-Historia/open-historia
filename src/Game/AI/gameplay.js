@@ -1,6 +1,6 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { nextTask } from "../../runtime/nextTask.js";
-import { callAI, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
+import { callAI, geminiDeclaresTaskFunction, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
 import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { clampTimelineDates, validatePregameEvents, validateTimelineDates } from "./timelineDates.js";
@@ -320,7 +320,7 @@ import {
   ridersThatWaited,
   withoutBoardOps,
 } from "./foldedSkip.js";
-import { toGeminiSchema } from "./geminiSchema.js";
+import { geminiDeclaredChars } from "./geminiAnswer.js";
 import { renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment, spySealingWorks } from "../../runtime/spySeal.js";
 import {
@@ -16629,8 +16629,18 @@ let foldedSkipCeiling = FOLDED_SKIP_SCHEMA_BUDGET;
 // leaves out after the others (fitSkipRiders `waited`).
 let skipRidersWaiting = [];
 
-// A function's size as Gemini is sent it, which is what its limit is on.
-const geminiFunctionChars = (tool) => JSON.stringify(toGeminiSchema(tool?.schema ?? {})).length;
+// What a skip's request declares, as Gemini is sent it, which is what its limit
+// is on (geminiAnswer.js geminiDeclaredChars): the skip's function, and the
+// lookup functions beside it where Gemini is asked for a call of that function
+// (main.jsx geminiDeclaresTaskFunction). A Gemini skip asked for as JSON text
+// declares neither beside the other: its lookup round has the lookup functions
+// alone and its answer none, so only the skip's function is weighed, for the
+// call it falls back on and for every other provider. Not the size the prompt
+// fingerprint logs, which is the schema as written (a 30,234 there was 28,894
+// here), and before 2026-11-10 not the lookup functions either: a player's skips
+// were refused with 25 of them beside a function weighed at 28,894, under a
+// ceiling of 29,684, and the next lowered it by one rider at a time.
+const skipDeclaredChars = (tool, beside = []) => geminiDeclaredChars([tool, ...beside]);
 
 // What a folded skip carries besides its events, gathered once before its first
 // request: the doubted board entries a fresh agent can now settle, the agents
@@ -17067,13 +17077,20 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // the one remembered for the next skip.
       let riders = { board: false, agentReports: false, history: false };
       if (state.folded) {
-        const baseTool = await jumpToolSent(mode === "auto" ? "autoJumpForward" : "jumpForward", segmentVariables);
+        const skipTaskKey = mode === "auto" ? "autoJumpForward" : "jumpForward";
+        const baseTool = await jumpToolSent(skipTaskKey, segmentVariables);
+        // The lookup functions the request will declare beside the skip's
+        // function, the same set askSegment hands it; none where they will not
+        // be beside it (skipDeclaredChars).
+        const declaredBeside = geminiDeclaresTaskFunction(skipTaskKey, { watched: Boolean(showEvents) })
+          ? normalizeArray(withFrontOrderFunction(buildTaskLookups(segmentBundle), frontOrderCall(context))?.tools)
+          : [];
         const fit = fitSkipRiders({
           wanted: { board: true, agentReports: dueAgentJobs.length > 0, history: true },
           historyDue: Boolean(dueHistoryJob),
           // A skip shown no board has no use for its ops beyond keeping the function the same.
           boardShown: Boolean(state.foldedPrep?.board),
-          sizeOf: (carried) => geminiFunctionChars(foldJumpTool(baseTool, carried)),
+          sizeOf: (carried) => skipDeclaredChars(foldJumpTool(baseTool, carried), declaredBeside),
           ceiling: foldedSkipCeiling,
           waited: skipRidersWaiting,
         });
@@ -17088,6 +17105,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             chars: fit.chars,
             ceiling: foldedSkipCeiling,
             leftOut: fit.leftOut,
+            ...(declaredBeside.length ? { lookupFunctionsBeside: declaredBeside.length } : {}),
             segmentIndex,
           }, { verbose: true });
         }

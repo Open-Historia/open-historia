@@ -180,8 +180,15 @@ test("a refused folded skip no longer turns folding off for the session", () => 
   assert.match(body, /skipRidersWaiting = ridersThatWaited\(fit\.leftOut, \{ historyDue: Boolean\(dueHistoryJob\) \}\);/);
   // Weighed against the function the request will really carry: the task's
   // own tool for this segment's variables, as runJsonTask builds it.
-  assert.match(body, /const baseTool = await jumpToolSent\(mode === "auto" \? "autoJumpForward" : "jumpForward", segmentVariables\);/);
-  assert.match(body, /sizeOf: \(carried\) => geminiFunctionChars\(foldJumpTool\(baseTool, carried\)\),/);
+  assert.match(body, /const skipTaskKey = mode === "auto" \? "autoJumpForward" : "jumpForward";/);
+  assert.match(body, /const baseTool = await jumpToolSent\(skipTaskKey, segmentVariables\);/);
+  assert.match(body, /sizeOf: \(carried\) => skipDeclaredChars\(foldJumpTool\(baseTool, carried\), declaredBeside\),/);
+  // With the lookup functions the request declares beside it, the same set the
+  // skip is asked with, where Gemini is asked for a call of the function (a
+  // player's log, 2026-11-10: refused at 28,894 with 25 of them beside it).
+  assert.match(body, /const declaredBeside = geminiDeclaresTaskFunction\(skipTaskKey, \{ watched: Boolean\(showEvents\) \}\)\s*\n\s*\? normalizeArray\(withFrontOrderFunction\(buildTaskLookups\(segmentBundle\), frontOrderCall\(context\)\)\?\.tools\)\s*\n\s*: \[\];/);
+  assert.match(body, /lookups: withFrontOrderFunction\(buildTaskLookups\(segmentBundle\), frontOrderCall\(context\)\),/);
+  assert.match(gameplaySource, /const skipDeclaredChars = \(tool, beside = \[\]\) => geminiDeclaredChars\(\[tool, \.\.\.beside\]\);/);
   assert.match(functionBody("runJsonTask"), /const ratedTool = taskToolFor\(taskKey, statContract, variables\);/);
   // And the prompt asks for nothing the function leaves out.
   assert.match(body, /foldedBoard: riders\.board,/);
