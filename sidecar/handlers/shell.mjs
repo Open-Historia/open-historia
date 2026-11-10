@@ -297,6 +297,7 @@ export const register = (ctx) => {
       const state = { on: false, packed: false, known: new Set(), failed: null, modelFailed: false };
       const router = aiKit().createTranslationRouter({
         isAiOn: () => state.on,
+        mayAskAi: () => engine.requestBudget.backgroundAiAllowance().allowed,
         askAi: async (batch) => engine.aiMain.callAI(aiKit().aiTranslationPrompt({ language: code, name: i18n.languageDisplayName(code), packed: state.packed, count: batch.length }), [
           { role: "user", parts: [{ text: JSON.stringify(batch) }] },
         ], { languageMode: "none", taskKey: "translation", requestKind: engine.requestBudget.BACKGROUND_REQUEST }),
