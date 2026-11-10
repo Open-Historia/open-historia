@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "why does it write all the events now before giving them to you instead of each event appearing as its written" (the owner,
+    // 2026-11-10): AI/geminiAnswer.js asks a Gemini skip's lookups first and its answer as streamed text.
+    id: "2026-11-gemini-live-events",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Events appear as they are written again",
+        items: [
+          "On Gemini with lookup functions on, a time skip's events appear one by one as the AI writes them again, instead of all at once at the end.",
+          "Those skips no longer waste a request on a first attempt Gemini refused.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it so in the scripted events there is a mini map thing so you can easily select regions for things instead
     // of needing to manually type out each one"; "upgrade the scripted events editor so there is an easy thing to add
     // Impacts yourself"; "make it so events can remove all claims on territory on a country" (the owner, 2026-11-09):

@@ -95,7 +95,10 @@ export const assignAgentReports = (jobs, reports, { sameName = (left, right) => 
 // them (a shared game's host sends more: the events' audience and the players'
 // advice). So each skip weighs its function before it asks, against
 // FOLDED_SKIP_SCHEMA_BUDGET, and leaves out what does not fit
-// (foldedSkipSent.test.js builds every combination).
+// (foldedSkipSent.test.js builds every combination). Weighed with the lookup
+// functions declared beside it where there are any, since Gemini counts those
+// against the same ceiling (gameplay.js skipDeclaredChars): with 25 of them
+// beside it, a skip's function was refused at 28,894.
 export const FOLDED_SKIP_SCHEMA_BUDGET = 30400;
 
 // The riders a skip carries: { board, agentReports, history }, and which of

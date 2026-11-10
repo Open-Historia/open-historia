@@ -233,34 +233,42 @@ test("the format block says it is strict JSON, what the marks mean, and to write
 });
 
 test("a Gemini skip is asked for as JSON text with this block, and no schema is sent", () => {
-  const source = readFileSync(new URL("./main.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
-  const body = source.slice(source.indexOf("async function callGemini("), source.indexOf("async function callAnthropic("));
-  assert.ok(body.length > 1000, "callGemini is in main.jsx");
-  assert.match(body, /const canAnswerAsText = Boolean\(tool && !lookupDeclarations\.length\);/);
-  assert.match(body, /let jsonAnswer = canAnswerAsText && \(geminiFunctionCallRefusals\.has\(model\)\s*\n\s*\|\| \(typeof onToolStream === "function" && !geminiJsonAnswerRefusals\.has\(model\)\)\);/);
+  // The requests themselves are driven with a fake fetch in geminiAnswer.test.js;
+  // these are the lines that decide them.
+  const source = readFileSync(new URL("./geminiAnswer.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const body = source.slice(source.indexOf("export async function askGeminiAnswer("));
+  assert.ok(body.length > 1000, "askGeminiAnswer is in geminiAnswer.js");
+  assert.match(source, /export const geminiAnswersAsText = \(model, \{ watched = false \} = \{\}\) => geminiFunctionCallRefusals\.has\(model\)\s*\n\s*\|\| \(watched && !geminiJsonAnswerRefusals\.has\(model\)\);/);
+  assert.match(body, /let asText = Boolean\(tool\) && geminiAnswersAsText\(model, \{ watched: typeof onToolStream === "function" \}\);/);
   assert.match(body, /answerFormat \|\|= buildAnswerFormatBlock\(tool\.schema, \{ first: Object\.keys\(tool\.schema\?\.properties \?\? \{\}\)\[0\] \|\| "" \}\);/);
-  assert.match(body, /\.\.\.\(jsonAnswer \? \{ responseMimeType: "application\/json" \} : \{\}\),/);
+  assert.match(body, /\.\.\.\(form === "json" \? \{ responseMimeType: "application\/json" \} : \{\}\),/);
   assert.equal(/responseSchema/.test(body), false, "the skip's contract does not fit in one (measured), so none is sent");
-  assert.match(body, /\.\.\.\(jsonAnswer \? \[\{ text: answerFormatBlock\(\) \}\] : \[\]\),/, "its own part, after the prompt");
-  assert.match(body, /\.\.\.\(tool && !jsonAnswer \? \{\s*\n\s*tools: \[\{ functionDeclarations: \[/, "and no function is declared with it");
-  const refusal = body.slice(body.indexOf("if (jsonAnswer && !functionCallRefused && [400, 422].includes(response.status)"), body.indexOf("// The function call refused as a request"));
+  assert.match(body, /\.\.\.\(form === "json" \|\| form === "lookups" \? textAnswerParts\(\) : \[\]\),/, "its own part, after the prompt");
+  assert.match(body, /\{ text: answerFormatBlock\(\) \},/);
+  assert.match(body, /const declared = form === "call" \? \[tool, \.\.\.lookupDeclarations\] : form === "lookups" \? lookupDeclarations : \[\];/, "and the skip's function is never declared with it");
+  const refusal = body.slice(body.indexOf("if (asText && !functionCallRefused && [400, 422].includes(response.status)"), body.indexOf("// The function call refused as a request"));
   assert.ok(refusal.length > 100, "the JSON-text form refused: the function call");
-  assert.match(refusal, /jsonAnswer = false;\s*\n\s*jsonAnswerRefused = true;/);
+  assert.match(refusal, /asText = false;\s*\n\s*textRefused = true;/);
   assert.match(refusal, /attempt -= 1;\s*\n\s*continue;/, "a refusal of the form is asked again at once, and is not one of the attempts");
+  // callGemini hands every task to it.
+  const main = readFileSync(new URL("./main.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const callGemini = main.slice(main.indexOf("async function callGemini("), main.indexOf("async function callAnthropic("));
+  assert.match(callGemini, /return askGeminiAnswer\(\{/);
+  assert.equal(/responseMimeType/.test(callGemini), false);
 });
 
 // A player's log, 2026-11-06: thirty time skips refused as sent, 400 "Request contains an invalid argument", each
 // to the canned events. The function call refused is asked again as JSON text, once a call and then for the session.
 test("a Gemini function call refused as a request is asked again as JSON text, once, and so for the session", () => {
-  const source = readFileSync(new URL("./main.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
-  const body = source.slice(source.indexOf("async function callGemini("), source.indexOf("async function callAnthropic("));
+  const source = readFileSync(new URL("./geminiAnswer.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const body = source.slice(source.indexOf("export async function askGeminiAnswer("));
   const start = body.indexOf("// The function call refused as a request");
-  const refusal = body.slice(start, body.indexOf('throw refusedRequestError("Gemini",', start));
+  const refusal = body.slice(start, body.indexOf("throw io.refusedRequestError(", start));
   assert.ok(refusal.length > 100);
-  assert.match(refusal, /if \(!jsonAnswer && canAnswerAsText && !functionCallRefused && !jsonAnswerRefused\s*\n\s*&& \[400, 422\]\.includes\(response\.status\) && failure\.kind === "other"\) \{/,
+  assert.match(refusal, /if \(!asText && tool && !functionCallRefused && !textRefused\s*\n\s*&& \[400, 422\]\.includes\(response\.status\) && failure\.kind === "other"\) \{/,
     "only a refusal of the request itself: a key, a model, a spent allowance or a request too big fails the same either way");
-  assert.match(refusal, /jsonAnswer = true;\s*\n\s*functionCallRefused = true;/);
+  assert.match(refusal, /asText = true;\s*\n\s*functionCallRefused = true;/);
   assert.match(refusal, /attempt -= 1;\s*\n\s*continue;/, "asked again at once, not one of the attempts");
   assert.match(body, /if \(functionCallRefused\) geminiFunctionCallRefusals\.add\(model\);/, "and so for the rest of the session");
-  assert.match(source, /const geminiFunctionCallRefusals = new Set\(\);/);
+  assert.match(source, /export const geminiFunctionCallRefusals = new Set\(\);/);
 });
