@@ -582,6 +582,7 @@ import {
   normalizeScriptedEventState,
   planScriptedEvents,
 } from "./scriptedEventResolution.js";
+import { buildScriptedImpactsInstruction, ensureScriptedEventsWithImpacts } from "./scriptedEventImpacts.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
   EMPTY_RESPONSE_BODY_NOTE,
@@ -17163,7 +17164,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           targetDate,
           segmentTargetDate: segmentTarget,
           priorEvents: state.generatedSoFar,
-        }), buildScriptedEventsInstruction(scriptedBeats, { language: scriptedLanguage }), scriptedPoliticalInstruction, WRITING_REMINDER].filter(Boolean).join("\n\n"),
+        }), buildScriptedEventsInstruction(scriptedBeats, { language: scriptedLanguage }), buildScriptedImpactsInstruction(scriptedBeats), scriptedPoliticalInstruction, WRITING_REMINDER].filter(Boolean).join("\n\n"),
         validatePayload: withReceiptDraft(async (candidate, { attempt = 1, finalAttempt } = {}, draft) => {
           // Shape-of-story problems (event count, stray dates) are STRICT while a
           // retry remains — the model gets the exact error and usually fixes its
@@ -17283,7 +17284,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           if (scriptedBeats.length) {
             const stopKey = mode === "auto" ? dateKey(candidate?.stopDate) : null;
             const due = stopKey === null ? scriptedBeats : scriptedBeats.filter((beat) => dateKey(beat.date) <= stopKey);
-            const scripted = ensureScriptedEvents(candidate?.events, due, { language: scriptedLanguage });
+            const scripted = ensureScriptedEventsWithImpacts(candidate?.events, due, { language: scriptedLanguage });
             if (scripted.inserted.length) {
               candidate.events = scripted.events;
               sortTimelineEventsChronologically(candidate);

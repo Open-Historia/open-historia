@@ -1,6 +1,6 @@
 /*! Open Historia — gameplay features a scenario can switch off and a game can override © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Shared by the server store, the web store and the client, so it lives under
-// server/ and imports nothing (server code never imports src/).
+// server/ and imports nothing outside it (server code never imports src/).
 //
 // A scenario carries a COMPLETE configuration — every feature, every setting —
 // which is the default for every game made from it. A game carries only the
@@ -8,6 +8,8 @@
 // never overrode that field. Add a feature here and it appears in both editors
 // and in resolveFeatures with its defaults; gate the code it controls with
 // isFeatureEnabled (client: isActiveFeatureEnabled in src/runtime/gameFeatures.js).
+
+import { scriptedImpactFields } from "./scriptedImpacts.js";
 
 export const FEATURE_DEFINITIONS = Object.freeze([
   Object.freeze({
@@ -285,7 +287,7 @@ const normalizeScriptedCondition = (value) => {
   const type = String(value.type ?? "").trim().toLowerCase();
   if (!type) return null;
   const out = { type: type.slice(0, 80) };
-  for (const key of ["polityId", "warId", "institutionId", "overlordId", "eventId", "outcomeId", "regionId", "baseOwner", "status", "kind"]) {
+  for (const key of ["polityId", "warId", "institutionId", "overlordId", "eventId", "outcomeId", "regionId", "regionName", "baseOwner", "status", "kind"]) {
     const token = String(value[key] ?? "").trim().slice(0, 160);
     if (token) out[key] = token;
   }
@@ -377,7 +379,7 @@ const normalizeScriptedOutcomes = (value, parentId) => {
     ids.set(baseId, seen + 1);
     const id = seen ? `${baseId}-${seen + 1}`.slice(0, 160) : baseId;
     const title = String(entry.title ?? "").replace(/\s+/g, " ").trim().slice(0, 140) || scriptedEventTitle(body);
-    outcomes.push({ id, title, text: body, weight: normalizeScriptedOutcomeWeight(entry.weight, 1) });
+    outcomes.push({ id, title, text: body, weight: normalizeScriptedOutcomeWeight(entry.weight, 1), ...scriptedImpactFields(entry) });
   }
   return outcomes;
 };
@@ -426,6 +428,7 @@ export const normalizeScriptedEvents = (value) => {
       textMode: normalizeScriptedTextMode(entry.textMode ?? entry.wordingMode ?? entry.presentationMode),
       trigger: normalizeScriptedTrigger(entry.trigger),
       ...(outcomes.length ? { outcomes } : {}),
+      ...scriptedImpactFields(entry),
     });
   }
   return events.sort((left, right) => scriptedEventDateKey(left.date) - scriptedEventDateKey(right.date));
