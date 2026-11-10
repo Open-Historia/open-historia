@@ -52,9 +52,13 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         // From the workflow's run number (OH_ANDROID_BUILD), so every published
         // build is an upgrade over the last: Android refuses a lower versionCode,
-        // and the in-app update banner compares the same number.
+        // and the in-app update banner compares the same number. The stable app
+        // is named by the release in package.json (2.5.0 on), the beta by its run.
         versionCode = ((System.getenv("OH_ANDROID_BUILD") ?: "1") as Integer)
-        versionName = "1.0." + (System.getenv("OH_ANDROID_BUILD") ?: "0") + (ohBeta ? "-beta" : "")
+        def releaseVersion = new groovy.json.JsonSlurper().parse(rootProject.file("../../package.json")).version
+        versionName = (!ohBeta && releaseVersion && releaseVersion != "0.0.0")
+            ? releaseVersion
+            : "1.0." + (System.getenv("OH_ANDROID_BUILD") ?: "0") + (ohBeta ? "-beta" : "")
         manifestPlaceholders.putAll([
             appLabel: ohBeta ? "Open Historia Beta" : "Open Historia",
             appIcon: ohBeta ? "@mipmap/ic_launcher_beta" : "@mipmap/ic_launcher",

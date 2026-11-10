@@ -7,10 +7,8 @@
 // at a time (world.pendingUnitOrders, carried out by gameState.js
 // advanceStandingOrders). Commanding one is setting those, and nothing more.
 // Each command is an OP, as everything done in the war room is (fronts/
-// warRoomOps.js): the page playing alone applies it to its own world, and a
-// page in a shared game sends it to the host, which applies the very same op
-// for the country that asked (runtime/warRoomWrites.js sendFleetOp,
-// multiplayer/host/gameHost.js):
+// warRoomOps.js), applied to the world for the country that asked
+// (runtime/warRoomWrites.js sendFleetOp):
 //
 //   { op: "posture",  unit, posture }     what it is to do where it is
 //   { op: "station",  unit, to, order }   sail to a place at sea (order "move"), or
@@ -24,8 +22,7 @@
 // The postures it may be given are FLEET_POSTURES: Patrol, Blockade, Seek
 // battle ("assaulting"), Hold ("holding"), Withdraw ("withdrawing") and Escort
 // ("transit"). A place it is sent to is at sea, in the water the fleet is in,
-// by the map's own sheet (runtime/warRoomChart.js), which the page and the
-// host each read for themselves.
+// by the map's own sheet (runtime/warRoomChart.js).
 //
 // How the game carries out what is written decides how it is written:
 //   - a patrol order puts its fleet back on its station every turn, wherever

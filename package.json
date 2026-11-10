@@ -2,7 +2,7 @@
   "name": "open-historia",
   "private": true,
   "license": "AGPL-3.0-or-later",
-  "version": "0.0.0",
+  "version": "2.5.4",
   "type": "module",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
@@ -28,13 +28,10 @@
     "dist:linux": "node scripts/stamp-channel.mjs stable && node scripts/fetch-fmg.mjs && npm run build && node scripts/package-desktop.mjs --linux",
     "dist:win:beta": "node scripts/stamp-channel.mjs beta && node scripts/fetch-fmg.mjs && npm run build && node scripts/package-desktop.mjs --win --config electron-builder.beta.yml",
     "dist:mac:beta": "node scripts/stamp-channel.mjs beta && node scripts/fetch-fmg.mjs && npm run build && node scripts/package-desktop.mjs --mac --config electron-builder.beta.yml",
-    "dist:linux:beta": "node scripts/stamp-channel.mjs beta && node scripts/fetch-fmg.mjs && npm run build && node scripts/package-desktop.mjs --linux --config electron-builder.beta.yml",
-    "dist:win:multiplayer": "node scripts/stamp-channel.mjs multiplayer && node scripts/fetch-fmg.mjs && npm run build && node scripts/package-desktop.mjs --win --config electron-builder.multiplayer.yml"
+    "dist:linux:beta": "node scripts/stamp-channel.mjs beta && node scripts/fetch-fmg.mjs && npm run build && node scripts/package-desktop.mjs --linux --config electron-builder.beta.yml"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.1",
-    "@noble/ciphers": "^2.4.0",
-    "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
     "@turf/area": "^7.3.5",
     "@turf/boolean-point-in-polygon": "^7.3.5",

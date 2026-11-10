@@ -204,12 +204,10 @@ skip, and the poll then shows how each choice did, how many voted and what the p
 result is public opinion your government has to live with. What you post is public. The next time skip reads it as your
 leader's own words, and the world answers: leaders and journalists quote you back, and allies,
 rivals, markets and crowds act on what you said. Posting costs no AI request; the posts come in
-the answer each time skip already gives. In a shared game every player posts as their own
-country's leader. A scenario or a game can switch it off with its **Social media** feature.
+the answer each time skip already gives. A scenario or a game can switch it off with its **Social media** feature.
 
 A new game's feed is empty until the first time skip. While it is, Rostra says so and offers
-**Refresh**: one AI request that writes the first posts by the people who make the news. In a
-shared game the posts come with the next time skip.
+**Refresh**: one AI request that writes the first posts by the people who make the news.
 
 **Search**, where the Your country tab was, opens on your own country and finds any country or
 region on the map. A place shows what its people of note have posted on Rostra and, on

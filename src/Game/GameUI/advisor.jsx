@@ -41,7 +41,6 @@ import { commitInstitutionLifecycleCommand } from "../../runtime/institutionLife
 import { getLibraryState } from "../../runtime/library.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
 import { TURN_RUNNING_NOTE, assertNoTurnRunning, isSimulationBusy } from "../AI/simulationStatus.js";
-import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
 
 Chart.register(...registerables);
 
@@ -1645,7 +1644,6 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             const receipt = await cancelApprovedAdvisorAction({
                 threadId, messageId, proposalId,
                 readAdvisorMessages, mutateActionsState, mutateAdvisorState,
-                sharedGame: inSharedGame(),
                 assertReady: assertNoTurnRunning,
             });
             if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
@@ -1687,7 +1685,6 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 readAdvisorMessages, mutateActionsState, mutateAdvisorState,
                 normalizeAction: normalizeActionEntry,
                 repeatOf: (queue, title) => repeatedOrder(queue, title, { round: Number(round) || 0 }),
-                sharedGame: inSharedGame(),
                 assertReady: assertNoTurnRunning,
             });
             if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {

@@ -2,18 +2,9 @@ The desktop app already runs a local server — that is how it works. This page 
 that server deliberately: to play entirely offline, to reach your campaign from another device,
 or to keep everything on hardware you control.
 
-**Hosting a server is not multiplayer.** It lets *you* reach *your* game from another device. It
+**A server of your own is for you.** It lets *you* reach *your* game from another device. It
 does not let two people play the same campaign. If you connect from your phone and your laptop at
 once, you are two windows onto one single-player game, and you will fight each other for it.
-
-<p class="beta-note"><b>Multiplayer is on beta, and needs no server of yours.</b> The main menu's
-<b>Lobbies</b> tab hosts the game you have open, from the desktop app, under an invite code.
-Friends join with <b>Join a private lobby</b> from the beta desktop app or the beta Android app,
-need the lobby's scenario in their library, and each take a country nobody else plays. The host's
-computer runs the game and pays for its AI with the host's key. Players connect straight to the
-host's computer, found through public relay servers, so the host and each player can see each
-other's network address: share the code only with people you trust. Some strict networks, many
-mobile carriers among them, cannot connect this way.</p>
 
 ## What you get
 

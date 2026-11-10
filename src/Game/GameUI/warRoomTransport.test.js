@@ -87,9 +87,7 @@ test("the drawer sends the op, lists the transporters, and shows the way found f
   const writes = read("../../runtime/warRoomWrites.js");
   assert.match(writes, /transports: world\?\.transports, era: eraSettingOf\(world\), media: activeTransportMedia\(\), military: transportFiguresOf\(world, game\?\.country\) \}\);/);
   // (The host holds a shared game's player to the same: the game's transports, and that country's navy and air force.)
-  assert.match(read("../../multiplayer/host/gameHost.js"), /era: eraSettingOf\(world\), media: activeTransportMedia\(\), military: transportFiguresOf\(world, seat\.country\) \}\);/);
   assert.match(writes, /\.\.\.\(result\.transports \? \{ transports: result\.transports \} : null\) \};/);
-  assert.match(read("../../multiplayer/host/gameHost.js"), /\.\.\.\(result\.transports \? \{ transports: result\.transports \} : null\) \} \};/);
 });
 
 // "make it so air transports work like train and boat except they can go over anywhere, but they can carry less

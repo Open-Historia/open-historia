@@ -17,7 +17,6 @@ const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { runLaunchUpdate } = require("./launchUpdate.cjs");
 const { BETA_APP_NAME, readChannel } = require("./channel.cjs");
-const { MULTIPLAYER_APP_NAME } = require("./channel.cjs");
 const { createLayeredUpdater } = require("./layeredUpdate.cjs");
 const { attachZoomKeys } = require("./zoomKeys.cjs");
 const { installMicrophonePermission } = require("./microphone.cjs");
@@ -48,12 +47,7 @@ app.commandLine.appendSwitch("disable-gpu-process-crash-limit");
 // needs both before this file runs, and the two must agree.
 const CHANNEL = readChannel(__dirname);
 const IS_BETA = CHANNEL === "beta";
-// The multiplayer build (`npm run dist:win:multiplayer`) is a third application,
-// the same way: its own profile, saves, settings and map folder, beside the
-// official app and the beta, never over them. Its name is in
-// electron/channel.cjs with the beta's, for the same reason.
-const IS_MULTIPLAYER = CHANNEL === "multiplayer";
-const APP_NAME = IS_BETA ? BETA_APP_NAME : IS_MULTIPLAYER ? MULTIPLAYER_APP_NAME : "Open Historia";
+const APP_NAME = IS_BETA ? BETA_APP_NAME : "Open Historia";
 
 // Electron derives userData — the Chromium profile, and with it the single-instance
 // lock — from the app name, which for both builds would otherwise be package.json's
@@ -63,7 +57,7 @@ const APP_NAME = IS_BETA ? BETA_APP_NAME : IS_MULTIPLAYER ? MULTIPLAYER_APP_NAME
 // has to happen HERE, before anything reads a path: the installer's productName
 // does NOT reach Electron (it only names the exe, the install folder and the
 // shortcut).
-if (IS_BETA || IS_MULTIPLAYER) app.setName(APP_NAME);
+if (IS_BETA) app.setName(APP_NAME);
 
 // Where a beta build looks for ITS updates. server.js defaults the desktop track to
 // .../desktop-stable/latest.json, so without this override a tester would be offered
@@ -202,17 +196,10 @@ process.on("unhandledRejection", (reason) => {
 // the update banner can compare it against the published one. Deliberately routed
 // this way rather than through a preload: attaching a preload to the game window is
 // what broke the app last time, and this adds nothing to how the window is created.
-//
-// The multiplayer build has no feed of its own to compare against, and the
-// official one would offer it the stable installer "as an update": a way out of
-// multiplayer, not a newer copy of it. So it never reads a build id, and the
-// banner never shows.
 try {
-  if (!IS_MULTIPLAYER) {
-    process.env.OH_DESKTOP_BUILD = String(
-      JSON.parse(fs.readFileSync(path.join(__dirname, "build-id.json"), "utf8")).build || "",
-    );
-  }
+  process.env.OH_DESKTOP_BUILD = String(
+    JSON.parse(fs.readFileSync(path.join(__dirname, "build-id.json"), "utf8")).build || "",
+  );
 } catch {
   /* dev build: unstamped, so no update is ever offered */
 }
@@ -235,9 +222,7 @@ try {
 // (CSC_IDENTITY_AUTO_DISCOVERY: false) because there is no Developer ID
 // certificate yet. Attempting it there produces an error and nothing else, so mac
 // keeps the manual download until there is a certificate to sign with.
-//
-// Nor does the multiplayer build update itself: it has no feed (see above).
-const AUTO_UPDATE_SUPPORTED = process.platform !== "darwin" && !IS_MULTIPLAYER;
+const AUTO_UPDATE_SUPPORTED = process.platform !== "darwin";
 
 // What the banner polls. One object, replaced rather than mutated, so a read is
 // always internally consistent.
@@ -312,9 +297,7 @@ const payloadFeed = () => {
 const setupPayloadUpdater = () => {
   const build = String(process.env.OH_DESKTOP_BUILD || "");
   // An unstamped build is nobody's release: nothing published is its update.
-  // Nor is anything the multiplayer build's: the official app's chunks would
-  // put the official game in its place.
-  if (!app.isPackaged || !PAYLOAD_PLATFORM || !build || IS_MULTIPLAYER) return null;
+  if (!app.isPackaged || !PAYLOAD_PLATFORM || !build) return null;
   return createPayloadUpdater({
     feed: payloadFeed(),
     manifestName: `payload-${PAYLOAD_PLATFORM}.json`,
@@ -431,60 +414,6 @@ const MANIFEST = path.join(APP_ROOT, "scripts", "map-assets.json");
 
 let mainWindow = null;
 let setupWindow = null;
-
-// --- a shared game's engine window ------------------------------------------
-
-// A host runs its shared game in a hidden window of its own
-// (src/multiplayer/host/engineMain.js, on engine.html): the game's engine lives
-// there, and the host's ordinary window plays it like any other player, so the
-// host's screen shows only what the host's government may know. Unthrottled,
-// because it keeps time for every player while nobody looks at it.
-//
-// Reachable from the page the same way the updater is: server.js runs in THIS
-// process and serves /api/multiplayer/engine/{open,close} straight off the handle
-// published below, with no preload on either window.
-let engineWindow = null;
-
-const closeEngineWindow = () => {
-  if (engineWindow && !engineWindow.isDestroyed()) engineWindow.destroy();
-  engineWindow = null;
-};
-
-const installSharedGameEngine = () => {
-  globalThis.__ohSharedGameEngine = {
-    status: () => ({ open: Boolean(engineWindow && !engineWindow.isDestroyed()) }),
-    open: async () => {
-      if (engineWindow && !engineWindow.isDestroyed()) return { open: true };
-      const port = process.env.PORT || 3000;
-      const origin = `http://localhost:${port}`;
-      engineWindow = new BrowserWindow({
-        show: false,
-        width: 640,
-        height: 480,
-        title: "Open Historia — shared game",
-        webPreferences: { backgroundThrottling: false, spellcheck: false },
-      });
-      // It never goes anywhere, and never opens anything.
-      engineWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-      engineWindow.webContents.on("will-navigate", (event, targetUrl) => {
-        if (!targetUrl.startsWith(`${origin}/engine.html`)) event.preventDefault();
-      });
-      engineWindow.webContents.on("render-process-gone", (_event, details) => {
-        logMain("warn", "engine.gone", String(details?.reason || "unknown"));
-        closeEngineWindow();
-      });
-      engineWindow.on("closed", () => {
-        engineWindow = null;
-      });
-      await engineWindow.loadURL(`${origin}/engine.html`);
-      return { open: true };
-    },
-    close: () => {
-      closeEngineWindow();
-      return { open: false };
-    },
-  };
-};
 
 // --- display mode (desktop window state) -----------------------------------
 // Windowed, maximized (the window fills the screen, its title bar kept: a
@@ -969,9 +898,6 @@ const createMainWindow = () => {
     // start that never gets here, and gives the set up after two).
     globalThis.__ohPayload?.confirm?.();
   });
-  // A shared game's hidden engine window would otherwise keep the app running
-  // with nothing on screen.
-  win.on("closed", closeEngineWindow);
   return win;
 };
 
@@ -1125,7 +1051,6 @@ const boot = async () => {
     fetchImpl: (url, init) => require("electron").net.fetch(url, init),
     log: logMain,
   });
-  installSharedGameEngine();
   installDesktopDisplayMode();
   installSystemSpeech();
   relocateLegacyStockMap();
@@ -1208,20 +1133,6 @@ const reportFatalBootError = (error) => {
 
 // One instance only: a second launch would hit EADDRINUSE on the server port and
 // die, which reads to the player as "the app is broken".
-// Discord starts the game through this protocol when the player presses Join
-// on a friend's invitation to a shared game and the game is not running; once
-// it is, Discord hands over the game to join (server/discordPresence.js). The
-// id is the server's DISCORD_APPLICATION_ID. Installed builds only: a
-// development run would register the bare Electron binary.
-const DISCORD_APPLICATION_ID = "1529270119916896326";
-const registerDiscordLaunch = () => {
-  if (!app.isPackaged || String(process.env.OH_DISCORD_PRESENCE ?? "1") === "0") return;
-  try {
-    app.setAsDefaultProtocolClient(`discord-${DISCORD_APPLICATION_ID}`);
-  } catch {
-    // Without it Discord can still hand a join to a running game.
-  }
-};
 
 // The game's window, brought forward: by a second launch, and on macOS by a
 // click on the app in the Dock or in Finder while it is running, which starts
@@ -1240,7 +1151,6 @@ if (!app.requestSingleInstanceLock()) {
   logMain("info", "app.alreadyRunning", "Another copy of the app is running; it was brought forward and this start closed.");
   app.quit();
 } else {
-  registerDiscordLaunch();
   app.on("second-instance", bringGameForward);
   app.on("activate", bringGameForward);
   app.whenReady().then(boot).catch(reportFatalBootError);

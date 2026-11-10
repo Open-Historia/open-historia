@@ -85,7 +85,6 @@ import {
     turnRecordId,
 } from "./turnReveal.js";
 import { prehistoryHasContent } from "../../runtime/scenarioPrehistory.js";
-import { SHARED_ROUND_LANDED, inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { rememberSkipLength, scheduleFrontsPrethink, stopFrontsPrethink } from "../AI/frontPrethink.js";
 
 dayjs.extend(advancedFormat);
@@ -2770,14 +2769,6 @@ const DateWidget = ({
         if (!gameData || days == null || isLoading || jumpAbortRef.current) {
             return;
         }
-        // A shared game's rounds are the host's (multiplayer/): each ends on the
-        // host's timer, or sooner when enough players are ready.
-        if (inSharedGame()) {
-            setPanel("skip");
-            setError("In a shared game the host's timer ends each round, or enough players pressing Ready on the round bar at the top.");
-            return;
-        }
-
         // What was being thought through ahead of time stops: the skip fights its own period now, and has whatever of
         // it was already thought through (AI/frontPrethink.js). Its length is the next one's to think through.
         stopFrontsPrethink();
@@ -3547,30 +3538,6 @@ const DateWidget = ({
         setVisibleEventCount(Math.max(1, ids.length - unseenEvents.unseenInTurn(ids).size));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [latestTurnRecord?.id, writtenEventCount, skipInFlight]);
-
-    // A shared game's round is resolved by the host and reaches this page as a
-    // new view (multiplayer/). The Events panel opens on it, as it does on a
-    // skip this page ran itself; and once the player has read the round
-    // through, the host is told, so planning begins when everyone has.
-    const openPanelOnRoundRef = React.useRef(null);
-    openPanelOnRoundRef.current = () => setPanel("history");
-    useEffect(() => {
-        const onLanded = () => { if (inSharedGame()) openPanelOnRoundRef.current?.(); };
-        window.addEventListener(SHARED_ROUND_LANDED, onLanded);
-        return () => window.removeEventListener(SHARED_ROUND_LANDED, onLanded);
-    }, []);
-    const toldHostRevealedRef = React.useRef("");
-    useEffect(() => {
-        const id = latestTurnRecord?.id || "";
-        if (!inSharedGame() || skipInFlight || !id || toldHostRevealedRef.current === id) return;
-        // What is still unseen is the record's own (runtime/unseenEvents.js),
-        // not this render's count, which is the round before's for one render.
-        const ids = (latestTurnRecord?.events ?? []).map((event) => event?.id).filter(Boolean);
-        if (unseenEvents.unseenInTurn(ids).size > 0) return;
-        toldHostRevealedRef.current = id;
-        void requestFromHost("revealed", { round: Number(latestTurnRecord?.round) || 0 });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [latestTurnRecord?.id, writtenEventCount, visibleEventCount, skipInFlight]);
 
     // Half of what the camera needs to turn the names an event carries
     // ("Ireland", "Donetsk") into a place on the map: the half that only moves

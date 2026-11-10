@@ -219,7 +219,7 @@ test("the UI refresh intentionally leaves the decorative page background for lat
 // buttons on a menu on the left side of the screen. restyle all 4 main menu
 // pages to fit better like this." (the owner, 2026-10-14)
 test("on a wide screen the main menu's pages are rounded squares on a rail down the left", () => {
-  assert.match(source, /const MENU_TABS = Object\.freeze\(\[\s+Object\.freeze\(\{ id: "games", label: "Games" \}\),\s+Object\.freeze\(\{ id: "scenarios", label: "Scenarios" \}\),\s+Object\.freeze\(\{ id: "community", label: "Community" \}\),\s+Object\.freeze\(\{ id: "lobbies", label: "Lobbies" \}\),\s+\]\);/);
+  assert.match(source, /const MENU_TABS = Object\.freeze\(\[\s+Object\.freeze\(\{ id: "games", label: "Games" \}\),\s+Object\.freeze\(\{ id: "scenarios", label: "Scenarios" \}\),\s+Object\.freeze\(\{ id: "community", label: "Community" \}\),\s+\]\);/);
   const rail = source.slice(source.indexOf("const railButtonStyle = "), source.indexOf("// On a touch screen .oh-tap"));
   // Semi-square: rounded corners, square proportions, the icon over the name.
   assert.match(rail, /borderRadius: "16px",/);
@@ -230,7 +230,7 @@ test("on a wide screen the main menu's pages are rounded squares on a rail down 
   // One per page, each with its own icon, the open one marked as the current page.
   assert.match(rail, /\{MENU_TABS\.map\(\(tab\) => \(\s+<button\s+key=\{tab\.id\}\s+aria-current=\{activeTab === tab\.id \? "page" : undefined\}/);
   assert.match(rail, /<ButtonIcon kind=\{tab\.id\} size=\{MENU_RAIL_ICON\} \/>/);
-  for (const kind of ["games", "scenarios", "community", "lobbies"]) assert.match(source, new RegExp(`case "${kind}":`));
+  for (const kind of ["games", "scenarios", "community"]) assert.match(source, new RegExp(`case "${kind}":`));
   // The mark and the name at its head, Settings at its foot.
   assert.ok(rail.indexOf("Open Historia") < rail.indexOf("MENU_TABS.map"));
   assert.ok(rail.indexOf("<div style={{ flex: 1, minHeight: \"0.6rem\" }} />") < rail.indexOf("<span>Settings</span>"));
@@ -248,10 +248,7 @@ test("each page has a header of its own on a wide screen: its name and its actio
   // A phone's header stands on a solid backdrop, so its row of pages reads over the library scrolling under it.
   assert.match(menu, /\{isMobile \? \(\s+<div style=\{\{ background: "var\(--oh-ui-overlay-strong, rgba\(15,15,17,0\.92\)\)", backdropFilter: "blur\(14px\)", borderBottom: "1px solid rgba\(255,255,255,0\.08\)", flexShrink: 0 \}\}>/);
   assert.match(menu, /\{isMobile && \(typeof onOpenSettings === "function" \|\| tabActions\.length > 0\) && \(/);
-  // The Lobbies page reads from the left edge like the others; the Community
-  // page's controls stay together on the right of its help.
-  const lobbies = fs.readFileSync(new URL("../../multiplayer/ui/LobbiesTab.jsx", import.meta.url), "utf8");
-  assert.match(lobbies, /maxWidth: "62rem", margin: "0" \}\}/);
+  // The Community page's controls stay together on the right of its help.
   const hub = fs.readFileSync(new URL("./communityHub.jsx", import.meta.url), "utf8");
   assert.match(hub, /flex: "1 1 20rem", fontSize: "0\.78rem", lineHeight: 1\.5, minWidth: 0/);
   assert.match(hub, /justifyContent: "flex-end", marginLeft: "auto" \}\}>\s+<input/);

@@ -26,7 +26,6 @@ import {
 } from "./gameplaySchemas.js";
 import { toGeminiSchema } from "./geminiSchema.js";
 import { SKIP_SPENDERS } from "./requestBudget.js";
-import { withSeatAdvice } from "./seatAdvice.js";
 import { FEATURE_DEFINITIONS, featureDefaults, isFeatureEnabled, normalizeFeatureSettings, resolveFeatures } from "../../../server/gameFeatures.js";
 import { dockLaunchers } from "../GameUI/hudDock.js";
 
@@ -53,7 +52,7 @@ test("the skip is sent the posts' shape: a list of flat posts, no bounds a provi
 });
 
 test("on, the posts come after everything the skip writes but its riders; off, the skip is not asked for any", () => {
-  const sent = foldJumpTool(withSocialPosts(withSeatAdvice(withFrontOrders(getGameplayTool("jumpForward"))), true), { board: true, agentReports: true, history: true });
+  const sent = foldJumpTool(withSocialPosts(withFrontOrders(getGameplayTool("jumpForward")), true), { board: true, agentReports: true, history: true });
   const keys = Object.keys(sent.schema.properties);
   assert.deepEqual(keys.slice(-3), [SOCIAL_POSTS_FIELD, AGENT_REPORTS_FIELD, HISTORY_FIELD]);
   assert.ok(keys.indexOf("frontOrders") < keys.indexOf(SOCIAL_POSTS_FIELD));
@@ -90,7 +89,7 @@ test("the [Social Media] block goes into the live records only while the game ha
 test("the field is sent with the feature, read when the turn is written, and the turn keeps itself if the posts break", () => {
   // Poll answers whether or not a poll is open: the same function every turn, which a provider caches with the prompt.
   assert.match(gameplay, /const taskTool = JUMP_TASK_KEYS\.has\(taskKey\)\n(?: {4}\/\/[^\n]*\n)* {4}\? withSocialPosts\(advisedTool, isActiveFeatureEnabled\("socialMedia"\), \{ polls: true \}\)\n {4}: advisedTool;/);
-  assert.match(gameplay, /parseWithoutTrailingFields\(rawText, \[POLL_RESULTS_FIELD, SOCIAL_POSTS_FIELD, AGENT_REPORTS_FIELD, HISTORY_FIELD, SEAT_ADVICE_FIELD\]\)/);
+  assert.match(gameplay, /parseWithoutTrailingFields\(rawText, \[POLL_RESULTS_FIELD, SOCIAL_POSTS_FIELD, AGENT_REPORTS_FIELD, HISTORY_FIELD\]\)/);
   const finish = body(gameplay, "const finishTimelineJump = async");
   assert.match(finish, /socialPosts: merged\.socialPosts,/);
   const apply = body(gameplay, "const applySimulationResult = async");

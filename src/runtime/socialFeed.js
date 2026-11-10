@@ -22,9 +22,7 @@
 // A post is named by its id ("p12"), which the skip quotes by: the model mints
 // no ids of its own and is shown no other.
 //
-// The plain data and rules, no React and no AI, so node can test them, and so a
-// shared game's host (multiplayer/host/gameHost.js) posts for its guests with
-// the same rules the player's own screen uses.
+// The plain data and rules, no React and no AI, so node can test them.
 import { compareGameDates, gameDateDayNumber, isGameDate } from "./gameDates.js";
 import { derivePoliticalDecisionAuthority, getPoliticalProfile } from "./politicalActors.js";
 

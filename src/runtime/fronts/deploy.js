@@ -5,7 +5,7 @@
 // A country's DEPLOYMENT LINE on a battlefield is drawn in the war room
 // (GameUI/warRoom.jsx; the op "deploy", warRoomOps.js) and kept in the
 // battlefield's brief.carry.deploy, a list a side of { country, way }: one
-// line a country, a side's own as its plans are (view.js). Its new troops on
+// line a country, a side's own as its plans are. Its new troops on
 // that battlefield come in on it: the levies it musters (engine.js
 // musterDay), a draft or a reinforcement of its own (reinforceOnFront), and
 // its troops when it joins the battle (raiseFor). They stand on ground their

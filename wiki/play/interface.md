@@ -166,12 +166,11 @@ The session pill's **⌂ Exit Game** returns you to the library, which has three
 press <b>Play</b> on a game. The first time the game opens after an update, a vault door stands in
 front of the menu: click its wheel to open it, onto a notice of what the update brings when there
 is one. On a wide screen the pages sit on a rail down the left — <b>Games</b>, <b>Scenarios</b>,
-<b>Community</b> and <b>Lobbies</b> — with <b>Settings</b>, for what applies to every game, at its
+and <b>Community</b> — with <b>Settings</b>, for what applies to every game, at its
 foot; the Open Historia mark at the top opens the history of every update. <b>Games</b> has
 <b>Continue Playing</b> and <b>All Games</b>; <b>Scenarios</b> has <b>Recently Used</b> and the
 <b>Scenario Library</b>, with All, Yours, Community and Updates; what you delete waits at the
-foot of each, on its <b>Recently deleted</b> shelf. <b>Lobbies</b> is for shared games: join one
-with the invite code its host sent you, or host one from the desktop app.</p>
+foot of each, on its <b>Recently deleted</b> shelf.</p>
 
 ## If the screen is blank
 

@@ -7,8 +7,6 @@ const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
 
 const library = read("./libraryBar.jsx");
 const community = read("./communityHub.jsx");
-const lobbies = read("../../multiplayer/ui/LobbiesTab.jsx");
-const publicLobbies = read("../../multiplayer/ui/PublicLobbies.jsx");
 const actions = read("./actions.jsx");
 const advisorDock = read("./main.jsx");
 const countryDock = read("./other.jsx");
@@ -29,17 +27,11 @@ test("Rostra preserves upstream theme coverage and tints only its remaining neut
   assert.match(css, /color-mix\(in srgb, var\(--oh-ui-accent\) 38%, transparent\)/);
 });
 
-test("Community and Lobbies reuse upstream themed cards while tinting neutral inputs", () => {
+test("Community reuses upstream themed cards while tinting neutral inputs", () => {
   assert.match(community, /const cardSurface = \{[\s\S]*?background: "var\(--oh-ui-surface, #12141a\)"/);
   assert.match(community, /const pillButton = \{[\s\S]*?background: "var\(--oh-ui-overlay-card,/);
   assert.match(community, /const searchInputStyle = \{[\s\S]*?background: "var\(--oh-ui-overlay-card,/);
-  assert.match(lobbies, /const card = \{[\s\S]*?background: "var\(--oh-ui-surface, #12141a\)"/);
-  assert.match(lobbies, /const input = \{ background: "var\(--oh-ui-overlay-card,/);
-  assert.match(lobbies, /const button = \{[\s\S]*?background: "var\(--oh-ui-overlay-card,/);
-  assert.match(publicLobbies, /const input = \{ background: "var\(--oh-ui-overlay-card,/);
-  assert.match(lobbies, /const primary = \{ \.\.\.button, background: "color-mix\(in srgb, var\(--oh-ui-accent,/);
   assert.match(community, /DISCORD_BLURPLE/);
-  assert.match(lobbies, /const errorText = \{ color: "#fca5a5"/);
 });
 
 test("Actions and Settings controls use opt-in palettes with original color fallbacks", () => {

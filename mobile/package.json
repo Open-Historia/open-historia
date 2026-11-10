@@ -2,7 +2,7 @@
   "name": "open-historia-mobile",
   "private": true,
   "version": "1.0.0",
-  "description": "Open Historia for Android: the web build inside a Capacitor WebView with everything on the device — the library in IndexedDB, the world map inside the APK (npm run map fetches and verifies it), files saved through the share sheet, a LAN model reached through native HTTP. It plays offline; with a connection it uses the network for the player's own AI provider, the community hub, the update check, map tiles, flags that are not bundled, place search, the setup video on a click, and shared games.",
+  "description": "Open Historia for Android: the web build inside a Capacitor WebView with everything on the device — the library in IndexedDB, the world map inside the APK (npm run map fetches and verifies it), files saved through the share sheet, a LAN model reached through native HTTP. It plays offline; with a connection it uses the network for the player's own AI provider, the community hub, the update check, map tiles, flags that are not bundled, place search and the setup video on a click.",
   "scripts": {
     "map": "node ./scripts/stage-map-assets.mjs",
     "www": "node ./scripts/stage-www.mjs",

@@ -61,7 +61,7 @@ test("nothing of a developer's, and no second copy of anything, is packed", () =
 test("the app never asks for a differential download, so the installer is not built for one", () => {
   assert.match(read("electron/main.cjs"), /autoUpdater\.disableDifferentialDownload = true/);
   assert.equal(packageJson.build.nsis.differentialPackage, false);
-  for (const config of ["electron-builder.beta.yml", "electron-builder.multiplayer.yml"]) {
+  for (const config of ["electron-builder.beta.yml"]) {
     assert.match(read(config), /^nsis:\n(?: {2}.*\n)*? {2}differentialPackage: false$/m, config);
   }
 });

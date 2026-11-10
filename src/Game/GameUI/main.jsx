@@ -1,5 +1,5 @@
 /*! Open Historia — portions (mobile HUD wiring + advisor/forces launchers) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { GenerationRatingToast } from "./generationRatingToast.jsx";
 import { SettingsButton, SettingsMenu } from "./settings";
 import { Presence } from "./presence.jsx";
@@ -49,7 +49,6 @@ import { AgentWaitingNotice } from "./agentWaitingNotice.jsx";
 import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
 import { PromptLimitNotice } from "./promptLimitNotice.jsx";
 import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
-import { inSharedGame, sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
 // top entry's provider for the start-of-game prompt's wording. Re-read whenever
@@ -430,16 +429,8 @@ const Main = ({
     setApiPromptAnsweredFor(id);
     try { sessionStorage.setItem("oh:api-setup-answered", id); } catch { /* the prompt just shows again next time */ }
   };
-  // A guest in a shared game plays on the host's key: nothing to set up.
-  const sharedRole = useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole);
   const showApiPrompt = loaded && Boolean(activeGame?.id) && !mainMenuOpen && !providerReady
-    && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen && !showGameLoading
-    && sharedRole !== "guest";
-  // The game master's tools are not offered in a shared game (see onOpenCheats
-  // below): a panel already open when one begins closes.
-  useEffect(() => {
-    if (sharedRole) setIsCheatsOpen(false);
-  }, [sharedRole]);
+    && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen && !showGameLoading;
 
   // Asked again while the warning is up. WebGL is refused for a moment while
   // the system's graphics process is being started again (a laptop changing
@@ -501,8 +492,7 @@ const Main = ({
     const listenerOptions = { capture: true, passive: true };
     for (const type of PLAYER_ACTIVITY_EVENTS) window.addEventListener(type, activity.note, listenerOptions);
     const iv = setInterval(() => {
-      // A shared game's world is the host's to move (multiplayer/).
-      if (document.visibilityState !== "visible" || inSharedGame()) return;
+      if (document.visibilityState !== "visible") return;
       if (!activity.isPresent()) return;
       import("../AI/gameplay.js")
         .then(({ maybeSendIdleDiplomacy }) => maybeSendIdleDiplomacy())
@@ -526,7 +516,7 @@ const Main = ({
   useEffect(() => {
     if (hasNoGames || mainMenuOpen || !gameEntered) return undefined;
     const iv = setInterval(() => {
-      if (document.visibilityState !== "visible" || inSharedGame()) return;
+      if (document.visibilityState !== "visible") return;
       import("../AI/gameplay.js")
         .then(({ maybeGatherIntelligence }) => maybeGatherIntelligence())
         .catch(() => {});
@@ -982,9 +972,7 @@ const Main = ({
           }}
           onOpenGameManagement={() => openLibraryTab("games")}
           onOpenEvents={() => setActiveBottomPanel("history")}
-          // The game master's tools write the game itself, which in a shared
-          // game is the host's engine's alone: they are not offered there.
-          onOpenCheats={sharedRole ? undefined : () => {
+          onOpenCheats={() => {
             setShouldLoadCheats(true);
             setIsCheatsOpen(true);
             setIsSettingsOpen(false);

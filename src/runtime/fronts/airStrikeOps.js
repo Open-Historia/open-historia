@@ -2,10 +2,8 @@
 // The war room's Deploy Aircraft (GameUI/warRoomAircraft.jsx): one of the
 // player's air units sent to strike a place when time next passes, which
 // airStrike.js flies. Each order is an OP, as everything done in the war room
-// is (warRoomOps.js): the page playing alone applies it to its own world, and
-// a page in a shared game sends it to the host, which applies the very same op
-// for the country that asked (runtime/warRoomWrites.js sendAirStrikeOp,
-// multiplayer/host/gameHost.js):
+// is (warRoomOps.js), applied to the world for the country that asked
+// (runtime/warRoomWrites.js sendAirStrikeOp):
 //
 //   { op: "airstrike", unit, kind, to, target, country, battlefield, marker, people, radius }
 //   { op: "unairstrike", unit }     its strike called off

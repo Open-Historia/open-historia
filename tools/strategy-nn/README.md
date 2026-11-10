@@ -250,4 +250,3 @@ node --test src/runtime/fronts/mind/mind.test.js
 ```
 
 - A war takes 0.5 to 2 seconds. A round of the league takes about ten seconds on twelve workers.
-- Stop a training run before running the whole test suite: under that load `src/multiplayer/client/gameClient.test.js` can hang.

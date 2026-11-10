@@ -15,7 +15,6 @@ import { DEPLOY_USUAL, deployLinesOf } from "./deploy.js";
 import { runFronts } from "./engine.js";
 import { projectorOf } from "./frame.js";
 import { frontInput, syntheticMap } from "./syntheticMap.js";
-import { battlefieldForViewer } from "./view.js";
 import { applyWarRoomOp, cleanWarRoomOp } from "./warRoomOps.js";
 
 const legend = { A: "Aland", B: "Borduria" };
@@ -50,12 +49,11 @@ test("a country's new troops come in on the line drawn for them, and on the fron
   assert.deepEqual(deployLinesOf(kept, side).map((line) => line.country), ["Aland"]);
 });
 
-test("a deployment line is its side's own, and an empty way takes it off", () => {
+test("a deployment line is kept for its side, and an empty way takes it off", () => {
   const [record] = run().battlefields;
   const side = record.sides.findIndex((members) => members.includes("Aland"));
   const drawn = applyWarRoomOp([record], { op: "deploy", battlefield: record.name, way: BACK }, { player: "Aland" }).record;
-  assert.equal(deployLinesOf(battlefieldForViewer(drawn, "Borduria"), side).length, 0, "the other side is not sent it");
-  assert.equal(deployLinesOf(battlefieldForViewer(drawn, "Aland"), side).length, 1);
+  assert.equal(deployLinesOf(drawn, side).length, 1);
   const off = applyWarRoomOp([drawn], { op: "deploy", battlefield: record.name, way: [] }, { player: "Aland" }).record;
   assert.equal(deployLinesOf(off, side).length, 0);
   assert.equal(off.brief.carry.deploy, undefined);

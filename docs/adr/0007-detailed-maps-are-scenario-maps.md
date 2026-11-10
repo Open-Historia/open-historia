@@ -14,4 +14,4 @@ Scenarios made before this name their one detailed map in `world.background.tile
 
 - A detailed map needs a drawn map in the Scenario to be shown over. Removing that drawn map moves the detailed map to another drawn map in the list, and is refused when there is none.
 - Loading a game offers to download only the detailed map the player starts on, and says the Scenario has others. Installing a Scenario from the hub lists all of them, the starting one ticked.
-- A player's **basemap pick** is kept on their device for each game, and never sent to other players. Countries are in the same place on every map, so players in one game may each see a different one.
+- A player's **basemap pick** is kept on their device for each game. Countries are in the same place on every map, so the pick changes nothing but the picture.

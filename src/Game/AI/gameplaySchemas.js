@@ -13,7 +13,6 @@ import { extractJsonArray } from "./jsonSalvage.js";
 import { PLACE_FEED_MAX_TRENDS } from "../../runtime/placeFeed.js";
 import { WAR_ROOM_ORDERS, WAR_ROOM_STANCES } from "../../runtime/fronts/constants.js";
 import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
-import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
 import { IDEOLOGIES, PARTY_ROLES } from "../../runtime/politics.js";
 import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
 import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
@@ -1290,8 +1289,7 @@ const eventSchema = {
       type: "boolean",
       description: "Whether it directly concerns the player polity.",
     },
-    // Who may read it in a shared game (multiplayer/host/projection.js
-    // readableBy); absent, as on everything public, it is everybody's.
+    // Never sent (withEventAudience); an answer that carries it is still read.
     audience: {
       type: "array",
       description: "Secret only: the polities that know it.",
@@ -1441,10 +1439,6 @@ export const JUMP_FORWARD_SCHEMA = {
       type: "string",
       description: "War figures; format in prompt. Empty if none.",
     },
-    // Each player's advisor and three orders to consider, in a game a host
-    // shares (seatAdvice.js). SENT only then, in full (withSeatAdvice); read
-    // either way, loosely, so a malformed piece of advice never costs the turn.
-    [SEAT_ADVICE_FIELD]: SEAT_ADVICE_ANSWER_SCHEMA,
     // A folded skip's agents' reports (see "The folded time skip" above). Loose
     // here on purpose: each report is checked against the agents' own schema
     // (SPY_INTERCEPT_SCHEMA) when it is filed, so a malformed one costs that
@@ -1517,7 +1511,6 @@ const JUMP_FORWARD_LEAN_SCHEMA = (() => {
     [HISTORY_FIELD]: _history,
     [FRONT_ORDERS_FIELD]: _frontOrders,
     [WAR_FIGURES_FIELD]: _warFigures,
-    [SEAT_ADVICE_FIELD]: _seatAdvice,
     [SOCIAL_POSTS_FIELD]: _socialPosts,
     [POLL_RESULTS_FIELD]: _pollResults,
     ...properties
@@ -3678,13 +3671,12 @@ const WAR_ROOM_SCHEMA = {
 // Only the tool shown to the model changes: the field is a transport field,
 // taken off the answer before the sheet is validated, and no other request
 // carries it.
-// Who may read an event (`audience`) is a shared game's: the tool sent
-// carries it only in one, and after the event's warId and combatants. Sent in
-// every game, just before combatants, it had Gemini leave combatants empty on
-// the battles of a war its skip started, so the war was dropped and no front
-// opened (2026-10-30, two answers against one with it left out). The answer is
-// still read against the whole schema, so a shared game's audience is kept.
-export const withEventAudience = (tool, shared = false) => {
+// Who may read an event (`audience`) is not sent. Sent just before
+// combatants, it had Gemini leave combatants empty on the battles of a war its
+// skip started, so the war was dropped and no front opened (2026-10-30, two
+// answers against one with it left out). The answer is still read against the
+// whole schema.
+export const withEventAudience = (tool) => {
   let changed = false;
   const visit = (node) => {
     if (!node || typeof node !== "object") return node;
@@ -3702,9 +3694,9 @@ export const withEventAudience = (tool, shared = false) => {
     }
     const properties = out.properties;
     if (properties && typeof properties === "object" && properties.audience && properties.combatants) {
-      const { audience, ...rest } = properties;
-      out = { ...out, properties: shared ? { ...rest, audience } : rest };
-      if (Array.isArray(out.required)) out.required = shared ? out.required : out.required.filter((name) => name !== "audience");
+      const { audience: _audience, ...rest } = properties;
+      out = { ...out, properties: rest };
+      if (Array.isArray(out.required)) out.required = out.required.filter((name) => name !== "audience");
       changed = true;
     }
     return out;

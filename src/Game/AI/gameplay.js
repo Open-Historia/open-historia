@@ -22,7 +22,7 @@ import { collectFoundedPolities, foundingPolityChange } from "../../runtime/poli
 import { describeBasisAction, sameRegionChange, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
 import { PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
-import { hostingSharedGame, humanCountriesOf } from "../../runtime/humanPolities.js";
+import { humanCountriesOf } from "../../runtime/humanPolities.js";
 import { uiString } from "../../runtime/translator.js";
 import { withTurnSeaBattles } from "../../runtime/naval/record.js";
 import { withFrontFortifications } from "../../runtime/warGeography.js";
@@ -193,7 +193,6 @@ import { formalAgendaProposals } from "./formalAgenda.js";
 import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.js";
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
 import { openingSpeaker } from "./chatSpeaker.js";
-import { sharedLetterOf } from "./sharedLetters.js";
 import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { OUTPUT_LIMIT_MESSAGE, REASONING_ONLY_MESSAGE, REASONING_ONLY_NOTE, isUnreachableError } from "./providerErrors.js";
 import { isCancelAllAbort } from "./aiRequestControl.js";
@@ -334,13 +333,10 @@ import {
   buildWorldPromptSnapshot,
   filterToRenderedRegions,
   formatDateReadable,
-  joinPolityNames,
   promptRegionNamer,
   refreshPromptReference,
   resolveHelperValues,
 } from "./promptContext.js";
-import { SHARED_WORLD_TASKS } from "./sharedGameDirective.js";
-import { SEAT_ADVICE_FIELD, mergeSeatAdvice, withSeatAdvice } from "./seatAdvice.js";
 import {
   HISTORY_CONSOLIDATION,
   HISTORY_TIERS_OUTPUT,
@@ -2938,7 +2934,7 @@ const buildJumpStaticRules = async (variables = {}) => {
 // after them (withWarFigures).
 const forActiveFeatures = (tool) => {
   const grouped = isActiveFeatureEnabled("groups") ? tool : withoutGroupOps(tool);
-  const shown = withEventImpacts(withEventAudience(grouped, hostingSharedGame()));
+  const shown = withEventImpacts(withEventAudience(grouped));
   return frontsOn() ? withWarFigures(withFrontOrders(shown)) : shown;
 };
 let gameMasterPromptNoGroups = null;
@@ -3262,8 +3258,7 @@ const taskToolFor = (taskKey, { customFullStatSheet, customStatRows, statIndexRo
   const featureTool = forActiveFeatures(customFullStatSheet
     ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
     : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
-  // The players' advice, asked of the time skip whose prompt asks for it.
-  const advisedTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(featureTool) : featureTool;
+  const advisedTool = featureTool;
   // And the social posts after all of it, or none where the game has no Rostra
   // (gameplaySchemas.js withSocialPosts).
   const taskTool = JUMP_TASK_KEYS.has(taskKey)
@@ -3758,25 +3753,6 @@ This live instruction supersedes older frozen country-stat prompts and all earli
     const block = await playerGoalBlock(normalizeString(variables?.playerPolity));
     if (block) systemPrompt = `${systemPrompt}\n\n${block}`;
   }
-
-  // Several people play (sharedGameDirective.js): in the passes that simulate
-  // the world, the prompt's one player is each of them. Nothing in single player.
-  if (SHARED_WORLD_TASKS.has(taskKey)) {
-    const sharedDirective = normalizeString(variables?.sharedGameDirective);
-    if (sharedDirective) systemPrompt = `${systemPrompt}\n\n${sharedDirective}`;
-    // The prompt's role line, written for one player, says from its first
-    // words that several people play; the rest of the prompt names them
-    // together (joinPolityNames), as the directive explains.
-    const together = normalizeString(variables?.playerPolity);
-    const polities = normalizeString(variables?.sharedPolities);
-    if (sharedDirective && together && polities) {
-      systemPrompt = systemPrompt.replace(`The player is playing as the polity of ${together}.`, `Several people play this game, one polity each: ${polities}.`);
-    }
-  }
-  // Each player's advisor and their three orders (seatAdvice.js): a time skip
-  // of a game a host shares, one person playing or several.
-  const seatAdviceDirective = JUMP_TASK_KEYS.has(taskKey) ? normalizeString(variables?.seatAdviceDirective) : "";
-  if (seatAdviceDirective) systemPrompt = `${systemPrompt}\n\n${seatAdviceDirective}`;
 
   // The scenario author's priority rules (worldDirection.js), for every task
   // that writes the world or speaks for a polity; a time skip has them, with the
@@ -4317,7 +4293,7 @@ const runJsonTask = async (taskKey, {
       // second request for a turn already in hand. Before the output-limit
       // check below, so a cut that fell inside a rider is not a lost turn.
       if (!parsed && rawText && JUMP_TASK_KEYS.has(taskKey)) {
-        const rescued = parseWithoutTrailingFields(rawText, [POLL_RESULTS_FIELD, SOCIAL_POSTS_FIELD, AGENT_REPORTS_FIELD, HISTORY_FIELD, SEAT_ADVICE_FIELD]);
+        const rescued = parseWithoutTrailingFields(rawText, [POLL_RESULTS_FIELD, SOCIAL_POSTS_FIELD, AGENT_REPORTS_FIELD, HISTORY_FIELD]);
         if (rescued) {
           parsed = rescued.value;
           console.warn(`[ai] task "${taskKey}": the end of the answer could not be read; kept the turn without ${rescued.dropped.join(" and ")}.`);
@@ -9715,7 +9691,7 @@ const applySimulationResult = async ({
       // And the water frozen this turn, for the map to show as ice (runtime/fronts/climate.js).
       ...(turnFronts ? { frozenRegions: normalizeArray(turnFronts.frozen) } : null),
       // And each climate zone's weather on the day the turn lands, drawn from the campaign's own seed as the
-      // land war's is (runtime/zoneWeather.js): the same patches of weather on every screen of a shared game.
+      // land war's is (runtime/zoneWeather.js).
       zoneWeather: zoneWeatherFor(baseWorld, { seed: campaignId, date: nextGame.gameDate }),
       // And the blockades that stand as the turn ends, each with the days it has stood (runtime/naval/blockade.js).
       ...(turnFronts ? { blockades: turnBlockades(baseWorld, turnFronts) } : null),
@@ -9723,10 +9699,6 @@ const applySimulationResult = async ({
       // in progress and clears a leftover one, and a scene resolving is this.
       activeInteractive: null,
       actionSuggestions: [],
-      // Each player's advisor and their orders to consider (seatAdvice.js).
-      ...(Array.isArray(result.seatAdvice)
-        ? { seatAdvice: mergeSeatAdvice(baseWorld?.seatAdvice, result.seatAdvice, { people: humanCountriesOf(baseGame), round: nextGame.round }) }
-        : null),
       lastJumpMode: normalizeString(result.mode),
       lastJumpSummary: normalizeString(result.summary),
       lastJumpTargetDate: nextGame.gameDate,
@@ -10465,19 +10437,9 @@ const applySimulationResult = async ({
   // belongs to the period rather than to one event with its last.
   const lastTurnEventId = normalizeString(normalizeArray(worldWithImpacts.simulationHistory?.[0]?.eventIds).at(-1));
 
-  // In a shared game (runtime/humanPolities.js) a thread the turn opens is
-  // written to one of the people, and its opening lines are the AI's
-  // (sharedLetterOf): the person it names in `to`, the host's own player when it
-  // names none. A country a person plays is never one of the governments
-  // speaking in it: that person writes their own lines.
-  const people = humanCountriesOf(baseGame);
-  const routed = (chatLike) => sharedLetterOf(chatLike, { people, host: baseGame.country });
   const opening = async (chatLike, linkEventId, options) => {
-    const letter = routed(chatLike);
-    if (!letter) return null;
-    const built = await buildGeneratedChat(letter.chat, linkEventId, worldWithImpacts, { ...options, playerName: letter.to });
-    // A thread names its owner when it is not the host's (multiplayer/host/projection.js).
-    return built && letter.owner ? { ...built, player: letter.owner } : built;
+    if (!chatLike || typeof chatLike !== "object") return null;
+    return buildGeneratedChat(chatLike, linkEventId, worldWithImpacts, { ...options, playerName: baseGame.country });
   };
 
   for (const event of freshEvents) {
@@ -10501,7 +10463,7 @@ const applySimulationResult = async ({
     const nextChat = await opening({ ...letter, source: "outreach", ...(offerMessageId ? { openingMessageId: offerMessageId } : {}) }, "", { revealWith: lastTurnEventId });
     if (nextChat) { nextChats.unshift(nextChat); generatedChats.unshift(nextChat); }
     if (!terms || !nextChat) continue;
-    const to = normalizeString(routed(letter)?.to) || normalizeString(baseGame.country);
+    const to = normalizeString(baseGame.country);
     const from = normalizeString(nextChat.messages?.find((message) => message?.id === offerMessageId)?.speaker) || normalizeString(letter.speaker);
     const made = offerPeace(worldWithImpacts, {
       from,
@@ -10532,6 +10494,7 @@ const applySimulationResult = async ({
   // old save) and one whose message could not be sent when it opened. Until it has one the player cannot have heard
   // it, and its silence breaks no treaty (alliances.js callsForTurn); from the turn it is asked (askedRound) it stands
   // CALL_STANDS_ROUNDS turns.
+  const people = humanCountriesOf(baseGame);
   for (const call of normalizeArray(worldWithImpacts?.callsToArms)) {
     if (call?.status !== "open" || normalizeString(call.messageId)) continue;
     if (!people.some((person) => regionKey(person) === regionKey(call.ally))) continue;
@@ -13536,7 +13499,7 @@ export const warRoomTransportWays = ({ world, game } = {}) =>
 // What the war room's fortified lines and fleets are held to on the map
 // (frontApply.js warRoomChartFor): where the sea is, and whose the ground is.
 // Read from the map, with no request made; of the world as it stands when none
-// is handed over. (A shared game's host reads its own: multiplayer/host/engineMain.js.)
+// is handed over.
 export const warRoomChart = async ({ world = null, game = null } = {}) => {
   const bundle = world && game ? { world, game } : await readGameStateBundle({ force: true });
   return warRoomChartFor({ world: bundle.world, game: bundle.game, campaignId: activeCampaignId(), loadRegions: createRenderedRegionsReader() });
@@ -13547,7 +13510,7 @@ export const warRoomChart = async ({ world = null, game = null } = {}) => {
 // battlefield, its places and what has been said so far are worked out in
 // warRoomContext.js and handed over in the prompt. Nothing is written here: the
 // caller writes what was said and ordered (runtime/warRoomWrites.js), which is
-// where a running turn and a shared game are answered for.
+// where a running turn is answered for.
 export const generateWarRoomReply = async ({ battlefield, message, signal } = {}) => {
   const said = normalizeString(message);
   if (!said) throw new Error("There is nothing to say to the generals.");
@@ -14356,48 +14319,6 @@ export const ensureCountryStatSheet = (target, { reason = "", rateIntelligence =
     }
     return sheet;
   });
-
-// A shared game's host, answering a player whose Stats pane opened a country
-// with no sheet (multiplayer/host/engineMain.js): the sheet, and with it the
-// rating of its service when it has none, in the one request. The player asked,
-// so this is not background AI and no allowance is consulted; whoever asks,
-// one reading of a polity runs at a time. Resolves to the sheet; rejects with
-// the reason when it could not be written.
-const playerReadingsInFlight = new Map();
-export const readCountryForPlayer = (target) => {
-  const name = normalizeString(target);
-  if (!name) return Promise.reject(new Error("There is no country to read."));
-  const key = firstReadingKey("a player's stat sheet", name);
-  if (playerReadingsInFlight.has(key)) return playerReadingsInFlight.get(key);
-  const run = (async () => {
-    const [world, definition] = await Promise.all([
-      readWorldState({ force: true }).then(normalizeWorldState),
-      loadStatSheetDefinition(),
-    ]);
-    const persisted = normalizeCountryStatSheet(world.countryStats?.[name]);
-    const complete = definition.custom
-      ? isCompleteCustomCountryStatSheet(persisted, statSheetKeys(definition))
-      : isCompleteCountryStatSheet(persisted);
-    if (complete) return persisted;
-    await waitForSimulationIdle();
-    const rate = !isIntelligenceRated(world, name);
-    const campaign = activeCampaignId();
-    let assessment = null;
-    const sheet = await generateCountryStatSheet({
-      code: name,
-      name,
-      ...(rate ? { rateIntelligence: true, onIntelligenceRating: (value) => { assessment = value; } } : {}),
-    });
-    if (assessment) {
-      await storeFirstIntelligenceRating(name, assessment, { campaign }).catch((error) => {
-        logDebugEvent("espionage", `${name}: the rating that came with the stat sheet was not kept: ${error?.message || error}`);
-      });
-    }
-    return sheet;
-  })().finally(() => playerReadingsInFlight.delete(key));
-  playerReadingsInFlight.set(key, run);
-  return run;
-};
 
 // The background stat-sheet reading now running for this polity, or null. The
 // Stats pane's Economy view waits on it rather than asking for the same sheet
@@ -16554,12 +16475,8 @@ const playerTerritoryNames = async (world, playerNames) => {
 
 // The focus, the player's names and the test the counter uses, once per jump.
 const readPlayerFocusContext = async (bundle) => {
-  // A shared game's focus is every polity people play (humanPolities.js).
-  const people = humanCountriesOf(bundle?.game);
-  const playerName = people.length > 1 ? joinPolityNames(people) : normalizeString(bundle?.game?.country);
-  const playerNames = people.length > 1
-    ? [...new Set(people.flatMap((name) => [name, toCountryName(name)]).map(normalizeString).filter(Boolean))]
-    : [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))];
+  const playerName = normalizeString(bundle?.game?.country);
+  const playerNames = [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))];
   const territoryNames = await playerTerritoryNames(bundle?.world, playerNames);
   // The scenario's default under this game's own choice (gameFeatures.js).
   return {
@@ -17438,12 +17355,6 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         if (state.folded && agentJobs.length && segmentGeneration?.source !== "fallback") state.foldedAgentAnswer = payload[AGENT_REPORTS_FIELD];
         delete payload[AGENT_REPORTS_FIELD];
       }
-      // And the players' advice (seatAdvice.js): the last segment's, kept on the
-      // world as the turn is written (applySimulationResult).
-      if (payload && typeof payload === "object" && SEAT_ADVICE_FIELD in payload) {
-        if (segmentGeneration?.source !== "fallback" && Array.isArray(payload[SEAT_ADVICE_FIELD])) state.seatAdvice = payload[SEAT_ADVICE_FIELD];
-        delete payload[SEAT_ADVICE_FIELD];
-      }
       // And the history fold, the same way (judged in foldedTurnReview).
       if (payload && typeof payload === "object" && HISTORY_FIELD in payload) {
         if (state.folded && historyJob && segmentGeneration?.source !== "fallback") state.foldedHistoryAnswer = payload[HISTORY_FIELD];
@@ -18249,10 +18160,6 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // but one that fails lands the turn as written rather than holding a turn the
   // player has no reason to retry.
   if (normalizeString(state.generation?.source) === "fallback") checks.accept();
-  // The engine hosting a shared game has no Timeline and nobody to press Retry:
-  // a held turn there would only fail the round for every player and be asked
-  // again whole. A check that fails lands the turn as written.
-  if (hostingSharedGame()) checks.accept();
   // A folded skip's review makes no request, so it is not one of the checks:
   // nothing in it can fail, hold the turn or be asked again. (A skip's events
   // cite the orders they answer themselves, so there is no order attribution
@@ -18322,7 +18229,6 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     // that period was fought again with (frontOrderFunction.js).
     frontsGiven: normalizeArray(context.variables?.frontsForecast?.given),
     storylineUpdates: merged.storylineUpdates,
-    seatAdvice: state.seatAdvice ?? null,
     breadthRepairContext: selectBreadthRepairContext(state, context),
     generation: state.generation,
     hiddenEvents: state.hiddenEvents,
@@ -18532,9 +18438,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     variables: frontsForecast ? { ...variables, frontsForecast } : variables,
     // Settings, AI: "Stop when my events fail" (playerTurnFailures.js). Read
     // once, at the start, so a toggle mid-skip does not change the skip.
-    // The host's own setting, read from the host's device, is not the other
-    // players': a shared game's round never stops on it (and nobody could answer).
-    stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures) && !hostingSharedGame(),
+    stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
     // A whole skip run again from that notice: what failed the first time.
     retryDirective: normalizeString(retryDirective),
   };

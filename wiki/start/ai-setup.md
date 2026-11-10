@@ -339,7 +339,7 @@ sign-in.
   starts by itself, such as background diplomacy, idle chats and automatic stat tracking. With
   nothing below it, those don't run, so keep a free Gemini key under it.
 - **Pause my Agent** sends everything to the entry below, for when you are away from your
-  terminal. In a shared game the Agent sits out the same way.
+  terminal.
 - **While a skip waits**, the time panel says *Waiting for your Agent*, and **Use API key** sends
   the rest of that skip on to the next entry instead.
 

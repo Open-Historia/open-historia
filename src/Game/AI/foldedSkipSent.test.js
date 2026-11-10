@@ -19,7 +19,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { foldJumpTool, getGameplayTool, withEventAudience, withEventImpacts, withFrontOrders, withSocialPosts, withWarFigures, withoutGroupOps } from "./gameplaySchemas.js";
-import { withSeatAdvice } from "./seatAdvice.js";
+// The stable release has no shared games, so no players' advice: a host adds nothing (seatAdvice.js is beta's).
+const withSeatAdvice = (tool) => tool;
 import { toGeminiSchema } from "./geminiSchema.js";
 import { FOLDED_SKIP_SCHEMA_BUDGET, fitSkipRiders } from "./foldedSkip.js";
 

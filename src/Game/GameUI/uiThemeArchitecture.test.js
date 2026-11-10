@@ -45,7 +45,6 @@ test("the main menu, its pages and the popups take the theme, the original colou
   assert.match(menu, /background: active \? "var\(--oh-ui-active, rgba\(255,255,255,0\.11\)\)"/);
   assert.doesNotMatch(menu, /"#12141a"/);
   assert.match(read("./communityHub.jsx"), /background: "var\(--oh-ui-surface, #12141a\)",/);
-  assert.match(read("../../multiplayer/ui/LobbiesTab.jsx"), /background: "var\(--oh-ui-surface, #12141a\)",/);
   for (const toast of ["generationRatingToast", "fallbackSwitchNotice", "agentWaitingNotice", "bordersFallbackNotice"]) {
     assert.match(read(`./${toast}.jsx`), /backgroundColor: "var\(--oh-ui-overlay-strong, rgba\(16,21,24,0\.96\)\)"/, toast);
   }

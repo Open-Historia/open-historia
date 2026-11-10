@@ -3,15 +3,13 @@
 // generate them" (the owner, 2026-11-03). A new game's feed is empty until the
 // first time skip writes posts; Refresh asks for them now: ONE AI request
 // (AI/gameplay.js generateRostraPosts), made on the press and never by itself,
-// which writes the posts into the feed. In a shared game the feed is the
-// host's to write, so there the posts come with the next time skip.
+// which writes the posts into the feed.
 //
 // Kept apart from social.jsx, which asks no model of its own; Search's place
 // feeds use the same button (rostraSearch.jsx).
 
 import React, { useState } from "react";
 
-import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
 import { generateRostraPosts } from "../AI/gameplayLazy.js";
 
 const INK = "#f4f4f5";
@@ -49,7 +47,6 @@ export const RefreshButton = ({ busy = false, disabled = false, onClick }) => (
 const EmptyFeedRefresh = ({ canPost = true }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const shared = inSharedGame();
   const refresh = async () => {
     if (busy) return;
     setBusy(true);
@@ -66,19 +63,11 @@ const EmptyFeedRefresh = ({ canPost = true }) => {
   return (
     <div style={{ padding: "1.6rem 1.1rem", textAlign: "center" }}>
       <div style={{ color: INK, fontSize: "0.9rem", fontWeight: 750 }}>Nothing has been posted yet.</div>
-      {shared ? (
-        <div style={{ color: INK_SOFT, fontSize: "0.76rem", lineHeight: 1.45, marginTop: "0.35rem" }}>
-          The people who make the news post with the next time skip.
-        </div>
-      ) : (
-        <>
-          <div style={{ color: INK_SOFT, fontSize: "0.76rem", lineHeight: 1.45, marginTop: "0.35rem" }}>
-            Refresh to see what the people who make the news are posting.
-          </div>
-          <RefreshButton busy={busy} disabled={!canPost} onClick={() => void refresh()} />
-          {error && <div role="alert" data-no-translate style={{ color: "rgba(253,186,116,0.95)", fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.6rem", overflowWrap: "anywhere" }}>{error}</div>}
-        </>
-      )}
+      <div style={{ color: INK_SOFT, fontSize: "0.76rem", lineHeight: 1.45, marginTop: "0.35rem" }}>
+        Refresh to see what the people who make the news are posting.
+      </div>
+      <RefreshButton busy={busy} disabled={!canPost} onClick={() => void refresh()} />
+      {error && <div role="alert" data-no-translate style={{ color: "rgba(253,186,116,0.95)", fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.6rem", overflowWrap: "anywhere" }}>{error}</div>}
     </div>
   );
 };

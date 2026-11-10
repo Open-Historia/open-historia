@@ -94,13 +94,6 @@ test("retry after queue succeeded but receipt failed uses stable ID, no duplicat
   assert.equal(ctx.advisor[1].actionReceipts[proposal.id].status, "queued");
 });
 
-test("a shared host request without a stable ID fails closed before any writes", async () => {
-  const ctx = setup();
-  await assert.rejects(approveAdvisorAction({ ...ctx.api, sharedGame: true }), /host-backed proposal IDs/);
-  assert.equal(ctx.actionWrites, 0);
-  assert.equal(ctx.receiptWrites, 0);
-});
-
 test("a valid reviewed Action after a rejected model entry retains its source position", async () => {
   const ctx = setup();
   const { proposals, problems } = actionProposalsFromReply([

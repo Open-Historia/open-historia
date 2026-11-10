@@ -9,9 +9,8 @@
 //   a fortified line is built only on ground its country holds
 //   (fronts/fortifyOps.js).
 //
-// The page and the host each read the sheet for themselves (Game/AI/
-// frontApply.js warRoomChartFor) and ask it here, so the same op is held to the
-// same map on both. chartOf gives
+// The page reads the sheet (Game/AI/frontApply.js warRoomChartFor) and asks it
+// here. chartOf gives
 //
 //   sea(lng, lat)              whether a ship may be there
 //   joins(from, to)            whether a fleet at `from` can sail to `to`: the same water

@@ -47,16 +47,9 @@ Every system, with the actual rules and numbers rather than a summary.
 
 ## Things worth knowing up front
 
-**The stable release is single-player.** You can host it on your own machine and reach it from
+**The game is single-player.** You can host it on your own machine and reach it from
 your phone or another computer on the same network, and you can share scenarios with other
 players through the [Community Hub](/wiki/community-hub/), but there is no shared session.
-
-<p class="beta-note"><b>On beta you can play together.</b> The main menu has a <b>Lobbies</b>
-tab. <b>Host a lobby</b> shares the game you have open, from the desktop app: you keep playing
-your own country, and the friends you send its invite code to each take another. They join under
-<b>Join a private lobby</b>, from the beta app on a computer or on Android, and need the lobby's
-scenario in their library. The host's computer runs the game and pays for its AI with the host's
-key. The host, and the services that connect you, can see each player's network address.</p>
 
 **Your API key never leaves your machine.** Provider settings live in your browser's local
 storage, or in the desktop app's own profile. No Open Historia server ever sees it. On the
@@ -70,7 +63,7 @@ turn and reacts in character; a very small local model will give you a thinner o
 
 **Some features are beta-only.** Pages and sections marked <em>beta</em> describe systems that
 have not reached the stable release — on the beta now: wars fought on battlefields from a War
-Room, war at sea, peace terms, espionage orders, seasons and weather, multiplayer and music. The
+Room, war at sea, peace terms, espionage orders, seasons and weather, and music. The
 beta build installs alongside the stable app and keeps its own saves, so trying it costs you
 nothing; see [installing the beta](/wiki/install/#the-beta-build).
 

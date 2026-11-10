@@ -492,7 +492,7 @@ button:active:not(:disabled) {
 }
 
 /* The main menu's skeletons (GameUI/menuSkeleton.jsx): while a page's games,
-   scenarios or lobbies are on their way, the outlines of their cards stand
+   scenarios or community posts are on their way, the outlines of their cards stand
    where the cards will be and a glimmer passes over them, in place of the word
    "Loading" (the owner: "show outlines of where all the games/scenarios go
    with a glimmer animation (like youtube loading does)"). The glimmer is a
