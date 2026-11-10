@@ -138,16 +138,10 @@ func setup(engine: EngineLink, updates: Array, prefs: Dictionary) -> void:
 		await page.open(engine, str((updates[0] as Dictionary).get("id", "")), _still)
 		return
 	var needs_metal := false
-	var ordered: Array = updates.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) == "major")
-	ordered.append_array(updates.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) != "major"))
-	for raw in ordered:
-		var update: Dictionary = raw
-		var banners: Array = update.get("banners", [])
-		for index in range(banners.size()):
-			var banner: Dictionary = banners[index]
-			_pages.append({"key": "%s#%d" % [str(update.get("id", "")), index], "update": update, "banner": banner})
-			if str(update.get("kind", "")) == "major" and str(banner.get("theme", "")) == "warsAndFronts2":
-				needs_metal = true
+	_pages = await _paged(engine, updates.filter(func(update: Variant) -> bool: return update is Dictionary))
+	for page in _pages:
+		if str((page["update"] as Dictionary).get("kind", "")) == "major" and str((page["banner"] as Dictionary).get("theme", "")) == "warsAndFronts2":
+			needs_metal = true
 	_at = 0
 	if _pages.is_empty():
 		visible = false
@@ -165,6 +159,47 @@ func setup(engine: EngineLink, updates: Array, prefs: Dictionary) -> void:
 		modulate.a = 0.0
 		CubicBezier.animate(self, func(t: float) -> void: modulate.a = t, 400.0, 0.0, UpdateKit.RISE)
 	_watch_size()
+
+
+func _paged(engine: EngineLink, updates: Array) -> Array[Dictionary]:
+	var pages: Array[Dictionary] = []
+	var by_id := {}
+	for raw in updates:
+		by_id[str((raw as Dictionary).get("id", ""))] = raw
+	if engine != null and engine.is_ready():
+		var reply: Dictionary = await engine.request("shell.notice.pages", {"updates": updates})
+		if reply.get("ok", false) and reply.get("result") is Array:
+			for raw in reply["result"]:
+				if not (raw is Dictionary):
+					continue
+				var entry: Dictionary = raw
+				var update: Dictionary = by_id.get(str(entry.get("id", "")), {})
+				if update.is_empty():
+					continue
+				var page := {"key": str(entry.get("key", "")), "update": update}
+				if entry.get("changelog") is Array:
+					var told: Array = []
+					for id in entry["changelog"]:
+						if by_id.has(str(id)):
+							told.append(by_id[str(id)])
+					page["changelog"] = told
+					page["banner"] = entry["banner"] if entry.get("banner") is Dictionary else {}
+				else:
+					var banners: Array = update.get("banners", [])
+					var index := int(entry.get("index", -1))
+					if index < 0 or index >= banners.size() or not (banners[index] is Dictionary):
+						continue
+					page["banner"] = banners[index]
+				pages.append(page)
+			return pages
+	var ordered: Array = updates.filter(func(update: Variant) -> bool: return str((update as Dictionary).get("kind", "")) == "major")
+	ordered.append_array(updates.filter(func(update: Variant) -> bool: return str((update as Dictionary).get("kind", "")) != "major"))
+	for raw in ordered:
+		var update: Dictionary = raw
+		var banners: Array = update.get("banners", [])
+		for index in range(banners.size()):
+			pages.append({"key": "%s#%d" % [str(update.get("id", "")), index], "update": update, "banner": banners[index]})
+	return pages
 
 
 func _ready() -> void:
@@ -214,7 +249,10 @@ func _show_page(index: int) -> void:
 			_page_view.queue_free()
 		var page: Dictionary = _pages[_at]
 		var ctx := {"still": _still, "narrow": _narrow, "width": _viewport_width(), "sound": bool(_prefs.get("soundEffects", false)), "metal": _metal, "engine": _engine}
-		_page_view = Themes.page(page["banner"], page["update"], ctx)
+		if page.has("changelog"):
+			_page_view = Themes.changelog_banner(page["banner"], page["changelog"], ctx)
+		else:
+			_page_view = Themes.page(page["banner"], page["update"], ctx)
 		_page_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_scroll.add_child(_page_view)
 		_scroll.scroll_vertical = 0

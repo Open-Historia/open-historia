@@ -9,8 +9,9 @@ const Espionage2 := preload("res://scripts/shell/themes/theme_espionage.gd")
 const Rostra := preload("res://scripts/shell/themes/theme_rostra.gd")
 const AirRaid := preload("res://scripts/shell/themes/theme_air_raid.gd")
 const Themes := preload("res://scripts/shell/themes/theme_themes.gd")
+const AiOverhaul := preload("res://scripts/shell/themes/theme_ai_overhaul.gd")
 
-const REGISTERED := ["themes", "rostra", "airRaid", "espionage2", "swarms", "warsAndFronts2", "seasonsAndWeather", "music", "chronicle"]
+const REGISTERED := ["aiOverhaul", "themes", "rostra", "airRaid", "espionage2", "swarms", "warsAndFronts2", "seasonsAndWeather", "music", "chronicle"]
 
 
 static func px(value: float) -> float:
@@ -32,6 +33,8 @@ static func page(banner: Dictionary, update: Dictionary, ctx: Dictionary) -> Con
 	if str(update.get("kind", "")) != "major":
 		return minor_banner(banner, update, ctx)
 	match str(banner.get("theme", "")):
+		"aiOverhaul":
+			return AiOverhaul.page(banner, update, ctx)
 		"themes":
 			return Themes.page(banner, update, ctx)
 		"rostra":
@@ -62,6 +65,8 @@ static func chrome(banner: Dictionary, update: Dictionary) -> Dictionary:
 			"skip": {},
 		}
 	match str(banner.get("theme", "")):
+		"aiOverhaul":
+			return AiOverhaul.chrome()
 		"themes":
 			return Themes.chrome()
 		"rostra":
@@ -105,6 +110,49 @@ static func minor_banner(banner: Dictionary, update: Dictionary, ctx: Dictionary
 		column.add_child(UpdateKit.gap(px(0.6)))
 		for item in items:
 			column.add_child(UpdateKit.list_item(str(item), px(0.82), UpdateKit.SOFT, UpdateKit.BASE_FONT, 1.5, px(1.1)))
+	plate.add_child(column)
+	return UpdateKit.plate_reveal(plate, still)
+
+
+static func changelog_banner(banner: Dictionary, updates: Array, ctx: Dictionary) -> Control:
+	var still: bool = ctx.get("still", false)
+	var plate := UpdateKit.plate({"background": Color("#1c1e22"), "radius": 14.0, "padding": Vector4(px(1.3), px(1.2), px(1.3), px(1.2))}, still)
+	var column := UpdateKit.vbox(0)
+	column.add_child(UpdateKit.text("Updates", px(0.68), UpdateKit.FAINT, UpdateKit.BASE_FONT, 700, false, 0.08, true))
+	column.add_child(UpdateKit.gap(px(0.3)))
+	column.add_child(UpdateKit.text(str(banner.get("title", "")), px(1.05), UpdateKit.INK, UpdateKit.BASE_FONT, 800))
+	column.add_child(UpdateKit.gap(px(0.4)))
+	for at in range(updates.size()):
+		if not (updates[at] is Dictionary):
+			continue
+		var update: Dictionary = updates[at]
+		var entry := PanelContainer.new()
+		entry.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		entry.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var line := StyleBoxFlat.new()
+		line.bg_color = Color(0, 0, 0, 0)
+		line.border_color = Color(1, 1, 1, 0.08)
+		line.border_width_top = 0 if at == 0 else 1
+		line.content_margin_top = px(0.75)
+		line.content_margin_bottom = px(0.1)
+		entry.add_theme_stylebox_override("panel", line)
+		var rows := UpdateKit.vbox(0)
+		if not str(update.get("date", "")).is_empty():
+			rows.add_child(UpdateKit.text(str(update.get("dateText", "")), px(0.68), UpdateKit.ACCENT, UpdateKit.BASE_FONT, 700, false, 0.08, true))
+		var banners: Array = update.get("banners", [])
+		for index in range(banners.size()):
+			if not (banners[index] is Dictionary):
+				continue
+			var told: Dictionary = banners[index]
+			rows.add_child(UpdateKit.gap(px(0.15) if index == 0 else px(0.55)))
+			rows.add_child(UpdateKit.text(str(told.get("title", "")), px(0.92), UpdateKit.INK, UpdateKit.BASE_FONT, 800))
+			var items: Array = told.get("items", [])
+			if not items.is_empty():
+				rows.add_child(UpdateKit.gap(px(0.35)))
+				for item in items:
+					rows.add_child(UpdateKit.list_item(str(item), px(0.82), UpdateKit.SOFT, UpdateKit.BASE_FONT, 1.5, px(1.1), true))
+		entry.add_child(rows)
+		column.add_child(entry)
 	plate.add_child(column)
 	return UpdateKit.plate_reveal(plate, still)
 
