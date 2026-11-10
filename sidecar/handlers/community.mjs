@@ -573,7 +573,7 @@ export const register = (ctx) => {
   const applyReviewChanges = async (review, changes) => {
     if (!changes.length) return;
     const details = await lib.loadScenarioDetails(review.scenarioId);
-    const { patch, uploads, clears } = applyKit.buildDetailSave(changes, details);
+    const { patch, uploads, clears } = applyKit.buildDetailSave(changes, details, { guidanceDefaults: engine.edPrompts.PROMPT_GUIDANCE_DEFAULTS });
     await lib.withSingleLibraryRefresh(async () => {
       if (Object.keys(patch).length) await lib.saveScenario(review.scenarioId, patch, { refresh: false });
       for (const upload of uploads) {
@@ -941,7 +941,10 @@ export const register = (ctx) => {
           }
         } else if (op === "accept") {
           const done = decided();
-          const pending = picked.filter((change) => !done.has(change.id) && review.statuses[change.id] !== "applied");
+          const open = picked.filter((change) => !done.has(change.id) && review.statuses[change.id] !== "applied");
+          const tooLong = open.filter((change) => applyKit.promptChangeOverLimit(change, engine.edPrompts.PROMPT_GUIDANCE_DEFAULTS));
+          const pending = open.filter((change) => !tooLong.includes(change));
+          if (!pending.length && tooLong.length) review.error = "This suggested prompt passage is more than 20% longer than the built-in one, so it cannot be accepted.";
           if (pending.length) {
             for (const change of pending) {
               const before = change.kind === "cover" ? review.coverBefore : applyKit.detailValueIn(review.snapshot, change);
@@ -954,6 +957,7 @@ export const register = (ctx) => {
             review.statuses = { ...review.statuses, ...Object.fromEntries(pending.map((change) => [change.id, "applied"])) };
             await decideReview(review, { accepted: new Set([...review.decisions.accepted, ...pending.map((change) => change.id)]), rejected: review.decisions.rejected })
               .catch((error) => { throw new Error(`Your scenario was changed, but the decision could not be saved: ${messageOf(error)}`); });
+            if (tooLong.length) review.error = "Some suggested prompt passages are more than 20% longer than the built-in ones, so they were not accepted.";
           }
         } else if (op === "undo") {
           const change = picked[0];

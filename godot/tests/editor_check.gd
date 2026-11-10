@@ -208,6 +208,35 @@ func _run() -> void:
 	_finish()
 
 
+func _prompt_limit(scenario_editor: Node, area: TextEdit) -> void:
+	var widgets: Dictionary = scenario_editor._prompt_widgets
+	var first: Dictionary = widgets.values()[0] if not widgets.is_empty() else {}
+	var limit := int(first.get("limit", 0))
+	_check(limit > 0, "each passage has its limit (%d)" % limit)
+	var count_ok := await _until(func() -> bool: return is_instance_valid(first.get("count")) and (first["count"] as Label).text == "%d / %d characters" % [area.text.strip_edges().length(), limit], 10.0)
+	_check(count_ok, "the passage counts its characters against the limit (%s)" % ((first["count"] as Label).text if first.has("count") else ""))
+	_check(_label(scenario_editor._content, "Bypass prompt length limit") != null, "the scenario's Prompts tab has the Bypass prompt length limit switch")
+	var kept := area.text
+	area.text = "x".repeat(limit + 37)
+	area.text_changed.emit()
+	var over := await _until(func() -> bool: return not scenario_editor.prompts_over_limit().is_empty(), 10.0)
+	_check(over, "a passage over its limit is caught")
+	await _wait(0.2)
+	_check((first["over"] as Label).text == "37 characters over the limit: shorten it to save.", "it says how far over it is (%s)" % (first["over"] as Label).text)
+	_check(scenario_editor._save_button.disabled and scenario_editor._prompt_alert.visible and scenario_editor._prompt_alert.text == "A prompt passage is longer than its limit. Shorten it or reset it in the Prompts tab to save.", "Save waits, and says why")
+	await _shoot("ed-07c-prompts-over-limit")
+	var bypass := scenario_editor._content.find_child("BypassToggle", true, false) as CheckBox
+	_check(bypass != null and not bypass.button_pressed, "the switch starts off")
+	if bypass:
+		bypass.button_pressed = true
+	var cleared := await _until(func() -> bool: return scenario_editor.prompts_over_limit().is_empty(), 10.0)
+	_check(cleared and not scenario_editor._save_button.disabled and (first["over"] as Label).text.is_empty(), "with the switch on, a long passage is counted but not capped")
+	await _shoot("ed-07d-prompts-bypass")
+	area.text = kept
+	area.text_changed.emit()
+	await _wait(0.4)
+
+
 func _scenario_flow() -> void:
 	await editor.open_scenario("default")
 	_check(editor.is_open() and editor.current_kind() == "scenario", "the drawer opened on the built-in scenario")
@@ -299,6 +328,7 @@ func _scenario_flow() -> void:
 		await _wait(0.2)
 		_check(_label(editor._content, "· edited") != null, "an edited passage is marked edited")
 		await _shoot("ed-07-prompts-edited")
+		await _prompt_limit(editor, area)
 	editor._go_section("features")
 	await _until(func() -> bool: return not _find_all(editor._content, func(entry: Node) -> bool: return entry is LineEdit and (entry as LineEdit).placeholder_text == "10,000", []).is_empty(), 20.0)
 	await _wait(0.4)
@@ -345,6 +375,18 @@ func _scenario_flow() -> void:
 	_check(not (disk_details.get("data", {}).get("world", {}).get("allowedUnitTypes", []) as Array).has("air"), "the saved troop types are on disk")
 	var prompts: Dictionary = disk_details.get("data", {}).get("prompts", {})
 	_check(JSON.stringify(prompts).contains("small republic"), "the edited prompt passage is saved")
+	_check(prompts.get("bypassLengthLimit") == true, "the scenario's Bypass prompt length limit is saved with its prompts")
+	var opened: Dictionary = await main.engine.request("picker.open", {"scenarioId": "default"})
+	_check(bool(opened.get("result", {}).get("bypassWarning", false)), "a new game from it is warned about its longer prompts")
+	var warning := LongerPromptsWarning.new()
+	main.ui.add_child(warning)
+	warning.show_for(str(opened.get("result", {}).get("scenario", {}).get("name", "")))
+	var answered := {"cancel": false}
+	warning.cancelled.connect(func() -> void: answered["cancel"] = true)
+	await _shoot("ed-07e-longer-prompts")
+	_press(_button(warning, "Cancel"))
+	await _wait(0.2)
+	_check(bool(answered["cancel"]) and not is_instance_valid(warning), "Cancel answers the warning and closes it")
 	_check(JSON.stringify(disk_details.get("data", {}).get("world", {}).get("warSettings", {})).contains("7500"), "the war setting is saved in the world")
 	var saved_features: Dictionary = disk_details.get("scenario", {}).get("features", {})
 	_check(saved_features.get("espionage") is Dictionary and not bool((saved_features["espionage"] as Dictionary).get("enabled", true)), "the feature switch is saved")
