@@ -125,10 +125,13 @@ test("the story is told so, and its order to attack there is carried out only wh
     events: [event("e1", "1916-08-04")],
     frontOrders: [{ id: "front-0", battlefield: "The Front", side: "Borduria", order: "advance", sector: "all", eventIds: ["e1"] }],
   });
-  assert.deepEqual(orders(told.battlefields[0]), [["Aland", "dig in", "all", SCENARIO_MARK], ["Borduria", "advance", "all", ""]]);
-  // To dig in or to hold is no attack: such an order needs no event.
+  // The story's attack is Borduria's order for its first week (STAFF_STORY_ORDER_DAYS); after that its own staff may change it.
+  const toldOrders = orders(told.battlefields[0]);
+  assert.deepEqual(toldOrders[0], ["Aland", "dig in", "all", SCENARIO_MARK]);
+  assert.ok(toldOrders[1][0] === "Borduria" && (toldOrders[1][1] === "advance" || toldOrders[1][3] === STAFF_MARK), JSON.stringify(toldOrders[1]));  // To dig in or to hold is no attack: such an order needs no event.
   const quiet = await turn(state, { from: "1916-08-30", to: "1916-09-29", seed: "campaign|4", frontOrders: [{ id: "front-0", battlefield: "The Front", side: "Borduria", order: "hold", sector: "all", eventIds: [] }] });
-  assert.deepEqual(orders(quiet.battlefields[0])[1], ["Borduria", "hold", "all", ""]);
+  // (Its own staff may take the order over after a week, and keep it.)
+  assert.deepEqual(orders(quiet.battlefields[0])[1].slice(0, 3), ["Borduria", "hold", "all"]);
 });
 
 test("a war begun on a border that was fortified in peace is fought: the side that began it attacks from its first day", async () => {
@@ -143,8 +146,9 @@ test("a war begun on a border that was fortified in peace is fought: the side th
   // What stood there was the posture of a border at peace, and the war ended it: neither order is the scenario's any more.
   assert.deepEqual(front.orders.map((order) => order.mark ?? "").filter((mark) => mark === SCENARIO_MARK), []);
   assert.equal(front.orders.find((order) => front.sides[order.s][0] === "Borduria").mark, STAFF_MARK);
-  // The defender stays dug in until somebody decides otherwise.
-  assert.deepEqual(orders(front).find(([side]) => side === "Aland"), ["Aland", "dig in", "all", ""]);
+  // The defender stays dug in until somebody decides otherwise: past a week its own staff may.
+  const aland = orders(front).find(([side]) => side === "Aland");
+  assert.ok((aland[1] === "dig in" && aland[3] === "") || aland[3] === STAFF_MARK, JSON.stringify(aland));
 
   // A side a person plays is that person's: the war begins and its troops wait for their orders.
   const mine = await start({ war: false, stance: ["dig in", "dig in"], players: ["Borduria"] });

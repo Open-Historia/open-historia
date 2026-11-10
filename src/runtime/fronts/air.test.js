@@ -50,7 +50,7 @@ test("in a game's run a country with no wings on the map flies its air arm over 
   const arms = fight({ mechanics: { air: true, military: true }, militaryOf: strong, airArms: true });
   assert.equal(bare.result.battlefields[0].brief.air, undefined, "without air arms nobody flies");
   assert.ok(arms.held > bare.held, `the better air arm takes more ground: ${arms.held} against ${bare.held}`);
-  assert.match(describeBattlefield(arms.result.battlefields[0], { max: 1400 }), /Air: Aland holds the sky \(\d+ wings against \d+\)/);
+  assert.match(describeBattlefield(arms.result.battlefields[0], { max: 1400 }), /Air: Aland holds the sky \(\d+ wings against \d+(?:, (?:fewer|as many) but stronger)?\)/);
   assert.equal(arms.result.unitChanges.some((change) => /^air arm/.test(change.unitId)), false, "an air arm is no unit of the world's");
   // A country with wings of its own on the map flies those and no air arm.
   const own = fight({ mechanics: { air: true, military: true }, militaryOf: strong, airArms: true, units: wings("Borduria", 1).map((unit) => ({ ...unit, lng: 27 })) });
@@ -97,4 +97,16 @@ test("a side's wings go where they are sent: to strike the other's troops, to su
   // advance has none of their support.
   assert.equal(worn(down), 0);
   assert.ok(down.held < support.held, `${down.held} against ${support.held}`);
+});
+
+// "the air line can read German Reich holds the sky (28 wings against 30)" (2026-11-10): the sky is held by strength, so
+// the line says so when the holder has no more wings, and a wing worn to nothing is not counted as flying.
+test("the air line explains a sky held by fewer or as many wings, and counts only wings with strength", async () => {
+  const { skyStrongerNote } = await import("./brief.js");
+  const { skyHeld } = await import("./air.js");
+  assert.equal(skyStrongerNote(28, 30), ", fewer but stronger");
+  assert.equal(skyStrongerNote(5, 5), ", as many but stronger");
+  assert.equal(skyStrongerNote(6, 2), "");
+  const battle = { wings: { holds: 0, superiority: 0.2, flying: [[{ strength: 80 }, { strength: 0 }], [{ strength: 10 }, { strength: 0 }, { strength: 0 }]] } };
+  assert.deepEqual(skyHeld(battle).wings, [1, 1]);
 });

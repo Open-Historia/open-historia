@@ -54,6 +54,39 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
+    // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
+    id: "2026-11-setup-choices-alike",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "The AI setup shows its three choices alike",
+        items: [
+          "Command Code is no longer marked as recommended in the AI setup that opens when you start a game without a key.",
+        ],
+      },
+    ],
+  },
+  {
+    // "make it be 7 days" (the owner, 2026-11-10): runtime/fronts/constants.js STAFF_STORY_ORDER_DAYS 45 -> 7; and the air line
+    // says when the sky is held by fewer but stronger wings (fronts/brief.js skyStrongerNote, air.js skyHeld counts only wings with strength).
+    id: "2026-11-commanders-change-course",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Commanders change course sooner",
+        items: [
+          "A country nobody plays keeps an order the story gave its front for a week, then its own commanders may change course.",
+          "A side that holds the sky with fewer wings than the other is told as holding it with fewer but stronger ones, and worn-out wings are no longer counted.",
+        ],
+      },
+    ],
+  },
+  {
     // "why does fighting the war take 60 seconds ... the whole thing about fighting in brest never happened"; "now ive
     // captured berlin and the game is still talking about things that happened historically"; "make it so the war
     // engine makes other countries reinforce more" (a player, 2026-11-10). runtime/fronts/brief.js lineGeography,
