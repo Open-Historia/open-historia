@@ -90,7 +90,7 @@ There is no Express server. `installWebApiRouter()` (`router.js`) replaces `wind
 ### The two branches that are *not* pure IndexedDB
 
 - **`runtime/pmtiles/<key>`** (`router.js`): first ask `getScenarioPmtilesOverride(key, range)` (a scenario may carry its own pmtiles in IndexedDB); otherwise fetch `mapArchiveUrl(key)` (`src/runtime/worldFiles.js`: `<ASSETS_BASE>/<key>.pmtiles`, the build's own z8 archive) with the incoming method and headers, so a `Range` is answered by the host that serves the site.
-- **`hub/*`** (`router.js`): the only hub call is a bundle download, `GET hub/file?url=…`, forwarded to `${VITE_OH_HUB_URL}/hub/file`. Community bundles are files on GitHub, which sends no CORS header on them, so a page cannot read one itself: the Worker fetches the file and returns it with the header. Any other hub path answers 404, and an unset `VITE_OH_HUB_URL` answers 502. Import counts are read from the hub's own index (`src/runtime/hubFiles.js`), straight from GitHub.
+- **`hub/*`** (`router.js`): the only hub call is a bundle download, `GET hub/file?url=…`, forwarded to `${VITE_OH_HUB_URL}/hub/file`. Community bundles are files on GitHub, which sends no CORS header on them, so a page cannot read one itself: the Worker fetches the file and returns it with the header. What is asked for is a checked copy in the hub's releases, or a suggestion's `.zip` the hub has checked (`src/runtime/hubFiles.js` decides). Any other hub path answers 404 (the import counter's routes are gone, and with them the session that was attached to its `POST`s), and an unset `VITE_OH_HUB_URL` answers 502. The hub's index (its list of posts, its checked files, the import counts) is read straight from `raw.githubusercontent.com` and a post's comments from `api.github.com`; both send CORS and are not intercepted.
 
 ---
 
@@ -271,13 +271,13 @@ About 69 MB in all. The archives are the z8 trims the desktop and the Android ap
 
 `scripts/stage-map-assets.mjs` downloads and verifies the files into `map-cache/` and lays them into a build (§1). `build:web` and `build:site` lay them into `dist-web/assets/`, and `build:site` then assembles the site, so they are served at `/play/assets/`. Before that, the Vite plugin `dropMapBinaries` (`vite.config.ts`) removes whatever map files `public/assets/` put into the output: a developer's `public/` holds the desktop's copies under the same names, and its `regions-seed.geojson` is 55 MB. For Android, `mobile/scripts/stage-map-assets.mjs` (`npm run map` in `mobile/`) is a thin wrapper around the same script and cache, and `mobile/scripts/stage-www.mjs` lays the files under `www/assets/` (see [mobile.md](mobile.md)).
 
-Every file must stay under Cloudflare Pages' 25 MiB a file (`SITE_FILE_LIMIT_BYTES` in the stager). `src/runtime/worldFiles.test.js` checks the list against the limit and against the names the app asks for, and the deploy workflow refuses a built site with a file over 24 MiB.
+Every file must stay under Cloudflare Pages' 25 MiB a file (`SITE_FILE_LIMIT_BYTES` in the stager). `src/runtime/worldFiles.test.js` checks the list against the limit and against the names the app asks for, and the deploy workflow refuses a built site with a file over 24 MiB. The deploy workflow caches `map-cache/` by the list's hash.
 
 ### Why the site carries its own copy
 
 A browser cannot read a GitHub release asset. Neither the release download (`github.com/.../releases/download/...`, which redirects to `release-assets.githubusercontent.com`) nor the API route sends an `Access-Control-Allow-Origin` header on the file (measured 2026-10-06), and the API route is limited to 60 requests an hour without a token. The desktop's fetcher is a Node script, where that header is not needed.
 
-The host must answer byte-range requests for static files: an archive is read by `Range` until the whole of it has been warmed into memory. Cloudflare Pages does (measured: a 206 on the live site). A self-hosted site needs a server that does too; nginx, Caddy, Apache, Netlify and GitHub Pages all do.
+The host need not answer byte-range requests: the website reads each archive once, whole, and slices it in memory, as the Android app does (`READ_ARCHIVES_WHOLE` in `assets.js`, `src/runtime/wholeFileSource.js`). Cloudflare Pages answers a `Range` request on a file of a megabyte or more with a 200 of the whole file (measured on openhistoria.com, 2026-10-28), which `pmtiles` refuses when it reads by range, so any static host works. The desktop's own server serves ranges and keeps reading them.
 
 ### What it replaced
 
@@ -347,6 +347,7 @@ The interceptor also answers these through the same `ctx` handler pattern (retur
 | `src/runtime/web/models.js` | constants, `resolveOwnerRef`, meta readers |
 | `src/runtime/web/util.js` | response builders, base64, SHA-256, range serving |
 | `src/runtime/web/retiredAccount.js` | one-time boot cleanup of a pre-removal sign-in |
+| `src/runtime/web/fakeIndexedDb.js` | in-memory IndexedDB for node tests of the stores (never bundled) |
 | `src/runtime/web/coverUrls.js` | covers as cached `blob:` object URLs |
 | `src/runtime/web/demoNotice.js` | the website's demo notice, over the game |
 | `src/runtime/web/nativeBoot.js` | the Android app's boot screen |

@@ -3,15 +3,12 @@
 //
 // A fortified line or a fleet's order is written as the war room's own ops
 // are: never while a turn runs, through the write queue on the world as it
-// stands, held to the map read for it, and in a shared game asked of the host
-// (which reads its own map) instead. Driven against an in-memory runtime
+// stands, and held to the map read for it. Driven against an in-memory runtime
 // store behind a stubbed fetch, the way the page talks to the local server.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { setSharedRequester } from "../multiplayer/client/sharedGameBridge.js";
-import { startRemoteRuntime, stopRemoteRuntime } from "../multiplayer/client/remoteRuntime.js";
 import { setRuntimeAssetEndpoints } from "./assets.js";
 import { readWorldState } from "./gameState.js";
 import { TURN_RUNNING_REFUSAL, sendFleetOp, sendFortifyOp } from "./warRoomWrites.js";
@@ -88,29 +85,4 @@ test("a fleet's order is written for the player's own fleet, and the map is read
   assert.deepEqual([world.units[0].posture, world.units[0].status], ["transit", "moving"]);
   await assert.rejects(sendFleetOp({ op: "station", unit: "u1", to: [3, 50] }, { readChart: sail.readChart }), /not at sea/);
   await assert.rejects(sendFleetOp({ op: "posture", unit: "u1", posture: "holding" }, { turnRunning: () => true }), new RegExp(TURN_RUNNING_REFUSAL.slice(0, 30)));
-});
-
-test("in a shared game the host is asked, with the op cut to its fields, and its own map is its own to read", async () => {
-  reset();
-  const asked = [];
-  let answer = { ok: false, error: "The host says no." };
-  setSharedRequester(async (t, fields) => {
-    asked.push([t, fields]);
-    return answer;
-  });
-  startRemoteRuntime({ publish: () => {}, urlFor: () => "" });
-  try {
-    const map = reading();
-    await assert.rejects(sendFortifyOp({ ...LINE, extra: "x", owner: "Aland" }, { readChart: map.readChart, turnRunning: () => true }), /The host says no/, "the host says whether a round is being resolved");
-    answer = { ok: true };
-    await sendFleetOp({ op: "blockade", unit: "u1", country: " Borduria ", to: [1, 2] }, { readChart: map.readChart });
-    assert.equal(map.reads.length, 0, "the page reads no map for the host");
-    assert.deepEqual(asked, [
-      ["fortify", { op: { op: "fortify", points: LINE.points, level: 5, name: "The Line", owner: "Aland" } }],
-      ["fleet", { op: { op: "blockade", unit: "u1", country: "Borduria" } }],
-    ]);
-  } finally {
-    stopRemoteRuntime();
-    setSharedRequester(null);
-  }
 });

@@ -353,46 +353,6 @@ export const PAST_UPDATES = Object.freeze([
     "banners": [
       {
         "theme": "chronicle",
-        "scene": "network",
-        "palette": {
-          "accent": "#36c6a0",
-          "ground": "#0c1614",
-          "font": "rounded"
-        },
-        "title": "Play Together",
-        "subtitle": "Shared games by invite code",
-        "lead": "Open Historia is multiplayer: host a game from the desktop app and play it with friends, each leading a country of their own.",
-        "sections": [
-          {
-            "heading": "Lobbies",
-            "icon": "people",
-            "items": [
-              "The main menu has a Lobbies tab: host a lobby from the desktop app and share its invite code.",
-              "Friends join with the code from the desktop app, the website or Android, and pick a country nobody else plays.",
-              "If joining gets stuck, the lobby says at which step."
-            ]
-          },
-          {
-            "heading": "Rounds",
-            "icon": "chess",
-            "items": [
-              "A round ends when the players are ready, after a countdown once enough of them are.",
-              "The host's computer runs each time skip on the host's AI key.",
-              "Each player is sent only what their own government may know."
-            ]
-          },
-          {
-            "heading": "Good to know",
-            "icon": "gear",
-            "items": [
-              "Connections are direct for now, so the host and each player can see each other's network address.",
-              "Everyone needs the same version of the game, and joiners need the lobby's scenario in their library."
-            ]
-          }
-        ]
-      },
-      {
-        "theme": "chronicle",
         "scene": "phone",
         "palette": {
           "accent": "#ff8a5c",

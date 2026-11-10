@@ -71,9 +71,6 @@ test("the real cards are the size the outlines say", () => {
   assert.match(hub, /const ScenarioCover = \(\{ post, borderRadius = "10px", marginBottom \}\) =>/);
   assert.match(hub, /borderRadius: "16px",\s+boxShadow: "0 14px 32px rgba\(0,0,0,0\.45\)",\s+boxSizing: "border-box",\s+color: "#fff",\s+display: "flex",\s+flexDirection: "column",\s+flex: `0 0 \$\{CARD_WIDTH\}`,\s+gap: "0\.55rem",\s+maxWidth: CARD_WIDTH,\s+minWidth: 0,\s+padding: "0\.9rem",/);
   assert.match(hub, /<div style=\{\{ display: "grid", gap: "0\.8rem", gridTemplateColumns: COMMUNITY_GRID_TEMPLATE, paddingBottom: "0\.35rem" \}\}>/);
-  const lobbies = read("../../multiplayer/ui/LobbiesTab.jsx");
-  assert.match(lobbies, /borderRadius: "18px",\s+padding: "1\.2rem 1\.3rem",/);
-  assert.match(lobbies, /<div style=\{\{ display: "grid", gap: "1\.1rem", maxWidth: "62rem", margin: "0" \}\}>/);
 });
 
 test("the Community tab's outlines: its browse grid of posts, each with its 16:9 cover", () => {
@@ -95,19 +92,10 @@ test("the Community tab's outlines: its browse grid of posts, each with its 16:9
   assert.deepEqual(unseen(whole), ["Loading Community…"]);
 });
 
-test("the Lobbies tab's outlines: its two cards, in its own column", () => {
-  const html = render(skeleton.LobbiesSkeleton, { label: "Loading lobbies…" });
-  assert.match(html, /^<div role="status"><span class="oh-visually-hidden">Loading lobbies…<\/span><div aria-hidden="true" style="display:grid;gap:1\.1rem;margin:0;max-width:62rem">/);
-  assert.equal(count(html, 'class="oh-skeleton"'), 2);
-  assert.equal(count(html, "border-radius:18px;padding:1.2rem 1.3rem"), 2);
-  assert.equal(seen(html).trim(), "");
-});
-
 test("nothing on the screen says Loading: the menu's pages show outlines, and a screen reader alone is told", () => {
-  // The four places that wrote it, each now an outline with the old words unseen.
+  // The three places that wrote it, each now an outline with the old words unseen.
   assert.doesNotMatch(libraryBar, /position: "fixed", right: "1\.25rem", top: "4\.35rem", zIndex: 10028/);
   assert.match(libraryBar, /\{!loaded && \(\s+<div className="oh-visually-hidden" role="status">\s+Loading games and scenarios\.\.\.\s+<\/div>\s+\)\}/);
-  assert.match(libraryBar, /<Suspense fallback=\{<LobbiesSkeleton label="Loading lobbies…" \/>\}>/);
   assert.match(libraryBar, /<Suspense fallback=\{<CommunitySkeleton count=\{isMobile \? 3 : 8\} gridTemplate=\{LIBRARY_GRID_TEMPLATE\} label="Loading Community…" withHeader \/>\}>/);
   assert.match(hub, /\{!posts && !error && \(\s+<CommunitySkeleton count=\{isMobile \? 3 : 8\} gridTemplate=\{COMMUNITY_GRID_TEMPLATE\} label="Loading community scenarios…" \/>\s+\)\}/);
   // The fallback cannot read the Community tab's template without loading the
@@ -118,13 +106,12 @@ test("nothing on the screen says Loading: the menu's pages show outlines, and a 
   assert.match(libraryBar, /\{loaded\s+\? browsedGames\.map\(\(game\) => \([\s\S]{0,400}?\)\)\s+: <MenuCardSkeletons count=\{isMobile \? 3 : 8\} kind="game" width=\{SHELF_CARD_WIDTH\} \/>\}/);
   assert.match(libraryBar, /\{loaded\s+\? browsedScenarios\.map\(\(scenario\) => \([\s\S]{0,900}?\)\)\s+: <MenuCardSkeletons count=\{isMobile \? 3 : 7\} kind="scenario" width=\{SHELF_CARD_WIDTH\} \/>\}/);
   // The old words are kept only where a screen reader alone reads them (they
-  // are translated already), and the Lobbies tab never had any.
-  for (const [source, text] of [[libraryBar, "Loading lobbies…"], [libraryBar, "Loading Community…"], [hub, "Loading community scenarios…"]]) {
+  // are translated already).
+  for (const [source, text] of [[libraryBar, "Loading Community…"], [hub, "Loading community scenarios…"]]) {
     assert.equal(count(source, text), 1, text);
     assert.ok(source.includes(`label="${text}"`), text);
   }
   assert.equal(count(libraryBar, "Loading games and scenarios..."), 1);
-  for (const file of ["../../multiplayer/ui/LobbiesTab.jsx", "../../multiplayer/ui/PublicLobbies.jsx"]) assert.doesNotMatch(read(file), /Loading/);
 });
 
 test("the glimmer is a flat band carried across each card, and stands still under reduced motion", () => {

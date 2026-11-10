@@ -194,7 +194,6 @@ test("a world event naming the player's country with decision-sounding words is 
   assert.deepEqual(screened.dropped, []);
   assert.equal(screened.events.length, 2);
   assert.deepEqual(wouldWithhold(screened), []);
-  // (sharedGameAgency.test.js: and where a shared game holds the boundary hard.)
 });
 
 test("the player's own order authorizes the same choice", () => {

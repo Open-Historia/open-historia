@@ -49,7 +49,6 @@ import {
   resolveRuntimeBinaryAsset,
   resolveEarlierBuiltInMap,
   setActiveGame,
-  setActiveGameHold,
   setSelectedScenario,
   updateGame,
   updateScenario,
@@ -140,7 +139,6 @@ import { AGENT_REQUESTS_DIR, writeAgentFolder, writeAgentSubagents } from "./age
 import { handleMcpMessage, tokenMatches } from "./agentMcp.js";
 import { AGENT_WAIT_MS, createAgentQueue } from "./agentQueue.js";
 import { appKindOf } from "./appKind.js";
-import { createClockOffsetCache } from "./clockOffset.js";
 import { createDiscordPresence, DISCORD_APPLICATION_ID, normalizePresence } from "./discordPresence.js";
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -644,21 +642,8 @@ app.post("/api/presence", jsonParser, (req, res) => {
   res.status(204).end();
 });
 
-// A shared game a friend invited this player to on Discord, and requests from
-// Discord to join this player's shared game (server/discordPresence.js). This
-// computer's player only.
-app.get("/api/presence/inbox", (req, res) => {
-  if (!isLoopbackAddress(req.socket?.remoteAddress)) return res.json({ join: null, requests: [] });
-  res.json(discordPresence.takeInbox?.() ?? { join: null, requests: [] });
-});
-app.post("/api/presence/answer", jsonParser, (req, res) => {
-  if (!isLoopbackAddress(req.socket?.remoteAddress)) return res.status(204).end();
-  const sent = discordPresence.answer?.(req.body?.userId, req.body?.accept === true) ?? false;
-  res.json({ sent });
-});
-
-// Which application this is: the desktop app (and whether it is the stable one,
-// the beta or the multiplayer build) or the server started by hand. Asked once by
+// Which application this is: the desktop app (and whether it is the stable one
+// or the beta) or the server started by hand. Asked once by
 // the page's visit counter (src/runtime/visitCount.js), which counts each apart.
 // Nothing is looked up to answer it.
 app.get("/api/app-kind", (req, res) => {
@@ -742,58 +727,6 @@ app.post("/api/app-update/restart", (req, res) => {
   }
   res.json({ restarting: true });
   updater.restart();
-});
-
-// A shared game's hidden engine window (electron/main.cjs), desktop only: the
-// host's page opens it when the host shares its game, and closes it when the host
-// stops. Like the updater, the handle is on globalThis because this server runs
-// inside the desktop app's own process; everywhere else there is none.
-const sharedGameEngine = () => globalThis.__ohSharedGameEngine || null;
-
-// While the engine window is open this computer is hosting, and the game it
-// hosts stays the open one (libraryStore.js setActiveGameHold): no page this
-// server serves may open, make-and-open or delete another in its place. Read
-// each time, so a window that closed by itself holds nothing.
-export const HOSTING_HOLDS_THE_GAME = "This computer is hosting a shared game, and the game it hosts stays its open game. Stop sharing first.";
-setActiveGameHold(() => (sharedGameEngine()?.status?.().open ? HOSTING_HOLDS_THE_GAME : ""));
-
-// How far this computer's clock is from the signaling relays' (clockOffset.js):
-// { offsetMs, sources }. A shared game asks before it joins or hosts, and
-// stamps its signaling by the relays' time (src/multiplayer/client/clock.js).
-const clockOffset = createClockOffsetCache();
-app.get("/api/multiplayer/clock", async (_req, res) => {
-  try {
-    res.json(await clockOffset());
-  } catch (error) {
-    sendError(res, 500, error);
-  }
-});
-
-app.get("/api/multiplayer/engine", (req, res) => {
-  const engine = sharedGameEngine();
-  res.json(engine ? { supported: true, ...engine.status() } : { supported: false });
-});
-
-app.post("/api/multiplayer/engine/open", async (req, res) => {
-  const engine = sharedGameEngine();
-  if (!engine) {
-    res.status(404).json({ error: "Only the desktop app can host a shared game." });
-    return;
-  }
-  try {
-    res.json(await engine.open());
-  } catch (error) {
-    sendError(res, 500, error);
-  }
-});
-
-app.post("/api/multiplayer/engine/close", (req, res) => {
-  const engine = sharedGameEngine();
-  if (!engine) {
-    res.status(404).json({ error: "Only the desktop app can host a shared game." });
-    return;
-  }
-  res.json(engine.close());
 });
 
 // Desktop display mode (fullscreen, maximized, windowed). Only the machine

@@ -10,7 +10,7 @@
 // start downloads it again.
 //
 // Only the installed stable and beta apps do this. A development run
-// (`npm run electron`, not packaged) and the multiplayer build never do; the
+// (`npm run electron`, not packaged) never does; the
 // website and the page code never do, because this is the desktop shell's own.
 // The Android apps (mobile/android .../AppFile.java) and the native app keep
 // their own file and their own mark.

@@ -291,7 +291,7 @@ The game reports a post's first import on an install (`src/runtime/hubImportCoun
 
 Set-up before the first deploy (owner, once): `wrangler d1 create oh-import-counts` and paste the id into `wrangler.toml` (until then `wrangler deploy` fails and the Worker already deployed keeps running), `wrangler secret put COUNT_KEY` (long random text). Then it rides the site deploy from `main` (§6.1). The privacy policy's Import Counts section describes all of this and must follow any change.
 
-### 7.2 Node registry — `open-historia-admin/registry/`
+### 7.2 Registry Worker — `open-historia-admin/registry/`
 
 The web-mode control plane (source of truth: the admin repo). Hosts the community hub proxy and accounts. Worker name `open-historia-registry`. The game itself no longer calls the account, sync or presence routes: accounts were removed from the web build (see [web-build.md §10](web-build.md#10-accounts-and-sync-removed)). Nor does it call the `/content` map proxy: the website carries its own map (see [web-build.md §8](web-build.md)). The one route the game still calls is `/hub/file`, the community hub proxy, because community bundles are files on GitHub and a browser cannot read those itself.
 
@@ -302,7 +302,7 @@ The web-mode control plane (source of truth: the admin repo). Hosts the communit
 | `IMPORT_COUNTER` | Service binding → `oh-import-counter` | For the older builds' `/hub/import-log` and `/hub/import-counts` (§7.1; this build calls neither). A direct binding because a Worker can't reach another same-account Worker via its public `workers.dev` URL (subrequest silently never arrives) |
 | `EMAIL` | Email Sending | Magic-link emails, sent by the Worker itself |
 
-The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry. Nothing the game needs at run time goes through it.
+The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry and deploys the site. Nothing the game needs at run time goes through it.
 
 The web game points at the registry through build-time env (`.env.web`), for the hub proxy only:
 
@@ -425,4 +425,4 @@ Tests: `server/payloadChunks.test.js`, `server/payloadUpdate.test.js` (a release
 
 - [World state](world-state.md) — the `world.json` shape that scenarios and the web seed carry
 - [Web build](web-build.md) — how the browser build carries and reads its map data
-- [Scenario hub](runtime-services.md) — the import flow that feeds the import counter
+- [Scenario hub](runtime-services.md) — the hub's index: its posts, its checked files and the import counts

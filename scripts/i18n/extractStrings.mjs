@@ -727,22 +727,13 @@ const PROSE_FILES = [
   // A time skip's progress and what stopped it.
   "src/Game/AI/skipPhases.js", "src/Game/AI/turnChecks.js", "src/Game/AI/playerTurnFailures.js",
   "src/Game/AI/gameplayLazy.js", "src/Game/AI/institutionGovernanceRetry.js", "src/Game/AI/aiRequestControl.js",
-  // A shared game: joining, hosting, and what the host refuses.
-  "src/multiplayer/client/joinProgress.js", "src/multiplayer/client/gameClient.js",
-  "src/multiplayer/client/remoteRuntime.js", "src/multiplayer/client/sharedGame.js",
-  "src/multiplayer/client/sharedGameBridge.js", "src/multiplayer/host/gameHost.js",
-  "src/multiplayer/host/institutions.js", "src/multiplayer/host/agents.js", "src/multiplayer/host/forces.js",
-  "src/multiplayer/host/engineMain.js", "src/multiplayer/host/settings.js", "src/multiplayer/host/advisorDesk.js",
-  "src/multiplayer/signaling/publicServers.js",
   // The local server's refusals the Workshop, the hub and Settings show.
   "server/tiledBasemaps.js", "server/musicLibrary.js", "server/flagValidation.js", "server/polityRename.js",
   "server/hubProvenance.js", "server/officialBasemaps.js", "server/hubCache.js", "server/basemapStore.js",
 ];
 // Modules whose returned and thrown sentences are read whole, but whose other
 // strings are pieces of them.
-const MESSAGE_ONLY_FILES = [
-  "src/multiplayer/client/clock.js", "src/multiplayer/invite.js", "src/multiplayer/transport/peer.js",
-];
+const MESSAGE_ONLY_FILES = [];
 // Text outside the page: the desktop app's own menus and dialogs, which the
 // main process translates with uiWord() (electron/uiWords.cjs). Only what is
 // handed to uiWord is read.

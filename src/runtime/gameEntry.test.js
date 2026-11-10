@@ -140,8 +140,8 @@ test("a game that could not be opened is not entered", async () => {
 
 test("a new game made to be played is entered when the library holds it; one made aside is not", async () => {
   await fresh();
-  // A shared game's stand-in is made without setActive, and opened by activateGame later.
-  await library.createGame({ id: "stand-in", name: "Shared game", scenarioId: "modern" });
+  // A game made without setActive is opened by activateGame later.
+  await library.createGame({ id: "aside", name: "Made aside", scenarioId: "modern" });
   assert.equal(entry.hasEnteredGame(), false);
 
   const activeWhenEntered = [];
@@ -158,8 +158,6 @@ const app = read("../App.jsx");
 const main = read("../Game/GameUI/main.jsx");
 const menu = read("../Game/GameUI/libraryBar.jsx");
 const cover = read("../Game/GameUI/gameLoadingScreen.jsx");
-const lobbies = read("../multiplayer/ui/LobbiesTab.jsx");
-const sharedGame = read("../multiplayer/client/sharedGame.js");
 
 test("App.jsx mounts the map only once a game is entered", () => {
   assert.match(app, /const gameEntered = useGameEntered\(\);/);
@@ -264,13 +262,7 @@ test("every way out of the menu opens a game: each flow closes it and then has t
   }
 });
 
-test("hosting and joining a shared game enter the game the menu closes over", () => {
-  assert.match(menu, /<LobbiesTab hosting=\{lobbyHosting\} onHostingChange=\{setLobbyHosting\} onEnterGame=\{enterActiveGame\} \/>/);
-  assert.match(lobbies, /await joinSharedGame\(\{ token: code, name: name \|\| "Player" \}\);\s*onEnterGame\?\.\(\);/);
-  assert.match(lobbies, /await hostSharedGame\(\{ settings, name: name \|\| "Host" \}\);\s*onClose\?\.\(\);\s*onEnterGame\?\.\(\);/);
-  // The guest's stand-in is opened by the library like any game.
-  assert.match(sharedGame, /await activateGame\(gameId\);/);
-  // Back, on a phone, closes the menu only over a game it was opened from, and by the same way out.
+test("Back, on a phone, closes the menu only over a game it was opened from", () => {
   assert.match(menu, /useBackToClose\(menuOpen && menuOverGame && Boolean\(activeGame\), enterActiveGame\);/);
 });
 

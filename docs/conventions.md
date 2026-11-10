@@ -25,7 +25,7 @@ Sibling repos in the same org that the code and docs reference (not part of this
 
 | Repo | Purpose |
 |------|---------|
-| `Open-Historia/open-historia-admin` | Private registry Worker (D1) + signing panel; deploys the website. |
+| `Open-Historia/open-historia-admin` | Private registry Worker (D1) + admin panel; deploys the website. |
 | `Open-Historia/Open-historia-scenarios` | The Scenario Hub — official presets + community scenarios. |
 
 ---

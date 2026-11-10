@@ -48,7 +48,8 @@ This produces `dist-web/`, with the map under `dist-web/assets/`: six files, abo
 69 MB, each under Cloudflare Pages' 25 MiB a file. The first build downloads them into
 `map-cache/` (gitignored) and later builds reuse that cache. The build fails if a file
 cannot be downloaded or does not match its pinned size and sha256. (Base path is `/`,
-correct for Cloudflare Pages.)
+correct for Cloudflare Pages.) The production site (`openhistoria.com`) is built with
+`npm run build:site` instead, by `.github/workflows/deploy-site.yml`.
 
 To use your own Worker for the community hub, set its URL for the build:
 
@@ -93,12 +94,12 @@ in the browser (Export/Import for backups).
 
 - **The map is six static files under `assets/`:** `regions.pmtiles`, `countries.pmtiles`,
   `cities.pmtiles`, `regions-seed.geojson`, `default-regions.geojson` and
-  `cities-seed.json`. If the world map is empty, check that they are in the deployed site
-  and that the host answers a `Range` request for a `.pmtiles` file with a 206.
+  `cities-seed.json`. If the world map is empty, check that they are in the deployed site.
 - **Nothing in the site is signed,** so no signing key is needed to build or deploy it.
 - **Updating the game:** rebuild (`npm run build:web`) and re-run
   `wrangler pages deploy`. Everyone gets the update on their next load — no per-player step.
-- **Updating the map:** the files are pinned in `scripts/map-assets.web.json`. A rebuild
-  after that list changes downloads the new files and the next deploy carries them.
+- **Updating the map:** upload the new files to the `map-data` release and put their
+  `bytes`/`sha256` in `scripts/map-assets.web.json`. A rebuild after that list changes
+  downloads the new files and the next deploy carries them.
 - **Local single-player is unaffected** by all of this — the downloadable app still runs
   its own server and never uses any of the web-mode code.

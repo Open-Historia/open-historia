@@ -11,14 +11,8 @@ import { planApprovedAdvisorAction, planCancelApprovedAdvisorAction, recordAdvis
 // Identity and recipient authority are re-read from persisted Advisor state
 // before both approvals and cancellations. The displayed card is not authority.
 const readReviewedProposal = async ({
-  threadId, messageId, proposalId, readAdvisorMessages, sharedGame,
+  threadId, messageId, proposalId, readAdvisorMessages,
 }) => {
-  // Host request "order" currently accepts text only, with no stable proposal
-  // ID/acknowledged Action ID. Retrying after a lost ack could issue twice.
-  // Refuse instead of presenting a false idempotency guarantee in multiplayer.
-  if (sharedGame) {
-    throw new Error("Advisor Action review in shared games needs host-backed proposal IDs. Queue through the Actions panel for now.");
-  }
   const saved = await readAdvisorMessages({ force: true });
   if (!Array.isArray(saved)) throw new Error("The Advisor conversation could not be read.");
   if (threadId !== CHIEF_ADVISOR_THREAD) {
@@ -59,11 +53,10 @@ export const approveAdvisorAction = async ({
   mutateAdvisorState,
   normalizeAction,
   repeatOf,
-  sharedGame = false,
   assertReady = () => {},
 } = {}) => {
   const { message, proposal } = await readReviewedProposal({
-    threadId, messageId, proposalId, readAdvisorMessages, sharedGame,
+    threadId, messageId, proposalId, readAdvisorMessages,
   });
   // Cancelled creates can be re-queued with their original deterministic ID.
   // A receipt for an edit/remove stays a terminal, acknowledged operation.
@@ -97,11 +90,10 @@ export const cancelApprovedAdvisorAction = async ({
   readAdvisorMessages,
   mutateActionsState,
   mutateAdvisorState,
-  sharedGame = false,
   assertReady = () => {},
 } = {}) => {
   const { message, proposal } = await readReviewedProposal({
-    threadId, messageId, proposalId, readAdvisorMessages, sharedGame,
+    threadId, messageId, proposalId, readAdvisorMessages,
   });
   if (proposal.operation !== "create") {
     throw new Error("Only a newly queued Advisor Action can be cancelled from its proposal card.");

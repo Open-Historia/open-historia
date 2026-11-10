@@ -34,10 +34,9 @@ const fakeFetch = (answer) => {
   return { impl, calls };
 };
 
-test("each desktop build has its own file, and the multiplayer build and unknown builds have none", () => {
+test("each desktop build has its own file, and unknown builds have none", () => {
   assert.equal(appFileFor("stable"), "main.app.txt");
   assert.equal(appFileFor("beta"), "beta.app.txt");
-  assert.equal(appFileFor("multiplayer"), null);
   assert.equal(appFileFor("toString"), null);
   assert.equal(appFileFor(undefined), null);
   assert.equal(appFileUrl("main.app.txt"), "https://github.com/Open-Historia/open-historia/releases/download/app-files/main.app.txt");
@@ -80,12 +79,11 @@ test("a start that could not download it leaves no mark, and the next start trie
   assert.equal(online.calls.length, 1);
 });
 
-test("a development run and the multiplayer build never download anything", async () => {
+test("a development run never downloads anything", async () => {
   const markFile = tempMark();
   const { impl, calls } = fakeFetch(200);
   assert.equal(await fetchAppFileOnce({ channel: "stable", packaged: false, markFile, fs, fetchImpl: impl }), "not-counted");
   assert.equal(await fetchAppFileOnce({ channel: "beta", packaged: false, markFile, fs, fetchImpl: impl }), "not-counted");
-  assert.equal(await fetchAppFileOnce({ channel: "multiplayer", packaged: true, markFile, fs, fetchImpl: impl }), "not-counted");
   assert.equal(calls.length, 0);
   assert.equal(fs.existsSync(markFile), false);
 });

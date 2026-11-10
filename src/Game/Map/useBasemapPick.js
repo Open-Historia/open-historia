@@ -1,7 +1,6 @@
 /*! Open Historia — the basemap pick of the game on screen © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// A player's basemap pick is kept for each game, on this device, and never sent
-// to the other players of a shared game; their default basemap, set in the main
-// menu's Settings, applies to every game that has no pick of its own and offers
+// A player's basemap pick is kept for each game, on this device; their default
+// basemap, set in the main menu's Settings, applies to every game that has no pick of its own and offers
 // that map (runtime/basemapPick.js basemapShownFor).
 import { useCallback } from "react";
 import {

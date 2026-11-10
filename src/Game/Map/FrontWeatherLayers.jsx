@@ -14,8 +14,8 @@
 // Map), and Weather effects under it ("add a setting to turn off the visual
 // weather effects"), and the scenario's wars have weather.
 //
-// Each zone's weather is the one the last turn wrote (world.zoneWeather, the
-// same on every screen of a shared game); before the first turn it is worked
+// Each zone's weather is the one the last turn wrote (world.zoneWeather);
+// before the first turn it is worked
 // out here as the turn would (runtime/zoneWeather.js), from this game's own id.
 
 import React, { useEffect, useMemo } from "react";

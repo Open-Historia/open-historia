@@ -8,9 +8,8 @@
 //
 // Each outline has the corners, the least height, the padding and the parts of
 // the card it stands for: the Games and the Scenarios tabs' cards (GameCard and
-// ScenarioCard in libraryBar.jsx), the Community tab's (ScenarioCard in
-// communityHub.jsx, as its browse grid lays it out) and the Lobbies tab's two
-// (multiplayer/ui/LobbiesTab.jsx, PublicLobbies.jsx). The library's outlines
+// ScenarioCard in libraryBar.jsx) and the Community tab's (ScenarioCard in
+// communityHub.jsx, as its browse grid lays it out). The library's outlines
 // are handed to its LibraryCollection as children, so they sit in its own grid
 // (or a phone's shelf); the other pages' outlines carry their page's grid.
 //
@@ -172,54 +171,6 @@ export const CommunitySkeleton = ({ count = 8, gridTemplate, label, withHeader =
       )}
       <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: gridTemplate, paddingBottom: "0.35rem" }}>
         {Array.from({ length: count }, (_, index) => <CommunityCardSkeleton key={index} />)}
-      </div>
-    </div>
-  </div>
-);
-
-const lobbyCard = { background: GROUND, border: EDGE, borderRadius: "18px", padding: "1.2rem 1.3rem" };
-// The public lobbies' list: its columns' widths, a row of headings and three rows.
-const LOBBY_COLUMNS = ["24%", "20%", "10%", "10%", "10%", "8%"];
-const LOBBY_FILTERS = ["7.5rem", "7rem", "8rem", "7.5rem"];
-
-// The Lobbies tab while its code is on its way: its two cards, Join a private
-// lobby (the heading and lead, the invite code and the name, Join, the note
-// under them) and Public lobbies (the heading, the filters and the list).
-export const LobbiesSkeleton = ({ label }) => (
-  <div role="status">
-    <Unseen>{label}</Unseen>
-    <div aria-hidden="true" style={{ display: "grid", gap: "1.1rem", margin: "0", maxWidth: "62rem" }}>
-      <div className="oh-skeleton" style={lobbyCard}>
-        <Shape height="1.1rem" radius="6px" width="13rem" />
-        <Shape height="0.86rem" radius="6px" style={{ marginTop: "0.75rem" }} width="88%" />
-        <Shape height="0.86rem" radius="6px" style={{ marginTop: "0.45rem" }} width="54%" />
-        <div style={{ alignItems: "flex-end", display: "flex", flexWrap: "wrap", gap: "0.7rem", marginTop: "1.1rem" }}>
-          <div style={{ flex: "3 1 16rem" }}>
-            <Shape height="0.72rem" radius="6px" width="6rem" />
-            <Shape height="2.6rem" radius="12px" style={{ marginTop: "0.45rem" }} />
-          </div>
-          <div style={{ flex: "1 1 9rem" }}>
-            <Shape height="0.72rem" radius="6px" width="5rem" />
-            <Shape height="2.6rem" radius="12px" style={{ marginTop: "0.45rem" }} />
-          </div>
-          <Shape height="2.75rem" style={{ flexShrink: 0 }} width="4.6rem" />
-        </div>
-        <Shape height="0.78rem" radius="6px" style={{ marginTop: "1rem" }} width="96%" />
-        <Shape height="0.78rem" radius="6px" style={{ marginTop: "0.42rem" }} width="72%" />
-      </div>
-      <div className="oh-skeleton" style={lobbyCard}>
-        <Shape height="1.1rem" radius="6px" width="9rem" />
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.9rem" }}>
-          <Shape height="2.1rem" radius="10px" style={{ flex: "1 1 12rem" }} width="auto" />
-          {LOBBY_FILTERS.map((width, index) => <Shape key={index} height="2.1rem" radius="10px" style={{ flexShrink: 0 }} width={width} />)}
-        </div>
-        <div style={{ marginTop: "0.8rem" }}>
-          {[0, 1, 2, 3].map((row) => (
-            <div key={row} style={{ borderTop: row ? "1px solid rgba(255,255,255,0.06)" : "none", display: "flex", gap: "1rem", padding: "0.62rem 0.5rem" }}>
-              {LOBBY_COLUMNS.map((width, column) => <Shape key={column} height={row ? "0.82rem" : "0.72rem"} radius="6px" width={width} />)}
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   </div>

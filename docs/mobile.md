@@ -1,6 +1,6 @@
 # Android app — everything on the device
 
-The Android app is the game's own web bundle inside a Capacitor 7 WebView, built with `--mode android`, with the world map inside the APK. After install it plays in airplane mode: the library lives on the phone, the map is read from the bundle, files save through the share sheet, and a model on the player's own network is reached through native HTTP. None of that needs the network. With a connection, these do use it: the player's AI provider, the community hub, the update check (GitHub), the map's basemap and terrain tiles (ESRI, AWS), flag pictures that are not in the bundle (flagcdn, or wherever a scenario's flag is kept), place search (Photon), the setup video once the player presses play (YouTube), and shared games (public relay servers, Google's and Cloudflare's STUN servers, and the host's computer).
+The Android app is the game's own web bundle inside a Capacitor 7 WebView, built with `--mode android`, with the world map inside the APK. After install it plays in airplane mode: the library lives on the phone, the map is read from the bundle, files save through the share sheet, and a model on the player's own network is reached through native HTTP. None of that needs the network. With a connection, these do use it: the player's AI provider, the community hub, the update check (GitHub), the map's basemap and terrain tiles (ESRI, AWS), flag pictures that are not in the bundle (flagcdn, or wherever a scenario's flag is kept), place search (Photon), and the setup video once the player presses play (YouTube).
 
 It has been three different things. First a thin WebView that asked for the address of a server the player ran themselves (a desktop on the LAN, or Termux on the phone). Then, from 2026-09-04, the website's bundle verbatim, which streamed every map tile over the network — an app that could not open without it. Since 2026-09-22 it is what this page describes. (A fourth design — the real Express server run in-process by nodejs-mobile — was documented in detail here and never built; the docs that described it have been rewritten.)
 
@@ -92,8 +92,7 @@ The plugin's methods (`SaveMovePlugin.java`): `info` (`moveTo`, `target` = `same
 1. Set both variables.
 2. Stable: merge to `main`, then run **Build Android APK** from `main`. It publishes `open-historia.apk` (the app, new id), `update.json`, `open-historia-handover.apk` and `latest.json` to `android`. Beta: run **Build Android APK (Beta)** from `beta`; the same four files with `-beta` names on `android-beta`.
 3. On a phone with the old app: open it; it updates to the handover build, then the card installs the new app and moves the games.
-4. The multiplayer servers' `ALLOWED_ORIGINS` (ops/README.md) list `http://app.openhistoria`; keep `http://` + the old host there too while players are still on the handover build.
-5. Leave the variables set for as long as old installs may still come back: each run then rebuilds the handover build from the current code. Unset, the runs publish only the app, and `latest.json` keeps naming the last handover build.
+4. Leave the variables set for as long as old installs may still come back: each run then rebuilds the handover build from the current code. Unset, the runs publish only the app, and `latest.json` keeps naming the last handover build.
 
 ## Verification
 

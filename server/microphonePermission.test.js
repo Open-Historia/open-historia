@@ -63,7 +63,7 @@ test("on macOS the system's own prompt decides", async () => {
 test("every macOS build says why it wants the microphone", () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
   assert.match(pkg.build.mac.extendInfo.NSMicrophoneUsageDescription, /Advisor/);
-  for (const file of ["electron-builder.beta.yml", "electron-builder.multiplayer.yml"]) {
+  for (const file of ["electron-builder.beta.yml"]) {
     const yml = fs.readFileSync(path.join(ROOT, file), "utf8");
     assert.match(yml, /^ {2}extendInfo:\r?\n {4}NSMicrophoneUsageDescription: .*Advisor/m, file);
   }

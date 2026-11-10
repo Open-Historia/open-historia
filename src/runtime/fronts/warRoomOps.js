@@ -1,11 +1,9 @@
 /*! Open Historia — what a person does in the war room, written onto the battlefields © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The war room (GameUI/warRoom.jsx) changes a battlefield in a handful of ways,
-// and every one of them is an OP: a plain object that says what was done. The
-// page playing alone applies it to its own world; a page in a shared game
-// sends it to the host, which applies the very same op for the country that
-// asked (runtime/warRoomWrites.js, multiplayer/host/gameHost.js). So the rules
-// are here once: whose troops they are, what may be ordered, where a way may
-// be drawn.
+// and every one of them is an OP: a plain object that says what was done,
+// applied to the world for the country that asked (runtime/warRoomWrites.js).
+// So the rules are here once: whose troops they are, what may be ordered,
+// where a way may be drawn.
 //
 //   { op: "order",     battlefield, troops, order, objective? }   troops picked out are told something
 //   { op: "route",     battlefield, troops, way }                 ... or sent along a route drawn for them

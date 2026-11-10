@@ -6,9 +6,8 @@
 // application so how many people are playing in the main, and beta apps
 // individually." In Umami that is the Tag filter.
 //
-// The page cannot tell by itself. The stable desktop app, the beta and the
-// multiplayer build serve the same files from the same localhost address, and so
-// does the server somebody starts from the zip; only the server knows which it is
+// The page cannot tell by itself. The stable desktop app and the beta serve
+// the same files from the same localhost address, and so does the server somebody starts from the zip; only the server knows which it is
 // inside (server/appKind.js, GET /api/app-kind).
 //
 // What is not counted, and so is never asked either:
@@ -34,7 +33,6 @@ export const VISIT_TAGS = Object.freeze({
   website: "website",
   stable: "desktop-main",
   beta: "desktop-beta",
-  multiplayer: "desktop-multiplayer",
   local: "self-hosted",
 });
 
@@ -51,7 +49,7 @@ export const VISIT_CONSENT_LABELS = Object.freeze({
 });
 
 // The desktop builds, by the channel electron/channel.cjs reads.
-const DESKTOP_TAGS = Object.freeze({ stable: VISIT_TAGS.stable, beta: VISIT_TAGS.beta, multiplayer: VISIT_TAGS.multiplayer });
+const DESKTOP_TAGS = Object.freeze({ stable: VISIT_TAGS.stable, beta: VISIT_TAGS.beta });
 
 const isThisComputer =(hostname) => /^(localhost|127(?:\.\d{1,3}){3}|\[?::1\]?)$/i.test(String(hostname ?? "").trim());
 

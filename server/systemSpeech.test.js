@@ -158,7 +158,7 @@ test("every build ships the program outside its archive, and macOS says why it w
   assert.ok(pkg.build.asarUnpack.includes("electron/speech/**"));
   assert.ok(pkg.build.files.includes("!electron/speech/*.{cs,swift,plist}"));
   assert.match(pkg.build.mac.extendInfo.NSSpeechRecognitionUsageDescription, /Advisor/);
-  for (const file of ["electron-builder.beta.yml", "electron-builder.multiplayer.yml"]) {
+  for (const file of ["electron-builder.beta.yml"]) {
     const yml = fs.readFileSync(path.join(ROOT, file), "utf8");
     assert.match(yml, /^asarUnpack:\r?\n(?: {2}.*\r?\n)*? {2}- electron\/speech\/\*\*\r?$/m, file);
     assert.match(yml, /^ {4}NSSpeechRecognitionUsageDescription: .*Advisor/m, file);

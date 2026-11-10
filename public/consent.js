@@ -45,7 +45,7 @@
   var ANSWER_DAYS = 180;
   var SITE_HOSTS = ["openhistoria.com", "www.openhistoria.com"];
   // The applications, as src/runtime/visitCount.js names them.
-  var DESKTOP_TAGS = { stable: "desktop-main", beta: "desktop-beta", multiplayer: "desktop-multiplayer" };
+  var DESKTOP_TAGS = { stable: "desktop-main", beta: "desktop-beta" };
   var LOCAL_TAG = "self-hosted";
   var WEBSITE_TAG = "website";
 

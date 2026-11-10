@@ -20,9 +20,9 @@ import { bootText, bootTranslated } from "./bootTexts.js";
 
 const BOOT_ID = "oh-native-boot";
 
-// Long enough that a fast connection does not flash the screen and vanish, short
-// enough that it never feels like a wait. Measured from first paint, not from the
-// connection starting, so seeding time counts toward it.
+// Long enough that a fast phone does not flash the screen and vanish, short
+// enough that it never feels like a wait. Measured from first paint, so seeding
+// time counts toward it.
 export const MIN_VISIBLE_MS = 500;
 
 // The boot screen must never be the reason a player cannot reach their games.

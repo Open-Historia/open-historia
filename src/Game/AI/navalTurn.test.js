@@ -22,7 +22,6 @@ import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { enlarge, syntheticMap } from "../../runtime/fronts/syntheticMap.js";
 import { BLOCKADE_BITES_DAYS, BLOCKADE_GDP_A_YEAR, gdpUnderBlockade } from "../../runtime/naval/blockade.js";
 import { NAVAL_REACH_KM } from "../../runtime/naval/engine.js";
-import { PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
 import { frontsLiveBlock, seasLiveBlock, turnBlockades, withBlockadeEconomy, withFrontUnits } from "./frontApply.js";
 import { applyFrontUnitChanges, runTurnFronts } from "./frontTurn.js";
 import { SEAS_BLOCK_HEADING, SEAS_BLOCK_MAX, buildSeasBlock, describeBlockade, describeSeaBattle } from "./navalPrompt.js";
@@ -252,7 +251,6 @@ test("the world keeps the turn's battles and when each navy was made or lost, an
   assert.deepEqual(world.seaBattles.map((entry) => [entry.id, entry.round, entry.place, entry.winner, entry.fleets[1][0].broke]), [["sea:1914-08-12:0", 3, "off Heligoland", 0, true]]);
   assert.deepEqual(world.naviesRaised, [{ country: "Teutonia", date: "1914-08-12" }]);
   assert.deepEqual([normalizeWorldState({}).seaBattles, normalizeWorldState({}).naviesRaised], [[], []], "a save from before has neither");
-  assert.ok(PUBLIC_WORLD_KEYS.includes("seaBattles"));
   const gameplay = read("gameplay.js");
   assert.ok(gameplay.includes("...(turnFronts ? { seaBattles: withTurnSeaBattles(baseWorld?.seaBattles, turnFronts.sea?.battles, nextGame.round) } : null),"));
   assert.ok(gameplay.includes("...(turnFronts?.sea ? { naviesRaised: turnFronts.sea.raised } : null),"));
@@ -293,7 +291,6 @@ test("a turn works out the period's blockades, and the world keeps them with the
   assert.deepEqual(turnBlockades({ blockades: second }, { sea: null }), []);
   assert.deepEqual(normalizeWorldState({ blockades: [...second, { country: "", pressure: 1 }, "x"] }).blockades, second);
   assert.deepEqual(normalizeWorldState({}).blockades, []);
-  assert.ok(PUBLIC_WORLD_KEYS.includes("blockades"), "every player's map is given them");
 });
 
 test("a blockade is taken off the economy of the country it is laid on, by how hard it pressed and how long", async () => {

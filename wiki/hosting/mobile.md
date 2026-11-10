@@ -78,9 +78,7 @@ noticeably. See [settings](/wiki/settings/).
 of memory or less: the map loads in smaller steps with fewer workers. <b>Full</b> is faster on a
 strong tablet. A change applies once the game is reloaded.</p>
 
-<p class="beta-note"><b>The beta app can join a shared game.</b> In the main menu's
-<b>Lobbies</b> tab, <b>Join a private lobby</b> takes the invite code a host sent you; hosting
-needs the desktop app. Detailed maps are desktop-only: on a phone a scenario that uses one shows
+<p class="beta-note"><b>Detailed maps are desktop-only.</b> On a phone a scenario that uses one shows
 the drawn map underneath.</p>
 
 ## iPhone and iPad

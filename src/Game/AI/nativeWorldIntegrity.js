@@ -3692,11 +3692,9 @@ export const screenGeneratedWorldEvents = ({
   // What native provenance concluded about each event that involves the player
   // without authority, enforced or not: the console trail for tuning the rule.
   const playerVerdicts = [];
-  // The polities people play (runtime/humanPolities.js). Single player keeps an
-  // event it cannot attribute, as it always has; a shared game holds the human
-  // boundary hard, so one person's orders never make another's country choose.
+  // The polities people play (runtime/humanPolities.js). An event it cannot
+  // attribute is kept, as it always has been.
   const humanCountries = humanCountriesOf(game);
-  const sharedGame = humanCountries.length > 1;
   // One identity index for the whole batch: every check below reads it. It
   // knows every human polity of a shared game.
   const resolver = createWorldActorResolver(world, normalizeString(game?.country), {
@@ -3750,20 +3748,15 @@ export const screenGeneratedWorldEvents = ({
       });
     }
 
-    const refusal = sharedGame
-      ? binding.unresolved.find((entry) => entry.rowIndex === -1 && HUMAN_SOVEREIGN_REFUSAL_SET.has(entry.reason))
-      : null;
-    const agencyReason = refusal
-      ? `${refusal.polity || "a human-controlled polity"} is played by a person, and only its own orders and messages make its government's choices`
-      : eventAgencyAuthorityReason(event, {
-        world,
-        gameCountry: normalizeString(game?.country),
-        humanCountries,
-        actions,
-        chats,
-        requireAgency: false,
-        resolver,
-      });
+    const agencyReason = eventAgencyAuthorityReason(event, {
+      world,
+      gameCountry: normalizeString(game?.country),
+      humanCountries,
+      actions,
+      chats,
+      requireAgency: false,
+      resolver,
+    });
     if (agencyReason) {
       dropped.push({
         id: normalizeString(event?.id),

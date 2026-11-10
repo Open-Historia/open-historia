@@ -63,7 +63,7 @@ test("a place's posts are one request, made on a pick or a press and never for t
   assert.match(read("../../main.jsx"), /deleteDatabase\("oh-listen-in"\)/);
 });
 
-test("an empty feed says so and offers Refresh: one request, made on the press, never in a shared game", () => {
+test("an empty feed says so and offers Refresh: one request, made on the press", () => {
   const refresh = read("./rostraRefresh.jsx");
   assert.match(panel, /posts\.length === 0 && tab === "all" \? \(\n\s*<EmptyFeedRefresh canPost=\{canPost\} \/>/);
   assert.match(refresh, />Nothing has been posted yet\.</);
@@ -72,8 +72,6 @@ test("an empty feed says so and offers Refresh: one request, made on the press, 
   assert.match(refresh, /const refresh = async \(\) => \{\n\s*if \(busy\) return;/);
   assert.match(refresh, /onClick=\{\(\) => void refresh\(\)\}/);
   assert.doesNotMatch(refresh, /useEffect/);
-  // A shared game's feed is the host's: no button there.
-  assert.match(refresh, /\{shared \? \(/);
   // Search's empty place uses the same button.
   assert.match(search, /<RefreshButton onClick=\{ask\} \/>/);
   assert.doesNotMatch(search, />Load posts</);
@@ -111,7 +109,6 @@ test("the box is put away until the pen opens it, and Quote opens it too", () =>
   assert.match(panel, /const startQuote = useCallback\(\(post\) => \{\n {4}setQuoting\(post\);\n {4}openComposer\(\);\n {2}\}, \[openComposer\]\);/);
   // A post sent puts it away again.
   assert.match(panel, /setChoices\(null\);\n {6}setComposing\(false\);\n {6}setPosted\(true\);/);
-  // And a poll goes with the post, to the host in a shared game too.
-  assert.match(panel, /requestFromHost\("post", \{ text, quote: quoting\?\.id \|\| "", \.\.\.\(poll \? \{ choices: poll \} : \{\}\) \}\)/);
+  // And a poll goes with the post.
   assert.match(panel, /withPlayerPost\(world, \{ by: country, text, quote: quoting\?\.id \|\| "", date: game\.gameDate, round: game\.round, choices: poll \}\)/);
 });

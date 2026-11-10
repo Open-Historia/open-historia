@@ -21,7 +21,7 @@ test("GM revision includes the prior exact transaction, not merely the amendment
   assert.match(source, /applyGameMasterPreviewEdits\(prior\.transaction, payload\)/);
   assert.match(source, /transaction,\s*generation,/);
   assert.match(source, /previewOnly: true/);
-  assert.match(lazy, /previewGameMasterRevision = hostOnly/);
+  assert.match(lazy, /export const previewGameMasterRevision = async/);
 });
 
 test("Auto-selected GM previews retain routing authority through deterministic revisions", () => {

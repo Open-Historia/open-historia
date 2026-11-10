@@ -77,8 +77,7 @@ extra on top. Settings → AI → **AI requests** shows today's count and what y
 <p class="beta-note"><b>On beta, the wars on the battlefields are fought by the game itself</b>,
 not by the model: troops move and fight in the engine, and the skip's single request tells the
 story of how it went. What costs a request is what you ask for — talking to your generals in the
-War Room. The posts of <b>Rostra</b>, the social network, ride in the time skip's own answer. In a
-shared game every time skip runs on the host's computer and the host's key.</p>
+War Room. The posts of <b>Rostra</b>, the social network, ride in the time skip's own answer.</p>
 
 Rough guidance rather than a price list:
 

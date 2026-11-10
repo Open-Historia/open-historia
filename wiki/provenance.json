@@ -25,7 +25,6 @@
   "pages": {
     "index.md": [
       "README.md",
-      "src/multiplayer/ui/LobbiesTab.jsx",
       "src/Game/AI/providerConfig.js",
       "src/Game/GameUI/apiSetupPrompt.jsx",
       "electron/main.cjs",
@@ -131,7 +130,6 @@
       "src/Game/GameUI/stats.jsx",
       "src/Game/GameUI/other.jsx",
       "src/Game/GameUI/MapModeSelector.jsx",
-      "src/multiplayer/ui/LobbiesTab.jsx",
       "src/Game/GameUI/updates",
       "src/Game/Map/mapGestures.js"
     ],
@@ -469,9 +467,7 @@
       "scripts/fetch-map-assets.mjs",
       "scripts/map-assets.json",
       "package.json",
-      "src/Game/GameUI/settings.jsx",
-      "src/multiplayer/ui/LobbiesTab.jsx",
-      "src/multiplayer/signaling/relays.js"
+      "src/Game/GameUI/settings.jsx"
     ],
     "hosting/mobile.md": [
       "mobile",
@@ -487,8 +483,7 @@
       "src/runtime/native/rendererRestart.js",
       "src/runtime/native/appInstaller.js",
       "public/offline-relief",
-      "src/Game/GameUI/settings.jsx",
-      "src/multiplayer/ui/LobbiesTab.jsx"
+      "src/Game/GameUI/settings.jsx"
     ],
     "reference/ai-providers.md": [
       "src/Game/AI/providerConfig.js",
@@ -763,7 +758,7 @@
     "No screenshot of Intervene, an interactive event, a group turn with a poll, a document notice, or any beta-only surface (puppet card, demand card, Player focus): each needs AI output or beta, and the 2026-09-24 pass had neither a key nor a beta build running.",
     "Content screenshots (events, diplomacy, advisor, stats, espionage, retry) predate the 2026-09-24 pass and use the older palette.",
     "Neither build was verified by playing a campaign through turns; the 2026-09-24 pass read source and drove main's menus and panels.",
-    "No screenshot of any surface added since 2026-09-24: the War Room, fleets and sea battles, the Intelligence tab's Operations, peace and call-to-arms cards, institutions, Listen in, the country panel and ranking, lobbies, the vault door and update notices, the map editor's sidebar. The existing statistics-sheet.jpg and the content shots show the stable layout."
+    "No screenshot of any surface added since 2026-09-24: the War Room, fleets and sea battles, the Intelligence tab's Operations, peace and call-to-arms cards, institutions, Listen in, the country panel and ranking, the vault door and update notices, the map editor's sidebar. The existing statistics-sheet.jpg and the content shots show the stable layout."
   ],
   "pageVerified": {
     "_comment": "Pages re-verified against a commit NEWER than verifiedAgainst. wiki:check skips a page for a channel whose recorded commit here is at or past the current tip. Only add a page you actually re-read. Emptied on 2026-09-11, when the global record moved past every entry that was here.",

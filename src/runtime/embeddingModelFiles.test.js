@@ -48,7 +48,7 @@ test("no build drops it: the desktop packs dist/ whole, the Android staging keep
   const pkg = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8"));
   assert.ok(pkg.build.files.includes("dist/**"));
   assert.ok(!pkg.build.files.some((pattern) => /models|onnx/.test(pattern)), "electron-builder excludes nothing of the model");
-  for (const config of ["electron-builder.beta.yml", "electron-builder.multiplayer.yml"]) {
+  for (const config of ["electron-builder.beta.yml"]) {
     const text = fs.readFileSync(path.join(repo, config), "utf8");
     assert.match(text, /^\s*- dist\/\*\*$/m, config);
     assert.doesNotMatch(text, /models|onnx/, `${config} excludes nothing of the model`);

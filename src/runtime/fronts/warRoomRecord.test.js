@@ -17,7 +17,6 @@ import { normalizeBattlefield } from "./record.js";
 import { frontInput, syntheticMap } from "./syntheticMap.js";
 import { FORECAST_DAYS, WEATHER_STATES } from "./weather.js";
 import { PLAN_NAMES, createPlanner } from "./mind/planner.js";
-import { battlefieldForViewer } from "./view.js";
 
 const legend = { A: "Aland", B: "Borduria" };
 const CITIES = [
@@ -75,9 +74,6 @@ test("a record keeps how its ground is supplied, what each side's staff means to
     assert.ok(PLAN_NAMES.includes(plan.plan), plan.plan);
     assert.ok(plan.since >= "2024-03-01" && plan.since <= record.asOf);
   }
-  // Each side keeps its own staff's plan from the other in a shared game; its agents may find it out.
-  const seen = battlefieldForViewer(record, "Aland");
-  assert.equal(seen.brief.carry.staff[1].length ?? 0, 0);
   // The aircraft over it, and what each side's were sent to do.
   assert.ok(record.brief.air, "both sides fly their air arms");
   assert.equal(record.brief.air.missions.length, 2);

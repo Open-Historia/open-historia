@@ -61,7 +61,6 @@ test("each application is counted under its own tag", () => {
   const desktop = (channel) => visitTagOf({ env: {}, kind: { app: "desktop", channel }, hostname: "localhost" });
   assert.equal(desktop("stable"), "desktop-main");
   assert.equal(desktop("beta"), "desktop-beta");
-  assert.equal(desktop("multiplayer"), "desktop-multiplayer");
   assert.equal(desktop(undefined), "desktop-main");
   assert.equal(visitTagOf({ env: {}, kind: { app: "local" }, hostname: "127.0.0.1" }), "self-hosted");
   assert.equal(visitTagOf({ env: { VITE_OH_WEB: true }, hostname: "openhistoria.com" }), "website");
@@ -314,7 +313,7 @@ test("a page is counted on the project's own address, on this computer's own ser
   assert.deepEqual([phone.body.length, phone.asked.length], [0, 0]);
 
   // A guide page opened from the desktop app: the server says which application it is.
-  for (const [kind, tag] of [[{ app: "desktop", channel: "beta" }, "desktop-beta"], [{ app: "desktop", channel: "stable" }, "desktop-main"], [{ app: "desktop", channel: "multiplayer" }, "desktop-multiplayer"], [{ app: "local" }, "self-hosted"]]) {
+  for (const [kind, tag] of [[{ app: "desktop", channel: "beta" }, "desktop-beta"], [{ app: "desktop", channel: "stable" }, "desktop-main"], [{ app: "local" }, "self-hosted"]]) {
     const local = browser({ hostname: "localhost", kind });
     await settle();
     assert.deepEqual(local.asked, ["/api/app-kind"]);
@@ -371,7 +370,7 @@ const websitePages = (folder, out = []) => {
 const HARD_CODED = /<script[^>]*(googletagmanager|cloud\.umami\.is|google-analytics)|gtag\(\s*['"]config['"]/;
 
 test("no page loads a counter itself: the website's pages carry the gate, once each, and the game adds its own", () => {
-  const pages = [...websitePages("public"), ...websitePages("site"), "index.html", ...(fs.existsSync(path.join(root, "engine.html")) ? ["engine.html"] : [])];
+  const pages = [...websitePages("public"), ...websitePages("site"), "index.html"];
   for (const file of pages) assert.equal(HARD_CODED.test(read(file)), false, `${file} loads a counter without asking`);
   for (const file of ["site/index.html", "site/404.html", "public/sitemap/index.html", "public/pax-historia-alternative/index.html"]) {
     assert.equal(read(file).split(GATE).length - 1, 1, file);

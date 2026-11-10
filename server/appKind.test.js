@@ -23,12 +23,11 @@ test("the server started by hand is not the desktop app, whatever its environmen
   assert.deepEqual(appKindOf(undefined, undefined), { app: "local" });
 });
 
-test("inside the desktop app it says which build: the stable one, the beta, the multiplayer build", () => {
+test("inside the desktop app it says which build: the stable one or the beta", () => {
   const electron = { node: "22.0.0", electron: "38.0.0" };
   assert.deepEqual(appKindOf(electron, {}), { app: "desktop", channel: "stable" });
   assert.deepEqual(appKindOf(electron, { OH_CHANNEL: "stable" }), { app: "desktop", channel: "stable" });
   assert.deepEqual(appKindOf(electron, { OH_CHANNEL: "beta" }), { app: "desktop", channel: "beta" });
-  assert.deepEqual(appKindOf(electron, { OH_CHANNEL: "multiplayer" }), { app: "desktop", channel: "multiplayer" });
   // A channel nobody knows is the stable app, as it is everywhere else that asks.
   assert.deepEqual(appKindOf(electron, { OH_CHANNEL: "nightly" }), { app: "desktop", channel: "stable" });
 });
@@ -38,7 +37,7 @@ test("the channels are the ones the desktop app can be stamped with", () => {
   const { readChannel } = require("../electron/channel.cjs");
   assert.equal(readChannel(path.join(here, "no-such-folder"), {}), "stable");
   assert.ok(APP_CHANNELS.includes(readChannel(here, { OH_CHANNEL: "beta" })));
-  assert.deepEqual([...APP_CHANNELS].sort(), ["beta", "multiplayer", "stable"]);
+  assert.deepEqual([...APP_CHANNELS].sort(), ["beta", "stable"]);
   // And the desktop app tells its server, which is this same process.
   assert.ok(read("../electron/main.cjs").includes("process.env.OH_CHANNEL = CHANNEL;"));
 });
@@ -55,7 +54,7 @@ test("inside the desktop app it says which build is running, when the build is s
   const electron = { node: "22.0.0", electron: "38.0.0" };
   assert.deepEqual(appKindOf(electron, { OH_CHANNEL: "beta", OH_DESKTOP_BUILD: "18123456789" }), { app: "desktop", channel: "beta", build: "18123456789" });
   assert.deepEqual(appKindOf(electron, { OH_DESKTOP_BUILD: " 42 " }), { app: "desktop", channel: "stable", build: "42" });
-  // Unstamped (a development run, the multiplayer build): nothing is said.
+  // Unstamped (a development run): nothing is said.
   assert.deepEqual(appKindOf(electron, { OH_DESKTOP_BUILD: "" }), { app: "desktop", channel: "stable" });
   // Told not to be counted, it still says its build: the door is not a counter.
   assert.deepEqual(appKindOf(electron, { OH_VISIT_COUNT: "0", OH_DESKTOP_BUILD: "42" }), { app: "uncounted", build: "42" });
