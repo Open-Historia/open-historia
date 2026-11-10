@@ -10,7 +10,7 @@
 // Accepted changes become one scenario save plus the asset uploads they need.
 // Pure: the caller does the saving.
 
-import { normalizePackGuidance, PROMPT_MODEL_VERSION } from "../Game/AI/promptGuidance.js";
+import { guidanceCharLimit, normalizePackGuidance, promptCharCount, PROMPT_MODEL_VERSION } from "../Game/AI/promptGuidance.js";
 import { normalizeFeatureSettings } from "../../server/gameFeatures.js";
 import { normalizeScenarioMusic } from "../../server/scenarioMusic.js";
 import { normalizeScenarioLanguages, scenarioLanguagePack } from "../../server/scenarioLanguages.js";
@@ -241,11 +241,32 @@ const applyHistoryChange = (current, change) => {
   return normalizeScenarioPrehistory({ ...record, events });
 };
 
+// A suggested prompt passage longer than its limit (guidanceCharLimit: 20%
+// over the longest built-in version), as { length, limit }, or null for any
+// other change. `guidanceDefaults` are the English defaults
+// (PROMPT_GUIDANCE_DEFAULTS). Such a passage is never accepted: the game would
+// not use it (normalizePackGuidance leaves it out), so the review says so
+// instead of saving text that does nothing.
+export const promptChangeOverLimit = (change, guidanceDefaults) => {
+  if (change?.area !== "details" || change.kind !== "field" || change.path?.[0] !== "prompts" || !guidanceDefaults) return null;
+  const text = String(change.to ?? "").trim();
+  if (!text) return null;
+  const [, ...path] = change.path;
+  const englishDefault = path[0] === "tasks"
+    ? guidanceDefaults.tasks?.[path[1]]?.[path[2]]
+    : guidanceDefaults[path[0]]?.[path[1]];
+  const length = promptCharCount(text);
+  const limit = guidanceCharLimit(englishDefault);
+  return length > limit ? { length, limit } : null;
+};
+
 // The save that applies `accepted` (details changes) to the scenario described
 // by `details` (loadScenarioDetails): { patch, uploads, clears }. `patch` goes
 // to saveScenario; each upload is { key, json } or { key, base64, contentType };
 // each clear is an asset key.
-export const buildDetailSave = (accepted, details) => {
+// With `guidanceDefaults`, a prompt passage over its limit is left out
+// (promptChangeOverLimit).
+export const buildDetailSave = (accepted, details, { guidanceDefaults = null } = {}) => {
   const patch = {};
   const uploads = [];
   const clears = [];
@@ -274,6 +295,7 @@ export const buildDetailSave = (accepted, details) => {
         features ??= normalizeFeatureSettings(scenario.features);
         features[key] = { ...(features[key] ?? {}), [setting]: change.to };
       } else if (area === "prompts") {
+        if (promptChangeOverLimit(change, guidanceDefaults)) continue;
         guidance ??= normalizePackGuidance(data.prompts);
         const [, ...path] = change.path;
         const text = String(change.to ?? "").trim();
@@ -325,6 +347,6 @@ export const buildDetailSave = (accepted, details) => {
   if (Object.keys(worldPatch).length) patch.worldPatch = worldPatch;
   if (Object.keys(gamePatch).length) patch.gamePatch = gamePatch;
   if (features) patch.features = features;
-  if (guidance) patch.prompts = { promptModel: PROMPT_MODEL_VERSION, guidance };
+  if (guidance) patch.prompts = { promptModel: PROMPT_MODEL_VERSION, ...(data?.prompts?.bypassLengthLimit === true ? { bypassLengthLimit: true } : null), guidance };
   return { patch, uploads, clears };
 };

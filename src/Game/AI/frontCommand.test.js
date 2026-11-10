@@ -100,7 +100,7 @@ test("a player's typed order reaches their troops through the function the skip'
   assert.match(skip, /frontsGiven: normalizeArray\(context\.variables\?\.frontsForecast\?\.given\),/);
   assert.match(skip, /givenOrders: normalizeArray\(result\.frontsGiven\),/);
   // (It is no lookup: the lookup directive is not said for it alone.)
-  assert.match(skip, /lookups\.tools\.some\(\(tool\) => tool\?\.name !== FRONT_ORDER_FUNCTION\)\) blocks\.push\(LOOKUP_DIRECTIVE\);/);
+  assert.match(skip, /lookups\.tools\.some\(\(tool\) => tool\?\.name !== FRONT_ORDER_FUNCTION\)\) blocks\.push\(activeLookupDirective\(\)\);/);
 
   // The lines of a call: the player's own, each with the day it is given.
   const read2 = (text) => readGivenOrders(text, { players: ["Aland"], fromDate: "2024-03-01", days: 10 });

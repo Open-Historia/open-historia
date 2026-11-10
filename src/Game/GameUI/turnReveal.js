@@ -298,7 +298,13 @@ export const describeEventMapChanges = (event, { polityLookup = new Map(), regio
     for (const op of listOf(impacts.unitOps)) {
         if (op?.op === "spawn") lines.push({ kind: "unit", text: `${op.unit?.name || "A formation"} raised — ${op.unit?.type || "unit"} of ${polity(op.unit?.ownerCode) || "an unknown owner"}${note(op.unit?.note)}` });
         else if (op?.op === "move") lines.push({ kind: "unit", text: `${unitName(op.unitId)} moves${op.regionId ? ` to ${region(op)}` : ""}${op.posture ? ` (${op.posture})` : ""}${note(op.note)}` });
-        else if (op?.op === "strength") lines.push({ kind: "unit", text: `${unitName(op.unitId)}: strength ${op.strength}%${note(op.note)}` });
+        else if (op?.op === "strength") {
+            // (A refit gives its new make-up, and its strength, missing or null, is unchanged.)
+            const given = op.strength !== undefined && op.strength !== null && String(op.strength).trim() !== "";
+            if (given && op.composition) lines.push({ kind: "unit", text: `${unitName(op.unitId)}: strength ${op.strength}%, refitted: ${op.composition}${note(op.note)}` });
+            else if (op.composition) lines.push({ kind: "unit", text: `${unitName(op.unitId)}: refitted: ${op.composition}${note(op.note)}` });
+            else if (given) lines.push({ kind: "unit", text: `${unitName(op.unitId)}: strength ${op.strength}%${note(op.note)}` });
+        }
         else if (op?.op === "remove") lines.push({ kind: "unit", text: `${unitName(op.unitId)} removed${note(op.note)}` });
     }
     for (const op of listOf(impacts.markerOps)) {

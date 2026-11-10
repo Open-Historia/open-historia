@@ -329,3 +329,15 @@ test("a country renamed in play no longer shows the label its old name had on th
   assert.equal(record.mapLabel, undefined);
   assert.equal(record.mapDistinctLabel, undefined);
 });
+
+test("a rename carries a country's force with it: the group is its force under the new name", () => {
+  const world = {
+    polityOverrides: { Aland: { code: "Aland", name: "Aland", aliases: [], color: "", note: "" } },
+    groups: { "Aland Forces in Neutralia": { name: "Aland Forces in Neutralia", description: "", color: "#e11d48", owner: "Aland" }, Cartel: { name: "Cartel", description: "", color: "#3b82f6" } },
+    groupAreas: { n1: "Aland Forces in Neutralia", n2: "Cartel" },
+  };
+  const { world: next } = renamePolityInWorld(world, "Aland", "Greater Aland");
+  assert.equal(next.groups["Aland Forces in Neutralia"].owner, "Greater Aland", "its name is its own and stays");
+  assert.deepEqual(next.groups.Cartel, world.groups.Cartel);
+  assert.deepEqual(next.groupAreas, world.groupAreas);
+});

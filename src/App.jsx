@@ -30,7 +30,8 @@ import { VaultDoor } from "./Game/GameUI/VaultDoor.jsx";
 import { holdMusicBehindDoor } from "./runtime/ambientMusic.js";
 import { vaultDoorAlways } from "./runtime/mapSettings.js";
 import { decideVaultDoor, rememberVaultDoorBuild } from "./runtime/vaultDoorDue.js";
-import { pendingUpdates, previewedUpdates, rememberUpdate } from "./Game/GameUI/updates/updateNotices.js";
+import { isWebsiteBuild } from "./runtime/websiteBuild.js";
+import { buildShowsUpdateNotices, pendingUpdates, previewedUpdates, rememberUpdate } from "./Game/GameUI/updates/updateNotices.js";
 import { firstSetupDue } from "./runtime/firstSetupDue.js";
 import { appBuildId } from "./runtime/buildId.js";
 import { announceMapRerender } from "./runtime/mapReadiness.js";
@@ -88,7 +89,11 @@ function GameApp() {
   // whether this opening is one is decided first ("deciding"): the running
   // build is asked of the desktop app's own server (runtime/buildId.js), and
   // the music is held meanwhile.
+  //
+  // The website's demo has no door (runtime/websiteBuild.js): it opens on the
+  // menu, and its music is never held.
   const [door, setDoor] = useState(() => {
+    if (isWebsiteBuild(import.meta.env)) return "open";
     holdMusicBehindDoor(true);
     return "deciding";
   });
@@ -121,10 +126,11 @@ function GameApp() {
   }, [door]);
   // What the update brings (Game/GameUI/updates/notes.js): each new update once a device, behind the door, so
   // the door opens onto it; shown as the leaves part (or at once, with the door off). ?updateNotice=<id> shows
-  // one whatever was seen, and keeps nothing.
+  // one whatever was seen, and keeps nothing. The website shows none (buildShowsUpdateNotices).
   const [notice, setNotice] = useState(() => {
     const asked = typeof window === "undefined" ? null : previewedUpdates(window.location.search);
-    return asked ? { updates: asked, preview: true } : { updates: pendingUpdates(), preview: false };
+    if (asked) return { updates: asked, preview: true };
+    return { updates: buildShowsUpdateNotices(import.meta.env) ? pendingUpdates() : [], preview: false };
   });
   const [parting, setParting] = useState(false);
   const closeNotice = useCallback(() => setNotice((now) => ({ updates: [], preview: now.preview })), []);

@@ -129,6 +129,10 @@ export const readAiReply = (raw, batch) => {
 //
 //   isAiOn()        the switch, read before every step: off, the AI is never
 //                   asked, and what it was going to take goes to the model;
+//   mayAskAi()      whether a request may be made now (sync or async): the
+//                   day's background allowance (requestBudget.js), since nobody
+//                   pressed anything for it. A "no" sends the batch to the
+//                   model, and is no failure of the AI;
 //   askAi(batch)    one request; resolves to the raw answer, or throws;
 //   askModel(batch) the model on this device; resolves to a translation or
 //                   null per string;
@@ -144,6 +148,7 @@ export const readAiReply = (raw, batch) => {
 // answer is cached, and a failure leaves it to the model.
 export const createTranslationRouter = ({
   isAiOn,
+  mayAskAi = () => true,
   askAi,
   askModel,
   known = () => undefined,
@@ -183,13 +188,13 @@ export const createTranslationRouter = ({
     const result = { translated: [], kept: [], unusable: [], asked: null };
     if (!list.length) return result;
     if (aiAvailable()) {
-      // Answered before: no request.
+      // Answered before: no request, and no allowance needed.
       for (const source of list) {
         if (cache.has(source)) result.translated.push({ source, text: cache.get(source), by: "ai" });
       }
       if (result.translated.length) return result;
       const fresh = list.filter((source) => !tried.has(source));
-      if (fresh.length) {
+      if (fresh.length && await mayAskAi()) {
         const batch = planAiBatch(fresh);
         batch.forEach((source) => tried.add(source));
         result.asked = "ai";

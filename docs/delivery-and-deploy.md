@@ -57,6 +57,34 @@ Each triplet member targets its like-named channel because the three channels ha
 
 > **Commit/PR attribution:** commit as the account-linked identity; **no** Claude `Co-Authored-By` trailer and **no** "Generated with Claude Code" footer (repo policy).
 
+### Releasing beta to main: a version
+
+Since 2.5.0 the stable game is released as a version, and each release is **beta merged into main, without multiplayer**: 2.5.0 (PR #961), 2.5.1 (#974, beta `bc2ffb94`), 2.5.2 (#976) and 2.5.3 (#979), all on 2026-11-05 and 11-06. Multiplayer (shared games, lobbies, relays) is public on beta and alpha and is not released to main. Smaller changes that main needs on their own (the update window's offer, the workflows, AGENTS.md) still go as their own pull requests into main.
+
+**How a release is made.**
+
+1. A `release/<version>` branch from main, and `git merge beta` on it ("Merge beta into main for the 2.5.3 release"). A merge, not a rebuilt tree: main's own work (the Nix package and its workflow, the website's own pages, main's version handling) stays, and the next release merges again from where this one left off. If beta moves while the pull request is open, merge the newer beta in again (2.5.3 did, `355c868a`, which took out the 80,000 lines of vendored MapLibre that #978 had put on beta and beta had reverted).
+2. Resolve every conflict to **beta's behaviour without multiplayer**, then take out what came in from beta without conflicting (below). Grep the tree, and the built bundles, for multiplayer: only what 2.5.0 already had may be left (the release page's `leftOut` entries).
+3. Bump the version: `package.json` and `package-lock.json` name it ("Version 2.5.3"). Beta's `package.json` stays `0.0.0`; main's names the release. On main, `desktop-installer.yml` keeps a real version and takes `0.0.<run_number>` only while the tree is still at `0.0.0` (as every stable build before 2.5.0 did), and `mobile/android/app/build.gradle` names the stable APK by it (`versionName`; the `versionCode` is still the run number). Keep main's side of both when they conflict.
+4. Check: `npm test` and `npm run build` (and `build:web` / `build:site` when the website changed), with a Node 22 `npm ci` among them (the trap below).
+5. A pull request into main with what players get (from beta's update notices since the last release), a **Multiplayer stays out** section naming what was taken out, the version, and the test counts. A point release gets no new release page; the 2.5 page names the new notices in its chapters, as beta's does.
+6. **Merge only when every check has passed**: Tests, Nix where the change touches what the package is made from, and `license/cla`. Main's ruleset requires a review the owner's own pull requests cannot get, so the owner merges with `--admin`, and only after those checks are green. A red or pending check is never merged past.
+7. Then dispatch **Build desktop installers** and **Build Android APK** from main; the website deploys from main by the admin panel (§6).
+
+**What main does not have**, and so what a merge of beta must take out again:
+
+- The folders: `src/multiplayer/`, `server-mp/`, `ops/` (the relay and TURN servers), `tools/multiplayer-e2e/`, the host engine page and the Discord lobby invites.
+- The shared-game guards in single-player code: the `hostOnly` wrapper in `src/Game/AI/gameplayLazy.js` (around `simulateTimelineJump`, `simulateAutoJump`, `warRoomRehearse` and the Game Master's preview edit), the `sharedGame` argument and refusal of the Advisor's Action approval and cancellation (`GameUI/advisorActionApproval.js`, `advisor.jsx` passing `inSharedGame()`), and imports of `hostingSharedGame` or `SharedGameRefusal`.
+- The extractor's multiplayer list (`scripts/i18n/extractStrings.mjs`): the shared-game modules in `PROSE_FILES`, and `MESSAGE_ONLY_FILES`, which is empty on main. Left in, the catalog test reads files main does not have.
+- The tests of what is gone: the lobby screens in `uiThemeSecondPass.test.js` ("The theme test checks only screens main has", 2.5.3), `multiplayerPackaging`, `sharedGameEngine`, `librarySharedGameEntry` and the other shared-game tests.
+- Multiplayer's update notices and their strings in the 22 packs, the website's "Play together" item, and the lines of the docs about multiplayer (the `ALLOWED_ORIGINS` step in mobile.md's release list, the multiplayer host route in advisor-conversation-ui.md).
+
+**Traps met on the way.**
+
+- **A leftover that builds and then throws.** Code that merged cleanly can name what the removal took out. In 2.5.1, `advisor.jsx` passed `sharedGame: inSharedGame()`, which main does not define, so cancelling an Action would have thrown; and the call-to-arms code read a `people` variable the removal had deleted from the turn, so the first call to arms would have thrown. Neither failed a test: read what the merge brought into files the removal touched, and grep for the names it removed.
+- **The prerelease `ERESOLVE`.** Beta's MapLibre is a prerelease (`6.16.0-openhistoria.1`), and npm 10 refuses a prerelease for `react-map-gl`'s peer range. A machine on npm 11 installs it, but the Tests workflow (Node 22) and main's Nix build run npm 10, so the 2.5.3 pull request failed at `npm ci`. The `overrides` entry in `package.json` (`b55bd1e0` on the release branch, `df32c2cc` on beta; [game-map.md](game-map.md#the-games-own-maplibre-open-historiamaplibre-gl-js)) fixed it. Run `npm ci` under Node 22 before opening the pull request.
+- **A new branch that will not push** (`fatal error in commit_refs_rules`, seen on the 2.5.0 branch): push the commit to a tag, create the branch from it through the API, and delete the tag.
+
 ---
 
 ## 3. GitHub Releases catalog
@@ -68,11 +96,12 @@ Delivery leans on **rolling releases** (fixed tags whose assets are re-uploaded 
 | `desktop-stable` | `desktop-installer.yml` (§4.1) | `workflow_dispatch` from `main` / `desktop-v*` tag | `Open-Historia-Setup.exe`, `Open-Historia-mac-{x64,arm64}.zip`, `Open-Historia-x86_64.AppImage`, `Open-Historia-amd64.deb`, the `latest.yml` / `latest-mac.yml` / `latest-linux.yml` update feeds, `latest.json` | no | The desktop app; it updates itself from here (not on macOS) |
 | `desktop-beta` | `desktop-beta.yml` (§4.1) | `workflow_dispatch` from `beta` / `desktop-beta-v*` tag | The same set named `Open-Historia-Beta-*` | **yes** (`--prerelease`) | "Open Historia Beta", a second desktop app beside the stable one, with its own saves; it updates itself from here |
 | `desktop-stable-chunks`, `desktop-beta-chunks` | the same two workflows (`scripts/publish-update-chunks.mjs`) | the same runs | The app's own files cut into chunks: `c-<hash>.bin` (about 180 a build, each uploaded once), the manifests `m-<hash>.json`, and one head per system, `payload-{win,mac,linux}.json`, the only files replaced | no (`--latest=false`) | The desktop app, which updates by fetching the chunks that changed (§11.2). Nothing here is downloaded by hand |
-| `android` | `android-apk.yml` | `workflow_dispatch` from `main` / `android-v*` tag | `open-historia.apk`, `latest.json` | no | The Android app (the `appId` in `mobile/capacitor.config.json`); it self-updates from here |
-| `android-beta` | `android-apk-beta.yml` (§4.3) | `workflow_dispatch` from `beta` / `android-beta-v*` tag | `open-historia-beta.apk`, `latest.json` | **yes** (`--prerelease`) | The Android beta, "Open Historia Beta" (the stable id + `.beta`): a second app beside the stable one, with its own saves; it self-updates from here |
+| `android` | `android-apk.yml` | `workflow_dispatch` from `main` / `android-v*` tag | `open-historia.apk` and `update.json` (the app, `io.github.arkniem.openhistoria`); with the handover variables set, `open-historia-handover.apk` and `latest.json` | no | The Android app (the `appId` in `mobile/capacitor.config.json`), which updates from `update.json`; `latest.json` is the feed of the apps still under the earlier id, and offers them the handover build ([mobile.md](mobile.md#moving-to-the-new-app-id)) |
+| `android-beta` | `android-apk-beta.yml` (§4.3) | `workflow_dispatch` from `beta` / `android-beta-v*` tag | `open-historia-beta.apk` and `update.json`; with the variables, `open-historia-beta-handover.apk` and `latest.json` | **yes** (`--prerelease`) | The Android beta, "Open Historia Beta" (the stable id + `.beta`): a second app beside the stable one, with its own saves; it self-updates from here the same way |
+| `native-experimental` | the private lab repository's own release workflow, not one in this repository | — | `Open-Historia-Native-Setup.exe`, `Open-Historia-Native-macOS.dmg`, `Open-Historia-Native-Linux-x86_64.tar.gz` | — | The native app. This repository only links to it: the website's download choice (`site/`) and the stable desktop app's update window (`NATIVE_DOWNLOAD_URL`, §11.1) |
 | `map-data` | *manually uploaded* | — | The desktop's list: `regions-z8.pmtiles`, `countries-z8.pmtiles`, `cities.pmtiles`, `cities-seed.json`, `regions-seed-z8-clean.geojson`, `default-regions-names-clean.geojson`. The web builds' list: the same two archives, `cities.pmtiles` and `cities-seed.json`, plus `regions-seed-clean.geojson` and `default-regions-names-web-clean.geojson`. Earlier editions stay on the release | — | The world-map binaries, off Git LFS (§8) |
 
-The APK asset names are contractual — they, and the two Android application ids (the `appId` in `mobile/capacitor.config.json`, and the beta's, the same id + `.beta`), must not change, because anything holding a fixed release/asset URL keeps pointing at the old name, and a new id is a new app beside the old one. The stable name WAS changed, from the project's earlier name to `open-historia.apk`, on 2026-09-04 (main `e29967e`, with the README and site/index.html updated to match); the old asset has since been deleted. The in-app update banner reads `apk` out of the release's `latest.json`, which each Android workflow writes beside its APK.
+The APK asset names are contractual — they, and the two Android application ids (the `appId` in `mobile/capacitor.config.json`, and the beta's, the same id + `.beta`), must not change, because anything holding a fixed release/asset URL keeps pointing at the old name, and a new id is a new app beside the old one. The stable name WAS changed, from the project's earlier name to `open-historia.apk`, on 2026-09-04 (main `e29967e`, with the README and site/index.html updated to match); the old asset has since been deleted. The ids WERE changed once, in November 2026, to `io.github.arkniem.openhistoria` (and `.beta`) at `http://app.openhistoria`, at the price of a handover build that moves every player's games across ([mobile.md](mobile.md#moving-to-the-new-app-id)); the earlier id and address live only in the repository variables `ANDROID_LEGACY_APP_ID` and `ANDROID_LEGACY_HOST`, never in the repository. The in-app update banner reads `apk` out of the release's `update.json`, which each Android workflow writes beside its APK; `latest.json`, which the app read before, is now the earlier id's feed, and a run refuses to start while it still names `open-historia.apk`, which the old apps would otherwise install beside themselves as an "update".
 
 ---
 
@@ -88,8 +117,10 @@ The APK asset names are contractual — they, and the two Android application id
 |---|---|
 | Triggers | `workflow_dispatch` (the `tag` input, default `desktop-stable`; clear it to build without publishing); push tag `desktop-v*` |
 | Matrix | `windows-latest` / `macos-latest` / `ubuntu-latest`, `fail-fast: false`; each installer must be built on its own OS |
-| Version | `electron/build-id.json` gets the run id; `package.json` `version` becomes `0.0.<run_number>`, which is what `electron-updater` compares |
-| Build | `npm ci` → `npm run build` → `node scripts/package-desktop.mjs <--win|--mac|--linux> --publish never` (unsigned: `CSC_IDENTITY_AUTO_DISCOVERY: false`) |
+| Version | `electron/build-id.json` gets the run id. On main, `package.json` names the release (2.5.0 on) and the stamp keeps it; a tree at `0.0.0` (beta's, and main's before 2.5.0) becomes `0.0.<run_number>`. `electron-updater` compares that version, so each release needs a higher one (§2, Releasing beta to main) |
+| Timeouts | each platform's build 45 minutes (a build takes 3 to 15; a hang used to run to GitHub's six hours), Windows 150 while SignPath signing is set up (two manual approvals); the `prune-chunks` job 15; `desktop-beta.yml`'s test job 20 |
+| Build | `npm ci` → `npm run build` → `node scripts/package-desktop.mjs <--win|--mac|--linux> --publish never` (electron-builder never signs: `CSC_IDENTITY_AUTO_DISCOVERY: false`) |
+| Windows signing | Only when the `SIGNPATH_API_TOKEN` secret and the `SIGNPATH_*` variables are set; otherwise skipped and the build is unsigned. The app's programs are signed through SignPath, the installer is rebuilt with `--prepackaged` and signed, `scripts/refresh-update-feed.mjs` rewrites `latest.yml`, and only then are the chunks cut. [code-signing.md](code-signing.md) |
 | Packed packages | electron-builder packs every package that is not a dev dependency, and `package.json`'s `dependencies` has to keep the client's build tools for `--omit=dev` installs. So `scripts/package-desktop.mjs` runs it against a `package.json` naming only `RUNTIME_DEPENDENCIES` (the four packages `server/` and `electron/` import), then puts the file back. A new import in either folder goes on that list; `server/desktopPackaging.test.js` fails until it does. `files` patterns cannot do this: they are matched inside each package's own folder, so `!node_modules/foo/**` matches nothing |
 | Installer compression | `nsis.differentialPackage: false`: building for differential downloads turns off solid compression and cuts the dictionary to 1 MB, and the app never asks for one (`disableDifferentialDownload` in `electron/main.cjs`) |
 | Map data | Not packaged: the app runs `scripts/fetch-map-assets.mjs --ensure` on first launch (`electron/main.cjs`) |
@@ -106,11 +137,13 @@ These replaced `app-bundle.yml`, which zipped the source, the map data and the `
 | Aspect | Detail |
 |---|---|
 | Triggers | `workflow_dispatch` from `main` (from any other branch its first step fails: a dispatch from `beta` once published the beta's code as the stable app, build 14 on 2026-09-25); push tag `android-v*` |
-| Toolchain | Node 24, Temurin Java 21 |
-| Build number | `VITE_APP_BUILD=${{ github.run_number }}` is baked into the bundle and `OH_ANDROID_BUILD` becomes `versionCode`/`versionName`; the update banner compares the bundle's number against `latest.json` |
+| Toolchain | Node 24, Temurin Java 21; npm's cache (`cache: npm`, keyed on `package-lock.json`, the key Tests and the website already use) and Gradle's dependencies and wrapper (`cache: gradle`, keyed on the Android project's `*.gradle*` files and the wrapper's properties) kept between runs |
+| Timeout | 30 minutes |
+| Guards | the branch (above); the two handover variables set together or not at all; and, without them, no run while `android/latest.json` still names `open-historia.apk` ([mobile.md](mobile.md#moving-to-the-new-app-id)) |
+| Build number | `VITE_APP_BUILD=${{ github.run_number }}` is baked into the bundle and `OH_ANDROID_BUILD` becomes `versionCode` (and `versionName` while `package.json` is at `0.0.0`; on main the release's version); the update banner compares the bundle's number against `update.json` |
 | Build | `npm ci` → `npm run build:android` (→ `dist-android/`) → in `mobile/`: `npm ci` → `npm run map` (map data; `map-cache/` is cached on the hash of `scripts/map-assets.web.json`) → `npm run www` → `npx cap sync android` → `./gradlew assembleRelease` with the `ANDROID_KEYSTORE_*` secrets, or `assembleDebug` without them |
-| Collect | copies the APK → `open-historia.apk` |
-| Publish | `gh release create android … || gh release edit android`; uploads `open-historia.apk` and `latest.json` (`{ build, apk, notes }`) with `--clobber` |
+| Collect | copies the APK → `open-historia.apk`; with `ANDROID_LEGACY_APP_ID` and `ANDROID_LEGACY_HOST` set, runs `mobile/scripts/legacy-config.mjs` and Gradle again with `OH_ANDROID_LEGACY_APP_ID` for the handover build → `open-historia-handover.apk` (same versionCode) |
+| Publish | `gh release create android … || gh release edit android`; uploads `open-historia.apk` and `update.json` (`{ build, apk, notes }`), and with the handover build `open-historia-handover.apk` and `latest.json` naming it, with `--clobber` |
 
 The map data must be staged **before** `cap sync` copies `www/` into the native project — that ordering is why `npm run map` and `npm run www` run between the bundle build and the Gradle step. One keystore for the life of the app: a fresh debug keystore on each runner is a different certificate, and Android refuses to install over a package signed with another one.
 
@@ -122,8 +155,9 @@ The map data must be staged **before** `cap sync` copies `www/` into the native 
 |---|---|
 | Triggers | `workflow_dispatch` from `beta` (from any other branch its first step fails; the copy on `main` is only there for the Run workflow entry); push tag `android-beta-v*`, which the stable `android-v*` does not match |
 | Channel | `OH_ANDROID_CHANNEL=beta`: `mobile/android/app/build.gradle` picks the application id, `versionName` `1.0.N-beta` and the manifest placeholders `appLabel` / `appIcon` / `appIconRound` (the icons come from `scripts/make-android-beta-icons.ps1`, committed) |
-| Update feed | `VITE_APP_TRACK=beta`: the web router reads `android-beta/latest.json`, so a tester is never offered the stable build; `versionCode` is this workflow's own run number |
-| Publish | `gh release create android-beta --prerelease …` or `gh release edit android-beta --prerelease …`; uploads `open-historia-beta.apk` and `latest.json` with `--clobber` |
+| Update feed | `VITE_APP_TRACK=beta`: the web router reads `android-beta/update.json` (the handover build `android-beta/latest.json`), so a tester is never offered the stable build; `versionCode` is this workflow's own run number |
+| Caches, timeout, guards | as §4.2 |
+| Publish | `gh release create android-beta --prerelease …` or `gh release edit android-beta --prerelease …`; uploads `open-historia-beta.apk` and `update.json`, and with the handover variables `open-historia-beta-handover.apk` and `latest.json`, with `--clobber` |
 
 `server/androidBetaPackaging.test.js` holds these together, and the stable workflow to the `android` release. The file replaced an experimental embedded-node-server build (2026-07) that checked out `alpha` and never ran green.
 
@@ -134,13 +168,26 @@ The map data must be staged **before** `cap sync` copies `www/` into the native 
 | Aspect | Detail |
 |---|---|
 | Triggers | `workflow_dispatch`; push to `main` with `paths-ignore` for `**.md`, `mobile/**`, `.github/**` (docs/app can't change what the site serves) |
-| Concurrency | group `deploy-site`, `cancel-in-progress: true` — a newer push supersedes an in-flight deploy rather than racing it live |
+| Concurrency | group `deploy-site`, `cancel-in-progress: false` (since 2026-11-06): a push during a deploy waits for it instead of cutting it off halfway, and of several waiting only the newest runs, so two deploys never race onto the live domain. Until then a newer push cancelled the deploy under way, which could stop it in the middle of its upload |
+| Timeout | 20 minutes |
 | Build | `npm ci` → restore `map-cache/` (`actions/cache`, keyed on the hash of `scripts/map-assets.web.json`) → `npm run build:site`, which fetches and verifies the six map files and lays them under `/play/assets/` |
 | Size guard | fails if any `dist-site` file exceeds 24 MiB (Pages rejects >25 MiB *after* reporting a green build) |
 | Deploy | `cloudflare/wrangler-action@v3` → `pages deploy dist-site --project-name=open-historia --branch=main`. `--branch=main` is what marks it the **production** deployment; without it Pages treats it as a preview and the live domain keeps the old build |
 | Secrets | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` |
 
 Why an Action rather than Git-connected Pages: the Pages project is direct-upload and Cloudflare can't convert those to Git-connected without a new project + domain move (downtime). A runner has no map files to sweep in by accident: the desktop's are gitignored and never on it. The only ones in the site are the six `build:site` fetches, and the build fails if one cannot be had, so a site without its map is never deployed.
+
+### 4.5 `tests.yml` — the suite on every pull request
+
+`.github/workflows/tests.yml` runs `npm ci` and `npm test` (Node 22, npm's cache) on every pull request into `beta` or `main`, on every push to `beta`, and by hand. It exists because twice on 2026-09-15 a pull request merged into beta with a failing source-text guard, and both times the next installer run was the first to notice (`desktop-beta.yml` runs the same `npm test` before it builds). A pull request uses the copy of this file on its base branch.
+
+| Aspect | Detail |
+|---|---|
+| Concurrency | group `tests-<pull request number or ref>`, `cancel-in-progress: true` (since 2026-11-06): a newer push to the same branch, or a newer commit on the same pull request, cancels the run before it, since the suite answers for the newest tree only. Pushes to beta come in quick runs, and each used to run the whole suite to the end |
+| Timeout | 20 minutes (the suite takes about three; a hung test used to hold the runner for six hours) |
+| Node | 22, which means npm 10: it is the run that catches what npm 10 refuses and a newer npm installs (the MapLibre prerelease, §2) |
+
+**Every workflow now has a timeout**, so a hang ends in minutes: the desktop builds 45, the Android builds 30, the website 20, the tests 20, the desktop workflows' `prune-chunks` 15.
 
 ---
 
@@ -162,7 +209,7 @@ Produces `dist-site/`: landing page at `/`, game under `/play/`.
 | `siteDir` = `site/` | `assemble-site.mjs` | Marketing landing page source (`index.html`, `_redirects`) copied to `dist-site/` root |
 | `gameDir` = `dist-web/` | `assemble-site.mjs` | Web game (base `/play/`) copied to `dist-site/play/` |
 | `outDir` = `dist-site/` | `assemble-site.mjs` | The deployable output |
-| `ROOT_PAGES` | `assemble-site.mjs` | Pages that must answer at the **root** (`guides`, `get-started`, `how-to-play`, `ai-setup`, `self-hosting`, `pax-historia-alternative`, `sitemap`, `guides.css`, `robots.txt`, `sitemap.xml`). Their only copy lives in `public/` (so a local install serves them offline too); assembler lifts them out of `/play/` up to `/`. **A listed page that's missing fails the build** (a dropped page would otherwise 404 only to a crawler) |
+| `ROOT_PAGES` | `assemble-site.mjs` | Pages and files that must answer at the **root** (`wiki`, `wiki.css`, `guides`, `get-started`, `how-to-play`, `ai-setup`, `self-hosting`, the comparison page, `privacy`, `sitemap`, `save-move`, `guides.css`, `consent.js`, `fonts`, `robots.txt`, `sitemap.xml`; the list in the file is the reference). Their only copy lives in `public/` (so a local install serves them offline too); assembler lifts them out of `/play/` up to `/`. **A listed page that's missing fails the build** (a dropped page would otherwise 404 only to a crawler) |
 | `ROOT_ASSETS` | `assemble-site.mjs` | Images referenced by absolute `/…` paths from both root guides and the game (`logo.png`, five `loading_screen*`, the default cover `scenario-placeholder.webp`, PWA icons, `screenshot.png`). Copied to `/` if present; a missing one prints a `[warn]` naming it but does not fail the build (a missing image is a cosmetic 404). `server/siteAssembly.test.js` checks every listed name exists in `public/` |
 | Guard | `assemble-site.mjs` | Fatal if `dist-web/index.html` is missing (build the game first) |
 
@@ -226,22 +273,23 @@ Two Cloudflare Workers deploy alongside the site so merged worker code can never
 
 ## 7. Cloudflare Workers (the control/edge plane)
 
-### 7.1 Import counter — `tools/import-counter/` (retired)
+### 7.1 Import counter — `tools/import-counter/`
 
-A scenario's import count is how many times its file has been downloaded from the community hub's **releases**, as GitHub counts it. The hub repository's workflow checks each post's attachment, puts a checked copy of it in a release, adds the downloads up every half hour, and writes them to `index.json` on its `hub-index` branch, with where each copy is, the list of released posts and the suggestions it has checked; the game reads that file from `raw.githubusercontent.com` (`src/runtime/hubFiles.js`), which costs no API request. That index is also the game's only list of the hub's posts, and the copies it names are the only hub files the game downloads: a post's own attachment is never fetched, and GitHub's API is asked for nothing but a post's comments. See [runtime-services.md](runtime-services.md).
+A scenario's import count is **how many players' games have imported it**, as the game reports it, kept by this Worker in D1. Downloading a scenario's file, from GitHub or through either hub proxy, counts nothing. From 2026-10-05 until 2026-11-09 the count was the downloads of the post's file from the hub's releases (summed by the hub repository's workflow into `index.json` `imports`), and anyone could raise it by downloading the file's address in a loop ("lets find a way so people cant manually download scenarios from the workshop in github to inflate import counts", the owner, 2026-11-09). Before that, this Worker counted in KV and the free plan's daily KV allowance ran out within hours of every day.
 
-Until 2026-10-05 the count was kept by this Worker in KV, pinged once per install through `/api/hub/import-log`. One KV `list()` per read of `/counts` and a write per import spent the free plan's daily KV allowance within hours of every day, after which nobody saw any counts. Those routes, `OH_IMPORT_COUNTER_URL` and the ping are gone from the game.
-
-Builds from before the change still call the Worker, so it still answers them, from the hub's index, and stores nothing (`worker.js`; `server/importCounterWorker.test.js`):
+The game reports a post's first import on an install (`src/runtime/hubImportCount.js`, called from `hubPosts.js downloadHubScenario`; never for an Update, a post the library holds, or a post imported before) and reads the counts back from `/counts` (five minutes in the page, five at the edge). See [runtime-services.md](runtime-services.md#the-hubs-index-its-posts-its-checked-files-its-counts-hubfilesjs).
 
 | Item | Value |
 |---|---|
 | Worker name | `oh-import-counter` (`tools/import-counter/wrangler.toml`) |
-| `GET /counts`, `GET /count/<post>` | The hub index's counts, in the shapes the old builds read; the index is kept five minutes at the edge |
-| `POST /hit` | Accepted and ignored: the download the import made is what counted it |
-| Storage | None. The `IMPORTS` KV binding is unused and can be removed with the namespace; what it had counted is carried in the hub's numbers (`data/legacy-import-counts.json` there) |
+| `POST /import { post, token }` | Counted only from the game's pages (`Origin`: openhistoria.com, `*.open-historia.pages.dev`, `http://app.openhistoria`, `http://localhost:<port>`), for a scenario the hub index lists, once per token (SHA-256 of the install's random `hubCountKey` and the post number: one per install per post, unlinkable across posts), once per post per address per UTC day, at most 20 posts per address per day, at most 10 reports a minute per address (`LIMITER`) |
+| `GET /counts`, `GET /count/<post>` | `legacy + counted` per post, in the shapes every build reads (`{ "<post>": { count } }`) |
+| `POST /hit` | The oldest builds' report: answered, never counted |
+| Storage | D1 `oh-import-counts` (binding `DB`): `counts(post, legacy, counted)`, `installs(post, token)`, `addresses(day, who, post)` where `who` is an HMAC of the address and the day under the `COUNT_KEY` secret (rows deleted by the daily cron after a day), `meta`. The Worker makes the tables itself. No KV: the `IMPORTS` namespace is unbound and can be deleted |
+| Old numbers | Frozen once, the first time the Worker runs with its database: the hub index's `imports` (downloads plus what the KV counter had reached) become `counts.legacy`, and are never read again |
+| Without set-up | No `DB`: answers from the hub index as the retired Worker did and counts nothing. No `COUNT_KEY`: counts nothing |
 
-It takes effect when this `worker.js` is on `main` and the site is deployed (§6.1).
+Set-up before the first deploy (owner, once): `wrangler d1 create oh-import-counts` and paste the id into `wrangler.toml` (until then `wrangler deploy` fails and the Worker already deployed keeps running), `wrangler secret put COUNT_KEY` (long random text). Then it rides the site deploy from `main` (§6.1). The privacy policy's Import Counts section describes all of this and must follow any change.
 
 ### 7.2 Node registry — `open-historia-admin/registry/`
 
@@ -317,10 +365,10 @@ It reads only from `server/seed/default`, which **is** committed (map included),
 |---|---|---|---|---|
 | **Desktop (stable)** | `main` | Installers on `desktop-stable` | `desktop-installer.yml` (dispatch from `main` / `desktop-v*` tag) | Install once; opening the app installs a waiting update from `desktop-stable` (§11.1; macOS: install the new zip by hand) |
 | **Desktop (beta)** | `beta` | `Open-Historia-Beta-*` installers on `desktop-beta` | `desktop-beta.yml` (dispatch from `beta` / `desktop-beta-v*` tag) | Install from the pre-release, beside the stable app; opening it installs a waiting update from `desktop-beta` |
-| **Android (stable)** | `main` | `open-historia.apk` on `android` | `android-apk.yml` (dispatch from `main` / `android-v*` tag) | Install once; opening the app downloads a waiting update from `android/latest.json` and opens Android's installer on it (§11.1) |
-| **Android (beta)** | `beta` | `open-historia-beta.apk` on `android-beta` | `android-apk-beta.yml` (dispatch from `beta` / `android-beta-v*` tag) | Install from the pre-release, beside the stable app; updates the same way from `android-beta/latest.json` |
+| **Android (stable)** | `main` | `open-historia.apk` on `android` | `android-apk.yml` (dispatch from `main` / `android-v*` tag) | Install once; opening the app downloads a waiting update from `android/update.json` and opens Android's installer on it (§11.1) |
+| **Android (beta)** | `beta` | `open-historia-beta.apk` on `android-beta` | `android-apk-beta.yml` (dispatch from `beta` / `android-beta-v*` tag) | Install from the pre-release, beside the stable app; updates the same way from `android-beta/update.json` |
 | **Website** | `main` | `dist-site/` | Admin-panel 🚀 button → clean `upstream/main` worktree → `build:site` → `wrangler pages deploy` (or legacy `deploy-site.yml`) | Nothing — the next page load reloads onto it (§11.1) |
-| **Import counter Worker** | `main` | `tools/import-counter/worker.js` | Rides the admin-panel site deploy from the same worktree | — |
+| **Import counter Worker** | `main` | `tools/import-counter/worker.js` | Rides the admin-panel site deploy from the same worktree, once its D1 database and `COUNT_KEY` are set up (§7.1) | — |
 | **Registry Worker** | admin repo | `registry/worker.js` | Rides the site deploy from the admin repo dir | — |
 | **Map binaries** | *manual* | Release assets | Uploaded to `map-data`; fetched by `fetch-map-assets.mjs` when the desktop app launches, and laid into the website and the APK by `scripts/stage-map-assets.mjs` when they are built | Desktop: downloaded on first run. Website and Android: nothing, the map is part of the build |
 
@@ -337,9 +385,9 @@ Opening the game installs a waiting update; the update banner (`src/runtime/AppU
 
 | Build | As the game opens | While it is open |
 |---|---|---|
-| **Desktop** (Windows, Linux) | `electron/launchUpdate.cjs`, from `boot()` in `electron/main.cjs` before the map check and the server: `checkForUpdates` against the release's `latest*.yml`, capped at 6 s. Nothing newer, offline or slow: no window, the game opens. An update: the setup window shows "Updating Open Historia" with its progress, then `quitAndInstall(true, true)` (silent, reopens on the new version). **Open the game now** opens the game at once; the download carries on and installs when the game is closed (`autoInstallOnAppQuit`), and the banner shows how far it got. The stable app's screen also offers **Download the beta** (`betaOffer`, `setup:open-beta`): the beta's Windows installer, or its release page on other systems, opened in the player's browser while the update goes on. The beta is a separate app with its own saves, and its own update screen makes no such offer. | The banner: **Update now** downloads, **Restart now** installs. |
+| **Desktop** (Windows, Linux) | `electron/launchUpdate.cjs`, from `boot()` in `electron/main.cjs` before the map check and the server: `checkForUpdates` against the release's `latest*.yml`, capped at 6 s. Nothing newer, offline or slow: no window, the game opens. An update: the setup window shows "Updating Open Historia" with its progress, then `quitAndInstall(true, true)` (silent, reopens on the new version). **Open the game now** opens the game at once; the download carries on and installs when the game is closed (`autoInstallOnAppQuit`), and the banner shows how far it got. The stable app's screen also asks "Do you want the Native or the Beta version for the best experience?" (`electron/setup.html`, shown when `setup:update` carries `betaOffer`, which `main.cjs` sets for every app but the beta): **Download Native**, the recommended button ringed in gold, opens the native app's installer for this system (`setup:open-native` → `NATIVE_DOWNLOAD_URL`: the Windows setup, the macOS `.dmg` or the Linux `.tar.gz` on the `native-experimental` release, as the website links them), and **Download the beta**, quiet beside it, the beta's Windows installer or its release page on other systems (`setup:open-beta` → `BETA_DOWNLOAD_URL`). Both open in the player's browser (`shell.openExternal`, through `window.ohSetup.openNative` / `openBeta` in `electron/preload.cjs`) while the update goes on. Each is a separate app with its own saves; the beta's own update screen makes no such offer. Until 2026-11-06 the screen offered the beta alone. `server/betaRecommendation.test.js` pins it. | The banner: **Update now** downloads, **Restart now** installs. |
 | **Website** | The first `version.json` check after the page loads, if it answers within 15 s (`LAUNCH_UPDATE_WINDOW_MS`), reloads onto the new bundle under a cover. | The banner's **Update now** reloads. |
-| **Android** | The same first check (`/api/app-update` → the release's `latest.json`): a cover downloads the APK with a progress bar (`UpdatePlugin.java`, `OhUpdate`, through `src/runtime/native/appInstaller.js`) and opens Android's installer on it. Android asks the player to confirm, and the first time to allow installs from the app (`REQUEST_INSTALL_PACKAGES`); it refuses an APK not signed with the installed app's key. **Not now** cancels the download. The APK is kept in the app's cache under its build number, so closing the installer and tapping **Update now** later does not download it again; it is deleted once the app is on that build. | The banner's **Update now** does the same download in the banner; after a failure it falls back to the phone's browser, as every update used to. |
+| **Android** | The same first check (`/api/app-update` → the release's `update.json`; the handover build reads `latest.json`): a cover downloads the APK with a progress bar (`UpdatePlugin.java`, `OhUpdate`, through `src/runtime/native/appInstaller.js`) and opens Android's installer on it. Android asks the player to confirm, and the first time to allow installs from the app (`REQUEST_INSTALL_PACKAGES`); it refuses an APK not signed with the installed app's key. **Not now** cancels the download. The APK is kept in the app's cache under its build number, so closing the installer and tapping **Update now** later does not download it again; it is deleted once the app is on that build. | The banner's **Update now** does the same download in the banner; after a failure it falls back to the phone's browser, as every update used to. |
 | **macOS** | An update made of chunks installs itself as on the other systems (§11.2; not yet run on a Mac). One that needs the installer does nothing: Squirrel.Mac needs a signed app, and the build is unsigned. | The same; for an update that needs the installer the banner links to the new zip. |
 
 A build that fails at launch twice (a desktop download that fails; a website reload that lands on the same old bundle; an APK that downloads but is not installed) is left to the banner: the desktop counts in `launch-update.json` in the app's user-data folder, the page in `localStorage` `oh-launch-update` (`appUpdate.js` `shouldUpdateAtLaunch`). A newer build starts again from zero.
@@ -363,7 +411,9 @@ Tests: `server/payloadChunks.test.js`, `server/payloadUpdate.test.js` (a release
 
 - **Never re-add map binaries to Git LFS** — they live on the `map-data` Release only (§8).
 - **Never let a file over 25 MiB into a Pages build** — the site carries its map, so every file in `scripts/map-assets.web.json` must stay under the limit (`SITE_FILE_LIMIT_BYTES` in the stager; `src/runtime/worldFiles.test.js` checks the list). The `oh-drop-map-binaries` plugin keeps the desktop's larger copies out, and both CI size guards and the local deploy engine's `findOversized` defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts`, `deploy-site.yml`, `deploy-site.mjs`).
-- **Neither Android application id may ever change** (the `appId` in `mobile/capacitor.config.json`; the beta's, the same id + `.beta`): a new id is a new app, and its players' saves stay behind in the old one. The APK asset name was changed once (from the project's earlier name to `open-historia.apk`, 2026-09-04); the old asset has since been deleted from the release. See §3 before doing it again.
+- **Neither Android application id may change lightly** (the `appId` in `mobile/capacitor.config.json`; the beta's, the same id + `.beta`): a new id is a new app, and its players' saves stay behind in the old one. It was changed once, in November 2026, with a handover build that moves them ([mobile.md](mobile.md#moving-to-the-new-app-id)); never write the earlier id or address into the repository. The APK asset name was changed once (from the project's earlier name to `open-historia.apk`, 2026-09-04); the old asset has since been deleted from the release. See §3 before doing either again.
+- **`latest.json` on the Android releases belongs to the earlier id's apps**: the app reads `update.json`. Never let `latest.json` name `open-historia.apk` again (the workflows refuse to run while it does).
+- **A release of main is beta without multiplayer** (§2): every merge of beta brings shared-game code back, some of it compiling cleanly and throwing at run time.
 - **Stage the map data before `cap sync`** — `android-apk.yml` runs `npm run map` and `npm run www` between `npm run build:android` and Gradle; `cap sync` copies whatever is in `mobile/www/`.
 - **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 and a build warning (`assembleSite` in `assemble-site.mjs`).
 - **`deploy-site.yml` is superseded but still on `main`** — the admin-panel button is the live path; the yml stays because the pushing token lacks the `workflow` scope to delete it.

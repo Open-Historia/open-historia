@@ -701,7 +701,13 @@ const actorSuppressedByDeferredSet = (
     worldActorsEquivalent(actor, deferredActor, world, gameCountry)
   );
 
-const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "") => {
+// A region in a pressure's line, by its name: `regionNames` maps the ids the
+// world's ledgers key by to what the model reads (nameRefs.js regionNamer),
+// a plain object so it crosses to the worker. Never the id.
+const UNNAMED_REGION = "an unnamed region";
+const regionNameIn = (regionNames, regionId) => normalizeString(regionNames?.[regionId]) || UNNAMED_REGION;
+
+const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "", regionNames = {}) => {
   const claimants = world?.regionClaimants && typeof world.regionClaimants === "object"
     ? world.regionClaimants
     : {};
@@ -743,7 +749,7 @@ const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set
       type: "territorial-pressure",
       score: 10,
       date: "",
-      title: `Active territorial pressure: ${regionId}`,
+      title: `Active territorial pressure: ${regionNameIn(regionNames, regionId)}`,
       detail: [
         controller ? `controller ${controller}` : "",
         sovereign ? `legal sovereign ${sovereign}` : "",
@@ -756,7 +762,7 @@ const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set
   }
 };
 
-const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "") => {
+const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "", regionNames = {}) => {
   let added = 0;
   for (const unit of normalizeArray(world?.units)) {
     if (added >= ACTIVE_UNIT_SAMPLE_LIMIT) break;
@@ -778,7 +784,7 @@ const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(
       score: 7,
       date: "",
       title: `Active military state: ${owner ? `${owner} — ` : ""}${name}`,
-      detail: [status ? `status ${status}` : "", region ? `region ${region}` : ""]
+      detail: [status ? `status ${status}` : "", region ? `in ${regionNameIn(regionNames, region)}` : ""]
         .filter(Boolean)
         .join("; "),
       ageDays: 0,
@@ -3088,12 +3094,23 @@ const installDebugApi = () => {
 
 installDebugApi();
 
+// The regions buildWorldInitiativeContext may name: those the claimants
+// ledger keys and those its active units stand in. Its caller turns them into
+// names (the `regionNames` option).
+export const directorRegionIds = (world) => [...new Set([
+  ...Object.keys(world?.regionClaimants && typeof world.regionClaimants === "object" ? world.regionClaimants : {}),
+  ...normalizeArray(world?.units).map((unit) => normalizeString(unit?.regionId)),
+].filter(Boolean))];
+
 export const buildWorldInitiativeContext = (
   bundle,
   {
     targetDate = "",
     maxCandidates = DEFAULT_MAX_CANDIDATES,
     playerFocus = "",
+    // { [regionId]: name } for the regions the world's ledgers name
+    // (directorRegionIds); a region it lacks is "an unnamed region".
+    regionNames = {},
   } = {},
 ) => {
   const originDate = normalizeString(bundle?.game?.gameDate);
@@ -3235,12 +3252,14 @@ export const buildWorldInitiativeContext = (
     bundle?.world || {},
     suppressedDeferredParticipantKeys,
     normalizeString(bundle?.game?.country),
+    regionNames,
   );
   pushActiveUnitCandidates(
     candidates,
     bundle?.world || {},
     suppressedDeferredParticipantKeys,
     normalizeString(bundle?.game?.country),
+    regionNames,
   );
 
   const activeInteractive = bundle?.world?.activeInteractive;

@@ -33,11 +33,11 @@ test("the player leads a group when their polity's name is a group's", () => {
 });
 
 test("every task about the player is told it is a group, what it is and where it holds", () => {
-  const text = describePlayerGroupForPrompt(world(), PLAYER, { regionName: (id) => ({ r1: "Sonora", r2: "Chihuahua" })[id] || id });
+  const text = describePlayerGroupForPrompt(world(), PLAYER, { regionName: (id) => ({ r1: "Sonora", r2: "Chihuahua" })[id] ?? "" });
   assert.match(text, /^\[Cartel del Norte Is a Group, Not a Country\]/);
   assert.match(text, /is a group, not a state: A drug cartel that runs the border towns\./);
   assert.match(text, /It owns no land/);
-  assert.match(text, /It controls 2 regions: Sonora \(r1\), Chihuahua \(r2\)\./);
+  assert.match(text, /It controls 2 regions: Sonora, Chihuahua\./);
   assert.equal(describePlayerGroupForPrompt(world(), "Mexico"), "", "nothing for a country");
   assert.match(PLAYER_GROUP_JUMP_RULE, /groupOps take/);
 });
@@ -100,7 +100,9 @@ test("the player's group can be renamed back to its former name", () => {
 test("the advisor reads that the player owns nothing and leads a group", async () => {
   const text = await buildPlayerPolityRegionsText({ game: { country: PLAYER }, world: world() }, [{ id: "r1", name: "Sonora" }]);
   assert.match(text, /^None — Cartel del Norte is a group, not a country\./);
-  assert.match(text, /Sonora \(r1\)/);
+  // By name alone: r2 is not on this map, so it is counted and not named.
+  assert.match(text, /It controls 2 regions: Sonora, \+1 more\./);
+  assert.doesNotMatch(text, /\br[12]\b/);
 });
 
 test("with groups switched off for the game, the player's polity reads as landless, not as a group", async () => {

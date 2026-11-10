@@ -6,12 +6,16 @@ import { decodeTroops } from "./codec.js";
 import { runFronts } from "./engine.js";
 import { frontInput, syntheticMap } from "./syntheticMap.js";
 import { battlefieldOn, readBattlefield } from "./testKit.js";
+import { AIR_FIND } from "./airStrike.js";
 import {
+  AIRLIFT_ARM_FIND,
   CARRIERS,
   HUNT_BASE,
   INTERCEPT_CHANCE_MOST,
   MAX_TRANSPORTS,
   TRANSPORT_LOAD_MOST,
+  airliftIntercepts,
+  airliftMost,
   cancelTransport,
   carrierFor,
   carriersOf,
@@ -24,8 +28,11 @@ import {
   normalizeTransports,
   orderTransport,
   setOut,
+  stretchOf,
   struck,
+  transportBar,
   transportChance,
+  transportLoadMost,
 } from "./transports.js";
 import { buildWorldGrid } from "./worldGrid.js";
 
@@ -414,4 +421,152 @@ test("in the engine a hunted convoy is caught on the way, told where and by whom
     const quiet = run(world, { transports: slow.transports, days: 5, seed: `seed ${seed}` });
     assert.deepEqual(quiet.voyages.map((voyage) => voyage.k), ["sailed"]);
   }
+});
+
+// "make it so air transports work like train and boat except they can go over anywhere, but they can carry less
+// troops and there is a chance they can be intercepted (when over enemy territory but they can be deployed into enemy
+// territory) also make different transport types disableable in features and if a country has their airforce or navy
+// disabled by being set to zero they cant use those transports" (the owner, 2026-11-09).
+const airlift = (extra = {}, at = {}) => orderTransport([], { medium: "air", owner: "Aland", to: { name: "city: Brod" }, raise: 30, battlefield: "Operation Sky", ...extra }, { date: "2024-03-01", year: 2024, ...at });
+// An air unit of Borduria's too far off to reach anything here: Borduria then has its aircraft on the map, and no air arm stands in for them.
+const farWing = { id: "u9", type: "air", ownerCode: "Borduria", name: "Far Wing", lng: 60, lat: 51.5, strength: 100 };
+
+test("an airlift carries fewer than a train or a ship: its era's most, by the country's air figure", () => {
+  assert.deepEqual(CARRIERS.air.map((row) => [row.since, row.most]), [[1960, 6], [1936, 3]]);
+  assert.deepEqual([airliftMost(2024), airliftMost(1944), airliftMost(2024, { air: 50 })], [6, 3, 6], "at an air figure of 50, or none given");
+  assert.deepEqual([airliftMost(2024, { air: 100 }), airliftMost(1944, { air: 100 }), airliftMost(2024, { air: 25 })], [12, 6, 3], "twice that at 100, half at 25");
+  assert.deepEqual([airliftMost(2024, { air: 1 }), airliftMost(2024, { air: 0 })], [1, 0], "one while there is any air force at all; none without");
+  assert.equal(airliftMost(1905), 3, "a carrier the story named before any flew troops carries what the first did");
+  assert.deepEqual([transportLoadMost("sea", 2024), transportLoadMost("land", 2024, { air: 0 }), transportLoadMost("air", 2024)], [TRANSPORT_LOAD_MOST, TRANSPORT_LOAD_MOST, 6]);
+  assert.ok(airliftMost(2024, { air: 100 }) < TRANSPORT_LOAD_MOST);
+
+  // In the engine: told to raise thirty, it flies six (twelve with an air figure of 100), and the rest are never raised.
+  const world = apart();
+  const flown = run(world, { transports: airlift().transports, units: [farWing], days: 4 });
+  assert.deepEqual(flown.voyages.map((voyage) => [voyage.k, voyage.n]), [["sailed", 6], ["landed", 6]]);
+  const strong = run(world, { transports: airlift().transports, units: [farWing], days: 4, mechanics: { military: true }, militaryOf: (name) => (name === "Aland" ? { air: 100 } : null) });
+  assert.deepEqual(strong.voyages.map((voyage) => [voyage.k, voyage.n]), [["sailed", 12], ["landed", 12]]);
+});
+
+test("troops picked out of a battlefield for an airlift: only as many as it carries go, the rest stand", () => {
+  const world = syntheticMap({ layout: ["AAAABBBB", "AAAABBBB", "AA~~~~BB", "AA~~~~BB", "AA~~~~BB"], legend, west: 20, north: 55, step: 1, cities: [{ name: "Southport", lng: 26.4, lat: 50.6 }], key: "bay" });
+  const row = (lng, south, north, count) => Array.from({ length: count }, (_, index) => ({ lng, lat: south + ((index + 0.5) * (north - south)) / count }));
+  const front = run(world, { battlefields: [battlefieldOn(world, { troops: [row(23.9, 53.1, 54.9, 30), row(24.1, 53.1, 54.9, 12)], pool: [300, 300] })], days: 0 }).battlefields[0];
+  const before = live(front, 0).length;
+  const ordered = orderTransport([], { medium: "air", owner: "Aland", kind: "gliders", speed: 300, to: { lng: 26.4, lat: 50.6, name: "city: Southport" }, embark: { battlefield: front.name, side: 0, troops: Array.from({ length: 14 }, (_, index) => index) } }, { date: "2024-03-01", year: 2024 });
+  const result = run(world, { battlefields: [front], transports: ordered.transports, units: [farWing], days: 1 });
+  assert.deepEqual([result.voyages[0].k, result.transports[0].status], ["sailed", "moving"], "still in the air a day on");
+  assert.equal(result.transports[0].load.length, 6, "six of the fourteen go aboard");
+  const left = result.battlefields.find((record) => record.name === front.name);
+  assert.equal(live(left, 0).length, before - 6, "the other eight are still on the line");
+});
+
+test("an airlift goes straight over anything, and puts its troops down in enemy land, where they fight", () => {
+  const world = apart();
+  const result = run(world, { transports: airlift().transports, units: [farWing], days: 6 });
+  const [transport] = result.transports;
+  // Over the sea and Borduria's own ground, straight: the way is as long as the distance between Alba and Brod.
+  assert.equal(transport.status, "landed");
+  assert.ok(transport.km > 470 && transport.km < 500, `${transport.km} km from Alba to Brod`);
+  assert.deepEqual(transport.landing, [30.5, 51.5], "it comes down where it was sent, inland, not on a coast");
+  // Brod is Borduria's: a battlefield opens there with the six flown in on it, against Borduria's.
+  const [record] = result.battlefields;
+  assert.deepEqual([record.name, record.sides], ["Operation Sky", [["Aland"], ["Borduria"]]]);
+  assert.ok(live(record, 0).length >= 1 && live(record, 1).length >= 1);
+  assert.deepEqual(record.log[0], { d: "2024-03-02", k: "landed", s: 0, at: "city: Brod" });
+});
+
+test("an airlift is intercepted only over its enemies' ground, by their air units within reach or their air arm", () => {
+  const world = apart();
+  const grid = buildWorldGrid(world.regions, { step: 0.25 });
+  const base = { ...airlift().transport, status: "moving", load: Array.from({ length: 6 }, () => [100, 0]) };
+  const way = [[23.5, 51.5], [30.5, 51.5]];
+  const over = stretchOf(way, 0, 485);
+  assert.ok(over.length >= 12 && over[0][0] === 23.5 && over.at(-1)[0] === 30.5, "the day's flight, looked at every forty kilometres or so");
+  const holderAt = (lng, lat) => {
+    const cell = grid.cellOf(lng, lat);
+    const mark = cell >= 0 ? grid.region[cell] : 0;
+    return mark ? world.controllerOf(grid.ids[mark]) : "";
+  };
+  const sides = { holderAt, enemy: (name) => name === "Borduria", era: 3 };
+  const wing = { id: "u1", type: "air", ownerCode: "Borduria", name: "1st Air Wing", lng: 30, lat: 51.5, strength: 100 };
+  const always = () => 0;
+  const never = () => 0.999;
+  // Over the sea alone nobody finds it, whoever is near.
+  const sea = stretchOf([[23.5, 51.5], [26.5, 51.5]], 0, 210);
+  assert.deepEqual(airliftIntercepts(base, { ...sides, over: sea, units: [wing], roll: always }), { over: [], found: [] });
+  // Over Borduria's ground its air unit within reach rises, and finds it on a roll under its era's AIR_FIND.
+  const found = airliftIntercepts(base, { ...sides, over, units: [wing], roll: always });
+  assert.deepEqual(found.over, ["Borduria"]);
+  assert.deepEqual(found.found.map((entry) => [entry.by, entry.with]), [["Borduria", "1st Air Wing"]]);
+  assert.ok(found.found[0].at[0] >= 27, "found over Borduria's ground, not over the sea");
+  assert.deepEqual(airliftIntercepts(base, { ...sides, over, units: [wing], roll: never }).found, []);
+  let seen = "";
+  airliftIntercepts(base, { ...sides, over, units: [wing], roll: (what) => { seen = what; return AIR_FIND[3] - 0.001; } });
+  assert.equal(seen, "find|u1");
+  assert.deepEqual(airliftIntercepts(base, { ...sides, over, units: [wing], roll: () => AIR_FIND[3] + 0.001 }).found, [], "AIR_FIND is the chance, radar's from 1945");
+  assert.deepEqual(airliftIntercepts(base, { ...sides, era: 2, over, units: [wing], roll: () => AIR_FIND[2] + 0.001 }).found, [], "and less before it");
+  // Out of reach, pending, of a country with no air arm, or nobody's enemy: it does not rise (and Borduria, with aircraft on the map, has no air arm besides).
+  assert.deepEqual(airliftIntercepts(base, { ...sides, over, units: [{ ...wing, lng: 60 }], roll: always }).found, []);
+  assert.deepEqual(airliftIntercepts(base, { ...sides, over, units: [{ ...wing, status: "pending" }], roll: always }).found.map((entry) => entry.with), [""], "a pending unit is none: Borduria's air arm finds it instead");
+  assert.deepEqual(airliftIntercepts(base, { ...sides, over, units: [wing], worthOf: () => 0, roll: always }).found, []);
+  assert.deepEqual(airliftIntercepts(base, { ...sides, over, units: [{ ...wing, ownerCode: "Neutralia" }], enemy: () => false, roll: always }).found, []);
+  // A country with no aircraft on the map: its air arm finds it at AIRLIFT_ARM_FIND, by what that arm is worth.
+  const arm = (value, worth = 1) => airliftIntercepts(base, { ...sides, over, units: [], worthOf: () => worth, roll: () => value }).found;
+  assert.deepEqual(arm(AIRLIFT_ARM_FIND[3] - 0.001).map((entry) => [entry.by, entry.with]), [["Borduria", ""]]);
+  assert.deepEqual(arm(AIRLIFT_ARM_FIND[3] + 0.001), []);
+  assert.deepEqual(arm(AIRLIFT_ARM_FIND[3] + 0.001, 1.5).length, 1, "a stronger air arm finds more");
+  assert.deepEqual(arm(0, 0), [], "and none at all finds nothing");
+  // Before 1850 nothing flies to find it.
+  assert.deepEqual(airliftIntercepts(base, { ...sides, era: 1, over, units: [wing], roll: always }).found, []);
+});
+
+test("in the engine an airlift over enemy ground is intercepted by the seed's own dice, told where and by whom, and what is left lands", () => {
+  const world = apart();
+  const wing = { id: "u1", type: "air", ownerCode: "Borduria", name: "1st Air Wing", lng: 30, lat: 51.5, strength: 100 };
+  const outcomes = { caught: 0, lost: 0, landed: 0 };
+  for (let seed = 0; seed < 8; seed += 1) {
+    const input = { transports: airlift().transports, units: [wing], days: 4, seed: `seed ${seed}` };
+    const result = run(world, input);
+    const again = run(world, input);
+    assert.deepEqual(again.voyages, result.voyages, "the same run is the same run");
+    const hits = result.voyages.filter((voyage) => voyage.k === "intercepted" || voyage.k === "lost");
+    if (hits.length > 0) outcomes.caught += 1;
+    if (result.transports[0].status === "lost") outcomes.lost += 1;
+    if (result.transports[0].status === "landed") outcomes.landed += 1;
+    for (const hit of hits) {
+      assert.deepEqual([hit.by, hit.with, hit.medium], ["Borduria", "1st Air Wing", "air"]);
+      assert.ok(hit.where[0] > 27, `caught over Borduria's ground (${hit.where})`);
+    }
+    assert.equal(result.transports[0].sunk, hits.reduce((sum, voyage) => sum + voyage.lost, 0));
+    if (result.transports[0].status === "landed") assert.equal(result.voyages.at(-1).landed, 6 - result.transports[0].sunk, "what was left of it was put down");
+  }
+  assert.ok(outcomes.caught >= 5, `with radar and a wing beside Brod it was found in ${outcomes.caught} of 8 runs`);
+  assert.ok(outcomes.landed >= 1 && outcomes.landed + outcomes.lost === 8, JSON.stringify(outcomes));
+  // Flown into its own side's ground with an enemy wing near, it is never intercepted: there is no enemy ground under it.
+  const home = syntheticMap({ layout: ["~~~~~~~~~~~~", "~AAA~~~~AAA~", "~AAA~~~~AAA~", "~AAA~~~~BBB~", "~~~~~~~~~~~~"], legend, west: 20, north: 54, step: 1, cities, key: "home" });
+  for (let seed = 0; seed < 6; seed += 1) {
+    const quiet = run(home, { transports: airlift({ to: { lng: 30.5, lat: 52.5, name: "region: East" } }).transports, units: [{ ...wing, lat: 51 }], days: 3, seed: `seed ${seed}` });
+    assert.ok(!quiet.voyages.some((voyage) => voyage.k === "intercepted" || voyage.k === "lost"), JSON.stringify(quiet.voyages));
+  }
+});
+
+test("a transport the features switched off, or by sea with no navy, or by air with no air force, is refused", () => {
+  const world = apart();
+  const refusedFor = (transports, extra) => {
+    const result = run(world, { transports, days: 2, ...extra });
+    return [result.transports[0].status, result.transports[0].note, result.voyages[0]?.why, result.battlefields.length];
+  };
+  assert.deepEqual(refusedFor(airlift().transports, { transportMedia: ["sea", "land"] }), ["refused", "switched-off", "switched-off", 0]);
+  assert.deepEqual(refusedFor(convoy().transports, { transportMedia: ["land", "air"] }), ["refused", "switched-off", "switched-off", 0]);
+  assert.equal(run(world, { transports: convoy().transports, days: 2, transportMedia: ["sea"] }).transports[0].status, "landed", "what is on still goes");
+  const figures = (military) => ({ mechanics: { military: true }, militaryOf: (name) => (name === "Aland" ? military : null) });
+  assert.deepEqual(refusedFor(airlift().transports, figures({ air: 0 })), ["refused", "no-air-force", "no-air-force", 0]);
+  assert.deepEqual(refusedFor(convoy().transports, figures({ sea: 0 })), ["refused", "no-navy", "no-navy", 0]);
+  assert.equal(run(world, { transports: convoy().transports, days: 2, ...figures({ air: 0 }) }).transports[0].status, "landed", "a country with no air force still ships troops");
+  // The rule as the war room reads it.
+  assert.deepEqual(["sea", "land", "air"].map((medium) => transportBar(medium)), ["", "", ""]);
+  assert.deepEqual(["sea", "land", "air"].map((medium) => transportBar(medium, { media: ["land"] })), ["switched-off", "", "switched-off"]);
+  assert.deepEqual(["sea", "land", "air"].map((medium) => transportBar(medium, { military: { sea: 0, air: 0 } })), ["no-navy", "", "no-air-force"]);
+  assert.deepEqual(["sea", "air"].map((medium) => transportBar(medium, { military: { sea: 5, air: null } })), ["", ""], "an arm not given is not none");
 });

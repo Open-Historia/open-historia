@@ -72,16 +72,79 @@ test("the tool: a click names what is struck, a drag moves the map, and a ring t
     closeWarRoom();
   }
   assert.deepEqual([getWarRoom().aircraft, getWarRoom().wing, getWarRoom().strikeKind], [false, "", "troops"], "shut, it forgets");
-  assert.match(tools, /if \(tool === "aircraft"\) \{\s*if \(\(done\.moved \?\? 0\) >= CLICK_PX\) return;[\s\S]*?reportWarRoomWay\("aircraft", \[\[unwrapLng\(place\.lng, 0\), place\.lat\]\], \{ wing, kind: strikeKind \}\);/);
+  assert.match(tools, /if \(tool === "aircraft"\) \{\s*if \(\(done\.moved \?\? 0\) >= CLICK_PX\) return;[\s\S]*?reportWarRoomWay\("aircraft", \[\[unwrapLng\(place\.lng, 0\), place\.lat\]\], \{ wing, kind: strikeKind, radius: strikeRadius \}\);/);
   assert.match(tools, /if \(tool === "aircraft"\) setAim\(ringAt\(at\(event\)\)\);/);
   assert.match(tools, /const km = Number\(getWarRoom\(\)\.blast\);/);
   assert.match(tools, /<circle cx=\{aim\.x\} cy=\{aim\.y\} r=\{aim\.r\} fill="rgba\(43, 193, 243, 0\.14\)" stroke=\{ACCENT\}/);
   // The panel sends what was clicked: troops there, the structure or the city nearest it.
-  assert.match(panel, /\} else if \(drawn === "aircraft" && extra\?\.wing && way\[0\]\) \{[\s\S]*?await orderWith\(sendAirStrikeOp, await strikeAtRef\.current\(extra\.wing, extra\.kind, way\[0\]\)\);/);
+  assert.match(panel, /\} else if \(drawn === "aircraft" && extra\?\.wing && way\[0\]\) \{[\s\S]*?await orderWith\(sendAirStrikeOp, \{ \.\.\.\(await strikeAtRef\.current\(extra\.wing, extra\.kind, way\[0\]\)\), radius: strikeRadiusOf\(extra\.radius\) \}\);/);
   assert.match(panel, /return \{ op: "airstrike", unit, kind: "troops", to: \[lng, lat\], battlefield: name, target: placeNear\(lng, lat\) \};/);
   assert.match(panel, /const found = near\(strikableStructures\(world, game\.country\)\);/);
   assert.match(panel, /const country = enemies\.find\(\(name\) => chart\?\.holds\?\.\(name, Number\(city\.lng\), Number\(city\.lat\)\) === true\)/);
-  assert.match(panel, /setWarRoom\(\{ blast: airBlast \}\)/);
+  // The ring is as wide as the strike radius set.
+  assert.match(panel, /setWarRoom\(\{ blast: airBlast \* strikeRadiusOf\(strikeRadius\) \}\)/);
+});
+
+test("the strike radius: a slider with no figure, carried by the click, a waiting strike ordered again once it is let go; shut, it forgets", () => {
+  try {
+    openWarRoom("The Front", 0);
+    assert.deepEqual([getWarRoom().strikeRadius, getWarRoom().sizing], [1, false], "the default: the strike as it always was");
+    setWarRoom({ strikeRadius: 0.65, sizing: true });
+    assert.deepEqual([getWarRoom().strikeRadius, getWarRoom().sizing], [0.65, true]);
+  } finally {
+    closeWarRoom();
+  }
+  assert.deepEqual([getWarRoom().strikeRadius, getWarRoom().sizing], [1, false]);
+  // "make the bombing radius be a slider not buttons, and dont have it actually say how big it is, just the visual
+  // circle" (the owner, 2026-11-09): a range from the least radius to the most in the engine's steps, and no
+  // kilometres, no figure, no keys.
+  assert.match(plate, /<RadiusSlider radius=\{radius\} disabled=\{radiusLocked \|\| wing\.pending\} onRadius=\{onRadius\} onRadiusSet=\{onRadiusSet\} onSizing=\{onSizing\} \/>/);
+  // Held only while a turn runs: not while one of its own orders is sent, which would take the keyboard's focus off it.
+  assert.match(panel, /locked=\{locked\}\s*radiusLocked=\{turnRunning\}/);
+  assert.match(plate, /type="range"\s*aria-label="Strike radius"[\s\S]*?min=\{AIR_STRIKE_RADIUS_LEAST\}\s*max=\{AIR_STRIKE_RADIUS_MOST\}\s*step=\{AIR_STRIKE_RADIUS_STEP\}\s*value=\{radius\}/);
+  assert.doesNotMatch(plate, /AIR_STRIKE_RADII|role="radiogroup" aria-label="Strike radius"|blast \* /, "no keys and no kilometres");
+  assert.doesNotMatch(plate, /aria-valuetext/, "nor a size read out");
+  assert.match(plate, /style=\{\{ accentColor: RED, cursor: disabled \? "default" : "pointer", margin: 0, width: "100%" \}\}/, "styled as the game's other sliders, in the war room's red");
+  assert.match(plate, /\{blast > 0 && \(/, "none in an era whose bombs fall nowhere");
+  // As it moves the store follows (and the circles with it); let go, the order; pointed at, held or focused, the circle.
+  assert.match(plate, /onChange=\{\(event\) => onRadius\(Number\(event\.target\.value\)\)\}/);
+  assert.match(plate, /window\.addEventListener\("pointerup", letGo\);/, "a drag let go off the slider still sets it");
+  assert.match(plate, /onKeyUp=\{\(\) => onRadiusSet\(valueOf\(\)\)\}/);
+  assert.match(plate, /onPointerEnter=\{\(\) => \{\s*pointing\.current = true;\s*onSizing\(true\);/);
+  assert.match(plate, /useEffect\(\(\) => \(\) => latest\.current\.onSizing\(false\), \[\]\);/, "taken away, it leaves no circle behind");
+  assert.match(panel, /onRadius=\{setStrikeRadius\}\s*onRadiusSet=\{orderStrikeRadius\}\s*onSizing=\{\(sizing\) => setWarRoom\(\{ sizing \}\)\}/);
+  assert.match(panel, /radius=\{strikeRadiusOf\(strikeRadius\)\}\s*blast=\{airBlast\}/);
+  assert.match(panel, /const setStrikeRadius = \(radius\) => setWarRoom\(\{ strikeRadius: strikeRadiusOf\(radius\) \}\);/);
+  // A strike waiting is ordered again at the same target with the radius set, and its own radius is shown when picked.
+  assert.match(panel, /const orderStrikeRadius = async \(radius\) => \{[\s\S]*?const done = await orderWith\(sendAirStrikeOp, \{\s*op: "airstrike",\s*unit: order\.unit,\s*kind: order\.kind,\s*to: \[order\.lng, order\.lat\],[\s\S]*?radius: strikeRadiusOf\(radius\),\s*\}\);\s*if \(!done\) setWarRoom\(\{ strikeRadius: strikeRadiusOf\(order\.radius\) \}\);/);
+  assert.match(panel, /if \(pickedOrderRadius > 0\) setWarRoom\(\{ strikeRadius: pickedOrderRadius \}\);/);
+  // On the map each ring is as wide as its own strike's radius, any radius between.
+  const ring = (radius) => {
+    const [feature] = airFeatures({ blast: 20, orders: [{ lng: 22, lat: 0, ...(radius ? { radius } : {}) }] }).features;
+    return Math.max(...feature.geometry.coordinates[0].map(([lng]) => lng)) - 22;
+  };
+  assert.ok(Math.abs(ring(2) / ring() - 2) < 0.01 && Math.abs(ring(0.5) / ring() - 0.5) < 0.01, `${ring(0.5)} ${ring()} ${ring(2)}`);
+  assert.ok(Math.abs(ring(1.35) / ring() - 1.35) < 0.01, `${ring(1.35)} ${ring()}`);
+});
+
+test("the circles follow the slider: the strike waiting, the pointer's ring, and one shown while it is set with none waiting", () => {
+  // The strike waiting for the air unit picked out is drawn at the radius on the slider.
+  assert.match(marks, /const orders = normalizeAirStrikeOrders\(strikeOrders\)\.filter\(mine\)\.map\(\(order\) => \(unit && order\.unit === wing \? \{ \.\.\.order, radius: strikeRadius \} : order\)\);/);
+  // With none waiting, a circle stands in the open middle of the map while the slider is being set.
+  assert.match(marks, /if \(unit && sizing && blast > 0 && !orders\.some\(\(order\) => order\.unit === wing\)\) \{/);
+  assert.match(marks, /sizing: sizingAt,/);
+  assert.equal(marks.split('filter={["any", IS("aim"), IS("struck"), IS("sizing")]}').length - 1, 2, "drawn as a strike's circle is, fill and edge");
+  const data = airFeatures({ blast: 20, sizing: { lng: 10, lat: 0, radius: 2 } });
+  assert.deepEqual(data.features.map((feature) => feature.properties.what), ["sizing"], "a circle and no target in it");
+  assert.equal(data.features[0].properties.colour, "#2bc1f3");
+  const east = Math.max(...data.features[0].geometry.coordinates[0].map(([lng]) => lng)) - 10;
+  const usual = Math.max(...airFeatures({ blast: 20, sizing: { lng: 10, lat: 0 } }).features[0].geometry.coordinates[0].map(([lng]) => lng)) - 10;
+  assert.ok(Math.abs(east / usual - 2) < 0.01, `${east} ${usual}`);
+  assert.equal(airFeatures({ blast: 20, sizing: null }).features.length, 0);
+  // The pointer's ring grows and shrinks where it stands when the radius changes (the store's blast).
+  assert.match(tools, /const blast = useWarRoom\(\(state\) => state\.blast\);/);
+  assert.match(tools, /useEffect\(\(\) => \{\s*setAim\(\(now\) => \(now && ringAtRef\.current \? ringAtRef\.current\(\[now\.x, now\.y\]\) : now\)\);\s*\}, \[blast\]\);/);
+  assert.match(tools, /ringAtRef\.current = ringAt;/);
 });
 
 test("on the map: the reach of the air unit picked out, and rings where the bombs of each strike fall, under the units' counters", () => {

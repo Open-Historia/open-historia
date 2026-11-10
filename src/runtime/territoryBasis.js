@@ -52,10 +52,9 @@ export const TERRITORY_BASIS_ENUM = Object.freeze([
 // below, which the jump is always given. So the definition is stated once, on
 // regionTransfers, and the control operation only points at it.
 export const TERRITORY_BASIS_DESCRIPTION =
-  "WHY the land moves; the engine reads it. treaty = agreed, or imposed by a peace. "
-  + "annexation = formalising land ALREADY held. unification = polities merging. "
-  + "independence = a new state actually governing it. occupation = ground physically held. "
-  + "claim, threat and raid do NOT move the map: a claim is recorded as a dispute instead.";
+  "WHY the land moves: treaty (agreed, or imposed by a peace), annexation (land ALREADY held), "
+  + "unification (polities merging), independence (a new state governing it), occupation (ground held). "
+  + "claim, threat and raid do NOT move the map.";
 export const TERRITORY_BASIS_DESCRIPTION_SHORT = "Why control changes; same words and meaning as regionTransfers.basis.";
 
 const MOVES_MAP = new Set(TERRITORY_BASIS_MOVES_MAP);

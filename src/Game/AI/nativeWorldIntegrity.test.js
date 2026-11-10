@@ -137,24 +137,64 @@ const wouldWithhold = (screened) => screened.playerVerdicts
   .filter((verdict) => verdict.wouldWithhold)
   .map((verdict) => verdict.reason);
 
+// A war record of the answer, tied to its event: `actors` start it.
+const warRecord = (eventId, actors, opponents) => ({
+  id: "baltic-war",
+  op: "start",
+  actors,
+  opponents,
+  eventIds: [eventId],
+  eventIndexes: [0],
+  note: "Baltic War",
+});
+
 test("the world declaring war for the player's country is marked to be withheld", () => {
-  const screened = screenLatvia([latviaEvent("Latvia Declares War on Russia", "Latvia declares war on Russia.")]);
+  const war = latviaEvent("Latvia Declares War on Russia", "Latvia declares war on Russia.");
+  const screened = screenLatvia([war], { warUpdates: [warRecord(war.id, ["Republic of Latvia"], ["Russian Federation"])] });
   assert.deepEqual(wouldWithhold(screened), ["player-fresh-sovereign-choice-without-authority"]);
   assert.equal(screened.events.length, 1, "logged only, so the event stays");
   assert.deepEqual(screened.dropped, []);
+  // Without the record nothing the event carries says Latvia chose it: its
+  // words alone never decide that.
+  assert.deepEqual(wouldWithhold(screenLatvia([war])), []);
 });
 
 test("the world acting on the player's country is never marked, even when the title opens with it", () => {
+  const attack = latviaEvent("Latvia Comes Under Attack as Russia Declares War", "Russia declares war on Latvia and its forces cross the border.", { combatants: ["Russian Federation", "Republic of Latvia"] });
   const screened = screenLatvia([
     latviaEvent("Russia Declares War on Latvia", "Russia declares war on Latvia.", { combatants: ["Russian Federation", "Republic of Latvia"] }),
-    latviaEvent("Latvia Comes Under Attack as Russia Declares War", "Russia declares war on Latvia and its forces cross the border.", { combatants: ["Russian Federation", "Republic of Latvia"] }),
+    attack,
     latviaEvent("Latvia Hit as Russia Imposes Sanctions", "Russia imposes sanctions on Latvian food exports."),
-  ]);
+  ], { warUpdates: [warRecord(attack.id, ["Russian Federation"], ["Republic of Latvia"])] });
   assert.equal(screened.events.length, 3);
   assert.deepEqual(screened.dropped, []);
-  // The title-based reading still takes the last two for Latvia's own choice.
-  // This is why the rule is not enforced yet.
-  assert.equal(wouldWithhold(screened).length, 2);
+  // The side a war is started on chose nothing; nor does a title that opens
+  // with the player's country make it the one choosing.
+  assert.deepEqual(wouldWithhold(screened), []);
+});
+
+// A player's report: a world event was filed "Not recorded: the game could
+// not tell it was your government's order". It named the player's country
+// beside words that sound like a decision, and carried nothing of the
+// player's: no actor, no operation, no record, no order.
+test("a world event naming the player's country with decision-sounding words is recorded", () => {
+  const events = [
+    latviaEvent(
+      "Estonian Parliament Approves Joint Air Policing With Latvia",
+      "The Estonian government approves a new bilateral defence agreement and orders fighter aircraft to patrol Latvian airspace; Latvia's government is said to welcome the deployment.",
+      { playerRelated: false },
+    ),
+    latviaEvent(
+      "Latvia's Neighbours Sign Sanctions Pact",
+      "The governments of Estonia and Russia sign an agreement imposing new sanctions; Latvia's cabinet declares a national state of emergency, observers say.",
+      { playerRelated: false },
+    ),
+  ];
+  const screened = screenLatvia(events);
+  assert.deepEqual(screened.dropped, []);
+  assert.equal(screened.events.length, 2);
+  assert.deepEqual(wouldWithhold(screened), []);
+  // (sharedGameAgency.test.js: and where a shared game holds the boundary hard.)
 });
 
 test("the player's own order authorizes the same choice", () => {
@@ -191,8 +231,9 @@ test("the player's own message in a chat authorizes the treaty it agreed", () =>
     "Latvia Signs Border Demarcation Treaty With Estonia",
     "Latvia signs the border demarcation treaty with Estonia in Riga.",
   );
-  assert.equal(wouldWithhold(screenLatvia([treaty])).length, 1, "without the chat nothing authorizes it");
-  const screened = screenLatvia([treaty], { chats });
+  const agreementUpdates = [pactRecord(treaty.id, ["Republic of Latvia", "Republic of Estonia"])];
+  assert.equal(wouldWithhold(screenLatvia([treaty], { agreementUpdates })).length, 1, "without the chat nothing authorizes it");
+  const screened = screenLatvia([treaty], { chats, agreementUpdates });
   assert.equal(screened.events.length, 1);
   assert.equal(screened.events[0].agency.authority, "player-commitment");
   assert.equal(screened.events[0].agency.authorityRef, "msg-latvia");

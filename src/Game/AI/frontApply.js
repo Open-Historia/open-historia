@@ -54,7 +54,7 @@ import { engineMapOf, worldMeasureOf } from "../../../server/mapDistance.js";
 import { stolenPlansBlock, turnPlanned, warRoomIntel } from "./frontPlans.js";
 import { battlefieldPowers, buildFrontsBlock } from "./frontPrompt.js";
 import { buildScenarioFronts, scenarioFrontsPending } from "./frontScenario.js";
-import { airOn, frontsOn, frontsPace, naviesOn, strategyNetOn } from "./frontsGate.js";
+import { airOn, frontsOn, frontsPace, naviesOn, strategyNetOn, transportMediaOn } from "./frontsGate.js";
 import { labStaffPolicy, trainedStaffPolicy } from "../../runtime/fronts/mind/trained.js";
 import { applyFrontUnitChanges, battlefieldRegionTest, engineRegionsOf, frontWorldReaders, runTurnFronts, stripFrontOps } from "./frontTurn.js";
 import { applyWarUpdates, eventNarratesHardCombat } from "./nativeWarLedger.js";
@@ -251,6 +251,8 @@ const turnRunInput = ({ world, game, campaignId, loadRegions, signal, round, fro
     // The Wars feature's other parts: fleets at sea, and what flies.
     naval: naviesOn(),
     air: airOn(),
+    // And what may carry troops: rail, sea and air each have a switch.
+    transportMedia: transportMediaOn(),
     // How its wars' troops stand where nobody deploys them otherwise: along fronts, or as swarms (runtime/fronts/swarms.js).
     warfare: warfareOf(world, fromDate),
     // The men a counter stands for and the share of people who can fight, where it set them.
@@ -299,9 +301,13 @@ const warGroundOf = (world) => [
     .map(([key, record]) => [key, record?.name ?? "", record.military])),
 ];
 
-// The last period worked out, kept while the same turn is being asked for: a
+// The last periods worked out, kept while the same turn is being asked for: a
 // request that is retried, or asked of the next model on the list, finds it done.
-let foreseen = { key: "", value: null };
+// And a few of them, of different lengths: the next period is thought through
+// ahead of time to the longer skips as well (frontPrethink.js), and a skip of
+// any of those lengths finds its own.
+export const FORESEEN_KEPT = 4;
+const foreseen = new globalThis.Map();
 
 // Runs the front engine over the days a turn is ABOUT to cover, under the
 // orders that already stand (the campaign's, and what was ordered in the war
@@ -341,7 +347,12 @@ export const forecastTurnFronts = async ({ world = {}, game = {}, campaignId = "
       // fought in, and each country's military figures (Wars and Fronts Pt.2).
       hashOf(JSON.stringify(warGroundOf(world))),
     ].join("|");
-    if (foreseen.key === key) return foreseen.value;
+    if (foreseen.has(key)) {
+      const value = foreseen.get(key);
+      foreseen.delete(key);
+      foreseen.set(key, value);
+      return value;
+    }
     const startedAt = Date.now();
     const run = await runFrontsWhere({
       ...turnRunInput({ world, game, campaignId, loadRegions, signal, round, fromDate }),
@@ -357,7 +368,8 @@ export const forecastTurnFronts = async ({ world = {}, game = {}, campaignId = "
     const value = run?.battlefields && days > 0
       ? { fromDate, toDate: target, days, battlefields: run.battlefields, news: asArray(run.news), flips: asArray(run.flips), transports: asArray(run.transports), voyages: asArray(run.voyages), sea: run.sea ?? null, airStrikes: asArray(run.airStrikes), ...(asArray(given).length ? { given: asArray(given) } : {}) }
       : null;
-    foreseen = { key, value };
+    foreseen.set(key, value);
+    while (foreseen.size > FORESEEN_KEPT) foreseen.delete(foreseen.keys().next().value);
     if (value) {
       const told = `the period's land war worked out before its story: ${days} day${days === 1 ? "" : "s"}, ${value.flips.length} region${value.flips.length === 1 ? "" : "s"} changed hands, ${value.news.length} thing${value.news.length === 1 ? "" : "s"} to tell (${Date.now() - startedAt} ms).`;
       console.info(`[OH fronts] ${told}`);
@@ -688,9 +700,12 @@ export const routesIntoOthers = async ({ world = {}, game = {}, campaignId = "",
     const readers = frontWorldReaders(world, { baseOwners: front.baseOwners, groups: isActiveFeatureEnabled("groups") });
     const members = new Set(asArray(record.sides).flat().map(fold));
     const inWar = (name) => members.has(fold(name));
+    // (As the engine reads it: a country's force holds for its country, runtime/fronts/engine.js holderIn.)
     const holderOf = (id) => {
       const group = clean(readers.groupAreas?.[id]);
-      return group && inWar(group) ? group : clean(readers.controllerOf(id));
+      if (group && inWar(group)) return group;
+      const owner = group ? clean(readers.groupOwnerOf(group)) : "";
+      return owner && inWar(owner) ? owner : clean(readers.controllerOf(id));
     };
     const place = projectorOf(record.frame);
     const under = asArray(record.brief?.carry?.under);
@@ -764,7 +779,10 @@ export const transportWaysFor = async ({ world = {}, game = {}, campaignId = "",
       if (mine < 0) continue;
       const holderOf = (id) => {
         const group = clean(readers.groupAreas?.[id]);
-        return group && sides.some((members) => members.includes(fold(group))) ? group : clean(readers.controllerOf(id));
+        const inWar = (name) => sides.some((members) => members.includes(fold(name)));
+        if (group && inWar(group)) return group;
+        const owner = group ? clean(readers.groupOwnerOf(group)) : "";
+        return owner && inWar(owner) ? owner : clean(readers.controllerOf(id));
       };
       const troops = decodeTroops(record.troops?.[transport.embark.side]);
       let x = 0;
@@ -906,7 +924,9 @@ export const withFrontUnits = (world, fronts) => {
 // prompt is then exactly what it was. `foreseen` is what forecastTurnFronts
 // gave for the turn, when it gave anything: the block then tells the
 // battlefields as the period leaves them and what happened on them.
-export const frontsLiveBlock = (world, game, foreseen = null) => [landBlock(world, game, foreseen), seasLiveBlock(world, game, foreseen), airStrikesLiveBlock(foreseen)].filter(Boolean).join("\n\n");
+// `options.orderLines: false` where the prompt states how an order line is
+// written elsewhere (frontPrompt.js FRONT_ORDER_LINES_BLOCK).
+export const frontsLiveBlock = (world, game, foreseen = null, options = {}) => [landBlock(world, game, foreseen, options), seasLiveBlock(world, game, foreseen), airStrikesLiveBlock(foreseen)].filter(Boolean).join("\n\n");
 // The war room's air strikes as the period's run flew them (runtime/fronts/airStrike.js): "" when none flew, or the
 // period was not fought before the story (they are flown when the turn is applied all the same, and told the next).
 export const airStrikesLiveBlock = (foreseen = null) => (frontsOn() && airOn() ? airStrikesBlock(foreseen?.airStrikes) : "");
@@ -918,8 +938,8 @@ export const seasLiveBlock = (world, game, foreseen = null) => (frontsOn() && na
   ? buildSeasBlock({ sea: foreseen?.sea ?? null, units: world?.units, wars: world?.wars, players: humanCountriesOf(game), date: clean(game?.gameDate || game?.startDate), blockades: world?.blockades, era: eraSettingOf(world) })
   : "");
 
-const landBlock = (world, game, foreseen = null) => (frontsOn()
-  ? buildFrontsBlock({ battlefields: world?.battlefields, players: humanCountriesOf(game), period: foreseen, transports: world?.transports, difficulty: normalizeDifficulty(game?.difficulty), orderFunction: foreseen?.orderFunction === true })
+const landBlock = (world, game, foreseen = null, { orderLines = true } = {}) => (frontsOn()
+  ? buildFrontsBlock({ battlefields: world?.battlefields, players: humanCountriesOf(game), period: foreseen, transports: world?.transports, difficulty: normalizeDifficulty(game?.difficulty), orderFunction: foreseen?.orderFunction === true, orderLines, transportMedia: transportMediaOn() })
   : "");
 
 // The battlefields of a period fought again with a player's orders, with no

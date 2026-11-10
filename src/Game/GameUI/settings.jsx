@@ -40,7 +40,7 @@ import {
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
 import { useWorldBackground } from "../Map/useWorldState.js";
-import { announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask } from "../AI/requestBudget.js";
+import { announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask, setNoRequestLimit } from "../AI/requestBudget.js";
 import {
     AI_REQUEST_CONTROL_EVENT,
     cancelAllAiRequests,
@@ -70,7 +70,7 @@ import {
     getStoredLanguage,
     setStoredChatLanguage,
 } from "../../runtime/i18n.js";
-import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSetting, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
+import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSetting, useMapSettingDefaultOn, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
 import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
 // The Map Editor's basemap window, opened here to browse, download and manage
 // maps without opening the editor. Loaded on first use: it brings the editor's
@@ -109,6 +109,7 @@ import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, decodeAllowedBasemaps, decodeOwnBase
 import { DEFAULT_BASEMAP_KEY, DEFAULT_BASEMAP_ON_KEY, basemapShownFor, scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
 import { useGameBasemapPick } from "../Map/useBasemapPick.js";
 import UiThemeSettings from "./UiThemeSettings.jsx";
+import { isWebsiteBuild } from "../../runtime/websiteBuild.js";
 import { formatBytes, subscribeTiledBasemaps } from "../../runtime/tiledBasemaps.js";
 import { detailedMapOffers, detailedMapsDownloadLine, lookUpDetailedMaps } from "../Map/detailedMapOffers.js";
 import DetailedMapsInstallOffer from "../Map/DetailedMapsInstallOffer.jsx";
@@ -1498,17 +1499,6 @@ const useRequestDay = () => {
     return day;
 };
 
-// Whether requests are being saved, following the switch in AI requests.
-const useSavingRequests = () => {
-    const [saving, setSaving] = useState(() => requestSettings.saveRequests());
-    useEffect(() => {
-        const refresh = () => setSaving(requestSettings.saveRequests());
-        window.addEventListener("ai:request-budget", refresh);
-        return () => window.removeEventListener("ai:request-budget", refresh);
-    }, []);
-    return saving;
-};
-
 // Task keys the request count holds that are not per-task models
 // (AI_TASK_ROUTING): a call that named no task.
 const OTHER_REQUEST_TASKS = [
@@ -1523,15 +1513,26 @@ const RequestBudgetSection = () => {
     const tasks = requestsByTask(day.byTask, REQUEST_TASK_LABELS);
     const [activeAiRequests, setActiveAiRequests] = useState(() => getActiveAiRequestCount());
     const [cancelNotice, setCancelNotice] = useState("");
-    const [saving, setSaving] = useState(() => requestSettings.saveRequests());
-    const [background, setBackground] = useState(() => requestSettings.backgroundAi());
+    // One switch (requestBudget.js): on, nothing is saved, and the lookup
+    // functions are on unless turned off under Advanced. What the game does in
+    // the background has no switch of its own (2026-11-07): it is always on,
+    // under a fixed cap for the day.
+    const [noLimit, setNoLimit] = useState(() => requestSettings.noRequestLimit());
+    const lookupsOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
+    // Idle diplomacy has a switch of its own, outside that cap (2026-11-09).
+    const idleDiplomacyOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy);
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
-    const [backgroundCap, setBackgroundCap] = useState(() => String(requestSettings.backgroundDailyCap()));
 
     useEffect(() => {
         const refresh = () => setActiveAiRequests(getActiveAiRequestCount());
         window.addEventListener(AI_REQUEST_CONTROL_EVENT, refresh);
         return () => window.removeEventListener(AI_REQUEST_CONTROL_EVENT, refresh);
+    }, []);
+    // The first-run setup sets the switch too.
+    useEffect(() => {
+        const refresh = () => setNoLimit(requestSettings.noRequestLimit());
+        window.addEventListener("ai:request-budget", refresh);
+        return () => window.removeEventListener("ai:request-budget", refresh);
     }, []);
 
     const apply = (message, write) => {
@@ -1550,8 +1551,10 @@ const RequestBudgetSection = () => {
             ? `Player cancelled ${cancelled} active AI request${cancelled === 1 ? "" : "s"} from Settings.`
             : "Player pressed Cancel all AI requests, but none were active.");
     };
-    // The most a skip is when function calling may add to it (Save AI requests off).
-    const lookupCap = describeJumpCost({ lookups: true }).max;
+    // The most a skip may use with the switch on, and its rounds of questions.
+    const noLimitCost = describeJumpCost({ lookups: true, unlimited: true });
+    const noLimitCap = noLimitCost.max;
+    const noLimitRounds = noLimitCost.rounds;
     const share = day.limit > 0 ? Math.min(1, day.used / day.limit) : 0;
     const barColor = share >= 0.9 ? "#f87171" : share >= 0.7 ? "#fbbf24" : "#60a5fa";
 
@@ -1560,21 +1563,51 @@ const RequestBudgetSection = () => {
         title="AI requests"
         description="A free key allows a few hundred requests a day. These settings decide how many the game spends, and on what."
         >
+            <Toggle
+            label="My key has no request limit"
+            enabled={noLimit}
+            onToggle={() => {
+                const next = !noLimit;
+                apply(`My key has no request limit turned ${next ? "on" : "off"}.`, () => setNoRequestLimit(next));
+                setNoLimit(requestSettings.noRequestLimit());
+            }}
+            />
+            {/* One sentence group per state, each a single string, so a language
+                pack translates it whole (docs/i18n.md). */}
+            <div style={settingsHelper}>
+                {noLimit
+                    ? `On: for a paid key or a local model. The AI looks things up and works in more steps, for better turns with less sent in each request. A time skip may use up to ${noLimitCap} requests, with up to ${noLimitRounds} rounds of questions.`
+                    : "Off (default): for a free key, where requests run out. A time skip is one request and the AI is handed what it needs. Turn this on for a paid key or a local model: the AI looks things up and works in more steps, for better turns with less sent in each request."}
+            </div>
+
             <div style={{ marginBottom: "0.95rem" }}>
-                <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
-                    <div style={{ color: "rgba(255,255,255,0.92)", fontSize: "0.82rem", fontWeight: 800 }}>
-                        <span data-no-translate>{day.used}</span> of <span data-no-translate>{day.limit}</span> used today
+                {noLimit ? (
+                    <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+                        <div style={{ color: "rgba(255,255,255,0.92)", fontSize: "0.82rem", fontWeight: 800 }}>
+                            <span data-no-translate>{day.used}</span> used today
+                        </div>
+                        <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.64rem" }}>
+                            resets at <span data-no-translate>{formatResetTime(day.resetAt)}</span>
+                        </div>
                     </div>
-                    <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.64rem" }}>
-                        resets at <span data-no-translate>{formatResetTime(day.resetAt)}</span>
-                    </div>
-                </div>
-                <div style={{ background: "rgba(255,255,255,0.07)", borderRadius: "999px", height: "6px", marginTop: "0.4rem", overflow: "hidden" }}>
-                    <div style={{ background: barColor, height: "100%", width: `${Math.round(share * 100)}%` }} />
-                </div>
+                ) : (
+                    <>
+                        <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+                            <div style={{ color: "rgba(255,255,255,0.92)", fontSize: "0.82rem", fontWeight: 800 }}>
+                                <span data-no-translate>{day.used}</span> of <span data-no-translate>{day.limit}</span> used today
+                            </div>
+                            <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.64rem" }}>
+                                resets at <span data-no-translate>{formatResetTime(day.resetAt)}</span>
+                            </div>
+                        </div>
+                        <div style={{ background: "rgba(255,255,255,0.07)", borderRadius: "999px", height: "6px", marginTop: "0.4rem", overflow: "hidden" }}>
+                            <div style={{ background: barColor, height: "100%", width: `${Math.round(share * 100)}%` }} />
+                        </div>
+                    </>
+                )}
                 <div style={{ ...helperStyle, marginTop: "0.4rem" }}>
                     {day.lastJump ? <>Your last time skip used <span data-no-translate>{day.lastJump.used}</span>. </> : null}
-                    {day.background > 0 ? <>Background AI has used <span data-no-translate>{day.background}</span> of its <span data-no-translate>{day.backgroundCap}</span>. </> : null}
+                    {day.background > 0 ? <>Requests nobody pressed a button for have used <span data-no-translate>{day.background}</span> of the <span data-no-translate>{day.backgroundCap}</span> they may use today. </> : null}
                     {day.refused > 0 ? <>The provider turned away <span data-no-translate>{day.refused}</span> for coming too fast; those cost a wait, not allowance. </> : null}
                     {day.failed > 0 ? <>{day.failed === 1 ? "1 request failed with an error." : `${day.failed} requests failed with an error.`} </> : null}
                     Counted on this device, from midnight Pacific time, which is when a Gemini key&apos;s day begins.
@@ -1621,72 +1654,53 @@ const RequestBudgetSection = () => {
                 {cancelNotice && <div role="status" style={{ ...helperStyle, color: "rgba(255,255,255,0.68)", marginTop: "0.45rem" }}>{cancelNotice}</div>}
             </div>
 
-            <Toggle
-            label="Save AI requests"
-            enabled={saving}
-            onToggle={() => {
-                const next = !saving;
-                setSaving(next);
-                apply(`Save AI requests turned ${next ? "on" : "off"}.`, () => requestSettings.setSaveRequests(next));
-            }}
-            />
-            {/* One sentence group per state, each a single string, so a language
-                pack translates it whole (docs/i18n.md). */}
-            <div style={settingsHelper}>
-                {saving
-                    ? "On (default): a time skip is one request. Each event arrives as soon as it is written, already carrying what it changed: the map, your units and structures, your orders and your Projects board. Your spies' reports come back in the same answer, and so does the history document when older events are due to be folded into it. The model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again. A skip takes a second request only when its answer could not be used at all, when a provider refuses the single-request form, or on a turn where something you switched on yourself falls due: the automatic Stats refresh, or NPC votes in an institution."
-                    : `Off: for a key with no daily limit. A time skip is still one request, and with AI lookup functions on (below) the model may look things up before it answers: each round of questions is another request, two at most, so a skip never uses more than ${lookupCap}. On Gemini such a skip shows its events together at the end instead of one at a time. Outside a skip, a task may look things up in up to three extra requests, and a flawed answer is sent back to be redone instead of being cut down.`}
-            </div>
-
-            <div style={fieldGroupStyle}>
-                <label style={labelStyle} htmlFor="ai-daily-request-limit">Requests a day your key allows</label>
-                <input
-                id="ai-daily-request-limit"
-                data-no-translate
-                inputMode="numeric"
-                style={{ ...inputStyle, maxWidth: "9rem" }}
-                value={dailyLimit}
-                onChange={(event) => setDailyLimit(event.target.value.replace(/[^\d]/g, ""))}
-                onBlur={() => {
-                    apply(`Daily request limit set to ${dailyLimit || "the default"}.`, () => requestSettings.setDailyLimit(dailyLimit));
-                    setDailyLimit(String(requestSettings.dailyLimit()));
-                }}
-                />
-                <div style={helperStyle}>Only used for the count above and to keep background AI from spending the end of your day. The game never stops you at the limit; your provider does.</div>
-            </div>
-
-            <Toggle
-            label="Background AI"
-            enabled={background}
-            onToggle={() => {
-                const next = !background;
-                setBackground(next);
-                apply(`Background AI turned ${next ? "on" : "off"}.`, () => requestSettings.setBackgroundAi(next));
-            }}
-            />
-            {/* The section ends on whichever of these two is last. */}
-            <div style={{ ...settingsHelper, ...(background ? null : { marginBottom: 0 }) }}>
-                {background
-                    ? <>On (default): while you are not skipping time, countries may write to you unprompted, forces may reposition, agents may file extra reports, and a country you look at gets its first intelligence reading — each of those is a request nobody pressed a button for, and together they stop at the daily cap below.</>
-                    : <>Off: the game only calls the model when you do something.</>}
-            </div>
-            {background && (
-                <div style={{ ...fieldGroupStyle, marginBottom: 0 }}>
-                    <label style={labelStyle} htmlFor="ai-background-daily-cap">Background requests a day, at most</label>
+            {!noLimit && (
+                <div style={fieldGroupStyle}>
+                    <label style={labelStyle} htmlFor="ai-daily-request-limit">Requests a day your key allows</label>
                     <input
-                    id="ai-background-daily-cap"
+                    id="ai-daily-request-limit"
                     data-no-translate
                     inputMode="numeric"
                     style={{ ...inputStyle, maxWidth: "9rem" }}
-                    value={backgroundCap}
-                    onChange={(event) => setBackgroundCap(event.target.value.replace(/[^\d]/g, ""))}
+                    value={dailyLimit}
+                    onChange={(event) => setDailyLimit(event.target.value.replace(/[^\d]/g, ""))}
                     onBlur={() => {
-                        apply(`Background AI daily cap set to ${backgroundCap || "the default"}.`, () => requestSettings.setBackgroundDailyCap(backgroundCap));
-                        setBackgroundCap(String(requestSettings.backgroundDailyCap()));
+                        apply(`Daily request limit set to ${dailyLimit || "the default"}.`, () => requestSettings.setDailyLimit(dailyLimit));
+                        setDailyLimit(String(requestSettings.dailyLimit()));
                     }}
                     />
-                    <div style={helperStyle}>It also stops by itself once less than a tenth of your day is left.</div>
+                    <div style={helperStyle}>Only used for the count above and to keep requests nobody pressed a button for from spending the end of your day. The game never stops you at the limit; your provider does.</div>
                 </div>
+            )}
+
+            {/* Where Background AI's switch was. On, unlimited: the daily cap
+                does not count or stop it (requestBudget.js
+                UNCAPPED_BACKGROUND_TASKS). The scenario's own idle diplomacy
+                still applies. */}
+            <Toggle
+            label="Countries write to me between time skips"
+            enabled={idleDiplomacyOn}
+            onToggle={() => setMapSetting(MAP_SETTING_KEYS.idleDiplomacy, !idleDiplomacyOn)}
+            />
+            {/* The section ends on this line when there is nothing under Advanced. */}
+            <div style={{ ...settingsHelper, ...(noLimit ? null : { marginBottom: 0 }) }}>
+                Off: between time skips, no country writes to you unless you write first.
+            </div>
+
+            {noLimit && (
+                <details style={{ marginBottom: 0 }}>
+                    <summary style={{ cursor: "pointer", fontSize: "0.74rem", color: "rgba(255,255,255,0.62)", marginBottom: "0.6rem", ...(touch ? TOUCH_SUMMARY : null) }}>Advanced</summary>
+                    <Toggle
+                    label="AI lookup functions"
+                    enabled={lookupsOn}
+                    onToggle={() => setMapSetting(MAP_SETTING_KEYS.lookupFunctions, !lookupsOn)}
+                    />
+                    <div style={{ ...settingsHelper, marginBottom: 0 }}>
+                        {lookupsOn
+                            ? `On (default): before it answers, the model can look up the exact power and region names, a region's neighbours, the war ledger or a chat, in up to ${noLimitRounds} extra requests a task. Needs a provider that supports function calling.`
+                            : "Off: one request per task, with the region lists and ledgers written into the prompt instead. For a model that does not handle function calling well."}
+                    </div>
+                </details>
             )}
         </SettingsSection>
     );
@@ -2894,9 +2908,6 @@ const SettingsWorkspace = ({
     // The system asks for reduced motion: the motion switches are on whatever
     // is stored, so they show on and stay put (mapSettings.js).
     const systemReducedMotion = useSystemReducedMotion();
-    // Lookups run only while requests are not being saved (gameplay.js
-    // lookupFunctionsEnabled), so the switch shows as paused meanwhile.
-    const savingRequests = useSavingRequests();
     useWorkspaceMorph(cardRef, fromRect, closing);
 
     useEffect(() => {
@@ -2977,19 +2988,26 @@ const SettingsWorkspace = ({
                 </SettingsSection>
                 <SettingsSection title="Display" description="Window and presentation preferences that apply to the game client.">
                     <DisplayModeSelector isFullscreenEnabled={isFullscreenEnabled} onToggleFullscreen={onToggleFullscreen} />
-                    {/* The vault door shows the first time the game opens after an
-                        update (runtime/vaultDoorDue.js); this shows it at every
-                        opening. */}
-                    <Toggle
-                    label="Show the vault door every time"
-                    enabled={mapSettings.vaultDoorAlways}
-                    onToggle={() => updateMapSetting("vaultDoorAlways", MAP_SETTING_KEYS.vaultDoorAlways, !mapSettings.vaultDoorAlways)}
-                    />
-                    <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>{"On: the vault door appears every time you start the game. Off: only the first time you start it after an update."}</div>
+                    {/* The website's demo has no vault door and no themes (runtime/websiteBuild.js). */}
+                    {!isWebsiteBuild(import.meta.env) && (
+                    <>
+                        {/* The vault door shows the first time the game opens after an
+                            update (runtime/vaultDoorDue.js); this shows it at every
+                            opening. */}
+                        <Toggle
+                        label="Show the vault door every time"
+                        enabled={mapSettings.vaultDoorAlways}
+                        onToggle={() => updateMapSetting("vaultDoorAlways", MAP_SETTING_KEYS.vaultDoorAlways, !mapSettings.vaultDoorAlways)}
+                        />
+                        <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>{"On: the vault door appears every time you start the game. Off: only the first time you start it after an update."}</div>
+                    </>
+                    )}
                 </SettingsSection>
+                {!isWebsiteBuild(import.meta.env) && (
                 <SettingsSection title="Interface appearance" description="Choose the colours of the main menu, the panels and the popups.">
                     <UiThemeSettings />
                 </SettingsSection>
+                )}
                 <SettingsSection title="Accessibility" description="Reduce automatic camera motion and map animations without changing simulation behavior.">
                     <Toggle
                     label="Reduce motion"
@@ -3137,13 +3155,9 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     Off (default): the whole skip is generated in a single request. On: skips of more than a few months are generated in several shorter requests and merged into one round — slower and costlier in tokens, but far less likely to time out on a hosted provider.
                     </div>
-                    <Toggle label="AI lookup functions" enabled={mapSettings.lookupFunctions} inactive={savingRequests ? "Paused while Save AI requests is on" : ""} onToggle={() => updateMapSetting("lookupFunctions", MAP_SETTING_KEYS.lookupFunctions, !mapSettings.lookupFunctions)} />
-                    <div style={settingsHelper}>
-                    Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task, and two inside a time skip. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.
-                    </div>
                     <Toggle label="Show time skip events as they are written" enabled={mapSettings.liveSkipEvents} onToggle={() => updateMapSetting("liveSkipEvents", MAP_SETTING_KEYS.liveSkipEvents, !mapSettings.liveSkipEvents)} />
                     <div style={settingsHelper}>
-                    On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (Save AI requests off) still arrives all at once.
+                    On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (My key has no request limit on) still arrives all at once.
                     </div>
                     <Toggle label="Stop when my events fail" enabled={mapSettings.stopOnPlayerFailures} onToggle={() => updateMapSetting("stopOnPlayerFailures", MAP_SETTING_KEYS.stopOnPlayerFailures, !mapSettings.stopOnPlayerFailures)} />
                     <div style={settingsHelper}>
@@ -3374,8 +3388,6 @@ const SettingsMenu = ({
         // Off by default too.
         chunkLongJumps: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
         // Ships ON: an absent key reads as on (see mapSettings.js).
-        lookupFunctions: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
-        // Ships ON too.
         liveSkipEvents: getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents),
         stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
         batchBackgroundTasks: getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks),

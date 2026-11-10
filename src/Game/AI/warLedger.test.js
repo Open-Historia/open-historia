@@ -244,6 +244,30 @@ test("hard combat without a canonical war is rejected", () => {
   assert.match(validateWarLedgerPayload(candidate, { world }), /has no event\.warId/);
 });
 
+// A long skip tagged its battles with the war they were in and named nobody fighting: every one lost its war
+// ("hard combat has fewer than two explicit combatants", a world war's 90 days, 2026-11-10). The war says who.
+test("fighting tagged with a war and naming no combatants is that war's, its sides fighting", () => {
+  const warWorld = {
+    ...world,
+    wars: [{ id: "war-france-germany-1914", status: "active", sideA: ["Germany", "Austria-Hungary"], sideB: ["France"], startedDate: "1914-08-03" }],
+  };
+  const candidate = {
+    events: [
+      { id: "e1", date: "1914-09-06", title: "Battle on the Marne", description: "French and German armies clash along the river in heavy fighting.", kind: "military", warId: "war-france-germany-1914" },
+      { id: "e2", date: "1914-09-08", title: "Fighting at the forts", description: "French and German armies clash at the forts in heavy fighting.", kind: "military", warId: "war-france-germany-1914", combatants: ["France"] },
+      { id: "e3", date: "1914-09-09", title: "Raid on a depot", description: "Heavy fighting breaks out at a depot.", kind: "military", warId: "war-elsewhere-1914" },
+    ],
+    warUpdates: "",
+  };
+  const repair = reconcileCombatWarState(candidate, { world: warWorld });
+  assert.deepEqual(candidate.events[0].combatants, ["Germany", "France"]);
+  assert.deepEqual(candidate.events[1].combatants, ["Germany", "France"], "the side it named, and the other side's first");
+  assert.equal(candidate.events[0].warId, "war-france-germany-1914");
+  assert.ok(!repair.unresolved.some((entry) => entry.index < 2), "neither is unbound");
+  // A war nobody holds is still nobody's to guess.
+  assert.equal(candidate.events[2].combatants, undefined);
+});
+
 test("reconciliation binds unlabelled combat to the one matching active war", () => {
   const warWorld = {
     ...world,
@@ -815,4 +839,75 @@ test("a join goes against the opponents it names, whatever its letter says (#892
   assert.deepEqual(join("war-ukraine~join-a~Belarus~~~").sideA, ["Russia", "Belarus"]);
   // Opponents on both sides say nothing: the letter again.
   assert.deepEqual(join("war-ukraine~join-a~Belarus~Ukraine,Russia~~").sideA, ["Russia", "Belarus"]);
+});
+
+// The battle that ends a war is fought in it. A player's 1973 game had the
+// fall of Saigon carry the end of the Vietnam War; the battle was refused as
+// fighting in a war already ended, the repair dropped the end, and the war
+// and its battlefield ran on for years after the story had closed it.
+test("the battle that ends a war may carry its end, and fighting before the end stands", () => {
+  const vietnam = { polityOverrides: {}, wars: [{ id: "war-vietnam", status: "active", sideA: ["Democratic Republic of Vietnam"], sideB: ["Republic of Vietnam", "United States"], startedDate: "1965-03-08" }] };
+  const fall = {
+    id: "e1",
+    date: "1975-04-30",
+    title: "People's Army of Vietnam Overruns Saigon",
+    description: "Armored columns of the People's Army of Vietnam storm Saigon after a final assault and the Republic of Vietnam surrenders.",
+    kind: "military",
+    combatants: ["Democratic Republic of Vietnam", "Republic of Vietnam"],
+    warId: "war-vietnam",
+  };
+  const same = { events: [fall], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Saigon falls" };
+  assert.equal(validateWarLedgerPayload(same, { world: vietnam }), "", "the end rides on the battle that ends it");
+
+  // The end tied to a later event the answer lists first: the earlier battle is still the war's.
+  const recognition = { id: "e0", date: "1975-07-25", title: "Washington Recognizes Hanoi", description: "The United States recognizes the reunified government.", kind: "diplomacy" };
+  const listedFirst = { events: [recognition, fall], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Reunification" };
+  assert.equal(validateWarLedgerPayload(listedFirst, { world: vietnam }), "");
+
+  // One record tied to both events ends the war once.
+  const twice = { events: [fall, recognition], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1,2~Reunification" };
+  assert.equal(validateWarLedgerPayload(twice, { world: vietnam }), "");
+
+  // Fighting dated AFTER the end is still refused.
+  const later = { ...fall, id: "e2", date: "1975-08-10", title: "Fresh Assault on Hue", description: "Armies clash again in a new assault on Hue." };
+  const after = { events: [fall, later], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Saigon falls" };
+  assert.match(validateWarLedgerPayload(after, { world: vietnam }), /is ended, not active/);
+
+  // A war ended before this answer is still over for any battle in it.
+  const over = { polityOverrides: {}, wars: [{ ...vietnam.wars[0], status: "ended", endedDate: "1975-04-30" }] };
+  assert.match(validateWarLedgerPayload({ events: [{ ...fall, date: "1975-04-20" }], warUpdates: "" }, { world: over }), /is ended, not active/);
+  assert.match(validateWarLedgerPayload(same, { world: over }), /already ended/);
+});
+
+// The same game told the US pulling its last troops out of Vietnam, and
+// Khmer Rouge sieges of Phnom Penh after the game's Cambodian war had ended,
+// as history had them: no record, and the map never followed.
+test("the skip is told that a country pulled out of a war leaves it, and that history yields to the record", () => {
+  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.match(gameplay, /A country nobody plays that the story takes out of a war \(its forces pulled out under an accord, a separate peace, its last troops brought home\) leaves it in that event, with a leave record: without one it is still at war, and its troops stay on the battlefield and fight on\./);
+  // (Never in a player's war, which the peace rules say no surrender ends: the two rules agree.)
+  assert.match(gameplay, /The battle or surrender that ends a war between countries nobody plays carries its end record; a war a player fights ends only by a peace \(see \$\{PEACE_BLOCK_HEADING\} below\), so no battle in it tells its end\./);
+  assert.doesNotMatch(gameplay, /The battle or surrender that ends a war carries its end record/);
+  assert.match(gameplay, /History yields to this game's record: a war the ledger shows ended, or never opened, is fought by nobody/);
+  assert.match(gameplay, /Events follow the record, not the history: no fighting in a war that ended here, and no siege or offensive where the game's lines do not put one\./);
+  // And a war that has gone otherwise is told where the game has it (a player crushing Germany from Berlin was told of real 1941, 2026-11-10).
+  assert.match(gameplay, /no campaign, siege, offensive or battle that real history had at this date is fought unless an account or the map puts fighting there, and a side whose capital or heartland its enemy holds is losing that war, whatever real history says of it\./);
+});
+
+// An end told by an event with no date: compareGameDates(date, "") is -1, so every later battle read as fought
+// before the end, and the whole of the fighting after it passed against the war as it was.
+test("an end told by an undated event does not let later fighting pass as fought before it", () => {
+  const vietnam = { polityOverrides: {}, wars: [{ id: "war-vietnam", status: "active", sideA: ["Democratic Republic of Vietnam"], sideB: ["Republic of Vietnam", "United States"], startedDate: "1965-03-08" }] };
+  const accord = { id: "e1", date: "", title: "The War Is Declared Over", description: "Hanoi and Saigon sign the final accord.", kind: "diplomacy", warId: "war-vietnam" };
+  const later = {
+    id: "e2",
+    date: "1975-08-10",
+    title: "People's Army of Vietnam Storms Hue",
+    description: "Armored columns of the People's Army of Vietnam storm Hue after a final assault.",
+    kind: "military",
+    combatants: ["Democratic Republic of Vietnam", "Republic of Vietnam"],
+    warId: "war-vietnam",
+  };
+  const payload = { events: [accord, later], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Accord" };
+  assert.match(validateWarLedgerPayload(payload, { world: vietnam }), /is ended, not active/);
 });

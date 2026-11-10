@@ -217,6 +217,15 @@ const CountryPickerMap = ({
   onPickDefault = null,
   colors = null,
   playGameId = null,
+  // The scripted-event region picker (ScriptedRegionPicker.jsx): its own line
+  // over the map in place of the faction one (null for none), borders between
+  // regions, the region to bring into view, the region under the pointer, and
+  // a map that fills its box ("auto") rather than standing 480 px high.
+  regionHint = undefined,
+  regionBorders = false,
+  focusRegionId = null,
+  onHoverRegion = null,
+  regionMapHeight = null,
 }) => {
   const containerRef = useRef(null);
   const mapObjectRef = useRef(null);
@@ -278,6 +287,10 @@ const CountryPickerMap = ({
   const selectedRegionsRef = useRef(new Set());
   const selectionColorRef = useRef(selectionColor);
   selectionColorRef.current = selectionColor;
+  const regionBordersRef = useRef(regionBorders);
+  regionBordersRef.current = regionBorders;
+  const onHoverRegionRef = useRef(onHoverRegion);
+  onHoverRegionRef.current = onHoverRegion;
   useEffect(() => {
     selectedRegionsRef.current = selectedRegionIds instanceof Set
       ? selectedRegionIds
@@ -390,6 +403,7 @@ const CountryPickerMap = ({
             : fallbackColorFromCode(ownerName);
         return new Style({
           fill: new Fill({ color: isHovered ? "rgba(255, 255, 255, 0.48)" : ownerFill }),
+          ...(regionBordersRef.current ? { stroke: new Stroke({ color: "rgba(10, 12, 16, 0.55)", width: 0.6 }) } : {}),
         });
       }
 
@@ -448,6 +462,7 @@ const CountryPickerMap = ({
         if (hoveredRegionRef.current !== key) {
           hoveredRegionRef.current = key;
           layer.changed();
+          onHoverRegionRef.current?.(key);
         }
         return;
       }
@@ -527,7 +542,16 @@ const CountryPickerMap = ({
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    const olMap = mapObjectRef.current;
+    const feature = focusRegionId != null ? sourceRef.current?.getFeatureById(String(focusRegionId)) : null;
+    const extent = feature?.getGeometry()?.getExtent();
+    if (!olMap || !extent) return;
+    olMap.getView().fit(extent, { padding: [48, 48, 48, 48], maxZoom: 6, duration: 250 });
+  }, [focusRegionId]);
+
   const regionMode = selectionMode === "regions";
+  const ownHeight = regionMode && regionMapHeight != null;
 
   return (
     <div
@@ -551,7 +575,7 @@ const CountryPickerMap = ({
           position: "relative",
         }}
       >
-        {regionMode ? (
+        {regionMode && regionHint !== undefined ? regionHint : regionMode ? (
           <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.78rem", marginBottom: "0.4rem" }}>
             Click regions on the map to claim them as your faction's starting
             territory. Click again to release one.
@@ -589,8 +613,9 @@ const CountryPickerMap = ({
             // leaves after them, between 150 and the usual 320 px. The screen
             // height, not the visible one, which shrinks with the keyboard and
             // took the map down to 150 px with it.
-            height: isMobile ? `clamp(150px, calc(${SCREEN_HEIGHT} - 28rem), 320px)` : regionMode ? "480px" : "100%",
-            minHeight: isMobile ? undefined : "480px",
+            height: ownHeight ? regionMapHeight : isMobile ? `clamp(150px, calc(${SCREEN_HEIGHT} - 28rem), 320px)` : regionMode ? "480px" : "100%",
+            minHeight: ownHeight ? "220px" : isMobile ? undefined : "480px",
+            flex: ownHeight ? "1 1 0" : undefined,
             borderRadius: 14,
             overflow: "hidden",
             border: "1px solid rgba(255,255,255,0.12)",

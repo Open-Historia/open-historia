@@ -49,14 +49,20 @@ test("polity rename re-keys Political Actors and the pre-existing 28k schema gua
   // And by about 560 for a letter's peaceOffer and the peaceTreaties lines: peace when the skip says so (2026-10-30).
   // And by about 400 for Rostra's socialPosts: the period's posts in the skip's one answer (2026-11-02).
   // And by about 190 for an event's strikes: missiles and bombing runs drawn in every game, not only on a battlefield (2026-11-05).
-  assert.match(schemaGuard, /assert\.ok\(jumpChars < 29850,/);
+  // And by about 140 for an event's one-line digest: later skips read an older event by it (2026-11-07).
+  // Then lowered to 28,400 by the description audit of 2026-11-07 (docs/prompt-budget.md).
+  assert.match(schemaGuard, /assert\.ok\(jumpChars < 28400,/);
   assert.doesNotMatch(schemaGuard, /jumpChars < 3[01]000|jumpChars < 32000/, "CP28.8.11 must not silently raise the separate pre-existing schema-size guard");
 });
 
 test("PWv2 event mutations preserve endogenous player politics while screening fresh sovereign choices", () => {
   const integrity = read("src/Game/AI/nativeWorldIntegrity.js");
   const agencyTests = read("src/Game/AI/playerAgencyAuthority.test.js");
-  assert.match(integrity, /playerPoliticalActorMutation && eventCrossesFreshSovereignPolicyBoundary\(event\)/);
+  // Which operations are the government's own choice is structured (its
+  // strategy, its behaviour), never read from the event's wording.
+  assert.match(integrity, /SOVEREIGN_CHOICE_POLITICAL_OPS = new Set\(\["set-strategy", "set-behavioral-disposition"\]\)/);
+  assert.match(integrity, /for \(const target of politicalChoiceTargets\(event, resolver\)\)/);
+  assert.doesNotMatch(integrity, /eventCrossesFreshSovereignPolicyBoundary/);
   assert.match(integrity, /politicalActorOps encodes a fresh sovereign-policy choice for the human-controlled polity/);
   assert.match(integrity, /\["player-order", "player-commitment"\]\.includes\(authority\)/);
   assert.match(agencyTests, /politicalActorOps may apply an endogenous canonical political consequence to the human polity/);

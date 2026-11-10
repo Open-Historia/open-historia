@@ -5,6 +5,8 @@ import {
   DEFAULT_STAT_INDEX_KEYS,
   MAX_STAT_INDICES,
   normalizeCustomStatValues,
+  readCustomStatNumber,
+  hasRecordedCustomStatValues,
   normalizeStatIndexRows,
   normalizeStatSheetDefinition,
   serializeStatSheet,
@@ -128,4 +130,34 @@ test("legacy key generation and index bounding remain deterministic", () => {
   assert.equal(rows[0].key, "timber");
   assert.equal(rows[1].key, "timber2");
   assert.equal(toStatIndexKey("Horse & cart capacity"), "horseCartCapacity");
+});
+
+test("custom numeric values distinguish unavailable data from recorded zero", () => {
+  const definition = { sections: [{ key: "finances", label: "Finances", stats: [
+    { key: "treasury", label: "Treasury", kind: "currency", suffix: "silver marks", minimum: 0, decimals: 2 },
+  ] }] };
+  for (const value of [undefined, null, "", "  ", false, true, [], [0], {}, NaN, Infinity, -Infinity, "unknown", "12 marks"]) {
+    assert.equal(readCustomStatNumber(value), null);
+    assert.deepEqual(normalizeCustomStatValues({ treasury: value }, definition), {});
+    assert.deepEqual(normalizeCustomStatValues({ treasury: value }, definition, { partial: true }), {});
+  }
+  for (const value of [0, "0", " 0 "]) {
+    assert.equal(readCustomStatNumber(value), 0);
+    assert.deepEqual(normalizeCustomStatValues({ treasury: value }, definition), { treasury: 0 });
+  }
+  assert.equal(readCustomStatNumber(" -12.5 "), -12.5);
+  assert.deepEqual(normalizeCustomStatValues({ treasury: 12.345 }, definition), { treasury: 12.35 });
+  assert.deepEqual(normalizeCustomStatValues({ treasury: -5 }, definition), { treasury: 0 });
+});
+
+test("a partial scenario sheet is displayable without declaring it complete", () => {
+  const definition = { sections: [{ key: "realm", label: "Realm", stats: [
+    { key: "treasury", label: "Treasury", kind: "currency" },
+    { key: "grain", label: "Grain reserves", kind: "number" },
+  ] }] };
+  assert.equal(hasRecordedCustomStatValues({ treasury: 0 }, definition), true);
+  assert.equal(hasRecordedCustomStatValues({ treasury: 1200 }, definition), true);
+  assert.equal(hasRecordedCustomStatValues({ unrelated: 12 }, definition), false);
+  assert.equal(hasRecordedCustomStatValues({ treasury: " " }, definition), false);
+  assert.equal(hasRecordedCustomStatValues(undefined, definition), false);
 });

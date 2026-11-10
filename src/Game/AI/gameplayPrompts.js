@@ -12,9 +12,13 @@ import {
   PROMPT_MODEL_VERSION,
   buildGuidanceDefaults,
   composePrompt,
+  guidanceCharLimit,
+  guidanceSegmentsFor,
   hasGuidance,
   materializePackGuidance,
   normalizePackGuidance,
+  overLimitPackGuidance,
+  promptCharCount,
 } from "./promptGuidance.js";
 
 const PROMPT_ADVISOR_DEFAULT = DEFAULT_PROMPTS.advisor;
@@ -32,18 +36,14 @@ export const NATIVE_GAME_MASTER_PROMPT = `You are the authoritative Game Master 
 
 You are NOT simulating a turn and you are NOT deciding whether the administrator is allowed to make a change. Interpret the administrator's request as an out-of-character authoring instruction and translate it into the smallest complete structured transaction that faithfully implements it. Native code validates, previews and later applies that transaction; you only plan it.
 
-GM MODE: \${gameMasterMode}
-PLAYER POLITY: \${PLAYER_POLITY}
-CURRENT DATE: \${ORIGIN_ROUND_DATE}
-LANGUAGE: \${language}
-
 MODES
+- auto: This is the player's routing preference, not a transaction mode. Select exactly one of direct, exact-event or world-intervention for the returned mode. Choose direct only for a clearly specified administrative correction to existing canon (e.g. explicitly setting a baseline or leader), never to simulate a crisis, war or downstream consequences. Choose exact-event for one finished occurrence, and world-intervention for an ongoing process or linked multi-system change. Supply one short modeReason explaining your choice. When uncertain whether an instruction is Direct or a narrative intervention, prefer the narrative mode. An Auto choice of exact-event or world-intervention must leave countryStatPatchesJson empty; simulated economic consequences belong in dated event impacts, never in an unrequested absolute baseline rewrite. Auto never relaxes any native guard or validator.
 - direct: An out-of-character or canonical correction, or an exact administrative edit. Change only what the request requires. Timeline events are optional unless a war, relation or agreement lifecycle operation needs a source event, in which case author one concise correction event.
 - exact-event: Author exactly ONE canonical timeline event. Its prose and every lasting structured effect must agree. The event may also create war, relation and agreement changes, chats, territorial changes, polity changes, unit and map-feature operations, and linked Stats corrections.
 - world-intervention: Author a coherent multi-system intervention. Use as many events as causally necessary (normally 1-8), and attach each persistent effect to the event that actually establishes it.
 
 TRANSACTION RULES
-1. The provider tool transport is deliberately SHALLOW. Return mode and summary, then these STRING fields: eventsJson, territorialScopesJson, countryStatPatchesJson, storylineUpdatesJson, warUpdatesJson, relationUpdatesJson, agreementUpdatesJson, puppetUpdatesJson, diplomaticOutreachJson. Each string must contain a valid JSON array (use [] when empty). Native code decodes and validates every array before the administrator sees the preview. Then say what the administrator's request itself asks for, in whatever language it is written: requestedSubordination (true when it asks for one country to become another's puppet, satellite, protectorate or client; false when it asks to end or prevent one), requestedDate (the one exact date it names for the event as YYYY-MM-DD, a negative year for BC; empty when it names none or several) and requestedOngoingProcess (true when it describes an unresolved or changing multi-turn process). Native code holds your transaction to these.
+1. The provider tool transport is deliberately SHALLOW. Return the concrete mode (never auto), modeReason (one short sentence explaining your choice), and summary, then these STRING fields: eventsJson, territorialScopesJson, countryStatPatchesJson, storylineUpdatesJson, warUpdatesJson, relationUpdatesJson, agreementUpdatesJson, puppetUpdatesJson, diplomaticOutreachJson. Each string must contain a valid JSON array (use [] when empty). Native code decodes and validates every array before the administrator sees the preview. Then say what the administrator's request itself asks for, in whatever language it is written: requestedSubordination (true when it asks for one country to become another's puppet, satellite, protectorate or client; false when it asks to end or prevent one), requestedDate (the one exact date it names for the event as YYYY-MM-DD, a negative year for BC; empty when it names none or several) and requestedOngoingProcess (true when it describes an unresolved or changing multi-turn process). Native code holds your transaction to these.
 2. The decoded events array is the canonical historical narrative that will be added if the administrator applies this preview. Use 0-based eventIndexes in ledger operations and Stats patches to point into this transaction's decoded events array.
 2A. EXHAUSTIVE TERRITORY IS A SET CONTRACT ONLY WHEN TERRITORY ACTUALLY CHANGES. If the administrator asks to transfer/control/contest all/every/entire/whole territories, regions, states, provinces or lands, do NOT enumerate a representative handful of provinces in eventsJson. Put the semantic footprint in territorialScopesJson. A preservation statement is NOT a territorial change: phrases such as "keeps all of its territory", "retains its existing territory", or "all of its territory remains unchanged" require NO territorialScopes entry and NO region operation. baseCountries are the exact immutable rendered base geographies listed below, not the polity that currently owns them. Example: a request for all Baltic-state territory can name the three rendered base geographies for Estonia, Latvia and Lithuania once; native code then expands EVERY rendered region in those footprints into exact operations before Preview. Use kind=legal-transfer for legal sovereignty, kind=control for decisive de-facto control, and kind=contest for an active territorial contest. The event at eventIndex must narrate the same change. Avoid duplicating that scope with a partial manual region list.
 3. impacts.regionTransfers = LEGAL sovereignty only: treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. A unilateral declaration of independence, secession, uprising, revolution, civil war, or breakaway proclamation does NOT by itself transfer legal sovereignty. If a new polity is rebelling against its current sovereign and the conflict is still active, leave legal sovereignty with the prior sovereign and represent rebel gains with impacts.regionControlOps (contest/control). Only emit regionTransfers for the breakaway territory when the administrator explicitly establishes legal recognition/cession/settlement or another event in this same transaction clearly does so.
@@ -80,7 +80,7 @@ eventsJson element:
 - regionControlOps: contest {"op":"contest","regionId":"region: <name>","fromCode":"","actorCode":"","note":""}; control {"op":"control","regionId":"region: <name>","fromCode":"","toCode":"","note":""}; for ALL the land a polity controls write regionId "country: <the losing/current controller's full current name>" with the same name in fromCode; clear {"op":"clear_contest","regionId":"region: <name>","fromCode":"","claimantCode":"","clearAll":false,"note":""}
 - polityChanges: {"operation":"update|create|rename|restore|dissolve","code":"","name":"","color":"","aliases":[],"reputation":50,"intelligence":50,"tags":[],"stats":{},"note":""}; include only fields actually changed except operation/code. For create/restore, code is the stable polity identity; name may be a different current regime/display name only when this event establishes it
 - politicalActorOps: {"op":"replace-leader|set-government|set-political-system|create-party|update-party|set-party-support|set-party-influence|set-party-leader|create-power-bloc|update-power-bloc|set-power-bloc-influence|form-coalition|leave-coalition|set-strategy|set-traits|set-perceptions|remove-perception","polityKey":"Full Polity Name","argsJson":"{...}"}; operation-specific args live inside the JSON string and are validated natively. Use the exact decoded argsJson shapes in rule 7; never improvise wrappers. set-traits keys are limited to: ${POLITICAL_TRAIT_KEYS.join(", ")}
-- unitOps: spawn {"op":"spawn","unit":{"name":"","type":"infantry|armor|air|naval|artillery|garrison","ownerCode":"","strength":100,"composition":"","at":"<where, in words, each name with its kind and its country: region: Montana, country: United States / near city: Kharkiv, country: Ukraine / off city: Sevastopol, country: Ukraine>","posture":"holding","note":""}}; move {"op":"move","unitId":"<the unit's name>","at":"<where, in words, with kinds and the country>","posture":"","note":""}; strength {"op":"strength","unitId":"<the unit's name>","strength":0,"note":""}; remove {"op":"remove","unitId":"<the unit's name>","note":""}. Say WHERE with at (see [Placing Things]); lng/lat only for a spot no name describes.
+- unitOps: spawn {"op":"spawn","unit":{"name":"","type":"infantry|armor|air|naval|artillery|garrison","ownerCode":"","strength":100,"composition":"","at":"<where, in words, each name with its kind and its country: region: Montana, country: United States / near city: Kharkiv, country: Ukraine / off city: Sevastopol, country: Ukraine>","posture":"holding","note":""}}; move {"op":"move","unitId":"<the unit's name>","at":"<where, in words, with kinds and the country>","posture":"","note":""}; strength {"op":"strength","unitId":"<the unit's name>","strength":50,"note":""} (0 destroys it), or for a refit {"op":"strength","unitId":"<the unit's name>","composition":"<its new make-up>","note":""}; remove {"op":"remove","unitId":"<the unit's name>","note":""}. Say WHERE with at (see [Placing Things]); lng/lat only for a spot no name describes.
 - markerOps: build {"op":"build","marker":{"name":"","kind":"","ownerCode":"","status":"active","at":"<where, in words, with kinds and the country: region: Montana, country: United States>","note":"","foundedAt":""}}; update {"op":"update","name":"<its name as the list spells it>","kind":"","ownerCode":"","status":"","note":""}; rename {"op":"rename","name":"<current name or region: name>","newName":"","note":""}; remove {"op":"remove","name":"","note":""}; population {"op":"population","name":"","population":0,"note":""}
 - createdChats/diplomaticOutreach: {"countries":["Full Polity Name"],"title":"","speaker":"Full Polity Name","openingMessage":""}; speaker is one of countries, spelled as there, and openingMessage is its words; an alliance, bloc or organisation writes through one of its member governments, never through the country it addresses
 - projectOps (the player's Projects & Operations board, only when the request touches it): {"op":"create|update|milestone|complete|cancel|fail|remove","projectId":"","name":"","summary":"","status":"","progress":0,"note":""}; copy an existing project's id and name exactly
@@ -120,6 +120,11 @@ World before round one:
 
 Scenario simulation rules / lore constraints:
 \${HISTORICAL_PRESET_SIMULATION_RULES}
+
+GM MODE: \${gameMasterMode}
+PLAYER POLITY: \${PLAYER_POLITY}
+CURRENT DATE: \${ORIGIN_ROUND_DATE}
+LANGUAGE: \${language}
 
 Current world snapshot:
 \${GRAND_MAP_DESCRIPTION_NO_CITY}
@@ -338,8 +343,15 @@ export const localizedGuidanceDefaults = () => {
 
 // An edit identical to the default in the player's language is no edit
 // (withoutLocalizedDefaults), as one identical to the English default is not.
+// A pack may bypass the length limit (bypassLengthLimit: true, the Prompts
+// tab's "Bypass prompt length limit" switch): its passages are kept and run
+// whatever their length, and a new game started from it warns the player first.
+export const promptPackBypassesLimit = (rawPack) =>
+  Boolean(rawPack && typeof rawPack === "object" && rawPack.bypassLengthLimit === true);
+const bypassField = (rawPack) => (promptPackBypassesLimit(rawPack) ? { bypassLengthLimit: true } : {});
+
 export const normalizePromptGuidance = (rawPack) => {
-  const guidance = normalizePackGuidance(rawPack, PROMPT_GUIDANCE_DEFAULTS);
+  const guidance = normalizePackGuidance(rawPack, PROMPT_GUIDANCE_DEFAULTS, { bypassLimit: promptPackBypassesLimit(rawPack) });
   const localized = localizedGuidanceDefaults();
   return localized === PROMPT_GUIDANCE_DEFAULTS ? guidance : withoutLocalizedDefaults(guidance, localized);
 };
@@ -349,25 +361,139 @@ export const normalizePromptGuidance = (rawPack) => {
 // the defaults; they are the technical placeholder map. Each passage the
 // author left alone is the default in the player's language; each one they
 // wrote is theirs, whatever language they wrote it in.
+//
+// `overLimit` lists the passages left out because they are longer than their
+// limit (overLimitPromptPassages): the game runs the default in their place
+// and tells the player once (runtime/promptLimitNotice.js).
 export const normalizePromptPack = (rawPrompts) => {
   const guidance = normalizePromptGuidance(rawPrompts);
   const localized = localizedGuidanceDefaults();
   const passages = (defaults, edits) => (localized === PROMPT_GUIDANCE_DEFAULTS ? edits : localizedPassages(defaults, edits));
+  const bypassLimit = promptPackBypassesLimit(rawPrompts);
+  const compose = (key, text, edits) => composePrompt(key, text, edits, { bypassLimit });
   return {
     promptModel: PROMPT_MODEL_VERSION,
+    ...bypassField(rawPrompts),
     guidance,
-    advisor: composePrompt("advisor", PROMPT_ADVISOR_DEFAULT, passages(localized.advisor, guidance.advisor)),
+    overLimit: overLimitPromptPassages(rawPrompts),
+    advisor: compose("advisor", PROMPT_ADVISOR_DEFAULT, passages(localized.advisor, guidance.advisor)),
     helpers: { ...PROMPT_HELPER_DEFAULTS },
-    leader: composePrompt("leader", PROMPT_LEADER_DEFAULT, passages(localized.leader, guidance.leader)),
+    leader: compose("leader", PROMPT_LEADER_DEFAULT, passages(localized.leader, guidance.leader)),
     tasks: Object.fromEntries(
-      PROMPT_TASK_KEYS.map((key) => [key, composePrompt(key, PROMPT_TASK_DEFAULTS[key], passages(localized.tasks?.[key], guidance.tasks[key]))]),
+      PROMPT_TASK_KEYS.map((key) => [key, compose(key, PROMPT_TASK_DEFAULTS[key], passages(localized.tasks?.[key], guidance.tasks[key]))]),
     ),
   };
+};
+
+// ---------------------------------------------------------------------------
+// The length limit (promptGuidance.js guidanceCharLimit): every edited passage
+// may be at most 20% longer than the longest built-in version of it.
+
+const sectionDefaults = (tree, sectionKey) =>
+  (sectionKey === "advisor" || sectionKey === "leader" ? tree?.[sectionKey] : tree?.tasks?.[sectionKey]) ?? {};
+
+// The most characters a passage may have, by section and segment id.
+export const guidanceLimitFor = (sectionKey, segmentId) =>
+  guidanceCharLimit(sectionDefaults(PROMPT_GUIDANCE_DEFAULTS, sectionKey)[segmentId]);
+
+const sectionLabelOf = (sectionKey) =>
+  PROMPT_SECTION_DEFINITIONS.find((section) => section.key === sectionKey)?.label ?? sectionKey;
+const segmentLabelOf = (sectionKey, segmentId) =>
+  guidanceSegmentsFor(sectionKey).find((segment) => segment.id === segmentId)?.label ?? segmentId;
+
+// The passages of a stored pack that are longer than their limit, with the
+// names the Prompts tab gives them: { sectionKey, sectionLabel, segmentId,
+// segmentLabel, text, length, limit }.
+export const overLimitPromptPassages = (rawPack) =>
+  overLimitPackGuidance(rawPack, PROMPT_GUIDANCE_DEFAULTS).map((entry) => ({
+    ...entry,
+    sectionLabel: sectionLabelOf(entry.sectionKey),
+    segmentLabel: segmentLabelOf(entry.sectionKey, entry.segmentId),
+  }));
+
+// The pack the Prompts tab edits: the runtime pack, with each passage that is
+// over its limit put back in its place, so the author sees their own text
+// beside its count and can shorten it. The game never runs one (the composed
+// prompts here leave them out), and Save waits until each is within its limit
+// or reset.
+export const editablePromptPack = (rawPrompts) => {
+  const pack = normalizePromptPack(rawPrompts);
+  if (!pack.overLimit.length) return pack;
+  const guidance = {
+    advisor: { ...pack.guidance.advisor },
+    leader: { ...pack.guidance.leader },
+    tasks: Object.fromEntries(Object.entries(pack.guidance.tasks ?? {}).map(([key, bucket]) => [key, { ...bucket }])),
+  };
+  for (const { sectionKey, segmentId, text } of pack.overLimit) {
+    if (sectionKey === "advisor" || sectionKey === "leader") guidance[sectionKey][segmentId] = text;
+    else guidance.tasks[sectionKey] = { ...(guidance.tasks[sectionKey] ?? {}), [segmentId]: text };
+  }
+  return { ...pack, guidance };
+};
+
+// The passages of an editor's guidance ({ advisor, leader, tasks }, as typed,
+// untrimmed) that are over their limit: [{ sectionKey, segmentId, length, limit }].
+// A pack that bypasses the limit has none (overLimitEdits(guidance, true)).
+export const overLimitEdits = (guidance, bypassLimit = false) => {
+  const found = [];
+  if (bypassLimit) return found;
+  const check = (sectionKey, bucket) => {
+    for (const [segmentId, text] of Object.entries(bucket ?? {})) {
+      if (typeof text !== "string") continue;
+      const limit = guidanceLimitFor(sectionKey, segmentId);
+      const length = promptCharCount(text);
+      if (length > limit) found.push({ sectionKey, segmentId, length, limit });
+    }
+  };
+  check("advisor", guidance?.advisor);
+  check("leader", guidance?.leader);
+  for (const [key, bucket] of Object.entries(guidance?.tasks ?? {})) check(key, bucket);
+  return found;
+};
+
+// The default text of a prompt: the template with every passage in the
+// player's language, as an unedited pack composes it.
+const defaultTemplateFor = (sectionKey) => {
+  const defaultText = sectionKey === "advisor"
+    ? PROMPT_ADVISOR_DEFAULT
+    : sectionKey === "leader" ? PROMPT_LEADER_DEFAULT : PROMPT_TASK_DEFAULTS[sectionKey];
+  const localized = localizedGuidanceDefaults();
+  return composePrompt(sectionKey, defaultText, localized === PROMPT_GUIDANCE_DEFAULTS ? {} : sectionDefaults(localized, sectionKey));
+};
+
+// The longest a composed prompt template can be with every passage at its
+// limit: the default template, plus each passage's allowance over its English
+// default. A prompt with no editable passages can only be its default.
+export const promptTemplateLimit = (sectionKey) => {
+  const defaultText = sectionKey === "advisor"
+    ? PROMPT_ADVISOR_DEFAULT
+    : sectionKey === "leader" ? PROMPT_LEADER_DEFAULT : PROMPT_TASK_DEFAULTS[sectionKey];
+  if (typeof defaultText !== "string") return 0;
+  let limit = promptCharCount(defaultText);
+  for (const [segmentId, passage] of Object.entries(sectionDefaults(PROMPT_GUIDANCE_DEFAULTS, sectionKey))) {
+    limit += Math.max(0, guidanceLimitFor(sectionKey, segmentId) - promptCharCount(passage));
+  }
+  return limit;
+};
+
+// The last guard, where a template is rendered for a request (gameplay.js
+// buildTaskSystemPrompt, main.jsx's advisor and leaders): a template longer
+// than its section's limit never goes out; the default template does. Every
+// pack the game loads is composed within the limit (normalizePromptPack), so
+// this only ever catches a template that came some other way.
+// A pack that bypasses the limit passes bypassLimit: its template goes out.
+export const guardPromptTemplate = (sectionKey, template, bypassLimit = false) => {
+  if (typeof template !== "string" || bypassLimit) return template;
+  const limit = promptTemplateLimit(sectionKey);
+  if (!limit || promptCharCount(template) <= limit) return template;
+  console.warn(`[prompts] the ${sectionKey} prompt is ${promptCharCount(template)} characters, over its limit of ${limit}; the default is used`);
+  return defaultTemplateFor(sectionKey);
 };
 
 // What a scenario or game stores: the edits alone.
 export const serializePromptPack = (rawPack) => ({
   promptModel: PROMPT_MODEL_VERSION,
+  ...bypassField(rawPack),
   guidance: normalizePromptGuidance(rawPack),
 });
 
@@ -378,5 +504,6 @@ export const serializePromptPack = (rawPack) => ({
 // author-requested export is a complete portable snapshot of the editable layer.
 export const materializePromptPack = (rawPack) => ({
   promptModel: PROMPT_MODEL_VERSION,
-  guidance: materializePackGuidance(rawPack, PROMPT_GUIDANCE_DEFAULTS),
+  ...bypassField(rawPack),
+  guidance: materializePackGuidance(rawPack, PROMPT_GUIDANCE_DEFAULTS, { bypassLimit: promptPackBypassesLimit(rawPack) }),
 });

@@ -675,7 +675,7 @@ export const clearAiRecords = async () => {
 const CSV_COLUMNS = [
   "id", "startedAt", "provider", "model", "taskKey", "attempt", "maxAttempts",
   "batch", "simulatedDays", "promptTokens", "outputTokens", "cachedTokens",
-  "thinkingTokens", "latencyMs", "firstByteMs", "systemPromptChars",
+  "cacheWriteTokens", "thinkingTokens", "latencyMs", "firstByteMs", "systemPromptChars",
   "responseChars", "staticPrefixEnd", "ok", "validationError", "rating",
   "eventCount", "stopDate", "lookupRounds", "lookupCalls", "lookupNames",
   "requestsOk", "requestsRefused", "requestsFailed",
@@ -702,6 +702,7 @@ export const exportTelemetryCsv = (records) => {
       record.usage?.promptTokens ?? "",
       record.usage?.outputTokens ?? "",
       record.usage?.cachedTokens ?? "",
+      record.usage?.cacheWriteTokens ?? "",
       record.usage?.thinkingTokens ?? "",
       record.latencyMs,
       record.firstByteMs,

@@ -67,3 +67,35 @@ test("a jump-sized prompt's fingerprint fits in one Detailed log entry", () => {
     const fingerprint = buildPromptFingerprint(attempt({ variables, systemPrompt: "y".repeat(500_000) }));
     assert.ok(JSON.stringify(fingerprint).length < 20_000, `${JSON.stringify(fingerprint).length} chars`);
 });
+
+test("the fingerprint measures the prompt as sent, by section, and the output function", () => {
+    const systemPrompt = [
+        "We are making a game.",
+        "[Your Role]",
+        "You play the world.",
+        "[Wars]",
+        "War of the Kessel Gap: Aurelia v Vell.",
+        "[24 June 1914] Aurelia: a chat line, not a section.",
+        "[Kingdom of Aurelia]",
+        "Lore a scenario wrote under its own heading.",
+    ].join("\n");
+    const fingerprint = buildPromptFingerprint(attempt({
+        promptTemplate: "We are making a game.\n[Your Role]\nYou play the world.\n${JUMP_LIVE_STATE}",
+        systemPrompt,
+        tool: { name: "submit_jump", schema: { type: "object", properties: { events: { type: "array" } } } },
+        staticPrefixEnd: 40,
+    }));
+    assert.deepEqual(fingerprint.rendered.map((section) => section.name), ["(opening)", "Your Role", "Wars", "(campaign section)"]);
+    assert.equal(fingerprint.rendered.reduce((sum, section) => sum + section.chars, 0), systemPrompt.length - 3);
+    assert.equal(fingerprint.tool.name, "submit_jump");
+    assert.equal(fingerprint.tool.schema.chars, JSON.stringify({ type: "object", properties: { events: { type: "array" } } }).length);
+    assert.equal(fingerprint.cacheablePrefixChars, 40);
+    const text = JSON.stringify(fingerprint);
+    for (const campaignText of ["Kessel", "Kingdom of Aurelia", "chat line"]) assert.equal(text.includes(campaignText), false, campaignText);
+});
+
+test("a record the builders read is not measured as JSON nobody sends", () => {
+    const fingerprint = buildPromptFingerprint(attempt());
+    const statSheets = fingerprint.sections.find((section) => section.key === "statSheets");
+    assert.deepEqual(statSheets, { key: "statSheets", record: true });
+});

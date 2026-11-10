@@ -172,3 +172,26 @@ test("troops picked out are sent by a transporter, one not yet out is called off
   assert.equal(cleanWarRoomOp({ op: "transport", battlefield: name, medium: "balloon" }).medium, "");
   assert.deepEqual(cleanWarRoomOp({ op: "hunt", battlefield: name, id: "t1", off: true }), { op: "hunt", battlefield: name, off: true, id: "t1" });
 });
+
+// "make it so air transports work like train and boat except they can go over anywhere, but they can carry less
+// troops ... also make different transport types disableable in features and if a country has their airforce or navy
+// disabled by being set to zero they cant use those transports" (the owner, 2026-11-09).
+test("an airlift takes only as many as it carries; a transport switched off, or with no navy or air force, is refused", () => {
+  const battlefields = field();
+  const name = battlefields[1].name;
+  const ask = (op, extra = {}) => applyWarRoomOp(battlefields, { op: "transport", battlefield: name, troops: Array.from({ length: 20 }, (_, index) => index), to: [24.6, 50.2], ...op }, { ...as("Aland"), ...extra });
+  // By air, six of the twenty picked out at an air figure of 50 (or none given), three at 25, twelve at 100; by sea all twenty.
+  assert.equal(ask({ medium: "air" }).transports[0].embark.troops.length, 6);
+  assert.deepEqual(ask({ medium: "air" }).transports[0].embark.troops, [0, 1, 2, 3, 4, 5], "the first picked out");
+  assert.equal(ask({ medium: "air" }, { military: { air: 25 } }).transports[0].embark.troops.length, 3);
+  assert.equal(ask({ medium: "air" }, { military: { air: 100 } }).transports[0].embark.troops.length, 12);
+  assert.equal(ask({ medium: "sea" }, { military: { air: 25 } }).transports[0].embark.troops.length, 20);
+  // What the game's features switched off is refused, in words.
+  assert.equal(ask({ medium: "air" }, { media: ["sea", "land"] }).error, "This game carries no troops that way.");
+  assert.equal(ask({ medium: "land" }, { media: ["sea", "air"] }).error, "This game carries no troops that way.");
+  assert.equal(ask({ medium: "sea" }, { media: ["sea"] }).error, undefined);
+  // And a country with no navy sends nothing by sea, one with no air force nothing by air.
+  assert.equal(ask({ medium: "sea" }, { military: { sea: 0 } }).error, "You have no navy to carry troops by sea.");
+  assert.equal(ask({ medium: "air" }, { military: { air: 0 } }).error, "You have no air force to carry troops by air.");
+  assert.equal(ask({ medium: "land" }, { military: { sea: 0, air: 0 } }).error, undefined, "by rail all the same");
+});

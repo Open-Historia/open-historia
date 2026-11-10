@@ -20,6 +20,7 @@
 // spy desks, the board) are entirely technical by design.
 
 import { readUnderTaskKey } from "./formerTaskKeys.js";
+import { TRANSLATED_GUIDANCE_LENGTHS } from "./guidanceLengths.js";
 import { SHIPPED_GUIDANCE_FINGERPRINTS } from "./shippedGuidance.js";
 
 const segment = (id, label, start, end, hint = "") => Object.freeze({ id, label, start, end, hint });
@@ -85,10 +86,6 @@ export const PROMPT_GUIDANCE = Object.freeze({
         "[What an Order Can Do]",
         "not the fall of a capital.",
         "Outcomes, consent, means and authority, and the pace of a war."),
-      segment("scope", "What to simulate and how much",
-        "[What to Simulate]",
-        "get that change exactly right.",
-        "Breadth, how many events, and the outcomes of the player's orders."),
       segment("reactions", "The world answers back",
         "[The World Answers Back]",
         "Bring the pressure to the player's door and stop there.",
@@ -97,6 +94,10 @@ export const PROMPT_GUIDANCE = Object.freeze({
         "[How to Write an Event]",
         "The fortress had held seven prisoners.",
         "The headline and the story under it: specifics, length, quotes, what counts as an event."),
+      segment("scope", "What to simulate and how much",
+        "[What to Simulate]",
+        "get that change exactly right.",
+        "Breadth, how many events, and the outcomes of the player's orders."),
     ]),
     autoJumpForward: Object.freeze([
       segment("role", "The simulator's role",
@@ -119,14 +120,18 @@ export const PROMPT_GUIDANCE = Object.freeze({
         "[What an Order Can Do]",
         "not the fall of a capital.",
         "Outcomes, consent, means and authority, and the pace of a war."),
-      segment("scope", "What to simulate",
-        "[What to Simulate]",
-        "get that change exactly right.",
-        "Breadth and the outcomes of the player's orders."),
       segment("reactions", "The world answers back",
         "[The World Answers Back]",
         "Bring the pressure to the player's door and stop there.",
         "Other powers acting on their own initiative, and answering the player's moves."),
+      segment("quality", "How an event is written",
+        "[How to Write an Event]",
+        "The fortress had held seven prisoners.",
+        "The headline and the story under it: specifics, length, quotes, what counts as an event."),
+      segment("scope", "What to simulate",
+        "[What to Simulate]",
+        "get that change exactly right.",
+        "Breadth and the outcomes of the player's orders."),
       segment("stopping", "Where the auto-jump stops",
         "[Where the Auto-Jump Stops]",
         "A good game surprises the player and demands their engagement.",
@@ -135,10 +140,6 @@ export const PROMPT_GUIDANCE = Object.freeze({
         "[How Many Events]",
         "Only the stopping point decides where the list ends.",
         "The number of events per auto-jump."),
-      segment("quality", "How an event is written",
-        "[How to Write an Event]",
-        "The fortress had held seven prisoners.",
-        "The headline and the story under it: specifics, length, quotes, what counts as an event."),
     ]),
     interactiveCreation: Object.freeze([
       segment("guidelines", "What makes a good interactive event",
@@ -308,6 +309,68 @@ export const guidanceFingerprint = (text) => {
 // in English or in a shipped translation (shippedGuidance.js)?
 export const isShippedGuidanceDefault = (text) => SHIPPED_GUIDANCE_FINGERPRINTS.has(guidanceFingerprint(text));
 
+// How long a passage may be. The owner, 2026-11-07: "add a character limit to
+// prompts so they can at most be 20% larger than the built in defaults".
+//
+// A passage is counted as the author sees it in the editor and as it is
+// stored: a line break as one character, the ends trimmed, and every
+// placeholder such as ${PLAYER_POLITY} as the characters it is written with.
+// No placeholder is left out of the count: the ones inside a passage are
+// guidance like the rest of it and an author may remove any of them (the ones
+// the game cannot do without sit in the technical text around the passages,
+// which is never edited).
+//
+// The limit is relative, so it moves with the defaults: 120% of the longest
+// built-in version of the same passage, in English or in any shipped
+// translation (guidanceLengths.js), rounded up. Measured against the longest
+// rather than the player's own language, so a scenario written in French is
+// within the limit for a player who reads English, and a translated default,
+// which can run longer than the English, always is.
+export const PROMPT_LENGTH_ALLOWANCE_PERCENT = 20;
+
+export const promptCharCount = (text) => String(text ?? "").replace(/\r\n?/g, "\n").trim().length;
+
+// The longest built-in version of a default (English) passage.
+export const longestShippedLength = (englishDefault) => Math.max(
+  promptCharCount(englishDefault),
+  TRANSLATED_GUIDANCE_LENGTHS.get(guidanceFingerprint(englishDefault)) ?? 0,
+);
+
+// The most characters a passage whose English default is `englishDefault` may
+// have; 0 for a passage with no default, which has nowhere to go in its prompt
+// (composePrompt cannot place it) and so cannot be written at all.
+export const guidanceCharLimit = (englishDefault) => {
+  if (typeof englishDefault !== "string" || !englishDefault.trim()) return 0;
+  return Math.ceil((longestShippedLength(englishDefault) * (100 + PROMPT_LENGTH_ALLOWANCE_PERCENT)) / 100);
+};
+
+export const isWithinGuidanceLimit = (text, englishDefault) => promptCharCount(text) <= guidanceCharLimit(englishDefault);
+
+// The passages of a stored pack that are longer than their limit, each
+// { sectionKey, segmentId, text, length, limit }, in the editor's order.
+// `guidanceDefaults` are the English defaults (buildGuidanceDefaults).
+// normalizePackGuidance leaves these out; this says which they were, for the
+// notice a game shows and for the editor, which shows them to be shortened.
+export const overLimitPackGuidance = (rawPack, guidanceDefaults) => {
+  const pack = isRecord(rawPack) ? rawPack : {};
+  if (pack.bypassLengthLimit === true) return [];
+  const source = Number(pack.promptModel) === PROMPT_MODEL_VERSION && isRecord(pack.guidance) ? pack.guidance : {};
+  const tasks = isRecord(source.tasks) ? source.tasks : {};
+  const found = [];
+  const check = (sectionKey, raw, defaults) => {
+    for (const [segmentId, text] of Object.entries(normalizeSectionGuidance(sectionKey, raw, defaults))) {
+      if (isShippedGuidanceDefault(text)) continue;
+      const limit = guidanceCharLimit(defaults?.[segmentId]);
+      const length = promptCharCount(text);
+      if (length > limit) found.push({ sectionKey, segmentId, text, length, limit });
+    }
+  };
+  check("advisor", source.advisor, guidanceDefaults?.advisor ?? {});
+  check("leader", source.leader, guidanceDefaults?.leader ?? {});
+  for (const key of Object.keys(PROMPT_GUIDANCE.tasks)) check(key, readUnderTaskKey(tasks, key), guidanceDefaults?.tasks?.[key] ?? {});
+  return found;
+};
+
 // The edits a stored pack carries, normalised: known sections and segments
 // only, trimmed, with blanks and default-identical text dropped. A pack of any
 // other shape carries nothing — the old model stored whole prompts, technical
@@ -323,12 +386,17 @@ export const isShippedGuidanceDefault = (text) => SHIPPED_GUIDANCE_FINGERPRINTS.
 // in the scenario and in every game played from it after the game changed
 // them. Only stored packs are read this way: composePrompt takes whatever
 // passages it is given, the translated defaults included.
-export const normalizePackGuidance = (rawPack, guidanceDefaults = null) => {
+//
+// With the defaults given, a passage longer than its limit (guidanceCharLimit)
+// is left out too, whole: the default runs in its place, and nothing is cut
+// to fit. overLimitPackGuidance names them, so the player is told.
+export const normalizePackGuidance = (rawPack, guidanceDefaults = null, { bypassLimit = false } = {}) => {
   const pack = isRecord(rawPack) ? rawPack : {};
   const source = Number(pack.promptModel) === PROMPT_MODEL_VERSION && isRecord(pack.guidance) ? pack.guidance : {};
   const tasks = isRecord(source.tasks) ? source.tasks : {};
   const edits = (sectionKey, raw, defaults) => Object.fromEntries(
-    Object.entries(normalizeSectionGuidance(sectionKey, raw, defaults)).filter(([, text]) => !isShippedGuidanceDefault(text)),
+    Object.entries(normalizeSectionGuidance(sectionKey, raw, defaults)).filter(([id, text]) =>
+      !isShippedGuidanceDefault(text) && (!guidanceDefaults || bypassLimit || isWithinGuidanceLimit(text, defaults?.[id]))),
   );
   const taskGuidance = {};
   for (const key of Object.keys(PROMPT_GUIDANCE.tasks)) {
@@ -345,9 +413,9 @@ export const normalizePackGuidance = (rawPack, guidanceDefaults = null) => {
 // Materialize every editable passage for an explicit transfer/export. Stored
 // scenario packs stay sparse via normalizePackGuidance; this helper is only for
 // moving the complete author-editable layer between scenarios/files.
-export const materializePackGuidance = (rawPack, guidanceDefaults = null) => {
+export const materializePackGuidance = (rawPack, guidanceDefaults = null, { bypassLimit = false } = {}) => {
   const defaults = isRecord(guidanceDefaults) ? guidanceDefaults : {};
-  const overrides = normalizePackGuidance(rawPack, guidanceDefaults);
+  const overrides = normalizePackGuidance(rawPack, guidanceDefaults, { bypassLimit });
   const defaultTasks = isRecord(defaults.tasks) ? defaults.tasks : {};
   return {
     advisor: { ...(isRecord(defaults.advisor) ? defaults.advisor : {}), ...overrides.advisor },
@@ -363,7 +431,15 @@ export const materializePackGuidance = (rawPack, guidanceDefaults = null) => {
 
 // The prompt the game runs: the default text with each segment's default
 // replaced by the author's text where one was written.
-export const composePrompt = (sectionKey, defaultText, guidance) => {
+//
+// The last word on the limit: a passage longer than its limit is never put in
+// a prompt, whatever handed it here, and the default stays in its place. A
+// default some version shipped (a translation) is a default, not an edit.
+//
+// A scenario that bypasses the limit (bypassLengthLimit on its prompt pack,
+// the Prompts tab's switch) passes { bypassLimit: true }: its passages go in
+// whatever their length.
+export const composePrompt = (sectionKey, defaultText, guidance, { bypassLimit = false } = {}) => {
   const overrides = normalizeSectionGuidance(sectionKey, guidance);
   if (!Object.keys(overrides).length) return String(defaultText ?? "");
   let text = String(defaultText ?? "");
@@ -371,7 +447,10 @@ export const composePrompt = (sectionKey, defaultText, guidance) => {
   for (const seg of guidanceSegmentsFor(sectionKey)) {
     const found = locateSegment(text, seg, cursor);
     if (!found) continue;
-    const replacement = overrides[seg.id] ?? found.text;
+    const written = overrides[seg.id];
+    const replacement = written !== undefined && (bypassLimit || isShippedGuidanceDefault(written) || isWithinGuidanceLimit(written, found.text))
+      ? written
+      : found.text;
     text = text.slice(0, found.start) + replacement + text.slice(found.end);
     cursor = found.start + replacement.length;
   }

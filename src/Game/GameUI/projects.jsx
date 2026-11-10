@@ -125,8 +125,10 @@ const buildCounterPrompt = (project, owner) => (owner
 
 // Same sizing rule as the Actions panel: use what a tall screen offers, never
 // below a usable 30rem, never into the 9rem the top HUD needs. Named because
-// the Tags menu is sized against it (TAG_MENU_MAX_HEIGHT).
-const PANEL_HEIGHT = `min(calc(${APP_HEIGHT} - 9rem), max(calc(${APP_HEIGHT} - 16rem), 30rem))`;
+// the Tags menu is sized against it (TAG_MENU_MAX_HEIGHT). The Actions panel
+// can be dragged taller or shorter, and says how tall it is in a variable
+// (actionsPanelLayout.js PANEL_HEIGHT_VAR); this rule is only its fallback.
+const PANEL_HEIGHT = `var(--oh-actions-panel-height, min(calc(${APP_HEIGHT} - 9rem), max(calc(${APP_HEIGHT} - 16rem), 30rem)))`;
 
 const STATUS_TONES = {
   proposed: { label: "Proposed", color: "#93c5fd", bg: "rgba(59,130,246,0.16)" },

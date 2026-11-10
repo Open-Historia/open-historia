@@ -1,4 +1,6 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+import { normalizePromptReference, normalizePromptSnapshot } from "./promptSnapshot.js";
+import { normalizeCanonFacts, normalizeHistoryEras, normalizeHistoryYears } from "./historyTiers.js";
 import { JSON_URLS, getPrimedScenarioRegionCatalog, loadTurnRestorePoint, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { withMapClaims } from "./mapClaims.js";
 import { populationFigureOf } from "./populationFigure.js";
@@ -100,6 +102,13 @@ export const WORLD_DEFAULTS = {
   // The living history document the AI is shown in place of the folded events
   // (AI/historyConsolidation.js); null until the first consolidation pass.
   historyDocument: null,
+  // The facts of the campaign that never fade: treaties, deaths, regime and
+  // border changes, office holders, each dated (runtime/historyTiers.js).
+  canonFacts: [],
+  // What the last time skip's prompt read, and the polity lore its cached
+  // opening carries (runtime/promptSnapshot.js); null until a skip writes them.
+  promptSnapshot: null,
+  promptReference: null,
   // Per-polity international reputation (0-100), evolved by the AI each turn via
   // polityChanges and fed back into prompts. Authoritative, unlike the on-demand
   // stat sheet it was first read from.
@@ -390,12 +399,16 @@ export const MAX_UNITS_PER_POLITY = 12;
 // A comma is only read as a decimal point when it is the ONLY separator: "1,234.5"
 // keeps its usual meaning, so a thousands separator can never silently divide a
 // value by a thousand.
+//
+// Nothing that is not a number or a string is one: Number(null) is 0, and a
+// coordinate a save kept as null (JSON writes NaN so) read as 0 sent a standing
+// order to lng 0, lat 0, where the unit flew or sailed, on the equator in the
+// middle of the ocean ("i had an airplane squadron and i tasked them to bomb the
+// enemy but they spawned on the equator in the middle of the ocean", a player's
+// report, 2026-11-09).
 const finiteOrNull = (value) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value !== "string") {
-    const num = Number(value);
-    return Number.isFinite(num) ? num : null;
-  }
+  if (typeof value !== "string") return null;
 
   let text = value.trim();
   if (!text) return null;
@@ -1157,13 +1170,19 @@ const normalizeRegionClaim = (entry) => {
     entry.claimantCode || entry.claimant || entry.byCode || entry.ownerCode || entry.code,
   ));
 
-  if (!regionId || !claimantCode) {
+  const drop = entry.drop === true || entry.drop === "true" || entry.op === "drop" || entry.op === "renounce";
+  // Every claimant's claim on the region withdrawn at once (a settlement, a
+  // country clearing all claims on its land): no claimant needs naming then.
+  const allClaimants = drop && (entry.allClaimants === true || entry.allClaimants === "true");
+
+  if (!regionId || (!claimantCode && !allClaimants)) {
     return null;
   }
 
   return {
+    ...(allClaimants ? { allClaimants: true } : {}),
     claimantCode,
-    drop: entry.drop === true || entry.drop === "true" || entry.op === "drop" || entry.op === "renounce",
+    drop,
     note: normalizeOptionalString(entry.note || entry.reason),
     regionId,
     regionName: normalizeOptionalString(entry.regionName || entry.name),
@@ -1380,7 +1399,8 @@ const normalizePendingUnitOrderEntry = (entry, index = 0) => {
   const unitId = normalizeOptionalString(entry.unitId);
   const toLng = finiteOrNull(entry.toLng);
   const toLat = finiteOrNull(entry.toLat);
-  if (!unitId || toLng === null || toLat === null) return null;
+  // (Nor to lng 0, lat 0: no place, as no unit stands there, normalizeUnitEntry.)
+  if (!unitId || toLng === null || toLat === null || (toLng === 0 && toLat === 0)) return null;
   const rawKind = normalizeOptionalString(entry.kind).toLowerCase();
   // Saves from before player-issued attacks were removed carry kind "attack".
   // Coerce rather than drop: the destination and targetLabel are still good, so
@@ -2885,7 +2905,16 @@ const normalizeUnitOp = (entry) => {
   }
 
   if (op === "strength") {
-    return { op, unitId, strength: clampUnitStrength(entry.strength ?? 0), note: normalizeOptionalString(entry.note) };
+    // A refit: the formation's ships or equipment replaced, said by its new
+    // make-up ("Made new ships ... the ship make-up list when clicked on still
+    // show old ships", a player's report, 2026-11-09). A refit that gives no
+    // strength keeps the one the formation has.
+    const composition = normalizeOptionalString(entry.composition);
+    const given = entry.strength !== undefined && entry.strength !== null && String(entry.strength).trim() !== "";
+    if (composition && !given) return { op, unitId, strength: null, composition, note: normalizeOptionalString(entry.note) };
+    // (Nor does one that says neither: a missing strength is unchanged, never 0, which destroys the formation.)
+    if (!given) return null;
+    return { op, unitId, strength: clampUnitStrength(entry.strength ?? 0), ...(composition ? { composition } : {}), note: normalizeOptionalString(entry.note) };
   }
 
   if (op === "remove") {
@@ -3207,17 +3236,19 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
     }
 
     if (op.op === "strength") {
-      next = next.map((unit) =>
-        unit.id === op.unitId
-          ? {
-              ...unit,
-              strength: op.strength,
-              status: op.strength <= 0 ? "defeated" : unit.status,
-              ...(eventId ? { eventId } : {}),
-              updatedAt: stamp(),
-            }
-          : unit,
-      );
+      next = next.map((unit) => {
+        if (unit.id !== op.unitId) return unit;
+        // (A refit that gave no strength keeps the formation's own.)
+        const strength = op.strength === null ? unit.strength : op.strength;
+        return {
+          ...unit,
+          strength,
+          status: strength <= 0 ? "defeated" : unit.status,
+          ...(op.composition ? { composition: op.composition } : {}),
+          ...(eventId ? { eventId } : {}),
+          updatedAt: stamp(),
+        };
+      });
       continue;
     }
 
@@ -3723,6 +3754,20 @@ const normalizeEventNpcReaction = (value) => {
   };
 };
 
+// An event's one-line digest (the time skip writes one beside each event): the
+// line a later skip's history shows of it once it is no longer the newest
+// (promptContext.js buildEventHistoryText). One line, at most
+// EVENT_DIGEST_MAX_CHARS; "" when there is none, as on every event written
+// before digests and every event of the Event Editor.
+export const EVENT_DIGEST_MAX_CHARS = 140;
+export const normalizeEventDigest = (value) => {
+  const line = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  if (line.length <= EVENT_DIGEST_MAX_CHARS) return line;
+  const cut = line.slice(0, EVENT_DIGEST_MAX_CHARS - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > EVENT_DIGEST_MAX_CHARS * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+};
+
 export const normalizeEventEntry = (entry, index = 0) => {
   if (typeof entry === "string") {
     const title = normalizeString(entry);
@@ -3772,11 +3817,14 @@ export const normalizeEventEntry = (entry, index = 0) => {
   // The places the event said it is about, as the engine found them on the
   // map (runtime/eventPlaces.js): what its card links to.
   const places = normalizeEventPlaces(entry.places);
+  const digest = normalizeEventDigest(entry.digest);
 
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
     date: normalizeOptionalString(entry.date),
     description: presentation.description,
+    // Only when present, so an event without one saves exactly as before.
+    ...(digest ? { digest } : {}),
     ...(presentation.quote ? { quote: presentation.quote } : {}),
     // Only when present, so an event without one saves exactly as before.
     ...(npcReaction ? { npcReaction } : {}),
@@ -3897,13 +3945,19 @@ const normalizeActionSuggestions = (value) =>
 
 // The living history document (AI/historyConsolidation.js). The text is the
 // point; the rest records which pass wrote it and how far it reaches.
+// `years` and `eras`: the document in tiers (runtime/historyTiers.js); a
+// document from before them has its text alone, and one in tiers may have none.
 const normalizeHistoryDocument = (value) => {
   if (!value || typeof value !== "object") return null;
   const text = normalizeTextLike(value.text);
-  if (!text) return null;
+  const years = normalizeHistoryYears(value.years);
+  const eras = normalizeHistoryEras(value.eras);
+  if (!text && !years.length && !eras.length) return null;
   const throughRound = Math.trunc(Number(value.throughRound) || 0);
   return {
     text,
+    ...(years.length ? { years } : {}),
+    ...(eras.length ? { eras } : {}),
     revision: Math.max(1, Math.trunc(Number(value.revision) || 1)),
     updatedAt: normalizeOptionalString(value.updatedAt) || new Date().toISOString(),
     source: normalizeOptionalString(value.source) || "ai",
@@ -4482,6 +4536,9 @@ export const normalizeWorldState = (world) => {
       : 0,
     consolidatedHistory: normalizeConsolidatedHistory(nextWorld.consolidatedHistory),
     historyDocument: normalizeHistoryDocument(nextWorld.historyDocument),
+    canonFacts: normalizeCanonFacts(nextWorld.canonFacts),
+    promptSnapshot: normalizePromptSnapshot(nextWorld.promptSnapshot),
+    promptReference: normalizePromptReference(nextWorld.promptReference),
     internationalReputation,
     intelligence,
     spies,
@@ -5469,6 +5526,24 @@ const settleRegionClaims = (world, regionId) => {
   if (!world.settledRegionClaims.includes(regionId)) world.settledRegionClaims.push(regionId);
 };
 
+// A world with the claimants given taken off their regions ([{ regionId, claimant }]): contests on a battlefield's
+// ground that nothing holds up any more (AI/frontTurn.js checkContests). The world itself when none is there.
+export const withoutClaimants = (world, expired) => {
+  const list = normalizeArray(expired).filter((entry) => normalizeOptionalString(entry?.regionId) && normalizeOptionalString(entry?.claimant));
+  const held = world?.regionClaimants && typeof world.regionClaimants === "object" ? world.regionClaimants : {};
+  const touched = list.filter((entry) => normalizeArray(held[entry.regionId]).some((name) => samePolity(name, entry.claimant)));
+  if (touched.length === 0) return world;
+  const next = {
+    ...world,
+    regionClaimants: { ...held },
+    settledRegionClaims: Array.isArray(world.settledRegionClaims) ? [...world.settledRegionClaims] : [],
+  };
+  for (const { regionId, claimant } of touched) {
+    writeRegionClaimants(next, regionId, normalizeArray(next.regionClaimants[regionId]).filter((name) => !samePolity(name, claimant)));
+  }
+  return next;
+};
+
 // A world in which no region is disputed for being held on a battlefield
 // (fronts/heldRegions.js): the claimants a battlefield accounts for are taken
 // off the regions its sides have taken from each other. The world itself when
@@ -5502,6 +5577,85 @@ const writeRegionSovereign = (world, regionId, sovereign) => {
 };
 
 const POLITY_LIFECYCLE_STORES = ["countryStats", "countryTags", "internationalReputation", "intelligence"];
+
+// WHAT A DISSOLVED POLITY LEAVES. "a polity isn't annexed or dismantled
+// completely despite specific instructions saying so ... claims staying from
+// the dismantled polity (despite it not existing)" (a player, 2026-11). A
+// dissolution used to be refused whenever the polity still had a row on the
+// map, even one it only occupied, and when it went through, every claim and
+// dispute it had stayed drawn. Now it leaves nothing behind.
+//
+// The heir is the one polity the dissolving event hands the polity's land to
+// (its transfers and captures from it), or else the one polity the event
+// creates or restores. None, or several, is no heir.
+export const dissolutionHeir = ({ code, polityChanges = [], regionTransfers = [], regionControlOps = [], resolveOwner = (name) => name }) => {
+  const nameOf = (value) => resolveOwner(value) || normalizeOptionalString(value);
+  const receivers = new Map();
+  for (const entry of [...normalizeArray(regionTransfers), ...normalizeArray(regionControlOps).filter((op) => op?.op === "control")]) {
+    if (!samePolity(nameOf(entry?.fromCode), code)) continue;
+    const to = nameOf(entry?.toCode);
+    if (to && !samePolity(to, code)) receivers.set(to.toLowerCase(), to);
+  }
+  if (receivers.size === 1) return [...receivers.values()][0];
+  if (receivers.size > 1) return "";
+  const founded = normalizeArray(polityChanges)
+    .filter(({ change }) => ["create", "restore"].includes(change?.operation))
+    .map(({ code: heir }) => heir)
+    .filter((heir) => heir && !samePolity(heir, code));
+  return founded.length === 1 ? founded[0] : "";
+};
+
+// The rows a dissolved polity is in, and what becomes of each: `control`
+// rows go to a new controller (its lawful sovereign, or the heir), `title`
+// rows are its sovereignty over land another holds (to the heir, or nobody's
+// once it is gone), `refused` counts land it holds outright with no heir.
+export const dissolvedPolityLand = (world, code, { heir = "" } = {}) => {
+  const owners = world?.regionOwnershipOverrides ?? {};
+  const sovereigns = world?.regionSovereigntyOverrides ?? {};
+  const control = [];
+  const title = [];
+  let refused = 0;
+  for (const [regionId, controller] of Object.entries(owners)) {
+    if (!samePolity(controller, code)) continue;
+    const sovereign = normalizeOptionalString(sovereigns[regionId]);
+    if (sovereign && !samePolity(sovereign, code)) control.push({ regionId, to: sovereign, sovereign });
+    else if (heir) control.push({ regionId, to: heir, sovereign: heir });
+    else refused += 1;
+  }
+  for (const [regionId, sovereign] of Object.entries(sovereigns)) {
+    if (!samePolity(sovereign, code) || samePolity(owners[regionId], code)) continue;
+    title.push({ regionId, to: heir });
+  }
+  return { control, title, refused, heir };
+};
+
+export const applyDissolvedPolityLand = (world, code, { control = [], title = [], heir = "" } = {}) => {
+  for (const { regionId, to, sovereign } of control) {
+    world.regionOwnershipOverrides[regionId] = to;
+    writeRegionSovereign(world, regionId, sovereign);
+    // Its new holder is no claimant of it: an occupation's stripe ends with the occupier.
+    const claimants = normalizeArray(world.regionClaimants?.[regionId]);
+    if (claimants.some((name) => samePolity(name, to) || samePolity(name, code))) {
+      writeRegionClaimants(world, regionId, claimants.filter((name) => !samePolity(name, to) && !samePolity(name, code)));
+    }
+  }
+  for (const { regionId, to } of title) {
+    if (to) writeRegionSovereign(world, regionId, to);
+    else delete world.regionSovereigntyOverrides[regionId];
+  }
+  // Every claim and every dispute it had, everywhere: as the lawful sovereign
+  // of land another occupies its heir stands in its place; otherwise it is
+  // simply gone. A region with nobody left on it is settled.
+  for (const [regionId, claimants] of Object.entries(world.regionClaimants ?? {})) {
+    const list = normalizeArray(claimants);
+    if (!list.some((name) => samePolity(name, code))) continue;
+    const sovereign = normalizeOptionalString(world.regionSovereigntyOverrides[regionId]);
+    const standIn = heir && samePolity(sovereign, heir) ? [heir] : [];
+    const controller = normalizeOptionalString(world.regionOwnershipOverrides[regionId]);
+    writeRegionClaimants(world, regionId, [...list.filter((name) => !samePolity(name, code)), ...standIn]
+      .filter((name) => !samePolity(name, controller)));
+  }
+};
 
 const applyPolityAndTerritoryImpacts = ({
   colors, eventDate = "", eventId = "", polityChanges = [], regionClaims = [], regionControlOps = [], regionTransfers = [], resolveOwner, world,
@@ -5563,6 +5717,14 @@ const applyPolityAndTerritoryImpacts = ({
       .filter(Boolean);
 
     if (claim.drop) {
+      // All of them: what stays is the stripe of an occupation (the lawful
+      // sovereign, while another holds the region), which is no claim.
+      if (claim.allClaimants) {
+        const holder = normalizeOptionalString(world.regionOwnershipOverrides[claim.regionId]);
+        const sovereign = normalizeOptionalString(world.regionSovereigntyOverrides[claim.regionId]);
+        writeRegionClaimants(world, claim.regionId, current.filter((entry) => holder && sovereign && !samePolity(holder, sovereign) && samePolity(entry, sovereign)));
+        continue;
+      }
       writeRegionClaimants(world, claim.regionId, current.filter((entry) => !samePolity(entry, claimant)));
       continue;
     }
@@ -5807,14 +5969,17 @@ const applyPolityAndTerritoryImpacts = ({
   // are kept as they were, so the record still says who fought). Its units
   // leave the map with it, and their standing orders with them.
   for (const { code } of dissolutions) {
-    const holdsTerritory = [
-      ...Object.values(world.regionOwnershipOverrides || {}),
-      ...Object.values(world.regionSovereigntyOverrides || {}),
-    ].some((owner) => samePolity(owner, code));
-    if (holdsTerritory) {
-      console.warn(`[polity lifecycle] refusing to dissolve "${code}": it still holds or is sovereign over mapped territory; transfer or settle that territory in the same event first.`);
+    // What its going settles by itself (dissolvedPolityLand): ground it only
+    // occupies goes back to its lawful sovereign, and the rest of its land, and
+    // its title to land another holds, to the one heir this event names. It is
+    // refused only when it still holds land outright and the event names no
+    // heir: then nobody can be said to take it.
+    const settlement = dissolvedPolityLand(world, code, { heir: dissolutionHeir({ code, polityChanges, regionTransfers, regionControlOps, resolveOwner }) });
+    if (settlement.refused) {
+      console.warn(`[polity lifecycle] refusing to dissolve "${code}": it still holds ${settlement.refused} mapped region(s) outright and the event gives them to nobody; transfer that territory in the same event first.`);
       continue;
     }
+    applyDissolvedPolityLand(world, code, settlement);
     world.polityOverrides[code] = {
       ...(world.polityOverrides[code] ?? { aliases: [], code, color: "", name: "", note: "" }),
       status: "dissolved",

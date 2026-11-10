@@ -33,7 +33,8 @@ import { applyWarRoomOp, cleanWarRoomOp } from "../../runtime/fronts/warRoomOps.
 import { applyFortifyOp, cleanFortifyOp } from "../../runtime/fronts/fortifyOps.js";
 import { applyFleetOp, cleanFleetOp } from "../../runtime/naval/fleetOps.js";
 import { applyAirStrikeOp, cleanAirStrikeOp } from "../../runtime/fronts/airStrikeOps.js";
-import { activeWars, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { activeTransportMedia, activeWars, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { transportFiguresOf } from "../../runtime/militaryStats.js";
 import { eraSettingOf } from "../../runtime/warSettings.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
 import { playerDiplomacy } from "../../Game/AI/warAndPeace.js";
@@ -417,7 +418,7 @@ export const createGameHost = ({
       if (!sent) return "Nothing was asked.";
       let refusal = "";
       await store.updateForces(({ world, game }) => {
-        const result = applyWarRoomOp(world?.battlefields, sent, { player: seat.country, date: clean(game?.gameDate), transports: world?.transports, era: eraSettingOf(world) });
+        const result = applyWarRoomOp(world?.battlefields, sent, { player: seat.country, date: clean(game?.gameDate), transports: world?.transports, era: eraSettingOf(world), media: activeTransportMedia(), military: transportFiguresOf(world, seat.country) });
         if (result.error) {
           refusal = result.error;
           return null;
@@ -641,6 +642,7 @@ export const createGameHost = ({
       // a letter between people was shown with no date at all.
       const gameDate = clean((await store.read())?.game?.gameDate);
       let chatId = clean(thread);
+      const opens = !chatId;
       let refusal = "";
       // Everyone at the table: the thread's owner and its members.
       let parties = [];
@@ -697,7 +699,10 @@ export const createGameHost = ({
         pushViews().then(() => replyTo({ chatId, seat: seat.country })).then(() => pushViews())
           .catch((error) => log("warn", "reply failed", { error: String(error?.message || error) }));
       }
-      return "";
+      // A thread opened by this line goes back with the ack, so the screen
+      // that began it can open it as soon as its view holds it
+      // (client/sharedThreads.js).
+      return opens ? { error: "", result: { chatId } } : "";
     },
   };
 

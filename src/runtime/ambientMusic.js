@@ -1397,6 +1397,28 @@ export const createMusicDirector = ({
   };
 };
 
+// The game drawn last: the one open behind the menu. Going back into it opens
+// it at once, so its opening has no build-up: "when entering a game thats
+// already opened, opening the game is super fast so dont do the whole music
+// ramp up thing. make it just go to the ingame music once your in" (the owner,
+// 2026-11-06). The screen then reports no loading for it (GameUI/main.jsx), and
+// the menu's music gives way straight to the game's, as a game drawn from the
+// menu does.
+//
+// Only that game, and only when it is the one being opened: "if you have an
+// open game but then switch games it still doesnt do the wind up" (the owner,
+// 2026-11-09). Another game is drawn from scratch, so it gets its build, and so
+// does a game drawn earlier this session that has since been replaced. The
+// screen of the open game is still up while the library opens another
+// (runtime/mapReadiness.js announces the opening first), so the game being
+// opened is asked for by name, not taken to be the one on the screen. A game's
+// first opening keeps its build, however fast.
+let drawnGame = "";
+export const noteGameDrawn = (gameId) => { if (gameId) drawnGame = String(gameId); };
+export const reopensDrawnGame = (gameId, openingId = "") => Boolean(gameId)
+  && drawnGame === String(gameId)
+  && (!openingId || String(openingId) === String(gameId));
+
 // The scene, from what the game's screen knows (GameUI/main.jsx).
 export const musicSceneOf = ({ inMenu = false, loading = false, atWar = false, war = false } = {}) => {
   if (inMenu) return "menu";

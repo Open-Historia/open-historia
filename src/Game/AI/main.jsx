@@ -16,7 +16,7 @@ import {
     updateEntry,
 } from "./providerConfig.js";
 import { formatResetTime, runWithFallback } from "./fallbackRunner.js";
-import { BACKGROUND_REQUEST, PLAYER_REQUEST, requestLedger, savingRequests } from "./requestBudget.js";
+import { BACKGROUND_REQUEST, PLAYER_REQUEST, lookupRoundLimit, requestLedger, savingRequests, unlimitedRequests } from "./requestBudget.js";
 import { requestActivity } from "./requestActivity.js";
 import { agentClient } from "./agentConnection.js";
 import { onSimulationsIdle } from "./simulationStatus.js";
@@ -34,7 +34,7 @@ import {
 } from "./contextWindow.js";
 import { endpointIsLocal, isLocalHostname } from "./localEndpoint.js";
 import { createKoboldCppMemory, endpointOriginOf, isKoboldCppModelName, saysKoboldCpp } from "./koboldCpp.js";
-import { MIN_CACHEABLE_PREFIX_CHARS, splitSystemPromptForCache } from "./promptLayout.js";
+import { MIN_CACHEABLE_PREFIX_CHARS, renderTemplateCached, splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { RELAY_CUT_OFF_MESSAGE, isRelayRefusal, isRelayUnreachable, relayUnreachableReason, withRelayCutoffHint } from "./relayResponse.js";
 import { attachLookupRound, attachCallMetrics, attachRequestOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
@@ -52,7 +52,8 @@ import {
 } from "../../runtime/diplomaticEnvelope.js";
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { withDifficultyPriority } from "../../runtime/difficulty.js";
-import { normalizePromptPack } from "./gameplayPrompts.js";
+import { guardPromptTemplate, normalizePromptPack } from "./gameplayPrompts.js";
+import { notePromptsOverLimit } from "../../runtime/promptLimitNotice.js";
 import { promptTranslationsVersion } from "../../runtime/promptTranslations.js";
 import {
     busyProviderMessage,
@@ -90,7 +91,7 @@ import { nativeHttpAvailable, nativeHttpFetch } from "../../runtime/native/http.
 import { createRelayOnlyOrigins } from "./relayOrigins.js";
 import { createFirstByteTimer, createStreamUsage, normalizeUsage, sumUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
-import { buildAnswerFormatBlock } from "./schemaOutline.js";
+import { askGeminiAnswer, geminiAnswersAsText } from "./geminiAnswer.js";
 import {
     applyAnthropicFrame,
     applyGeminiFrame,
@@ -102,7 +103,6 @@ import {
     finishGeminiStream,
     finishOpenAIStream,
     readAnthropicStreamedResponse,
-    readGeminiStreamedResponse,
     readOpenAIStreamedResponse,
 } from "./streamAssembly.js";
 import {
@@ -121,6 +121,7 @@ import {
     lookupCallsFromOpenAI,
     lookupRoundCount,
     openAiMessagesFromHistory,
+    withCachedHistory,
     withCarriedRounds,
 } from "./toolTurns.js";
 import { GROUP_LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
@@ -129,10 +130,10 @@ import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "../../runtime/mapSetti
 import {
     buildPromptContext,
     formatDateReadable,
-    renderTemplate,
     resolveHelperValues,
     sortDiplomaticChatsByRecentActivity,
 } from "./promptContext.js";
+import { findPastTalks } from "./relatedEventsSearch.js";
 import { collapseRepeatedWorldContext } from "./promptDedupe.js";
 import { promptVariableDemand } from "./contextDiagnostics.js";
 import { filterChatsVisibleTo, isChatVisibleTo } from "./chatVisibility.js";
@@ -377,20 +378,6 @@ function pickLikelyChatModel(models) {
     return safeFallbackModel ?? modelIds[0] ?? "";
 }
 
-function joinGeminiParts(parts) {
-    return (parts ?? [])
-    .map((part) => part?.text ?? "")
-    .join("")
-    .trim();
-}
-
-function extractGeminiToolInput(data, tool) {
-    const call = (data?.candidates?.[0]?.content?.parts ?? [])
-    .map((part) => part?.functionCall)
-    .find((entry) => entry?.name === tool?.name);
-    return call?.args && typeof call.args === "object" ? call.args : null;
-}
-
 // Qwen/DeepSeek thinking models emit reasoning either in a separate field or inline in
 // <think>...</think>. Strip the think block so we return the actual answer; an unclosed
 // <think> means the stream was cut mid-thought, leaving no answer, so drop it too.
@@ -489,70 +476,25 @@ function getGeminiStreamUrl(model, apiKey) {
     return getGeminiUrl(model, apiKey).replace(":generateContent?", ":streamGenerateContent?alt=sse&");
 }
 
-// How a Gemini skip's events arrive one by one, as every other provider's do
-// (streamedEvents.js).
-//
-// Streaming a tool call's arguments needs partialArgs, and
-// toolConfig.functionCallingConfig.streamFunctionCallArguments is Vertex-only:
-// this API's v1beta discovery doc (revision 20260918) gives FunctionCallingConfig
-// only `mode` and `allowedFunctionNames`. Sending it buys a 400 and costs the
-// player a request, so it is not sent, and a skip asked for as a function call
-// arrives whole.
-//
-// Text does stream, so a watched skip is asked for as JSON text: the answer's
-// mime type set to application/json, and the function's contract written out in
-// the prompt in place of its declaration (schemaOutline.js buildAnswerFormatBlock).
-// Gemini refuses a response mime type alongside tools ("Function calling with a
-// response mime type: 'application/json' is unsupported"), so it is used exactly
-// when nothing else needs the function channel: a watched skip (onToolStream)
-// with no lookup functions, which is every skip while requests are being saved,
-// the default. A skip that has lookup functions keeps the function call and its
-// questions, and arrives whole as before.
-//
-// Not generationConfig.responseSchema, which was built first and measured
-// against the live API on 2026-10-05 (gemini-3.5-flash-lite): the schema is
-// compiled into a grammar with a ceiling on its size, and the skip's contract
-// sits at it. As it stood it was refused, 400 "Request contains an invalid
-// argument"; with its four unions merged into single objects it passed; with the
-// Projects board's ops added it was refused again; and the same weight spent
-// anywhere else (the stats block, the institution ops) tipped it the same way.
-// That ceiling has moved before (geminiSchema.js), so a contract that passes
-// today is no promise. Written into the prompt, the contract's size costs tokens
-// and nothing else: measured the same day, the whole folded contract is about
-// 5,800 tokens there, fewer than its declaration, the answer arrived in 72
-// frames with no gap over 0.2 s, in the order the outline gives its fields, and
-// it passed the task's validation as written. What holds an answer to the
-// contract is that validation, as it does for every model that has no function
-// calling at all.
-//
-// A model that refuses the mime type itself is asked again at once as the
-// function call it always was, and that way for the rest of the session rather
-// than paying a refused request per skip.
-//
-// streamAssembly.js still assembles partialArgs if they ever arrive, so the day
-// the field reaches this API, asking for it is the only change.
-const geminiJsonAnswerRefusals = new Set();
+// How a Gemini task's answer is asked for (as a function call, as streamed JSON
+// text, or split around its lookup round) is geminiAnswer.js's, with why.
 
-// The other way round: a model that refuses a task's function call as a request,
-// 400 "Request contains an invalid argument" before a word is written (a
-// player's log, 2026-11-06: thirty time skips, every one to the canned events),
-// is asked again at once with the contract written into the prompt as JSON text,
-// which has no grammar to outgrow, and that way for the rest of the session. A
-// skip that also declares lookup functions keeps the call: the text form cannot
-// carry their questions.
-const geminiFunctionCallRefusals = new Set();
-
-// The whole answer of a JSON-mode request, or null when it is not one object
-// (cut off, fenced, prose around it): the task's own salvage reads those from
-// the raw text.
-function parseGeminiJsonAnswer(text) {
+// Whether a task's first Fallback entry is Gemini asking for the answer as a
+// call of the output function, the lookup functions declared beside it: the one
+// request whose declarations Gemini can refuse for their size. A time skip
+// weighs its riders against that (gameplay.js fitSkipRiders). `watched`: the
+// skip's events are shown as they are written.
+export const geminiDeclaresTaskFunction = (taskKey, { watched = false } = {}) => {
     try {
-        const value = JSON.parse(text);
-        return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+        const { entries, preferredEntryId } = resolveTaskFallbackEntries(taskKey);
+        const entry = entries.find((candidate) => candidate.id === preferredEntryId) ?? entries[0];
+        if (entry?.provider !== "gemini") return false;
+        const model = normalizeGeminiModel(entry.model) || GEMINI_DEFAULT_MODEL;
+        return !geminiAnswersAsText(model, { watched });
     } catch {
-        return null;
+        return false;
     }
-}
+};
 
 // AI calls go straight from the browser to the provider so the player's API key
 // only ever reaches the provider — never a server or a community node. Direct is
@@ -1197,12 +1139,9 @@ async function callGemini(systemPrompt, history, {
     taskKey = "",
     lookupTools,
     requireOutputTool = false,
+    lookupRoundsAnswered = 0,
 } = {}) {
     const settings = entrySettings;
-    // Lookup functions (lookupTools.js) declared beside the output function.
-    // They stay declared for the whole conversation (the history carries calls
-    // to them); which ones the model may CALL this round is allowedFunctionNames.
-    const lookupDeclarations = tool && Array.isArray(lookupTools) ? lookupTools : [];
     const apiKey = settings.apiKey.trim();
 
     if (!apiKey) {
@@ -1328,203 +1267,46 @@ async function callGemini(systemPrompt, history, {
         }
     }
 
-    let retriedAfterOverload = false;
-    // The answer as JSON text rather than a function call, so a watched skip's
-    // events arrive one at a time (see geminiJsonAnswerRefusals above for when,
-    // and for what happens when it is refused).
-    const canAnswerAsText = Boolean(tool && !lookupDeclarations.length);
-    let jsonAnswer = canAnswerAsText && (geminiFunctionCallRefusals.has(model)
-        || (typeof onToolStream === "function" && !geminiJsonAnswerRefusals.has(model)));
-    let jsonAnswerRefused = false;
-    let functionCallRefused = false;
-    // Events first: they are what the panel shows as they are written. Built the
-    // first time the text form is asked for, which may be after a refused call.
-    let answerFormat = "";
-    const answerFormatBlock = () => {
-        answerFormat ||= buildAnswerFormatBlock(tool.schema, { first: Object.keys(tool.schema?.properties ?? {})[0] || "" });
-        return answerFormat;
-    };
-
-    for (let attempt = 1; attempt <= retries; attempt++) {
-        // Tool calls stream, for the same reason they do on the other three
-        // providers: a timeline jump is the longest request the game makes, and
-        // a buffered one sends nothing over the wire for the whole generation,
-        // which is what an API edge or a proxy cuts. Gemini was the last
-        // provider still sending its tool calls buffered — and it is the
-        // DEFAULT provider, so a jump on a stock install was the one request
-        // most exposed to that. readGeminiStreamedResponse rebuilds the exact
-        // envelope the extractors below already read, so nothing downstream
-        // changes. (The advisor's own streaming is handled above, where the
-        // tokens go to the UI as they arrive.)
-        const requestUrl = tool ? getGeminiStreamUrl(model, apiKey) : getGeminiUrl(model, apiKey);
-        const generationConfig = {
+    // A task's answer, or a reply in words with no output function: the
+    // requests and their forms are geminiAnswer.js's (askGeminiAnswer), the
+    // provider's own rules and errors handed to it here.
+    return askGeminiAnswer({
+        fetch: (url, init) => fetch(url, init),
+        url: (stream) => (stream ? getGeminiStreamUrl(model, apiKey) : getGeminiUrl(model, apiKey)),
+        retryOrFail: (response, attempt) => retryOrFail(response, attempt),
+        sleep: (ms) => sleep(ms, signal),
+        readErrorPayload,
+        readJsonAnswer: (response) => readJsonAnswer(response, "Gemini"),
+        refusedRequestError: (message, failure) => refusedRequestError("Gemini", message, failure),
+        retriesSpentError: () => retriesSpentError("Gemini", retries),
+        failIfClosedEarly: (data, text) => failIfClosedEarly(data, text),
+        keepProseClosedEarly: (closedEarly, text) => keepProseClosedEarly(closedEarly, text, onUnmarkedEnd),
+        canRetryBeforeDeadline: (delayMs) => canRetryBeforeDeadline(deadline, delayMs),
+        waitingCannotFix,
+        retryableStatuses: RETRYABLE_HTTP_STATUSES,
+        overloadedRetryDelay: OVERLOADED_RETRY_DELAY,
+    }, {
+        model,
+        systemPrompt,
+        history,
+        tool,
+        lookupTools,
+        requireOutputTool,
+        lookupRoundsAnswered,
+        retries,
+        generationConfig: {
             ...samplingConfig,
             ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
-            ...(jsonAnswer ? { responseMimeType: "application/json" } : {}),
-        };
-        // The request goes out now: the skip's progress row starts its count
-        // from here, again on every retry (requestActivity.js).
-        onSend?.();
-        const response = await fetch(requestUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                // The contract after the prompt, as a part of its own: nothing
-                // before it changes, so the prompt's cacheable prefix is the
-                // one a function-call request has.
-                system_instruction: { parts: [
-                    { text: systemPrompt },
-                    ...(jsonAnswer ? [{ text: answerFormatBlock() }] : []),
-                ] },
-                contents: geminiContentsFromHistory(history),
-                ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
-                ...customParams,
-                ...(tool && !jsonAnswer ? {
-                    tools: [{ functionDeclarations: [
-                        {
-                            name: tool.name,
-                            description: tool.description,
-                            parameters: toGeminiSchema(tool.schema),
-                        },
-                        ...lookupDeclarations.map((entry) => ({
-                            name: entry.name,
-                            description: entry.description,
-                            parameters: toGeminiSchema(entry.schema),
-                        })),
-                    ] }],
-                    toolConfig: { functionCallingConfig: {
-                        mode: "ANY",
-                        // The final round of a lookup conversation may only answer.
-                        allowedFunctionNames: [tool.name, ...(requireOutputTool ? [] : lookupDeclarations.map((entry) => entry.name))],
-                    } },
-                } : {}),
-            }),
-            signal,
-        });
-        // Every response is one request against the player's allowance, whatever
-        // became of it (requestBudget.js): a lookup round, a retry, a refusal.
-        onRequest?.(response.status);
-
-        // A 429 used to be fatal here while every other provider retried it, so
-        // one per-minute trip on a free-tier key destroyed the turn and dropped
-        // the player to canned events. Only a SPENT quota (daily allowance, or
-        // billing) is worth failing over; a rate limit is what waiting is for —
-        // unless the player chose to move straight to the next Fallback entry.
-        if (RETRYABLE_HTTP_STATUSES.has(response.status)) {
-            await retryOrFail(response, attempt);
-            continue;
-        }
-
-        if (!response.ok) {
-            const payload = await readErrorPayload(response);
-            const failure = classifyProviderFailure({ status: response.status, payload });
-            // The JSON-text form of the answer, refused as a request: asked again
-            // at once as the function call it always was. Not one of the
-            // attempts, which are for a busy model; a key, a missing model or a
-            // request too large fails the same either way and is not asked twice.
-            if (jsonAnswer && !functionCallRefused && [400, 422].includes(response.status) && !waitingCannotFix(failure) && failure.kind !== "tooBig") {
-                jsonAnswer = false;
-                jsonAnswerRefused = true;
-                console.warn("[ai] Gemini refused the skip's JSON-text form; asking again as a function call (its events will arrive together).");
-                logDebugEvent("ai", "Gemini refused a JSON-mode request; asked again as a function call.", {
-                    model,
-                    status: response.status,
-                    detail: extractErrorMessage(payload, "").slice(0, 300),
-                }, { verbose: true });
-                attempt -= 1;
-                continue;
-            }
-            // The function call refused as a request: asked again at once as JSON
-            // text (geminiFunctionCallRefusals above). Once a call, and never after
-            // the text form was itself refused in this one.
-            if (!jsonAnswer && canAnswerAsText && !functionCallRefused && !jsonAnswerRefused
-                && [400, 422].includes(response.status) && failure.kind === "other") {
-                jsonAnswer = true;
-                functionCallRefused = true;
-                console.warn("[ai] Gemini refused the function call; asking again with the answer as JSON text.");
-                logDebugEvent("ai", "Gemini refused a function-call request; asked again as JSON text.", {
-                    model,
-                    status: response.status,
-                    detail: extractErrorMessage(payload, "").slice(0, 300),
-                }, { verbose: true });
-                attempt -= 1;
-                continue;
-            }
-            throw refusedRequestError("Gemini",
-                extractErrorMessage(payload, `Gemini API request failed (${response.status})`),
-                failure,
-            );
-        }
-        // Accepted as a function call straight after being refused as JSON text:
-        // it was the form that was refused, so this model is asked the function
-        // way for the rest of the session.
-        if (jsonAnswerRefused) geminiJsonAnswerRefusals.add(model);
-        if (functionCallRefused) geminiFunctionCallRefusals.add(model);
-
-        // Branch on what actually came back, not on what was asked for: an edge
-        // or proxy that ignored alt=sse still answers plain JSON, and that must
-        // keep working exactly as it did.
-        const data = String(response.headers.get("content-type") || "").includes("text/event-stream")
-            ? await readGeminiStreamedResponse(response, onActivity, onToolStream, onReceived)
-            : await readJsonAnswer(response, "Gemini");
-        onUsage?.(data);
-        if (tool) {
-            // Asked for as JSON text: the text IS the function's arguments. One
-            // that will not parse whole (cut off mid-answer) goes on below as raw
-            // text, where the task's salvage and the busy-retry both read it.
-            const jsonText = jsonAnswer ? joinGeminiParts(data?.candidates?.[0]?.content?.parts) : "";
-            const jsonInput = jsonText ? parseGeminiJsonAnswer(jsonText) : null;
-            // answeredAsText: no function was declared, so a correction asks for
-            // the JSON again and not for a call (gameplay.js runJsonTask).
-            if (jsonInput) return { rawText: jsonText, toolInput: jsonInput, answeredAsText: true };
-            const toolInput = extractGeminiToolInput(data, tool);
-            if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
-            failIfClosedEarly(data, joinGeminiParts(data?.candidates?.[0]?.content?.parts));
-            // Not the answer but a question: the model called lookup functions.
-            // Handed back to callAI, which answers them and asks again.
-            if (lookupDeclarations.length) {
-                const lookupCalls = lookupCallsFromGemini(data, tool.name);
-                if (lookupCalls.length) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput: null, lookupCalls };
-            }
-
-            // Now that tool calls stream, an overloaded model can refuse INSIDE
-            // the stream — HTTP 200, an error frame, no function call — where the
-            // same refusal used to arrive as a 503 and be retried by status code
-            // above. Without this, a hiccup would cost the player a whole turn to
-            // the canned fallback, which is what the buffered path protected them
-            // from. (Mirrors the OpenAI-compatible path.)
-            const streamedError = data?.error;
-            const streamedText = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
-            if (!streamedText && isBusyErrorPayload(streamedError) && !retriedAfterOverload && attempt < retries
-                && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
-                retriedAfterOverload = true;
-                console.warn(`[ai] Gemini reported "${errorPayloadText(streamedError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
-                await sleep(OVERLOADED_RETRY_DELAY, signal);
-                continue;
-            }
-            // Fragments that stopped partway assemble into a valid object missing
-            // half the turn, so streamAssembly.js drops the call and leaves this
-            // for the log alone.
-            if (data?.partialToolJson) {
-                logDebugEvent("warn", `[ai] Gemini tool call was cut off mid-argument.`, {
-                    partialChars: data.partialToolJson.length,
-                }, { verbose: true });
-            }
-            // Still refusing: say so, rather than hand back an empty "answer".
-            if (!streamedText && streamedError) throw toolStreamRefusalError("Gemini", streamedError, retriedAfterOverload);
-
-            return { rawText: streamedText, toolInput: null };
-        }
-        const text = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
-        keepProseClosedEarly(data?.closedEarly, text, onUnmarkedEnd);
-
-        if (!text) {
-            throw new Error("Gemini response did not contain text.");
-        }
-
-        return text;
-    }
-    throw retriesSpentError("Gemini", retries);
+        },
+        customParams,
+        signal,
+        onActivity,
+        onReceived,
+        onRequest,
+        onSend,
+        onToolStream,
+        onUsage,
+    });
 }
 
 // Extra output tokens allowed when reasoning is on, because on an OpenAI-style
@@ -1589,6 +1371,9 @@ async function callOpenAIStyleChatCompletions({
     // callAI's word that this entry is a KoboldCpp server (entryOutputLimit):
     // decided once per attempt, where the request's log line is written.
     koboldCpp = false,
+    // OpenAI's prompt_cache_key: requests that share a prefix go to the same
+    // cache with it (callOpenAI passes it; nothing else does).
+    promptCacheKey = "",
 }) {
     // A model under KoboldCpp's own prefix is its /v1/models speaking, typed
     // into the entry or found there a moment ago (resolveConfiguredModel).
@@ -1724,6 +1509,7 @@ async function callOpenAIStyleChatCompletions({
                 // to no other server: the rest read no limit as none.
                 ...(koboldCppLimit ? { [tokenLimitField]: koboldCppLimit } : {}),
                 ...(disableTemperature ? {} : ownTemperature),
+                ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
                 ...requestCustomParams,
                 ...(structuredMode === "tool" && disableToolReasoning ? { reasoning_effort: "none" } : {}),
                 ...(structuredMode === "tool" ? {
@@ -2083,7 +1869,9 @@ async function callOpenAIStyleChatCompletions({
 }
 
 async function callOpenAI(systemPrompt, history, opts = {}) {
-    const { entrySettings, ...rest } = opts;
+    // promptCacheKey: OpenAI's own API only (prompt_cache_key); a compatible
+    // gateway is never sent a field it may refuse.
+    const { entrySettings, promptCacheKey = "", ...rest } = opts;
     const settings = entrySettings;
     const apiKey = settings.apiKey.trim();
 
@@ -2118,6 +1906,7 @@ async function callOpenAI(systemPrompt, history, opts = {}) {
         configuredStructuredMode: settings.structuredMode,
         observerKey: settings.id,
         tokenLimitField: "max_completion_tokens",
+        promptCacheKey,
         ...rest,
     });
 }
@@ -2186,17 +1975,69 @@ const anthropicModelMax = new Map(); // model -> learned output ceiling
 // some 70,000 tokens on a long campaign (a Discord test game, 2026-10-27). A
 // request with no such function is answered in one call, and writing its tail
 // to the cache would only cost more.
-function buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, { followUp = false } = {}) {
-    const split = splitSystemPromptForCache(systemPrompt, staticPrefixEnd);
+//
+// A round that follows lookups is a follow-up too, the last one included (it
+// may no longer offer a lookup, so without this it unpinned the tail and paid
+// for it again in full). And the conversation so far gets a breakpoint of its
+// own on its last block (toolTurns.js withCachedHistory, the third of four), so
+// the next round reads the earlier rounds from the cache as well.
+//
+// `sharedPrefixEnd`: where the part of the prefix another task opens with too
+// ends (the time skip and the auto-jump, promptLayout.js CACHE_BREAK_KEY). It
+// gets a breakpoint of its own, so switching between the two still reads that
+// part from the cache. With the tail's and the history's, that is the four the API takes.
+//
+// `ttl`: "1h" keeps the prefix an hour instead of five minutes. Writing it then
+// costs twice the input price instead of 1.25 times, and every read a tenth: on
+// a time skip, whose prefix is most of a long campaign's prompt and whose next
+// turn rarely comes within five minutes, it pays from the third skip in an
+// hour. Only the pinned prefix gets it; the tail, re-read only by the follow-ups
+// of the same call, keeps the default (the API takes the longer TTL first).
+function buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, { followUp = false, sharedPrefixEnd = null, ttl = "" } = {}) {
+    const split = splitSystemPromptForCache(systemPrompt, staticPrefixEnd, { sharedPrefixEnd });
     const pinned = followUp ? { cache_control: { type: "ephemeral" } } : {};
     if (!split) return followUp && String(systemPrompt ?? "").length >= MIN_CACHEABLE_PREFIX_CHARS
         ? [{ type: "text", text: systemPrompt, ...pinned }]
         : systemPrompt;
+    const kept = { cache_control: { type: "ephemeral", ...(ttl ? { ttl } : {}) } };
     return [
-        { type: "text", text: split.prefix, cache_control: { type: "ephemeral" } },
+        ...(split.shared ? [{ type: "text", text: split.shared, ...kept }] : []),
+        { type: "text", text: split.shared ? split.prefix.slice(split.shared.length) : split.prefix, ...kept },
         { type: "text", text: split.tail, ...pinned },
     ];
 }
+
+// The requests whose cacheable prefix is kept an hour (buildAnthropicSystemContent).
+const HOUR_CACHED_TASKS = new Set(["jumpForward", "autoJumpForward"]);
+
+// The conversations' prompts (the advisor's, a leader's) are built here and
+// sent through callAI by several callers, some of which add to them first. The
+// cacheable opening each was rendered with (promptLayout.js) is remembered, and
+// callAI gives a prompt that still opens with one its boundary, as runJsonTask
+// does for the gameplay tasks. A few at a time: one per conversation open.
+const conversationPrefixes = [];
+const rememberConversationPrefix = (prefix) => {
+    const text = String(prefix ?? "");
+    if (text.length < MIN_CACHEABLE_PREFIX_CHARS) return;
+    const at = conversationPrefixes.indexOf(text);
+    if (at >= 0) conversationPrefixes.splice(at, 1);
+    conversationPrefixes.unshift(text);
+    conversationPrefixes.length = Math.min(conversationPrefixes.length, 8);
+};
+const conversationPrefixEnd = (systemPrompt) => {
+    const text = String(systemPrompt ?? "");
+    let best = null;
+    for (const prefix of conversationPrefixes) {
+        if (text.length > prefix.length && text.startsWith(prefix) && (best == null || prefix.length > best)) best = prefix.length;
+    }
+    return best;
+};
+// A conversation's template rendered with its cacheable opening remembered.
+const renderConversationTemplate = (template, values) => {
+    const rendered = renderTemplateCached(template, values);
+    rememberConversationPrefix(rendered.text.slice(0, rendered.staticPrefixEnd));
+    return rendered.text;
+};
 
 async function callAnthropic(systemPrompt, history, {
     canFallBack = false,
@@ -2217,6 +2058,7 @@ async function callAnthropic(systemPrompt, history, {
     onModel,
     signal,
     staticPrefixEnd,
+    sharedPrefixEnd = null,
     tool,
     taskKey = "",
     lookupTools,
@@ -2290,10 +2132,15 @@ async function callAnthropic(systemPrompt, history, {
         // A model that refuses a forced tool_choice is asked for the call in words.
         const forceTool = forcesToolChoice(model, samplingKey);
         const lookupsAllowed = lookupDeclarations.length > 0 && !requireOutputTool;
-        const messages = toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history);
+        const followUp = lookupsAllowed || chatTools.length > 0 || lookupRoundCount(history) > 0;
+        const messages = withCachedHistory(toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history), { followUp });
         const body = {
             model,
-            system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, { followUp: lookupsAllowed || chatTools.length > 0 }),
+            system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, {
+                followUp,
+                sharedPrefixEnd,
+                ttl: HOUR_CACHED_TASKS.has(taskKey) ? "1h" : "",
+            }),
             max_tokens: requestedMaxTokens,
             ...(thinks ? { thinking: thinkingFor({ adaptive: thinksAdaptive(model) || adaptiveThinkingLearned.has(samplingKey) }) } : {}),
             ...temperatureBody(taskKey, { enabled: !thinks && !temperatureRefused }),
@@ -2509,6 +2356,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
     onModel,
     signal,
     staticPrefixEnd,
+    sharedPrefixEnd = null,
     tool,
     taskKey = "",
     lookupTools,
@@ -2608,10 +2456,12 @@ async function callAnthropicCompatible(systemPrompt, history, {
         // A model that refuses a forced tool_choice is asked for the call in words.
         const forceTool = forcesToolChoice(model, samplingKey);
         const lookupsAllowed = lookupDeclarations.length > 0 && !requireOutputTool;
-        const messages = toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history);
+        const followUp = lookupsAllowed || chatTools.length > 0 || lookupRoundCount(history) > 0;
+        const messages = withCachedHistory(toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history), { followUp });
         const body = {
             model,
-            system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd, { followUp: lookupsAllowed || chatTools.length > 0 }),
+            // The default TTL only: a proxy may not take the field.
+            system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd, { followUp, sharedPrefixEnd }),
             max_tokens: requestedMaxTokens,
             ...(thinks ? { thinking: thinkingFor({ adaptive: thinksAdaptive(model) || adaptiveThinkingLearned.has(samplingKey) }) } : {}),
             ...temperatureBody(taskKey, { enabled: !thinks && !temperatureRefused }),
@@ -2894,7 +2744,10 @@ const entryOutputLimit = (entry, maxTokens, koboldCpp) => {
 // Three, not more: every round re-sends the whole prompt, and a model that
 // asks one question per round spent seven rounds and three hundred thousand
 // prompt tokens on one jump. The directive tells it to ask everything at once.
-const DEFAULT_LOOKUP_ROUNDS = 3;
+// Six with no request limit (requestBudget.js lookupRoundLimit): the
+// prompt is slimmer there, and on Anthropic every round reads the one before
+// from the cache (withCachedHistory).
+const defaultLookupRounds = () => lookupRoundLimit({ unlimited: unlimitedRequests() });
 
 // A chat's round comes back as { chatText, lookupCalls } when the model asked
 // (chatLookupsFor); once it stops asking, what the caller gets is the text.
@@ -2916,7 +2769,7 @@ const chatAnswer = (result) => (result && typeof result === "object" && typeof r
 async function runWithLookups(lookups, history, dispatch, { label, provider, onRound = null, carry = null, outputToolName = "" }) {
     const tools = Array.isArray(lookups?.tools) ? lookups.tools.filter((entry) => entry?.name && entry?.schema) : [];
     if (!tools.length || typeof lookups?.execute !== "function") return dispatch(history, {});
-    const maxRounds = Number.isInteger(lookups.maxRounds) && lookups.maxRounds >= 0 ? lookups.maxRounds : DEFAULT_LOOKUP_ROUNDS;
+    const maxRounds = Number.isInteger(lookups.maxRounds) && lookups.maxRounds >= 0 ? lookups.maxRounds : defaultLookupRounds();
     const baseHistory = Array.isArray(history) ? history : [];
     const carried = carriedRoundCount(carry);
     if (carried) {
@@ -2930,7 +2783,10 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
     for (let round = 0; ; round += 1) {
         const requireOutputTool = outputOnly || carried + round >= maxRounds;
         if (round > 0) lookups.onRound?.(round);
-        const result = await dispatch(conversation, { lookupTools: tools, requireOutputTool });
+        // How many rounds are answered already, carried ones too: Gemini asks a
+        // watched answer after its one lookup round with no function declared
+        // (geminiAnswer.js), so that the answer streams.
+        const result = await dispatch(conversation, { lookupTools: tools, requireOutputTool, lookupRoundsAnswered: carried + round });
         const calls = Array.isArray(result?.lookupCalls) ? result.lookupCalls : [];
         // The answer, or a request that could not be turned into one (a final
         // round still asking questions falls through to the runner's retry).
@@ -3069,6 +2925,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // decide nothing for the player are named there and get nothing. It is the
     // same for every call of a campaign, so the cacheable prefix of the prompt
     // (promptLayout.js) still leads it and is longer by the line.
+    if (providerOpts.staticPrefixEnd == null) {
+        const known = conversationPrefixEnd(systemPrompt);
+        if (known != null) providerOpts.staticPrefixEnd = known;
+    }
     try {
         const savedGame = await readJson(JSON_URLS.game, { defaultValue: {} });
         const led = withDifficultyPriority({
@@ -3077,8 +2937,13 @@ export async function callAI(systemPrompt, history, opts = {}) {
             difficulty: savedGame?.difficulty,
             staticPrefixEnd: providerOpts.staticPrefixEnd ?? null,
         });
+        // The lead goes in front of everything, so the shared boundary moves by as much.
+        const lead = led.systemPrompt.length - systemPrompt.length;
         systemPrompt = led.systemPrompt;
         if (providerOpts.staticPrefixEnd != null) providerOpts.staticPrefixEnd = led.staticPrefixEnd;
+        if (providerOpts.sharedPrefixEnd != null && Number.isFinite(Number(providerOpts.sharedPrefixEnd))) {
+            providerOpts.sharedPrefixEnd = Number(providerOpts.sharedPrefixEnd) + lead;
+        }
     } catch {
         // Without the save the call goes out as it was built.
     }
@@ -3113,7 +2978,9 @@ export async function callAI(systemPrompt, history, opts = {}) {
     if (debugSink && typeof debugSink === "object") debugSink.record = record;
     const callShape = {
         ...conversationShape(systemPrompt, history),
-        streaming: Boolean(providerOpts.onChunk),
+        // A reply shown as it arrives, or a task's answer read as it is written
+        // (a watched time skip).
+        streaming: Boolean(providerOpts.onChunk || providerOpts.onToolStream),
         tool: providerOpts.tool?.name || "(none — raw JSON expected)",
         lookupTools: Array.isArray(lookups?.tools) ? lookups.tools.length : 0,
         maxTokens: providerOpts.maxTokens ?? "(provider maximum)",
@@ -3387,6 +3254,7 @@ async function ensurePromptsLoaded() {
         promptsReady = readJson(JSON_URLS.prompts, { defaultValue: {} })
         .then((data) => {
             promptPack = normalizePromptPack(data);
+            notePromptsOverLimit(promptPack.overLimit);
             return promptPack;
         })
         .catch((error) => {
@@ -3405,6 +3273,7 @@ async function buildPromptVariables({
     chatData,
     eventData,
     gameData,
+    pastTalks = null,
     requiredKeys = null,
     speakingAs = "",
     worldData,
@@ -3428,6 +3297,9 @@ async function buildPromptVariables({
         // speakingAs and therefore sees everything, which is correct — it is the
         // player's own staff, and the player is in every chat.
         chatVisibleTo: speakingAs,
+        // The passages of the older conversations kept on file that bear on
+        // this message (AI/chatArchive.js), found on this device.
+        pastTalks,
         // Only what the prompt can show (chatPromptDemand). Without it every
         // advisor and leader message built the whole context, the force
         // posture's border geometry and the city catalog among it.
@@ -3709,7 +3581,7 @@ ${lines.length ? lines.join("\n") : "No country is known to direct another."}`;
 // being saved: the narrator's lookups follow the same rule
 // (gameplay.js lookupFunctionsEnabled), since each round is a request.
 // Otherwise the advisor is handed the list itself (describeAdvisorGroups), as
-// Save AI requests promises: the names it needs instead of looking them up.
+// a key with a request limit gets: the names it needs instead of looking them up.
 // Neither while groups are switched off for the game (server/gameFeatures.js).
 const advisorGroupCount = (world) => (isActiveFeatureEnabled("groups") ? Object.keys(normalizeGroups(world?.groups)).length : 0);
 const advisorGroupFunctionsAllowed = () => !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
@@ -3825,6 +3697,14 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
         game: savedGame, chats: savedChats, world: savedWorld, events: savedEvents,
     });
 
+    // The older conversations kept on file nearest to what the player asks
+    // (AI/chatArchive.js): a moment at most, on this device.
+    const lastQuestion = [...(Array.isArray(advisorData) ? advisorData : [])].reverse()
+        .find((message) => message?.role === "user" && String(message?.text || "").trim());
+    const pastTalks = await findPastTalks({ game: gameData, world: worldData, chats: chatData, actions: actionData }, {
+        about: lastQuestion ? [String(lastQuestion.text)] : [],
+        focus: false,
+    });
     const variables = {
         ...(await buildPromptVariables({
             actionData,
@@ -3832,6 +3712,7 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
             chatData,
             eventData,
             gameData,
+            pastTalks,
             worldData,
             requiredKeys: chatPromptDemand(promptPack.advisor, {
                 extra: ["plannedActionsWithIds", "projectsSummary"],
@@ -3847,7 +3728,7 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
     // The briefing and the rules also ride inside the world summary; keep one
     // copy of each, as runJsonTask does for the gameplay tasks.
     const rendered = collapseRepeatedWorldContext(
-        renderTemplate(promptPack.advisor, { ...variables, ...helperValues }),
+        renderConversationTemplate(guardPromptTemplate("advisor", promptPack.advisor, promptPack.bypassLengthLimit === true), { ...variables, ...helperValues }),
         variables,
     );
     const groupLookups = advisorGroupLookups({ world: worldData, player: gameData?.country || "" });
@@ -3985,11 +3866,22 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     const ownChats = speaker ? filterChatsVisibleTo(chats, speaker) : [];
     const threadId = String(chatId || "");
     const otherOwnChats = threadId ? ownChats.filter((chat) => String(chat?.id || "") !== threadId) : ownChats;
+    // Of this leader's older conversations kept on file (AI/chatArchive.js),
+    // the passages nearest to what the thread is saying now: only chats it was
+    // in, a moment at most, on this device.
+    const thread = threadId ? ownChats.find((chat) => String(chat?.id || "") === threadId) : null;
+    const pastTalks = await findPastTalks({ game: gameData, world: worldData, chats: otherOwnChats, actions: actionData }, {
+        addressed: speaker ? [participantName(speaker)].filter(Boolean) : [],
+        about: (thread?.messages || []).slice(-3).map((message) => String(message?.text || "")).filter(Boolean),
+        openChatId: threadId,
+        focus: false,
+    });
     const variables = {
         ...(await buildPromptVariables({
             actionData,
             advisorData,
             chatData: otherOwnChats,
+            pastTalks,
             eventData,
             gameData,
             speakingAs: speaker,
@@ -4036,7 +3928,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
 
     // One copy each of the briefing and the rules (see buildAdvisorSystemPrompt).
     const rendered = collapseRepeatedWorldContext(
-        renderTemplate(promptPack.leader, { ...variables, ...helperValues }),
+        renderConversationTemplate(guardPromptTemplate("leader", promptPack.leader, promptPack.bypassLengthLimit === true), { ...variables, ...helperValues }),
         variables,
     );
     const politicalDecision = buildDiplomaticPoliticalContext({
@@ -4476,13 +4368,15 @@ const pendingBatchIds = new Map(); // customId -> { batchId, apiKey }
 // Resolves to { customId, batchId, connectionId } when the batch was accepted,
 // null when batching is unavailable or the submission was refused — the caller
 // then runs the task synchronously.
-export async function submitAIBatch({ customId, systemPrompt, history, taskKey, tool }) {
+export async function submitAIBatch({ customId, systemPrompt, history, taskKey, tool, staticPrefixEnd = null }) {
     const entry = batchEntryFor(taskKey);
     if (entry?.provider !== "anthropic") return null;
     // A batched task opens with the difficulty's priority line like any other (callAI).
     try {
         const savedGame = await readJson(JSON_URLS.game, { defaultValue: {} });
-        systemPrompt = withDifficultyPriority({ systemPrompt, taskKey, difficulty: savedGame?.difficulty }).systemPrompt;
+        const led = withDifficultyPriority({ systemPrompt, taskKey, difficulty: savedGame?.difficulty, staticPrefixEnd });
+        systemPrompt = led.systemPrompt;
+        staticPrefixEnd = led.staticPrefixEnd;
     } catch {
         // Without the save the batch goes out as it was built.
     }
@@ -4511,7 +4405,9 @@ export async function submitAIBatch({ customId, systemPrompt, history, taskKey, 
         messages: tool && !forceTool
             ? withToolCallReminder(messages, toolCallReminder({ toolName: tool.name, lookupsAllowed: false }))
             : messages,
-        system: systemPrompt,
+        // Batches take cache_control like any request: the cacheable prefix is
+        // read from the cache when the batch runs, at a tenth of its price.
+        system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd),
         ...temperatureBody(taskKey, { enabled: !temperatureRefusals.refuses(samplingKey) }),
         ...(tool ? {
             tools: [{ name: tool.name, description: tool.description, input_schema: tool.schema }],

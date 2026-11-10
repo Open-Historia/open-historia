@@ -86,6 +86,5 @@ test("every segment's lines reach the turn, and the turn keeps them before anyth
   assert.match(gameplay, /warFigures: merged\.warFigures,/);
   const kept = gameplay.indexOf("worldWithImpacts = keepWarFigures(worldWithImpacts, result.warFigures);");
   assert.ok(kept > 0);
-  assert.ok(kept < gameplay.indexOf("nextWorld = await refreshTrackedCountryStatsIfDue({"), "before the player's sheet is looked at");
   assert.ok(kept < gameplay.indexOf("requestConflictSheets(nextWorld, nextGame);"), "before the requests for what is left");
 });

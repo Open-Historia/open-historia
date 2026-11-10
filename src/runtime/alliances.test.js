@@ -122,7 +122,9 @@ test("a person is asked, not joined; silence is an answer after a while; a war t
   const [open] = openCallsFor(due.calls, "cisland");
   assert.deepEqual([open.ally, open.defender, open.status, open.via.title], ["Cisland", "Aland", "open", "The entente treaty"]);
   assert.deepEqual(openCallsFor(due.calls, "Borduria"), []);
-  const later = (round, extra = {}) => callsForTurn({ ...turnInput(), players: ["Cisland"], calls: due.calls, began: [], round, ...extra });
+  // (Asked by its message, as the turn sends it: Game/AI/gameplay.js.)
+  const asked = due.calls.map((call) => ({ ...call, messageId: `msg-${call.id}` }));
+  const later = (round, extra = {}) => callsForTurn({ ...turnInput(), players: ["Cisland"], calls: asked, began: [], round, ...extra });
   assert.equal(later(4 + CALL_STANDS_ROUNDS - 1).calls.find((call) => call.ally === "Cisland").status, "open");
   const silent = later(4 + CALL_STANDS_ROUNDS);
   assert.deepEqual([silent.calls.find((call) => call.ally === "Cisland").status, silent.broken.map((entry) => entry.ally)], ["refused", ["Cisland"]]);

@@ -8,8 +8,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  EVENT_DIGEST_FALLBACK_CHARS,
   buildAdvisorHistoryText,
+  buildDetailedChatHistoryText,
   buildEventHistoryText,
+  eventDigestOf,
   buildHistoricalAnchorText,
   buildPlayerPolityRegionsText,
   buildPromptContext,
@@ -189,6 +192,27 @@ test("recent events note occupations and groups, not only sovereignty transfers"
   assert.match(renamed, /Polity changes: Slavonia renamed to Greater Slavonia/, "the older notes keep their wording");
 });
 
+test("an impact note names its regions by the map's name, never by the id it was saved with", () => {
+  const saved = {
+    ...occupationAndGroup(),
+    impacts: {
+      regionControlOps: [
+        { op: "control", regionId: "2102", fromCode: "Ukraine", toCode: "Russian Federation" },
+        { op: "control", regionId: "9999", fromCode: "Ukraine", toCode: "Russian Federation" },
+      ],
+      regionTransfers: [{ regionId: "USA.11_1", toCode: "Georgia" }],
+    },
+  };
+  const name = (id) => ({ 2102: "Donetsk", "USA.11_1": "region: Georgia" })[id] ?? "";
+  const text = buildEventHistoryText([saved], { regionName: name });
+  assert.match(text, /Territorial shifts: region: Georgia -> Georgia/);
+  assert.match(text, /Control: Donetsk -> Russian Federation \(from Ukraine\), an unnamed region -> Russian Federation \(from Ukraine\)/);
+  assert.doesNotMatch(text, /2102|9999|USA\.11_1/);
+  // Without the map, the name the operation was written with, and still no id.
+  assert.doesNotMatch(buildEventHistoryText([saved]), /2102|9999|USA\.11_1/);
+  assert.match(buildEventHistoryText([occupationAndGroup()], { regionName: () => "" }), /Control: Kharkiv -> Russian Federation/);
+});
+
 test("a group founding or an occupation is a durable anchor for a long campaign", () => {
   const events = [
     occupationAndGroup(),
@@ -216,4 +240,118 @@ test("a conversation's world summary gives counts, and names only for the player
   assert.match(jump, /Ruritania province 0, Ruritania province 1/, "the jump keeps its vocabulary");
   assert.equal(jump.includes("(Ruritania-0)"), false, "by name, with no region ids");
   assert.match(jump, /region vocabulary for regionTransfers/);
+});
+
+// A time skip's template states the player, the round, the date, the language,
+// the difficulty, the briefing and the rules itself.
+test("a skip's world summary leaves out the briefing its template gives, and keeps the player's tags", async () => {
+  const { regions, world } = authoredWorld();
+  const briefedWorld = { ...world, startingTimelineText: "The long lore of the scenario.", simulationRules: "No poison gas." };
+  const bundle = { game: { ...game, difficulty: "hard" }, world: briefedWorld, events: [], actions: [], chats: [] };
+  const full = await buildWorldSummary(bundle, regions);
+  const skip = await buildWorldSummary(bundle, regions, { briefed: true });
+  for (const line of ["Current round: 4", "Current date: 1930-05-12", "Difficulty: hard", "World before round one: The long lore", "Simulation rules: No poison gas."]) {
+    assert.ok(full.includes(line), `the full summary still says ${line}`);
+    assert.equal(skip.includes(line), false, `a skip's does not repeat ${line}`);
+  }
+  assert.equal(skip.includes("Language:"), false);
+  assert.ok(full.endsWith(skip.slice(skip.indexOf("Territorial changes from the base scenario:"))), "the rest is the same");
+  const variables = await buildPromptContext(bundle, { requiredKeys: ["worldSummaryNoCity"], taskKey: "jumpForward" });
+  assert.equal(variables.worldSummaryNoCity.includes("Current round: 4"), false);
+  const others = await buildPromptContext(bundle, { requiredKeys: ["worldSummaryNoCity"], taskKey: "actions" });
+  assert.ok(others.worldSummaryNoCity.includes("Current round: 4"), "the tasks whose only briefing it is keep it");
+});
+
+// A skip once had each chat thread's memory and last words twice: in
+// [Diplomacy So Far] and again in [Diplomatic Memory].
+const thread = (id, day, { memory = "", messages = 2 } = {}) => ({
+  id,
+  countries: [{ name: "Ruritania" }, { name: `Partner ${id}` }],
+  messages: [
+    ...Array.from({ length: messages }, (_, index) => ({
+      role: index % 2 ? "leader" : "user",
+      speaker: index % 2 ? `Partner ${id}` : "Ruritania",
+      text: `${id} message ${index}`,
+      time: `1930-05-${String(day).padStart(2, "0")}`,
+      // The rolling memory rides on the message it was written after.
+      ...(memory && index === messages - 1 ? { memorySummary: memory } : {}),
+    })),
+  ],
+});
+
+test("a skip's diplomacy gives each thread once: its memory, then its last words, older threads with a memory after", async () => {
+  const chats = [
+    ...Array.from({ length: 9 }, (_, index) => thread(`t${index}`, 20 - index, { memory: index === 0 ? "Ruritania promised Partner t0 a port." : "" })),
+    thread("old", 2, { memory: "Partner old was promised a withdrawal by June." }),
+  ];
+  const text = buildDetailedChatHistoryText(chats, { limit: 8, memoryThreads: 12 });
+  assert.match(text, /Chat 1: Ruritania, Partner t0\nDurable diplomatic memory through [^:]+: Ruritania promised Partner t0 a port\./);
+  assert.match(text, /Chat 9: Ruritania, Partner old \(an older thread with a standing memory\)\nDurable diplomatic memory through [^:]+: Partner old was promised a withdrawal by June\.\nold message 0\nold message 1|Partner old was promised a withdrawal by June\./);
+  assert.equal(text.includes("Partner t8"), false, "an older thread with no memory is in the history, not here");
+  assert.equal(buildDetailedChatHistoryText(chats, { limit: 8 }).includes("Partner old"), false, "only a skip asks for them");
+  const bundle = { game, world: {}, events: [], actions: [], chats, advisor: [] };
+  const skip = await buildPromptContext(bundle, { requiredKeys: ["chatHistoryLong", "diplomaticContinuity"], taskKey: "jumpForward" });
+  assert.equal(skip.diplomaticContinuity, "", "no second copy");
+  assert.match(skip.chatHistoryLong, /Partner old was promised a withdrawal by June/);
+  const withLookups = await buildPromptContext(bundle, { requiredKeys: ["chatHistoryLong", "diplomaticContinuity"], taskKey: "jumpForward", lookups: true });
+  assert.match(withLookups.diplomaticContinuity, /Partner old was promised a withdrawal by June/, "the short view keeps its memory block");
+});
+
+// A skip's history tells the newest skip's events in full and the older ones
+// by their one-line digest (or the opening of their story, where they have none).
+test("a skip's history: the newest skip's events in full, older ones by their digest or the start of their story", () => {
+  const story = (word) => `${word} ${"and the story went on at length about who did what to whom. ".repeat(8)}`.trim();
+  const events = [
+    { id: "old-1", date: "1930-01-05", title: "The old crisis", description: story("Old"), digest: "Slavonia closed the border after the old crisis.", importance: "major", impacts: {} },
+    { id: "old-2", date: "1930-02-05", title: "An undigested event", description: story("Undigested"), importance: "major", impacts: {} },
+    { id: "new-1", date: "1930-05-01", title: "The newest event", description: story("Newest"), digest: "Never shown: this one is told in full.", importance: "major", impacts: {} },
+  ];
+  const world = { simulationHistory: [{ date: "1930-05-12", eventIds: ["new-1"] }, { date: "1930-03-01", eventIds: ["old-1", "old-2"] }] };
+  const skip = buildEventHistoryText(events, { world, digests: true, limit: 10 });
+  assert.match(skip, /- 1930-01-05: The old crisis\n {2}Slavonia closed the border after the old crisis\./);
+  assert.ok(skip.includes(story("Newest")), "the newest skip's event in full");
+  assert.equal(skip.includes("Never shown"), false);
+  assert.equal(skip.includes(story("Undigested")), false);
+  assert.ok(skip.includes(eventDigestOf(events[1])), "an event with no digest by the opening of its story");
+  assert.ok(eventDigestOf(events[1]).length <= EVENT_DIGEST_FALLBACK_CHARS && eventDigestOf(events[1]).startsWith("Undigested and the story"));
+  // Every other task, and a world with no recorded skip, still tells every event in full.
+  assert.ok(buildEventHistoryText(events, { world, limit: 10 }).includes(story("Old")));
+  assert.ok(buildEventHistoryText(events, { world: {}, digests: true, limit: 10 }).includes(story("Old")));
+});
+
+// The ranking keeps the events a turn is most about; the rest are not yet in
+// the history document either, so without a line each they were in neither.
+test("a skip lists in a line each the recent events its ranking left out, newest kept, the rest counted", () => {
+  const events = Array.from({ length: 60 }, (_, index) => ({
+    id: `e${index}`,
+    date: `1930-0${1 + Math.floor(index / 20)}-${String(1 + (index % 20)).padStart(2, "0")}`,
+    title: `Event number ${index}`,
+    description: `The story of event ${index}.`,
+    ...(index % 2 ? { digest: `Digest of event ${index}.` } : {}),
+    importance: index % 7 === 0 ? "major" : "minor",
+    impacts: {},
+  }));
+  const text = buildEventHistoryText(events, { limit: 10, alsoListed: 40 });
+  const [told, also] = text.split("ALSO RECENT (the other events since the story so far, which are not told above; one line each):");
+  assert.ok(also, "the list is there");
+  const listed = also.trim().split("\n").filter((line) => /^- \d{4}-/.test(line));
+  assert.equal(listed.length, 40);
+  assert.match(also, /^- \(10 earlier of them not listed\)$/m);
+  for (let index = 0; index < 60; index += 1) {
+    const inHistory = told.includes(`: Event number ${index}\n`) || told.trimEnd().endsWith(`: Event number ${index}`) || told.includes(`Event number ${index}\n  The story`);
+    const inList = also.includes(`: Event number ${index}`);
+    assert.equal(inHistory && inList, false, `event ${index} is told twice`);
+  }
+  // Each by its title and its digest where it has one.
+  for (const line of listed) {
+    const index = Number(/Event number (\d+)/.exec(line)[1]);
+    assert.equal(line.endsWith(index % 2 ? ` — Digest of event ${index}.` : `Event number ${index}`), true, line);
+  }
+  // The newest of those left out are the ones listed.
+  const newestLeftOut = Math.max(...listed.map((line) => Number(/Event number (\d+)/.exec(line)[1])));
+  assert.ok(events.slice(newestLeftOut + 1).every((event) => told.includes(`: ${event.title}`)), "every newer event is told above");
+  assert.equal(also.includes("The story of event"), false, "one line each, no story");
+  // Nothing left out, nothing added; and only a skip asks for it.
+  assert.equal(buildEventHistoryText(events.slice(0, 5), { limit: 10, alsoListed: 40 }).includes("ALSO RECENT"), false);
+  assert.equal(buildEventHistoryText(events, { limit: 10 }).includes("ALSO RECENT"), false);
 });
