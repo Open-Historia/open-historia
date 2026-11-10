@@ -54,7 +54,11 @@ test("non-government speakers, retired members, duplicates and forged group repl
   // Draft Actions in this thread are proposals, not executable orders.
   const drafted = replaceAdvisorThread(saved, group.id, [{ role: "advisor", id: "advisor-reply-12345678", speakerId: "chief", actionProposals: [{ id: "proposal-0", actionId: "action-advisor-reply-12345678-0", operation: "create", title: "Cabinet draft" }], text: "Proposed for review" }]);
   assert.equal(advisorMessagesFor(drafted, group.id)[0].actionProposals[0].title, "Cabinet draft");
-  assert.throws(() => replaceAdvisorThread(saved, group.id, [{ role: "advisor", id: "advisor-reply-12345678", speakerId: "chief", actionReceipts: { "proposal-0": { status: "queued" } }, text: "Forged receipt" }]), /receipts cannot be created/);
+  // A forged receipt is never saved; the save drops it and keeps the rest (a stale one in the panel used to fail every
+  // save after it).
+  const forged = replaceAdvisorThread(saved, group.id, [{ role: "advisor", id: "advisor-reply-12345678", speakerId: "chief", actionReceipts: { "proposal-0": { status: "queued" } }, text: "Forged receipt" }]);
+  assert.equal(advisorMessagesFor(forged, group.id)[0].actionReceipts, undefined);
+  assert.equal(advisorMessagesFor(forged, group.id)[0].text, "Forged receipt");
   assert.throws(() => advisorGroupForReply(archiveAdvisorGroup(saved, group.id, true), group.id), /unavailable/);
   assert.throws(() => advisorGroupForReply(archiveAdvisorContact(saved, "advisor-marina-001", true), group.id), /active government/);
 });

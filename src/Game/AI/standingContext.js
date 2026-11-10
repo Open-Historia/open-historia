@@ -254,6 +254,56 @@ export const territorialControlRows = (world, catalog = []) => {
   return rows;
 };
 
+// Issue #1000 (a 1947 save): Germany had surrendered and its wars were ended in the war ledger, but 18 regions of
+// Poland were still held by the German Reich, so the map showed Poland German. Nothing ends an occupation when its
+// war ends: only an event's control op or a transfer does, and the time skip was never told the war behind it was
+// over. These are the occupations whose controller and sovereign face each other in no war still active or in
+// ceasefire, and that are not between a puppet and its overlord: each is for the next time skip to settle. Who keeps
+// the land is the story's to say (a surrender, a treaty, an annexation), so nothing is handed back here.
+const SETTLING_WAR_STATUSES = new Set(["active", "ceasefire"]);
+export const occupationsAfterTheirWar = (rows, world) => {
+  const fold = (value) => asText(value).toLowerCase();
+  const wars = (Array.isArray(world?.wars) ? world.wars : [])
+    .filter((war) => SETTLING_WAR_STATUSES.has(fold(war?.status) || "active"))
+    .map((war) => [new Set((war?.sideA ?? []).map(fold)), new Set((war?.sideB ?? []).map(fold))]);
+  const atWar = (a, b) => wars.some(([sideA, sideB]) => (sideA.has(a) && sideB.has(b)) || (sideA.has(b) && sideB.has(a)));
+  const tied = new Set((Array.isArray(world?.puppets) ? world.puppets : [])
+    .filter((entry) => fold(entry?.status || "active") === "active")
+    .flatMap((entry) => [`${fold(entry?.overlord)}|${fold(entry?.puppet)}`, `${fold(entry?.puppet)}|${fold(entry?.overlord)}`]));
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    const controller = fold(row?.controller);
+    const sovereign = fold(row?.sovereign);
+    return controller && sovereign && controller !== sovereign
+      && !atWar(controller, sovereign) && !tied.has(`${controller}|${sovereign}`);
+  });
+};
+
+// The block for the time skip: each occupier and sovereign with the regions, every region by the name it is written
+// with (`regionName`, nameRefs.js regionNamer: "region: X" where needed). Empty when there is none.
+export const OCCUPATIONS_AFTER_WAR_MOST = 60;
+export const describeOccupationsAfterTheirWar = (rows, { regionName = null, most = OCCUPATIONS_AFTER_WAR_MOST } = {}) => {
+  if (!rows.length) return "";
+  const groups = new Map();
+  for (const row of rows) {
+    const key = `${row.controller}\u0001${row.sovereign}`;
+    const group = groups.get(key) ?? { controller: row.controller, sovereign: row.sovereign, names: [] };
+    group.names.push((regionName ? regionName(row.regionId, row.name) : "") || row.name);
+    groups.set(key, group);
+  }
+  let room = most;
+  const lines = [...groups.values()].sort((a, b) => b.names.length - a.names.length).map((group) => {
+    const shown = group.names.slice(0, Math.max(0, room));
+    room -= shown.length;
+    const rest = group.names.length - shown.length;
+    return `- ${group.controller} holds ${group.names.length === 1 ? "a region" : `${group.names.length} regions`} of ${group.sovereign}: ${shown.join(", ") || "(listed above)"}${rest > 0 ? ` (+${rest} more)` : ""}`;
+  });
+  return [
+    "[Occupations Outliving Their War]",
+    "These regions are held by a power no longer at war with their sovereign: the war that brought the occupation has ended, and nothing has settled the land since. Settle each this period, in the event the story gives it (a surrender, an evacuation, a peace, an annexation): a regionControlOps control entry back to the sovereign where the occupier withdraws or is driven out, or a regionTransfers entry to the occupier where a treaty or annexation gives it the land. Leave one as it is only where an event this period says why the occupation goes on.",
+    ...lines,
+  ].join("\n");
+};
+
 // The rows in which any of `polities` is sovereign, controller or claimant.
 export const territorialRowsInvolving = (rows, polities = []) => {
   const names = new Set(polities.map(asText).filter(Boolean));
