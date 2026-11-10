@@ -23,6 +23,8 @@ const CLOSED := {
 	"aircraft": false,
 	"wing": "",
 	"strike_kind": "troops",
+	"strike_radius": 1.0,
+	"sizing": false,
 	"blast": 0.0,
 	"transport_ways": null,
 	"pointed": "",

@@ -317,6 +317,7 @@ func _run() -> void:
 	await _settled()
 	var deployed := await _until(func() -> bool: return _shows(room, "Deployment line") and _shows(room, "Fresh formations come in here when time next passes"), 10.0)
 	_check("a deployment line is drawn", deployed, room._notice)
+	_check("a deployment drawn over the battlefield shown stays on it", room._sent is Dictionary and str((room._sent as Dictionary).get("battlefield", "")) == "Rhine Front" and room._name() == "Rhine Front", str(room._sent))
 	if not deployed:
 		_dump("planned", room._sections)
 	await _shoot("wr-10-deployed")
@@ -425,7 +426,36 @@ func _run() -> void:
 	await _wait(0.3)
 	_check("the carriers menu offers what carries troops", _shows(room.rail, "CARRY THE") and _shows(room.rail, "BY RAIL"))
 	await _shoot("wr-14-carriers")
+	var carriers: Array = room._record.get("carriers", [])
+	var air_row: Dictionary = {}
+	for entry in carriers:
+		if str((entry as Dictionary).get("medium", "")) == "air":
+			air_row = entry
+	var most := int(air_row.get("most", 0))
+	_check("the carriers are the game's, an airlift carrying fewer than a train or a ship", not air_row.is_empty() and most > 0 and most < 40 and str(air_row.get("bar", "x")).is_empty(), JSON.stringify(carriers))
+	_check("an airlift says how many it takes at most", _shows(room.rail, "%d formations at most ·" % most) and _shows(room.rail, "formations each ·"))
+	var own_all: Array = room._record.get("ownTroops", [])
+	var many := mini(own_all.size(), most + 2)
+	if most > 0 and many > most:
+		room.store.set_values({"selected": own_all.slice(0, many)})
+		room.rail.choosing = true
+		room.rail._render()
+		await _wait(0.3)
+		_check("with more picked out than an airlift takes, it says how few go", _shows(room.rail, "%d of the %d go: the rest stay where they are." % [most, many]))
+		await _shoot("wr-14b-carriers-airlift-fewer")
+	var defs: Dictionary = await main.engine.request("editor.rules.definitions")
+	var switches: Array = []
+	for feature in (defs.get("result", {}) as Dictionary).get("features", []):
+		if str((feature as Dictionary).get("key", "")) == "fronts":
+			for setting in (feature as Dictionary).get("settings", []):
+				switches.append(str((setting as Dictionary).get("label", "")))
+	_check("the Wars feature has a switch for each transport", "Transport by rail" in switches and "Transport by sea" in switches and "Transport by air" in switches, ", ".join(switches))
 	room.rail.choosing = false
+	room.store.set_values({"selected": picked.slice(0, mini(4, picked.size()))})
+	room.store.take_tool("transport", {"medium": "air"})
+	await _wait(0.3)
+	_check("with an airlift in hand the hint says it goes anywhere and can be intercepted", _shows(room.rail, "picked out are to be flown to: anywhere, enemy land too. Over enemy ground they can be intercepted. Drag to move the map. They board when time next passes."))
+	await _shoot("wr-14c-airlift-hint")
 	room.store.take_tool("transport", {"medium": "land"})
 	var target := start + Vector2(-160.0, -40.0)
 	await _idle()
@@ -437,7 +467,22 @@ func _run() -> void:
 	if not carried:
 		_dump("planned", room._sections)
 	await _shoot("wr-15-transport")
+	if most > 0 and own_all.size() > most + 4:
+		room.store.set_values({"selected": own_all.slice(0, mini(own_all.size(), most + 8))})
+		room.store.take_tool("transport", {"medium": "air"})
+		await _idle()
+		var drop := start + Vector2(-120.0, 60.0)
+		room.map_layer._press(drop, false)
+		room.map_layer._release(drop)
+		await _settled()
+		var flown_load := -1
+		for entry in room._record.get("ownTransports", []):
+			if str((entry as Dictionary).get("medium", "")) == "air":
+				flown_load = int((entry as Dictionary).get("load", -1))
+		_check("an airlift takes only as many as it carries, the rest staying", flown_load == most, "%d aboard, %d at most; %s" % [flown_load, most, room._notice])
+		await _shoot("wr-15-airlift-ordered")
 	await _aircraft(start)
+	await _deploy_elsewhere()
 	await _home_forces()
 	room._sections_scroll.scroll_vertical = 100000
 	await _wait(0.3)
@@ -531,15 +576,50 @@ func _aircraft(start: Vector2) -> void:
 	_check("the Aircraft key puts out the Deploy Aircraft plate", room.plates._aircraft.visible and _shows(room.plates, "DEPLOY AIRCRAFT") and _shows(room.plates, "Escadre de chasse 2/30") and _shows(room.plates, "It reaches") and _shows(room.plates, "TROOPS") and _shows(room.plates, "STRUCTURE") and _shows(room.plates, "CITY") and _shows(room.plates, "CHOOSE TARGET"))
 	_check("the first air unit is picked out", not str(room.store.value("wing")).is_empty())
 	await _shoot("wr-15a-aircraft-plate")
+	var blast := float(air.get("blast", 0))
+	var slider := _radius_slider()
+	var figures := RegEx.create_from_string("^[0-9][0-9,.]* km$")
+	var found: PackedStringArray = []
+	_texts(room.plates, found)
+	var told := false
+	for entry in found:
+		if figures.search(entry.strip_edges()) != null:
+			told = true
+	_check("the strike radius is a slider from half to twice the circle, with its hint and no figure", slider != null and is_equal_approx(slider.min_value, 0.5) and is_equal_approx(slider.max_value, 2.0) and is_equal_approx(slider.step, 0.05) and is_equal_approx(slider.value, 1.0) and _shows(room.plates, "Smaller is deadlier; wider touches more, each less.") and not told, ", ".join(found))
+	if slider:
+		main.map_view.fly_to_lonlat(7.4, 48.6, 6.6, 0.0)
+		await _wait(0.6)
+		slider.mouse_entered.emit()
+		slider.value = 0.5
+		await _frames(3)
+		_check("pointed at, the slider shows a circle of its radius in the open map, and it shrinks as it slides", bool(room.store.value("sizing")) and room.map_layer.sizing_place(room._record.get("air", {})) is Vector2 and is_equal_approx(float(room.store.value("blast")), blast * 0.5), "%s %s" % [str(room.store.value("sizing")), str(room.store.value("blast"))])
+		await _shoot("wr-15a1-radius-small")
+		slider.value = 2.0
+		await _frames(3)
+		_check("and grows as it slides wider", is_equal_approx(float(room.store.value("blast")), blast * 2.0))
+		await _shoot("wr-15a2-radius-wide")
+		slider.mouse_exited.emit()
+		await _frames(2)
+		_check("the circle goes when the pointer leaves the slider", not bool(room.store.value("sizing")) and room.map_layer.sizing_place(room._record.get("air", {})) == null)
 	room.plates.aim.emit()
 	await _wait(0.3)
 	_check("Choose target takes up the aircraft tool", str(room.store.value("tool")) == "aircraft" and _shows(room.rail, "Click what the air unit is to strike. Its bombs fall inside the ring, on your own troops there too. Drag to move the map.") and _shows(room.plates, "CANCEL"))
-	var aim_at := start + Vector2(30.0, -20.0)
+	var aim_points := _own_screen_points()
+	var aim_at: Vector2 = (aim_points[0] if not aim_points.is_empty() else start) + Vector2(30.0, -20.0)
 	var motion := InputEventMouseMotion.new()
 	motion.position = aim_at
 	room.map_layer._gui_input(motion)
 	await _frames(3)
 	_check("a ring the size of where the bombs fall follows the pointer", room.map_layer._aim is Vector3 and float((room.map_layer._aim as Vector3).z) >= 4.0, str(room.map_layer._aim))
+	var wide_ring := float((room.map_layer._aim as Vector3).z) if room.map_layer._aim is Vector3 else 0.0
+	var aiming_slider := _radius_slider()
+	if aiming_slider:
+		aiming_slider.value = 1.0
+		await _frames(2)
+		var usual_ring := float((room.map_layer._aim as Vector3).z) if room.map_layer._aim is Vector3 else 0.0
+		_check("the pointer's ring grows and shrinks with the slider where it stands", wide_ring > usual_ring * 1.6 and usual_ring >= 4.0, "%.1f at twice, %.1f at the usual" % [wide_ring, usual_ring])
+		aiming_slider.value = 2.0
+		await _frames(2)
 	await _shoot("wr-15b-aircraft-aim")
 	await _idle()
 	room.map_layer._press(aim_at, false)
@@ -547,8 +627,24 @@ func _aircraft(start: Vector2) -> void:
 	await _settled()
 	air = room._record.get("air", {})
 	_check("a click orders the strike", (air.get("orders", []) as Array).size() == 1 and _shows(room, "AIR STRIKES") and _shows(room, "Flies when time next passes.") and _shows(room.plates, "Ordered to strike"), room._notice)
+	_check("the strike is ordered at the radius set", (air.get("orders", []) as Array).size() == 1 and is_equal_approx(float(((air.get("orders", []) as Array)[0] as Dictionary).get("radius", 0)), 2.0), JSON.stringify(air.get("orders", [])))
 	_check("the tool is put down after the click", str(room.store.value("tool")) == "pan")
 	await _shoot("wr-15c-aircraft-ordered")
+	var again := _radius_slider()
+	if again:
+		_check("the slider shows the waiting strike's radius", is_equal_approx(again.value, 2.0), str(again.value))
+		again.drag_started.emit()
+		again.value = 0.75
+		await _frames(2)
+		var live: Array = (room._record.get("air", {}) as Dictionary).get("orders", [])
+		_check("the waiting strike's ring follows the slider before it is let go", live.size() == 1 and is_equal_approx(float((live[0] as Dictionary).get("radius", 0)), 2.0) and is_equal_approx(float(room.store.value("strike_radius")), 0.75))
+		await _idle()
+		again.drag_ended.emit(true)
+		await _settled()
+		air = room._record.get("air", {})
+		var redone: Array = air.get("orders", [])
+		_check("let go, the waiting strike is ordered again at the same target with the new radius", redone.size() == 1 and is_equal_approx(float((redone[0] as Dictionary).get("radius", 0)), 0.75) and _shows(room.plates, "Ordered to strike"), "%s %s" % [JSON.stringify(redone), room._notice])
+		await _shoot("wr-15c2-aircraft-radius-again")
 	var wing := str(room.store.value("wing"))
 	await _idle()
 	room.plates.call_off.emit(wing)
@@ -585,6 +681,8 @@ func _aircraft(start: Vector2) -> void:
 		var said := WarRoomWords.strike_outcome(flown[0])
 		_check("what the strike came to is in the drawer and on the plate", _shows(room, said) and _shows(room.plates, "LAST STRIKE"), said)
 		_check("the war room map rings where it struck", not (air.get("struck", []) as Array).is_empty())
+		var struck: Array = air.get("struck", [])
+		_check("a strike flown keeps the radius it was ordered with, and is ringed at it", not struck.is_empty() and is_equal_approx(float((struck[0] as Dictionary).get("radius", 0)), 0.75), JSON.stringify(struck).left(300))
 	room._sections_scroll.scroll_vertical = 100000
 	await _wait(0.3)
 	await _shoot("wr-15d-aircraft-flown")
@@ -592,6 +690,38 @@ func _aircraft(start: Vector2) -> void:
 	room.plates.aircraft_close.emit()
 	await _wait(0.2)
 	_check("Close puts the plate away", not room.plates._aircraft.visible)
+
+
+func _radius_slider() -> HSlider:
+	for node in _find(room.plates, "HSlider"):
+		if (node as Node).has_meta("strike_radius"):
+			return node
+	return null
+
+
+func _deploy_elsewhere() -> void:
+	var joined: Dictionary = await main.engine.request("warroom.test.samewar", {"battlefields": ["Rhine Front", "Alpine Front"]})
+	var before: Dictionary = joined.get("result", {}) if joined.get("ok", false) else {}
+	_check("the two battlefields are made one war's (test record)", before.has("Alpine Front"), str(joined))
+	await room.refresh()
+	await _wait(0.4)
+	_check("the room shows the other battlefield of the war", room._name() == "Rhine Front", room._name())
+	main.map_view.fly_to_lonlat(9.1, 42.15, 7.5, 0.0)
+	await _wait(0.6)
+	room.store.take_tool("deploy")
+	var line: Array = []
+	for step in range(10):
+		line.append(_screen_of([8.95 + step * 0.04, 41.9 + step * 0.06]))
+	await _draw_way(line)
+	await _settled()
+	var turned := await _until(func() -> bool: return room._name() == "Alpine Front", 15.0)
+	await _wait(0.6)
+	_check("a deployment drawn over the war's other battlefield goes to it, and the room turns to it", turned and _shows(room, "Deployment line"), "%s / %s / %s" % [room._name(), room._notice, str(room._sent)])
+	await _shoot("wr-15g-deploy-other-battlefield")
+	await main.engine.request("warroom.test.samewar", {"restore": before})
+	room.store.show_battlefield("Rhine Front", 0)
+	await _until(func() -> bool: return room._name() == "Rhine Front", 15.0)
+	await _wait(0.6)
 
 
 func _home_forces() -> void:

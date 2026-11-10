@@ -14,6 +14,9 @@ signal strike_kind(kind: String)
 signal aim
 signal call_off(unit: String)
 signal aircraft_close
+signal strike_radius(radius: float)
+signal strike_radius_set(radius: float)
+signal radius_sizing(on: bool)
 
 const T := preload("res://scripts/ui/war_room_theme.gd")
 const W := preload("res://scripts/ui/war_room_words.gd")
@@ -31,6 +34,9 @@ var _fortify: PanelContainer
 var _fleets: PanelContainer
 var _aircraft: PanelContainer
 var _name_field: LineEdit
+var _radius: HSlider
+var _radius_pointed := false
+var _radius_held := false
 
 
 func _init() -> void:
@@ -86,10 +92,12 @@ func _column() -> VBoxContainer:
 	return column
 
 
-func _place(plate: PanelContainer, scroll: ScrollContainer, content: float) -> void:
+func _place(plate: PanelContainer, scroll: ScrollContainer, content: float, natural := 0.0) -> void:
 	var view := get_viewport_rect().size if is_inside_tree() else Vector2(1440, 900)
 	var rail := float(store.value("rail")) if store else 0.0
 	var width := minf(T.px(21.0), view.x - T.px(7.5))
+	if natural > 0.0:
+		width = minf(width, ceilf(natural) + T.px(1.3) + 4.0)
 	var chrome := T.px(1.1) + 4.0
 	var height := minf(content + chrome, view.y - T.px(11.0))
 	scroll.custom_minimum_size = Vector2(width - T.px(1.3) - 4.0, maxf(0.0, height - chrome))
@@ -120,6 +128,7 @@ func _render() -> void:
 		_render_aircraft()
 	else:
 		_clear(_aircraft)
+		_drop_radius()
 
 
 func _render_fortify() -> void:
@@ -388,6 +397,7 @@ func _render_fleets() -> void:
 
 func _render_aircraft() -> void:
 	_clear(_aircraft)
+	_radius = null
 	var locked := bool(props.get("locked", false))
 	var air: Dictionary = props.get("air", {})
 	var wings: Array = air.get("wings", [])
@@ -477,6 +487,9 @@ func _render_aircraft() -> void:
 			key.pressed.connect(func() -> void: strike_kind.emit(chosen))
 			kinds.add_child(key)
 		column.add_child(kinds)
+		if float(air.get("blast", 0.0)) > 0.0:
+			column.add_child(_radius_slider(air, bool(props.get("radius_locked", locked)) or pending))
+			column.add_child(T.soft("Smaller is deadlier; wider touches more, each less."))
 		var orders := HFlowContainer.new()
 		orders.add_theme_constant_override("h_separation", int(round(T.px(0.25))))
 		orders.add_theme_constant_override("v_separation", int(round(T.px(0.25))))
@@ -499,10 +512,107 @@ func _render_aircraft() -> void:
 			column.add_child(T.heading("Last strike", null, T.px(0.2)))
 			column.add_child(strike_text(last, true))
 	_aircraft.add_child(scroll)
-	_place(_aircraft, scroll, column.get_combined_minimum_size().y)
+	if _radius == null:
+		_drop_radius()
+	var natural := _natural(column)
+	_place(_aircraft, scroll, column.get_combined_minimum_size().y, natural)
 	await get_tree().process_frame
 	if is_instance_valid(scroll) and scroll.get_parent() == _aircraft:
-		_place(_aircraft, scroll, column.get_combined_minimum_size().y)
+		_place(_aircraft, scroll, column.get_combined_minimum_size().y, natural)
+	if _radius_pointed and not _radius_held and is_instance_valid(_radius) and not _radius.get_global_rect().has_point(_radius.get_global_mouse_position()):
+		_on_radius_pointed(false)
+
+
+func _natural(node: Node) -> float:
+	if node is Control and not (node as Control).visible:
+		return 0.0
+	if node is Label:
+		var label := node as Label
+		return label.get_theme_font("font").get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, label.get_theme_font_size("font_size")).x + 1.0
+	if node is RichTextLabel:
+		var rich := node as RichTextLabel
+		return rich.get_theme_font("normal_font").get_string_size(str(rich.get_meta("plain", rich.get_parsed_text())), HORIZONTAL_ALIGNMENT_LEFT, -1, rich.get_theme_font_size("normal_font_size")).x + 1.0
+	if node is Range:
+		return 0.0
+	if node is Button and node.get_child_count() == 0:
+		return (node as Control).get_combined_minimum_size().x
+	var widest := 0.0
+	if node is HBoxContainer or node is HFlowContainer:
+		var count := 0
+		for child in node.get_children():
+			if child is Control and (child as Control).visible:
+				widest += _natural(child)
+				count += 1
+		var box := node as Control
+		var gap := box.get_theme_constant("separation") if node is HBoxContainer else box.get_theme_constant("h_separation")
+		return widest + gap * maxi(0, count - 1)
+	for child in node.get_children():
+		widest = maxf(widest, _natural(child))
+	if node is MarginContainer:
+		var margins := node as MarginContainer
+		widest += float(margins.get_theme_constant("margin_left") + margins.get_theme_constant("margin_right"))
+	elif node is Button:
+		widest += 2.0
+	return widest
+
+
+func _radius_slider(air: Dictionary, held: bool) -> HSlider:
+	var slider := HSlider.new()
+	slider.min_value = float(air.get("radiusLeast", 0.5))
+	slider.max_value = float(air.get("radiusMost", 2.0))
+	slider.step = float(air.get("radiusStep", 0.05))
+	slider.value = float(store.value("strike_radius"))
+	slider.editable = not held
+	slider.scrollable = false
+	slider.focus_mode = Control.FOCUS_NONE
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.mouse_default_cursor_shape = Control.CURSOR_ARROW if held else Control.CURSOR_POINTING_HAND
+	slider.set_meta("strike_radius", true)
+	if "accessibility_name" in slider:
+		slider.set("accessibility_name", "Strike radius")
+	T.style_range(slider, held)
+	slider.value_changed.connect(_on_radius_moved)
+	slider.drag_started.connect(_on_radius_held)
+	slider.drag_ended.connect(_on_radius_let_go)
+	slider.mouse_entered.connect(_on_radius_pointed.bind(true))
+	slider.mouse_exited.connect(_on_radius_pointed.bind(false))
+	_radius = slider
+	return slider
+
+
+func _on_radius_moved(value: float) -> void:
+	strike_radius.emit(value)
+
+
+func _on_radius_pointed(on: bool) -> void:
+	_radius_pointed = on
+	if on:
+		radius_sizing.emit(true)
+	elif not _radius_held:
+		radius_sizing.emit(false)
+
+
+func _on_radius_held() -> void:
+	_radius_held = true
+	radius_sizing.emit(true)
+
+
+func _on_radius_let_go(_moved: bool) -> void:
+	_radius_held = false
+	var value := float(store.value("strike_radius"))
+	if is_instance_valid(_radius):
+		value = _radius.value
+	strike_radius_set.emit(value)
+	if not _radius_pointed:
+		radius_sizing.emit(false)
+
+
+func _drop_radius() -> void:
+	_radius = null
+	_radius_pointed = false
+	_radius_held = false
+	if store and bool(store.value("sizing")):
+		radius_sizing.emit(false)
 
 
 static func target_name(entry: Dictionary) -> String:
