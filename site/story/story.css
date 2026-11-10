@@ -226,11 +226,14 @@ img { max-width: 100%; display: block; }
 .scroll-cue::after { content: ""; width: 1px; height: 18px; background: var(--muted); transform-origin: top; animation: cue 2.4s ease-in-out infinite; }
 @keyframes cue { 0% { transform: scaleY(0); } 50% { transform: scaleY(1); } 100% { transform: scaleY(1); opacity: 0; } }
 
-/* Narrower screens: the four ages in a row above the plate, then two by two on a phone. */
+/* Narrower screens: the four ages fill the hero, in a row and then two by two on a phone, and the plate sits over
+   them, see-through, so the ages show behind it ("make the part in the image be more transparent and sit directly
+   infront/ontop of the 4 themes on tablet and mobile view": the owner, 2026-11-09). An even tint, never a fade. */
 @media (max-width: 1099px) {
-  .hero { min-height: 0; justify-content: flex-start; padding: 0 0 60px; }
-  .realms { position: relative; width: 100%; height: 34vw; }
-  .hero-plate { width: auto; margin: -22px var(--gutter) 0; grid-template-columns: 1fr; text-align: center; }
+  .hero { min-height: 0; justify-content: center; padding: 64px var(--gutter) 72px; }
+  .realms { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .hero-plate { width: min(760px, 100%); margin: 0; grid-template-columns: 1fr; text-align: center; background: rgba(13, 13, 15, 0.6); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45); text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85); }
+  .hero-note { color: var(--paper2); }
   .plate-side { justify-items: center; }
   .plate-side .cta-row, .title .t-small, .title .t-big { justify-content: center; }
   .title .rule-l { display: block; }
@@ -239,12 +242,15 @@ img { max-width: 100%; display: block; }
   .realm figcaption { top: 10px; max-width: calc(86% - 10px); flex-wrap: wrap; row-gap: 3px; padding: 6px 8px 5px; font-size: 10px; line-height: 1.15; letter-spacing: 0.1em; gap: 6px; white-space: normal; }
 }
 @media (max-width: 699px) {
-  .realms { height: min(118vw, 66svh); grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+  .hero { padding: 52px 12px 108px; }
+  .realms { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
   .realm:nth-child(3) .scene { clip-path: polygon(0 0, 100% 0, 83.333% 100%, 0 100%); }
   .realm:nth-child(2) .scene { clip-path: polygon(16.667% 0, 100% 0, 100% 100%, 0 100%); }
   .realm:nth-child(3) figcaption { left: 10px; }
   .realm:nth-child(1) figcaption { left: 10px; }
   .realm figcaption { top: 8px; font-size: 9px; letter-spacing: 0.1em; padding: 5px 7px 4px; }
+  /* The lower two ages name themselves at their foot, below the plate. */
+  .realm:nth-child(3) figcaption, .realm:nth-child(4) figcaption { top: auto; bottom: 56px; }
   .seams .desk { display: none; }
   .seams .phone { display: inline; }
   .kicker { font-size: 11px; letter-spacing: 0.14em; }
