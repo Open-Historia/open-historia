@@ -1364,6 +1364,8 @@ func _render_prompts() -> void:
 		bypass.focus_mode = Control.FOCUS_NONE
 		bypass.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		bypass.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		bypass.add_theme_icon_override("unchecked", UI.svg_texture(EditorLanguagesPanel.BOX_OFF, 1.0))
+		bypass.add_theme_icon_override("checked", UI.svg_texture(EditorLanguagesPanel.BOX_ON, 1.0))
 		bypass.toggled.connect(_set_prompt_bypass)
 		bypass_row.add_child(bypass)
 		var bypass_texts := VBoxContainer.new()
