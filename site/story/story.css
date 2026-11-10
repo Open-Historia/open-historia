@@ -227,12 +227,12 @@ img { max-width: 100%; display: block; }
 @keyframes cue { 0% { transform: scaleY(0); } 50% { transform: scaleY(1); } 100% { transform: scaleY(1); opacity: 0; } }
 
 /* Narrower screens: the four ages fill the hero, in a row and then two by two on a phone, and the plate sits over
-   them, see-through, so the ages show behind it ("make the part in the image be more transparent and sit directly
+   them, see-through and unblurred, so the ages show behind it ("make the part in the image be more transparent and sit directly
    infront/ontop of the 4 themes on tablet and mobile view": the owner, 2026-11-09). An even tint, never a fade. */
 @media (max-width: 1099px) {
   .hero { min-height: 0; justify-content: center; padding: 64px var(--gutter) 72px; }
   .realms { position: absolute; inset: 0; width: 100%; height: 100%; }
-  .hero-plate { width: min(760px, 100%); margin: 0; grid-template-columns: 1fr; text-align: center; background: rgba(13, 13, 15, 0.6); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45); text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85); }
+  .hero-plate { width: min(760px, 100%); margin: 0; grid-template-columns: 1fr; text-align: center; background: rgba(13, 13, 15, 0.6); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45); text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85); }
   .hero-note { color: var(--paper2); }
   .plate-side { justify-items: center; }
   .plate-side .cta-row, .title .t-small, .title .t-big { justify-content: center; }
