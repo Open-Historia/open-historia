@@ -6,7 +6,7 @@
 // it is. The model is told what each event carries so its story agrees.
 
 import { normalizeScriptedImpacts } from "../../../server/scriptedImpacts.js";
-import { beatIsWritten, ensureScriptedEvents } from "./worldDirection.js";
+import { SCRIPTED_EVENT, beatIsWritten, ensureScriptedEvents } from "./worldDirection.js";
 
 const text = (value) => String(value ?? "").trim();
 const lower = (value) => text(value).toLowerCase();
@@ -59,9 +59,18 @@ export const mergeAuthoredImpacts = (impactsInput, authoredInput) => {
   return out;
 };
 
+// Marks an event as one that tells a fired scripted event: the map's tempo
+// (worldDirection.js applyTerritoryTempo) never withholds what it carries.
+const markScripted = (event) => {
+  if (event && typeof event === "object") event[SCRIPTED_EVENT] = true;
+};
+
 // ensureScriptedEvents (worldDirection.js), with each beat's authored impacts
 // on the event that tells it: an event of the answer (matched one-to-one in
 // the same order ensureScriptedEvents matches them) or the engine's own copy.
+// Every such event is marked (SCRIPTED_EVENT), with or without authored
+// impacts. The marker is a symbol: it rides the copies the engine makes of
+// the event (an exact-wording beat's) and never reaches a save.
 export const ensureScriptedEventsWithImpacts = (eventsInput, beatsInput, options = {}) => {
   const events = array(eventsInput);
   const beats = array(beatsInput);
@@ -79,6 +88,7 @@ export const ensureScriptedEventsWithImpacts = (eventsInput, beatsInput, options
     consumed.add(matchIndex);
     const authored = scriptedImpactsOf(beat);
     const event = events[matchIndex];
+    markScripted(event);
     if (!Object.keys(authored).length || !event || typeof event !== "object") continue;
     event.impacts = mergeAuthoredImpacts(event.impacts, authored);
     attached.push(beat);
@@ -87,6 +97,7 @@ export const ensureScriptedEventsWithImpacts = (eventsInput, beatsInput, options
   result.inserted.forEach((beat, offset) => {
     const authored = scriptedImpactsOf(beat);
     const event = result.events[events.length + offset];
+    markScripted(event);
     if (!Object.keys(authored).length || !event) return;
     event.impacts = mergeAuthoredImpacts(event.impacts, authored);
     attached.push(beat);

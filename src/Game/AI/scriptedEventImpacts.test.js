@@ -13,6 +13,7 @@ import {
   mergeAuthoredImpacts,
   scriptedImpactsOf,
 } from "./scriptedEventImpacts.js";
+import { SCRIPTED_EVENT, applyTerritoryTempo } from "./worldDirection.js";
 
 const rows = [{ type: "independence", name: "Republic of Moldova", regions: [{ id: "MDA.1_1", name: "Chişinău" }, { id: "MDA.22_1", name: "Ialoveni" }] }];
 const beat = {
@@ -145,4 +146,43 @@ test("the time skip merges the authored impacts before the answer's world change
   const validate = gameplay.indexOf("const worldChangeError = await validateGeneratedWorldChanges(candidate");
   assert.ok(ensure > 0 && validate > ensure);
   assert.match(gameplay, /buildScriptedEventsInstruction\(scriptedBeats, \{ language: scriptedLanguage \}\), buildScriptedImpactsInstruction\(scriptedBeats\)/);
+});
+
+// --- The map's tempo leaves a scripted event's changes be ---
+
+test("the map's tempo never withholds what a fired scripted event carries, the author's or the model's for it", () => {
+  const answer = [
+    // The model's own advance, early in the period: it spends the allowance.
+    { date: "1991-08-01", title: "Front moves", description: "Troops advance.", impacts: { regionTransfers: [{ regionId: "r1", toCode: "X" }, { regionId: "r2", toCode: "X" }] } },
+    // The model's telling of the beat, with a change of its own beside the author's.
+    {
+      date: "1991-08-27",
+      title: "Moldova declares independence",
+      description: "In Chişinău the parliament declares Moldova's independence from the Soviet Union.",
+      impacts: { regionTransfers: [{ regionId: "region: Bender", toCode: "Republic of Moldova" }] },
+    },
+    { date: "1991-08-30", title: "Another advance", description: "More troops advance.", impacts: { regionTransfers: [{ regionId: "r3", toCode: "X" }] } },
+  ];
+  const scripted = ensureScriptedEventsWithImpacts(answer, [beat]);
+  assert.equal(scripted.inserted.length, 0);
+  assert.equal(answer[1][SCRIPTED_EVENT], true, "the event that tells the beat is marked");
+  assert.equal(answer[0][SCRIPTED_EVENT], undefined);
+  assert.equal(JSON.stringify(answer[1]).includes("scripted"), false, "the mark never reaches a save");
+
+  const { events, withheld } = applyTerritoryTempo(answer, { ceilingPerMonth: 2, spanDays: 30 });
+  assert.equal(withheld, 1, "only the model's own third region is held back");
+  assert.deepEqual(events[1].impacts.regionTransfers.map((entry) => entry.regionId), ["region: Bender", "MDA.1_1", "MDA.22_1"]);
+  assert.deepEqual(events[2].impacts.regionTransfers, []);
+
+  // A beat the answer left out, written in by the engine, is marked as well.
+  const inserted = ensureScriptedEventsWithImpacts([{ date: "1991-01-01", title: "Winter", description: "Snow falls.", impacts: {} }], [beat]);
+  assert.equal(inserted.events[1][SCRIPTED_EVENT], true);
+  assert.equal(applyTerritoryTempo(inserted.events, { ceilingPerMonth: 1, spanDays: 30 }).withheld, 0);
+});
+
+test("the time skip marks its scripted events before it counts the map's tempo", () => {
+  const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  const ensure = gameplay.indexOf("ensureScriptedEventsWithImpacts(candidate?.events, due");
+  const tempo = gameplay.indexOf("applyTerritoryTempo(candidate?.events");
+  assert.ok(ensure > 0 && tempo > ensure);
 });

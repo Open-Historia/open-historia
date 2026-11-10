@@ -17279,27 +17279,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
               receiptPlayerNote("datesClamped"),
             );
           }
-          // The map's tempo, an author's ceiling on how many regions change hands
-          // in a period (worldDirection.js): counted in event order, before the
-          // resolver spends anything on entries the period cannot carry. Never a
-          // rejection — the front simply moves this far, and the model is told.
-          if (direction?.territoryTempo > 0) {
-            const tempo = applyTerritoryTempo(candidate?.events, { ceilingPerMonth: direction.territoryTempo, spanDays });
-            if (tempo.withheld > 0) {
-              candidate.events = tempo.events;
-              noteReceipt(
-                draft,
-                "withheld",
-                `${tempo.withheld} territorial change${tempo.withheld === 1 ? " was" : "s were"} withheld: this scenario's map moves no faster than ${Math.round(direction.territoryTempo)} region${Math.round(direction.territoryTempo) === 1 ? "" : "s"} per thirty days (${tempo.allowance} this period), counted in event order. `
-                  + "Carry the rest of that advance into the next period, or write the front as holding.",
-                countedNote(tempo.withheld, "tempoOne", "tempoMany"),
-              );
-            }
-          }
           // The author's scripted events (worldDirection.js): one the answer left
           // out is written by the engine, in the author's words, and the model is
           // told so it carries the consequences. An auto jump that stopped short
-          // owes only the beats up to where it stopped.
+          // owes only the beats up to where it stopped. Before the map's tempo:
+          // the events that tell them are marked, and the tempo leaves them be.
           if (scriptedBeats.length) {
             const stopKey = mode === "auto" ? dateKey(candidate?.stopDate) : null;
             const due = stopKey === null ? scriptedBeats : scriptedBeats.filter((beat) => dateKey(beat.date) <= stopKey);
@@ -17323,6 +17307,24 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
                   if (beatIsWritten(requirement.beat, [event], { language: scriptedLanguage })) politicalClaimContext.legacyEvents.add(event);
                 }
               }
+            }
+          }
+          // The map's tempo, an author's ceiling on how many regions change hands
+          // in a period (worldDirection.js): counted in event order, before the
+          // resolver spends anything on entries the period cannot carry. Never a
+          // rejection — the front simply moves this far, and the model is told.
+          // A scripted event's own changes are the author's and never withheld.
+          if (direction?.territoryTempo > 0) {
+            const tempo = applyTerritoryTempo(candidate?.events, { ceilingPerMonth: direction.territoryTempo, spanDays });
+            if (tempo.withheld > 0) {
+              candidate.events = tempo.events;
+              noteReceipt(
+                draft,
+                "withheld",
+                `${tempo.withheld} territorial change${tempo.withheld === 1 ? " was" : "s were"} withheld: this scenario's map moves no faster than ${Math.round(direction.territoryTempo)} region${Math.round(direction.territoryTempo) === 1 ? "" : "s"} per thirty days (${tempo.allowance} this period), counted in event order. `
+                  + "Carry the rest of that advance into the next period, or write the front as holding.",
+                countedNote(tempo.withheld, "tempoOne", "tempoMany"),
+              );
             }
           }
           // The war ledger must see the sanitized impacts, so world changes go first.

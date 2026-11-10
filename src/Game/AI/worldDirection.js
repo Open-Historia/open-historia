@@ -364,6 +364,13 @@ export const buildScriptedEventsInstruction = (beats, { language = "" } = {}) =>
 // ceiling an entry is withheld — the front does not move that far this period
 // — and the model is told, so the next period carries it on. A whole-country
 // entry is the ceiling's worth by itself. 0 is no ceiling.
+//
+// An event that tells one of the author's scripted events is the author's own
+// pace: its territory changes (the author's impacts and the model's for it)
+// are never withheld and never counted. scriptedEventImpacts.js marks such an
+// event with this key; a symbol, so it never reaches a save.
+export const SCRIPTED_EVENT = Symbol.for("openHistoria.scriptedEvent");
+
 export const territoryTempoAllowance = (ceilingPerMonth, spanDays) => {
     const ceiling = Number(ceilingPerMonth);
     if (!(ceiling > 0)) return Infinity;
@@ -378,7 +385,7 @@ export const applyTerritoryTempo = (events, { ceilingPerMonth, spanDays } = {}) 
     let withheld = 0;
     const next = list.map((event) => {
         const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : null;
-        if (!impacts) return event;
+        if (!impacts || event[SCRIPTED_EVENT]) return event;
         // A border moves on a transfer and on a control op that says "control";
         // a contest opened or cleared moves nothing and is never withheld.
         const keep = (entry) => {
