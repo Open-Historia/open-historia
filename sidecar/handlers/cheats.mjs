@@ -866,6 +866,8 @@ export const register = (ctx) => {
       notes: list(preview?.notes).map((note) => String(note ?? "")).filter(Boolean),
       date: preview?.date || "",
       mode: preview?.mode || "",
+      requestedMode: preview?.requestedMode || preview?.mode || "",
+      modeReason: preview?.modeReason || "",
       source: preview?.generation?.source || "unknown",
       revisionCount: Math.max(0, Number(preview?.revisionCount) || 0),
       applied: Boolean(applied?.applied),
@@ -908,6 +910,7 @@ export const register = (ctx) => {
     addStandIn(({ tool, text: prompt }) => {
       if (tool !== "submit_game_master") return null;
       const mode = /Generate a (direct|exact-event|world-intervention) GM transaction preview/.exec(prompt)?.[1] || "world-intervention";
+      const routed = /Generate a auto GM transaction preview/.test(prompt);
       const date = standInState.date;
       const country = standInState.country || "France";
       const event = {
@@ -928,6 +931,7 @@ export const register = (ctx) => {
       return {
         args: {
           mode,
+          ...(routed ? { modeReason: "One finished occurrence with its lasting effects, told as an event." } : {}),
           summary: `Adds one event: ${country} opens a national library annex.`,
           eventsJson: JSON.stringify([event]),
           territorialScopesJson: "[]",
@@ -1011,28 +1015,13 @@ export const register = (ctx) => {
       if (boundary >= 0) unconsolidated = events.slice(boundary + 1);
       else if (text(last.throughDate)) unconsolidated = events.filter((event) => !event.date || compareGameDates(event.date, text(last.throughDate)) > 0);
     }
-    const sizeThreshold = 48;
-    const intervalRounds = 5;
     const retainEvents = 24;
-    const documentWordBudget = 1500;
     const round = Number(bundle?.game?.round) || 0;
     const priorChatIds = new Set(list(world.consolidatedHistory).flatMap((entry) => list(entry.chatIds)));
     const closedChats = gs.normalizeChats(bundle?.chats).filter((chat) => chat.status === "closed" && !priorChatIds.has(chat.id));
     const canFold = (unconsolidated.length > retainEvents) || closedChats.length > 0;
-    const passes = list(world.consolidatedHistory).length;
-    const since = unconsolidated.length;
-    const words = (value) => {
-      const normalized = text(value);
-      return normalized ? normalized.split(/\s+/).length : 0;
-    };
-    const documentWords = words(world.historyDocument?.text);
-    const documentText = world.historyDocument
-      ? `The history document is ${documentWords} words of a ${documentWordBudget}-word budget (revision ${world.historyDocument.revision}, ${world.historyDocument.source === "manual" ? "last edited by hand" : "last written by the AI"}${world.historyDocument.throughDate ? `, through ${world.historyDocument.throughDate}` : ""}).`
-      : passes > 0
-        ? `No history document yet: the AI is shown the ${passes} pass ${passes === 1 ? "summary" : "summaries"} below until the next pass writes the document.`
-        : "No history document yet: nothing has been folded.";
     return {
-      text: `${since} event${since === 1 ? "" : "s"} since the last pass. A turn folds them by itself once more than ${sizeThreshold} have piled up, or on every ${intervalRounds}th round once more than ${retainEvents} have; the newest ${retainEvents} always stay in full. ${documentText}`,
+      text: engine.historyConsolidation.describeHistoryConsolidation(bundle).text,
       canFoldNow: canFold,
       round,
     };
@@ -1049,6 +1038,7 @@ export const register = (ctx) => {
     const status = historyStatus({ world, events, chats, actions, game });
     return {
       document: world?.historyDocument ?? null,
+      draft: world?.historyDocument ? engine.historyConsolidation.seedHistoryDocumentText(world) : "",
       passes: list(world?.consolidatedHistory).map((entry, index) => ({
         meta: [
           `Pass ${index + 1}`,
@@ -1357,7 +1347,7 @@ export const register = (ctx) => {
 
     "cheats.region.at": async ({ index = -1 } = {}) => regionAt({ index }),
 
-    "cheats.gm.preview": async ({ text: requestText = "", mode = "world-intervention" } = {}) => {
+    "cheats.gm.preview": async ({ text: requestText = "", mode = "auto" } = {}) => {
       const game = await readGame();
       standInState.date = clean(game?.gameDate || game?.startDate);
       standInState.country = clean(game?.country);
@@ -2125,6 +2115,7 @@ export const register = (ctx) => {
           quote: quote || null,
           npcReaction: nextReaction(entry),
           title,
+          ...(tidyProse(entry.description) !== description || cleanEventText(entry.title) !== title ? { digest: "" } : {}),
         }),
       });
       const persistedEvent = persisted.find((candidate) => eventRowIdentity(candidate) === eventRowIdentity(event));
@@ -2216,6 +2207,8 @@ export const register = (ctx) => {
       const world = await readWorld();
       const current = world?.historyDocument ?? null;
       const value = String(draft ?? "").trim();
+      const seeded = current ? engine.historyConsolidation.seedHistoryDocumentText(world).trim() : "";
+      if (current && value === seeded) return "The history document is unchanged.";
       const words = value ? value.split(/\s+/).length : 0;
       const next = value
         ? {
@@ -2229,7 +2222,7 @@ export const register = (ctx) => {
         }
         : null;
       await gs.writeWorldState({ ...world, historyDocument: next });
-      if ((current?.text ?? "").trim() !== value) {
+      if (seeded !== value) {
         await noteGmChange("history", next ? "Rewrote the history document by hand; it is the account of the past to go by." : "Cleared the history document by hand.");
       }
       return next

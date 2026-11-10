@@ -54,6 +54,7 @@ const TOOL_GROUPS := [
 ]
 
 const MODE_OPTIONS := [
+	{"id": "auto", "title": "Auto - Recommended", "description": "Describe the change freely. GM selects one validated mode before preview."},
 	{"id": "direct", "title": "Direct / OOC correction", "description": "Exact canonical/admin edits with the smallest possible scope."},
 	{"id": "exact-event", "title": "Exact Event", "description": "Author one timeline event and all structured effects it establishes."},
 	{"id": "world-intervention", "title": "World Intervention", "description": "Orchestrate a coherent multi-event change across territory, polities, wars, diplomacy, forces and Stats."},
@@ -316,8 +317,7 @@ func _load_tool() -> void:
 			var history: Dictionary = await engine.request("cheats.history.get")
 			if history.get("ok", false):
 				_s["hd"] = history["result"]
-				var document: Variant = (history["result"] as Dictionary).get("document")
-				_s["hd_draft"] = str((document as Dictionary).get("text", "")) if typeof(document) == TYPE_DICTIONARY else ""
+				_s["hd_draft"] = str((history["result"] as Dictionary).get("draft", ""))
 			else:
 				_s["hd"] = {"document": null, "passes": [], "status": {"text": "Could not read the campaign: %s" % str(history.get("error", "")), "canFoldNow": false}, "totalEvents": 0}
 				_s["hd_draft"] = ""
@@ -1037,6 +1037,8 @@ func _meta_header() -> void:
 
 
 func _gm_placeholder(mode: String) -> String:
+	if mode == "auto":
+		return "Example: \"A major Berlin bank collapses, triggering a prolonged financial panic. Let the game reflect the consequences over time.\""
 	if mode == "direct":
 		return "Example: \"Germany should have a population of 72 million and GDP of €500 billion. Do not add a timeline event.\""
 	if mode == "exact-event":
@@ -1046,13 +1048,13 @@ func _gm_placeholder(mode: String) -> String:
 
 func _render_gm() -> void:
 	_header("GM Console", "Unified GM · natural-language canonical transaction planner")
-	var mode := _sv("gm_mode", "world-intervention")
+	var mode := _sv("gm_mode", "auto")
 	var info: Array = _box(Color(30 / 255.0, 64 / 255.0, 175 / 255.0, 0.09), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.18), 9, Vector4(10, 9, 10, 9))
 	(info[1] as VBoxContainer).add_child(_rich("[b][color=#bfdbfe]Preview → Apply.[/color][/b] Generate a transaction, inspect every canonical operation, then apply that exact preview. Apply performs no second AI call, revalidates the live world immediately before writing, and never advances the date or round.", 11, Color(219 / 255.0, 234 / 255.0, 254 / 255.0, 0.82)))
 	_body.add_child(info[0])
 	_body.add_child(_field_label("Mode", 10))
 	var grid := GridContainer.new()
-	grid.columns = 3
+	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 6)
 	grid.add_theme_constant_override("v_separation", 6)
 	for option_entry in MODE_OPTIONS:
@@ -1124,7 +1126,7 @@ func _gm_generate() -> void:
 	if text.is_empty() or _busy:
 		return
 	_set_busy(true)
-	var reply: Dictionary = await engine.request("cheats.gm.preview", {"text": text, "mode": _sv("gm_mode", "world-intervention")})
+	var reply: Dictionary = await engine.request("cheats.gm.preview", {"text": text, "mode": _sv("gm_mode", "auto")})
 	_s["gm_expanded"] = {}
 	if reply.get("ok", false):
 		var result: Dictionary = reply["result"]
@@ -1240,6 +1242,24 @@ func _gm_apply() -> void:
 	_set_busy(false)
 
 
+func _gm_auto_box(view: Dictionary) -> Control:
+	var holder := VBoxContainer.new()
+	holder.add_theme_constant_override("separation", 0)
+	holder.add_child(_gap(8))
+	var box: Array = _box(Color(0, 0, 0, 0), Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.2), 8, Vector4(9, 8, 9, 8), 0)
+	var chosen := str(view.get("mode", ""))
+	for option_entry in MODE_OPTIONS:
+		if str((option_entry as Dictionary)["id"]) == chosen:
+			chosen = I18n.now(str((option_entry as Dictionary)["title"]))
+	var reason := str(view.get("modeReason", ""))
+	var told := reason if not reason.is_empty() else I18n.now("The selected native GM mode governs all proposed operations.")
+	var line := _rich("[b]%s[/b] %s. %s" % [I18n.now("Auto mode selected:"), chosen.replace("[", "[lb]"), told.replace("[", "[lb]")], 11, Color(219 / 255.0, 234 / 255.0, 254 / 255.0, 0.88))
+	line.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	(box[1] as VBoxContainer).add_child(line)
+	holder.add_child(box[0])
+	return holder
+
+
 func _gm_preview_box(view: Dictionary) -> Control:
 	var applied := bool(view.get("applied", false))
 	var box: Array = _box(Color(0, 0, 0, 0.18), Color(1, 1, 1, 0.11), 10, Vector4(11, 11, 11, 11), 0)
@@ -1261,6 +1281,8 @@ func _gm_preview_box(view: Dictionary) -> Control:
 	if not summary.is_empty():
 		summary_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	column.add_child(summary_label)
+	if str(view.get("requestedMode", "")) == "auto":
+		column.add_child(_gm_auto_box(view))
 	if not applied:
 		column.add_child(_gm_edit_section())
 	var notes: Array = view.get("notes", [])
