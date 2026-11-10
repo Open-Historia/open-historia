@@ -383,3 +383,4 @@ export * as aiTranslation from "../../src/runtime/aiTranslation.js";
 export * as scenarioLanguages from "../../server/scenarioLanguages.js";
 export * as scenarioLangPacks from "../../src/runtime/scenarioLanguagePacks.js";
 export * as scenarioTranslation from "../../src/Game/AI/scenarioTranslation.js";
+export * as historyConsolidation from "../../src/Game/AI/historyConsolidation.js";
