@@ -252,7 +252,8 @@ export const register = (ctx) => {
     const day = engine.requestBudget.requestDay();
     const saving = engine.requestBudget.savingRequests();
     const lookupsOn = engine.mapSettings.getMapSettingValue(engine.mapSettings.MAP_SETTING_KEYS.lookupFunctions, "1") !== "0";
-    const cost = engine.requestBudget.describeJumpCost({ lookups: !saving && lookupsOn });
+    const unlimited = engine.requestBudget.unlimitedRequests();
+    const cost = engine.requestBudget.describeJumpCost({ lookups: !saving && lookupsOn, unlimited });
     const segmented = Boolean(engine.mapSettings.getMapSetting(engine.mapSettings.MAP_SETTING_KEYS.chunkLongJumps));
     const second = cost.lookups
       ? (segmented ? `a skip uses 1 request, at most ${cost.max} when the model looks things up, plus one per extra segment` : `a skip uses 1 request, at most ${cost.max} when the model looks things up`)
@@ -262,7 +263,8 @@ export const register = (ctx) => {
       limit: day.limit,
       second,
       lastUsed: day.lastJump ? day.lastJump.used : null,
-      nearlyOut: day.left <= Math.max(3, Math.ceil(day.limit * 0.1)),
+      noLimit: day.noLimit === true,
+      nearlyOut: !day.noLimit && day.left <= Math.max(3, Math.ceil(day.limit * 0.1)),
     };
   };
 

@@ -757,14 +757,20 @@ class ApiSetupPrompt extends Control:
 	const TUTORIAL_VIDEO_ID := "YdalQ8UqMR4"
 	const TUTORIAL_VIDEO_URL := "https://www.youtube.com/watch?v=" + TUTORIAL_VIDEO_ID
 	const AI_STUDIO_KEY_URL := "https://aistudio.google.com/app/apikey"
+	const CHOOSER_WIDTH := 595.2
 	const CONTENT_WIDTH := 499.0
+	const MOBILE_WIDTH := 700.0
 	const CARD_PADDING := Vector2(44.8, 40.8)
+	const LOGO_SIZE := 40
+	const STEP_LOGO_SIZE := 28
+	const CUSTOM_START_PROVIDER := "openai-compatible"
 	const ENDPOINT_PLACEHOLDERS := {"openai-compatible": "http://localhost:11434/v1", "anthropic-compatible": "https://my-proxy.example/v1"}
 	const EYE_SVG := "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z'/><circle cx='12' cy='12' r='3'/></svg>"
 	const EYE_OFF_SVG := "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24'/><line x1='1' y1='1' x2='23' y2='23'/></svg>"
 
 	var link: EngineLink
 	var setup := {}
+	var choice := ""
 	var provider := "gemini"
 	var api_key := ""
 	var endpoint := ""
@@ -773,20 +779,23 @@ class ApiSetupPrompt extends Control:
 	var show_key := false
 	var show_tutorial := true
 	var online := true
+	var custom_no_limit := false
 	var _body: VBoxContainer
 	var _scroll: ScrollContainer
 	var _model_line: LineEdit
 	var _suggest_box: PanelContainer
 	var _suggest_list: VBoxContainer
 	var _online_timer: Timer
+	var _no_limit_row: Control
 	var _fit_queued := false
+	var _stacked := false
+	var _no_limit_asked := 0
 	var video_playing := false
 	var _video: WebPanel
 
 	func _init(engine_link: EngineLink, setup_data: Dictionary) -> void:
 		link = engine_link
 		setup = setup_data
-		provider = str(setup.get("defaultProvider", "gemini"))
 		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		mouse_filter = Control.MOUSE_FILTER_STOP
 		var dim := ColorRect.new()
@@ -801,7 +810,7 @@ class ApiSetupPrompt extends Control:
 		_scroll = ScrollContainer.new()
 		_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 		_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
-		_scroll.custom_minimum_size = Vector2(CONTENT_WIDTH, 0)
+		_scroll.custom_minimum_size = Vector2(CHOOSER_WIDTH, 0)
 		_body = VBoxContainer.new()
 		_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_body.add_theme_constant_override("separation", 0)
@@ -809,7 +818,7 @@ class ApiSetupPrompt extends Control:
 		_scroll.add_child(_body)
 		card.add_child(_scroll)
 		centre.add_child(card)
-		resized.connect(_fit)
+		resized.connect(_on_resized)
 		_suggest_box = PanelContainer.new()
 		_suggest_box.add_theme_stylebox_override("panel", UI.box(Color("#1f1f23"), Color(1, 1, 1, 0.16), 6, 1, Vector4(3, 3, 3, 3)))
 		_suggest_box.visible = false
@@ -837,8 +846,65 @@ class ApiSetupPrompt extends Control:
 		var next := bool((reply.get("result", {}) as Dictionary).get("online", true))
 		if next != online:
 			online = next
-			if show_tutorial:
+			if show_tutorial and choice == "gemini":
 				_render()
+
+	func _on_resized() -> void:
+		var stacked := get_viewport_rect().size.x <= MOBILE_WIDTH
+		if stacked != _stacked and choice.is_empty():
+			_stacked = stacked
+			_render()
+			return
+		_stacked = stacked
+		_fit()
+
+	func _provider_for(next: String) -> String:
+		if next == "custom":
+			return CUSTOM_START_PROVIDER
+		if next == "commandcode":
+			return str((setup.get("commandCode", {}) as Dictionary).get("provider", "openai-compatible"))
+		return "gemini"
+
+	func _command_code(key: String, fallback := "") -> String:
+		var info: Variant = setup.get("commandCode", {})
+		return str((info as Dictionary).get(key, fallback)) if info is Dictionary else fallback
+
+	func open_choice(next: String) -> void:
+		choice = next
+		api_key = ""
+		model = ""
+		error = ""
+		_choose_provider(_provider_for(next))
+		_render()
+		_check_no_limit()
+
+	func back_to_choices() -> void:
+		choice = ""
+		error = ""
+		_stop_video_quietly()
+		_render()
+
+	func _choose_provider(next: String) -> void:
+		provider = next
+		error = ""
+		endpoint = str(ENDPOINT_PLACEHOLDERS.get(next, "")) if ENDPOINT_PLACEHOLDERS.has(next) and _requirement() == "endpoint" else ""
+
+	func _check_no_limit() -> void:
+		if choice != "custom" or not link:
+			custom_no_limit = false
+			_show_no_limit_row()
+			return
+		_no_limit_asked += 1
+		var asked := _no_limit_asked
+		var reply: Dictionary = await link.request("settings.setupNoRequestLimit", {"choice": choice, "provider": provider, "endpoint": endpoint})
+		if not is_instance_valid(self) or asked != _no_limit_asked:
+			return
+		custom_no_limit = bool((reply.get("result", {}) as Dictionary).get("on", false)) if reply.get("ok", false) else false
+		_show_no_limit_row()
+
+	func _show_no_limit_row() -> void:
+		if _no_limit_row and is_instance_valid(_no_limit_row):
+			_no_limit_row.visible = custom_no_limit
 
 	func _recent_models() -> Array:
 		var table: Variant = setup.get("recentModels", {})
@@ -871,12 +937,7 @@ class ApiSetupPrompt extends Control:
 			row.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 4, 0, Vector4(8, 5, 8, 5)))
 			row.add_theme_stylebox_override("hover", UI.box(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 4, 0, Vector4(8, 5, 8, 5)))
 			row.add_theme_stylebox_override("pressed", UI.box(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 4, 0, Vector4(8, 5, 8, 5)))
-			row.pressed.connect(func() -> void:
-				model = value
-				if _model_line and is_instance_valid(_model_line):
-					_model_line.text = value
-					_model_line.caret_column = value.length()
-				_suggest_box.visible = false)
+			row.pressed.connect(_pick_suggestion.bind(value))
 			_suggest_list.add_child(row)
 			shown += 1
 		if shown == 0:
@@ -890,6 +951,13 @@ class ApiSetupPrompt extends Control:
 		_suggest_box.global_position = origin.position + Vector2(0, origin.size.y + 2)
 		move_child(_suggest_box, get_child_count() - 1)
 
+	func _pick_suggestion(value: String) -> void:
+		model = value
+		if _model_line and is_instance_valid(_model_line):
+			_model_line.text = value
+			_model_line.caret_column = value.length()
+		_suggest_box.visible = false
+
 	func _hide_suggestions_later() -> void:
 		await get_tree().process_frame
 		if is_instance_valid(self) and _model_line and is_instance_valid(_model_line) and not _model_line.has_focus():
@@ -901,12 +969,15 @@ class ApiSetupPrompt extends Control:
 		_fit_queued = true
 		_fit.call_deferred()
 
+	func _content_width() -> float:
+		return CHOOSER_WIDTH if choice.is_empty() else CONTENT_WIDTH
+
 	func _fit() -> void:
 		_fit_queued = false
 		if not is_inside_tree():
 			return
 		var view := get_viewport_rect().size
-		var width := clampf(view.x - 32.0 - CARD_PADDING.x, 240.0, CONTENT_WIDTH)
+		var width := clampf(view.x - 32.0 - CARD_PADDING.x, 240.0, _content_width())
 		var room := maxf(120.0, view.y - 32.0 - CARD_PADDING.y)
 		_scroll.custom_minimum_size = Vector2(width, minf(room, _body.get_combined_minimum_size().y))
 
@@ -915,6 +986,9 @@ class ApiSetupPrompt extends Control:
 			if str(option.get("value", "")) == provider:
 				return str(option.get("requirement", "apiKey"))
 		return "apiKey"
+
+	func _self_hosted() -> bool:
+		return choice == "custom" and _requirement() == "endpoint"
 
 	func _meta_label() -> String:
 		for option: Dictionary in setup.get("providers", []):
@@ -935,11 +1009,11 @@ class ApiSetupPrompt extends Control:
 				return "Blank picks a chat model from the server"
 		return "Model id"
 
-	func _gap(height: float) -> void:
+	func _gap(height: float, parent: Control = null) -> void:
 		var spacer := Control.new()
 		spacer.custom_minimum_size.y = height
 		spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_body.add_child(spacer)
+		(parent if parent else _body).add_child(spacer)
 
 	func _label(text: String) -> Label:
 		return UI.label(text.to_upper(), 12, Color(1, 1, 1, 0.72), 700)
@@ -975,6 +1049,10 @@ class ApiSetupPrompt extends Control:
 			bg = Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.14)
 			border = Color(74 / 255.0, 222 / 255.0, 128 / 255.0, 0.35)
 			ink = Color("#bbf7d0")
+		elif kind == "grey":
+			bg = UiTheme.pick("overlay_card", Color(1, 1, 1, 0.06))
+			border = UiTheme.pick("line", Color(1, 1, 1, 0.14))
+			ink = UiTheme.pick("text", Color("#f4f4f5"))
 		var normal := UI.box(bg, border, 10, 1, Vector4(16, 9.6, 16, 9.6))
 		var hover := UI.box(Color(bg.r, bg.g, bg.b, minf(1.0, bg.a + 0.06)), Color(border.r, border.g, border.b, minf(1.0, border.a + 0.1)), 10, 1, Vector4(16, 9.6, 16, 9.6))
 		for state in ["normal", "focus", "disabled"]:
@@ -985,11 +1063,93 @@ class ApiSetupPrompt extends Control:
 		button.add_theme_font_size_override("font_size", 13)
 		for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
 			button.add_theme_color_override(name, ink)
-		button.pressed.connect(func() -> void: on_press.call())
+		button.pressed.connect(on_press)
 		return button
 
 	func _svg(svg: String, size: int, color: Color) -> Texture2D:
 		return UI.svg_texture(svg.replace("#fff", "#" + color.to_html(false)), float(size) / 24.0)
+
+	func _mark(kind: String, size: int) -> Control:
+		var holder := TextureRect.new()
+		holder.custom_minimum_size = Vector2(size, size)
+		holder.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		holder.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		holder.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		holder.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		holder.texture = _mark_texture(kind, size)
+		holder.name = "Mark_%s" % kind
+		return holder
+
+	func _mark_texture(kind: String, size: int) -> Texture2D:
+		if kind == "gemini":
+			var image := Image.load_from_file(UI.repo_path("public/brands/gemini.png"))
+			if image == null or image.is_empty():
+				return null
+			image.resize(size * 2, size * 2, Image.INTERPOLATE_LANCZOS)
+			return ImageTexture.create_from_image(image)
+		if kind == "commandcode":
+			var file := FileAccess.open(UI.repo_path("public/brands/commandcode.svg"), FileAccess.READ)
+			if file == null:
+				return null
+			var source := file.get_as_text()
+			file.close()
+			return DPITexture.create_from_string(source, float(size) / 137.0)
+		var raised := UiTheme.pick("raised", Color("#2a2a2e"))
+		var line := UiTheme.pick("line", Color(1, 1, 1, 0.14))
+		var text := UiTheme.pick("text", Color("#f4f4f5"))
+		var svg := "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'><rect x='0.5' y='0.5' width='39' height='39' rx='11' fill='#%s' fill-opacity='%s' stroke='#%s' stroke-opacity='%s'/><circle cx='11' cy='20' r='3' fill='#%s'/><circle cx='20' cy='20' r='3' fill='#%s'/><circle cx='29' cy='20' r='3' fill='#%s'/></svg>" % [raised.to_html(false), String.num(raised.a, 3), line.to_html(false), String.num(line.a, 3), text.to_html(false), text.to_html(false), text.to_html(false)]
+		return DPITexture.create_from_string(svg, float(size) / 40.0)
+
+	func _choice_card(key: String, name_text: String, label_text: String) -> Control:
+		var card := PanelContainer.new()
+		card.name = "Choice_%s" % key
+		card.set_meta("setup_choice", key)
+		var fill := UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05))
+		var edge := UiTheme.pick("line", Color(1, 1, 1, 0.12))
+		var padding := Vector4(14.4, 12, 14.4, 12) if _stacked else Vector4(11.2, 24, 11.2, 17.6)
+		card.add_theme_stylebox_override("panel", UI.box(fill, edge, 14, 1, padding))
+		card.mouse_filter = Control.MOUSE_FILTER_STOP
+		card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		card.size_flags_stretch_ratio = 1.0
+		card.custom_minimum_size.y = 70.4 if _stacked else 152.0
+		card.gui_input.connect(_on_card_input.bind(key))
+		var texts := VBoxContainer.new()
+		texts.add_theme_constant_override("separation", 3)
+		texts.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var title := UI.label(name_text, 15, UiTheme.pick("text", Color("#f4f4f5")), 850)
+		var words := UI.wrapped(label_text, 12, Color(1, 1, 1, 0.62), 600)
+		words.add_theme_constant_override("line_spacing", 1)
+		texts.add_child(title)
+		texts.add_child(words)
+		if _stacked:
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 13)
+			row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			row.add_child(_mark(key, LOGO_SIZE))
+			texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			texts.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			row.add_child(texts)
+			card.add_child(row)
+		else:
+			var column := VBoxContainer.new()
+			column.add_theme_constant_override("separation", 9)
+			column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			column.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+			title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			words.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			column.add_child(_mark(key, LOGO_SIZE))
+			column.add_child(texts)
+			card.add_child(column)
+		return card
+
+	func _on_card_input(event: InputEvent, key: String) -> void:
+		if event is InputEventMouseButton:
+			var click := event as InputEventMouseButton
+			if click.button_index == MOUSE_BUTTON_LEFT and not click.pressed:
+				accept_event()
+				open_choice(key)
 
 	func _video_panel() -> WebPanel:
 		if _video and is_instance_valid(_video):
@@ -1001,29 +1161,38 @@ class ApiSetupPrompt extends Control:
 https://www.youtube-nocookie.com/"
 		_video.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		_video.mouse_filter = Control.MOUSE_FILTER_STOP
-		_video.key_pressed.connect(func(key: String) -> void:
-			if key == "Escape":
-				_stop_video())
-		_video.open_external.connect(func(url: String) -> void:
-			if url.begins_with("https://") or url.begins_with("http://"):
-				_open_outside(url))
-		_video.failed.connect(func(_reason: String) -> void: _video_failed())
+		_video.key_pressed.connect(_on_video_key)
+		_video.open_external.connect(_on_video_external)
+		_video.failed.connect(_on_video_failed)
 		return _video
+
+	func _on_video_key(key: String) -> void:
+		if key == "Escape":
+			_stop_video()
+
+	func _on_video_external(url: String) -> void:
+		if url.begins_with("https://") or url.begins_with("http://"):
+			_open_outside(url)
+
+	func _on_video_failed(_reason: String) -> void:
+		_video_failed()
 
 	func _video_frame() -> Control:
 		var frame := PanelContainer.new()
 		frame.name = "TutorialVideoFrame"
 		frame.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.5), Color(0, 0, 0, 0), 10, 0))
 		frame.custom_minimum_size = Vector2(0, roundf((CONTENT_WIDTH - 28.8) * 9.0 / 16.0))
-		frame.resized.connect(func() -> void:
-			var tall := roundf(frame.size.x * 9.0 / 16.0)
-			if frame.size.x > 0.0 and absf(frame.custom_minimum_size.y - tall) >= 1.0:
-				frame.custom_minimum_size.y = tall)
+		frame.resized.connect(_keep_sixteen_nine.bind(frame))
 		var panel := _video_panel()
 		if panel.get_parent():
 			panel.get_parent().remove_child(panel)
 		frame.add_child(panel)
 		return frame
+
+	func _keep_sixteen_nine(node: Control) -> void:
+		var tall := roundf(node.size.x * 9.0 / 16.0)
+		if node.size.x > 0.0 and absf(node.custom_minimum_size.y - tall) >= 1.0:
+			node.custom_minimum_size.y = tall
 
 	func _open_outside(url: String) -> void:
 		var log_file := OS.get_environment("OH_OPEN_LOG")
@@ -1052,12 +1221,15 @@ https://www.youtube-nocookie.com/"
 		if url.is_empty() or not (_video and is_instance_valid(_video)) or not _video.open_url(url):
 			_video_failed()
 
-	func _stop_video() -> void:
+	func _stop_video_quietly() -> void:
 		video_playing = false
 		if _video and is_instance_valid(_video):
 			_video.focus_app()
 			_video.queue_free()
 		_video = null
+
+	func _stop_video() -> void:
+		_stop_video_quietly()
 		_render()
 
 	func _video_failed() -> void:
@@ -1066,10 +1238,39 @@ https://www.youtube-nocookie.com/"
 		if was_playing:
 			_open_outside(TUTORIAL_VIDEO_URL)
 
+	func _hide_video() -> void:
+		show_tutorial = false
+		_stop_video()
+
+	func _show_video() -> void:
+		show_tutorial = true
+		_render()
+
+	func _step_heading(kind: String, name_text: String) -> void:
+		_gap(12.8)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		row.add_child(_mark(kind, STEP_LOGO_SIZE))
+		var title := UI.label(name_text, 15, UI.WHITE, 850)
+		title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(title)
+		_body.add_child(row)
+
+	func _fact_row(name_text: String, value: String) -> HBoxContainer:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 7)
+		var title := _label(name_text)
+		title.size_flags_vertical = Control.SIZE_SHRINK_END
+		row.add_child(title)
+		var shown := UI.label(value, 13, UI.WHITE, 750)
+		shown.size_flags_vertical = Control.SIZE_SHRINK_END
+		row.add_child(shown)
+		return row
+
 	func _render() -> void:
 		if _video and is_instance_valid(_video) and _video.get_parent():
 			_video.get_parent().remove_child(_video)
-		if video_playing and not (show_tutorial and online):
+		if video_playing and not (choice == "gemini" and show_tutorial and online):
 			video_playing = false
 			if _video and is_instance_valid(_video):
 				_video.queue_free()
@@ -1077,19 +1278,68 @@ https://www.youtube-nocookie.com/"
 		for child in _body.get_children():
 			_body.remove_child(child)
 			child.queue_free()
-		var self_hosted := _requirement() == "endpoint"
-		var label := _meta_label()
+		_model_line = null
+		_no_limit_row = null
+		_suggest_box.visible = false
+		_stacked = is_inside_tree() and get_viewport_rect().size.x <= MOBILE_WIDTH
 		_body.add_child(UI.label("Set up your AI provider", 17, UI.WHITE, 900))
+		match choice:
+			"gemini":
+				_render_gemini()
+			"commandcode":
+				_render_command_code()
+			"custom":
+				_render_custom()
+			_:
+				_render_choices()
+		if not error.is_empty():
+			_gap(11.2)
+			_body.add_child(UI.wrapped(error, 12, Color("#fca5a5")))
+		_gap(17.6)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		if not choice.is_empty():
+			row.add_child(_button("← Back", "quiet", back_to_choices))
+		row.add_child(UI.spacer())
+		row.add_child(_button("Not now", "quiet", dismissed.emit))
+		if choice.is_empty() or choice == "custom":
+			var full := _button("Open full settings", "quiet", configure.emit)
+			full.name = "OpenFullSettings"
+			row.add_child(full)
+		if not choice.is_empty():
+			var save_button := _button("Save and play", "primary", _save)
+			save_button.name = "SaveAndPlay"
+			row.add_child(save_button)
+		_body.add_child(row)
+		_refresh_save()
+		_queue_fit()
+
+	func _render_choices() -> void:
 		_gap(8)
-		var intro := UI.wrapped("Open Historia writes every turn, advisor reply and diplomatic message with an AI model, and %s has %s missing. Until it is set, time skips fall back to canned events and the advisor cannot answer. Paste your details below and you are ready to play." % [str(setup.get("providerLabel", "the selected provider")), str(setup.get("missing", "an API key"))], 13, Color(1, 1, 1, 0.64))
+		var intro := UI.wrapped("Open Historia writes every turn, advisor reply and diplomatic message with an AI model, and %s has %s missing. Until it is set, time skips fall back to canned events and the advisor cannot answer." % [str(setup.get("providerLabel", "the selected provider")), str(setup.get("missing", "an API key"))], 13, Color(1, 1, 1, 0.64))
 		intro.add_theme_constant_override("line_spacing", 5)
 		_body.add_child(intro)
+		_gap(19.2 if _stacked else 22.4)
+		var cards: BoxContainer
+		if _stacked:
+			cards = VBoxContainer.new()
+		else:
+			cards = HBoxContainer.new()
+		cards.name = "SetupChoices"
+		cards.add_theme_constant_override("separation", 13 if _stacked else 11)
+		cards.add_child(_choice_card("gemini", "Gemini", "Best free option"))
+		cards.add_child(_choice_card("commandcode", _command_code("name", "Command Code"), "Best quality option"))
+		cards.add_child(_choice_card("custom", "Custom", "Configure any provider and any model, or a local model"))
+		_body.add_child(cards)
+
+	func _render_gemini() -> void:
+		_step_heading("gemini", "Gemini")
 		_gap(14.4)
 		var box := PanelContainer.new()
 		box.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.09), 12, 1, Vector4(14.4, 12.8, 14.4, 12.8)))
 		var box_column := VBoxContainer.new()
 		box_column.add_theme_constant_override("separation", 0)
-		var head := HBoxContainer.new()
+		var head := VBoxContainer.new()
 		head.add_theme_constant_override("separation", 8)
 		var texts := VBoxContainer.new()
 		texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1097,14 +1347,12 @@ https://www.youtube-nocookie.com/"
 		texts.add_child(UI.label("New to API keys?", 14, UI.WHITE, 800))
 		texts.add_child(UI.wrapped("A Gemini key is free. The video walks through getting one; the button opens the page where it is made.", 12, Color(1, 1, 1, 0.55)))
 		head.add_child(texts)
-		var get_key := _button("Get a key at Google AI Studio ↗", "link", func() -> void: OS.shell_open(AI_STUDIO_KEY_URL))
-		get_key.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		var get_key := _button("Get a key at Google AI Studio ↗", "link", _open_outside.bind(AI_STUDIO_KEY_URL))
+		get_key.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		head.add_child(get_key)
 		box_column.add_child(head)
 		if show_tutorial and not online:
-			var spacer := Control.new()
-			spacer.custom_minimum_size.y = 11
-			box_column.add_child(spacer)
+			_gap(11, box_column)
 			var note := PanelContainer.new()
 			note.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.3), Color(0, 0, 0, 0), 10, 0, Vector4(14.4, 12.8, 14.4, 12.8)))
 			var words := UI.wrapped("The video needs an internet connection. It plays here as soon as you are back online, and so does getting a key.", 12, Color(1, 1, 1, 0.6))
@@ -1112,47 +1360,35 @@ https://www.youtube-nocookie.com/"
 			note.add_child(words)
 			box_column.add_child(note)
 		if show_tutorial:
-			var spacer := Control.new()
-			spacer.custom_minimum_size.y = 11 if online else 6
-			box_column.add_child(spacer)
-			var video := Button.new()
-			video.focus_mode = Control.FOCUS_NONE
-			video.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-			video.custom_minimum_size = Vector2(0, roundf((CONTENT_WIDTH - 28.8) * 9.0 / 16.0))
-			video.resized.connect(func() -> void:
-				var tall := roundf(video.size.x * 9.0 / 16.0)
-				if video.size.x > 0.0 and absf(video.custom_minimum_size.y - tall) >= 1.0:
-					video.custom_minimum_size.y = tall)
-			video.text = "▶   Play the video (loads YouTube)"
-			video.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.5), Color(0, 0, 0, 0), 10, 0))
-			video.add_theme_stylebox_override("hover", UI.box(Color(0, 0, 0, 0.42), Color(0, 0, 0, 0), 10, 0))
-			video.add_theme_stylebox_override("pressed", UI.box(Color(0, 0, 0, 0.42), Color(0, 0, 0, 0), 10, 0))
-			video.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-			video.add_theme_font_override("font", UI.font(750))
-			video.add_theme_font_size_override("font_size", 13)
-			video.add_theme_color_override("font_color", Color(1, 1, 1, 0.86))
-			video.add_theme_color_override("font_hover_color", UI.WHITE)
-			video.pressed.connect(_play_video)
+			_gap(11 if online else 6, box_column)
 			if online and video_playing:
-				video.queue_free()
 				box_column.add_child(_video_frame())
-				var spacer_two := Control.new()
-				spacer_two.custom_minimum_size.y = 6
-				box_column.add_child(spacer_two)
+				_gap(6, box_column)
 			elif online:
+				var video := Button.new()
+				video.focus_mode = Control.FOCUS_NONE
+				video.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+				video.custom_minimum_size = Vector2(0, roundf((CONTENT_WIDTH - 28.8) * 9.0 / 16.0))
+				video.resized.connect(_keep_sixteen_nine.bind(video))
+				video.text = "▶   Play the video (loads YouTube)"
+				video.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.5), Color(0, 0, 0, 0), 10, 0))
+				video.add_theme_stylebox_override("hover", UI.box(Color(0, 0, 0, 0.42), Color(0, 0, 0, 0), 10, 0))
+				video.add_theme_stylebox_override("pressed", UI.box(Color(0, 0, 0, 0.42), Color(0, 0, 0, 0), 10, 0))
+				video.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+				video.add_theme_font_override("font", UI.font(750))
+				video.add_theme_font_size_override("font_size", 13)
+				video.add_theme_color_override("font_color", Color(1, 1, 1, 0.86))
+				video.add_theme_color_override("font_hover_color", UI.WHITE)
+				video.pressed.connect(_play_video)
 				box_column.add_child(video)
-				var spacer_two := Control.new()
-				spacer_two.custom_minimum_size.y = 6
-				box_column.add_child(spacer_two)
-			else:
-				video.queue_free()
+				_gap(6, box_column)
 			var links := HBoxContainer.new()
 			var watch := LinkButton.new()
 			watch.text = "Watch on YouTube ↗"
 			watch.underline = LinkButton.UNDERLINE_MODE_ALWAYS
 			watch.add_theme_font_size_override("font_size", 11)
 			watch.add_theme_color_override("font_color", Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.9))
-			watch.pressed.connect(func() -> void: _open_outside(TUTORIAL_VIDEO_URL))
+			watch.pressed.connect(_open_outside.bind(TUTORIAL_VIDEO_URL))
 			links.add_child(watch)
 			links.add_child(UI.spacer())
 			var hide := Button.new()
@@ -1161,24 +1397,59 @@ https://www.youtube-nocookie.com/"
 			hide.focus_mode = Control.FOCUS_NONE
 			hide.add_theme_font_size_override("font_size", 11)
 			hide.add_theme_color_override("font_color", Color(1, 1, 1, 0.45))
-			hide.pressed.connect(func() -> void:
-				show_tutorial = false
-				_stop_video())
+			hide.pressed.connect(_hide_video)
 			links.add_child(hide)
 			box_column.add_child(links)
 		else:
-			var spacer := Control.new()
-			spacer.custom_minimum_size.y = 9.6
-			box_column.add_child(spacer)
-			var show_video := _button("Show the video tutorial", "quiet", func() -> void:
-				show_tutorial = true
-				_render())
+			_gap(9.6, box_column)
+			var show_video := _button("Show the video tutorial", "quiet", _show_video)
 			show_video.add_theme_font_size_override("font_size", 12)
 			show_video.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			box_column.add_child(show_video)
 		box.add_child(box_column)
 		_body.add_child(box)
 		_gap(15.2)
+		var label := _meta_label()
+		_key_field("%s API key" % label, "Paste your %s API key" % label, "Stored only in this browser. It is sent to %s and nowhere else." % label)
+		_gap(12)
+		_model_field()
+
+	func _render_command_code() -> void:
+		var name_text := _command_code("name", "Command Code")
+		_step_heading("commandcode", name_text)
+		_gap(14.4)
+		var box := PanelContainer.new()
+		box.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.09), 12, 1, Vector4(14.4, 12.8, 14.4, 12.8)))
+		var steps := VBoxContainer.new()
+		steps.add_theme_constant_override("separation", 11)
+		for step: Array in [["1. Get the GOAT plan, $10 a month", "Open the plans ↗", _command_code("pricingUrl"), "Pricing"], ["2. Generate an API key", "Open the API keys page ↗", _command_code("keysUrl"), "Keys"]]:
+			var line := HBoxContainer.new()
+			line.add_theme_constant_override("separation", 8)
+			var words := UI.wrapped(str(step[0]), 13, UI.WHITE, 800)
+			words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			words.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			line.add_child(words)
+			var open_link := _button(str(step[1]), "grey", _open_outside.bind(str(step[2])))
+			open_link.name = "Open%s" % str(step[3])
+			open_link.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			line.add_child(open_link)
+			steps.add_child(line)
+		box.add_child(steps)
+		_body.add_child(box)
+		_gap(15.2)
+		_key_field("%s API key" % name_text, "Paste your %s API key" % name_text, "Stored only in this browser. It is sent to %s and nowhere else." % name_text)
+		_gap(12)
+		_body.add_child(_fact_row("Model", "GLM 5.3 Flash"))
+		_gap(12)
+		var no_limit := _fact_row("My key has no request limit", "On")
+		no_limit.name = "NoRequestLimitRow"
+		_body.add_child(no_limit)
+
+	func _render_custom() -> void:
+		_step_heading("custom", "Custom")
+		_gap(15.2)
+		var self_hosted := _self_hosted()
+		var label := _meta_label()
 		_body.add_child(_label("Provider"))
 		_gap(4.8)
 		var select := OptionButton.new()
@@ -1210,44 +1481,69 @@ https://www.youtube-nocookie.com/"
 				selected_index = index
 		if selected_index >= 0:
 			select.select(selected_index)
-		select.item_selected.connect(func(index: int) -> void:
-			provider = str(select.get_item_metadata(index))
-			error = ""
-			endpoint = str(ENDPOINT_PLACEHOLDERS.get(provider, "")) if _requirement() == "endpoint" else ""
-			_render())
+		select.item_selected.connect(_on_provider_selected.bind(select))
 		_body.add_child(select)
 		_gap(12)
 		if self_hosted:
 			_body.add_child(_label("API endpoint"))
 			_gap(4.8)
 			var endpoint_line := LineEdit.new()
+			endpoint_line.name = "EndpointLine"
 			endpoint_line.text = endpoint
 			endpoint_line.placeholder_text = str(ENDPOINT_PLACEHOLDERS.get(provider, "https://…"))
 			endpoint_line.custom_minimum_size.y = 38
 			_input_box(endpoint_line)
-			endpoint_line.text_changed.connect(func(text: String) -> void:
-				endpoint = text
-				_refresh_save())
+			endpoint_line.text_changed.connect(_on_endpoint_changed)
 			_body.add_child(endpoint_line)
 			_gap(4.8)
 			_body.add_child(_helper("Base URL that exposes /chat/completions and /models (Ollama, LM Studio, OpenRouter, a gateway)." if provider == "openai-compatible" else "Base URL of a self-hosted proxy that speaks the Anthropic Messages API."))
 			_gap(12)
-		_body.add_child(_label("API key (optional)" if self_hosted else "%s API key" % label))
+		_key_field("API key (optional)" if self_hosted else "%s API key" % label, "Leave empty if your server needs none" if self_hosted else "Paste your %s API key" % label, "Stored only in this browser. It is sent to %s and nowhere else." % label)
+		_gap(12)
+		_model_field()
+		var holder := VBoxContainer.new()
+		holder.name = "NoRequestLimitRow"
+		holder.add_theme_constant_override("separation", 0)
+		_gap(12, holder)
+		holder.add_child(_fact_row("My key has no request limit", "On"))
+		holder.visible = custom_no_limit
+		_no_limit_row = holder
+		_body.add_child(holder)
+
+	func _on_provider_selected(index: int, select: OptionButton) -> void:
+		_choose_provider(str(select.get_item_metadata(index)))
+		custom_no_limit = false
+		_render()
+		_check_no_limit()
+
+	func _on_endpoint_changed(text: String) -> void:
+		endpoint = text
+		_refresh_save()
+		_check_no_limit()
+
+	func _on_key_changed(text: String) -> void:
+		api_key = text
+		_refresh_save()
+
+	func _on_key_submitted(_text: String) -> void:
+		_save()
+
+	func _key_field(label_text: String, placeholder: String, helper: String) -> void:
+		_body.add_child(_label(label_text))
 		_gap(4.8)
 		var key_holder := Control.new()
 		key_holder.custom_minimum_size.y = 38
 		var key_line := LineEdit.new()
+		key_line.name = "KeyLine"
 		key_line.text = api_key
 		key_line.secret = not show_key
-		key_line.placeholder_text = "Leave empty if your server needs none" if self_hosted else "Paste your %s API key" % label
+		key_line.placeholder_text = placeholder
 		key_line.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		_input_box(key_line)
 		key_line.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.35), Color(1, 1, 1, 0.14), 8, 1, Vector4(10.4, 8.8, 40, 8.8)))
 		key_line.add_theme_stylebox_override("focus", UI.box(Color(0, 0, 0, 0.4), Color(1, 1, 1, 0.26), 8, 1, Vector4(10.4, 8.8, 40, 8.8)))
-		key_line.text_changed.connect(func(text: String) -> void:
-			api_key = text
-			_refresh_save())
-		key_line.text_submitted.connect(func(_text: String) -> void: _save())
+		key_line.text_changed.connect(_on_key_changed)
+		key_line.text_submitted.connect(_on_key_submitted)
 		key_holder.add_child(key_line)
 		var eye := Button.new()
 		eye.flat = true
@@ -1260,74 +1556,72 @@ https://www.youtube-nocookie.com/"
 		eye.offset_right = -4
 		eye.offset_top = 3
 		eye.offset_bottom = 35
-		eye.pressed.connect(func() -> void:
-			show_key = not show_key
-			key_line.secret = not show_key
-			eye.icon = _svg(EYE_OFF_SVG if show_key else EYE_SVG, 18, Color("#38bdf8") if show_key else Color(1, 1, 1, 0.65))
-			eye.tooltip_text = "Hide API key" if show_key else "Show API key")
+		eye.pressed.connect(_toggle_key_shown.bind(key_line, eye))
 		key_holder.add_child(eye)
 		_body.add_child(key_holder)
 		_gap(4.8)
-		_body.add_child(_helper("Stored only in this browser. It is sent to %s and nowhere else." % label))
-		_gap(12)
+		_body.add_child(_helper(helper))
+
+	func _toggle_key_shown(key_line: LineEdit, eye: Button) -> void:
+		show_key = not show_key
+		key_line.secret = not show_key
+		eye.icon = _svg(EYE_OFF_SVG if show_key else EYE_SVG, 18, Color("#38bdf8") if show_key else Color(1, 1, 1, 0.65))
+		eye.tooltip_text = "Hide API key" if show_key else "Show API key"
+
+	func _model_field() -> void:
 		_body.add_child(_label("Model (optional)"))
 		_gap(4.8)
 		var model_line := LineEdit.new()
+		model_line.name = "ModelLine"
 		model_line.text = model
 		model_line.placeholder_text = _model_placeholder()
 		model_line.custom_minimum_size.y = 38
 		_input_box(model_line)
 		_model_line = model_line
-		_suggest_box.visible = false
-		model_line.text_changed.connect(func(text: String) -> void:
-			model = text
-			_show_suggestions())
+		model_line.text_changed.connect(_on_model_changed)
 		model_line.focus_entered.connect(_show_suggestions)
 		model_line.focus_exited.connect(_hide_suggestions_later)
-		model_line.gui_input.connect(func(event: InputEvent) -> void:
-			if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
-				_show_suggestions.call_deferred()
-			elif event is InputEventKey and (event as InputEventKey).pressed and (event as InputEventKey).keycode == KEY_ESCAPE and _suggest_box.visible:
-				_suggest_box.visible = false
-				model_line.accept_event())
-		model_line.text_submitted.connect(func(_text: String) -> void:
-			_suggest_box.visible = false
-			_save())
+		model_line.gui_input.connect(_on_model_input.bind(model_line))
+		model_line.text_submitted.connect(_on_model_submitted)
 		_body.add_child(model_line)
 		_gap(4.8)
 		_body.add_child(_helper("Leave blank for the default. You can add more models and backup providers later under the game menu, Settings, AI."))
-		if not error.is_empty():
-			_gap(11.2)
-			_body.add_child(UI.wrapped(error, 12, Color("#fca5a5")))
-		_gap(17.6)
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 8)
-		row.add_child(UI.spacer())
-		row.add_child(_button("Not now", "quiet", func() -> void: dismissed.emit()))
-		row.add_child(_button("Open full settings", "quiet", func() -> void: configure.emit()))
-		var save_button := _button("Save and play", "primary", func() -> void: _save())
-		save_button.name = "SaveAndPlay"
-		row.add_child(save_button)
-		_body.add_child(row)
-		_refresh_save()
-		_queue_fit()
+
+	func _on_model_changed(text: String) -> void:
+		model = text
+		_show_suggestions()
+
+	func _on_model_input(event: InputEvent, model_line: LineEdit) -> void:
+		if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+			_show_suggestions.call_deferred()
+		elif event is InputEventKey and (event as InputEventKey).pressed and (event as InputEventKey).keycode == KEY_ESCAPE and _suggest_box.visible:
+			_suggest_box.visible = false
+			model_line.accept_event()
+
+	func _on_model_submitted(_text: String) -> void:
+		_suggest_box.visible = false
+		_save()
+
+	func _can_save() -> bool:
+		if choice.is_empty():
+			return false
+		return not endpoint.strip_edges().is_empty() if _self_hosted() else not api_key.strip_edges().is_empty()
 
 	func _refresh_save() -> void:
 		var button := _body.find_child("SaveAndPlay", true, false) as Button
 		if not button:
 			return
-		var self_hosted := _requirement() == "endpoint"
-		var can_save := not endpoint.strip_edges().is_empty() if self_hosted else not api_key.strip_edges().is_empty()
+		var can_save := _can_save()
 		button.modulate.a = 1.0 if can_save else 0.5
 		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if can_save else Control.CURSOR_FORBIDDEN
-		button.tooltip_text = "Save these settings and start playing" if can_save else ("Enter the server endpoint first" if self_hosted else "Paste an API key first")
+		button.tooltip_text = "Save these settings and start playing" if can_save else ("Enter the server endpoint first" if _self_hosted() else "Paste an API key first")
 
 	func _save() -> void:
-		var self_hosted := _requirement() == "endpoint"
-		var can_save := not endpoint.strip_edges().is_empty() if self_hosted else not api_key.strip_edges().is_empty()
-		if not can_save or not link:
+		if not _can_save() or not link:
 			return
-		var reply: Dictionary = await link.request("settings.quickSetup", {"provider": provider, "apiKey": api_key, "endpoint": endpoint, "model": model})
+		var reply: Dictionary = await link.request("settings.quickSetup", {"choice": choice, "provider": provider, "apiKey": api_key, "endpoint": endpoint, "model": model})
+		if not is_instance_valid(self):
+			return
 		if not reply.get("ok", false):
 			error = str(reply.get("error", "The settings could not be saved."))
 			_render()
