@@ -151,6 +151,7 @@ export const RELEASES = [
           "2026-11-events-take-effect",
           "2026-11-changes-where-they-belong",
           "2026-11-scripted-events-in-ai-words",
+          "2026-11-scripted-event-impacts",
           "2026-10-interactive-offers",
           "2026-10-unruled-land",
           "2026-10-renamed-regions",
