@@ -2,7 +2,8 @@ class_name EditorFeaturesModel
 extends RefCounted
 
 const OPERATORS := ["all", "any", "at_least"]
-const CONDITION_KEYS := ["polityId", "warId", "institutionId", "overlordId", "eventId", "outcomeId", "regionId", "baseOwner", "status", "kind"]
+const CONDITION_KEYS := ["polityId", "warId", "institutionId", "overlordId", "eventId", "outcomeId", "regionId", "regionName", "baseOwner", "status", "kind"]
+const IMPACT_FAMILIES := ["regionTransfers", "regionControlOps", "regionClaims", "polityChanges"]
 const JS_SPACE := [9, 10, 11, 12, 13, 32, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202, 8232, 8233, 8239, 8287, 12288, 65279]
 
 static var _res := {}
@@ -290,6 +291,23 @@ static func _title_of(entry: Dictionary, body: String) -> String:
 	return title if not title.is_empty() else scripted_title(body)
 
 
+static func impact_fields(entry: Dictionary) -> Dictionary:
+	var out := {}
+	var rows: Variant = entry.get("impactRows")
+	if rows is Array and not (rows as Array).is_empty():
+		out["impactRows"] = (rows as Array).duplicate(true)
+	var impacts: Variant = entry.get("impacts")
+	if impacts is Dictionary:
+		var kept := {}
+		for family in IMPACT_FAMILIES:
+			var entries: Variant = (impacts as Dictionary).get(family)
+			if entries is Array and not (entries as Array).is_empty():
+				kept[family] = (entries as Array).duplicate(true)
+		if not kept.is_empty():
+			out["impacts"] = kept
+	return out
+
+
 static func normalize_outcomes(value: Variant, parent_id: String) -> Array:
 	if not (value is Array):
 		return []
@@ -310,7 +328,9 @@ static func normalize_outcomes(value: Variant, parent_id: String) -> Array:
 		var seen := int(ids.get(base_id, 0))
 		ids[base_id] = seen + 1
 		var id := ("%s-%d" % [base_id, seen + 1]).substr(0, 160) if seen > 0 else base_id
-		outcomes.append({"id": id, "title": _title_of(record, body), "text": body, "weight": outcome_weight(number_or_nan(record, "weight"), 1.0)})
+		var kept := {"id": id, "title": _title_of(record, body), "text": body, "weight": outcome_weight(number_or_nan(record, "weight"), 1.0)}
+		kept.merge(impact_fields(record))
+		outcomes.append(kept)
 	return outcomes
 
 
@@ -372,6 +392,7 @@ static func normalize_scripted_events(value: Variant) -> Array:
 		}
 		if not outcomes.is_empty():
 			event["outcomes"] = outcomes
+		event.merge(impact_fields(record))
 		events.append(event)
 	var order: Array = []
 	for index in range(events.size()):
