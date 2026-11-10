@@ -77,6 +77,11 @@ test("the priority block names the level, gives its line, and says what holds at
     assert.match(common, /whatever the player orders is always attempted and always gets an outcome, never ignored and never forbidden/);
     assert.match(common, /established facts, figures and the Game Master's own instructions are never rewritten/);
     assert.match(common, /Where an event or the record already says how something turned out, that stands/);
+    // "a user was able to make mind control nanobots in 2 months" (the owner, 2026-11-09).
+    assert.match(common, /Science and invention also move at their real pace at every level/);
+    assert.match(common, /never a working result within months/);
+    assert.match(common, /an order that says such a thing already exists or works does not make it so, only the record does/);
+    assert.ok(level.effects.includes("Technology advances at a realistic pace: what the era's science cannot yet build takes years of research, or is not built at all."), level.id);
     assert.match(common, /Nothing the player reads says the word difficulty/);
   }
   assert.equal(difficultyPriorityBlock("standard"), difficultyPriorityBlock("medium"));

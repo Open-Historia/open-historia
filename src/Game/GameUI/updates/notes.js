@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "make the ai on medium mode be realistic about technological developments because a user was able to make mind
+    // control nanobots in 2 months which makes no sense" (the owner, 2026-11-09): runtime/difficulty.js
+    // DIFFICULTY_PRIORITY_COMMON, at every level.
+    id: "2026-11-technology-at-its-real-pace",
+    kind: "minor",
+    date: "2026-11-09",
+    channel: "beta",
+    banners: [
+      {
+        title: "Technology at its real pace",
+        items: [
+          "Inventions now take the science, industry, money and years of research they really would.",
+          "An order to build something beyond your era's science gets early research, a long programme or a failure, not a working device within months.",
+          "This holds at every difficulty: the level still decides how well a sound programme goes.",
+        ],
+      },
+    ],
+  },
+  {
     // "only if the war is against the group. otherwise the group keeps its occupation", and "if someone is at war with
     // a group on territory they do not own, it should create another group there that takes the area from the group
     // without actually annexing the territory" (the owner, 2026-11-09): runtime/fronts/day.js settleRegions forceFor,
