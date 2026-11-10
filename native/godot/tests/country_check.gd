@@ -109,19 +109,6 @@ func _find_all(node: Node, test: Callable, into: Array) -> Array:
 	return into
 
 
-func _cadence_choices(panel: Node) -> Array:
-	var labels := PackedStringArray()
-	for item in (panel.get("_tracking_model") as Dictionary).get("intervals", []):
-		labels.append(str((item as Dictionary).get("label", "")))
-	var modal: Node = panel.get("_modal")
-	return _find_all(modal, func(node: Node) -> bool: return node is Button and labels.has((node as Button).text), [])
-
-
-func _tracking_button(panel: Node) -> Variant:
-	var found := _find_all(panel.get("body"), func(node: Node) -> bool: return node.get_script() != null and node.get("enabled") != null and node is PanelContainer and _has_text(node, "Historical tracking"), [])
-	return found[0] if not found.is_empty() else null
-
-
 func _press(node: Node, wanted: String) -> bool:
 	if node is Button and (node as Button).text == wanted:
 		(node as Button).pressed.emit()
@@ -467,7 +454,7 @@ func cancel(id: int) -> void:
 	await _shoot("06-country-economy-lower")
 	panel.scroll.scroll_vertical = 4000
 	await _wait(0.3)
-	_check(_has_text(panel, "MILITARY POWER") and _has_text(panel, "Advanced statistics") and _has_text(panel, "Historical tracking"), "military card and the two buttons")
+	_check(_has_text(panel, "MILITARY POWER") and _has_text(panel, "Advanced statistics") and not _has_text(panel, "Historical tracking"), "military card and Advanced statistics, with no Historical tracking")
 	await _shoot("07-country-economy-bottom")
 	panel.scroll.scroll_vertical = 0
 	panel._toggle_refresh_menu()
@@ -487,51 +474,7 @@ func cancel(id: int) -> void:
 	_check(panel._modal != null and _has_text(panel._modal, "Advanced Statistics") and _has_text(panel._modal, "TIME RANGE"), "advanced statistics modal")
 	await _shoot("10-country-advanced")
 	panel._close_modal()
-	await panel._open_tracking()
-	await _wait(0.8)
-	_check(panel._modal != null and _has_text(panel._modal, "Historical tracking") and _has_text(panel._modal, "Auto-refresh cadence"), "historical tracking modal")
-	await _shoot("11-country-tracking")
-	var busy_script := GDScript.new()
-	busy_script.source_code = "extends EngineLink
-func request(method: String, args: Dictionary = {}) -> Dictionary:
-	return {\"ok\": true, \"result\": {\"busy\": method == \"country.busy\"}}
-"
-	busy_script.reload()
-	var busy_link: Node = busy_script.new()
-	var live_link: EngineLink = panel.engine
-	var cadence_before := _cadence_choices(panel)
-	_check(not cadence_before.is_empty() and cadence_before.all(func(b: Button) -> bool: return not b.disabled), "cadence choices lit while no turn runs (%d)" % cadence_before.size())
-	panel.engine = busy_link
-	await panel._poll_busy()
-	await _wait(0.2)
-	var cadence_busy := _cadence_choices(panel)
-	_check(panel._modal_kind == "tracking" and not cadence_busy.is_empty() and cadence_busy.all(func(b: Button) -> bool: return b.disabled), "open tracking sheet dims its cadence live when a turn starts (%d)" % cadence_busy.size())
-	panel.engine = live_link
-	await panel._poll_busy()
-	await _wait(0.2)
-	var cadence_after := _cadence_choices(panel)
-	_check(panel._modal_kind == "tracking" and not cadence_after.is_empty() and cadence_after.all(func(b: Button) -> bool: return not b.disabled), "and lights them again when it ends (%d)" % cadence_after.size())
-	panel._close_modal()
-	await _wait(0.2)
-	panel.engine = busy_link
-	await panel._poll_busy()
-	await _until(func() -> bool:
-		var button: Variant = _tracking_button(panel)
-		return bool(panel.data.get("turnRunning", false)) and button != null and not bool(button.get("enabled")), 15.0)
-	await _wait(0.2)
-	var dimmed_button: Variant = _tracking_button(panel)
-	_check(bool(panel.data.get("turnRunning", false)) and _has_text(panel, str(panel.data.get("turnRunningNote", "?"))), "the tracking button dims as soon as a turn runs")
-	_check(dimmed_button != null and not bool(dimmed_button.get("enabled")), "the open drawer's Historical tracking button turns off live")
-	panel.scroll.scroll_vertical = 4000
-	await _wait(0.2)
-	await _shoot("11b-country-tracking-dimmed")
-	panel.engine = live_link
-	busy_link.free()
-	await panel._poll_busy()
-	await _wait(0.2)
-	var lit_button: Variant = _tracking_button(panel)
-	_check(not bool(panel.data.get("turnRunning", true)), "and lights again when the turn ends")
-	_check(lit_button != null and bool(lit_button.get("enabled")), "the Historical tracking button turns back on live")
+	_check(not panel.has_method("_open_tracking") and panel.get("_tracking_model") == null, "Stats has no Historical tracking sheet")
 	panel.scroll.scroll_vertical = 0
 
 	await panel.set_tab("ranking")
@@ -575,7 +518,6 @@ func request(method: String, args: Dictionary = {}) -> Dictionary:
 	panel.engine = spy
 	await panel.refresh()
 	panel._background("ensureCountryAssessed", panel._sequence)
-	panel._poll_busy()
 	await panel.set_tab("economy")
 	await panel.set_tab("politics")
 	await panel.on_region_selected("Germany")

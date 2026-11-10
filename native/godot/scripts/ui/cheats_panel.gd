@@ -319,7 +319,7 @@ func _load_tool() -> void:
 				_s["hd"] = history["result"]
 				_s["hd_draft"] = str((history["result"] as Dictionary).get("draft", ""))
 			else:
-				_s["hd"] = {"document": null, "passes": [], "status": {"text": "Could not read the campaign: %s" % str(history.get("error", "")), "canFoldNow": false}, "totalEvents": 0}
+				_s["hd"] = {"document": null, "passes": [], "status": {"text": "Could not read the campaign: %s" % str(history.get("error", ""))}, "totalEvents": 0}
 				_s["hd_draft"] = ""
 
 
@@ -4363,15 +4363,6 @@ func _render_history() -> void:
 	info_column.add_child(_note("%d events in the timeline. %s" % [int(data.get("totalEvents", 0)), str(status.get("text", ""))], 12, Color(1, 1, 1, 0.72)))
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 5)
-	var can_fold := bool(status.get("canFoldNow", false))
-	var fold := _btn("Fold the older events now", "primary", 12)
-	fold.tooltip_text = "Runs the AI consolidator on the older events now" if can_fold else "Only the retained tail is waiting; there is nothing older to fold"
-	_enable(fold, not _busy and can_fold)
-	fold.pressed.connect(func() -> void:
-		await _run("cheats.history.fold", {})
-		await _load_tool()
-		_render())
-	buttons.add_child(fold)
 	if bool(_s.get("hd_confirm_reset", false)):
 		var confirm := _btn("Confirm reset", "primary", 12)
 		_enable(confirm, not _busy)
