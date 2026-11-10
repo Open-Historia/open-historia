@@ -84,7 +84,7 @@ test("every segment's lines reach the turn, and the turn keeps them before anyth
   assert.match(gameplay, /return frontsOn\(\) \? withWarFigures\(withFrontOrders\(shown\)\) : shown;/);
   assert.match(gameplay, /const figures = warFiguresBlockOf\(world, game\);\n {2}if \(figures\) blocks\.push\(figures\);/);
   assert.match(gameplay, /warFigures: merged\.warFigures,/);
-  const kept = gameplay.indexOf("worldWithImpacts = keepWarFigures(worldWithImpacts, result.warFigures);");
+  const kept = gameplay.indexOf("worldWithImpacts = keepWarFigures(worldWithImpacts, result.warFigures, nextGame);");
   assert.ok(kept > 0);
   assert.ok(kept < gameplay.indexOf("requestConflictSheets(nextWorld, nextGame);"), "before the requests for what is left");
 });

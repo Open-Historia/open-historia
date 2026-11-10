@@ -789,3 +789,40 @@ Author starting tags come from `getNationTags` (`assets.js`, the scenario's `tag
 | `isPolityLandless` | Territory check. |
 
 All reads/writes route through `src/runtime/assets.js` `readJson`/`writeJson`, which layer value-caching, request batching, Cache-Storage persistence with a HEAD freshness check, and derived-cache invalidation (`invalidateDerivedCachesForWrite`, `assets.js`) on top of the raw `/api/runtime/json/*` endpoints.
+
+
+### National-statistic origins
+
+A country sheet may carry optional `statProvenance`, keyed by numeric field paths
+such as `population.total`, `economy.gdp`, `indices.sovereignty`,
+`gdpBreakdown.agriculture`, `military.quality` and `customStats.grain`. Each bounded
+entry stores `{source, value, date?, round?}`. Sources are `scenario`, `manual`,
+`ai` or `calculated`; absence means unspecified. The value binds attribution to
+the number it describes. The live intelligence rating remains in
+`world.intelligence`; its optional origin is bound under `intelligenceService`
+on the country's sheet and checked against the live value when displayed. Native
+war weariness and resource origins use separate `warWeariness` and `warResources`
+keys, so a sheet's military rating cannot impersonate a live war-ledger value.
+
+`server/statProvenance.js` is the pure shared implementation (packaged with the
+desktop server and imported by the browser). New-game creation stamps scenario
+origins in both stores, without rewriting the scenario; clones and imports do not
+reclassify their data. Runtime mutation callers pass engine-known `origin`
+options into the existing merge boundary. Unchanged/rejected values retain their
+origin; changed values with no origin lose stale attribution. AI tool schemas do
+not offer a provenance-writing field. Standard sheet validation strips this
+engine-owned field before applying the model's output schema.
+
+History samples keep a compact optional `statProvenance` record:
+`{origins:[{source,date?,round?}],fields:{[fieldPath]:originIndex}}`. Repeated
+origin triples are stored once per snapshot; the snapshot already owns the numeric
+values. Snapshot normalization bounds both tables and ignores malformed entries.
+An unchanged reading does not create an extra history sample. Existing history
+limits apply. Current-source metadata is never substituted for a historical
+snapshot's missing attribution. There is no schema-version bump or save migration;
+older builds can drop metadata without losing numeric fields.
+
+This is writer attribution, not historical verification or a tamper-proof change
+log. Source dates describe accepted changes in game time, not the publication date
+of a historical source. Calculated numbers may depend on estimates. Manual
+Country Editor corrections are `manual`; an AI-executed GM request is `ai`.

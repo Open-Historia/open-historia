@@ -1589,3 +1589,22 @@ test("a bundle carries the language packs out and back in, a clone keeps them, a
   ok(await scenarios("PUT", `${copy}/import`, version("Hub Map v3", null, 3)));
   assert.equal("languages" in ok(await scenarios("GET", copy)).scenario, false, "a version without packs keeps none of the old");
 });
+
+test("new-game origins persist in the web store without rewriting scenario, clone, or import sources", async () => {
+  await reset();
+  const scenario = ok(await scenarios("POST", "", { name: "Medieval origins" })).scenario;
+  ok(await scenarios("PUT", scenario.id, {
+    world: { polityOverrides: { Testland: { name: "Testland" } }, countryStats: { Testland: { customStats: { silver: 0 }, population: { total: 1000 } } } },
+    game: { country: "Testland", gameDate: "1200-01-01", startDate: "1200-01-01", round: 0 },
+  }));
+  const game = ok(await games("POST", "", { scenarioId: scenario.id, name: "Sources" })).game;
+  const saved = ok(await games("GET", game.id)).data.world.countryStats.Testland;
+  assert.equal(saved.statProvenance["customStats.silver"].source, "scenario");
+  assert.equal(saved.statProvenance["population.total"].date, "1200-01-01");
+  assert.equal(ok(await scenarios("GET", scenario.id)).data.world.countryStats.Testland.statProvenance, undefined);
+  const clone = ok(await games("POST", "", { seedGameId: game.id, name: "Copy" }));
+  assert.deepEqual(clone.data.world.countryStats.Testland, saved);
+  const bundle = ok(await games("GET", `${game.id}/export`));
+  const imported = ok(await games("POST", "import", bundle));
+  assert.deepEqual(imported.data.world.countryStats.Testland, saved);
+});

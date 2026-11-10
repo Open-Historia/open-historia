@@ -1,3 +1,4 @@
+import { seedScenarioStatProvenance } from "../../../server/statProvenance.js";
 /*! Open Historia — web-mode library/scenario/game/runtime store © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Browser (IndexedDB) port of server/libraryStore.js. Backs /api/library,
 // /api/scenarios*, /api/games*, /api/runtime/json*, /api/runtime/pmtiles* in web
@@ -1482,6 +1483,8 @@ const createGame = async (body = {}) => {
   if (body.gamePatch && typeof body.gamePatch === "object") {
     record.json.game = canonicalizeGameCountry({ ...jsonAsset(record, "game"), ...body.gamePatch }, jsonAsset(record, "world"));
   }
+
+  if (!sourceGameSummary) record.json.world = seedScenarioStatProvenance(jsonAsset(record, "world"), jsonAsset(record, "game"));
 
   // Meta cascade + seed inheritance, byte-faithful to server createGame (:1343).
   const createdAt = nowIso();
