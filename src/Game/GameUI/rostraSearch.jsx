@@ -71,8 +71,8 @@ const ensureStyles = () => {
   style.id = STYLE_ID;
   style.textContent = `
   @keyframes rostraShimmer { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
-  .rostra-search-input::placeholder { color: ${INK_FAINT}; }
-  .rostra-search-hit:hover { background: ${WASH}; }
+  .rostra-search-input::placeholder { color: var(--rs-ink-faint); }
+  .rostra-search-hit:hover { background: var(--rs-wash); }
   @media (prefers-reduced-motion: reduce) { .rostra-shimmer { animation: none !important; } }
   `;
   document.head.appendChild(style);
