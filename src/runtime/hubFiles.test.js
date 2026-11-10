@@ -316,16 +316,17 @@ test("a copy says what kind of image it is by its bytes", () => {
   assert.equal(imageTypeOfBytes(null), "");
 });
 
-test("a post reads its count, its file's copy, its cover's copy and its checked suggestions from the index", () => {
+test("a post reads its file's copy, its cover's copy and its checked suggestions from the index, and its count from the counter", () => {
   const index = normalizeHubIndex(INDEX);
-  const parsed = parsePost(index.posts[0], index);
-  assert.equal(parsed.installs, 345);
+  const parsed = parsePost(index.posts[0], index, { 12: 17 });
+  assert.equal(parsed.installs, 17, "the counter's number");
+  assert.equal(parsePost(index.posts[0], index).installs, null, "the index's download count is never shown");
   assert.equal(parsed.bundleUrl, ATTACHMENT, "the post's identity stays its attachment, so a new copy of the same file never looks like a new version");
   assert.equal(parsed.releaseUrl, COPY);
   assert.equal(parsed.coverImageUrl, COVER_COPY, "the cover is shown from its copy, never from the attachment");
   assert.deepEqual(parsed.checkedSuggestions, { 7001: SUGGESTION });
 
-  const other = parsePost({ ...index.posts[0], number: 99 }, index);
+  const other = parsePost({ ...index.posts[0], number: 99 }, index, { 12: 17 });
   assert.equal(other.installs, null);
   assert.deepEqual(other.checkedSuggestions, {});
   // No copy, no picture and nothing to import.
@@ -336,8 +337,9 @@ test("a post reads its count, its file's copy, its cover's copy and its checked 
 });
 
 // Every hub download goes through fetchHubFile, nothing lists the hub through
-// GitHub's API, and nothing calls the old counter.
-test("the game downloads hub files through hubFiles.js only, asks GitHub's API for comments only, and reports imports nowhere", () => {
+// GitHub's API, nothing calls the old counter's routes, and only
+// hubImportCount.js talks to the import counter.
+test("the game downloads hub files through hubFiles.js only, asks GitHub's API for comments only, and reports imports from one place", () => {
   const sources = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -360,10 +362,16 @@ test("the game downloads hub files through hubFiles.js only, asks GitHub's API f
   assert.deepEqual(apiCalls, ["`${HUB_API}/issues/${id}/comments?per_page=100`"]);
   for (const file of sources) assert.doesNotMatch(code(file), /issues\?state=|[?&]labels=/, `${rel(file)} lists no issues`);
 
-  const counter = [...sources, path.join(ROOT, "server", "server.js")]
-    .filter((file) => /api\/hub\/import-(?:log|counts)|IMPORT_COUNTER_URL|oh-import-counter/.test(code(file)))
+  const oldRoutes = [...sources, path.join(ROOT, "server", "server.js")]
+    .filter((file) => /api\/hub\/import-(?:log|counts)|\bOH_IMPORT_COUNTER_URL/.test(code(file)))
     .map(rel);
-  assert.deepEqual(counter, []);
+  assert.deepEqual(oldRoutes, []);
+  const counter = [...sources, path.join(ROOT, "server", "server.js")]
+    .filter((file) => /IMPORT_COUNTER_URL|oh-import-counter|importCounterUrl/.test(code(file)))
+    .map(rel);
+  assert.deepEqual(counter, ["src/runtime/hubImportCount.js"]);
+  const countCalls = sources.filter((file) => /\bcountHubImport\(/.test(code(file))).map(rel).sort();
+  assert.deepEqual(countCalls, ["src/runtime/hubPosts.js"], "a first import in downloadHubScenario is the one report");
   const suggestions = fs.readFileSync(path.join(ROOT, "src/Game/GameUI/ScenarioSuggestions.jsx"), "utf8");
   assert.match(suggestions, /downloadHubFile\(source\.ref\.zipUrl, \{ copy: false \}\)/);
 });

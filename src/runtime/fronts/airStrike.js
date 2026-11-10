@@ -11,12 +11,27 @@
 // (world.units of type "air"; airStrikeOps.js) and waits in
 // world.airStrikeOrders until time next passes:
 //
-//   { id, unit, owner, kind, lng, lat, target, country, battlefield, marker, people, date, round }
+//   { id, unit, owner, kind, lng, lat, target, country, battlefield, marker, people, date, round, radius? }
 //
 //   kind     "troops" (a place on a battlefield), "structure" (one of the
 //            enemy's, world.markers: `marker` is its id) or "city" (`people`,
 //            how many live there, where the page knew it)
 //   target   what is struck, by its name; `country`, whose it is
+//   radius   the STRIKE RADIUS the player set, as a share of the era's
+//            AIR_BLAST_KM: from AIR_STRIKE_RADIUS_LEAST to AIR_STRIKE_RADIUS_MOST,
+//            in steps of AIR_STRIKE_RADIUS_STEP (strikeRadiusOf). Kept only when
+//            it is not AIR_STRIKE_RADIUS_DEFAULT (1, the strike as it always
+//            was), so an order saved before there was a radius reads as the
+//            default.
+//
+// "bombing should be able to adjust the strike radius: smaller radii result in
+// greater lethality, while larger radii reduce the overall threat level" (the
+// owner, 2026-11-09). The same bombs fall on a circle of radius r = AIR_BLAST_KM
+// times `radius`: concentrated on a smaller one, spread over a larger one. What
+// they do to each thing under them goes as the bomb load over the area it falls
+// on, so it is multiplied by the CONCENTRATION c = 1 / radius² (radiusConcentration):
+// half the radius, four times as deadly to what is inside it; twice the radius,
+// a quarter as deadly to each of the four times as much ground it covers.
 //
 // Time passing flies it before the period's land war (Game/AI/frontTurn.js),
 // the same in the run made before the story is asked for and in the one that
@@ -44,16 +59,17 @@
 //   4. FLAK: a raid that reaches its target loses AIR_FLAK of strength by what
 //      it struck (half as much again from 1945).
 //   5. THE BOMBS: power P, the load delivered times the striker's air arm,
-//      0 to about 100.
-//        troops     every troop of either side within the era's AIR_BLAST_KM of
-//                   the place loses AIR_BOMB_TROOPS P at the middle, falling
-//                   away to half at the edge, the less dug in (combat.js
-//                   DUG_IN_LOSS): the striker's own and its allies' too
-//                   (bombTroops, in the engine's run)
-//        structure  AIR_BOMB_STRUCTURE P / 100: damaged from AIR_STRUCTURE_DAMAGED,
+//      0 to about 100; and as they fall, P c (c, the strike radius's
+//      concentration above: 1 at the default radius).
+//        troops     every troop of either side within r (the era's AIR_BLAST_KM
+//                   times the strike radius) of the place loses AIR_BOMB_TROOPS P c
+//                   at the middle, falling away to half at the edge, the less dug
+//                   in (combat.js DUG_IN_LOSS): the striker's own and its allies'
+//                   too (bombTroops, in the engine's run)
+//        structure  AIR_BOMB_STRUCTURE P c / 100: damaged from AIR_STRUCTURE_DAMAGED,
 //                   destroyed from 1, or from AIR_DAMAGED_DESTROYED when it was
 //                   damaged already
-//        city       severity s = P / 100: AIR_CITY_DEAD s of its people killed,
+//        city       severity s = P c / 100, at most 1: AIR_CITY_DEAD s of its people killed,
 //                   AIR_CITY_GDP s of its country's economy lost, and its
 //                   country WEARINESS_BOMBED s more weary of the war
 //                   (warWeariness.js); and AIR_COLLATERAL of the troops' share
@@ -76,6 +92,13 @@ export const AIR_STRIKE_KINDS = Object.freeze(["troops", "structure", "city"]);
 export const AIR_STRIKE_OUTCOMES = Object.freeze(["unopposed", "through", "partly", "turned back", "out of reach", "gone"]);
 // How far the bombs of one strike fall from where it was aimed, by era (before 1500, 1500-1849, 1850-1944, from 1945).
 export const AIR_BLAST_KM = Object.freeze([0, 0, 15, 20]);
+// The strike radius a player may set, as a share of AIR_BLAST_KM: anywhere from the least to the most, kept to
+// the nearest step (the war room's slider moves in the same steps), and the one an order without one has.
+// "make the bombing radius be a slider not buttons" (the owner, 2026-11-09).
+export const AIR_STRIKE_RADIUS_LEAST = 0.5;
+export const AIR_STRIKE_RADIUS_MOST = 2;
+export const AIR_STRIKE_RADIUS_STEP = 0.05;
+export const AIR_STRIKE_RADIUS_DEFAULT = 1;
 // The chance a defender's air unit within reach finds a raid, by era (radar from 1945).
 export const AIR_FIND = Object.freeze([0, 0, 0.6, 0.85]);
 export const INTERCEPTORS_MOST = 3;
@@ -112,6 +135,31 @@ const round4 = (value) => Math.round(Number(value) * 10000) / 10000;
 const whole = (value) => Math.max(0, Math.round(Number(value) || 0));
 const within = (value, least, most) => (value < least ? least : value > most ? most : value);
 
+// ---- the strike radius -----------------------------------------------------------------------
+
+// A strike radius as it is kept: held between the least and the most and rounded to the nearest step (so 0.75,
+// 1.5 and the other radii the war room once offered as keys are kept as they were), or the default for what is
+// none. Divided rather than multiplied by the step, so that a radius is the number it reads as (0.65, never
+// 0.6500000000000001).
+const RADIUS_STEPS_PER_UNIT = Math.round(1 / AIR_STRIKE_RADIUS_STEP);
+export const strikeRadiusOf = (value) => {
+  if (!finite(value) || !(Number(value) > 0)) return AIR_STRIKE_RADIUS_DEFAULT;
+  const wanted = within(Number(value), AIR_STRIKE_RADIUS_LEAST, AIR_STRIKE_RADIUS_MOST);
+  return Math.round(wanted * RADIUS_STEPS_PER_UNIT) / RADIUS_STEPS_PER_UNIT;
+};
+
+// How concentrated the bombs of a strike of that radius fall: 1 / radius² (4 at half the radius, 1/4 at twice it).
+export const radiusConcentration = (value) => {
+  const radius = strikeRadiusOf(value);
+  return 1 / (radius * radius);
+};
+
+// The strike radius kept on an order or a strike: only when it is not the default.
+const radiusField = (value) => {
+  const radius = strikeRadiusOf(value);
+  return radius === AIR_STRIKE_RADIUS_DEFAULT ? {} : { radius };
+};
+
 // ---- what is kept --------------------------------------------------------------------------
 
 // One strike waiting to be flown, or null for what is not one.
@@ -136,6 +184,7 @@ export const normalizeAirStrikeOrder = (raw) => {
     people: whole(raw.people),
     date: clean(raw.date, 40),
     round: whole(raw.round),
+    ...radiusField(raw.radius),
   };
 };
 
@@ -177,6 +226,7 @@ export const normalizeAirStrike = (raw) => {
     ...(clean(raw.marker, 160) ? { marker: clean(raw.marker, 160) } : {}),
     lng: round4(raw.lng),
     lat: round4(raw.lat),
+    ...radiusField(raw.radius),
     from,
     outcome,
     intercepted: list(raw.intercepted).map((entry) => ({ name: clean(entry?.name, 160), owner: clean(entry?.owner), lost: whole(entry?.lost) })).filter((entry) => entry.name).slice(0, INTERCEPTORS_MOST),
@@ -306,6 +356,7 @@ export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "
       ...(order.marker ? { marker: order.marker } : {}),
       lng: order.lng,
       lat: order.lat,
+      ...radiusField(order.radius),
       from: flier ? [round4(flier.unit.lng), round4(flier.unit.lat)] : null,
       intercepted: [],
       lost: 0,
@@ -372,26 +423,27 @@ export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "
       item.entry.strength = Math.max(0, item.entry.strength - cut);
       told.intercepted.push({ name: clean(item.entry.unit.name) || "an air unit", owner: clean(item.entry.unit.ownerCode), lost: Math.round(cut) });
     });
-    // 5. The bombs.
+    // 5. The bombs: P as delivered, and P c as they fall on the strike radius's circle.
     const power = reached ? load * wA : 0;
+    const falls = power * radiusConcentration(order.radius);
     told.outcome = outcome;
     told.lost = Math.round(lost);
     told.down = Math.min(told.sorties, Math.round(lost / 10));
     told.power = Math.round(power);
     if (order.kind === "structure" && standing.has(order.marker)) {
-      const after = structureAfter(standing.get(order.marker), power);
+      const after = structureAfter(standing.get(order.marker), falls);
       standing.set(order.marker, after);
       told.status = after;
     }
     if (order.kind === "city" && power > 0) {
-      const losses = cityLosses({ power, people: order.people, countryPeople: typeof peopleOf === "function" ? peopleOf(order.country) : 0 });
+      const losses = cityLosses({ power: falls, people: order.people, countryPeople: typeof peopleOf === "function" ? peopleOf(order.country) : 0 });
       told.dead = losses.dead;
       told.weariness = Math.round(losses.weariness * 10) / 10;
     }
     strikes.push(told);
     if (power > 0 && blast > 0) {
-      const hit = AIR_BOMB_TROOPS * power * (order.kind === "troops" ? 1 : AIR_COLLATERAL);
-      moments.push({ type: "airstrike", day: 0, ref: told.id, owner, lng: order.lng, lat: order.lat, km: blast, hit, at: order.target || order.battlefield || "" });
+      const hit = AIR_BOMB_TROOPS * falls * (order.kind === "troops" ? 1 : AIR_COLLATERAL);
+      moments.push({ type: "airstrike", day: 0, ref: told.id, owner, lng: order.lng, lat: order.lat, km: blast * strikeRadiusOf(order.radius), hit, at: order.target || order.battlefield || "" });
     }
   }
   const unitChanges = [];
@@ -494,7 +546,9 @@ export const wearinessFromStrikes = (strikes) => {
 };
 
 // The strikes flown, as the map plays them (runtime/strikes.js): the raid flies from its base to its target,
-// with those shot down seen to fall.
+// with those shot down seen to fall, and its bombs scattered as wide as the strike radius was set
+// (`spreadKm`: AIR_VISUAL_SPREAD_KM, the scatter a bombing run is drawn with, times it; none at the default).
+export const AIR_VISUAL_SPREAD_KM = 24;
 export const airStrikeVisuals = (strikes) => normalizeAirStrikes(strikes)
   .filter((strike) => strike.from && strike.outcome !== "gone" && strike.outcome !== "out of reach")
   .map((strike) => ({
@@ -507,6 +561,7 @@ export const airStrikeVisuals = (strikes) => normalizeAirStrikes(strikes)
     down: strike.down,
     from: { name: strike.unit, lng: strike.from[0], lat: strike.from[1] },
     to: { name: strike.target || strike.battlefield, lng: strike.lng, lat: strike.lat },
+    ...(strike.radius ? { spreadKm: AIR_VISUAL_SPREAD_KM * strike.radius } : {}),
   }));
 
 // ---- what is told ----------------------------------------------------------------------------
@@ -521,6 +576,10 @@ const OUTCOME_WORDS = {
   partly: "the bombers got through only in part",
   "turned back": "the bombers turned back without bombing",
 };
+// A strike radius the story is told as narrow (at most this) or wide (at least this): a slider set a step or two
+// off the usual circle is told as the usual strike. (Each is the other's reciprocal: 0.8 = 1 / 1.25.)
+export const AIR_STRIKE_TOLD_NARROW = 0.8;
+export const AIR_STRIKE_TOLD_WIDE = 1.25;
 
 // One strike, in words, or "" for one that never flew.
 export const describeAirStrike = (strike) => {
@@ -532,7 +591,8 @@ export const describeAirStrike = (strike) => {
     : strike.kind === "structure"
       ? `${whose}${strike.target || "a structure"}`
       : `${strike.country ? `${strike.country}'s troops` : "troops"}${strike.battlefield ? ` on ${strike.battlefield}` : ""}${strike.target ? ` near ${strike.target}` : ""}`;
-  const parts = [`${by} struck ${what}`];
+  const pattern = strike.radius >= AIR_STRIKE_TOLD_WIDE ? ", its bombs spread over a wide area" : strike.radius <= AIR_STRIKE_TOLD_NARROW ? ", its bombs concentrated on a narrow area" : "";
+  const parts = [`${by} struck ${what}${pattern}`];
   if (strike.intercepted.length > 0) {
     parts.push(`intercepted by ${joined(strike.intercepted.map((entry) => `${entry.owner}'s ${entry.name}`))}; the fighters fought it out and ${OUTCOME_WORDS[strike.outcome] ?? ""}`);
   } else parts.push(OUTCOME_WORDS.unopposed);
@@ -553,11 +613,35 @@ export const describeAirStrike = (strike) => {
   return `${parts.join("; ")}.`;
 };
 
-// The block a time skip's prompt is given: "" when nothing flew.
-export const airStrikesBlock = (strikes) => {
-  const lines = normalizeAirStrikes(strikes).map(describeAirStrike).filter(Boolean);
-  if (lines.length === 0) return "";
-  return [AIR_STRIKES_HEADING, AIR_STRIKES_RULE, ...lines.map((line) => `- ${line}`)].join("\n");
+// The block a time skip's prompt is given: "" when nothing flew. At most
+// AIR_STRIKES_MAX_CHARS of strikes: those that did the most first (a structure
+// destroyed, people killed, troops hit), then the rest in the order they flew;
+// what did not fit is counted, so a long air war never reads as a short one.
+export const AIR_STRIKES_MAX_CHARS = 6000;
+const strikeWeight = (strike) => (strike.outcome === "turned back" ? 0 : 1)
+  + (strike.status === "destroyed" ? 4 : strike.status === "damaged" ? 2 : 0)
+  + (strike.dead > 0 ? 3 : 0)
+  + (strike.hits.length ? 2 : 0)
+  + (strike.kind === "city" ? 1 : 0);
+export const airStrikesBlock = (strikes, { maxChars = AIR_STRIKES_MAX_CHARS } = {}) => {
+  const described = normalizeAirStrikes(strikes)
+    .map((strike, index) => ({ index, weight: strikeWeight(strike), line: describeAirStrike(strike) }))
+    .filter((entry) => entry.line);
+  if (described.length === 0) return "";
+  const kept = new Set();
+  let used = 0;
+  for (const entry of [...described].sort((a, b) => b.weight - a.weight || a.index - b.index)) {
+    if (kept.size > 0 && used + entry.line.length + 3 > maxChars) continue;
+    kept.add(entry);
+    used += entry.line.length + 3;
+  }
+  const left = described.length - kept.size;
+  return [
+    AIR_STRIKES_HEADING,
+    AIR_STRIKES_RULE,
+    ...described.filter((entry) => kept.has(entry)).map((entry) => `- ${entry.line}`),
+    ...(left > 0 ? [`(+${left} more air strike${left === 1 ? "" : "s"} this period, of lesser effect, not listed)`] : []),
+  ].join("\n");
 };
 
 // What a country's war stats say of the air war lately (Game/AI/warStatsPrompt.js): "" for none.

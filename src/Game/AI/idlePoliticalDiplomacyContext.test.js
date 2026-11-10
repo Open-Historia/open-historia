@@ -121,6 +121,19 @@ test("names are matched whole and exactly: Niger is not read inside Nigeria", ()
     events: [{ id: "e1", date: "2016-01-02", title: "Nigeria closes its northern border", description: "Lagos cites smuggling.", impacts: {} }],
   };
   assert.deepEqual(rankRelevantPolities(bundle).map((entry) => entry.name), ["Nigeria"]);
+  // Candidates count only where the world has no political profiles.
+  assert.deepEqual(rankRelevantPolities(bundle, { candidates: ["Niger", "Chad"] }).map((entry) => entry.name), ["Nigeria"]);
+});
+
+test("a world without political profiles ranks the candidates it is given, and none without them", () => {
+  const bundle = {
+    game: { country: "Chad" },
+    world: {},
+    chats: [],
+    events: [{ id: "e1", date: "2016-01-02", title: "Nigeria closes its northern border", description: "Lagos cites smuggling.", impacts: {} }],
+  };
+  assert.deepEqual(rankRelevantPolities(bundle).map((entry) => entry.name), []);
+  assert.deepEqual(rankRelevantPolities(bundle, { candidates: ["Chad", "Niger", "Nigeria"] }).map((entry) => entry.name), ["Nigeria"]);
 });
 
 test("a reaction's own event comes first", () => {

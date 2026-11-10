@@ -74,10 +74,8 @@ test("a scenario's own sheet is asked for WITH its backend, in the same request"
   const turn = read("../Game/AI/gameplay.js");
   assert.ok(turn.includes("      statsBackendInstruction(statsBackendOf(previous)),"));
   assert.ok(turn.includes("const sheet = mergeCountryStatPatch(previous, { customStats, ...statsBackendPatch(payload?.[STATS_BACKEND_FIELD]) }, {"));
-  // And the periodic refresh of a scenario's own sheets shows it and moves it with them.
-  assert.ok(turn.includes('`HIDDEN BACKEND: ${statsBackendOf(entry.previous) ? JSON.stringify(statsBackendOf(entry.previous)) : "none yet"}`,'));
-  assert.ok(turn.includes("const backend = statsBackendPatch(update?.[STATS_BACKEND_FIELD]);"));
-  assert.ok(turn.includes("if (!Object.keys(patchValues).length && !Object.keys(backend).length) continue;"));
+  // (The periodic refresh of a scenario's own sheets moved it too, until that refresh went, 2026-11-07.)
+  assert.equal(turn.includes("refreshTrackedCustomStatsIfDue"), false);
 });
 
 test("a sheet keeps both layers, and the war reads the one under the scenario's own", () => {
@@ -138,8 +136,8 @@ test("it is asked after a turn, when a scenario's fronts are built, and when a r
   assert.ok(turn.includes("    if (attacked.length > 0) requestConflictSheets(world, game, attacked);"), "when a route is drawn into a country");
   // A sheet wanted for the war is one with a backend: a scenario's own sheet written before it kept one is written again.
   assert.ok(turn.includes("if (complete && (!needBackend || hasStatsBackend(persisted))) return persisted;"));
-  // And the player's own country, tracked from the first skip, is asked for the same.
-  assert.ok(turn.includes('if (waiting) agentClient.holdSkip(ensureCountryStatSheet(waiting, { reason: "historical tracking", needBackend: true, agentKind: "skip" }));'));
+  // (The player's own country, tracked from the first skip, was asked for the same, until tracking went, 2026-11-07.)
+  assert.equal(turn.includes('reason: "historical tracking"'), false);
 });
 
 // "I meant update both layers of the stats in one request."
@@ -173,7 +171,8 @@ test("a patch that moves a country's own values moves its backend in the same pa
   const rule = statsBackendTurnRule({ Roma: sheet, Parthia: { customStats: { legions: 20 } } });
   assert.match(rule, /^\[Hidden Backend\]\n/);
   assert.match(rule, /The two are moved TOGETHER, in this one answer: when an event changes a polity's values above for a reason that also moves its people or its economy \(a war's losses, a plague, a famine, a boom, a default\), write the backend's new figures in the same stats patch, as `backend`, beside its customStats\./);
-  assert.ok(rule.endsWith('- Roma: {"population":5200000,"gdp":3000000000,"budgetBalance":-2,"publicDebt":35}'), "only a polity that has one is shown");
+  assert.ok(rule.endsWith("- Roma: 5.2 million, 3 billion, -2%, 35%"), "only a polity that has one is shown, its figures readable");
+  assert.match(rule, /Each polity: population, gdp, budgetBalance, publicDebt/);
   assert.equal(statsBackendTurnRule({ Parthia: { customStats: { legions: 20 } } }), "");
   const turn = read("../Game/AI/gameplay.js");
   assert.ok(turn.includes("    const backends = statsBackendTurnRule(world?.countryStats);\n    if (backends) blocks.push(backends);"));

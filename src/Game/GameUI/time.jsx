@@ -23,7 +23,7 @@ import { AI_REQUEST_CONTROL_EVENT } from "../AI/aiRequestControl.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { agentHasEntryBelow, fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
-import { describeJumpCost, requestDay, savingRequests } from "../AI/requestBudget.js";
+import { describeJumpCost, requestDay, savingRequests, unlimitedRequests } from "../AI/requestBudget.js";
 import { REQUEST_AGENT, describeRequestActivity, formatElapsedClock, requestActivity } from "../AI/requestActivity.js";
 import { agentClient, openAgentFolder } from "../AI/agentConnection.js";
 import { AGENT_BUTTON_STYLE } from "./agentWaitingNotice.jsx";
@@ -221,10 +221,13 @@ const panelSurface = {
     zIndex: 9998,
 };
 
+// The date bar takes the theme's glass, as the menu button and the session
+// pill beside it do; the HUD's own glass alone stayed all but the default's
+// dark grey under a palette.
 const widgetSurface = {
     alignItems: "center",
     backdropFilter: "var(--oh-hud-blur)",
-    backgroundColor: "var(--oh-hud-bg-strong)",
+    backgroundColor: "var(--oh-ui-glass-pill, var(--oh-hud-bg-strong))",
     border: "1px solid var(--oh-hud-border)",
     borderRadius: "14px",
     boxShadow: "var(--oh-hud-shadow-soft)",
@@ -1100,10 +1103,13 @@ const RequestsTodayCaption = () => {
     // one the compiler keeps from the first render, so this line went on saying
     // what a skip cost under the setting it was first drawn with.
     const [saving, setSaving] = useState(() => savingRequests());
+    // My key has no request limit on: more rounds of lookups, so a higher most.
+    const [unlimited, setUnlimited] = useState(() => unlimitedRequests());
     useEffect(() => {
         const refresh = () => {
             setDay(requestDay());
             setSaving(savingRequests());
+            setUnlimited(unlimitedRequests());
         };
         window.addEventListener("ai:request-budget", refresh);
         const timer = setInterval(refresh, 60000);
@@ -1113,19 +1119,22 @@ const RequestsTodayCaption = () => {
         };
     }, []);
     // A skip is one request; function calling is what can add to it (Settings →
-    // AI: Save AI requests off, with the lookup functions on), up to `cost.max`.
-    // That switch is on unless it was turned off.
+    // AI: My key has no request limit on, with the lookup functions on), up to
+    // `cost.max`. The lookup functions are on unless turned off.
     const lookupsOn = useMapSettingValue(MAP_SETTING_KEYS.lookupFunctions, "1") !== "0";
-    const cost = describeJumpCost({ lookups: !saving && lookupsOn });
+    const cost = describeJumpCost({ lookups: !saving && lookupsOn, unlimited });
     // A long skip split into segments (Settings → AI) pays one request a segment.
     const segmented = useMapSetting(MAP_SETTING_KEYS.chunkLongJumps);
-    const nearlyOut = day.left <= Math.max(3, Math.ceil(day.limit * 0.1));
+    // With no request limit there is no allowance to run short of.
+    const nearlyOut = !day.noLimit && day.left <= Math.max(3, Math.ceil(day.limit * 0.1));
     return (
         <div
         title="Counted on this device since midnight Pacific time. Change what the game spends in Settings → AI → AI requests."
         style={{ color: nearlyOut ? "#fbbf24" : "rgba(255,255,255,0.42)", fontSize: "0.68rem", lineHeight: 1.45, marginTop: "0.45rem", textAlign: "center", width: "12.5rem" }}
         >
-            <span data-no-translate>{day.used}</span> of <span data-no-translate>{day.limit}</span> AI requests used today
+            {day.noLimit
+                ? <><span data-no-translate>{day.used}</span> AI requests used today</>
+                : <><span data-no-translate>{day.used}</span> of <span data-no-translate>{day.limit}</span> AI requests used today</>}
             <br />
             {/* A whole line, one string, in an element of its own, so a language
                 pack translates the sentence and not its pieces (docs/i18n.md). */}
@@ -3941,7 +3950,7 @@ const DateWidget = ({
         aria-label="Events"
         style={{
             ...buttonStyle,
-            color: openPanel === "history" ? "#bfdbfe" : buttonStyle.color,
+            color: openPanel === "history" ? "var(--oh-ui-glass-active-text, #bfdbfe)" : buttonStyle.color,
         }}
         onClick={() => togglePanel("history")}
         onMouseEnter={(event) => {
@@ -3974,7 +3983,7 @@ const DateWidget = ({
             >
             <span
             style={{
-                color: countryButton && countryOpen ? "#bfdbfe" : "rgba(147,197,253,0.88)",
+                color: countryButton && countryOpen ? "var(--oh-ui-glass-active-text, #bfdbfe)" : "var(--oh-ui-accent, rgba(147,197,253,0.88))",
                 fontSize: isMobile ? "0.68rem" : "0.8rem",
                 fontWeight: 700,
                 letterSpacing: "0.05em",

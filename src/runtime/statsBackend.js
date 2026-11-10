@@ -86,8 +86,26 @@ export const statsBackendTurnRule = (countryStats, { most = 10 } = {}) => {
     "Under the sheet above every polity has a hidden backend the player never sees, which the game's own arithmetic reads (armies are raised from its people and paid from its economy): population, gdp, budgetBalance (% of gdp) and publicDebt (% of gdp). "
     + `The two are moved TOGETHER, in this one answer: when an event changes a polity's values above for a reason that also moves its people or its economy (a war's losses, a plague, a famine, a boom, a default), write the backend's new figures in the same stats patch, as \`${STATS_BACKEND_FIELD}\`, beside its customStats. `
     + "Absolute values, only the figures that changed, and only for a polity whose backend is shown here.",
-    ...known.map((entry) => `- ${entry.name}: ${JSON.stringify(entry.backend)}`),
+    "Each polity: population, gdp, budgetBalance, publicDebt (figures rounded to three digits; write exact ones back).",
+    ...known.map((entry) => `- ${entry.name}: ${[
+      readableFigure(entry.backend.population),
+      entry.backend.gdp !== undefined ? readableFigure(entry.backend.gdp) : "?",
+      entry.backend.budgetBalance !== undefined ? `${roundTo(entry.backend.budgetBalance, 1)}%` : "?",
+      entry.backend.publicDebt !== undefined ? `${roundTo(entry.backend.publicDebt, 1)}%` : "?",
+    ].join(", ")}`),
   ].join("\n");
+};
+
+const roundTo = (value, digits) => Number(Number(value).toFixed(digits));
+// A count in words a model reads at a glance: 1430000000 is "1.43 billion".
+export const readableFigure = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "?";
+  const abs = Math.abs(n);
+  for (const [size, word] of [[1e12, "trillion"], [1e9, "billion"], [1e6, "million"]]) {
+    if (abs >= size) return `${Number((n / size).toPrecision(3))} ${word}`;
+  }
+  return String(Math.round(n));
 };
 
 // The backend a sheet carries, as the four figures; null for a sheet with no people on it.

@@ -161,6 +161,8 @@ let preparedModel = "";
 let modelDownloading = false;
 let modelCardEl = null;
 let noticeTimer = null;
+// The pill holds a notice (showNotice) until its time is up.
+let noticeUp = false;
 let observer = null;
 let scanTimer = null;
 let persistTimer = null;
@@ -314,10 +316,14 @@ const showProgress = () => {
   document.body.appendChild(progressEl);
 };
 
+// The pill is up only while the queue is being worked through: when the queue
+// stops, done, given up or with nothing to do, so does the pill, whatever is
+// still pending (it is taken up again by the next scan).
 const updateProgress = () => {
-  // The download's own words stay in the pill while it lasts.
-  if (!progressEl || modelDownloading) return;
-  if (pending.size === 0 || modelCardEl || !translating()) {
+  // The download's own words stay in the pill while it lasts, and a notice
+  // its time: the model failing is said, not taken off the screen at once.
+  if (!progressEl || modelDownloading || noticeUp) return;
+  if (pending.size === 0 || modelCardEl || !translating() || !inFlight) {
     progressEl.remove();
     progressEl = null;
     return;
@@ -332,8 +338,10 @@ const showNotice = (english) => {
   showProgress();
   if (!progressEl) return;
   progressEl.textContent = book.translate(english) ?? english;
+  noticeUp = true;
   clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => {
+    noticeUp = false;
     progressEl?.remove();
     progressEl = null;
   }, NOTICE_MS);
@@ -715,6 +723,16 @@ const askAi = async (batch) => {
   });
 };
 
+// Nobody pressed anything for a translation, so it is background work
+// (requestBudget.js), like idle diplomacy and the agents' reports between
+// turns: it stops at the day's fixed cap and never takes the last tenth of
+// the day's limit, and the translation model on this device translates
+// meanwhile. Loaded only here, as the AI's modules are.
+const mayAskAi = async () => {
+  const { backgroundAiAllowance } = await import("../Game/AI/requestBudget.js");
+  return backgroundAiAllowance().allowed;
+};
+
 const aiFailed = (error, { halted }) => {
   console.warn(
     `[i18n] your AI did not translate (${error?.message || "unknown"}); the translation model on this device did instead` +
@@ -1086,11 +1104,12 @@ const collectAndTranslate = async () => {
   const run = generation;
   await collectContentStrings();
   if (stopped || run !== generation) return;
-  if (pending.size > 10) {
+  // Started first, so the pill only comes up over a queue that is running.
+  void processQueue();
+  if (pending.size > 10 && inFlight) {
     showProgress();
     updateProgress();
   }
-  void processQueue();
 };
 
 // ---- a scenario's own pack ----
@@ -1316,6 +1335,7 @@ const startInLanguage = (code) => {
   shippedKeys = packed ? null : new Set();
   router = createTranslationRouter({
     isAiOn: () => run === generation && aiShown && aiInUse(),
+    mayAskAi,
     askAi,
     askModel: modelAnswers,
     known: modelKnows,
@@ -1374,6 +1394,7 @@ const leaveLanguage = () => {
   observer = null;
   clearTimeout(scanTimer);
   clearTimeout(noticeTimer);
+  noticeUp = false;
   clearTimeout(persistTimer);
   writeCache();
   clearTimeout(syncTimer);
@@ -1449,6 +1470,7 @@ export const stopTranslator = () => {
   observer?.disconnect();
   clearTimeout(scanTimer);
   clearTimeout(noticeTimer);
+  noticeUp = false;
   progressEl?.remove();
   progressEl = null;
   removeModelCard();

@@ -10,13 +10,26 @@ import { acceptModelOutput, splitForModel, translationModelFor } from "./transla
 // after its last translation; the download stays, only the copy in memory goes.
 const IDLE_CLOSE_MS = 3 * 60 * 1000;
 
+// Every request ends: answered, failed, or given up on once the worker has
+// said nothing at all for this long (a download reports its progress every
+// quarter second, and a batch of strings takes seconds). A worker that never
+// started, or stopped, answered nothing before, and the translator waited on
+// it for good with "Translating to …" on the screen (a player's report,
+// Arabic, 2026-11-09).
+export const WORKER_SILENCE_MS = 3 * 60 * 1000;
+
 let current = null; // { language, worker, listeners, idle }
 
-const close = () => {
+// The worker goes; whatever was still waiting on it is told so, rather than
+// waiting for an answer that cannot come.
+const close = (reason = "The translation worker was closed.") => {
   if (!current) return;
-  clearTimeout(current.idle);
-  current.worker.terminate();
+  const entry = current;
   current = null;
+  clearTimeout(entry.idle);
+  entry.worker.terminate();
+  for (const listener of [...entry.listeners]) listener({ type: "error", message: reason });
+  entry.listeners.clear();
 };
 
 const workerFor = (language) => {
@@ -28,9 +41,13 @@ const workerFor = (language) => {
     worker.onmessage = (event) => {
       for (const listener of [...created.listeners]) listener(event.data || {});
     };
-    worker.onerror = (event) => {
-      for (const listener of [...created.listeners]) listener({ type: "error", message: String(event?.message || "The translation worker stopped.") });
+    // A worker that could not start, or failed, answers nothing more: closed,
+    // so the next request starts another rather than waiting on this one.
+    const failed = (event) => {
+      if (current === created) close(String(event?.message || "The translation worker stopped."));
     };
+    worker.onerror = failed;
+    worker.onmessageerror = failed;
     current = created;
   }
   clearTimeout(current.idle);
@@ -53,18 +70,44 @@ const listen = (language, listener) => {
 
 const send = (message) => current?.worker.postMessage(message);
 
-const ask = (language, message, answerType) => new Promise((resolve, reject) => {
-  const off = listen(language, (reply) => {
-    if (reply.type === answerType) {
-      off();
-      resolve(reply);
-    } else if (reply.type === "error") {
-      off();
-      reject(new Error(reply.message || "The translation model failed."));
+// One request to the worker. `take(reply)` returns the answer once it has come
+// (anything but undefined); an error, the worker going, or WORKER_SILENCE_MS
+// without a word from it rejects.
+const request = (language, message, take) => new Promise((resolve, reject) => {
+  let timer = null;
+  let entry = null;
+  let off = () => {};
+  const end = (settle, value) => {
+    clearTimeout(timer);
+    off();
+    settle(value);
+  };
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      end(reject, new Error("The translation model stopped answering."));
+      if (current === entry) close("The translation model stopped answering.");
+    }, WORKER_SILENCE_MS);
+  };
+  off = listen(language, (reply) => {
+    arm();
+    if (reply.type === "error") {
+      end(reject, new Error(reply.message || "The translation model failed."));
+      return;
     }
+    const answer = take(reply);
+    if (answer !== undefined) end(resolve, answer);
   });
-  send({ ...message, language });
+  entry = current;
+  arm();
+  try {
+    send({ ...message, language });
+  } catch (error) {
+    end(reject, error);
+  }
 });
+
+const ask = (language, message, answerType) => request(language, message, (reply) => (reply.type === answerType ? reply : undefined));
 
 // Whether this device already has the model, read from the cache it is kept in.
 export const translationModelCached = async (language) => {
@@ -78,23 +121,15 @@ export const translationModelCached = async (language) => {
 
 // Downloads (once) and loads the model. `onProgress({ loaded, total })` while
 // it downloads.
-export const loadTranslationModel = (language, onProgress) => new Promise((resolve, reject) => {
+export const loadTranslationModel = async (language, onProgress) => {
   if (!translationModelFor(language) || typeof Worker === "undefined") {
-    reject(new Error("No translation model for this language."));
-    return;
+    throw new Error("No translation model for this language.");
   }
-  const off = listen(language, (message) => {
+  await request(language, { type: "load" }, (message) => {
     if (message.type === "progress") onProgress?.({ loaded: message.loaded, total: message.total });
-    else if (message.type === "ready") {
-      off();
-      resolve();
-    } else if (message.type === "error") {
-      off();
-      reject(new Error(message.message || "The translation model did not load."));
-    }
+    return message.type === "ready" ? true : undefined;
   });
-  send({ type: "load", language });
-});
+};
 
 // Removes the downloaded model from this device.
 export const forgetTranslationModel = async (language) => {
@@ -116,18 +151,8 @@ export const translateWithModel = async (language, strings) => {
   const pieces = splits.flatMap((split) => split.pieces);
   nextId += 1;
   const id = nextId;
-  const reply = await new Promise((resolve, reject) => {
-    const off = listen(language, (message) => {
-      if (message.type === "result" && message.id === id) {
-        off();
-        resolve(message);
-      } else if (message.type === "error") {
-        off();
-        reject(new Error(message.message || "The translation model failed."));
-      }
-    });
-    send({ type: "translate", id, language, strings: pieces });
-  });
+  const reply = await request(language, { type: "translate", id, strings: pieces },
+    (message) => (message.type === "result" && message.id === id ? message : undefined));
   if (!Array.isArray(reply.outputs)) throw new Error(reply.error || "The translation model failed.");
   let at = 0;
   return splits.map((split) => {

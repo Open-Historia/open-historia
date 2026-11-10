@@ -147,6 +147,11 @@ test("the rule the skip is given says a kind is needed and what is never listed"
     assert.match(EVENT_PLACES_RULE, /each with its kind/);
     assert.match(EVENT_PLACES_RULE, /"building: Camp Humphreys"/);
     assert.match(EVENT_PLACES_RULE, /a thing that is not a place on the map .* is never listed/);
+    // Where a region's name comes from, and whose country it is (the quality A/B of 2026-11-07: five
+    // places of one skip were regions the map does not have, or a region with the country it had in history).
+    assert.match(EVENT_PLACES_RULE, /A region is one \[Game Map Description\] lists by name, copied exactly/);
+    assert.match(EVENT_PLACES_RULE, /name one of its cities from \[City Coordinates\], or the country/);
+    assert.match(EVENT_PLACES_RULE, /the power that holds it now/);
 });
 
 // A player's year-long skips (2026-11-03): Gemini wrote every event's places as { kind, name, country }, the

@@ -507,9 +507,14 @@ export const treatyFromSkip = ({ from = "", to = "", terms = null, wars = [], pl
   const war = warBetween(wars, from, to);
   if (!war) return { reason: `${clean(from) || "nobody"} and ${clean(to) || "nobody"} are not at war` };
   if (sidesOf(war).some((members) => members.some((member) => played.has(fold(member))))) {
-    const offer = openOfferBetween(offers, from, to);
-    if (offer && clean(offer.warId) === clean(war.id) && played.has(fold(offer.from)) && !played.has(fold(offer.to))) {
-      return { treaty: { warId: clean(war.id), from: offer.from, to: offer.to, terms: offer.terms, accepts: offer.id } };
+    // (In any war still unsettled between the two: a ledger that started the war twice has twins, and the offer
+    // may wait in the one warBetween did not find first. The peace ends both, warAndPeace.js makePeace.)
+    const between = new Set(list(wars).filter((entry) => warBetween([entry], from, to)).map((entry) => clean(entry.id)));
+    const offer = normalizePeaceOffers(offers).find((entry) => entry.status === "open" && between.has(clean(entry.warId))
+      && ((fold(entry.from) === fold(from) && fold(entry.to) === fold(to)) || (fold(entry.from) === fold(to) && fold(entry.to) === fold(from)))
+      && played.has(fold(entry.from)) && !played.has(fold(entry.to)));
+    if (offer) {
+      return { treaty: { warId: clean(offer.warId), from: offer.from, to: offer.to, terms: offer.terms, accepts: offer.id } };
     }
     return { reason: "a person is in that war: their peace is theirs to make" };
   }

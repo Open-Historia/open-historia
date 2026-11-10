@@ -5,8 +5,11 @@
 // is (warRoomOps.js), applied to the world for the country that asked
 // (runtime/warRoomWrites.js sendAirStrikeOp):
 //
-//   { op: "airstrike", unit, kind, to, target, country, battlefield, marker, people }
+//   { op: "airstrike", unit, kind, to, target, country, battlefield, marker, people, radius }
 //   { op: "unairstrike", unit }     its strike called off
+//
+//   radius            the strike radius, a share of the era's blast (airStrike.js
+//                     strikeRadiusOf, 0.5 to 2 in steps of 0.05): none for the default
 //
 //   kind "troops"     `to` lies on `battlefield`, one the asker fights on;
 //                     `target` names the place near it
@@ -28,7 +31,7 @@ import { militaryLookup } from "../militaryStats.js";
 import { decodeTroops } from "./codec.js";
 import { airWorth, readMilitary } from "./military.js";
 import { AIR_REACH_KM } from "./air.js";
-import { AIR_BLAST_KM, AIR_STRIKE_KINDS, AIR_STRIKE_ORDERS_MOST, enemiesIn, fightersShareOf, normalizeAirStrikeOrders } from "./airStrike.js";
+import { AIR_BLAST_KM, AIR_STRIKE_KINDS, AIR_STRIKE_ORDERS_MOST, AIR_STRIKE_RADIUS_DEFAULT, enemiesIn, fightersShareOf, normalizeAirStrikeOrders, strikeRadiusOf } from "./airStrike.js";
 import { pointInFrame, projectorOf } from "./frame.js";
 import { foldBattlefieldName, isOpenBattlefield, normalizeBattlefields } from "./record.js";
 import { kmBetween, measureOptions } from "./worldGrid.js";
@@ -210,8 +213,11 @@ export const applyAirStrikeOp = (world, op, { player = "", date = "", round = 0,
   const far = kmBetween(Number(unit.lng), Number(unit.lat), to[0], to[1], measureOptions(engineMapOf(worldMeasureOf(world))));
   if (!(far <= reach)) return { error: `That is beyond ${clean(unit.name) || "the air unit"}'s reach: ${Math.round(far).toLocaleString("en-US")} km, and it reaches ${reach.toLocaleString("en-US")} km.` };
   if (others.filter((order) => fold(order.owner) === fold(owner)).length >= AIR_STRIKE_ORDERS_MOST) return { error: REFUSED.many };
+  const radius = strikeRadiusOf(op.radius);
+  // (A strike at the default radius keeps the id it always had.)
+  const idParts = [id, Math.max(0, Math.trunc(Number(round) || 0)), to[0], to[1], kind, ...(radius === AIR_STRIKE_RADIUS_DEFAULT ? [] : [radius])];
   const order = normalizeAirStrikeOrders([{
-    id: `strike-${hashSeed([id, Math.max(0, Math.trunc(Number(round) || 0)), to[0], to[1], kind].join("|")).toString(36)}`,
+    id: `strike-${hashSeed(idParts.join("|")).toString(36)}`,
     unit: id,
     owner,
     kind,
@@ -224,6 +230,7 @@ export const applyAirStrikeOp = (world, op, { player = "", date = "", round = 0,
     people,
     date: clean(date, 40),
     round: Math.max(0, Math.trunc(Number(round) || 0)),
+    radius,
   }])[0];
   return { world: { ...world, airStrikeOrders: [...others, order] }, order };
 };
@@ -242,6 +249,7 @@ export const cleanAirStrikeOp = (op) => {
     if (clean(op.battlefield)) sent.battlefield = clean(op.battlefield, 120);
     if (clean(op.marker)) sent.marker = clean(op.marker, 160);
     if (Number(op.people) > 0) sent.people = Math.round(Number(op.people));
+    if (strikeRadiusOf(op.radius) !== AIR_STRIKE_RADIUS_DEFAULT) sent.radius = strikeRadiusOf(op.radius);
   }
   return sent;
 };

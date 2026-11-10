@@ -228,3 +228,14 @@ test("terms beyond the ground and the money: read from a line, from a letter, he
   assert.equal(termsWorth(made.offer.terms, "Syldavia", 0), 1);
   assert.ok(termsWorth(read, "Syldavia", 0) > 0.5 && termsWorth(read, "Borduria", 0) < -0.5);
 });
+
+// A ledger that started the war twice: the player's offer waits in the twin warBetween does not find first, and the
+// skip's line accepting it was refused, "a person is in that war" (ff199dc1 meant the twins to settle together).
+test("a person's open offer is accepted in whichever of two twin wars it waits in", () => {
+  const twin = { ...WAR, id: "war-1b" };
+  const offers = [{ id: "peace:war-1b:cisland:4", warId: "war-1b", from: "Cisland", to: "Aland", terms: { territory: TERRITORY_RESTORED, reparations: null }, status: "open" }];
+  const checked = treatyFromSkip({ from: "Aland", to: "Cisland", wars: [WAR, twin], players: ["Cisland"], offers });
+  assert.equal(checked.treaty?.warId, "war-1b");
+  assert.equal(checked.treaty?.accepts, "peace:war-1b:cisland:4");
+  assert.match(treatyFromSkip({ from: "Aland", to: "Cisland", wars: [WAR, { ...twin, status: "ended" }], players: ["Cisland"], offers }).reason, /person is in that war/, "not in a war already settled");
+});

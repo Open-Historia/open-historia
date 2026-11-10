@@ -850,6 +850,15 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
     }
   }
 
+  // A war this batch ends or halts, as it stood while it was still being
+  // fought, and the date it stopped. The battle that ends a war is fought in
+  // it: "People's Army of Vietnam Overruns Saigon" carried the end of the
+  // Vietnam War, was then refused as fighting in a war already ended, and the
+  // last-attempt repair dropped the end, so the war (and its battlefield) went
+  // on for years after the story had ended it. Fighting dated on or before the
+  // day a war stops is read against the war as it was until then.
+  const halted = new Map();
+
   for (const [eventIndex, event] of normalizedEvents.entries()) {
     const eventId = normalizeString(event.id);
     const eventUpdates = byEventId.get(eventId) || [];
@@ -861,6 +870,10 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
       }
 
       if (!hoisted.has(update)) {
+        const updateId = normalizeString(update?.id);
+        const was = working.get(updateId) || null;
+        // (One record tied to two events is applied at the first: at the second it is already done.)
+        if (halted.has(updateId) && ((op === "end" && was?.status === "ended") || (op === "ceasefire" && was?.status === "ceasefire"))) continue;
         const result = applyUpdateToWarMap({
           map: working,
           update,
@@ -868,6 +881,9 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
           linkedEvents: [event],
         });
         if (result.error) return result.error;
+        const now = working.get(updateId);
+        if (was?.status === "active" && now && now.status !== "active") halted.set(updateId, { war: was, date: normalizeString(event.date) });
+        else if (now?.status === "active") halted.delete(updateId);
       }
     }
 
@@ -892,7 +908,11 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
       if (!warId) {
         return `Combat event "${normalizeString(event.title)}" has no event.warId. Battles, invasions, offensives, bombardments, active fronts and unit attacks require an active canonical war.`;
       }
-      const war = working.get(warId);
+      const stopped = halted.get(warId);
+      // (Only against an end with a date: compareGameDates(date, "") is -1, and every battle after an undated end
+      // would pass as fought before it.)
+      const fought = stopped && stopped.date && working.get(warId)?.status !== "active" && normalizeString(event.date) && compareGameDates(normalizeString(event.date), stopped.date) <= 0;
+      const war = fought ? stopped.war : working.get(warId);
       if (!war || war.status !== "active") {
         return `Combat event "${normalizeString(event.title)}" cannot occur because canonical war ${warId} is ${war?.status || "missing"}, not active.`;
       }

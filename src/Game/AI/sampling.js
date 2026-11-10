@@ -27,7 +27,8 @@ export const TASK_TEMPERATURES = Object.freeze({
   intelligenceAssessment: 0.3,
   interactiveSummary: 0.3,
 
-  // A compromise: one request carrying the four 0.2 reconcilers plus written agent reports.
+  // A Scene's map check (gameplay.js runSceneReview): one request carrying the
+  // three directors and the board, all 0.2 on their own.
   turnReview: 0.3,
 });
 

@@ -126,7 +126,7 @@ test("the app shows the door once the startup screen is done, over the menu, and
   assert.match(app, /decideVaultDoor\(\{\s+always: vaultDoorAlways\(\),\s+resolveBuild: \(\) => appBuildId\(\{ env: import\.meta\.env \}\),\s+\}\)/);
   // The menu's music waits behind the door and begins as it opens; with the
   // door not shown this time, there is no door and nothing waits.
-  assert.match(app, /useState\(\(\) => \{\s+holdMusicBehindDoor\(true\);\s+return "deciding";\s+\}\)/);
+  assert.match(app, /useState\(\(\) => \{\s+if \(isWebsiteBuild\(import\.meta\.env\)\) return "open";\s+holdMusicBehindDoor\(true\);\s+return "deciding";\s+\}\)/);
   assert.match(app, /const shut = show \|\| setupRef\.current;\s+\/\/[^\n]*\n\s+if \(!shut\) holdMusicBehindDoor\(false\);\s+setDoor\(shut \? "shut" : "open"\);/);
   // (As the leaves part, what the update brings is shown behind them: Game/GameUI/updates/.)
   assert.match(app, /const letMusicIn = useCallback\(\(\) => \{\s+setParting\(true\);\s+holdMusicBehindDoor\(false\);\s+\}, \[\]\);/);

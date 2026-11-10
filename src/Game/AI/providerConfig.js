@@ -239,12 +239,13 @@ function getProviderField(provider, field) {
 export const AI_TASK_ROUTING = [
     { key: "jumpForward", label: "Time skip", hint: "Strongest model — the main simulation call", group: "Simulation" },
     { key: "autoJumpForward", label: "Auto time skip", hint: "Strongest model — the main simulation call", group: "Simulation" },
-    // While AI requests are being saved (requestBudget.js) the time skip itself
-    // does the work of the curator, the three directors, the projects pass and
-    // every spy intercept below, and their own picks are not used. This task is
-    // those checks as one request after the skip, asked only when a provider
-    // refused the skip that carries them (gameplay.js runTurnReview).
-    { key: "turnReview", label: "After-skip checks", hint: "Rarely asked: the checks as one request, only when a provider refuses the single-request time skip", group: "Simulation" },
+    // The time skip itself does the work of the curator, the three directors,
+    // the projects pass and every spy intercept below, and their own picks are
+    // not used for it. This task is a Scene's map check: the directors and the
+    // board as one request after a Scene's outcome (gameplay.js runSceneReview).
+    // It was also the checks after a skip a provider refused in its folded form,
+    // until that went (2026-11-07); the key stays so a pick a player made is kept.
+    { key: "turnReview", label: "Scene map check", hint: "Mid-tier: moves units, marks held land and builds structures after a Scene, in one request", group: "Simulation" },
     { key: "worldMotionRepair", label: "World motion repair", hint: "Mid-tier: rewrites a static jump", group: "Simulation" },
     { key: "worldBreadthRepair", label: "World breadth repair", hint: "Mid-tier: widens a narrow jump", group: "Simulation" },
     { key: "politicalClaimRepair", label: "Political claim repair", hint: "Mid/high-tier: reconcile generated political outcomes with Political World", group: "Simulation" },
@@ -253,7 +254,6 @@ export const AI_TASK_ROUTING = [
     { key: "territoryDirector", label: "Territory director", hint: "Mid-tier: front outcomes", group: "Simulation" },
     { key: "structureDirector", label: "Structure director", hint: "Mid-tier: new structures on the map", group: "Simulation" },
     { key: "geographyResolver", label: "Geography resolver", hint: "Small model: place-name matching", group: "Simulation" },
-    { key: "eventConsolidator", label: "Event consolidator", hint: "Small/mid-tier: pure summarization", group: "Simulation" },
     { key: "projects", label: "Projects & operations", hint: "Mid-tier model", group: "Simulation" },
     { key: "pregameHistory", label: "Pre-game history", hint: "Mid-tier model", group: "Simulation" },
     { key: "politicalWorldGeneration", label: "Political world generation", hint: "Mid/high-tier: bounded scenario political seeding", group: "Simulation" },
@@ -358,10 +358,30 @@ export function setReasoningEnabled(enabled) {
     logDebugEvent("setting", `Model reasoning turned ${enabled ? "on" : "off"}.`);
 }
 
+// Command Code (commandcode.ai), the start-of-game prompt's "Best quality
+// option": its provider API speaks OpenAI Chat Completions with a Bearer key
+// (commandcode.ai/docs/provider), so it is an OpenAI Compatible Connection with
+// the address and the model filled in and only the key left to paste. The key
+// is made at COMMANDCODE_KEYS_URL; the API needs a plan with API access (the
+// $10 GOAT plan has it, the Go plan does not: commandcode.ai/docs/plans/goat).
+// The model id is the one its /models list gives GLM-5.3 Flash (checked
+// 2026-11-07); a renamed model only needs this line changed.
+export const COMMANDCODE_BASE_URL = "https://api.commandcode.ai/provider/v1";
+export const COMMANDCODE_MODEL = "z-ai/glm-5.3-flash";
+export const COMMANDCODE_PRICING_URL = "https://commandcode.ai/pricing";
+export const COMMANDCODE_KEYS_URL = "https://commandcode.ai/settings/keys";
+export const COMMANDCODE_TEMPLATE = Object.freeze({
+    name: "Command Code",
+    provider: "openai-compatible",
+    endpoint: COMMANDCODE_BASE_URL,
+    suggestedModel: COMMANDCODE_MODEL,
+});
+
 // Starting points offered when adding a Connection: the stock profiles, as they
 // were (ported from the abdulrahman-2005 fork), so a Groq or OpenRouter key is
 // one click and a paste away.
 export const CONNECTION_TEMPLATES = [
+    COMMANDCODE_TEMPLATE,
     { name: "Groq", provider: "openai-compatible", endpoint: "https://api.groq.com/openai/v1", suggestedModel: "llama-3.3-70b-versatile" },
     { name: "OpenRouter", provider: "openai-compatible", endpoint: "https://openrouter.ai/api/v1", suggestedModel: "" },
     { name: "Local Ollama", provider: "openai-compatible", endpoint: "http://localhost:11434/v1", suggestedModel: "" },
@@ -413,6 +433,11 @@ const readJsonSetting = (key, fallback) => {
 const writeJsonSetting = (key, value) => {
     if (typeof localStorage === "undefined") return;
     localStorage.setItem(key, JSON.stringify(value));
+    // "My key has no request limit" follows the main provider until it is set
+    // (requestBudget.js defaultNoRequestLimit): Settings hears the change.
+    if (key === FALLBACK_LIST_KEY || key === CONNECTIONS_KEY) {
+        try { window.dispatchEvent(new CustomEvent("ai:request-budget")); } catch { /* no window */ }
+    }
 };
 
 // The kinds an Agent Connection ticks, in AGENT_KINDS order. One saved before
@@ -823,6 +848,33 @@ export function applyQuickAiSetup({ provider, apiKey = "", endpoint = "", model 
     logDebugEvent("setting", `Quick AI setup: ${getProviderMeta(normalized).label} ${requirement === "endpoint" ? "endpoint" : "key"} saved from the start-of-game prompt.`, {
         model: modelName || "(unchanged)",
     });
+    return { connectionId, entryId };
+}
+
+// The start-of-game prompt's set-up-for-you path (Command Code): a template's
+// provider, address and model, with the key the player pasted. The Connection
+// already pointed at that address gets the new key rather than a twin; the
+// template's model on it goes to the TOP of the list, added if it is not there.
+// Throws without a key. Returns { connectionId, entryId }.
+export function applyTemplateAiSetup(template, apiKey = "") {
+    const key = String(apiKey ?? "").trim();
+    if (!key) throw new Error("Paste an API key first.");
+    const provider = normalizeProvider(template?.provider);
+    const endpoint = String(template?.endpoint ?? "").trim();
+    const model = String(template?.suggestedModel ?? "").trim();
+    const address = (value) => String(value ?? "").trim().replace(/\/+$/, "").toLowerCase();
+    const existing = getConnections().find((connection) => connection.provider === provider && address(connection.endpoint) === address(endpoint));
+    let connectionId;
+    if (existing) {
+        updateConnection(existing.id, { apiKey: key });
+        connectionId = existing.id;
+    } else {
+        connectionId = addConnection({ name: template?.name, provider, endpoint, apiKey: key, suggestedModel: model });
+    }
+    const entry = getFallbackList().find((candidate) => candidate.connectionId === connectionId && candidate.model.trim() === model);
+    const entryId = entry ? entry.id : addEntry({ connectionId, model });
+    if (getFallbackList().findIndex((candidate) => candidate.id === entryId) > 0) moveEntry(entryId, 0);
+    logDebugEvent("setting", `Quick AI setup: ${connectionName(connectionId)} key saved from the start-of-game prompt.`, { model });
     return { connectionId, entryId };
 }
 

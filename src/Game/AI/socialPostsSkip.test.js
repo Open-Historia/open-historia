@@ -87,7 +87,8 @@ test("the [Social Media] block goes into the live records only while the game ha
 });
 
 test("the field is sent with the feature, read when the turn is written, and the turn keeps itself if the posts break", () => {
-  assert.match(gameplay, /const taskTool = JUMP_TASK_KEYS\.has\(taskKey\)\n {4}\? withSocialPosts\(featureTool, isActiveFeatureEnabled\("socialMedia"\), \{ polls: Number\(variables\?\.rostraOpenPolls\) > 0 \}\)\n {4}: featureTool;/);
+  // Poll answers whether or not a poll is open: the same function every turn, which a provider caches with the prompt.
+  assert.match(gameplay, /const taskTool = JUMP_TASK_KEYS\.has\(taskKey\)\n(?: {4}\/\/[^\n]*\n)* {4}\? withSocialPosts\(advisedTool, isActiveFeatureEnabled\("socialMedia"\), \{ polls: true \}\)\n {4}: advisedTool;/);
   assert.match(gameplay, /parseWithoutTrailingFields\(rawText, \[POLL_RESULTS_FIELD, SOCIAL_POSTS_FIELD, AGENT_REPORTS_FIELD, HISTORY_FIELD\]\)/);
   const finish = body(gameplay, "const finishTimelineJump = async");
   assert.match(finish, /socialPosts: merged\.socialPosts,/);
@@ -103,7 +104,7 @@ test("the field is sent with the feature, read when the turn is written, and the
 // Posts ride in the time skip. The one exception is an empty feed's Refresh
 // (GameUI/rostraRefresh.jsx), a request the player makes by pressing it.
 test("the social network asks for nothing by itself: no spender, and the feed calls no model", () => {
-  assert.deepEqual([...SKIP_SPENDERS], ["jump", "review", "history", "stats", "institutionBallots"]);
+  assert.deepEqual([...SKIP_SPENDERS], ["jump", "institutionBallots"]);
   assert.equal(Object.keys(GAMEPLAY_SCHEMAS).some((key) => /social|listen/i.test(key)), false);
   assert.equal(Object.keys(JSON.parse(read("./defaultPrompts.json")).tasks).some((key) => /social|listen/i.test(key)), false);
   assert.doesNotMatch(read("./providerConfig.js"), /key: "(?:social\w*|listenIn)"/);

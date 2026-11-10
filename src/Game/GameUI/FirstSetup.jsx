@@ -12,9 +12,13 @@
 // the theme page is then already in that language. Each theme is applied as it
 // is picked (runtime/uiTheme.js), and the setup itself is drawn in the theme's
 // colours, so the choice is seen at once.
+//
+// The website's demo picks no theme (runtime/websiteBuild.js): its setup is the
+// language page alone, and gives onto the menu.
 
 import React, { useEffect, useMemo, useState } from "react";
 import { rememberFirstSetup } from "../../runtime/firstSetupDue.js";
+import { isWebsiteBuild } from "../../runtime/websiteBuild.js";
 import { GREETINGS } from "../../runtime/greetings.js";
 import { DEFAULT_LANGUAGE, getStoredLanguage, getUiLanguageOptions, isRtlLanguage } from "../../runtime/i18n.js";
 import { reduceMotionEnabled } from "../../runtime/mapSettings.js";
@@ -148,7 +152,7 @@ const ThemePage = ({ onBack, onDone }) => {
   );
 };
 
-export default function FirstSetup({ onDone }) {
+export default function FirstSetup({ onDone, withTheme = !isWebsiteBuild(import.meta.env) }) {
   const [step, setStep] = useState(0);
   const [leaving, setLeaving] = useState(false);
   const still = useMemo(() => stillWanted(), []);
@@ -165,10 +169,10 @@ export default function FirstSetup({ onDone }) {
     <div className="oh-setup" data-leaving={leaving || undefined} data-still={still || undefined} role="region" aria-label="First-time setup">
       <div className="oh-setup-body" key={step}>
         {step === 0
-          ? <LanguagePage onChosen={() => setStep(1)} />
+          ? <LanguagePage onChosen={withTheme ? () => setStep(1) : finish} />
           : <ThemePage onBack={() => setStep(0)} onDone={finish} />}
       </div>
-      <Steps step={step} />
+      {withTheme && <Steps step={step} />}
     </div>
   );
 }

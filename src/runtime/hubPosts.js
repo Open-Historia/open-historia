@@ -27,7 +27,8 @@ import {
   normalizeHubSuggestionRef,
   normalizeHubUnlinked,
 } from "../../server/hubProvenance.js";
-import { checkedSuggestionsOf, fetchHubFile, fetchHubIndex, importCountOf, releaseCopyOf, requireReleaseCopy } from "./hubFiles.js";
+import { checkedSuggestionsOf, fetchHubFile, fetchHubIndex, releaseCopyOf, requireReleaseCopy } from "./hubFiles.js";
+import { countHubImport, fetchImportCounts, importCountIn } from "./hubImportCount.js";
 import { HUB_API, HUB_URL, fetchHubPages, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 import { FLAT_MAP_LABEL, declareFlatMapFromPost, postSaysFlatMap } from "../../server/mapProjection.js";
 import { HUB_IMPORTED_KEY, hubImportedIncludes, normalizeHubImported } from "../../server/hubImported.js";
@@ -61,10 +62,11 @@ const SCENARIO_KEY_PATTERN = /^\s*Scenario-Key:\s*([A-Za-z0-9-]{8,64})\s*$/im;
 // by GitHub itself (author_association). Titles and body text can't fake this.
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
-// `hubIndex` is the hub's index (hubFiles.js): where a post's import count, the
-// checked copies of its file and of its cover, and the suggestions on it that
-// passed the hub's check come from.
-export const parsePost = (issue, hubIndex) => {
+// `hubIndex` is the hub's index (hubFiles.js): where the checked copies of a
+// post's file and of its cover, and the suggestions on it that passed the
+// hub's check come from. `importCounts` is what the import counter keeps
+// (hubImportCount.js fetchImportCounts), where its import count comes from.
+export const parsePost = (issue, hubIndex, importCounts = null) => {
   const body = String(issue.body ?? "");
   const bundleUrl = body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null;
   // The issue-form body is a series of "### <label>\n<value>" sections. Show only
@@ -95,14 +97,12 @@ export const parsePost = (issue, hubIndex) => {
   const description = fullDescription.replace(/\s+/g, " ");
   // Never the attachment itself: no copy, no picture.
   const coverImageUrl = releaseCopyOf(hubIndex, firstHubImage(body));
-  // The import count is how many times the post's file has been downloaded from
-  // the hub's releases, as GitHub counts it and the hub's index reports it
-  // (hubFiles.js). It counts downloads, not people: importing again after
-  // clearing the download cache counts again. It used to come from a counter of
-  // the game's own, one per install, which ran on a free Cloudflare allowance
-  // that was spent within hours of every day; what that counter had reached is
-  // carried into these numbers by the hub.
-  const installs = importCountOf(hubIndex, issue.number);
+  // The import count is the import counter's (hubImportCount.js): the first
+  // imports the game itself reported, on top of what the post had when the
+  // counter started keeping them. The hub index's `imports`, which is how many
+  // times the file was downloaded (and anyone can download it), only while the
+  // counter cannot be read (fetchImportCounts). null when neither could be.
+  const installs = importCountIn(importCounts, issue.number);
   return {
     id: issue.number,
     title: String(issue.title ?? "").replace(/^\[Scenario\]\s*/i, "").trim() || `Scenario #${issue.number}`,
@@ -144,20 +144,25 @@ export const parsePost = (issue, hubIndex) => {
 
 // Exported so the translator can pre-translate the Community tab's posts.
 // The issue list is the one every hub screen shares (hubIssues.js), read from
-// the hub's index together with the index itself; the posts made of it, with
-// their import counts and checked copies, are kept as long as that index is.
-let hubCache = { index: null, posts: null };
+// the hub's index together with the index itself, and the import counts from
+// the counter; the posts made of them, with their import counts and checked
+// copies, are kept as long as that index and those counts are.
+let hubCache = { index: null, counts: null, posts: null };
 export const fetchHubPosts = async ({ force = false } = {}) => {
-  const [issues, hubIndex] = await Promise.all([fetchHubScenarioIssues({ force }), fetchHubIndex({ force })]);
-  if (hubCache.index === hubIndex) return hubCache.posts;
+  const [issues, hubIndex, counts] = await Promise.all([
+    fetchHubScenarioIssues({ force }),
+    fetchHubIndex({ force }),
+    fetchImportCounts({ force }),
+  ]);
+  if (hubCache.posts && hubCache.index === hubIndex && hubCache.counts === counts) return hubCache.posts;
   const posts = issues
-    .map((issue) => parsePost(issue, hubIndex))
+    .map((issue) => parsePost(issue, hubIndex, counts))
     // The parser finds the post's scenario file, and the index that file's
     // checked copy. A post without either has nothing to import, so it is not
     // surfaced: a malformed or misfiled "scenario" issue, or one whose file
     // the index does not hold under the address the post gives it.
     .filter((post) => Boolean(post.bundleUrl && post.releaseUrl));
-  hubCache = { index: hubIndex, posts };
+  hubCache = { index: hubIndex, counts, posts };
   return posts;
 };
 
@@ -288,7 +293,9 @@ export const downloadHubBundle = async (bundleUrl, { update = false } = {}) => r
 
 // Whether this player has imported a post before (server/hubImported.js): read
 // from ui-settings, the desktop server's file or the website's own storage.
-// Unreadable = not before, so the import is counted as it always was.
+// Unreadable = not before. (Then the install's counting key cannot be read
+// either, so nothing is counted; and were it counted, the counter would still
+// count this install's import of the post once.)
 export const hubPostImportedBefore = async (postId) => {
   try {
     const response = await fetch("/api/ui-settings");
@@ -300,7 +307,8 @@ export const hubPostImportedBefore = async (postId) => {
 };
 
 // Notes a post as imported, once its file is downloaded. A failed write only
-// means its next import is counted again.
+// means its next import downloads the first copy again; the counter has this
+// install's token for the post by then, so it is not counted twice.
 export const rememberHubImport = async (postId) => {
   if (!normalizeHubImported([postId]).length) return;
   try {
@@ -328,13 +336,18 @@ export const rememberHubImport = async (postId) => {
 // Importing a post again is not an import either: a post this player has
 // imported before (hubPostImportedBefore, kept even after the scenario is
 // deleted), or one the caller knows is in the library (`again`), downloads the
-// update copy too. Where the hub has no update copy yet (it makes them a few
-// at a time) the counted copy is all there is, and that download still counts.
+// update copy too.
+//
+// Only a first import is counted, and it is counted here, by a report to the
+// import counter once the file has downloaded (hubImportCount.js
+// countHubImport), not by the download: a file downloaded from GitHub, by the
+// game or by anyone, counts nothing. The report is not waited for.
 export const downloadHubScenario = async ({ postId, bundleUrl, title, author, syncedAt, flatMap = false, update = false, again = false } = {}) => {
   const release = await requireReleaseCopy(bundleUrl);
   const importedBefore = await hubPostImportedBefore(postId);
   const downloaded = await downloadHubBundle(release, { update: update || again || importedBefore });
   if (!importedBefore) await rememberHubImport(postId);
+  if (!importedBefore && !update && !again) void countHubImport(postId);
   // What the hub's maintainers said of the post (parseScenarioPost flatMap),
   // for a file that declares no projection of its own.
   const bundle = flatMap ? declareFlatMapFromPost(downloaded, { labels: [FLAT_MAP_LABEL] }) : downloaded;

@@ -93,7 +93,7 @@ import { authoredName } from "./scenarioFronts.js";
 import { breakthroughAnswer, sideIsPlayed, staffDecision, staffMayOrder, staffStanding } from "./staff.js";
 import { findPockets } from "./supply.js";
 import { SWARM_FORM, gatherNewcomers } from "./swarms.js";
-import { EMBARK_PORTS_MOST, TRANSPORT_ENDED, TRANSPORT_START_FAILS, boundFor, departuresFor, interceptionOf, loadOf, moveOn, normalizeTransports, setOut, struck, transportChance } from "./transports.js";
+import { EMBARK_PORTS_MOST, TRANSPORT_ENDED, TRANSPORT_START_FAILS, airliftIntercepts, boundFor, departuresFor, interceptionOf, loadOf, moveOn, normalizeTransports, setOut, stretchOf, struck, transportBar, transportChance, transportLoadMost } from "./transports.js";
 import { describePoint, findPlace, inSector, resolveSector } from "./sectors.js";
 import { STATE_HOLDING, createTroop, isLive, kindsFor, liveCount, troopsCap, troopsFactor, troopsLeast, troopsWanted } from "./troops.js";
 import { buildWorldGrid, kmBetween, measureOptions, placeAlong, worldSheetKey } from "./worldGrid.js";
@@ -120,6 +120,8 @@ const createRun = (input) => {
   const era = eraOf(fromDate, Number.isInteger(input?.era) ? input.era : null);
   const controller = new Map();
   const group = new Map();
+  // The forces the run founded (day.js settleRegions): folded name -> [name, the country whose force it is].
+  const forces = new Map();
   const areas = input?.groupAreas && typeof input.groupAreas === "object" ? input.groupAreas : {};
   const run = {
     input,
@@ -174,7 +176,11 @@ const createRun = (input) => {
     controllerOf: (id) => (controller.has(id) ? controller.get(id) : clean(input?.controllerOf?.(id))),
     sovereignOf: (id) => clean(input?.sovereignOf?.(id)),
     groupOf: (id) => (group.has(id) ? group.get(id) : clean(areas[id])),
-    isGroup: (name) => input?.isGroup?.(name) === true,
+    isGroup: (name) => forces.has(fold(name)) || input?.isGroup?.(name) === true,
+    // The country whose force a group is (runtime/groups.js `owner`), or "".
+    groupOwnerOf: (name) => (forces.has(fold(name)) ? forces.get(fold(name))[1] : clean(input?.groupOwnerOf?.(name))),
+    // A country's force founded during the run (day.js settleRegions).
+    foundForce: (name, owner) => forces.set(fold(name), [clean(name), clean(owner)]),
     strengthOf: (name) => {
       const weight = Number(input?.strengthOf?.(name));
       return weight > 0 && Number.isFinite(weight) ? weight : 1;
@@ -209,7 +215,7 @@ const createRun = (input) => {
   };
   // (What the run has itself been told or worked out of the world, kept where a copy of it fought on another core
   // can be given it: rehearsalPacket below. Not among its own keys.)
-  Object.defineProperty(run, "lookups", { value: { controller, group, figures, curves } });
+  Object.defineProperty(run, "lookups", { value: { controller, group, figures, curves, forces } });
   // A region changed hands: every battlefield it lies on reads its side again.
   run.regionChanged = (id) => {
     for (const battle of run.battles) {
@@ -245,15 +251,19 @@ const regionsOf = (run) => (Array.isArray(run.input?.map?.regions) ? run.input.m
 const openBattles = (run) => run.battles.filter((battle) => battle.status !== "closed" && !battle.home);
 
 // Which side of a war holds a region: the group in whose area it lies if that
-// group is in the war, else its controller.
+// group is in the war, or the country whose force that group is if that
+// country is (battle.js groupSideOf), else its controller.
 const warSideOf = (run, war, id) => {
   const sideOf = (name) => {
     const wanted = fold(name);
     if (!wanted) return -1;
     return war.sides[0].some((member) => fold(member) === wanted) ? 0 : war.sides[1].some((member) => fold(member) === wanted) ? 1 : -1;
   };
-  const group = sideOf(run.groupOf(id));
-  return group >= 0 ? group : sideOf(run.controllerOf(id));
+  const name = run.groupOf(id);
+  const group = name ? sideOf(name) : -1;
+  if (group >= 0) return group;
+  const owner = name ? sideOf(run.groupOwnerOf(name)) : -1;
+  return owner >= 0 ? owner : sideOf(run.controllerOf(id));
 };
 
 // ---- battlefields opening and closing ------------------------------------------
@@ -265,7 +275,8 @@ const nameFor = (run, battle) => {
   const lead = [HOLDER_SIDE_A, HOLDER_SIDE_B].map((side) => {
     const cells = new Float64Array(battle.sides[side].length);
     for (let region = 1; region < arena.ids.length; region += 1) {
-      const holder = run.groupOf(arena.ids[region]) || run.controllerOf(arena.ids[region]);
+      // (A group outside the war holds nothing on it: its regions are its country's, holderOf.)
+      const holder = holderOf(battle, run, arena.ids[region]);
       const index = battle.sides[side].findIndex((member) => fold(member) === fold(holder));
       if (index >= 0) cells[index] += arena.cells[region];
     }
@@ -438,13 +449,19 @@ const examineWar = (run, war, day) => {
   landWhereTroopsStand(run, war, day);
   const key = contactKey(run, war);
   if (key && run.cache?.get(key) === true) return;
+  // A stretch the world had no room for is looked at again once it has: "I have the south eastern borders and the
+  // west, however the game only allows me to attack from the west" (a player, 2026-11-05). That answer was kept as
+  // the war's whole answer, and the stretch never opened after other battlefields closed.
+  if (key && run.cache?.get(`${key}|full`) === true && openBattles(run).length >= MAX_BATTLEFIELDS) return;
   const regions = landRegionsOf(run);
   if (!regions) throw REGIONS_NEEDED;
   const map = run.input.map;
+  let full = false;
   for (const contact of findContacts(regions, (id) => warSideOf(run, war, id), map)) {
     if (run.battles.some((battle) => battle.warId === war.id && battle.status !== "closed" && pointInFrame(battle.frame, contact.lng, contact.lat))) continue;
     if (openBattles(run).length >= MAX_BATTLEFIELDS) {
       run.notes.push({ kind: "too-many-battlefields", detail: war.title || war.id });
+      full = true;
       break;
     }
     const frame = frameForContact(contact, map);
@@ -457,7 +474,7 @@ const examineWar = (run, war, day) => {
     startBattle(run, battle, day);
   }
   const after = contactKey(run, war);
-  if (after && run.cache) run.cache.set(after, true);
+  if (after && run.cache) run.cache.set(full ? `${after}|full` : after, true);
 };
 
 // ---- a war changing ------------------------------------------------------------
@@ -803,15 +820,22 @@ const tellAttack = (run, battle, attacker, defender, day) => {
   const side = sideOfName(battle, attacker);
   if (side >= 0) battle.log.push({ d: run.dateOf(day), k: "attacked", s: side, at: `${run.isGroup(defender) ? "group" : "country"}: ${defender}` });
 };
+// Which of two names holds a region, 0 or 1, or -1: the group in whose area it lies where that group is one of
+// them, else its controller, as in a war between the two (warSideOf). A group that is neither of them takes
+// nothing from its country: an attack across a border it holds was refused as no border at all.
+// (A country's force holds for the country whose force it is: battle.js groupSideOf.)
+const pairSideOf = (run, first, second) => (id) => {
+  const one = (name) => name && (name === fold(first) || name === fold(second));
+  const group = fold(run.groupOf(id));
+  const owner = group && !one(group) ? fold(run.groupOwnerOf(group)) : "";
+  const holder = one(group) ? group : one(owner) ? owner : fold(run.controllerOf(id));
+  return holder && holder === fold(first) ? 0 : holder && holder === fold(second) ? 1 : -1;
+};
 // Whether two names hold land that touches.
 const landsTouch = (run, first, second) => {
   const regions = landRegionsOf(run);
   if (!regions) throw REGIONS_NEEDED;
-  const sideOf = (id) => {
-    const holder = run.groupOf(id) || run.controllerOf(id);
-    return fold(holder) === fold(first) ? 0 : fold(holder) === fold(second) ? 1 : -1;
-  };
-  return findContacts(regions, sideOf, run.input.map).length > 0;
+  return findContacts(regions, pairSideOf(run, first, second), run.input.map).length > 0;
 };
 
 // An order that names no battlefield there is, but aims its side's troops at a
@@ -1280,11 +1304,7 @@ const applyBorderMoment = (run, moment, day, first, second) => {
     const regions = landRegionsOf(run);
     if (!regions) throw REGIONS_NEEDED;
     const map = run.input.map;
-    const sideOf = (id) => {
-      const holder = run.groupOf(id) || run.controllerOf(id);
-      return fold(holder) === fold(first) ? 0 : fold(holder) === fold(second) ? 1 : -1;
-    };
-    for (const contact of findContacts(regions, sideOf, map)) {
+    for (const contact of findContacts(regions, pairSideOf(run, first, second), map)) {
       const frame = frameForContact(contact, map);
       const arena = frame ? arenaFor(run.cache, map, frame, run.input.regionTypes) : null;
       battle = arena ? openBattle(run, { name: names[0], warId: "", sides: [[first], [second]], frame, arena, day }) : null;
@@ -1821,8 +1841,30 @@ const marchInto = (run, battle, region, taker, day) => {
   fallBackOverland(battle, 1 - side, run.dateOf(day), region, field.cols + field.rows);
 };
 
+// A region the world gave someone during a run (a change of control, or a group's area): every battlefield it lies
+// on is brought into step and the taker's troops walk in (marchInto). And land handed to a side of a war outside
+// its battlefields (a treaty, a capture the story told far off) may touch the other side where nothing did: that
+// war is added to `handed`, to be looked at again once the day's moments are in. Returns `handed`.
+const landChanged = (run, id, taker, day, handed) => {
+  for (const battle of run.battles) {
+    if (battle.status === "closed" || !battle.arena.indexOf.has(id)) continue;
+    reconcile(battle, run);
+    // And the troops follow: the taker's nearest stand in it, the other side's fall back out of it.
+    if (battle.status === "active") marchInto(run, battle, battle.arena.indexOf.get(id), taker, day);
+    battle.planKey = "";
+    battle.touched = true;
+  }
+  let wars = handed;
+  for (const war of run.wars.values()) {
+    if (war.status !== "active" || warSideOf(run, war, id) < 0) continue;
+    if (!run.battles.some((battle) => battle.warId === war.id && battle.status !== "closed" && battle.arena.indexOf.has(id) && battle.arena.outside[battle.arena.indexOf.get(id)] === 0)) (wars ??= new Set()).add(war);
+  }
+  return wars;
+};
+
 // Applies every moment dated up to a day, in the order they were given.
 const applyMoments = (run, day) => {
+  let handed = null;
   while (run.cursor < run.moments.length && run.moments[run.cursor].day <= day) {
     const { moment } = run.moments[run.cursor];
     run.cursor += 1;
@@ -1842,16 +1884,20 @@ const applyMoments = (run, day) => {
         continue;
       }
       run.setController(id, moment.to);
-      for (const battle of run.battles) {
-        if (battle.status === "closed" || !battle.arena.indexOf.has(id)) continue;
-        reconcile(battle, run);
-        // And the troops follow: the taker's nearest stand in it, the other side's fall back out of it.
-        if (battle.status === "active") marchInto(run, battle, battle.arena.indexOf.get(id), moment.to, day);
-        battle.planKey = "";
-        battle.touched = true;
-      }
+      handed = landChanged(run, id, moment.to, day, handed);
+    } else if (moment.type === "group") {
+      // A group took a region into its area, or let one go (a groupOps entry of the story's): the world wins here
+      // too, and the troops follow as for a change of control. Told to nobody before, the area changed between
+      // runs: the next run painted it at once, far behind the line and with nobody there.
+      const id = clean(moment.regionId);
+      const group = clean(moment.group);
+      const held = run.groupOf(id);
+      if (!id || fold(held) === fold(group) || (!group && moment.from && fold(held) !== fold(moment.from))) continue;
+      run.setGroup(id, group);
+      handed = landChanged(run, id, group || run.controllerOf(id), day, handed);
     }
   }
+  for (const war of handed ?? []) examineWar(run, war, day);
   for (const battle of run.battles) if (battle.closing && battle.status !== "closed") closeBattle(run, battle, day);
   // What a moment did to the orders or the ground is read at once: which
   // places are besieged, and what is cut off.
@@ -2112,10 +2158,13 @@ const transportWar = (run, transport) => {
   const named = run.wars.get(transport.warId);
   return fought(named) ? named : [...run.wars.values()].find(fought) ?? null;
 };
-// Who holds a region in name, to a war: the group whose area it is if that group is in it.
+// Who holds a region in name, to a war: the group whose area it is if that group is in it, or the country whose
+// force that group is if that country is (battle.js groupSideOf), else its controller.
 const holderIn = (run, war, id) => {
   const group = run.groupOf(id);
-  return group && warSide(war, group) >= 0 ? group : run.controllerOf(id);
+  if (group && warSide(war, group) >= 0) return group;
+  const owner = group ? run.groupOwnerOf(group) : "";
+  return owner && warSide(war, owner) >= 0 ? owner : run.controllerOf(id);
 };
 const holderAtPoint = (run, grid, war, lng, lat) => {
   const cell = grid.cellOf(lng, lat);
@@ -2206,6 +2255,11 @@ const departTransport = (run, index, day) => {
   // air arm nothing by air: military.js.)
   if (run.mech.military && transport.medium === "sea" && seaWorth(run.militaryOf(transport.owner)) === 0) return refuse("no-navy");
   if (run.mech.military && transport.medium === "air" && airWorth(run.militaryOf(transport.owner)) === 0) return refuse("no-air-force");
+  // (Nor by a medium the game's features switched off: transports.js transportBar.)
+  if (transportBar(transport.medium, { media: Array.isArray(run.input?.transportMedia) ? run.input.transportMedia : null })) return refuse("switched-off");
+  // The most it carries: an airlift fewer than a train or a ship (transports.js transportLoadMost).
+  const year = yearInEra(gameDateYear(run.dateOf(0)), Number.isInteger(run.input?.era) ? run.input.era : null);
+  const most = Math.max(1, transportLoadMost(transport.medium, year, run.mech.military ? run.militaryOf(transport.owner) : null));
   let war = transportWar(run, transport);
   const grid = worldGridOf(run);
   // Its owner is fighting no war: bound for land of a country it is at peace
@@ -2237,7 +2291,7 @@ const departTransport = (run, index, day) => {
   if (transport.embark) {
     const battle = run.battles.find((entry) => entry.status !== "closed" && foldBattlefieldName(entry.name) === foldBattlefieldName(transport.embark.battlefield));
     const side = transport.embark.side;
-    const picked = battle ? transport.embark.troops.filter((at) => battle.troops[side][at] && isLive(battle.troops[side][at]) && !battle.named.some((entry) => entry.s === side && entry.i === at)) : [];
+    const picked = (battle ? transport.embark.troops.filter((at) => battle.troops[side][at] && isLive(battle.troops[side][at]) && !battle.named.some((entry) => entry.s === side && entry.i === at)) : []).slice(0, most);
     if (picked.length === 0) return refuse("no-troops");
     let x = 0;
     let y = 0;
@@ -2250,20 +2304,20 @@ const departTransport = (run, index, day) => {
     load = picked.map((at) => [Math.round(battle.troops[side][at].strength), battle.troops[side][at].kind]);
     boarding = { battle, side, picked };
   } else if (load.length === 0) {
-    load = kindsFor(Math.max(1, transport.raise || 1), run.era, run.mech.military ? mixOf(run.militaryOf(transport.owner)) : null).map((kind) => [100, kind]);
+    load = kindsFor(Math.min(most, Math.max(1, transport.raise || 1)), run.era, run.mech.military ? mixOf(run.militaryOf(transport.owner)) : null).map((kind) => [100, kind]);
     draw(run, transport.owner, load.length * menOf(run, transport.owner));
     if (origins.length === 0) origins = originsOf(run, grid, war, transport);
   }
   if (origins.length === 0) return refuse("no-origin");
   const { embark: _embark, raise: _raise, ...bare } = transport;
-  const loaded = { ...bare, load, warId: war.id };
+  const loaded = { ...bare, load: load.slice(0, most), warId: war.id };
   const fromHere = (origin) => setOut({ ...loaded, from: { lng: origin.lng, lat: origin.lat, name: clean(origin.name) } }, {
     grid,
     from: [origin.lng, origin.lat],
     holderOf: (id) => holderIn(run, war, id),
     friendly,
     hostile,
-    year: yearInEra(gameDateYear(run.dateOf(0)), Number.isInteger(run.input?.era) ? run.input.era : null),
+    year,
     date,
     dateOf: (days) => run.dateOf(day + days),
   });
@@ -2385,6 +2439,35 @@ const beginTransports = (run) => {
   for (let index = 0; index < run.transports.length; index += 1) if (run.transports[index].status === "ordered") departTransport(run, index, 0);
 };
 
+// An airlift's day over what it flew over: each that found it over its enemies'
+// ground (transports.js airliftIntercepts) is a hit, told where and by whom.
+// True when nothing is left of it.
+const airliftDay = (run, index, before, moved, war, mine, day, options) => {
+  const grid = worldGridOf(run);
+  const seen = airliftIntercepts(moved, {
+    over: stretchOf(moved.way, before.gone, moved.gone, options),
+    holderAt: (lng, lat) => (grid ? holderAtPoint(run, grid, war, lng, lat) : ""),
+    // (Nobody rises against what nobody is at war with.)
+    enemy: (name) => war.peace !== true && warSide(war, name) === 1 - mine,
+    units: run.input.units,
+    era: run.era,
+    worthOf: (name) => airWorth(run.militaryOf(name)),
+    roll: (what) => transportChance(run.seed, moved.id, day, `airlift|${what}`),
+    ...options,
+  });
+  const date = run.dateOf(day);
+  let left = moved;
+  for (const [n, finder] of seen.found.entries()) {
+    const hit = struck(left, transportChance(run.seed, moved.id, day, `airlift|hurt|${n}`), date);
+    const near = cityNear(run, finder.at[0], finder.at[1], 250);
+    tellVoyage(run, day, hit.transport.status === "lost" ? "lost" : "intercepted", left, { by: finder.by, with: finder.with, lost: hit.lost, at: near, where: finder.at });
+    left = hit.transport;
+    if (left.status === "lost") break;
+  }
+  run.transports[index] = left;
+  return left.status === "lost";
+};
+
 // A day of every transporter under way: it goes on along its way, whoever can
 // reach it may catch it, and at the end of its way it puts its troops down.
 const moveTransports = (run, day) => {
@@ -2405,8 +2488,14 @@ const moveTransports = (run, day) => {
     }
     const { transport: moved, arrived } = moveOn(before, options);
     run.transports[index] = moved;
-    // Caught on the day's stretch, at the middle of it.
     const mine = warSide(war, moved.owner);
+    // An airlift is caught only over its enemies' ground, as an air strike is (transports.js airliftIntercepts).
+    if (moved.medium === "air") {
+      if (airliftDay(run, index, before, moved, war, mine, day, options)) continue;
+      if (arrived) landTransport(run, index, day);
+      continue;
+    }
+    // Caught on the day's stretch, at the middle of it.
     const middle = placeAlong(moved.way, (before.gone + moved.gone) / 2, options);
     const grid = worldGridOf(run);
     const risk = interceptionOf(moved, middle ? [middle.lng, middle.lat] : moved.at, {
@@ -2792,7 +2881,8 @@ const snapshot = (run) => {
   const closed = records.filter((record) => record.status === "closed").slice(-MAX_CLOSED_BATTLEFIELDS);
   return {
     battlefields: [...open, ...closed],
-    flips: run.flips.map(({ day: on, date, battlefield, regionId, from, to, kind }) => ({ day: on, date, battlefield: battlefield.name, regionId, from, to, kind })),
+    // (A take by a country's force says whose it is, and on whose land: day.js settleRegions.)
+    flips: run.flips.map(({ day: on, date, battlefield, regionId, from, to, kind, owner, land }) => ({ day: on, date, battlefield: battlefield.name, regionId, from, to, kind, ...(owner ? { owner, land } : {}) })),
     // The countries troops were sent into, each with the war it is in from
     // that day and the side of it (0 for its first, 1 for its second).
     joins: run.joins.map(({ day: on, date, battlefield, warId, name, side, by }) => ({ day: on, date, battlefield: battlefield.name, warId, name, side, by })),
@@ -2855,6 +2945,7 @@ export const rehearsal = (run, battle) => {
   copy.grown = 6;
   const controllers = new Map();
   const groups = new Map();
+  const forces = new Map();
   const stub = Object.create(run);
   Object.assign(stub, {
     battles: [copy],
@@ -2878,6 +2969,10 @@ export const rehearsal = (run, battle) => {
     setController: (id, who) => { controllers.set(id, who); },
     groupOf: (id) => (groups.has(id) ? groups.get(id) : run.groupOf(id)),
     setGroup: (id, who) => { groups.set(id, who); },
+    // (A force it founds is its own too.)
+    isGroup: (name) => forces.has(fold(name)) || run.isGroup(name),
+    groupOwnerOf: (name) => (forces.has(fold(name)) ? forces.get(fold(name)) : run.groupOwnerOf(name)),
+    foundForce: (name, owner) => { forces.set(fold(name), clean(owner)); },
     regionChanged: () => {},
     spendFlip: () => {},
     input: { ...run.input, watch: null, staffPolicy: null },

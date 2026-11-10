@@ -1,6 +1,6 @@
 /*! Open Historia — portions (panel sizing on small screens) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React from "react";
-import { APP_HEIGHT, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { APP_HEIGHT, APP_HEIGHT_VAR, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import dayjs from "dayjs";
@@ -26,6 +26,19 @@ import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
 import { ProjectsBoard, ProjectsTabIcon } from "./projects.jsx";
+import {
+    PANEL_HEIGHT_VAR,
+    actionsLayoutReducer,
+    clampPanelHeight,
+    initialActionsLayout,
+    keyedPanelHeight,
+    openSectionOf,
+    panelHeightCss,
+    readGoalOpen,
+    readPanelHeight,
+    writeGoalOpen,
+    writePanelHeight,
+} from "./actionsPanelLayout.js";
 
 dayjs.extend(advancedFormat);
 
@@ -255,6 +268,14 @@ const ActionItem = ({ action, onDelete, locked = false }) => {
     );
 };
 
+// The caret of every collapsible part of the panel (the two lists and the
+// standing goal), so the three read as one family.
+const SectionCaret = ({ open }) => (
+    <span aria-hidden="true" style={{ color: "rgba(255,255,255,0.5)", display: "inline-block", flexShrink: 0, fontSize: "0.7rem", transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>{"\u25B6"}</span>
+);
+
+const SECTION_TITLE_STYLE = { fontSize: "0.78rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" };
+
 const SectionHeader = ({ title, count, open, onToggle }) => (
     <button
     type="button"
@@ -275,8 +296,8 @@ const SectionHeader = ({ title, count, open, onToggle }) => (
         width: "100%",
     }}
     >
-    <span aria-hidden="true" style={{ color: "rgba(255,255,255,0.5)", display: "inline-block", fontSize: "0.7rem", transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>{"\u25B6"}</span>
-    <span style={{ flex: 1, fontSize: "0.78rem", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>{title}</span>
+    <SectionCaret open={open} />
+    <span style={{ ...SECTION_TITLE_STYLE, flex: 1 }}>{title}</span>
     <span data-no-translate style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem" }}>{count}</span>
     </button>
 );
@@ -428,8 +449,17 @@ const GoalProgress = ({ country, round, turnRunning }) => {
 // orders. The advisor, the time skip and the suggestions are told it; a foreign
 // leader never is. Locked while a turn runs, because the turn writes the world
 // it lives in.
-const StandingGoal = ({ country, round, gameDate, isOpen }) => {
+//
+// `open` and `onToggle`: the card minimizes to its header row (the goal on one
+// line and how far it has come), and the panel minimizes it whenever one of
+// the order lists opens (actionsPanelLayout.js). Writing the goal always shows
+// the whole card.
+const StandingGoal = ({ country, round, gameDate, isOpen, open = true, onToggle }) => {
     const goal = useRuntimeState("world", (world) => playerGoalOf(world, country), country);
+    const percent = useRuntimeState("world", (world) => {
+        const value = Number(playerGoalEntryOf(world, country)?.progress?.progress);
+        return Number.isFinite(value) ? value : null;
+    }, country);
     const turnRunning = useTurnRunning(isOpen);
     const [editing, setEditing] = React.useState(false);
     const [draft, setDraft] = React.useState("");
@@ -579,24 +609,45 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
     }
 
     return (
-        <div style={{ background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.08))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.15))", borderRadius: "10px", display: "flex", flexDirection: "column", gap: "0.3rem", padding: "0.55rem 0.75rem" }}>
-        <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
-        {label}
+        <div style={{ background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.08))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.15))", borderRadius: "10px", display: "flex", flexDirection: "column", flexShrink: 0, gap: "0.3rem", padding: open ? "0.55rem 0.75rem" : "0.35rem 0.75rem" }}>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
+        {/* The header row, the whole of the card when it is minimized. */}
+        <button
+        type="button"
+        className="oh-tap-row"
+        aria-expanded={open}
+        onClick={onToggle}
+        title={open ? undefined : goal}
+        style={{ alignItems: "center", background: "none", border: "none", color: "rgba(255,255,255,0.9)", cursor: "pointer", display: "flex", flex: 1, fontFamily: "sans-serif", gap: "0.5rem", minWidth: 0, padding: "0.15rem 0", textAlign: "left" }}
+        >
+        <SectionCaret open={open} />
+        <span style={{ ...SECTION_TITLE_STYLE, flexShrink: 0 }}>Standing goal</span>
+        {!open && (
+            <span data-no-translate style={{ color: "rgba(255,255,255,0.72)", flex: 1, fontSize: "0.76rem", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{goal}</span>
+        )}
+        {!open && percent !== null && (
+            <span data-no-translate style={{ color: "rgba(255,255,255,0.6)", flexShrink: 0, fontSize: "0.72rem", fontWeight: 700, marginLeft: "auto" }}>{`${percent}%`}</span>
+        )}
+        </button>
         <button
         type="button"
         className="oh-tap"
         disabled={turnRunning}
         onClick={startEditing}
         title={turnRunning ? lockedNote : "Change or clear the goal"}
-        style={{ background: "none", border: "none", color: turnRunning ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.28)", cursor: turnRunning ? "not-allowed" : "pointer", fontFamily: "sans-serif", fontSize: "0.74rem", padding: 0 }}
+        style={{ background: "none", border: "none", color: turnRunning ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.28)", cursor: turnRunning ? "not-allowed" : "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: "0.74rem", padding: 0 }}
         >
         Edit
         </button>
         </div>
-        <span title={goal} style={{ color: "rgba(255,255,255,0.82)", display: "-webkit-box", fontSize: "0.8rem", lineHeight: "1.45", overflow: "hidden", WebkitBoxOrient: "vertical", WebkitLineClamp: 3 }}>
-        {"\u{1F3AF} "}{goal}
-        </span>
-        <GoalProgress country={country} round={round} turnRunning={turnRunning} />
+        {open && (
+            <>
+            <span title={goal} style={{ color: "rgba(255,255,255,0.82)", display: "-webkit-box", fontSize: "0.8rem", lineHeight: "1.45", overflow: "hidden", WebkitBoxOrient: "vertical", WebkitLineClamp: 3 }}>
+            {"\u{1F3AF} "}{goal}
+            </span>
+            <GoalProgress country={country} round={round} turnRunning={turnRunning} />
+            </>
+        )}
         </div>
     );
 };
@@ -618,6 +669,123 @@ const OrdersTabIcon = () => (
     <path d="M18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z" />
     </svg>
 );
+
+const browserStorage = () => {
+    try {
+        return typeof window === "undefined" ? null : window.localStorage;
+    } catch {
+        return null;
+    }
+};
+
+// The visible height (mobileUi.js APP_HEIGHT, which follows a phone's address
+// bar and keyboard) and the root font size, in px, for the drag.
+const screenMetrics = () => {
+    if (typeof window === "undefined") return { viewport: 800, rem: 16 };
+    const root = document.documentElement;
+    const rem = parseFloat(getComputedStyle(root).fontSize) || 16;
+    const viewport = parseFloat(root.style.getPropertyValue(APP_HEIGHT_VAR)) || window.innerHeight || 800;
+    return { viewport, rem };
+};
+
+// The panel's top edge, the one that is free: the panel stands on the dock at
+// the bottom of the screen, on a phone too. Drag it (mouse, finger or pen), or
+// focus it and use the arrow keys (Shift for bigger steps, Home and End for the
+// smallest and the tallest); a double-click or Enter gives back the default
+// height. The grip is the advisor's and the country panel's edge (advisor.jsx),
+// turned on its side. Pointer capture keeps the drag alive off the thin strip.
+const PanelResizeHandle = ({ panelRef, height, onCommit, touch, shown = true }) => {
+    const [dragging, setDragging] = React.useState(false);
+    const [hover, setHover] = React.useState(false);
+    const [focused, setFocused] = React.useState(false);
+    const currentHeight = () => panelRef.current?.clientHeight || 0;
+
+    const handlePointerDown = (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        const target = event.currentTarget;
+        try { target.setPointerCapture(event.pointerId); } catch { /* optional */ }
+        const startY = event.clientY;
+        const startHeight = currentHeight();
+        const metrics = screenMetrics();
+        let latest = null;
+        setDragging(true);
+        // Straight onto the panel while the pointer moves, and into React (and
+        // storage) once, when it lets go.
+        const onMove = (moveEvent) => {
+            latest = clampPanelHeight(startHeight + (startY - moveEvent.clientY), metrics);
+            panelRef.current?.style.setProperty(PANEL_HEIGHT_VAR, `${latest}px`);
+        };
+        const onUp = () => {
+            setDragging(false);
+            target.removeEventListener("pointermove", onMove);
+            target.removeEventListener("pointerup", onUp);
+            target.removeEventListener("pointercancel", onUp);
+            if (latest !== null) onCommit(latest);
+        };
+        target.addEventListener("pointermove", onMove);
+        target.addEventListener("pointerup", onUp);
+        target.addEventListener("pointercancel", onUp);
+    };
+
+    const handleKeyDown = (event) => {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            onCommit(null);
+            return;
+        }
+        const next = keyedPanelHeight(event.key, { current: currentHeight(), shift: event.shiftKey, ...screenMetrics() });
+        if (next === null) return;
+        event.preventDefault();
+        onCommit(next);
+    };
+
+    const lit = dragging || focused;
+    return (
+        <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize the Actions panel"
+        aria-valuenow={height ?? undefined}
+        tabIndex={shown ? 0 : -1}
+        title="Drag to resize. Double-click for the default height."
+        onPointerDown={handlePointerDown}
+        onPointerEnter={() => setHover(true)}
+        onPointerLeave={() => setHover(false)}
+        onDoubleClick={() => onCommit(null)}
+        onKeyDown={handleKeyDown}
+        // Lit for the keyboard's focus, not for the click that starts a drag.
+        onFocus={(event) => {
+            let keyboard = true;
+            try { keyboard = event.currentTarget.matches(":focus-visible"); } catch { /* older engine: show it */ }
+            setFocused(keyboard);
+        }}
+        onBlur={() => setFocused(false)}
+        style={{
+            alignItems: "center",
+            cursor: "ns-resize",
+            display: "flex",
+            height: touch ? "10px" : "8px",
+            justifyContent: "center",
+            left: 0,
+            outline: "none",
+            position: "absolute",
+            right: 0,
+            top: 0,
+            touchAction: "none",
+            zIndex: 30,
+        }}
+        >
+        <div style={{
+            backgroundColor: lit ? "var(--oh-ui-accent, #2bc1f3)" : hover ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.22)",
+            borderRadius: "2px",
+            height: "3px",
+            transition: "background-color 0.15s",
+            width: "42px",
+        }} />
+        </div>
+    );
+};
 
 // `requestedTab`: { tab } from outside (the advisor's board card opens the
 // Projects tab); a new object each time, so the same tab can be asked for twice.
@@ -661,7 +829,21 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     // the same shape as the timeline jump's cancel (time.jsx jumpAbortRef).
     const improveAbortRef = React.useRef(null);
     const [isSuggesting, setIsSuggesting] = React.useState(false);
-    const [openSection, setOpenSection] = React.useState("submitted");
+    // Which order list is open, and whether the standing goal card is: one
+    // state, because opening a list minimizes the card (actionsPanelLayout.js).
+    // The card's state is kept for the next opening of the panel.
+    const [layout, dispatchLayout] = React.useReducer(actionsLayoutReducer, undefined, () => initialActionsLayout(readGoalOpen(browserStorage())));
+    React.useEffect(() => {
+        writeGoalOpen(browserStorage(), layout.goalOpen);
+    }, [layout.goalOpen]);
+    const showSuggested = hasRequestedSuggestions || isSuggesting || suggestions.length > 0;
+    // The height the player dragged the panel to (null: the default), kept too.
+    const panelRef = React.useRef(null);
+    const [panelHeight, setPanelHeight] = React.useState(() => readPanelHeight(browserStorage()));
+    const commitPanelHeight = React.useCallback((px) => {
+        setPanelHeight(px);
+        writePanelHeight(browserStorage(), px);
+    }, []);
     const inputRef = React.useRef(null);
     const lastRoundRef = React.useRef(null);
     const isMobile = useIsMobile();
@@ -748,7 +930,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         if (!trimmed || isSubmitting || isImproving) {
             return;
         }
-        setOpenSection("submitted");
+        dispatchLayout({ type: "open", section: "submitted", showSuggested });
 
         const nextAction = createManualAction(trimmed);
         if (!nextAction) {
@@ -858,7 +1040,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         }
 
         setHasRequestedSuggestions(true);
-        setOpenSection("suggested");
+        dispatchLayout({ type: "open", section: "suggested", showSuggested });
         setIsSuggesting(true);
         setSuggestionError("");
         try {
@@ -887,6 +1069,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
 
     return (
         <div
+        ref={panelRef}
         style={{
             backdropFilter: "blur(8px)",
             backgroundColor: "var(--oh-ui-bg, rgba(24, 24, 27, 0.95))",
@@ -898,10 +1081,14 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             display: "flex",
             flexDirection: "column",
             fontFamily: "sans-serif",
-            // Grow to use the height a taller screen offers (leaving ~16rem for the
-            // top bar), never dropping below a usable 30rem floor for laptops/phones,
-            // and never past the 9rem the top UI needs (so it can't overflow up).
-            height: `min(calc(${APP_HEIGHT} - 9rem), max(calc(${APP_HEIGHT} - 16rem), 30rem))`,
+            // By default, grow to use the height a taller screen offers (leaving
+            // ~16rem for the top bar), never dropping below a usable 30rem floor
+            // for laptops/phones. Dragged by its top edge, between 20rem and the
+            // screen's height. Never past the 9rem the top UI needs (so it can't
+            // overflow up) either way (actionsPanelLayout.js panelHeightCss). In
+            // a variable, which the Projects tab sizes its tag menu by.
+            [PANEL_HEIGHT_VAR]: panelHeightCss(panelHeight, APP_HEIGHT),
+            height: `var(${PANEL_HEIGHT_VAR})`,
             minHeight: "10rem",
             left: "0rem",
             maxWidth: "calc(100vw - 1rem)",
@@ -914,6 +1101,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             zIndex: 9998,
         }}
         >
+        <PanelResizeHandle panelRef={panelRef} height={panelHeight} onCommit={commitPanelHeight} touch={isTouch} shown={isOpen} />
         <div
         style={{
             alignItems: "center",
@@ -986,7 +1174,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         <>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem", padding: "0.875rem 1.25rem", flex: 1, minHeight: 0, ...(scrollAsOne ? { overflowY: "auto", scrollbarWidth: "none" } : { overflow: "hidden" }) }}>
 
-        <StandingGoal country={game.country} round={game.round} gameDate={game.gameDate} isOpen={isOpen} />
+        <StandingGoal country={game.country} round={game.round} gameDate={game.gameDate} isOpen={isOpen} open={layout.goalOpen} onToggle={() => dispatchLayout({ type: "goal" })} />
 
         {/* Brainstorm and AI Suggestions side by side, to leave the room to the
             submitted actions (the owner, 2026-10-14). */}
@@ -1061,8 +1249,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         </div>
 
         {(() => {
-            const showSuggested = hasRequestedSuggestions || isSuggesting || suggestions.length > 0;
-            const suggestedOpen = showSuggested && openSection === "suggested";
+            const suggestedOpen = openSectionOf(layout.section, showSuggested) === "suggested";
             const submittedOpen = !suggestedOpen;
             const sectionStyle = (open) => ({
                 display: "flex",
@@ -1080,7 +1267,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                 <>
                 {showSuggested && (
                     <div style={sectionStyle(suggestedOpen)}>
-                    <SectionHeader title="Suggested Actions" count={suggestions.length} open={suggestedOpen} onToggle={() => setOpenSection(suggestedOpen ? "submitted" : "suggested")} />
+                    <SectionHeader title="Suggested Actions" count={suggestions.length} open={suggestedOpen} onToggle={() => dispatchLayout({ type: "toggle", showSuggested })} />
                     {suggestedOpen && (
                         <div style={{ ...listStyle, gap: "0.5rem" }}>
                         {suggestionError && !isSuggesting && (
@@ -1108,7 +1295,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
 
                 <div style={sectionStyle(submittedOpen)}>
                 {showSuggested ? (
-                    <SectionHeader title="Your Submitted Actions" count={submittedActions.length} open={submittedOpen} onToggle={() => setOpenSection(submittedOpen ? "suggested" : "submitted")} />
+                    <SectionHeader title="Your Submitted Actions" count={submittedActions.length} open={submittedOpen} onToggle={() => dispatchLayout({ type: "toggle", showSuggested })} />
                 ) : (
                     <p
                     style={{

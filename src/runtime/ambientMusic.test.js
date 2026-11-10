@@ -59,6 +59,8 @@ import {
   loadSecondsMemory,
   musicAddress,
   musicSceneOf,
+  noteGameDrawn,
+  reopensDrawnGame,
   musicVolumeOf,
   setMusicPlaylists,
   setMusicScene,
@@ -1180,6 +1182,26 @@ test("a browser that still refuses is asked again at the next click; a file that
 test("the scene is where the player is", () => {
   assert.deepEqual([...MUSIC_SCENES], ["menu", "loading", "game", "atWar", "war"]);
   assert.equal(musicSceneOf({ inMenu: true, loading: true, atWar: true, war: true }), "menu");
+  // "When entering a game thats already opened ... dont do the whole music ramp up thing": a game drawn once
+  // this session is remembered, and the screen reports no loading for it.
+  assert.equal(reopensDrawnGame("game-a"), false);
+  noteGameDrawn("game-a");
+  assert.equal(reopensDrawnGame("game-a"), true);
+  assert.equal(reopensDrawnGame("game-a", "game-a"), true);
+  assert.equal(reopensDrawnGame("game-b"), false);
+  assert.equal(reopensDrawnGame(""), false);
+  // "if you have an open game but then switch games it still doesnt do the wind up": the open game's
+  // screen is still up while another is being opened, and that opening gets its build...
+  assert.equal(reopensDrawnGame("game-a", "game-b"), false);
+  // ...as does the open game's own screen when it comes up for the second time after another was drawn.
+  noteGameDrawn("game-b");
+  assert.equal(reopensDrawnGame("game-a", "game-a"), false);
+  assert.equal(reopensDrawnGame("game-b", "game-b"), true);
+  const gameScreen = read("src/Game/GameUI/main.jsx");
+  assert.match(gameScreen, /loading: showGameLoading && !reopening/);
+  assert.match(gameScreen, /const reopening = reopensDrawnGame\(activeGame\?\.id, gameLoading\.opening\);/);
+  assert.match(read("src/Game/GameUI/gameLoadingScreen.jsx"), /setOpening\(String\(event\?\.detail\?\.gameId \?\? openingGameId\(\)\)\)/);
+  assert.match(gameScreen, /if \(gameEntered && activeGame\?\.id && !showGameLoading\) noteGameDrawn\(activeGame\.id\);/);
   assert.equal(musicSceneOf({ loading: true, atWar: true, war: true }), "loading");
   assert.equal(musicSceneOf({ atWar: true, war: true }), "war");
   assert.equal(musicSceneOf({ war: true }), "war");
@@ -1190,7 +1212,7 @@ test("the scene is where the player is", () => {
   // At war is what puts the war room's button on the screen: the player's troops on a battlefield.
   // (Battlefields being on is the Wars feature's Fronts switch.)
   assert.ok(screen.includes("const atWar = hasFronts && fightingIn(warFronts);"));
-  assert.ok(screen.includes("musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading, atWar: atWar || inWar, war: battlefieldShown })"));
+  assert.ok(screen.includes("musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading && !reopening, atWar: atWar || inWar, war: battlefieldShown })"));
   assert.ok(screen.includes("useEffect(() => { setMusicScene(musicScene); }, [musicScene]);"));
   // The open game's scenario's own music, told before the scene it is for.
   // Of the OPEN game: the game last played has no say before the player opens one (gameEntry.js).

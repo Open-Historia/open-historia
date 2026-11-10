@@ -119,10 +119,17 @@ const polityNamesInEvent = (event, world, nameOf, byLength) => {
 // The polities that have had something happen to them, or have dealt with the
 // player, latest first: { name, date } for each, the date of the latest thing
 // (blank when it carries none: those come after the dated ones).
-export const rankRelevantPolities = (bundle, { event = null } = {}) => {
+// `candidates`: the names to rank where the world has no political profiles
+// (a time skip passes the map's powers, promptContext.js buildPromptFocus), so
+// a scenario without a Political World still has relevant countries. Idle
+// diplomacy passes none: only a government with a profile may write.
+export const rankRelevantPolities = (bundle, { event = null, candidates = null } = {}) => {
   const world = bundle?.world || {};
   const player = clean(bundle?.game?.country);
-  const names = eligiblePolities(world, player);
+  const profiled = eligiblePolities(world, player);
+  const names = profiled.length || !Array.isArray(candidates)
+    ? profiled
+    : [...new Set(candidates.map(clean))].filter((name) => name && lower(name) !== lower(player));
   const nameOf = exactNamer(world, names);
   const byLength = [...names].sort((a, b) => b.length - a.length);
   // Each polity's latest: { date, round }. A date first; with none, the round;

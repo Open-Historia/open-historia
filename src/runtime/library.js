@@ -594,6 +594,9 @@ export const removeGame = async (gameId) => {
   const catalog = await requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`, {
     method: "DELETE",
   });
+  // Its related-events vectors (eventVectorStore.js), derived and rebuilt
+  // should the game come back out of the trash.
+  void import("./eventVectorStore.js").then(({ forgetGameVectors }) => forgetGameVectors(gameId)).catch(() => {});
   return applyLibraryCatalog(catalog);
 };
 

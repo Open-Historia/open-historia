@@ -10,6 +10,7 @@ import {
   migrateOwnerRecord,
   needsMigration as needsOwnerMigration,
 } from "./ownerMigration.js";
+import { commonNameRenames, migrateToCommonNames, needsCommonNames, scenarioPredatesCommonNames } from "./commonNames.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.join(__dirname, "..");
@@ -3348,6 +3349,41 @@ const migrateOwnerRecordAtPaths = (label, paths) => {
   return true;
 };
 
+// ---------------------------------------------------------------------------
+// Common country names (server/commonNames.js): a world that took the built-in's
+// old formal names ("Kingdom of Spain") is re-keyed to the common ones ("Spain")
+// once, on disk, in the same once-per-record pass as the owner migration, after
+// it. The table is the packaged seed's formerNames, read once.
+// ---------------------------------------------------------------------------
+let commonNameRenameTable = null;
+const readCommonNameRenames = () => {
+  if (!commonNameRenameTable) commonNameRenameTable = commonNameRenames(readJsonFile(path.join(BUILT_IN_SEED_DIR, "world.json"), null));
+  return commonNameRenameTable;
+};
+
+const migrateCommonNamesAtPaths = (label, paths, { scenarioId = "", parentPredates = false } = {}) => {
+  const world = readJsonFile(paths.world, null);
+  if (!needsCommonNames(world, { scenarioId, parentPredates })) return false;
+  const own = (file) => (file && fs.existsSync(file) ? readJsonFile(file, null) : undefined);
+  const migrated = migrateToCommonNames({
+    world,
+    game: own(paths.game),
+    colors: own(paths.colors),
+    flags: own(paths.flags),
+    tags: own(paths.tags),
+    chat: own(paths.chat),
+    actions: own(paths.actions),
+  }, readCommonNameRenames());
+  if (!migrated) return false;
+  for (const part of ["game", "colors", "flags", "tags", "chat", "actions"]) {
+    if (migrated[part] !== undefined) writeJsonFile(paths[part], migrated[part]);
+  }
+  // World last: it carries the marker, so a failure part-way is redone next time.
+  writeJsonFile(paths.world, migrated.world);
+  console.log(`[common-names] ${label}: ${migrated.renamed.length} countr${migrated.renamed.length === 1 ? "y" : "ies"} renamed to their common names`);
+  return true;
+};
+
 const ensureScenarioOwnerSchema = (scenarioId) => {
   const key = `scenario:${scenarioId}`;
   if (ownerSchemaChecked.has(key)) return;
@@ -3379,6 +3415,20 @@ const ensureScenarioOwnerSchema = (scenarioId) => {
   } catch (error) {
     ownerSchemaChecked.delete(key); // let the next read retry rather than pin a half state
     console.warn(`[owner-migration] ${key} failed: ${error.message}`);
+    return;
+  }
+  try {
+    migrateCommonNamesAtPaths(key, {
+      world: getScenarioJsonPath(scenarioId, "world"),
+      game: getScenarioJsonPath(scenarioId, "game"),
+      colors: getScenarioJsonPath(scenarioId, "colors"),
+      flags: getScenarioJsonPath(scenarioId, "flags"),
+      tags: getScenarioJsonPath(scenarioId, "tags"),
+      chat: getScenarioJsonPath(scenarioId, "chat"),
+      actions: getScenarioJsonPath(scenarioId, "actions"),
+    }, { scenarioId });
+  } catch (error) {
+    console.warn(`[common-names] ${key} failed: ${error.message}`);
   }
 };
 
@@ -3435,6 +3485,26 @@ const ensureGameOwnerSchema = (gameId) => {
   } catch (error) {
     ownerSchemaChecked.delete(key);
     console.warn(`[owner-migration] ${key} failed: ${error.message}`);
+    return;
+  }
+  try {
+    // The game's own world, chats, actions, colours, flags and tags; the
+    // scenario's colours it reads when it has none are the scenario's to move
+    // (ensureScenarioOwnerSchema above already did).
+    const parentId = getGameSummary(gameId)?.scenarioId || DEFAULT_SCENARIO_ID;
+    migrateCommonNamesAtPaths(key, {
+      world: getGameJsonPath(gameId, "world"),
+      game: getGameJsonPath(gameId, "game"),
+      colors: getGameJsonPath(gameId, "colors"),
+      flags: getGameJsonPath(gameId, "flags"),
+      tags: getGameJsonPath(gameId, "tags"),
+      chat: getGameJsonPath(gameId, "chat"),
+      actions: getGameJsonPath(gameId, "actions"),
+    }, {
+      parentPredates: scenarioPredatesCommonNames(parentId, readJsonFile(getScenarioJsonPath(parentId, "world"), null)),
+    });
+  } catch (error) {
+    console.warn(`[common-names] ${key} failed: ${error.message}`);
   }
 };
 

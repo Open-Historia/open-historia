@@ -59,7 +59,7 @@ const ALLOWED = {
   // M3C removes both direct Advisor Actions and Projects whole-document writes.
   // Keep both forbidden; Project edits now use the canonical world write queue.
   "Game/GameUI/chat.jsx": { "writeChatsState": 1, "writeWorldState": 1 },
-  "Game/GameUI/stats.jsx": { "writeWorldState": 3 },
+  "Game/GameUI/stats.jsx": { "writeWorldState": 1 },
   "Game/GameUI/actions.jsx": { "writeActionsState": 1, "writeWorldState": 1 },
   "Game/GameUI/projects.jsx": { "writeWorldState": 1 },
   // alpha: starting a game as a group gives it its colour and flag, as a faction's does.

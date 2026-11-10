@@ -250,9 +250,12 @@ test("the story is told how a strike is written, on its event, in every skip", (
     assert.match(block, /A missile launch or a bombing run is not a front order: it goes in the impacts\.strikes of the event that tells of it/);
     assert.ok(block.length <= FRONTS_BLOCK_MAX);
   }
-  // The levers' example reads as the strike it shows, bound to its event.
-  const [example] = decodeEventStrikes(["Russia~missile strike~~city: Kyiv~12~some"], "e7");
-  assert.deepEqual([example.problem, example.side, example.weapon, example.from, example.objective, example.count, example.down, example.eventIds], [undefined, "Russia", "missile strike", "", "city: Kyiv", 12, 4, ["e7"]]);
+  // The levers' example reads as the strike it shows, bound to its event, and names no real country or city, which
+  // a model copies (as front orders' did, 2254902f).
+  const shown = levers.match(/Example: ([^"\n]*~[^"\n]*)",\r?\n/)?.[1];
+  assert.equal(shown, "A~missile strike~~city: X~12~some");
+  const [example] = decodeEventStrikes([shown], "e7");
+  assert.deepEqual([example.problem, example.side, example.weapon, example.from, example.objective, example.count, example.down, example.eventIds], [undefined, "A", "missile strike", "", "city: X", 12, 4, ["e7"]]);
   // A line written the battlefield way is read as that, and an old answer's strike line still is.
   const [old] = decodeEventStrikes("strike~A~bombing run~city: X~4~city: Y~3~24", "e1");
   assert.deepEqual([old.problem, old.weapon, old.from, old.objective, old.down, old.count, old.eventIds], [undefined, "bombing run", "city: X", "city: Y", 3, 24, ["e1"]]);

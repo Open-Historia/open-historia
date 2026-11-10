@@ -36,7 +36,7 @@ export const FEATURE_DEFINITIONS = Object.freeze([
     label: "Wars",
     toggleable: false,
     legacyEnabledSetting: "battlefields",
-    description: "How the game fights its wars itself. Each part has a switch: land war on battlefields, air units and navies. What is switched off is left to the story: the simulator tells of it, and the game does not fight it.",
+    description: "How the game fights its wars itself. Each part has a switch: land war on battlefields, air units, navies, and troops carried by rail, sea and air. What is switched off is left to the story: the simulator tells of it, and the game does not fight it.",
     settings: Object.freeze([
       Object.freeze({
         key: "battlefields",
@@ -59,6 +59,29 @@ export const FEATURE_DEFINITIONS = Object.freeze([
         defaultValue: true,
         description: "Fleets on the map: they fight at sea, blockade coasts and carry troops across water. Off: no fleet is raised or sails, nothing is carried by sea, the War Room has no fleets, and the simulator is told the war has none.",
       }),
+      // "make different transport types disableable in features" (the owner, 2026-11-09): each way of
+      // carrying troops to a place their side has no border with (src/runtime/fronts/transports.js).
+      Object.freeze({
+        key: "railTransport",
+        type: "toggle",
+        label: "Transport by rail",
+        defaultValue: true,
+        description: "Troops carried by train through land their side holds, to another front. Off: the War Room offers no rail, nothing is sent by it, and the simulator is not told of it.",
+      }),
+      Object.freeze({
+        key: "seaTransport",
+        type: "toggle",
+        label: "Transport by sea",
+        defaultValue: true,
+        description: "Troops carried by ship to a coast their side has no border with, where they land and fight. Off, or with navies off: the War Room offers no transport by sea, nothing is shipped, and the simulator is not told of it.",
+      }),
+      Object.freeze({
+        key: "airTransport",
+        type: "toggle",
+        label: "Transport by air",
+        defaultValue: true,
+        description: "Troops flown straight to any place, into enemy land too, fewer of them than by rail or sea; over enemy land their aircraft can be intercepted. Off, or with air units off: the War Room offers no airlift, nothing is flown, and the simulator is not told of it.",
+      }),
     ]),
   }),
   // Rostra, the social network (src/runtime/socialFeed.js, src/Game/GameUI/social.jsx):
@@ -75,7 +98,7 @@ export const FEATURE_DEFINITIONS = Object.freeze([
   Object.freeze({
     key: "idleDiplomacy",
     label: "Idle diplomacy",
-    description: "While the game sits open between turns, a polity with a live reason to speak may send the player an unprompted note. Every attempt is an AI request nobody pressed a button for, so it only runs while Background AI is on (Settings, AI, AI requests; on by default), and stops at that player's daily cap.",
+    description: "While the game sits open between turns, a polity with a live reason to speak may send the player an unprompted note. Every attempt is an AI request nobody pressed a button for, so it stops at the day's cap of such requests, and while less than a tenth of the player's daily request limit is left.",
     settings: Object.freeze([
       Object.freeze({
         key: "averageMinutes",
@@ -85,7 +108,7 @@ export const FEATURE_DEFINITIONS = Object.freeze([
         max: 720,
         step: 1,
         defaultValue: 8,
-        description: "How often, on average, the model is asked whether some polity would write. Most attempts send nothing; the roll only runs while the game is on screen, and only while Background AI is on.",
+        description: "How often, on average, the model is asked whether some polity would write. Most attempts send nothing; the roll only runs while the game is on screen.",
       }),
     ]),
   }),
@@ -524,6 +547,21 @@ export const warsOf = (features) => {
     air: wars?.air !== false,
     navies: wars?.navies !== false,
   };
+};
+
+// What may carry troops in a game (the Wars feature's transport switches), as
+// the media of src/runtime/fronts/transports.js: "land" is rail, "sea" ships
+// and "air" aircraft. Each on unless switched off, and nothing goes by sea
+// without navies nor by air without air units. A save from before the switches
+// has them all.
+export const transportMediaOf = (features) => {
+  const wars = features?.fronts;
+  const { air, navies } = warsOf(features);
+  return [
+    wars?.seaTransport !== false && navies ? "sea" : "",
+    wars?.railTransport !== false ? "land" : "",
+    wars?.airTransport !== false && air ? "air" : "",
+  ].filter(Boolean);
 };
 
 // The director's settings as the engine reads them: null when world direction is

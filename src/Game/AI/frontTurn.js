@@ -38,6 +38,7 @@ import { hashKey } from "../../runtime/fronts/codec.js";
 import { forcesFunding, middleFundingPerHead } from "../../runtime/militaryFunding.js";
 import { countryWeight, middleWeight } from "../../runtime/countryWeight.js";
 import { populationFigureOf } from "../../runtime/populationFigure.js";
+import { forceGroupDescription, groupOwnerOf, normalizeGroupOp } from "../../runtime/groups.js";
 import { arenaFor } from "../../runtime/fronts/arena.js";
 import { REINFORCE_ORDER, SCENARIO_MARK } from "../../runtime/fronts/constants.js";
 import { anyMechanic } from "../../runtime/fronts/mechanics.js";
@@ -186,6 +187,17 @@ export const planFrontMoments = ({ events = [], frontOrders = [], warsBefore = [
       const regionId = clean(transfer?.regionId);
       const to = clean(transfer?.toCode);
       if (regionId && to) moments.push({ day, type: "control", regionId, to, ref: clean(event?.id) });
+    }
+    // A group taking a region into its area, or letting one go, is told the same way (engine.js, a "group" moment).
+    // (A release of its whole area, or a group dissolved, names no region: the next run finds the area as it stands.)
+    for (const raw of asArray(impacts.groupOps)) {
+      const op = raw?.by === FRONT_MARK ? null : normalizeGroupOp(raw);
+      if (!op || (op.op !== "take" && op.op !== "create" && op.op !== "release")) continue;
+      for (const regionId of op.regionIds) {
+        moments.push(op.op === "release"
+          ? { day, type: "group", regionId, group: "", from: op.name, ref: clean(event?.id) }
+          : { day, type: "group", regionId, group: op.name, ref: clean(event?.id) });
+      }
     }
   }
 
@@ -376,6 +388,8 @@ export const frontWorldReaders = (world, { baseOwners = null, groups = true } = 
     sovereignOf,
     groupAreas,
     isGroup: (name) => groupNames.has(fold(name)),
+    // The country whose force a group is, where it is one (runtime/groups.js `owner`).
+    groupOwnerOf: (name) => (groups ? groupOwnerOf(world?.groups, name) : ""),
     strengthOf,
     // A country's own military figures, where its author or its sheet gives them (runtime/militaryStats.js;
     // what they do: runtime/fronts/military.js).
@@ -773,7 +787,11 @@ export const attachFrontFlips = (events, flips, { dayOf = () => 0, aboutOf = nul
     const note = clean(flip?.battlefield);
     if (flip?.kind === "groupTake" || flip?.kind === "groupRelease") {
       const name = clean(flip.kind === "groupTake" ? flip.to : flip.from);
-      if (name) ops.groupOps.push({ op: flip.kind === "groupTake" ? "take" : "release", name, regionIds: [regionId], note, by: FRONT_MARK });
+      // A country's force taking ground from a group on a third country's land (runtime/fronts/day.js
+      // settleRegions) is founded by its first take as that country's, and told what it is.
+      const owner = flip.kind === "groupTake" ? clean(flip.owner) : "";
+      const force = owner ? { owner, description: forceGroupDescription(owner, flip.land, flip.from) } : {};
+      if (name) ops.groupOps.push({ op: flip.kind === "groupTake" ? "take" : "release", name, regionIds: [regionId], note, by: FRONT_MARK, ...force });
     } else if (clean(flip?.from) && clean(flip?.to)) {
       ops.regionControlOps.push({ op: "control", regionId, fromCode: clean(flip.from), toCode: clean(flip.to), basis: "occupation", note, by: FRONT_MARK });
     }
@@ -809,12 +827,15 @@ export const applyFrontUnitChanges = (units, changes) => {
     }
     if (change.remove === true) continue;
     const { committedTo: _was, ...rest } = unit;
-    const lng = Number(change.lng);
-    const lat = Number(change.lat);
+    // (A place the change does not have is none: Number(null) is 0, and a unit put at lng 0, lat 0 is taken off the map.)
+    const coordinate = (value) => (typeof value === "number" || (typeof value === "string" && value.trim() !== "") ? Number(value) : NaN);
+    const lng = coordinate(change.lng);
+    const lat = coordinate(change.lat);
+    const placed = Number.isFinite(lng) && Number.isFinite(lat) && !(lng === 0 && lat === 0);
     const strength = Number(change.strength);
     next.push({
       ...rest,
-      ...(Number.isFinite(lng) && Number.isFinite(lat) ? { lng, lat } : {}),
+      ...(placed ? { lng, lat } : {}),
       ...(Number.isFinite(strength) ? { strength: Math.max(1, Math.min(100, Math.round(strength))) } : {}),
       // (A fleet that broke off a battle at sea is withdrawing: runtime/naval/engine.js.)
       ...(clean(change.posture) ? { posture: clean(change.posture) } : {}),
@@ -877,6 +898,7 @@ const TRANSPORT_REFUSALS = {
   "nothing-aboard": "it was given nothing to carry",
   "no-navy": "its sender has no navy to carry it by sea",
   "no-air-force": "its sender has no air arm to carry it by air",
+  "switched-off": "this game carries no troops that way",
   incomplete: "its order is incomplete",
 };
 export const transportRefusal = (code) => TRANSPORT_REFUSALS[clean(code)] ?? "it could not set out";
@@ -996,6 +1018,8 @@ export const runTurnFronts = async ({
   naval = true,
   // false: the scenario has no air units (the Wars feature): nothing is airlifted, and no aircraft is drawn striking.
   air = true,
+  // What may carry troops ("sea", "land", "air": frontsGate.js transportMediaOn), or null for all: the Wars feature's switches.
+  transportMedia = null,
   // The most formations a country and the world may have, for a fleet the war at sea commissions.
   unitCaps = null,
   // The era the scenario set, 0 to 3, or null to read it off the date (runtime/warSettings.js).
@@ -1047,7 +1071,8 @@ export const runTurnFronts = async ({
   const orders = written.filter((order) => order.order !== "strike" && !Object.hasOwn(TRANSPORT_ORDERS, order.order));
   const carriedBy = (order) => TRANSPORT_ORDERS[order.order];
   const dispatches = written.filter((order) => Object.hasOwn(TRANSPORT_ORDERS, order.order)
-    && !(naval === false && carriedBy(order) === "sea") && !(air === false && carriedBy(order) === "air"));
+    && !(naval === false && carriedBy(order) === "sea") && !(air === false && carriedBy(order) === "air")
+    && !(Array.isArray(transportMedia) && !transportMedia.includes(carriedBy(order))));
   const atWar = stages.some((wars) => wars.some((war) => clean(war?.status) !== "ended"));
   const committed = asArray(world?.units).some((unit) => clean(unit?.committedTo));
   // No battlefield, no war, no order and nothing at sea: there is nothing for
@@ -1105,6 +1130,22 @@ export const runTurnFronts = async ({
     ...Object.keys(isRecord(world?.polityOverrides) ? world.polityOverrides : {}),
     ...Object.keys(groups && isRecord(world?.groups) ? world.groups : {}),
   ]);
+
+  // The groups the turn's events found or give ground to are groups to the engine too: a group the world did not
+  // have as the turn began, fighting in it, took what it captured as a COUNTRY does, by a control operation to its
+  // name, which founded a landless country of that name owning the ground beside the group holding it.
+  // Only a create founds one, and a take naming a group nobody has (applyGroupOps creates it): a stray take or
+  // update naming a COUNTRY made it a group to the engine, and its captures that turn were recorded as a group's area.
+  const countries = new Set([
+    ...Object.entries(isRecord(world?.polityOverrides) ? world.polityOverrides : {}).flatMap(([key, record]) => [key, record?.name]),
+    ...(baseOwners instanceof Map ? baseOwners.values() : []),
+    ...Object.values(isRecord(world?.regionOwnershipOverrides) ? world.regionOwnershipOverrides : {}),
+    ...Object.values(isRecord(world?.regionSovereigntyOverrides) ? world.regionSovereigntyOverrides : {}),
+  ].map(clean).filter(Boolean).map((name) => fold(nameOf(name))));
+  const foundedGroups = new Set(groups ? list.flatMap((event) => asArray(event?.impacts?.groupOps))
+    .filter((op) => op?.by !== FRONT_MARK).map(normalizeGroupOp)
+    .filter((op) => op && (op.op === "create" || (op.op === "take" && !countries.has(fold(nameOf(op.name))))))
+    .map((op) => fold(nameOf(op.name))) : []);
 
   // The map's shapes, read once and only if something needs them.
   let regions = null;
@@ -1193,6 +1234,7 @@ export const runTurnFronts = async ({
     .map((moment) => {
       if (moment.type === "order") return { ...moment, side: nameOf(withoutKind(moment.side)) };
       if (moment.type === "control") return { ...moment, to: nameOf(moment.to) };
+      if (moment.type === "group") return { ...moment, group: moment.group ? nameOf(moment.group) : "", ...(moment.from ? { from: nameOf(moment.from) } : {}) };
       if (moment.type === "war") return { ...moment, names: asArray(moment.names).map(nameOf), ...(moment.opponents ? { opponents: asArray(moment.opponents).map(nameOf) } : {}) };
       return moment;
     })];
@@ -1230,9 +1272,12 @@ export const runTurnFronts = async ({
       controllerOf: readers.controllerOf,
       sovereignOf: readers.sovereignOf,
       groupAreas: readers.groupAreas,
-      isGroup: readers.isGroup,
+      isGroup: (name) => readers.isGroup(name) || foundedGroups.has(fold(name)),
+      groupOwnerOf: readers.groupOwnerOf,
       units: flown,
       transports: normalizeTransports(world?.transports),
+      // (What the Wars feature switched off carries nothing: runtime/fronts/transports.js transportBar.)
+      ...(Array.isArray(transportMedia) ? { transportMedia } : {}),
       // (With the ground the scenario made harder to cross, where it weighs terrain: runtime/fronts/arena.js;
       // and the water frozen this turn, where it has seasons and weather: runtime/fronts/climate.js.)
       map: { ...map, regions, ...(mechanics?.terrain === true && terrainOf(world) ? { terrain: terrainOf(world) } : {}), ...(frozen.length > 0 ? { frozen: frozen.map((entry) => entry.id) } : {}) },

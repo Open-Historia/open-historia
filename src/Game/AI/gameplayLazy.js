@@ -91,7 +91,6 @@ export const refinePlayerAction = async (...args) => (await gameplay()).refinePl
 export const previewGameMasterCommand = async (...args) => (await gameplay()).previewGameMasterCommand(...args);
 export const previewGameMasterRevision = async (...args) => (await gameplay()).previewGameMasterRevision(...args);
 export const applyGameMasterPreview = async (...args) => (await gameplay()).applyGameMasterPreview(...args);
-export const consolidateHistoryNow = async (...args) => (await gameplay()).consolidateHistoryNow(...args);
 
 // --- Stats and intelligence -------------------------------------------------
 export const ensureIntelligenceRated = async (...args) => (await gameplay()).ensureIntelligenceRated(...args);

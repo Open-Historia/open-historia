@@ -39,6 +39,10 @@ import {
   migrateOwnerRecord,
   needsMigration as needsOwnerMigration,
 } from "../../../server/ownerMigration.js";
+// The common country names (server/commonNames.js), from the seed's formerNames
+// as scripts/seed-web-defaults.mjs bundles them.
+import { migrateToCommonNames, needsCommonNames, scenarioPredatesCommonNames } from "../../../server/commonNames.js";
+import COMMON_NAME_RENAMES from "./generated/commonNames.js";
 import { planRestorePointSlots, publicRestorePointIndex } from "../../../server/restorePoints.js";
 import { coverObjectUrl } from "./coverUrls.js";
 import { createCoarseRegionsCache } from "./coarseRegionsCache.js";
@@ -858,7 +862,64 @@ const ownerMigrationContext = async (record, kind) => {
 // another caller's migration landed takes the stored, migrated record instead.
 const migrateOwnerSchema = (record, kind) => {
   if (!record?.id) return Promise.resolve(false);
-  return serializeByKey(`owner-migration:${kind}:${record.id}`, () => migrateOwnerSchemaNow(record, kind));
+  return serializeByKey(`owner-migration:${kind}:${record.id}`, async () => {
+    const owners = await migrateOwnerSchemaNow(record, kind);
+    const names = await migrateCommonNamesNow(record, kind);
+    return owners || names;
+  });
+};
+
+// A world that took the built-in's old formal names ("Kingdom of Spain") is
+// re-keyed to the common ones ("Spain") once, after the owner migration, in the
+// same pass (server/commonNames.js; desktop: migrateCommonNamesAtPaths). The
+// world's marker makes it once; a game is judged by its scenario when its own
+// world carries no map stamp. That judgement is remembered for the session (by
+// game and scenario), so a game on any other scenario loads its scenario once,
+// not on every read.
+const parentPredatesCommonNames = new Map();
+const migrateCommonNamesNow = async (record, kind) => {
+  const world = record.json?.world;
+  if (!world || typeof world !== "object" || Number(world.commonNames ?? 0) > 0) return false;
+  let parentPredates = false;
+  if (kind === "game" && !world.builtInMap) {
+    const scenarioId = readGameMeta(record.id, record.meta ?? {}).scenarioId || DEFAULT_SCENARIO_ID;
+    const cacheKey = `${record.id}\u0000${scenarioId}`;
+    if (!parentPredatesCommonNames.has(cacheKey)) {
+      const parent = await getScenario(scenarioId);
+      parentPredatesCommonNames.set(cacheKey, Boolean(parent) && scenarioPredatesCommonNames(parent.id, parent.json?.world));
+    }
+    parentPredates = parentPredatesCommonNames.get(cacheKey);
+  }
+  const judged = { scenarioId: kind === "scenario" ? record.id : "", parentPredates };
+  if (!needsCommonNames(world, judged)) return false;
+  // Another caller's copy may have been brought across and put already: take it.
+  const stored = await (kind === "game" ? getGame(record.id) : getScenario(record.id));
+  if (stored?.json?.world && !needsCommonNames(stored.json.world, judged)) {
+    for (const field of Object.keys(record)) if (!(field in stored)) delete record[field];
+    Object.assign(record, stored);
+    return false;
+  }
+  try {
+    const migrated = migrateToCommonNames({
+      world,
+      game: record.json.game,
+      colors: ownJsonValue(record.colors),
+      flags: ownJsonValue(record.flags),
+      tags: ownJsonValue(record.tags),
+      chat: record.json.chat,
+      actions: record.json.actions,
+    }, COMMON_NAME_RENAMES);
+    if (!migrated) return false;
+    for (const part of ["colors", "flags", "tags"]) if (migrated[part] !== undefined) record[part] = migrated[part];
+    for (const part of ["game", "chat", "actions"]) if (migrated[part] !== undefined) record.json[part] = migrated[part];
+    record.json.world = migrated.world;
+    await (kind === "game" ? putGame(record) : putScenario(record));
+    console.log(`[common-names] ${kind}:${record.id}: ${migrated.renamed.length} countr${migrated.renamed.length === 1 ? "y" : "ies"} renamed to their common names`);
+    return true;
+  } catch (error) {
+    console.warn(`[common-names] ${kind}:${record.id} failed: ${error.message}`);
+    return false;
+  }
 };
 
 const migrateOwnerSchemaNow = async (record, kind) => {

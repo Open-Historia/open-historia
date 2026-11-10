@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  CACHE_BREAK_KEY,
   MIN_CACHEABLE_PREFIX_CHARS,
   STATIC_PROMPT_KEYS,
   renderTemplateCached,
@@ -95,4 +96,36 @@ test("the stock jump templates keep most of their text ahead of the first per-tu
     assert.ok(share >= 0.5, `${task}: only ${(share * 100).toFixed(0)}% of the template precedes its first per-turn placeholder`);
     assert.ok(rendered.staticPrefixEnd >= MIN_CACHEABLE_PREFIX_CHARS, `${task}: prefix too short to pin`);
   }
+});
+
+test("a cache break marks the part of the prefix another task shares, and renders as nothing", () => {
+  const template = "Rules ${simulationRules}.${CACHE_BREAK} Mode: jump. Player ${PLAYER_POLITY}. Today ${dateReadable}.";
+  const rendered = renderTemplateCached(template, { simulationRules: "r", PLAYER_POLITY: "P", dateReadable: "d" });
+  assert.equal(CACHE_BREAK_KEY, "CACHE_BREAK");
+  assert.equal(rendered.text, "Rules r. Mode: jump. Player P. Today d.");
+  assert.equal(rendered.text.slice(0, rendered.sharedPrefixEnd), "Rules r.");
+  assert.equal(rendered.text.slice(0, rendered.staticPrefixEnd), "Rules r. Mode: jump. Player P. Today ");
+  assert.equal(renderTemplateCached("${dateReadable}${CACHE_BREAK}", { dateReadable: "d" }).sharedPrefixEnd, null, "only a break inside the static prefix counts");
+  assert.equal(renderTemplateCached("no break", {}).sharedPrefixEnd, null);
+});
+
+test("splitSystemPromptForCache splits off the shared part when it is worth pinning on its own", () => {
+  const shared = "s".repeat(MIN_CACHEABLE_PREFIX_CHARS);
+  const own = "m".repeat(500);
+  const prompt = `${shared}${own}tail`;
+  const split = splitSystemPromptForCache(prompt, shared.length + own.length, { sharedPrefixEnd: shared.length });
+  assert.deepEqual(split, { prefix: `${shared}${own}`, tail: "tail", shared });
+  assert.equal(splitSystemPromptForCache(prompt, shared.length + own.length, { sharedPrefixEnd: 10 }).shared, undefined, "too short to pin alone");
+  assert.equal(splitSystemPromptForCache(prompt, shared.length + own.length, { sharedPrefixEnd: prompt.length }).shared, undefined, "past the prefix");
+});
+
+test("the time skip's standing rules are static, and both jump templates break at the same place", () => {
+  const prompts = JSON.parse(readFileSync(new URL("./defaultPrompts.json", import.meta.url), "utf8"));
+  assert.ok(STATIC_PROMPT_KEYS.has("JUMP_STATIC_RULES") && STATIC_PROMPT_KEYS.has("jumpStaticRules"));
+  assert.equal(prompts.helpers.JUMP_STATIC_RULES, "${jumpStaticRules}");
+  const variables = Object.fromEntries([...STATIC_PROMPT_KEYS].map((key) => [key, `<${key}>`]));
+  const [jump, auto] = ["jumpForward", "autoJumpForward"].map((task) => renderTemplateCached(prompts.tasks[task], variables));
+  assert.ok(jump.sharedPrefixEnd > MIN_CACHEABLE_PREFIX_CHARS);
+  assert.equal(jump.text.slice(0, jump.sharedPrefixEnd), auto.text.slice(0, auto.sharedPrefixEnd));
+  assert.ok(jump.sharedPrefixEnd < jump.staticPrefixEnd && auto.sharedPrefixEnd < auto.staticPrefixEnd);
 });

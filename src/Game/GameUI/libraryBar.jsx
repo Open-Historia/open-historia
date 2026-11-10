@@ -6,12 +6,14 @@ import { Presence } from "./presence.jsx";
 import {
   PROMPT_EDITOR_SECTIONS,
   PROMPT_GUIDANCE_DEFAULTS,
+  editablePromptPack,
+  guidanceLimitFor,
   localizedGuidanceDefaults,
   materializePromptPack,
-  normalizePromptPack,
+  overLimitEdits,
   serializePromptPack,
 } from "../AI/gameplayPrompts.js";
-import { guidanceSegmentsFor } from "../AI/promptGuidance.js";
+import { guidanceSegmentsFor, promptCharCount } from "../AI/promptGuidance.js";
 import { promptTranslationsVersion, subscribePromptTranslations } from "../../runtime/promptTranslations.js";
 import {
   activateGame,
@@ -558,7 +560,7 @@ const normalizeString = (value) => String(value ?? "").trim();
 const buildScenarioEditorState = (details) => {
   const scenario = details?.scenario ?? {};
   const game = details?.data?.game ?? {};
-  const prompts = normalizePromptPack(details?.data?.prompts ?? {});
+  const prompts = editablePromptPack(details?.data?.prompts ?? {});
   const world = details?.data?.world ?? {};
 
   return {
@@ -593,7 +595,7 @@ const buildScenarioEditorState = (details) => {
 const buildGameEditorState = (details) => {
   const gameMeta = details?.game ?? {};
   const game = details?.data?.game ?? {};
-  const prompts = normalizePromptPack(details?.data?.prompts ?? {});
+  const prompts = editablePromptPack(details?.data?.prompts ?? {});
   const world = details?.data?.world ?? {};
 
   return {
@@ -629,6 +631,19 @@ const saveJsonBundleToDisk = async (bundle, fileName) => {
   await saveBlobToDisk(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }), fileName);
 };
 
+// Every edited prompt passage may be at most 20% longer than the built-in one
+// (promptGuidance.js guidanceCharLimit). The Prompts tab counts each passage
+// as it is typed; a passage over its limit is kept in the form, marked, and
+// Save waits until it is shortened or reset, so nothing the author wrote is
+// cut or thrown away behind their back.
+const PROMPT_TOO_LONG_TEXT = "A prompt passage is longer than its limit. Shorten it or reset it in the Prompts tab to save.";
+// A scenario may bypass the limit (the Prompts tab's switch, bypassLengthLimit
+// on its prompt pack): nothing of it is over, and a new game from it warns the
+// player that it will use a lot more tokens (handleScenarioPlay).
+const promptsBypassLimit = (prompts) => prompts?.bypassLengthLimit === true;
+const promptsOverLimit = (prompts) => overLimitEdits(prompts?.guidance, promptsBypassLimit(prompts)).length > 0;
+export const BYPASS_LIMIT_WARNING = "This scenario's prompts are longer than the built-in ones, so it will use a lot more tokens than other scenarios.";
+
 // Prompt-pack files intentionally contain only scenario-author editable guidance.
 // The technical/tooling portions of prompts are app-owned and are recomposed from
 // the current defaults when the pack loads, so importing an older pack cannot
@@ -659,6 +674,7 @@ const promptPackFromImport = (value) => {
 // passage stores nothing. The technical text never reaches the author, so it
 // cannot be broken here and it stays current as the game changes.
 const PromptSectionEditor = ({
+  onChangeBypassLimit = null,
   onChangePrompt,
   onExportPromptPack,
   onImportPromptPack,
@@ -696,6 +712,9 @@ const PromptSectionEditor = ({
     && edits[segment.id].trim() !== (defaults[segment.id] ?? "").trim()
     && edits[segment.id].trim() !== (englishDefaults[segment.id] ?? "").trim();
   const editedCount = segments.filter(isEdited).length;
+  // The sections with a passage over its limit, marked on their buttons.
+  const bypassLimit = promptsBypassLimit(promptPack);
+  const sectionsOverLimit = new Set(overLimitEdits(promptPack.guidance, bypassLimit).map((entry) => entry.sectionKey));
   const smallButtonStyle = { ...themeButtonStyle, fontSize: "0.72rem", minHeight: "1.7rem", padding: "0 0.6rem" };
 
   const handlePromptImportFile = async (event) => {
@@ -705,11 +724,16 @@ const PromptSectionEditor = ({
 
     try {
       const parsed = JSON.parse(await file.text());
-      onImportPromptPack(promptPackFromImport(parsed));
-      setPromptTransferStatus({
-        error: false,
-        text: `Imported ${file.name}. Save the scenario to persist these prompt edits.`,
-      });
+      const imported = onImportPromptPack(promptPackFromImport(parsed));
+      setPromptTransferStatus(promptsOverLimit(imported)
+        ? {
+          error: true,
+          text: `Imported ${file.name}. Some passages are longer than the limit and are marked in red: shorten or reset them to save.`,
+        }
+        : {
+          error: false,
+          text: `Imported ${file.name}. Save the scenario to persist these prompt edits.`,
+        });
     } catch (error) {
       setPromptTransferStatus({ error: true, text: `Import failed: ${error.message}` });
     }
@@ -717,6 +741,10 @@ const PromptSectionEditor = ({
 
   const handlePromptExport = () => {
     if (!onExportPromptPack) return;
+    if (promptsOverLimit(promptPack)) {
+      setPromptTransferStatus({ error: true, text: PROMPT_TOO_LONG_TEXT });
+      return;
+    }
     onExportPromptPack();
     setPromptTransferStatus({
       error: false,
@@ -830,8 +858,9 @@ const PromptSectionEditor = ({
               ...themeButtonStyle,
               background:
                 section.key === currentSection.key ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)",
-              borderColor:
-                section.key === currentSection.key ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)",
+              borderColor: sectionsOverLimit.has(section.key)
+                ? "rgba(248,113,113,0.7)"
+                : section.key === currentSection.key ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)",
               minHeight: "2rem",
               padding: "0 0.8rem",
             }, touch)}
@@ -861,12 +890,34 @@ const PromptSectionEditor = ({
         The technical parts of every prompt (the placeholders that inject the world, the output contracts,
         the map rules) are fixed in the app, so every scenario and game keeps up with the game as it changes.
         A placeholder such as {"${PLAYER_POLITY}"} inside a passage is filled in by the game.
+        {" "}
+        <span>Each passage can be up to 20% longer than the built-in one.</span>
       </div>
+
+      {onChangeBypassLimit ? (
+        <label style={{ alignItems: "flex-start", cursor: "pointer", display: "flex", gap: "0.55rem", marginBottom: "0.9rem" }}>
+          <input
+            checked={bypassLimit}
+            onChange={(event) => onChangeBypassLimit(event.target.checked)}
+            style={{ marginTop: "0.2rem" }}
+            type="checkbox"
+          />
+          <span>
+            <span style={{ color: "rgba(255,255,255,0.9)", display: "block", fontSize: "0.82rem", fontWeight: 700 }}>Bypass prompt length limit</span>
+            <span style={{ color: "rgba(255,255,255,0.48)", display: "block", fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.15rem" }}>
+              Passages can be any length. Players are warned when they start a game that it will use a lot more tokens.
+            </span>
+          </span>
+        </label>
+      ) : null}
 
       <div style={{ display: "grid", gap: "0.9rem" }}>
         {segments.map((segment) => {
           const value = typeof edits[segment.id] === "string" ? edits[segment.id] : defaults[segment.id] ?? "";
           const edited = isEdited(segment);
+          const count = promptCharCount(value);
+          const limit = guidanceLimitFor(currentSection.key, segment.id);
+          const over = bypassLimit ? 0 : count - limit;
           return (
             <div key={segment.id}>
               <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
@@ -891,11 +942,27 @@ const PromptSectionEditor = ({
                 </div>
               ) : null}
               <textarea
+                aria-invalid={over > 0 ? true : undefined}
                 aria-label={`${currentSection.label}: ${segment.label}`}
-                style={{ ...textareaStyle, minHeight: "7rem" }}
+                style={{ ...textareaStyle, minHeight: "7rem", ...(over > 0 ? { borderColor: "rgba(248,113,113,0.7)" } : null) }}
                 value={value}
                 onChange={(event) => onChangePrompt(currentSection, segment.id, event.target.value)}
               />
+              <div
+                aria-live="polite"
+                style={{
+                  color: over > 0 ? "#fca5a5" : "rgba(255,255,255,0.42)",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  fontSize: "0.7rem",
+                  gap: "0.2rem 0.6rem",
+                  justifyContent: "space-between",
+                  marginTop: "0.25rem",
+                }}
+              >
+                <span>{over > 0 ? `${over} characters over the limit: shorten it to save.` : ""}</span>
+                <span style={{ fontVariantNumeric: "tabular-nums", marginLeft: "auto" }}>{`${count} / ${limit} characters`}</span>
+              </div>
             </div>
           );
         })}
@@ -1968,17 +2035,25 @@ const EditorDrawer = ({
     ? details.scenario?.coverImageUrl
     : details.game?.coverImageUrl || details.scenario?.coverImageUrl;
   const accent = record.accentColor || "#a1a1aa";
+  const promptsTooLong = promptsOverLimit(formState.prompts);
 
   const actions = (
     <div style={{ display: "flex", flexDirection: isMobile ? "row" : "column", flexWrap: isMobile ? "wrap" : undefined, gap: "0.45rem" }}>
       <button
         className="oh-tap-row"
+        disabled={promptsTooLong}
         onClick={onSave}
-        style={touchFit({ ...themeButtonStyle, background: accent, borderColor: accent, borderRadius: "11px", boxShadow: `0 3px 12px ${accent}33`, color: "#fff", flex: isMobile ? "1 1 7rem" : undefined, fontWeight: 700, minHeight: "2.4rem", width: isMobile ? undefined : "100%" }, touch)}
+        style={touchFit({ ...themeButtonStyle, background: accent, borderColor: accent, borderRadius: "11px", boxShadow: `0 3px 12px ${accent}33`, color: "#fff", cursor: promptsTooLong ? "not-allowed" : themeButtonStyle.cursor, flex: isMobile ? "1 1 7rem" : undefined, fontWeight: 700, minHeight: "2.4rem", opacity: promptsTooLong ? 0.5 : 1, width: isMobile ? undefined : "100%" }, touch)}
+        title={promptsTooLong ? PROMPT_TOO_LONG_TEXT : undefined}
         type="button"
       >
         {isBusy ? "Saving..." : "Save"}
       </button>
+      {promptsTooLong ? (
+        <div role="alert" style={{ color: "#fca5a5", flex: isMobile ? "1 1 100%" : undefined, fontSize: "0.72rem", lineHeight: 1.4 }}>
+          {PROMPT_TOO_LONG_TEXT}
+        </div>
+      ) : null}
       {kind === "scenario" && onOpenMapEditor && (
         <button
           className="oh-tap-row"
@@ -2424,6 +2499,7 @@ const EditorDrawer = ({
 
       {editorSection === "prompts" && (
         <PromptSectionEditor
+          onChangeBypassLimit={kind === "scenario" ? (on) => onChange("prompts", { ...formState.prompts, bypassLengthLimit: on }) : null}
           onChangePrompt={onChangePrompt}
           onExportPromptPack={kind === "scenario" ? onExportPrompts : null}
           onImportPromptPack={kind === "scenario" ? onImportPrompts : null}
@@ -2984,6 +3060,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setPlayGameId(null);
     setPickerTab("country");
     setPickerGroups([]);
+    setBypassWarning(null);
     setCountryPicker(scenario);
     // A community basemap the import could not download is tried again (once a
     // session), and shown in the picker when it lands.
@@ -2993,6 +3070,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     Promise.all([loadCountryNames().catch(() => []), loadScenarioDetails(scenario.id).catch(() => null)])
       .then(([allCountries, details]) => {
         if (!isCurrent()) return;
+        if (promptsBypassLimit(details?.data?.prompts)) setBypassWarning(scenario);
         setCountryOptions(buildScenarioCountryOptions(
           details?.data?.world,
           [...getBaseCountryOptions(), ...allCountries],
@@ -3064,6 +3142,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // scenario they have edited, which the Update would replace (the question
   // is drawn below, beside the missing-map prompt).
   const [replaceEditsTarget, setReplaceEditsTarget] = useState(null);
+  // The scenario a new game is being started from, while its "will use a lot more
+  // tokens" warning is up (its prompts bypass the length limit).
+  const [bypassWarning, setBypassWarning] = useState(null);
 
   // Pull the post's current bundle and replace this scenario in place. The
   // scenario keeps its local id, so existing games keep pointing at it; the
@@ -3617,15 +3698,24 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   };
 
   const handleImportPrompts = (rawPromptPack) => {
-    if (editorKind !== "scenario") return;
+    if (editorKind !== "scenario") return null;
+    // A passage over the limit comes into the form marked, to be shortened.
+    const prompts = editablePromptPack(rawPromptPack);
     setEditorState((current) => ({
       ...current,
-      prompts: normalizePromptPack(rawPromptPack),
+      prompts,
     }));
+    return prompts;
   };
 
   const handleSave = async () => {
     if (!editorKind || !editorDetails || !editorState) {
+      return;
+    }
+
+    // Never written over the limit: serializing would drop the passage.
+    if (promptsOverLimit(editorState.prompts)) {
+      setEditorError(PROMPT_TOO_LONG_TEXT);
       return;
     }
 
@@ -4101,6 +4191,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   useBackToClose(Boolean(countryPicker && difficultyPick), () => setDifficultyPick(null));
   useBackToClose(Boolean(missingScenarioGame), () => setMissingScenarioGame(null));
   useBackToClose(Boolean(replaceEditsTarget), () => setReplaceEditsTarget(null));
+  const cancelBypassStart = () => { setBypassWarning(null); closeCountryPicker(); };
+  useBackToClose(Boolean(bypassWarning), cancelBypassStart);
 
   // Write a map built in the editor into its scenario (region geometry + ownership
   // + colors), then immediately spin up and activate a fresh game from it so the
@@ -5092,6 +5184,49 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           hub's file in the scenario's place, so their changes go with it: it is
           asked here first, in the prompt above's own dress, and nothing happens
           on any answer but the first button's. */}
+      <Presence open={Boolean(bypassWarning && countryPicker)} value={bypassWarning}>
+        {(pending) => (
+          <div
+            onClick={cancelBypassStart}
+            style={{ alignItems: "center", background: "rgba(0,0,0,0.55)", display: "flex", inset: 0, justifyContent: "center", position: "fixed", zIndex: 10060 }}
+          >
+            <div
+              aria-modal="true"
+              data-testid="bypass-limit-warning"
+              onClick={(event) => event.stopPropagation()}
+              role="dialog"
+              style={{ ...themeSurfaceStyle, borderRadius: 16, color: "#fff", fontFamily: "sans-serif", padding: "1.1rem", width: "min(430px, 92vw)" }}
+            >
+              <div style={{ fontSize: "1rem", fontWeight: 800 }}>Longer prompts</div>
+              <div data-no-translate style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.86rem", fontWeight: 700, marginTop: "0.35rem", overflowWrap: "anywhere" }}>
+                {pending.name}
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.82rem", lineHeight: 1.5, margin: "0.5rem 0 1rem" }}>
+                {BYPASS_LIMIT_WARNING}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+                <button
+                  className="oh-tap-row"
+                  onClick={() => setBypassWarning(null)}
+                  style={touchFit({ ...themeButtonStyle, minHeight: "2.6rem" }, touch)}
+                  type="button"
+                >
+                  Continue
+                </button>
+                <button
+                  className="oh-tap-row"
+                  onClick={cancelBypassStart}
+                  style={touchFit({ ...themeButtonStyle, minHeight: "2.6rem" }, touch)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </Presence>
+
       <Presence open={Boolean(replaceEditsTarget)} value={replaceEditsTarget}>
         {(pending) => (
           <div

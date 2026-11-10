@@ -263,6 +263,23 @@ test("recent_events: newest last, bounded, filterable by a name, with what moved
   assert.deepEqual(run("recent_events", { about: "Ukraine" }).events.map((event) => event.id), ["e1"]);
 });
 
+test("recent_events and list_projects name the regions their records key by id, never the id", () => {
+  const ctx = buildLookupContext({
+    regions: REGIONS,
+    world: { ...WORLD, projects: [{ id: "p9", name: "Retake", kind: "military", ownerCode: "Ukraine", status: "active", progress: 5, onComplete: { regionTransfers: [{ regionId: "ukr-zap", toCode: "Ukraine" }] } }] },
+    events: [{ id: "x1", date: "2014-04-01", title: "Belgorod raid", description: "A raid.", impacts: {
+      regionControlOps: [{ op: "control", regionId: "rus-belgorod", toCode: "Ukraine" }, { op: "contest", regionId: "gone-77", actorCode: "Ukraine" }],
+      regionClaims: [{ regionId: "ukr-kn", claimantCode: "Russian Federation" }],
+    } }],
+    player: "Ukraine",
+  });
+  const [event] = executeLookup(ctx, "recent_events", {}).events;
+  assert.deepEqual(event.mapChanges, ["control: Belgorod -> Ukraine", "contest: an unnamed region", "claim: Kremenchuk North by Russian Federation"]);
+  const project = executeLookup(ctx, "list_projects", { owner: "Ukraine" }).projects.find((entry) => entry.id === "p9");
+  assert.ok(JSON.stringify(project).includes("transfer Zaporizhzhia -> Ukraine"), JSON.stringify(project));
+  assert.doesNotMatch(JSON.stringify([event, project]), /ukr-|rus-|gone-77/);
+});
+
 test("war_ledger and chat_history read the ledgers as they are", () => {
   const ledger = run("war_ledger", {});
   assert.equal(ledger.wars[0].status, "active");

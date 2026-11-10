@@ -14,7 +14,7 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { brushedMetalUrl } from "./brushedMetal.js";
 import { fightingIn, playerFrontsKey } from "./warRoomData.js";
 import { presenceFor, useDiscordPresence } from "../../runtime/discordPresence.js";
-import { musicSceneOf, setMusicScene } from "../../runtime/ambientMusic.js";
+import { musicSceneOf, noteGameDrawn, reopensDrawnGame, setMusicScene } from "../../runtime/ambientMusic.js";
 import { followScenarioMusic } from "../../runtime/scenarioMusic.js";
 import { useScenarioLanguagePack } from "../../runtime/useScenarioLanguagePack.js";
 import { useWarRoom } from "../Map/warRoomStore.js";
@@ -47,6 +47,7 @@ import {
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
 import { AgentWaitingNotice } from "./agentWaitingNotice.jsx";
 import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
+import { PromptLimitNotice } from "./promptLimitNotice.jsx";
 import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
@@ -692,7 +693,13 @@ const Main = ({
   // and the war room or a battlefield being shown, which the war room's own
   // store knows.
   const battlefieldShown = useWarRoom((room) => room.open || Boolean(room.battlefield));
-  const musicScene = musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading, atWar: atWar || inWar, war: battlefieldShown });
+  // The game open behind the menu opens again at once: no build-up for it.
+  // Another game being opened from this screen gets its build.
+  const reopening = reopensDrawnGame(activeGame?.id, gameLoading.opening);
+  useEffect(() => {
+    if (gameEntered && activeGame?.id && !showGameLoading) noteGameDrawn(activeGame.id);
+  }, [gameEntered, activeGame?.id, showGameLoading]);
+  const musicScene = musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading && !reopening, atWar: atWar || inWar, war: battlefieldShown });
   useEffect(() => { setMusicScene(musicScene); }, [musicScene]);
   const closeWarRoomPanel = useCallback(() => setIsWarRoomOpen(false), []);
   const toggleWarRoom = () => {
@@ -998,6 +1005,7 @@ const Main = ({
       {/* Same place on screen: the lasting borders note goes first so a
           passing fallback-switch notice draws over it, not under it. */}
       <BordersFallbackNotice />
+      <PromptLimitNotice />
       <FallbackSwitchNotice />
       <AgentWaitingNotice />
     </>

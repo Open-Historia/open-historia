@@ -1,12 +1,30 @@
 # Cloudflare Worker config for the Open Historia scenario import counter.
-# Deploy steps are in README.md.
+# Set-up and deploy steps are in README.md.
 name = "oh-import-counter"
 main = "worker.js"
 compatibility_date = "2024-09-01"
 
-# The KV namespace that stores the counts. Create it once with:
-#   wrangler kv namespace create IMPORTS
-# then paste the printed id below (replace PASTE_KV_NAMESPACE_ID).
-[[kv_namespaces]]
-binding = "IMPORTS"
-id = "666b3ec9f2744a91a812284927a1a290"
+# The counts. Create the database once with:
+#   wrangler d1 create oh-import-counts
+# then paste the printed database_id below (replace PASTE_D1_DATABASE_ID).
+# The Worker makes its own tables (worker.js SCHEMA).
+[[d1_databases]]
+binding = "DB"
+database_name = "oh-import-counts"
+database_id = "97121bc6-2c01-4d8d-afa5-221df335a5b3"
+
+# At most 10 import reports a minute from one address (an IPv6 address's whole
+# /64), kept by Cloudflare in memory only. namespace_id is any number unique to
+# this account's limiters.
+[[ratelimits]]
+name = "LIMITER"
+namespace_id = "1971"
+simple = { limit = 10, period = 60 }
+
+# Once a day: the address rows of the days before yesterday are deleted.
+[triggers]
+crons = ["20 0 * * *"]
+
+# COUNT_KEY is a secret, never written here:
+#   wrangler secret put COUNT_KEY
+# (any long random text, e.g. the output of `openssl rand -hex 32`).

@@ -40,6 +40,10 @@ export const announceGameOpening = (gameId) => {
   window.dispatchEvent(new CustomEvent(GAME_OPENING_EVENT, { detail: store().opening }));
 };
 
+// The game the library last began to open ("" before any): the music asks
+// whether it is the one already drawn (runtime/ambientMusic.js reopensDrawnGame).
+export const openingGameId = () => String(store().opening?.gameId ?? "");
+
 // The same game drawn again from scratch — the 3D globe switched on or off,
 // which replaces the MapLibre instance. The opening screen covers it until the
 // new instance has its polity layers in and has gone idle, exactly as a game

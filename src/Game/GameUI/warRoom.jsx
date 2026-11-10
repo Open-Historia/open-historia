@@ -34,7 +34,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateWarRoomReply, warRoomChart, warRoomRouteAttacks, warRoomTransportWays } from "../AI/gameplayLazy.js";
-import { normalizeAirStrikeOrders, normalizeAirStrikes } from "../../runtime/fronts/airStrike.js";
+import { normalizeAirStrikeOrders, normalizeAirStrikes, strikeRadiusOf } from "../../runtime/fronts/airStrike.js";
 import { airReachOf, airUnitsOf, strikableStructures } from "../../runtime/fronts/airStrikeOps.js";
 import { kmBetween, measureOptions } from "../../runtime/fronts/worldGrid.js";
 import { engineMapOf } from "../../../server/mapDistance.js";
@@ -49,7 +49,9 @@ import { THRUST_TROOPS } from "../../runtime/fronts/constants.js";
 import { handicapOf } from "../../runtime/fronts/handicap.js";
 import { deployLinesOf } from "../../runtime/fronts/deploy.js";
 import { foldBattlefieldName, normalizeBattlefield } from "../../runtime/fronts/record.js";
-import { TRANSPORT_MEDIA, carrierFor, isUnderWay, loadOf, normalizeTransports } from "../../runtime/fronts/transports.js";
+import { deployBattlefieldOf } from "../../runtime/fronts/warRoomOps.js";
+import { TRANSPORT_MEDIA, carrierFor, isUnderWay, loadOf, normalizeTransports, transportBar, transportLoadMost } from "../../runtime/fronts/transports.js";
+import { transportFiguresOf } from "../../runtime/militaryStats.js";
 import { formatGameDateReadable, gameDateYear } from "../../runtime/gameDates.js";
 import { isActiveFeatureEnabled, useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
@@ -57,11 +59,11 @@ import { useLibraryState } from "../../runtime/library.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { kmOnMap } from "../../runtime/unitMotion.js";
+import { kmOnMap, yearInEra } from "../../runtime/unitMotion.js";
 import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 import { convoysOf, enemiesOf, fleetsOf } from "../../runtime/naval/fleetOps.js";
 import { sendAirStrikeOp, sendFleetOp, sendFortifyOp, sendWarRoomOp } from "../../runtime/warRoomWrites.js";
-import { warSettingsOf, warfareOf } from "../../runtime/warSettings.js";
+import { eraSettingOf, warSettingsOf, warfareOf } from "../../runtime/warSettings.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import { placeName, playerFronts } from "./warRoomData.js";
 import { FleetsList, FleetsPlate } from "./warRoomFleets.jsx";
@@ -71,7 +73,7 @@ import { WarRoomRail } from "./warRoomRail.jsx";
 import { WeatherAhead } from "./warRoomWeather.jsx";
 import { RehearsalTray } from "./warRoomRehearsal.jsx";
 import { supplyShading } from "../Map/warRoomCells.js";
-import { airOn, naviesOn, strategyNetOn } from "../AI/frontsGate.js";
+import { airOn, naviesOn, strategyNetOn, transportMediaOn } from "../AI/frontsGate.js";
 import { scheduleFrontsPrethink } from "../AI/frontPrethink.js";
 import { commanderOf } from "../../runtime/fronts/mind/commanders.js";
 import {
@@ -155,6 +157,7 @@ const WayRefusal = ({ code }) => {
   if (code === "no-war") return <>you are fighting no war</>;
   if (code === "no-navy") return <>your country has no navy to carry them</>;
   if (code === "no-air-force") return <>your country has no air arm to carry them</>;
+  if (code === "switched-off") return <>this game carries no troops that way</>;
   if (code === "railhead") return <>its line ends before that place</>;
   if (code === "too-far" || code === "off-map") return <>that place cannot be reached</>;
   return <>no way was found</>;
@@ -231,11 +234,14 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   const supplyOn = useWarRoom((state) => state.supply);
   const pickedFleet = useWarRoom((state) => state.fleet);
   const station = useWarRoom((state) => state.station);
+  // What the troops picked out are to be carried by, while the transport tool is in hand.
+  const carrying = useWarRoom((state) => state.medium);
   const deployForm = useWarRoom((state) => state.deployForm);
-  // The aircraft's plate, the air unit picked out on it, and what it is to strike.
+  // The aircraft's plate, the air unit picked out on it, what it is to strike, and over how wide a circle.
   const aircraftOut = useWarRoom((state) => state.aircraft);
   const pickedWing = useWarRoom((state) => state.wing);
   const strikeKind = useWarRoom((state) => state.strikeKind);
+  const strikeRadius = useWarRoom((state) => state.strikeRadius);
 
   // ---- which battlefield ---------------------------------------------------------------
   const fronts = useMemo(() => playerFronts(world?.battlefields, game.country, world?.wars), [world?.battlefields, game.country, world?.wars]);
@@ -405,11 +411,18 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   // What carries troops this year. (Nothing by sea in a scenario without navies, nor by air in one without air units: the Wars feature.)
   const navies = naviesOn();
   const aircraft = airOn();
+  // ... nor by a transport the Wars feature switched off. One the player's country has no navy or air force for is
+  // shown, and cannot be chosen (`bar`); an airlift carries `most` of the troops picked out (runtime/fronts/transports.js).
+  const media = transportMediaOn();
+  const mediaKey = media.join(",");
+  const figures = useMemo(() => transportFiguresOf(world, game.country), [world?.warSettings, world?.polityOverrides, world?.groups, world?.countryStats, game.country]);
   const carriers = useMemo(() => {
-    const year = gameDateYear(game.gameDate);
-    return TRANSPORT_MEDIA.map((medium) => ({ medium, ...carrierFor(medium, year) }))
-      .filter((carrier) => carrier.kind && (carrier.medium !== "sea" || navies) && (carrier.medium !== "air" || aircraft));
-  }, [game.gameDate, navies, aircraft]);
+    const year = yearInEra(gameDateYear(game.gameDate), eraSettingOf(world));
+    return TRANSPORT_MEDIA.filter((medium) => mediaKey.split(",").includes(medium))
+      .map((medium) => ({ medium, ...carrierFor(medium, year), most: transportLoadMost(medium, year, figures), bar: transportBar(medium, { military: figures }) }))
+      .filter((carrier) => carrier.kind);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [game.gameDate, world?.warSettings, mediaKey, figures]);
   // The way found for each of the player's own that has not set out, so that it
   // is seen on the map before time passes (no request: read from the map).
   const waiting = ownTransports.filter((entry) => entry.status === "ordered").map((entry) => `${entry.id}:${entry.medium}:${entry.to.lng},${entry.to.lat}:${entry.embark?.troops.join(".") ?? ""}`).join("|");
@@ -457,9 +470,16 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aircraft, world?.airStrikes, game.country]);
   const wingName = (id) => wings.find((entry) => entry.id === id)?.name ?? (world?.units ?? []).find((unit) => unit?.id === id)?.name ?? "";
+  // The ring that follows the pointer is as wide as the strike radius set; an air unit picked out with a strike
+  // waiting shows that strike's radius.
   useEffect(() => {
-    if (open) setWarRoom({ blast: airBlast });
-  }, [open, airBlast]);
+    if (open) setWarRoom({ blast: airBlast * strikeRadiusOf(strikeRadius) });
+  }, [open, airBlast, strikeRadius]);
+  const pickedOrder = wings.find((entry) => entry.id === pickedWing)?.order ?? null;
+  const pickedOrderRadius = pickedOrder ? strikeRadiusOf(pickedOrder.radius) : 0;
+  useEffect(() => {
+    if (pickedOrderRadius > 0) setWarRoom({ strikeRadius: pickedOrderRadius });
+  }, [pickedWing, pickedOrderRadius]);
   const convoys = useMemo(() => convoysOf({ transports: world?.transports }, game.country), [world?.transports, game.country]);
   // What the nearest town to a place on the map is called, if one is near: a
   // transporter is told where it is bound in words as well.
@@ -523,6 +543,11 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   useEffect(() => {
     placeNearRef.current = placeNear;
   });
+  // What a deployment drawn over another battlefield of the war needs to find it (deployBattlefieldOf).
+  const deployContextRef = useRef({ battlefields: [], country: "", fronts: [] });
+  useEffect(() => {
+    deployContextRef.current = { battlefields: world?.battlefields ?? [], country: game.country, fronts };
+  });
   useEffect(() => {
     if (!open || !name) return undefined;
     return onWarRoomWay(async (drawn, way, extra) => {
@@ -533,7 +558,15 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
       } else if (drawn === "deploy") {
         // Where the player's new troops here come in: one line, drawn again over the last; or a swarm's place. And the
         // fresh formations it calls up there when time next passes, as many as the country can (runtime/fronts/engine.js callUpSize).
-        if (await act({ op: "deploy", battlefield: name, way, ...(extra?.form === "swarm" ? { form: "swarm" } : {}) })) setWarRoom({ tool: "pan" });
+        // Drawn over another battlefield of the same war, it is that battlefield's, and the room turns to it (warRoomOps.js deployBattlefieldOf).
+        const op = { op: "deploy", battlefield: name, way, ...(extra?.form === "swarm" ? { form: "swarm" } : {}) };
+        const { battlefields: rows, country, fronts: mine } = deployContextRef.current;
+        const target = deployBattlefieldOf(rows, op, country);
+        if (await act(op)) {
+          setWarRoom({ tool: "pan" });
+          const turned = foldBattlefieldName(target) !== foldBattlefieldName(name) ? mine.find((entry) => foldBattlefieldName(entry.name) === foldBattlefieldName(target)) : null;
+          if (turned) showBattlefield(turned.name, turned.side);
+        }
       } else if (drawn === "replan" && extra?.replan) {
         await act({ op: "plan", battlefield: name, project: extra.replan, way });
       } else if (drawn === "transport" && extra?.medium && way[0]) {
@@ -545,7 +578,7 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
         setWarRoom({ draft: way });
       } else if (drawn === "aircraft" && extra?.wing && way[0]) {
         // What was clicked: the air unit picked out is to strike it when time next passes.
-        await orderWith(sendAirStrikeOp, await strikeAtRef.current(extra.wing, extra.kind, way[0]));
+        await orderWith(sendAirStrikeOp, { ...(await strikeAtRef.current(extra.wing, extra.kind, way[0])), radius: strikeRadiusOf(extra.radius) });
       } else if (drawn === "fleet" && extra?.fleet && way[0]) {
         // The place clicked at sea: the fleet picked out sails there, or patrols it.
         await orderWith(sendFleetOp, { op: "station", unit: extra.fleet, to: way[0], order: extra.station === "patrol" ? "patrol" : "move" });
@@ -712,7 +745,30 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
     setWarRoom({ wing: id, aircraft: true, fleets: false });
     if (isMobile) setFolded(true);
   }, [isMobile]);
-  const nameOf = (command) => generals.find((general) => general.command === command)?.name || "";
+  // The strike radius set on the aircraft's slider: as it moves, the circles on the map follow it (the pointer's
+  // ring, and a strike waiting for the air unit picked out: WarRoomMarks.jsx); once it is let go, that strike is
+  // ordered again with it, at the same target (and where that is refused, the slider goes back to the strike's own
+  // radius).
+  const setStrikeRadius = (radius) => setWarRoom({ strikeRadius: strikeRadiusOf(radius) });
+  const orderStrikeRadius = async (radius) => {
+    setStrikeRadius(radius);
+    const order = pickedOrder;
+    if (!order || strikeRadiusOf(order.radius) === strikeRadiusOf(radius)) return;
+    const done = await orderWith(sendAirStrikeOp, {
+      op: "airstrike",
+      unit: order.unit,
+      kind: order.kind,
+      to: [order.lng, order.lat],
+      target: order.target,
+      country: order.country,
+      battlefield: order.battlefield,
+      marker: order.marker,
+      people: order.people,
+      radius: strikeRadiusOf(radius),
+    });
+    if (!done) setWarRoom({ strikeRadius: strikeRadiusOf(order.radius) });
+  };
+  const nameOf =(command) => generals.find((general) => general.command === command)?.name || "";
   const locked = turnRunning || busy;
   const other = record ? record.sides[1 - side] ?? [] : [];
   const mine = record ? record.sides[side] ?? [] : [];
@@ -808,6 +864,7 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
         onClear={() => setWarRoom({ selected: [] })}
         carriers={carriers}
         onCarrier={(medium) => takeTool("transport", { medium })}
+        carrying={carrying}
         canFortify={canFortify}
         drafted={Boolean(draft)}
         navies={navies}
@@ -867,12 +924,18 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
           wings={wings}
           picked={pickedWing}
           kind={strikeKind}
+          radius={strikeRadiusOf(strikeRadius)}
+          blast={airBlast}
           reach={airReach}
           flown={strikesFlown}
           locked={locked}
+          radiusLocked={turnRunning}
           tool={tool}
           onPick={pickWing}
           onKind={(kind) => setWarRoom({ strikeKind: kind })}
+          onRadius={setStrikeRadius}
+          onRadiusSet={orderStrikeRadius}
+          onSizing={(sizing) => setWarRoom({ sizing })}
           onAim={() => takeTool("aircraft")}
           onCallOff={(unit) => orderWith(sendAirStrikeOp, { op: "unairstrike", unit })}
           onClose={() => setWarRoom({ aircraft: false })}

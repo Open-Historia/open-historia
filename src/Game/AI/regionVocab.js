@@ -234,7 +234,8 @@ export const regionTouchingMapSliced = (features, { between = nextTask } = {}) =
 export const hasUnruledLand = (regionCatalog, overrides, { waterTypes = new Set() } = {}) => (Array.isArray(regionCatalog) ? regionCatalog : [])
   .some((region) => norm(region?.id) && !regionOwnerName(region, overrides) && !waterTypes.has(norm(region.typeId)) && !waterTypes.has(norm(region.type)));
 
-export const buildUnruledBordersText = (regionCatalog, overrides, { waterTypes = new Set(), perOwnerCap = 30, touching = null } = {}) => {
+export const UNRULED_BORDER_OWNERS = 40;
+export const buildUnruledBordersText = (regionCatalog, overrides, { waterTypes = new Set(), perOwnerCap = 30, touching = null, ownersCap = UNRULED_BORDER_OWNERS, firstOwners = null } = {}) => {
   const catalog = (Array.isArray(regionCatalog) ? regionCatalog : []).filter((region) => norm(region?.id));
   const water = (region) => waterTypes.has(norm(region.typeId)) || waterTypes.has(norm(region.type));
   const unruled = catalog.filter((region) => !regionOwnerName(region, overrides) && !water(region));
@@ -289,8 +290,13 @@ export const buildUnruledBordersText = (regionCatalog, overrides, { waterTypes =
     const shown = sorted.slice(0, perOwnerCap);
     return `${shown.join(", ")}${sorted.length > shown.length ? `, (+${sorted.length - shown.length} more)` : ""}`;
   };
-  const lines = [...new Set([...byOwner.keys(), ...bySea.keys()])]
-    .sort((a, b) => a.localeCompare(b))
+  // At most `ownersCap` powers, those in `firstOwners` (lower-case names: the
+  // powers a skip has in view) before the rest; the cut says how many it left.
+  const first = firstOwners instanceof Set ? firstOwners : new Set();
+  const owners = [...new Set([...byOwner.keys(), ...bySea.keys()])]
+    .sort((a, b) => Number(first.has(lower(b))) - Number(first.has(lower(a))) || a.localeCompare(b));
+  const shownOwners = owners.slice(0, Math.max(1, ownersCap));
+  const lines = shownOwners
     .map((owner) => {
       const parts = [];
       if (byOwner.has(owner)) parts.push(listed(byOwner.get(owner)));
@@ -303,6 +309,9 @@ export const buildUnruledBordersText = (regionCatalog, overrides, { waterTypes =
       + "written here (without the sea in brackets), with no fromCode. Each is listed beside every power it touches; "
       + "\"by sea\" is land across one stretch of water from that power's coast, reached by ships over the sea named:",
     ...lines,
+    ...(owners.length > shownOwners.length
+      ? [`(+${owners.length - shownOwners.length} more power${owners.length - shownOwners.length === 1 ? "" : "s"} border unruled land)`]
+      : []),
   ].join("\n");
 };
 
@@ -326,6 +335,8 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   const rosterCap = Number.isFinite(options.rosterCap) ? options.rosterCap : 80;
   const polityNames = options.polityNames || {};
   const withIds = options.regionIds === true;
+  // `territories: false`: a power's count alone, without its territories.
+  const withTerritories = options.territories !== false;
   const focusIntro = options.focusIntro || FOCUS_INTRO;
   const rosterIntro = options.rosterIntro || ROSTER_INTRO;
 
@@ -349,7 +360,7 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   };
   const regionWord = (n) => `${n} region${n === 1 ? "" : "s"}`;
   // "; territories: Greenland (18 regions), Faroe Islands (4 regions)", or "".
-  const territoriesOf = (group) => (group.territories.length
+  const territoriesOf = (group) => (withTerritories && group.territories.length
     ? `; territories: ${group.territories.map((territory) => `${territory.name} (${regionWord(territory.regions.length)})`).join(", ")}`
     : "");
 
@@ -379,9 +390,44 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
       if (b[1].total !== a[1].total) return b[1].total - a[1].total;
       return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
     });
+  const rosterLine = ([key, group]) => `- ${headerLabel(key, group.label)} — ${regionWord(group.total)}${territoriesOf(group)}`;
+
+  // A time skip's tiers (promptContext.js buildWorldSummary): the powers in
+  // view (`rosterDetail`, lower-case names) keep their line with its
+  // territories; every other power is a name and a count in one paragraph
+  // (`restIntro`), with what `restDetail(label)` says of it after the count,
+  // or, where the lookup functions can give any of them, one line saying how
+  // many there are (`restLine(count)`).
+  if (options.rosterDetail instanceof Set) {
+    const detail = rosterEntries.filter(([key]) => options.rosterDetail.has(key));
+    const rest = rosterEntries.filter(([key]) => !options.rosterDetail.has(key));
+    const out = [];
+    if (focusLines.length) out.push(focusIntro, ...focusLines);
+    if (detail.length) {
+      if (out.length) out.push("");
+      out.push(rosterIntro, ...detail.map(rosterLine));
+    }
+    if (rest.length) {
+      if (out.length) out.push("");
+      if (typeof options.restLine === "function") {
+        out.push(options.restLine(rest.length));
+      } else {
+        const shown = rest.slice(0, rosterCap);
+        const omitted = rest.length - shown.length;
+        const restDetail = typeof options.restDetail === "function" ? options.restDetail : () => "";
+        const entry = ([key, group]) => {
+          const detail = norm(restDetail(group.label));
+          return `${headerLabel(key, group.label)} (${group.total}${detail ? `; ${detail}` : ""})`;
+        };
+        out.push(`${options.restIntro || "Every other power, with the regions it holds:"} ${shown.map(entry).join(", ")}`
+          + (omitted > 0 ? `, (+${omitted} more power${omitted === 1 ? "" : "s"} not listed for brevity)` : ""));
+      }
+    }
+    return out.join("\n");
+  }
+
   const rosterShown = rosterEntries.slice(0, rosterCap);
-  const rosterLines = rosterShown.map(([key, group]) =>
-    `- ${headerLabel(key, group.label)} — ${regionWord(group.total)}${territoriesOf(group)}`);
+  const rosterLines = rosterShown.map(rosterLine);
   const rosterOmitted = rosterEntries.length - rosterShown.length;
 
   const out = [];
@@ -396,4 +442,21 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
     }
   }
   return out.join("\n");
+};
+
+// Every power the map knows, with how many regions it holds and what its roster
+// line says (territories included): what a skip's snapshot hashes
+// (promptFocus.js), so that a power whose holdings moved reads as changed.
+export const ownerRoster = (regionCatalog, overrides, { polityNames = {} } = {}) => {
+  const catalog = Array.isArray(regionCatalog) ? regionCatalog : [];
+  if (!catalog.length) return [];
+  const groups = groupByOwner(catalog, overrides, polityNames);
+  return [...groups.entries()]
+    .sort((a, b) => b[1].total - a[1].total || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([key, group]) => ({
+      key,
+      label: group.label,
+      regions: group.total,
+      line: `${group.label}|${group.total}|${group.territories.map((territory) => `${territory.name}:${territory.regions.length}`).join(",")}`,
+    }));
 };

@@ -48,6 +48,15 @@ test("a board reaches the jump whole, with the narration rules and no output con
   assert.ok(directive.includes("exactly as the board names it"));
 });
 
+// The pass that once moved the board after a skip went on 2026-11-07: a skip
+// that does not keep the board itself is told the board stands still, never
+// that something after it will move it.
+test("a jump that does not keep the board is told nothing moves it after the jump", () => {
+  const directive = buildJumpProjectsDirective(BOARD);
+  assert.match(directive, /nothing records the board from this jump: it stays as it is until a later jump moves it/);
+  assert.doesNotMatch(directive, /separate pass|the pass can find|the board reads every event/);
+});
+
 test("the jump is told a Board entry is not a Storyline, and to write its routine progress as an event", () => {
   const directive = buildJumpProjectsDirective(BOARD);
   assert.match(directive, /never as a storyline/i);

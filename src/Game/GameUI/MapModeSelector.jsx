@@ -64,7 +64,7 @@ export const MapModeSelector = memo(function MapModeSelector({ dockStyle = DEFAU
       {isDiplo && showLegend && (
         <div
           style={{
-            background: "var(--oh-hud-bg)",
+            background: "var(--oh-ui-glass-pill, var(--oh-hud-bg))",
             backdropFilter: "var(--oh-hud-blur)",
             WebkitBackdropFilter: "var(--oh-hud-blur)",
             border: "1px solid var(--oh-hud-border)",
@@ -142,10 +142,10 @@ export const MapModeSelector = memo(function MapModeSelector({ dockStyle = DEFAU
         </div>
       )}
 
-      {/* Mode switcher bar */}
+      {/* Mode switcher bar: the theme's glass, as the dock's tray (chat.jsx Toolbar). */}
       <div
         style={{
-          background: "var(--oh-hud-bg)",
+          background: "var(--oh-ui-glass-pill, var(--oh-hud-bg))",
           backdropFilter: "var(--oh-hud-blur)",
           WebkitBackdropFilter: "var(--oh-hud-blur)",
           border: "1px solid var(--oh-hud-border)",

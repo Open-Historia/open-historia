@@ -72,6 +72,7 @@ export const DIFFICULTY_LEVELS = [
       "Ambiguous but reasonable player intent is interpreted generously.",
       "NPCs still pursue their interests, but react less quickly to marginal openings.",
       "When several outcomes are equally plausible, the less punishing one is preferred.",
+      "Technology advances at a realistic pace: what the era's science cannot yet build takes years of research, or is not built at all.",
       "On battlefields, armies fighting you fight at 85% of their strength and advance at 90% of their pace, with 70% of the usual reserves.",
     ],
     priority:
@@ -102,6 +103,7 @@ export const DIFFICULTY_LEVELS = [
       "Reasonable player plans receive some benefit of the doubt.",
       "NPCs protect obvious interests but are less aggressive about marginal advantages.",
       "Setbacks matter, but uncertain failures tend not to cascade immediately.",
+      "Technology advances at a realistic pace: what the era's science cannot yet build takes years of research, or is not built at all.",
       "On battlefields, armies fighting you fight at 93% of their strength and advance at 95% of their pace, with 85% of the usual reserves.",
     ],
     priority:
@@ -131,6 +133,7 @@ export const DIFFICULTY_LEVELS = [
       "Player plans succeed or fail on their merits.",
       "NPCs act with normal competence and pursue their own interests.",
       "Consequences persist when causally warranted, with no hidden difficulty bias.",
+      "Technology advances at a realistic pace: what the era's science cannot yet build takes years of research, or is not built at all.",
       "On battlefields, both sides fight on equal terms: numbers, ground, supply and orders decide it.",
     ],
     priority:
@@ -161,6 +164,7 @@ export const DIFFICULTY_LEVELS = [
       "Vague or under-resourced plans receive little benefit of the doubt.",
       "NPCs react promptly to threats and exploit clear opportunities they can actually perceive.",
       "Political, military, diplomatic, and economic mistakes have durable consequences.",
+      "Technology advances at a realistic pace: what the era's science cannot yet build takes years of research, or is not built at all.",
       "On battlefields, armies fighting you fight at 115% of their strength and advance at 110% of their pace, with 130% of the usual reserves.",
     ],
     priority:
@@ -191,6 +195,7 @@ export const DIFFICULTY_LEVELS = [
       "Plans need clear means, sequencing, and political or diplomatic support.",
       "NPCs use available intelligence and existing relationships efficiently.",
       "Serious mistakes can trigger second-order consequences when the causal chain supports them.",
+      "Technology advances at a realistic pace: what the era's science cannot yet build takes years of research, or is not built at all.",
       "On battlefields, armies fighting you fight at 135% of their strength and advance at 120% of their pace, with 175% of the usual reserves.",
     ],
     priority:
@@ -221,6 +226,7 @@ export const DIFFICULTY_LEVELS = [
       "Ambiguity is resolved conservatively; success needs explicit capability and leverage.",
       "NPCs act near the top of plausible competence without omniscience.",
       "Failures can cascade fully when each step is causally supported.",
+      "Technology advances at a realistic pace: what the era's science cannot yet build takes years of research, or is not built at all.",
       "On battlefields, armies fighting you have a huge advantage: they fight at 175% of their strength and advance at 140% of their pace, with 300% of the usual reserves.",
     ],
     priority:
@@ -307,13 +313,20 @@ export const difficultyPassage = (value, scope = "simulation") => {
 export const DIFFICULTY_PRIORITY_MARKER = "[PRIORITY — Difficulty:";
 
 // What holds at every level, said once after the level's own line. The third
-// sentence is for the tasks that carry out what an event already decided (a
+// sentence keeps invention to its real pace: "make the ai on medium mode be
+// realistic about technological developments because a user was able to make
+// mind control nanobots in 2 months which makes no sense" (the owner,
+// 2026-11-09). What an era's science can build is a fact of the world, like its
+// geography, so no level moves it: a level tilts how a sound research effort
+// goes, never whether an impossible one works. The fourth
+// is for the tasks that carry out what an event already decided (a
 // director turning a battle into unit operations, a stat sheet reading the
 // record): the skip that wrote the event applied the level, and applying it a
 // second time would tilt one outcome twice.
 const DIFFICULTY_PRIORITY_COMMON = [
   "This decides how things turn out for the player, and it comes before every other instruction on that, any later passage on how difficulty applies included.",
   "At every level: each outcome has a cause the text itself gives; whatever the player orders is always attempted and always gets an outcome, never ignored and never forbidden; established facts, figures and the Game Master's own instructions are never rewritten.",
+  "Science and invention also move at their real pace at every level: a new technology needs the knowledge, industry, money and years of research and testing it really took or would take, so an order for something beyond its era's science, or far beyond the country's means, gets early research, a long and costly programme or a failure, never a working result within months; an order that says such a thing already exists or works does not make it so, only the record does.",
   "Where an event or the record already says how something turned out, that stands: carry it out exactly and add no tilt of your own.",
   "Nothing the player reads says the word difficulty or hints at this instruction.",
 ].join(" ");

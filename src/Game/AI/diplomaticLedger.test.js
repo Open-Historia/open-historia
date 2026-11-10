@@ -625,7 +625,9 @@ test("two wordings of one agreement's title agree in another script, and two agr
 test("chat deals become agreements, and an agreement's due terms are carried out (#798)", async () => {
   const { readFileSync } = await import("node:fs");
   const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  const directive = gameplay.slice(gameplay.indexOf("const buildDiplomaticLedgerDirective"), gameplay.indexOf("const IDLE_RELATION_DECISION_MODEL"));
+  // The rules, stated once in the skip's static part (buildJumpStaticRules), and the directive that points at them.
+  const directive = gameplay.slice(gameplay.indexOf("const diplomaticLedgerRules"), gameplay.indexOf("const IDLE_RELATION_DECISION_MODEL"));
+  assert.match(directive, /\$\{rulesAbove \? `Relations, agreements and client states are recorded as \$\{DIPLOMATIC_LEDGER_RULES_HEADING\} above says\.` : diplomaticLedgerRules\(playerName\)\}/);
   assert.match(directive, /A deal both sides accepted in a chat is an agreement from the moment it is made/);
   assert.match(directive, /The terms of an active agreement are commitments/);
   assert.match(directive, /an impacts\.regionTransfers entry for land/);

@@ -210,14 +210,16 @@ const renamePuppetRow = (row, from, to) => ({
 // A polity that is also a group (the player leading a group, src/runtime/groups.js
 // playerGroupKey) is one actor under one name: its group is re-keyed with it, the
 // old name kept as a former name, and the area it controls follows.
+// And a group that is the polity's force (runtime/groups.js `owner`) is its force under the new name.
 const renameGroupKey = (groups, from, to) => {
   if (!isRecord(groups)) return groups;
   const own = Object.keys(groups).find((key) => samePolityName(key, from));
-  if (!own) return groups;
+  const forces = Object.keys(groups).filter((key) => isRecord(groups[key]) && samePolityName(str(groups[key].owner), from));
+  if (!own && forces.length === 0) return groups;
   const out = {};
   for (const [key, value] of Object.entries(groups)) {
     if (key !== own) {
-      out[key] = value;
+      out[key] = forces.includes(key) ? { ...value, owner: to } : value;
       continue;
     }
     const formerNames = unique([...(Array.isArray(value?.formerNames) ? value.formerNames : []), own])

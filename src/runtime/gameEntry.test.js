@@ -213,7 +213,7 @@ test("the cover's wait, and its ceiling, start when a game is entered", () => {
   assert.match(cover, /useWorldState\(\{ wait: !entered \}\)/);
   // The effect that arms the ceiling does nothing until then, and runs again when it is.
   assert.match(cover, /useEffect\(\(\) => \{\s*if \(!entered\) return undefined;\s*let settled = false;[\s\S]*?later\(finish, LOADING_CEILING_MS\);[\s\S]*?timers\.forEach\(clearTimeout\);\s*\};\s*\}, \[entered\]\);/);
-  assert.match(cover, /return \{ active: entered && phase !== "done", phase \};/);
+  assert.match(cover, /return \{ active: entered && phase !== "done", phase, opening \};/);
   // Between a press of Play and the game landing the cover is up all the same, and cannot stay up over nothing.
   assert.match(main, /const awaitingGame = !gameEntered && !mainMenuOpen;/);
   assert.match(main, /const showGameLoading = awaitingGame \|\| \(gameLoading\.active && Boolean\(activeGame\?\.id\)\);/);

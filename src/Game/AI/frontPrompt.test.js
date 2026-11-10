@@ -12,7 +12,7 @@ import { FRONT_EFFORTS, FRONT_ORDERS, FRONT_RESULTS, MAX_BATTLEFIELDS } from "..
 import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { enlarge, syntheticMap } from "../../runtime/fronts/syntheticMap.js";
 import { decodeFrontOrders } from "./nativeFrontLedger.js";
-import { FRONTS_BLOCK_HEADING, FRONTS_BLOCK_MAX, alliesRule, battlefieldPowers, buildFrontsBlock } from "./frontPrompt.js";
+import { FRONTS_BLOCK_HEADING, FRONTS_BLOCK_MAX, FRONT_ORDER_LINES_BLOCK, FRONT_ORDER_LINES_HEADING, alliesRule, battlefieldPowers, buildFrontsBlock } from "./frontPrompt.js";
 import { runTurnFronts } from "./frontTurn.js";
 
 const legend = { A: "Aland", B: "Borduria", "~": null };
@@ -82,11 +82,11 @@ test("the block says how an order is written, what it sets aside, who may not be
   assert.match(block, /Sent in peace to another country's land it is an attack on it: the war begins the day its troops are put down\./);
   assert.match(block, /A war begun in this answer has none yet: name its battlefield yourself in its first order\./);
   // Its own examples are lines the ledger reads without a complaint.
-  const examples = lines.filter((line) => line.startsWith("Eastern Ukraine~"));
+  const examples = lines.filter((line) => ["NAME~A~spearhead~north~2,3~city: X~~major", "NAME~A~~south~5~city: Y~captured"].includes(line));
   assert.equal(examples.length, 2);
   assert.deepEqual(decodeFrontOrders(examples.join("\n")).map(({ side, order, sector, objective, result, effort, problem }) => [side, order, sector, objective, result, effort, problem]), [
-    ["Russia", "spearhead", "north", "city: Kharkiv", "", "major", undefined],
-    ["Russia", "", "south", "city: Mariupol", "captured", "", undefined],
+    ["A", "spearhead", "north", "city: X", "", "major", undefined],
+    ["A", "", "south", "city: Y", "captured", "", undefined],
   ]);
   // A person's side.
   assert.ok(lines.some((line) => line.startsWith("Neutralia is played by a person: write no order for it of your own.")));
@@ -188,4 +188,33 @@ test("who a battlefield fields: the members of the sides of every one fought on 
     { ...ended, name: "An old front", status: "closed", sides: [["Syldavia"], ["Borduria"]] },
   ]), ["Aland", "Borduria", "Cisland"]);
   assert.deepEqual(battlefieldPowers(undefined), []);
+});
+
+// A time skip states how an order line is written once, in the part of its
+// prompt that never changes (gameplay.js buildJumpStaticRules), and its
+// [Fronts] block points there: the battlefields keep the room they had.
+test("the order lines can be stated elsewhere, and the battlefields keep their room", async () => {
+  const record = await fought();
+  const full = buildFrontsBlock({ battlefields: [record], players: ["Neutralia"] });
+  const pointed = buildFrontsBlock({ battlefields: [record], players: ["Neutralia"], orderLines: false });
+  assert.ok(FRONT_ORDER_LINES_BLOCK.startsWith(`${FRONT_ORDER_LINES_HEADING}\n`));
+  for (const line of FRONT_ORDER_LINES_BLOCK.split("\n").slice(1)) {
+    assert.ok(full.includes(line), "every order line is in the block that states them");
+    assert.equal(pointed.includes(line), false, "and in none of the block that points at them");
+  }
+  assert.match(pointed, /is under \[Front Orders\] above; here, for this period:/);
+  assert.ok(pointed.includes("- eventNumbers:"), "the fields that differ by period stay with the period");
+  const battlefieldsOf = (block) => block.slice(block.indexOf("Battlefields open now:"));
+  assert.equal(battlefieldsOf(pointed), battlefieldsOf(full));
+  assert.ok(pointed.length < full.length - 3000);
+});
+
+// "it seems sometimes events to do with war aren't being represented on the map" (a player, 2026-11): his
+// 2003 invasion of a country its invader borders nowhere opened no battlefield, and its answer sent no
+// transporter. Whether or not the engine fought the period first, the block says what such a war needs.
+test("a war whose sides share no border is told it needs a transporter, or troops moved up, before the map moves", () => {
+  for (const period of [null, { battlefields: [], voyages: [{ id: "v1" }], transports: [] }]) {
+    const block = buildFrontsBlock({ battlefields: [], period });
+    assert.match(block, /A war whose sides share no land border opens none by itself: an invasion across a sea or from a third country's soil needs a transporter line in frontOrders, or its troops moved up in unitOps first, and until then only the events' own regionControlOps move its map./);
+  }
 });

@@ -7,10 +7,12 @@
 // costs, not how long its prompt is. A time skip is ONE request, in every mode;
 // function calling is what can make it more, and it is never more than
 // JUMP_REQUEST_CAP. What the game spends while the player is not pressing
-// anything stops at a daily cap, and at nothing when the player turns it off.
+// anything stops at a fixed daily cap (BACKGROUND_DAILY_CAP below); there is no
+// switch for it any more.
 //
 // Three parts, all plain data and rules:
-//   - the SETTINGS a player chooses (save requests, background AI, the limits);
+//   - the SETTINGS a player chooses (whether their key has a request limit,
+//     the limit);
 //   - the LEDGER of what today has cost, counted where the requests are made
 //     (main.jsx tells it about every provider response);
 //   - the JUMP BUDGET one time skip spends from, in a fixed order of priority.
@@ -24,14 +26,28 @@ import { nextPacificMidnight } from "./fallbackRunner.js";
 
 // What a free Gemini key allows in a day, near enough; the player can change it.
 export const DEFAULT_DAILY_REQUEST_LIMIT = 500;
-// What background AI may spend in a day.
-export const DEFAULT_BACKGROUND_DAILY_CAP = 30;
-// Background AI also stops while less than this share of the day is left, so
-// the last requests of the day are always the player's own.
-export const BACKGROUND_RESERVE_SHARE = 0.1;
 // The most one time skip may spend, whatever the settings: the skip itself and
 // two rounds of function calling.
 export const JUMP_REQUEST_CAP = 3;
+
+// "My key has no request limit" (Settings → AI → AI requests). Until the
+// player sets it, it follows their main provider (the first entry of the
+// Fallback list): off for Gemini, whose free key runs out of requests, on for
+// any other provider (defaultNoRequestLimit). The first-run setup sets it for
+// each choice, and a value the player or the setup set always wins: for a paid key or a local model, where requests do not run out and
+// what each one sends is what costs. The model looks things up as it needs them
+// instead of being handed everything, so a skip may ask more rounds and its
+// prompt is slimmer (promptContext.js `leanLookups`). A skip is still one
+// request when the model looks nothing up; with lookups it may be up to this
+// many: the skip itself, six rounds of questions, and one more for being asked
+// again. In the code the switch on is `unlimited`, and off is
+// saving requests.
+export const UNLIMITED_JUMP_REQUEST_CAP = 8;
+// The rounds of function calling one task may ask (main.jsx runWithLookups),
+// and in a skip never more than its budget has free (gameplay.js runJsonTask).
+export const DEFAULT_LOOKUP_ROUNDS = 3;
+export const UNLIMITED_LOOKUP_ROUNDS = 6;
+export const lookupRoundLimit = ({ unlimited = false } = {}) => (unlimited ? UNLIMITED_LOOKUP_ROUNDS : DEFAULT_LOOKUP_ROUNDS);
 
 // What a time skip may spend a request on at all (the owner's rule, 2026-10:
 // "at most 3 api calls per skip, and that's for the function calling").
@@ -43,42 +59,58 @@ export const JUMP_REQUEST_CAP = 3;
 //                       function calling it asks for is counted as jumpLookup,
 //                       and being asked again, only when its first answer could
 //                       not be used at all, as jumpRetry.
-//   review              the checks as one request: only for a provider that
-//                       refused the skip that carries them (runTurnReview).
-//   history             folding old events into the history document: only when
-//                       the skip could not carry it (that same provider, a
-//                       batch the player asked for, or a fold that has failed
-//                       until the pile is twice its limit).
-//   stats               the automatic Stats refresh, a feature the player
-//                       switches on and sets the interval of.
 //   institutionBallots  NPC votes on a proposal open in an institution.
 //
-// Nothing else asks inside a skip. A place name the map does not have is left
-// out and said in the receipt (the model writes it exactly next time, or looks
-// it up when function calling is on); a storyline the skip left still stays
-// overdue, which is what the next skip is told to move first; with saving off
-// the units, the fronts, the structures, the repeats, the board and the agents
-// used to be a request each, and are the skip's own answer now.
-export const SKIP_SPENDERS = Object.freeze(["jump", "review", "history", "stats", "institutionBallots"]);
+// Nothing else asks inside a skip. There were three more, each a request after
+// the skip: the turn review (the checks, for a provider that refused the skip
+// that carries them), the event consolidator (folding old events when the skip
+// could not carry the fold) and the automatic Stats refresh. They are gone:
+// "remove the stuff relating to those things entirely, they dont need to be
+// part of the game" (the owner, 2026-11-07). A place name the map does not have
+// is left out and said in the receipt (the model writes it exactly next time,
+// or looks it up when function calling is on); a storyline the skip left still
+// stays overdue, which is what the next skip is told to move first; with saving
+// off the units, the fronts, the structures, the repeats, the board and the
+// agents used to be a request each, and are the skip's own answer now.
+export const SKIP_SPENDERS = Object.freeze(["jump", "institutionBallots"]);
 
 // "jumpRetry" and "jumpLookup" are "jump" asking again and looking something up.
 export const spenderBase = (spender) => String(spender || "other").replace(/(?:Retry|Lookup)$/, "") || "other";
 
 export const REQUEST_BUDGET_KEYS = Object.freeze({
-    // ON unless the player turned it off ("0"): an absent key saves requests.
-    saveRequests: "ai_save_requests",
-    // ON unless the player turned it off ("0"), within its daily cap.
-    backgroundAi: "ai_background_activity",
+    // "My key has no request limit": "1" on, "0" off. Absent, it is read from
+    // the two switches it replaced (LEGACY_REQUEST_KEYS).
+    noRequestLimit: "ai_no_request_limit",
     dailyLimit: "ai_daily_request_limit",
-    backgroundDailyCap: "ai_background_daily_cap",
     ledger: "ai_request_ledger",
+    // What the switch changed when it was turned on, as it was before, so
+    // turning it off gives the player their own choices back.
+    beforeNoRequestLimit: "ai_before_no_request_limit",
 });
+
+// The two switches "My key has no request limit" replaced (2026-11-07): "Save
+// AI requests", on unless turned off, and "Unlimited requests", off unless
+// turned on. Read only while the new key is absent: Unlimited requests on, or
+// Save AI requests off (which said it was for a key with no daily limit), is
+// the switch on. Removed once the player sets the switch.
+export const LEGACY_REQUEST_KEYS = Object.freeze({
+    saveRequests: "ai_save_requests",
+    unlimited: "ai_unlimited_requests",
+});
+
+// The AI lookup functions' own key (runtime/mapSettings.js
+// MAP_SETTING_KEYS.lookupFunctions, which this module does not import): on
+// unless turned off, and used only while the switch is on.
+export const LOOKUP_FUNCTIONS_KEY = "ai_lookup_functions";
 
 // There were six more, `ai_review_units` and its siblings: a switch for each
 // check a time skip got after it was written. They are gone (2026-10). The
 // checks are part of the skip itself now (gameplay.js, "The folded time skip"),
 // so there is nothing left to switch, and a check left off only ever meant a
 // map that did not match the story. A key a player once set is never read.
+// So are Background AI's two, `ai_background_activity` and
+// `ai_background_daily_cap` (2026-11-07): what the game does in the
+// background is always on, under a cap that is fixed (BACKGROUND_DAILY_CAP).
 
 // --- Where settings are kept ---
 //
@@ -126,6 +158,12 @@ const writeItem = (storage, key, value) => {
     }
 };
 
+const removeItem = (storage, key) => {
+    try {
+        storage.removeItem?.(key);
+    } catch { /* refused: the key is simply left */ }
+};
+
 const wholeNumber = (value, { min, max, fallback }) => {
     const number = Math.round(Number(value));
     if (value === null || value === undefined || value === "" || !Number.isFinite(number)) return fallback;
@@ -134,21 +172,108 @@ const wholeNumber = (value, { min, max, fallback }) => {
 
 // --- The settings ---
 
+// One switch, "My key has no request limit". Everything that saves requests
+// reads it: saving requests is the switch off, unlimited the switch on.
+// Turning it on also turns on what a limited key does without, the AI lookup
+// functions, and keeps them as they were, so turning the switch off again puts
+// back what the player had chosen.
+//
+// Never set (the key and both switches it replaced absent), it is its default:
+// on unless the player's main provider is Gemini. The default is read at every
+// read, so it follows a change of main provider until the player sets it.
+export const MAIN_PROVIDER_KEYS = Object.freeze({
+    // providerConfig.js's Fallback list and Connections (not imported: that
+    // module imports this one). The first entry whose Connection exists is
+    // the main provider; before the list exists, the old api_provider.
+    fallbackList: "ai_fallback_list",
+    connections: "ai_connections",
+    legacyProvider: "api_provider",
+});
+const readJsonArray = (storage, key) => {
+    try {
+        const value = JSON.parse(readItem(storage, key) ?? "null");
+        return Array.isArray(value) ? value : null;
+    } catch {
+        return null;
+    }
+};
+export const readMainProvider = (storage = defaultStorage()) => {
+    const list = readJsonArray(storage, MAIN_PROVIDER_KEYS.fallbackList);
+    const connections = readJsonArray(storage, MAIN_PROVIDER_KEYS.connections);
+    if (list && connections) {
+        const byId = new Map(connections.filter((c) => c && typeof c === "object").map((c) => [c.id, c]));
+        for (const entry of list) {
+            const connection = byId.get(entry?.connectionId);
+            if (connection) return String(connection.provider || "gemini").trim().toLowerCase() || "gemini";
+        }
+    }
+    return String(readItem(storage, MAIN_PROVIDER_KEYS.legacyProvider) || "gemini").trim().toLowerCase() || "gemini";
+};
+export const defaultNoRequestLimit = (storage = defaultStorage()) => readMainProvider(storage) !== "gemini";
+
+const readNoRequestLimit = (storage, { withDefault = true } = {}) => {
+    const stored = readItem(storage, REQUEST_BUDGET_KEYS.noRequestLimit);
+    if (stored === "1") return true;
+    if (stored === "0") return false;
+    const unlimited = readItem(storage, LEGACY_REQUEST_KEYS.unlimited);
+    const saveRequests = readItem(storage, LEGACY_REQUEST_KEYS.saveRequests);
+    if (unlimited !== null || saveRequests !== null) return unlimited === "1" || saveRequests === "0";
+    return withDefault ? defaultNoRequestLimit(storage) : false;
+};
+
+// What turning the switch on sets to on.
+// (It turned on Background AI too, until that went, 2026-11-07. A record of
+// it kept from then is never read: only these names are put back.)
+const NO_LIMIT_TURNS_ON = Object.freeze({
+    lookups: LOOKUP_FUNCTIONS_KEY,
+});
+
+const readBefore = (storage) => {
+    try {
+        const value = JSON.parse(readItem(storage, REQUEST_BUDGET_KEYS.beforeNoRequestLimit) ?? "null");
+        return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+    } catch {
+        return null;
+    }
+};
+
 export const createRequestSettings = ({ storage = defaultStorage() } = {}) => ({
-    saveRequests: () => readItem(storage, REQUEST_BUDGET_KEYS.saveRequests) !== "0",
-    backgroundAi: () => readItem(storage, REQUEST_BUDGET_KEYS.backgroundAi) !== "0",
+    noRequestLimit: () => readNoRequestLimit(storage),
+    saveRequests: () => !readNoRequestLimit(storage),
+    unlimited: () => readNoRequestLimit(storage),
     dailyLimit: () => wholeNumber(readItem(storage, REQUEST_BUDGET_KEYS.dailyLimit), {
         min: 1, max: 1000000, fallback: DEFAULT_DAILY_REQUEST_LIMIT,
     }),
-    backgroundDailyCap: () => wholeNumber(readItem(storage, REQUEST_BUDGET_KEYS.backgroundDailyCap), {
-        min: 0, max: 1000000, fallback: DEFAULT_BACKGROUND_DAILY_CAP,
-    }),
-    setSaveRequests: (on) => writeItem(storage, REQUEST_BUDGET_KEYS.saveRequests, on ? "1" : "0"),
-    setBackgroundAi: (on) => writeItem(storage, REQUEST_BUDGET_KEYS.backgroundAi, on ? "1" : "0"),
+    // On: the lookup functions on, what they were kept. Off:
+    // what was kept put back (null, an absent key: its default). Only a change
+    // of the switch does either.
+    setNoRequestLimit: (on) => {
+        // What the player or the setup set, the default aside: setting it on
+        // over a default that was on still turns on what it turns on.
+        const was = readNoRequestLimit(storage, { withDefault: false });
+        if (!writeItem(storage, REQUEST_BUDGET_KEYS.noRequestLimit, on ? "1" : "0")) return false;
+        removeItem(storage, LEGACY_REQUEST_KEYS.saveRequests);
+        removeItem(storage, LEGACY_REQUEST_KEYS.unlimited);
+        if (on && !was) {
+            const before = {};
+            for (const [name, key] of Object.entries(NO_LIMIT_TURNS_ON)) {
+                before[name] = readItem(storage, key);
+                writeItem(storage, key, "1");
+            }
+            writeItem(storage, REQUEST_BUDGET_KEYS.beforeNoRequestLimit, JSON.stringify(before));
+        } else if (!on && was) {
+            const before = readBefore(storage) ?? {};
+            for (const [name, key] of Object.entries(NO_LIMIT_TURNS_ON)) {
+                if (!Object.prototype.hasOwnProperty.call(before, name)) continue;
+                if (before[name] === null) removeItem(storage, key);
+                else writeItem(storage, key, String(before[name]));
+            }
+            removeItem(storage, REQUEST_BUDGET_KEYS.beforeNoRequestLimit);
+        }
+        return true;
+    },
     setDailyLimit: (value) => writeItem(storage, REQUEST_BUDGET_KEYS.dailyLimit,
         String(wholeNumber(value, { min: 1, max: 1000000, fallback: DEFAULT_DAILY_REQUEST_LIMIT }))),
-    setBackgroundDailyCap: (value) => writeItem(storage, REQUEST_BUDGET_KEYS.backgroundDailyCap,
-        String(wholeNumber(value, { min: 0, max: 1000000, fallback: DEFAULT_BACKGROUND_DAILY_CAP }))),
 });
 
 // --- The ledger ---
@@ -265,18 +390,30 @@ export const createRequestLedger = ({ storage = defaultStorage(), now = Date.now
     };
 };
 
-// --- Background AI ---
+// --- In the background ---
 //
-// Anything the game would do with nobody pressing a button: a country writing
-// to the player unprompted, an agent filing a report on a timer, a first
-// reading of a service nobody asked about. On unless the player turns it off,
-// capped for the day, and never out of the last tenth of the allowance.
+// Anything the game does with nobody pressing a button: a country writing to
+// the player unprompted (idle diplomacy), an agent filing a report between
+// skips, a first reading of an intelligence service, a stat sheet or military
+// figures written ahead of the first time they are needed. There was a switch
+// for all of it, Background AI, with a cap the player set, and when "My key has
+// no request limit" became the default for every provider but Gemini the
+// switch came on with it. "get rid of the background agent" (the owner,
+// 2026-11-07): the switch is gone. What it ran stays ("dont remove idle
+// diplomacy", "same with background spy stuff", "also do the intelligence
+// ratings, and stats and military figures written ahead of time"), always on,
+// under one fixed cap for the day, and never out of the last tenth of the
+// day's limit, so the last requests of the day are always the player's own.
+// With no request limit there is no allowance to keep, and only the cap
+// applies.
+export const BACKGROUND_DAILY_CAP = 30;
+export const BACKGROUND_RESERVE_SHARE = 0.1;
+
 export const backgroundAllowance = ({ settings, ledger }) => {
-    if (!settings.backgroundAi()) return { allowed: false, reason: "off", remaining: 0 };
     const day = ledger.today();
-    const cap = settings.backgroundDailyCap();
-    const remaining = Math.max(0, cap - day.background);
+    const remaining = Math.max(0, BACKGROUND_DAILY_CAP - day.background);
     if (remaining <= 0) return { allowed: false, reason: "cap", remaining: 0 };
+    if (settings.noRequestLimit?.()) return { allowed: true, reason: "", remaining };
     const limit = settings.dailyLimit();
     const reserve = Math.ceil(limit * BACKGROUND_RESERVE_SHARE);
     if (day.used + reserve >= limit) return { allowed: false, reason: "reserve", remaining };
@@ -287,14 +424,17 @@ export const backgroundAllowance = ({ settings, ledger }) => {
 //
 // Who may spend is SKIP_SPENDERS above, and how much is the cap. The skip
 // itself always runs: every segment's one request is reserved when the skip
-// starts. Everything else asks first, and a "no" is never an error: a lookup
-// round that is refused means the model answers with what it has, a refused
-// retry leaves whatever the first answer can still give, and upkeep that is put
-// off is due again on the next skip.
+// starts, and so are an institution's ballots when they fall due. Everything
+// else asks first, and a "no" is never an error: a lookup round that is
+// refused means the model answers with what it has, and a refused retry leaves
+// whatever the first answer can still give. Nothing is asked after a skip any
+// more (SKIP_SPENDERS above), so nothing is put off to the next one.
 
 // A skip generated in segments (Settings → AI) pays one request per segment:
 // the player chose that, so the cap moves with it rather than breaking the skip.
-export const jumpRequestCap = ({ segments = 1 } = {}) => JUMP_REQUEST_CAP + Math.max(0, Math.round(Number(segments) || 1) - 1);
+// `unlimited`: the switch is on, and the skip may look up more.
+export const jumpRequestCap = ({ segments = 1, unlimited = false } = {}) => (unlimited ? UNLIMITED_JUMP_REQUEST_CAP : JUMP_REQUEST_CAP)
+    + Math.max(0, Math.round(Number(segments) || 1) - 1);
 
 // `only`: the spenders this budget serves at all (SKIP_SPENDERS for a time
 // skip); null serves anyone. `state` is what `state` below gave out: a skip
@@ -331,8 +471,9 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null, state = 
             return reservations.get(key) || 0;
         },
         // Give back a slot that was kept and turned out not to be needed, so the
-        // next in line may have it (the history fold the skip's own answer
-        // carried leaves its request to the Stats refresh).
+        // next in line may have it. Nothing in the game gives one back now (the
+        // fold's request it once released to the Stats refresh went with both,
+        // 2026-11-07); kept for a reservation that may.
         release: (spender) => {
             const key = String(spender || "other");
             const held = reservations.get(key) || 0;
@@ -377,13 +518,33 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null, state = 
     };
 };
 
+// A folded skip refused as a request (gameplay.js, "The folded time skip") is
+// asked again the old way, and the skip asked again must have a request: the
+// refused one was spent (the owner's log, 2026-11-04: "Not asked: this time
+// skip has used its 3 requests", one request spent, the turn fell back). Nothing
+// else is asked after a skip any more (no review, Stats refresh or history
+// fold, 2026-11-07), so this keeps the skip's request and nothing else. Returns
+// what it kept (1, or 0 when there was no room).
+export const keepForRefusedSkip = (budget) => {
+    if (!budget || typeof budget.reserve !== "function") return 0;
+    // (reserve(spender, 0) reads what the spender holds: a skip in segments holds one for each segment still to come.)
+    const held = budget.reserve("jump", 0);
+    return budget.reserve("jump", 1) > held ? 1 : 0;
+};
+
 // What the time panel says a skip will cost before the player presses it: one
 // request (one per segment), and up to the cap only when function calling may
-// add rounds to it, which is Save AI requests off with the lookup functions on
-// (`lookups`).
-export const describeJumpCost = ({ lookups = false, segments = 1 } = {}) => {
+// add rounds to it (`lookups`: the switch on, with the lookup functions on);
+// the higher cap with the switch on (`unlimited`).
+export const describeJumpCost = ({ lookups = false, segments = 1, unlimited = false } = {}) => {
     const pieces = Math.max(1, Math.round(Number(segments) || 1));
-    return { min: pieces, max: lookups ? jumpRequestCap({ segments: pieces }) : pieces, lookups: Boolean(lookups) };
+    return {
+        min: pieces,
+        max: lookups ? jumpRequestCap({ segments: pieces, unlimited }) : pieces,
+        lookups: Boolean(lookups),
+        rounds: lookups ? lookupRoundLimit({ unlimited }) : 0,
+        unlimited: Boolean(unlimited),
+    };
 };
 
 // "37 of 500 today" — and what is left, never below zero.
@@ -394,8 +555,10 @@ export const describeDay = ({ settings, ledger }) => {
         used: day.used,
         limit,
         left: Math.max(0, limit - day.used),
+        // No request limit: there is no day's allowance to count against.
+        noLimit: Boolean(settings.noRequestLimit?.()),
         background: day.background,
-        backgroundCap: settings.backgroundDailyCap(),
+        backgroundCap: BACKGROUND_DAILY_CAP,
         refused: day.refused,
         failed: day.failed,
         resetAt: day.resetAt,
@@ -436,6 +599,19 @@ export const requestSettings = createRequestSettings();
 export const requestLedger = createRequestLedger({ onChange: announce });
 
 export const savingRequests = () => requestSettings.saveRequests();
+export const unlimitedRequests = () => requestSettings.unlimited();
+export const noRequestLimit = () => requestSettings.noRequestLimit();
+// The switch, for Settings and the first-run setup. What it changed is told to
+// whoever listens for the request budget, and for the map settings, where the
+// lookup functions are.
+export const setNoRequestLimit = (on) => {
+    const saved = requestSettings.setNoRequestLimit(Boolean(on));
+    announce();
+    try {
+        window.dispatchEvent(new Event("mapSettings:updated"));
+    } catch { /* no window (tests, the harness) */ }
+    return saved;
+};
 export const backgroundAiAllowance = () => backgroundAllowance({ settings: requestSettings, ledger: requestLedger });
 export const requestDay = () => describeDay({ settings: requestSettings, ledger: requestLedger });
 export const announceRequestBudgetChange = announce;

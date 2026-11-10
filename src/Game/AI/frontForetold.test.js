@@ -178,9 +178,9 @@ test("the block tells a period that was fought as it leaves the battlefield, by 
   assert.match(block, /Only on a battlefield that first opens in this answer \(a war begun here\) is an order carried out from its event's date/);
   assert.equal(block.includes("told to you here next period, so an event says a named place fell only when"), false, "the rule of a period still to be fought is gone");
   // Its own examples are lines the ledger reads.
-  assert.deepEqual(decodeFrontOrders(lines.filter((line) => line.startsWith("Eastern Ukraine~")).join("\n")).map(({ side, order, sector, objective, effort, problem }) => [side, order, sector, objective, effort, problem]), [
-    ["Russia", "spearhead", "north", "city: Kharkiv", "major", undefined],
-    ["Ukraine", "dig in", "south", "", "", undefined],
+  assert.deepEqual(decodeFrontOrders(lines.filter((line) => ["NAME~A~spearhead~north~2,3~city: X~~major", "NAME~B~dig in~south~5"].includes(line)).join("\n")).map(({ side, order, sector, objective, effort, problem }) => [side, order, sector, objective, effort, problem]), [
+    ["A", "spearhead", "north", "city: X", "major", undefined],
+    ["B", "dig in", "south", "", "", undefined],
   ]);
   // A person's side: its order too is for the next period.
   assert.ok(lines.some((line) => line.startsWith("Aland is played by a person: write no order for it of your own. But what that person tells its troops to do in an action of this turn IS its order, and you write it for them:")
@@ -288,7 +288,7 @@ test("the skip fights its period before it asks, and the turn it writes says so"
   assert.match(skip, /const frontsForecast = foughtBefore \? \{ \.\.\.foughtBefore \} : null;/);
   assert.ok(skip.indexOf("await forecastTurnFronts(") < skip.indexOf("const jumpContext = {"));
   assert.match(skip, /variables: frontsForecast \? \{ \.\.\.variables, frontsForecast \} : variables,/);
-  assert.match(gameplay, /const fronts = frontsLiveBlock\(world, game, variables\.frontsForecast \?\? null\);/);
+  assert.match(gameplay, /const fronts = frontsLiveBlock\(world, game, variables\.frontsForecast \?\? null, \{ orderLines: !rulesAbove \}\);/);
   // The turn carries whether it was, so that a turn kept and applied later is applied the same way.
   assert.match(gameplay, /frontsForetold: Boolean\(context\.variables\?\.frontsForecast\),/);
   assert.match(gameplay, /foretold: result\.frontsForetold === true,/);

@@ -17,6 +17,7 @@ import { frontRunSpan, planFrontMoments } from "./frontTurn.js";
 
 const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
 const frontTurn = readFileSync(new URL("./frontTurn.js", import.meta.url), "utf8");
+const storyMarch = readFileSync(new URL("./storyMarch.js", import.meta.url), "utf8");
 
 test("the skip is told it may have an army take a region, with enough of its troops near, and to bring them up first", () => {
   assert.match(gameplay, /\[Taking Ground\]\r?\nAn army may take a region in this period wherever what has led up to it makes that likely, or where history took it at this time/);
@@ -41,11 +42,11 @@ test("a capture the engine refused is not made in the world: its control operati
 });
 
 test("off any battlefield, as many of the taker's free land formations as the region's size asks march in, and too few take nothing", () => {
-  const body = gameplay.slice(gameplay.indexOf("const marchCapturersIn = async"), gameplay.indexOf("// A region's area in km², near enough"));
+  const body = storyMarch.slice(storyMarch.indexOf("export const marchStoryCapturers = "));
   assert.ok(body.length > 0);
   // Not a garrison, not covert, not one fighting on a battlefield, and within reach.
-  assert.match(gameplay, /const STORY_MARCHERS = new Set\(\["infantry", "armor", "artillery"\]\);/);
-  assert.match(gameplay, /const STORY_MARCH_KM = 800;/);
+  assert.match(storyMarch, /export const STORY_MARCHERS = new Set\(\["infantry", "armor", "artillery"\]\);/);
+  assert.match(storyMarch, /export const STORY_MARCH_KM = 800;/);
   assert.match(body, /!unit\.covert && !normalizeString\(unit\.committedTo\)/);
   // The region's size sets how many: at least the least, or the control operation comes off the event.
   assert.match(body, /const \{ least, most \} = takersFor\(geometryAreaKm2\(row\.geometry\)\);/);

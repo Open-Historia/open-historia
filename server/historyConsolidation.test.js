@@ -186,11 +186,14 @@ test("a document edited by hand while the pass ran is not overwritten by the pas
   assert.match(next.historyDocument.text, /^Edited by hand\.\n\nThrough 2002-01-01:\nNew period\.$/);
 });
 
-test("the consolidator is told the current document and its budget; a campaign from before the document sees its pass summaries as the document", () => {
-  const fresh = buildHistoryDocumentDirective({});
-  assert.match(fresh, /no history document yet/);
-  assert.match(fresh, new RegExp(`near ${documentWordBudget} words and never above ${documentWordCeiling}`));
-  assert.match(fresh, /removing the LEAST important older material first/);
+test("the consolidator is told the history in tiers and the canon; a campaign from before the document sees its pass summaries as its history", () => {
+  const fresh = buildHistoryDocumentDirective({}, { span: [1936, 1937] });
+  assert.match(fresh, /There is no history yet: write the years of the material below\./);
+  assert.match(fresh, /"years": a paragraph for each game year the material below covers \(1936 to 1937\)/);
+  assert.match(fresh, /"canon": the facts in the material below that must never fade/);
+  assert.match(fresh, /The campaign has no canon yet\./);
+  assert.doesNotMatch(fresh, /"eras":/, "eras are asked for only when they are over their budget");
+  assert.ok(documentWordBudget > 0 && documentWordCeiling > documentWordBudget);
 
   const legacy = { consolidatedHistory: [
     { summary: "Old one.", throughDate: "2000-01-01" },
@@ -198,12 +201,15 @@ test("the consolidator is told the current document and its budget; a campaign f
   ] };
   assert.equal(seedHistoryDocumentText(legacy), "Through 2000-01-01: Old one.\n\nThrough 2000-06-01: Old two.");
   const migrating = buildHistoryDocumentDirective(legacy);
-  assert.match(migrating, /The current document \(\d+ words\) follows/);
+  assert.match(migrating, /The history as it stands \(fold the new material into its years\):\nThrough 2000-01-01: Old one\./);
   assert.match(migrating, /Through 2000-06-01: Old two\./);
 
   const live = { historyDocument: { text: "Live text.", revision: 2 }, consolidatedHistory: legacy.consolidatedHistory };
   assert.equal(seedHistoryDocumentText(live), "Live text.", "the live document wins over the ledger");
-  assert.match(buildHistoryDocumentDirective({ historyDocument: { text: Array.from({ length: documentWordBudget + 1 }, () => "word").join(" ") } }), /over the .*-word budget, so condense it/);
+  const longEras = { historyDocument: { text: "", eras: [{ from: 1900, to: 1930, text: Array.from({ length: 1300 }, () => "word").join(" ") }], revision: 3 } };
+  assert.match(buildHistoryDocumentDirective(longEras), /"eras": the earlier years below run to 1300 words, over the 1200 they are kept near/);
+  const withCanon = { ...longEras, canonFacts: [{ date: "1919-06-28", kind: "treaty", text: "Treaty of Zenda." }] };
+  assert.match(buildHistoryDocumentDirective(withCanon), /CANON \(standing facts[^\n]*\n- 1919-06-28 \(treaty\): Treaty of Zenda\./);
   assert.equal(countWords("  one two\nthree  "), 3);
 });
 
@@ -329,7 +335,9 @@ test("the first document a campaign gets must be a document too", () => {
   assert.equal(judgeSkipHistoryAnswer({ summary: "Nothing.", document: "Not much happened." }, { currentText: "" }).ok, false);
 });
 
-test("a fold that fails only waits so long", () => {
-  assert.equal(HISTORY_CONSOLIDATION.ownRequestThreshold, sizeThreshold * 2, "twice the pile that makes a turn fold by itself");
-  assert.ok(HISTORY_CONSOLIDATION.ownRequestThreshold > sizeThreshold + batchSize - retainEvents);
+// A fold that failed was asked for as a request of its own once the pile was
+// twice its size, until the event consolidator went (2026-11-07): it waits for
+// the next skip's fold, however long.
+test("a fold that fails waits for the next skip, however long", () => {
+  assert.equal("ownRequestThreshold" in HISTORY_CONSOLIDATION, false);
 });

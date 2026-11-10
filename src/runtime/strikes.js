@@ -14,6 +14,8 @@
 //            | "nuclear bomber" | "bombing run"
 //   count    how many missiles or aircraft
 //   down     how many of them were intercepted before they got there
+//   spreadKm how wide the bombs of a bombing run scatter round the place, in km, where
+//            it was set (a war room strike's radius: fronts/airStrike.js airStrikeVisuals); else as always
 //
 // It changes nothing in the world by itself: what a strike DID is whatever
 // its event's own operations say. This is only what is drawn (Map/StrikeLayers.jsx).
@@ -74,6 +76,7 @@ export const normalizeStrike = (entry) => {
     down: Math.max(0, Math.min(count, Math.round(Number(entry.down) || 0))),
     from: readPlace(entry.from),
     to,
+    ...(Number(entry.spreadKm) > 0 ? { spreadKm: Math.min(200, Math.round(Number(entry.spreadKm) * 10) / 10) } : {}),
   };
 };
 
@@ -102,35 +105,47 @@ export const withTurnStrikes = (before, added, round) => {
 
 // A name as it is written with its kind before it: "city: Kyiv" -> { kind: "city", name: "Kyiv" }. What the skip
 // teaches a model to add after it, the country or region it lies in ("city: Isfahan, country: Iran"), is no part of
-// the name.
+// the name; the country is kept beside it, { ..., country: "Iran" }, to tell two places of one name apart.
 export const parsePlace = (value) => {
-  const text = clean(value).replace(/\s*,\s*(?:country|region|state|province)\s*:.*$/i, "");
+  const written = clean(value);
+  const text = written.replace(/\s*,\s*(?:country|region|state|province)\s*:.*$/i, "");
+  const country = clean(/,\s*country\s*:\s*([^,]+)/i.exec(written.slice(text.length))?.[1]);
   const marked = /^(city|region|country|group|structure|unit|sea)\s*:\s*(.+)$/i.exec(text);
-  return marked ? { kind: marked[1].toLowerCase(), name: clean(marked[2]) } : { kind: "", name: text };
+  const place = marked ? { kind: marked[1].toLowerCase(), name: clean(marked[2]) } : { kind: "", name: text };
+  return country ? { ...place, country } : place;
 };
+
+// Whether a place of the map lies in, or belongs to, a country: by whichever of the fields the map's places carry
+// says so (a structure's or a formation's ownerCode, a city's country).
+const PLACE_COUNTRY_FIELDS = ["country", "countryCode", "owner", "ownerCode"];
+const placeIn = (entry, country) => PLACE_COUNTRY_FIELDS.some((field) => fold(entry?.[field]) === country);
 
 // Where a place a strike names is, from what the turn has in hand: the places
 // of the event that tells of it (which the game has already found), then the
 // map's cities, the world's structures and its formations. null when none of
 // them is called that.
 //   places       the event's own: [{ kind, name, lng, lat }]
-//   cities       [{ name, lng, lat }]
-//   markers      world.markers: [{ name, lng, lat }]
-//   units        world.units: [{ name, lng, lat }]
+//   cities       [{ name, lng, lat, country? }]
+//   markers      world.markers: [{ name, lng, lat, ownerCode }]
+//   units        world.units: [{ name, lng, lat, ownerCode }]
+// Of two places of the name, the one in the country written after it ("city: Alexandria, country: United States"),
+// where a place says which country it is in; else the first, as before.
 export const findStrikePlace = (value, { places = [], cities = [], markers = [], units = [] } = {}) => {
-  const { kind, name } = parsePlace(value);
+  const { kind, name, country = "" } = parsePlace(value);
   const wanted = fold(name);
+  const where = fold(country);
   if (!wanted) return null;
   const at = (entry) => {
     const lng = numberOf(entry?.lng);
     const lat = numberOf(entry?.lat);
     return Number.isFinite(lng) && Number.isFinite(lat) ? { lng: round4(lng), lat: round4(lat) } : null;
   };
-  const named = (rows) => list(rows).find((entry) => fold(entry?.name) === wanted && at(entry));
+  const named = (rows) => list(rows).filter((entry) => fold(entry?.name) === wanted && at(entry));
   // What the event itself placed, of the same kind where a kind is given.
-  const told = list(places).find((entry) => fold(entry?.name) === wanted && at(entry) && (!kind || !clean(entry?.kind) || fold(entry.kind) === kind));
+  const told = list(places).filter((entry) => fold(entry?.name) === wanted && at(entry) && (!kind || !clean(entry?.kind) || fold(entry.kind) === kind));
   const order = kind === "structure" ? [markers, cities, units] : kind === "unit" ? [units, markers, cities] : [cities, markers, units];
-  const found = told ?? order.map(named).find(Boolean) ?? null;
+  const candidates = [told, ...order.map(named)].flat();
+  const found = (where ? candidates.find((entry) => placeIn(entry, where)) : null) ?? candidates[0] ?? null;
   return found ? at(found) : null;
 };
 
