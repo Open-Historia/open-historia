@@ -32,6 +32,10 @@ const AMBER := Color("#fbbf24")
 const SECTION_BG := Color(1, 1, 1, 0.025)
 const SECTION_BORDER := Color(1, 1, 1, 0.07)
 const ENTITY_TIP := "Type to search by name. An exact canonical ID may also be entered for an advanced/future reference."
+const PICK_REGIONS_TIP := "Pick regions on a map of this scenario and insert their names, spelled as the map spells them, where the cursor is"
+const POLITY_FIELDS := ["to", "from", "actor", "claimant", "polity"]
+const IMPACT_ROW_BG := Color(0, 0, 0, 0.14)
+const IMPACT_ROW_BORDER := Color(1, 1, 1, 0.055)
 
 var _engine: EngineLink
 var _host: Node
@@ -60,6 +64,13 @@ var _suggest: PanelContainer
 var _suggest_list: VBoxContainer
 var _suggest_scroll: ScrollContainer
 var _suggest_owner: LineEdit
+var _suggest_pick: Callable
+var _scenario_id := ""
+var _picker: EditorRegionPicker
+var _picker_target := {}
+var _text_areas := {}
+var _impact_problems := {}
+var _impact_calls := {}
 
 
 static func clean(value: Variant) -> String:
@@ -286,6 +297,73 @@ static func picker_value(typed: String, options: Array) -> String:
 	return value
 
 
+static func impact_field_label(type: String, field: String) -> String:
+	match field:
+		"regions":
+			return "Regions"
+		"from":
+			return "From (optional)"
+		"color":
+			return "Colour"
+		"actor":
+			return "Attacker"
+		"leader":
+			return "New leader"
+		"government":
+			return "New government"
+		"to":
+			if type == "control":
+				return "Occupier"
+			if type == "annex":
+				return "Annexed by"
+			if type == "dissolve":
+				return "Its land goes to"
+			return "New owner"
+		"claimant":
+			if type == "clear_contest":
+				return "Only this side (optional)"
+			if type == "clear_country_claims":
+				return "Only this claimant (optional)"
+			return "Claimant"
+		"polity":
+			return "Country"
+		"name":
+			return "New name" if type == "rename" else "New country's name"
+	return field
+
+
+static func region_names(regions: Variant) -> String:
+	var names: PackedStringArray = []
+	for region in list_of(regions):
+		var text := clean((region as Dictionary).get("name") if region is Dictionary else null)
+		if not text.is_empty():
+			names.append(text)
+	return ", ".join(names)
+
+
+static func utf16_index(text: String, index: int) -> int:
+	var units := 0
+	for position in range(mini(index, text.length())):
+		units += 2 if text.unicode_at(position) > 0xFFFF else 1
+	return units
+
+
+static func from_utf16(text: String, units: int) -> int:
+	var counted := 0
+	for position in range(text.length()):
+		if counted >= units:
+			return position
+		counted += 2 if text.unicode_at(position) > 0xFFFF else 1
+	return text.length()
+
+
+static func caret_index(edit: TextEdit, line: int, column: int) -> int:
+	var index := 0
+	for row in range(mini(line, edit.get_line_count())):
+		index += edit.get_line(row).length() + 1
+	return index + column
+
+
 static func valid_number_text(text: String) -> bool:
 	var trimmed := text.strip_edges()
 	if trimmed.is_empty():
@@ -318,6 +396,7 @@ func _read_props(props: Dictionary) -> void:
 	_scenario_value = list_of(props.get("scenarioValue", _scenario_value))
 	_is_game = bool(props.get("isGame", _is_game))
 	_overridden = bool(props.get("overridden", _overridden))
+	_scenario_id = str(props.get("scenarioId", _scenario_id))
 	if props.has("world"):
 		_world = props["world"] if props["world"] is Dictionary else {}
 	if props.has("options"):
@@ -527,6 +606,7 @@ func open_manager() -> void:
 
 
 func close_manager() -> void:
+	_close_picker()
 	if _manager and is_instance_valid(_manager):
 		_manager.queue_free()
 	_manager = null
@@ -537,7 +617,7 @@ func close_manager() -> void:
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
-	if not is_manager_open():
+	if not is_manager_open() or is_picker_open():
 		return
 	if event is InputEventKey and (event as InputEventKey).pressed and (event as InputEventKey).keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
@@ -689,6 +769,8 @@ func _set_condition_type(event_index: int, condition_index: int, type: String) -
 	var definition := definition_of(type) if has_definition(type) else definition_of("polity_exists")
 	var next := {"type": type}
 	for field in definition["fields"]:
+		if field == "regionId" and not clean(current.get("regionName")).is_empty():
+			next["regionName"] = clean(current.get("regionName"))
 		if field == "status":
 			var status := clean(current.get("status"))
 			next["status"] = status if not status.is_empty() else "member"
@@ -935,6 +1017,7 @@ func _build_editor(key: String, holder: VBoxContainer) -> void:
 		return
 	_editor_refreshers = []
 	_refreshers_by_key[key] = _editor_refreshers
+	_text_areas.clear()
 	var event: Dictionary = _events[index] if _events[index] is Dictionary else {}
 	var rule := ColorRect.new()
 	rule.color = Color(1, 1, 1, 0.08)
@@ -980,16 +1063,18 @@ func _build_editor(key: String, holder: VBoxContainer) -> void:
 
 	var text_column := VBoxContainer.new()
 	text_column.add_theme_constant_override("separation", 7)
-	text_column.add_child(EditorKit.field_label("Event instruction"))
+	text_column.add_child(_label_with_pick("Event instruction", key, -1))
 	var text_edit := EditorKit.area(EditorFeaturesModel.text_of(event.get("text")) if event.get("text") != null else "", 88.0, func(text: String) -> void:
 		var at := _index_of_key(key)
 		if at >= 0:
 			_patch_event(at, {"text": text.substr(0, 4000)}), "What happens on this date?")
 	text_edit.tooltip_text = "Scripted event text"
+	_text_areas["%s|-1" % key] = text_edit
 	text_column.add_child(text_edit)
 	column.add_child(text_column)
 
 	column.add_child(_wording_section(key, event))
+	column.add_child(_impacts_section(key, event))
 	column.add_child(_conditions_section(key, index, event))
 	column.add_child(_outcomes_section(key, event))
 	column.add_child(_chance_section(key, event))
@@ -1117,14 +1202,7 @@ func _condition_row(key: String, event_index: int, condition_index: int, conditi
 	if fields.has("overlordId"):
 		row.add_child(_entity_field(key, condition_index, "overlordId", polities, "Search overlord", "Overlord polity"))
 	if fields.has("regionId"):
-		var region := EditorKit.line(clean(condition.get("regionId")) if condition.get("regionId") != null else "", "Stable region ID", func(text: String) -> void:
-			var at := _index_of_key(key)
-			if at >= 0:
-				_patch_condition(at, condition_index, {"regionId": text}))
-		region.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-		region.custom_minimum_size.x = 120
-		region.tooltip_text = "Region id"
-		row.add_child(region)
+		row.add_child(_region_condition_field(key, condition_index, condition))
 	if fields.has("baseOwner"):
 		row.add_child(_entity_field(key, condition_index, "baseOwner", polities, "Base owner", "Base region owner"))
 	if fields.has("eventId"):
@@ -1176,6 +1254,44 @@ func _condition_row(key: String, event_index: int, condition_index: int, conditi
 	return holder
 
 
+func _region_condition_field(key: String, condition_index: int, condition: Dictionary) -> Control:
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 3)
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	column.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	column.custom_minimum_size.x = 208
+	var line := HBoxContainer.new()
+	line.add_theme_constant_override("separation", 5)
+	var region := EditorKit.line(clean(condition.get("regionId")) if condition.get("regionId") != null else "", "Stable region ID", Callable())
+	region.custom_minimum_size.x = 120
+	region.tooltip_text = "Region id"
+	line.add_child(region)
+	var pick := _button("Pick on map")
+	pick.name = "PickRegionCondition"
+	pick.tooltip_text = "Pick the region on a map of this scenario"
+	pick.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	pick.pressed.connect(_open_picker.bind({"kind": "condition", "key": key, "conditionIndex": condition_index}))
+	line.add_child(pick)
+	column.add_child(line)
+	var named := UI.wrapped(clean(condition.get("regionName")), 10, Color(1, 1, 1, 0.6))
+	named.name = "RegionName"
+	named.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	named.visible = not clean(condition.get("regionName")).is_empty()
+	column.add_child(named)
+	region.text_changed.connect(_on_region_id_typed.bind(key, condition_index, named))
+	return column
+
+
+func _on_region_id_typed(text: String, key: String, condition_index: int, named: Label) -> void:
+	var at := _index_of_key(key)
+	if at < 0:
+		return
+	_patch_condition(at, condition_index, {"regionId": text, "regionName": ""})
+	if is_instance_valid(named):
+		named.text = ""
+		named.visible = false
+
+
 func _entity_field(key: String, condition_index: int, field: String, options: Array, placeholder: String, aria: String) -> Control:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 3)
@@ -1225,10 +1341,11 @@ func _condition_at(key: String, condition_index: int) -> Dictionary:
 	return conditions[condition_index] if condition_index < conditions.size() and conditions[condition_index] is Dictionary else {}
 
 
-func _show_suggest(edit: LineEdit, options: Array, field: String, key: String, condition_index: int) -> void:
+func _show_suggest(edit: LineEdit, options: Array, field: String, key: String, condition_index: int, on_pick := Callable()) -> void:
 	if not _suggest or not is_instance_valid(_suggest) or not is_instance_valid(edit):
 		return
 	_suggest_owner = edit
+	_suggest_pick = on_pick
 	EditorKit.clear(_suggest_list)
 	var typed := edit.text.strip_edges().to_lower()
 	var shown := 0
@@ -1271,7 +1388,10 @@ func _show_suggest(edit: LineEdit, options: Array, field: String, key: String, c
 			if at < 0:
 				return
 			var stored := picker_value(label, options)
-			_patch_condition(at, condition_index, {field: stored})
+			if _suggest_pick.is_valid():
+				_suggest_pick.call(stored)
+			else:
+				_patch_condition(at, condition_index, {field: stored})
 			if is_instance_valid(edit):
 				edit.text = picker_label(stored, options)
 				edit.caret_column = edit.text.length()
@@ -1514,13 +1634,19 @@ func _outcome_card(key: String, outcome_index: int, outcome_input: Variant) -> C
 	column.add_child(row)
 	var text_column := VBoxContainer.new()
 	text_column.add_theme_constant_override("separation", 7)
-	text_column.add_child(EditorKit.field_label("What happens"))
+	text_column.add_child(_label_with_pick("What happens", key, outcome_index))
 	var text_edit := EditorKit.area(str(outcome.get("text", "")) if outcome.get("text") != null else "", 72.0, func(text: String) -> void: _patch_outcome(key, outcome_index, "text", text), "What happens if this outcome is selected?")
 	text_edit.tooltip_text = "Outcome text"
+	_text_areas["%s|%d" % [key, outcome_index]] = text_edit
 	text_column.add_child(text_edit)
 	column.add_child(text_column)
 	var missing := UI.wrapped("Add outcome text before saving. Blank outcomes are discarded.", 10, AMBER)
 	column.add_child(missing)
+	var impacts_column := VBoxContainer.new()
+	impacts_column.add_theme_constant_override("separation", 0)
+	impacts_column.add_child(EditorKit.field_label("Impacts of this outcome"))
+	impacts_column.add_child(_impacts_editor(key, outcome_index))
+	column.add_child(impacts_column)
 	var refresh := func() -> void:
 		if not is_instance_valid(chance):
 			return
@@ -1581,3 +1707,470 @@ func _chance_section(key: String, event: Dictionary) -> Control:
 			_set_text(percent_edit, EditorFeaturesModel.number_text(value)))
 	body.add_child(slider)
 	return parts[0]
+
+
+func _label_with_pick(text: String, key: String, outcome_index: int) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var label := EditorKit.field_label(text)
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(label)
+	var pick := _button("Pick regions")
+	pick.name = "PickRegions"
+	pick.custom_minimum_size.y = 27
+	for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
+		var face := (pick.get_theme_stylebox(state) as StyleBoxFlat).duplicate() as StyleBoxFlat
+		face.content_margin_left = 8.8
+		face.content_margin_right = 8.8
+		face.content_margin_top = 0
+		face.content_margin_bottom = 0
+		pick.add_theme_stylebox_override(state, face)
+	pick.tooltip_text = PICK_REGIONS_TIP
+	pick.pressed.connect(_open_text_picker.bind(key, outcome_index))
+	row.add_child(pick)
+	return row
+
+
+func _impact_types() -> Array:
+	return _options.get("impactTypes", [])
+
+
+func _impact_definition(type: String) -> Dictionary:
+	var types := _impact_types()
+	for entry in types:
+		if str((entry as Dictionary).get("type", "")) == type:
+			return entry
+	return types[0] if not types.is_empty() else {"type": "transfer", "label": "Regions change hands", "fields": ["regions", "to", "from"], "required": ["regions", "to"]}
+
+
+func _impact_rows(key: String, outcome_index: int) -> Array:
+	var event := _event_of(key)
+	if outcome_index < 0:
+		return list_of(event.get("impactRows")).duplicate(true)
+	var outcomes := list_of(event.get("outcomes"))
+	var outcome: Variant = outcomes[outcome_index] if outcome_index < outcomes.size() else null
+	return list_of((outcome as Dictionary).get("impactRows") if outcome is Dictionary else null).duplicate(true)
+
+
+func _store_impacts(key: String, outcome_index: int, field: String, value: Variant) -> void:
+	var at := _index_of_key(key)
+	if at < 0:
+		return
+	if outcome_index < 0:
+		_patch_event(at, {field: value})
+	else:
+		_patch_outcome(key, outcome_index, field, value)
+
+
+func _set_impact_rows(key: String, outcome_index: int, rows: Array, rebuild := false) -> void:
+	_store_impacts(key, outcome_index, "impactRows", rows)
+	_compile_impacts(key, outcome_index, rows, true)
+	if rebuild:
+		_rebuild_editor(key)
+
+
+func _compile_impacts(key: String, outcome_index: int, rows: Array, store: bool) -> void:
+	if _engine == null:
+		return
+	var slot := "%s|%d" % [key, outcome_index]
+	var counter := slot if store else slot + "|view"
+	var call := int(_impact_calls.get(counter, 0)) + 1
+	_impact_calls[counter] = call
+	var reply: Dictionary = await _engine.request("editor.rules.impacts", {"rows": rows})
+	if int(_impact_calls.get(counter, 0)) != call or not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY:
+		return
+	if not store and int(_impact_calls.get(slot, 0)) > int(_impact_calls.get(slot + "|done", 0)):
+		return
+	var result: Dictionary = reply["result"]
+	_impact_problems[slot] = result.get("problems", [])
+	if store:
+		_impact_calls[slot + "|done"] = call
+		_store_impacts(key, outcome_index, "impacts", result.get("impacts", {}))
+	else:
+		for refresher in _refreshers_by_key.get(key, []):
+			(refresher as Callable).call()
+
+
+func impact_problems(key: String, outcome_index: int) -> Array:
+	return _impact_problems.get("%s|%d" % [key, outcome_index], [])
+
+
+func _impacts_section(key: String, _event: Dictionary) -> Control:
+	var parts := _section("Impacts", 0)
+	var body: VBoxContainer = parts[1]
+	(parts[0] as Control).name = "ImpactsSection"
+	body.add_child(_impacts_editor(key, -1))
+	return parts[0]
+
+
+func _impacts_editor(key: String, outcome_index: int) -> Control:
+	var rows := _impact_rows(key, outcome_index)
+	var column := VBoxContainer.new()
+	column.name = "ImpactRows"
+	column.add_theme_constant_override("separation", 7)
+	column.add_child(EditorKit.gap(0))
+	for row_index in range(rows.size()):
+		column.add_child(_impact_row(key, outcome_index, row_index, rows[row_index] if rows[row_index] is Dictionary else {}))
+	var add := _button("+ Add impact")
+	add.name = "AddImpact"
+	add.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	add.pressed.connect(_add_impact.bind(key, outcome_index))
+	column.add_child(add)
+	if not rows.is_empty() and not _impact_problems.has("%s|%d" % [key, outcome_index]):
+		_compile_impacts(key, outcome_index, rows, false)
+	return column
+
+
+func _add_impact(key: String, outcome_index: int) -> void:
+	var rows := _impact_rows(key, outcome_index)
+	rows.append({"type": "transfer", "regions": [], "to": "", "from": ""})
+	_set_impact_rows(key, outcome_index, rows, true)
+
+
+func _remove_impact(key: String, outcome_index: int, row_index: int) -> void:
+	var rows := _impact_rows(key, outcome_index)
+	if row_index < rows.size():
+		rows.remove_at(row_index)
+	_set_impact_rows(key, outcome_index, rows, true)
+
+
+func _set_impact_type(value: String, key: String, outcome_index: int, row_index: int) -> void:
+	var definition := _impact_definition(value)
+	var rows := _impact_rows(key, outcome_index)
+	if row_index >= rows.size():
+		return
+	var current: Dictionary = rows[row_index] if rows[row_index] is Dictionary else {}
+	var next := {"type": str(definition.get("type", value))}
+	for field in definition.get("fields", []):
+		if field == "regions":
+			next["regions"] = list_of(current.get("regions"))
+		elif current.has(field):
+			next[field] = current[field]
+	rows[row_index] = next
+	_set_impact_rows(key, outcome_index, rows, true)
+
+
+func _patch_impact_row(key: String, outcome_index: int, row_index: int, patch: Dictionary) -> void:
+	var rows := _impact_rows(key, outcome_index)
+	if row_index >= rows.size():
+		return
+	var current: Dictionary = (rows[row_index] as Dictionary).duplicate() if rows[row_index] is Dictionary else {}
+	for field in patch:
+		current[field] = patch[field]
+	rows[row_index] = current
+	_set_impact_rows(key, outcome_index, rows)
+
+
+func _impact_row(key: String, outcome_index: int, row_index: int, row: Dictionary) -> Control:
+	var definition := _impact_definition(str(row.get("type", "")))
+	var type := str(definition.get("type", "transfer"))
+	var holder := PanelContainer.new()
+	holder.name = "ImpactRow"
+	holder.add_theme_stylebox_override("panel", UI.box(IMPACT_ROW_BG, IMPACT_ROW_BORDER, 9, 1, Vector4(7.7, 7.7, 7.7, 7.7)))
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 4)
+	holder.add_child(column)
+	var line := HBoxContainer.new()
+	line.add_theme_constant_override("separation", 6)
+	column.add_child(line)
+	var type_options: Array = []
+	for entry in _impact_types():
+		type_options.append([str((entry as Dictionary).get("type", "")), str((entry as Dictionary).get("label", ""))])
+	var type_select := EditorKit.select(type_options, type, _set_impact_type.bind(key, outcome_index, row_index))
+	type_select.tooltip_text = "Impact type"
+	_flex_child(type_select, 208.0, 1.2)
+	line.add_child(type_select)
+	var polities: Array = _options.get("polities", [])
+	for field in definition.get("fields", []):
+		var label := impact_field_label(type, str(field))
+		var cell := VBoxContainer.new()
+		cell.add_theme_constant_override("separation", 7)
+		cell.add_child(EditorKit.field_label(label))
+		if field == "regions":
+			var regions := list_of(row.get("regions"))
+			var pick_row := HBoxContainer.new()
+			pick_row.add_theme_constant_override("separation", 6)
+			var pick := _button("Pick on map (%d)" % regions.size() if not regions.is_empty() else "Pick on map")
+			pick.name = "PickImpactRegions"
+			pick.pressed.connect(_open_picker.bind({"kind": "impact", "key": key, "outcomeIndex": outcome_index, "rowIndex": row_index}))
+			pick_row.add_child(pick)
+			var names := UI.label(region_names(regions), 11, Color(1, 1, 1, 0.62))
+			names.name = "RegionNames"
+			names.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			names.tooltip_text = region_names(regions)
+			names.clip_text = true
+			names.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			names.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			names.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			names.mouse_filter = Control.MOUSE_FILTER_PASS
+			pick_row.add_child(names)
+			cell.add_child(pick_row)
+			_flex_child(cell, 256.0, 2.0)
+		elif field == "color":
+			var shade := EditorKit.color_button(clean(row.get("color")) if not clean(row.get("color")).is_empty() else "#808080", _on_impact_colour.bind(key, outcome_index, row_index))
+			shade.tooltip_text = label
+			cell.add_child(shade)
+			_flex_child(cell, 72.0, 0.0)
+		else:
+			var stored := clean(row.get(field))
+			var edit: LineEdit
+			if POLITY_FIELDS.has(field):
+				edit = EditorKit.line(picker_label(stored, polities), "Search country", Callable())
+				edit.tooltip_text = label
+				edit.text_changed.connect(_on_impact_polity_typed.bind(edit, key, outcome_index, row_index, str(field)))
+				edit.focus_entered.connect(_on_impact_polity_focus.bind(edit, key, outcome_index, row_index, str(field)))
+				edit.focus_exited.connect(_on_impact_polity_blur.bind(edit))
+			else:
+				edit = EditorKit.line(stored, "", Callable())
+				edit.tooltip_text = label
+				edit.text_changed.connect(_on_impact_text.bind(key, outcome_index, row_index, str(field)))
+			edit.set_meta("impact_field", str(field))
+			cell.add_child(edit)
+			_flex_child(cell, 160.0, 1.0)
+		cell.size_flags_vertical = Control.SIZE_SHRINK_END
+		line.add_child(cell)
+	var remove := _button("Remove", 0.06, ROSE_INK)
+	remove.name = "RemoveImpact"
+	remove.size_flags_vertical = Control.SIZE_SHRINK_END
+	remove.pressed.connect(_remove_impact.bind(key, outcome_index, row_index))
+	_flex_child(remove, 0.0, 0.0)
+	line.add_child(remove)
+	type_select.size_flags_vertical = Control.SIZE_SHRINK_END
+	line.resized.connect(_flex_fit.bind(line))
+	var needed := UI.wrapped("", 10, AMBER)
+	needed.name = "ImpactNeeded"
+	needed.visible = false
+	column.add_child(needed)
+	var repeated := UI.wrapped("", 10, AMBER)
+	repeated.name = "ImpactRepeated"
+	repeated.visible = false
+	column.add_child(repeated)
+	_editor_refreshers.append(_refresh_impact_row.bind(needed, repeated, key, outcome_index, row_index))
+	return holder
+
+
+func _refresh_impact_row(needed: Label, repeated: Label, key: String, outcome_index: int, row_index: int) -> void:
+	if not is_instance_valid(needed) or not is_instance_valid(repeated):
+		return
+	var problems := impact_problems(key, outcome_index)
+	var problem: Dictionary = problems[row_index] if row_index < problems.size() and problems[row_index] is Dictionary else {}
+	var rows := _impact_rows(key, outcome_index)
+	var type := str(_impact_definition(str((rows[row_index] as Dictionary).get("type", "")) if row_index < rows.size() and rows[row_index] is Dictionary else "").get("type", ""))
+	var missing: PackedStringArray = []
+	for field in list_of(problem.get("missing")):
+		missing.append(impact_field_label(type, str(field)))
+	needed.text = "Still needed: %s. This impact is left out until it is complete." % ", ".join(missing)
+	needed.visible = not missing.is_empty()
+	var twice: PackedStringArray = []
+	for region in list_of(problem.get("repeated")):
+		twice.append(str(region))
+	repeated.text = "Already chosen in another impact: %s" % ", ".join(twice)
+	repeated.visible = not twice.is_empty()
+
+
+func _flex_child(control: Control, basis: float, grow: float) -> void:
+	control.set_meta("flex_basis", basis)
+	control.set_meta("flex_grow", grow)
+	control.size_flags_horizontal = Control.SIZE_FILL
+	if basis > 0.0:
+		control.custom_minimum_size.x = basis
+
+
+func _flex_fit(line: HBoxContainer) -> void:
+	if not is_instance_valid(line):
+		return
+	var children: Array[Control] = []
+	for child in line.get_children():
+		if child is Control and (child as Control).visible:
+			children.append(child as Control)
+	if children.is_empty():
+		return
+	var gap := float(line.get_theme_constant("separation"))
+	var fixed := gap * float(children.size() - 1)
+	var total_grow := 0.0
+	for child in children:
+		var basis := float(child.get_meta("flex_basis", 0.0))
+		fixed += basis if basis > 0.0 else child.get_combined_minimum_size().x
+		total_grow += float(child.get_meta("flex_grow", 0.0))
+	var free := maxf(0.0, line.size.x - fixed)
+	for child in children:
+		var grow := float(child.get_meta("flex_grow", 0.0))
+		var basis := float(child.get_meta("flex_basis", 0.0))
+		if grow <= 0.0 or basis <= 0.0:
+			continue
+		var width := floorf(basis + (free * grow / total_grow if total_grow > 0.0 else 0.0))
+		if absf(child.custom_minimum_size.x - width) >= 1.0:
+			child.custom_minimum_size.x = width
+
+
+func _on_impact_colour(hex: String, key: String, outcome_index: int, row_index: int) -> void:
+	_patch_impact_row(key, outcome_index, row_index, {"color": hex})
+
+
+func _on_impact_text(text: String, key: String, outcome_index: int, row_index: int, field: String) -> void:
+	_patch_impact_row(key, outcome_index, row_index, {field: text})
+
+
+func _on_impact_polity_typed(text: String, edit: LineEdit, key: String, outcome_index: int, row_index: int, field: String) -> void:
+	var polities: Array = _options.get("polities", [])
+	var stored := picker_value(text, polities)
+	_patch_impact_row(key, outcome_index, row_index, {field: stored})
+	var shown := picker_label(stored, polities)
+	if is_instance_valid(edit) and edit.text != shown:
+		edit.text = shown
+		edit.caret_column = shown.length()
+	_on_impact_polity_focus(edit, key, outcome_index, row_index, field)
+
+
+func _on_impact_polity_focus(edit: LineEdit, key: String, outcome_index: int, row_index: int, field: String) -> void:
+	_show_suggest(edit, _options.get("polities", []), field, key, -1, _on_impact_polity_picked.bind(key, outcome_index, row_index, field))
+
+
+func _on_impact_polity_picked(stored: String, key: String, outcome_index: int, row_index: int, field: String) -> void:
+	_patch_impact_row(key, outcome_index, row_index, {field: stored})
+
+
+func _on_impact_polity_blur(edit: LineEdit) -> void:
+	var owner_id := edit.get_instance_id()
+	get_tree().create_timer(0.15).timeout.connect(_hide_suggest_for.bind(owner_id))
+
+
+func _hide_suggest_for(owner_id: int) -> void:
+	if _suggest_owner != null and is_instance_valid(_suggest_owner) and _suggest_owner.get_instance_id() == owner_id:
+		_hide_suggest()
+
+
+func is_picker_open() -> bool:
+	return _picker != null and is_instance_valid(_picker)
+
+
+func picker() -> EditorRegionPicker:
+	return _picker if is_picker_open() else null
+
+
+func _picker_source() -> Dictionary:
+	var overrides: Variant = _world.get("regionOwnershipOverrides")
+	return {
+		"scenarioId": clean(_scenario_id),
+		"customRegions": bool(_world.get("customRegions", false)),
+		"ownerOverrides": overrides if overrides is Dictionary else null,
+	}
+
+
+func _open_text_picker(key: String, outcome_index: int) -> void:
+	var area: TextEdit = _text_areas.get("%s|%d" % [key, outcome_index])
+	var start := -1
+	var finish := -1
+	if area and is_instance_valid(area):
+		if area.has_selection():
+			start = caret_index(area, area.get_selection_from_line(), area.get_selection_from_column())
+			finish = caret_index(area, area.get_selection_to_line(), area.get_selection_to_column())
+		else:
+			start = caret_index(area, area.get_caret_line(), area.get_caret_column())
+			finish = start
+	_open_picker({"kind": "text", "key": key, "outcomeIndex": outcome_index, "start": start, "end": finish})
+
+
+func _picker_initial(target: Dictionary) -> Array:
+	var key := str(target.get("key", ""))
+	if target.get("kind") == "condition":
+		var condition := _condition_at(key, int(target.get("conditionIndex", 0)))
+		var id := clean(condition.get("regionId"))
+		if id.is_empty():
+			return []
+		var named := clean(condition.get("regionName"))
+		return [{"id": id, "name": named if not named.is_empty() else id}]
+	if target.get("kind") == "impact":
+		var rows := _impact_rows(key, int(target.get("outcomeIndex", -1)))
+		var row_index := int(target.get("rowIndex", 0))
+		return list_of((rows[row_index] as Dictionary).get("regions") if row_index < rows.size() and rows[row_index] is Dictionary else null).duplicate(true)
+	return []
+
+
+func _open_picker(target: Dictionary) -> void:
+	if not is_manager_open() or _engine == null:
+		return
+	_close_picker()
+	_hide_suggest()
+	_picker_target = target
+	_picker = EditorRegionPicker.new()
+	_manager.add_child(_picker)
+	_picker.done.connect(_finish_picker)
+	_picker.closed.connect(_close_picker)
+	_picker.open(_engine, _picker_source(), _picker_initial(target), target.get("kind") == "condition")
+
+
+func _close_picker() -> void:
+	if _picker and is_instance_valid(_picker):
+		_picker.queue_free()
+	_picker = null
+
+
+func _finish_picker(regions: Array) -> void:
+	var target := _picker_target
+	_close_picker()
+	if regions.is_empty():
+		return
+	var key := str(target.get("key", ""))
+	var at := _index_of_key(key)
+	if at < 0:
+		return
+	match str(target.get("kind", "")):
+		"condition":
+			var region: Dictionary = regions[0]
+			var condition_index := int(target.get("conditionIndex", 0))
+			var condition := _condition_at(key, condition_index)
+			var patch := {"regionId": str(region.get("id", "")), "regionName": str(region.get("name", ""))}
+			if clean(condition.get("baseOwner")).is_empty() and not clean(region.get("baseOwner")).is_empty():
+				patch["baseOwner"] = clean(region.get("baseOwner"))
+			_patch_condition(at, condition_index, patch)
+			_rebuild_editor(key)
+		"impact":
+			var outcome_index := int(target.get("outcomeIndex", -1))
+			var rows := _impact_rows(key, outcome_index)
+			var row_index := int(target.get("rowIndex", 0))
+			if row_index < rows.size():
+				var picked: Array = []
+				for region in regions:
+					picked.append({"id": str((region as Dictionary).get("id", "")), "name": str((region as Dictionary).get("name", ""))})
+				var row: Dictionary = (rows[row_index] as Dictionary).duplicate() if rows[row_index] is Dictionary else {}
+				row["regions"] = picked
+				rows[row_index] = row
+				_set_impact_rows(key, outcome_index, rows, true)
+		_:
+			await _insert_regions(key, int(target.get("outcomeIndex", -1)), regions, int(target.get("start", -1)), int(target.get("end", -1)))
+
+
+func _insert_regions(key: String, outcome_index: int, regions: Array, start: int, finish: int) -> void:
+	var event := _event_of(key)
+	var holder: Dictionary = event
+	if outcome_index >= 0:
+		var outcomes := list_of(event.get("outcomes"))
+		holder = outcomes[outcome_index] if outcome_index < outcomes.size() and outcomes[outcome_index] is Dictionary else {}
+	var value := str(holder.get("text", "")) if holder.get("text") != null else ""
+	var args := {"value": value, "regions": regions, "start": null, "end": null}
+	if start >= 0:
+		args["start"] = utf16_index(value, start)
+		args["end"] = utf16_index(value, maxi(start, finish))
+	var reply: Dictionary = await _engine.request("editor.rules.insertRegions", args)
+	if not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY:
+		return
+	var result: Dictionary = reply["result"]
+	var next := str(result.get("value", value))
+	var cursor := from_utf16(next, int(result.get("cursor", 0)))
+	var at := _index_of_key(key)
+	if at < 0:
+		return
+	if outcome_index < 0:
+		_patch_event(at, {"text": next.substr(0, 4000)})
+	else:
+		_patch_outcome(key, outcome_index, "text", next)
+	var area: TextEdit = _text_areas.get("%s|%d" % [key, outcome_index])
+	if area and is_instance_valid(area):
+		area.text = next
+		var line := next.substr(0, cursor).count("\n")
+		var column := cursor - (next.substr(0, cursor).rfind("\n") + 1)
+		area.grab_focus()
+		area.set_caret_line(line)
+		area.set_caret_column(column)
