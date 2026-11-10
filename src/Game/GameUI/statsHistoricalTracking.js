@@ -1,5 +1,6 @@
 /*! Open Historia — hot-path helpers for Advanced Stats historical tracking. */
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { readCustomStatNumber } from "../../runtime/statIndexDefinitions.js";
 import { gameDateDayNumber } from "../../runtime/gameDates.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -148,4 +149,29 @@ export const historySamplesInRange = (samples, range = "all") => {
     const day = gameDateDayNumber(sample?.date);
     return Number.isFinite(day) && day >= cutoff;
   });
+};
+
+// A missing observation is not zero, in cards, chart paths, or trend summaries.
+export const historyMetricValue = (sample, key) =>
+  readCustomStatNumber(sample?.[key] ?? sample?.indices?.[key] ?? sample?.customStats?.[key]);
+
+export const historyMetricPath = (samples, key, xFor, yFor) => {
+  let path = "";
+  let started = false;
+  for (const sample of samples) {
+    const value = historyMetricValue(sample, key);
+    if (value === null) {
+      started = false;
+      continue;
+    }
+    path += `${started ? "L" : "M"}${xFor(sample).toFixed(2)},${yFor(value).toFixed(2)} `;
+    started = true;
+  }
+  return path.trim();
+};
+
+export const historyMetricChange = (samples, key) => {
+  const values = samples.map((sample) => historyMetricValue(sample, key)).filter((value) => value !== null);
+  const end = values.length ? values.at(-1) : null;
+  return { end, delta: values.length >= 2 ? end - values[0] : null };
 };

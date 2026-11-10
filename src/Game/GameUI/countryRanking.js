@@ -18,6 +18,7 @@
 //
 // No React here, so node can test it. The tab is in stats.jsx.
 
+import { readCustomStatNumber } from "../../runtime/statIndexDefinitions.js";
 import { middleFundingPerHead } from "../../runtime/militaryFunding.js";
 import { militaryPower } from "../../runtime/militaryPower.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
@@ -135,7 +136,7 @@ export const rankingValue = (metric, world, key, context = {}) => {
     default:
       break;
   }
-  if (clean(metric?.key).startsWith(CUSTOM_PREFIX)) return finite(record(sheet.customStats)[metric.key.slice(CUSTOM_PREFIX.length)]);
+  if (clean(metric?.key).startsWith(CUSTOM_PREFIX)) return readCustomStatNumber(record(sheet.customStats)[metric.key.slice(CUSTOM_PREFIX.length)]);
   return null;
 };
 
