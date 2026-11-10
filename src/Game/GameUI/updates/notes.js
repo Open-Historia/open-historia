@@ -54,6 +54,29 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "why does fighting the war take 60 seconds ... the whole thing about fighting in brest never happened"; "now ive
+    // captured berlin and the game is still talking about things that happened historically"; "make it so the war
+    // engine makes other countries reinforce more" (a player, 2026-11-10). runtime/fronts/brief.js lineGeography,
+    // AI/frontTurn.js frontPlaceTold, frontReportEvents and checkContests, runtime/fronts/engine.js staffCallUp,
+    // runtime/fronts/climate.js yearOf, AI/frontPrethink.js prethinkLengths.
+    id: "2026-11-fronts-and-story-agree",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "The war and its story agree",
+        items: [
+          "The story is told where each front runs and who holds whose land, so a war that has turned against history is told where it is really fought.",
+          "A captured city appears on the map with the event that reports it. Where no event names it, the war reports it itself.",
+          "A region far behind the front line is no longer left contested, and a side can only contest ground it can reach.",
+          "Countries nobody plays call up fresh troops when their line is thin or they lose ground, and most of all when their capital is at stake. A country that has lost its capital fights to take it back.",
+          "Long skips fight their war faster, and while you read, the next period is worked out for the longer skips too.",
+        ],
+      },
+    ],
+  },
+  {
     // "readd the idle diplomacy setting so you can disable it (no more limiting it tho, it should be unlimited if its
     // enabled)" (the owner, 2026-11-09): MAP_SETTING_KEYS.idleDiplomacy in Settings → AI → AI requests, and
     // requestBudget.js UNCAPPED_BACKGROUND_TASKS keeps idle diplomacy out of the background daily cap.
