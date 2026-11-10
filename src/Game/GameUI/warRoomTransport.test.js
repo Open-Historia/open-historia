@@ -32,8 +32,14 @@ test("the rail has a key that carries troops, and with a carrier chosen the map 
   assert.match(rail, /<span data-no-translate>\{carrier\.kind\}<\/span> · \{carrier\.capacity\} formations each · \{carrier\.speed\} km a day/);
   assert.match(rail, /onCarrier\(carrier\.medium\);/);
   assert.match(panel, /carriers=\{carriers\}\s*onCarrier=\{\(medium\) => takeTool\("transport", \{ medium \}\)\}/);
-  // (Nothing by sea without navies, nor by air without air units: the Wars feature.)
-  assert.match(panel, /TRANSPORT_MEDIA\.map\(\(medium\) => \(\{ medium, \.\.\.carrierFor\(medium, year\) \}\)\)\s*\.filter\(\(carrier\) => carrier\.kind && \(carrier\.medium !== "sea" \|\| navies\) && \(carrier\.medium !== "air" \|\| aircraft\)\)/);
+  // (Nothing by a transport the Wars feature switched off, by sea without navies, nor by air without air units:
+  // frontsGate.js transportMediaOn. The player's own navy and air force bar what they have none of.)
+  assert.match(panel, /const media = transportMediaOn\(\);/);
+  assert.match(panel, /const figures = useMemo\(\(\) => transportFiguresOf\(world, game\.country\)/);
+  assert.match(panel, /TRANSPORT_MEDIA\.filter\(\(medium\) => mediaKey\.split\(","\)\.includes\(medium\)\)\s*\.map\(\(medium\) => \(\{ medium, \.\.\.carrierFor\(medium, year\), most: transportLoadMost\(medium, year, figures\), bar: transportBar\(medium, \{ military: figures \}\) \}\)\)\s*\.filter\(\(carrier\) => carrier\.kind\);/);
+  // The year is the one the op reads (runtime/fronts/warRoomOps.js): the scenario's era's.
+  assert.match(panel, /const year = yearInEra\(gameDateYear\(game\.gameDate\), eraSettingOf\(world\)\);/);
+  assert.match(panel, /carrying=\{carrying\}/);
   // The rail says its limit in the number the engine has.
   assert.match(rail, /const LOAD_MOST = (\d+);/);
   assert.equal(Number(/const LOAD_MOST = (\d+);/.exec(rail)[1]), TRANSPORT_LOAD_MOST);
@@ -84,4 +90,27 @@ test("the drawer sends the op, lists the transporters, and shows the way found f
   assert.match(read("../../multiplayer/host/gameHost.js"), /era: eraSettingOf\(world\), media: activeTransportMedia\(\), military: transportFiguresOf\(world, seat\.country\) \}\);/);
   assert.match(writes, /\.\.\.\(result\.transports \? \{ transports: result\.transports \} : null\) \};/);
   assert.match(read("../../multiplayer/host/gameHost.js"), /\.\.\.\(result\.transports \? \{ transports: result\.transports \} : null\) \} \};/);
+});
+
+// "make it so air transports work like train and boat except they can go over anywhere, but they can carry less
+// troops ... if a country has their airforce or navy disabled by being set to zero they cant use those transports"
+// (the owner, 2026-11-09).
+test("the choice of carrier: an airlift says how few it takes, and one the country has no navy or air force for is greyed with why", () => {
+  // Shown, and not to be chosen, with its reason where its numbers would be.
+  assert.match(rail, /const barred = Boolean\(carrier\.bar\);/);
+  assert.match(rail, /disabled=\{barred\}\s*aria-disabled=\{barred\}\s*onClick=\{\(\) => \{\s*if \(barred\) return;/);
+  assert.match(rail, /style=\{\{ \.\.\.keyLook\(false, barred\),/);
+  assert.match(rail, /\{carrier\.bar === "no-navy" && <>You have no navy\.<\/>\}/);
+  assert.match(rail, /\{carrier\.bar === "no-air-force" && <>You have no air force\.<\/>\}/);
+  // By air, the most it takes, and how many of those picked out stay behind.
+  assert.match(rail, /\{!barred && carrier\.medium === "air" && <><span data-no-translate>\{carrier\.kind\}<\/span> · \{carrier\.most\} formations at most · \{carrier\.speed\} km a day<\/>\}/);
+  assert.match(rail, /const fewer = carrier\.medium === "air" && carrier\.most > 0 && selected\.length > carrier\.most;/);
+  assert.match(rail, /\{carrier\.most\} of the \{selected\.length\} go: the rest stay where they are\./);
+  // With every transport switched off there is no Transport key at all.
+  assert.match(rail, /\{carriers\.length > 0 && <RailKey label="Transport"/);
+  // With the tool in hand for an airlift, the hint says where it may go and what it risks.
+  assert.match(rail, /tool === "transport" && carrying === "air" && <>Click the place the \{selected\.length\} picked out are to be flown to: anywhere, enemy land too\. Over enemy ground they can be intercepted\./);
+  assert.match(rail, /tool === "transport" && carrying !== "air" && <>Click the place the \{selected\.length\} picked out are to be carried to\./);
+  // A transporter refused for a switch is told so in the drawer.
+  assert.match(panel, /if \(code === "switched-off"\) return <>this game carries no troops that way<\/>;/);
 });
