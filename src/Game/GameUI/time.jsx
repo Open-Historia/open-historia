@@ -222,10 +222,13 @@ const panelSurface = {
     zIndex: 9998,
 };
 
+// The date bar takes the theme's glass, as the menu button and the session
+// pill beside it do; the HUD's own glass alone stayed all but the default's
+// dark grey under a palette.
 const widgetSurface = {
     alignItems: "center",
     backdropFilter: "var(--oh-hud-blur)",
-    backgroundColor: "var(--oh-hud-bg-strong)",
+    backgroundColor: "var(--oh-ui-glass-pill, var(--oh-hud-bg-strong))",
     border: "1px solid var(--oh-hud-border)",
     borderRadius: "14px",
     boxShadow: "var(--oh-hud-shadow-soft)",
@@ -3980,7 +3983,7 @@ const DateWidget = ({
         aria-label="Events"
         style={{
             ...buttonStyle,
-            color: openPanel === "history" ? "#bfdbfe" : buttonStyle.color,
+            color: openPanel === "history" ? "var(--oh-ui-glass-active-text, #bfdbfe)" : buttonStyle.color,
         }}
         onClick={() => togglePanel("history")}
         onMouseEnter={(event) => {
@@ -4013,7 +4016,7 @@ const DateWidget = ({
             >
             <span
             style={{
-                color: countryButton && countryOpen ? "#bfdbfe" : "rgba(147,197,253,0.88)",
+                color: countryButton && countryOpen ? "var(--oh-ui-glass-active-text, #bfdbfe)" : "var(--oh-ui-accent, rgba(147,197,253,0.88))",
                 fontSize: isMobile ? "0.68rem" : "0.8rem",
                 fontWeight: 700,
                 letterSpacing: "0.05em",

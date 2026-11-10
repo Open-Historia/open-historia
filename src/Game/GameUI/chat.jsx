@@ -5567,8 +5567,12 @@ const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, mapRef, actio
     // so the Search control beside it moves with it. Rostra is there only while
     // the game's social media feature is on (server/gameFeatures.js).
     const dock = useDockGeometry();
+    // The tray takes the theme's glass as the Advisor and country buttons do
+    // (--oh-ui-glass-pill); the HUD's own glass alone was all but the default's
+    // dark grey under a palette, so the buttons were themed and the tray round
+    // them was not (the owner, 2026-11-09).
     return (
-        <div style={{ position: "fixed", bottom: `calc(${DOCK_BOTTOM_REM}rem + ${SAFE_BOTTOM})`, left: `calc(${DOCK_LEFT_REM}rem + ${SAFE_LEFT})`, height: `${DOCK_HEIGHT_REM}rem`, width: dock.width, gap: `${DOCK_GAP_REM}rem`, padding: "0 0.1rem", backgroundColor: "var(--oh-hud-bg)", backdropFilter: "var(--oh-hud-blur)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid var(--oh-hud-border)", boxShadow: "var(--oh-hud-shadow-soft)" }}>
+        <div style={{ position: "fixed", bottom: `calc(${DOCK_BOTTOM_REM}rem + ${SAFE_BOTTOM})`, left: `calc(${DOCK_LEFT_REM}rem + ${SAFE_LEFT})`, height: `${DOCK_HEIGHT_REM}rem`, width: dock.width, gap: `${DOCK_GAP_REM}rem`, padding: "0 0.1rem", backgroundColor: "var(--oh-ui-glass-pill, var(--oh-hud-bg))", backdropFilter: "var(--oh-hud-blur)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid var(--oh-hud-border)", boxShadow: "var(--oh-hud-shadow-soft)" }}>
         <Chat hovered={canHover && hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={() => onTogglePanel("chat")} />
         {/* Projects & Operations is the Actions panel's second tab (actions.jsx);
             the advisor opens it there with actionsTab. */}

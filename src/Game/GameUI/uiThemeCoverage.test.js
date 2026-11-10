@@ -20,7 +20,7 @@ test("Default (Original) is first, preserves authored per-panel styles and clear
   assert.match(selector, /Default \(Original\)/);
   assert.match(selector, /UI_THEME_PRESETS\.map/);
   assert.match(selector, /selectUiTheme\("custom"\)/);
-  assert.match(time, /const widgetSurface = \{[\s\S]*?backgroundColor: "var\(--oh-hud-bg-strong\)"/);
+  assert.match(time, /const widgetSurface = \{[\s\S]*?backgroundColor: "var\(--oh-ui-glass-pill, var\(--oh-hud-bg-strong\)\)"/);
   // The HUD glass is themed; its text and blue/amber/red signals are not.
   assert.match(theme, /"--oh-hud-bg": translucent\(colors\.background,/);
   assert.match(theme, /"--oh-hud-border": /);
@@ -30,6 +30,30 @@ test("Default (Original) is first, preserves authored per-panel styles and clear
   for (const file of ["./settings.jsx", "./main.jsx", "./other.jsx", "./chat.jsx", "./actions.jsx", "./social.jsx", "./MapModeSelector.jsx", "./libraryBar.jsx"]) {
     assert.doesNotMatch(read(file), /: "rgba\(35,35,39,0\.53\)"|"rgba\(59,130,246,0\.16\)"|"rgba\(34,34,37,0\.53\)"/, file);
   }
+});
+
+// "for themes, it themes the buttons themselfs but not the button tray. or the
+// search button"; "it also doesnt theme this" (the date bar) (the owner,
+// 2026-11-09). The HUD's own glass (--oh-hud-bg) is all but the default's dark
+// grey under a palette, so the trays round themed buttons read the theme's
+// glass, the HUD's glass as the fallback: Default is unchanged.
+test("The dock's tray, search, the date bar and the map-mode switch take the theme's glass", () => {
+  assert.match(diplomacy, /const Toolbar = memo\([\s\S]*?backgroundColor: "var\(--oh-ui-glass-pill, var\(--oh-hud-bg\)\)"/, "the dock's tray");
+  const search = read("./search.jsx");
+  assert.match(search, /borderRadius: hasSuggestions \? "0 0 12px 12px" : "12px",[\s\S]*?backgroundColor: "var\(--oh-ui-glass-pill, var\(--oh-hud-bg\)\)"/, "the search button");
+  assert.match(search, /backgroundColor: "var\(--oh-ui-overlay-header, var\(--oh-hud-bg-strong\)\)"/, "search's suggestions");
+  assert.match(search, /index === selectedIndex \? "var\(--oh-ui-glass-hover, rgba\(255,255,255,0\.08\)\)"/);
+  assert.match(time, /color: countryButton && countryOpen \? "var\(--oh-ui-glass-active-text, #bfdbfe\)" : "var\(--oh-ui-accent, rgba\(147,197,253,0\.88\)\)"/, "the date bar's country");
+  assert.match(time, /color: openPanel === "history" \? "var\(--oh-ui-glass-active-text, #bfdbfe\)"/, "the date bar's «");
+  const mapMode = read("./MapModeSelector.jsx");
+  assert.equal((mapMode.match(/background: "var\(--oh-ui-glass-pill, var\(--oh-hud-bg\)\)"/g) || []).length, 2, "the map-mode switch and its legend");
+  for (const [file, text] of [["chat.jsx", diplomacy], ["search.jsx", search], ["time.jsx", time], ["MapModeSelector.jsx", mapMode]]) {
+    assert.doesNotMatch(text, /(?:background|backgroundColor): "var\(--oh-hud-bg(?:-strong)?\)"/, `${file}: no HUD surface left on the bare HUD glass`);
+  }
+  const advisor = read("./advisorDossier.css");
+  assert.match(advisor, /\.oh-advisor-recipient-trigger \{[\s\S]*?border: 1px solid var\(--oh-ui-line, rgba\(141, 194, 222, \.27\)\);/);
+  assert.match(advisor, /\.oh-advisor-contact-select\[aria-current="true"\] \{[\s\S]*?background: var\(--oh-ui-active, rgba\(69, 137, 176, \.17\)\);/);
+  assert.match(advisor, /\.oh-advisor-composer-field \{[\s\S]*?border: 1px solid var\(--oh-ui-line, rgba\(133, 183, 210, \.3\)\);/);
 });
 
 test("Diplomacy list, tabs, unread filter, thread controls and workspace use themed chrome", () => {
