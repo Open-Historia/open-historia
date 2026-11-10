@@ -79,6 +79,13 @@ export const MAP_SETTING_KEYS = {
     // (AI/streamedEvents.js). ON by default; off leaves the skip behind the
     // Timeline panel's spinner.
     liveSkipEvents: "ai_live_skip_events",
+    // Countries writing to the player between time skips (AI/gameplay.js
+    // maybeSendIdleDiplomacy). ON by default — read with
+    // getMapSettingDefaultOn. Off, none is scheduled or sent. The scenario's
+    // own idleDiplomacy feature still applies on top. On, it is outside the
+    // background daily cap (AI/requestBudget.js UNCAPPED_BACKGROUND_TASKS).
+    // Settings → AI → AI requests.
+    idleDiplomacy: "ai_idle_diplomacy",
     // A skip whose player events were refused, or whose player orders got no
     // outcome, is held for the player to retry (AI/playerTurnFailures.js). OFF
     // by default: the skip lands and the orders carry over as overdue.
@@ -160,8 +167,8 @@ export function getMapSetting(key) {
 // A default-on setting CANNOT use getMapSetting above — an absent key reads as
 // "1" !== null, i.e. off — so every consumer of such a key must come through here.
 //
-// lookupFunctions, liveSkipEvents, discordPresence, ambientMusic,
-// soundEffects, seasonsWeather and weatherEffects ship on;
+// lookupFunctions, liveSkipEvents, idleDiplomacy, discordPresence,
+// ambientMusic, soundEffects, seasonsWeather and weatherEffects ship on;
 // limitAiGeneration and chunkLongJumps, which used to, went default-off in the
 // beta.
 const OFF_IN_LOW_MEMORY = new Set([MAP_SETTING_KEYS.weatherEffects]);
@@ -195,6 +202,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
     [MAP_SETTING_KEYS.lookupFunctions]: "AI lookup functions",
     [MAP_SETTING_KEYS.liveSkipEvents]: "Show time skip events as they are written",
+    [MAP_SETTING_KEYS.idleDiplomacy]: "Countries write to me between time skips",
     [MAP_SETTING_KEYS.stopOnPlayerFailures]: "Stop when my events fail",
     [MAP_SETTING_KEYS.discordPresence]: "Show what I am playing on Discord",
     [MAP_SETTING_KEYS.ambientMusic]: "Music",

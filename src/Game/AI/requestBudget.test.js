@@ -20,6 +20,7 @@ import {
     JUMP_REQUEST_CAP,
     REQUEST_BUDGET_KEYS,
     SKIP_SPENDERS,
+    UNCAPPED_BACKGROUND_TASKS,
     backgroundAllowance,
     createJumpBudget,
     createMemoryStorage,
@@ -125,12 +126,27 @@ test("only an answered request is counted as used", () => {
 
 test("background requests are counted inside the day and on their own", () => {
     const { ledger } = setup();
-    ledger.note({ status: 200, kind: BACKGROUND_REQUEST, taskKey: "idleDiplomacy" });
+    ledger.note({ status: 200, kind: BACKGROUND_REQUEST, taskKey: "spyIntercept" });
     ledger.note({ status: 200, taskKey: "jumpForward" });
-    ledger.note({ status: 429, kind: BACKGROUND_REQUEST, taskKey: "idleDiplomacy" });
+    ledger.note({ status: 429, kind: BACKGROUND_REQUEST, taskKey: "spyIntercept" });
     const day = ledger.today();
     assert.equal(day.used, 2);
     assert.equal(day.background, 1);
+});
+
+// "no more limiting it tho, it should be unlimited if its enabled" (the owner,
+// 2026-11-09): idle diplomacy is a background request the cap does not count.
+test("idle diplomacy is counted in the day and under its task, but not against the background cap", () => {
+    const { ledger } = setup();
+    assert.deepEqual(UNCAPPED_BACKGROUND_TASKS, ["idleDiplomacy"]);
+    ledger.note({ status: 200, kind: BACKGROUND_REQUEST, taskKey: "idleDiplomacy" });
+    ledger.note({ status: 200, kind: BACKGROUND_REQUEST, taskKey: "idleDiplomacy" });
+    ledger.note({ status: 429, kind: BACKGROUND_REQUEST, taskKey: "idleDiplomacy" });
+    const day = ledger.today();
+    assert.equal(day.used, 2);
+    assert.equal(day.refused, 1);
+    assert.equal(day.background, 0);
+    assert.deepEqual(day.byTask, { idleDiplomacy: 2 });
 });
 
 test("the day turns over at midnight Pacific, not at local midnight", () => {
@@ -194,6 +210,17 @@ test("what runs in the background stops at the day's fixed cap", () => {
     assert.deepEqual(backgroundAllowance({ settings, ledger }), { allowed: true, reason: "", remaining: 1 });
     ledger.note({ status: 200, kind: BACKGROUND_REQUEST });
     assert.deepEqual(backgroundAllowance({ settings, ledger }), { allowed: false, reason: "cap", remaining: 0 });
+});
+
+test("a day of idle diplomacy leaves the rest of the background its whole cap", () => {
+    const { settings, ledger } = setup();
+    settings.setDailyLimit(10000);
+    for (let request = 0; request < BACKGROUND_DAILY_CAP * 3; request += 1) {
+        ledger.note({ status: 200, kind: BACKGROUND_REQUEST, taskKey: "idleDiplomacy" });
+    }
+    assert.deepEqual(backgroundAllowance({ settings, ledger }), { allowed: true, reason: "", remaining: BACKGROUND_DAILY_CAP });
+    assert.equal(describeDay({ settings, ledger }).background, 0);
+    assert.equal(describeDay({ settings, ledger }).used, BACKGROUND_DAILY_CAP * 3);
 });
 
 test("what runs in the background never spends the last tenth of the day", () => {

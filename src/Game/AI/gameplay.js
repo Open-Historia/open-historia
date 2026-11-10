@@ -519,7 +519,7 @@ import {
   idleDiplomacyPoliticalContextText,
   idleDiplomacySpeakerHasContext,
 } from "./idlePoliticalDiplomacyContext.js";
-import { createIdlePulseBackoff, idlePulseEvent, idlePulseFingerprint, idlePulseUnitOps, keepDetectedEvents, sightingEvent } from "./idlePulse.js";
+import { createIdlePulseBackoff, idlePulseChance, idlePulseEvent, idlePulseFingerprint, idlePulseUnitOps, keepDetectedEvents, sightingEvent } from "./idlePulse.js";
 import {
   advanceInstitutionLifecycleCore,
   applyInstitutionLifecycleImpactBatchCore,
@@ -21447,14 +21447,18 @@ const appendSightingEvent = async (bundle, sighting, unitOps, campaign = "") => 
 
 export const maybeSendIdleDiplomacy = async () => {
   if (idleDiplomacyInFlight || isSimulationBusy()) return null;
-  // Nobody pressed anything, so this is background work (requestBudget.js):
-  // always on, and it stops at the day's fixed cap ("dont remove idle
-  // diplomacy", the owner, 2026-11-07).
-  if (!backgroundAiAllowance().allowed) return null;
   // One cadence, the feature's own (see the comment above idleDiplomacyInFlight),
-  // for the whole pulse: zero when idle diplomacy is off for this game, and then
-  // nothing runs, movement included.
-  const pulseChance = idleDiplomacyChancePerMinute();
+  // for the whole pulse: zero when the player turned "Countries write to me
+  // between time skips" off, or idle diplomacy is off for this game, and then
+  // nothing runs, movement included (idlePulse.js idlePulseChance). Nobody
+  // pressed anything, so its requests are background requests, but the day's
+  // background cap does not stop it and does not count it ("no more limiting
+  // it tho, it should be unlimited if its enabled", the owner, 2026-11-09;
+  // requestBudget.js UNCAPPED_BACKGROUND_TASKS).
+  const pulseChance = idlePulseChance({
+    playerSwitch: getMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy),
+    featureChance: idleDiplomacyChancePerMinute(),
+  });
   if (!(pulseChance > 0)) return null;
   const roll = Math.random();
   if (roll >= pulseChance) return null;

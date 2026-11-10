@@ -186,6 +186,15 @@ test("on: the background keeps no reserve but still stops at its cap; off: both"
     assert.equal(backgroundAllowance({ settings, ledger }).allowed, false);
 });
 
+// Idle diplomacy is outside that cap with or without a limit (2026-11-09).
+test("with or without a limit, idle diplomacy's requests leave the background cap alone", () => {
+    for (const noLimit of [false, true]) {
+        const { settings, ledger } = setup({ [REQUEST_BUDGET_KEYS.noRequestLimit]: noLimit ? "1" : "0", [REQUEST_BUDGET_KEYS.dailyLimit]: "10000" });
+        for (let index = 0; index < BACKGROUND_DAILY_CAP + 5; index += 1) ledger.note({ status: 200, kind: "background", taskKey: "idleDiplomacy" });
+        assert.deepEqual(backgroundAllowance({ settings, ledger }), { allowed: true, reason: "", remaining: BACKGROUND_DAILY_CAP }, `noLimit ${noLimit}`);
+    }
+});
+
 test("the day says whether there is a limit to count against", () => {
     const { settings, ledger } = setup();
     assert.equal(describeDay({ settings, ledger }).noLimit, false);
@@ -222,6 +231,11 @@ test("Settings: the switch first, the daily limit only when it is off, the looku
     assert.ok(at('label="My key has no request limit"') < at("used today"), "the switch at the top");
     assert.ok(at("{!noLimit && (") < at('htmlFor="ai-daily-request-limit"'));
     assert.ok(at("{noLimit && (") < at('label="AI lookup functions"'));
+    // Idle diplomacy's own switch, where Background AI's was (2026-11-09): after
+    // the daily limit, before Advanced, shown whatever the switch above says.
+    assert.ok(at('htmlFor="ai-daily-request-limit"') < at('label="Countries write to me between time skips"'));
+    assert.ok(at('label="Countries write to me between time skips"') < at("{noLimit && ("));
+    assert.match(section, /onToggle=\{\(\) => setMapSetting\(MAP_SETTING_KEYS\.idleDiplomacy, !idleDiplomacyOn\)\}/);
     assert.equal(section.includes('label="Background AI"'), false);
     assert.equal(section.includes("ai-background-daily-cap"), false);
     assert.match(section, /apply\(`My key has no request limit turned \$\{next \? "on" : "off"\}\.`, \(\) => setNoRequestLimit\(next\)\);/);

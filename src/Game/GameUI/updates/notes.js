@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "readd the idle diplomacy setting so you can disable it (no more limiting it tho, it should be unlimited if its
+    // enabled)" (the owner, 2026-11-09): MAP_SETTING_KEYS.idleDiplomacy in Settings → AI → AI requests, and
+    // requestBudget.js UNCAPPED_BACKGROUND_TASKS keeps idle diplomacy out of the background daily cap.
+    id: "2026-11-idle-diplomacy-switch",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Turn off countries writing to you",
+        items: [
+          "Settings → AI → AI requests has a new switch, Countries write to me between time skips. Turn it off and no country writes to you between time skips unless you write first.",
+          "While it is on, countries writing to you no longer count toward the 30 background requests a day, and are no longer stopped by them.",
+        ],
+      },
+    ],
+  },
+  {
     // A world event filed "Not recorded: the game could not tell it was your government's order" (a player, 2026-11):
     // nativeWorldIntegrity.js reads whose choice an event is from its actors, records and operations, never its words.
     // Scripted events: worldDirection.js applyTerritoryTempo, AI/scriptedEventImpacts.js (the fallback's impacts), and
