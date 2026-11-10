@@ -1170,13 +1170,19 @@ const normalizeRegionClaim = (entry) => {
     entry.claimantCode || entry.claimant || entry.byCode || entry.ownerCode || entry.code,
   ));
 
-  if (!regionId || !claimantCode) {
+  const drop = entry.drop === true || entry.drop === "true" || entry.op === "drop" || entry.op === "renounce";
+  // Every claimant's claim on the region withdrawn at once (a settlement, a
+  // country clearing all claims on its land): no claimant needs naming then.
+  const allClaimants = drop && (entry.allClaimants === true || entry.allClaimants === "true");
+
+  if (!regionId || (!claimantCode && !allClaimants)) {
     return null;
   }
 
   return {
+    ...(allClaimants ? { allClaimants: true } : {}),
     claimantCode,
-    drop: entry.drop === true || entry.drop === "true" || entry.op === "drop" || entry.op === "renounce",
+    drop,
     note: normalizeOptionalString(entry.note || entry.reason),
     regionId,
     regionName: normalizeOptionalString(entry.regionName || entry.name),
@@ -5693,6 +5699,14 @@ const applyPolityAndTerritoryImpacts = ({
       .filter(Boolean);
 
     if (claim.drop) {
+      // All of them: what stays is the stripe of an occupation (the lawful
+      // sovereign, while another holds the region), which is no claim.
+      if (claim.allClaimants) {
+        const holder = normalizeOptionalString(world.regionOwnershipOverrides[claim.regionId]);
+        const sovereign = normalizeOptionalString(world.regionSovereigntyOverrides[claim.regionId]);
+        writeRegionClaimants(world, claim.regionId, current.filter((entry) => holder && sovereign && !samePolity(holder, sovereign) && samePolity(entry, sovereign)));
+        continue;
+      }
       writeRegionClaimants(world, claim.regionId, current.filter((entry) => !samePolity(entry, claimant)));
       continue;
     }

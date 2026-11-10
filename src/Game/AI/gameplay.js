@@ -251,6 +251,7 @@ import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../run
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, foldedRegionIndex, matchRegionName, nearestRegionNames, regionsFoldedAs, stripRegionAffixes } from "./regionMatch.js";
 import { marchStoryCapturers } from "./storyMarch.js";
+import { countryClaimWithdrawals } from "./claimsByCountry.js";
 import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
 import { findUnitByRef, newestTwinByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedAreas.js";
@@ -1656,6 +1657,7 @@ const JUMP_LEVERS = [
   "• strikes: a missile launch or a bombing run the event tells of, one line each: side~weapon~from~target~count~shot down. weapon: silo missile | submarine missile | nuclear bomber (these three are nuclear) | missile strike | bombing run. from: where it is launched (city: X, structure: X, unit: X) or blank for the game to pick; target: the place hit; count: how many missiles or aircraft; shot down: how many were intercepted on the way, a number or all | most | half | some | none, which an event telling of interceptions owes. It is drawn on the map and changes nothing itself: what it destroyed or took is the event's other operations. Example: A~missile strike~~city: X~12~some",
   "• groupOps: create founds a group (with its first regions if it holds any), update changes its name, description or colour, take adds regions to its area, release gives them back (all of them when regionIds is empty), dissolve erases it; regions as \"region: <name>\".",
   "• regionClaims: the claimant by full name, and drop true when a claim is given up; the region stays striped until a transfer or a drop settles it.",
+  "  To end claims on a whole country in one entry, never region by region: regionId \"country: <name>\", drop true, and the claimant's full name, or allClaimants true for every claimant's claims and disputes there.",
   "• actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
 ].join("\n");
 
@@ -6251,6 +6253,9 @@ const resolveRegionTransfers = async (containers, world, {
   // known: the whole of that polity's land, or the area of that name
   // (namedAreas.js).
   const countryRefs = new WeakMap();
+  // The claims written "country: <name>": a withdrawal of claims on all of
+  // that country's land (the claims loop below).
+  const claimedCountries = new WeakMap();
   const plainRegionRef = (value) => {
     const raw = normalizeString(value);
     if (!raw || byId.has(raw) || byAliasId.has(raw)) return { text: raw, kind: "", bracket: "" };
@@ -6276,6 +6281,7 @@ const resolveRegionTransfers = async (containers, world, {
     }
     for (const claim of normalizeArray(impacts?.regionClaims)) {
       if (!claim || typeof claim !== "object") continue;
+      if (typeof claim.regionId === "string" && plainRegionRef(claim.regionId).kind === "country") claimedCountries.set(claim, plainRegionRef(claim.regionId).text);
       if (typeof claim.regionId === "string") claim.regionId = plainRegionRef(claim.regionId).text;
       if (typeof claim.regionName === "string") claim.regionName = plainRegionRef(claim.regionName).text;
     }
@@ -7378,6 +7384,26 @@ const resolveRegionTransfers = async (containers, world, {
     if (claims.length === 0) continue;
     const kept = [];
     for (const claim of claims) {
+      // Claims withdrawn from a whole country, "country: <name>" with drop
+      // (one entry, never a list): every region that country holds, as a
+      // transfer's "country: <name>" means it, on which the claimant (or,
+      // with allClaimants, anybody) has a claim or a dispute. "make it so
+      // events can remove all claims on territory on a country" (the owner,
+      // 2026-11-09): a list of regions was as long as the model would write,
+      // about seventy, and the rest stayed claimed.
+      const country = claimedCountries.get(claim) || (claim?.drop === true && !namesARegion(claim?.regionId) && regionsOwnedBy(claim?.regionId).length ? normalizeString(claim?.regionId) : "");
+      if (claim?.drop === true && country) {
+        const everyone = claim.allClaimants === true;
+        const claimantKey = canonicalOwnerKey(toCountryName(claim?.claimantCode)) || regionKey(claim?.claimantCode);
+        const regions = countryClaimWithdrawals(claim, {
+          regions: regionsOwnedBy(country),
+          claimantsOf: (regionId) => normalizeArray(worldState.regionClaimants?.[regionId]),
+          isClaimant: (name) => Boolean(claimantKey) && (canonicalOwnerKey(name) === claimantKey || regionKey(name) === claimantKey),
+        });
+        kept.push(...regions);
+        console.info(`[ai] ${path}.regionClaims: ${everyone ? "every claim" : `${normalizeString(claim?.claimantCode)}'s claims`} on ${country} withdrawn: ${regions.length} region(s).`);
+        continue;
+      }
       if (byId.has(normalizeString(claim?.regionId))) {
         kept.push(claim);
         continue;
