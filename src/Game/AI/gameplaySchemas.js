@@ -134,15 +134,16 @@ const regionTransferSchema = {
 
 const regionClaimSchema = {
   type: "object",
-  description: "One polity's claim on a region it neither holds nor was given.",
+  description: "A polity's claim on land it does not hold.",
   properties: {
     regionId: regionIdSchema,
     regionName: regionNameSchema,
     claimantCode: textSchema("Claiming polity's FULL name (\"Spain\"), never a code."),
     drop: {
       type: "boolean",
-      description: "True to WITHDRAW the claim (renounced, traded away, given up in defeat). Unset asserts it.",
+      description: "True WITHDRAWS it (renounced, traded, lost). Unset asserts it.",
     },
+    allClaimants: { type: "boolean", description: "With drop: everyone's claim goes." },
     note: textSchema("Brief reason."),
   },
   required: ["regionId", "claimantCode"],

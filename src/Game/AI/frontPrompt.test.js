@@ -208,3 +208,13 @@ test("the order lines can be stated elsewhere, and the battlefields keep their r
   assert.equal(battlefieldsOf(pointed), battlefieldsOf(full));
   assert.ok(pointed.length < full.length - 3000);
 });
+
+// "it seems sometimes events to do with war aren't being represented on the map" (a player, 2026-11): his
+// 2003 invasion of a country its invader borders nowhere opened no battlefield, and its answer sent no
+// transporter. Whether or not the engine fought the period first, the block says what such a war needs.
+test("a war whose sides share no border is told it needs a transporter, or troops moved up, before the map moves", () => {
+  for (const period of [null, { battlefields: [], voyages: [{ id: "v1" }], transports: [] }]) {
+    const block = buildFrontsBlock({ battlefields: [], period });
+    assert.match(block, /A war whose sides share no land border opens none by itself: an invasion across a sea or from a third country's soil needs a transporter line in frontOrders, or its troops moved up in unitOps first, and until then only the events' own regionControlOps move its map./);
+  }
+});
