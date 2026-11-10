@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "make them more detailed and look good" (the owner, 2026-11-10, of Rostra's newspaper, scroll and tablet looks):
+    // GameUI/rostraDress.jsx; textures are SVG noise, never a gradient.
+    id: "2026-11-rostra-looks-detailed",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Rostra's looks, in detail",
+        items: [
+          "The newspaper has a masthead and a lead story with a drop cap, printed on newsprint with a fold.",
+          "The scroll is stained parchment, torn at the sides, between turned wooden rolls, with a wax seal.",
+          "The stone tablet is chipped and cracked, with a laurel, names cut in capitals and grooved rules.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it so rostra can be themed as a phone, newspaper, scroll, and a stone tablet selected by the scenario designer in features"
     // (the owner, 2026-11-10): server/gameFeatures.js socialMedia setting "look"; GameUI/rostraLooks.js draws each.
     id: "2026-11-rostra-looks",
