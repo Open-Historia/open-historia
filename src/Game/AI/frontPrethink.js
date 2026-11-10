@@ -23,6 +23,16 @@ const LAST_KEY = "oh:lastSkipDays";
 export const PRETHINK_DELAY_MS = 2500;
 // Where no skip has been made on this device yet: a month.
 export const PRETHINK_DAYS = 30;
+// And then on, while the player still reads, to the Timeline's longer skips: the staff that looks ahead keeps what
+// it decided at each look (runtime/fronts/mind/trained.js), so a longer period thought through after a shorter one
+// thinks only its own later days, and a skip of any of these lengths, or shorter, finds its looks thought through.
+// A world war's 180-day skip, after a month thought through ahead, took 60 seconds; the month after it, 87 (2026-11-10).
+export const PRETHINK_HORIZONS = Object.freeze([30, 90, 180]);
+// The lengths thought through, in turn: the one asked for first, then the longer horizons.
+export const prethinkLengths = (first) => {
+  const days = Number(first) > 0 ? Number(first) : PRETHINK_DAYS;
+  return [days, ...PRETHINK_HORIZONS.filter((horizon) => horizon > days)];
+};
 
 let timer = null;
 let running = null;
@@ -59,8 +69,9 @@ export const stopFrontsPrethink = () => {
   running = null;
 };
 
-// Thinks the next period through, a little from now (anything waiting or under way is called off first).
-export const scheduleFrontsPrethink = ({ delay = PRETHINK_DELAY_MS } = {}) => {
+// Thinks the next period through, a little from now (anything waiting or under way is called off first): as long as
+// `days`, or the last skip made here, and then on to the longer horizons (prethinkLengths).
+export const scheduleFrontsPrethink = ({ delay = PRETHINK_DELAY_MS, days = 0 } = {}) => {
   stopFrontsPrethink();
   if (!mayPrethink()) return;
   timer = setTimeout(async () => {
@@ -69,7 +80,10 @@ export const scheduleFrontsPrethink = ({ delay = PRETHINK_DELAY_MS } = {}) => {
     const controller = new AbortController();
     running = controller;
     try {
-      await prethinkFronts({ days: lastSkipLength(), signal: controller.signal });
+      for (const length of prethinkLengths(Number(days) > 0 ? days : lastSkipLength())) {
+        if (controller.signal.aborted || !mayPrethink()) break;
+        await prethinkFronts({ days: length, signal: controller.signal });
+      }
     } catch (error) {
       if (error?.name !== "AbortError") console.warn("[fronts] the next period could not be thought through ahead of time; the skip will do it.", error);
     } finally {
