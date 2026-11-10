@@ -48,6 +48,7 @@ import {
 import {
   basisActionNote,
   countedNote,
+  dissolutionRefusedNote,
   eventCountNote,
   focusShareNote,
   interventionNote,
@@ -571,7 +572,6 @@ import {
   buildScriptedEventsInstruction,
   buildWorldDirectionDirective,
   dateKey,
-  ensureScriptedEvents,
   firstSkipIncludesScriptedOrigin,
   scriptedBeatsInSpan,
   scriptedBeatsNotAlreadyWritten,
@@ -582,7 +582,12 @@ import {
   normalizeScriptedEventState,
   planScriptedEvents,
 } from "./scriptedEventResolution.js";
-import { buildScriptedImpactsInstruction, ensureScriptedEventsWithImpacts } from "./scriptedEventImpacts.js";
+import {
+  buildScriptedImpactsInstruction,
+  ensureScriptedEventsWithImpacts,
+  resolveFallbackScriptedImpacts,
+  scriptedBeatWrittenNote,
+} from "./scriptedEventImpacts.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
   EMPTY_RESPONSE_BODY_NOTE,
@@ -1192,6 +1197,7 @@ const screenSegmentPayload = (payload, {
     chats,
     analysis,
     agreementUpdates: payload?.agreementUpdates,
+    warUpdates: payload?.warUpdates,
     frontOrders: payload?.frontOrders,
   });
   if (screened.dropped?.length) {
@@ -8267,7 +8273,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   }
   // A dissolution the engine will refuse (gameState.js dissolvedPolityLand):
   // the polity still holds land outright that its event gives to nobody, and
-  // nobody is named who could take it. Said now, with the land by name.
+  // nobody is named who could take it. Said now, with the land by name, and
+  // to the player in a line of their own (dissolutionRefusedNote).
   if (!strict) {
     for (const { impacts, path } of containers) {
       const changes = normalizeArray(impacts?.polityChanges);
@@ -8292,7 +8299,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         if (!kept.length) continue;
         const catalogNames = new Map(normalizeArray(getPrimedScenarioRegionCatalog()).map((region) => [normalizeString(region?.id), normalizeString(region?.name)]));
         const names = kept.map((id) => catalogNames.get(id)).filter(Boolean).slice(0, 4);
-        noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}` + `${code} was not dissolved: the event gives ${kept.length} of its regions${names.length ? ` (${names.join(", ")}${kept.length > names.length ? ", …" : ""})` : ""} to nobody. Give its land to one polity in the same event.`);
+        noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}` + `${code} was not dissolved: the event gives ${kept.length} of its regions${names.length ? ` (${names.join(", ")}${kept.length > names.length ? ", …" : ""})` : ""} to nobody. Give its land to one polity in the same event.`,
+          dissolutionRefusedNote({ polity: code, count: kept.length }, titleAt(path)));
       }
     }
   }
@@ -17278,27 +17286,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
               receiptPlayerNote("datesClamped"),
             );
           }
-          // The map's tempo, an author's ceiling on how many regions change hands
-          // in a period (worldDirection.js): counted in event order, before the
-          // resolver spends anything on entries the period cannot carry. Never a
-          // rejection — the front simply moves this far, and the model is told.
-          if (direction?.territoryTempo > 0) {
-            const tempo = applyTerritoryTempo(candidate?.events, { ceilingPerMonth: direction.territoryTempo, spanDays });
-            if (tempo.withheld > 0) {
-              candidate.events = tempo.events;
-              noteReceipt(
-                draft,
-                "withheld",
-                `${tempo.withheld} territorial change${tempo.withheld === 1 ? " was" : "s were"} withheld: this scenario's map moves no faster than ${Math.round(direction.territoryTempo)} region${Math.round(direction.territoryTempo) === 1 ? "" : "s"} per thirty days (${tempo.allowance} this period), counted in event order. `
-                  + "Carry the rest of that advance into the next period, or write the front as holding.",
-                countedNote(tempo.withheld, "tempoOne", "tempoMany"),
-              );
-            }
-          }
           // The author's scripted events (worldDirection.js): one the answer left
           // out is written by the engine, in the author's words, and the model is
           // told so it carries the consequences. An auto jump that stopped short
-          // owes only the beats up to where it stopped.
+          // owes only the beats up to where it stopped. Before the map's tempo:
+          // the events that tell them are marked, and the tempo leaves them be.
           if (scriptedBeats.length) {
             const stopKey = mode === "auto" ? dateKey(candidate?.stopDate) : null;
             const due = stopKey === null ? scriptedBeats : scriptedBeats.filter((beat) => dateKey(beat.date) <= stopKey);
@@ -17307,7 +17299,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
               candidate.events = scripted.events;
               sortTimelineEventsChronologically(candidate);
               for (const beat of scripted.inserted) {
-                noteReceipt(draft, "adjusted", `The scripted event of ${beat.date} — "${beat.title}" — was not in your answer, so the engine wrote it in the author's words, with no impacts. It is history in this world: its consequences are yours to carry forward.`,
+                noteReceipt(draft, "adjusted", `${scriptedBeatWrittenNote(beat)} It is history in this world: its consequences are yours to carry forward.`,
                   receiptPlayerNote("scriptedBeatWritten", { title: beat.title, date: readableReceiptDate(beat.date) }));
               }
             }
@@ -17322,6 +17314,24 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
                   if (beatIsWritten(requirement.beat, [event], { language: scriptedLanguage })) politicalClaimContext.legacyEvents.add(event);
                 }
               }
+            }
+          }
+          // The map's tempo, an author's ceiling on how many regions change hands
+          // in a period (worldDirection.js): counted in event order, before the
+          // resolver spends anything on entries the period cannot carry. Never a
+          // rejection — the front simply moves this far, and the model is told.
+          // A scripted event's own changes are the author's and never withheld.
+          if (direction?.territoryTempo > 0) {
+            const tempo = applyTerritoryTempo(candidate?.events, { ceilingPerMonth: direction.territoryTempo, spanDays });
+            if (tempo.withheld > 0) {
+              candidate.events = tempo.events;
+              noteReceipt(
+                draft,
+                "withheld",
+                `${tempo.withheld} territorial change${tempo.withheld === 1 ? " was" : "s were"} withheld: this scenario's map moves no faster than ${Math.round(direction.territoryTempo)} region${Math.round(direction.territoryTempo) === 1 ? "" : "s"} per thirty days (${tempo.allowance} this period), counted in event order. `
+                  + "Carry the rest of that advance into the next period, or write the front as holding.",
+                countedNote(tempo.withheld, "tempoOne", "tempoMany"),
+              );
             }
           }
           // The war ledger must see the sanitized impacts, so world changes go first.
@@ -17464,15 +17474,31 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 
       // runJsonTask's deterministic fallback bypasses the candidate validator.
       // Preserve the existing scripted-event guarantee there too: an eligible
-      // authored beat omitted by the fallback is inserted in the author's words.
+      // authored beat omitted by the fallback is inserted in the author's words,
+      // and every fired beat carries the impacts its author attached, resolved
+      // like any event's (validateGeneratedWorldChanges, never strict: there is
+      // no attempt to send back) and so applied with the turn.
       if (segmentGeneration?.source === "fallback" && scriptedCommit.fired.length) {
-        const fallbackScripted = ensureScriptedEvents(payload?.events, scriptedCommit.fired);
+        const fallbackScripted = ensureScriptedEventsWithImpacts(payload?.events, scriptedCommit.fired);
         if (fallbackScripted.inserted.length) {
           payload.events = fallbackScripted.events;
           sortTimelineEventsChronologically(payload);
           for (const beat of fallbackScripted.inserted) {
-            noteReceipt(state.receipt, "adjusted", `The scripted event of ${beat.date} — "${beat.title}" — was not in the fallback answer, so the engine wrote it in the author's words, with no impacts.`,
+            noteReceipt(state.receipt, "adjusted", scriptedBeatWrittenNote(beat, { fallback: true }),
               receiptPlayerNote("scriptedBeatWritten", { title: beat.title, date: readableReceiptDate(beat.date) }));
+          }
+        }
+        const authored = await resolveFallbackScriptedImpacts(payload, bundle.world, {
+          validate: validateGeneratedWorldChanges,
+          receipt: state.receipt,
+          requests: state.requests,
+          actions: bundle.actions,
+          playerCountry: bundle.game.country,
+        });
+        if (authored.error) {
+          console.warn(`[ai] the fallback's scripted events kept their story without their authored impacts: ${authored.error}`);
+          for (const event of authored.events) {
+            noteReceipt(state.receipt, "dropped", `Event "${normalizeString(event?.title)}": the impacts its author attached could not be applied — ${firstComplaintLine(authored.error)}`);
           }
         }
       }

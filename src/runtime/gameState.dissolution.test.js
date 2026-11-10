@@ -97,3 +97,24 @@ test("a dissolution the engine will refuse is told to the next turn, with the la
   assert.match(gameplay, /was not dissolved: the event gives \$\{kept\.length\} of its regions/);
   assert.match(gameplay, /const names = kept\.map\(\(id\) => catalogNames\.get\(id\)\)\.filter\(Boolean\)\.slice\(0, 4\);/);
 });
+
+// Only the model was told: the player saw the polity still on the map and no
+// word of why. The same receipt note now carries the player's own line.
+test("a refused dissolution is told to the player too, by the polity's name, beside its event", async () => {
+  const { readFileSync } = await import("node:fs");
+  const gameplay = readFileSync(new URL("../Game/AI/gameplay.js", import.meta.url), "utf8");
+  assert.match(gameplay, /to nobody\. Give its land to one polity in the same event\.`,\r?\n\s+dissolutionRefusedNote\(\{ polity: code, count: kept\.length \}, titleAt\(path\)\)\);/);
+
+  const { dissolutionRefusedNote } = await import("./receiptPlayerNotes.js");
+  assert.deepEqual(dissolutionRefusedNote({ polity: JUNTA, count: 3 }, "The coup collapses"), {
+    text: `${JUNTA} was not dissolved: 3 of its regions were given to no one.`,
+    event: "The coup collapses",
+  });
+  assert.equal(dissolutionRefusedNote({ polity: JUNTA, count: 1 }).text, `${JUNTA} was not dissolved: 1 of its regions was given to no one.`);
+
+  // And it is what the engine does: the polity stays, with the land it held.
+  const holder = { polityOverrides: { [UNION]: polity(UNION), [JUNTA]: polity(JUNTA) }, regionOwnershipOverrides: { r1: JUNTA, r2: JUNTA, r3: JUNTA } };
+  const kept = applyEventImpactsToWorld({ events: [dissolving([])], world: holder }).world;
+  assert.notEqual(kept.polityOverrides[JUNTA].status, "dissolved");
+  assert.equal(Object.values(kept.regionOwnershipOverrides).filter((owner) => owner === JUNTA).length, 3);
+});

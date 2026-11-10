@@ -58,7 +58,11 @@ test("polity rename re-keys Political Actors and the pre-existing 28k schema gua
 test("PWv2 event mutations preserve endogenous player politics while screening fresh sovereign choices", () => {
   const integrity = read("src/Game/AI/nativeWorldIntegrity.js");
   const agencyTests = read("src/Game/AI/playerAgencyAuthority.test.js");
-  assert.match(integrity, /playerPoliticalActorMutation && eventCrossesFreshSovereignPolicyBoundary\(event\)/);
+  // Which operations are the government's own choice is structured (its
+  // strategy, its behaviour), never read from the event's wording.
+  assert.match(integrity, /SOVEREIGN_CHOICE_POLITICAL_OPS = new Set\(\["set-strategy", "set-behavioral-disposition"\]\)/);
+  assert.match(integrity, /for \(const target of politicalChoiceTargets\(event, resolver\)\)/);
+  assert.doesNotMatch(integrity, /eventCrossesFreshSovereignPolicyBoundary/);
   assert.match(integrity, /politicalActorOps encodes a fresh sovereign-policy choice for the human-controlled polity/);
   assert.match(integrity, /\["player-order", "player-commitment"\]\.includes\(authority\)/);
   assert.match(agencyTests, /politicalActorOps may apply an endogenous canonical political consequence to the human polity/);

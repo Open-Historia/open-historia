@@ -54,6 +54,27 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A world event filed "Not recorded: the game could not tell it was your government's order" (a player, 2026-11):
+    // nativeWorldIntegrity.js reads whose choice an event is from its actors, records and operations, never its words.
+    // Scripted events: worldDirection.js applyTerritoryTempo, AI/scriptedEventImpacts.js (the fallback's impacts), and
+    // a refused dissolution in the receipt (receiptPlayerNotes.js dissolutionRefusedNote).
+    id: "2026-11-world-events-and-scripted-beats",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "World events stay, scripted events take effect",
+        items: [
+          "A world event that mentions your country is no longer thrown out as a decision of your government's. Only an event that has your country act is checked against your orders.",
+          "A scripted event's map changes happen in full, even in a scenario that limits how fast the map may change.",
+          "When a time skip falls back to stand-in events, a scripted event still makes the changes its author attached.",
+          "When a country cannot be dissolved because its land was given to no one, the time skip's notes say so.",
+        ],
+      },
+    ],
+  },
+  {
     // "why does it write all the events now before giving them to you instead of each event appearing as its written" (the owner,
     // 2026-11-10): AI/geminiAnswer.js asks a Gemini skip's lookups first and its answer as streamed text.
     id: "2026-11-gemini-live-events",
