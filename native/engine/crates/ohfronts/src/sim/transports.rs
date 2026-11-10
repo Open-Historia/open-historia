@@ -30,15 +30,20 @@ pub struct Carrier {
     pub kind: &'static str,
     pub speed: f64,
     pub capacity: f64,
+    pub most: Option<f64>,
 }
 
 const fn carrier(since: f64, kind: &'static str, speed: f64, capacity: f64) -> Carrier {
-    Carrier { since, kind, speed, capacity }
+    Carrier { since, kind, speed, capacity, most: None }
+}
+
+const fn airlift(since: f64, kind: &'static str, speed: f64, capacity: f64, most: f64) -> Carrier {
+    Carrier { since, kind, speed, capacity, most: Some(most) }
 }
 
 pub const CARRIERS_SEA: [Carrier; 3] = [carrier(1940.0, "troop convoy", 720.0, 6.0), carrier(1850.0, "troopships", 480.0, 5.0), carrier(f64::NEG_INFINITY, "transport fleet", 190.0, 3.0)];
 pub const CARRIERS_LAND: [Carrier; 3] = [carrier(1920.0, "troop trains", 800.0, 4.0), carrier(1840.0, "troop trains", 480.0, 4.0), carrier(f64::NEG_INFINITY, "wagon train", 35.0, 2.0)];
-pub const CARRIERS_AIR: [Carrier; 2] = [carrier(1960.0, "transport aircraft", 15000.0, 2.0), carrier(1936.0, "transport aircraft", 5500.0, 1.0)];
+pub const CARRIERS_AIR: [Carrier; 2] = [airlift(1960.0, "transport aircraft", 15000.0, 2.0, 6.0), airlift(1936.0, "transport aircraft", 5500.0, 1.0, 3.0)];
 
 fn fold(value: &Val) -> String {
     clean(value, 120).to_lowercase()
@@ -64,6 +69,58 @@ pub fn carrier_for(medium: &str, year: Option<f64>) -> Option<Carrier> {
         _ => 2000.0,
     };
     rows.iter().find(|row| when >= row.since).copied()
+}
+
+pub const TRANSPORT_BARS: [&str; 3] = ["switched-off", "no-navy", "no-air-force"];
+
+pub fn figure_of(military: &Val, arm: &str) -> Option<f64> {
+    let value = military.get(arm);
+    match value {
+        Val::Undef | Val::Null => None,
+        Val::Str(text) if text.is_empty() => None,
+        other => {
+            let number = js::to_number(other);
+            if number.is_finite() {
+                Some(number)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+pub fn transport_bar(medium: &str, media: Option<&[String]>, military: &Val) -> &'static str {
+    if let Some(media) = media {
+        if !media.iter().any(|known| known == medium) {
+            return "switched-off";
+        }
+    }
+    if medium == "sea" && figure_of(military, "sea").is_some_and(|figure| figure <= 0.0) {
+        return "no-navy";
+    }
+    if medium == "air" && figure_of(military, "air").is_some_and(|figure| figure <= 0.0) {
+        return "no-air-force";
+    }
+    ""
+}
+
+pub const AIRLIFT_FIGURE_USUAL: f64 = 50.0;
+
+pub fn airlift_most(year: Option<f64>, military: &Val) -> f64 {
+    let row = carrier_for("air", year).unwrap_or(CARRIERS_AIR[CARRIERS_AIR.len() - 1]);
+    let air = figure_of(military, "air").unwrap_or(AIRLIFT_FIGURE_USUAL);
+    if !(air > 0.0) {
+        return 0.0;
+    }
+    clamp(jsmath::round((row.most.unwrap_or(f64::NAN) * jsmath::min(100.0, air)) / AIRLIFT_FIGURE_USUAL), 1.0, TRANSPORT_LOAD_MOST)
+}
+
+pub fn transport_load_most(medium: &str, year: Option<f64>, military: &Val) -> f64 {
+    if medium == "air" {
+        airlift_most(year, military)
+    } else {
+        TRANSPORT_LOAD_MOST
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -766,6 +823,161 @@ pub fn struck(transport: &Transport, draw: f64, date: &str) -> (Transport, f64) 
     } else {
         (next, lost)
     }
+}
+
+pub const AIRLIFT_ARM_FIND: [f64; 4] = [0.0, 0.0, 0.2, 0.3];
+pub const AIRLIFT_ARM_WORTH_MOST: f64 = 1.5;
+pub const AIRLIFT_LOOK_KM: f64 = 40.0;
+pub const AIRLIFT_LOOKS_MOST: f64 = 160.0;
+pub const AIR_FIND: [f64; 4] = [0.0, 0.0, 0.6, 0.85];
+pub const INTERCEPTORS_MOST: usize = 3;
+
+pub fn stretch_of(way: &[[f64; 2]], from_km: f64, to_km: f64, surface: Surface) -> Vec<[f64; 2]> {
+    let from = jsmath::max(0.0, js::or_zero(from_km));
+    let to = jsmath::max(from, js::or_zero(to_km));
+    let parts = clamp(((to - from) / AIRLIFT_LOOK_KM).ceil(), 1.0, AIRLIFT_LOOKS_MOST - 1.0);
+    let mut points = Vec::new();
+    let mut part = 0.0;
+    while part <= parts {
+        if let Some(place) = place_along(way, from + ((to - from) * part) / parts, surface) {
+            points.push([round3(place.lng), round3(place.lat)]);
+        }
+        part += 1.0;
+    }
+    points
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Finder {
+    pub by: String,
+    pub with: String,
+    pub at: [f64; 2],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Intercepts {
+    pub over: Vec<String>,
+    pub found: Vec<Finder>,
+}
+
+pub struct Airlift<'a> {
+    pub over: &'a [[f64; 2]],
+    pub holder_at: &'a dyn Fn(f64, f64) -> Val,
+    pub enemy: &'a dyn Fn(&str) -> bool,
+    pub units: &'a [Val],
+    pub era: Val,
+    pub worth_of: &'a dyn Fn(&str) -> Val,
+    pub roll: &'a dyn Fn(&str) -> f64,
+    pub surface: Surface,
+}
+
+fn of_era(table: &[f64; 4], era: &Val) -> f64 {
+    match era {
+        Val::Num(n) if *n >= 0.0 && n.fract() == 0.0 && (*n as usize) < table.len() => table[*n as usize],
+        Val::Str(text) => text.parse::<usize>().ok().filter(|_| js::to_number(era).fract() == 0.0).and_then(|at| table.get(at).copied()).unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+pub fn airlift_intercepts(owner: &str, ask: Airlift) -> Intercepts {
+    let mut hostile: Vec<([f64; 2], String)> = Vec::new();
+    let mut holders: Vec<String> = Vec::new();
+    let owner_key = fold(&Val::str(owner));
+    for point in ask.over {
+        let name = clean(&(ask.holder_at)(point[0], point[1]), 120);
+        if name.is_empty() || fold(&Val::str(&name)) == owner_key || !(ask.enemy)(&name) {
+            continue;
+        }
+        if !holders.iter().any(|known| fold(&Val::str(known)) == fold(&Val::str(&name))) {
+            holders.push(name.clone());
+        }
+        hostile.push((*point, name));
+    }
+    if hostile.is_empty() {
+        return Intercepts { over: Vec::new(), found: Vec::new() };
+    }
+    let reach = of_era(&super::air::AIR_REACH_KM, &ask.era);
+    let find = of_era(&AIR_FIND, &ask.era);
+    let worth = |name: &str| jsmath::max(0.0, js::or_zero(js::to_number(&(ask.worth_of)(name))));
+    let mut flying: Vec<String> = Vec::new();
+    #[derive(Clone)]
+    struct Rising<'u> {
+        unit: &'u Val,
+        owner: String,
+        km: f64,
+        at: [f64; 2],
+    }
+    let mut rising: Vec<Rising> = Vec::new();
+    for unit in ask.units {
+        let owner = clean(unit.get("ownerCode"), 120);
+        let lng = js::to_number(unit.get("lng"));
+        let lat = js::to_number(unit.get("lat"));
+        if fold(unit.get("type")) != "air" || owner.is_empty() || fold(unit.get("status")) == "pending" || !lng.is_finite() || !lat.is_finite() {
+            continue;
+        }
+        let key = fold(&Val::str(&owner));
+        if !flying.contains(&key) {
+            flying.push(key);
+        }
+        if !(reach > 0.0) || !(ask.enemy)(&owner) || !(js::or_zero(js::to_number(unit.get("strength"))) >= 1.0) || !(worth(&owner) > 0.0) {
+            continue;
+        }
+        let mut nearest: Option<(f64, [f64; 2])> = None;
+        for (point, _) in &hostile {
+            let km = km_between(lng, lat, point[0], point[1], ask.surface);
+            if nearest.is_none_or(|(known, _)| km < known) {
+                nearest = Some((km, *point));
+            }
+        }
+        if let Some((km, at)) = nearest {
+            if km <= reach {
+                rising.push(Rising { unit, owner, km, at });
+            }
+        }
+    }
+    let id_of = |unit: &Val| {
+        let id = clean(unit.get("id"), 120);
+        if id.is_empty() {
+            clean(unit.get("name"), 120)
+        } else {
+            id
+        }
+    };
+    js::stable_sort_by(&mut rising, |a, b| {
+        let by = a.km - b.km;
+        if by != 0.0 && !by.is_nan() {
+            return by;
+        }
+        match js::compare_units(&id_of(a.unit), &id_of(b.unit)) {
+            std::cmp::Ordering::Less => -1.0,
+            std::cmp::Ordering::Greater => 1.0,
+            std::cmp::Ordering::Equal => 0.0,
+        }
+    });
+    let mut found: Vec<Finder> = Vec::new();
+    for entry in &rising {
+        if found.len() >= INTERCEPTORS_MOST {
+            break;
+        }
+        if (ask.roll)(&format!("find|{}", id_of(entry.unit))) < find {
+            found.push(Finder { by: entry.owner.clone(), with: clean(entry.unit.get("name"), 120), at: entry.at });
+        }
+    }
+    if found.is_empty() {
+        for name in &holders {
+            let key = fold(&Val::str(name));
+            if flying.contains(&key) {
+                continue;
+            }
+            let chance = of_era(&AIRLIFT_ARM_FIND, &ask.era) * jsmath::min(AIRLIFT_ARM_WORTH_MOST, worth(name));
+            if chance > 0.0 && (ask.roll)(&format!("arm|{key}")) < chance {
+                let at = hostile.iter().find(|(_, held)| fold(&Val::str(held)) == key).map(|(point, _)| *point).unwrap_or([f64::NAN, f64::NAN]);
+                found.push(Finder { by: name.clone(), with: String::new(), at });
+                break;
+            }
+        }
+    }
+    Intercepts { over: holders, found }
 }
 
 pub fn transport_title(transport: &Transport) -> String {

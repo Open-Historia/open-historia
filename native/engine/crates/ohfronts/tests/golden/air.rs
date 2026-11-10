@@ -65,6 +65,18 @@ pub fn wings_val(run: &Run) -> Val {
     }
 }
 
+pub fn flying_alive(value: &Val) -> Vec<String> {
+    let mut alive = Vec::new();
+    for side in 0..2 {
+        for wing in value.get("flying").at(side).array_or_empty() {
+            if wing.get("strength").num() > 0.0 {
+                alive.push(wing.get("id").string_or_empty());
+            }
+        }
+    }
+    alive
+}
+
 pub fn battle_wings_of(value: &Val) -> Option<BattleWings> {
     if !value.is_object() {
         return None;
@@ -226,7 +238,8 @@ fn air_matches_js() {
             ("skyHeld", &|case| {
                 let run = bare_run();
                 let battle = air_battle(&run, case.arg(0));
-                let got = match sky_held(&battle) {
+                let alive = flying_alive(case.arg(0).get("wings"));
+                let got = match sky_held(&battle, &|id| alive.iter().any(|known| known == id)) {
                     Some(held) => {
                         let mut out = Obj::new();
                         out.set("holds", num(held.holds as f64));

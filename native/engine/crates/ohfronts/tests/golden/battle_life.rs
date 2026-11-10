@@ -57,6 +57,9 @@ impl Hooks for Called {
     fn is_group(&self, name: &str) -> Val {
         self.find("isGroup", name)
     }
+    fn group_owner_of(&self, name: &str) -> Val {
+        self.find("groupOwnerOf", name)
+    }
 }
 
 fn hooked(case: &Case, at: usize) -> Box<Called> {
@@ -72,7 +75,9 @@ fn input_of(case: &Case, at: usize, given: &Val) -> Val {
     if let Some(calls) = case.calls(&format!("{at}.groupOf")) {
         for (args, result) in calls {
             if let Some(Val::Str(id)) = args.first() {
-                areas.set(id, result.clone());
+                if areas.get(id).is_none() {
+                    areas.set(id, result.clone());
+                }
             }
         }
     }
@@ -328,13 +333,14 @@ fn battle_val(battle: &Battle) -> Val {
         ("seed", text(&battle.seed)),
         ("even", Val::Bool(battle.even)),
         ("lineKm", num(battle.line_km)),
+        ("mobilised", battle.mobilised.as_ref().map(|dates| list(dates.iter().map(|date| text(date)).collect())).unwrap_or(Val::Undef)),
         ("field", Val::obj([("holders", u8s(field.holders.clone())), ("phi", typed_f64(&field.phi)), ("play", u8s(field.play.clone())), ("cols", num(field.cols as f64)), ("rows", num(field.rows as f64))])),
     ])
 }
 
-const LOAD_KEYS: [&str; 44] = [
+const LOAD_KEYS: [&str; 45] = [
     "name", "warId", "status", "sides", "gone", "openedDate", "openedDay", "fresh", "served", "shown", "regionSide", "homeSide", "homes", "iceSide", "edge", "short", "worth", "named", "pool", "base", "quality", "effort", "mind", "orders", "halts", "anchors", "pockets", "log", "logFrom", "quiet",
-    "away", "sentHome", "generals", "talk", "swarms", "plans", "deploy", "staffPlans", "chronicle", "levy", "seed", "even", "lineKm", "field",
+    "away", "sentHome", "generals", "talk", "swarms", "plans", "deploy", "staffPlans", "chronicle", "levy", "seed", "even", "lineKm", "field", "mobilised",
 ];
 
 fn battle_like(battle: &Battle, want: &Val) -> Result<(), String> {
@@ -435,6 +441,9 @@ pub fn save_battle_check(case: &Case) -> Option<Result<(), String>> {
     }
     let finish = case.calls("0.recorder.finish");
     battle.replay = if plain.get("replay").is_nullish() { finish.and_then(|calls| calls.first()).map(|(_, result)| result.clone()) } else { Some(plain.get("replay").clone()) };
+    if battle.replay.is_none() {
+        battle.replay = case.result.as_ref().map(|result| result.get("replay").clone());
+    }
     if let Some(calls) = finish {
         if let Some((args, _)) = calls.first() {
             let asked = Val::obj([("date", run.input.get("fromDate").clone()), ("days", case.arg(2).clone())]);

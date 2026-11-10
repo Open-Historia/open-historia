@@ -44,6 +44,9 @@ pub trait Hooks {
     fn people_of(&self, _name: &str) -> Val {
         Val::Undef
     }
+    fn group_owner_of(&self, _name: &str) -> Val {
+        Val::Undef
+    }
     fn collate(&self, _a: &str, _b: &str) -> Option<f64> {
         None
     }
@@ -208,6 +211,8 @@ pub struct Run {
     pub land_regions: Option<Rc<Vec<Val>>>,
     pub captures_refused: Vec<String>,
     pub spare: Option<Battle>,
+    pub staff_calls: Vec<Val>,
+    pub forces: OrdMap<String, (String, String)>,
     dated: bool,
     from_date: String,
     controller: OrdMap<String, String>,
@@ -280,6 +285,8 @@ pub fn create_run(input: Val, hooks: Box<dyn Hooks>) -> Run {
         land_regions: None,
         captures_refused: Vec::new(),
         spare: None,
+        staff_calls: Vec::new(),
+        forces: OrdMap::new(),
         dated,
         from_date,
         controller: OrdMap::new(),
@@ -375,7 +382,18 @@ impl Run {
     }
 
     pub fn is_group(&self, name: &str) -> bool {
-        self.hooks.is_group(name).is_true()
+        self.forces.has(&fold_text(name)) || self.hooks.is_group(name).is_true()
+    }
+
+    pub fn group_owner_of(&self, name: &str) -> String {
+        match self.forces.get(&fold_text(name)) {
+            Some((_, owner)) => owner.clone(),
+            None => clean(&self.hooks.group_owner_of(name), 120),
+        }
+    }
+
+    pub fn found_force(&mut self, name: &str, owner: &str) {
+        self.forces.set(fold_text(name), (clean_text(name, 120), clean_text(owner, 120)));
     }
 
     pub fn strength_of(&self, name: &str) -> f64 {
@@ -516,6 +534,8 @@ impl Run {
             land_regions: self.land_regions.clone(),
             captures_refused: Vec::new(),
             spare: None,
+            staff_calls: Vec::new(),
+            forces: self.forces.clone(),
             dated: self.dated,
             from_date: self.from_date.clone(),
             controller: self.controller.clone(),

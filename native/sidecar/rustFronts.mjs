@@ -9,7 +9,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 export const FRONTS_HOST = process.platform === "win32" ? "ohfronts-host.exe" : "ohfronts-host";
 export const FRONTS_HOST_DIR = "ohfronts";
-export const READERS = Object.freeze(["controllerOf", "sovereignOf", "isGroup", "strengthOf", "shortageOf", "militaryOf", "musterOf", "peopleOf"]);
+export const READERS = Object.freeze(["controllerOf", "sovereignOf", "isGroup", "strengthOf", "shortageOf", "militaryOf", "musterOf", "peopleOf", "groupOwnerOf"]);
 const BY_REGION = ["controllerOf", "sovereignOf"];
 const LEFT_OUT = new Set([...READERS, "staffPolicy", "rehearsers", "arenas"]);
 const SLICE_MS = 100;
