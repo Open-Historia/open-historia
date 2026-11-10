@@ -173,6 +173,9 @@ test("the block tells a period that was fought as it leaves the battlefield, by 
   assert.match(lines[1], /write no unitOps for their sides' land forces and no regionControlOps for their regions/);
   assert.match(lines[2], /^Tell the war\. A battlefield where ground changed hands is among the first things this period is about, whoever is fighting on it: give it at least three events of this answer/);
   assert.match(block, /Nothing in any event goes against an account: a place it does not say fell did not fall/);
+  // A war gone otherwise than real history's is told where its account has it, and its events are tied to it (2026-11-10).
+  assert.match(block, /Where this war has gone otherwise than real history's, its account is the war: tell it at the places the account names \(its Line, the regions the line runs through, what is Occupied\), on the dates it gives, and none of real history's campaigns, sieges or offensives of these dates that it does not give\./);
+  assert.match(block, /Each event that tells a battlefield's fighting carries its war's warId, as \[Wars\] lists it, and its combatants, a member of each side/);
   assert.ok(lines.includes("battlefield~side~order~sector~eventNumbers~objective~result~effort"));
   assert.match(block, /An order written here is for what comes NEXT: it is put to the troops as this period ends and carried out in the one after/);
   assert.match(block, /Only on a battlefield that first opens in this answer \(a war begun here\) is an order carried out from its event's date/);

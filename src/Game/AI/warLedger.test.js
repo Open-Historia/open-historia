@@ -244,6 +244,30 @@ test("hard combat without a canonical war is rejected", () => {
   assert.match(validateWarLedgerPayload(candidate, { world }), /has no event\.warId/);
 });
 
+// A long skip tagged its battles with the war they were in and named nobody fighting: every one lost its war
+// ("hard combat has fewer than two explicit combatants", a world war's 90 days, 2026-11-10). The war says who.
+test("fighting tagged with a war and naming no combatants is that war's, its sides fighting", () => {
+  const warWorld = {
+    ...world,
+    wars: [{ id: "war-france-germany-1914", status: "active", sideA: ["Germany", "Austria-Hungary"], sideB: ["France"], startedDate: "1914-08-03" }],
+  };
+  const candidate = {
+    events: [
+      { id: "e1", date: "1914-09-06", title: "Battle on the Marne", description: "French and German armies clash along the river in heavy fighting.", kind: "military", warId: "war-france-germany-1914" },
+      { id: "e2", date: "1914-09-08", title: "Fighting at the forts", description: "French and German armies clash at the forts in heavy fighting.", kind: "military", warId: "war-france-germany-1914", combatants: ["France"] },
+      { id: "e3", date: "1914-09-09", title: "Raid on a depot", description: "Heavy fighting breaks out at a depot.", kind: "military", warId: "war-elsewhere-1914" },
+    ],
+    warUpdates: "",
+  };
+  const repair = reconcileCombatWarState(candidate, { world: warWorld });
+  assert.deepEqual(candidate.events[0].combatants, ["Germany", "France"]);
+  assert.deepEqual(candidate.events[1].combatants, ["Germany", "France"], "the side it named, and the other side's first");
+  assert.equal(candidate.events[0].warId, "war-france-germany-1914");
+  assert.ok(!repair.unresolved.some((entry) => entry.index < 2), "neither is unbound");
+  // A war nobody holds is still nobody's to guess.
+  assert.equal(candidate.events[2].combatants, undefined);
+});
+
 test("reconciliation binds unlabelled combat to the one matching active war", () => {
   const warWorld = {
     ...world,
@@ -866,6 +890,8 @@ test("the skip is told that a country pulled out of a war leaves it, and that hi
   assert.doesNotMatch(gameplay, /The battle or surrender that ends a war carries its end record/);
   assert.match(gameplay, /History yields to this game's record: a war the ledger shows ended, or never opened, is fought by nobody/);
   assert.match(gameplay, /Events follow the record, not the history: no fighting in a war that ended here, and no siege or offensive where the game's lines do not put one\./);
+  // And a war that has gone otherwise is told where the game has it (a player crushing Germany from Berlin was told of real 1941, 2026-11-10).
+  assert.match(gameplay, /no campaign, siege, offensive or battle that real history had at this date is fought unless an account or the map puts fighting there, and a side whose capital or heartland its enemy holds is losing that war, whatever real history says of it\./);
 });
 
 // An end told by an event with no date: compareGameDates(date, "") is -1, so every later battle read as fought
