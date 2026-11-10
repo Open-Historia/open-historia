@@ -102,7 +102,7 @@ const orderLinesFor = (media = TRANSPORT_MEDIA_ALL) => [
   ...transportOrderLines(media),
   "A missile launch or a bombing run is not a front order: it goes in the impacts.strikes of the event that tells of it (see the levers), war or no war.",
   "Every war on the map is fought this way, between countries nobody plays as much as any other: when the story has two of them go to war, open it (its warUpdates record, or an order to attack across their border at effort major or total) and give each side its orders when it opens and whenever the story changes what that side does there.",
-  "A side nobody plays that you give no order is not idle. Its own staff decides for it, by how strong it stands against its enemy and whether it began the war: a general advance where it is much the stronger, an attack on one stretch of the line where it has the edge, holding at even odds, digging in where it is much the weaker. What it decided is among the standing orders shown. Your line for that side replaces it, and stands.",
+  "A side nobody plays that you give no order is not idle. Its own staff decides for it, by how strong it stands against its enemy and whether it began the war: a general advance where it is much the stronger, an attack on one stretch of the line where it has the edge, holding at even odds, digging in where it is much the weaker. What it decided is among the standing orders shown. Your line for that side replaces it, and stands. Its staff also calls up fresh formations when its line is thin, when it loses ground, and most when its capital or heartland is at stake, as far as its men, supplies and war weariness allow; an account tells when it did.",
   "A standing order shown as (the scenario's) is what the scenario's author made that front: a line dug in, a line held, a line attacked along. It stands until an event of the story changes what that side does there. An order to attack against it is carried out only when it carries the number of the event in which the side goes over to the attack; with no event it is ignored, and a quiet period is no reason to end it. The side's own staff leaves it alone.",
 ];
 
@@ -275,6 +275,8 @@ const NEWS_WORDS = {
   reinforced: (who, at) => `${who} was reinforced at ${at}`,
   // More troops brought to a side's line by an order (a draft, reinforcements sent): `at` says how many and where.
   drafted: (who, at) => `${who} brought up ${at}`,
+  // Fresh troops a side nobody plays called up on its own staff's decision (runtime/fronts/engine.js staffCallUp).
+  mobilised: (who, at) => `${who} called up ${at}, on its own staff's decision`,
   city: (who, at) => `${who} took ${at}`,
   taken: (who, at) => `${who} took ${at}`,
   destroyed: (who, at) => `${who} destroyed ${at}`,
@@ -297,7 +299,7 @@ const newsWeight = (entry) => {
   if (entry.k === "invaded" || entry.k === "attacked") return 7e9;
   if (entry.k === "withdrew" || entry.k === "returned") return 5.5e9;
   if (entry.k === "landed") return 6.5e9;
-  if (entry.k === "reinforced" || entry.k === "drafted") return 2.2e9;
+  if (entry.k === "reinforced" || entry.k === "drafted" || entry.k === "mobilised") return 2.2e9;
   const size = Math.min(9e8, Math.max(0, Number(entry.size) || 0));
   if (entry.k === "city") return entry.capital ? 6e9 : size >= LARGE_TOWN ? 4e9 + size : 2e9 + size;
   if (entry.k === "breached") return 3.5e9;

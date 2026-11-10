@@ -72,6 +72,8 @@ import {
   POOL_PER_TROOP,
   STAFF_MARK,
   MIND_MARK,
+  STAFF_CALL_UP_CEILING,
+  STAFF_CALL_UP_DAYS,
   STAFF_REVIEW_DAYS,
   STANDING_QUIET_DAYS,
   TROOPS_PER_STRENGTH,
@@ -90,7 +92,7 @@ import { draw, formationsLeft, manpowerReport, menOf, menPerFormation, partLeft,
 import { applyOrder, assignOrder, fallBackOverland, giveWay, landCarried, putAshore, readSieges, setStandingOrder, standingOf } from "./orders.js";
 import { foldBattlefieldName, isWarIdName, normalizeBattlefields } from "./record.js";
 import { authoredName } from "./scenarioFronts.js";
-import { breakthroughAnswer, sideIsPlayed, staffDecision, staffMayOrder, staffStanding } from "./staff.js";
+import { breakthroughAnswer, callUpNeed, sideIsPlayed, staffDecision, staffMayOrder, staffStanding } from "./staff.js";
 import { findPockets } from "./supply.js";
 import { SWARM_FORM, gatherNewcomers } from "./swarms.js";
 import { EMBARK_PORTS_MOST, TRANSPORT_ENDED, TRANSPORT_START_FAILS, airliftIntercepts, boundFor, departuresFor, interceptionOf, loadOf, moveOn, normalizeTransports, setOut, stretchOf, struck, transportBar, transportChance, transportLoadMost } from "./transports.js";
@@ -1155,7 +1157,8 @@ const reinforceOnFront = (run, battle, moment, day) => {
     : moment.deployed && onLine ? "on its deployment line"
       : battle.home ? "round its cities"
       : whole ? "along its whole line" : `in the ${sector.word ?? clean(moment.sector)}`;
-  battle.log.push({ d: run.dateOf(day), k: "drafted", s: side, at: `${count} fresh formations ${where}`, n: count });
+  // (Called up by its own staff, it says so: staffCallUp.)
+  battle.log.push({ d: run.dateOf(day), k: moment.staff ? "mobilised" : "drafted", s: side, at: `${count} fresh formations ${where}`, n: count });
   battle.quiet = 0;
   battle.touched = true;
   battle.planKey = "";
@@ -2700,6 +2703,40 @@ function* askOwnStaff(policy, battle, side, context, run) {
 // STAFF_REVIEW_DAYS after. Before the day is fought, and after whatever the
 // story ordered for that day or before it: an order of the story's is left
 // alone, and the staff's own is replaced only when it would decide otherwise.
+// A STAFF CALLS UP TROOPS (constants.js STAFF_CALL_UP_*): a side nobody plays, at most once in
+// STAFF_CALL_UP_DAYS, drafts from its first country's men what its need calls for (staff.js callUpNeed) of the
+// formations that country's strength raises there, less what it is short of and times the reserves the game's
+// difficulty gives it, as an order for more troops of the whole line is drafted (reinforceOnFront: held to the men
+// it has and the room the line has). True when any came. What it came to is kept on the battle (brief.carry.mobilised)
+// so that the next run waits its days too.
+const staffCallUp = (run, battle, side, day) => {
+  // (A run may be told to leave the numbers to the story: a test of something else is.)
+  if (run.input?.callUps === false) return false;
+  battle.mobilised ??= ["", ""];
+  const last = battle.mobilised[side];
+  const since = last ? diffGameDays(last, run.dateOf(day)) : null;
+  if (since !== null && since >= 0 && since < STAFF_CALL_UP_DAYS) return false;
+  const owner = battle.sides[side].findIndex((member, at) => !battle.gone[side].has(at));
+  if (owner < 0) return false;
+  const lead = battle.sides[side][owner];
+  const usual = Math.max(troopsLeast(run.troops), Math.round(troopsWanted(memberWeights(battle, run, side)[owner] ?? 0, battle.effort[side], run.troops)));
+  const need = callUpNeed(battle, side, usual);
+  if (!(need.share > 0)) return false;
+  const reserves = Number(battle.edge?.[side]?.reserves) || 1;
+  // (Never past STAFF_CALL_UP_CEILING times that army on the battlefield, with what the difficulty gives it.)
+  const ceiling = Math.floor(usual * STAFF_CALL_UP_CEILING * reserves) - liveCount(battle.troops[side]);
+  const count = Math.min(ceiling, Math.floor(usual * need.share * (1 - run.shortageOf(lead)) * reserves));
+  if (count < 1) return false;
+  const before = battle.troops[side].length;
+  const said = run.notes.length;
+  reinforceOnFront(run, battle, { side: lead, sector: "all", given: true, count, staff: need.why }, day);
+  run.notes.length = said;
+  battle.mobilised[side] = run.dateOf(day);
+  const came = battle.troops[side].length - before;
+  (run.staffCalls ??= []).push({ d: run.dateOf(day), battlefield: battle.name, side: lead, why: need.why, asked: count, came });
+  return came > 0;
+};
+
 function* reviewStaff(run, battle, day, regular = true) {
   // (A run may be told to leave every side to its orders: the engine's own tests of other things are.)
   if (run.input?.staff === false) return;
@@ -2746,6 +2783,8 @@ function* reviewStaff(run, battle, day, regular = true) {
     battle.log.push({ d: run.dateOf(day), k: "offensive", s: opener, at: "the whole line" });
   }
   for (const side of [HOLDER_SIDE_A, HOLDER_SIDE_B]) {
+    // A side nobody plays calls up fresh troops when it needs them, whatever its orders (staffCallUp).
+    if (regular && !battle.away[side] && !sideIsPlayed(battle, side, run.input?.players) && staffCallUp(run, battle, side, day)) today = null;
     // (The side that has just gone over to the attack is left to it until the staff next looks.)
     if (begun && battle.begunBy === side) continue;
     if (battle.away[side] || sideIsPlayed(battle, side, run.input?.players) || !staffMayOrder(battle, side)) continue;
@@ -2930,6 +2969,8 @@ const snapshot = (run) => {
     // What the fighting did to the scenario's walls: their breaches and wear (walls.js).
     ...(run.lines && run.lines.some((line) => line.changed) ? { fortifications: linesChanged(run) } : {}),
     stats: { days: day, steps: run.steps },
+    // What the staffs of the sides nobody plays called up, and why (staffCallUp): for the log.
+    ...(run.staffCalls?.length ? { staffCalls: run.staffCalls.map((call) => ({ ...call })) } : {}),
   };
 };
 
@@ -2972,6 +3013,8 @@ export const rehearsal = (run, battle) => {
     joins: [],
     starts: [],
     unitChanges: [],
+    // (What its staffs call up is its own to count: staffCallUp.)
+    staffCalls: [],
     taken: new Set(run.taken),
     manpower: structuredClone(run.manpower),
     effort: new Map(),

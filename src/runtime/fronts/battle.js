@@ -732,6 +732,8 @@ export const loadBattle = (run, record, arena) => {
   }
   // The day a country's forces at home were last called up (home.js): once a day at most.
   battle.calledOn = typeof carry.called === "string" ? carry.called : "";
+  // When each side's own staff last called up troops (engine.js staffCallUp): it waits its days across runs.
+  battle.mobilised = [0, 1].map((side) => (Array.isArray(carry.mobilised) && typeof carry.mobilised[side] === "string" ? carry.mobilised[side] : ""));
   // Where each troop still on its way to the line is going (march.js).
   if (Array.isArray(carry.march)) {
     read.forEach((list, side) => {
@@ -1055,6 +1057,7 @@ export const saveBattle = (battle, run, day, changes, brief) => {
           : {}),
         ...(battle.talk.some((lines) => lines.length > 0) ? { talk: battle.talk } : {}),
         ...(battle.home && battle.calledOn ? { called: battle.calledOn } : {}),
+        ...(Array.isArray(battle.mobilised) && battle.mobilised.some(Boolean) ? { mobilised: battle.mobilised.slice() } : {}),
         // Where each troop still on its way to the line is going (march.js).
         ...(battle.troops.some((list) => list.some((troop) => isLive(troop) && troop.goal >= 0)) ? { march: battle.troops.map(marchKept) } : {}),
         ...(plans ? { plans } : {}),

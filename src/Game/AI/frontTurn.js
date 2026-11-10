@@ -1228,6 +1228,8 @@ export const runTurnFronts = async ({
   players = [],
   // false leaves every side nobody plays to the orders it is given (runtime/fronts/staff.js decides for it otherwise).
   staff = true,
+  // false: the staffs of the sides nobody plays call up no troops of their own (runtime/fronts/engine.js staffCallUp).
+  callUps = true,
   // EXPERIMENT, in the lab (runtime/fronts/mind/policy.js): a staff of the caller's own, asked before the engine's.
   staffPolicy = null,
   // The cores such a staff's plans may be fought on together (runtime/fronts/mind/rehearsers.js), where the caller has them.
@@ -1535,6 +1537,7 @@ export const runTurnFronts = async ({
       // (runtime/naval/blockade.js): the side it fights on is weighed for it (runtime/fronts/handicap.js).
       ...(short.size > 0 ? { shortageOf: (name) => short.get(fold(name)) ?? 0 } : {}),
       ...(staff === false ? { staff: false } : {}),
+      ...(callUps === false ? { callUps: false } : {}),
       ...(typeof staffPolicy === "function" ? { staffPolicy, ...(rehearsers ? { rehearsers } : {}) } : {}),
       ...(Number(troops) > 0 && Number(troops) !== 1 ? { troops: Number(troops) } : {}),
       pace,
@@ -1805,6 +1808,8 @@ export const runTurnFronts = async ({
     notes,
     flips: asArray(result.flips),
     stats: result.stats ?? null,
+    // What the staffs of the sides nobody plays called up (runtime/fronts/engine.js staffCallUp).
+    staffCalls: asArray(result.staffCalls),
     news: asArray(result.news),
     joins: asArray(result.joins),
     starts: asArray(result.starts),

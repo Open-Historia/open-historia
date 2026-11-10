@@ -47,6 +47,8 @@ const worldOn = (map) => ({
 const event = (id, date, extra = {}) => ({ id, date, title: `The ${id} of the war`, description: "The fighting goes on along the border.", source: "ai", impacts: {}, ...extra });
 const turn = (map, world, overrides = {}) => ({
   createFrontRun,
+  // (The staffs call up no troops of their own here: engine.js staffCallUp is tested by itself.)
+  callUps: false,
   world,
   events: [],
   frontOrders: [],
