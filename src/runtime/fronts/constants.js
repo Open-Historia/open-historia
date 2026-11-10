@@ -369,7 +369,9 @@ export const LINE_MARKS = Object.freeze([STAFF_MARK, SCENARIO_MARK]);
 // incident is no war and opens no battlefield.
 export const WAR_EFFORTS = Object.freeze(["major", "total"]);
 export const STAFF_REVIEW_DAYS = 10;
-export const STAFF_STORY_ORDER_DAYS = 45;
+// A week (the owner, 2026-11-10: "make it be 7 days"; it was 45): a story order is the side's for its first week, then
+// its own staff may change it again.
+export const STAFF_STORY_ORDER_DAYS = 7;
 export const STAFF_ATTACKER_ADVANCES = 1.25;
 export const STAFF_ATTACKER_PROBES = 0.9;
 export const STAFF_CHANCE_ATTACKER = 0.7;

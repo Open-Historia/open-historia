@@ -356,6 +356,16 @@ export const describeSince = (record, { most = 4 } = {}) => {
 // own country's at more: Game/AI/advisorWars.js).
 // With `viewer` a country or a group fighting there, the other side's standing
 // orders are left out: what a government has told its own side is its own.
+// The air line says why a side holds the sky with no more wings than the other: it is held by strength (air.js
+// skyOfWings), not by count. "" when the side holding it also has more wings.
+export const skyStrongerNote = (held, against) => {
+  const mine = Number(held) || 0;
+  const theirs = Number(against) || 0;
+  if (mine < theirs) return ", fewer but stronger";
+  if (mine === theirs) return ", as many but stronger";
+  return "";
+};
+
 export const describeBattlefield = (record, { viewer = "", max = BRIEF_TEXT_MAX } = {}) => {
   if (!record || !Array.isArray(record.sides)) return "";
   const brief = record.brief ?? {};
@@ -392,7 +402,9 @@ export const describeBattlefield = (record, { viewer = "", max = BRIEF_TEXT_MAX 
     : "";
   // Who holds the sky (air.js): "Air: Aland holds the sky (6 wings against 2)".
   const air = brief.air && (brief.air.holds === 0 || brief.air.holds === 1) && Array.isArray(brief.air.wings)
-    ? `  Air: ${lead[brief.air.holds]} holds the sky (${brief.air.wings[brief.air.holds]} wings against ${brief.air.wings[1 - brief.air.holds]})`
+    // The sky is held by strength (air.js skyOfWings: each wing's strength times its country's air worth), not by
+    // the count, so a side with fewer or as many wings that holds it does so with the stronger ones, and says so.
+    ? `  Air: ${lead[brief.air.holds]} holds the sky (${brief.air.wings[brief.air.holds]} wings against ${brief.air.wings[1 - brief.air.holds]}${skyStrongerNote(brief.air.wings[brief.air.holds], brief.air.wings[1 - brief.air.holds])})`
     : "";
   // Water frozen hard enough to cross (climate.js).
   const ice = Array.isArray(brief.frozen) && brief.frozen.length > 0 ? `  Ice: ${brief.frozen.join(", ")} ${brief.frozen.length === 1 ? "is" : "are"} frozen hard enough for troops to cross` : "";
