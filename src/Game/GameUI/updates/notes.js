@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "right now in modern day countries go by the kingdom of spain or the french republic, rename all these
+    // countries by their more common names ... leave the us's name as it is tho"; "many countries are just gray for no
+    // reason sometimes" (the owner, 2026-11-09): server/commonNames.js brings an older Modern Day world across once,
+    // in both stores; ownerColors.js finds a country's colour under its other names.
+    id: "2026-11-common-country-names",
+    kind: "minor",
+    date: "2026-11-09",
+    channel: "beta",
+    banners: [
+      {
+        title: "Common country names in older Modern Day games",
+        items: [
+          "Older copies of Modern Day and the games started on them now call countries by their common names, like Spain and France.",
+          "Countries no longer turn grey when the scenario's colour list does not name them.",
+        ],
+      },
+    ],
+  },
+  {
     // "for themes, it themes the buttons themselfs but not the button tray. or the search button"; "it also doesnt
     // theme this" (the date bar) (the owner, 2026-11-09). The dock's tray, search, the date bar and the map-mode switch
     // read --oh-ui-glass-pill (chat.jsx Toolbar, search.jsx, time.jsx widgetSurface, MapModeSelector.jsx); the
