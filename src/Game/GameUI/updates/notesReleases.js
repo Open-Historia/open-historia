@@ -238,6 +238,7 @@ export const RELEASES = [
         updates: [
           "2026-11-minor-changelog",
           "2026-11-no-background-ai",
+          "2026-11-gemini-live-events",
           "2026-11-faster-turns",
           "2026-11-smoother-scrolling",
           "2026-11-long-campaign-fixes",
