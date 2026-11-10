@@ -166,6 +166,20 @@ const NEW_UPDATES = [
     ],
   },
   {
+    id: "2026-11-native-card-badges",
+    kind: "minor",
+    date: "2026-11-10",
+    banners: [
+      {
+        title: "Game cards keep their labels in place",
+        items: [
+          "A long scenario name on a game card no longer runs over the card beside it: it moves to a line of its own and is cut short, and pointing at it shows the whole name.",
+          "The labels at the top of each game card are back to their usual height, with their text centred.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it so in the scripted events there is a mini map thing so you can easily select regions for things instead
     // of needing to manually type out each one"; "upgrade the scripted events editor so there is an easy thing to add
     // Impacts yourself"; "make it so events can remove all claims on territory on a country" (the owner, 2026-11-09):
