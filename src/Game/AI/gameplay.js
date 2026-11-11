@@ -3012,10 +3012,13 @@ const buildJumpStaticRules = async (variables = {}) => {
 // in it (gameplaySchemas.js withFrontOrders), and the figures the war needs
 // after them (withWarFigures).
 // And what the other switched-off features alone use (withoutFeaturesOff): no
-// spy fields with espionage off, no air or naval units without them.
+// spy fields with espionage off, no posts or polls without social media (a
+// repair pass asks with the skip's contract too, and taskToolFor is not its
+// way in), no air or naval units without them.
 const withoutFeaturesOff = (tool) => {
   const spied = isActiveFeatureEnabled("espionage") ? tool : withoutEspionage(tool);
-  return withWarParts(spied, { air: airOn(), navies: naviesOn() });
+  const posted = isActiveFeatureEnabled("socialMedia") ? spied : withSocialPosts(spied, false);
+  return withWarParts(posted, { air: airOn(), navies: naviesOn() });
 };
 const forActiveFeatures = (tool) => {
   const grouped = isActiveFeatureEnabled("groups") ? tool : withoutGroupOps(tool);

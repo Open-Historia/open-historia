@@ -80,7 +80,9 @@ test("air units or navies off: no unit is raised as one, and without a navy noth
 
 test("the game shows each task's contract without what is off, the background batch's too", () => {
   const gameplay = read("./gameplay.js");
-  assert.match(gameplay, /const withoutFeaturesOff = \(tool\) => \{\n\s*const spied = isActiveFeatureEnabled\("espionage"\) \? tool : withoutEspionage\(tool\);\n\s*return withWarParts\(spied, \{ air: airOn\(\), navies: naviesOn\(\) \}\);/);
+  assert.match(gameplay, /const withoutFeaturesOff = \(tool\) => \{\n\s*const spied = isActiveFeatureEnabled\("espionage"\) \? tool : withoutEspionage\(tool\);\n\s*const posted = isActiveFeatureEnabled\("socialMedia"\) \? spied : withSocialPosts\(spied, false\);\n\s*return withWarParts\(posted, \{ air: airOn\(\), navies: naviesOn\(\) \}\);/);
+  // The breadth repair asks with the skip's contract through forActiveFeatures alone: no posts there either.
+  assert.match(gameplay, /taskKey: "worldBreadthRepair",\n\s*tool: forActiveFeatures\(getGameplayTool\("jumpForward"\)\)/);
   assert.match(gameplay, /withEventAudience\(withoutFeaturesOff\(grouped\)/);
   assert.match(gameplay, /schema: withoutFeaturesOff\(getGameplayTool\(job\.taskKey\)\)\?\.schema/);
 });
