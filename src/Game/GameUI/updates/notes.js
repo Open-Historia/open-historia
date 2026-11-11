@@ -56,8 +56,8 @@ const NEW_UPDATES = [
   {
     // Issue #1000 (a 1947 save): Germany had surrendered and its wars were ended, but 18 regions of Poland were still
     // under German control, so the map showed Poland German. Nothing ends an occupation when its war ends; the time skip
-    // is now told which occupations outlive their war and settles each (Game/AI/standingContext.js
-    // occupationsAfterTheirWar, gameplay.js buildJumpLiveState).
+    // is now told which occupations outlive their war, and how that war ended, and its answer names who holds each
+    // (Game/AI/standingContext.js occupationsAfterTheirWar, runtime/occupationSettlements.js).
     id: "2026-11-occupations-end-with-their-war",
     kind: "minor",
     date: "2026-11-10",

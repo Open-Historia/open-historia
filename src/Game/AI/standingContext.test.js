@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 import {
   describeOccupationsAfterTheirWar,
+  occupationWar,
   occupationsAfterTheirWar,
   CONVERSATION_TERRITORIAL_ROWS,
   NO_TERRITORIAL_ROWS,
@@ -266,18 +267,20 @@ test("occupations outliving their war are put to the time skip, and only those",
   ];
   const world = {
     wars: [
-      { status: "ended", sideA: ["German Reich"], sideB: ["Poland"] },
+      { status: "ended", title: "Polish War", endedDate: "1945-05-08", note: "German unconditional surrender", sideA: ["German Reich"], sideB: ["Poland"] },
+      { status: "ended", title: "Earlier War", endedDate: "1939-10-06", sideA: ["Poland"], sideB: ["German Reich"] },
       { status: "ceasefire", sideA: ["France"], sideB: ["German Reich"] },
     ],
     puppets: [{ overlord: "United Kingdom", puppet: "British Raj", status: "active" }],
   };
   const after = occupationsAfterTheirWar(rows, world);
   assert.deepEqual(after.map((row) => row.regionId), ["POL.1_1", "POL.2_1"], "ended war only: not the ceasefire, not a puppet, not a claim");
-  const text = describeOccupationsAfterTheirWar(after, { regionName: (id, name) => (id === "POL.2_1" ? "region: Lublin" : name) });
+  const text = describeOccupationsAfterTheirWar(after, { world, regionName: (id, name) => (id === "POL.2_1" ? "region: Lublin" : name) });
   assert.ok(text.startsWith("[Occupations Outliving Their War]\n"));
-  assert.match(text, /German Reich holds 2 regions of Poland: Masovia, region: Lublin/);
-  assert.match(text, /regionControlOps control entry back to the sovereign/);
-  assert.match(text, /regionTransfers entry to the occupier/);
+  assert.match(text, /- o1: German Reich holds 2 regions of Poland: Masovia, region: Lublin\. Their war \(Polish War\) ended 1945-05-08: German unconditional surrender$/m,
+    "the latest ended war between the two, and how it ended, so the story can tell who lost");
+  assert.equal(occupationWar(world, "Poland", "France"), null);
+  assert.match(text, /In occupationSettlements, answer each key below .*say who had lost when it ended.*'returned' where the occupier withdrew.*'kept' where a treaty/);
   // Nothing to settle: no block, so a game without one pays nothing.
   assert.equal(describeOccupationsAfterTheirWar([]), "");
   assert.deepEqual(occupationsAfterTheirWar(rows, { wars: [{ status: "active", sideA: ["Poland"], sideB: ["German Reich"] }] }).map((row) => row.regionId), ["FRA.1_1", "BRT.1_1"]);
