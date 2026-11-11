@@ -320,6 +320,7 @@ pub const SUPPLY_EVERY_DAYS: f64 = 3.0;
 pub const SUPPLY_FAR_FACTOR: f64 = 2.5;
 pub const SUPPLY_FULL_KM: [f64; 4] = [120.0, 180.0, 300.0, 450.0];
 pub const SUPPLY_LEAST: f64 = 0.4;
+pub const SUPPLY_PIECE_SHARE: f64 = 0.5;
 pub const SUPPORT_FULL: f64 = 0.3;
 pub const SUPPORT_KM: f64 = 100.0;
 pub const SUPPORT_NONE: f64 = 0.1;

@@ -138,10 +138,15 @@ fn supplied_bodies(battle: &mut Battle, side: usize) -> Fed {
         }
     }
     for body in 0..bodies.count {
-        let piece = most_of[body];
-        if piece >= 0 && most_held[body] > held_by[piece as usize] {
-            held_by[piece as usize] = most_held[body];
-            holder_of[piece as usize] = body as i32;
+        if most_of[body] < 0 {
+            continue;
+        }
+        for piece in 0..pieces.count {
+            let cells = held.get(&(body * pieces.count + piece)).copied().unwrap_or(0);
+            if cells > 0 && cells as f64 >= most_held[body] as f64 * SUPPLY_PIECE_SHARE && cells > held_by[piece] {
+                held_by[piece] = cells;
+                holder_of[piece] = body as i32;
+            }
         }
     }
     let mut supplied = vec![0u8; bodies.count];
