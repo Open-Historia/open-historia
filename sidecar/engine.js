@@ -392,4 +392,8 @@ export * as aiOpenConversation from "../../src/runtime/openConversation.js";
 export * as aiGameEntry from "../../src/runtime/gameEntry.js";
 export * as historyConsolidation from "../../src/Game/AI/historyConsolidation.js";
 export * as mpThreads from "../../src/multiplayer/client/sharedThreads.js";
+export * as advisorGroupOrders from "../../src/Game/GameUI/advisorGroupOrders.js";
+export * as advisorGroupMeetings from "../../src/Game/AI/advisorGroupMeetings.js";
+export * as advisorGroupSettings from "../../src/Game/AI/advisorGroupSettings.js";
+export * as groupTelemetry from "../../src/Game/AI/groupTelemetry.js";
 export * as rostraLooks from "../../src/Game/GameUI/rostraLooks.js";

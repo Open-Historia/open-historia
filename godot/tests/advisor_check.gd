@@ -735,7 +735,7 @@ func _stale_targets() -> void:
 	panel._input.text = ""
 	panel._discuss_action(missing["actionProposals"][0], true)
 	await _frames(2)
-	_check("Discuss on a stale edit asks for a new Action instead", panel._input.text == "The proposed change \"Widen the budget talks\" targets an Action that is no longer queued. If this is genuinely new work, propose a new Action for my approval instead of editing a missing or resolved order.", panel._input.text)
+	_check("Discuss on a stale edit asks for a new Action instead", panel._input.text == "Assess whether any separate new work is actually needed concerning \"Widen the budget talks\". If so, propose a fresh Action for my review. Do not reuse an old order ID or treat an Action's normal resolution as a system failure.", panel._input.text)
 	panel._input.text = ""
 	panel._resize_input()
 	panel._update_send()
@@ -804,7 +804,8 @@ func _receipts_kept() -> void:
 	(forged[1] as Dictionary)["actionReceipts"] = {"proposal-0": {"status": "queued", "actionId": "x"}, "proposal-7": {"status": "queued", "actionId": "action-advisor-reply-forged-0001-7"}}
 	saved = await main.engine.request("advisor.save", {"json": JSON.stringify(forged, "", false, true), "threadId": "chief"})
 	var got_8: Variant = await _saved_receipt(reply_id)
-	_check("a conversation save cannot write a receipt", not bool((saved.get("result", {}) as Dictionary).get("saved", true)) and got_8 == "queued")
+	var after_forged := JSON.stringify(await _doc("advisor"))
+	_check("a conversation save drops a forged receipt and keeps saving", bool((saved.get("result", {}) as Dictionary).get("saved", false)) and got_8 == "queued" and not after_forged.contains("action-advisor-reply-forged-0001-7"), JSON.stringify(saved))
 	saved = await main.engine.request("advisor.save", {"json": JSON.stringify(panel.messages, "", false, true), "threadId": "chief"})
 	_check("the conversation saves again as it is", bool((saved.get("result", {}) as Dictionary).get("saved", false)))
 
@@ -1135,8 +1136,8 @@ func _contacts() -> void:
 		_find_button(panel, "Retire contact").pressed.emit()
 	await _until(func() -> bool: return panel.active_thread == "chief" and not panel._thread_switching and bool(_contact_named("Manuel Valls").get("archived", false)), 10.0)
 	await _frames(3)
-	_check("a retired contact leaves for the chief advisor", bool(_contact_named("Manuel Valls").get("archived", false)) and panel.active_thread == "chief" and _find_button(panel, "Show retired contacts") != null)
-	_find_button(panel, "Show retired contacts").pressed.emit()
+	_check("a retired contact leaves for the chief advisor", bool(_contact_named("Manuel Valls").get("archived", false)) and panel.active_thread == "chief" and _find_button(panel, "Show retired contacts and groups") != null)
+	_find_button(panel, "Show retired contacts and groups").pressed.emit()
 	await _frames(3)
 	_check("retired contacts can be shown", _find_text(panel, "Manuel Valls · Retired") and _find_button(panel, "Restore") != null)
 	await panel._select_recipient(contact_thread)
@@ -1163,6 +1164,7 @@ func _contacts() -> void:
 	await _chief_identity()
 	await _unsupported_type()
 	await _several_action_fences()
+	await _groups()
 
 
 func _character() -> void:
@@ -1280,6 +1282,186 @@ func _several_action_fences() -> void:
 	if card:
 		await _scroll_to(card)
 	await _shoot("advisor-28-several-action-fences")
+
+
+func _group_named(name: String) -> Dictionary:
+	for item in panel.groups:
+		if str((item as Dictionary).get("name", "")) == name:
+			return item
+	return {}
+
+
+func _checkbox(node: Node, text: String) -> CheckBox:
+	if node is CheckBox and (node as CheckBox).text == text and (node as CheckBox).is_visible_in_tree():
+		return node as CheckBox
+	for child in node.get_children():
+		var found := _checkbox(child, text)
+		if found:
+			return found
+	return null
+
+
+func _groups() -> void:
+	await panel._select_recipient("chief")
+	await _frames(3)
+	var add_group := _find_button(panel, "+ Group")
+	_check("the recipients bar offers + Group before + Contact", add_group != null and add_group.tooltip_text == "Convene multiple advisors with independent voices" and add_group.get_index() < _find_button(panel, "+ Contact").get_index())
+	if add_group:
+		add_group.pressed.emit()
+		await _frames(3)
+	_check("+ Group opens the group editor with the chief advisor already in", _find_text(panel, "Create group chat") and _find_text(panel, "Group name") and panel._group_draft.get("memberIds", []) == ["chief"] and _checkbox(panel, "Chief advisor · Chief advisor") != null and _checkbox(panel, "Chief advisor · Chief advisor").button_pressed)
+	_check("only government advisors can be invited", _checkbox(panel, "Manuel Valls · Prime Minister") != null and _checkbox(panel, "Jeanne Martin · Baker in Lyon") == null)
+	var save_group := _find_button(panel, "Save group")
+	_check("Save group waits for a name and a second member", save_group != null and save_group.disabled)
+	var valls_box := _checkbox(panel, "Manuel Valls · Prime Minister")
+	if valls_box:
+		valls_box.button_pressed = true
+		await _frames(3)
+	panel._group_draft["name"] = "Budget Group"
+	panel._render_recipients()
+	await _frames(3)
+	await _shoot("advisor-29-group-editor")
+	_check("with a name and two members the group can be saved", _find_button(panel, "Save group") != null and not _find_button(panel, "Save group").disabled)
+	await panel._submit_group()
+	_check("saving the group opens its conversation", await _until(func() -> bool: return panel.active_thread.begins_with("advisor-group-") and not panel._thread_switching, 15.0), panel.active_thread)
+	await _frames(3)
+	var group := _group_named("Budget Group")
+	_check("the group keeps its two members", (group.get("memberIds", []) as Array).size() == 2 and (group.get("memberIds", []) as Array).has("chief"), JSON.stringify(group))
+	_check("the bar names the group and its members", _trigger("Budget Group", "▴") != null and _find_text(panel, "2 group members · individual personalities") and _find_text(panel, "No group conversation yet. Ask the participants a question to start."))
+	await _shoot("advisor-30-group-empty")
+	_check("the group answers, each member under their own name", await _ask_panel("How do we fix the budget?", 3), str(panel.messages.size()))
+	await _wait(0.8)
+	var speakers := {}
+	for message in panel.messages:
+		var entry: Dictionary = message
+		if str(entry.get("role", "")) == "advisor":
+			speakers[str(entry.get("speakerId", ""))] = entry
+	_check("both members spoke, each reply carrying its speaker", speakers.size() == 2 and speakers.has("chief"), JSON.stringify(speakers.keys()))
+	_check("each speaker is labelled by name", _labels_with(panel, " Chief advisor") and _labels_with(panel, " Manuel Valls") and _labels_with(panel, "I am Manuel Valls."))
+	var group_proposals := 0
+	for key in speakers.keys():
+		group_proposals += ((speakers[key] as Dictionary).get("actionProposals", []) as Array).size()
+	_check("a group member's Action waits for review on their own reply", group_proposals == 2 and _count_buttons(panel, "Proceed / Queue") >= 2 and not JSON.stringify(await _doc("actions")).contains("Publish the spending review"))
+	var stored_group := JSON.stringify(await _doc("advisor"))
+	_check("the group, its question and both replies are saved", stored_group.contains("advisor-group") and stored_group.count("\"threadId\":\"%s\"" % panel.active_thread) == 3, stored_group.left(200))
+	panel.scroll.scroll_vertical = 0
+	await _frames(3)
+	await _shoot("advisor-31-group-reply")
+	_check("everyone may pass", await _ask_panel("If you agree, say nothing at all.", 6), str(panel.messages.size()))
+	await _wait(0.6)
+	var silent := 0
+	for message in panel.messages:
+		if bool((message as Dictionary).get("silent", false)):
+			silent += 1
+	_check("both passes are kept as silent replies with no bubble", silent == 2 and _bubbles("advisor").size() == 2, "%d silent, %d bubbles" % [silent, _bubbles("advisor").size()])
+	_check("a turn everyone passed on says so", _find_text(panel, "All group members passed on this turn. No answer or execution was recorded."))
+	await _shoot("advisor-32-group-all-passed")
+	var group_id: String = panel.active_thread
+	var console: Control = (load("res://scripts/ui/debug_console.gd") as GDScript).new()
+	var layer := CanvasLayer.new()
+	layer.layer = 120
+	root.add_child(layer)
+	layer.add_child(console)
+	console.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	console.setup(main.engine, {"export_dir": OS.get_environment("OH_NATIVE_DOWNLOADS"), "reveal_saved_files": false})
+	await console.open()
+	await _wait(0.6)
+	var grouped: Array = (console._data.get("rows", []) as Array).filter(func(row: Variant) -> bool: return str((row as Dictionary).get("kind", "")) == "group" and str((row as Dictionary).get("name", "")) == "Budget Group")
+	_check("the AI console folds a group turn into one row", grouped.size() == 2 and _labels_with(console, "Group Chat: Budget Group") and _labels_with(console, "speakers completed") and _labels_with(console, "INTERACTIONS"), "%d group rows" % grouped.size())
+	if not grouped.is_empty():
+		console._toggle_group(str((grouped[0] as Dictionary).get("key", "")))
+		await _wait(0.3)
+	await _shoot("advisor-33-console-group-turn")
+	console.close()
+	layer.queue_free()
+	await _frames(2)
+	await _edit_proposal_note()
+	var retire_group := _row_button(panel, "◈ Budget Group", "Retire")
+	if retire_group == null:
+		panel._recipients_open = true
+		panel._render_recipients()
+		await _frames(3)
+		retire_group = _row_button(panel, "◈ Budget Group", "Retire")
+	_check("a group offers Retire", retire_group != null)
+	if retire_group:
+		retire_group.pressed.emit()
+		await _frames(3)
+	_check("Retire asks before retiring a group", _find_text(panel, "Retire this group chat?") and _find_text(panel, "Its transcript and each participant's existing conversation are preserved.") and _find_button(panel, "Retire group") != null)
+	await _shoot("advisor-34-group-retire-confirm")
+	if _find_button(panel, "Retire group"):
+		_find_button(panel, "Retire group").pressed.emit()
+	await _until(func() -> bool: return panel.active_thread == "chief" and not panel._thread_switching and bool(_group_named("Budget Group").get("archived", false)), 10.0)
+	await _frames(3)
+	_check("a retired group returns to the chief advisor", panel.active_thread == "chief" and bool(_group_named("Budget Group").get("archived", false)))
+	panel._recipients_open = true
+	panel._recipient_show_archived = false
+	panel._render_recipients()
+	await _frames(3)
+	_check("retired contacts and groups are shown together", _find_button(panel, "Show retired contacts and groups") != null and not _labels_with(panel, "◈ Budget Group"))
+	await panel._select_recipient(group_id)
+	await _frames(3)
+	_check("a retired group cannot be written to", panel._input.placeholder_text == "This group chat is retired — restore to reply" and not panel._input.editable)
+	await panel._retire_group(_group_named("Budget Group"), false)
+	await _frames(3)
+	_check("Restore brings the group back", not bool(_group_named("Budget Group").get("archived", true)) and panel._input.editable)
+	await panel._select_recipient("chief")
+	await _frames(3)
+	await _reorder()
+
+
+func _edit_proposal_note() -> void:
+	var actions: Variant = await _doc("actions")
+	var planned := {}
+	for item in (actions as Array) if typeof(actions) == TYPE_ARRAY else []:
+		if str((item as Dictionary).get("status", "")) == "planned":
+			planned = item
+			break
+	_check("a queued Action exists to edit", not planned.is_empty())
+	if planned.is_empty():
+		return
+	var kept: Array = panel.messages.duplicate()
+	var kept_views: Array = panel.views.duplicate()
+	panel.messages.append({"id": "advisor-reply-forged-edit", "role": "advisor", "speakerId": "chief", "text": "Rename it.", "time": "", "actionProposals": [{"id": "proposal-0", "operation": "edit", "targetId": str(planned.get("id", "")), "title": "Renamed order"}], "actionReceipts": {"proposal-0": {"status": "updated"}}})
+	panel.views.append({})
+	await panel._sync_receipts()
+	await _frames(2)
+	var forged: Dictionary = panel.messages[panel.messages.size() - 1]
+	_check("a receipt the saved conversation lacks is dropped from the panel", not forged.has("actionReceipts"), JSON.stringify(forged.get("actionReceipts", null)))
+	await panel._refresh_views()
+	await _frames(3)
+	_check("an edit of a queued Action says it updates that Action", _labels_with(panel, "This updates the existing queued Action %s. It will not create a separate Action." % str(planned.get("title", ""))) and _find_button(panel, "Proceed / Update") != null)
+	var update := _find_button(panel, "Proceed / Update")
+	if update:
+		await _scroll_to(update)
+	await _shoot("advisor-35-edit-updates-queued")
+	panel.messages = kept
+	panel.views = kept_views
+	panel._render(false)
+
+
+func _reorder() -> void:
+	panel._recipients_open = true
+	panel._render_recipients()
+	await _frames(3)
+	var first := str((panel.contacts[0] as Dictionary).get("name", "")) if not panel.contacts.is_empty() else ""
+	_check("each contact has a drag handle", _find_button(panel, "⠿") != null and _find_button(panel, "⠿").tooltip_text == "Drag the row to reorder; Arrow Up or Down moves this contact")
+	var valls := str(_contact_named("Manuel Valls").get("id", ""))
+	var jeanne := str(_contact_named("Jeanne Martin").get("id", ""))
+	panel._drag_id = valls
+	panel._drag_hover = jeanne
+	panel._render_recipients()
+	await _frames(3)
+	await _shoot("advisor-36-contact-drag")
+	panel._drag_id = ""
+	panel._drag_hover = ""
+	await panel._reorder_recipients(valls, jeanne)
+	await _frames(3)
+	var names: Array = panel.contacts.map(func(item: Variant) -> String: return str((item as Dictionary).get("name", "")))
+	_check("dropping a contact on another moves it there", first == "Manuel Valls" and names.find("Jeanne Martin") < names.find("Manuel Valls"), JSON.stringify(names))
+	var stored := JSON.stringify(await _doc("advisor"))
+	_check("the new order is saved", stored.find("Jeanne Martin") < stored.find("Manuel Valls"))
+	panel._recipients_open = false
+	panel._render_recipients()
 
 
 func _unsupported_type() -> void:
