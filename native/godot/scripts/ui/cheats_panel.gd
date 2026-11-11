@@ -4389,7 +4389,8 @@ func _render_history() -> void:
 	info_column.add_child(buttons)
 	_body.add_child(info[0])
 	_body.add_child(_gap(9))
-	var saved_text := str((document as Dictionary).get("text", "")) if has_document else ""
+	# The whole history as the box shows it (in tiers the document's own text is only what came since the last fold).
+	var saved_text := str(data.get("draft", "")) if has_document else ""
 	var draft := _sv("hd_draft", saved_text)
 	var heading := _section_label("")
 	_body.add_child(heading)
@@ -4421,6 +4422,15 @@ func _render_history() -> void:
 	row.add_child(revert)
 	_body.add_child(row)
 	update_heading.call()
+	var canon: Array = data.get("canon", [])
+	if not canon.is_empty():
+		_body.add_child(_gap(9))
+		var canon_holder := VBoxContainer.new()
+		var canon_inner := _details("%d standing fact%s the AI is always shown" % [canon.size(), "" if canon.size() == 1 else "s"], "hd_canon", false, canon_holder, 12, 300)
+		for fact_value in canon:
+			var fact: Dictionary = fact_value
+			canon_inner.add_child(_note("%s · %s · %s" % [str(fact.get("date", "")), str(fact.get("kind", "")), str(fact.get("text", ""))], 12, Color(1, 1, 1, 0.78)))
+		_body.add_child(canon_holder)
 	if not passes.is_empty():
 		_body.add_child(_gap(9))
 		var holder := VBoxContainer.new()
