@@ -1017,6 +1017,8 @@ export const register = (ctx) => {
     return {
       document: world?.historyDocument ?? null,
       draft: world?.historyDocument ? engine.historyConsolidation.seedHistoryDocumentText(world) : "",
+      // The canon beside the document (runtime/historyTiers.js), as the web panel lists it.
+      canon: list(world?.canonFacts).map((fact) => ({ date: String(fact?.date ?? ""), kind: String(fact?.kind ?? ""), text: String(fact?.text ?? "") })),
       passes: list(world?.consolidatedHistory).map((entry, index) => ({
         meta: [
           `Pass ${index + 1}`,
