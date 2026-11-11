@@ -68,6 +68,7 @@ export const RELEASES = [
           "2026-11-rostra-looks-detailed",
           "2026-11-overthrown-governments-rename",
           "2026-11-civil-wars-split-countries",
+          "2026-11-older-history-kept",
           "2026-10-wars-and-fronts-2",
           "2026-10-swarms",
           "2026-10-deploy-calls-up",

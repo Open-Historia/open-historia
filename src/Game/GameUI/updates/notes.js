@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "why doesnt it show the stuff anymore in cheats then" (the owner, 2026-11-10): a save's history from before the tiers was replaced whole by
+    // a stub of eras the first tiered fold wrote unasked (runtime/historyTiers.js eraWordCount counted it as 0 words).
+    id: "2026-11-older-history-kept",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Older history kept",
+        items: [
+          "A campaign's history written before it was kept year by year is no longer lost the first time a time skip folds it.",
+          "Cheats → History Document shows the whole history again, with the standing facts the AI is always shown.",
+        ],
+      },
+    ],
+  },
+  {
     // A scenario author, 2026-11-10 (a 1946 save, Chinese Civil War, 3-month skips): "a significant portion of the CCPs
     // army disappears and the land falls into Republic of China control". The front engine fed a body of ground only
     // through the one piece of home ground it held most of; the Communists' southern body held all of Jiangsu, their
