@@ -2426,7 +2426,49 @@ func _build_requests_section() -> void:
 		_gap(body, 14.4)
 	var idle_on := _flag("ai_idle_diplomacy")
 	_add_toggle(body, "Countries write to me between time skips", idle_on, func() -> void: _set_flag_and_render("ai_idle_diplomacy", not idle_on))
-	_add_settings_helper(body, "Off: between time skips, no country writes to you unless you write first.", 12.0 if no_limit else 0.0)
+	_add_settings_helper(body, "Off: between time skips, no country writes to you unless you write first.")
+	var group_ai: Dictionary = _requests.get("groupAi", {}) if typeof(_requests.get("groupAi")) == TYPE_DICTIONARY else {}
+	var group_individual := bool(group_ai.get("individual", true))
+	var group_batch := int(group_ai.get("batchSize", 3))
+	_add_toggle(body, "Individual AI responses in group chats", group_individual, func() -> void: _requests_set("groupIndividual", not group_individual))
+	_add_settings_helper(body, "On: each group member gets an individual AI request. Off: members share requests in batches. In both modes, members may speak or deliberately stay silent.")
+	var batch_row := HBoxContainer.new()
+	batch_row.add_theme_constant_override("separation", 12)
+	var batch_label := UI.label("Advisors per AI request", _fs(0.9), UI.WHITE)
+	batch_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	batch_row.add_child(batch_label)
+	var batch_slider := HSlider.new()
+	batch_slider.min_value = 1
+	batch_slider.max_value = 10
+	batch_slider.step = 1
+	batch_slider.value = 1 if group_individual else group_batch
+	batch_slider.custom_minimum_size = Vector2(144, 20)
+	batch_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	batch_slider.focus_mode = Control.FOCUS_NONE
+	batch_slider.tooltip_text = "Advisors per AI request"
+	batch_slider.add_theme_stylebox_override("slider", UI.box(Color(1, 1, 1, 0.14), Color(0, 0, 0, 0), 999, 0, Vector4(0, 2, 0, 2)))
+	batch_slider.add_theme_stylebox_override("grabber_area", UI.box(UiTheme.pick("accent", BLUE), Color(0, 0, 0, 0), 999, 0, Vector4(0, 2, 0, 2)))
+	batch_slider.add_theme_stylebox_override("grabber_area_highlight", UI.box(UiTheme.pick("accent", BLUE), Color(0, 0, 0, 0), 999, 0, Vector4(0, 2, 0, 2)))
+	batch_slider.editable = not group_individual
+	batch_row.add_child(batch_slider)
+	var batch_value := UI.label(str(int(batch_slider.value)), _fs(0.78), UiTheme.pick("text", BLUE_TEXT), 650)
+	batch_value.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	batch_value.custom_minimum_size.x = 28.8
+	batch_value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	batch_row.add_child(batch_value)
+	batch_slider.value_changed.connect(func(value: float) -> void:
+		batch_value.text = str(int(value))
+		group_ai["batchSize"] = int(value)
+		_requests["groupAi"] = group_ai
+		_queue_write("requests:groupBatchSize", "settings.requests.set", {"field": "groupBatchSize", "value": int(value)}))
+	if group_individual:
+		batch_row.modulate.a = 0.6
+	body.add_child(batch_row)
+	_gap(body, 13.6)
+	_pull_up(body, 8.0)
+	var batch_help := _helper("All group members are consulted, but only those with something to contribute need to speak. This setting controls request batching, not who gets excluded. Retries and fallback attempts may add requests.")
+	body.add_child(batch_help)
+	_gap(body, 12.0)
 	if no_limit:
 		var advanced_open := bool(_details.get("requestsAdvanced", false))
 		body.add_child(_summary_button("Advanced", advanced_open, func() -> void:

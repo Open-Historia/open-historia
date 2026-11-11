@@ -432,6 +432,23 @@ func _requests_switch(menu: Variant) -> void:
 	_check("the daily limit field shows with the switch off", text.contains("Requests a day your key allows") and text.contains("Only used for the count above and to keep requests nobody pressed a button for from spending the end of your day."))
 	_check("Countries write to me between time skips, on by default", text.contains("Countries write to me between time skips") and text.contains("Off: between time skips, no country writes to you unless you write first.") and menu._workspace._flag("ai_idle_diplomacy"))
 	_check("AI lookup functions left Generation behavior", not _all_text(menu._workspace).contains("Only used while Save AI requests"))
+	_check("group chats answer one advisor per request by default, with the batch size beside it", text.contains("Individual AI responses in group chats") and text.contains("On: each group member gets an individual AI request. Off: members share requests in batches. In both modes, members may speak or deliberately stay silent.") and text.contains("Advisors per AI request") and text.contains("All group members are consulted, but only those with something to contribute need to speak.") and bool((menu._workspace._requests.get("groupAi", {}) as Dictionary).get("individual", false)))
+	await menu._workspace._requests_set("groupIndividual", false)
+	await _wait(0.4)
+	var group_ai: Dictionary = menu._workspace._requests.get("groupAi", {})
+	var batch_sliders: Array = menu._workspace._content.find_children("*", "HSlider", true, false).filter(func(node: Node) -> bool: return (node as HSlider).tooltip_text == "Advisors per AI request")
+	_check("turning individual responses off lets members share a request, three at a time by default", not bool(group_ai.get("individual", true)) and int(group_ai.get("effectiveBatchSize", 0)) == 3 and batch_sliders.size() == 1 and (batch_sliders[0] as HSlider).editable and int((batch_sliders[0] as HSlider).value) == 3, JSON.stringify(group_ai))
+	if batch_sliders.size() == 1:
+		var holder: Variant = (batch_sliders[0] as Node).get_parent()
+		while holder != null and not (holder is ScrollContainer):
+			holder = (holder as Node).get_parent()
+		if holder is ScrollContainer:
+			(holder as ScrollContainer).ensure_control_visible(batch_sliders[0] as Control)
+	await _shoot("m03b-ai-group-requests")
+	await menu._workspace._requests_set("groupBatchSize", 5)
+	await menu._workspace._requests_set("groupIndividual", true)
+	group_ai = menu._workspace._requests.get("groupAi", {})
+	_check("individual mode keeps the saved batch size and sends one advisor a request", bool(group_ai.get("individual", false)) and int(group_ai.get("batchSize", 0)) == 5 and int(group_ai.get("effectiveBatchSize", 0)) == 1, JSON.stringify(group_ai))
 	await menu._workspace._set_flag("ai_idle_diplomacy", false)
 	var values: Variant = await _request("settings.values")
 	var flags: Dictionary = (values as Dictionary).get("flags", {}) if typeof(values) == TYPE_DICTIONARY else {}
