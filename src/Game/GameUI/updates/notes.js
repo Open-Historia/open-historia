@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "make it so the ai can very easily create a civil war and split a country in 2" (the owner, 2026-11-10):
+    // AI/countrySplit.js; one regionControlOps entry with part, written out by splitCountryOps before the transfers are resolved.
+    id: "2026-11-civil-wars-split-countries",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Civil wars split countries",
+        items: [
+          "A time skip can split a country in two in a civil war: the breakaway state takes one side of it and the war begins.",
+          "The government keeps its capital and still claims the land the breakaway holds.",
+        ],
+      },
+    ],
+  },
+  {
     // A player, 2026-11-10: "when a movement ousted the Lebanese government nothing actually changed on map despite the events and AI
     // recognizing the new Republic". AI/gameplay.js JUMP_LEVERS polityChanges line; polityTransitions.js landlessFoundings.
     id: "2026-11-overthrown-governments-rename",
