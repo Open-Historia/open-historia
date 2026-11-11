@@ -223,6 +223,7 @@ import {
   withEventAudience,
   withEventImpacts,
   withFrontOrders,
+  withOccupationSettlements,
   withWarFigures,
   withIntelligenceRating,
   withSocialPosts,
@@ -244,6 +245,7 @@ import { holdPlayersWars } from "./playersWarsHold.js";
 import { chatMessageTags } from "./chatTags.js";
 import { PEACE_BLOCK_HEADING, buildPeaceBlock } from "./peacePrompt.js";
 import { WAR_FIGURES_WANTED_MOST, buildWarFiguresBlock, readWarFigures } from "./warFiguresPrompt.js";
+import { applyOccupationSettlements, occupationAnswerPolity, planOccupationSettlements, readOccupationAnswers, readOccupationSettlements } from "../../runtime/occupationSettlements.js";
 import { reshelveJumpAnswer } from "./jumpAnswerShelves.js";
 import { readPeaceVerdict, readTreatyLines, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { PEACE_ANSWERS_FIELD, buildWarStatsBlock, describePeaceTalk, warsOf } from "./warStatsPrompt.js";
@@ -544,6 +546,7 @@ import {
   describeIntelligenceStanding,
   describeLeaderStanding,
   describeOccupationsAfterTheirWar,
+  occupationGroups,
   describeReputationStanding,
   describeTerritorialRows,
   describeTerritorialRowsGrouped,
@@ -1376,13 +1379,56 @@ const LEAN_TERRITORIAL_ROWS = 12;
 // by who holds what, those of the powers in view in full.
 // Occupations whose war is over (standingContext.js occupationsAfterTheirWar), for the time skip to settle. Issue
 // #1000: Germany surrendered in 1945 and Poland was still German on the map in 1947.
+// { text, groups }: the block, and the groups the answer's keys are (standingContext.js occupationGroups).
 const buildOccupationsAfterWarContext = async (worldLike) => {
   const world = normalizeWorldState(worldLike);
   const catalog = await loadRegionCatalog().catch(() => []);
   const rows = occupationsAfterTheirWar(territorialControlRows(world, catalog), world);
-  if (!rows.length) return "";
+  if (!rows.length) return { text: "", groups: [] };
   const namer = await promptRegionNamer(world, catalog).catch(() => null);
-  return describeOccupationsAfterTheirWar(rows, { regionName: namer ? (id, name) => namer(id) || name : null });
+  return {
+    text: describeOccupationsAfterTheirWar(rows, { world, regionName: namer ? (id, name) => namer(id) || name : null }),
+    groups: occupationGroups(rows, world).map(({ key, controller, sovereign, rows: held, war }) => ({ key, controller, sovereign, count: held.length, war })),
+  };
+};
+
+// The skip's occupationSettlements (runtime/occupationSettlements.js), applied to the occupations that outlived
+// their war when it was asked (`baseWorld`) and are still held as they were then (an event of this turn may have
+// settled one already). Issue #1000.
+const settleOccupationsAfterWar = async (world, baseWorld, answer) => {
+  const keyed = readOccupationAnswers(answer);
+  const written = readOccupationSettlements(answer);
+  if (!keyed.length && !written.length) return world;
+  const before = normalizeWorldState(baseWorld);
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const pending = occupationsAfterTheirWar(territorialControlRows(before, catalog), before);
+  if (!pending.length) return world;
+  // A key stands for every region of its group, as the prompt listed them.
+  const groups = new Map(occupationGroups(pending).map((group) => [group.key, group]));
+  const lines = [
+    ...keyed.flatMap(({ key, to }) => (groups.get(key)?.rows ?? []).map((row) => ({ region: row.regionId, to: occupationAnswerPolity(to, groups.get(key)) }))),
+    ...written,
+  ];
+  const namer = await promptRegionNamer(before, catalog).catch(() => null);
+  const polities = new Map();
+  for (const name of [
+    ...Object.values(world?.regionOwnershipOverrides ?? {}),
+    ...normalizeArray(world?.ownerCodes),
+    ...Object.keys(world?.polityOverrides ?? {}),
+    ...catalog.map((region) => region?.country),
+  ]) {
+    const text = normalizeString(name);
+    if (text && !polities.has(text.toLowerCase())) polities.set(text.toLowerCase(), text);
+  }
+  const plan = planOccupationSettlements(lines, pending, {
+    namesOf: (row) => [row.regionId, row.name, namer?.(row.regionId)],
+    knownPolity: (name) => polities.get(normalizeString(toCountryName(name) || name).toLowerCase()) || "",
+  });
+  const held = world?.regionOwnershipOverrides ?? {};
+  const live = plan.filter((entry) => normalizeString(held[entry.regionId]).toLowerCase() === normalizeString(entry.from).toLowerCase());
+  if (!live.length) return world;
+  logDebugEvent("turn", `Occupations settled after their war: ${live.map((entry) => `${namer?.(entry.regionId) || entry.regionId} ${entry.kind} (${entry.to})`).join(", ")}.`, live);
+  return applyOccupationSettlements(world, live);
 };
 
 const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLookups = false, inView = null } = {}) => {
@@ -1605,7 +1651,9 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       // A time skip: grouped, the powers it has in view in full (promptContext.js buildPromptFocus).
       inView: variables.promptFocus?.inView ?? null,
     });
-    variables.occupationsAfterWarContext = await buildOccupationsAfterWarContext(bundle.world);
+    const occupations = await buildOccupationsAfterWarContext(bundle.world);
+    variables.occupationsAfterWarContext = occupations.text;
+    variables.occupationGroups = occupations.groups;
   }
   // Groups switched off for this game (server/gameFeatures.js): no task is
   // given them, which also leaves out the time skip's [Groups] rule and the
@@ -3286,8 +3334,10 @@ const taskToolFor = (taskKey, { customFullStatSheet, customStatRows, statIndexRo
   const featureTool = forActiveFeatures(customFullStatSheet
     ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
     : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
+  // Occupations that outlived their war (issue #1000): settled in a field the answer must hold, when there are any.
+  const settlingTool = JUMP_TASK_KEYS.has(taskKey) && normalizeArray(variables?.occupationGroups).length ? withOccupationSettlements(featureTool, variables.occupationGroups) : featureTool;
   // The players' advice, asked of the time skip whose prompt asks for it.
-  const advisedTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(featureTool) : featureTool;
+  const advisedTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(settlingTool) : settlingTool;
   // And the social posts after all of it, or none where the game has no Rostra
   // (gameplaySchemas.js withSocialPosts).
   const taskTool = JUMP_TASK_KEYS.has(taskKey)
@@ -10101,6 +10151,8 @@ const applySimulationResult = async ({
   // attacked; every country's weariness moves by what the turn did to it; and
   // the peaces the skip says two sides nobody plays made are made. Nobody
   // offers anybody peace here: a country does in the skip's letters (below).
+  // Occupations that outlived their war, as the skip settled them (issue #1000).
+  worldWithImpacts = await settleOccupationsAfterWar(worldWithImpacts, baseWorld, result.occupationSettlements);
   const toldTreaties = readTreatyLines(result.peaceTreaties);
   const samePair = (line, entry) => [line.from, line.to].map((name) => normalizeString(name).toLowerCase()).sort().join("|") === [entry.from, entry.to].map((name) => normalizeString(name).toLowerCase()).sort().join("|");
   const turnTreaties = [
@@ -18434,6 +18486,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     peaceTreaties: merged.peaceTreaties,
     // The figures the war needs of the countries that fight, a line a country (warFiguresPrompt.js).
     warFigures: merged.warFigures,
+    // Who each occupation that outlived its war goes to (runtime/occupationSettlements.js).
+    occupationSettlements: merged.occupationSettlements,
     // What was posted on Rostra in the period (runtime/socialFeed.js), read when the turn is written.
     socialPosts: merged.socialPosts,
     // What the public answered to the player's open polls (runtime/socialFeed.js readSkipPollResults).

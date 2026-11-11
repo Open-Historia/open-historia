@@ -278,28 +278,66 @@ export const occupationsAfterTheirWar = (rows, world) => {
   });
 };
 
-// The block for the time skip: each occupier and sovereign with the regions, every region by the name it is written
+// Those rows by occupier and sovereign, the largest first: [{ key: "o1", controller, sovereign, rows }]. The keys
+// are what the time skip answers (occupationSettlements), so the block, the tool and the reading all take them from
+// here, from the same world. At most OCCUPATION_GROUPS_MOST groups (the rest wait for a later skip).
+export const OCCUPATION_GROUPS_MOST = 12;
+// The war that brought an occupation, as the war ledger tells it: the latest ended war with the occupier and the
+// sovereign on opposite sides, { title, ended, note }, or null. A live skip (issue #1000, gemini-3.5-flash-lite) given
+// only "German Reich holds 17 regions of Poland" handed them to the German Reich, which had surrendered; the ledger's
+// note says how the war ended, and the story reads it from there.
+export const occupationWar = (world, controller, sovereign) => {
+  const fold = (value) => asText(value).toLowerCase();
+  const a = fold(controller);
+  const b = fold(sovereign);
+  const war = (Array.isArray(world?.wars) ? world.wars : [])
+    .filter((entry) => fold(entry?.status) === "ended")
+    .filter((entry) => {
+      const sideA = (entry?.sideA ?? []).map(fold);
+      const sideB = (entry?.sideB ?? []).map(fold);
+      return (sideA.includes(a) && sideB.includes(b)) || (sideA.includes(b) && sideB.includes(a));
+    })
+    .sort((x, y) => asText(y?.endedDate).localeCompare(asText(x?.endedDate)))[0];
+  if (!war) return null;
+  return { title: asText(war.title), ended: asText(war.endedDate), note: asText(war.note).slice(0, 200) };
+};
+const describeOccupationWar = (war) => (war
+  ? `Their war${war.title ? ` (${war.title})` : ""} ended${war.ended ? ` ${war.ended}` : ""}${war.note ? `: ${war.note}` : ""}`
+  : "");
+
+export const occupationGroups = (rows, world = null) => {
+  const groups = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const id = `${asText(row.controller).toLowerCase()}\u0001${asText(row.sovereign).toLowerCase()}`;
+    const group = groups.get(id) ?? { controller: row.controller, sovereign: row.sovereign, rows: [] };
+    group.rows.push(row);
+    groups.set(id, group);
+  }
+  return [...groups.values()]
+    .sort((a, b) => b.rows.length - a.rows.length || `${a.controller}|${a.sovereign}`.localeCompare(`${b.controller}|${b.sovereign}`))
+    .slice(0, OCCUPATION_GROUPS_MOST)
+    .map((group, index) => ({ key: `o${index + 1}`, ...group, war: occupationWar(world, group.controller, group.sovereign) }));
+};
+
+// The block for the time skip: each group under its key, with the regions, every region by the name it is written
 // with (`regionName`, nameRefs.js regionNamer: "region: X" where needed). Empty when there is none.
 export const OCCUPATIONS_AFTER_WAR_MOST = 60;
-export const describeOccupationsAfterTheirWar = (rows, { regionName = null, most = OCCUPATIONS_AFTER_WAR_MOST } = {}) => {
+export const describeOccupationsAfterTheirWar = (rows, { regionName = null, most = OCCUPATIONS_AFTER_WAR_MOST, world = null } = {}) => {
   if (!rows.length) return "";
-  const groups = new Map();
-  for (const row of rows) {
-    const key = `${row.controller}\u0001${row.sovereign}`;
-    const group = groups.get(key) ?? { controller: row.controller, sovereign: row.sovereign, names: [] };
-    group.names.push((regionName ? regionName(row.regionId, row.name) : "") || row.name);
-    groups.set(key, group);
-  }
+  const groups = occupationGroups(rows, world).map((group) => ({
+    ...group,
+    names: group.rows.map((row) => (regionName ? regionName(row.regionId, row.name) : "") || row.name),
+  }));
   let room = most;
-  const lines = [...groups.values()].sort((a, b) => b.names.length - a.names.length).map((group) => {
+  const lines = groups.map((group) => {
     const shown = group.names.slice(0, Math.max(0, room));
     room -= shown.length;
     const rest = group.names.length - shown.length;
-    return `- ${group.controller} holds ${group.names.length === 1 ? "a region" : `${group.names.length} regions`} of ${group.sovereign}: ${shown.join(", ") || "(listed above)"}${rest > 0 ? ` (+${rest} more)` : ""}`;
+    return `- ${group.key}: ${group.controller} holds ${group.names.length === 1 ? "a region" : `${group.names.length} regions`} of ${group.sovereign}: ${shown.join(", ") || "(listed above)"}${rest > 0 ? ` (+${rest} more)` : ""}${group.war ? `. ${describeOccupationWar(group.war)}` : ""}`;
   });
   return [
     "[Occupations Outliving Their War]",
-    "These regions are held by a power no longer at war with their sovereign: the war that brought the occupation has ended, and nothing has settled the land since. Settle each this period, in the event the story gives it (a surrender, an evacuation, a peace, an annexation): a regionControlOps control entry back to the sovereign where the occupier withdraws or is driven out, or a regionTransfers entry to the occupier where a treaty or annexation gives it the land. Leave one as it is only where an event this period says why the occupation goes on.",
+    "These regions are held by a power no longer at war with their sovereign: the war that brought the occupation has ended, and nothing has settled the land since. In occupationSettlements, answer each key below as the war's end and the story since have it. Where its war is told, say who had lost when it ended: the land goes back to the sovereign if the occupier lost, and stays the occupier's if the sovereign did. Otherwise 'returned' where the occupier withdrew or was driven out, 'kept' where a treaty or annexation made the land its own. Tell it in an event where it matters to the story.",
     ...lines,
   ].join("\n");
 };
