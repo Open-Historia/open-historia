@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player, 2026-11-10: "when a movement ousted the Lebanese government nothing actually changed on map despite the events and AI
+    // recognizing the new Republic". AI/gameplay.js JUMP_LEVERS polityChanges line; polityTransitions.js landlessFoundings.
+    id: "2026-11-overthrown-governments-rename",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Overthrown governments change the map",
+        items: [
+          "A government overthrown across a whole country now renames that country, instead of founding a new republic beside it with no land.",
+          "A country founded with no land is pointed out to the next time skip, so it can give the country the land it rules.",
+        ],
+      },
+    ],
+  },
+  {
     // Issue #1000 (a 1947 save): Germany had surrendered and its wars were ended, but 18 regions of Poland were still
     // under German control, so the map showed Poland German. Nothing ends an occupation when its war ends; the time skip
     // is now told which occupations outlive their war, and how that war ended, and its answer names who holds each

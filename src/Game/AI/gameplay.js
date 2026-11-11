@@ -79,7 +79,7 @@ import {
   trimWorldForFocus,
 } from "./playerFocus.js";
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
-import { successorTransfers } from "./polityTransitions.js";
+import { landlessFoundings, successorTransfers } from "./polityTransitions.js";
 import { hasAnnexOrders, orderedAnnexations } from "./orderedAnnexations.js";
 import {
   detectExplicitBaseTerritoryScope,
@@ -1718,7 +1718,7 @@ const JUMP_LEVERS = [
   // Said where each change goes because models put them anywhere else (2026-11-03: Gemma, beam and an unheld
   // Gemini wrote client states, wars and relations into an event's impacts, and the check cut them out).
   "Every change to the map, the units, the structures, a country or its politics rides in an event's impacts object, and no event's text may claim a change its impacts do not make. Wars, relations, agreements, client states and storylines are not impacts: they are the answer's own lines (warUpdates, relationUpdates, agreementUpdates, puppetUpdates, storylineUpdates), beside the events and never inside an event, each naming its events by number (1 for the first). The output function describes each field; these need a word more, and every one of them is a list in an event's impacts:",
-  "• polityChanges: after a rename the country IS the new name everywhere, so address the change to its current name, never the new one; stats carry only the fields that changed, tags the complete new list. A better intelligence service is built over time: open it as a project, never as an instant rating.",
+  "• polityChanges: after a rename the country IS the new name everywhere, so address the change to its current name, never the new one; stats carry only the fields that changed, tags the complete new list. A government overthrown across the whole country (a coup, a revolution or a movement that takes power, a new republic or regime proclaimed in its place) leaves the same country under a new regime: rename it to the name the event gives and replace its government, never create a second country beside it that holds no land. A country founded with land gets that land in the same event, as transfer or control entries to it; one that replaces another country outright takes all of it, with dissolve for the old one. A better intelligence service is built over time: open it as a project, never as an instant rating.",
   "• politicalActorOps {\"op\":\"<operation>\",\"polityKey\":\"<current full name; the new one if this event also renames it>\",\"argsJson\":\"<one JSON object, as a string>\"}: set-government, replace-leader, form-coalition / leave-coalition, create / update / set-party-*, create / update / set-power-bloc-*, set-political-system, set-strategy, set-traits, set-perceptions / remove-perception. Never guess the decoded argsJson shape: use the one given for the op below. Every change of government, leader or party carries these ops, or it changes only the story; stats.leader and stats.government never carry it.",
   "• Always return politicalClaims: transient validation only, never world state. One line per event that COMPLETES a national Political World structural change: eventNumber~polity~effectsCSV. Effects: election (final national result), government, coalition, leadership, system, parties (founding/split/merger/reorganization). Use the same polityKey as that event's politicalActorOps (new key after a same-event rename). No line for campaigns, policy, subnational politics, references or later consequences. Empty string when none. Claims never replace politicalActorOps.",
   POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE,
@@ -8264,6 +8264,11 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       noteReceipt(receipt, "adjusted", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}${transfer.toCode} takes over the land of ${transfer.fromCode}, which the event dissolves.`);
       console.info(`[ai] ${path}.regionTransfers: ${transfer.toCode} succeeds ${transfer.fromCode}; its whole country passes with it.`);
     }
+  }
+  // A polity founded with no land (polityTransitions.js landlessFoundings): kept as written, and the next skip is told.
+  for (const { polity, title } of landlessFoundings(containers.map(({ impacts, path }) => ({ impacts, title: titleAt(path) })))) {
+    noteReceipt(receipt, "short", `${title ? `Event "${title}": ` : ""}it founded ${polity}, which holds no land on the map. If ${polity} now governs a country, write that: rename the country it took over to ${polity} (polityChanges rename), or give ${polity} the land it holds.`);
+    console.info(`[ai] ${polity} was founded and holds no land; the next skip is told.`);
   }
   if (Array.isArray(candidate?.events) && normalizeString(playerCountry) && hasAnnexOrders(actions)) {
     const catalog = filterToRenderedRegions(await loadRegionCatalog().catch(() => []), world);
