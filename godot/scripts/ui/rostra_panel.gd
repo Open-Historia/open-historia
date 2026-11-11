@@ -5,20 +5,29 @@ signal closed
 signal unseen_changed(count: int)
 signal enabled_changed(on: bool)
 
-const ACCENT := Color("#2bc1f3")
-const ACCENT_SOFT := Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.14)
-const ACCENT_EDGE := Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.45)
-const INK := Color("#f4f4f5")
-const INK_SOFT := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.62)
-const INK_FAINT := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.38)
-const LINE := Color(1, 1, 1, 0.08)
-const AVATAR := Color("#2a2a2f")
-const SCREEN := Color("#0b0b0d")
+const PHONE := {
+	"--rs-accent": "#2bc1f3",
+	"--rs-accent-soft": "rgba(43,193,243,0.14)",
+	"--rs-accent-edge": "rgba(43,193,243,0.45)",
+	"--rs-accent-bar": "rgba(43,193,243,0.28)",
+	"--rs-on-accent": "#06171d",
+	"--rs-ink": "#f4f4f5",
+	"--rs-ink-soft": "rgba(244,244,245,0.62)",
+	"--rs-ink-faint": "rgba(244,244,245,0.38)",
+	"--rs-line": "rgba(255,255,255,0.08)",
+	"--rs-edge": "rgba(255,255,255,0.12)",
+	"--rs-wash": "rgba(255,255,255,0.06)",
+	"--rs-wash-faint": "rgba(255,255,255,0.03)",
+	"--rs-avatar": "#2a2a2f",
+	"--rs-screen": "#0b0b0d",
+	"--rs-warn": "rgba(253,186,116,0.95)",
+	"--rs-font": "sans-serif",
+	"--rs-title-font": "sans-serif",
+	"--rs-name-font": "sans-serif",
+	"--rs-carve": "none",
+}
 const FRAME := Color("#17171a")
 const FRAME_BUTTON := Color("#2c2c31")
-const DARK_INK := Color("#06171d")
-const WARN := Color(253 / 255.0, 186 / 255.0, 116 / 255.0, 0.95)
-const TOO_LONG := Color("#f87171")
 const BOTTOM_GAP := 78.0
 const RING := 3.0
 const TABS := [["all", "For you", "home"], ["search", "Search", "search"], ["mentions", "Mentions", "bell"], ["mine", "Your posts", "person"]]
@@ -27,9 +36,12 @@ const EMPTY_TEXTS := {
 	"mine": "You have not posted yet.",
 }
 const CANNOT_POST := "You can post again once the time skip has ended."
-const MARK := "<svg viewBox='0 0 32 32'><path d='M6 3h20a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H13l-6 5v-5H6a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4z' fill='#2bc1f3'/><path d='M12 21h8l-1.2-7.5h-5.6z' fill='#0b1a20'/><path d='M9.5 13.5h13' stroke='#0b1a20' stroke-width='1.8' stroke-linecap='round'/><circle cx='16' cy='9' r='2' fill='#0b1a20'/></svg>"
+const MARK := "<svg viewBox='0 0 32 32'><path d='M6 3h20a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H13l-6 5v-5H6a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4z' fill='#2bc1f3'/><path d='M12 21h8l-1.2-7.5h-5.6z' fill='#06171d'/><path d='M9.5 13.5h13' stroke='#06171d' stroke-width='1.8' stroke-linecap='round'/><circle cx='16' cy='9' r='2' fill='#06171d'/></svg>"
 const GLYPHS := {
 	"dock": ["<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='5.5' y='2' width='13' height='20' rx='3'/><path d='M10.5 5h3'/><path d='M9.5 19h5'/></svg>", 24.0],
+	"dock-newspaper": ["<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M4 4.5h13v15H6a2 2 0 0 1-2-2z'/><path d='M17 8.5h3v9a2 2 0 0 1-2 2h-1'/><path d='M7 8h7M7 11.5h7M7 15h4'/></svg>", 24.0],
+	"dock-scroll": ["<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M6 4h12M6 20h12'/><path d='M7.5 4v16M16.5 4v16'/><path d='M10 8.5h4M10 12h4M10 15.5h3'/></svg>", 24.0],
+	"dock-tablet": ["<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M5 21V9.5a7 6 0 0 1 14 0V21z'/><path d='M9 11h6M9 14.5h6M9 18h4'/></svg>", 24.0],
 	"quote": ["<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M7 7h4v4c0 2.5-1.3 4-4 5'/><path d='M14 7h4v4c0 2.5-1.3 4-4 5'/></svg>", 24.0],
 	"repost": ["<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M17 3l3 3-3 3'/><path d='M4 12V9a3 3 0 0 1 3-3h13'/><path d='M7 21l-3-3 3-3'/><path d='M20 12v3a3 3 0 0 1-3 3H4'/></svg>", 24.0],
 	"heart": ["<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M20.5 5.8a5 5 0 0 0-7.1 0L12 7.2l-1.4-1.4a5 5 0 0 0-7.1 7.1L12 21.4l8.5-8.5a5 5 0 0 0 0-7.1z'/></svg>", 24.0],
@@ -57,6 +69,28 @@ const GLYPHS := {
 static var _textures := {}
 static var _flags := {}
 static var _italics := {}
+static var _docks: Array = []
+static var LOOK := "phone"
+static var EDGE_POINTS: Array = []
+static var ACCENT := Color("#2bc1f3")
+static var ACCENT_SOFT := Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.14)
+static var ACCENT_EDGE := Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.45)
+static var ACCENT_BAR := Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.28)
+static var ON_ACCENT := Color("#06171d")
+static var INK := Color("#f4f4f5")
+static var INK_SOFT := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.62)
+static var INK_FAINT := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.38)
+static var LINE := Color(1, 1, 1, 0.08)
+static var EDGE := Color(1, 1, 1, 0.12)
+static var WASH := Color(1, 1, 1, 0.06)
+static var WASH_FAINT := Color(1, 1, 1, 0.03)
+static var AVATAR := Color("#2a2a2f")
+static var SCREEN := Color("#0b0b0d")
+static var WARN := Color(253 / 255.0, 186 / 255.0, 116 / 255.0, 0.95)
+static var BODY_FONT := PackedStringArray(["sans-serif"])
+static var TITLE_FONT := PackedStringArray(["sans-serif"])
+static var NAME_FONT := PackedStringArray(["sans-serif"])
+static var CARVE := Color(0, 0, 0, 0)
 
 var engine: EngineLink
 var context := {}
@@ -82,6 +116,11 @@ var _refresh_busy := false
 var _refresh_error := ""
 var _opened_place: Variant = null
 var _search: RostraSearch
+var _root: Control
+var _backdrop: Control
+var _rolls: Array = []
+var _mast_issue: Label
+var _look_built := "phone"
 var _shell: PanelContainer
 var _ring: PanelContainer
 var _body: PanelContainer
@@ -139,6 +178,7 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(func() -> void:
 		_apply_look()
 		_place(false))
+	resized.connect(_lay_dress)
 	_apply_look()
 	_place(false)
 	_poll.start()
@@ -201,11 +241,73 @@ func open_place(place: Dictionary) -> void:
 
 static func dock_glyph(size: int) -> TextureRect:
 	var rect := TextureRect.new()
-	rect.texture = glyph("dock", size)
+	rect.texture = glyph(_dock_name(), size)
 	rect.custom_minimum_size = Vector2(size, size)
 	rect.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
 	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rect.set_meta("dock_size", size)
+	_docks.append(weakref(rect))
 	return rect
+
+
+static func _dock_name() -> String:
+	return "dock" if LOOK == "phone" else "dock-" + LOOK
+
+
+static func apply_dress(dress: Dictionary) -> bool:
+	var look := str(dress.get("look", "phone"))
+	if not RostraLook.LOOKS.has(look):
+		look = "phone"
+	var vars: Dictionary = PHONE.duplicate()
+	var given: Variant = dress.get("vars")
+	if typeof(given) == TYPE_DICTIONARY:
+		vars.merge(given, true)
+	var changed := look != LOOK
+	LOOK = look
+	EDGE_POINTS = dress.get("edge", []) if typeof(dress.get("edge")) == TYPE_ARRAY else []
+	var read := func(key: String) -> Color: return RostraLook.color_of(vars.get(key, PHONE[key]), RostraLook.color_of(PHONE[key], Color.WHITE))
+	ACCENT = read.call("--rs-accent")
+	ACCENT_SOFT = read.call("--rs-accent-soft")
+	ACCENT_EDGE = read.call("--rs-accent-edge")
+	ACCENT_BAR = read.call("--rs-accent-bar")
+	ON_ACCENT = read.call("--rs-on-accent")
+	INK = read.call("--rs-ink")
+	INK_SOFT = read.call("--rs-ink-soft")
+	INK_FAINT = read.call("--rs-ink-faint")
+	LINE = read.call("--rs-line")
+	EDGE = read.call("--rs-edge")
+	WASH = read.call("--rs-wash")
+	WASH_FAINT = read.call("--rs-wash-faint")
+	AVATAR = read.call("--rs-avatar")
+	SCREEN = read.call("--rs-screen")
+	WARN = read.call("--rs-warn")
+	BODY_FONT = RostraLook.families(vars.get("--rs-font", "sans-serif"))
+	TITLE_FONT = RostraLook.families(vars.get("--rs-title-font", "sans-serif"))
+	NAME_FONT = RostraLook.families(vars.get("--rs-name-font", "sans-serif"))
+	var carve := str(vars.get("--rs-carve", "none"))
+	CARVE = RostraLook.color_of(carve.substr(carve.find("rgb")), Color(0, 0, 0, 0)) if carve.contains("rgb") else Color(0, 0, 0, 0)
+	if changed:
+		var kept: Array = []
+		for ref in _docks:
+			var rect := (ref as WeakRef).get_ref() as TextureRect
+			if rect != null and is_instance_valid(rect):
+				rect.texture = glyph(_dock_name(), int(rect.get_meta("dock_size", 24)))
+				kept.append(ref)
+		_docks = kept
+	return changed
+
+
+static func phone_look() -> bool:
+	return LOOK == "phone"
+
+
+static func face(weight := 400, slanted := false, spacing := 0.0, names: PackedStringArray = PackedStringArray()) -> Font:
+	var family := names if not names.is_empty() else BODY_FONT
+	if LOOK == "phone" and names.is_empty():
+		if slanted:
+			return italic(weight)
+		return UI.font(weight, "Arial", int(round(spacing)))
+	return RostraLook.font(family, weight, slanted, spacing)
 
 
 static func glyph(name: String, size: int) -> Texture2D:
@@ -267,6 +369,8 @@ static func italic(weight := 400) -> Font:
 
 static func text(words: String, size: int, color: Color, weight := 400, own := false) -> Label:
 	var node := UI.label(words, size, color, weight)
+	if LOOK != "phone":
+		node.add_theme_font_override("font", face(weight))
 	if own:
 		node.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	return node
@@ -299,9 +403,9 @@ static func pad(child: Control, left: float, top: float, right: float, bottom: f
 	return box
 
 
-static func rule(color := LINE) -> ColorRect:
+static func rule(color: Variant = null) -> ColorRect:
 	var line := ColorRect.new()
-	line.color = color
+	line.color = LINE if color == null else color
 	line.custom_minimum_size.y = 1
 	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return line
@@ -391,7 +495,18 @@ static func avatar(name: String, initials_text: String, flag_path: String, mine:
 	holder.custom_minimum_size = Vector2(size, size)
 	holder.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var face := boxed(ACCENT_SOFT if mine else AVATAR, ACCENT_EDGE if mine else Color(1, 1, 1, 0.1), 999, Vector4.ZERO)
+	var bg := ACCENT_SOFT if mine else AVATAR
+	var edge := ACCENT_EDGE if mine else EDGE
+	var face := boxed(bg, edge, 999, Vector4.ZERO)
+	if LOOK == "newspaper":
+		face = boxed(bg, EDGE, 2, Vector4.ZERO)
+	elif LOOK == "scroll":
+		face = boxed(bg, EDGE, 999, Vector4.ZERO, 2)
+	elif LOOK == "tablet":
+		face = PanelContainer.new()
+		face.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		face.add_theme_stylebox_override("panel", Hollow.new(bg, 999))
+	face.name = "Face"
 	face.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var letters := text(initials_text if not initials_text.is_empty() else "?", int(round(size_rem * 0.34 * 16.0)), ACCENT if mine else INK_SOFT, 800, true)
 	letters.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -402,7 +517,17 @@ static func avatar(name: String, initials_text: String, flag_path: String, mine:
 	if picture:
 		var width := size_rem * 0.52 * 16.0
 		var height := size_rem * 0.36 * 16.0
-		var frame := boxed(Color("#18181b"), Color("#18181b"), 3, Vector4(1.5, 1.5, 1.5, 1.5), 2)
+		var ring := SCREEN
+		var corner := 3
+		if LOOK == "newspaper":
+			ring = INK
+			corner = 0
+		elif LOOK == "scroll":
+			ring = INK_SOFT
+		elif LOOK == "tablet":
+			ring = Color(0, 0, 0, 0.3)
+		var frame := boxed(Color(0, 0, 0, 0), ring, corner, Vector4(1.5, 1.5, 1.5, 1.5), 2)
+		frame.name = "Flag"
 		frame.clip_contents = true
 		frame.position = Vector2(size + 0.2 * 16.0 - width - 3.0, size + 0.12 * 16.0 - height - 3.0)
 		frame.size = Vector2(width + 3.0, height + 3.0)
@@ -412,6 +537,9 @@ static func avatar(name: String, initials_text: String, flag_path: String, mine:
 		image.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 		image.custom_minimum_size = Vector2(width, height)
 		image.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		image.material = RostraLook.flag_material(LOOK)
+		if LOOK == "phone":
+			frame.add_theme_stylebox_override("panel", UI.box(SCREEN, SCREEN, corner, 2, Vector4(1.5, 1.5, 1.5, 1.5)))
 		frame.add_child(image)
 		holder.add_child(frame)
 	return holder
@@ -421,10 +549,10 @@ static func quoted_card(post: Dictionary) -> Control:
 	if post.is_empty() or bool(post.get("gone", false)):
 		var gone := boxed(Color(0, 0, 0, 0), LINE, 10, Vector4(11, 9, 11, 9))
 		var words := para("This post is no longer available.", 12, INK_FAINT, 400, 1.3)
-		words.add_theme_font_override("font", italic())
+		words.add_theme_font_override("font", face(400, true))
 		gone.add_child(words)
 		return gone
-	var card := boxed(Color(0, 0, 0, 0), Color(1, 1, 1, 0.12), 10, Vector4(11, 9, 11, 9))
+	var card := boxed(Color(0, 0, 0, 0), EDGE, 10, Vector4(11, 9, 11, 9))
 	var stack := column(5)
 	var top := FitRow.new(7)
 	top.add_child(avatar(str(post.get("author", "")), str(post.get("initials", "")), str(post.get("flag", "")), bool(post.get("mine", false)), 1.3))
@@ -443,7 +571,7 @@ static func quoted_card(post: Dictionary) -> Control:
 
 
 static func poll_card(poll: Dictionary) -> Control:
-	var card := boxed(Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.1), 12, Vector4(10, 10, 10, 9))
+	var card := boxed(WASH_FAINT, EDGE, 12, Vector4(10, 10, 10, 9))
 	var stack := column(7)
 	var grid := column(6)
 	var results: Variant = poll.get("results")
@@ -458,7 +586,8 @@ static func poll_card(poll: Dictionary) -> Control:
 			var won := index == winner
 			var bar := ShareBar.new()
 			bar.share = share
-			bar.fill = Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.28) if won else Color(1, 1, 1, 0.1)
+			bar.fill = ACCENT_BAR if won else EDGE
+			bar.add_theme_stylebox_override("panel", UI.box(WASH, Color(0, 0, 0, 0), 8, 0))
 			var line := row(8)
 			var name := clipped("✓ %s" % choice if won else choice, 13, INK, 800 if won else 600, true)
 			name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -481,15 +610,15 @@ static func poll_card(poll: Dictionary) -> Control:
 		foot.add_child(para("The public votes until the next time skip.", 11, INK_FAINT, 400, 1.3))
 	stack.add_child(foot)
 	if has_results and not str((results as Dictionary).get("consensus", "")).is_empty():
-		var box := boxed(Color(1, 1, 1, 0.04), LINE, 8, Vector4(9, 7, 9, 7))
+		var box := boxed(WASH_FAINT, LINE, 8, Vector4(9, 7, 9, 7))
 		var words := RichTextLabel.new()
 		words.bbcode_enabled = true
 		words.fit_content = true
 		words.scroll_active = false
 		words.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		words.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		words.add_theme_font_override("normal_font", UI.font(400))
-		words.add_theme_font_override("bold_font", UI.font(700))
+		words.add_theme_font_override("normal_font", face(400))
+		words.add_theme_font_override("bold_font", face(700))
 		words.add_theme_font_size_override("normal_font_size", 12)
 		words.add_theme_font_size_override("bold_font_size", 12)
 		words.add_theme_color_override("default_color", INK_SOFT)
@@ -503,7 +632,7 @@ static func poll_card(poll: Dictionary) -> Control:
 	return card
 
 
-func post_card(post: Dictionary, can_post: bool) -> Control:
+func post_card(post: Dictionary, can_post: bool, lead := false) -> Control:
 	var id := str(post.get("id", ""))
 	var mine := bool(post.get("mine", false))
 	var article := VBoxContainer.new()
@@ -514,11 +643,23 @@ func post_card(post: Dictionary, can_post: bool) -> Control:
 	var words := column(0)
 	words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var top := FitRow.new(6)
-	top.add_child(shrinking(clipped(str(post.get("author", "")), 13, INK, 800, true)))
+	var author_text := str(post.get("author", ""))
+	if LOOK == "newspaper" and lead:
+		var headline := para(author_text, 20, INK, 700, 1.15, true)
+		headline.name = "Author"
+		headline.add_theme_font_override("font", face(700, false, 0.0, NAME_FONT))
+		headline.set_meta("least", 40.0)
+		headline.set_meta("shrink", 1.0)
+		headline.set_meta("basis", ceilf(face(700, false, 0.0, NAME_FONT).get_string_size(author_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 20).x) + 2.0)
+		top.add_child(headline)
+	else:
+		top.add_child(shrinking(author_label(author_text)))
 	if mine:
 		var you := boxed(ACCENT_SOFT, ACCENT_EDGE, 999, Vector4(6, 1, 6, 1))
 		you.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		var you_words := UI.label("You", 9, ACCENT, 800, "Arial", 1)
+		if LOOK != "phone":
+			you_words.add_theme_font_override("font", face(800, false, 1.0))
 		you_words.uppercase = true
 		you.add_child(you_words)
 		top.add_child(you)
@@ -533,10 +674,17 @@ func post_card(post: Dictionary, can_post: bool) -> Control:
 			badge.add_child(text("Poll", 10, ACCENT, 800))
 			meta.add_child(badge)
 		var about := clipped(str(post.get("meta", "")), 11, INK_FAINT, 400, true)
+		if LOOK == "newspaper":
+			about.add_theme_font_override("font", face(400, true))
+		elif LOOK == "tablet":
+			about.uppercase = true
+			about.add_theme_font_size_override("font_size", 10)
+			about.add_theme_color_override("font_color", INK_SOFT)
+			about.add_theme_font_override("font", face(400, false, 0.6))
 		about.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		meta.add_child(about)
 		words.add_child(meta)
-	words.add_child(pad(para(str(post.get("text", "")), 13, INK, 400, 1.5, true), 0, 6, 0, 0))
+	words.add_child(pad(post_text(str(post.get("text", "")), lead), 0, 6, 0, 0))
 	if typeof(post.get("poll")) == TYPE_DICTIONARY:
 		words.add_child(pad(poll_card(post["poll"]), 0, 10, 0, 0))
 	if typeof(post.get("quote")) == TYPE_DICTIONARY:
@@ -556,21 +704,95 @@ func post_card(post: Dictionary, can_post: bool) -> Control:
 	actions.add_child(quote)
 	if bool(post.get("waiting", false)):
 		var waiting := para("The world answers with the next time skip.", 11, INK_FAINT, 400, 1.3)
-		waiting.add_theme_font_override("font", italic())
+		waiting.add_theme_font_override("font", face(400, true))
 		actions.add_child(waiting)
 	else:
 		actions.add_child(_count_chip("repost", str(post.get("reposts", "0")), "Reposts"))
 		actions.add_child(_count_chip("heart", str(post.get("likes", "0")), "Likes"))
 	words.add_child(pad(actions, 0, 9, 0, 0))
 	line.add_child(words)
-	article.add_child(pad(line, 16, 13, 16, 13))
-	article.add_child(rule())
+	article.add_child(pad(line, 16, 13, 16, 13 + post_tail()))
+	article.add_child(post_rule(lead))
 	if not id.is_empty():
 		if not _rendered_ids.has(id):
 			article.modulate.a = 0.0
 			article.create_tween().tween_property(article, "modulate:a", 1.0, 0.28)
 		_next_ids[id] = true
 	return article
+
+
+static func author_label(words: String) -> Label:
+	var node: Label
+	if LOOK == "newspaper":
+		node = clipped(words, 15, INK, 700, true)
+		node.add_theme_font_override("font", face(700, false, 0.0, NAME_FONT))
+	elif LOOK == "scroll":
+		node = clipped(words, 16, INK, 400, true)
+		node.add_theme_font_override("font", face(400, false, 0.0, NAME_FONT))
+	elif LOOK == "tablet":
+		node = clipped(words, 13, INK, 800, true)
+		node.uppercase = true
+		node.add_theme_font_override("font", face(800, false, 1.3, NAME_FONT))
+	else:
+		node = clipped(words, 13, INK, 800, true)
+	node.name = "Author"
+	return node
+
+
+static func post_text(words: String, lead := false) -> Control:
+	if LOOK != "newspaper":
+		return para(words, 13, INK, 400, 1.5, true)
+	if not lead or words.is_empty():
+		var plain := para(words, 14, INK, 400, 1.42, true)
+		plain.horizontal_alignment = HORIZONTAL_ALIGNMENT_FILL
+		return plain
+	var rich := RichTextLabel.new()
+	rich.bbcode_enabled = true
+	rich.fit_content = true
+	rich.scroll_active = false
+	rich.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rich.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rich.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	rich.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rich.custom_minimum_size.x = 1
+	rich.add_theme_font_override("normal_font", face(400))
+	rich.add_theme_font_size_override("normal_font_size", 14)
+	rich.add_theme_color_override("default_color", INK)
+	rich.add_theme_constant_override("line_separation", 4)
+	rich.push_paragraph(HORIZONTAL_ALIGNMENT_FILL)
+	rich.push_dropcap(words.substr(0, 1), face(700, false, 0.0, NAME_FONT), 42, Rect2(0, 1, 2, -2), INK)
+	rich.add_text(words.substr(1))
+	rich.pop()
+	rich.name = "Lead"
+	return rich
+
+
+static func post_tail() -> float:
+	return 1.55 * 16.0 - 0.8 * 16.0 if LOOK == "scroll" else 0.0
+
+
+static func post_rule(lead := false) -> Control:
+	if LOOK == "newspaper":
+		return RostraLook.double_rule(INK_SOFT) if lead else rule(EDGE)
+	if LOOK == "tablet":
+		return RostraLook.groove(Color(0, 0, 0, 0.22), Color(1, 1, 1, 0.32))
+	if LOOK == "scroll":
+		var holder := Control.new()
+		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		holder.custom_minimum_size.y = 0
+		var mark := text("❦", 18, INK_FAINT, 400, true)
+		mark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		mark.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+		mark.anchor_left = 0.0
+		mark.anchor_right = 1.0
+		mark.offset_left = 0
+		mark.offset_right = 0
+		mark.offset_top = -0.15 * 16.0 - 18.0
+		mark.offset_bottom = -0.15 * 16.0
+		mark.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+		holder.add_child(mark)
+		return holder
+	return rule()
 
 
 func _count_chip(name: String, value: String, tip: String) -> Control:
@@ -583,10 +805,20 @@ func _count_chip(name: String, value: String, tip: String) -> Control:
 
 
 func _build() -> void:
+	_root = Control.new()
+	_root.name = "Look"
+	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(_root)
+	if LOOK != "phone":
+		_backdrop = Control.new()
+		_backdrop.name = "Backdrop"
+		_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_root.add_child(_backdrop)
 	_shell = PanelContainer.new()
 	_shell.mouse_filter = Control.MOUSE_FILTER_STOP
 	_shell.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(_shell)
+	_root.add_child(_shell)
 	_ring = PanelContainer.new()
 	_ring.mouse_filter = Control.MOUSE_FILTER_PASS
 	_shell.add_child(_ring)
@@ -596,6 +828,13 @@ func _build() -> void:
 	_screen = PanelContainer.new()
 	_screen.mouse_filter = Control.MOUSE_FILTER_PASS
 	_screen.clip_contents = true
+	if LOOK == "tablet":
+		var carved := Theme.new()
+		for kind in ["Label", "RichTextLabel"]:
+			carved.set_color("font_shadow_color", kind, CARVE)
+			carved.set_constant("shadow_offset_x", kind, 0)
+			carved.set_constant("shadow_offset_y", kind, 1)
+		_screen.theme = carved
 	_body.add_child(_screen)
 	for spec in [[true, 6.2, 1.8], [true, 9.0, 3.0], [false, 9.6, 4.4]]:
 		var button := ColorRect.new()
@@ -605,7 +844,7 @@ func _build() -> void:
 		button.set_meta("top", float(spec[1]) * 16.0)
 		button.size = Vector2(3, float(spec[2]) * 16.0)
 		_side_buttons.append(button)
-		add_child(button)
+		_root.add_child(button)
 	var room := Control.new()
 	room.mouse_filter = Control.MOUSE_FILTER_PASS
 	_screen.add_child(room)
@@ -635,43 +874,64 @@ func _build() -> void:
 	status_row.add_child(marks)
 	_status.add_child(status_row)
 	stack.add_child(_status)
-	_header = MarginContainer.new()
-	_header_row = row(10)
-	var mark := TextureRect.new()
-	mark.texture = mark_texture(26)
-	mark.custom_minimum_size = Vector2(26, 26)
-	mark.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
-	mark.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_header_row.add_child(mark)
-	var titles := column(2)
-	titles.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var name := UI.label("Rostra", 17, INK, 900, "Arial", 1)
-	name.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-	titles.add_child(name)
-	titles.add_child(text("What the world is saying", 10, INK_FAINT))
-	_header_row.add_child(titles)
-	_date_gap = spacer()
-	_header_row.add_child(_date_gap)
-	_header_date = text("", 11, INK_FAINT)
-	_header_date.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_header_row.add_child(_header_date)
-	_pen_gap = spacer()
-	_header_row.add_child(_pen_gap)
-	_pen = round_button("pen", 17, INK_SOFT, Color(1, 1, 1, 0.06), Color(0, 0, 0, 0))
+	_pen = round_button("pen", 17, INK_SOFT, WASH, Color(0, 0, 0, 0))
 	_pen.tooltip_text = "Write a post"
-	_pen.pressed.connect(func() -> void:
-		if _composing:
-			_close_composer()
+	_pen.pressed.connect(_on_pen)
+	_close = round_button("close", 15, INK_SOFT, WASH)
+	_close.pressed.connect(_on_close)
+	if LOOK != "phone":
+		for state in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
+			_close.add_theme_stylebox_override(state, _button_look(false))
+	if LOOK == "newspaper":
+		_header = _masthead()
+		stack.add_child(_header)
+	else:
+		_header = MarginContainer.new()
+		_header_row = row(10)
+		if LOOK == "phone":
+			var mark := TextureRect.new()
+			mark.texture = mark_texture(26)
+			mark.custom_minimum_size = Vector2(26, 26)
+			mark.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+			mark.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_header_row.add_child(mark)
 		else:
-			_open_composer())
-	_header_row.add_child(_pen)
-	_close = round_button("close", 15, INK_SOFT, Color(1, 1, 1, 0.06))
-	_close.pressed.connect(func() -> void: closed.emit())
-	_header_row.add_child(_close)
-	_header.add_child(_header_row)
-	stack.add_child(_header)
-	stack.add_child(rule())
+			_header_row.add_child(RostraLook.look_mark(LOOK))
+		var titles := column(2)
+		titles.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		var name := UI.label("Rostra", 17, INK, 900, "Arial", 1)
+		if LOOK == "scroll":
+			name = UI.label("Rostra", 25, INK, 400)
+			name.add_theme_font_override("font", face(400, false, 1.0, TITLE_FONT))
+		elif LOOK == "tablet":
+			name = UI.label("Rostra", 22, INK, 700)
+			name.uppercase = true
+			name.add_theme_font_override("font", face(700, false, 1.0, TITLE_FONT))
+		name.name = "Title"
+		name.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		titles.add_child(name)
+		titles.add_child(text("What the world is saying", 10, INK_FAINT))
+		if LOOK != "phone":
+			titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			titles.clip_contents = true
+			titles.custom_minimum_size.x = 1
+		_header_row.add_child(titles)
+		_date_gap = spacer()
+		_header_row.add_child(_date_gap)
+		_header_date = text("", 11, INK_FAINT)
+		_header_date.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		_header_row.add_child(_header_date)
+		_pen_gap = spacer()
+		_header_row.add_child(_pen_gap)
+		_header_row.add_child(_pen)
+		_header_row.add_child(_close)
+		_header.add_child(_header_row)
+		stack.add_child(_header)
+		if LOOK == "phone":
+			stack.add_child(rule())
+		else:
+			stack.add_child(_look_rule(false))
 	_scroll = ScrollContainer.new()
 	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -679,7 +939,7 @@ func _build() -> void:
 	bar.add_theme_stylebox_override("scroll", StyleBoxEmpty.new())
 	bar.add_theme_stylebox_override("scroll_focus", StyleBoxEmpty.new())
 	for state in ["grabber", "grabber_highlight", "grabber_pressed"]:
-		bar.add_theme_stylebox_override(state, UI.box(Color(1, 1, 1, 0.2), Color(0, 0, 0, 0), 3, 0, Vector4(3, 0, 3, 0)))
+		bar.add_theme_stylebox_override(state, UI.box(Color(1, 1, 1, 0.2) if LOOK == "phone" else EDGE, Color(0, 0, 0, 0), 3, 0, Vector4(3, 0, 3, 0)))
 	bar.custom_minimum_size.x = 6
 	_content = column(0)
 	_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -700,7 +960,7 @@ func _build() -> void:
 	_feed = column(0)
 	_feed.mouse_filter = Control.MOUSE_FILTER_PASS
 	_content.add_child(_feed)
-	stack.add_child(rule())
+	stack.add_child(rule() if LOOK == "phone" else _look_rule(true))
 	_tab_pad = MarginContainer.new()
 	var tabs := row(0)
 	tabs.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -722,22 +982,23 @@ func _build() -> void:
 		if key == "mentions":
 			_mention_badge = boxed(ACCENT, SCREEN, 999, Vector4(3, 0, 3, 0), 2)
 			_mention_badge.custom_minimum_size = Vector2(17, 17)
-			_mention_label = text("", 9, DARK_INK, 800, true)
+			_mention_label = text("", 9, ON_ACCENT, 800, true)
 			_mention_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			_mention_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 			_mention_badge.add_child(_mention_label)
 			_mention_badge.visible = false
 			icon_holder.add_child(_mention_badge)
 		inner.add_child(icon_holder)
-		var caption := clipped(str(entry[1]), 10, INK_FAINT, 650)
+		var caption := clipped(str(entry[1]), _caption_size(), INK_FAINT, 650)
 		caption.name = "Caption"
+		caption.uppercase = LOOK == "newspaper" or LOOK == "tablet"
 		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		inner.add_child(caption)
 		var holder := pad(inner, 2, 5, 2, 5)
 		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		fill_button(button, holder)
-		button.pressed.connect(func() -> void: _set_tab(key))
+		button.pressed.connect(_set_tab.bind(key))
 		_tab_buttons[key] = button
 		tabs.add_child(button)
 	_tab_pad.add_child(tabs)
@@ -749,8 +1010,122 @@ func _build() -> void:
 	home.add_child(pill)
 	_home_bar = pad(home, 0, 5, 0, 7)
 	stack.add_child(_home_bar)
+	_rolls = []
+	if LOOK == "scroll":
+		for end in ["top", "bottom"]:
+			var roll := RostraLook.Roll.new(end)
+			_rolls.append(roll)
+			_root.add_child(roll)
+	_look_built = LOOK
 	_style_tabs()
 	_render_feed()
+
+
+func _on_pen() -> void:
+	if _composing:
+		_close_composer()
+	else:
+		_open_composer()
+
+
+func _on_close() -> void:
+	closed.emit()
+
+
+func _masthead() -> MarginContainer:
+	var mast := pad(null, 0.85 * 16.0, 0.35 * 16.0, 0.85 * 16.0, 0)
+	var col := column(0)
+	var title := UI.label("Rostra", 39, INK, 400)
+	title.name = "Title"
+	title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	title.add_theme_font_override("font", face(400, false, 0.0, TITLE_FONT))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	col.add_child(pad(title, 4.4 * 16.0, 0.15 * 16.0, 4.4 * 16.0, 0.2 * 16.0))
+	col.add_child(rule(INK_SOFT))
+	var line := row(6)
+	_mast_issue = text("", 10, INK_SOFT, 400, true)
+	_mast_issue.uppercase = true
+	_mast_issue.add_theme_font_override("font", face(400, false, 0.6))
+	_mast_issue.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	line.add_child(_mast_issue)
+	var motto := text("What the world is saying", 10, INK_SOFT)
+	motto.add_theme_font_override("font", face(400, true))
+	line.add_child(motto)
+	_header_date = text("", 10, INK_SOFT, 400, true)
+	_header_date.uppercase = true
+	_header_date.add_theme_font_override("font", face(400, false, 0.6))
+	_header_date.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_header_date.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	line.add_child(_header_date)
+	col.add_child(pad(line, 1.6, 3.5, 1.6, 3.5))
+	col.add_child(RostraLook.double_rule(INK_SOFT))
+	var gap := Control.new()
+	gap.custom_minimum_size.y = 0.35 * 16.0
+	gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(gap)
+	mast.add_child(col)
+	var overlay := Control.new()
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var actions := row(0.3 * 16.0)
+	actions.mouse_filter = Control.MOUSE_FILTER_PASS
+	actions.add_child(_pen)
+	actions.add_child(_close)
+	actions.anchor_left = 1.0
+	actions.anchor_right = 1.0
+	actions.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	actions.offset_right = 0.85 * 16.0 - 0.6 * 16.0
+	actions.offset_left = actions.offset_right
+	actions.offset_top = 0.45 * 16.0 - 0.35 * 16.0
+	overlay.add_child(actions)
+	mast.add_child(overlay)
+	_date_gap = spacer()
+	_pen_gap = spacer()
+	return mast
+
+
+func _look_rule(flip: bool) -> Control:
+	if LOOK == "scroll":
+		var line := row(0.45 * 16.0)
+		var left := rule()
+		left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		left.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		line.add_child(left)
+		var mark := text("❧", 20, ACCENT, 400, true)
+		if flip:
+			mark.name = "Flipped"
+			var turned := FlipBox.new()
+			turned.add_child(mark)
+			line.add_child(turned)
+		else:
+			line.add_child(mark)
+		var right := rule()
+		right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		right.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		line.add_child(right)
+		return pad(line, 16, 0, 16, 0)
+	if LOOK == "tablet":
+		return pad(RostraLook.groove(Color(0, 0, 0, 0.28), Color(1, 1, 1, 0.35)), 0.7 * 16.0, 0, 0.7 * 16.0, 0)
+	return RostraLook.double_rule(INK_SOFT)
+
+
+func _caption_size() -> int:
+	if LOOK == "newspaper":
+		return 10
+	if LOOK == "scroll":
+		return 11
+	if LOOK == "tablet":
+		return 9
+	return 10
+
+
+func _button_look(active: bool) -> StyleBox:
+	if LOOK == "newspaper":
+		return UI.box(Color(0, 0, 0, 0), EDGE, 2, 1)
+	if LOOK == "scroll":
+		return UI.box(Color(0, 0, 0, 0), EDGE, 999, 1)
+	if LOOK == "tablet":
+		return Hollow.new(Color(0, 0, 0, 0), 999)
+	return UI.box(ACCENT_SOFT if active else WASH, ACCENT_EDGE if active else Color(0, 0, 0, 0), 999, 1)
 
 
 func _build_composer() -> void:
@@ -773,7 +1148,7 @@ func _build_composer() -> void:
 	_draft = TextEdit.new()
 	_draft.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	_draft.scroll_fit_content_height = true
-	_draft.add_theme_font_override("font", UI.font(400))
+	_draft.add_theme_font_override("font", face(400))
 	_draft.add_theme_font_size_override("font_size", 14)
 	_draft.add_theme_color_override("font_color", INK)
 	_draft.add_theme_color_override("font_readonly_color", INK_SOFT)
@@ -820,10 +1195,10 @@ func _build_composer() -> void:
 	_count.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	foot.add_child(_count)
 	_post_button = plain_button(UI.box(ACCENT, Color(0, 0, 0, 0), 999, 0, Vector4(17, 6, 17, 6)))
-	_post_button.add_theme_font_override("font", UI.font(800))
+	_post_button.add_theme_font_override("font", face(800))
 	_post_button.add_theme_font_size_override("font_size", 12)
 	for slot in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
-		_post_button.add_theme_color_override(slot, DARK_INK)
+		_post_button.add_theme_color_override(slot, ON_ACCENT)
 	_post_button.text = "Post"
 	_post_button.pressed.connect(_submit)
 	foot.add_child(_post_button)
@@ -840,7 +1215,8 @@ func _apply_look() -> void:
 	var area := get_viewport_rect().size if is_inside_tree() else Vector2(1600, 900)
 	var touch := DisplayServer.is_touchscreen_available()
 	framed = area.x > 700.0 and not (touch and area.y <= 500.0)
-	if framed:
+	var phone := LOOK == "phone"
+	if phone and framed:
 		var outer := UI.box(Color("#0e0e10"), Color(0, 0, 0, 0), int(round(41.6 + RING)), 0, Vector4(2, 2, 2, 2))
 		outer.shadow_color = Color(0, 0, 0, 0.55)
 		outer.shadow_size = 30
@@ -849,7 +1225,7 @@ func _apply_look() -> void:
 		_ring.add_theme_stylebox_override("panel", UI.box(Color("#3a3a40"), Color(0, 0, 0, 0), int(round(41.6 + 1.0)), 0, Vector4(1, 1, 1, 1)))
 		_body.add_theme_stylebox_override("panel", UI.box(FRAME, Color(0, 0, 0, 0), 42, 0, Vector4(8, 8, 8, 8)))
 		_screen.add_theme_stylebox_override("panel", UI.box(SCREEN, Color(0, 0, 0, 0), 34, 0))
-	else:
+	elif phone:
 		var look := UI.box(Color(11 / 255.0, 11 / 255.0, 13 / 255.0, 0.97), Color(1, 1, 1, 0.1), 16, 1)
 		look.shadow_color = Color(0, 0, 0, 0.4)
 		look.shadow_size = 12
@@ -858,25 +1234,120 @@ func _apply_look() -> void:
 		_ring.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 		_body.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 		_screen.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 16, 0))
+	else:
+		var shell := StyleBoxEmpty.new()
+		if framed:
+			var padding: Vector4 = (RostraLook.FRAMES[LOOK] as Dictionary)["padding"]
+			shell.content_margin_left = padding.x * 16.0
+			shell.content_margin_top = padding.y * 16.0
+			shell.content_margin_right = padding.z * 16.0
+			shell.content_margin_bottom = padding.w * 16.0
+		else:
+			for side in [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]:
+				shell.set_content_margin(side, 1.0)
+		_shell.add_theme_stylebox_override("panel", shell)
+		_ring.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+		_body.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+		var screen := StyleBoxFlat.new()
+		screen.bg_color = Color(0, 0, 0, 0)
+		if framed and LOOK == "newspaper":
+			screen.border_width_bottom = 1
+			screen.border_color = Color(27 / 255.0, 26 / 255.0, 23 / 255.0, 0.55)
+		if framed and LOOK == "tablet":
+			screen.content_margin_top = float((RostraLook.FRAMES["tablet"] as Dictionary)["inner_top"]) * 16.0
+		_screen.add_theme_stylebox_override("panel", screen)
+		_dress_backdrop()
 	for button in _side_buttons:
-		button.visible = framed
-	_status.visible = framed
-	_home_bar.visible = framed
-	_header_date.visible = not framed
-	_date_gap.visible = not framed
-	_pen_gap.visible = framed
-	var header_pad := Vector4(15, 4, 15, 10) if framed else (Vector4(14, 10, 14, 9) if touch else Vector4(18, 14, 18, 10))
-	for side in [["margin_left", header_pad.x], ["margin_top", header_pad.y], ["margin_right", header_pad.z], ["margin_bottom", header_pad.w]]:
-		_header.add_theme_constant_override(side[0], int(side[1]))
+		button.visible = framed and phone
+	_status.visible = framed and phone
+	_home_bar.visible = framed and phone
+	for roll in _rolls:
+		(roll as Control).visible = framed
+	_header_date.visible = LOOK == "newspaper" or not (framed and phone)
+	_date_gap.visible = not (framed and phone)
+	_pen_gap.visible = framed and phone
+	if LOOK != "newspaper":
+		var header_pad := Vector4(15, 4, 15, 10) if framed else (Vector4(14, 10, 14, 9) if touch else Vector4(18, 14, 18, 10))
+		for side in [["margin_left", header_pad.x], ["margin_top", header_pad.y], ["margin_right", header_pad.z], ["margin_bottom", header_pad.w]]:
+			_header.add_theme_constant_override(side[0], int(side[1]))
 	for side in [["margin_left", 6], ["margin_top", 5], ["margin_right", 6], ["margin_bottom", 1 if framed else 6]]:
 		_tab_pad.add_theme_constant_override(side[0], side[1])
 	_draft.custom_minimum_size.y = 46.0 if (touch or framed) else 66.0
 	if _mention_badge:
-		_mention_badge.add_theme_stylebox_override("panel", UI.box(ACCENT, SCREEN if framed else Color("#18181b"), 999, 2, Vector4(3, 0, 3, 0)))
+		_mention_badge.add_theme_stylebox_override("panel", UI.box(ACCENT, SCREEN if (framed or not phone) else Color("#18181b"), 999, 2, Vector4(3, 0, 3, 0)))
+	_lay_dress()
+
+
+func _dress_backdrop() -> void:
+	if not is_instance_valid(_backdrop):
+		return
+	var key := "%s:%s" % [LOOK, framed]
+	if str(_backdrop.get_meta("dressed", "")) == key:
+		return
+	_backdrop.set_meta("dressed", key)
+	for child in _backdrop.get_children():
+		_backdrop.remove_child(child)
+		child.queue_free()
+	var frame: Dictionary = RostraLook.FRAMES.get(LOOK, {})
+	if framed:
+		var params: Dictionary = (frame["material"] as Dictionary).duplicate()
+		params["drops"] = frame.get("drops", [])
+		var jags := RostraLook.edge_jags(EDGE_POINTS) if LOOK == "scroll" or LOOK == "tablet" else {}
+		var material := RostraLook.surface(params, LOOK, jags, 64.0)
+		material.name = "Material"
+		_backdrop.add_child(material)
+		if LOOK == "newspaper":
+			for fold in [[0, Color(60 / 255.0, 48 / 255.0, 26 / 255.0, 0.12)], [1, Color(1, 1, 1, 0.45)]]:
+				var line := ColorRect.new()
+				line.name = "Fold"
+				line.color = fold[1]
+				line.set_meta("below", fold[0])
+				line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				_backdrop.add_child(line)
+		if LOOK == "tablet":
+			var cracks := RostraLook.Cracks.new()
+			cracks.name = "Cracks"
+			_backdrop.add_child(cracks)
+			var inner := RostraLook.surface(frame["inner"], "", {}, 4.0)
+			inner.name = "Inner"
+			_backdrop.add_child(inner)
+	else:
+		var plain := RostraLook.surface({"base": SCREEN, "top": Vector2(16, 16), "bottom": Vector2(16, 16), "border": [1.0, EDGE], "drops": [[Vector2(-4, 0), 24.0, Color(0, 0, 0, 0.4)]]}, LOOK, {}, 40.0)
+		plain.name = "Material"
+		_backdrop.add_child(plain)
+
+
+func _lay_dress() -> void:
+	if not is_instance_valid(_backdrop):
+		return
+	var box := Rect2(Vector2.ZERO, size)
+	for child in _backdrop.get_children():
+		var node := child as Control
+		match str(node.name):
+			"Material":
+				RostraLook.place_surface(node, box)
+			"Cracks":
+				node.position = Vector2.ZERO
+				node.size = size
+			"Fold":
+				node.position = Vector2(0, roundf(size.y * 0.5) + float(node.get_meta("below", 0)))
+				node.size = Vector2(size.x, 1)
+			"Inner":
+				var padding: Vector4 = (RostraLook.FRAMES["tablet"] as Dictionary)["padding"] * 16.0
+				RostraLook.place_surface(node, Rect2(padding.x, padding.y, size.x - padding.x - padding.z, size.y - padding.y - padding.w))
+	var reach := 1.45 * 16.0
+	for roll in _rolls:
+		var node := roll as RostraLook.Roll
+		var top := -reach if node.end == "top" else size.y + reach - 1.7 * 16.0
+		node.position = Vector2(-reach, top)
+		node.size = Vector2(size.x + reach * 2.0, 1.7 * 16.0)
 
 
 func frame_size() -> Vector2:
 	var area := get_viewport_rect().size if is_inside_tree() else Vector2(1600, 900)
+	if framed and LOOK != "phone":
+		var tall := maxf(minf(736.0, area.y - 144.0), 384.0)
+		return Vector2(minf(384.0, area.x - 16.0), tall)
 	if framed:
 		var height := maxf(minf(736.0, area.y - 144.0), 384.0)
 		var width := maxf(height * 9.0 / 19.0, minf(280.0, area.x - 16.0))
@@ -888,9 +1359,10 @@ func frame_size() -> Vector2:
 
 func _place(animate: bool) -> void:
 	var box := frame_size()
-	var grow := RING if framed else 0.0
-	var top := -BOTTOM_GAP - box.y - grow if _open else 200.0
-	var bottom := -BOTTOM_GAP + grow if _open else 200.0 + box.y + grow * 2.0
+	var grow := RING if framed and LOOK == "phone" else 0.0
+	var lift := float((RostraLook.FRAMES.get(LOOK, {}) as Dictionary).get("margin", 0.0)) * 16.0 if framed else 0.0
+	var top := -BOTTOM_GAP - lift - box.y - grow if _open else 200.0
+	var bottom := -BOTTOM_GAP - lift + grow if _open else 200.0 + box.y + grow * 2.0
 	offset_left = 8.0 - grow
 	offset_right = 8.0 + box.x + grow
 	for button in _side_buttons:
@@ -905,6 +1377,41 @@ func _place(animate: bool) -> void:
 	tween.tween_property(self, "offset_top", top, 0.35)
 	tween.tween_property(self, "offset_bottom", bottom, 0.35)
 	tween.tween_property(self, "modulate:a", 1.0 if _open else 0.0, 0.35)
+
+
+func _take_dress(reply: Dictionary) -> void:
+	var dress: Variant = reply.get("dress")
+	if typeof(dress) != TYPE_DICTIONARY:
+		return
+	apply_dress(dress)
+	if LOOK == _look_built:
+		return
+	_rebuild()
+
+
+func _rebuild() -> void:
+	var keep_tab := tab
+	if is_instance_valid(_search):
+		_search = null
+	_tab_buttons = {}
+	_side_buttons = []
+	_rolls = []
+	_backdrop = null
+	if is_instance_valid(_root):
+		remove_child(_root)
+		_root.queue_free()
+	_composing = false
+	_choices = null
+	_quoting = {}
+	_posted = false
+	_rendered_ids = {}
+	_build()
+	tab = keep_tab
+	_apply_look()
+	_place(false)
+	_view_json = ""
+	if not view.is_empty():
+		_render()
 
 
 func _on_poll() -> void:
@@ -923,6 +1430,7 @@ func _load_state() -> void:
 	if not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY:
 		return
 	var state: Dictionary = reply["result"]
+	_take_dress(state)
 	_set_enabled(bool(state.get("enabled", true)))
 	if not _open:
 		_emit_unseen(int(state.get("unseen", 0)))
@@ -954,6 +1462,7 @@ func _load_view(force: bool) -> void:
 	if not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY or asked != tab:
 		return
 	var next: Dictionary = reply["result"]
+	_take_dress(next)
 	_set_enabled(bool(next.get("enabled", true)))
 	var newest := int(next.get("newest", 0))
 	if _open and newest > _seen_sent:
@@ -975,6 +1484,9 @@ func _render() -> void:
 		_search.refresh_view()
 	_status_date.text = str(view.get("date", ""))
 	_header_date.text = str(view.get("date", ""))
+	if is_instance_valid(_mast_issue):
+		var issue := int(view.get("round", 0))
+		_mast_issue.text = "№ %d" % issue if issue > 0 else ""
 	var has_country := not str(view.get("country", "")).is_empty()
 	_pen.disabled = not has_country
 	_pen.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if has_country else Control.CURSOR_ARROW
@@ -985,13 +1497,23 @@ func _render() -> void:
 
 
 func _style_pen() -> void:
-	var look := UI.box(ACCENT_SOFT if _composing else Color(1, 1, 1, 0.06), ACCENT_EDGE if _composing else Color(0, 0, 0, 0), 999, 1)
+	var look := _button_look(_composing)
 	for state in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
 		_pen.add_theme_stylebox_override(state, look)
 	var mark := _pen.find_child("Glyph", true, false) as TextureRect
 	if mark:
 		mark.self_modulate = ACCENT if _composing else INK_SOFT
 	_pen.tooltip_text = "Put the post away" if _composing else "Write a post"
+
+
+func _caption_face(weight: int) -> Font:
+	if LOOK == "newspaper":
+		return face(weight, false, 0.4)
+	if LOOK == "scroll":
+		return face(weight, true)
+	if LOOK == "tablet":
+		return face(weight, false, 0.7)
+	return face(weight)
 
 
 func _style_tabs() -> void:
@@ -1003,7 +1525,7 @@ func _style_tabs() -> void:
 		mark.self_modulate = ink
 		var caption := button.find_child("Caption", true, false) as Label
 		caption.add_theme_color_override("font_color", ink)
-		caption.add_theme_font_override("font", UI.font(800 if active else 650))
+		caption.add_theme_font_override("font", _caption_face(800 if active else 650))
 	var count := int(view.get("mentionCount", 0))
 	_mention_badge.visible = count > 0
 	_mention_label.text = "9+" if count > 9 else str(count)
@@ -1033,7 +1555,7 @@ func _render_feed() -> void:
 				child.queue_free()
 		if not is_instance_valid(_search):
 			_search = RostraSearch.new()
-			_search.setup(engine, func(post: Dictionary) -> Control: return post_card(post, bool(view.get("canPost", false))), _opened_place, _open)
+			_search.setup(engine, func(post: Dictionary, lead: bool) -> Control: return post_card(post, bool(view.get("canPost", false)), lead), _opened_place, _open)
 			_feed.add_child(_search)
 		else:
 			_search.set_can_post(bool(view.get("canPost", false)))
@@ -1050,12 +1572,12 @@ func _render_feed() -> void:
 		_feed.add_child(_empty_refresh())
 	elif posts.is_empty():
 		var words := para(str(EMPTY_TEXTS.get(tab, "")), 12, INK_FAINT, 400, 1.5)
-		words.add_theme_font_override("font", italic())
+		words.add_theme_font_override("font", face(400, true))
 		_feed.add_child(pad(words, 18, 19, 18, 19))
 	else:
 		var can_post := bool(view.get("canPost", false))
-		for post in posts:
-			_feed.add_child(post_card(post, can_post))
+		for index in range(posts.size()):
+			_feed.add_child(post_card(posts[index], can_post, index == 0))
 	_rendered_ids = _next_ids
 	_restore_scroll.call_deferred(keep)
 
@@ -1170,7 +1692,7 @@ func _render_quote() -> void:
 	var overlay := Control.new()
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.add_child(overlay)
-	var remove := plain_button(UI.box(Color("#18181b"), Color(1, 1, 1, 0.18), 999, 1))
+	var remove := plain_button(UI.box(SCREEN, EDGE, 999, 1))
 	remove.tooltip_text = "Remove the quote"
 	remove.anchor_left = 1.0
 	remove.anchor_right = 1.0
@@ -1215,12 +1737,12 @@ func _render_choices() -> void:
 		field.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		field.placeholder_text = I18n.ui("Choice {{value}}", {"value": index + 1})
 		field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		field.add_theme_font_override("font", UI.font(400))
+		field.add_theme_font_override("font", face(400))
 		field.add_theme_font_size_override("font_size", 13)
 		field.add_theme_color_override("font_color", INK)
 		field.add_theme_color_override("font_placeholder_color", INK_FAINT)
 		field.add_theme_color_override("caret_color", INK)
-		var look := UI.box(Color(1, 1, 1, 0.04), ACCENT_EDGE, 8, 1, Vector4(9, 6, 9, 6))
+		var look := UI.box(WASH_FAINT, ACCENT_EDGE, 8, 1, Vector4(9, 6, 9, 6))
 		for state in ["normal", "focus", "read_only"]:
 			field.add_theme_stylebox_override(state, look)
 		var at := index
@@ -1248,7 +1770,7 @@ func _render_choices() -> void:
 	if choices.size() < most:
 		var add := plain_button(StyleBoxEmpty.new())
 		add.text = "Add a choice"
-		add.add_theme_font_override("font", UI.font(700))
+		add.add_theme_font_override("font", face(700))
 		add.add_theme_font_size_override("font_size", 12)
 		for slot in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
 			add.add_theme_color_override(slot, ACCENT)
@@ -1308,12 +1830,12 @@ func _update_composer() -> void:
 	var length := _draft.text.strip_edges().length()
 	var most := int(view.get("maxChars", 280))
 	_count.text = "%d/%d" % [length, most]
-	_count.add_theme_color_override("font_color", TOO_LONG if length > most else INK_FAINT)
+	_count.add_theme_color_override("font_color", WARN if length > most else INK_FAINT)
 	var ready := _ready_to_post()
 	_post_button.text = "Posting…" if _posting else "Post"
 	_post_button.disabled = not ready or _posting
 	_post_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if ready and not _posting else Control.CURSOR_ARROW
-	var look := UI.box(ACCENT if ready else Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.25), Color(0, 0, 0, 0), 999, 0, Vector4(17, 6, 17, 6))
+	var look := UI.box(ACCENT if ready else ACCENT_SOFT, Color(0, 0, 0, 0), 999, 0, Vector4(17, 6, 17, 6))
 	for state in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
 		_post_button.add_theme_stylebox_override(state, look)
 	var polling := _choices != null
@@ -1374,6 +1896,68 @@ func _submit() -> void:
 		await _set_tab("all")
 	else:
 		await _load_view(true)
+
+
+class Hollow extends StyleBox:
+	var fill := Color(0, 0, 0, 0)
+	var corner := 999
+
+	func _init(bg := Color(0, 0, 0, 0), radius := 999, margin := Vector4.ZERO) -> void:
+		fill = bg
+		corner = radius
+		content_margin_left = margin.x
+		content_margin_top = margin.y
+		content_margin_right = margin.z
+		content_margin_bottom = margin.w
+
+	func _draw(to_canvas_item: RID, rect: Rect2) -> void:
+		var lip := StyleBoxFlat.new()
+		lip.draw_center = false
+		lip.border_width_bottom = 1
+		lip.border_color = Color(1, 1, 1, 0.35)
+		lip.set_corner_radius_all(corner)
+		lip.anti_aliasing = true
+		lip.draw(to_canvas_item, Rect2(rect.position + Vector2(0, 1), rect.size))
+		if fill.a > 0.0:
+			var body := StyleBoxFlat.new()
+			body.bg_color = fill
+			body.set_corner_radius_all(corner)
+			body.anti_aliasing = true
+			body.draw(to_canvas_item, rect)
+		var shade := StyleBoxFlat.new()
+		shade.draw_center = false
+		shade.border_width_top = 3
+		shade.border_width_left = 1
+		shade.border_width_right = 1
+		shade.border_blend = true
+		shade.bg_color = Color(0, 0, 0, 0)
+		shade.border_color = Color(0, 0, 0, 0.35)
+		shade.set_corner_radius_all(corner)
+		shade.anti_aliasing = true
+		shade.draw(to_canvas_item, rect)
+
+
+class FlipBox extends Container:
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		size_flags_vertical = Control.SIZE_SHRINK_CENTER
+
+	func _get_minimum_size() -> Vector2:
+		var least := Vector2.ZERO
+		for child in get_children():
+			if child is Control:
+				least = least.max((child as Control).get_combined_minimum_size())
+		return least
+
+	func _notification(what: int) -> void:
+		if what != NOTIFICATION_SORT_CHILDREN:
+			return
+		for child in get_children():
+			if child is Control:
+				var node := child as Control
+				fit_child_in_rect(node, Rect2(Vector2.ZERO, size))
+				node.pivot_offset = size * 0.5
+				node.scale = Vector2(1, -1)
 
 
 class ShareBar extends PanelContainer:
