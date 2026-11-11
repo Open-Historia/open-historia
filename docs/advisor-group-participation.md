@@ -30,7 +30,9 @@ The local development instance ran at `http://localhost:3003`, using a separate 
 
 No new Group Chat error records were observed across these five live turns. Test 5 verifies distinct queued/proposed state and reload persistence; it does **not** establish post-time-skip Action resolution.
 
-The full upstream-based suite had **9,116 passing, 1 failing, 2 skipped, 2 TODO** out of 9,121 tests. The single failing cross-file Political Bridge architecture assertion still expects `jumpChars < 28400`, while untouched upstream now uses `jumpChars < 28450`. The actual schema test passed 12/12; the Advisor-focused suite passed 69/69, lint passed, and the production build succeeded. Do not report the full suite green or weaken the unrelated native schema limit.
+At the initial A3 checkpoint, the full upstream-based suite had **9,116 passing, 1 failing, 2 skipped, 2 TODO** out of 9,121 tests. The failure was an upstream cross-file Political Bridge architecture assertion that still expected `jumpChars < 28400`, although upstream commit `5ba77816` had deliberately raised the actual schema-size guard to `< 28450` for `regionControlOps[].part`. The schema itself passed its tests, and the A3 Advisor-focused suite passed 69/69 with a successful production build.
+
+A follow-up on PR #1007 synchronized only the stale cross-file test expectation and documented the upstream reason, **without changing the schema or its enforced limit**. The complete Beta suite then passed **9,117 tests, 0 failures, 2 skipped, 2 TODO** (9,121 total), with the Political Bridge and schema contract tests passing 17/17 together. These figures are local validation; GitHub CI on the updated PR is a separate check.
 
 ## Acceptance scope and remaining watch items
 
