@@ -83,3 +83,27 @@ The oldest messages of a long conversation reach you only as short snippets, or 
 ADVISOR_MEMORY:<memory>
 
 The memory is the COMPLETE current durable memory of this conversation, not a summary of your newest reply: carry forward what still holds from the memory you were given, and add what this exchange settled. Keep what was only SAID and would otherwise be lost: the player's stated preferences and priorities, the ideas they turned down (so you never propose them again), what you advised and they accepted, what either of you promised to come back to, and standing instructions about how they want advice. Leave out what the game already shows you (planned actions, projects, the map, events). One compact line, under ${ADVISOR_MEMORY_MAX_CHARS} characters. The player never sees it.`;
+
+// Group replies have an exclusive silence outcome. The ordinary one-to-one
+// "memory on EVERY reply" directive must not enter either group prompt:
+// it contradicts literal [[PASS]] and JSON pass:true, both of which native
+// validation (correctly) forbids from writing private memory.
+export const ADVISOR_GROUP_MEMORY_DIRECTIVE = `[Group Advisor Memory — One Participant]
+You decide whether your contribution is substantive. These two outcomes are mutually exclusive:
+- If you have nothing material to add, output exactly [[PASS]] and nothing else. Add no ADVISOR_MEMORY line, private memory, explanation, fenced block, or other text. Silence never authorizes or executes work.
+- If you speak, give the substantive answer or objection. Only if there is useful NEW durable conversational context that should survive compaction, you MAY end your substantive reply, after any native fenced blocks, with one hidden line:
+ADVISOR_MEMORY:<memory>
+
+The memory is about what was actually said or agreed in this conversation, not a record of Actions or Projects already captured by native state. Do not invent prior discussions or disclose another member's private correspondence. Keep this line under ${ADVISOR_MEMORY_MAX_CHARS} characters. Never use it when passing.`;
+
+export const ADVISOR_GROUP_BATCH_MEMORY_DIRECTIVE = `[Group Advisor Memory — Shared JSON]
+Return only the single JSON object defined by the Group Chat reply contract, nothing before or after it.
+For any member whose reply has pass: true, use empty text and no memory or operations. The normal memory-on-every-reply instruction does not apply to a pass.
+For a member with pass: false and substantive text, an optional JSON memory field may capture genuinely useful durable conversational context; omit the field when no memory update is needed. Do not fabricate private conversations.
+Use the JSON memory field exclusively. Include no ADVISOR_MEMORY line or suffix in any speaker's text or outside the JSON object.`;
+
+// Mode is selected by native routing, never inferred from player wording.
+export const advisorMemoryDirectiveForMode = (meetingMode = false) =>
+  meetingMode === "batch" ? ADVISOR_GROUP_BATCH_MEMORY_DIRECTIVE
+    : meetingMode ? ADVISOR_GROUP_MEMORY_DIRECTIVE
+      : ADVISOR_MEMORY_DIRECTIVE;

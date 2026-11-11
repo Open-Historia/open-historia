@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, sendAdvisorGroupMessage, startChat, loadHistory } from "../AI/main.jsx";
+import { completedSilentGroupTurnIndices } from "../AI/advisorGroupMeetings.js";
 import { requestDiplomaticChat } from "./chat.jsx";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { formatReportFields, logDebugEvent } from "../../runtime/debugLog.js";
@@ -985,11 +986,16 @@ const ADVISOR_RENDER_WINDOW_STEP = 20;
 // Only the last `visibleLimit` messages are drawn. `i` stays the index into
 // the WHOLE transcript: placedDeployments and completedInstitutionDrafts are
 // written back through it.
-const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", speakerNameFor = null, emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => {
+const AdvisorMessageList = React.memo(({ messages, groupMemberIds = [], visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", speakerNameFor = null, emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => {
     // Silent group-participation markers are persisted for resume/idempotence,
     // but never consume visible history slots or display empty bubbles.
-    const visibleRows = messages.flatMap((msg, i) => msg.silent === true ? [] : [{ msg, i }]);
-    const visibleLastIndex = visibleRows.at(-1)?.i;
+    const silentTurnEnds = new Set(completedSilentGroupTurnIndices(messages, groupMemberIds));
+    const visibleRows = messages.flatMap((msg, i) => [
+        ...(msg.silent === true ? [] : [{ msg, i }]),
+        ...(silentTurnEnds.has(i) ? [{ msg: { role: "group-pass" }, i }] : []),
+    ]);
+    // A synthetic all-pass notice must not become the latest recoverable reply.
+    const visibleLastIndex = visibleRows.findLast(({ msg }) => msg.role !== "group-pass")?.i;
     return (
     <div className="oh-advisor-messages" ref={containerRef} onScroll={onScroll}>
     {visibleRows.length === 0 && (
@@ -1014,6 +1020,10 @@ const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, 
         newest affected reply; older errors must not reissue stale work. */}
     {visibleRows.map(({ msg, i }, visualIndex) => (visualIndex < visibleRows.length - visibleLimit ? null : msg.role === "notice"
         ? <AdvisorDocumentNotice key={msg.id || i} notice={msg} />
+        : msg.role === "group-pass"
+        ? <div key={"group-pass-" + i} role="status" style={{ fontSize: "0.76rem", opacity: 0.65, padding: "0.3rem 0.5rem" }}>
+            {uiString("All group members passed on this turn. No answer or execution was recorded.")}
+          </div>
         : (
         <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerNameFor ? speakerNameFor(msg) : speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} actionStates={actionStates} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={i === visibleLastIndex && msg.projectsProblem ? onRetryProjects : undefined} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onCancelAction={onCancelAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === visibleLastIndex && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
@@ -2220,6 +2230,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             keystroke. See AdvisorMessageRow's comment for why that mattered. */}
         <AdvisorMessageList
         messages={messages}
+        groupMemberIds={selectedGroup?.memberIds || []}
         speakerName={selectedGroup?.name || selectedContact?.name || chiefProfile?.name || "Advisor"}
         speakerNameFor={speakerNameFor}
         emptyMessage={selectedGroup ? "No group conversation yet. Ask the participants a question to start." : selectedContact && advisorRecipientType(selectedContact) !== ADVISOR_RECIPIENT_TYPES.MINISTER ? "No messages yet. Start your conversation." : "No messages yet. Ask your advisor something!"}

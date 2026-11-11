@@ -3767,6 +3767,51 @@ const dropGroupOps = (schema) => {
 };
 export const withoutGroupOps = (tool) => (tool?.schema ? { ...tool, schema: dropGroupOps(tool.schema) } : tool);
 
+// "features disabled in scenarios and stuff should not have the stuff about them in the system prompts" (the owner,
+// 2026-11-11). The same tool with what only a switched-off feature uses taken out, the way withoutGroupOps does for
+// groups: `drop(field, owner)` names a property to leave out (owner: the property whose object holds it), `keep(field,
+// value, values)` the enum values a property may still offer. Only the tool shown to the model changes; the payload is still
+// read against the full schema, and what a model writes for a feature that is off is left out where it is applied.
+const pruneSchema = (schema, { drop = () => false, keep = () => true } = {}, owner = "") => {
+  if (Array.isArray(schema)) return schema.map((entry) => pruneSchema(entry, { drop, keep }, owner));
+  if (!schema || typeof schema !== "object") return schema;
+  const out = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
+      out.properties = Object.fromEntries(Object.entries(value)
+        .filter(([field]) => !drop(field, owner))
+        .map(([field, entry]) => {
+          const pruned = pruneSchema(entry, { drop, keep }, field);
+          return [field, Array.isArray(pruned?.enum) ? { ...pruned, enum: pruned.enum.filter((item) => keep(field, item, pruned.enum)) } : pruned];
+        }));
+    } else if (key === "required" && Array.isArray(value)) {
+      out.required = value.filter((field) => !drop(field, owner));
+    } else {
+      out[key] = key === "items" || key === "anyOf" || key === "oneOf" || key === "allOf" || key === "additionalProperties"
+        ? pruneSchema(value, { drop, keep }, owner)
+        : value;
+    }
+  }
+  return out;
+};
+const pruneTool = (tool, rules) => (tool?.schema ? { ...tool, schema: pruneSchema(tool.schema, rules) } : tool);
+
+// Espionage off: no spy orders on an event, no spies sent at the player, no intelligence rating to move.
+const ESPIONAGE_FIELDS = new Set(["spyOps", "spiesOnPlayer", AGENT_REPORTS_FIELD]);
+export const withoutEspionage = (tool) => pruneTool(tool, {
+  drop: (field, owner) => ESPIONAGE_FIELDS.has(field) || (field === "intelligence" && owner === "polityChanges"),
+});
+
+// Air units or navies off (the Wars feature): a unit is never raised as one, and with no navy nothing blockades.
+export const withWarParts = (tool, { air = true, navies = true } = {}) => (air && navies ? tool : pruneTool(tool, {
+  keep: (field, value, values) => {
+    // A unit's type and posture: the enums that list "infantry", and "blockade".
+    if (field === "type" && values.includes("infantry")) return !((!air && value === "air") || (!navies && value === "naval"));
+    if (field === "posture" && values.includes("blockade")) return navies || value !== "blockade";
+    return true;
+  },
+}));
+
 // Fronts on for a game (AI/frontsGate.js): a time skip's tool with the
 // battlefields' orders in its contract. Any other tool, and a skip's tool that
 // already has the field, comes back as it was.

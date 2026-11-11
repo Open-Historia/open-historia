@@ -19,10 +19,11 @@ test("the Projects recovery composer request is scoped to failed operations, not
 });
 
 test("only the newest problematic Advisor reply may invite another Projects recovery request", () => {
-  // Silent group participation markers are not visible messages. Recovery
-  // belongs to the newest visible reply, not the newest stored marker.
-  assert.match(source, /const visibleRows = messages\.flatMap\(\(msg, i\) => msg\.silent === true \? \[\] : \[\{ msg, i \}\]\)/);
-  assert.match(source, /const visibleLastIndex = visibleRows\.at\(-1\)\?\.i/);
+  // Silent group markers stay hidden. A synthetic all-pass status is visible,
+  // but cannot steal the newest recoverable-reply index.
+  assert.match(source, /msg\.silent === true \? \[\] : \[\{ msg, i \}\]/);
+  assert.match(source, /silentTurnEnds\.has\(i\)/);
+  assert.match(source, /const visibleLastIndex = visibleRows\.findLast\(\(\{ msg \}\) => msg\.role !== "group-pass"\)\?\.i/);
   assert.match(
     source,
     /onRetryProjects=\{i === visibleLastIndex && msg\.projectsProblem \? onRetryProjects : undefined\}/,

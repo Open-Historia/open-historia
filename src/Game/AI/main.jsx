@@ -147,9 +147,9 @@ import { describeReportsForPrompt, normalizeReports } from "../../runtime/report
 import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
-import { ADVISOR_MEMORY_DIRECTIVE, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
+import { advisorMemoryDirectiveForMode, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
 import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorGroupForReply, advisorOfficeStatus, advisorRecipientForReply, advisorRecipientType, assertAdvisorRecipientCanReply, chiefAdvisorProfile } from "../../runtime/advisorThreads.js";
-import { advisorGroupSpeakerName, OPTIONAL_GROUP_SPEECH_STANDARD, renderAdvisorGroupHistory, requiredAdvisorGroupSpeakers, selectAdvisorGroupSpeakers } from "./advisorGroupMeetings.js";
+import { GROUP_MEETING_CONTEXT_MAX_CHARS, advisorGroupSpeakerName, OPTIONAL_GROUP_SPEECH_STANDARD, parseAdvisorGroupIndividualReply, renderAdvisorGroupHistory, selectAdvisorGroupSpeakers } from "./advisorGroupMeetings.js";
 import { groupSpeakerBatches, parseAdvisorGroupBatch, advisorBatchOutputContract, buildAdvisorSharedBatchPrompt } from "./advisorGroupBatching.js";
 import { readAdvisorGroupSettings } from "./advisorGroupSettings.js";
 import { describeChiefAdvisorOverride } from "./advisorPersona.js";
@@ -3803,9 +3803,9 @@ async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = fal
         // true now, whatever the record says. Empty — and so absent — without any.
         renderReminders(worldData?.simulationReminders, { formatDate: formatDateReadable }),
         ADVISOR_FORMATTING_DIRECTIVE,
-        // Last, as the last thing it writes: the hidden ADVISOR_MEMORY line
-        // (advisorMemory.js).
-        ADVISOR_MEMORY_DIRECTIVE,
+        // One-to-one replies retain their durable memory suffix. Group
+        // speakers may pass without memory; shared batches use a JSON field.
+        advisorMemoryDirectiveForMode(meetingMode),
     ].filter(Boolean);
     // A manually created contact speaks as its own persistent personality.
     // Its profile is supplied every call, outside history compaction. Only
@@ -3836,8 +3836,13 @@ ${recipient.personality ? `Personality and operating principles: ${recipient.per
 // specific speaker's saved reply and pass them through native validation.
 // Sequential batches preserve full participation with optional independent generation.
 export async function sendAdvisorGroupMessage({ threadId, messages, onSpeakerChunk, onSpeakerComplete, onBatchComplete, shouldAbort } = {}) {
-    const stored = await readJson(JSON_URLS.advisor, { defaultValue: [], force: true });
+    const [stored, currentActions] = await Promise.all([
+        readJson(JSON_URLS.advisor, { defaultValue: [], force: true }),
+        readJson(JSON_URLS.actions, { defaultValue: [], force: true }),
+    ]);
+    if (!Array.isArray(currentActions)) throw new Error("Current Actions could not be verified for Advisor proposal review.");
     const group = advisorGroupForReply(stored, threadId);
+    const persistedGroupMessages = advisorMessagesFor(stored, threadId);
     const contacts = advisorContacts(stored);
     const chiefName = chiefAdvisorProfile(stored)?.name || "Chief advisor";
     const conversation = (Array.isArray(messages) ? messages : [])
@@ -3846,9 +3851,6 @@ export async function sendAdvisorGroupMessage({ threadId, messages, onSpeakerChu
     if (!String(question).trim()) throw new Error("A group chat needs a question from the player.");
     const speakers = selectAdvisorGroupSpeakers(group.memberIds, conversation, question, contacts, chiefName);
     if (!speakers.length) throw new Error("Every group member has already responded or explicitly declined this question.");
-    // One response is always required. Directly named members are mandatory;
-    // every other participant retains an opportunity to intervene or pass.
-    const mustSpeak = new Set(requiredAdvisorGroupSpeakers(group.memberIds, conversation, question, contacts, chiefName));
     const { effectiveBatchSize } = readAdvisorGroupSettings();
     const batches = groupSpeakerBatches(speakers, effectiveBatchSize);
     const groupTurnId = `group-turn-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2,14)}`}`;
@@ -3868,9 +3870,8 @@ export async function sendAdvisorGroupMessage({ threadId, messages, onSpeakerChu
                 groupName: group.name, memberIds: batch, contacts,
                 chiefName, chiefTitle: chief?.title || "Chief advisor",
                 chiefPersonality: chief?.personality || "",
-                transcript: renderAdvisorGroupHistory(conversation, contacts, chiefName),
+                transcript: renderAdvisorGroupHistory(conversation, contacts, chiefName, GROUP_MEETING_CONTEXT_MAX_CHARS, { currentActions, draftMessages: persistedGroupMessages }),
                 question,
-                requiredSpeakerIds: batch.filter((id) => mustSpeak.has(id)),
             });
             const sink = {};
             try {
@@ -3882,9 +3883,7 @@ export async function sendAdvisorGroupMessage({ threadId, messages, onSpeakerChu
                         groupDebug: { turnId: groupTurnId, name: group.name,
                             batchIndex: batchIndex + 1, totalSpeakers: speakers.length, speakerIds: batch } });
                 if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
-                const parsed = parseAdvisorGroupBatch(raw, batch, {
-                    requiredSpeakerIds: batch.filter((id) => mustSpeak.has(id)),
-                });
+                const parsed = parseAdvisorGroupBatch(raw, batch);
                 if (typeof onBatchComplete !== "function") throw new Error("Group batch validation callback is missing.");
                 const completed = await onBatchComplete(parsed);
                 if (!Array.isArray(completed) || completed.length !== batch.length
@@ -3930,18 +3929,16 @@ ${privateHistory || "(No prior private exchanges.)"}
 Only you have seen these private exchanges. Do not attribute their contents to colleagues unless those facts are also public or spoken in this meeting.
 
 [Group Chat Transcript]
-${renderAdvisorGroupHistory(conversation, contacts, chiefName)}
+${renderAdvisorGroupHistory(conversation, contacts, chiefName, GROUP_MEETING_CONTEXT_MAX_CHARS, { currentActions, draftMessages: persistedGroupMessages })}
 
 [Group participation decision]
-${mustSpeak.has(speakerId)
-  ? "You are directly addressed or the lead respondent: you MUST provide a substantive answer, not silence."
-  : `${OPTIONAL_GROUP_SPEECH_STANDARD} If no material contribution remains, output ONLY the exact token [[PASS]] and nothing else. That is an intentional pass, not an empty or truncated response.`}
+${OPTIONAL_GROUP_SPEECH_STANDARD} If no material contribution remains, output ONLY the exact token [[PASS]] and nothing else. That is an intentional pass, not an empty or truncated response.
 
-Decide whether you need to speak as ${name}. If required, answer. If optional, speak only to make a material contribution; otherwise return exactly [[PASS]].`;
+Decide independently whether you need to speak as ${name}. Address a substantive question when you have useful counsel; otherwise pass. A material objection is always welcome.`;
         const sink = {};
         try {
             const raw = await callAI(`${systemPrompt}\n\n${meetingDirective}`,
-                [{ role: "user", parts: [{ text: "Apply the group participation decision above. A required speaker must answer; an optional speaker must return exactly [[PASS]] unless they have a material new contribution or substantive objection. Do not produce a courtesy reply." }] }],
+                [{ role: "user", parts: [{ text: "Apply the group participation decision above. Speak when you have a substantive answer, necessary clarification or important objection. Otherwise return exactly [[PASS]]. Do not produce a courtesy reply or imply silent execution." }] }],
                 { maxTokens: 2400, languageMode: "chat", logLabel: "advisor group", taskKey: "advisor",
                     agentKind: "advisor", __debugSink: sink,
                     groupDebug: { turnId: groupTurnId, name: group.name,
@@ -3949,16 +3946,8 @@ Decide whether you need to speak as ${name}. If required, answer. If optional, s
                     ...(lookups ? { lookups } : {}),
                     onChunk: (delta, full) => { if (!shouldAbort?.() && !("[[PASS]]".startsWith(String(full || "").trim()))) onSpeakerChunk?.(speakerId, delta, full); } });
             if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
-            const { reply, memory } = splitAdvisorMemory(raw);
-            if (!reply?.trim()) throw new Error(`Group member ${name} returned an empty reply.`);
+            const record = parseAdvisorGroupIndividualReply(raw, speakerId, name);
             if (typeof onSpeakerComplete !== "function") throw new Error("Group speaker validation callback is missing.");
-            const pass = reply.trim() === "[[PASS]]";
-            if (pass && mustSpeak.has(speakerId)) throw new Error(`Required group member ${name} must answer.`);
-            if (pass && memory) throw new Error(`Silent group member ${name} cannot write private memory.`);
-            if (reply.includes("[[PASS]]") && !pass) throw new Error(`Group member ${name} returned an invalid partial pass.`);
-            const record = pass
-                ? { role: "advisor", speakerId, silent: true, text: "" }
-                : { role: "advisor", speakerId, text: reply.trim(), ...(memory ? { memory } : {}) };
             const completed = await onSpeakerComplete(record);
             if (!completed || completed.speakerId !== speakerId) throw new Error("Group speaker identity changed during completion.");
             conversation.push(completed);
