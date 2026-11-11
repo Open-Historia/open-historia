@@ -110,6 +110,9 @@ const outreachChatSchema = {
 const regionIdSchema = textSchema("The region's NAME as the map spells it, \"region: Hamhung\", or \"country: <name>\" for all of it. Never an id.");
 const regionNameSchema = textSchema("Region name, when known.");
 
+// A country split in two by one entry (AI/countrySplit.js): the game picks the regions.
+const SPLIT_PART_SCHEMA = textSchema("A civil war split, as [Levers] says.");
+
 const regionTransferSchema = {
   type: "object",
   description: "Legal sovereignty of one region passes; wartime occupation is regionControlOps.",
@@ -242,8 +245,9 @@ const regionControlOpSchema = {
         basis: { type: "string", enum: [...TERRITORY_BASIS_ENUM], description: TERRITORY_BASIS_DESCRIPTION_SHORT },
         wholeCountry: {
           type: "boolean",
-          description: "True only when the new controller takes EVERY region the other still holds; regionId repeats its name.",
+          description: "True only when it takes EVERY region the other holds; regionId repeats its name.",
         },
+        part: SPLIT_PART_SCHEMA,
       },
       required: ["op", "regionId", "fromCode", "toCode"],
       additionalProperties: false,
@@ -256,7 +260,7 @@ const regionControlOpSchema = {
         regionName: regionNameSchema,
         fromCode: textSchema("Current controller's FULL name, preferred."),
         claimantCode: textSchema("The contender to remove. Omit only with clearAll."),
-        clearAll: { type: "boolean", description: "Remove every contender — only for a final settlement; a ceasefire removes one claimantCode." },
+        clearAll: { type: "boolean", description: "Every contender, only at a final settlement; a ceasefire clears one." },
         note: textSchema("Brief reason."),
       },
       required: ["op", "regionId"],
