@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "features disabled in scenarios and stuff should not have the stuff about them in the system prompts" (the owner, 2026-11-11):
+    // espionage's fields and intelligence rating, and air or naval units, were still offered with those features off.
+    id: "2026-11-features-off-left-out",
+    kind: "minor",
+    date: "2026-11-11",
+    channel: "beta",
+    banners: [
+      {
+        title: "Switched-off features left out",
+        items: [
+          "The AI is no longer told about what a scenario switched off: no spies or intelligence rating without espionage, and no aircraft or fleets without air units or navies.",
+        ],
+      },
+    ],
+  },
+  {
     // "why doesnt it show the stuff anymore in cheats then" (the owner, 2026-11-10): a save's history from before the tiers was replaced whole by
     // a stub of eras the first tiered fold wrote unasked (runtime/historyTiers.js eraWordCount counted it as 0 words).
     id: "2026-11-older-history-kept",
