@@ -545,6 +545,12 @@ export const CORRIDOR_COST = 4;
 // power and waste away by this much a day, and it gives up after this many
 // days, or once no troop is left in it.
 export const PATCH_MAX_KM2 = 1500;
+// A body that holds the most of a piece of its side's home ground is fed by it
+// when it holds at least this share as much of that piece as of the piece it
+// holds most of. A stretch of its own country that it alone holds feeds it,
+// even where it holds a little more of a piece another body holds most of; a
+// scrap of home ground inside a ring (an islet, a sliver a lake cuts off) does not.
+export const SUPPLY_PIECE_SHARE = 0.5;
 export const POCKET_DAYS = 10;
 export const POCKET_LOSS = 2;
 export const POCKET_ATTACK = 0.7;
