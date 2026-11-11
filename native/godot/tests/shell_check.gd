@@ -7,8 +7,8 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
-const NEWEST_UPDATES := ["2026-11-setup-choices-alike", "2026-11-commanders-change-course", "2026-11-fronts-and-story-agree", "2026-11-idle-diplomacy-switch"]
-const NEWEST_TITLES := ["The AI setup shows its three choices alike", "Commanders change course sooner", "The war and its story agree", "Turn off countries writing to you"]
+const NEWEST_UPDATES := ["2026-11-older-history-kept", "2026-11-armies-on-their-own-land-stay-supplied", "2026-11-civil-wars-split-countries", "2026-11-overthrown-governments-rename"]
+const NEWEST_TITLES := ["Older history kept", "Armies on their own land stay supplied", "Civil wars split countries", "Overthrown governments change the map"]
 const RELEASE := "2026-11-version-2-5"
 
 
