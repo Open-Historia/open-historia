@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 
 import {
   HISTORY_TIERS,
+  eraWordCount,
   judgeHistoryTiers,
   mergeHistoryTiers,
   normalizeCanonFacts,
@@ -106,4 +107,23 @@ test("each tier has its own budget, newest kept and the rest counted", () => {
   assert.match(text, /1932: 1932 saw/);
   assert.equal(renderHistoryTiers({}), "");
   assert.equal(renderCanonFacts([]), "");
+});
+
+// A WW2 save, 2026-11-10: its document from before the tiers covered 1939 and
+// early 1940; the first fold in tiers wrote 1940 and 1941 and, unasked, an era
+// of 1940–1941 in 50 words, and that era replaced the old text whole.
+test("a document from before the tiers is not replaced by a stub of eras, nor by eras that leave its years out", () => {
+  const legacy = { text: paragraph("1939").repeat(20), revision: 3, throughDate: "1940-05-12" };
+  assert.ok(eraWordCount(legacy) > 300);
+  const stub = judgeHistoryTiers({ years: [{ year: 1940, text: paragraph("1940") }, { year: 1941, text: paragraph("1941") }], eras: [{ from: 1940, to: 1941, text: paragraph("1940 and 1941") }] }, { span: [1940, 1941], eraWords: eraWordCount(legacy) });
+  assert.equal(stub.eras, null);
+  const merged = mergeHistoryTiers(legacy, stub, { startYear: 1939 });
+  assert.deepEqual(merged.eras.map((era) => [era.from, era.to]), [[1939, 1939]]);
+  assert.equal(merged.eras[0].text, legacy.text);
+  assert.deepEqual(merged.years.map((entry) => entry.year), [1940, 1941]);
+  // Eras long enough to be taken: an older era they leave out stays, and one of years still kept as paragraphs is not written.
+  const long = mergeHistoryTiers(legacy, { years: stub.years, eras: [{ from: 1940, to: 1941, text: paragraph("again").repeat(10) }] }, { startYear: 1939 });
+  assert.deepEqual(long.eras.map((era) => [era.from, era.to]), [[1939, 1939]]);
+  const condensed = mergeHistoryTiers({ eras: [{ from: 1900, to: 1910, text: "Old." }, { from: 1911, to: 1920, text: "Older." }], years: [{ year: 1930, text: "x" }] }, { eras: [{ from: 1911, to: 1920, text: "Condensed." }] });
+  assert.deepEqual(condensed.eras.map((era) => era.text), ["Old.", "Condensed."]);
 });

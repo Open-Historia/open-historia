@@ -45,6 +45,7 @@ import { applyGmPuppetChange, gmPuppetRows } from "./puppetStatesTool.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
 import { applyGameMasterPreview, previewGameMasterCommand, previewGameMasterRevision } from "../AI/gameplayLazy.js";
 import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, seedHistoryDocumentText } from "../AI/historyConsolidation.js";
+import { normalizeCanonFacts } from "../../runtime/historyTiers.js";
 import {
     POLITICAL_TRAIT_REGISTRY,
     canonicalPoliticalTraitKey,
@@ -3303,6 +3304,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const bundle = { world, events, chats, actions, game };
         const data = {
             document: world?.historyDocument ?? null,
+            // The document as the panel shows it (in tiers its own text is only
+            // what was added since the last fold), and the canon beside it.
+            seeded: world?.historyDocument ? seedHistoryDocumentText(world) : "",
+            canon: normalizeCanonFacts(world?.canonFacts),
             passes: Array.isArray(world?.consolidatedHistory) ? world.consolidatedHistory : [],
             status: describeHistoryConsolidation(bundle),
             totalEvents: Array.isArray(events) ? events.length : 0,
@@ -3311,7 +3316,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         // In tiers (runtime/historyTiers.js), the eras and years as one text:
         // saved by hand, it is one document again, and the next fold makes it
         // the first era.
-        setFields({ document: data.document ? seedHistoryDocumentText(world) : "" });
+        setFields({ document: data.seeded });
         return data;
     };
 
@@ -4258,7 +4263,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const data = items;
         const doc = data?.document ?? null;
         const passes = data?.passes ?? [];
-        const savedText = doc?.text ?? "";
+        const savedText = data?.seeded ?? doc?.text ?? "";
+        const canon = data?.canon ?? [];
         const draft = typeof fields.document === "string" ? fields.document : savedText;
         const dirty = draft !== savedText;
         const draftWords = countWords(draft);
@@ -4360,6 +4366,18 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <button type="button" className="oh-tap-row" disabled={busy || !dirty} style={{ ...buttonStyle, opacity: busy || !dirty ? 0.55 : 1, padding: "0.3rem 0.6rem" }} onClick={() => setFields({ document: savedText })}>Revert</button>
                 </div>
                 </>
+            )}
+            {canon.length > 0 && (
+                <details style={{ marginTop: "0.6rem" }}>
+                <summary style={{ cursor: "pointer", color: "rgba(255,255,255,0.6)", fontSize: "0.74rem", ...(touch ? TOUCH_SUMMARY : null) }}>{canon.length} standing fact{canon.length === 1 ? "" : "s"} the AI is always shown</summary>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginTop: "0.4rem", maxHeight: "14rem", overflowY: "auto" }}>
+                {canon.map((fact, index) => (
+                    <div key={`${fact.date}-${index}`} style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.74rem", lineHeight: 1.45 }}>
+                    <span style={{ color: "rgba(255,255,255,0.45)" }}>{fact.date} · {fact.kind} · </span>{fact.text}
+                    </div>
+                ))}
+                </div>
+                </details>
             )}
             {passes.length > 0 && (
                 <details style={{ marginTop: "0.6rem" }}>
