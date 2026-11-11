@@ -865,7 +865,7 @@ func _render_refresh_menu() -> void:
 	first.add_child(again)
 	first.add_child(text(str(data.get("refreshHint", "")), 10, Color(1, 1, 1, 0.42)))
 	stack.add_child(first)
-	if not data.get("custom", false) and refresh_step == "open":
+	if refresh_step == "open":
 		var second := column(4)
 		var rebuild := _menu_button("Rebuild baseline from scratch")
 		rebuild.pressed.connect(func() -> void:
@@ -874,7 +874,7 @@ func _render_refresh_menu() -> void:
 		second.add_child(rebuild)
 		second.add_child(text("Uses 1 request and replaces the current numbers with a fresh assessment of the country as it stands now.", 10, Color(1, 1, 1, 0.42)))
 		stack.add_child(second)
-	if not data.get("custom", false) and refresh_step == "confirm":
+	if refresh_step == "confirm":
 		var third := column(7)
 		third.add_child(text("Rebuild this country's baseline from scratch? It uses 1 request and replaces the current numbers.", 12, Color(1, 1, 1, 0.82)))
 		var buttons := flow(7, 7)
