@@ -1189,7 +1189,7 @@ export const register = (ctx) => {
       custom: Boolean(definition.custom),
       economyTab: definition.custom ? "📊 National" : "📈 Economy",
       definitionError,
-      refreshHint: definition.custom ? "Uses 1 request." : "Uses a request only if something has changed since the last assessment.",
+      refreshHint: "\"Uses a request only if relevant canonical evidence has changed since the last assessment.\"",
     };
     if (!target) return { ...base, empty: "No active game. Start one to see national statistics." };
     const countries = await countryNameRows(ctx);

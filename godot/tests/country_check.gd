@@ -459,7 +459,7 @@ func cancel(id: int) -> void:
 	panel.scroll.scroll_vertical = 0
 	panel._toggle_refresh_menu()
 	await _wait(0.3)
-	_check(_has_text(panel, "Rebuild baseline from scratch") and _has_text(panel, "Uses a request only if something has changed since the last assessment."), "refresh menu")
+	_check(_has_text(panel, "Rebuild baseline from scratch") and _has_text(panel, "\"Uses a request only if relevant canonical evidence has changed since the last assessment.\""), "refresh menu")
 	await _shoot("08-country-refresh-menu")
 	panel.refresh_step = "confirm"
 	panel._render()
