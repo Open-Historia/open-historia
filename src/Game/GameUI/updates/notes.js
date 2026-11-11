@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A scenario author, 2026-11-10 (a 1946 save, Chinese Civil War, 3-month skips): "a significant portion of the CCPs
+    // army disappears and the land falls into Republic of China control". The front engine fed a body of ground only
+    // through the one piece of home ground it held most of; the Communists' southern body held all of Jiangsu, their
+    // own, and one cell more of Henan, which their northern body holds most of, so it was read as cut off and gave up
+    // whole ten days later. runtime/fronts/supply.js suppliedBodies, constants.js SUPPLY_PIECE_SHARE.
+    id: "2026-11-armies-on-their-own-land-stay-supplied",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Armies on their own land stay supplied",
+        items: [
+          "An army holding a province of its own country could be counted as encircled on a battlefield, and ten days later it vanished and all its ground went to the enemy. It is now supplied from that province, and only a truly encircled army surrenders.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it so the ai can very easily create a civil war and split a country in 2" (the owner, 2026-11-10):
     // AI/countrySplit.js; one regionControlOps entry with part, written out by splitCountryOps before the transfers are resolved.
     id: "2026-11-civil-wars-split-countries",
