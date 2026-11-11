@@ -225,7 +225,9 @@ test("the board no longer costs the jump anything", () => {
   // read an older event by it instead of by its whole story. The description
   // audit of 2026-11-07 (docs/prompt-budget.md) took it to 28,273: each field
   // says what it is, and the rules it repeated are in the prompt.
-  assert.ok(jumpChars < 28400, `the jump schema grew back to ${jumpChars} chars`);
+  // A civil war split in one entry (regionControlOps[].part, AI/countrySplit.js) raised it by about 160, on
+  // purpose, the field pointing at the prompt that explains it: half a country was forty entries the model never wrote.
+  assert.ok(jumpChars < 28450, `the jump schema grew back to ${jumpChars} chars`);
 
   // ...and the game master, which has no second pass to hand the board to, keeps
   // it on its authored events (the provider sees a shallow transport; the
