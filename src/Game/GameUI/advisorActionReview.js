@@ -55,6 +55,33 @@ export const actionProposalsFromReply = (operations, messageId) => {
   return { proposals, problems };
 };
 
+// Validate generated Action targets against current native state BEFORE a
+// proposal becomes a saved review card. Older conversations are historical
+// context, not an authority to edit a resolved or removed order. Proceed still
+// rechecks inside the canonical Action mutation queue, because an order may
+// resolve between generation and the player's click.
+export const reviewAdvisorActionProposals = (operations, messageId, currentActions) => {
+  if (!Array.isArray(currentActions)) {
+    throw new Error("Current Actions could not be verified for Advisor proposal review.");
+  }
+  const { proposals, problems } = actionProposalsFromReply(operations, messageId);
+  const valid = [];
+  const rejected = [...problems];
+  for (const item of proposals) {
+    if (item.operation === "create") {
+      valid.push(item);
+      continue;
+    }
+    const matches = currentActions.filter((action) => action?.id === item.targetId);
+    if (matches.length !== 1 || matches[0].status !== "planned") {
+      rejected.push(`Action proposal ${Number(item.id.slice("proposal-".length)) + 1} was not offered: only an existing queued Action can be edited or removed. A resolved or missing order is historical; new work requires a separate Action proposal and your approval.`);
+      continue;
+    }
+    valid.push(item);
+  }
+  return { proposals: valid, problems: rejected };
+};
+
 const validateProposal = (proposal) => {
   if (!proposal || typeof proposal !== "object" || Array.isArray(proposal)
       || !/^proposal-\d{1,2}$/.test(proposal.id || "")

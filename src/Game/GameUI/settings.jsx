@@ -39,6 +39,7 @@ import {
     updateEntry,
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
+import { readAdvisorGroupSettings, setAdvisorGroupSettings } from "../AI/advisorGroupSettings.js";
 import { useWorldBackground } from "../Map/useWorldState.js";
 import { announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask, setNoRequestLimit } from "../AI/requestBudget.js";
 import {
@@ -1521,6 +1522,7 @@ const RequestBudgetSection = () => {
     const lookupsOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
     // Idle diplomacy has a switch of its own, outside that cap (2026-11-09).
     const idleDiplomacyOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy);
+    const [groupAi, setGroupAi] = useState(() => readAdvisorGroupSettings());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
 
     useEffect(() => {
@@ -1682,10 +1684,33 @@ const RequestBudgetSection = () => {
             enabled={idleDiplomacyOn}
             onToggle={() => setMapSetting(MAP_SETTING_KEYS.idleDiplomacy, !idleDiplomacyOn)}
             />
-            {/* The section ends on this line when there is nothing under Advanced. */}
-            <div style={{ ...settingsHelper, ...(noLimit ? null : { marginBottom: 0 }) }}>
+            <div style={settingsHelper}>
                 Off: between time skips, no country writes to you unless you write first.
             </div>
+
+            <Toggle
+            label="Individual AI responses in group chats"
+            enabled={groupAi.individual}
+            onToggle={() => {
+                const next = setAdvisorGroupSettings({ individual: !groupAi.individual });
+                setGroupAi(next);
+                logSettingChange("Individual AI responses in group chats", next.individual ? "on" : "off");
+            }}
+            />
+            <div style={settingsHelper}>On: each group member gets an individual AI request. Off: members share requests in batches. In both modes, members may speak or deliberately stay silent.</div>
+            <label style={{ alignItems: "center", display: "flex", gap: "0.75rem", justifyContent: "space-between", marginBottom: "0.85rem", opacity: groupAi.individual ? 0.6 : 1 }}>
+                <span style={{ fontSize: "0.9rem" }}>Advisors per AI request</span>
+                <span style={{ alignItems: "center", display: "flex", gap: "0.6rem" }}>
+                    <input type="range" min="1" max="10" step="1"
+                    value={groupAi.individual ? 1 : groupAi.batchSize}
+                    disabled={groupAi.individual}
+                    onChange={(event) => setGroupAi(setAdvisorGroupSettings({ batchSize: Number(event.target.value) }))}
+                    aria-label="Advisors per AI request"
+                    style={{ accentColor: "var(--oh-ui-accent, #3b82f6)", width: "9rem" }} />
+                    <span data-no-translate style={{ color: "var(--oh-ui-text, #93c5fd)", fontSize: "0.78rem", minWidth: "1.8rem", textAlign: "right", fontWeight: 650 }}>{groupAi.individual ? 1 : groupAi.batchSize}</span>
+                </span>
+            </label>
+            <div style={{ ...settingsHelper, marginTop: "-0.5rem" }}>All group members are consulted, but only those with something to contribute need to speak. This setting controls request batching, not who gets excluded. Retries and fallback attempts may add requests.</div>
 
             {noLimit && (
                 <details style={{ marginBottom: 0 }}>

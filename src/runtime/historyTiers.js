@@ -178,10 +178,17 @@ export const mergeHistoryTiers = (document, { years = [], eras = null } = {}, { 
     const from = Number.isFinite(startYear) ? Math.min(startYear, Number.isFinite(to) ? to : startYear) : to;
     if (Number.isFinite(from) && Number.isFinite(to)) currentEras = [{ from, to: Math.max(from, to), text: legacy }];
   }
-  if (eras) currentEras = normalizeHistoryEras(eras);
   const byYear = new Map(currentYears.map((entry) => [entry.year, entry]));
   for (const entry of incoming) byYear.set(entry.year, entry);
   currentYears = [...byYear.values()].sort((a, b) => a.year - b.year);
+  if (eras) {
+    // A revision of the eras replaces them, except an era older than every one
+    // it gives (it was not revised, only left out), and except an era of years
+    // still kept as paragraphs, which says them twice.
+    const firstKept = currentYears.slice(-HISTORY_TIERS.yearsKept)[0]?.year ?? Infinity;
+    const revised = normalizeHistoryEras(eras).filter((era) => era.from < firstKept);
+    if (revised.length) currentEras = [...currentEras.filter((era) => era.to < revised[0].from), ...revised];
+  }
   while (currentYears.length > HISTORY_TIERS.yearsKept) {
     const oldest = currentYears.shift();
     const last = currentEras.at(-1);
@@ -194,7 +201,15 @@ export const mergeHistoryTiers = (document, { years = [], eras = null } = {}, { 
   return { eras: currentEras, years: currentYears };
 };
 
-export const eraWordCount = (document) => normalizeHistoryEras(document?.eras).reduce((sum, era) => sum + words(era.text), 0);
+// A document from before the tiers counts its text: mergeHistoryTiers makes it
+// the first era, so a fold's eras answer is judged against it. Counted as 0, a
+// stub of eras the model wrote unasked replaced it whole (a 1939 campaign's
+// first year and more, 2026-11-10).
+export const eraWordCount = (document) => {
+  const eras = normalizeHistoryEras(document?.eras);
+  if (!eras.length && !normalizeHistoryYears(document?.years).length) return words(document?.text);
+  return eras.reduce((sum, era) => sum + words(era.text), 0);
+};
 
 // ---- what the prompt is shown --------------------------------------------------
 

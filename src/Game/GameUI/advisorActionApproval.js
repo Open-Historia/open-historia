@@ -3,6 +3,7 @@ import {
   ADVISOR_RECIPIENT_TYPES,
   CHIEF_ADVISOR_THREAD,
   advisorContacts,
+  advisorGroups,
   advisorMessagesFor,
   advisorRecipientType,
 } from "../../runtime/advisorThreads.js";
@@ -21,7 +22,8 @@ const readReviewedProposal = async ({
   }
   const saved = await readAdvisorMessages({ force: true });
   if (!Array.isArray(saved)) throw new Error("The Advisor conversation could not be read.");
-  if (threadId !== CHIEF_ADVISOR_THREAD) {
+  const group = advisorGroups(saved).find((item) => item.id === threadId);
+  if (threadId !== CHIEF_ADVISOR_THREAD && !group) {
     const contact = advisorContacts(saved).find((record) => record.id === threadId);
     if (!contact || contact.archived || advisorRecipientType(contact) !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
       throw new Error("Only an active domestic Advisor / Minister conversation may submit player-approved Actions.");
@@ -31,6 +33,14 @@ const readReviewedProposal = async ({
     .filter((entry) => entry?.role === "advisor" && entry.id === messageId);
   if (messages.length !== 1) throw new Error("The original Advisor reply was not found or was ambiguous.");
   const message = messages[0];
+  if (group) {
+    const member = advisorContacts(saved).find((row) => row.id === message.speakerId);
+    if (group.archived || !group.memberIds?.includes(message.speakerId)
+        || (message.speakerId !== CHIEF_ADVISOR_THREAD
+          && (!member || member.archived || advisorRecipientType(member) !== ADVISOR_RECIPIENT_TYPES.MINISTER))) {
+      throw new Error("Only a current invited Advisor / Minister may submit a group Action for player review.");
+    }
+  }
   const proposals = Array.isArray(message.actionProposals) ? message.actionProposals : [];
   const matches = proposals.filter((proposal) => proposal?.id === proposalId);
   if (matches.length !== 1) throw new Error("The requested Action proposal is missing or ambiguous.");
@@ -44,7 +54,32 @@ const readReviewedProposal = async ({
         && (candidate?.id === matches[0].id || candidate?.actionId === matches[0].actionId))) {
     throw new Error("The Advisor Action proposal does not match its original message identity.");
   }
-  return { message, proposal: matches[0] };
+  const proposal = matches[0];
+  if (group && proposal.operation !== "create" && proposal.targetId?.startsWith("action-advisor-reply-")) {
+    // The model sees every queued order in the group context. A minister
+    // revising their own *unqueued* proposal must not accidentally overwrite
+    // a different member's already-approved Action by copying its ID.
+    // Provenance is the immutable originating saved proposal, not a title
+    // (titles may collide) or the model's claim of who owns the order.
+    const origin = saved.filter((entry) => entry?.role === "advisor"
+      && entry.actionProposals?.some((item) =>
+        item?.operation === "create" && item.actionId === proposal.targetId));
+    const conversation = advisorMessagesFor(saved, threadId);
+    const replyIndex = conversation.findIndex((row) => row?.role === "advisor" && row.id === messageId);
+    const latestUserText = replyIndex < 0 ? "" : String(conversation.slice(0, replyIndex)
+      .reverse().find((row) => row?.role === "user")?.text || "");
+    if (origin.length > 1) {
+      throw new Error("The targeted Advisor Action has ambiguous original ownership.");
+    }
+    const originalSpeaker = origin.length === 1
+      ? (origin[0].speakerId || origin[0].threadId || CHIEF_ADVISOR_THREAD) : "";
+    if ((!originalSpeaker || originalSpeaker !== message.speakerId)
+        && !latestUserText.includes(proposal.targetId)) {
+      throw new Error("This edit targets another advisor's queued Action, or its author cannot be verified. Ask for a new proposal to revise an unqueued draft; to change this specific queued Action, identify its exact Action ID in your instruction.");
+    }
+  }
+  return { message, proposal };
+
 };
 
 // All dependencies are the existing canonical runtime service methods. Keeping

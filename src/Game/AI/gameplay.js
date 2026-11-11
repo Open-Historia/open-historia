@@ -79,7 +79,8 @@ import {
   trimWorldForFocus,
 } from "./playerFocus.js";
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
-import { successorTransfers } from "./polityTransitions.js";
+import { landlessFoundings, successorTransfers } from "./polityTransitions.js";
+import { splitCountryOps } from "./countrySplit.js";
 import { hasAnnexOrders, orderedAnnexations } from "./orderedAnnexations.js";
 import {
   detectExplicitBaseTerritoryScope,
@@ -202,6 +203,7 @@ import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE, audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
 import { buildTargetDossierKernel, buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
 import { buildTargetLedgerLines } from "./targetDossier.js";
+import { buildCustomStatContinuity, customStatRefreshDecision, describeFreshCustomStatEvidence } from "./customStatContinuity.js";
 import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
 import {
   AGENT_REPORTS_FIELD,
@@ -222,6 +224,7 @@ import {
   withEventAudience,
   withEventImpacts,
   withFrontOrders,
+  withOccupationSettlements,
   withWarFigures,
   withIntelligenceRating,
   withSocialPosts,
@@ -243,6 +246,7 @@ import { holdPlayersWars } from "./playersWarsHold.js";
 import { chatMessageTags } from "./chatTags.js";
 import { PEACE_BLOCK_HEADING, buildPeaceBlock } from "./peacePrompt.js";
 import { WAR_FIGURES_WANTED_MOST, buildWarFiguresBlock, readWarFigures } from "./warFiguresPrompt.js";
+import { applyOccupationSettlements, occupationAnswerPolity, planOccupationSettlements, readOccupationAnswers, readOccupationSettlements } from "../../runtime/occupationSettlements.js";
 import { reshelveJumpAnswer } from "./jumpAnswerShelves.js";
 import { readPeaceVerdict, readTreatyLines, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { PEACE_ANSWERS_FIELD, buildWarStatsBlock, describePeaceTalk, warsOf } from "./warStatsPrompt.js";
@@ -322,7 +326,7 @@ import {
   withoutBoardOps,
 } from "./foldedSkip.js";
 import { geminiDeclaredChars } from "./geminiAnswer.js";
-import { renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
+import { buildIdleConversationBrief, idleThreadChangedSince } from "../../runtime/idleConversationContext.js";
 import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment, spySealingWorks } from "../../runtime/spySeal.js";
 import {
   buildActionHistoryText,
@@ -542,10 +546,13 @@ import { isPendingAction } from "./regionFocus.js";
 import {
   describeIntelligenceStanding,
   describeLeaderStanding,
+  describeOccupationsAfterTheirWar,
+  occupationGroups,
   describeReputationStanding,
   describeTerritorialRows,
   describeTerritorialRowsGrouped,
   describeTerritoryForConversation,
+  occupationsAfterTheirWar,
   territorialControlRows,
 } from "./standingContext.js";
 import { buildBoundedPoliticalDecisionContextSet } from "./politicalDecisionContext.js";
@@ -1371,6 +1378,60 @@ const perfNow = () =>
 const LEAN_TERRITORIAL_ROWS = 12;
 // A time skip's `inView` (promptContext.js buildPromptFocus): the rows grouped
 // by who holds what, those of the powers in view in full.
+// Occupations whose war is over (standingContext.js occupationsAfterTheirWar), for the time skip to settle. Issue
+// #1000: Germany surrendered in 1945 and Poland was still German on the map in 1947.
+// { text, groups }: the block, and the groups the answer's keys are (standingContext.js occupationGroups).
+const buildOccupationsAfterWarContext = async (worldLike) => {
+  const world = normalizeWorldState(worldLike);
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const rows = occupationsAfterTheirWar(territorialControlRows(world, catalog), world);
+  if (!rows.length) return { text: "", groups: [] };
+  const namer = await promptRegionNamer(world, catalog).catch(() => null);
+  return {
+    text: describeOccupationsAfterTheirWar(rows, { world, regionName: namer ? (id, name) => namer(id) || name : null }),
+    groups: occupationGroups(rows, world).map(({ key, controller, sovereign, rows: held, war }) => ({ key, controller, sovereign, count: held.length, war })),
+  };
+};
+
+// The skip's occupationSettlements (runtime/occupationSettlements.js), applied to the occupations that outlived
+// their war when it was asked (`baseWorld`) and are still held as they were then (an event of this turn may have
+// settled one already). Issue #1000.
+const settleOccupationsAfterWar = async (world, baseWorld, answer) => {
+  const keyed = readOccupationAnswers(answer);
+  const written = readOccupationSettlements(answer);
+  if (!keyed.length && !written.length) return world;
+  const before = normalizeWorldState(baseWorld);
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const pending = occupationsAfterTheirWar(territorialControlRows(before, catalog), before);
+  if (!pending.length) return world;
+  // A key stands for every region of its group, as the prompt listed them.
+  const groups = new Map(occupationGroups(pending).map((group) => [group.key, group]));
+  const lines = [
+    ...keyed.flatMap(({ key, to }) => (groups.get(key)?.rows ?? []).map((row) => ({ region: row.regionId, to: occupationAnswerPolity(to, groups.get(key)) }))),
+    ...written,
+  ];
+  const namer = await promptRegionNamer(before, catalog).catch(() => null);
+  const polities = new Map();
+  for (const name of [
+    ...Object.values(world?.regionOwnershipOverrides ?? {}),
+    ...normalizeArray(world?.ownerCodes),
+    ...Object.keys(world?.polityOverrides ?? {}),
+    ...catalog.map((region) => region?.country),
+  ]) {
+    const text = normalizeString(name);
+    if (text && !polities.has(text.toLowerCase())) polities.set(text.toLowerCase(), text);
+  }
+  const plan = planOccupationSettlements(lines, pending, {
+    namesOf: (row) => [row.regionId, row.name, namer?.(row.regionId)],
+    knownPolity: (name) => polities.get(normalizeString(toCountryName(name) || name).toLowerCase()) || "",
+  });
+  const held = world?.regionOwnershipOverrides ?? {};
+  const live = plan.filter((entry) => normalizeString(held[entry.regionId]).toLowerCase() === normalizeString(entry.from).toLowerCase());
+  if (!live.length) return world;
+  logDebugEvent("turn", `Occupations settled after their war: ${live.map((entry) => `${namer?.(entry.regionId) || entry.regionId} ${entry.kind} (${entry.to})`).join(", ")}.`, live);
+  return applyOccupationSettlements(world, live);
+};
+
 const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLookups = false, inView = null } = {}) => {
   const catalog = await loadRegionCatalog().catch(() => []);
   const rows = territorialControlRows(normalizeWorldState(worldLike), catalog);
@@ -1591,6 +1652,9 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       // A time skip: grouped, the powers it has in view in full (promptContext.js buildPromptFocus).
       inView: variables.promptFocus?.inView ?? null,
     });
+    const occupations = await buildOccupationsAfterWarContext(bundle.world);
+    variables.occupationsAfterWarContext = occupations.text;
+    variables.occupationGroups = occupations.groups;
   }
   // Groups switched off for this game (server/gameFeatures.js): no task is
   // given them, which also leaves out the time skip's [Groups] rule and the
@@ -1655,7 +1719,7 @@ const JUMP_LEVERS = [
   // Said where each change goes because models put them anywhere else (2026-11-03: Gemma, beam and an unheld
   // Gemini wrote client states, wars and relations into an event's impacts, and the check cut them out).
   "Every change to the map, the units, the structures, a country or its politics rides in an event's impacts object, and no event's text may claim a change its impacts do not make. Wars, relations, agreements, client states and storylines are not impacts: they are the answer's own lines (warUpdates, relationUpdates, agreementUpdates, puppetUpdates, storylineUpdates), beside the events and never inside an event, each naming its events by number (1 for the first). The output function describes each field; these need a word more, and every one of them is a list in an event's impacts:",
-  "• polityChanges: after a rename the country IS the new name everywhere, so address the change to its current name, never the new one; stats carry only the fields that changed, tags the complete new list. A better intelligence service is built over time: open it as a project, never as an instant rating.",
+  "• polityChanges: after a rename the country IS the new name everywhere, so address the change to its current name, never the new one; stats carry only the fields that changed, tags the complete new list. A government overthrown across the whole country (a coup, a revolution or a movement that takes power, a new republic or regime proclaimed in its place) leaves the same country under a new regime: rename it to the name the event gives and replace its government, never create a second country beside it that holds no land. A country founded with land gets that land in the same event, as transfer or control entries to it; one that replaces another country outright takes all of it, with dissolve for the old one. A better intelligence service is built over time: open it as a project, never as an instant rating.",
   "• politicalActorOps {\"op\":\"<operation>\",\"polityKey\":\"<current full name; the new one if this event also renames it>\",\"argsJson\":\"<one JSON object, as a string>\"}: set-government, replace-leader, form-coalition / leave-coalition, create / update / set-party-*, create / update / set-power-bloc-*, set-political-system, set-strategy, set-traits, set-perceptions / remove-perception. Never guess the decoded argsJson shape: use the one given for the op below. Every change of government, leader or party carries these ops, or it changes only the story; stats.leader and stats.government never carry it.",
   "• Always return politicalClaims: transient validation only, never world state. One line per event that COMPLETES a national Political World structural change: eventNumber~polity~effectsCSV. Effects: election (final national result), government, coalition, leadership, system, parties (founding/split/merger/reorganization). Use the same polityKey as that event's politicalActorOps (new key after a same-event rename). No line for campaigns, policy, subnational politics, references or later consequences. Empty string when none. Claims never replace politicalActorOps.",
   POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE,
@@ -1664,6 +1728,7 @@ const JUMP_LEVERS = [
   "• markerOps: build (a specific name, a short kind such as city, military base, port, embassy or airfield, the owner's full name, `at`, a note), remove, rename (to newName) and population (the new total), each naming its place exactly. rename and population work on every city on the map.",
   "• strikes: a missile launch or a bombing run the event tells of, one line each: side~weapon~from~target~count~shot down. weapon: silo missile | submarine missile | nuclear bomber (these three are nuclear) | missile strike | bombing run. from: where it is launched (city: X, structure: X, unit: X) or blank for the game to pick; target: the place hit; count: how many missiles or aircraft; shot down: how many were intercepted on the way, a number or all | most | half | some | none, which an event telling of interceptions owes. It is drawn on the map and changes nothing itself: what it destroyed or took is the event's other operations. Example: A~missile strike~~city: X~12~some",
   "• groupOps: create founds a group (with its first regions if it holds any), update changes its name, description or colour, take adds regions to its area, release gives them back (all of them when regionIds is empty), dissolve erases it; regions as \"region: <name>\".",
+  "• A civil war splits a country in ONE entry, never region by region: a regionControlOps control with regionId \"country: <the country>\", fromCode that country, toCode the breakaway state (a new name founds it), and part: the side it holds (north, the southeast) or the place its half centres on (\"around Aleppo\"), with a share when it is not half (\"east 30%\"). The game picks the regions, leaves the government its capital, and starts the civil war; the government still claims what the breakaway holds.",
   "• regionClaims: the claimant by full name, and drop true when a claim is given up; the region stays striped until a transfer or a drop settles it.",
   "  To end claims on a whole country in one entry, never region by region: regionId \"country: <name>\", drop true, and the claimant's full name, or allClaimants true for every claimant's claims and disputes there.",
   "• actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
@@ -1682,7 +1747,7 @@ const JUMP_LEVERS = [
 const FOLDED_SKIP_CONSEQUENCES = [
   "[Every Event Carries Its Consequences]",
   "Nothing checks your events afterwards. What an event's impacts say is ALL that happens to the map, the units, the structures and the board, so finish each event before you start the next: once its text is written, give it every consequence that text states. Each consequence below is a list in that event's impacts object (impacts.regionControlOps, impacts.unitOps and so on), never a field of the event itself.",
-  "• Land. Every region the text says was captured, occupied, liberated, retaken or overrun is a regionControlOps control entry, from the side that held it to the side that took it; fighting inside a named region with no decisive result is a contest; a withdrawal, ceasefire or armistice that ends a front is a clear_contest. A legal change of ownership is a regionTransfers entry for each region. The whole of a country, territory or dependency is \"country: <name>\" in the region field (\"country: Puerto Rico\", \"country: Greenland\"): that one entry is every region of it the losing side holds. Armies moving nearby change no control, and an unresolved clash names no winner. A side that is NOT a country on the map (rebels, an insurgency, a militia, a breakaway army) is a group: the first event that has it holding ground founds it with that ground (groupOps create), a town it captures is a groupOps take, and a town a government wins back from it is a groupOps release. This holds for every war, the player's or not: \"Aleppo falls\" always carries the op that shows it, whoever took it.",
+  "• Land. Every region the text says was captured, occupied, liberated, retaken or overrun is a regionControlOps control entry, from the side that held it to the side that took it; fighting inside a named region with no decisive result is a contest; a withdrawal, ceasefire or armistice that ends a front is a clear_contest. A legal change of ownership is a regionTransfers entry for each region. The whole of a country, territory or dependency is \"country: <name>\" in the region field (\"country: Puerto Rico\", \"country: Greenland\"): that one entry is every region of it the losing side holds. Armies moving nearby change no control, and an unresolved clash names no winner. A side that is NOT a country on the map (rebels, an insurgency, a militia, a breakaway army) is a group, unless it holds a whole part of the country as a state of its own, which is one split entry ([Levers]): the first event that has it holding ground founds it with that ground (groupOps create), a town it captures is a groupOps take, and a town a government wins back from it is a groupOps release. This holds for every war, the player's or not: \"Aleppo falls\" always carries the op that shows it, whoever took it.",
   "• Units. Check the event against Current Military Units. A formation the text has advancing, retreating, redeploying, massing on a border or going into action is MOVED: its name in unitId, an `at`, and the posture it now has (fighting is a move into contact with posture assaulting). Losses, attrition, reinforcement or refit change its strength; destruction or disbandment removes it. Reuse the formation that already exists before raising another: the army that fought last month is the army fighting this month. A ship, submarine or squadron commissioned, delivered or stood up, and a division raised or mobilised, is a NEW formation: spawn it for the power that raised it, at its named port or base, even when that power already has units. A war is fought by formations the map shows, on BOTH sides, whether or not the player is in it: when an event has a power or a group attacking, defending, besieging or falling back somewhere and it has no formation there among Current Military Units, spawn one where the event puts it (a group's formation carries the group's exact name as ownerCode), and move it in later events as the front moves.",
   "• Structures. Anything physical and fixed that the text says was built, opened, completed, commissioned, activated or begun (a base, shipyard, port, airfield, factory, plant, reactor, laboratory, data centre, radar or ground station, launch site, depot, embassy, fortification) is a markerOps build: a specific name, a short lowercase kind, its owner's full name, `at` the place the event names, and a status of planned, under_construction or active. A meeting, study, budget or plan builds nothing; nothing in orbit is a structure, though the ground station that serves it is; a ship or an aircraft is a unit; and nothing already on the map is built twice.",
   EVENT_PLACES_RULE,
@@ -3016,6 +3081,8 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
   // priority line opens the system prompt (main.jsx callAI).
 
   blocks.push(`[Occupied and Contested Regions]\n${normalizeString(variables.territorialControlContext) || "None."}`);
+  const afterWar = normalizeString(variables.occupationsAfterWarContext);
+  if (afterWar) blocks.push(afterWar);
   if (isActiveFeatureEnabled("groups")) blocks.push(buildJumpGroupsBlock(variables.groupsContext, { rulesAbove }));
   // The player leads a group rather than a country (runtime/groups.js).
   if (normalizeString(variables.playerGroupContext)) blocks.push(`${variables.playerGroupContext}\n${PLAYER_GROUP_JUMP_RULE}`);
@@ -3269,8 +3336,10 @@ const taskToolFor = (taskKey, { customFullStatSheet, customStatRows, statIndexRo
   const featureTool = forActiveFeatures(customFullStatSheet
     ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
     : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
+  // Occupations that outlived their war (issue #1000): settled in a field the answer must hold, when there are any.
+  const settlingTool = JUMP_TASK_KEYS.has(taskKey) && normalizeArray(variables?.occupationGroups).length ? withOccupationSettlements(featureTool, variables.occupationGroups) : featureTool;
   // The players' advice, asked of the time skip whose prompt asks for it.
-  const advisedTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(featureTool) : featureTool;
+  const advisedTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(settlingTool) : settlingTool;
   // And the social posts after all of it, or none where the game has no Rostra
   // (gameplaySchemas.js withSocialPosts).
   const taskTool = JUMP_TASK_KEYS.has(taskKey)
@@ -8198,6 +8267,11 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       console.info(`[ai] ${path}.regionTransfers: ${transfer.toCode} succeeds ${transfer.fromCode}; its whole country passes with it.`);
     }
   }
+  // A polity founded with no land (polityTransitions.js landlessFoundings): kept as written, and the next skip is told.
+  for (const { polity, title } of landlessFoundings(containers.map(({ impacts, path }) => ({ impacts, title: titleAt(path) })))) {
+    noteReceipt(receipt, "short", `${title ? `Event "${title}": ` : ""}it founded ${polity}, which holds no land on the map. If ${polity} now governs a country, write that: rename the country it took over to ${polity} (polityChanges rename), or give ${polity} the land it holds.`);
+    console.info(`[ai] ${polity} was founded and holds no land; the next skip is told.`);
+  }
   if (Array.isArray(candidate?.events) && normalizeString(playerCountry) && hasAnnexOrders(actions)) {
     const catalog = filterToRenderedRegions(await loadRegionCatalog().catch(() => []), world);
     const overrides = world?.regionOwnershipOverrides ?? {};
@@ -8245,6 +8319,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   if (!strict && captureGuard && !resolvedRegionIdsOnly && Array.isArray(candidate?.events)) {
     await completeNarratedAnnexations(containers, { receipt, lookupContext });
   }
+  // A country split in two by one entry (splitCountryOps), on every attempt: it is how the entry is read.
+  if (!resolvedRegionIdsOnly) await splitCountryOps(candidate, containers, { receipt, lookupContext, playerCountry, titleAt, wars: world?.wars });
   const unresolvedTransfers = await resolveRegionTransfers(containers, world, {
     ownershipMode: "sovereignty",
     exactRegionIdsOnly: resolvedRegionIdsOnly,
@@ -10084,6 +10160,8 @@ const applySimulationResult = async ({
   // attacked; every country's weariness moves by what the turn did to it; and
   // the peaces the skip says two sides nobody plays made are made. Nobody
   // offers anybody peace here: a country does in the skip's letters (below).
+  // Occupations that outlived their war, as the skip settled them (issue #1000).
+  worldWithImpacts = await settleOccupationsAfterWar(worldWithImpacts, baseWorld, result.occupationSettlements);
   const toldTreaties = readTreatyLines(result.peaceTreaties);
   const samePair = (line, entry) => [line.from, line.to].map((name) => normalizeString(name).toLowerCase()).sort().join("|") === [entry.from, entry.to].map((name) => normalizeString(name).toLowerCase()).sort().join("|");
   const turnTreaties = [
@@ -10477,7 +10555,9 @@ const applySimulationResult = async ({
   };
 
   for (const event of freshEvents) {
-    for (const createdChat of event.impacts.createdChats) {
+    // An event whose impacts carry no list of chats opens none, instead of
+    // stopping the turn with "createdChats is not iterable".
+    for (const createdChat of normalizeArray(event?.impacts?.createdChats)) {
       const nextChat = await opening(createdChat, event.id, { fallbackTitle: event.title, revealWith: event.id });
       if (nextChat) { nextChats.unshift(nextChat); generatedChats.push(nextChat); }
     }
@@ -14519,11 +14599,80 @@ const generateScenarioCustomStatSheet = async ({
   onRequest,
   rateIntelligence = false,
   onIntelligenceRating = null,
+  forceReassess = false,
 } = {}) => {
   const currentDate = normalizeString(bundle?.game?.gameDate || bundle?.game?.startDate);
   const currentRound = Math.max(0, Math.trunc(Number(bundle?.game?.round) || 0));
   const previous = normalizeCountryStatSheet(worldAtStart?.countryStats?.[statCode]);
   const previousValues = normalizeCustomStatValues(previous?.customStats, definition, { partial: true });
+  const requiredKeys = statSheetKeys(definition);
+
+  // A saved custom sheet is canon, not a fresh opinion poll. The previous
+  // provider path asked for every value on every Refresh, even if no native
+  // evidence whatsoever had changed. Fingerprint only TARGET-relevant facts,
+  // never elapsed calendar time or unrelated countries' news.
+  const aliases = statsPolityAliases(worldAtStart, statCode);
+  const targetMatches = (text) => statsTextMentionsTarget(text, aliases);
+  const currentEvents = normalizeEvents(bundle?.events).filter((event) =>
+    !event?.date || !currentDate || compareGameDates(event.date, currentDate) <= 0);
+  const relevantRecords = (rows) => normalizeArray(rows).filter((row) =>
+    targetMatches(JSON.stringify(row)));
+  const political = getPoliticalProfile(worldAtStart, statCode);
+  const polity = Object.entries(worldAtStart?.polityOverrides || {})
+    .filter(([key, value]) => targetMatches([key, value?.code, value?.name].join(" ")))
+    .map(([key, value]) => ({ key, name: value?.name, note: value?.note, tags: value?.tags, aliases: value?.aliases }));
+  const sourceState = {
+    polity,
+    government: political?.government ?? null,
+    politicalSystem: political?.politicalSystem ?? null,
+    stability: political?.stability ?? null,
+    domesticPressures: political?.domesticPressures ?? null,
+    reputation: Object.entries(worldAtStart?.internationalReputation || {})
+      .filter(([key]) => targetMatches(key)),
+    wars: relevantRecords(worldAtStart?.wars),
+    agreements: relevantRecords(worldAtStart?.agreements),
+    relations: relevantRecords(worldAtStart?.relations),
+    projects: relevantRecords(worldAtStart?.projects).map((row) => ({
+      id: row?.id, title: row?.title, status: row?.status, progress: row?.progress, ownerCode: row?.ownerCode,
+    })),
+  };
+  const evidence = buildCustomStatContinuity({
+    events: currentEvents,
+    prior: previous?.continuity,
+    currentState: sourceState,
+    targetMatches,
+  });
+  const decision = customStatRefreshDecision({
+    previousValues,
+    requiredKeys,
+    prior: previous?.continuity,
+    current: evidence,
+    hardAudit: forceReassess,
+  });
+  const continuity = {
+    assessedDate: currentDate,
+    assessedRound: currentRound,
+    customStatFingerprint: evidence.fingerprint,
+    customStatEvidenceIds: evidence.evidenceIds,
+  };
+
+  if (!decision.regenerate && !rateIntelligence) {
+    // Existing saves have no custom fingerprint. Seal the current evidence
+    // without silently revisiting three years of already-assessed history.
+    if (decision.migrate && statCode) {
+      await beginStatsWrite(campaign, signal);
+      try {
+        await mutateWorldState((world) => {
+          applyCountryStatPatchToWorld(world, statCode, {}, { continuity });
+          return world;
+        }, { emitEvents: false });
+      } finally {
+        endSimulation();
+      }
+    }
+    console.info(`[stats custom] ${target}: reused persistent baseline (${decision.reason}); no AI request.`);
+    return previous;
+  }
   const dossier = await buildTargetDossier(bundle, target, worldAtStart, { statSheet: false });
   const variables = await buildTemplateVariables(bundle, {
     lookups: true,
@@ -14548,6 +14697,12 @@ ${dossier || "(nothing recorded)"}`,
         ? `PREVIOUS PERSISTENT CUSTOM STATS (campaign canon; preserve continuity unless supplied events justify change):
 ${JSON.stringify(previousValues)}`
         : "No previous custom Stats baseline exists; establish scenario-appropriate initial values from the supplied canon.",
+      decision.regenerate && Object.keys(previousValues).length
+        ? `NEW EVIDENCE SINCE THE LAST ASSESSMENT:
+${describeFreshCustomStatEvidence(evidence.freshEvents)}
+
+Reassess existing values only as a response to newly changed canonical evidence. Historical crises already incorporated in the previous sheet are NOT new events. Preserve any index for which no relevant new evidence justifies a difference. Changes can be positive or negative; do not assume ongoing decline.`
+        : "",
       // The layer under the scenario's own sheet (runtime/statsBackend.js).
       statsBackendInstruction(statsBackendOf(previous)),
       rateIntelligence ? intelligenceRatingInstruction(target, currentDate) : "",
@@ -14557,20 +14712,21 @@ ${JSON.stringify(previousValues)}`
   if (rateIntelligence) onIntelligenceRating?.(payload?.[INTELLIGENCE_RATING_FIELD] ?? null);
 
   throwIfAborted(signal);
-  const customStats = normalizeCustomStatValues(payload?.customStats, definition);
-  const expectedKeys = statSheetKeys(definition);
-  const missing = expectedKeys.filter((key) => !Object.prototype.hasOwnProperty.call(customStats, key));
+  // An intelligence-rating-only request has no permission to reassess a
+  // previously complete scenario sheet. Never accept incidental numeric drift.
+  const customStats = decision.regenerate
+    ? normalizeCustomStatValues(payload?.customStats, definition)
+    : previousValues;
+  const missing = requiredKeys.filter((key) => !Object.prototype.hasOwnProperty.call(customStats, key));
   if (missing.length) {
     throw new Error(`Scenario Stats generation omitted required value(s): ${missing.join(", ")}.`);
   }
 
   // (A backend the answer left out, or wrote unusably, leaves the one the sheet had.)
-  const sheet = mergeCountryStatPatch(previous, { customStats, ...statsBackendPatch(payload?.[STATS_BACKEND_FIELD]) }, {
-    continuity: {
-      assessedDate: currentDate,
-      assessedRound: currentRound,
-    },
-  });
+  const sheet = mergeCountryStatPatch(previous, {
+    customStats,
+    ...(decision.regenerate ? statsBackendPatch(payload?.[STATS_BACKEND_FIELD]) : {}),
+  }, { continuity });
 
   if (!statCode || !sheet) return sheet;
 
@@ -14580,7 +14736,7 @@ ${JSON.stringify(previousValues)}`
       const persisted = await persistCountryStatsBackground({
         code: statCode,
         sheet,
-        continuity: { assessedDate: currentDate, assessedRound: currentRound },
+        continuity,
         date: currentDate,
         round: currentRound,
         signal,
@@ -14605,9 +14761,7 @@ ${JSON.stringify(previousValues)}`
 
     let nextSheet = null;
     await mutateWorldState((world) => {
-      nextSheet = applyCountryStatPatchToWorld(world, statCode, sheet, {
-        continuity: { assessedDate: currentDate, assessedRound: currentRound },
-      });
+      nextSheet = applyCountryStatPatchToWorld(world, statCode, sheet, { continuity });
       world.countryStatsHistory = appendCountryStatHistorySample(
         world.countryStatsHistory,
         statCode,
@@ -14672,6 +14826,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       onRequest,
       rateIntelligence,
       onIntelligenceRating,
+      forceReassess,
     });
   }
 
@@ -18340,6 +18495,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     peaceTreaties: merged.peaceTreaties,
     // The figures the war needs of the countries that fight, a line a country (warFiguresPrompt.js).
     warFigures: merged.warFigures,
+    // Who each occupation that outlived its war goes to (runtime/occupationSettlements.js).
+    occupationSettlements: merged.occupationSettlements,
     // What was posted on Rostra in the period (runtime/socialFeed.js), read when the turn is written.
     socialPosts: merged.socialPosts,
     // What the public answered to the player's open polls (runtime/socialFeed.js readSkipPollResults).
@@ -20389,11 +20546,12 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
     const beforeSignature = eventSignature(event);
 
     const openChats = normalizeChats(bundle.chats);
+    const conversationBrief = buildIdleConversationBrief(openChats);
     const conversationContext = [
       "",
       "These are the conversations already open with the player, oldest message first:",
       "",
-      renderOpenChatsForPrompt(openChats),
+      conversationBrief.text,
       "",
       "If you write to a polity already in an open thread, the note is appended there. Reply to what was actually said; never restart the conversation or parrot an existing message.",
     ].join("\n");
@@ -20518,10 +20676,26 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
 
     const messageDate = normalizeString(event.date) || normalizeString(bundle.game?.gameDate);
     let nextChats = [];
+    let staleConversation = false;
     await mutateChatsState((currentChats) => {
+      const key = chatParticipantNamesKey(built);
+      const previous = openChats.find((chat) => chatParticipantNamesKey(chat) === key);
+      const destination = normalizeChats(currentChats).find((chat) =>
+        chat?.status !== "closed" && chatParticipantNamesKey(chat) === key);
+      if (destination && (!conversationBrief.includedChatIds.includes(String(destination.id || ""))
+          || !previous || idleThreadChangedSince(previous, destination))) {
+        staleConversation = true;
+        return null;
+      }
       nextChats = foldGeneratedChatsIntoStorage(currentChats, [built], { stampTime: messageDate });
       return nextChats;
     });
+    if (staleConversation) {
+      // The model did not see the thread it would answer, or it changed while
+      // the request ran. Silence, not a false "sent" receipt.
+      await removeQueueEntry({ reactionResult: "silent" });
+      return debug ? { processed: 1, reason: "diplomacy-thread-unbriefed-or-changed" } : null;
+    }
 
     const builtParticipantKey = chatParticipantNamesKey(built);
     const mergedChat = builtParticipantKey
@@ -21479,6 +21653,7 @@ export const maybeSendIdleDiplomacy = async () => {
     const bundle = await readGameStateBundle({ force: true });
     if (!normalizeString(bundle.game?.country)) return null; // no active game
     const openChats = normalizeChats(bundle.chats).filter((chat) => !isLifecycleNegotiationChat(chat));
+    const conversationBrief = buildIdleConversationBrief(openChats);
     // The same world the last pulses answered empty on: a second roll, before
     // anything is built or asked.
     const fingerprint = idlePulseFingerprint({
@@ -21527,7 +21702,7 @@ export const maybeSendIdleDiplomacy = async () => {
       "",
       "These are the conversations already open with the player, oldest message first:",
       "",
-      renderOpenChatsForPrompt(openChats),
+      conversationBrief.text,
       "",
       "A note addressed to a polity the player is ALREADY talking to is appended to that"
       + " conversation, so it must read as the next thing that polity says: answer what was"
@@ -21660,6 +21835,17 @@ export const maybeSendIdleDiplomacy = async () => {
       ));
       if (collidesWithLifecycleNegotiation) {
         outcome = "lifecycle";
+        return null;
+      }
+      const key = chatParticipantKey(built.countries);
+      const destination = normalizeChats(chats).find((chat) =>
+        chat?.status !== "closed" && chatParticipantKey(chat.countries) === key);
+      const prior = openChats.find((chat) => chatParticipantKey(chat.countries) === key);
+      if (destination && (!prior || !conversationBrief.includedChatIds.includes(String(destination.id || ""))
+          || idleThreadChangedSince(prior, destination))) {
+        // The conversation was omitted by the bounded prompt or changed while
+        // the model was thinking. Appending would fabricate continuity.
+        outcome = "stale-thread";
         return null;
       }
       // A note from a country the player already has an open thread with (1:1 or a

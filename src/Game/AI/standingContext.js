@@ -254,6 +254,94 @@ export const territorialControlRows = (world, catalog = []) => {
   return rows;
 };
 
+// Issue #1000 (a 1947 save): Germany had surrendered and its wars were ended in the war ledger, but 18 regions of
+// Poland were still held by the German Reich, so the map showed Poland German. Nothing ends an occupation when its
+// war ends: only an event's control op or a transfer does, and the time skip was never told the war behind it was
+// over. These are the occupations whose controller and sovereign face each other in no war still active or in
+// ceasefire, and that are not between a puppet and its overlord: each is for the next time skip to settle. Who keeps
+// the land is the story's to say (a surrender, a treaty, an annexation), so nothing is handed back here.
+const SETTLING_WAR_STATUSES = new Set(["active", "ceasefire"]);
+export const occupationsAfterTheirWar = (rows, world) => {
+  const fold = (value) => asText(value).toLowerCase();
+  const wars = (Array.isArray(world?.wars) ? world.wars : [])
+    .filter((war) => SETTLING_WAR_STATUSES.has(fold(war?.status) || "active"))
+    .map((war) => [new Set((war?.sideA ?? []).map(fold)), new Set((war?.sideB ?? []).map(fold))]);
+  const atWar = (a, b) => wars.some(([sideA, sideB]) => (sideA.has(a) && sideB.has(b)) || (sideA.has(b) && sideB.has(a)));
+  const tied = new Set((Array.isArray(world?.puppets) ? world.puppets : [])
+    .filter((entry) => fold(entry?.status || "active") === "active")
+    .flatMap((entry) => [`${fold(entry?.overlord)}|${fold(entry?.puppet)}`, `${fold(entry?.puppet)}|${fold(entry?.overlord)}`]));
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    const controller = fold(row?.controller);
+    const sovereign = fold(row?.sovereign);
+    return controller && sovereign && controller !== sovereign
+      && !atWar(controller, sovereign) && !tied.has(`${controller}|${sovereign}`);
+  });
+};
+
+// Those rows by occupier and sovereign, the largest first: [{ key: "o1", controller, sovereign, rows }]. The keys
+// are what the time skip answers (occupationSettlements), so the block, the tool and the reading all take them from
+// here, from the same world. At most OCCUPATION_GROUPS_MOST groups (the rest wait for a later skip).
+export const OCCUPATION_GROUPS_MOST = 12;
+// The war that brought an occupation, as the war ledger tells it: the latest ended war with the occupier and the
+// sovereign on opposite sides, { title, ended, note }, or null. A live skip (issue #1000, gemini-3.5-flash-lite) given
+// only "German Reich holds 17 regions of Poland" handed them to the German Reich, which had surrendered; the ledger's
+// note says how the war ended, and the story reads it from there.
+export const occupationWar = (world, controller, sovereign) => {
+  const fold = (value) => asText(value).toLowerCase();
+  const a = fold(controller);
+  const b = fold(sovereign);
+  const war = (Array.isArray(world?.wars) ? world.wars : [])
+    .filter((entry) => fold(entry?.status) === "ended")
+    .filter((entry) => {
+      const sideA = (entry?.sideA ?? []).map(fold);
+      const sideB = (entry?.sideB ?? []).map(fold);
+      return (sideA.includes(a) && sideB.includes(b)) || (sideA.includes(b) && sideB.includes(a));
+    })
+    .sort((x, y) => asText(y?.endedDate).localeCompare(asText(x?.endedDate)))[0];
+  if (!war) return null;
+  return { title: asText(war.title), ended: asText(war.endedDate), note: asText(war.note).slice(0, 200) };
+};
+const describeOccupationWar = (war) => (war
+  ? `Their war${war.title ? ` (${war.title})` : ""} ended${war.ended ? ` ${war.ended}` : ""}${war.note ? `: ${war.note}` : ""}`
+  : "");
+
+export const occupationGroups = (rows, world = null) => {
+  const groups = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const id = `${asText(row.controller).toLowerCase()}\u0001${asText(row.sovereign).toLowerCase()}`;
+    const group = groups.get(id) ?? { controller: row.controller, sovereign: row.sovereign, rows: [] };
+    group.rows.push(row);
+    groups.set(id, group);
+  }
+  return [...groups.values()]
+    .sort((a, b) => b.rows.length - a.rows.length || `${a.controller}|${a.sovereign}`.localeCompare(`${b.controller}|${b.sovereign}`))
+    .slice(0, OCCUPATION_GROUPS_MOST)
+    .map((group, index) => ({ key: `o${index + 1}`, ...group, war: occupationWar(world, group.controller, group.sovereign) }));
+};
+
+// The block for the time skip: each group under its key, with the regions, every region by the name it is written
+// with (`regionName`, nameRefs.js regionNamer: "region: X" where needed). Empty when there is none.
+export const OCCUPATIONS_AFTER_WAR_MOST = 60;
+export const describeOccupationsAfterTheirWar = (rows, { regionName = null, most = OCCUPATIONS_AFTER_WAR_MOST, world = null } = {}) => {
+  if (!rows.length) return "";
+  const groups = occupationGroups(rows, world).map((group) => ({
+    ...group,
+    names: group.rows.map((row) => (regionName ? regionName(row.regionId, row.name) : "") || row.name),
+  }));
+  let room = most;
+  const lines = groups.map((group) => {
+    const shown = group.names.slice(0, Math.max(0, room));
+    room -= shown.length;
+    const rest = group.names.length - shown.length;
+    return `- ${group.key}: ${group.controller} holds ${group.names.length === 1 ? "a region" : `${group.names.length} regions`} of ${group.sovereign}: ${shown.join(", ") || "(listed above)"}${rest > 0 ? ` (+${rest} more)` : ""}${group.war ? `. ${describeOccupationWar(group.war)}` : ""}`;
+  });
+  return [
+    "[Occupations Outliving Their War]",
+    "These regions are held by a power no longer at war with their sovereign: the war that brought the occupation has ended, and nothing has settled the land since. In occupationSettlements, answer each key below as the war's end and the story since have it. Where its war is told, say who had lost when it ended: the land goes back to the sovereign if the occupier lost, and stays the occupier's if the sovereign did. Otherwise 'returned' where the occupier withdrew or was driven out, 'kept' where a treaty or annexation made the land its own. Tell it in an event where it matters to the story.",
+    ...lines,
+  ].join("\n");
+};
+
 // The rows in which any of `polities` is sovereign, controller or claimant.
 export const territorialRowsInvolving = (rows, polities = []) => {
   const names = new Set(polities.map(asText).filter(Boolean));

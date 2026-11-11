@@ -19,9 +19,14 @@ test("the Projects recovery composer request is scoped to failed operations, not
 });
 
 test("only the newest problematic Advisor reply may invite another Projects recovery request", () => {
+  // Silent group markers stay hidden. A synthetic all-pass status is visible,
+  // but cannot steal the newest recoverable-reply index.
+  assert.match(source, /msg\.silent === true \? \[\] : \[\{ msg, i \}\]/);
+  assert.match(source, /silentTurnEnds\.has\(i\)/);
+  assert.match(source, /const visibleLastIndex = visibleRows\.findLast\(\(\{ msg \}\) => msg\.role !== "group-pass"\)\?\.i/);
   assert.match(
     source,
-    /onRetryProjects=\{i === messages\.length - 1 && msg\.projectsProblem \? onRetryProjects : undefined\}/,
+    /onRetryProjects=\{i === visibleLastIndex && msg\.projectsProblem \? onRetryProjects : undefined\}/,
   );
   assert.match(source, /\{onRetry && \(/, "no retry control when handler is absent");
   assert.match(source, /Retry missing entries/);

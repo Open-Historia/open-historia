@@ -23,6 +23,7 @@ New to the codebase? Read **[Architecture Overview](architecture.md)** first —
 - [World State & Turn Model](world-state.md) — The `world.json`/`game.json` schema, normalizers, AI impact application, state distribution, country tags, and games-vs-scenarios storage.
 
 ### AI & Prompts
+- [Advisor Group Chat: Participation, Memory & Action Continuity](advisor-group-participation.md) - Native Group Chat ownership, individual versus shared-batch participation, strict pass and memory contracts, stable Action review, and scoped 2026-11-11 live acceptance evidence.
 - [AI System Overview](ai-overview.md) — Transport/provider dispatch, key/relay security, streaming vs buffered, token caps, and the `runJsonTask` strict/salvage task pipeline.
 - [Prompt-Making Guide](ai-prompts.md) — The reference for authoring and editing AI prompts: every variable, all tasks, end-to-end assembly, and the override/frozen-prompt model.
 - [AI Return Schemas & Validation](ai-schemas.md) — AI JSON return schemas, the two-layer validator, and the `runJsonTask` strict/salvage retry discipline.

@@ -54,6 +54,147 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "why doesnt it show the stuff anymore in cheats then" (the owner, 2026-11-10): a save's history from before the tiers was replaced whole by
+    // a stub of eras the first tiered fold wrote unasked (runtime/historyTiers.js eraWordCount counted it as 0 words).
+    id: "2026-11-older-history-kept",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Older history kept",
+        items: [
+          "A campaign's history written before it was kept year by year is no longer lost the first time a time skip folds it.",
+          "Cheats → History Document shows the whole history again, with the standing facts the AI is always shown.",
+        ],
+      },
+    ],
+  },
+  {
+    // A scenario author, 2026-11-10 (a 1946 save, Chinese Civil War, 3-month skips): "a significant portion of the CCPs
+    // army disappears and the land falls into Republic of China control". The front engine fed a body of ground only
+    // through the one piece of home ground it held most of; the Communists' southern body held all of Jiangsu, their
+    // own, and one cell more of Henan, which their northern body holds most of, so it was read as cut off and gave up
+    // whole ten days later. runtime/fronts/supply.js suppliedBodies, constants.js SUPPLY_PIECE_SHARE.
+    id: "2026-11-armies-on-their-own-land-stay-supplied",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Armies on their own land stay supplied",
+        items: [
+          "An army holding a province of its own country could be counted as encircled on a battlefield, and ten days later it vanished and all its ground went to the enemy. It is now supplied from that province, and only a truly encircled army surrenders.",
+        ],
+      },
+    ],
+  },
+  {
+    // "make it so the ai can very easily create a civil war and split a country in 2" (the owner, 2026-11-10):
+    // AI/countrySplit.js; one regionControlOps entry with part, written out by splitCountryOps before the transfers are resolved.
+    id: "2026-11-civil-wars-split-countries",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Civil wars split countries",
+        items: [
+          "A time skip can split a country in two in a civil war: the breakaway state takes one side of it and the war begins.",
+          "The government keeps its capital and still claims the land the breakaway holds.",
+        ],
+      },
+    ],
+  },
+  {
+    // A player, 2026-11-10: "when a movement ousted the Lebanese government nothing actually changed on map despite the events and AI
+    // recognizing the new Republic". AI/gameplay.js JUMP_LEVERS polityChanges line; polityTransitions.js landlessFoundings.
+    id: "2026-11-overthrown-governments-rename",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Overthrown governments change the map",
+        items: [
+          "A government overthrown across a whole country now renames that country, instead of founding a new republic beside it with no land.",
+          "A country founded with no land is pointed out to the next time skip, so it can give the country the land it rules.",
+        ],
+      },
+    ],
+  },
+  {
+    // Issue #1000 (a 1947 save): Germany had surrendered and its wars were ended, but 18 regions of Poland were still
+    // under German control, so the map showed Poland German. Nothing ends an occupation when its war ends; the time skip
+    // is now told which occupations outlive their war, and how that war ended, and its answer names who holds each
+    // (Game/AI/standingContext.js occupationsAfterTheirWar, runtime/occupationSettlements.js).
+    id: "2026-11-occupations-end-with-their-war",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Occupations end with their war",
+        items: [
+          "Land a country still occupied after its war ended, such as Poland held by Germany after its surrender, is now settled by the next time skip: handed back, or kept by treaty or annexation.",
+        ],
+      },
+    ],
+  },
+  {
+    // A player's log (Android stable #30, 2026-11-10): "Failed to save advisor conversation" 13 times in a row, each
+    // "Action receipts cannot be created by an Advisor conversation save." The panel held a receipt the saved reply no
+    // longer had (put back by an Undo after the approval), and the guard refused every save. It now keeps only the saved
+    // receipts and saves the rest (runtime/advisorThreads.js replaceAdvisorThread), and the panel takes each reply's
+    // receipts from the file whenever it changes (withSavedActionReceipts), so an Undo no longer leaves one behind.
+    id: "2026-11-advisor-keeps-saving",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "The Advisor keeps saving",
+        items: [
+          "After an Advisor action you approved was undone, the Advisor could stop saving your conversation, and its replies were lost when the game closed. They are saved again.",
+        ],
+      },
+    ],
+  },
+  {
+    // "make them more detailed and look good" (the owner, 2026-11-10, of Rostra's newspaper, scroll and tablet looks):
+    // GameUI/rostraDress.jsx; textures are SVG noise, never a gradient.
+    id: "2026-11-rostra-looks-detailed",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Rostra's looks, in detail",
+        items: [
+          "The newspaper has a masthead and a lead story with a drop cap, printed on newsprint with a fold.",
+          "The scroll is stained parchment, torn at the sides, between turned wooden rolls, with a wax seal.",
+          "The stone tablet is chipped and cracked, with a laurel, names cut in capitals and grooved rules.",
+        ],
+      },
+    ],
+  },
+  {
+    // "make it so rostra can be themed as a phone, newspaper, scroll, and a stone tablet selected by the scenario designer in features"
+    // (the owner, 2026-11-10): server/gameFeatures.js socialMedia setting "look"; GameUI/rostraLooks.js draws each.
+    id: "2026-11-rostra-looks",
+    kind: "minor",
+    date: "2026-11-10",
+    channel: "beta",
+    banners: [
+      {
+        title: "Rostra in four looks",
+        items: [
+          "A scenario's author can draw Rostra as a phone, a newspaper, a scroll or a stone tablet, in Features under Social media.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",

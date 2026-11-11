@@ -16,6 +16,7 @@ import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
 import { IDEOLOGIES, PARTY_ROLES } from "../../runtime/politics.js";
 import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
+import { OCCUPATION_SETTLEMENTS_FIELD, occupationOutcomesFor } from "../../runtime/occupationSettlements.js";
 import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
 import { CANON_KINDS } from "../../runtime/historyTiers.js";
 const textSchema = (description) => ({
@@ -108,6 +109,9 @@ const outreachChatSchema = {
 // territory or a dependency (AI/namedAreas.js).
 const regionIdSchema = textSchema("The region's NAME as the map spells it, \"region: Hamhung\", or \"country: <name>\" for all of it. Never an id.");
 const regionNameSchema = textSchema("Region name, when known.");
+
+// A country split in two by one entry (AI/countrySplit.js): the game picks the regions.
+const SPLIT_PART_SCHEMA = textSchema("A civil war split, as [Levers] says.");
 
 const regionTransferSchema = {
   type: "object",
@@ -241,8 +245,9 @@ const regionControlOpSchema = {
         basis: { type: "string", enum: [...TERRITORY_BASIS_ENUM], description: TERRITORY_BASIS_DESCRIPTION_SHORT },
         wholeCountry: {
           type: "boolean",
-          description: "True only when the new controller takes EVERY region the other still holds; regionId repeats its name.",
+          description: "True only when it takes EVERY region the other holds; regionId repeats its name.",
         },
+        part: SPLIT_PART_SCHEMA,
       },
       required: ["op", "regionId", "fromCode", "toCode"],
       additionalProperties: false,
@@ -255,7 +260,7 @@ const regionControlOpSchema = {
         regionName: regionNameSchema,
         fromCode: textSchema("Current controller's FULL name, preferred."),
         claimantCode: textSchema("The contender to remove. Omit only with clearAll."),
-        clearAll: { type: "boolean", description: "Remove every contender — only for a final settlement; a ceasefire removes one claimantCode." },
+        clearAll: { type: "boolean", description: "Every contender, only at a final settlement; a ceasefire clears one." },
         note: textSchema("Brief reason."),
       },
       required: ["op", "regionId"],
@@ -1442,6 +1447,14 @@ export const JUMP_FORWARD_SCHEMA = {
       type: "string",
       description: "War figures; format in prompt. Empty if none.",
     },
+    // Who each occupation outliving its war goes to (runtime/occupationSettlements.js), a line a region, for the
+    // regions listed under [Occupations Outliving Their War]. SENT, required, only when there are some
+    // (withOccupationSettlements); read either way.
+    [OCCUPATION_SETTLEMENTS_FIELD]: {
+      type: "object",
+      description: "For each occupation key in the prompt, the polity that holds that land now.",
+      additionalProperties: { type: "string" },
+    },
     // Each player's advisor and three orders to consider, in a game a host
     // shares (seatAdvice.js). SENT only then, in full (withSeatAdvice); read
     // either way, loosely, so a malformed piece of advice never costs the turn.
@@ -1518,6 +1531,7 @@ const JUMP_FORWARD_LEAN_SCHEMA = (() => {
     [HISTORY_FIELD]: _history,
     [FRONT_ORDERS_FIELD]: _frontOrders,
     [WAR_FIGURES_FIELD]: _warFigures,
+    [OCCUPATION_SETTLEMENTS_FIELD]: _occupationSettlements,
     [SEAT_ADVICE_FIELD]: _seatAdvice,
     [SOCIAL_POSTS_FIELD]: _socialPosts,
     [POLL_RESULTS_FIELD]: _pollResults,
@@ -3787,6 +3801,40 @@ export const withWarFigures = (tool) => {
       ...tool.schema,
       properties: { ...properties, [WAR_FIGURES_FIELD]: JUMP_FORWARD_SCHEMA.properties[WAR_FIGURES_FIELD] },
       required: [...new Set([...(Array.isArray(tool.schema.required) ? tool.schema.required : []), WAR_FIGURES_FIELD])],
+    },
+  };
+};
+
+// A time skip's tool with occupationSettlements in it, required: only when occupations outlive their war (issue
+// #1000). Told in words alone, a live skip settled none of them; a field the answer must hold is what a small model
+// fills.
+// One key a group (standingContext.js occupationGroups: { key, controller, sovereign, count }), each required: a
+// required free string came back "" in a live skip with the regions listed above it. Each key answers how it ended,
+// "returned" or "kept", not a polity: asked who holds the land, two live skips on issue #1000's save named the German
+// Reich, the holder, though the prompt said it had surrendered. Where the war is on the ledger, the key asks who lost
+// it (runtime/occupationSettlements.js occupationOutcomesFor).
+export const withOccupationSettlements = (tool, groups = []) => {
+  const properties = tool?.schema?.properties;
+  const list = (Array.isArray(groups) ? groups : []).filter((group) => group?.key);
+  if (!properties?.events || !properties?.stopDate || !list.length) return tool;
+  const field = {
+    type: "object",
+    description: "For each key, how its occupation ended.",
+    properties: Object.fromEntries(list.map((group) => [group.key, {
+      type: "string",
+      enum: occupationOutcomesFor(group),
+      description: group.war
+        ? `${group.controller}'s ${group.count === 1 ? "occupied region" : `${group.count} occupied regions`} of ${group.sovereign}. Their war${group.war.title ? `, ${group.war.title}` : ""}, ended${group.war.ended ? ` ${group.war.ended}` : ""}${group.war.note ? ` (${group.war.note})` : ""}: which side had surrendered or been defeated when it ended, whatever happened earlier in it?`
+        : `${group.controller}'s ${group.count === 1 ? "occupied region" : `${group.count} occupied regions`} of ${group.sovereign}. returned: ${group.controller} withdrew or was driven out, and ${group.sovereign} holds the land again. kept: a treaty or annexation made it ${group.controller}'s.`,
+    }])),
+    required: list.map((group) => group.key),
+  };
+  return {
+    ...tool,
+    schema: {
+      ...tool.schema,
+      properties: { ...properties, [OCCUPATION_SETTLEMENTS_FIELD]: field },
+      required: [...new Set([...(Array.isArray(tool.schema.required) ? tool.schema.required : []), OCCUPATION_SETTLEMENTS_FIELD])],
     },
   };
 };

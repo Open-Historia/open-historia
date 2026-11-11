@@ -373,6 +373,13 @@ export const normalizeCountryStatContinuity = (value) => {
     out.assessedRound = Math.trunc(assessedRound);
   }
   if (stateFingerprint) out.stateFingerprint = stateFingerprint;
+  // Independent causal checkpoint for scenario-defined custom values; never
+  // overwrite the standard economic/territorial state fingerprint.
+  const customStatFingerprint = clean(value.customStatFingerprint).slice(0, 128);
+  if (customStatFingerprint) out.customStatFingerprint = customStatFingerprint;
+  if (Array.isArray(value.customStatEvidenceIds)) {
+    out.customStatEvidenceIds = [...new Set(value.customStatEvidenceIds.map((id) => clean(id).slice(0, 160)).filter(Boolean))].slice(-96);
+  }
   if (territorialFingerprint) out.territorialFingerprint = territorialFingerprint;
   if (Number.isInteger(populationCalibrationVersion) && populationCalibrationVersion > 0) {
     out.populationCalibrationVersion = populationCalibrationVersion;
