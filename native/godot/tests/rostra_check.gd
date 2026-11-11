@@ -177,6 +177,7 @@ func _run() -> void:
 	await _actions_checks()
 	await _phone_checks()
 	await _feature_checks()
+	await _look_checks()
 	_finish()
 
 
@@ -461,6 +462,87 @@ func _feature_checks() -> void:
 	await _wait(0.4)
 	var war_again := main.get("war_room_button") as WarRoomButton
 	_check(war_again != null and is_equal_approx(war_again.offset_left, 221.0), "on again, the war room's button moves back beside the full dock (%s)" % (str(war_again.offset_left) if war_again else "none"))
+
+
+func _look_checks() -> void:
+	var hud: Hud = main.hud
+	var expected := {
+		"newspaper": [Color("#1b1a17"), Color("#8c1d18"), Color("#f1ebdb")],
+		"scroll": [Color("#3a2814"), Color("#9a3412"), Color("#eedcae")],
+		"tablet": [Color("#25231f"), Color("#6b4a16"), Color("#b9b4a8")],
+	}
+	var launchers: Dictionary = hud.get("_launchers")
+	var dock_glyph := (launchers["social"] as Control).find_children("*", "TextureRect", true, false)
+	var phone_icon: Texture2D = (dock_glyph[0] as TextureRect).texture if not dock_glyph.is_empty() else null
+	for look in ["newspaper", "scroll", "tablet"]:
+		var reply: Dictionary = await main.engine.request("social.testFeature", {"on": true, "look": look})
+		_check(reply.get("ok", false) and str((reply.get("result", {}) as Dictionary).get("look", "")) == look, "the scenario's Social media feature draws Rostra as a %s" % look)
+		hud.set_active_panel("social")
+		var panel := _panel()
+		panel._set_tab("all")
+		await _until(func() -> bool: return RostraPanel.LOOK == look and panel.get("_look_built") == look and panel.is_open() and (panel.view.get("posts", []) as Array).size() > 0, 20.0)
+		await _wait(1.0)
+		var colours: Array = expected[look]
+		_check(RostraPanel.LOOK == look and panel.get("_look_built") == look, "%s: the panel is drawn again in the new look" % look)
+		_check(RostraPanel.INK.is_equal_approx(colours[0]) and RostraPanel.ACCENT.is_equal_approx(colours[1]) and RostraPanel.SCREEN.is_equal_approx(colours[2]), "%s: ink, accent and paper are beta's (%s, %s, %s)" % [look, RostraPanel.INK.to_html(false), RostraPanel.ACCENT.to_html(false), RostraPanel.SCREEN.to_html(false)])
+		var box := panel.frame_size()
+		_check(absf(box.x - 384.0) < 1.0 and absf(box.y - minf(736.0, 900.0 - 144.0)) < 1.0, "%s: the frame is 24rem wide and as tall as the phone (%s)" % [look, str(box)])
+		_check(not panel._status.visible and not panel._home_bar.visible and not (panel._side_buttons[0] as Control).visible, "%s: no status bar, home bar or side buttons" % look)
+		var backdrop: Control = panel.get("_backdrop")
+		var material := backdrop.find_child("Material", false, false) if backdrop else null
+		_check(material is RostraLook.Surface and ((material as RostraLook.Surface).material as ShaderMaterial).get_shader_parameter("layers") > 0, "%s: the panel is made of a textured %s" % [look, {"newspaper": "newsprint", "scroll": "parchment", "tablet": "stone"}[look]])
+		var rolls: Array = panel.get("_rolls")
+		_check((rolls.size() == 2) == (look == "scroll"), "%s: %s" % [look, "two wooden rolls, top and bottom" if look == "scroll" else "no rolls"])
+		if look == "scroll" or look == "tablet":
+			var jags: int = ((material as RostraLook.Surface).material as ShaderMaterial).get_shader_parameter("jag_n")
+			_check(jags > 0, "%s: the %s edges are ragged (%d steps)" % [look, "torn" if look == "scroll" else "chipped", jags])
+		if look == "newspaper":
+			_check(_has_text(panel._header, "What the world is saying") and _has_text(panel._header, "№ ") and backdrop.find_child("Fold", false, false) != null, "newspaper: a masthead over the issue, the motto and the day, and a fold")
+			_check(panel._feed.find_child("Lead", true, false) is RichTextLabel, "newspaper: the first post is the lead story with a drop cap")
+		elif look == "scroll":
+			_check(_has_text(panel._feed, "❦") and _has_text(panel, "❧"), "scroll: fleurons between the posts and round the header and tabs")
+		else:
+			_check(backdrop.find_child("Cracks", false, false) != null and backdrop.find_child("Inner", false, false) != null and panel._screen.theme != null, "tablet: cracks, a recessed face and letters cut into the stone")
+			var author := panel._feed.find_child("Author", true, false) as Label
+			_check(author != null and author.uppercase, "tablet: names are cut in capitals")
+		var icon: Array = (launchers["social"] as Control).find_children("*", "TextureRect", true, false)
+		_check(not icon.is_empty() and (icon[0] as TextureRect).texture != phone_icon, "%s: the dock's mark is drawn in the look" % look)
+		await _shoot("r-look-%s" % look)
+		await _fits("the %s" % look)
+		if look == "tablet":
+			panel._set_tab("search")
+			await _until(func() -> bool: return is_instance_valid(panel._search) and not panel._search.view.is_empty(), 20.0)
+			await _wait(0.6)
+			await _shoot("r-look-tablet-search")
+			panel._set_tab("all")
+			await _wait(0.6)
+		if look == "scroll":
+			panel._pen.pressed.emit()
+			await _frames(3)
+			await _shoot("r-look-scroll-compose")
+			panel._close_composer()
+		hud.set_active_panel("")
+		await _wait(0.5)
+	var window := root.get_window()
+	window.size = Vector2i(390, 844)
+	await _wait(0.8)
+	hud.set_active_panel("social")
+	await _wait(1.0)
+	var narrow := _panel()
+	_check(not narrow.framed and (narrow.get("_rolls") as Array).all(func(roll: Control) -> bool: return not roll.visible), "on a phone-size window the stone fills the panel, with no frame")
+	await _shoot("r-look-tablet-narrow")
+	hud.set_active_panel("")
+	window.size = Vector2i(1440, 900)
+	await _wait(0.8)
+	var back: Dictionary = await main.engine.request("social.testFeature", {"on": true, "look": "phone"})
+	_check(str((back.get("result", {}) as Dictionary).get("look", "")) == "phone", "the look goes back to the phone")
+	hud.set_active_panel("social")
+	var phone := _panel()
+	await _until(func() -> bool: return RostraPanel.LOOK == "phone" and phone.get("_look_built") == "phone", 20.0)
+	await _wait(0.8)
+	_check(phone.framed and (phone._side_buttons[0] as Control).visible and phone._status.visible and RostraPanel.ACCENT.is_equal_approx(Color("#2bc1f3")), "the phone is drawn again with its frame, status bar and accent")
+	await _shoot("r-look-phone-again")
+	hud.set_active_panel("")
 
 
 func _german_region() -> int:

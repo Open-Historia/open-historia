@@ -1,12 +1,7 @@
 class_name RostraSearch
 extends VBoxContainer
 
-const INK := Color("#f4f4f5")
-const INK_SOFT := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.56)
-const INK_FAINT := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.34)
-const LINE := Color(1, 1, 1, 0.08)
 const LIKED := Color("#f43f5e")
-const SCREEN := Color("#0b0b0d")
 
 var engine: EngineLink
 var render_post: Callable
@@ -40,15 +35,15 @@ func _init() -> void:
 	var box := HBoxContainer.new()
 	box.add_theme_constant_override("separation", 7)
 	box.mouse_filter = Control.MOUSE_FILTER_PASS
-	box.add_child(RostraPanel.glyph_rect("find", 16, INK_SOFT))
+	box.add_child(RostraPanel.glyph_rect("find", 16, RostraPanel.INK_SOFT))
 	_input = LineEdit.new()
 	_input.placeholder_text = "Search countries and regions"
 	_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_input.add_theme_font_override("font", UI.font(400))
+	_input.add_theme_font_override("font", RostraPanel.face(400))
 	_input.add_theme_font_size_override("font_size", 13)
-	_input.add_theme_color_override("font_color", INK)
-	_input.add_theme_color_override("font_placeholder_color", INK_FAINT)
-	_input.add_theme_color_override("caret_color", INK)
+	_input.add_theme_color_override("font_color", RostraPanel.INK)
+	_input.add_theme_color_override("font_placeholder_color", RostraPanel.INK_FAINT)
+	_input.add_theme_color_override("caret_color", RostraPanel.INK)
 	for state in ["normal", "focus", "read_only"]:
 		_input.add_theme_stylebox_override(state, StyleBoxEmpty.new())
 	_input.text_changed.connect(_on_query)
@@ -56,7 +51,7 @@ func _init() -> void:
 	box.add_child(_input)
 	_clear = RostraPanel.plain_button(StyleBoxEmpty.new())
 	_clear.tooltip_text = "Clear the search"
-	RostraPanel.fill_button(_clear, RostraPanel.glyph_rect("clear", 14, INK_SOFT))
+	RostraPanel.fill_button(_clear, RostraPanel.glyph_rect("clear", 14, RostraPanel.INK_SOFT))
 	_clear.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_clear.visible = false
 	_clear.pressed.connect(func() -> void:
@@ -64,7 +59,7 @@ func _init() -> void:
 		_on_query("")
 		_input.grab_focus())
 	box.add_child(_clear)
-	var pill := RostraPanel.boxed(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.08), 999, Vector4(12, 5, 12, 5))
+	var pill := RostraPanel.boxed(RostraPanel.WASH, RostraPanel.EDGE, 999, Vector4(12, 5, 12, 5))
 	pill.mouse_filter = Control.MOUSE_FILTER_PASS
 	pill.add_child(box)
 	add_child(RostraPanel.pad(pill, 14, 10, 14, 10))
@@ -227,23 +222,23 @@ func _render() -> void:
 
 func _render_hits() -> void:
 	if not _found and hits.is_empty():
-		_body.add_child(RostraPanel.pad(RostraPanel.text("Reading the map…", 12, INK_SOFT), 16, 13, 16, 13))
+		_body.add_child(RostraPanel.pad(RostraPanel.text("Reading the map…", 12, RostraPanel.INK_SOFT), 16, 13, 16, 13))
 		return
 	if hits.is_empty() and _finding > 0:
-		_body.add_child(RostraPanel.pad(RostraPanel.para("No country or region by that name.", 12, INK_SOFT), 16, 14, 16, 14))
+		_body.add_child(RostraPanel.pad(RostraPanel.para("No country or region by that name.", 12, RostraPanel.INK_SOFT), 16, 14, 16, 14))
 		return
 	for item in hits:
 		var hit: Dictionary = item
-		var button := RostraPanel.plain_button(StyleBoxEmpty.new(), UI.box(Color(1, 1, 1, 0.05), Color(0, 0, 0, 0), 0, 0))
+		var button := RostraPanel.plain_button(StyleBoxEmpty.new(), UI.box(RostraPanel.WASH, Color(0, 0, 0, 0), 0, 0))
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var line := RostraPanel.row(10)
-		line.add_child(RostraPanel.glyph_rect("pin" if str(hit.get("scope", "")) == "region" else "flag", 15, INK_SOFT))
+		line.add_child(RostraPanel.glyph_rect("pin" if str(hit.get("scope", "")) == "region" else "flag", 15, RostraPanel.INK_SOFT))
 		var words := RostraPanel.column(1)
 		words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		words.add_child(RostraPanel.clipped(str(hit.get("title", "")), 13, INK, 700, true))
+		words.add_child(RostraPanel.clipped(str(hit.get("title", "")), 13, RostraPanel.INK, 700, true))
 		var region := str(hit.get("scope", "")) == "region"
 		var polity := str(hit.get("polity", ""))
-		var sub := RostraPanel.clipped("Country" if not region else (polity if not polity.is_empty() else "Held by no country"), 11, INK_FAINT, 400, region and not polity.is_empty())
+		var sub := RostraPanel.clipped("Country" if not region else (polity if not polity.is_empty() else "Held by no country"), 11, RostraPanel.INK_FAINT, 400, region and not polity.is_empty())
 		words.add_child(sub)
 		line.add_child(words)
 		var stack := RostraPanel.column(0)
@@ -255,7 +250,9 @@ func _render_hits() -> void:
 
 
 func _section(title: String, left := 16.0, top := 10.0, bottom := 6.0) -> Control:
-	var label := UI.label(title, 10, INK_SOFT, 800, "Arial", 1)
+	var label := UI.label(title, 10, RostraPanel.INK_SOFT, 800, "Arial", 1)
+	if not RostraPanel.phone_look():
+		label.add_theme_font_override("font", RostraPanel.face(800, false, 1.0))
 	label.uppercase = true
 	return RostraPanel.pad(label, left, top, 16, bottom)
 
@@ -264,16 +261,16 @@ func _render_place() -> void:
 	var head := RostraPanel.row(10)
 	var titles := RostraPanel.column(0)
 	titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	titles.add_child(RostraPanel.clipped(str(view.get("title", "")), 16, INK, 850, true))
-	titles.add_child(RostraPanel.clipped(str(view.get("dateLong", "")), 11, INK_SOFT))
+	titles.add_child(RostraPanel.clipped(str(view.get("title", "")), 16, RostraPanel.INK, 850, true))
+	titles.add_child(RostraPanel.clipped(str(view.get("dateLong", "")), 11, RostraPanel.INK_SOFT))
 	head.add_child(titles)
 	if picked != null:
-		var back := RostraPanel.plain_button(UI.box(Color(1, 1, 1, 0.06), Color(0, 0, 0, 0), 999, 0, Vector4(11, 5, 11, 5)))
+		var back := RostraPanel.plain_button(UI.box(RostraPanel.WASH, Color(0, 0, 0, 0), 999, 0, Vector4(11, 5, 11, 5)))
 		back.text = "Your country"
-		back.add_theme_font_override("font", UI.font(700))
+		back.add_theme_font_override("font", RostraPanel.face(700))
 		back.add_theme_font_size_override("font_size", 11)
 		for slot in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
-			back.add_theme_color_override(slot, INK_SOFT)
+			back.add_theme_color_override(slot, RostraPanel.INK_SOFT)
 		back.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		back.pressed.connect(func() -> void:
 			picked = null
@@ -281,7 +278,7 @@ func _render_place() -> void:
 			refresh_view())
 		head.add_child(back)
 	var can_ask := bool(view.get("canAsk", false))
-	var load_more := RostraPanel.round_button("refresh", 15, INK, Color(1, 1, 1, 0.06))
+	var load_more := RostraPanel.round_button("refresh", 15, RostraPanel.INK, RostraPanel.WASH)
 	load_more.tooltip_text = "Load new posts (one AI request)"
 	load_more.disabled = not can_ask
 	load_more.modulate.a = 1.0 if can_ask else 0.45
@@ -305,13 +302,13 @@ func _render_place() -> void:
 			tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			tab.custom_minimum_size = Vector2(1, 0)
 			tab.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-			tab.add_theme_font_override("font", UI.font(750))
+			tab.add_theme_font_override("font", RostraPanel.face(750))
 			tab.add_theme_font_size_override("font_size", 13)
 			for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
-				tab.add_theme_color_override(state, INK if active else INK_SOFT)
+				tab.add_theme_color_override(state, RostraPanel.INK if active else RostraPanel.INK_SOFT)
 			var style := StyleBoxFlat.new()
 			style.bg_color = Color(0, 0, 0, 0)
-			style.border_color = INK if active else Color(0, 0, 0, 0)
+			style.border_color = RostraPanel.INK if active else Color(0, 0, 0, 0)
 			style.border_width_bottom = 2
 			style.content_margin_left = 8
 			style.content_margin_right = 8
@@ -335,8 +332,8 @@ func _render_place() -> void:
 		chips.add_theme_constant_override("v_separation", 6)
 		chips.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		for trend in trends:
-			var chip := RostraPanel.boxed(Color(1, 1, 1, 0.07), Color(0, 0, 0, 0), 999, Vector4(10, 3, 10, 3))
-			chip.add_child(RostraPanel.text(str(trend), 12, INK, 650, true))
+			var chip := RostraPanel.boxed(RostraPanel.WASH, Color(0, 0, 0, 0), 999, Vector4(10, 3, 10, 3))
+			chip.add_child(RostraPanel.text(str(trend), 12, RostraPanel.INK, 650, true))
 			chips.add_child(chip)
 		block.add_child(chips)
 		_body.add_child(RostraPanel.pad(block, 16, 10, 16, 10))
@@ -344,31 +341,31 @@ func _render_place() -> void:
 	var rostra_posts: Array = view.get("rostraPosts", [])
 	if not rostra_posts.is_empty() and render_post.is_valid():
 		_body.add_child(_section("On Rostra"))
-		for post in rostra_posts:
-			_body.add_child(render_post.call(post))
+		for index in range(rostra_posts.size()):
+			_body.add_child(render_post.call(rostra_posts[index], index == 0))
 	_body.add_child(_section("What people are saying"))
 	var waiting := bool(view.get("waiting", false))
 	var failure: Variant = view.get("failure")
 	var batches: Array = view.get("batches", [])
 	if waiting and typeof(session) == TYPE_DICTIONARY and bool(view.get("wanted", false)):
-		_body.add_child(RostraPanel.pad(RostraPanel.text("Tuning in…", 12, INK_SOFT), 16, 3, 16, 3))
+		_body.add_child(RostraPanel.pad(RostraPanel.text("Tuning in…", 12, RostraPanel.INK_SOFT), 16, 3, 16, 3))
 		for width in [0.7, 0.48, 0.82]:
 			_body.add_child(_skeleton(width))
 	if typeof(failure) == TYPE_STRING and not waiting:
 		var stack := RostraPanel.column(5)
-		var headline := RostraPanel.text("The posts could not be loaded.", 14, INK, 700)
+		var headline := RostraPanel.text("The posts could not be loaded.", 14, RostraPanel.INK, 700)
 		headline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		stack.add_child(headline)
 		if not str(failure).is_empty():
-			var detail := RostraPanel.para(str(failure), 12, INK_SOFT, 400, 1.4, true)
+			var detail := RostraPanel.para(str(failure), 12, RostraPanel.INK_SOFT, 400, 1.4, true)
 			detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			stack.add_child(detail)
-		var again := RostraPanel.plain_button(UI.box(INK, Color(0, 0, 0, 0), 999, 0, Vector4(17, 7, 17, 7)))
+		var again := RostraPanel.plain_button(UI.box(RostraPanel.INK, Color(0, 0, 0, 0), 999, 0, Vector4(17, 7, 17, 7)))
 		again.text = "Try again"
-		again.add_theme_font_override("font", UI.font(800))
+		again.add_theme_font_override("font", RostraPanel.face(800))
 		again.add_theme_font_size_override("font_size", 12)
 		for slot in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
-			again.add_theme_color_override(slot, SCREEN)
+			again.add_theme_color_override(slot, RostraPanel.SCREEN)
 		again.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		again.pressed.connect(ask)
 		stack.add_child(RostraPanel.pad(again, 0, 6, 0, 0))
@@ -376,10 +373,10 @@ func _render_place() -> void:
 		_body.add_child(RostraPanel.rule())
 	if not waiting and typeof(failure) != TYPE_STRING and batches.is_empty() and typeof(session) == TYPE_DICTIONARY:
 		var stack := RostraPanel.column(0)
-		var headline := RostraPanel.text("Nothing has been posted here yet.", 14, INK, 750)
+		var headline := RostraPanel.text("Nothing has been posted here yet.", 14, RostraPanel.INK, 750)
 		headline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		stack.add_child(headline)
-		var words := RostraPanel.para(I18n.ui("Refresh to see what ordinary people in {{title}} are posting.", {"title": str(view.get("title", ""))}), 12, INK_SOFT, 400, 1.45, true)
+		var words := RostraPanel.para(I18n.ui("Refresh to see what ordinary people in {{title}} are posting.", {"title": str(view.get("title", ""))}), 12, RostraPanel.INK_SOFT, 400, 1.45, true)
 		words.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		stack.add_child(RostraPanel.pad(words, 0, 5, 0, 0))
 		stack.add_child(RostraPanel.refresh_button(false, false, ask))
@@ -387,23 +384,24 @@ func _render_place() -> void:
 	for item in batches:
 		var batch: Dictionary = item
 		if not str(batch.get("line", "")).is_empty():
-			var band := RostraPanel.boxed(Color(1, 1, 1, 0.03), Color(0, 0, 0, 0), 0, Vector4(16, 6, 16, 6))
-			var words := RostraPanel.text(str(batch["line"]), 11, INK_SOFT, 700)
+			var band := RostraPanel.boxed(RostraPanel.WASH_FAINT, Color(0, 0, 0, 0), 0, Vector4(16, 6, 16, 6))
+			var words := RostraPanel.text(str(batch["line"]), 11, RostraPanel.INK_SOFT, 700)
 			words.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			band.add_child(words)
 			_body.add_child(band)
 			_body.add_child(RostraPanel.rule())
-		for post in batch.get("posts", []):
-			_body.add_child(_person_post(post))
+		var shown: Array = batch.get("posts", [])
+		for index in range(shown.size()):
+			_body.add_child(_person_post(shown[index], index == 0))
 	if not batches.is_empty():
-		var note := RostraPanel.para("Written by your AI model. Each new feed is one AI request.", 11, INK_FAINT)
+		var note := RostraPanel.para("Written by your AI model. Each new feed is one AI request.", 11, RostraPanel.INK_FAINT)
 		note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		_body.add_child(RostraPanel.pad(note, 19, 14, 19, 18))
 
 
 func _skeleton(width: float) -> Control:
 	var line := RostraPanel.row(10)
-	var face := RostraPanel.boxed(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 999, Vector4.ZERO)
+	var face := RostraPanel.boxed(RostraPanel.EDGE, Color(0, 0, 0, 0), 999, Vector4.ZERO)
 	face.custom_minimum_size = Vector2(38, 38)
 	face.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	_shimmer.append(face)
@@ -418,7 +416,7 @@ func _skeleton(width: float) -> Control:
 		holder.custom_minimum_size.y = 10
 		holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var bar := RostraPanel.boxed(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 999, Vector4.ZERO)
+		var bar := RostraPanel.boxed(RostraPanel.EDGE, Color(0, 0, 0, 0), 999, Vector4.ZERO)
 		bar.anchor_right = float(fraction)
 		bar.anchor_bottom = 1.0
 		holder.add_child(bar)
@@ -431,7 +429,7 @@ func _skeleton(width: float) -> Control:
 	return stack
 
 
-func _person_post(item: Variant) -> Control:
+func _person_post(item: Variant, lead := false) -> Control:
 	var post: Dictionary = item
 	var id := str(post.get("id", ""))
 	var line := RostraPanel.row(10)
@@ -446,27 +444,27 @@ func _person_post(item: Variant) -> Control:
 	var words := RostraPanel.column(0)
 	words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var who := RostraPanel.FitRow.new(5)
-	who.add_child(RostraPanel.shrinking(RostraPanel.clipped(str(post.get("author", "")), 13, INK, 800, true)))
+	who.add_child(RostraPanel.shrinking(RostraPanel.clipped(str(post.get("author", "")), 13, RostraPanel.INK, 800, true)))
 	if not str(post.get("handle", "")).is_empty():
-		who.add_child(RostraPanel.shrinking(RostraPanel.clipped(str(post["handle"]), 12, INK_SOFT, 400, true), 10.0, 32.0))
-	who.add_child(RostraPanel.text(str(post.get("age", "")), 12, INK_SOFT, 400, true))
+		who.add_child(RostraPanel.shrinking(RostraPanel.clipped(str(post["handle"]), 12, RostraPanel.INK_SOFT, 400, true), 10.0, 32.0))
+	who.add_child(RostraPanel.text(str(post.get("age", "")), 12, RostraPanel.INK_SOFT, 400, true))
 	who.add_child(RostraPanel.filling(RostraPanel.spacer()))
 	words.add_child(who)
 	if not str(post.get("about", "")).is_empty():
-		words.add_child(RostraPanel.clipped(str(post["about"]), 11, INK_FAINT, 400, true))
-	words.add_child(RostraPanel.pad(RostraPanel.para(str(post.get("text", "")), 14, INK, 400, 1.45, true), 0, 4, 0, 0))
+		words.add_child(RostraPanel.clipped(str(post["about"]), 11, RostraPanel.INK_FAINT, 400, true))
+	words.add_child(RostraPanel.pad(RostraPanel.para(str(post.get("text", "")), 14, RostraPanel.INK, 400, 1.45, true), 0, 4, 0, 0))
 	var actions := RostraPanel.row(18)
 	actions.mouse_filter = Control.MOUSE_FILTER_PASS
-	actions.add_child(_action("reply", str(post.get("replies", "")), INK_FAINT))
-	actions.add_child(_action("reshare", str(post.get("reposts", "")), INK_FAINT))
+	actions.add_child(_action("reply", str(post.get("replies", "")), RostraPanel.INK_FAINT))
+	actions.add_child(_action("reshare", str(post.get("reposts", "")), RostraPanel.INK_FAINT))
 	var is_liked := liked.has(id)
 	var heart := RostraPanel.plain_button(StyleBoxEmpty.new())
 	heart.tooltip_text = "Like"
 	var heart_row := RostraPanel.row(5)
-	heart_row.add_child(RostraPanel.glyph_rect("liked" if is_liked else "like", 17, LIKED if is_liked else INK_FAINT))
+	heart_row.add_child(RostraPanel.glyph_rect("liked" if is_liked else "like", 17, LIKED if is_liked else RostraPanel.INK_FAINT))
 	var count := str(post.get("likesWithMine", "")) if is_liked else str(post.get("likes", ""))
 	if not count.is_empty():
-		heart_row.add_child(RostraPanel.text(count, 12, LIKED if is_liked else INK_FAINT, 400, true))
+		heart_row.add_child(RostraPanel.text(count, 12, LIKED if is_liked else RostraPanel.INK_FAINT, 400, true))
 	RostraPanel.fill_button(heart, heart_row)
 	heart.custom_minimum_size.x = maxf(heart.custom_minimum_size.x, 45.0)
 	heart.pressed.connect(func() -> void:
@@ -480,8 +478,8 @@ func _person_post(item: Variant) -> Control:
 	line.add_child(words)
 	var stack := RostraPanel.column(0)
 	stack.mouse_filter = Control.MOUSE_FILTER_PASS
-	stack.add_child(RostraPanel.pad(line, 16, 13, 16, 13))
-	stack.add_child(RostraPanel.rule())
+	stack.add_child(RostraPanel.pad(line, 16, 13, 16, 13 + RostraPanel.post_tail()))
+	stack.add_child(RostraPanel.post_rule(lead))
 	return stack
 
 
