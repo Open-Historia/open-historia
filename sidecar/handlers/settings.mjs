@@ -457,6 +457,7 @@ export const register = (ctx) => {
       noLimitCap: noLimitCost.max,
       noLimitRounds: noLimitCost.rounds,
       active,
+      groupAi: engine.advisorGroupSettings.readAdvisorGroupSettings(),
     };
   };
 
@@ -847,6 +848,15 @@ export const register = (ctx) => {
       } else if (field === "dailyLimit") {
         settings.setDailyLimit(String(value ?? ""));
         message = `Daily request limit set to ${clean(value) || "the default"}.`;
+      } else if (field === "groupIndividual") {
+        const next = engine.advisorGroupSettings.setAdvisorGroupSettings({ individual: Boolean(value) });
+        logSetting("Individual AI responses in group chats", next.individual ? "on" : "off");
+        storage.flush();
+        return requestsView();
+      } else if (field === "groupBatchSize") {
+        engine.advisorGroupSettings.setAdvisorGroupSettings({ batchSize: Number(value) });
+        storage.flush();
+        return requestsView();
       } else {
         throw new Error(`Unknown request setting: ${field}`);
       }
@@ -1034,6 +1044,9 @@ export const register = (ctx) => {
         count: records.length,
         completed: generationCount,
         filtered: filtered.map(summaryOf),
+        rows: engine.groupTelemetry.groupGenerationRows(filtered).map((row) => row.kind === "group"
+          ? { kind: "group", key: String(row.key), name: String(row.name ?? ""), completedSpeakers: row.completedSpeakers, totalSpeakers: row.totalSpeakers, calls: row.records.length, requests: row.requests, promptTokens: row.promptTokens, outputTokens: row.outputTokens, failedBatches: row.failedBatches, pendingBatches: row.pendingBatches, ids: row.records.map((record) => record.id) }
+          : { kind: "record", id: row.record.id }),
         tasks: [...new Set(records.map((record) => record.taskKey).filter(Boolean))].sort(),
         models: [...new Set(records.map((record) => record.model).filter(Boolean))].sort(),
         analytics: analyticsOf(records),

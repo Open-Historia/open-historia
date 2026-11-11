@@ -39,6 +39,7 @@ var _search_caret := 0
 var _search_timer: Timer
 var _sort := "newest"
 var _expanded := {}
+var _group_open := {}
 var _copied := ""
 var _confirming_clear := false
 var _notice := ""
@@ -442,7 +443,14 @@ func _generations() -> Control:
 	else:
 		var info := PanelContainer.new()
 		info.add_theme_stylebox_override("panel", UI.box(BG, Color(0, 0, 0, 0), 0, 0, Vector4(11.2, 4, 11.2, 4)))
-		var shown_text := ("%d shown (most requests first)" if _sort == "requests" else "%d shown (newest first)") % filtered.size()
+		var display_rows: Array = (_data.get("rows", []) as Array).duplicate() if typeof(_data.get("rows")) == TYPE_ARRAY else []
+		if display_rows.is_empty():
+			for single_record: Dictionary in filtered:
+				display_rows.append({"kind": "record", "id": str(single_record.get("id", ""))})
+		var by_id := {}
+		for known: Dictionary in filtered:
+			by_id[str(known.get("id", ""))] = known
+		var shown_text := I18n.ui("{{displayRowsCount}} interactions, {{filteredCount}} calls (most requests first)" if _sort == "requests" else "{{displayRowsCount}} interactions, {{filteredCount}} calls (newest first)", {"displayRowsCount": display_rows.size(), "filteredCount": filtered.size()})
 		info.add_child(_label(shown_text.to_upper(), 10, MUTED, 800, false, 1))
 		list_holder.add_child(info)
 		list_holder.add_child(_rule(ROW_RULE))
@@ -453,8 +461,34 @@ func _generations() -> Control:
 		var rows := VBoxContainer.new()
 		rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		rows.add_theme_constant_override("separation", 0)
-		for record: Dictionary in filtered:
-			rows.add_child(_generation_row(record))
+		for entry: Dictionary in display_rows:
+			if str(entry.get("kind", "")) != "group":
+				var single: Variant = by_id.get(str(entry.get("id", "")))
+				if typeof(single) == TYPE_DICTIONARY:
+					rows.add_child(_generation_row(single))
+				continue
+			var key := str(entry.get("key", ""))
+			rows.add_child(_group_row(entry, bool(_group_open.get(key, false))))
+			if not bool(_group_open.get(key, false)):
+				continue
+			for member_id: Variant in entry.get("ids", []):
+				var member: Variant = by_id.get(str(member_id))
+				if typeof(member) != TYPE_DICTIONARY:
+					continue
+				var indent := MarginContainer.new()
+				indent.add_theme_constant_override("margin_left", 14)
+				var line := HBoxContainer.new()
+				line.add_theme_constant_override("separation", 0)
+				var rail := ColorRect.new()
+				rail.color = UiTheme.pick("line", ROW_RULE)
+				rail.custom_minimum_size.x = 2
+				rail.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				line.add_child(rail)
+				var member_row := _generation_row(member)
+				member_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				line.add_child(member_row)
+				indent.add_child(line)
+				rows.add_child(indent)
 		scroll.add_child(rows)
 		list_holder.add_child(scroll)
 	split.add_child(list_holder)
@@ -469,6 +503,66 @@ func _generations() -> Control:
 		split.add_child(detail)
 	column.add_child(split)
 	return column
+
+
+func _group_row(group: Dictionary, expanded: bool) -> Control:
+	var key := str(group.get("key", ""))
+	var button := Button.new()
+	button.focus_mode = Control.FOCUS_NONE
+	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var face := UI.box(UiTheme.pick("surface", Color("#192b3b")), UiTheme.pick("accent", Color("#60a5fa")), 0, 0, Vector4(10.4, 10.4, 10.4, 10.4))
+	face.border_width_left = 3
+	for state in ["normal", "focus", "hover", "pressed", "hover_pressed"]:
+		button.add_theme_stylebox_override(state, face)
+	var flow := HBoxContainer.new()
+	flow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	flow.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	flow.offset_left = 13.4
+	flow.offset_right = -10.4
+	flow.offset_top = 10.4
+	flow.offset_bottom = -10.4
+	flow.add_theme_constant_override("separation", 7)
+	flow.add_child(_label("▾" if expanded else "▸", 11, TEXT))
+	var parts: Array = [
+		[I18n.ui("Group Chat: {{name}}", {"name": str(group.get("name", ""))}), TEXT, 700, false],
+		[I18n.ui("{{completedSpeakers}} of {{totalSpeakers}} speakers completed", {"completedSpeakers": int(group.get("completedSpeakers", 0)), "totalSpeakers": int(group.get("totalSpeakers", 0))}), MUTED, 400, false],
+		[I18n.ui("{{recordsCount}} AI calls", {"recordsCount": int(group.get("calls", 0))}), MUTED, 400, false],
+		[I18n.ui("{{requests}} provider requests", {"requests": int(group.get("requests", 0))}), MUTED, 400, false],
+	]
+	if int(group.get("failedBatches", 0)) > 0:
+		parts.append([I18n.ui("{{failedBatches}} failed", {"failedBatches": int(group.get("failedBatches", 0))}), DANGER, 700, false])
+	if int(group.get("pendingBatches", 0)) > 0:
+		parts.append([I18n.ui("{{pendingBatches}} pending", {"pendingBatches": int(group.get("pendingBatches", 0))}), GOLD, 400, false])
+	parts.append([I18n.ui("{{fmtInt}} input tokens / {{fmtInt2}} generated tokens", {"fmtInt": _thousands(int(group.get("promptTokens", 0))), "fmtInt2": _thousands(int(group.get("outputTokens", 0)))}), MUTED, 400, true])
+	for part: Array in parts:
+		if bool(part[3]):
+			var push := Control.new()
+			push.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			push.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			flow.add_child(push)
+		var piece := _label(str(part[0]), 11, part[1], int(part[2]), bool(part[3]))
+		piece.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		flow.add_child(piece)
+	button.add_child(flow)
+	button.custom_minimum_size.y = 38
+	flow.minimum_size_changed.connect(_fit_group_row.bind(button, flow))
+	flow.resized.connect(_fit_group_row.bind(button, flow))
+	button.pressed.connect(_toggle_group.bind(key))
+	var holder := VBoxContainer.new()
+	holder.add_theme_constant_override("separation", 0)
+	holder.add_child(button)
+	holder.add_child(_rule(UiTheme.pick("line", ROW_RULE)))
+	return holder
+
+
+func _fit_group_row(button: Button, flow: HBoxContainer) -> void:
+	if is_instance_valid(button) and is_instance_valid(flow):
+		button.custom_minimum_size.y = flow.get_combined_minimum_size().y + 20.8
+
+
+func _toggle_group(key: String) -> void:
+	_group_open[key] = not bool(_group_open.get(key, false))
+	_render()
 
 
 func _rule(color: Color) -> ColorRect:
