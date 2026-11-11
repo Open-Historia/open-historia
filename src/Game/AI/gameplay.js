@@ -230,10 +230,12 @@ import {
   withSocialPosts,
   POLL_RESULTS_FIELD,
   withoutGroupOps,
+  withoutEspionage,
+  withWarParts,
 } from "./gameplaySchemas.js";
 import { placeRostraLines, readSkipPollResults, readSkipPosts, rostraRefreshRules, socialFeedPromptBlock, withSkipPosts } from "../../runtime/socialFeed.js";
 import { knownPolityNames } from "../../runtime/countryInfoPanel.js";
-import { airOn, frontsOn, strategyNetOn, transportMediaOn, warPartsOffBlock } from "./frontsGate.js";
+import { airOn, frontsOn, naviesOn, strategyNetOn, transportMediaOn, warPartsOffBlock } from "./frontsGate.js";
 import { placeStrikes } from "./frontTurn.js";
 import { engineerLines } from "../../runtime/fronts/engineer.js";
 import { foreseeFronts } from "./foreseenFronts.js";
@@ -1684,7 +1686,8 @@ const buildTemplateVariables = async (bundle, options = {}) => {
     variables.playerPolityReputationContext = await buildPlayerPolityReputationText(bundle);
   }
   await pause?.();
-  if (wants("playerPolityIntelligenceContext")) {
+  // The intelligence rating is espionage's (server/gameFeatures.js): none shown, and so none asked to move, with it off.
+  if (wants("playerPolityIntelligenceContext") && isActiveFeatureEnabled("espionage")) {
     variables.playerPolityIntelligenceContext = buildPlayerPolityIntelligenceText(bundle);
   }
   // The player's and its enemies' military figures, which a turn moves (runtime/militaryStanding.js).
@@ -2980,7 +2983,7 @@ const buildJumpStaticRules = async (variables = {}) => {
       "============================================================",
     ].join("\n"),
     // Groups switched off for this game: their lever goes with their rule.
-    isActiveFeatureEnabled("groups") ? JUMP_LEVERS : withoutGroupOpsLines(JUMP_LEVERS),
+    jumpLevers(),
     // One request, so the events finish themselves.
     variables?.foldedSkip ? FOLDED_SKIP_CONSEQUENCES : "",
     unitsOnTheMapBlock(game?.gameDate, eraSettingOf(world)),
@@ -3008,10 +3011,34 @@ const buildJumpStaticRules = async (variables = {}) => {
 // Fronts on (frontsGate.js): a time skip's tool with the battlefields' orders
 // in it (gameplaySchemas.js withFrontOrders), and the figures the war needs
 // after them (withWarFigures).
+// And what the other switched-off features alone use (withoutFeaturesOff): no
+// spy fields with espionage off, no air or naval units without them.
+const withoutFeaturesOff = (tool) => {
+  const spied = isActiveFeatureEnabled("espionage") ? tool : withoutEspionage(tool);
+  return withWarParts(spied, { air: airOn(), navies: naviesOn() });
+};
 const forActiveFeatures = (tool) => {
   const grouped = isActiveFeatureEnabled("groups") ? tool : withoutGroupOps(tool);
-  const shown = withEventImpacts(withEventAudience(grouped, hostingSharedGame()));
+  const shown = withEventImpacts(withEventAudience(withoutFeaturesOff(grouped), hostingSharedGame()));
   return frontsOn() ? withWarFigures(withFrontOrders(shown)) : shown;
+};
+
+// The time skip templates' one line on the intelligence rating, which is
+// espionage's: reputation alone with espionage off. A campaign's own template
+// that words it otherwise is left as it is.
+const withoutEspionageWords = (template) => (typeof template === "string" && !isActiveFeatureEnabled("espionage")
+  ? template.replace("a polity's reputation and intelligence rating change through polityChanges", "a polity's reputation changes through polityChanges")
+  : template);
+
+// The skip's levers as this game has them: no groupOps with groups off, and no
+// aircraft among a strike's weapons without air units (frontsGate.js).
+const jumpLevers = () => {
+  const grouped = isActiveFeatureEnabled("groups") ? JUMP_LEVERS : withoutGroupOpsLines(JUMP_LEVERS);
+  return airOn() ? grouped : grouped
+    .replace("a missile launch or a bombing run the event tells of", "a missile launch the event tells of")
+    .replace(" | nuclear bomber (these three are nuclear)", " (these two are nuclear)")
+    .replace(" | bombing run.", ".")
+    .replace("how many missiles or aircraft", "how many missiles");
 };
 let gameMasterPromptNoGroups = null;
 const gameMasterPromptWithoutGroups = () => {
@@ -3128,11 +3155,15 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
   const reputation = normalizeString(variables.playerPolityReputationContext);
   const intelligence = normalizeString(variables.playerPolityIntelligenceContext);
   if (reputation || intelligence) {
+    // With espionage off there is no rating to show (buildTemplateVariables), and nothing said of one.
+    const reputationRule = "Reputation decides how far others trust, trade with and stand by a polity: aggression, atrocities and broken treaties lower it; aid and kept promises raise it.";
     blocks.push([
-      "[Standing and Intelligence]",
+      intelligence ? "[Standing and Intelligence]" : "[Standing]",
       reputation,
       intelligence,
-      "Reputation decides how far others trust, trade with and stand by a polity: aggression, atrocities and broken treaties lower it; aid and kept promises raise it. An intelligence rating is how much of others' private diplomacy a service reads and how well it guards its own: a purge, a defection or a network rolled up lowers it at once; investment that actually delivers raises it a few points at a time. Set either (reputation / intelligence on polityChanges, the new absolute value 0-100) only when this period's events change it.",
+      intelligence
+        ? `${reputationRule} An intelligence rating is how much of others' private diplomacy a service reads and how well it guards its own: a purge, a defection or a network rolled up lowers it at once; investment that actually delivers raises it a few points at a time. Set either (reputation / intelligence on polityChanges, the new absolute value 0-100) only when this period's events change it.`
+        : `${reputationRule} Set it (reputation on polityChanges, the new absolute value 0-100) only when this period's events change it.`,
     ].filter(Boolean).join("\n"));
   }
 
@@ -3219,7 +3250,7 @@ ${brief}`);
 
   // Groups switched off for this game: their lever goes with their rule. Above,
   // with the rules, where the template has them (buildJumpStaticRules).
-  if (!rulesAbove) blocks.push(isActiveFeatureEnabled("groups") ? JUMP_LEVERS : withoutGroupOpsLines(JUMP_LEVERS));
+  if (!rulesAbove) blocks.push(jumpLevers());
   // One request, so the events finish themselves (FOLDED_SKIP_CONSEQUENCES), and
   // keep to the map's own rules for where a unit may go and a thing be built,
   // which only the directors were told.
@@ -3366,9 +3397,9 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   // The GM operational contract is native behaviour: a campaign's frozen
   // gameMaster prompt would silently roll the transaction semantics back.
   // Groups switched off for this game: the contract without its groups rule.
-  const promptTemplate = taskKey === "gameMaster"
+  const promptTemplate = withoutEspionageWords(taskKey === "gameMaster"
     ? (isActiveFeatureEnabled("groups") ? NATIVE_GAME_MASTER_PROMPT : gameMasterPromptWithoutGroups())
-    : guardPromptTemplate(taskKey, prompts.tasks[taskKey], prompts.bypassLengthLimit === true);
+    : guardPromptTemplate(taskKey, prompts.tasks[taskKey], prompts.bypassLengthLimit === true));
   // A time skip's live records go INTO its template, at ${JUMP_LIVE_STATE}.
   const jumpTask = JUMP_TASK_KEYS.has(taskKey);
   if (jumpTask) {
@@ -18188,7 +18219,7 @@ const runSceneReview = async ({ context, merged, signal, state, agentKind = "" }
   const sharedBlocks = [];
   const addJob = async (job, variables) => {
     const { systemPrompt } = await buildTaskSystemPrompt(job.taskKey, { variables, lookups: null, reminders: false });
-    jobs.push({ ...job, prompt: systemPrompt, schema: getGameplayTool(job.taskKey)?.schema });
+    jobs.push({ ...job, prompt: systemPrompt, schema: withoutFeaturesOff(getGameplayTool(job.taskKey))?.schema });
     for (const value of Object.values(variables ?? {})) if (typeof value === "string") sharedBlocks.push(value);
   };
 
