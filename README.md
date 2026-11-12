@@ -108,10 +108,11 @@ scenarios and map data are kept.
 
 Windows builds of Open Historia are code-signed through SignPath Foundation. Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org). A release whose Windows build was signed says so on its release page.
 
-- **What is signed:** the Windows installer, the app's program and its system speech program, built from the source in this repository. Electron's own runtime libraries are left as Electron ships them.
-- **Where signed builds come from:** only this repository's release workflows ([desktop-installer.yml](.github/workflows/desktop-installer.yml), [desktop-beta.yml](.github/workflows/desktop-beta.yml)) on GitHub-hosted runners. Nothing built anywhere else is signed.
+- **What is signed:** the stable Windows app: its installer, its program and its system speech program, built from the source in this repository, each marked with the product name Open Historia and that release's version. Electron's own runtime libraries are left as Electron ships them. The beta, the native app and the other systems' builds are not signed.
+- **Where signed builds come from:** only this repository's stable release workflow ([desktop-installer.yml](.github/workflows/desktop-installer.yml)) on GitHub-hosted runners. Nothing built anywhere else is signed, and every signing request is approved by hand.
 - **Team roles:** committers and reviewers: [Arkniem](https://github.com/Arkniem) (owner), who reviews every outside contribution before it is merged. Approvers: [Arkniem](https://github.com/Arkniem), who approves each signing request by hand.
-- **Privacy:** what the app sends, and to whom (the player's own AI provider, the community hub, update checks, the map download), is set out in the [privacy policy](https://openhistoria.com/privacy/).
+- **Privacy:** what the app sends, and to whom (the player's own AI provider, the community hub, update checks, the install count, the map download), is set out in the [privacy policy](https://openhistoria.com/privacy/). The Windows installer shows it on a privacy page, where update checks, the install count and the Discord link handler can each be switched off.
+- **Uninstalling:** Windows' *Installed apps* (or *Apps & features*) removes the game; your saves stay in `%APPDATA%\open-historia` until you delete that folder.
 - **Other systems:** the macOS app is not signed (see above). The Android app is signed with the project's own release key.
 
 
