@@ -1,0 +1,517 @@
+class_name MapExtras
+extends Node
+
+signal settings_changed(settings: Dictionary)
+signal globe_changed(active: bool)
+signal world_refreshed(world: Dictionary)
+
+const SLOTS := ["natgeo_fills", "flood", "under", "natgeo_lines", "season", "ice", "top"]
+const LAT_NORTH := 85.0
+const LAT_SOUTH := -80.0
+const KEY_ALIASES := {
+	"Globe": "globe",
+	"Terrain": "terrain",
+	"map_disable_idle_rotation": "disableIdleRotation",
+	"map_disable_event_camera": "disableEventCamera",
+	"map_seasons_weather": "seasonsWeather",
+	"map_weather_effects": "weatherEffects",
+	"map_basemap_default": "defaultBasemap",
+	"map_basemap_default_on": "defaultBasemapOn",
+	"map_scenario_terrain": "scenarioTerrain",
+	"map_hide_country_labels": "hideCountryLabels",
+	"map_label_font": "labelFont",
+	"map_mode": "mapMode",
+	"systemReducedMotion": "reduceMotion",
+}
+const BACKGROUND_KEYS := ["defaultBasemap", "defaultBasemapOn", "scenarioTerrain", "gamePick"]
+
+var engine: EngineLink
+var map_view: MapView
+var settings := {
+	"globe": false,
+	"terrain": true,
+	"disableIdleRotation": false,
+	"disableEventCamera": false,
+	"seasonsWeather": true,
+	"weatherEffects": true,
+	"defaultBasemap": "",
+	"defaultBasemapOn": false,
+	"scenarioTerrain": "",
+	"gamePick": null,
+	"reduceMotion": false,
+	"transitionMode": "",
+	"constrained": false,
+	"hideCountryLabels": false,
+	"labelFont": "",
+	"mapMode": "political",
+}
+var world: Dictionary = {}
+var background: Dictionary = {}
+var globe: GlobeView
+var overlays: RegionOverlays
+var season: SeasonTint
+var flood: OwnershipFlood
+var offers: BasemapOffers
+var navigator: MapNavigator
+var natgeo: NatGeoReference
+var _layer: CanvasLayer
+var _ui: Control
+var _slots: Array[Dictionary] = []
+var _refreshing := false
+var _again := false
+var _background_key := ""
+var _relief_stops: Array = []
+var _basemap_shown := ""
+
+
+func setup(link: EngineLink, context: Dictionary) -> void:
+	engine = link
+	map_view = context.get("map_view")
+	if map_view == null:
+		return
+	overlays = RegionOverlays.new()
+	add_child(overlays)
+	overlays.setup(self)
+	season = SeasonTint.new()
+	add_child(season)
+	season.setup(self)
+	flood = OwnershipFlood.new()
+	add_child(flood)
+	flood.setup(self)
+	globe = GlobeView.new()
+	add_child(globe)
+	globe.setup(self, map_view)
+	var parent: Variant = context.get("overlay_parent")
+	if parent is Control:
+		_ui = Control.new()
+		(parent as Control).add_child(_ui)
+	else:
+		_layer = CanvasLayer.new()
+		_layer.layer = 5
+		add_child(_layer)
+		_ui = Control.new()
+		_layer.add_child(_ui)
+	_ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	navigator = MapNavigator.new()
+	add_child(navigator)
+	navigator.setup(self, map_view, globe, _ui)
+	natgeo = NatGeoReference.new()
+	add_child(natgeo)
+	natgeo.setup(self, map_view)
+	offers = BasemapOffers.new()
+	_ui.add_child(offers)
+	offers.setup(self)
+	map_view.attach_extras(self)
+	if not map_view.baked.is_connected(_on_baked):
+		map_view.baked.connect(_on_baked)
+	if engine and not engine.engine_event.is_connected(_on_engine_event):
+		engine.engine_event.connect(_on_engine_event)
+	if map_view.basemap and map_view.basemap.has_signal("loading_changed"):
+		map_view.basemap.connect("loading_changed", offers.set_loading)
+	if map_view.extras_ready():
+		_build_slots()
+		flood.rebuild()
+		flood.capture()
+		overlays.rebuild()
+		season.rebuild()
+	if engine:
+		var reply: Dictionary = await engine.request("mapextras.settings")
+		if bool(reply.get("ok", false)) and reply.get("result") is Dictionary:
+			_merge_settings(reply["result"])
+		var motion: Dictionary = await engine.request("mapextras.systemMotion")
+		if bool(motion.get("ok", false)) and motion.get("result") is Dictionary:
+			settings["reduceMotion"] = bool((motion["result"] as Dictionary).get("reduced", false))
+	_apply_all()
+	await refresh()
+
+
+func open() -> void:
+	refresh()
+
+
+func close() -> void:
+	pass
+
+
+func _merge_settings(values: Dictionary) -> void:
+	for key in values.keys():
+		var name := str(key)
+		if settings.has(name):
+			settings[name] = values[key]
+
+
+func apply_map_settings(values: Dictionary) -> void:
+	var changed := {}
+	for key in values.keys():
+		var name: String = KEY_ALIASES.get(str(key), str(key))
+		var value: Variant = values[key]
+		if name == "scenarioTerrain":
+			value = "painted" if str(value) == "painted" else ""
+		if settings.get(name) != value:
+			settings[name] = value
+			changed[name] = true
+	if changed.is_empty():
+		return
+	_apply_all()
+	for key in BACKGROUND_KEYS:
+		if changed.has(key):
+			refresh_background()
+			break
+	if changed.has("seasonsWeather"):
+		season.refresh()
+	if changed.has("seasonsWeather") or changed.has("weatherEffects"):
+		var war := war_layers()
+		if war and war.has_method("refresh"):
+			war.call("refresh")
+	settings_changed.emit(map_settings())
+
+
+func war_layers() -> Node:
+	if map_view == null:
+		return null
+	for child in map_view.get_children():
+		if child.has_method("set_war_room") and child.has_method("refresh"):
+			return child
+	return null
+
+
+func map_settings() -> Dictionary:
+	return settings.duplicate(true)
+
+
+func reduce_motion() -> bool:
+	return bool(settings.get("reduceMotion", false)) or (bool(settings.get("disableIdleRotation", false)) and bool(settings.get("disableEventCamera", false)))
+
+
+func _apply_all() -> void:
+	if not map_view:
+		return
+	var no_globe := bool(world.get("noGlobe", background.get("noGlobe", false)))
+	globe.idle_rotation_disabled = bool(settings.get("disableIdleRotation", false)) or bool(settings.get("reduceMotion", false))
+	globe.terrain_on = bool(settings.get("terrain", true)) and str(background.get("kind", "builtin")) == "builtin"
+	globe.set_enabled(bool(settings.get("globe", false)) and not no_globe)
+	season.set_enabled(bool(settings.get("seasonsWeather", true)))
+	if map_view.basemap and map_view.basemap.has_method("set_terrain"):
+		map_view.basemap.call("set_terrain", bool(settings.get("terrain", true)))
+	_apply_wrap()
+
+
+func _apply_wrap() -> void:
+	var no_wrap := bool(world.get("noWrap", background.get("noWrap", false)))
+	var copies := map_view.extras_copies()
+	for index in range(copies.size()):
+		var copy := copies[index]
+		if is_instance_valid(copy):
+			copy.visible = not no_wrap or is_zero_approx(copy.position.x)
+	if map_view.basemap and map_view.basemap.has_method("set_wrap"):
+		map_view.basemap.call("set_wrap", not no_wrap)
+
+
+func refresh() -> void:
+	if not engine or not map_view:
+		return
+	if _refreshing:
+		_again = true
+		return
+	_refreshing = true
+	var passes := 0
+	while passes < 4:
+		passes += 1
+		_again = false
+		await _refresh_once()
+		if not _again or not is_inside_tree():
+			break
+	_refreshing = false
+
+
+func refresh_world() -> void:
+	if not engine or not map_view:
+		return
+	_world_request += 1
+	var ticket := _world_request
+	var reply: Dictionary = await engine.request("mapextras.world")
+	if ticket != _world_request or not bool(reply.get("ok", false)) or not (reply.get("result") is Dictionary):
+		return
+	world = reply["result"]
+	overlays.set_world(world)
+	world_refreshed.emit(world)
+
+
+var _world_request := 0
+
+
+func _refresh_once() -> void:
+	var stored: Dictionary = await engine.request("mapextras.settings")
+	if bool(stored.get("ok", false)) and stored.get("result") is Dictionary:
+		var values: Dictionary = stored["result"]
+		settings["gamePick"] = values.get("gamePick")
+	var reply: Dictionary = await engine.request("mapextras.world")
+	if not bool(reply.get("ok", false)) or not (reply.get("result") is Dictionary):
+		return
+	world = reply["result"]
+	_apply_all()
+	overlays.set_world(world)
+	season.refresh()
+	world_refreshed.emit(world)
+	await refresh_background()
+
+
+func refresh_background() -> void:
+	if not engine or not map_view:
+		return
+	var reply: Dictionary = await engine.request("mapextras.background", {"globe": globe.globe_shown()})
+	if not bool(reply.get("ok", false)) or not (reply.get("result") is Dictionary):
+		return
+	background = reply["result"]
+	var relief: Variant = background.get("relief")
+	_relief_stops = []
+	if relief is Dictionary and (relief as Dictionary).get("fillOpacity") is Array:
+		_relief_stops = (relief as Dictionary)["fillOpacity"]
+	var shown := "%s|%s" % [str(background.get("kind", "")), str(background.get("basemapId", ""))]
+	if not _basemap_shown.is_empty() and shown != _basemap_shown and str(background.get("kind", "")) == "builtin":
+		offers.show_transition(str(background.get("basemapId", "")))
+	_basemap_shown = shown
+	if map_view.basemap and map_view.basemap.has_method("apply_style"):
+		map_view.basemap.call("apply_style", background, engine)
+	if natgeo:
+		natgeo.set_enabled(str(background.get("kind", "builtin")) == "builtin" and str(background.get("basemapId", "")) == "natgeo-dark")
+	_apply_all()
+	offers.set_background(background)
+	map_view.call("_after_camera_move")
+
+
+func fill_opacity_at(level: float) -> float:
+	if _relief_stops.size() < 2:
+		return -1.0
+	var first: Array = _relief_stops[0]
+	if level <= float(first[0]):
+		return float(first[1])
+	for index in range(1, _relief_stops.size()):
+		var stop: Array = _relief_stops[index]
+		if level <= float(stop[0]):
+			var previous: Array = _relief_stops[index - 1]
+			return lerpf(float(previous[1]), float(stop[1]), (level - float(previous[0])) / (float(stop[0]) - float(previous[0])))
+	var last: Array = _relief_stops[_relief_stops.size() - 1]
+	return float(last[1])
+
+
+static func political_fill_opacity(level: float) -> float:
+	var stops: Array = MapView.FILL_OPACITY
+	var first: Array = stops[0]
+	if level <= float(first[0]):
+		return float(first[1])
+	for index in range(1, stops.size()):
+		var stop: Array = stops[index]
+		if level <= float(stop[0]):
+			var previous: Array = stops[index - 1]
+			return lerpf(float(previous[1]), float(stop[1]), (level - float(previous[0])) / (float(stop[0]) - float(previous[0])))
+	var last: Array = stops[stops.size() - 1]
+	return float(last[1])
+
+
+func _on_baked(_info: Dictionary) -> void:
+	_build_slots()
+	if natgeo:
+		natgeo.rebuild()
+	overlays.rebuild()
+	season.rebuild()
+	flood.rebuild()
+	_apply_wrap()
+	refresh()
+
+
+func _build_slots() -> void:
+	for entry in _slots:
+		for name in SLOTS:
+			var node: Variant = entry.get(name)
+			if node is Node and is_instance_valid(node):
+				(node as Node).queue_free()
+	_slots.clear()
+	for copy in map_view.extras_copies():
+		var entry := {"copy": copy}
+		for name in SLOTS:
+			var slot := Node2D.new()
+			slot.name = "extras_" + name
+			copy.add_child(slot)
+			entry[name] = slot
+		_slots.append(entry)
+	order_slots()
+
+
+func order_slots() -> void:
+	for entry in _slots:
+		var copy: Node2D = entry["copy"]
+		if not is_instance_valid(copy):
+			continue
+		var natgeo_fills_slot: Node2D = entry["natgeo_fills"]
+		var flood_slot: Node2D = entry["flood"]
+		var under_slot: Node2D = entry["under"]
+		var natgeo_lines_slot: Node2D = entry["natgeo_lines"]
+		var season_slot: Node2D = entry["season"]
+		var ice_slot: Node2D = entry["ice"]
+		var top_slot: Node2D = entry["top"]
+		var fill_index := map_view.extras_child_index(copy, "fill")
+		if fill_index >= 0 and natgeo_fills_slot.get_index() != fill_index - 1:
+			_place_before(copy, natgeo_fills_slot, fill_index)
+			fill_index = map_view.extras_child_index(copy, "fill")
+		if fill_index >= 0 and flood_slot.get_index() != fill_index + 1:
+			_place_after(copy, flood_slot, fill_index)
+		if under_slot.get_index() != flood_slot.get_index() + 1:
+			_place_after(copy, under_slot, flood_slot.get_index())
+		if natgeo_lines_slot.get_index() != under_slot.get_index() + 1:
+			_place_after(copy, natgeo_lines_slot, under_slot.get_index())
+		var shadow_index := map_view.extras_child_index(copy, "shadow")
+		if shadow_index >= 0 and ice_slot.get_index() != shadow_index - 1:
+			_place_before(copy, ice_slot, shadow_index)
+		if season_slot.get_index() != ice_slot.get_index() - 1:
+			_place_before(copy, season_slot, ice_slot.get_index())
+		var border_index := map_view.extras_child_index(copy, "border")
+		if border_index >= 0 and top_slot.get_index() != border_index + 1:
+			_place_after(copy, top_slot, border_index)
+
+
+func _place_after(copy: Node2D, node: Node, anchor_index: int) -> void:
+	copy.move_child(node, anchor_index + 1 if node.get_index() > anchor_index else anchor_index)
+
+
+func _place_before(copy: Node2D, node: Node, anchor_index: int) -> void:
+	copy.move_child(node, anchor_index - 1 if node.get_index() < anchor_index else anchor_index)
+
+
+var _ordered_at := 0
+
+
+func _process(_delta: float) -> void:
+	var now := Time.get_ticks_msec()
+	if now - _ordered_at > 500 and not _slots.is_empty():
+		_ordered_at = now
+		order_slots()
+		if natgeo:
+			natgeo.keep_labels_under()
+
+
+func slots(name: String) -> Array[Node2D]:
+	var found: Array[Node2D] = []
+	for entry in _slots:
+		var node: Variant = entry.get(name)
+		if node is Node2D and is_instance_valid(node):
+			found.append(node)
+	return found
+
+
+func constrain_camera() -> void:
+	if not map_view or not map_view.input_enabled:
+		return
+	if globe and globe.enabled and globe.active:
+		globe.constrain()
+		return
+	var camera := map_view.camera
+	var size := map_view.get_viewport_rect().size
+	var zoom := camera.zoom.x
+	if zoom < MapView.MIN_ZOOM:
+		zoom = MapView.MIN_ZOOM
+	var bounds := camera_bounds()
+	var top := GlobeView.world_of_lonlat(0.0, float(bounds["north"])).y
+	var bottom := GlobeView.world_of_lonlat(0.0, float(bounds["south"])).y
+	if (bottom - top) * zoom < size.y:
+		zoom = size.y / (bottom - top)
+	var sides := bool(bounds["sides"])
+	var left := (float(bounds["west"]) + 180.0) / 360.0 * MapView.WORLD_WIDTH
+	var right := (float(bounds["east"]) + 180.0) / 360.0 * MapView.WORLD_WIDTH
+	if sides and (right - left) * zoom < size.x:
+		zoom = size.x / (right - left)
+	camera.zoom = Vector2.ONE * zoom
+	var half := size.y * 0.5 / zoom
+	if camera.position.y - half < top:
+		camera.position.y = top + half
+	if camera.position.y + half > bottom:
+		camera.position.y = bottom - half
+	if sides:
+		var half_width := size.x * 0.5 / zoom
+		camera.position.x = clampf(camera.position.x, left + half_width, maxf(left + half_width, right - half_width))
+
+
+func camera_bounds() -> Dictionary:
+	var own_map := str(background.get("kind", "builtin")) in ["image", "vector"]
+	var bounds := {"south": -GlobeView.MERCATOR_LIMIT if own_map else LAT_SOUTH, "north": GlobeView.MERCATOR_LIMIT if own_map else LAT_NORTH, "west": -180.0, "east": 180.0, "sides": false}
+	var box: Variant = background.get("camera")
+	var given_sides := false
+	if box is Array and (box as Array).size() == 2 and box[0] is Array and box[1] is Array and (box[0] as Array).size() == 2 and (box[1] as Array).size() == 2:
+		bounds["south"] = float(box[0][1])
+		bounds["north"] = float(box[1][1])
+		if box[0][0] != null and box[1][0] != null and float(box[1][0]) > float(box[0][0]):
+			bounds["west"] = float(box[0][0])
+			bounds["east"] = float(box[1][0])
+			given_sides = true
+	bounds["sides"] = bool(world.get("noWrap", background.get("noWrap", false)))
+	if not bool(bounds["sides"]) or not given_sides:
+		bounds["west"] = -180.0
+		bounds["east"] = 180.0
+	return bounds
+
+
+func render_view() -> Array:
+	if globe:
+		globe.sync_active()
+	if globe and globe.active:
+		return globe.render_view()
+	return []
+
+
+func after_camera_move(level: float) -> void:
+	if globe and globe.active:
+		globe.after_camera_move()
+	if natgeo:
+		natgeo.update_view()
+	overlays.on_zoom(level)
+	season.on_zoom(level)
+	flood.on_zoom(level)
+
+
+func map_input(event: InputEvent) -> bool:
+	if navigator == null:
+		return false
+	return navigator.handle(event)
+
+
+func pan_view(delta: Vector2, around := Vector2(-1.0, -1.0)) -> void:
+	if navigator:
+		navigator.pan_view(delta, around)
+
+
+func globe_world_to_screen(point: Vector2) -> Vector2:
+	return globe.world_to_screen(point)
+
+
+func globe_world_to_screen_many(points: PackedVector2Array) -> PackedVector2Array:
+	return globe.world_to_screen_many(points)
+
+
+func globe_screen_to_world(point: Vector2) -> Vector2:
+	return globe.screen_to_world(point)
+
+
+func globe_frame_at(point: Vector2) -> Transform2D:
+	return globe.frame_at(point)
+
+
+func state_applied(previous_owners: PackedInt32Array, previous_names: PackedStringArray, palette: Array[Color]) -> void:
+	overlays.on_state()
+	flood.state_applied(previous_owners, previous_names, palette)
+
+
+func set_rotation_paused(paused: bool) -> void:
+	if globe:
+		globe.set_rotation_paused(paused)
+
+
+func _on_engine_event(name: String, data: Variant) -> void:
+	if name == "warmap.shown":
+		refresh_world()
+		return
+	if name == "mapextras.systemMotion" and data is Dictionary:
+		apply_map_settings({"reduceMotion": bool((data as Dictionary).get("reduced", false))})
+		return
+	if name == "mapextras.install" and data is Dictionary:
+		offers.on_install_progress(data)

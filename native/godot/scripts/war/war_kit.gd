@@ -1,0 +1,358 @@
+class_name WarKit
+extends RefCounted
+
+const WORLD := 4096.0
+const EDGE := Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.92)
+const TONES := {"own": Color("#e9b949"), "enemy": Color("#e0454d"), "other": Color("#ece7da")}
+
+static var _sprites: Dictionary = {}
+static var _flags: Dictionary = {}
+static var _flag_masks: Dictionary = {}
+
+
+static func stops(level: float, table: Array) -> float:
+	if table.is_empty():
+		return 0.0
+	var first: Array = table[0]
+	if level <= float(first[0]):
+		return float(first[1])
+	for index in range(1, table.size()):
+		var stop: Array = table[index]
+		if level <= float(stop[0]):
+			var before: Array = table[index - 1]
+			var span := float(stop[0]) - float(before[0])
+			var part := (level - float(before[0])) / span if span > 0.0 else 1.0
+			return lerpf(float(before[1]), float(stop[1]), part)
+	var last: Array = table[table.size() - 1]
+	return float(last[1])
+
+
+static func color_of(value: Variant, alpha := 1.0) -> Color:
+	if value is Array and (value as Array).size() >= 3:
+		var rgb: Array = value
+		return Color(float(rgb[0]) / 255.0, float(rgb[1]) / 255.0, float(rgb[2]) / 255.0, alpha)
+	return Color(120 / 255.0, 120 / 255.0, 120 / 255.0, alpha)
+
+
+static func faded(color: Color, alpha: float) -> Color:
+	return Color(color.r, color.g, color.b, color.a * alpha)
+
+
+static func project(lon: float, lat: float) -> Vector2:
+	return MapView.CityLayer.ohproject(lon, lat)
+
+
+static func points_of(flat: Variant) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	if not (flat is Array):
+		return out
+	var values: Array = flat
+	var count := values.size() / 2
+	out.resize(count)
+	for index in range(count):
+		out[index] = Vector2(float(values[index * 2]), float(values[index * 2 + 1]))
+	return out
+
+
+static func ints_of(values: Variant) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	if values is Array:
+		for value in values:
+			out.append(int(value))
+	return out
+
+
+static func dashes(points: PackedVector2Array, dash: float, gap: float, start := 0.0) -> Array[PackedVector2Array]:
+	var out: Array[PackedVector2Array] = []
+	if points.size() < 2 or dash <= 0.0:
+		return out
+	var period: float = dash + maxf(gap, 0.0)
+	var along := fposmod(start, period)
+	var current := PackedVector2Array()
+	var drawing := along < dash
+	if drawing:
+		current.append(points[0])
+	for index in range(1, points.size()):
+		var from := points[index - 1]
+		var to := points[index]
+		var length := from.distance_to(to)
+		var walked := 0.0
+		while walked < length:
+			var left: float = (dash - along) if drawing else (period - along)
+			var step := minf(left, length - walked)
+			walked += step
+			along += step
+			var at: Vector2 = from.lerp(to, walked / length) if length > 0.0 else to
+			if drawing:
+				current.append(at)
+			if along >= (dash if drawing else period) - 0.00001:
+				if drawing:
+					if current.size() >= 2:
+						out.append(current)
+					current = PackedVector2Array()
+					drawing = false
+				else:
+					along = 0.0
+					drawing = true
+					current = PackedVector2Array([at])
+	if drawing and current.size() >= 2:
+		out.append(current)
+	return out
+
+
+static func offset_line(points: PackedVector2Array, distance: float) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	var count := points.size()
+	if count < 2:
+		return points
+	out.resize(count)
+	for index in range(count):
+		var before := points[maxi(0, index - 1)]
+		var after := points[mini(count - 1, index + 1)]
+		var normal := Vector2.ZERO
+		if index > 0:
+			var incoming := (points[index] - before).normalized()
+			normal += Vector2(-incoming.y, incoming.x)
+		if index < count - 1:
+			var outgoing := (after - points[index]).normalized()
+			normal += Vector2(-outgoing.y, outgoing.x)
+		normal = normal.normalized()
+		var scale := 1.0
+		if index > 0 and index < count - 1:
+			var incoming_normal := (points[index] - before).normalized()
+			var cosine := normal.dot(Vector2(-incoming_normal.y, incoming_normal.x))
+			scale = 1.0 / maxf(cosine, 0.35)
+		out[index] = points[index] - normal * distance * scale
+	return out
+
+
+static func sprite(kind: String) -> Texture2D:
+	if _sprites.has(kind):
+		return _sprites[kind]
+	var size := 64
+	var image := Image.create_empty(size, size, false, Image.FORMAT_RGBA8)
+	for y in range(size):
+		for x in range(size):
+			var p := Vector2((x + 0.5) / size * 2.0 - 1.0, -((y + 0.5) / size * 2.0 - 1.0))
+			var far := p.length()
+			var seen := 0.0
+			var tint := Color(1, 1, 1)
+			match kind:
+				"glow":
+					seen = smoothstep(1.0, 0.0, far)
+					seen *= seen
+				"flash":
+					seen = smoothstep(1.0, 0.22, far)
+				"ring":
+					seen = smoothstep(0.6, 0.78, far) * smoothstep(1.0, 0.86, far)
+				"plane":
+					seen = _aircraft(Vector2(p.y, -p.x), 0.0)
+				"plane_edge":
+					var inner := _aircraft(Vector2(p.y, -p.x), 0.0)
+					seen = _aircraft(Vector2(p.y, -p.x), 0.08) * (1.0 - inner)
+					tint = Color(0.03, 0.05, 0.08)
+			image.set_pixel(x, y, Color(tint.r, tint.g, tint.b, seen))
+	var texture := ImageTexture.create_from_image(image)
+	_sprites[kind] = texture
+	return texture
+
+
+static func _aircraft(q: Vector2, grow: float) -> float:
+	var side := absf(q.y)
+	var body := _step(side, 0.11 + grow) * _step(-0.86 - grow, q.x) * _step(q.x, 0.92 + grow)
+	var wing := _step(side, 0.9 + grow) * _step(q.x, 0.26 - 0.55 * side + grow) * _step(-0.06 - 0.36 * side - grow, q.x)
+	var tail := _step(side, 0.36 + grow) * _step(-0.9 - grow, q.x) * _step(q.x, -0.62 + grow)
+	return maxf(body, maxf(wing, tail))
+
+
+static func _step(edge: float, value: float) -> float:
+	return 1.0 if value >= edge else 0.0
+
+
+static func flag(path: String) -> Texture2D:
+	if path.is_empty():
+		return null
+	var px := maxi(64, roundi(64.0 * UI.pixel_scale()))
+	var key := "%s|%d" % [path, px]
+	if _flags.has(key):
+		return _flags[key]
+	var image := Image.new()
+	var loaded := false
+	if path.to_lower().ends_with(".svg"):
+		var file := FileAccess.open(path, FileAccess.READ)
+		if file:
+			var svg := file.get_as_text()
+			var probe := Image.new()
+			if probe.load_svg_from_string(svg, 1.0) == OK and probe.get_width() > 0 and probe.get_height() > 0:
+				var fit := float(px) / minf(probe.get_width(), probe.get_height())
+				loaded = image.load_svg_from_string(svg, maxf(fit, 0.05)) == OK
+	else:
+		var still := ImageLoader.decode_gif(FileAccess.get_file_as_bytes(path)) if path.to_lower().ends_with(".gif") else null
+		loaded = still != null or image.load(path) == OK
+		if still != null:
+			image = still
+	if not loaded or image.get_width() == 0:
+		_flags[key] = null
+		return null
+	image.convert(Image.FORMAT_RGBA8)
+	var width := image.get_width()
+	var height := image.get_height()
+	var cover := maxf(float(px) / width, float(px) / height)
+	var scaled_w := maxi(px, int(ceil(width * cover)))
+	var scaled_h := maxi(px, int(ceil(height * cover)))
+	image.resize(scaled_w, scaled_h, Image.INTERPOLATE_BILINEAR)
+	var round_image := Image.create_empty(px, px, false, Image.FORMAT_RGBA8)
+	round_image.blit_rect(image, Rect2i((scaled_w - px) / 2, (scaled_h - px) / 2, px, px), Vector2i.ZERO)
+	var mask := _flag_mask(px)
+	var cuts: PackedInt32Array = mask["cuts"]
+	var clear := Color(0, 0, 0, 0)
+	for y in range(px):
+		var cut := cuts[y]
+		if cut * 2 >= px:
+			round_image.fill_rect(Rect2i(0, y, px, 1), clear)
+		elif cut > 0:
+			round_image.fill_rect(Rect2i(0, y, cut, 1), clear)
+			round_image.fill_rect(Rect2i(px - cut, y, cut, 1), clear)
+	var edges: PackedFloat32Array = mask["edges"]
+	for at in range(0, edges.size(), 3):
+		var x := int(edges[at])
+		var y := int(edges[at + 1])
+		var c := round_image.get_pixel(x, y)
+		round_image.set_pixel(x, y, Color(c.r, c.g, c.b, c.a * edges[at + 2]))
+	var texture := ImageTexture.create_from_image(round_image)
+	_flags[key] = texture
+	return texture
+
+
+static func _flag_mask(px: int) -> Dictionary:
+	if _flag_masks.has(px):
+		return _flag_masks[px]
+	var half := px / 2.0
+	var cuts := PackedInt32Array()
+	var edges := PackedFloat32Array()
+	for y in range(px):
+		var cut := px
+		for x in range(px):
+			var alpha := clampf(half - Vector2(x + 0.5 - half, y + 0.5 - half).length() + 0.5, 0.0, 1.0)
+			if alpha > 0.0 and cut == px:
+				cut = x
+			if alpha > 0.0 and alpha < 1.0:
+				edges.append_array(PackedFloat32Array([x, y, alpha]))
+		cuts.append(cut)
+	var mask := {"cuts": cuts, "edges": edges}
+	_flag_masks[px] = mask
+	return mask
+
+
+static func batch() -> Array:
+	return [PackedVector2Array(), PackedColorArray(), PackedInt32Array()]
+
+
+static func stroke(into: Array, line: PackedVector2Array, width: float, feather: float, colour: Color) -> void:
+	var points := PackedVector2Array()
+	for p in line:
+		if points.is_empty() or points[points.size() - 1].distance_squared_to(p) > 0.000000000001:
+			points.append(p)
+	var count := points.size()
+	if count < 2 or width <= 0.0 or colour.a <= 0.0:
+		return
+	var tone := colour
+	var drawn := width
+	if width < feather:
+		tone.a *= width / feather
+		drawn = feather
+	var inner := maxf(0.0, drawn * 0.5 - feather * 0.5)
+	var outer := drawn * 0.5 + feather * 0.5
+	var clear := Color(tone.r, tone.g, tone.b, 0.0)
+	var verts: PackedVector2Array = into[0]
+	var colours: PackedColorArray = into[1]
+	var indices: PackedInt32Array = into[2]
+	into[0] = PackedVector2Array()
+	into[1] = PackedColorArray()
+	into[2] = PackedInt32Array()
+	var base := verts.size()
+	for index in range(count):
+		var incoming := Vector2.ZERO
+		var outgoing := Vector2.ZERO
+		if index > 0:
+			var along_in := (points[index] - points[index - 1]).normalized()
+			incoming = Vector2(-along_in.y, along_in.x)
+		if index < count - 1:
+			var along_out := (points[index + 1] - points[index]).normalized()
+			outgoing = Vector2(-along_out.y, along_out.x)
+		var normal := incoming + outgoing
+		if normal.length_squared() < 0.000000000001:
+			normal = outgoing if incoming == Vector2.ZERO else incoming
+		normal = normal.normalized()
+		var scale := 1.0
+		if index > 0 and index < count - 1:
+			scale = 1.0 / maxf(normal.dot(incoming), 0.5)
+		var p := points[index]
+		verts.append(p + normal * outer * scale)
+		verts.append(p + normal * inner * scale)
+		verts.append(p - normal * inner * scale)
+		verts.append(p - normal * outer * scale)
+		colours.append(clear)
+		colours.append(tone)
+		colours.append(tone)
+		colours.append(clear)
+	for index in range(count - 1):
+		var a := base + index * 4
+		var b := a + 4
+		for k in range(3):
+			indices.append(a + k)
+			indices.append(a + k + 1)
+			indices.append(b + k + 1)
+			indices.append(a + k)
+			indices.append(b + k + 1)
+			indices.append(b + k)
+	into[0] = verts
+	into[1] = colours
+	into[2] = indices
+
+
+static func disc(into: Array, centre: Vector2, radius: float, feather: float, colour: Color) -> void:
+	if radius <= 0.0 or colour.a <= 0.0:
+		return
+	var verts: PackedVector2Array = into[0]
+	var colours: PackedColorArray = into[1]
+	var indices: PackedInt32Array = into[2]
+	into[0] = PackedVector2Array()
+	into[1] = PackedColorArray()
+	into[2] = PackedInt32Array()
+	var base := verts.size()
+	var steps := 16
+	var inner := maxf(0.0, radius - feather * 0.5)
+	var outer := radius + feather * 0.5
+	var clear := Color(colour.r, colour.g, colour.b, 0.0)
+	verts.append(centre)
+	colours.append(colour)
+	for step in range(steps):
+		var angle := TAU * step / steps
+		var direction := Vector2(cos(angle), sin(angle))
+		verts.append(centre + direction * inner)
+		colours.append(colour)
+		verts.append(centre + direction * outer)
+		colours.append(clear)
+	for step in range(steps):
+		var here := base + 1 + step * 2
+		var next := base + 1 + ((step + 1) % steps) * 2
+		indices.append(base)
+		indices.append(here)
+		indices.append(next)
+		indices.append(here)
+		indices.append(here + 1)
+		indices.append(next + 1)
+		indices.append(here)
+		indices.append(next + 1)
+		indices.append(next)
+	into[0] = verts
+	into[1] = colours
+	into[2] = indices
+
+
+static func flush(item: RID, into: Array) -> void:
+	var indices: PackedInt32Array = into[2]
+	if indices.is_empty():
+		return
+	RenderingServer.canvas_item_add_triangle_array(item, indices, into[0], into[1])
