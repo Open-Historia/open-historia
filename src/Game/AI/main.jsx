@@ -159,6 +159,7 @@ import { describeWarsForAdvisor } from "./advisorWars.js";
 import { describeLeaderStanding, describeOurFigures, describeTerritoryForConversation } from "./standingContext.js";
 import { OWN_WARS_HEADING, buildWarStatsBlock, describePeaceTalk } from "./warStatsPrompt.js";
 import { beginAiRequestScope } from "./aiRequestControl.js";
+import { requestTally } from "./requestTally.js";
 
 // A time skip the player's Agent was answering is over once the game stops
 // simulating, so the Agent's `/skip` stops too (ADR 0008).
@@ -2890,7 +2891,23 @@ function announceFallbackSwitch({ skipped, to }) {
     } catch { /* no window (tests, the harness) — the log line stands */ }
 }
 
+// Every call is told to the tally behind the badge on the map (requestTally.js),
+// the watched and the background ones alike, from the one place they all pass:
+// it opens here and closes in the finally, so a call that throws (a failure, a
+// cancel) is closed too and counted as unanswered. The call itself is untouched.
 export async function callAI(systemPrompt, history, opts = {}) {
+    const tallyId = requestTally.begin(opts?.__debug?.taskKey ?? opts?.taskKey ?? "");
+    let answered = false;
+    try {
+        const result = await callAIUntallied(systemPrompt, history, opts);
+        answered = true;
+        return result;
+    } finally {
+        requestTally.end(tallyId, answered);
+    }
+}
+
+async function callAIUntallied(systemPrompt, history, opts = {}) {
     // Non-English players get replies in their language at the source —
     // native answers beat post-translating them (see runtime/i18n.js).
     //
