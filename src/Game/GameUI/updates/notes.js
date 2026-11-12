@@ -54,6 +54,29 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Combined Beta release batch: PR #1016 (Advisor/Interactive Events/custom Stats/war integrity)
+    // and the A4 Country Editor/GM capability + GDP display-currency changes.
+    // Publish only in a Beta build containing both scopes. The date is the
+    // player's release date; once shipped, never reuse or rename this id.
+    id: "2026-11-advisor-country-tools",
+    kind: "minor",
+    date: "2026-11-12",
+    channel: "beta",
+    banners: [
+      {
+        title: "Steadier advisers and country tools",
+        items: [
+          "Advisers keep earlier conversations intact, and new Action proposals still need your review instead of changing orders already completed.",
+          "Interactive Events now show the ending of the scene you played, even when other events occur during the same time skip.",
+          "Scenario-defined national Stats can be edited without a territorial baseline, while unset values remain unset.",
+          "Country Editor and Game Master can correct intelligence, military capability, war weariness and resources without overriding calculated Military Power.",
+          "Choose GDP display currency in scenarios, new games or Settings: dollars, euros, pounds, rubles, rupees or yuan.",
+          "Invalid battle records are rejected instead of being silently accepted as the result of a war.",
+        ],
+      },
+    ],
+  },
+  {
     // "make the default currency in stats be dollars" (the owner, 2026-11-11): GDP was kept and shown in 2026 euros.
     id: "2026-11-stats-in-dollars",
     kind: "minor",

@@ -35,6 +35,21 @@ test("only an update with a notice is shown, once, and nothing where it could no
   assert.doesNotMatch(app, /closeNotice = useCallback\([^\n]*rememberUpdate/);
 });
 
+test("one Beta release entry covers the combined Advisor, country tools and currency batch", () => {
+  const id = "2026-11-advisor-country-tools";
+  const updates = UPDATES.filter((update) => update.id === id);
+  assert.equal(updates.length, 1);
+  const update = updates[0];
+  assert.equal(update.kind, "minor");
+  assert.equal(update.channel, "beta");
+  assert.equal(update.date, "2026-11-12");
+  assert.equal(update.banners.length, 1);
+  assert.equal(update.banners[0].items.length, 6);
+  assert.equal(NOTICE_UPDATES.filter((item) => item.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+  assert.deepEqual(noticePages([update]).map((page) => page.key), [id + "#0"]);
+});
+
 test("the website's browser version shows no update notices; the apps do", () => {
   // "make update announcements not appear on the website beta" (the owner, 2026-11-09).
   assert.equal(buildShowsUpdateNotices({ VITE_OH_WEB: true, VITE_OH_NATIVE: false }), false, "the website");

@@ -28,6 +28,7 @@ import { withTurnSeaBattles } from "../../runtime/naval/record.js";
 import { withFrontFortifications } from "../../runtime/warGeography.js";
 import { zoneWeatherFor } from "../../runtime/zoneWeather.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
+import { applyCountryCapabilityPatchToWorld, validateCountryCapabilityPatch } from "../../runtime/countryCapabilities.js";
 import { MILITARY_CHANGE_RULE, describeMilitaryStanding } from "../../runtime/militaryStanding.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
 import { STATS_BACKEND_FIELD, conflictSheetTargets, hasStatsBackend, statsBackendInstruction, statsBackendOf, statsBackendPatch, statsBackendTurnRule } from "../../runtime/statsBackend.js";
@@ -19048,6 +19049,16 @@ const gmPatchHasContent = (patch) => {
 const validateGameMasterStatPatches = (patches, world, events) => {
   const normalizedWorld = normalizeWorldState(world);
   const eventCount = normalizeArray(events).length;
+  // Preflight native capability mutations on a detached world copy, including
+  // sparse wartime-ledger capacity and multiple patches to one country. An
+  // approved preview must not discover a new capability error at Apply.
+  const capabilityPreflight = {
+    ...normalizedWorld,
+    countryStats: { ...(normalizedWorld.countryStats || {}) },
+    intelligence: { ...(normalizedWorld.intelligence || {}) },
+    warWeariness: Array.isArray(normalizedWorld.warWeariness) ? [...normalizedWorld.warWeariness] : [],
+    warResources: Array.isArray(normalizedWorld.warResources) ? [...normalizedWorld.warResources] : [],
+  };
 
   for (let index = 0; index < normalizeArray(patches).length; index += 1) {
     const entry = patches[index];
@@ -19065,6 +19076,34 @@ const validateGameMasterStatPatches = (patches, world, events) => {
     }
     if (!gmPatchHasContent(entry?.patch)) {
       return `$.countryStatPatches[${index}].patch must contain at least one requested Stats field.`;
+    }
+
+    // Direct capability edits have native combat/espionage owners even with
+    // scenario-defined custom National Stats. The legacy intelligenceService
+    // custom key is already rendered from live intelligence when rated.
+    const capability = {};
+    for (const key of ["intelligence", "military", "warWeariness", "warResources"]) {
+      if (Object.prototype.hasOwnProperty.call(entry.patch, key)) capability[key] = entry.patch[key];
+    }
+    const customIntelligence = entry.patch?.customStats?.intelligenceService;
+    if (customIntelligence !== undefined) {
+      if (typeof customIntelligence !== "number" || !Number.isInteger(customIntelligence)
+        || customIntelligence < 0 || customIntelligence > 100) {
+        return `$.countryStatPatches[${index}].patch.customStats.intelligenceService must be a live 0..100 integer.`;
+      }
+      if (capability.intelligence !== undefined && capability.intelligence !== customIntelligence) {
+        return `$.countryStatPatches[${index}] specifies conflicting live intelligence ratings.`;
+      }
+      capability.intelligence = customIntelligence;
+    }
+    if (Object.keys(capability).length) {
+      const capabilityError = validateCountryCapabilityPatch(capability);
+      if (capabilityError) return `$.countryStatPatches[${index}].patch: ${capabilityError}`;
+      try {
+        applyCountryCapabilityPatchToWorld(capabilityPreflight, canonical, capability);
+      } catch (error) {
+        return `$.countryStatPatches[${index}].patch: ${normalizeString(error?.message) || "Capability correction could not be admitted."}`;
+      }
     }
 
     for (const eventIndex of normalizeArray(entry?.eventIndexes)) {
@@ -20204,8 +20243,28 @@ export const applyGameMasterPreview = async (preview) => {
     const statCountries = [];
     for (const entry of normalizeArray(transaction.countryStatPatches)) {
       const country = normalizeString(entry?.country);
-      const nextSheet = applyCountryStatPatchToWorld(nextWorld, country, cloneValue(entry?.patch));
-      if (!nextSheet) throw new Error(`Stats patch for ${country || "unknown polity"} could not be applied. Nothing was persisted.`);
+      const requestedPatch = cloneValue(entry?.patch);
+      const capability = {};
+      const statsOnlyPatch = { ...requestedPatch };
+      for (const key of ["intelligence", "military", "warWeariness", "warResources"]) {
+        if (!Object.prototype.hasOwnProperty.call(requestedPatch, key)) continue;
+        capability[key] = requestedPatch[key];
+        delete statsOnlyPatch[key];
+      }
+      // A custom intelligenceService field is already treated as the live
+      // Intelligence Service in the Country panel; keep the canonical owner in sync.
+      if (Object.prototype.hasOwnProperty.call(requestedPatch?.customStats || {}, "intelligenceService")) {
+        capability.intelligence = requestedPatch.customStats.intelligenceService;
+      }
+      const hasStatPatch = Object.keys(statsOnlyPatch).length > 0;
+      let nextSheet = hasStatPatch
+        ? applyCountryStatPatchToWorld(nextWorld, country, statsOnlyPatch)
+        : nextWorld.countryStats?.[country] ?? null;
+      if (Object.keys(capability).length) {
+        applyCountryCapabilityPatchToWorld(nextWorld, country, capability);
+        nextSheet = nextWorld.countryStats?.[country] ?? nextSheet;
+      }
+      if (hasStatPatch && !nextSheet) throw new Error(`Stats patch for ${country || "unknown polity"} could not be applied. Nothing was persisted.`);
       statCountries.push(country);
       const reputation = Number(nextSheet?.indices?.internationalReputation);
       if (Number.isFinite(reputation)) {

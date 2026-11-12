@@ -2339,6 +2339,24 @@ const gmCountryStatPatchSchema = {
         government: textSchema("Government system/ideology, when explicitly changed."),
         leader: textSchema("Current leader, when explicitly changed."),
         stability: { type: "number", minimum: 0, maximum: 100 },
+        intelligence: { type: "integer", minimum: 0, maximum: 100, description: "Live intelligence-service rating used for espionage." },
+        military: {
+          type: "object",
+          description: "Live military capability ratings; Military Power is derived, not independently stored.",
+          properties: {
+            quality: { type: "integer", minimum: 0, maximum: 100 },
+            technology: { type: "integer", minimum: 0, maximum: 100 },
+            spending: { type: "integer", minimum: 0, maximum: 100 },
+            manpowerShare: { type: "number", minimum: 0.1, maximum: 100 },
+            land: { type: "integer", minimum: 0, maximum: 100 },
+            sea: { type: "integer", minimum: 0, maximum: 100 },
+            air: { type: "integer", minimum: 0, maximum: 100 },
+          },
+          minProperties: 1,
+          additionalProperties: false,
+        },
+        warWeariness: { type: "number", minimum: 0, maximum: 100, description: "Current live war weariness." },
+        warResources: { type: "number", minimum: 0, maximum: 100, description: "Current war supply/resources." },
         population: {
           type: "object",
           properties: {
@@ -2594,7 +2612,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     summary: textSchema("Concise explanation of what the transaction would change if applied."),
     eventsJson: textSchema(`JSON array text for canonical event objects. ${GM_EVENTS_POSTURE_NOTE} Use [] when none.`),
     territorialScopesJson: textSchema("JSON array text for exhaustive rendered base-geography territorial scopes. Use [] when none."),
-    countryStatPatchesJson: textSchema("JSON array text for authoritative country Stats patches. Use [] when none."),
+    countryStatPatchesJson: textSchema("JSON array text for authoritative country Stats and live capability corrections: patch.intelligence, patch.military, patch.warWeariness and patch.warResources are supported. Use [] when none."),
     storylineUpdatesJson: textSchema("JSON array text for persistent canonical world.storylines updates. Use [] when none."),
     warUpdatesJson: textSchema("JSON array text for structured world.wars lifecycle operations. Use [] when none."),
     relationUpdatesJson: textSchema("JSON array text for structured world.relations operations. Use [] when none."),
@@ -4412,6 +4430,7 @@ export const getGameplayToolForCustomStatSheet = (taskKey, rows, { custom = fals
       `JSON array text for authoritative country Stats patches in this custom-sheet scenario. `
       + `Numeric Stats MUST be written only as patch.customStats using these exact machine keys: ${keyList}. `
       + `Do not use population, economy, indices, stability, or gdpBreakdown. `
+      + `Live capabilities are separate and allowed: patch.intelligence (0..100), patch.military (quality, technology, spending, manpowerShare, land, sea, air), patch.warWeariness and patch.warResources (0..100). These do not invent customStats or a total Military Power figure. `
       + `The hidden backend the game's own arithmetic reads may be corrected in the same patch, as patch.${STATS_BACKEND_FIELD}: {"population":0,"gdp":0,"budgetBalance":0,"publicDebt":0}, any of the four. `
       + `Example: [{"country":"Full Polity Name","patch":{"customStats":{"${sampleKey}":1}},"eventIndexes":[],"reason":""}]. `
       + "Use only the requested customStats keys; values are absolute, not deltas.";

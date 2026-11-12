@@ -1,5 +1,5 @@
 /*! Open Historia — national stats pane © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
@@ -12,6 +12,7 @@ import { showEventOnTimeline, warTimelineEventId, warTimelineEventOpensWar } fro
 import { isPolityLandless, readGameData, readWorldStateView, writeWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
+import { economicDisplayUnitLabel, formatEconomicDisplayValue, getActiveEconomicDisplayCurrency, setActiveEconomicDisplayCurrency, subscribeEconomicDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { resolveChosenPolityFlag, resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { buildHistoricalTrackingCandidateRows, buildHistoricalTrackingIndex, historyMetricValue, historyMetricPath, historyMetricChange, historySamplesInRange } from "./statsHistoricalTracking.js";
@@ -60,7 +61,7 @@ import {
     readCustomStatNumber,
     hasRecordedCustomStatValues,
 } from "../../runtime/statsSheet.js";
-import { formatCustomStatValue } from "./customStatFormatting.js";
+import { customGdpSourceCurrency, formatCustomStatValue } from "./customStatFormatting.js";
 import { onMemoryPressure } from "../../runtime/memoryPressure.js";
 
 // Sheets are regenerated when the game date moves; within a date they persist
@@ -247,14 +248,8 @@ const formatCompactNumber = (value, { digits = 1 } = {}) => {
 };
 
 const formatPopulation = (value) => formatCompactNumber(value);
-const formatDollarTotal = (value) => {
-    const text = formatCompactNumber(value);
-    return text === "—" ? text : `$${text}`;
-};
-const formatDollarPerCapita = (value) => {
-    const number = Number(value);
-    return Number.isFinite(number) ? `$${Math.round(number).toLocaleString()}` : "—";
-};
+const formatDollarTotal = (value) => formatEconomicDisplayValue(value, getActiveEconomicDisplayCurrency(), { compact: true });
+const formatDollarPerCapita = (value) => formatEconomicDisplayValue(value, getActiveEconomicDisplayCurrency(), { perCapita: true });
 const formatPercent = (value, { signed = false } = {}) => {
     const number = Number(value);
     if (!Number.isFinite(number)) return "—";
@@ -270,7 +265,8 @@ const customMetricUnit = (stat) => [
     String(stat?.suffix || ""),
 ].join(":");
 
-const customMetricUnitLabel = (stat) => {
+const customMetricUnitLabel = (stat, displayCurrency) => {
+    if (customGdpSourceCurrency(stat)) return economicDisplayUnitLabel(displayCurrency);
     if (stat?.kind === "index") return "Index · 0–100";
     if (stat?.kind === "percentage") return stat?.suffix || "Percent";
     const display = [stat?.prefix, stat?.suffix].filter(Boolean).join(" … ");
@@ -306,8 +302,8 @@ const IndexMetricCard = ({ icon = "", label, value, color = "#a1a1aa" }) => {
     );
 };
 
-const CustomStatCard = ({ stat, value }) => {
-    const formatted = formatCustomStatValue(stat, value);
+const CustomStatCard = ({ stat, value, displayCurrency }) => {
+    const formatted = formatCustomStatValue(stat, value, { economicDisplayCurrency: displayCurrency });
     if (stat.kind === "index") {
         return <IndexMetricCard icon={stat.icon} label={stat.label} value={value} color={stat.color || "#a1a1aa"} />;
     }
@@ -330,7 +326,7 @@ const CustomStatCard = ({ stat, value }) => {
 const LIVE_INTELLIGENCE_STAT_KEYS = Object.freeze(["intelligenceService"]);
 
 // `hiddenKeys`: stat keys not to draw. A section left with nothing is skipped.
-const CustomStatsSheet = ({ definition, sheet, hiddenKeys = [] }) => {
+const CustomStatsSheet = ({ definition, sheet, hiddenKeys = [], displayCurrency }) => {
     const values = sheet?.customStats || {};
     const sections = definition.sections
         .map((section) => ({ ...section, stats: section.stats.filter((stat) => !hiddenKeys.includes(stat.key)) }))
@@ -344,7 +340,7 @@ const CustomStatsSheet = ({ definition, sheet, hiddenKeys = [] }) => {
                     </div>
                     <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(auto-fit, minmax(min(12rem, 100%), 1fr))" }}>
                         {section.stats.map((stat) => (
-                            <CustomStatCard key={stat.key} stat={stat} value={values[stat.key]} />
+                            <CustomStatCard key={stat.key} stat={stat} value={values[stat.key]} displayCurrency={displayCurrency} />
                         ))}
                     </div>
                 </React.Fragment>
@@ -1064,7 +1060,7 @@ const phoneSheetStyle = {
 // ---------------------------------------------------------------------------
 // 8B.3 — Advanced Statistics
 // ---------------------------------------------------------------------------
-const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
+const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null, displayCurrency = "USD") => {
     if (definition?.custom) {
         return definition.sections.map((section) => ({
             key: section.key,
@@ -1074,9 +1070,9 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
                 key: stat.key,
                 label: stat.label,
                 unit: customMetricUnit(stat),
-                unitLabel: customMetricUnitLabel(stat),
+                unitLabel: customMetricUnitLabel(stat, displayCurrency),
                 color: stat.color || "#a1a1aa",
-                format: (value) => formatCustomStatValue(stat, value),
+                format: (value) => formatCustomStatValue(stat, value, { economicDisplayCurrency: displayCurrency }),
                 bounded01: stat.kind === "index" || (Number(stat.minimum) === 0 && Number(stat.maximum) === 100),
                 nonNegative: Number.isFinite(Number(stat.minimum)) && Number(stat.minimum) >= 0,
             })),
@@ -1134,13 +1130,18 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
 };
 
 const ADVANCED_UNIT_LABELS = {
-    gdp: "GDP · 2026-USD equivalent",
-    gdpPerCapita: "GDP per capita · 2026-USD equivalent",
+    gdp: "GDP",
+    gdpPerCapita: "GDP per capita",
     population: "Population",
     economicPercent: "Percent",
     index: "Index · 0–100",
     sector: "Share of GDP · %",
 };
+
+const advancedUnitLabel = (unit) =>
+    unit === "gdp" || unit === "gdpPerCapita"
+        ? `${ADVANCED_UNIT_LABELS[unit]} · ${economicDisplayUnitLabel(getActiveEconomicDisplayCurrency())}`
+        : ADVANCED_UNIT_LABELS[unit] || "Value";
 
 const formatHistoryDate = (value, { compact = false } = {}) => {
     const text = String(value || "");
@@ -1277,7 +1278,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
                     const right = index === validSamples.length - 1 ? width - pad.right : (x + next) / 2;
                     return <rect key={`hit-${sample.date}`} x={left} y={pad.top} width={Math.max(2, right - left)} height={plotHeight} fill="transparent" onMouseEnter={() => setHoverIndex(index)} onMouseMove={() => setHoverIndex(index)} onMouseLeave={() => setHoverIndex(null)} />;
                 })}
-                <text x={pad.left} y="18" fill="rgba(255,255,255,0.38)" fontSize="11" fontWeight="700" letterSpacing="1">{metrics[0]?.unitLabel || ADVANCED_UNIT_LABELS[unit] || "Value"}</text>
+                <text x={pad.left} y="18" fill="rgba(255,255,255,0.38)" fontSize="11" fontWeight="700" letterSpacing="1">{metrics[0]?.unitLabel || advancedUnitLabel(unit)}</text>
             </svg>
             {hovered && (
                 <div style={{ backgroundColor: "rgba(16,16,18,0.96)", border: "1px solid rgba(148,163,184,0.22)", borderRadius: "10px", boxShadow: "0 12px 35px rgba(0,0,0,0.35)", left: `min(calc(${((hoverX / width) * 100).toFixed(2)}% + 10px), calc(100% - 190px))`, padding: "0.55rem 0.65rem", pointerEvents: "none", position: "absolute", top: "1.1rem", width: "180px", zIndex: 2 }}>
@@ -1311,6 +1312,7 @@ const AdvancedStatsModal = ({
     persistentCount,
     indexRows,
     statSheetDefinition,
+    displayCurrency,
 }) => {
     const [metricKeys, setMetricKeys] = useState(["gdp"]);
     const [range, setRange] = useState("all");
@@ -1321,8 +1323,8 @@ const AdvancedStatsModal = ({
     const touch = useTouchPrimary();
     const fit = isMobile || touch;
     const metricGroups = useMemo(
-        () => advancedMetricGroupsFor(indexRows, statSheetDefinition),
-        [indexRows, statSheetDefinition],
+        () => advancedMetricGroupsFor(indexRows, statSheetDefinition, displayCurrency),
+        [indexRows, statSheetDefinition, displayCurrency],
     );
     const metricsByKey = useMemo(() => Object.fromEntries(
         metricGroups.flatMap((group) => group.metrics.map((metric) => [metric.key, metric])),
@@ -1405,7 +1407,7 @@ const AdvancedStatsModal = ({
                         <div style={{ alignItems: "flex-start", display: "flex", flexWrap: "wrap", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.35rem" }}>
                             <div>
                                 <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.82rem", fontWeight: 850 }}>{selectedMetrics.map((metric) => metric.label).join(" · ")}</div>
-                                <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.64rem", marginTop: "0.15rem" }}>{selectedMetrics[0]?.unitLabel || ADVANCED_UNIT_LABELS[selectedUnit] || "Value"}</div>
+                                <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.64rem", marginTop: "0.15rem" }}>{selectedMetrics[0]?.unitLabel || advancedUnitLabel(selectedUnit)}</div>
                             </div>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
                                 {selectedMetrics.map((metric) => <span key={metric.key} style={{ alignItems: "center", color: "rgba(255,255,255,0.58)", display: "inline-flex", fontSize: "0.63rem", gap: "0.3rem" }}><span style={{ backgroundColor: metric.color, borderRadius: "999px", height: "7px", width: "7px" }} />{metric.label}</span>)}
@@ -1509,8 +1511,8 @@ const STOCK_COUNTRY_NAMES = Object.values(COUNTRY_NAMES);
 
 const RANKING_ROWS_FIRST = 25;
 
-const formatRankingValue = (metric, value) => {
-    if (metric.stat) return formatCustomStatValue(metric.stat, value);
+const formatRankingValue = (metric, value, displayCurrency) => {
+    if (metric.stat) return formatCustomStatValue(metric.stat, value, { economicDisplayCurrency: displayCurrency });
     if (metric.kind === "money") return formatDollarTotal(value);
     if (metric.kind === "money each") return formatDollarPerCapita(value);
     if (metric.kind === "index") return String(Math.round(value));
@@ -1518,7 +1520,7 @@ const formatRankingValue = (metric, value) => {
     return formatCompactNumber(value);
 };
 
-const RankingSection = ({ world, definition, index, playerCode, targetCountry, onPick, flags, touch }) => {
+const RankingSection = ({ world, definition, index, playerCode, targetCountry, onPick, flags, touch, displayCurrency }) => {
     const [metricKey, setMetricKey] = useState("");
     const [showAll, setShowAll] = useState(false);
     const metrics = useMemo(
@@ -1615,7 +1617,7 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
                                 {flagUrl ? <img alt="" src={bundledFlagUrl(flagUrl)} style={{ display: "block", height: "100%", objectFit: "contain", width: "100%" }} /> : null}
                             </span>
                             <span data-no-translate className="oh-country-ranking-name">{row.label}</span>
-                            <span data-no-translate className="oh-country-ranking-value">{formatRankingValue(metric, row.value)}</span>
+                            <span data-no-translate className="oh-country-ranking-value">{formatRankingValue(metric, row.value, displayCurrency)}</span>
                         </button>
                     );
                 })}
@@ -1644,6 +1646,7 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
 // Stats button); `onConsumeTarget` is called once it has been taken.
 const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }) => {
     const { activeGameId, runtimeScenario, token: libraryToken } = useLibraryState();
+    const displayCurrency = useSyncExternalStore(subscribeEconomicDisplayCurrency, getActiveEconomicDisplayCurrency);
     const [player, setPlayer] = useState({ code: "", date: "", startDate: "", round: 0, gameKey: "game" });
     const [targetCountry, setTargetCountry] = useState("");
     // A requested polity that arrived before the game was read: the first
@@ -1776,6 +1779,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
 
         const applyGame = (game) => {
             if (cancelled || !game) return;
+            setActiveEconomicDisplayCurrency(game.economicDisplayCurrency);
             const code = String(game?.country || "").trim();
             const requested = requestedTargetRef.current;
             requestedTargetRef.current = "";
@@ -2544,6 +2548,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                     onPick={setTargetCountry}
                     flags={customFlags}
                     touch={touch}
+                    displayCurrency={displayCurrency}
                 />
             )}
 
@@ -2562,6 +2567,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                     definition={statSheetDefinition}
                     sheet={sheet}
                     hiddenKeys={intelligence !== null ? LIVE_INTELLIGENCE_STAT_KEYS : []}
+                    displayCurrency={displayCurrency}
                     />
                     </>
                 ) : (
@@ -2611,7 +2617,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 <EconomyCard
                 label="GDP"
                 value={formatDollarTotal(sheet.economy?.gdp)}
-                sub={`Growth ${formatPercent(sheet.economy?.gdpGrowth, { signed: true })} · 2026-USD eq.`}
+                sub={`Growth ${formatPercent(sheet.economy?.gdpGrowth, { signed: true })} · ${economicDisplayUnitLabel(displayCurrency)}`}
                 tone="#34d399"
                 />
                 <EconomyCard
@@ -2632,7 +2638,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 </div>
                 {sheet.economy?.currency && (
                     <div style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.66rem", marginTop: "0.45rem" }}>
-                    Domestic currency: <span data-no-translate>{sheet.economy.currency}</span> · GDP accounting shown in 2026-USD-equivalent values.
+                    Domestic currency: <span data-no-translate>{sheet.economy.currency}</span> · GDP display: {economicDisplayUnitLabel(displayCurrency)}. Canonical calculations remain in USD.
                     </div>
                 )}
 
@@ -2707,6 +2713,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             persistentCount={historyState.persistentCount}
             indexRows={indexRows}
             statSheetDefinition={statSheetDefinition}
+            displayCurrency={displayCurrency}
             />
         )}
         </div>

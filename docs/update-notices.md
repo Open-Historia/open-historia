@@ -33,6 +33,21 @@ Do **not** write one for refactors, tests, CI, documentation, build or training 
 - **The entry follows its feature.** It goes on the branch where the change lands. When a feature is promoted to another branch (alpha, then beta, then main), its entry goes with it. Promote only the lines for what was promoted.
 - **The date** is the day the change reaches players on that branch (`YYYY-MM-DD`).
 
+## Coordinating one Beta release across multiple PRs
+
+When two or more PRs are deliberately shipped in **one Beta build**, prepare **one player-facing update entry for the combined release**, rather than making one announcement per PR. Place that entry in the integration/last-to-merge PR, after reviewing the actual scope of *every* contributing PR. Do not claim that a feature is in the release merely because a PR exists or the local preview works; verify that the published build includes all corresponding commits. Do not publish an incomplete combined notice if only one PR reaches players.
+
+**Git branch caution:** If PR A is already open from a branch and PR B's changes are still uncommitted on that **same branch**, pushing B there silently expands PR A; it does **not** create a second independent PR. Preserve the dirty worktree and its checkpoint, merge A first, and prepare B on a separate branch based on the post-merge Beta source (or use an explicitly reviewed stacked-PR sequence). Both can still reach the same release build. Never reset, stash, rebase, cherry-pick, commit or push a user's branch as an automatic workaround.
+
+- **Choose the kind by player impact, not PR count.** Several bug fixes and smaller settings can share one `minor` entry. A genuine new headline system or substantial experience rework warrants `major` and its own themed banner(s).
+- **Set a release-specific id and date.** Reserve a fresh permanent id; set `date` to the intended Beta delivery day before building. If the release slips, adjust the date before publication. Never rename, remove, re-date or repurpose an entry that devices may already have seen.
+- **Write what's shipped, not what's proposed.** Keep 3–6 concise player-facing lines for a minor batch. Mention actions players can take and visible fixes, not PR numbers, internal ownership, build commands or unverified consequences. Preserve earlier shipped entries instead of rewriting history when a later feature supersedes one.
+- **Run the notice gate with the same code as the release.** Test `?updateNotice=<id>`, the logo-opened Update History timeline, narrow-screen layout and Reduce motion; verify the English catalog and notice tests, then run the complete repository tests and production build.
+- **Verify publication separately.** Confirm both PRs merged, compare the Beta branch SHA against the GitHub Actions workflow `headSha`, and verify the actual desktop-beta installer/update feeds and all target platform jobs. A merged PR, green test job or local localhost preview alone is **not** a published release.
+- **Coordinate outward messaging.** Once the player-distributed build is verified, the in-game notice is the enduring changelog; Discord's `#updates` message summarizes the same user-facing changes and links the verified build. A version-jump **stable** release instead gets its separate `notesReleases.js` chapter-based announcement, referencing the included update ids.
+
+The notice entry belongs on the feature branch and ships with source. It is not a separate website announcement deployed afterward. The website browser demo suppresses automatic notices, but explicit preview URLs still work; desktop/Android clients show them once per device when owed. Check `updateNotices.js` before changing any of this delivery behavior.
+
 ## How to write one
 
 ### 1. Add the entry at the top of `NEW_UPDATES` in `notes.js`
