@@ -3108,6 +3108,10 @@ const SettingsWorkspace = ({
                         <div style={helperStyle}>Empty uses the font the scenario author chose. Any font installed on this computer works; overrides apply immediately.</div>
                     </div>
                     <Toggle label="Hide country labels" enabled={mapSettings.hideCountryLabels} onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)} />
+                    <Toggle label="Solid political colours" enabled={mapSettings.solidPoliticalFill} onToggle={() => updateMapSetting("solidPoliticalFill", MAP_SETTING_KEYS.solidPoliticalFill, !mapSettings.solidPoliticalFill)} />
+                    <div style={settingsHelper}>
+                    Off (default): countries are tinted over the terrain, lighter the further out you zoom. On: countries are painted almost solid at every zoom, like a flat political map, so a scenario's colours show as its author picked them. Takes effect the next time the game opens.
+                    </div>
                     <Toggle label="Seasons and weather" enabled={mapSettings.seasonsWeather} onToggle={() => updateMapSetting("seasonsWeather", MAP_SETTING_KEYS.seasonsWeather, !mapSettings.seasonsWeather)} />
                     <div style={settingsHelper}>
                     On (default): the map is tinted by the season and shows its weather. Frozen water is drawn as ice either way.
@@ -3381,6 +3385,7 @@ const SettingsMenu = ({
 
     const [mapSettings, setMapSettingsState] = useState(() => ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
+        solidPoliticalFill: getMapSetting(MAP_SETTING_KEYS.solidPoliticalFill),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
         // Off by default, so getMapSetting: an absent key reads as off.

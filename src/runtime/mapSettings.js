@@ -34,6 +34,11 @@ export const MAP_SETTING_KEYS = {
     // browser, like the default basemap.
     scenarioTerrain: "map_scenario_terrain",
     hideCountryLabels: "map_hide_country_labels",
+    // Countries painted almost opaque at every zoom, as a flat political map,
+    // instead of tinted over the terrain (Map/vnext/presentationPolicy.js
+    // POLITICAL_FILL_OPACITY_STOPS, which reads this key once as the game
+    // loads). OFF by default — read with getMapSetting. Settings → Map.
+    solidPoliticalFill: "map_solid_political_fill",
     disableIdleRotation: "map_disable_idle_rotation",
     disableEventCamera: "map_disable_event_camera",
     // Not a map setting, but the same localStorage-toggle mechanism: when ON,
@@ -195,6 +200,7 @@ export const vaultDoorAlways = () => {
 // forgets to add a name still logs its key rather than nothing.
 const SETTING_LABELS = {
     [MAP_SETTING_KEYS.hideCountryLabels]: "Hide country labels",
+    [MAP_SETTING_KEYS.solidPoliticalFill]: "Solid political colours",
     [MAP_SETTING_KEYS.disableIdleRotation]: "Disable idle globe rotation",
     [MAP_SETTING_KEYS.disableEventCamera]: "Disable camera movement during events",
     [MAP_SETTING_KEYS.limitAiGeneration]: "Limit AI generation",
