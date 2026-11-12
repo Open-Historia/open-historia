@@ -329,3 +329,21 @@ test("final-attempt salvage strips only quiet deferred bookkeeping", () => {
   assert.deepEqual(salvage.strippedIds, ["storyline-deferred-quiet-test"]);
   assert.deepEqual(decodeWorldStorylineUpdates(candidate.storylineUpdates).map((entry) => entry.id), ["storyline-selected-test"]);
 });
+
+// A player's turn, 2026-11-12 (1989, Poland, a small model writing Russian): every record came back as
+// "id~status~pressure~momentum~~state" and the first state was short, with no full stop, so the recovery did not
+// take it for prose and the whole skip fell back over "record 1 must describe the process state".
+test("a record cut to id~status~pressure~momentum~~state keeps its state, however short", () => {
+  const [short, quiet] = decodeWorldStorylineUpdates([
+    "afghan-war~active~72~62~~Вывод советских войск завершается; Кабул отверг коалицию, Пешавар снабжает моджахедов",
+    "karabakh~active~60~60~~Без новых событий за неделю",
+  ].join("\n"));
+  assert.equal(short.state, "Вывод советских войск завершается; Кабул отверг коалицию, Пешавар снабжает моджахедов");
+  assert.equal(short.kind || "", "");
+  assert.equal(quiet.state, "Без новых событий за неделю");
+});
+
+test("a record that stops at a one- or two-word kind is not read as a state", () => {
+  const [record] = decodeWorldStorylineUpdates("border-row~active~40~30~1989-01-02~border crisis");
+  assert.equal(record.state || "", "");
+});
