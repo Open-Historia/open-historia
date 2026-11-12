@@ -66,7 +66,7 @@ const Badge = ({ gameDate }) => {
             {tally.open.length > 1 && <span style={faint}>Calls open: {tally.open.length}</span>}
             <span style={faint}>Calls this turn: {tally.sinceTurn}</span>
             {tally.unansweredSinceTurn > 0 && <span style={faint}>Unanswered: {tally.unansweredSinceTurn}</span>}
-            {!busy && tally.lastTurn && <span style={faint}>Calls last turn: {tally.lastTurn.calls}</span>}
+            {!busy && tally.lastTurn?.calls > 0 && <span style={faint}>Calls last turn: {tally.lastTurn.calls}</span>}
             {last && <span style={faint}>Last call</span>}
             {last && <span style={{ ...faint, ...clip }}>{taskLabel(last.taskKey)}</span>}
             {last && <span style={faint} data-no-translate>{formatElapsedClock(last.ms)}</span>}
