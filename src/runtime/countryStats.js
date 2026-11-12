@@ -1,3 +1,4 @@
+import { normalizeStatProvenance, statNumericValues, mergeStatProvenance, packStatProvenance } from "../../server/statProvenance.js";
 import { astronomicalYear, compareGameDates, isGameDate, parseGameDate } from "./gameDates.js";
 import { STATS_BACKEND_FIELD, statsBackendPatch } from "./statsBackend.js";
 import { normalizeMilitaryStats } from "./militaryStats.js";
@@ -444,6 +445,8 @@ export const normalizeCountryStatSheet = (value, { indexKeys: expectedIndexKeys 
 
   const customStats = normalizeCustomCountryStats(value.customStats);
   if (customStats) out.customStats = customStats;
+  const statProvenance = normalizeStatProvenance(value.statProvenance);
+  if (statProvenance) out.statProvenance = statProvenance;
 
   const indexKeys = normalizeIndexKeys(value.indexKeys);
   const indices = normalizeCountryStatIndices(value.indices, { allowedKeys: normalizeIndexKeys(expectedIndexKeys) || indexKeys || INDEX_KEYS });
@@ -500,6 +503,8 @@ export const finalizeCountryStatSheet = (value, { indexKeys: expectedIndexKeys }
 
   const customStats = normalizeCustomCountryStats(value.customStats);
   if (customStats) out.customStats = customStats;
+  const statProvenance = normalizeStatProvenance(value.statProvenance);
+  if (statProvenance) out.statProvenance = statProvenance;
 
   const indexKeys = normalizeIndexKeys(value.indexKeys);
   const indices = normalizeCountryStatIndices(value.indices, { allowedKeys: normalizeIndexKeys(expectedIndexKeys) || indexKeys || INDEX_KEYS });
@@ -554,6 +559,9 @@ export const finalizeCountryStatSheet = (value, { indexKeys: expectedIndexKeys }
         : 0;
   }
 
+  const boundProvenance = normalizeStatProvenance(out.statProvenance, statNumericValues(out));
+  if (boundProvenance) out.statProvenance = boundProvenance;
+  else delete out.statProvenance;
   return out;
 };
 
@@ -956,7 +964,7 @@ const mergeComponentsByGeography = (base, patch) => {
 export const mergeCountryStatPatch = (
   baseValue,
   patchValue,
-  { replaceComponents = false, continuity = null, maxAggregateRescale = 0 } = {},
+  { replaceComponents = false, continuity = null, maxAggregateRescale = 0, origin = null } = {},
 ) => {
   const base = normalizeCountryStatSheet(baseValue) || {};
   const written = patchValue && typeof patchValue === "object" && !Array.isArray(patchValue)
@@ -1132,7 +1140,11 @@ export const mergeCountryStatPatch = (
     merged.territorialComponents = components;
   }
 
-  return finalizeCountryStatSheet(merged);
+  const result = finalizeCountryStatSheet(merged);
+  const statProvenance = mergeStatProvenance(base, patch, result, origin);
+  if (statProvenance) result.statProvenance = statProvenance;
+  else delete result.statProvenance;
+  return result;
 };
 
 // ---------------------------------------------------------------------------
@@ -1204,8 +1216,16 @@ export const normalizeCountryStatHistorySample = (value) => {
   for (const key of HISTORY_BREAKDOWN_KEYS) copyNumber(key);
   const customStats = normalizeCustomCountryStats(value.customStats);
   if (customStats) out.customStats = customStats;
+  const historyValues = statNumericValues({
+    stability: out.stability, indices: { ...Object.fromEntries(HISTORY_INDEX_KEYS.map((key) => [key, out[key]])), ...out.indices }, customStats: out.customStats,
+    population: { total: out.population, coreIntegrated: out.corePopulation, otherTerritories: out.otherPopulation },
+    economy: Object.fromEntries(HISTORY_ECONOMY_KEYS.map((key) => [key, out[key]])),
+    gdpBreakdown: Object.fromEntries(HISTORY_BREAKDOWN_KEYS.map((key) => [key, out[key]])),
+  });
+  const statProvenance = packStatProvenance(value.statProvenance, historyValues);
+  if (statProvenance) out.statProvenance = statProvenance;
 
-  return Object.keys(out).length > 3 ? out : null;
+  return Object.keys(historyValues).length ? out : null;
 };
 
 export const buildCountryStatHistorySample = (sheetInput, { date = "", round = 0 } = {}) => {
@@ -1240,6 +1260,7 @@ export const buildCountryStatHistorySample = (sheetInput, { date = "", round = 0
     industry: sheet.gdpBreakdown?.industry,
     services: sheet.gdpBreakdown?.services,
     customStats: sheet.customStats,
+    statProvenance: sheet.statProvenance,
   });
 };
 
@@ -1531,6 +1552,8 @@ export const describeCountryStatsForAdvisor = (value, { name = "", definition = 
   const sheet = finalizeCountryStatSheet(value);
   if (!sheet || typeof sheet !== "object") return "";
   const lines = [];
+  const origins = normalizeStatProvenance(sheet.statProvenance, statNumericValues(sheet));
+  if (origins) lines.push(`Recorded statistic origins (writer attribution, NOT historical verification): ${JSON.stringify(origins)}. Unlisted values have unspecified sources; calculated figures may use estimates.`);
   const identity = [
     sheet.government ? `government ${sheet.government}` : "",
     sheet.leader ? `leader ${sheet.leader}` : "",

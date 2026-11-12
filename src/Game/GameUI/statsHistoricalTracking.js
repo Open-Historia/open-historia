@@ -152,14 +152,14 @@ export const historySamplesInRange = (samples, range = "all") => {
 };
 
 // A missing observation is not zero, in cards, chart paths, or trend summaries.
-export const historyMetricValue = (sample, key) =>
-  readCustomStatNumber(sample?.[key] ?? sample?.indices?.[key] ?? sample?.customStats?.[key]);
+export const historyMetricValue = (sample, key, { custom = false } = {}) =>
+  readCustomStatNumber(custom ? sample?.customStats?.[key] : sample?.[key] ?? sample?.indices?.[key] ?? sample?.customStats?.[key]);
 
-export const historyMetricPath = (samples, key, xFor, yFor) => {
+export const historyMetricPath = (samples, key, xFor, yFor, options = {}) => {
   let path = "";
   let started = false;
   for (const sample of samples) {
-    const value = historyMetricValue(sample, key);
+    const value = historyMetricValue(sample, key, options);
     if (value === null) {
       started = false;
       continue;
@@ -170,8 +170,8 @@ export const historyMetricPath = (samples, key, xFor, yFor) => {
   return path.trim();
 };
 
-export const historyMetricChange = (samples, key) => {
-  const values = samples.map((sample) => historyMetricValue(sample, key)).filter((value) => value !== null);
+export const historyMetricChange = (samples, key, options = {}) => {
+  const values = samples.map((sample) => historyMetricValue(sample, key, options)).filter((value) => value !== null);
   const end = values.length ? values.at(-1) : null;
   return { end, delta: values.length >= 2 ? end - values[0] : null };
 };

@@ -483,3 +483,25 @@ test("an optional file the game does not have stays out of the bundle, so the sc
   }
   assert.deepEqual(result.flags, { Testland: "data:image/png;base64,AAAA" }, "the imported game reads the scenario's flags");
 });
+
+test("statistic origins seed only new games and travel through clone and export/import", () => {
+  const root = buildDataDir({ scenarioId: "hand-drawn" });
+  const actual = runStore(root, `
+    store.updateScenario("hand-drawn", {
+      world: { polityOverrides: { Testland: { name: "Testland" } }, countryStats: { Testland: { customStats: { silver: 0 }, population: { total: 1000 } } } },
+      game: { country: "Testland", gameDate: "1200-01-01", startDate: "1200-01-01", round: 0 }
+    });
+    const created = store.createGame({ scenarioId: "hand-drawn", id: "with-origins" });
+    const seeded = created.data.world.countryStats.Testland;
+    const clone = store.createGame({ seedGameId: created.game.id, id: "origin-copy" });
+    const bundle = store.exportGameBundle(created.game.id);
+    const imported = store.importGameBundle(bundle);
+    const scenario = store.getScenarioDetails("hand-drawn");
+    ${report(`({ seeded, clone: clone.data.world.countryStats.Testland, imported: imported.data.world.countryStats.Testland, scenario: scenario.data.world.countryStats.Testland })`)}
+  `);
+  assert.equal(actual.seeded.statProvenance["customStats.silver"].source, "scenario");
+  assert.equal(actual.seeded.statProvenance["population.total"].date, "1200-01-01");
+  assert.deepEqual(actual.clone, actual.seeded);
+  assert.deepEqual(actual.imported, actual.seeded);
+  assert.equal(actual.scenario.statProvenance, undefined);
+});

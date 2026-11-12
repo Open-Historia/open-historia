@@ -536,7 +536,7 @@ export const citiesFollowCountries = async ({ world = {}, baseWorld = null, game
 // country with no sheet of statistics has no population to take them from and
 // is left as it is. The same world when the run charged nobody.
 //   patch   (world, name, { population: { total } }) => writes it (gameState.js applyCountryStatPatchToWorld)
-export const withFrontManpower = (world, fronts, patch) => {
+export const withFrontManpower = (world, fronts, patch, { date, round } = {}) => {
   const ledger = asArray(fronts?.manpower).filter((entry) => clean(entry?.name) && (Number(entry.drawn) > 0 || Number(entry.returned) > 0));
   if (ledger.length === 0 || typeof patch !== "function" || !world || typeof world.countryStats !== "object" || !world.countryStats) return world;
   const next = { ...world, countryStats: { ...world.countryStats } };
@@ -548,7 +548,7 @@ export const withFrontManpower = (world, fronts, patch) => {
     if (!key || !(total > 0)) continue;
     const after = Math.max(1, Math.round(total - (Number(entry.drawn) || 0) + (Number(entry.returned) || 0)));
     if (after === total) continue;
-    patch(next, key, { population: { total: after } });
+    patch(next, key, { population: { total: after } }, { origin: { source: "calculated", date, round } });
     changed = true;
   }
   return changed ? next : world;
@@ -561,7 +561,7 @@ export const withFrontManpower = (world, fronts, patch) => {
 // with neither on its sheet has none to take it from and is left as it is. The
 // same world when nobody was blockaded.
 //   patch   (world, name, { economy: { gdp, budgetBalance } }) => writes it (gameState.js applyCountryStatPatchToWorld)
-export const withBlockadeEconomy = (world, fronts, patch) => {
+export const withBlockadeEconomy = (world, fronts, patch, { date, round } = {}) => {
   const days = Number(fronts?.sea?.days);
   const laid = asArray(fronts?.sea?.blockades).filter((entry) => clean(entry?.country) && Number(entry.pressure) > 0);
   if (laid.length === 0 || !(days > 0) || typeof patch !== "function" || !world || typeof world.countryStats !== "object" || !world.countryStats) return world;
@@ -582,7 +582,7 @@ export const withBlockadeEconomy = (world, fronts, patch) => {
       ...(balanceAfter !== null && balanceAfter < balance ? { budgetBalance: balanceAfter } : {}),
     };
     if (Object.keys(write).length === 0) continue;
-    patch(next, key, { economy: write });
+    patch(next, key, { economy: write }, { origin: { source: "calculated", date, round } });
     changed = true;
   }
   return changed ? next : world;
@@ -614,13 +614,13 @@ export const withAirStrikes = (world, fronts, { round = 0, date = "", patch = nu
     const sheet = key ? next.countryStats[key] : null;
     if (!sheet) continue;
     const total = Number(sheet.population?.total);
-    if (strike.dead > 0 && total > 0) patch(next, key, { population: { total: Math.max(1, Math.round(total - strike.dead)) } });
+    if (strike.dead > 0 && total > 0) patch(next, key, { population: { total: Math.max(1, Math.round(total - strike.dead)) } }, { origin: { source: "calculated", date, round } });
     const economy = next.countryStats[key]?.economy;
     const gdp = Number(economy?.gdp);
     if (gdp > 0) {
       const after = Math.max(1, Math.round(gdp * (1 - (AIR_CITY_GDP * Math.min(100, strike.power)) / 100)));
       const head = Number(economy.gdpPerCapita);
-      if (after < gdp) patch(next, key, { economy: { gdp: after, ...(head > 0 ? { gdpPerCapita: Math.round(((head * after) / gdp) * 100) / 100 } : {}) } });
+      if (after < gdp) patch(next, key, { economy: { gdp: after, ...(head > 0 ? { gdpPerCapita: Math.round(((head * after) / gdp) * 100) / 100 } : {}) } }, { origin: { source: "calculated", date, round } });
     }
   }
   return next;

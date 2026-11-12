@@ -1,3 +1,4 @@
+import { recordExternalStatOrigin } from "../../server/statProvenance.js";
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { normalizePromptReference, normalizePromptSnapshot } from "./promptSnapshot.js";
 import { normalizeCanonFacts, normalizeHistoryEras, normalizeHistoryYears } from "./historyTiers.js";
@@ -5900,7 +5901,9 @@ const applyPolityAndTerritoryImpacts = ({
     // (which defaults `intelligence` to {}) — saves predating espionage.
     if (Number.isFinite(change.intelligence)) {
       if (!world.intelligence || typeof world.intelligence !== "object") world.intelligence = {};
+      const previousIntelligence = world.intelligence[code];
       world.intelligence[code] = change.intelligence;
+      if (previousIntelligence !== change.intelligence) recordExternalStatOrigin(world, code, change.intelligence, { source: "ai", date: eventDate });
     }
 
     // How it makes war, moved this turn (a purge, a rearmament, a fleet lost:
@@ -5908,7 +5911,7 @@ const applyPolityAndTerritoryImpacts = ({
     // the figures the scenario's author gave it.
     if (change.military) {
       const military = shiftedMilitary(world, code, change.military);
-      if (military) applyCountryStatPatchToWorld(world, code, { military });
+      if (military) applyCountryStatPatchToWorld(world, code, { military }, { origin: { source: "ai", date: eventDate } });
     }
 
     // Reputation the AI set this turn becomes the polity's authoritative value.
@@ -5920,7 +5923,7 @@ const applyPolityAndTerritoryImpacts = ({
       if (Object.prototype.hasOwnProperty.call(world.countryStats?.[code]?.indices ?? {}, "internationalReputation")) {
         applyCountryStatPatchToWorld(world, code, {
           indices: { internationalReputation: change.reputation },
-        });
+        }, { origin: { source: "ai", date: eventDate } });
       }
     }
 
@@ -5931,6 +5934,7 @@ const applyPolityAndTerritoryImpacts = ({
     // into the authoritative store.
     if (change.stats && typeof change.stats === "object") {
       const merged = applyCountryStatPatchToWorld(world, code, change.stats, {
+        origin: { source: "ai", date: eventDate },
         continuity: eventId ? { accountedEventIds: [eventId] } : null,
         maxAggregateRescale: COUNTRY_STATS_EVENT_RESCALE_LIMIT,
       });

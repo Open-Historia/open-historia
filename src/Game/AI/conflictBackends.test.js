@@ -120,7 +120,7 @@ test("in a scenario with a sheet of its own the one request writes both layers: 
   const turn = read("gameplay.js");
   assert.ok(turn.includes("sheet: definition.custom ? { description: describeStatSheetDefinition(definition), keys } : null,"));
   assert.ok(turn.includes("const values = definition.custom && customStats && !ownSheet(latest, name) ? normalizeCustomStatValues(customStats, definition) : null;"));
-  assert.ok(turn.includes("applyCountryStatPatchToWorld(latest, key, { ...(whole ? { customStats: values } : {}), ...statsBackendPatch(backend), ...rated }, whole"));
+  assert.ok(turn.includes("applyCountryStatPatchToWorld(latest, key, { ...(whole ? { customStats: values } : {}), ...statsBackendPatch(backend), ...rated }, {"));
 });
 
 test("weighing countries' military figures, the same request rates those of a country that has none, and they are kept on its sheet", () => {

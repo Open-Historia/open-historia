@@ -1,3 +1,4 @@
+import { seedScenarioStatProvenance } from "./statProvenance.js";
 /*! Open Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import fs from "fs";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "./gameFeatures.js";
@@ -2424,6 +2425,13 @@ const createGame = ({
       canonicalizeGameCountry(gamePatch, readJsonFile(getGameJsonPath(resolvedGameId, "world"), JSON_ASSET_DEFAULTS.world)),
       JSON_ASSET_DEFAULTS.game,
     );
+  }
+
+  if (!cloning) {
+    const worldPath = getGameJsonPath(resolvedGameId, "world");
+    writeJsonFile(worldPath, seedScenarioStatProvenance(
+      readJsonFile(worldPath, {}), readJsonFile(getGameJsonPath(resolvedGameId, "game"), {}),
+    ));
   }
 
   const createdAt = new Date().toISOString();
