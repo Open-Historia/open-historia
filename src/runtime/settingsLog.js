@@ -195,6 +195,7 @@ registerSettingsSnapshot("AI requests", () => {
         ["Background requests a day, at most", String(day.backgroundCap)],
         // Outside that cap while on (requestBudget.js UNCAPPED_BACKGROUND_TASKS).
         ["Countries write to me between time skips", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy))],
+        ["Assess a country when I open it", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.assessOnOpen))],
         ["Used today", `${day.noLimit ? day.used : `${day.used} of ${day.limit}`} (background ${day.background}, refused by rate limit ${day.refused}, failed ${day.failed})`],
         ["Used today, by task", tasks || "nothing yet"],
         ["Last time skip", day.lastJump ? `${day.lastJump.used} request(s)${day.lastJump.refused ? `, ${day.lastJump.refused} refused` : ""}` : "none yet"],

@@ -86,6 +86,15 @@ export const MAP_SETTING_KEYS = {
     // background daily cap (AI/requestBudget.js UNCAPPED_BACKGROUND_TASKS).
     // Settings → AI → AI requests.
     idleDiplomacy: "ai_idle_diplomacy",
+    // Opening a country's pane on Politics or Diplomacy asks, in the
+    // background and once a country, for its stat sheet and a first reading of
+    // its intelligence service (GameUI/stats.jsx, AI/gameplay.js
+    // ensureCountryAssessed). ON by default — read with
+    // getMapSettingDefaultOn. Off, looking at a country asks nothing; its sheet
+    // is still written when the player opens the tab that shows it, and when
+    // the game needs it (a conflict with the player, espionage).
+    // Settings → AI → AI requests.
+    assessOnOpen: "ai_assess_country_on_open",
     // A skip whose player events were refused, or whose player orders got no
     // outcome, is held for the player to retry (AI/playerTurnFailures.js). OFF
     // by default: the skip lands and the orders carry over as overdue.
@@ -203,6 +212,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.lookupFunctions]: "AI lookup functions",
     [MAP_SETTING_KEYS.liveSkipEvents]: "Show time skip events as they are written",
     [MAP_SETTING_KEYS.idleDiplomacy]: "Countries write to me between time skips",
+    [MAP_SETTING_KEYS.assessOnOpen]: "Assess a country when I open it",
     [MAP_SETTING_KEYS.stopOnPlayerFailures]: "Stop when my events fail",
     [MAP_SETTING_KEYS.discordPresence]: "Show what I am playing on Discord",
     [MAP_SETTING_KEYS.ambientMusic]: "Music",
