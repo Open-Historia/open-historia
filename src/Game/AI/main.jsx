@@ -125,7 +125,8 @@ import {
 } from "./toolTurns.js";
 import { GROUP_LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
 import { audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
-import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSettingDefaultOn, getMapSettingValue } from "../../runtime/mapSettings.js";
+import { requestAttemptsFrom } from "./requestAttempts.js";
 import {
     buildPromptContext,
     formatDateReadable,
@@ -3127,11 +3128,16 @@ export async function callAI(systemPrompt, history, opts = {}) {
                     // Open from here until this round's answer is in or has
                     // failed: one request, or several when the provider path
                     // asks again (it says so with onSend).
-                    const live = showsActivity ? requestActivity.open({ label: `${label} → ${entry.label}` }) : null;
+                    // How many times this request is tried is the player's
+                    // (Settings → AI → Attempts per request); a caller that named
+                    // its own count keeps it.
+                    const attempts = providerOpts.retries ?? requestAttemptsFrom(getMapSettingValue(MAP_SETTING_KEYS.requestAttempts));
+                    const live = showsActivity ? requestActivity.open({ label: `${label} → ${entry.label}`, attempts }) : null;
                     endedUnmarked = false;
                     return dispatchToProvider(entry.provider, systemPrompt, roundHistory, {
                         ...providerOpts,
                         ...roundOpts,
+                        retries: attempts,
                         onChunk,
                         entrySettings: entry,
                         canFallBack,

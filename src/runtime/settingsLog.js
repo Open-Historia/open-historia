@@ -172,6 +172,7 @@ registerSettingsSnapshot("AI", () => {
     items.push(
         ["Model reasoning", onOff(getReasoningEnabled())],
         ["Limit AI generation", onOff(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration))],
+        ["Attempts per request", getMapSettingValue(MAP_SETTING_KEYS.requestAttempts) || "3 (default)"],
         ["Generate long time skips in segments", onOff(getMapSetting(MAP_SETTING_KEYS.chunkLongJumps))],
         ["AI lookup functions", lookupFunctionsState()],
         ["Show time skip events as they are written", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents))],
