@@ -92,9 +92,32 @@ test("the file on disk is hashed as electron-updater hashes it, and its stale bl
   assert.ok(!fs.existsSync(`${installer}.blockmap`));
 });
 
+// The beta is not signed: its product name is "Open Historia Beta", and SignPath
+// Foundation signs only files that carry the project's name.
+test("the beta workflow sends nothing to SignPath", () => {
+  const text = read(".github/workflows/desktop-beta.yml");
+  assert.doesNotMatch(text.replace(/^ *#.*\n/gm, ""), /SIGNPATH|signpath|--prepackaged|refresh-update-feed/);
+  assert.match(read("electron-builder.beta.yml"), /^productName: Open Historia Beta$/m);
+});
+
+test("every signed file says product Open Historia and the build's version, checked before SignPath sees it", () => {
+  const text = read(".github/workflows/desktop-installer.yml");
+  // One version everywhere: the program's product version is written back to the installer's 0.0.N (not 0.0.N.0).
+  assert.match(text, /node scripts\/set-product-version\.mjs --version "\$APP_VERSION" "release\/win-unpacked\/Open Historia\.exe"/);
+  assert.ok(text.indexOf("- name: Write the program's product version as the build's") < text.indexOf("- name: Check the programs' product name and version"));
+  assert.match(text, /echo "APP_VERSION=0\.0\.\$\{\{ github\.run_number \}\}" >> "\$GITHUB_ENV"/);
+  assert.equal(text.match(/ {10}parameters: \|\n {12}version: "\$\{\{ env\.APP_VERSION \}\}"\n/g)?.length, 2, "both signing requests pass the version");
+  const at = (needle) => text.indexOf(needle);
+  assert.ok(at("- name: Check the programs' product name and version") < at("- name: Collect the app's programs for signing"));
+  assert.ok(at("- name: Check the installer's product name and version") < at("- name: Collect the installer for signing"));
+  assert.ok(at("- name: Stamp the app version") < at("- name: Build the system speech program"), "the speech program is built with the stamped version");
+  const check = read("scripts/check-signing-metadata.ps1");
+  assert.match(check, /\$ProductName = 'Open Historia'/);
+  assert.match(check, /\$productVersion -eq \$Version/);
+});
+
 for (const [workflow, installer, config] of [
   [".github/workflows/desktop-installer.yml", "Open-Historia-Setup.exe", ""],
-  [".github/workflows/desktop-beta.yml", "Open-Historia-Beta-Setup.exe", " --config electron-builder.beta.yml"],
 ]) {
   test(`${workflow}: signing is Windows-only, off without the owner's settings, and done before anything is hashed`, () => {
     const text = read(workflow);
@@ -148,6 +171,18 @@ test("the artifact configuration signs the app, its speech program and the insta
   assert.match(xml, /<include path="resources\/app\.asar\.unpacked\/\*\*\/\*\.exe"/);
   assert.doesNotMatch(xml, /\.dll/);
   assert.match(xml, /<authenticode-sign \/>/);
+  // SignPath Foundation: metadata set and enforced on every signed file.
+  assert.match(xml, /<parameter name="version" required="true" \/>/);
+  assert.match(xml, /<pe-file-set product-name="Open Historia" product-version="\$\{version\}">/);
+});
+
+test("the speech program carries the project's name and the app's version", async () => {
+  const { speechAssemblyInfo } = await import("../scripts/build-speech-helpers.mjs");
+  const info = speechAssemblyInfo("0.0.412");
+  assert.match(info, /\[assembly: AssemblyProduct\("Open Historia"\)\]/);
+  assert.match(info, /\[assembly: AssemblyInformationalVersion\("0\.0\.412"\)\]/);
+  assert.match(info, /\[assembly: AssemblyVersion\("0\.0\.412\.0"\)\]/);
+  assert.match(speechAssemblyInfo("2.5.0"), /AssemblyFileVersion\("2\.5\.0\.0"\)/);
 });
 
 test("the README carries the code signing policy SignPath Foundation asks for", () => {

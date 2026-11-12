@@ -35,6 +35,29 @@ const run = (command, args) => {
   return { ok: result.status === 0, output };
 };
 
+// The program's version block, as SignPath Foundation requires of everything it
+// signs (docs/code-signing.md): the product name is the project's, and the
+// product version is the app's own (package.json's, which the release workflows
+// stamp before building this), the same as the app and its installer carry.
+// AssemblyVersion must be four numbers; the product version is the string.
+export const speechAssemblyInfo = (version) => {
+  const text = String(version || "0.0.0").trim();
+  const numbers = (text.match(/^\d+(?:\.\d+){0,3}/)?.[0] ?? "0").split(".");
+  while (numbers.length < 4) numbers.push("0");
+  const quoted = JSON.stringify(text);
+  return [
+    "using System.Reflection;",
+    '[assembly: AssemblyTitle("Open Historia speech recognition")]',
+    '[assembly: AssemblyProduct("Open Historia")]',
+    `[assembly: AssemblyInformationalVersion(${quoted})]`,
+    `[assembly: AssemblyVersion("${numbers.join(".")}")]`,
+    `[assembly: AssemblyFileVersion("${numbers.join(".")}")]`,
+    "",
+  ].join("\n");
+};
+
+const appVersion = () => JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
+
 const buildWindows = () => {
   const windir = process.env.WINDIR || process.env.SystemRoot || "C:\\Windows";
   const framework = ["Framework64", "Framework"]
@@ -45,6 +68,10 @@ const buildWindows = () => {
     return { ok: false, output: "No .NET Framework C# compiler or Windows Runtime metadata on this machine." };
   }
   const out = path.join(DIR, HELPERS.win32);
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "oh-speech-"));
+  const info = path.join(work, "AssemblyInfo.cs");
+  fs.writeFileSync(info, speechAssemblyInfo(appVersion()));
+  try {
   return run(path.join(framework, "csc.exe"), [
     "/nologo",
     "/target:exe",
@@ -59,7 +86,11 @@ const buildWindows = () => {
     `/r:${path.join(metadata, "Windows.Media.winmd")}`,
     `/r:${path.join(metadata, "Windows.Globalization.winmd")}`,
     path.join(DIR, "windows.cs"),
+    info,
   ]);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
 };
 
 const buildMac = () => {
