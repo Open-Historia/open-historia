@@ -13175,6 +13175,7 @@
  "The model is writing its answer…",
  "The model may be out of context, or the endpoint may have dropped the response.",
  "The model refused a request of about {{formatTokens}} tokens. One that big is not sent to it until {{formatDate}}.",
+ "The model returned text, but no complete parseable JSON answer or tool arguments were found.",
  "The model said its window is {{formatTokens}} tokens. A request too big for it is not sent to it until {{formatDate}}.",
  "The model stopped at its output limit before it finished its answer.",
  "The model store is open elsewhere.",

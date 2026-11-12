@@ -1675,10 +1675,9 @@ const anchorStartsOnOpeners = (candidate) => {
 //    that already exist keep theirs.
 // 4. Whatever the validator still says about the remaining narrative (a title
 //    that reads like a declaration with no record behind it, a battle narrated
-//    during a ceasefire) comes back as `residual` for the caller to log and
-//    accept: the events stand as narrative, apply time drops what cannot be
-//    applied (applyWarUpdates) and the merged turn is checked again with a
-//    warning, not a rejection.
+//    during a ceasefire) comes back as `residual`. The caller MUST reject
+//    a still-invalid segment rather than publishing hard combat that has no
+//    legal canonical war binding. It must not silently accept that residual.
 export const repairWarLedgerPayload = (candidate, { world = {} } = {}) => {
   const result = { stamped: 0, anchored: 0, droppedIds: [], strippedEvents: 0, residual: "" };
   if (!candidate || typeof candidate !== "object") return result;

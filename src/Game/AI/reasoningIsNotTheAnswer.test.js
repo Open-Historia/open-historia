@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-import { REASONING_ONLY_MESSAGE, REASONING_ONLY_NOTE } from "./providerErrors.js";
+import { REASONING_ONLY_MESSAGE, REASONING_ONLY_NOTE, UNPARSEABLE_STRUCTURED_TEXT_MESSAGE } from "./providerErrors.js";
 
 // A player's log (2026-10-12): a time skip on an OpenAI-compatible endpoint
 // fell back after two requests with "$.events is required." The endpoint
@@ -53,7 +53,11 @@ test("reasoning is read only for a complete answer, and the log says when one wa
 
 test("with no answer, the player is told the model wrote only its reasoning", () => {
   assert.equal(REASONING_ONLY_MESSAGE, "The model wrote only its reasoning and no answer.");
-  assert.match(task, /reasoningOnly \|\| \(contractKeys\.length && rawText\.length > PLANNING_PROSE_CHARS\) \? REASONING_ONLY_MESSAGE/);
+  assert.match(task, /reasoningOnly \? REASONING_ONLY_MESSAGE/);
+  assert.match(task, /rawText \? UNPARSEABLE_STRUCTURED_TEXT_MESSAGE/);
+  assert.doesNotMatch(task, /PLANNING_PROSE_CHARS/);
+  assert.match(UNPARSEABLE_STRUCTURED_TEXT_MESSAGE, /text.*no complete parseable JSON/);
+  assert.doesNotMatch(UNPARSEABLE_STRUCTURED_TEXT_MESSAGE, /reasoning/i);
   // The report shows the reasoning labelled, and the retry does not send it back.
   assert.match(REASONING_ONLY_NOTE, /no answer/);
   assert.match(task, /reasoningOnly \? `\$\{REASONING_ONLY_NOTE\}\\n\$\{reasoningText\}` : ""/);
