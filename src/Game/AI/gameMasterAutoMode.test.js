@@ -48,6 +48,24 @@ test("Auto only routes to Direct when the request explicitly describes a canonic
   }), /must remain/, "manual mode is never silently overridden");
 });
 
+test("Auto permits explicit canonical intelligence and military rating corrections but not simulated military improvements", () => {
+  for (const request of [
+    "Set Latvia's intelligence service to 82.",
+    "Correct Russia's troop quality to 75.",
+    "Update France's military technology to 90.",
+    "Set Germany's naval capability to 85.",
+    "Set China's war resources to 100.",
+    "Change Ukraine's war weariness to 35.",
+    "Override Poland's manpower share to 2%.",
+  ]) assert.equal(auto("direct", request), "", request);
+  for (const request of [
+    "Set out to improve intelligence service readiness across the ministry.",
+    "Increase naval capability through a five-year procurement programme.",
+    "The war increases Ukraine's war weariness to 70.",
+    "Set the army to invade and take the capital.",
+  ]) assert.match(auto("direct", request), /cannot authorize Direct mode/, request);
+});
+
 test("Auto narrative routing cannot smuggle an administrative Stats rewrite", () => {
   const patches = [{ country: "Germany", patch: { gdp: 700000000000 } }];
   assert.match(auto("world-intervention", "A Berlin bank fails and a prolonged recession begins", patches),

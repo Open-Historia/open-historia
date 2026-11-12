@@ -79,6 +79,7 @@ import { zipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 import { SCENARIO_LICENSE_FILE, SCENARIO_LICENSE_TEXT, SCENARIO_LICENSE_URL } from "../../runtime/scenarioLicense.js";
 import { formatGameDateShort } from "../../runtime/gameDates.js";
 import { getStoredLanguage } from "../../runtime/i18n.js";
+import { ECONOMIC_DISPLAY_CURRENCIES, normalizeEconomicDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
@@ -599,6 +600,7 @@ const buildScenarioEditorState = (details) => {
     eyebrow: scenario.eyebrow ?? "",
     features: normalizeFeatureSettings(scenario.features),
     gameDate: game.gameDate ?? "",
+    economicDisplayCurrency: normalizeEconomicDisplayCurrency(game.economicDisplayCurrency),
     heroSubtitle: scenario.heroSubtitle ?? "",
     heroTitle: scenario.heroTitle ?? "",
     language: game.language ?? world.language ?? "English",
@@ -634,6 +636,7 @@ const buildGameEditorState = (details) => {
     features: normalizeFeatureOverrides(gameMeta.features),
     scenarioFeatures: normalizeFeatureSettings(details?.scenario?.features),
     gameDate: game.gameDate ?? "",
+    economicDisplayCurrency: normalizeEconomicDisplayCurrency(game.economicDisplayCurrency),
     heroSubtitle: gameMeta.heroSubtitle ?? "",
     heroTitle: gameMeta.heroTitle ?? "",
     language: game.language ?? world.language ?? "English",
@@ -2344,6 +2347,17 @@ const EditorDrawer = ({
                 <label style={fieldLabelStyle}>Language</label>
                 <input style={inputStyle} value={formState.language} onChange={(event) => onChange("language", event.target.value)} />
               </div>
+              <div>
+                <label style={fieldLabelStyle}>{kind === "scenario" ? "Default GDP display currency" : "GDP display currency"}</label>
+                <select style={inputStyle} value={formState.economicDisplayCurrency || "USD"} onChange={(event) => onChange("economicDisplayCurrency", event.target.value)}>
+                  {ECONOMIC_DISPLAY_CURRENCIES.map(({ code, name, symbol }) => (
+                    <option key={code} value={code}>{name} ({code}, {symbol})</option>
+                  ))}
+                </select>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", lineHeight: 1.4, marginTop: "0.35rem" }}>
+                  {kind === "scenario" ? "Suggested for new campaigns; players can override it." : "This campaign only."} GDP numbers remain in canonical 2026 USD.
+                </div>
+              </div>
             </div>
           </div>
           {kind === "scenario" && (
@@ -2905,7 +2919,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
 
   // Create the game from the scenario with the starting country and difficulty
   // the player chose in the two-step picker, and go straight into it.
-  const startGameForCountry = async (scenario, countryCode, difficulty) => {
+  const startGameForCountry = async (scenario, countryCode, difficulty, displayCurrency) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerColors(null); setPickerBackground(null);
     setEditorError(null);
@@ -2945,7 +2959,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // Create a game led by a player-invented faction. It is written into the game's
   // OWN world/colors/flags — a game carries its own copies and falls back to the
   // scenario only for what it doesn't set, so the scenario is never touched.
-  const startGameForFaction = async (scenario, faction, difficulty) => {
+  const startGameForFaction = async (scenario, faction, difficulty, displayCurrency) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerColors(null); setPickerBackground(null);
     setEditorError(null);
@@ -2959,7 +2973,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         // The faction's name from the first moment the game is active (the
         // opening cover reads it); the save below writes it again once the
         // faction is in the world it resolves against.
-        gamePatch: { country: faction.name, ...(difficulty ? { difficulty } : null) },
+        gamePatch: { country: faction.name, ...(difficulty ? { difficulty } : null), economicDisplayCurrency: normalizeEconomicDisplayCurrency(displayCurrency) },
         setActive: true,
       });
       gameId = details.game.id;
@@ -3016,7 +3030,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // carries everything keyed by the player (flag, colour, diplomacy, orders), the
   // group the area the map draws and what the story knows the player is. Written
   // into the game's own world, like a faction, so the scenario is never touched.
-  const startGameForGroup = async (scenario, group, difficulty) => {
+  const startGameForGroup = async (scenario, group, difficulty, displayCurrency) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerColors(null); setPickerBackground(null);
     setEditorError(null);
@@ -3028,7 +3042,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       const details = await createGame({
         name: `${name} — ${scenario.name}`,
         scenarioId: scenario.id,
-        gamePatch: { country: name, ...(difficulty ? { difficulty } : null) },
+        gamePatch: { country: name, ...(difficulty ? { difficulty } : null), economicDisplayCurrency: normalizeEconomicDisplayCurrency(displayCurrency) },
         setActive: true,
       });
       gameId = details.game.id;
@@ -3096,6 +3110,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setPickerGroups([]);
     setBypassWarning(null);
     setCountryPicker(scenario);
+    setPickerEconomicCurrency("USD");
     // A community basemap the import could not download is tried again (once a
     // session), and shown in the picker when it lands.
     retryMissingBasemap(scenario).then((retry) => {
@@ -3105,6 +3120,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       .then(([allCountries, details]) => {
         if (!isCurrent()) return;
         if (promptsBypassLimit(details?.data?.prompts)) setBypassWarning(scenario);
+        setPickerEconomicCurrency(normalizeEconomicDisplayCurrency(details?.data?.game?.economicDisplayCurrency));
         setCountryOptions(buildScenarioCountryOptions(
           details?.data?.world,
           [...getBaseCountryOptions(), ...allCountries],
@@ -3770,6 +3786,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             ...currentGame,
             country: editorState.country,
             gameDate: editorState.gameDate,
+            ...(editorState.economicDisplayCurrency !== normalizeEconomicDisplayCurrency(currentGame.economicDisplayCurrency)
+              ? { economicDisplayCurrency: editorState.economicDisplayCurrency }
+              : {}),
             language: editorState.language,
             startDate: editorState.gameDate || currentGame.startDate || "",
           },
@@ -3828,7 +3847,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         // while turns are played, and writing back the game.json and world.json
         // it loaded rolled back the date, round, borders, units and polities.
         const baseline = buildGameEditorState(editorDetails);
-        const gamePatch = changedFields(editorState, baseline, ["country", "gameDate", "language"]);
+        const gamePatch = changedFields(editorState, baseline, ["country", "gameDate", "language", "economicDisplayCurrency"]);
         const worldPatch = changedFields(editorState, baseline, [
           "labelFont",
           "labelHaloColor",
@@ -4195,6 +4214,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // Step two of the new-game dialog: the chosen country waits here while the
   // player picks a difficulty.
   const [difficultyPick, setDifficultyPick] = useState(null);
+  const [pickerEconomicCurrency, setPickerEconomicCurrency] = useState("USD");
   // Which opening of the picker its loads belong to (handleScenarioPlay).
   const [pickerRequest] = useState(createLatestRequest);
 
@@ -4203,6 +4223,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setCountryPicker(null);
     setPlayGameId(null);
     setDifficultyPick(null);
+    setPickerEconomicCurrency("USD");
     setCustomRegionData(null);
     setPickerOwnerOverrides(null);
     setPickerColors(null);
@@ -4568,18 +4589,18 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     const draft = difficultyPick;
     setDifficultyPick(null);
     if (draft?.faction) {
-      startGameForFaction(countryPicker, draft.faction, difficultyId);
+      startGameForFaction(countryPicker, draft.faction, difficultyId, pickerEconomicCurrency);
       return;
     }
     if (draft?.group) {
-      startGameForGroup(countryPicker, draft.group, difficultyId);
+      startGameForGroup(countryPicker, draft.group, difficultyId, pickerEconomicCurrency);
       return;
     }
     const countryCode = draft?.countryCode || "";
     if (playGameId) {
       choosePlayCountry(countryCode, difficultyId);
     } else {
-      startGameForCountry(countryPicker, countryCode, difficultyId);
+      startGameForCountry(countryPicker, countryCode, difficultyId, pickerEconomicCurrency);
     }
   };
 
@@ -4937,6 +4958,19 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     <div style={{ display: "flex", flexDirection: "column" }}>
                       <span data-no-translate>{difficultyPick.group.name}</span>
                       <span style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.45)", fontWeight: 400 }}>Selected Group</span>
+                    </div>
+                  </div>
+                )}
+                {!playGameId && (
+                  <div style={{ marginBottom: "0.85rem" }}>
+                    <label style={{ color: "rgba(255,255,255,0.72)", display: "block", fontSize: "0.76rem", fontWeight: 700, marginBottom: "0.35rem" }}>GDP display currency</label>
+                    <select aria-label="GDP display currency" value={pickerEconomicCurrency} onChange={(event) => setPickerEconomicCurrency(event.target.value)} style={{ ...inputStyle, width: "100%" }}>
+                      {ECONOMIC_DISPLAY_CURRENCIES.map(({ code, name, symbol }) => (
+                        <option key={code} value={code}>{name} ({code}, {symbol})</option>
+                      ))}
+                    </select>
+                    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", marginTop: "0.35rem", lineHeight: 1.4 }}>
+                      Display only · fixed 2026 reference rates. The simulation keeps USD accounting; you can change this later.
                     </div>
                   </div>
                 )}

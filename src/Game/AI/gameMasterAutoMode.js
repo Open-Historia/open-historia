@@ -20,7 +20,8 @@ const authorizesAutoDirect = (request) => {
   // not a request to re-baseline GDP. Numeric fields must name a number.
   const numeric = /\b(?:correct|fix|set|edit|update|replace|override|rebase|change)\b[^.!?;\n]{0,120}\b(?:gdp|population|statistics|stats|stability|inflation|unemployment|public debt|budget|relation score|reputation|energy autonomy|food autonomy)\b[^.!?;\n]{0,45}(?:\bto\b|=)\s*(?:[€$£]\s*)?[+-]?\d/i;
   const named = /\b(?:correct|fix|set|edit|update|replace|override|rebase|change)\b[^.!?;\n]{0,120}\b(?:leader|government|currency|country name|capital)\b[^.!?;\n]{0,45}(?:\b(?:to|as)\b|=)\s*\S/i;
-  return numeric.test(text) || named.test(text);
+  const capabilities = /\b(?:correct|fix|set|edit|update|replace|override|rebase|change)\b[^.!?;\n]{0,120}\b(?:intelligence(?: service| rating)?|troop quality|military technology|technology rating|military spending|manpower share|land capability|naval capability|air capability|war weariness|war resources|military (?:quality|land|naval|air|technology|spending))\b[^.!?;\n]{0,45}(?:\bto\b|=)\s*[+-]?\d/i;
+  return numeric.test(text) || named.test(text) || capabilities.test(text);
 };
 
 // No inferred fallback from an untrusted AI selection. A mode whose authority

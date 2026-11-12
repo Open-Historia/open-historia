@@ -1,6 +1,7 @@
 /*! Open Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import fs from "fs";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "./gameFeatures.js";
+import { assertEconomicDisplayCurrencyChoice } from "./economicDisplayCurrency.js";
 import { layOutScenarioBundle } from "./mapProjection.js";
 import path from "path";
 import url from "url";
@@ -2406,6 +2407,7 @@ const createGame = ({
 } = {}) => {
   ensureGameStore();
 
+  assertEconomicDisplayCurrencyChoice(gamePatch);
   const resolvedGameId = ensureUniqueId(id || name || "game", "game");
   const gameDir = getGameDirectory(resolvedGameId);
   // Refused before anything is on disk: a game made to be opened at once.
@@ -2547,6 +2549,8 @@ const updateScenario = (scenarioId, body = {}) => {
     world,
     worldPatch,
   } = body ?? {};
+  assertEconomicDisplayCurrencyChoice(game);
+  assertEconomicDisplayCurrencyChoice(gamePatch);
   ensureScenarioStore();
 
   if (!fs.existsSync(getScenarioDirectory(scenarioId))) {
@@ -2666,6 +2670,8 @@ const updateGame = (
     worldPatch,
   } = {},
 ) => {
+  assertEconomicDisplayCurrencyChoice(game);
+  assertEconomicDisplayCurrencyChoice(gamePatch);
   ensureGameStore();
 
   if (!fs.existsSync(getGameDirectory(gameId))) {
