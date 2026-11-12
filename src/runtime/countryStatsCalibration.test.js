@@ -63,7 +63,7 @@ const historical = (overrides = {}) => ({
   anchorCurrency: "USD",
   nominalGdpBillions: 1,
   nominalGdpPerCapita: 10,
-  rebasedGdpPerCapita2026Eur: 10000,
+  rebasedGdpPerCapita2026Usd: 10000,
   divergenceEventIds: [],
   ...overrides,
 });
@@ -135,7 +135,7 @@ test("a modern anchor may not smuggle PPP output in through the rebasing factor"
       anchorCurrency: "USD",
       nominalGdpBillions: 60,
       nominalGdpPerCapita: 6000,
-      rebasedGdpPerCapita2026Eur: rebased,
+      rebasedGdpPerCapita2026Usd: rebased,
     },
     components: ledger(6000, 10_000_000),
     eligibleEvidenceIds: [],

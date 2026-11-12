@@ -3208,8 +3208,8 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
           "Contemporaneous NOMINAL GDP per capita at anchorYear in anchorCurrency. Never use PPP/international-dollar GDP per capita.",
           { minimum: 1 },
         ),
-        rebasedGdpPerCapita2026Eur: statNumberSchema(
-          "The same nominal GDP-per-capita anchor expressed in constant 2026 EUR using monetary inflation/FX rebasing only. This is NOT PPP, purchasing power, or a productivity/living-standard adjustment.",
+        rebasedGdpPerCapita2026Usd: statNumberSchema(
+          "The same nominal GDP-per-capita anchor expressed in constant 2026 USD using monetary inflation/FX rebasing only. This is NOT PPP, purchasing power, or a productivity/living-standard adjustment.",
           { minimum: 1 },
         ),
         divergenceEventIds: {
@@ -3228,7 +3228,7 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
         "anchorCurrency",
         "nominalGdpBillions",
         "nominalGdpPerCapita",
-        "rebasedGdpPerCapita2026Eur",
+        "rebasedGdpPerCapita2026Usd",
         "divergenceEventIds",
       ],
       additionalProperties: false,
@@ -3237,7 +3237,7 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
       type: "string",
       minLength: 1,
       description:
-        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. For an explicitly NON-TERRITORIAL basis, compatibility rows may use group~geography~population~gdpPerCapita when campaign canon supports a real distributed people/organization/economy; return the literal NONE when no defensible quantitative scope exists. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-EUR accounting terms for inhabited buckets; a genuinely uninhabited bucket may use population=0 and gdpPerCapita=0. Never use PPP/international dollars.",
+        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. For an explicitly NON-TERRITORIAL basis, compatibility rows may use group~geography~population~gdpPerCapita when campaign canon supports a real distributed people/organization/economy; return the literal NONE when no defensible quantitative scope exists. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-USD accounting terms for inhabited buckets; a genuinely uninhabited bucket may use population=0 and gdpPerCapita=0. Never use PPP/international dollars.",
     },
     territorialComponentSplitText: {
       type: "string",
@@ -3379,7 +3379,7 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
           },
           population: { type: "integer", minimum: 0, description: "Current inhabitants in THIS geography only." },
           gdpPerCapita: statNumberSchema(
-            "THIS component's NOMINAL GDP per capita expressed in constant 2026-EUR accounting terms. This is not PPP/international-dollar purchasing power and does not import 2026 technology/productivity.",
+            "THIS component's NOMINAL GDP per capita expressed in constant 2026-USD accounting terms. This is not PPP/international-dollar purchasing power and does not import 2026 technology/productivity.",
             { minimum: 1 },
           ),
         },
@@ -3390,11 +3390,11 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
     economy: {
       type: "object",
       properties: {
-        gdp: statNumberSchema("Derived whole-polity NOMINAL GDP in constant 2026-EUR accounting terms.", { minimum: 1 }),
+        gdp: statNumberSchema("Derived whole-polity NOMINAL GDP in constant 2026-USD accounting terms.", { minimum: 1 }),
         gdpGrowth: statNumberSchema("Annual real GDP growth estimate in percent.", { minimum: -100, maximum: 100 }),
-        gdpPerCapita: statNumberSchema("Derived whole-polity NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
-        coreGdpPerCapita: statNumberSchema("Derived core/integrated NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
-        otherGdpPerCapita: statNumberSchema("Derived overseas/dependent NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
+        gdpPerCapita: statNumberSchema("Derived whole-polity NOMINAL GDP per capita in constant 2026-USD accounting terms.", { minimum: 1 }),
+        coreGdpPerCapita: statNumberSchema("Derived core/integrated NOMINAL GDP per capita in constant 2026-USD accounting terms.", { minimum: 1 }),
+        otherGdpPerCapita: statNumberSchema("Derived overseas/dependent NOMINAL GDP per capita in constant 2026-USD accounting terms.", { minimum: 1 }),
         currency: nonEmptyTextSchema("Current domestic currency or dominant medium of exchange."),
         inflation: statNumberSchema("Annual inflation estimate in percent; negative is deflation.", { minimum: -1000, maximum: 1000 }),
         unemployment: statNumberSchema("Unemployment estimate in percent.", { minimum: 0, maximum: 100 }),

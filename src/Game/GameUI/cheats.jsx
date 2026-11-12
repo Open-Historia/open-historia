@@ -974,7 +974,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         ? previewGdp / previewPopulation
         : baseline?.perCapita;
     const perCapitaText = Number.isFinite(previewPerCapita)
-        ? `€${Math.round(previewPerCapita).toLocaleString()}`
+        ? `$${Math.round(previewPerCapita).toLocaleString()}`
         : "—";
 
     const pairedField = (label, key, props = {}) => (
@@ -1415,7 +1415,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                                 </div>
                                 <div style={{ display: "grid", gap: "0.48rem", gridTemplateColumns: "1fr 1fr" }}>
                                     {pairedField("Population (millions) · whole polity", "populationM", { type: "number", min: "0.001", step: "0.1" })}
-                                    {pairedField("GDP (€ billions) · whole polity", "gdpB", { type: "number", min: "0.001", step: "0.1" })}
+                                    {pairedField("GDP ($ billions) · whole polity", "gdpB", { type: "number", min: "0.001", step: "0.1" })}
                                     <div style={{ minWidth: 0 }}>
                                         <label style={{ ...labelStyle, marginTop: 0 }}>GDP / capita · derived</label>
                                         <div style={{ ...inputStyle, color: "rgba(255,255,255,0.62)", cursor: "default" }}>{perCapitaText}</div>
@@ -3717,7 +3717,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     placeholder={gmMode === "auto"
                         ? 'Example: "A major Berlin bank collapses, triggering a prolonged financial panic. Let the game reflect the consequences over time."'
                         : gmMode === "direct"
-                        ? 'Example: "Germany should have a population of 72 million and GDP of €500 billion. Do not add a timeline event."'
+                        ? 'Example: "Germany should have a population of 72 million and GDP of $500 billion. Do not add a timeline event."'
                         : gmMode === "exact-event"
                             ? 'Example: "On 4 March 1927 Britain and Germany sign a naval consultation accord. Make it major and notable, create the agreement, and set relations to +45."'
                             : 'Example: "Russia enters a constitutional crisis; Finland gains broad autonomy, Polish unrest spreads, Nicholas II replaces the government, and Russia asks Germany for consultations."'}

@@ -46,8 +46,8 @@ export const DEFAULT_CUSTOM_STAT_SECTIONS = Object.freeze([
     label: "Economy",
     icon: "📈",
     stats: Object.freeze([
-      Object.freeze({ key: "gdp", label: "GDP", kind: "currency", icon: "💶", color: "#34d399", prefix: "€", compact: true, decimals: 1, minimum: 0, description: "Scenario-appropriate total economic output. Change the label/unit for eras where GDP is not meaningful." }),
-      Object.freeze({ key: "gdpPerCapita", label: "GDP/capita", kind: "currency", icon: "◫", color: "#e5e7eb", prefix: "€", compact: true, decimals: 0, minimum: 0, description: "Scenario-appropriate output or income per person. Delete or repurpose when not meaningful." }),
+      Object.freeze({ key: "gdp", label: "GDP", kind: "currency", icon: "💵", color: "#34d399", prefix: "$", compact: true, decimals: 1, minimum: 0, description: "Scenario-appropriate total economic output. Change the label/unit for eras where GDP is not meaningful." }),
+      Object.freeze({ key: "gdpPerCapita", label: "GDP/capita", kind: "currency", icon: "◫", color: "#e5e7eb", prefix: "$", compact: true, decimals: 0, minimum: 0, description: "Scenario-appropriate output or income per person. Delete or repurpose when not meaningful." }),
       Object.freeze({ key: "inflation", label: "Inflation", kind: "percentage", icon: "↗", color: "#34d399", suffix: "%", decimals: 1, minimum: 0, maximum: 1000, description: "Price inflation in percent." }),
       Object.freeze({ key: "unemployment", label: "Unemployment", kind: "percentage", icon: "♟", color: "#34d399", suffix: "%", decimals: 1, minimum: 0, maximum: 100, description: "Unemployment in percent." }),
       Object.freeze({ key: "publicDebt", label: "Public debt", kind: "percentage", icon: "▥", color: "#34d399", suffix: "%", decimals: 1, minimum: 0, maximum: 1000, description: "Public debt in the scenario's chosen percentage basis." }),

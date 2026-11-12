@@ -3796,9 +3796,9 @@ ${variables?.statsPopulationCalibrationRequested ? `
 NOMINAL ECONOMIC BASELINE CALIBRATION — NATIVE CONTROLLED:
 ${variables?.statsEconomicCalibrationRequested ? `
 - ECONOMIC CALIBRATION IS REQUIRED for this fresh baseline/hard audit. Return economicCalibration.
-- The canonical GDP ledger is NOMINAL economic output expressed in a common constant-2026-EUR accounting unit. It is NOT PPP, purchasing-power parity, international dollars, real living-standard output, or a modernization/productivity adjustment.
+- The canonical GDP ledger is NOMINAL economic output expressed in a common constant-2026-USD accounting unit. It is NOT PPP, purchasing-power parity, international dollars, real living-standard output, or a modernization/productivity adjustment.
 - Start from a historically/causally legitimate NOMINAL GDP and NOMINAL GDP/capita anchor at or before the shared-history frontier. economicCalibration.anchorCurrency must be USD or EUR and the two nominal anchor values must be contemporaneous nominal values for anchorYear.
-- economicCalibration.rebasedGdpPerCapita2026Eur is ONLY the monetary rebasing of that nominal GDP/capita into constant 2026 EUR. It may reflect ordinary inflation and USD/EUR conversion. It MUST NOT incorporate PPP or make a poorer historical country look like a 2026 rich-country economy.
+- economicCalibration.rebasedGdpPerCapita2026Usd is ONLY the monetary rebasing of that nominal GDP/capita into constant 2026 USD. It may reflect ordinary inflation and USD/EUR conversion. It MUST NOT incorporate PPP or make a poorer historical country look like a 2026 rich-country economy.
 - economicCalibration.nominalGdpBillions and nominalGdpPerCapita must describe the SAME territorial scope, and that scope must be the ENTIRE authoritative live Stats basis above - not merely the metropolitan/core state. Native code audits their implied population against the authoritative live baseline when mode=historical_start.
 - For empires, federations, composite monarchies, colonial systems, or other mixed territorial polities, NEVER substitute a metropole-only headline GDP/GDP-per-capita anchor for the whole live polity. If no single same-scope historical aggregate exists, construct a defensible same-scope nominal anchor from the supplied regional/macro territorial evidence and say that explicitly in basis.
 - If the current generated GDP/capita materially departs from the rebased nominal anchor, cite ONLY canonical IDs from this bounded list in economicCalibration.divergenceEventIds: ${normalizeArray(variables?.statsEconomicEvidenceIds).join(", ") || "(none)"}.
@@ -3822,10 +3822,10 @@ BOUNDED REGIONAL METHOD — REQUIRED:
 - The SUM of macro-bucket populations becomes the national population. Native JavaScript expands each macro estimate deterministically back across ALL exact live-map components, preserving prior local proportions where a campaign ledger already exists.
 ${buildStatsComponentSplitContract(variables?.statsComponentSplitBuckets)}- Do not give colonies, dependencies, peripheral territories, or poorer constituent regions metropolitan productivity by default.
 - group is only an economic/display bucket. It is NOT a sovereignty, alliance, customs-union, recognition, or constitutional judgment.
-- gdpPerCapita inside each macro bucket is NOMINAL output per person expressed in constant 2026-EUR accounting terms so components and eras can be aggregated. It is NOT PPP/international-dollar purchasing power and does NOT import 2026 technology, institutions, productivity, or living standards.
+- gdpPerCapita inside each macro bucket is NOMINAL output per person expressed in constant 2026-USD accounting terms so components and eras can be aggregated. It is NOT PPP/international-dollar purchasing power and does NOT import 2026 technology, institutions, productivity, or living standards.
 - population totals and GDP aggregates are DERIVED by native JavaScript after regional expansion.
 - economy.gdpGrowth, inflation, unemployment, publicDebt and budgetBalance are percentages expressed as plain numbers; budgetBalance is negative for deficit and positive for surplus.
-- economy.currency is the polity's actual current domestic currency/medium, even though GDP accounting uses 2026-EUR-equivalent values.
+- economy.currency is the polity's actual current domestic currency/medium, even though GDP accounting uses 2026-USD-equivalent values.
 - GDP breakdown must sum to exactly 100.
 - Never invent a war, reform, boom, depression, trade bloc, annexation, reconstruction program, tax change, loan, or fiscal shock absent from supplied campaign evidence.
 
@@ -4625,8 +4625,8 @@ const runJsonTask = async (taskKey, {
                 `${normalizeString(economicCalibration?.mode)} anchor ${economicCalibration?.anchorYear} ` +
                 `${normalizeString(economicCalibration?.anchorCurrency).toUpperCase()} nominal GDP/capita ` +
                 `${Math.round(Number(economicCalibration?.nominalGdpPerCapita) || 0).toLocaleString()} -> ` +
-                `${Math.round(Number(economicCalibration?.rebasedGdpPerCapita2026Eur) || 0).toLocaleString()} 2026-EUR; ` +
-                `generated ${Math.round(generatedPc).toLocaleString()} 2026-EUR.`,
+                `${Math.round(Number(economicCalibration?.rebasedGdpPerCapita2026Usd) || 0).toLocaleString()} 2026-USD; ` +
+                `generated ${Math.round(generatedPc).toLocaleString()} 2026-USD.`,
             );
           }
         }

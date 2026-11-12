@@ -154,7 +154,7 @@ export const describeStatHistory = (world, name, limit = STAT_HISTORY_ROWS) => {
   const samples = normalizeCountryStatsHistory({ [key]: asObject(world?.countryStatsHistory)[key] })[key] ?? [];
   return samples.slice(-Math.max(0, limit)).map((sample) => {
     const values = [
-      field("GDP-eq", sample.gdp, (number) => `€${compactNumber(number)}`),
+      field("GDP-eq", sample.gdp, (number) => `$${compactNumber(number)}`),
       field("growth", sample.gdpGrowth, (number) => `${number}%`),
       field("inflation", sample.inflation, (number) => `${number}%`),
       field("unemployment", sample.unemployment, (number) => `${number}%`),

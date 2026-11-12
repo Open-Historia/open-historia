@@ -41,9 +41,9 @@ test("the advisor is handed the panel's figures as authoritative", () => {
   assert.match(text, /National stability: 83\/100/);
   assert.match(text, /Intelligence service: 48\/100/);
   assert.match(text, /Total population: 410M/);
-  assert.match(text, /GDP €433B/);
+  assert.match(text, /GDP \$433B/);
   assert.match(text, /growth \+6.2%/);
-  assert.match(text, /GDP per capita €1,057/);
+  assert.match(text, /GDP per capita \$1,057/);
   assert.match(text, /budget balance -0.4% of GDP/);
   assert.match(text, /domestic currency Chinese Yuan \(Fapi\)/);
   assert.match(text, /agriculture 48%, industry 32%, services 20%/);
@@ -81,7 +81,7 @@ test("the recorded trend rides along, oldest first, for charts over time", () =>
   ];
   const text = describeCountryStatsForAdvisor(ROC, { name: "Republic of China", history });
   assert.match(text, /Recorded trend \(oldest first/);
-  assert.match(text, /1961-08-03: stability 80, food 45%, energy 40%, GDP €400B, growth \+5.8%\n\s+1962-02-03: stability 83, food 47%, energy 42%, GDP €433B, growth \+6.2%/);
+  assert.match(text, /1961-08-03: stability 80, food 45%, energy 40%, GDP \$400B, growth \+5.8%\n\s+1962-02-03: stability 83, food 47%, energy 42%, GDP \$433B, growth \+6.2%/);
 });
 
 test("a single sample is not a trend", () => {
