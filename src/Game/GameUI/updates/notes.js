@@ -54,6 +54,21 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "make the default currency in stats be dollars" (the owner, 2026-11-11): GDP was kept and shown in 2026 euros.
+    id: "2026-11-stats-in-dollars",
+    kind: "minor",
+    date: "2026-11-11",
+    channel: "beta",
+    banners: [
+      {
+        title: "Stats in dollars",
+        items: [
+          "GDP and GDP per person are now counted and shown in 2026 US dollars instead of euros. Figures in games already under way keep their numbers.",
+        ],
+      },
+    ],
+  },
+  {
     // "features disabled in scenarios and stuff should not have the stuff about them in the system prompts" (the owner, 2026-11-11):
     // espionage's fields and intelligence rating, and air or naval units, were still offered with those features off.
     id: "2026-11-features-off-left-out",

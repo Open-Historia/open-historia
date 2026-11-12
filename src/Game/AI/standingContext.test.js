@@ -89,7 +89,7 @@ const FIGURES_WORLD = {
 
 test("a sheet is one line of the figures the Stats panel shows", () => {
   const line = describeStatSheet(SHEET, PLAYER);
-  for (const figure of ["population 41M", "stability 68/100", "sovereignty 88/100", "internal security 71/100", "leader Raymond Poincaré", "GDP-eq €120B", "growth 1.8%", "inflation 2.4%", "unemployment 5.1%", "debt 84% GDP", "budget -2.1% GDP"]) {
+  for (const figure of ["population 41M", "stability 68/100", "sovereignty 88/100", "internal security 71/100", "leader Raymond Poincaré", "GDP-eq $120B", "growth 1.8%", "inflation 2.4%", "unemployment 5.1%", "debt 84% GDP", "budget -2.1% GDP"]) {
     assert.ok(line.includes(figure), figure);
   }
   assert.ok(line.startsWith(`${PLAYER}: `));
@@ -101,8 +101,8 @@ test("a sheet is one line of the figures the Stats panel shows", () => {
 test("the history gives the last few samples as dated points, oldest first", () => {
   const rows = describeStatHistory(FIGURES_WORLD, PLAYER);
   assert.equal(rows.length, STAT_HISTORY_ROWS);
-  assert.equal(rows.at(-1), "- 1 June 1914: GDP-eq €115B; growth 1.5%; stability 69/100");
-  assert.equal(rows.at(-2), "- 1 January 1914: GDP-eq €110B; growth 1.2%; stability 70/100");
+  assert.equal(rows.at(-1), "- 1 June 1914: GDP-eq $115B; growth 1.5%; stability 69/100");
+  assert.equal(rows.at(-2), "- 1 January 1914: GDP-eq $110B; growth 1.2%; stability 70/100");
   assert.deepEqual(describeStatHistory(FIGURES_WORLD, "Belgium"), []);
 });
 
@@ -111,7 +111,7 @@ test("the advisor is given its own country's figures, their history, its reputat
   assert.match(text, /^\[Our Country's Figures\]\n/);
   assert.match(text, /never contradict them/);
   assert.ok(text.includes(describeStatSheet(SHEET, PLAYER)));
-  assert.match(text, /- 1 June 1914: GDP-eq €115B/);
+  assert.match(text, /- 1 June 1914: GDP-eq \$115B/);
   assert.ok(text.includes(describeReputationStanding(FIGURES_WORLD, PLAYER)));
   assert.ok(text.includes(describeIntelligenceStanding(FIGURES_WORLD, PLAYER)));
   assert.doesNotMatch(text, /Wilhelm II/, "another country's sheet is not ours");

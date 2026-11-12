@@ -227,7 +227,7 @@ const StatEditor = ({ stat, onPatch }) => (
       <>
         <div>
           <label style={labelStyle}>Prefix</label>
-          <input value={stat.prefix || ""} maxLength={12} onChange={(event) => onPatch({ prefix: event.target.value })} placeholder="€, $, £" style={inputStyle} />
+          <input value={stat.prefix || ""} maxLength={12} onChange={(event) => onPatch({ prefix: event.target.value })} placeholder="$, €, £" style={inputStyle} />
         </div>
         <div>
           <label style={labelStyle}>Suffix / unit</label>

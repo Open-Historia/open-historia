@@ -247,13 +247,13 @@ const formatCompactNumber = (value, { digits = 1 } = {}) => {
 };
 
 const formatPopulation = (value) => formatCompactNumber(value);
-const formatEuroTotal = (value) => {
+const formatDollarTotal = (value) => {
     const text = formatCompactNumber(value);
-    return text === "—" ? text : `€${text}`;
+    return text === "—" ? text : `$${text}`;
 };
-const formatEuroPerCapita = (value) => {
+const formatDollarPerCapita = (value) => {
     const number = Number(value);
-    return Number.isFinite(number) ? `€${Math.round(number).toLocaleString()}` : "—";
+    return Number.isFinite(number) ? `$${Math.round(number).toLocaleString()}` : "—";
 };
 const formatPercent = (value, { signed = false } = {}) => {
     const number = Number(value);
@@ -1088,8 +1088,8 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
             label: "Headline economy",
             icon: "◈",
             metrics: [
-                { key: "gdp", label: "GDP", unit: "gdp", color: "#34d399", format: formatEuroTotal },
-                { key: "gdpPerCapita", label: "GDP per capita", unit: "gdpPerCapita", color: "#e7e7e9", format: formatEuroPerCapita },
+                { key: "gdp", label: "GDP", unit: "gdp", color: "#34d399", format: formatDollarTotal },
+                { key: "gdpPerCapita", label: "GDP per capita", unit: "gdpPerCapita", color: "#e7e7e9", format: formatDollarPerCapita },
                 { key: "population", label: "Population", unit: "population", color: "#94a3b8", format: formatPopulation },
             ],
         },
@@ -1134,8 +1134,8 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
 };
 
 const ADVANCED_UNIT_LABELS = {
-    gdp: "GDP · 2026-EUR equivalent",
-    gdpPerCapita: "GDP per capita · 2026-EUR equivalent",
+    gdp: "GDP · 2026-USD equivalent",
+    gdpPerCapita: "GDP per capita · 2026-USD equivalent",
     population: "Population",
     economicPercent: "Percent",
     index: "Index · 0–100",
@@ -1431,9 +1431,9 @@ const AdvancedStatsModal = ({
                                         : String(metric.unit || "").startsWith("custom:")
                                             ? `${delta > 0 ? "+" : ""}${metric.format(delta)}`
                                             : metric.unit === "gdp"
-                                                ? formatEuroTotal(delta)
+                                                ? formatDollarTotal(delta)
                                                 : metric.unit === "gdpPerCapita"
-                                                    ? formatEuroPerCapita(delta)
+                                                    ? formatDollarPerCapita(delta)
                                                     : metric.unit === "population"
                                                         ? formatCompactNumber(delta)
                                                         : `${delta > 0 ? "+" : ""}${Math.round(delta * 10) / 10}${metric.unit === "index" ? "" : " pp"}`;
@@ -1511,8 +1511,8 @@ const RANKING_ROWS_FIRST = 25;
 
 const formatRankingValue = (metric, value) => {
     if (metric.stat) return formatCustomStatValue(metric.stat, value);
-    if (metric.kind === "money") return formatEuroTotal(value);
-    if (metric.kind === "money each") return formatEuroPerCapita(value);
+    if (metric.kind === "money") return formatDollarTotal(value);
+    if (metric.kind === "money each") return formatDollarPerCapita(value);
     if (metric.kind === "index") return String(Math.round(value));
     if (metric.kind === "weight") return formatMilitaryPower(value);
     return formatCompactNumber(value);
@@ -2321,7 +2321,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
         ? `Core/integrated ${formatPopulation(corePopulation)} · Other territories ${formatPopulation(otherPopulation)}`
         : "";
     const capitaScope = hasOtherTerritories
-        ? `Core/integrated · Whole polity ${formatEuroPerCapita(wholePerCapita)}`
+        ? `Core/integrated · Whole polity ${formatDollarPerCapita(wholePerCapita)}`
         : "Whole polity";
 
     return (
@@ -2610,13 +2610,13 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "1fr 1fr" }}>
                 <EconomyCard
                 label="GDP"
-                value={formatEuroTotal(sheet.economy?.gdp)}
-                sub={`Growth ${formatPercent(sheet.economy?.gdpGrowth, { signed: true })} · 2026-EUR eq.`}
+                value={formatDollarTotal(sheet.economy?.gdp)}
+                sub={`Growth ${formatPercent(sheet.economy?.gdpGrowth, { signed: true })} · 2026-USD eq.`}
                 tone="#34d399"
                 />
                 <EconomyCard
                 label="GDP/capita"
-                value={formatEuroPerCapita(displayedPerCapita)}
+                value={formatDollarPerCapita(displayedPerCapita)}
                 sub={capitaScope}
                 tone="#e7e7e9"
                 />
@@ -2632,7 +2632,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 </div>
                 {sheet.economy?.currency && (
                     <div style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.66rem", marginTop: "0.45rem" }}>
-                    Domestic currency: <span data-no-translate>{sheet.economy.currency}</span> · GDP accounting shown in 2026-EUR-equivalent values.
+                    Domestic currency: <span data-no-translate>{sheet.economy.currency}</span> · GDP accounting shown in 2026-USD-equivalent values.
                     </div>
                 )}
 

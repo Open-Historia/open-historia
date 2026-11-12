@@ -1481,7 +1481,7 @@ export const buildCompactEconomicContext = (value, { name = "", conditions = tru
   const breakdown = sheet.gdpBreakdown || {};
   const indices = sheet.indices || {};
   const fields = [
-    Number.isFinite(Number(economy.gdp)) ? `GDP-eq €${compactEconomicNumber(economy.gdp)}` : "",
+    Number.isFinite(Number(economy.gdp)) ? `GDP-eq $${compactEconomicNumber(economy.gdp)}` : "",
     Number.isFinite(Number(economy.gdpGrowth)) ? `growth ${Number(economy.gdpGrowth)}%` : "",
     Number.isFinite(Number(economy.inflation)) ? `inflation ${Number(economy.inflation)}%` : "",
     Number.isFinite(Number(economy.unemployment)) ? `unemployment ${Number(economy.unemployment)}%` : "",
@@ -1520,7 +1520,7 @@ const describeStatsTrend = (samples, { limit = 6 } = {}) => {
     ["stability", "stability", (v) => `${Math.round(v)}`],
     ["foodAutonomy", "food", (v) => `${Math.round(v)}%`],
     ["energyAutonomy", "energy", (v) => `${Math.round(v)}%`],
-    ["gdp", "GDP", (v) => `€${compactEconomicNumber(v)}`],
+    ["gdp", "GDP", (v) => `$${compactEconomicNumber(v)}`],
     ["gdpGrowth", "growth", (v) => formatSignedPercent(v)],
     ["inflation", "inflation", (v) => `${formatStatFigure(v)}%`],
     ["unemployment", "unemployment", (v) => `${formatStatFigure(v)}%`],
@@ -1572,9 +1572,9 @@ export const describeCountryStatsForAdvisor = (value, { name = "", definition = 
 
   const economy = sheet.economy || {};
   const economic = [
-    finite(economy.gdp) ? `GDP €${compactEconomicNumber(economy.gdp)} (2026-EUR equivalent)` : "",
+    finite(economy.gdp) ? `GDP $${compactEconomicNumber(economy.gdp)} (2026-USD equivalent)` : "",
     finite(economy.gdpGrowth) ? `growth ${formatSignedPercent(economy.gdpGrowth)}` : "",
-    finite(economy.gdpPerCapita) ? `GDP per capita €${formatStatFigure(economy.gdpPerCapita, { decimals: 0 })}` : "",
+    finite(economy.gdpPerCapita) ? `GDP per capita $${formatStatFigure(economy.gdpPerCapita, { decimals: 0 })}` : "",
     finite(economy.inflation) ? `inflation ${formatStatFigure(economy.inflation)}%` : "",
     finite(economy.unemployment) ? `unemployment ${formatStatFigure(economy.unemployment)}%` : "",
     finite(economy.publicDebt) ? `public debt ${formatStatFigure(economy.publicDebt)}% of GDP` : "",
