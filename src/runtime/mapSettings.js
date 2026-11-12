@@ -79,6 +79,11 @@ export const MAP_SETTING_KEYS = {
     // (AI/streamedEvents.js). ON by default; off leaves the skip behind the
     // Timeline panel's spinner.
     liveSkipEvents: "ai_live_skip_events",
+    // A badge over the map that says whether an AI call is open, which task
+    // and for how long, and how many the turn has made
+    // (GameUI/AiActivityBadge.jsx, AI/requestTally.js). OFF by default — read
+    // with getMapSetting, so an absent key means "off". Settings → AI.
+    aiActivityBadge: "ai_activity_badge",
     // Countries writing to the player between time skips (AI/gameplay.js
     // maybeSendIdleDiplomacy). ON by default — read with
     // getMapSettingDefaultOn. Off, none is scheduled or sent. The scenario's
@@ -202,6 +207,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
     [MAP_SETTING_KEYS.lookupFunctions]: "AI lookup functions",
     [MAP_SETTING_KEYS.liveSkipEvents]: "Show time skip events as they are written",
+    [MAP_SETTING_KEYS.aiActivityBadge]: "Show AI activity on the map",
     [MAP_SETTING_KEYS.idleDiplomacy]: "Countries write to me between time skips",
     [MAP_SETTING_KEYS.stopOnPlayerFailures]: "Stop when my events fail",
     [MAP_SETTING_KEYS.discordPresence]: "Show what I am playing on Discord",
