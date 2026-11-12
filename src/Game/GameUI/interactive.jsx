@@ -20,6 +20,7 @@ import { offeredEvent } from "../../runtime/interactiveOffer.js";
 import { formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
 import { canRewindInteractiveTo, interactiveChoiceTexts, isSceneInProgress } from "../AI/interactiveRewind.js";
 import { advanceActiveInteractive, createInteractive, declineInteractiveOffer, endActiveInteractive, rewindActiveInteractive, setAsideActiveInteractive } from "../AI/gameplayLazy.js";
+import { sceneCompletionTitle } from "../AI/interactiveCompletion.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 
 const YELLOW = "#facc15";
@@ -161,13 +162,13 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
         const title = scene?.title || "";
         const result = await advanceActiveInteractive(wording);
         setMove("");
-        if (result && !result.interactive) setFinished({ title: result.events?.at?.(-1)?.title || title });
+        if (result && !result.interactive) setFinished({ title: sceneCompletionTitle(result, title) });
     });
     const takeBack = (index) => run("Taking the move back…", () => rewindActiveInteractive({ beatIndex: index }));
     const end = () => run("Writing the scene into the record…", async () => {
         const title = scene?.title || "";
         const result = await endActiveInteractive();
-        if (result?.resolved) setFinished({ title: result.events?.at?.(-1)?.title || title });
+        if (result?.resolved) setFinished({ title: sceneCompletionTitle(result, title) });
     });
     const setAside = () => {
         if (beats.length > 0 && !confirmingAside) {

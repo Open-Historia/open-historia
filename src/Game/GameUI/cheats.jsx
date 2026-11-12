@@ -68,7 +68,9 @@ import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { createSerialQueue } from "../../runtime/serialQueue.js";
 import { annexationImpacts, regionOwnerNow, regionsHeldBy } from "../../runtime/gmAnnex.js";
 import { polityNameInUse } from "../../runtime/gmPolityNames.js";
-import { changedEditorFields, countryStatPatchFromForm, editorStateChanged } from "./countryEditorStats.js";
+import { changedEditorFields, countryCustomStatEditFromForm, countryCustomStatFormFromSheet, countryStatPatchFromForm, editorStateChanged } from "./countryEditorStats.js";
+import { loadStatSheetDefinition } from "../../runtime/statsSheet.js";
+import { isIntelligenceRated } from "../../runtime/spycraft.js";
 import { collectImpactOps, countImpactOps, otherImpactFamilies } from "./gmPreviewOps.js";
 // The feature types, with the glyph the map draws for each (mapFeatureKinds.js).
 import { GM_MAP_FEATURE_KINDS as MAP_FEATURE_KINDS } from "./mapFeatureKinds.js";
@@ -664,6 +666,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
     const [target, setTarget] = useState("");
     const [loading, setLoading] = useState(false);
     const [form, setForm] = useState({});
+    const [customStatForm, setCustomStatForm] = useState({});
     const [politicsForm, setPoliticsForm] = useState(() => politicalActorToEditorState(null));
     const [politicsDebug, setPoliticsDebug] = useState(null);
     const [decisionContextText, setDecisionContextText] = useState("");
@@ -679,6 +682,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
     useEffect(() => {
         if (!target) {
             setForm({});
+            setCustomStatForm({});
             setPoliticsForm(politicalActorToEditorState(null));
             setPoliticsDebug(null);
             setDecisionContextText("");
@@ -692,11 +696,20 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         Promise.all([
             readWorldState({ force: true }),
             readJson(JSON_URLS.colors, { defaultValue: {}, force: true }).catch(() => ({})),
+            // A Stats-definition fetch failure must not prevent editing this
+            // country's identity or Political World. It must fail CLOSED for
+            // Stats mutations rather than assuming a legacy sheet.
+            loadStatSheetDefinition().then(
+                (definition) => ({ definition, error: "" }),
+                (error) => ({ definition: null, error: error?.message || "Could not load this scenario's Stats definition." }),
+            ),
         ])
-            .then(([world, colors]) => {
+            .then(([world, colors, statsRead]) => {
+                const statsDefinition = statsRead.definition;
                 if (cancelled) return;
                 const polity = world?.polityOverrides?.[target] ?? {};
                 const sheet = world?.countryStats?.[target] ?? null;
+                const liveIntelligence = isIntelligenceRated(world, target) ? Number(world.intelligence[target]) : null;
                 const rgb = colors?.[target];
                 const color = polity.color || (Array.isArray(rgb) ? rgbToHex(rgb) : "");
                 const population = Number(sheet?.population?.total);
@@ -735,11 +748,16 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                 setBaseline({
                     sheet,
                     componentCount: Array.isArray(sheet?.territorialComponents) ? sheet.territorialComponents.length : 0,
+                    statsDefinition,
+                    statsError: statsRead.error,
+                    liveIntelligence,
+                    customStats: countryCustomStatFormFromSheet({ sheet, definition: statsDefinition, liveIntelligence }),
                     perCapita: Number.isFinite(perCapita) ? perCapita : null,
                     form: loadedForm,
                     politics: loadedPolitics,
                 });
                 setPoliticsForm(loadedPolitics);
+                setCustomStatForm(countryCustomStatFormFromSheet({ sheet, definition: statsDefinition, liveIntelligence }));
                 setPoliticsDebug(politicalDebugSnapshotFromWorld(world, target));
                 setDecisionContextText(buildPoliticalDecisionContext(world, target, { maxChars: 12000 })?.text || "");
                 setForm(loadedForm);
@@ -757,6 +775,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
     }, [target, reloadKey, nameOf, setStatus]);
 
     const change = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+    const changeCustomStat = (key, value) => setCustomStatForm((current) => ({ ...current, [key]: value }));
     const changePolitics = (key, value) => setPoliticsForm((current) => ({ ...current, [key]: value }));
     const changeTrait = (key, value) => setPoliticsForm((current) => {
         const next = {
@@ -862,7 +881,8 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         });
     };
 
-    const hasComponentBaseline = Boolean(baseline?.componentCount);
+    const hasComponentBaseline = baseline?.statsDefinition?.custom === false && Boolean(baseline?.componentCount);
+    const hasCustomStatDefinition = baseline?.statsDefinition?.custom === true;
     const composition = useMemo(() => {
         try { return { ...politicalEditorComposition(politicsForm, { asRecorded: baseline?.politics || null }), error: "" }; }
         catch (error) { return { error: error?.message || "Invalid political landscape." }; }
@@ -916,7 +936,20 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         };
 
         let nextSheet = world.countryStats?.[target] ?? null;
-        const patch = hasComponentBaseline
+        const changedCustom = changedEditorFields(customStatForm, baseline?.customStats);
+        if (hasCustomStatDefinition && changedCustom.has("intelligenceService")) {
+            const ratedNow = isIntelligenceRated(world, target);
+            if (ratedNow !== Number.isFinite(baseline?.liveIntelligence)) {
+                throw new Error("The live intelligence rating changed while this editor was open. Reset the form and try again.");
+            }
+        }
+        const customEdit = hasCustomStatDefinition
+            ? countryCustomStatEditFromForm({
+                form: customStatForm, loaded: baseline?.customStats,
+                definition: baseline.statsDefinition, liveIntelligence: baseline.liveIntelligence,
+            })
+            : { patch: null, intelligenceRating: null };
+        const patch = hasCustomStatDefinition ? customEdit.patch : hasComponentBaseline
             ? countryStatPatchFromForm({ form, changed, politicalActor: nextPoliticalActor })
             : null;
         if (patch) {
@@ -930,6 +963,12 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
             }
         }
 
+        if (customEdit.intelligenceRating != null) {
+            world.intelligence = {
+                ...(world.intelligence || {}),
+                [target]: customEdit.intelligenceRating,
+            };
+        }
         await writeWorldState(world);
 
         const rgb = hexToRgb(colorHex);
@@ -938,8 +977,13 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
             await writeJson(JSON_URLS.colors, { ...colors, [target]: rgb }, { pretty: true });
         }
 
+        const customUpdates = Object.entries(customEdit.patch?.customStats || {});
+        const customNotes = customUpdates.slice(0, 6).map(([key, value]) => `${key}: ${value}`);
+        if (customUpdates.length > customNotes.length) customNotes.push(`and ${customUpdates.length - customNotes.length} more Stats edits`);
         const edits = [
             previousName && previousName !== nextName ? `renamed it from ${previousName}` : "",
+            ...customNotes,
+            customEdit.intelligenceRating != null ? `live intelligence: ${customEdit.intelligenceRating}` : "",
             ...["leader", "government", "capital"].map((key) => {
                 const after = String(nextSheet?.[key] ?? "").trim();
                 return after && after !== headlineBefore[key] ? `${key}: ${after}` : "";
@@ -952,7 +996,8 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
             nextPoliticalActor?.government?.form,
             nextPoliticalActor?.government?.ideology,
         ].map((value) => String(value || "").trim()).filter(Boolean).join(" · ");
-        await noteGmChange(hasComponentBaseline ? "stats" : "polity",
+        const wroteStats = Boolean(patch || customEdit.intelligenceRating != null);
+        await noteGmChange(wroteStats || (!hasCustomStatDefinition && hasComponentBaseline) ? "stats" : "polity",
             `Edited ${nextName} in the country editor${edits.length ? `: ${edits.join("; ")}` : ""}${politicalSummary ? `${edits.length ? "; " : ": "}Political World ${politicalSummary}` : ""}.`);
 
         if (typeof window !== "undefined") {
@@ -963,9 +1008,13 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
 
         await refresh();
         setReloadKey((value) => value + 1);
-        return hasComponentBaseline
-            ? `${nextName} updated. These values are the current baseline; future simulation can change them naturally.`
-            : `${nextName} identity updated. Generate a Stats baseline before editing national statistics.`;
+        return hasCustomStatDefinition
+            ? wroteStats
+                ? `${nextName} scenario-defined Stats updated. Any hidden population/economy backend not explicitly edited remains unchanged.`
+                : `${nextName} identity or Political World updated; no scenario-defined Stats were changed.`
+            : hasComponentBaseline
+                ? `${nextName} updated. These values are the current baseline; future simulation can change them naturally.`
+                : `${nextName} identity updated. Generate a Stats baseline before editing standard national statistics.`;
     });
 
     const previewPopulation = Number(form.populationM) * 1e6;
@@ -1391,7 +1440,52 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                         </details>
                     </div>
 
-                    {!hasComponentBaseline ? (
+                    {hasCustomStatDefinition ? (
+                        <div style={{ ...editorFieldStyle, marginTop: "0.65rem" }} data-country-editor-custom-stats="true">
+                            <div style={editorSectionLabelStyle}>Scenario-defined national statistics</div>
+                            <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.65rem", lineHeight: 1.5, marginBottom: "0.55rem" }}>
+                                These values come from this scenario's canonical Stats definition. Only explicitly changed metrics are saved.
+                                A blank metric is unset, not zero. The hidden simulation population/economy backend is independent
+                                and is not silently rewritten when similarly named scenario metrics change.
+                            </div>
+                            {(baseline?.statsDefinition?.sections || []).map((section) => (
+                                <div key={section.key} style={{ marginTop: "0.75rem" }}>
+                                    <div style={{ ...editorSectionLabelStyle, color: "rgba(255,255,255,0.72)", marginBottom: "0.4rem" }}>
+                                        {section.icon || ""} {section.label}
+                                    </div>
+                                    <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(min(9.5rem, 100%), 1fr))" }}>
+                                        {section.stats.map((stat) => (
+                                            <div key={stat.key} style={{ minWidth: 0 }}>
+                                                <label style={{ ...labelStyle, fontSize: "0.64rem", marginTop: 0 }} htmlFor={`country-stat-${stat.key}`}>
+                                                    {stat.label}
+                                                    {stat.key === "intelligenceService" && Number.isFinite(baseline?.liveIntelligence) ? " (live intelligence)" : ""}
+                                                </label>
+                                                <input
+                                                    id={`country-stat-${stat.key}`}
+                                                    aria-label={stat.label}
+                                                    type="number"
+                                                    min={Number.isFinite(stat.minimum) ? stat.minimum : undefined}
+                                                    max={Number.isFinite(stat.maximum) ? stat.maximum : undefined}
+                                                    step={stat.decimals > 0 ? 10 ** -stat.decimals : 1}
+                                                    style={{ ...inputStyle, width: "100%" }}
+                                                    value={customStatForm[stat.key] ?? ""}
+                                                    onChange={(event) => changeCustomStat(stat.key, event.target.value)}
+                                                />
+                                                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.58rem", marginTop: "0.2rem", overflowWrap: "anywhere" }}>
+                                                    {stat.description || stat.key}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : baseline?.statsError ? (
+                        <div style={{ ...editorFieldStyle, marginTop: "0.65rem", color: "#fca5a5", fontSize: "0.7rem", lineHeight: 1.45 }}>
+                            Stats definition unavailable: {baseline.statsError} Identity and Political World editing remain available;
+                            national-stat edits are disabled until the scenario Stats definition can be loaded.
+                        </div>
+                    ) : !hasComponentBaseline ? (
                         <div style={{
                             background: "rgba(245,158,11,0.08)",
                             border: "1px solid rgba(245,158,11,0.24)",

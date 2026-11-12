@@ -16487,7 +16487,8 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
   const scene = outcome ? await sceneMapConsequences({ bundle, outcome: markSceneOutcome(outcome, history), generation: summaryGeneration }) : null;
   const sceneOutcome = scene?.events?.[0] ?? outcome;
 
-  const applyScene = (withBoard) => applySimulationResult({
+  const applyScene = async (withBoard) => {
+    const applied = await applySimulationResult({
     baseActions: bundle.actions,
     baseChats: bundle.chats,
     baseColors,
@@ -16510,7 +16511,12 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
       generation: summaryGeneration,
       receipt: scene?.receipt ?? null,
     },
-  });
+    });
+    // The interactive outcome owns this title. Generic turn processing can
+    // append espionage/lifecycle events afterwards, so its last event is not
+    // necessarily the scene the player just completed.
+    return { ...applied, resolvedSceneTitle: normalizeString(sceneOutcome?.title) || normalizeString(interactive.title) };
+  };
   // A Board that fails holds a jump for the player to retry; a Scene is not held
   // for its Board. Its outcome is written without the Board moving, and the next
   // jump's Board pass reads it with the rest.

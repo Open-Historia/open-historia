@@ -148,6 +148,8 @@ import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { advisorMemoryDirectiveForMode, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
+import { pendingAdvisorActionDrafts, redactHistoricalAdvisorActionBlocks, renderHistoricalAdvisorReply, renderPendingAdvisorActionDrafts, sanitizeAdvisorModelHistory } from "./advisorActionHistory.js";
+import { advisorDiplomaticLookups, renderAdvisorDiplomaticContext } from "./advisorDiplomaticContext.js";
 import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorGroupForReply, advisorOfficeStatus, advisorRecipientForReply, advisorRecipientType, assertAdvisorRecipientCanReply, chiefAdvisorProfile } from "../../runtime/advisorThreads.js";
 import { GROUP_MEETING_CONTEXT_MAX_CHARS, advisorGroupSpeakerName, OPTIONAL_GROUP_SPEECH_STANDARD, parseAdvisorGroupIndividualReply, renderAdvisorGroupHistory, selectAdvisorGroupSpeakers } from "./advisorGroupMeetings.js";
 import { groupSpeakerBatches, parseAdvisorGroupBatch, advisorBatchOutputContract, buildAdvisorSharedBatchPrompt } from "./advisorGroupBatching.js";
@@ -3671,7 +3673,7 @@ async function describePlayerStatsForAdvisor(worldData, country) {
     });
 }
 
-async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = false, meetingMode = false, noLookups = false } = {}) {
+async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = false, meetingMode = false, noLookups = false, currentQuestion = "" } = {}) {
     if (recipient && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
         // This branch deliberately reads NO actions, private diplomatic chats,
         // Advisor transcripts or prompt pack. World is used only by viewAsSeen
@@ -3712,7 +3714,9 @@ async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = fal
     const lastQuestion = [...(Array.isArray(advisorData) ? advisorData : [])].reverse()
         .find((message) => message?.role === "user" && String(message?.text || "").trim());
     const pastTalks = await findPastTalks({ game: gameData, world: worldData, chats: chatData, actions: actionData }, {
-        about: lastQuestion ? [String(lastQuestion.text)] : [],
+        // The current question has not necessarily been persisted yet; searching
+        // for the previous saved question misses the exact topic of this turn.
+        about: String(currentQuestion).trim() ? [String(currentQuestion)] : lastQuestion ? [String(lastQuestion.text)] : [],
         focus: false,
     });
     const variables = {
@@ -3726,9 +3730,16 @@ async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = fal
             worldData,
             requiredKeys: chatPromptDemand(promptPack.advisor, {
                 extra: ["plannedActionsWithIds", "projectsSummary"],
-                exclude: ["advisorMessages"],
+                exclude: ["advisorMessages", "chatHistoryLong"],
             }),
         })),
+        // Time Skip already uses bounded, lookup-backed history. Individual
+        // Advisors now receive their own bounded diplomatic view, with a native
+        // exact-message retrieval path across both active and archived chats.
+        chatHistoryLong: renderAdvisorDiplomaticContext({
+            chats: chatData, world: worldData, game: gameData, pastTalks,
+            question: currentQuestion,
+        }),
         advisorMessages: CONVERSATION_IN_TURNS,
         plannedActions: PLANNED_ACTIONS_IN_ACTION_PLANNING,
     };
@@ -3742,6 +3753,14 @@ async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = fal
         variables,
     );
     const groupLookups = discussionOnly || noLookups ? null : advisorGroupLookups({ world: worldData, player: gameData?.country || "" });
+    const diplomaticLookups = discussionOnly || noLookups || !advisorGroupFunctionsAllowed()
+        ? null : advisorDiplomaticLookups({ chats: chatData });
+    const lookups = groupLookups && diplomaticLookups ? {
+        tools: [...groupLookups.tools, ...diplomaticLookups.tools],
+        maxRounds: Math.max(groupLookups.maxRounds, diplomaticLookups.maxRounds),
+        execute: (name, args) => diplomaticLookups.tools.some((tool) => tool.name === name)
+            ? diplomaticLookups.execute(name, args) : groupLookups.execute(name, args),
+    } : groupLookups || diplomaticLookups;
     const groupsListed = groupLookups ? "" : await describeAdvisorGroups({ world: worldData, player: gameData?.country || "" });
     const advisorPoliticalDiplomacy = buildAdvisorPoliticalDiplomacyContext({
         world: worldData,
@@ -3777,6 +3796,8 @@ async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = fal
         // (The seasons and the weather, which the map shows with no words:
         // advisorWeather.js.)
         discussionOnly ? "" : buildAdvisorActionsDirective(variables.plannedActionsWithIds),
+        discussionOnly || meetingMode ? "" : renderPendingAdvisorActionDrafts(
+            pendingAdvisorActionDrafts(advisorData, actionData, recipient?.id || CHIEF_ADVISOR_THREAD)),
         discussionOnly ? "" : ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
         discussionOnly || meetingMode ? "" : ADVISOR_INSTITUTION_DRAFT_DIRECTIVE,
         discussionOnly || meetingMode ? "" : ADVISOR_DEPLOY_DIRECTIVE,
@@ -3828,7 +3849,7 @@ ${recipient.personality ? `Personality and operating principles: ${recipient.per
   : "You may propose Actions for human review using fenced actions blocks, but they are NOT queued until the player explicitly selects Proceed; never claim to have executed one. You may also create or update Projects with fenced projects blocks once the player has clearly committed to the sustained effort, or when recording substantiated progress; those Project edits go directly to the existing board without an extra approval. Recommend potential Projects freely in prose, but do not open speculative ones or claim institutional powers merely from your typed title."} No other canonical government mutations are authorized by this conversation.`
         : "";
     const chiefIdentity = recipient || meetingMode === "batch" ? "" : describeChiefAdvisorOverride(chiefAdvisorProfile(advisorData));
-    return { systemPrompt: `${rendered}\n\n${[...directives, identity, chiefIdentity].filter(Boolean).join("\n\n")}`, lookups: groupLookups };
+    return { systemPrompt: `${rendered}\n\n${[...directives, identity, chiefIdentity].filter(Boolean).join("\n\n")}`, lookups };
 }
 
 // Each group member speaks in their own persistent minister/chief persona.
@@ -3863,7 +3884,7 @@ export async function sendAdvisorGroupMessage({ threadId, messages, onSpeakerChu
         if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
         if (batch.length > 1) {
             const { systemPrompt } = await buildAdvisorSystemPrompt({
-                meetingMode: "batch", noLookups: true,
+                meetingMode: "batch", noLookups: true, currentQuestion: question,
             });
             const chief = chiefAdvisorProfile(stored);
             const prompt = buildAdvisorSharedBatchPrompt({
@@ -3910,7 +3931,7 @@ export async function sendAdvisorGroupMessage({ threadId, messages, onSpeakerChu
         if (recipient && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
             throw new Error("Only government advisors may speak in a government group chat.");
         }
-        const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient, meetingMode: true, noLookups: true });
+        const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient, meetingMode: true, noLookups: true, currentQuestion: question });
         const name = advisorGroupSpeakerName(speakerId, contacts, chiefName);
         const privateHistory = advisorMessagesFor(stored, speakerId)
             .filter((row) => row.role === "user" || row.role === "advisor")
@@ -4189,9 +4210,11 @@ export async function sendMessage(userMessage, options) {
     // The conversation this reply is for, and its history, taken before the
     // first await. Another contact can be opened without replacing this state.
     const conversation = state.conversation.current();
-    const priorHistory = state.history;
+    // Old Action JSON blocks describe previous proposals, not editable queue state.
+    // Filter only provider-bound minister/chief history; retain the saved transcript.
+    const priorHistory = character ? state.history : sanitizeAdvisorModelHistory(state.history);
     const memoryContext = advisorMemoryContextEntry(state.memory);
-    const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient: storedRecipient });
+    const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient: storedRecipient, currentQuestion: userMessage });
     const asked = { role: "user", parts: [{ text: withCatchUp(userMessage, catchUp) }] };
     const history = compactConversationHistory([...priorHistory, asked]);
     if (state.conversation.isCurrent(conversation)) state.history = history;
@@ -4219,7 +4242,9 @@ export async function sendMessage(userMessage, options) {
         const { reply: shown, memory } = splitAdvisorMemory(reply);
         if (state.conversation.isCurrent(conversation)) {
             if (memory) state.memory = memory;
-            state.history.push({ role: "model", parts: [{ text: shown }] });
+            // Keep the next in-session turn safe without altering the raw
+            // response passed to the native parser and saved Advisor messages.
+            state.history.push({ role: "model", parts: [{ text: character ? shown : redactHistoricalAdvisorActionBlocks(shown) }] });
         }
         // The raw reply, before advisor.jsx strips its ```actions / ```projects /
         // ```deploy blocks out of it. A block that was malformed, or that the UI
@@ -4237,18 +4262,21 @@ export async function sendMessage(userMessage, options) {
     }
 }
 
-export function loadHistory(savedMessages, threadId = "chief") {
+export function loadHistory(savedMessages, threadId = "chief", { character = false } = {}) {
     const state = advisorState(threadId);
     state.conversation.replace();
     state.memory = latestAdvisorMemory(savedMessages);
-    state.history = savedMessages
+    const restoredHistory = savedMessages
     .filter((msg) => msg.role === "user" || msg.role === "advisor")
     .map((msg) => ({
         role: msg.role === "user" ? "user" : "model",
         // Preserve the question's original catch-up across reloads.
-        parts: [{ text: msg.role === "user" ? withCatchUp(msg.text, msg.catchUp) : msg.text }],
+        parts: [{ text: msg.role === "user" ? withCatchUp(msg.text, msg.catchUp)
+            : character ? msg.text : renderHistoricalAdvisorReply(msg) }],
     }));
-    state.history = compactConversationHistory(state.history);
+    // Redact historical machine instructions BEFORE older turns are compacted
+    // into a synthetic user-side summary. Characters do not have Action authority.
+    state.history = compactConversationHistory(character ? restoredHistory : sanitizeAdvisorModelHistory(restoredHistory));
     logDebugEvent("advisor",
         `Advisor history restored for ${threadId}: ${state.history.length} message(s) from a ${savedMessages.length}-message transcript.`,
         undefined, { verbose: true });
