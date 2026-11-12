@@ -70,6 +70,7 @@ import {
     getStoredLanguage,
     setStoredChatLanguage,
 } from "../../runtime/i18n.js";
+import { DEFAULT_REQUEST_ATTEMPTS, REQUEST_ATTEMPT_CHOICES, requestAttemptsFrom } from "../AI/requestAttempts.js";
 import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSetting, useMapSettingDefaultOn, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
 import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
 // The Map Editor's basemap window, opened here to browse, download and manage
@@ -2471,6 +2472,29 @@ const PerformanceModeSetting = () => {
     );
 };
 
+// How many times a request is tried before the game gives up on it
+// (AI/requestAttempts.js). On this device, like its neighbours in the section.
+const RequestAttemptsField = () => {
+    const stored = useMapSettingValue(MAP_SETTING_KEYS.requestAttempts);
+    const attempts = requestAttemptsFrom(stored);
+    // A count stored by hand that the list does not offer is still shown.
+    const choices = REQUEST_ATTEMPT_CHOICES.includes(attempts) ? REQUEST_ATTEMPT_CHOICES : [...REQUEST_ATTEMPT_CHOICES, attempts].sort((a, b) => a - b);
+    // The default is stored as nothing, so a later change of it reaches a
+    // player who never chose.
+    const choose = (value) => setMapSettingValue(MAP_SETTING_KEYS.requestAttempts, Number(value) === DEFAULT_REQUEST_ATTEMPTS ? "" : value);
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={labelStyle} htmlFor="game-request-attempts">Attempts per request</label>
+        <select id="game-request-attempts" value={String(attempts)} onChange={(event) => choose(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+        {choices.map((choice) => <option key={choice} value={String(choice)} style={{ color: "black" }} data-no-translate>{choice}</option>)}
+        </select>
+        <div style={helperStyle}>
+        How many times the game asks before it gives up on a request, 15 seconds apart, when the provider is busy, rate limits your key or sends no answer. 3 is the default. With more, a time skip waits out a busy provider instead of landing as fallback events you would roll back; the line under the spinner says which attempt is running. A provider with others after it in the Fallback list is still left for the next one at once.
+        </div>
+        </div>
+    );
+};
+
 // How much of each time skip is about the player's own country (AI/playerFocus.js).
 // Kept with the GAME rather than on this device, unlike its neighbours in this
 // section: a Spotlight war campaign should not decide how the next sandbox game
@@ -3151,6 +3175,7 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     Off (default): waits as long as the model needs, however stuck. On: the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Cancel works either way.
                     </div>
+                    <RequestAttemptsField />
                     <Toggle label="Generate long time skips in segments" enabled={mapSettings.chunkLongJumps} onToggle={() => updateMapSetting("chunkLongJumps", MAP_SETTING_KEYS.chunkLongJumps, !mapSettings.chunkLongJumps)} />
                     <div style={settingsHelper}>
                     Off (default): the whole skip is generated in a single request. On: skips of more than a few months are generated in several shorter requests and merged into one round — slower and costlier in tokens, but far less likely to time out on a hosted provider.

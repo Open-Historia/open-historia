@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player on a free Gemini key, 2026-11-12: three attempts 15 seconds apart all met 503 "high demand", the skip landed
+    // as the fallback events and was rolled back by hand and asked for again. "It is easier to wait 15 seconds than to
+    // click." AI/requestAttempts.js, main.jsx callAI, requestActivity.js attempt, time.jsx; mapSettings.js requestAttempts.
+    id: "2026-11-attempts-per-request",
+    kind: "minor",
+    date: "2026-11-12",
+    banners: [
+      {
+        title: "A busy provider can be waited out",
+        items: [
+          "A new setting, Attempts per request, sets how many times the game asks a busy provider before it gives up. It stays at 3 unless you change it.",
+          "With more attempts, a time skip waits instead of landing as fallback events you would roll back and ask for again.",
+          "While it waits, the line under the spinner says which attempt is running.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",
