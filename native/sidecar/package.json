@@ -1,0 +1,9 @@
+{
+  "name": "open-historia-native-sidecar",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@huggingface/transformers": "4.3.1",
+    "node-datachannel": "^0.33.6"
+  }
+}
