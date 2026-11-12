@@ -410,6 +410,10 @@ export const OUTPUT_LIMIT_MESSAGE = "The model stopped at its output limit befor
 // in what it thought. The reader used to be handed the reasoning as if it were
 // the answer, and the player was told "$.events is required."
 export const REASONING_ONLY_MESSAGE = "The model wrote only its reasoning and no answer.";
+// A visible textual reply that did not parse is NOT evidence that the model
+// returned only reasoning. In particular, a JSON-looking (possibly truncated)
+// time-skip reply must not be misdiagnosed as an absent answer.
+export const UNPARSEABLE_STRUCTURED_TEXT_MESSAGE = "The model returned text, but no complete parseable JSON answer or tool arguments were found.";
 // What stands above that reasoning where a report prints the rejected reply,
 // so nobody reads the model's planning as the answer it gave.
 export const REASONING_ONLY_NOTE = "(the model wrote no answer; this is its reasoning)";

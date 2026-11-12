@@ -567,6 +567,8 @@ Ownership/name resolution is done in **one namespace** (country display name) �
 
 One engine call at a time; a failed step changes nothing and its reason shows in the panel. **✕ Leave** closes the dialog and leaves a scene where it is, and an offer until the next time skip. A scene an older skip proposed and nobody took up is not shown.
 
+**Completed-scene identity.** Both **Play** (when the last move resolves the scene) and **End the scene** display the title of the interactive outcome returned by `resolveInteractiveScene` (`resolvedSceneTitle`, read through `sceneCompletionTitle`). They must not read `result.events.at(-1)`: the committed events array is the whole timeline, and automatic espionage or lifecycle events may be appended after the interactive outcome in the same turn. Those unrelated events remain on the timeline but are not the scene's title. When no resolved title is available, the panel falls back to the original scene title. The engine saves the same canonical events as before; this contract affects completion presentation only.
+
 ---
 
 ## 10-ter. Rostra, the social network — `src/Game/GameUI/social.jsx`
@@ -691,3 +693,11 @@ The standalone `ScenarioTopBar` (`scenarios.jsx`) and its `runtime/scenarios.js`
 ### Interface palette controls (Beta, 2026-11-05)
 
 The new Settings → General → Interface appearance control is documented in [Interface themes](ui-themes.md). Default (Original) deliberately clears all theme overrides to preserve each panel's authored legacy colors. Five opt-in themed presets and Custom recolor the Country, Advisor, Actions, Projects, Diplomacy, Events, Timeline, Tools, Cheats and AI Debug Console chrome from one validated device-local palette, while scenario-authored Stats values/order and semantic country, political, military and diplomatic colors remain unchanged. This is presentation state only and does not enter campaign canon or AI context. Existing hardcoded semantic colors must not be replaced merely to make them follow the theme.
+
+### Country Editor: standard and scenario-defined Stats (Beta, 2026-11-12)
+
+The Country Editor in Cheats reads `loadStatSheetDefinition()`, the same scenario-owned Stats definition used by the National panel. The old editor enabled its economic fields only for a `countryStats[polity].territorialComponents` ledger. This is correct for the **standard** component-backed Stats pathway but incorrectly disabled every metric for valid **custom Stats V2** scenarios: their authoritative visible values are in `countryStats[polity].customStats`, which need not contain a component ledger.
+
+On a custom sheet, the editor now shows the scenario-author's defined sections, metric labels, numeric bounds and precision, and the currently recorded value or a blank for **unset**. Only user-changed stat keys are patched via `applyCountryStatPatchToWorld` -> `mergeCountryStatPatch`. Explicit zero remains distinct from unset; invalid or cleared values fail closed rather than inventing a zero or silently deleting state. Undeclared/legacy custom keys and the existing continuity evidence remain preserved. Live Intelligence Service, when rated, is displayed and edited through `world.intelligence` (the same native value used by the country panel and espionage) instead of the duplicate custom stat.
+
+The scenario-visible custom layer and hidden native population/GDP/budget/debt backend remain **separate authorities**; merely editing a custom metric called GDP does **not** infer compatible units or silently rebaseline military/economic simulation. Native/legacy metric binding requires its own explicit accepted mapping and reconciliation, not a hardcoded alias. For standard Stats, the original territorial-component edit/rescale flow remains unchanged; the absent-baseline guard is retained where it applies. The editor continues to edit Political World independently and records the explicitly changed scenario values in the Game Master change note.

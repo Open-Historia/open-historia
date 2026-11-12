@@ -24,6 +24,8 @@ New to the codebase? Read **[Architecture Overview](architecture.md)** first —
 
 ### AI & Prompts
 - [Advisor Group Chat: Participation, Memory & Action Continuity](advisor-group-participation.md) - Native Group Chat ownership, individual versus shared-batch participation, strict pass and memory contracts, stable Action review, and scoped 2026-11-11 live acceptance evidence.
+- [Individual Advisor Action History & Canonical Queue](advisor-action-history.md) - Historical JSON replay boundaries, strict queued-vs-resolved Action validation, native review-card continuity, and stale-ID regression evidence.
+- [Advisor Diplomatic-History Context & Retrieval](advisor-diplomatic-context.md) - Bounded Advisor diplomatic briefings, exact dated message retrieval across active and archived chats, confidentiality, and measured long-campaign prompt reduction.
 - [AI System Overview](ai-overview.md) — Transport/provider dispatch, key/relay security, streaming vs buffered, token caps, and the `runJsonTask` strict/salvage task pipeline.
 - [Prompt-Making Guide](ai-prompts.md) — The reference for authoring and editing AI prompts: every variable, all tasks, end-to-end assembly, and the override/frozen-prompt model.
 - [AI Return Schemas & Validation](ai-schemas.md) — AI JSON return schemas, the two-layer validator, and the `runJsonTask` strict/salvage retry discipline.
