@@ -7,9 +7,12 @@ import {
   MARKER_FAMILY,
   MARKER_VISIBILITY_TIER,
   POLITICAL_FILL_OPACITY_STOPS,
+  SOLID_POLITICAL_FILL_STORAGE_KEY,
   getMarkerPresentation,
   politicalFillOpacityAtZoom,
+  politicalFillOpacityStops,
 } from "./presentationPolicy.js";
+import { MAP_SETTING_KEYS } from "../../../runtime/mapSettings.js";
 import { MAP_FEATURE_KINDS } from "../../../Editor/mapFeatures.js";
 
 test("the conquest flood draws at the strength MapLibre gives the political fill", () => {
@@ -21,6 +24,26 @@ test("the conquest flood draws at the strength MapLibre gives the political fill
     const expected = compiled.value.evaluate({ zoom });
     assert.ok(Math.abs(politicalFillOpacityAtZoom(zoom) - expected) < 1e-9, `zoom ${zoom}`);
   }
+});
+
+test("the fill is the blended list unless Solid political colours is on", () => {
+  // No store under node: the game's own look.
+  assert.equal(POLITICAL_FILL_OPACITY_STOPS, politicalFillOpacityStops(false));
+  assert.deepEqual(politicalFillOpacityStops(false).map(([, opacity]) => opacity), [0.46, 0.5, 0.56, 0.62, 0.68, 0.72, 0.78, 0.82, 0.84]);
+  assert.equal(SOLID_POLITICAL_FILL_STORAGE_KEY, MAP_SETTING_KEYS.solidPoliticalFill);
+});
+
+test("the solid list keeps the blended list's zooms, never draws weaker, and ends where it does", () => {
+  const blended = politicalFillOpacityStops(false);
+  const solid = politicalFillOpacityStops(true);
+  // The same zooms, so every layer built from the stops keeps its shape.
+  assert.deepEqual(solid.map(([zoom]) => zoom), blended.map(([zoom]) => zoom));
+  solid.forEach(([, opacity], index) => {
+    assert.ok(opacity >= blended[index][1], `stop ${index}`);
+    // Never fully opaque: the relief under a country still reads.
+    assert.ok(opacity < 1, `stop ${index}`);
+  });
+  assert.equal(solid.at(-1)[1], blended.at(-1)[1]);
 });
 
 // What each kind the Map feature tool offers should be drawn as in the game.

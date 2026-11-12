@@ -117,6 +117,7 @@ registerSettingsSnapshot("Map", () => [
     ["3D Globe", onOff(storedBoolean("Globe", false))],
     ["3D Terrain", onOff(storedBoolean("Terrain", true))],
     ["Hide country labels", onOff(getMapSetting(MAP_SETTING_KEYS.hideCountryLabels))],
+    ["Solid political colours", onOff(getMapSetting(MAP_SETTING_KEYS.solidPoliticalFill))],
     // Ships on: an absent key is on.
     ["Seasons and weather", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.seasonsWeather))],
     ["Weather effects", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.weatherEffects))],

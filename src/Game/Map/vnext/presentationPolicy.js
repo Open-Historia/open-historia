@@ -32,7 +32,7 @@ export const V_NEXT_MARKER_SHAPE_LAYER_IDS = Object.freeze([
 // builds its MapLibre ramp from it) and the conquest flood
 // (ownershipFloodCustomLayer.js), which hands off to the fill seamlessly only
 // while both draw at the same strength.
-export const POLITICAL_FILL_OPACITY_STOPS = Object.freeze([
+const BLENDED_FILL_OPACITY_STOPS = Object.freeze([
   // World view: terrain remains visible while political ownership is readable.
   [1.5, 0.46],
   [2.5, 0.50],
@@ -49,6 +49,49 @@ export const POLITICAL_FILL_OPACITY_STOPS = Object.freeze([
   [12.0, 0.82],
   [14.0, 0.84],
 ].map((stop) => Object.freeze(stop)));
+
+// The other look, for a player who turned on Solid political colours
+// (Settings → Map): countries painted almost opaque from the world view down,
+// as a flat political map is. A scenario whose author chose its colours to be
+// told apart (blocs, ideologies, a mod's own palette) loses that at 0.46 over
+// a physical basemap, where every colour is half terrain. The close stops
+// are the blended list's own, so terrain detail still comes through there and
+// nothing changes when a player zooms into a city.
+const SOLID_FILL_OPACITY_STOPS = Object.freeze([
+  [1.5, 0.88],
+  [2.5, 0.88],
+  [3.75, 0.88],
+  [5.0, 0.88],
+  [6.5, 0.88],
+  [8.0, 0.88],
+  [10.0, 0.86],
+  [12.0, 0.84],
+  [14.0, 0.84],
+].map((stop) => Object.freeze(stop)));
+
+export const politicalFillOpacityStops = (solid) => (solid ? SOLID_FILL_OPACITY_STOPS : BLENDED_FILL_OPACITY_STOPS);
+
+// The setting's storage key, MAP_SETTING_KEYS.solidPoliticalFill
+// (runtime/mapSettings.js; presentationPolicy.test.js holds the two together).
+// Written out here because this module stays import-free.
+export const SOLID_POLITICAL_FILL_STORAGE_KEY = "map_solid_political_fill";
+
+// Read ONCE, as the game loads, and not subscribed to: the fill ramp, the
+// disputed tiles, the ownership sweep, a battlefield's ground and the conquest
+// flood are each built from this one list, several of them as constants, and
+// they hand off to one another seamlessly only while all draw at the same
+// strength. A list that changed under them mid-game would leave the ones
+// already built at the old strength. So the switch takes effect the next time
+// the game opens, and Settings says so. No store (node --test) reads as off.
+const solidPoliticalFillChosen = () => {
+  try {
+    return globalThis.localStorage?.getItem?.(SOLID_POLITICAL_FILL_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
+export const POLITICAL_FILL_OPACITY_STOPS = politicalFillOpacityStops(solidPoliticalFillChosen());
 
 // The borders between polities (Nations.jsx polity-boundaries and its shadow),
 // in px by zoom: one list for those lines and the border a battlefield's ground
