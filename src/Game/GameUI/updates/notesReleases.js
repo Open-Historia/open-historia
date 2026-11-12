@@ -71,6 +71,7 @@ export const RELEASES = [
           "2026-11-older-history-kept",
           "2026-11-features-off-left-out",
           "2026-11-stats-in-dollars",
+          "2026-11-installer-privacy-page",
           "2026-10-wars-and-fronts-2",
           "2026-10-swarms",
           "2026-10-deploy-calls-up",

@@ -28,6 +28,7 @@ import { withTurnSeaBattles } from "../../runtime/naval/record.js";
 import { withFrontFortifications } from "../../runtime/warGeography.js";
 import { zoneWeatherFor } from "../../runtime/zoneWeather.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
+import { applyCountryCapabilityPatchToWorld, validateCountryCapabilityPatch } from "../../runtime/countryCapabilities.js";
 import { MILITARY_CHANGE_RULE, describeMilitaryStanding } from "../../runtime/militaryStanding.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
 import { STATS_BACKEND_FIELD, conflictSheetTargets, hasStatsBackend, statsBackendInstruction, statsBackendOf, statsBackendPatch, statsBackendTurnRule } from "../../runtime/statsBackend.js";
@@ -197,7 +198,7 @@ import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiati
 import { openingSpeaker } from "./chatSpeaker.js";
 import { sharedLetterOf } from "./sharedLetters.js";
 import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
-import { OUTPUT_LIMIT_MESSAGE, REASONING_ONLY_MESSAGE, REASONING_ONLY_NOTE, isUnreachableError } from "./providerErrors.js";
+import { OUTPUT_LIMIT_MESSAGE, REASONING_ONLY_MESSAGE, REASONING_ONLY_NOTE, UNPARSEABLE_STRUCTURED_TEXT_MESSAGE, isUnreachableError } from "./providerErrors.js";
 import { isCancelAllAbort } from "./aiRequestControl.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE, audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
@@ -900,10 +901,10 @@ const filedEventsFromRows = (droppedRows, hiddenRows, sourceEvents) => {
 
 // One jump segment's ledger records, checked against the world as the earlier
 // segments left it. Strict while a retry remains (the model gets the exact
-// error), salvaged on the final attempt: an ambiguous combat event is dropped
-// together with the war record only it established, rather than the whole
-// segment going to the fallback. Ends by binding every record to this
-// segment's event ids, which is what lets mergeSegmentPayloads concatenate.
+// error); the final attempt repairs independently unsupported war changes.
+// If the result still fails canonical validation, the segment fails closed,
+// rather than publishing hard-combat narration without an active war.
+// Record event links before mergeSegmentPayloads concatenates segments.
 const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, receipt = null }) => {
   const events = normalizeArray(candidate?.events);
   // Temporary ids: the canonical round-scoped ones are minted once the whole
@@ -989,11 +990,10 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
     warError = validateWarLedgerPayload(candidate, { world });
   }
   if (warError && !strict) {
-    // The last attempt: the model was told what was wrong and still could not
-    // bind its war record, and a finished segment is not lost to that. The
-    // record's own event numbers are stamped onto their events as the warId
-    // they declare; what still cannot bind is dropped with the events' war
-    // bindings, and the events stay as narrative (repairWarLedgerPayload).
+    // The last attempt: after asking for correction, repairWarLedgerPayload
+    // stamps supported event links and drops unsupported war records. An
+    // invalid residual is never accepted merely because the model is done:
+    // narrative hard combat without an active war must fail closed.
     const first = warError;
     const repair = repairWarLedgerPayload(candidate, { world });
     const summary = `stamped warId on ${repair.stamped} event(s)`
@@ -1001,10 +1001,12 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
       + `, dropped ${repair.droppedIds.length} war record(s)`
       + `${repair.droppedIds.length ? ` (${repair.droppedIds.join(", ")})` : ""}, unbound ${repair.strippedEvents} event(s)`;
     console.warn(
-      `[ai] war ledger salvage after the model failed its corrective retry: ${summary}; keeping the segment. `
+      `[ai] war ledger salvage after the model failed its corrective retry: ${summary}; ${repair.residual ? "rejecting the still-invalid segment" : "keeping the repaired segment"}. `
       + `First rejection: ${first}${repair.residual ? ` The ledger still says: ${repair.residual}` : ""}`,
     );
-    logDebugEvent("warn", "[turn] War ledger salvage on the final attempt: the segment is kept, its canonical war changes repaired or dropped.", {
+    logDebugEvent("warn", repair.residual
+      ? "[turn] War ledger salvage could not restore canonical integrity; the segment is rejected."
+      : "[turn] War ledger salvage on the final attempt repaired or removed unsupported war changes.", {
       firstRejection: first,
       stamped: repair.stamped,
       anchored: repair.anchored,
@@ -1026,7 +1028,12 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
           : countedNote(repair.strippedEvents, "warLinksOne", "warLinksMany"),
       );
     }
-    warError = "";
+    // A residual is NOT a successful salvage. The old path cleared the error
+    // unconditionally and committed events the merged canonical validator still
+    // rejected (BETA-10). Reject this segment instead of publishing impossible
+    // battlefield history. The caller can retry or fall back under its existing
+    // task budget; unrelated events remain in its uncommitted candidate.
+    warError = repair.residual;
   }
   if (warError) return warError;
 
@@ -4383,9 +4390,9 @@ const runJsonTask = async (taskKey, {
       // what the model wrote, and never the first fragment that happens to
       // parse (jsonSalvage.js extractJsonPayload).
       const contractKeys = normalizeArray(tool?.schema?.required);
-      // Past this much text with no answer in it, what the model wrote was its
-      // planning (a refusal or an error is a line or two).
-      const PLANNING_PROSE_CHARS = 600;
+      // Do not infer "reasoning-only" from the length of a text reply.
+      // A model can return thousands of characters of malformed JSON, which
+      // is an unusable answer but is not evidence of hidden reasoning.
       // A value that passes the task's own schema check is the whole answer,
       // and fits better than any count of keys: the tool may ask for a key the
       // check does not insist on, and an answer without it is still complete.
@@ -4684,12 +4691,12 @@ const runJsonTask = async (taskKey, {
           : checkToolPayload(parsed))
         : {
           valid: false,
-          // Reasoning and nothing else, whether the provider returned it apart
-          // or the model wrote its planning where the answer goes: long prose
-          // with no object of the contract's in it.
+          // Keep provider-reported reasoning separate from visible but
+          // unparseable text. Length alone cannot distinguish the two.
           error: cutAtLimitUnusable ? OUTPUT_LIMIT_MESSAGE
-            : reasoningOnly || (contractKeys.length && rawText.length > PLANNING_PROSE_CHARS) ? REASONING_ONLY_MESSAGE
-              : "Response did not contain parseable JSON or tool arguments.",
+            : reasoningOnly ? REASONING_ONLY_MESSAGE
+              : rawText ? UNPARSEABLE_STRUCTURED_TEXT_MESSAGE
+                : "Response did not contain parseable JSON or tool arguments.",
         };
       // The scenario's stats contract, once the schema passes (validateStatContract).
       if (validation.valid && parsed) {
@@ -16487,7 +16494,8 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
   const scene = outcome ? await sceneMapConsequences({ bundle, outcome: markSceneOutcome(outcome, history), generation: summaryGeneration }) : null;
   const sceneOutcome = scene?.events?.[0] ?? outcome;
 
-  const applyScene = (withBoard) => applySimulationResult({
+  const applyScene = async (withBoard) => {
+    const applied = await applySimulationResult({
     baseActions: bundle.actions,
     baseChats: bundle.chats,
     baseColors,
@@ -16510,7 +16518,12 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
       generation: summaryGeneration,
       receipt: scene?.receipt ?? null,
     },
-  });
+    });
+    // The interactive outcome owns this title. Generic turn processing can
+    // append espionage/lifecycle events afterwards, so its last event is not
+    // necessarily the scene the player just completed.
+    return { ...applied, resolvedSceneTitle: normalizeString(sceneOutcome?.title) || normalizeString(interactive.title) };
+  };
   // A Board that fails holds a jump for the player to retry; a Scene is not held
   // for its Board. Its outcome is written without the Board moving, and the next
   // jump's Board pass reads it with the rest.
@@ -19036,6 +19049,16 @@ const gmPatchHasContent = (patch) => {
 const validateGameMasterStatPatches = (patches, world, events) => {
   const normalizedWorld = normalizeWorldState(world);
   const eventCount = normalizeArray(events).length;
+  // Preflight native capability mutations on a detached world copy, including
+  // sparse wartime-ledger capacity and multiple patches to one country. An
+  // approved preview must not discover a new capability error at Apply.
+  const capabilityPreflight = {
+    ...normalizedWorld,
+    countryStats: { ...(normalizedWorld.countryStats || {}) },
+    intelligence: { ...(normalizedWorld.intelligence || {}) },
+    warWeariness: Array.isArray(normalizedWorld.warWeariness) ? [...normalizedWorld.warWeariness] : [],
+    warResources: Array.isArray(normalizedWorld.warResources) ? [...normalizedWorld.warResources] : [],
+  };
 
   for (let index = 0; index < normalizeArray(patches).length; index += 1) {
     const entry = patches[index];
@@ -19053,6 +19076,34 @@ const validateGameMasterStatPatches = (patches, world, events) => {
     }
     if (!gmPatchHasContent(entry?.patch)) {
       return `$.countryStatPatches[${index}].patch must contain at least one requested Stats field.`;
+    }
+
+    // Direct capability edits have native combat/espionage owners even with
+    // scenario-defined custom National Stats. The legacy intelligenceService
+    // custom key is already rendered from live intelligence when rated.
+    const capability = {};
+    for (const key of ["intelligence", "military", "warWeariness", "warResources"]) {
+      if (Object.prototype.hasOwnProperty.call(entry.patch, key)) capability[key] = entry.patch[key];
+    }
+    const customIntelligence = entry.patch?.customStats?.intelligenceService;
+    if (customIntelligence !== undefined) {
+      if (typeof customIntelligence !== "number" || !Number.isInteger(customIntelligence)
+        || customIntelligence < 0 || customIntelligence > 100) {
+        return `$.countryStatPatches[${index}].patch.customStats.intelligenceService must be a live 0..100 integer.`;
+      }
+      if (capability.intelligence !== undefined && capability.intelligence !== customIntelligence) {
+        return `$.countryStatPatches[${index}] specifies conflicting live intelligence ratings.`;
+      }
+      capability.intelligence = customIntelligence;
+    }
+    if (Object.keys(capability).length) {
+      const capabilityError = validateCountryCapabilityPatch(capability);
+      if (capabilityError) return `$.countryStatPatches[${index}].patch: ${capabilityError}`;
+      try {
+        applyCountryCapabilityPatchToWorld(capabilityPreflight, canonical, capability);
+      } catch (error) {
+        return `$.countryStatPatches[${index}].patch: ${normalizeString(error?.message) || "Capability correction could not be admitted."}`;
+      }
     }
 
     for (const eventIndex of normalizeArray(entry?.eventIndexes)) {
@@ -20192,8 +20243,28 @@ export const applyGameMasterPreview = async (preview) => {
     const statCountries = [];
     for (const entry of normalizeArray(transaction.countryStatPatches)) {
       const country = normalizeString(entry?.country);
-      const nextSheet = applyCountryStatPatchToWorld(nextWorld, country, cloneValue(entry?.patch));
-      if (!nextSheet) throw new Error(`Stats patch for ${country || "unknown polity"} could not be applied. Nothing was persisted.`);
+      const requestedPatch = cloneValue(entry?.patch);
+      const capability = {};
+      const statsOnlyPatch = { ...requestedPatch };
+      for (const key of ["intelligence", "military", "warWeariness", "warResources"]) {
+        if (!Object.prototype.hasOwnProperty.call(requestedPatch, key)) continue;
+        capability[key] = requestedPatch[key];
+        delete statsOnlyPatch[key];
+      }
+      // A custom intelligenceService field is already treated as the live
+      // Intelligence Service in the Country panel; keep the canonical owner in sync.
+      if (Object.prototype.hasOwnProperty.call(requestedPatch?.customStats || {}, "intelligenceService")) {
+        capability.intelligence = requestedPatch.customStats.intelligenceService;
+      }
+      const hasStatPatch = Object.keys(statsOnlyPatch).length > 0;
+      let nextSheet = hasStatPatch
+        ? applyCountryStatPatchToWorld(nextWorld, country, statsOnlyPatch)
+        : nextWorld.countryStats?.[country] ?? null;
+      if (Object.keys(capability).length) {
+        applyCountryCapabilityPatchToWorld(nextWorld, country, capability);
+        nextSheet = nextWorld.countryStats?.[country] ?? nextSheet;
+      }
+      if (hasStatPatch && !nextSheet) throw new Error(`Stats patch for ${country || "unknown polity"} could not be applied. Nothing was persisted.`);
       statCountries.push(country);
       const reputation = Number(nextSheet?.indices?.internationalReputation);
       if (Number.isFinite(reputation)) {

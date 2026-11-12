@@ -911,3 +911,46 @@ test("an end told by an undated event does not let later fighting pass as fought
   const payload = { events: [accord, later], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Accord" };
   assert.match(validateWarLedgerPayload(payload, { world: vietnam }), /is ended, not active/);
 });
+
+test("BETA-10: a residual hard-combat error must reject the segment instead of reaching the canonical save", () => {
+  // Reproduction from the Albanian campaign's Mojkovac offensive: no direct
+  // combatants, no resolvable war record, yet the old salvage kept the event.
+  const combat = {
+    id: "mojkovac-replay",
+    date: "2016-11-03",
+    title: "Montenegrin Security Forces Counter-Offensive Reclaims Mojkovac Administrative Center",
+    description: "Montenegrin troops launched a counter-offensive against the insurgents at Mojkovac.",
+    kind: "military",
+    warId: "",
+    combatants: [],
+  };
+  const candidate = { events: [combat], warUpdates: "" };
+  assert.equal(eventNarratesHardCombat(combat), true);
+  assert.match(validateWarLedgerPayload(candidate, { world }), /no event\.warId/);
+  const repaired = repairWarLedgerPayload(candidate, { world });
+  assert.match(repaired.residual, /no event\.warId/);
+  assert.equal(candidate.events.length, 1, "native repair does not silently invent a war or rewrite history");
+
+  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  const segment = gameplay.slice(gameplay.indexOf("const validateSegmentLedgers ="), gameplay.indexOf("// On the salvage pass a malformed ledger row"));
+  assert.match(segment, /warError = repair\.residual;/);
+  assert.match(segment, /if \(warError\) return warError;/);
+  assert.doesNotMatch(segment, /warError = "";/, "the final salvage must not erase the residual error");
+  assert.match(segment, /rejecting the still-invalid segment/);
+});
+
+test("BETA-10: a quiet non-war narrative still passes canonical validation", () => {
+  const narrative = {
+    id: "odessa-quiet",
+    date: "2016-11-03",
+    title: "Civilian Demonstrations Convene in Odessa",
+    description: "Residents held a public rally over housing costs.",
+    kind: "world",
+    warId: "",
+    combatants: [],
+  };
+  const candidate = { events: [narrative], warUpdates: "" };
+  assert.equal(eventNarratesHardCombat(narrative), false);
+  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
+  assert.equal(repairWarLedgerPayload(candidate, { world }).residual, "");
+});

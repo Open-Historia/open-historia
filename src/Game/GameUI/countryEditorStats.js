@@ -1,4 +1,6 @@
 /*! Open Historia — Country Editor: what a Save writes © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+import { flattenStatSheetRows, readCustomStatNumber } from "../../runtime/statIndexDefinitions.js";
+
 // The Country Editor (Cheats) loads a country's sheet into a form once, and a
 // turn may change the country while the form is open. A Save therefore writes
 // only what the player changed since the form loaded: writing every field put
@@ -99,4 +101,57 @@ export const countryStatPatchFromForm = ({ form = {}, changed = new Set(), polit
         ...(gdpBreakdown ? { gdpBreakdown } : {}),
     };
     return Object.keys(patch).length ? patch : null;
+};
+
+// Scenario-defined Stats V2 is its OWN canonical sheet, not a territorial
+// component ledger. Render the exact authored stat keys and preserve unset
+// (blank) instead of filling metrics just because the definition contains them.
+// Intelligence Service is special: when a live native rating exists, the
+// National panel shows world.intelligence instead of its stale custom copy.
+export const countryCustomStatFormFromSheet = ({
+    sheet = null, definition = null, liveIntelligence = null,
+} = {}) => {
+    if (!definition?.custom) return {};
+    return Object.fromEntries(flattenStatSheetRows(definition).map(({ key }) => {
+        const source = key === "intelligenceService" && Number.isFinite(liveIntelligence)
+            ? liveIntelligence : readCustomStatNumber(sheet?.customStats?.[key]);
+        return [key, source == null ? "" : String(source)];
+    }));
+};
+
+// Fail closed for clearing a recorded stat: the native merge contract supports
+// sparse numeric patches, NOT deletion. Never claim success for an erased field.
+// The caller writes an explicit live intelligence rating to its own native
+// ledger, not to a customStats duplicate the player cannot see.
+export const countryCustomStatEditFromForm = ({
+    form = {}, loaded = {}, definition = null, liveIntelligence = null,
+} = {}) => {
+    if (!definition?.custom) return { patch: null, intelligenceRating: null };
+    const changed = changedEditorFields(form, loaded);
+    const customStats = {};
+    let intelligenceRating = null;
+    for (const stat of flattenStatSheetRows(definition)) {
+        if (!changed.has(stat.key)) continue;
+        const raw = form?.[stat.key];
+        if (raw === "" || raw == null) {
+            throw new Error(`${stat.label} cannot be cleared here; only explicit numeric changes can be saved.`);
+        }
+        const min = Number.isFinite(stat.minimum) ? stat.minimum : -Infinity;
+        const max = Number.isFinite(stat.maximum) ? stat.maximum : Infinity;
+        const value = editorNumber(raw, { min, max, label: stat.label });
+        // Respect the scenario author's precision without silently rounding
+        // the user's entered value to a different figure.
+        if (Math.abs(value - Number(value.toFixed(stat.decimals))) > 1e-8) {
+            throw new Error(`${stat.label} supports at most ${stat.decimals} decimal place(s).`);
+        }
+        if (stat.key === "intelligenceService" && Number.isFinite(liveIntelligence)) {
+            intelligenceRating = value;
+        } else {
+            customStats[stat.key] = value;
+        }
+    }
+    return {
+        patch: Object.keys(customStats).length ? { customStats } : null,
+        intelligenceRating,
+    };
 };

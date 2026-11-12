@@ -26,6 +26,7 @@ const { createPayloadUpdater } = require("./payloadUpdate.cjs");
 const payloadBoot = require("./payloadBoot.cjs");
 const { clearOtherPortsCaches } = require("./staleCaches.cjs");
 const { fetchAppFileOnce } = require("./appFile.cjs");
+const { INSTALL_OPTIONS_FILE, readInstallOptions } = require("./installOptions.cjs");
 const { configureUiWords, uiWord } = require("./uiWords.cjs");
 
 // The map is drawn with WebGL, and without it the game is a black window with
@@ -139,6 +140,12 @@ configureUiWords({ dataDir: DATA_DIR, langDirs: [path.join(__dirname, "..", "dis
 // neither and server.js keeps its own defaults.
 process.env.OH_CHANNEL = CHANNEL;
 if (IS_BETA) process.env.OH_DESKTOP_UPDATE_URL = BETA_UPDATE_MANIFEST;
+
+// What the player switched off on the Windows installer's privacy page
+// (electron/installOptions.cjs); everything is on without it. Update checks off
+// also quiets the page's update banner, whose feed server.js fetches.
+const INSTALL_OPTIONS = readInstallOptions(fs, path.join(USER_ROOT, INSTALL_OPTIONS_FILE));
+if (!INSTALL_OPTIONS.checkUpdates) process.env.OH_UPDATE_CHECKS = "0";
 
 // Main-process crashes are the ones that reach the player as a bare "A
 // JavaScript error occurred in the main process" dialog with nothing to act on —
@@ -1097,7 +1104,8 @@ const boot = async () => {
   // (electron/launchUpdate.cjs); the banner is for one found while it is open.
   // Nothing here may stop the game opening: any failure opens it as before.
   const launchUpdate = await runLaunchUpdate({
-    updater,
+    // Without update checks (the installer's privacy page) there is nothing to ask.
+    updater: INSTALL_OPTIONS.checkUpdates ? updater : null,
     fs,
     recordFile: path.join(USER_ROOT, "launch-update.json"),
     showWindow: openSetupWindow,
@@ -1117,7 +1125,8 @@ const boot = async () => {
   // This app's own file, downloaded once per install or update and never
   // again (electron/appFile.cjs): how installs are counted. In the background;
   // the game opens whether it goes through or not.
-  void fetchAppFileOnce({
+  // Not when the player said no on the installer's privacy page.
+  if (INSTALL_OPTIONS.countInstall) void fetchAppFileOnce({
     channel: CHANNEL,
     packaged: app.isPackaged,
     markFile: path.join(USER_ROOT, "app-file.json"),
@@ -1216,6 +1225,12 @@ const reportFatalBootError = (error) => {
 const DISCORD_APPLICATION_ID = "1529270119916896326";
 const registerDiscordLaunch = () => {
   if (!app.isPackaged || String(process.env.OH_DISCORD_PRESENCE ?? "1") === "0") return;
+  // Said no on the installer's privacy page: no link handler, and one an
+  // earlier version of the app left behind comes off.
+  if (!INSTALL_OPTIONS.discordLaunch) {
+    try { app.removeAsDefaultProtocolClient(`discord-${DISCORD_APPLICATION_ID}`); } catch { /* nothing registered */ }
+    return;
+  }
   try {
     app.setAsDefaultProtocolClient(`discord-${DISCORD_APPLICATION_ID}`);
   } catch {

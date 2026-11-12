@@ -1300,7 +1300,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             updateMessages(selectedMessages);
             setInput(contactDraftsRef.current.get(id) || "");
             setVisibleMessageLimit(ADVISOR_INITIAL_RENDER_WINDOW);
-            loadHistory(selectedMessages, id);
+            loadHistory(selectedMessages, id, { character: advisorContacts(saved).some((contact) =>
+                contact.id === id && advisorRecipientType(contact) !== ADVISOR_RECIPIENT_TYPES.MINISTER) });
             shouldAutoScrollRef.current = true;
         } catch (error) {
             setLoadFailed(true);
@@ -1788,7 +1789,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             setContacts(advisorContacts(saved));
             setChiefProfile(chiefAdvisorProfile(saved));
             updateMessages(merged);
-            loadHistory(merged, threadId);
+            loadHistory(merged, threadId, { character: advisorContacts(saved).some((contact) =>
+                contact.id === threadId && advisorRecipientType(contact) !== ADVISOR_RECIPIENT_TYPES.MINISTER) });
             if (said.length) await saveMessages(merged, threadId);
         } finally {
             setStorageRetrying(false);

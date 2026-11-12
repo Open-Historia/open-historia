@@ -54,6 +54,45 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "make sure to follow all the signpath requirements for oss stuff" (the owner, 2026-11-12): SignPath Foundation requires the installer to show the privacy policy
+    // and offer to switch off what the app sends on its own; the stable Windows app's files now carry its name and version for signing.
+    id: "2026-11-installer-privacy-page",
+    kind: "minor",
+    date: "2026-11-12",
+    channel: "beta",
+    banners: [
+      {
+        title: "Privacy choices in the Windows installer",
+        items: [
+          "The Windows installer now has a privacy page: it says what the game contacts on its own, links the privacy policy, and lets you switch off update checks, the install count and Discord's link to the game.",
+        ],
+      },
+    ],
+  },
+  {
+    // Combined Beta release batch: PR #1016 (Advisor/Interactive Events/custom Stats/war integrity)
+    // and the A4 Country Editor/GM capability + GDP display-currency changes.
+    // Publish only in a Beta build containing both scopes. The date is the
+    // player's release date; once shipped, never reuse or rename this id.
+    id: "2026-11-advisor-country-tools",
+    kind: "minor",
+    date: "2026-11-12",
+    channel: "beta",
+    banners: [
+      {
+        title: "Steadier advisers and country tools",
+        items: [
+          "Advisers keep earlier conversations intact, and new Action proposals still need your review instead of changing orders already completed.",
+          "Interactive Events now show the ending of the scene you played, even when other events occur during the same time skip.",
+          "Scenario-defined national Stats can be edited without a territorial baseline, while unset values remain unset.",
+          "Country Editor and Game Master can correct intelligence, military capability, war weariness and resources without overriding calculated Military Power.",
+          "Choose GDP display currency in scenarios, new games or Settings: dollars, euros, pounds, rubles, rupees or yuan.",
+          "Invalid battle records are rejected instead of being silently accepted as the result of a war.",
+        ],
+      },
+    ],
+  },
+  {
     // "make the default currency in stats be dollars" (the owner, 2026-11-11): GDP was kept and shown in 2026 euros.
     id: "2026-11-stats-in-dollars",
     kind: "minor",

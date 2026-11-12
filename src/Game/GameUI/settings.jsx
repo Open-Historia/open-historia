@@ -78,6 +78,8 @@ import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
 // file readers with it.
 const BasemapPicker = lazy(() => import("../../Editor/BasemapPicker.jsx"));
 import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
+import { readGameData } from "../../runtime/gameState.js";
+import { ECONOMIC_DISPLAY_CURRENCIES, getActiveEconomicDisplayCurrency, normalizeEconomicDisplayCurrency, setActiveEconomicDisplayCurrency, subscribeEconomicDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
 import { DISCORD_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { CommunityTile, DISCORD_BLURPLE, DiscordMark, REDDIT_ORANGERED, RedditMark } from "./communityLogos.jsx";
 import { copyToClipboard } from "../../runtime/clipboard.js";
@@ -2894,6 +2896,54 @@ const useWorkspaceMorph = (cardRef, fromRect, closing) => {
     }, [cardRef, closing, fromRect]);
 };
 
+const EconomicDisplayCurrencySetting = () => {
+    const { activeGameId } = useLibraryState();
+    const currency = useSyncExternalStore(subscribeEconomicDisplayCurrency, getActiveEconomicDisplayCurrency);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
+
+    useEffect(() => {
+        if (!activeGameId) return undefined;
+        let cancelled = false;
+        // The stored campaign game.json is authoritative. No browser-global
+        // setting may silently override it when switching campaigns.
+        readGameData({ force: true }).then((game) => {
+            if (!cancelled) setActiveEconomicDisplayCurrency(game?.economicDisplayCurrency);
+        }).catch(() => {
+            if (!cancelled) setError("Could not load the campaign's currency preference.");
+        });
+        return () => { cancelled = true; };
+    }, [activeGameId]);
+
+    if (!activeGameId) return null;
+    const change = async (event) => {
+        const next = normalizeEconomicDisplayCurrency(event.target.value);
+        setSaving(true);
+        setError("");
+        try {
+            await saveGame(activeGameId, { gamePatch: { economicDisplayCurrency: next } });
+            setActiveEconomicDisplayCurrency(next);
+            logSettingChange("GDP display currency", next);
+        } catch (reason) {
+            setError(reason?.message || "Could not save the currency preference.");
+        } finally {
+            setSaving(false);
+        }
+    };
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginTop: "0.7rem" }}>
+            <label htmlFor="oh-economic-display-currency" style={{ color: "rgba(255,255,255,0.84)", fontSize: "0.77rem", fontWeight: 700 }}>GDP display currency</label>
+            <select id="oh-economic-display-currency" value={currency} onChange={change} disabled={saving} style={{ background: "var(--oh-hud-bg)", border: "1px solid var(--oh-hud-border)", borderRadius: 8, color: "white", minHeight: "2.4rem", padding: "0.4rem" }}>
+                {ECONOMIC_DISPLAY_CURRENCIES.map(({ code, name, symbol }) => <option value={code} key={code}>{name} ({code}, {symbol})</option>)}
+            </select>
+            <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.7rem", lineHeight: 1.5 }}>
+                This campaign only. Fixed January 2026 reference rates; changes affect display, not economic simulation or the country's domestic currency.
+            </div>
+            {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.73rem" }}>{error}</div>}
+        </div>
+    );
+};
+
 const SettingsWorkspace = ({
     activeSection,
     onSectionChange,
@@ -3013,6 +3063,7 @@ const SettingsWorkspace = ({
                 </SettingsSection>
                 <SettingsSection title="Display" description="Window and presentation preferences that apply to the game client.">
                     <DisplayModeSelector isFullscreenEnabled={isFullscreenEnabled} onToggleFullscreen={onToggleFullscreen} />
+                    {forGame && <EconomicDisplayCurrencySetting />}
                     {/* The website's demo has no vault door and no themes (runtime/websiteBuild.js). */}
                     {!isWebsiteBuild(import.meta.env) && (
                     <>
