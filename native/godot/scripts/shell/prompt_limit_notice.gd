@@ -95,7 +95,7 @@ func _render() -> void:
 		_list.add_child(line)
 	ShellNotices.place_top(_panel)
 	var width := get_viewport_rect().size.x
-	var available := minf(34.0 * REM, width - 2.0 * REM) - 1.6 * REM - 2.0 * 0.6 * REM - 2.0 * REM
+	var available := ShellNotices.text_room(width)
 	ShellNotices.fit_text(_words, available)
 	for child in _list.get_children():
 		ShellNotices.fit_text(child as Label, available)

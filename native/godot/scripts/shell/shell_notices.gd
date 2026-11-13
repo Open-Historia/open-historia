@@ -71,6 +71,13 @@ static func place_top(panel: Control) -> void:
 	panel.offset_right = 0.0
 
 
+static func text_room(width: float) -> float:
+	var room := minf(34.0 * REM, width - 2.0 * REM) - 1.6 * REM - 2.0 * 0.6 * REM - 2.0 * REM
+	if UI.phone():
+		room -= UI.PHONE_TAP - REM + 2.0
+	return room
+
+
 static func fit_text(label: Label, available: float) -> void:
 	var font := label.get_theme_font("font")
 	var size := label.get_theme_font_size("font_size")
@@ -94,6 +101,7 @@ static func dismiss_button() -> Button:
 	for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
 		button.add_theme_stylebox_override(state, StyleBoxEmpty.new())
 	button.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	UI.tap_size(button)
 	if "accessibility_name" in button:
 		button.set("accessibility_name", "Dismiss")
 	return button

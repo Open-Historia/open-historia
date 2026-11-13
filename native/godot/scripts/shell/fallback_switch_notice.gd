@@ -69,7 +69,7 @@ func _render() -> void:
 		return
 	ShellNotices.place_top(_panel)
 	var width := get_viewport_rect().size.x
-	var available := minf(34.0 * REM, width - 2.0 * REM) - 1.6 * REM - 2.0 * 0.6 * REM - 2.0 * REM
+	var available := ShellNotices.text_room(width)
 	for notice in _notices:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", roundi(0.6 * REM))

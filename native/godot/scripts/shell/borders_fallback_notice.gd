@@ -51,4 +51,4 @@ func _render() -> void:
 		return
 	ShellNotices.place_top(_panel)
 	var width := get_viewport_rect().size.x
-	ShellNotices.fit_text(_words, minf(34.0 * REM, width - 2.0 * REM) - 1.6 * REM - 2.0 * 0.6 * REM - 2.0 * REM)
+	ShellNotices.fit_text(_words, ShellNotices.text_room(width))

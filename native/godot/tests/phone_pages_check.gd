@@ -188,6 +188,86 @@ func _notice_part(view: Vector2) -> void:
 		await _shoot("phone-notice-2")
 	notice.queue_free()
 	await _wait(0.4)
+	await _ai_notice(view, updates)
+	await _changelog(view, updates)
+	await _prompt_limit(view)
+
+
+func _prompt_limit(view: Vector2) -> void:
+	var notice := PromptLimitNotice.new()
+	main.shell.overlay.add_child(notice)
+	await _wait(0.2)
+	notice.add_entries([{"id": "jump-a", "sectionLabel": "Time skip", "segmentLabel": "Event writing"}, {"id": "advisor-b", "sectionLabel": "Advisor", "segmentLabel": "Tone and voice"}])
+	await _wait(0.6)
+	var panel := notice.get("_panel") as Control
+	var r := panel.get_global_rect()
+	_check(r.position.x >= 15.5 and r.end.x <= view.x - 15.5, "the prompt limit notice keeps 1rem from the phone's sides (%s)" % str(r))
+	_check(absf(r.position.y - 4.75 * 16.0) < 1.0, "on a phone it hangs 4.75rem from the top")
+	var dismiss := _button(notice, "×")
+	_check(dismiss != null and dismiss.size.x >= 43.5 and dismiss.size.y >= 43.5, "its × is a 44 px target")
+	await _shoot("phone-prompt-limit")
+	notice.queue_free()
+	await _wait(0.3)
+
+
+func _ai_notice(view: Vector2, updates: Array) -> void:
+	var overhaul := {}
+	for item in updates:
+		for banner in (item as Dictionary).get("banners", []):
+			if str((banner as Dictionary).get("theme", "")) == "aiOverhaul":
+				overhaul = item
+	_check(not overhaul.is_empty(), "the AI overhaul notice is there")
+	if overhaul.is_empty():
+		return
+	var notice := UpdateNotice.new()
+	main.shell.overlay.add_child(notice)
+	await notice.setup(main.engine, [overhaul], {"reduceMotion": true})
+	await _wait(1.2)
+	var column := notice.get("_column") as Control
+	_check(column != null and column.size.x <= view.x - 32.0 + 0.5, "the AI overhaul notice keeps 1rem from the phone's sides (%d)" % (column.size.x if column else 0))
+	_check(_rightmost(notice) <= view.x + 0.5, "nothing in the AI overhaul notice runs off the phone (%.1f)" % _rightmost(notice))
+	await _shoot("phone-notice-ai")
+	var scroll := notice.get("_scroll") as ScrollContainer
+	if scroll:
+		scroll.scroll_vertical = 100000
+		await _wait(0.4)
+		await _shoot("phone-notice-ai-end")
+	notice.queue_free()
+	await _wait(0.4)
+
+
+func _changelog(view: Vector2, updates: Array) -> void:
+	var minors := updates.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) == "minor" and not ((update as Dictionary).get("banners", []) as Array).is_empty()).slice(0, 3)
+	_check(minors.size() == 3, "three minor updates to show together")
+	if minors.size() < 3:
+		return
+	var notice := UpdateNotice.new()
+	main.shell.overlay.add_child(notice)
+	await notice.setup(main.engine, minors, {"reduceMotion": true})
+	await _wait(1.2)
+	var pages: Array = notice.get("_pages")
+	_check(pages.size() == 1 and (pages[0] as Dictionary).has("changelog"), "three minor updates are one changelog card")
+	var column := notice.get("_column") as Control
+	_check(column != null and column.size.x <= view.x - 32.0 + 0.5, "the changelog keeps 1rem from the phone's sides (%d)" % (column.size.x if column else 0))
+	_check(_rightmost(notice) <= view.x + 0.5, "nothing in the changelog runs off the phone (%.1f)" % _rightmost(notice))
+	await _shoot("phone-changelog")
+	var scroll := notice.get("_scroll") as ScrollContainer
+	if scroll:
+		scroll.scroll_vertical = 100000
+		await _wait(0.4)
+		await _shoot("phone-changelog-end")
+	notice.queue_free()
+	await _wait(0.4)
+
+
+func _rightmost(node: Node) -> float:
+	var most := 0.0
+	for child in node.get_children():
+		if child is Control and (child as Control).is_visible_in_tree() and child.get_parent() is Container:
+			most = maxf(most, (child as Control).get_global_rect().end.x)
+		if not (child is ScrollContainer and (child as ScrollContainer).horizontal_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED):
+			most = maxf(most, _rightmost(child))
+	return most
 
 
 func _release_part(view: Vector2) -> void:
