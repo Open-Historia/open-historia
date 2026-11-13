@@ -75,6 +75,10 @@ export const MAP_SETTING_KEYS = {
     // provider handles tool calls badly, or who wants the single cheaper
     // request per task, turns them off from Settings → AI.
     lookupFunctions: "ai_lookup_functions",
+    // A local llama.cpp server is asked for its window, and a lookup round that
+    // would no longer fit it is not offered the lookups (AI/contextWindow.js).
+    // OFF by default — read with getMapSetting.
+    lookupWindowGuard: "ai_lookup_window_guard",
     // A skip's events on the Events panel as the model writes them
     // (AI/streamedEvents.js). ON by default; off leaves the skip behind the
     // Timeline panel's spinner.
@@ -201,6 +205,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.batchBackgroundTasks]: "Batch background AI tasks",
     [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
     [MAP_SETTING_KEYS.lookupFunctions]: "AI lookup functions",
+    [MAP_SETTING_KEYS.lookupWindowGuard]: "Stop lookups before a local window is full",
     [MAP_SETTING_KEYS.liveSkipEvents]: "Show time skip events as they are written",
     [MAP_SETTING_KEYS.idleDiplomacy]: "Countries write to me between time skips",
     [MAP_SETTING_KEYS.stopOnPlayerFailures]: "Stop when my events fail",
