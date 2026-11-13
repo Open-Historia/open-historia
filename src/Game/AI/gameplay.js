@@ -2350,9 +2350,8 @@ const canonicalizeNamedThings = (containers, world) => {
   const markerIds = new Set(markers.map((marker) => normalizeString(marker?.id)).filter(Boolean));
   const fold = (value) => normalizeString(value).toLowerCase();
   let named = 0;
-  for (const { event, impacts } of normalizeArray(containers)) {
+  for (const { impacts } of normalizeArray(containers)) {
     if (!impacts || typeof impacts !== "object") continue;
-    const context = [normalizeString(event?.title), normalizeString(event?.description)].filter(Boolean).join(". ");
     for (const op of normalizeArray(impacts.unitOps)) {
       if (!op || typeof op !== "object" || normalizeString(op.op).toLowerCase() === "spawn") continue;
       const written = normalizeString(op.unitId)
@@ -2361,7 +2360,9 @@ const canonicalizeNamedThings = (containers, world) => {
         || normalizeString(op.name);
       if (!written || unitIds.has(written)) continue;
       const removes = normalizeString(op.op).toLowerCase() === "remove" || (normalizeString(op.op).toLowerCase() === "strength" && strengthGiven(op) && Number(op.strength) === 0);
-      const unit = findUnitByRef(written, units, { owner: normalizeString(op.ownerCode ?? op.owner), context })
+      // By its exact name and, where two units share it, its owner (nameRefs.js):
+      // never by the event's words.
+      const unit = findUnitByRef(written, units, { owner: normalizeString(op.ownerCode ?? op.owner) })
         || (removes ? newestTwinByRef(written, units) : null);
       if (!unit) continue;
       op.unitId = unit.id;

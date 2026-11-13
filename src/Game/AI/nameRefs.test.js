@@ -13,12 +13,26 @@ test("a name is read with the kind it was given", () => {
     assert.deepEqual(readNameRef("region: Georgia"), { kind: "region", name: "Georgia", bracket: "", written: "region: Georgia" });
     assert.deepEqual(readNameRef("country: Georgia"), { kind: "country", name: "Georgia", bracket: "", written: "country: Georgia" });
     assert.equal(readNameRef("Country:North Korea").kind, "country");
-    assert.equal(readNameRef("state: Georgia").kind, "region", "the states of a country are its regions");
-    assert.equal(readNameRef("province = Hamhung").name, "Hamhung");
     assert.equal(readNameRef("city: Atlanta").kind, "city");
     assert.equal(readNameRef("unit: 3rd Infantry Division").kind, "unit");
-    assert.equal(readNameRef("base: Camp Humphreys").kind, "structure");
+    assert.equal(readNameRef("structure: Camp Humphreys").kind, "structure");
+    assert.equal(readNameRef("building: Camp Humphreys").kind, "structure", "an event's places write a structure so");
     assert.equal(readNameRef("sea: Black Sea").kind, "sea");
+    assert.equal(readNameRef("group: Wagner").kind, "group");
+});
+
+// The kinds are the tags the game itself writes and teaches, and nothing a
+// model might write instead: an English synonym is no more a kind than a
+// French one is (the owner, 2026-11-13: no keywording anywhere).
+test("only the game's own tags are kinds: a synonym in any language is part of the name", () => {
+    for (const written of ["state: Georgia", "province: Hamhung", "oblast: Kharkiv", "town: Atlanta", "base: Camp Humphreys", "nation: Georgia"]) {
+        assert.deepEqual(readNameRef(written), { kind: "", name: written, bracket: "", written }, written);
+    }
+    for (const written of ["province : Hamhung", "ville: Atlanta", "État: Géorgie", "провинция: Хамхын"]) {
+        assert.equal(readNameRef(written).kind, "", written);
+    }
+    assert.equal(readNameRef("province = Hamhung").name, "province = Hamhung", "a tag is written with a colon");
+    assert.equal(stripKindTags("near town: Kharkiv").kinds.size, 0);
 });
 
 test("a name with no kind is itself, and a word before a colon that is no kind is part of it", () => {
@@ -68,7 +82,27 @@ test("a phrase gives up its tags and says what kind each name was", () => {
     assert.equal(between.text, "between Kyiv, Ukraine and Kharkiv, Ukraine");
 
     assert.equal(stripKindTags("sea: Black Sea").text, "Black Sea");
-    assert.equal(kindOfName(stripKindTags("sea: Black Sea").kinds, "the Black Sea"), "sea");
+    assert.equal(kindOfName(stripKindTags("sea: Black Sea").kinds, "Black Sea"), "sea");
+    // An article is a word of the name like any other: no language's is taken off.
+    assert.equal(kindOfName(stripKindTags("sea: Black Sea").kinds, "the Black Sea"), "");
+    assert.equal(kindOfName(stripKindTags("sea: la mer Noire").kinds, "la mer Noire"), "sea");
+});
+
+test("the words that end a tagged name are the placement grammar's own", () => {
+    const opposite = stripKindTags("region: Donetsk Oblast opposite country: Russia");
+    assert.equal(kindOfName(opposite.kinds, "Donetsk Oblast"), "", "\"opposite\" is no word of the grammar, so it does not end the name");
+    assert.equal(kindOfName(opposite.kinds, "Donetsk Oblast opposite"), "region");
+    assert.equal(kindOfName(opposite.kinds, "Russia"), "country");
+    const facing = stripKindTags("region: Donetsk Oblast facing country: Russia");
+    assert.equal(kindOfName(facing.kinds, "Donetsk Oblast"), "region");
+});
+
+test("a script that writes its letters with marks keeps them when a name is folded", () => {
+    // दिल्ली and दाल्ला differ only by their vowel signs; so do が and か.
+    assert.notEqual(foldName("दिल्ली"), foldName("दाल्ला"));
+    assert.notEqual(foldName("がっこう"), foldName("かっこう"));
+    assert.equal(foldName("Ｄｉｌｌｉ ").length > 0, true);
+    assert.equal(foldName("Кривий  Ріг"), foldName("кривий ріг"));
 });
 
 test("a phrase with no tag is left exactly as it was", () => {
@@ -98,25 +132,46 @@ test("a unit is listed by its name, with its owner only where another shares it"
     assert.equal(handles.get("u-3"), "1st Army (Germany)");
 });
 
-test("a unit is found by its name, however it was written", () => {
+test("a unit is found by its name as the roster spells it, case and spacing aside", () => {
     assert.equal(findUnitByRef("3rd Infantry Division", UNITS)?.id, "u-1");
-    assert.equal(findUnitByRef("unit: 3rd infantry division", UNITS)?.id, "u-1");
-    assert.equal(findUnitByRef("the 3rd Infantry Division", UNITS)?.id, "u-1");
+    assert.equal(findUnitByRef("unit: 3rd infantry  division", UNITS)?.id, "u-1");
     assert.equal(findUnitByRef("3rd Infantry Division (United States)", UNITS)?.id, "u-1");
-    assert.equal(findUnitByRef("US 3rd Infantry Division", UNITS)?.id, "u-1", "the whole of its name inside what was written");
     // The save's own key is still read, for a saved order and a model that has seen one.
     assert.equal(findUnitByRef("u-4", UNITS)?.id, "u-4");
     assert.equal(findUnitByRef("Carrier Strike Group 5 (u-4)", UNITS)?.id, "u-4");
+    // A name the roster does not spell is no unit: the model is told, and names it right next time.
+    assert.equal(findUnitByRef("the 3rd Infantry Division", UNITS), null, "an article is no part of the roster's name");
+    assert.equal(findUnitByRef("US 3rd Infantry Division", UNITS), null, "a name inside a longer one is not that name");
+    assert.equal(findUnitByRef("3rd Infantry", UNITS), null);
 });
 
-test("a name two units share needs its owner, and is never guessed", () => {
+test("a name two units share is told apart by its owner, exactly, and never guessed", () => {
     assert.equal(findUnitByRef("1st Army", UNITS), null);
     assert.equal(findUnitByRef("1st Army (France)", UNITS)?.id, "u-2");
-    assert.equal(findUnitByRef("1st Army, Germany", UNITS)?.id, "u-3");
-    assert.equal(findUnitByRef("Germany's 1st Army", UNITS)?.id, "u-3");
+    assert.equal(findUnitByRef("1st Army (Germany)", UNITS)?.id, "u-3");
     assert.equal(findUnitByRef("1st Army", UNITS, { owner: "France" })?.id, "u-2", "the operation's own owner decides");
-    assert.equal(findUnitByRef("1st Army", UNITS, { context: "The French government ordered it. France moves north." })?.id, "u-2", "the event names one owner");
-    assert.equal(findUnitByRef("1st Army", UNITS, { context: "France and Germany both moved." }), null);
+    assert.equal(findUnitByRef("1st Army (Spain)", UNITS), null);
+    // English and other readings of prose are gone alike: neither names the owner.
+    assert.equal(findUnitByRef("1st Army, Germany", UNITS), null);
+    assert.equal(findUnitByRef("Germany's 1st Army", UNITS), null);
+    assert.equal(findUnitByRef("la 1st Army d'Allemagne", UNITS), null);
+    assert.equal(findUnitByRef("1st Army", UNITS, { context: "The French government ordered it. France moves north." }), null, "the event's words are not read");
+});
+
+test("a unit of any script is found the same way", () => {
+    const units = [
+        { id: "r-1", name: "1-я гвардейская танковая армия", ownerCode: "Россия" },
+        { id: "r-2", name: "1-я армия", ownerCode: "Россия" },
+        { id: "u-1", name: "1-я армия", ownerCode: "Україна" },
+        { id: "j-1", name: "第1師団", ownerCode: "日本" },
+    ];
+    assert.equal(findUnitByRef("1-я гвардейская танковая армия", units)?.id, "r-1");
+    assert.equal(findUnitByRef("unit: 1-Я Гвардейская Танковая Армия", units)?.id, "r-1");
+    assert.equal(findUnitByRef("第1師団", units)?.id, "j-1");
+    assert.equal(findUnitByRef("1-я армия", units), null);
+    assert.equal(findUnitByRef("1-я армия (Україна)", units)?.id, "u-1");
+    assert.equal(findUnitByRef("1-я армия", units, { owner: "Россия" })?.id, "r-2");
+    assert.equal(findUnitByRef("гвардейская танковая армия", units), null);
 });
 
 test("a name no unit has finds nothing, and neither does another kind of thing", () => {
@@ -154,6 +209,9 @@ test("what the model writes is turned into the save's keys before anything looks
     assert.ok(validate.indexOf("canonicalizeNamedThings(containers, world);") < validate.indexOf("await resolveRegionTransfers(containers, world"), "before the regions are resolved");
     const placing = gameplay.slice(gameplay.indexOf("const resolvePlacements = async"));
     assert.ok(placing.indexOf("canonicalizeNamedThings(containers, world);") < placing.indexOf("const placing = [];"), "a Director's own placing pass reads them too");
+    const canonical = gameplay.slice(gameplay.indexOf("const canonicalizeNamedThings ="), gameplay.indexOf("const resolvePlacements = async"));
+    assert.match(canonical, /findUnitByRef\(written, units, \{ owner: normalizeString\(op\.ownerCode \?\? op\.owner\) \}\)/, "a unit by its name and owner, never by the event's words");
+    assert.equal(/context/.test(canonical), false);
     assert.match(gameplay, /const plainRegionRef = \(value\) =>/, "a region reference is taken down to its name");
     assert.match(gameplay, /bracketHints\.set\(transfer, bracket\)/, "what stood in brackets is kept as a hint");
     assert.match(gameplay, /\(id\.kind \|\| name\.kind\) === "country"/, "country: <name> is the whole of its land");

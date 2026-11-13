@@ -30,36 +30,46 @@
 const asText = (value) => String(value ?? "").trim();
 const asArray = (value) => (Array.isArray(value) ? value : []);
 
-// Each kind, and the words a model writes for it. "state" is a region: the
-// states of a country are what the word is used for beside a place name, and
-// a country is said "country".
-const KIND_WORDS = Object.freeze({
-    country: ["country", "nation", "polity", "power"],
-    region: ["region", "province", "state", "territory", "oblast", "district", "prefecture", "governorate", "county"],
-    city: ["city", "town", "capital", "port", "village"],
-    sea: ["sea", "ocean", "waters"],
-    unit: ["unit", "formation"],
-    structure: ["structure", "building", "base", "facility", "installation", "marker"],
-    group: ["group", "faction"],
-});
-const KIND_OF_WORD = new Map(Object.entries(KIND_WORDS).flatMap(([kind, words]) => words.map((word) => [word, kind])));
+// The kinds, each by the tag the game itself writes and teaches: the
+// placement directive (placement.js PLACEMENT_DIRECTIVE) names country, region,
+// city, sea, unit and structure, an event's places write a structure
+// "building:" (eventPlaces.js), and a battlefield's side may be a group. A word
+// before a colon that is none of these is part of the name: "province:" or
+// "town:" is not read as a kind, in English or in any other language, because
+// a list of the words a model might use instead is a list that never ends
+// (the owner, 2026-11-13: no keywording anywhere).
+const KIND_OF_WORD = new Map([
+    ["country", "country"],
+    ["region", "region"],
+    ["city", "city"],
+    ["sea", "sea"],
+    ["unit", "unit"],
+    ["structure", "structure"],
+    ["building", "structure"],
+    ["group", "group"],
+]);
 const KIND_WORD_PATTERN = [...KIND_OF_WORD.keys()].join("|");
-const WHOLE_TAG = new RegExp(`^(${KIND_WORD_PATTERN})\\s*[:=]\\s*(.+)$`, "i");
+const WHOLE_TAG = new RegExp(`^(${KIND_WORD_PATTERN})\\s*:\\s*(.+)$`, "i");
 // A tag inside a phrase: at its start, or after a space, a comma or a bracket.
 const TAG_IN_PHRASE = new RegExp(`(^|[\\s,(\\[])(${KIND_WORD_PATTERN})\\s*:\\s*`, "gi");
-// Where a tagged name ends inside a phrase, when no comma or other tag ends it.
-const NAME_END = /\s+(?:and|facing|toward|towards|opposite|bordering|nearest|closest|on the border with|on the frontier with)\s+/i;
-// "Hamhung (4441)", "Hamhung [id 4441]", "Hamhung (#4441)".
-const TRAILING_BRACKET = /^(.*\S)\s*[([]\s*(?:(?:id|region id|gid|code|no\.?|number)\s*[:#]?\s*|#\s*)?([^()[\]]{1,64}?)\s*[)\]]$/i;
+// Where a tagged name ends inside a phrase, when no comma or other tag ends it:
+// the words that join two places in the placement directive's own grammar
+// ("between A and B", "A facing B", "80 km from A toward B").
+const NAME_END = /\s+(?:and|facing|toward)\s+/i;
+// "Hamhung (4441)", "Hamhung [id 4441]", "Hamhung (#4441)": the ways the game
+// itself once wrote a key beside a name.
+const TRAILING_BRACKET = /^(.*\S)\s*[([]\s*(?:id\s*[:#]?\s*|#\s*)?([^()[\]]{1,64}?)\s*[)\]]$/i;
 
 // Lower case, accents off, punctuation to spaces: how two spellings of one
-// name are told to be the same.
+// name are told to be the same. The marks a script writes its letters with
+// (a Devanagari vowel sign, a Japanese voicing mark) are part of the letter
+// and stay, or two names of those scripts would fold together.
 export const foldName = (value) => asText(value)
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/[’'`]/g, "")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
     .trim();
 
 // One written reference: its kind when it was given one, the name, and what
@@ -114,7 +124,7 @@ export const stripKindTags = (phrase) => {
         const rest = source.slice(tag.to, tags[index + 1]?.from ?? source.length);
         const untilComma = rest.split(",")[0];
         const name = untilComma.split(NAME_END)[0].replace(/[)\].;]+$/, "").trim();
-        const key = foldName(name.replace(/^(?:the|a|an)\s+/i, ""));
+        const key = foldName(name);
         if (key && tag.kind && !kinds.has(key)) kinds.set(key, tag.kind);
     }
     text += source.slice(cursor);
@@ -122,7 +132,7 @@ export const stripKindTags = (phrase) => {
 };
 
 // The kind a phrase gave a name, "" when it gave none.
-export const kindOfName = (kinds, name) => (kinds?.size ? kinds.get(foldName(asText(name).replace(/^(?:the|a|an)\s+/i, ""))) ?? "" : "");
+export const kindOfName = (kinds, name) => (kinds?.size ? kinds.get(foldName(name)) ?? "" : "");
 
 // ---------------------------------------------------------------------------
 // Regions, by name
@@ -175,8 +185,8 @@ export const regionNamer = (regions, { countries = [] } = {}) => {
 //
 // A unit is ordered about by its name: "3rd Infantry Division". Two powers
 // can each have a 1st Army, so a name that is not the only one of its kind is
-// said with its owner — "1st Army (France)", "1st Army, France" — which is how
-// the roster lists it (unitHandles below). Its id is still read, for a saved
+// said with its owner in brackets — "1st Army (France)" — which is how the
+// roster lists it (unitHandles below). Its id is still read, for a saved
 // order that carries one and for a model that has seen ids before.
 
 // What each unit is called where the model is told of it: its name, and its
@@ -212,9 +222,15 @@ export const newestTwinByRef = (written, units) => {
 };
 
 // The unit a written reference means, or null when it means none or could
-// mean two. `owner`: whose unit the operation says it is, when it says.
-// `context`: the event's own words, which name the owner when nothing else does.
-export const findUnitByRef = (written, units, { owner = "", context = "" } = {}) => {
+// mean two. It is found by its name exactly as the roster spells it (case,
+// accents and spacing aside), and two units of one name are told apart by
+// their owner: the one the roster writes after the name ("1st Army (France)",
+// unitHandles above), or `owner`, whose unit the operation says it is. Nothing
+// else is read: not the event's words for an owner, not "France's 1st Army",
+// not a name found inside a longer one. Those were English readings of prose,
+// and a name the roster does not have is a name to tell the model it got
+// wrong (the owner, 2026-11-13: no keywording anywhere).
+export const findUnitByRef = (written, units, { owner = "" } = {}) => {
     const list = asArray(units);
     const raw = asText(written);
     if (!raw) return null;
@@ -226,46 +242,13 @@ export const findUnitByRef = (written, units, { owner = "", context = "" } = {})
         const bracketId = list.find((unit) => asText(unit?.id) === ref.bracket);
         if (bracketId) return bracketId;
     }
-    const sameOwner = (unit, name) => Boolean(foldName(name)) && foldName(unit?.ownerCode) === foldName(name);
-    const named = (name) => list.filter((unit) => foldName(unit?.name) === foldName(name));
-    const choose = (candidates, saidOwner) => {
-        if (candidates.length === 1 && !saidOwner) return candidates[0];
-        for (const hint of [saidOwner, owner]) {
-            if (!foldName(hint)) continue;
-            const owned = candidates.filter((unit) => sameOwner(unit, hint));
-            if (owned.length === 1) return owned[0];
-            // The owner it was said with holds no such unit: the name decides, when it can.
-            if (!owned.length && candidates.length === 1) return candidates[0];
-        }
-        if (candidates.length === 1) return candidates[0];
-        const told = ` ${foldName(context)} `;
-        const inContext = candidates.filter((unit) => foldName(unit?.ownerCode) && told.includes(` ${foldName(unit.ownerCode)} `));
-        return inContext.length === 1 ? inContext[0] : null;
-    };
-    // The name as written, its owner in brackets after it or not.
-    let candidates = named(ref.name);
-    if (candidates.length) return choose(candidates, ref.bracket);
-    // "1st Army, France" and "France's 1st Army".
-    const comma = ref.name.lastIndexOf(",");
-    if (comma > 0) {
-        candidates = named(ref.name.slice(0, comma));
-        if (candidates.length) return choose(candidates, ref.name.slice(comma + 1));
-    }
-    const possessive = ref.name.match(/^(.+?)['’]s?\s+(.+)$/);
-    if (possessive) {
-        candidates = named(possessive[2]);
-        if (candidates.length) return choose(candidates, possessive[1]);
-    }
-    // The whole of one unit's name inside what was written, or the other way
-    // round ("the 3rd Infantry Division" for "US 3rd Infantry Division"), when
-    // exactly one unit fits. Short names are left alone: "1st" is in a dozen.
-    const key = foldName(ref.name.replace(/^(?:the|a|an)\s+/i, ""));
-    if (key.length >= 8) {
-        candidates = list.filter((unit) => {
-            const name = foldName(unit?.name);
-            return name.length >= 8 && (` ${name} `.includes(` ${key} `) || ` ${key} `.includes(` ${name} `));
-        });
-        if (candidates.length) return choose(candidates, ref.bracket);
+    const key = foldName(ref.name);
+    const named = key ? list.filter((unit) => foldName(unit?.name) === key) : [];
+    if (named.length === 1) return named[0];
+    for (const hint of [ref.bracket, owner]) {
+        if (!foldName(hint)) continue;
+        const owned = named.filter((unit) => foldName(unit?.ownerCode) === foldName(hint));
+        if (owned.length === 1) return owned[0];
     }
     return null;
 };

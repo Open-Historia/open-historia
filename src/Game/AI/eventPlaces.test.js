@@ -16,7 +16,10 @@ test("an entry is read as a name, its kind and the country it was said to be in"
     assert.deepEqual(readEventPlace("city: Kharkiv, country: Ukraine"), { kind: "city", name: "Kharkiv", country: "Ukraine" });
     assert.deepEqual(readEventPlace("City: Kharkiv, Ukraine"), { kind: "city", name: "Kharkiv", country: "Ukraine" });
     assert.deepEqual(readEventPlace("region: Crimea"), { kind: "region", name: "Crimea", country: "" });
-    assert.deepEqual(readEventPlace("country: the United States"), { kind: "country", name: "United States", country: "" });
+    assert.deepEqual(readEventPlace("country: United States"), { kind: "country", name: "United States", country: "" });
+    // A name as written: an article is part of it in English as in French.
+    assert.deepEqual(readEventPlace("country: the United States"), { kind: "country", name: "the United States", country: "" });
+    assert.deepEqual(readEventPlace("country: les États-Unis"), { kind: "country", name: "les États-Unis", country: "" });
     assert.deepEqual(readEventPlace("building: Camp Humphreys"), { kind: "structure", name: "Camp Humphreys", country: "" });
     assert.deepEqual(readEventPlace("structure: Camp Humphreys"), { kind: "structure", name: "Camp Humphreys", country: "" });
     assert.deepEqual(readEventPlace("sea: Black Sea"), { kind: "sea", name: "Black Sea", country: "" });
