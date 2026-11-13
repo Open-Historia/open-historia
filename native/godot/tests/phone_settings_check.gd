@@ -172,7 +172,10 @@ func _pages(name: String, workspace: Control) -> void:
 	await _shoot(name)
 	var card: Control = workspace.get("_card")
 	var view := root.get_visible_rect().size
-	_check(card.size.x <= view.x - 14.0 and card.get_combined_minimum_size().x <= view.x - 14.0, "%s fits the screen's width (%.0f)" % [name, card.get_combined_minimum_size().x])
+	var fits := card.size.x <= view.x - 14.0 and card.get_combined_minimum_size().x <= view.x - 14.0
+	_check(fits, "%s fits the screen's width (%.0f)" % [name, card.get_combined_minimum_size().x])
+	if not fits:
+		_say("too wide: " + _widest(card, 120.0))
 	var page := scroll.size.y
 	var height := scroll.get_v_scroll_bar().max_value
 	for index in [2, 3]:
@@ -183,6 +186,21 @@ func _pages(name: String, workspace: Control) -> void:
 		await _wait(0.4)
 		await _shoot("%s-p%d" % [name, index])
 	scroll.scroll_vertical = 0
+
+
+func _widest(node: Node, limit: float) -> String:
+	var best: Control = null
+	for child in node.get_children():
+		if child is Control and (child as Control).visible and (child as Control).get_combined_minimum_size().x > limit:
+			if best == null or (child as Control).get_combined_minimum_size().x > best.get_combined_minimum_size().x:
+				best = child
+	var text := ""
+	if node is Label or node is Button:
+		text = str(node.get("text")).left(60)
+	var here := "%s %.0f \"%s\"" % [node.get_class(), (node as Control).get_combined_minimum_size().x if node is Control else 0.0, text]
+	if best:
+		return here + " > " + _widest(best, limit)
+	return here
 
 
 func _clear_shell() -> void:

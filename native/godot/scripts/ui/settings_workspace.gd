@@ -2513,6 +2513,9 @@ func _build_requests_section() -> void:
 	batch_row.add_theme_constant_override("separation", 12)
 	var batch_label := UI.label("Advisors per AI request", _fs(0.9), UI.WHITE)
 	batch_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if UI.phone():
+		batch_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		batch_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	batch_row.add_child(batch_label)
 	var batch_slider := HSlider.new()
 	batch_slider.min_value = 1
