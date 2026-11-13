@@ -188,6 +188,7 @@ import {
   JUMP_PROJECTS_RULES_HEADING,
 } from "./projectsDirective.js";
 import { filterBoundLedgerUpdatesToKeptEvents, keepWarRecordsBeyondEvents } from "./ledgerEventBinding.js";
+import { giveSegmentEventIds, pinLedgersToEvents } from "./ledgerPins.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
 import { parkedTurnRecord, restoreParkedTurn } from "./parkedTurn.js";
 import { applyBoardCarriers } from "./boardPassApply.js";
@@ -254,7 +255,7 @@ import { reshelveJumpAnswer } from "./jumpAnswerShelves.js";
 import { readPeaceVerdict, readTreatyLines, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { PEACE_ANSWERS_FIELD, buildWarStatsBlock, describePeaceTalk, warsOf } from "./warStatsPrompt.js";
 import { readWarRoomAnswer, warRoomRequest, warRoomStanding, warRoomVariables } from "./warRoomContext.js";
-import { bindFrontOrdersToEvents, decodeEventStrikes, describeDroppedFrontOrders, frontOrderProseLines, screenFrontOrders } from "./nativeFrontLedger.js";
+import { bindFrontOrdersToEvents, decodeEventStrikes, describeDroppedFrontOrders, screenFrontOrders } from "./nativeFrontLedger.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, foldedRegionIndex, matchRegionName, nearestRegionNames, regionsFoldedAs, stripRegionAffixes } from "./regionMatch.js";
@@ -442,7 +443,6 @@ import {
   decodeWarUpdates,
   interpretWarLedger,
   settleWarLedger,
-  warUpdateProseLines,
 } from "./nativeWarLedger.js";
 import {
   DIPLOMATIC_LEDGER_VERSION,
@@ -895,26 +895,17 @@ const filedEventsFromRows = (droppedRows, hiddenRows, sourceEvents) => {
     .filter(Boolean);
 };
 
-// A segment's war records tied to its events by id, in the order the model
-// wrote them, before anything reorders or inserts events. Events without an id
-// get the segment's temporary one here (the same validateSegmentLedgers would
-// give them: the round's own ids are minted later, and the records follow).
-// Prose where records go is said once and dropped.
-const pinWarRecordsToEvents = (candidate, segmentIndex = 0) => {
-  if (!candidate || typeof candidate !== "object") return;
-  const events = normalizeArray(candidate.events);
-  events.forEach((event, index) => {
-    if (event && typeof event === "object" && !normalizeString(event.id)) {
-      event.id = `segment-${segmentIndex + 1}-event-${index + 1}`;
-    }
-  });
-  const prose = warUpdateProseLines(candidate.warUpdates);
-  if (prose.length) {
-    logDebugEvent("ai", `warUpdates: ${prose.length} line(s) that are not war records were ignored.`, { lines: prose });
+// A segment's ledger records, every ledger of them, tied to its events by id
+// in the order the model wrote them, before anything reorders or inserts
+// events (ledgerPins.js). Events without an id get the segment's temporary one
+// here: the round's own ids are minted later, and the records follow. Prose
+// where records go is said once and dropped.
+const pinSegmentLedgers = (candidate, segmentIndex = 0) => {
+  const { warProse, frontProse } = pinLedgersToEvents(candidate, { segmentIndex });
+  if (warProse.length) {
+    logDebugEvent("ai", `warUpdates: ${warProse.length} line(s) that are not war records were ignored.`, { lines: warProse });
   }
-  const records = decodeWarUpdates(candidate.warUpdates, { limit: Infinity });
-  if (!records.length) return;
-  candidate.warUpdates = bindWarUpdatesToEvents(records, events, { limit: Infinity });
+  if (frontProse.length && frontsOn()) console.info(`[OH fronts] ignored ${frontProse.length} line(s) of prose where front orders go.`);
 };
 
 // One jump segment's ledger records, checked against the world as the earlier
@@ -922,23 +913,13 @@ const pinWarRecordsToEvents = (candidate, segmentIndex = 0) => {
 // diplomatic ledgers are strict while a retry remains and salvaged on the last
 // attempt. Record event links before mergeSegmentPayloads concatenates segments.
 const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, receipt = null }) => {
-  const events = normalizeArray(candidate?.events);
   // Temporary ids: the canonical round-scoped ones are minted once the whole
   // round is in hand (applySimulationResult), and the records follow them.
-  events.forEach((event, index) => {
-    if (event && typeof event === "object" && !normalizeString(event.id)) {
-      event.id = `segment-${segmentIndex + 1}-event-${index + 1}`;
-    }
-  });
-
-  // Prose where war records go (a heading, "No changes.") is not a record and
-  // never reaches the ledger (nativeWarLedger.js parseWarUpdateRecord). Said
-  // here, once for the answer and before anything rewrites the field. It is
-  // not a rejection and not a note for the next turn: such a line names no war.
-  const warProse = warUpdateProseLines(candidate?.warUpdates);
-  if (warProse.length) {
-    logDebugEvent("ai", `warUpdates: ${warProse.length} line(s) that are not war records were ignored.`, { lines: warProse });
-  }
+  // Every event has one by now, and every record is tied to its events by it
+  // (pinSegmentLedgers, before the answer was put in date order). Prose where
+  // war records go was said there, and is no rejection and no note for the
+  // next turn: such a line names no war.
+  giveSegmentEventIds(candidate?.events, segmentIndex);
 
   // The answer's wars, settled by the engine alone (nativeWarLedger.js
   // settleWarLedger): what the answer's structure tells is made explicit, every
@@ -991,8 +972,7 @@ const screenSegmentFrontOrders = (candidate, { game, actions, receipt = null } =
     delete candidate.frontOrders;
     return;
   }
-  const prose = frontOrderProseLines(candidate?.frontOrders);
-  if (prose.length) console.info(`[OH fronts] ignored ${prose.length} line(s) of prose where front orders go.`);
+  // (Prose where orders go was said, and dropped, when they were tied to their events: pinSegmentLedgers.)
   const events = normalizeArray(candidate?.events);
   const owners = new Map(normalizeArray(actions).map((action) => [
     normalizeString(action?.id),
@@ -17344,11 +17324,13 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
               `${politicalClaimContext.discardedReason} The transient claim ledger was ignored and legacy prose completeness validation was used for this answer.`,
             );
           }
-          // War records name their events by their place in the answer as it
-          // was written: they are tied to the events themselves first, or once
-          // the answer is in date order a record's "1" names whichever event is
-          // first by date (a probe: a war's id and sides stamped onto a flood).
-          pinWarRecordsToEvents(candidate, segmentIndex);
+          // Every ledger of the answer (wars, relations, agreements, puppets,
+          // storylines, the battlefields' orders) names its events by their
+          // place in the answer as it was written: each is tied to the events
+          // themselves first, or once the answer is in date order a record's
+          // "1" names whichever event is first by date (a probe: a war's id
+          // and sides stamped onto a flood, a revolt onto a treaty).
+          pinSegmentLedgers(candidate, segmentIndex);
           // Mechanical: a batch whose dates are all real is put in date order
           // before anything counts positions (a malformed date is left for the
           // date validator below to report).
@@ -17423,6 +17405,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             const scripted = ensureScriptedEventsWithImpacts(candidate?.events, due, { language: scriptedLanguage });
             if (scripted.inserted.length) {
               candidate.events = scripted.events;
+              // The engine's events come after the answer's and are named by
+              // their place there, before the sort: one named by its place in
+              // date order took the id of the answer's event that stood there,
+              // and every record tied to that event with it.
+              giveSegmentEventIds(candidate.events, segmentIndex);
               sortTimelineEventsChronologically(candidate);
               for (const beat of scripted.inserted) {
                 noteReceipt(draft, "adjusted", `${scriptedBeatWrittenNote(beat)} It is history in this world: its consequences are yours to carry forward.`,

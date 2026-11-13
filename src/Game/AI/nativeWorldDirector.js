@@ -280,14 +280,19 @@ export const deriveWorldConflictRiskPosture = ({
   };
 };
 
-const linkedRecordTouchesEvent = (records, eventIndex) =>
+// A record tied to the event by its id, or by its place among the events. A
+// skip's ledgers are tied by id before its events are put in date order
+// (ledgerPins.js), and a place they were written with names another event.
+const linkedRecordTouchesEvent = (records, eventIndex, eventId = "") =>
   normalizeArray(records).some((entry) =>
-    normalizeArray(entry?.eventIndexes).some((value) => Number(value) === eventIndex)
+    (eventId && normalizeArray(entry?.eventIds).map(normalizeString).includes(eventId))
+    || normalizeArray(entry?.eventIndexes).some((value) => Number(value) === eventIndex)
   );
 
 const eventCanonicalConsequenceChannels = (candidate, eventIndex) => {
   const event = normalizeArray(candidate?.events)[eventIndex];
   if (!event || typeof event !== "object") return [];
+  const eventId = normalizeString(event?.id);
 
   const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
   const channels = [];
@@ -309,11 +314,11 @@ const eventCanonicalConsequenceChannels = (candidate, eventIndex) => {
   if (normalizeArray(event?.storylineIds).length) channels.push("storyline");
   if (normalizeString(event?.warId)) channels.push("war-event");
 
-  if (linkedRecordTouchesEvent(candidate?.storylineUpdates, eventIndex)) channels.push("storyline-update");
-  if (linkedRecordTouchesEvent(candidate?.warUpdates, eventIndex)) channels.push("war-update");
-  if (linkedRecordTouchesEvent(candidate?.relationUpdates, eventIndex)) channels.push("relation-update");
-  if (linkedRecordTouchesEvent(candidate?.agreementUpdates, eventIndex)) channels.push("agreement-update");
-  if (linkedRecordTouchesEvent(candidate?.countryStatPatches, eventIndex)) channels.push("stats");
+  if (linkedRecordTouchesEvent(candidate?.storylineUpdates, eventIndex, eventId)) channels.push("storyline-update");
+  if (linkedRecordTouchesEvent(candidate?.warUpdates, eventIndex, eventId)) channels.push("war-update");
+  if (linkedRecordTouchesEvent(candidate?.relationUpdates, eventIndex, eventId)) channels.push("relation-update");
+  if (linkedRecordTouchesEvent(candidate?.agreementUpdates, eventIndex, eventId)) channels.push("agreement-update");
+  if (linkedRecordTouchesEvent(candidate?.countryStatPatches, eventIndex, eventId)) channels.push("stats");
 
   return [...new Set(channels)];
 };
@@ -1706,6 +1711,25 @@ export const decodeWorldStorylineUpdates = (value, { limit = MAX_STORYLINE_UPDAT
     .slice(0, limit);
 };
 
+// The records with the ids of the events their numbers name, as the other
+// ledgers' binders tie theirs: a skip's answer is tied this way before its
+// events are put in date order (ledgerPins.js), so its numbers still name the
+// events the model meant. A record that has ids keeps them.
+// normalizeWorldStorylineEventLinks reads them as the places those events then
+// stand in, and the record leaves it with places alone, as it always has.
+export const bindWorldStorylineUpdatesToEvents = (value, events, { limit } = {}) => {
+  const ids = normalizeArray(events).map((event) => normalizeString(event?.id));
+  return decodeWorldStorylineUpdates(value, { limit }).map((update) => {
+    const pinned = normalizeArray(update?.eventIds).map(normalizeString).filter(Boolean);
+    return {
+      ...update,
+      eventIds: [...new Set(pinned.length
+        ? pinned
+        : normalizeArray(update?.eventIndexes).map((index) => ids[index]).filter(Boolean))].slice(0, 12),
+    };
+  });
+};
+
 const STORYLINE_LINK_STOPWORDS = new Set([
   "about", "after", "again", "against", "among", "because", "between", "during",
   "from", "into", "over", "that", "their", "there", "these", "this", "through",
@@ -2065,11 +2089,21 @@ export const normalizeWorldStorylineEventLinks = (
   const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
   let rebound = 0;
   let strippedInvalid = 0;
+  // A record tied to its events by id (bindWorldStorylineUpdatesToEvents) names
+  // them where they stand now: its ids are the numbers it was written with.
+  const placeOfId = new Map();
+  events.forEach((event, index) => {
+    const id = normalizeString(event?.id);
+    if (id && !placeOfId.has(id)) placeOfId.set(id, index);
+  });
 
-  const normalized = updates.map((update) => {
-    const supplied = normalizeArray(update?.eventIndexes)
-      .map(Number)
-      .filter((index) => Number.isInteger(index));
+  const normalized = updates.map(({ eventIds, ...update }) => {
+    const pinned = normalizeArray(eventIds).map(normalizeString).filter(Boolean);
+    const supplied = pinned.length
+      ? pinned.map((id) => (placeOfId.has(id) ? placeOfId.get(id) : -1))
+      : normalizeArray(update?.eventIndexes)
+        .map(Number)
+        .filter((index) => Number.isInteger(index));
     const validSupplied = supplied.filter(
       (index) => index >= 0 && index < events.length,
     );
