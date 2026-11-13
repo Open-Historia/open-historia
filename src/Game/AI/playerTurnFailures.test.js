@@ -12,6 +12,7 @@ import {
     hasPlayerTurnFailures,
     keepRetryBoundRecords,
     restrictToRetriedOrders,
+    retriesUnasked,
 } from "./playerTurnFailures.js";
 import { normalizeFiledEvents, toFiledEvent } from "../../runtime/filedEvents.js";
 import { bindPuppetUpdatesToEvents } from "./nativeDiplomaticDirector.js";
@@ -246,4 +247,23 @@ test("a retry looks nothing up, is told how many events its list asks for, and l
     assert.match(segments, /const minEvents = context\.amend \? amendCount :/);
     assert.match(segments, /amend: amendCount,/);
     assert.match(segments, /mode !== "auto" && !context\.amend && \(eventCount < minEvents/);
+});
+
+test("a skip asks again unasked only with the setting on, something failed and no Cancel", () => {
+    const failures = { events: [], orders: [{ id: "a1", title: "Raise the levy" }] };
+    assert.equal(retriesUnasked({ enabled: true, failures }), true);
+    assert.equal(retriesUnasked({ enabled: false, failures }), false);
+    assert.equal(retriesUnasked({ failures }), false, "off unless turned on");
+    assert.equal(retriesUnasked({ enabled: true, failures, cancelled: true }), false);
+    assert.equal(retriesUnasked({ enabled: true, failures: { events: [], orders: [] } }), false);
+    assert.equal(retriesUnasked({ enabled: true, failures: null }), false);
+});
+
+test("the skip itself runs the notice's retry, once, and marks what it leaves as tried", () => {
+    const jump = section("export const simulateTimelineJump = async", "\nexport const ");
+    assert.match(jump, /retryPlayerFailuresUnasked: getMapSetting\(MAP_SETTING_KEYS\.retryPlayerFailuresUnasked\),/);
+    assert.match(jump, /error\?\.heldKind === HELD_TURN\.events && Boolean\(getHeldTurn\(HELD_TURN\.events\)\)/);
+    assert.match(jump, /if \(!unasked\) throw error;/);
+    assert.equal(jump.split("retryHeldPlayerEvents(").length - 1, 1, "one retry, never a loop of them");
+    assert.match(jump, /if \(retryError\?\.heldKind === HELD_TURN\.events\) retryError\.triedUnasked = true;/);
 });

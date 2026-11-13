@@ -2561,7 +2561,9 @@ const DateWidget = ({
         message: heldError.message || "The turn is held.",
         // What failed, for a turn held on the player's events.
         failures: heldError.playerFailures ?? null,
-        retries: current?.kind === heldError.heldKind ? current.retries : 0,
+        // A retry the skip made by itself ("Retry my failed events once before
+        // asking") counts: the notice then says it was tried.
+        retries: current?.kind === heldError.heldKind ? current.retries : heldError.triedUnasked ? 1 : 0,
     }));
     // A time skip that finished while another campaign was open, kept for this
     // one (AI/gameplay.js loadParkedTurn): set means it waits for the player to
@@ -2930,6 +2932,9 @@ const DateWidget = ({
             if (controller.signal.aborted || jumpError?.name === "AbortError") {
                 // Player cancelled — nothing was written, so just close out quietly.
                 setError("");
+                // Cancelled while the skip was asking again for the player's failed
+                // events by itself: the turn is still held, and its notice goes up.
+                setHeld(heldTurnOnOpen());
                 // With how long it had run and what its open request had
                 // received: a report of skips "failing" that were in fact
                 // cancelled a minute or two into a slow answer reads at a glance.

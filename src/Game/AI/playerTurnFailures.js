@@ -88,6 +88,12 @@ export const retryMadeProgress = (before, after, { followUps = 0 } = {}) => {
     return followUps < MAX_RETRY_FOLLOW_UPS && left > 0 && left < failureCount(before);
 };
 
+// Whether a skip that has just been held on the player's events asks again for
+// them before the player is shown the notice ("Retry my failed events once
+// before asking"): the setting on, something on the list, and no Cancel.
+export const retriesUnasked = ({ enabled = false, failures = null, cancelled = false } = {}) =>
+    Boolean(enabled) && !cancelled && failureCount(failures) > 0;
+
 // The held notice's message: what failed, in the player's words.
 // `retryError`: the retry's own request failed, and the turn is held as it was.
 export const describePlayerTurnFailures = (failures, { retryError = "" } = {}) => {

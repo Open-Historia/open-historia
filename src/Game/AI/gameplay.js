@@ -290,7 +290,7 @@ import {
   shareRepeatedBlocks,
 } from "./turnReview.js";
 import { checksHeldError, checksHoldTurn, createTurnChecks } from "./turnChecks.js";
-import { acknowledgeFailures, buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, keepRetryBoundRecords, restrictToRetriedOrders, retryMadeProgress } from "./playerTurnFailures.js";
+import { acknowledgeFailures, buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, keepRetryBoundRecords, restrictToRetriedOrders, retriesUnasked, retryMadeProgress } from "./playerTurnFailures.js";
 import {
   describeDoubtedForPrompt,
   doubtedAwaitingFreshSource,
@@ -18481,6 +18481,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     // Settings, AI: "Stop when my events fail" (playerTurnFailures.js). Read
     // once, at the start, so a toggle mid-skip does not change the skip.
     stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
+    // "Retry my failed events once before asking": read once, like it.
+    retryPlayerFailuresUnasked: getMapSetting(MAP_SETTING_KEYS.retryPlayerFailuresUnasked),
     // A whole skip run again from that notice: what failed the first time.
     retryDirective: normalizeString(retryDirective),
   };
@@ -18527,7 +18529,28 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   budgetForPhases = jumpState.requests;
 
   await runJumpSegments({ context: jumpContext, onEvents, onProgress, signal, state: jumpState });
-  return await finishTimelineJump({ context: jumpContext, signal, state: jumpState });
+  try {
+    return await finishTimelineJump({ context: jumpContext, signal, state: jumpState });
+  } catch (error) {
+    // Held on the player's events, with "Retry my failed events once before
+    // asking" on: the retry the notice offers is run here, as the same skip,
+    // under its spinner and its Cancel. Whatever it leaves is held as any
+    // retry leaves it, and the notice then says it was tried. A Cancel puts
+    // the turn back as it was held (attemptHeldTurn), for the panel to show.
+    const unasked = error?.heldKind === HELD_TURN.events && Boolean(getHeldTurn(HELD_TURN.events))
+      && retriesUnasked({ enabled: jumpContext.retryPlayerFailuresUnasked, failures: error.playerFailures, cancelled: Boolean(signal?.aborted) });
+    if (!unasked) throw error;
+    logDebugEvent("turn", "The skip was held on the player's events; asking again for them before the player is shown the notice.", {
+      events: normalizeArray(error.playerFailures?.events).map((event) => event.title),
+      orders: normalizeArray(error.playerFailures?.orders).map((order) => order.title),
+    });
+    try {
+      return await retryHeldPlayerEvents({ onProgress, signal });
+    } catch (retryError) {
+      if (retryError?.heldKind === HELD_TURN.events) retryError.triedUnasked = true;
+      throw retryError;
+    }
+  }
   } finally {
     endSimulation();
   }

@@ -3163,6 +3163,10 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     Off (default): an event about your country that the game refuses is left out, and an order of yours that got no outcome carries over to the next skip as overdue. On: the skip stops before anything is saved and lists what failed. Retry the failed events (one more request, for the same dates), retry the whole skip, or keep it and move on.
                     </div>
+                    <Toggle label="Retry my failed events once before asking" enabled={mapSettings.retryPlayerFailuresUnasked} onToggle={() => updateMapSetting("retryPlayerFailuresUnasked", MAP_SETTING_KEYS.retryPlayerFailuresUnasked, !mapSettings.retryPlayerFailuresUnasked)} />
+                    <div style={settingsHelper}>
+                    Off (default): a skip stopped on your failed events shows its notice at once. On: the game first asks once more by itself for the events that failed (one more request, for the same dates), and shows the notice only if some still failed. Cancel during that request stops it and shows the notice. Does nothing with "Stop when my events fail" off.
+                    </div>
                     <Toggle label="Batch background AI tasks" enabled={mapSettings.batchBackgroundTasks} onToggle={() => updateMapSetting("batchBackgroundTasks", MAP_SETTING_KEYS.batchBackgroundTasks, !mapSettings.batchBackgroundTasks)} />
                     <div style={{ ...settingsHelper, marginBottom: 0 }}>
                     Anthropic only. On: history consolidation runs through the Message Batches API at about half the price and lands a little later, applied between turns. Off (default): every task answers in the same call. Other providers are unaffected either way.
@@ -3390,6 +3394,7 @@ const SettingsMenu = ({
         // Ships ON: an absent key reads as on (see mapSettings.js).
         liveSkipEvents: getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents),
         stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
+        retryPlayerFailuresUnasked: getMapSetting(MAP_SETTING_KEYS.retryPlayerFailuresUnasked),
         batchBackgroundTasks: getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks),
         // Ships ON as well: Discord's "Playing Open Historia" (General → Privacy).
         discordPresence: getMapSettingDefaultOn(MAP_SETTING_KEYS.discordPresence),

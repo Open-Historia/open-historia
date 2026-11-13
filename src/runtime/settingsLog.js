@@ -176,6 +176,7 @@ registerSettingsSnapshot("AI", () => {
         ["AI lookup functions", lookupFunctionsState()],
         ["Show time skip events as they are written", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents))],
         ["Stop when my events fail", onOff(getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures))],
+        ["Retry my failed events once before asking", onOff(getMapSetting(MAP_SETTING_KEYS.retryPlayerFailuresUnasked))],
         ["Batch background AI tasks", onOff(getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks))],
         ["Record AI telemetry", onOff(isTelemetryEnabled())],
         ["Rate AI generations", onOff(isRatingEnabled())],

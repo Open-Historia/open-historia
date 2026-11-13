@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player, 2026-11-13: "why was the retry button not pressed by itself, without waiting for us?" A month's skip
+    // on a local model had been held on one unanswered order for as long as nobody was at the screen.
+    // AI/gameplay.js simulateTimelineJump, AI/playerTurnFailures.js retriesUnasked.
+    id: "2026-11-retry-my-events-unasked",
+    kind: "minor",
+    date: "2026-11-13",
+    banners: [
+      {
+        title: "A skip can retry your failed events before it asks you",
+        items: [
+          "Settings → AI has a new switch, \"Retry my failed events once before asking\", off by default. With it and \"Stop when my events fail\" on, a skip that would stop on your failed events first asks once more for them by itself, and shows its notice only if some still failed.",
+        ],
+      },
+    ],
+  },
+  {
     // A player, 2026-11-13: a month's skip on a local model was held on four failed orders, and each "Retry the failed
     // events" took five minutes and carried out one. The retry was sent the whole-period wording ("between 1 and N
     // events") under its list, and six rounds of lookups first. AI/jumpSegments.js buildSegmentInstruction (amend),
