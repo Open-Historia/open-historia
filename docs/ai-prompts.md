@@ -395,7 +395,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 - **Purpose:** Turn the player's raw sentence into one action (or a chat invitation), ~50% longer, tone-matched, ≤650 chars.
 - **Prompt:** `tasks.descriptionToAction`. **Entry:** `refinePlayerAction(rawInput, {persist})` `gameplay.js` (passes `actionInput`). Returns `{ action, source, fallbackReason, rawResponse }`; on `source: "fallback"` the Actions panel keeps the player's text instead of the template.
 - **Tool/schema:** `submit_description_to_action` / `DESCRIPTION_TO_ACTION_SCHEMA`: `{ title, text, kind, invitees[], chatStarter }`.
-- **Fallback:** `fallbackDescriptionToAction` — heuristic chat detection via `looksLikeChatRequest` (`chatHints.js`: stems for talks, negotiations, meetings and messages in every language with a shipped pack; a stem starts a word where words are written apart, and may sit anywhere in German compounds and in scripts without spaces) and `inferInviteeNames`; its text is written in the player's language from `FALLBACK_TURN_TEXTS`.
+- **Fallback:** `fallbackDescriptionToAction` — always an action, with no invitees: whether an order asks for talks, and with whom, is the model's to read, never guessed from its words. Its text is written in the player's language from `FALLBACK_TURN_TEXTS`.
 
 ### 7.5 Diplomatic speaker routing — native / in-batch
 - **One-on-one:** there is exactly one AI counterpart, selected natively. No speaker-selection model call exists.

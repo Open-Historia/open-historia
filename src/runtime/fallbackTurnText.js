@@ -42,8 +42,7 @@ export const FALLBACK_TURN_TEXTS = Object.freeze({
   suggestionContingencyTextNoCountry: "Prepare a second-order measure that protects the country if this line of effort triggers resistance.",
   suggestionContingencyTitle: "Create a contingency layer",
 
-  // An order the model could not improve.
-  chatOrderExpanded: "{{order}}. Clarify the objective, the concession you can offer, and the outcome you want before the exchange hardens.",
+  // An order the model could not improve: always an action.
   actionOrderExpanded: "{{order}}. Define the instrument, timing, and expected political or military effect so the move can be executed cleanly.",
 });
 

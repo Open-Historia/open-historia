@@ -5,7 +5,6 @@ import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.j
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { clampTimelineDates, validatePregameEvents, validateTimelineDates } from "./timelineDates.js";
 import { MILITARY_FEASIBILITY, buildMilitaryFeasibilityText } from "./militaryFeasibility.js";
-import { looksLikeChatRequest } from "./chatHints.js";
 import { FALLBACK_SUGGESTION_TOPICS, fallbackTurnText } from "../../runtime/fallbackTurnText.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
 import { regionTypeRules, regionTypesHaveRules, waterTypeIds } from "../../runtime/regionTypes.js";
@@ -5800,17 +5799,6 @@ const resolveInvitees = async (names, world, additionalCountries = []) => {
     }));
 };
 
-const inferInviteeNames = async (text, world, playerCountry = "") => {
-  const countryCatalog = mergePolityCatalog(await loadCountryNames(), world);
-  const normalizedText = normalizeString(text).toLowerCase();
-
-  return countryCatalog
-    .filter((country) => country.name && country.name.toLowerCase() !== normalizeString(playerCountry).toLowerCase())
-    .filter((country) => normalizedText.includes(country.name.toLowerCase()))
-    .slice(0, 5)
-    .map((country) => country.name);
-};
-
 // The engine's own suggestions and orders, when the model gave none, are
 // written in the player's language (runtime/fallbackTurnText.js), as the
 // model's would have been.
@@ -5850,19 +5838,21 @@ const fallbackActionSuggestions = async (bundle) => {
   return { topics };
 };
 
-const fallbackDescriptionToAction = async (rawInput, bundle) => {
+// The order as the player wrote it, when the model could not structure it: an
+// action. Whether it asked for talks, and with whom, is the model's to read;
+// the engine used to guess both from words (talk stems in about twenty
+// languages, and country names found in the text), which opened a chat for a
+// "summit" of generals and missed a request for talks in any language it did
+// not list.
+const fallbackDescriptionToAction = async (rawInput) => {
   const trimmed = normalizeString(rawInput);
-  const isChat = looksLikeChatRequest(trimmed);
-  const inferredInvitees = isChat
-    ? await inferInviteeNames(trimmed, bundle.world, bundle.game.country)
-    : [];
   const title = sentenceCase(trimmed.split(/[.!?]/)[0] || trimmed);
-  const expandedText = fallbackTurnText(isChat ? "chatOrderExpanded" : "actionOrderExpanded", { order: trimmed });
+  const expandedText = fallbackTurnText("actionOrderExpanded", { order: trimmed });
 
   return {
-    chatStarter: isChat ? trimmed : "",
-    invitees: inferredInvitees,
-    kind: isChat ? "chat" : "action",
+    chatStarter: "",
+    invitees: [],
+    kind: "action",
     text: expandedText.slice(0, 520),
     title: title.length > 72 ? `${title.slice(0, 69)}...` : title,
   };
@@ -14639,7 +14629,7 @@ export const refinePlayerAction = async (rawInput, { persist = true, signal } = 
   const variables = await buildTemplateVariables(bundle, { actionInput: rawInput, taskKey: "descriptionToAction", lookups: true });
   const { payload, generation } = await runJsonTask("descriptionToAction", {
     lookups: buildTaskLookups(bundle),
-    fallback: () => fallbackDescriptionToAction(rawInput, bundle),
+    fallback: () => fallbackDescriptionToAction(rawInput),
     // Improve can be stopped mid-generation, exactly like a timeline jump.
     // runJsonTask already links an external signal to the controller it hands
     // the provider, so on a local model the next token write fails and inference
