@@ -29,6 +29,8 @@ export const installStandInModel = ({ expected, strikes = () => [] }) => {
     let args = null;
     let text = null;
     if (tool === "submit_jump_result" && origin && target) {
+      const wait = Number(process.env.OH_STANDIN_DELAY_MS) || 0;
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
       const who = country || "The government";
       const struck = strikes();
       args = {

@@ -554,6 +554,19 @@ if (fs.existsSync(handlersDir)) {
   }
 }
 
+const LONG_WORK = new Set(["turn.skip", "turn.retry", "turn.rerun", "turn.applyParked", "turn.intervene"]);
+const busyFile = clean(process.env.OH_BUSY_FILE);
+const busyCalls = new Set();
+const writeBusy = () => {
+  if (!busyFile) return;
+  try {
+    fs.writeFileSync(`${busyFile}.part`, JSON.stringify({ busy: busyCalls.size, at: Date.now() }));
+    fs.renameSync(`${busyFile}.part`, busyFile);
+  } catch (error) {
+    process.stderr.write(`[sidecar] the busy file was not written: ${error?.message ?? error}\n`);
+  }
+};
+
 const handle = async (line) => {
   let message;
   try {
@@ -569,6 +582,11 @@ const handle = async (line) => {
   }
   const controller = new AbortController();
   running.set(id, controller);
+  const long = busyFile && LONG_WORK.has(clean(message?.method));
+  if (long) {
+    busyCalls.add(id);
+    writeBusy();
+  }
   try {
     const result = await run(message.args ?? {}, { signal: controller.signal, id });
     send({ id, ok: true, result: result ?? null });
@@ -576,6 +594,10 @@ const handle = async (line) => {
     send({ id, ok: false, error: clean(error?.message ?? error) || "Something went wrong.", heldKind: clean(error?.heldKind), failures: plain(error?.playerFailures ?? null), aborted: error?.name === "AbortError" });
   } finally {
     running.delete(id);
+    if (long) {
+      busyCalls.delete(id);
+      writeBusy();
+    }
   }
 };
 
