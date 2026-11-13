@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The owner's three follow-ups to the war foundations (2026-11-13): "Battlefields that seat a whole coalition", "Pin every ledger to its events before sorting",
+    // "Remove the last word-list gates near the war system" (an annexation or capture told in words alone no longer moves the map).
+    id: "2026-11-whole-coalitions",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Whole coalitions, steadier records",
+        items: [
+          "Every member of a coalition now fights on its battlefields with troops of its own: a battlefield used to seat eight a side.",
+          "Treaties, puppet changes, battlefield orders and storylines stay on the event the AI wrote them for, even when it lists a period's events out of date order.",
+          "The map changes only by the region changes an event records, in every language: a capture or annexation told in words alone no longer moves it.",
+          "War news such as rationing, patrols and artillery fire is no longer hidden or thrown out over its English wording, and a country can ration in the same turn its war begins.",
+        ],
+      },
+    ],
+  },
+  {
     // "the entire war foundational archetecture is pretty weak ... we need to redesign the foundations and do a canonical war system rework" (the owner, 2026-11-13):
     // one war record for everything (runtime/warRecord.js), ids never reused, whole coalitions, nothing live cut, one settlement per skip and no retries.
     id: "2026-11-sturdier-wars",
