@@ -4,9 +4,9 @@ extends Node2D
 const WEATHER_SHADER := """
 shader_type canvas_item;
 render_mode unshaded;
-uniform sampler2D pattern_0 : filter_nearest, repeat_enable;
-uniform sampler2D pattern_1 : filter_nearest, repeat_enable;
-uniform sampler2D pattern_2 : filter_nearest, repeat_enable;
+uniform sampler2D pattern_0 : filter_linear, repeat_enable;
+uniform sampler2D pattern_1 : filter_linear, repeat_enable;
+uniform sampler2D pattern_2 : filter_linear, repeat_enable;
 uniform float size_0 = 97.0;
 uniform float size_1 = 97.0;
 uniform float size_2 = 97.0;
@@ -31,8 +31,9 @@ vec4 over(vec4 top, vec4 under) {
 }
 
 vec4 layer(sampler2D pattern, float size) {
-	vec4 c = texture(pattern, floor(world * zoom) / size);
-	return vec4(c.rgb, c.a * strength * pattern_factor);
+	vec4 c = texture(pattern, world * zoom / size);
+	vec3 rgb = c.a > 0.0 ? c.rgb / c.a : vec3(0.0);
+	return vec4(rgb, c.a * strength * pattern_factor);
 }
 
 void fragment() {
@@ -236,6 +237,7 @@ func _pattern_texture(tile: Dictionary) -> ImageTexture:
 	if known is ImageTexture:
 		return known
 	var image := Image.create_from_data(int(tile["width"]), int(tile["height"]), false, Image.FORMAT_RGBA8, Marshalls.base64_to_raw(data))
+	image.premultiply_alpha()
 	var texture := ImageTexture.create_from_image(image)
 	if _pattern_textures.size() >= 32:
 		_pattern_textures.clear()
