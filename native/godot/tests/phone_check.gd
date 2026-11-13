@@ -84,6 +84,7 @@ func _run() -> void:
 	await main._start_scenario("default")
 	await _wait(3.0)
 	await _shoot("p-picker")
+	await _pinch_picker()
 	main.picker._choose("France")
 	await _wait(1.0)
 	await _shoot("p-picker-chosen")
@@ -118,6 +119,44 @@ func _run() -> void:
 	_check(not main.phone_shell.asking, "Back again keeps the game")
 	await _hold_on_map(hud)
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _touch(index: int, at: Vector2, pressed: bool) -> void:
+	var touch := InputEventScreenTouch.new()
+	touch.index = index
+	touch.position = at
+	touch.pressed = pressed
+	Input.parse_input_event(touch)
+
+
+func _pinch_picker() -> void:
+	var picker: CountryPicker = main.picker
+	var area: Control = picker.get("_container")
+	var camera: Camera2D = picker.get("_camera")
+	if area == null or camera == null or not area.is_visible_in_tree():
+		_check(false, "the picker's map is shown")
+		return
+	var centre := area.get_global_rect().get_center()
+	var before := camera.zoom.x
+	_touch(0, centre - Vector2(30, 0), true)
+	_touch(1, centre + Vector2(30, 0), true)
+	await process_frame
+	for step in range(1, 9):
+		var gap := 30.0 + 10.0 * step
+		for finger in [0, 1]:
+			var drag := InputEventScreenDrag.new()
+			drag.index = finger
+			drag.position = centre + Vector2(gap if finger == 1 else -gap, 0)
+			drag.relative = Vector2(10 if finger == 1 else -10, 0)
+			Input.parse_input_event(drag)
+		await process_frame
+	_touch(0, centre - Vector2(110, 0), false)
+	_touch(1, centre + Vector2(110, 0), false)
+	await _wait(0.4)
+	_say("picker zoom %.3f -> %.3f" % [before, camera.zoom.x])
+	_check(camera.zoom.x > before * 2.5, "two fingers spread on the picker's map zoom it in")
+	await _shoot("p-picker-pinched")
+	picker.call("_zoom", centre - area.get_global_rect().position, before / camera.zoom.x)
 
 
 func _clear_shell() -> void:

@@ -48,6 +48,8 @@ var _camera: Camera2D
 var _list: VBoxContainer
 var _dragging := false
 var _drag := 0.0
+var _fingers := {}
+var _pinch_gap := 0.0
 var _phone := false
 var _phone_default: VBoxContainer
 var _list_scroll: ScrollContainer
@@ -1043,6 +1045,9 @@ func _blend(shade: Array) -> Array:
 
 
 func _on_map_input(event: InputEvent) -> void:
+	if _phone and (event is InputEventScreenTouch or event is InputEventScreenDrag):
+		_on_finger(event)
+		return
 	if _phone and event is InputEventMagnifyGesture:
 		var pinch := event as InputEventMagnifyGesture
 		_zoom(pinch.position, pinch.factor)
@@ -1071,6 +1076,40 @@ func _on_map_input(event: InputEvent) -> void:
 			_sync()
 		else:
 			_hover_at(motion.position)
+
+
+func _on_finger(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		var touch := event as InputEventScreenTouch
+		if touch.pressed:
+			_fingers[touch.index] = touch.position
+		else:
+			_fingers.erase(touch.index)
+		_pinch_gap = _finger_gap()
+		if _fingers.size() >= 2:
+			_dragging = false
+			_drag = INF
+		return
+	var moved := event as InputEventScreenDrag
+	if not _fingers.has(moved.index):
+		return
+	_fingers[moved.index] = moved.position
+	if _fingers.size() < 2:
+		return
+	var gap := _finger_gap()
+	if _pinch_gap > 0.0 and gap > 0.0:
+		var points: Array = _fingers.values()
+		_zoom(((points[0] as Vector2) + (points[1] as Vector2)) * 0.5, gap / _pinch_gap)
+	_pinch_gap = gap
+	_dragging = false
+	_drag = INF
+
+
+func _finger_gap() -> float:
+	if _fingers.size() < 2:
+		return 0.0
+	var points: Array = _fingers.values()
+	return (points[0] as Vector2).distance_to(points[1] as Vector2)
 
 
 func _hover_at(local: Vector2) -> void:

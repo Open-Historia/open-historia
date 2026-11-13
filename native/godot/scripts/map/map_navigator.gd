@@ -105,7 +105,7 @@ func handle(event: InputEvent) -> bool:
 		return _on_touch_drag(event as InputEventScreenDrag)
 	if (event is InputEventMouseButton or event is InputEventMouseMotion) and event.device == InputEvent.DEVICE_ID_EMULATION:
 		return true
-	if (event is InputEventMagnifyGesture or event is InputEventPanGesture) and not _touches.is_empty():
+	if (event is InputEventPanGesture or (event is InputEventMagnifyGesture and OS.get_name() != "Android")) and not _touches.is_empty():
 		return true
 	if event is InputEventMouseButton:
 		return _on_button(event as InputEventMouseButton)
