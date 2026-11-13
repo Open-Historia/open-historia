@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player, 2026-11-13: a one-month skip took eight minutes on a local model and was held on three failed orders; the
+    // notice was the last thing in the time skip panel, under the ladder of dates, and they found "nothing there" and the
+    // old date. "Make it appear in the middle of the screen and impossible to dismiss without choosing." GameUI/time.jsx
+    // HeldTurnDialog.
+    id: "2026-11-held-turn-dialog",
+    kind: "minor",
+    date: "2026-11-13",
+    banners: [
+      {
+        title: "A held turn asks for your decision in the middle of the screen",
+        items: [
+          "When a turn is held (some of your events failed, a segment or a check did not come back), its notice now opens as a window in the middle of the screen, over everything.",
+          "It stays until you choose one of its options, so a finished turn can no longer be missed under the list of dates or closed by accident.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",
