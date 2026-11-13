@@ -1,0 +1,24 @@
+# The Windows beta: electron-builder.beta.yml with the product name
+# "Open Historia".
+#
+# SignPath Foundation signs only files whose product name is the project's
+# (docs/code-signing.md), and electron-builder writes productName into the
+# program's and the installer's version blocks. Everything a player sees and
+# Windows tells installs apart by stays the beta's own:
+#
+#   executableName        Open Historia Beta.exe, and the install folder
+#                         %LOCALAPPDATA%\Programs\Open Historia Beta
+#   appId (beta.yml)      its own uninstall entry and upgrade identity
+#   nsis.shortcutName,    "Open Historia Beta" in the Start menu, on the desktop
+#   uninstallDisplayName  and in Installed apps (beta.yml)
+#   app.setName           its own saves in %APPDATA%\Open Historia Beta
+#                         (electron/main.cjs, not productName)
+#
+# macOS and Linux are not signed and keep "Open Historia Beta" throughout: a
+# second "Open Historia.app" would land on top of the stable one.
+#
+#   node scripts/package-desktop.mjs --win --config electron-builder.beta-win.yml --publish never
+extends: electron-builder.beta.yml
+productName: Open Historia
+win:
+  executableName: Open Historia Beta

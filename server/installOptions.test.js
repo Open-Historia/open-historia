@@ -45,8 +45,9 @@ test("the installer's page names each thing, links the policy, and writes the fi
   for (const box of ["OHUpdateBox", "OHCountBox", "OHDiscordBox"]) assert.match(nsh, new RegExp(`\\$\\{NSD_CreateCheckbox\\}[^\\n]*\\n\\s*Pop \\$${box}\\n\\s*\\$\\{NSD_Check\\} \\$${box}`));
   assert.match(nsh, /FileWrite \$0 '\{"checkUpdates":\$OHUpdate,"countInstall":\$OHCount,"discordLaunch":\$OHDiscord\}\$\\r\$\\n'/);
   assert.ok(nsh.includes(`\\${INSTALL_OPTIONS_FILE}"`), "the same file name");
-  // Where Electron keeps each build's data: package.json's name for the stable app, the set name for the others.
-  assert.match(nsh, /!if "\$\{PRODUCT_NAME\}" == "Open Historia"\n\s*!define OH_DATA_DIR "\$APPDATA\\open-historia"/);
+  // Where Electron keeps each build's data: package.json's name for the stable app, the set name (its
+  // program's name) for the others. Not the product name, which the Windows beta shares with the stable app.
+  assert.match(nsh, /!if "\$\{PRODUCT_FILENAME\}" == "Open Historia"\n\s*!define OH_DATA_DIR "\$APPDATA\\open-historia"\n\s*!else\n\s*!define OH_DATA_DIR "\$APPDATA\\\$\{PRODUCT_FILENAME\}"/);
   assert.equal(JSON.parse(read("package.json")).name, "open-historia");
   // A silent update shows no page and leaves the player's answers alone.
   assert.match(nsh, /\$\{If\} \$OHPrivacyShown == "1"\n\s*CreateDirectory/);

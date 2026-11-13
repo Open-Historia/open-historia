@@ -92,18 +92,34 @@ test("the file on disk is hashed as electron-updater hashes it, and its stale bl
   assert.ok(!fs.existsSync(`${installer}.blockmap`));
 });
 
-// The beta is not signed: its product name is "Open Historia Beta", and SignPath
-// Foundation signs only files that carry the project's name.
-test("the beta workflow sends nothing to SignPath", () => {
-  const text = read(".github/workflows/desktop-beta.yml");
-  assert.doesNotMatch(text.replace(/^ *#.*\n/gm, ""), /SIGNPATH|signpath|--prepackaged|refresh-update-feed/);
-  assert.match(read("electron-builder.beta.yml"), /^productName: Open Historia Beta$/m);
+// SignPath Foundation signs only files whose product name is the project's. The
+// Windows beta is packed as "Open Historia" with everything a player or Windows
+// tells it apart by still the beta's own; macOS and Linux keep the beta's name.
+test("the Windows beta's product name is Open Historia, and nothing else of it changes", () => {
+  const win = read("electron-builder.beta-win.yml");
+  assert.match(win, /^extends: electron-builder\.beta\.yml$/m);
+  assert.match(win, /^productName: Open Historia$/m);
+  assert.match(win, /^win:\n {2}executableName: Open Historia Beta$/m, "its program and install folder");
+  const beta = read("electron-builder.beta.yml");
+  assert.match(beta, /^productName: Open Historia Beta$/m, "macOS and Linux keep it");
+  assert.match(beta, /^appId: io\.github\.arkniem\.openhistoria\.beta$/m, "its own uninstall entry");
+  assert.match(beta, /^ {2}shortcutName: Open Historia Beta$/m);
+  assert.match(beta, /^ {2}uninstallDisplayName: Open Historia Beta$/m);
+  const workflow = read(".github/workflows/desktop-beta.yml");
+  assert.match(workflow, /- os: windows-latest\n {12}args: --win\n(?: *#.*\n)* {12}config: electron-builder\.beta-win\.yml\n/);
+  assert.match(workflow, /- os: macos-latest\n {12}args: --mac\n {12}config: electron-builder\.beta\.yml\n/);
+  assert.match(workflow, /- os: ubuntu-latest\n {12}args: --linux\n {12}config: electron-builder\.beta\.yml\n/);
+  // The installer's privacy page finds the beta's data by its program's name, not the product name.
+  assert.match(read("build/installer.nsh"), /!if "\$\{PRODUCT_FILENAME\}" == "Open Historia"/);
 });
 
-test("every signed file says product Open Historia and the build's version, checked before SignPath sees it", () => {
-  const text = read(".github/workflows/desktop-installer.yml");
+for (const [workflow, program] of [
+  [".github/workflows/desktop-installer.yml", "Open Historia.exe"],
+  [".github/workflows/desktop-beta.yml", "Open Historia Beta.exe"],
+]) test(`${workflow}: every signed file says product Open Historia and the build's version, checked before SignPath sees it`, () => {
+  const text = read(workflow);
   // One version everywhere: the program's product version is written back to the installer's 0.0.N (not 0.0.N.0).
-  assert.match(text, /node scripts\/set-product-version\.mjs --version "\$APP_VERSION" "release\/win-unpacked\/Open Historia\.exe"/);
+  assert.ok(text.includes(`node scripts/set-product-version.mjs --version "$APP_VERSION" "release/win-unpacked/${program}"`));
   assert.ok(text.indexOf("- name: Write the program's product version as the build's") < text.indexOf("- name: Check the programs' product name and version"));
   assert.match(text, /echo "APP_VERSION=0\.0\.\$\{\{ github\.run_number \}\}" >> "\$GITHUB_ENV"/);
   assert.equal(text.match(/ {10}parameters: \|\n {12}version: "\$\{\{ env\.APP_VERSION \}\}"\n/g)?.length, 2, "both signing requests pass the version");
@@ -116,8 +132,9 @@ test("every signed file says product Open Historia and the build's version, chec
   assert.match(check, /\$productVersion -eq \$Version/);
 });
 
-for (const [workflow, installer, config] of [
+for (const [workflow, installer, config, firstConfig = config] of [
   [".github/workflows/desktop-installer.yml", "Open-Historia-Setup.exe", ""],
+  [".github/workflows/desktop-beta.yml", "Open-Historia-Beta-Setup.exe", " --config electron-builder.beta-win.yml", " --config ${{ matrix.config }}"],
 ]) {
   test(`${workflow}: signing is Windows-only, off without the owner's settings, and done before anything is hashed`, () => {
     const text = read(workflow);
@@ -136,7 +153,7 @@ for (const [workflow, installer, config] of [
       );
     }
     // The original build step is untouched, so an unconfigured run builds what it always built.
-    assert.match(text, new RegExp(`- name: Build the installer\\n {8}run: node scripts/package-desktop\\.mjs \\$\\{\\{ matrix\\.args \\}\\}${config.replace(/\./g, "\\.")} --publish never\\n`));
+    assert.match(text, new RegExp(`- name: Build the installer\\n {8}run: node scripts/package-desktop\\.mjs \\$\\{\\{ matrix\\.args \\}\\}${firstConfig.replace(/[.${}]/g, (c) => `\\${c}`)} --publish never\\n`));
 
     const at = (needle) => {
       const index = text.indexOf(needle);
