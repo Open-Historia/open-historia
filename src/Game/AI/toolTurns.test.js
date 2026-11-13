@@ -4,10 +4,13 @@
 // Fallback entry, starts with the rounds already answered, as text where they
 // were first asked, and with only the rest of the round budget.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   answerLookupCalls,
+  answerNowDirective,
+  keepsLookupsDeclared,
   answeredLookupKeys,
   anthropicMessagesFromHistory,
   appendLookupRound,
@@ -23,6 +26,28 @@ import {
 const prompt = { role: "user", parts: [{ text: "Simulate the next month." }] };
 const calls = [{ id: "call_1", name: "list_powers", args: {}, thoughtSignature: "SIG-FROM-MODEL-A" }];
 const results = [{ id: "call_1", name: "list_powers", response: { powers: ["France", "Russian Federation"] } }];
+
+// A local server reads its functions with the prompt: a round that drops them is read again whole.
+test("on a local server the round that must answer keeps the lookups declared and is told to answer", () => {
+  assert.equal(keepsLookupsDeclared({ local: true, answerOnly: true, lookups: 23 }), true);
+  assert.equal(keepsLookupsDeclared({ local: false, answerOnly: true, lookups: 23 }), false, "a hosted gateway is sent the one function");
+  assert.equal(keepsLookupsDeclared({ local: true, answerOnly: false, lookups: 23 }), false, "a round that may still ask is as it was");
+  assert.equal(keepsLookupsDeclared({ local: true, answerOnly: true, lookups: 0 }), false);
+  assert.equal(keepsLookupsDeclared(), false);
+  assert.match(answerNowDirective("submit_jump_result"), /No more lookups are answered in this turn/);
+  assert.match(answerNowDirective("submit_jump_result"), /Call submit_jump_result now with your answer\.$/);
+  assert.match(answerNowDirective(), /Call the output function now/);
+});
+
+const mainSource = readFileSync(new URL("./main.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+
+test("the chat-completions path declares them on that round, says so last, and falls back once if the model asks again", () => {
+  assert.match(mainSource, /let keepLookupsDeclared = keepsLookupsDeclared\(\{\n\s+local: isLocalEndpoint\(normalizeEndpoint\(endpoint\)\),\n\s+answerOnly: Boolean\(tool\) && requireOutputTool,/);
+  assert.match(mainSource, /let lookupDeclarations = tool && Array\.isArray\(lookupTools\) && \(!requireOutputTool \|\| keepLookupsDeclared\) \? lookupTools : \[\];/);
+  assert.match(mainSource, /\.\.\.\(keepLookupsDeclared && structuredMode === "tool" \? \[\{ role: "user", content: answerNowDirective\(tool\.name\) \}\] : \[\]\),/);
+  const again = mainSource.slice(mainSource.indexOf("if (lookupCalls.length && keepLookupsDeclared) {"));
+  assert.match(again.slice(0, 900), /keepLookupsDeclared = false;\n\s+lookupDeclarations = \[\];[\s\S]+?continue;/);
+});
 
 test("a fresh carry changes nothing", () => {
   const carry = createLookupCarry();
