@@ -71,6 +71,7 @@ export const RECEIPT_PLAYER_TEXTS = Object.freeze({
   chatNotOpened: "The conversation \"{{title}}\" was not opened: none of its participants is a country on this map.",
   untitledChatNotOpened: "A conversation was not opened: none of its participants is a country on this map.",
   unitNotRaised: "A new unit was not raised: it had no name or no owner.",
+  unitTypeNotFielded: "{{name}} was not raised: {{owner}} cannot field the unit type {{type}}.",
   unitOrderNoUnit: "An order to a unit was not carried out: it did not say which unit.",
   unitOrderUnknownUnit: "An order to the unit \"{{unit}}\" was not carried out: no unit has that id, and it may have been destroyed.",
   structureUnnamed: "A structure was not built: it had no name.",

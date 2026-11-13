@@ -75,6 +75,7 @@ export const RELEASES = [
           "2026-11-war-music-only-in-war",
           "2026-11-sturdier-wars",
           "2026-11-whole-coalitions",
+          "2026-11-custom-unit-types",
           "2026-10-wars-and-fronts-2",
           "2026-10-swarms",
           "2026-10-deploy-calls-up",

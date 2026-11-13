@@ -44,6 +44,10 @@
 // posture changed, a fleet gone, a fleet commissioned) and the battles, for
 // the story to tell and the map to show.
 //
+// A fleet of one of the scenario's own unit types (runtime/unitTypes.js: a
+// naval unit of one of `unitTypes`) weighs its type's `attack` times as much in
+// a battle and a blockade, and takes its `toughness` times less in a battle.
+//
 // Pure, the same input the same result on every machine (nothing is drawn but
 // from the run's seed), and it loads in plain Node.
 
@@ -53,6 +57,7 @@ import { readMilitary, seaWorth } from "../fronts/military.js";
 import { weatherOn } from "../fronts/weather.js";
 import { kmBetween } from "../fronts/worldGrid.js";
 import { eraOf } from "../unitMotion.js";
+import { unitFigures } from "../unitTypes.js";
 
 // How far apart hostile fleets can be and still fight, in km, by era (before
 // 1500, 1500 to 1849, 1850 to 1944, from 1945): oars and sail meet hull to
@@ -277,11 +282,12 @@ const placeOf = ({ lng, lat, seas, cities, km }) => {
 //   caps             { perCountry, world }: the most formations a country and the world may have
 //   raised           world.naviesRaised: [{ country, date }], when each country was last given
 //                    a navy or lost the last of one
+//   unitTypes        world.unitTypes, the scenario's own unit types (runtime/unitTypes.js)
 // Returns { battles, unitChanges, commissioned, fleets, raised, blockades }.
 //   blockades   [{ country, by: [names], pressure, covered, days }]: each country a fleet
 //               pressed on in the period (blockade.js): the mean of its days, the share
 //               of its coast reached, and how many of the period's days it stood
-export const runNaval = ({ fromDate = "", days = 0, seed = "", wars = [], units = [], strengthOf = null, controllerOf = null, grid = null, cities = [], seas = [], flat = false, scale = undefined, factor = 1, metric = null, caps = {}, raised = [], era: setEra = null, militaryOf = null, weatherSeed = null, iced = [] } = {}) => {
+export const runNaval = ({ fromDate = "", days = 0, seed = "", wars = [], units = [], strengthOf = null, controllerOf = null, grid = null, cities = [], seas = [], flat = false, scale = undefined, factor = 1, metric = null, caps = {}, raised = [], era: setEra = null, militaryOf = null, weatherSeed = null, iced = [], unitTypes = [] } = {}) => {
   const era = eraOf(fromDate, setEra);
   // Weighing the weather (fronts/weather.js): a storm keeps fleets apart and weakens a blockade. Fleets in the same
   // stretch of sea (five degrees by five) have the same weather; none without a seed.
@@ -335,6 +341,9 @@ export const runNaval = ({ fromDate = "", days = 0, seed = "", wars = [], units 
       broke: false,
       sunk: false,
       fresh: false,
+      // What its type makes of it (runtime/unitTypes.js): 1 and 1 for a fleet of no type of the scenario's.
+      attack: unitFigures(unitTypes, unit).attack,
+      toughness: unitFigures(unitTypes, unit).toughness,
     }));
 
   // ---- a navy to fight with ---------------------------------------------------------
@@ -470,7 +479,7 @@ export const runNaval = ({ fromDate = "", days = 0, seed = "", wars = [], units 
         if (withOne) sides[0].push(fleet);
         else if (withTwo) sides[1].push(fleet);
       }
-      const weights = sides.map((side, index) => side.reduce((sum, fleet) => sum + fleet.strength * navyFactor(weightOf(fleet.owner)) * seaOf(fleet.owner) * fightsOf(fleet.posture), 0)
+      const weights = sides.map((side, index) => side.reduce((sum, fleet) => sum + fleet.strength * navyFactor(weightOf(fleet.owner)) * seaOf(fleet.owner) * fightsOf(fleet.posture) * (fleet.attack ?? 1), 0)
         * (0.85 + 0.3 * chanceOf(`${seed}|${day}|${one.id}|${two.id}|luck${index}`)));
       const share = weights[0] / (weights[0] + weights[1]);
       const hard = 0.5 + 0.7 * Math.max(...sides.flat().map((fleet) => keenOf(fleet.posture)));
@@ -479,7 +488,7 @@ export const runNaval = ({ fromDate = "", days = 0, seed = "", wars = [], units 
         const loss = (BATTLE_LOSS * hard * (1 - mine) * 2) / Math.sqrt(side.length);
         return side.map((fleet) => {
           const before = fleet.strength;
-          fleet.strength = Math.max(0, fleet.strength - Math.max(1, loss));
+          fleet.strength = Math.max(0, fleet.strength - Math.max(1, loss) / (fleet.toughness ?? 1));
           fleet.ready = day + REFIT_DAYS;
           if (fleet.strength <= SUNK_UNDER) {
             fleet.sunk = true;
@@ -513,11 +522,11 @@ export const runNaval = ({ fromDate = "", days = 0, seed = "", wars = [], units 
         if (!live(fleet) || fleet.posture !== "blockade" || !hostile(fleet.key, key) || frozenIn(fleet)) continue;
         if (!post.stations.some(([lng, lat]) => km(lng, lat, fleet.lng, fleet.lat) <= reach)) continue;
         // What it can put into the blockade: what it is, less what the fleets of its enemies in reach of it tie down.
-        const mine = fleet.strength * navyFactor(weightOf(fleet.owner)) * seaOf(fleet.owner) * (stormy(fleet, day) ? STORM_BLOCKADE : 1);
+        const mine = fleet.strength * navyFactor(weightOf(fleet.owner)) * seaOf(fleet.owner) * (stormy(fleet, day) ? STORM_BLOCKADE : 1) * (fleet.attack ?? 1);
         let tied = 0;
         for (const other of fleets) {
           if (!live(other) || other.posture === "withdrawing" || !hostile(other.key, fleet.key)) continue;
-          if (km(other.lng, other.lat, fleet.lng, fleet.lat) <= reach) tied += other.strength * navyFactor(weightOf(other.owner)) * seaOf(other.owner) * fightsOf(other.posture);
+          if (km(other.lng, other.lat, fleet.lng, fleet.lat) <= reach) tied += other.strength * navyFactor(weightOf(other.owner)) * seaOf(other.owner) * fightsOf(other.posture) * (other.attack ?? 1);
         }
         blockaders.push({ lng: fleet.lng, lat: fleet.lat, weight: mine > 0 ? (mine * mine) / (mine + tied) : 0, owner: fleet.owner });
       }

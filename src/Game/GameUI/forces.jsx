@@ -8,10 +8,14 @@ import {
   getInteractionMode,
   setInteractionMode,
   clearInteractionMode,
+  getUnitTypeOf,
+  getUnitTypes,
   updateUnitAdmin,
   UNIT_NOT_SAVED,
 } from "../Map/unitsController.js";
 import { UNIT_STATUSES, UNIT_TYPES } from "../../runtime/gameState.js";
+import { mayFieldUnitType } from "../../runtime/unitTypes.js";
+import { uiString } from "../../runtime/translator.js";
 import { ensurePolityNames, polityDisplayName, subscribePolityNames } from "../../runtime/polityNames.js";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -94,6 +98,12 @@ const surface = {
 // from here.
 const unitActivity = (unit) => POSTURE_LABEL[unit.posture] || unit.posture || unit.status;
 
+// What the row and the unit card call a unit's kind, and the mark they show it with: one of the scenario's own unit
+// types by its name and icon (runtime/unitTypes.js), every other unit by its kind. Shared with the unit popup
+// (Selection/Units.jsx), so the two never call one formation two things.
+export const unitKindLabel = (unit) => getUnitTypeOf(unit)?.name || (TYPE_LABEL[unit?.type] ?? unit?.type);
+export const unitKindGlyph = (unit) => getUnitTypeOf(unit)?.icon || (TYPE_GLYPH[unit?.type] ?? "🛡");
+
 const UnitRow = ({ unit, dimmed, onClick }) => (
   <button
     className="oh-tap-row"
@@ -114,13 +124,13 @@ const UnitRow = ({ unit, dimmed, onClick }) => (
       opacity: dimmed ? 0.65 : 1,
     }}
   >
-    <span style={{ fontSize: "1.1rem", lineHeight: 1 }}>{TYPE_GLYPH[unit.type] ?? "🛡"}</span>
+    <span style={{ fontSize: "1.1rem", lineHeight: 1 }}>{unitKindGlyph(unit)}</span>
     <div style={{ minWidth: 0, flex: 1 }}>
       <div style={{ fontSize: "12px", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
         {unit.name}
       </div>
       <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.55)" }}>
-        {TYPE_LABEL[unit.type] ?? unit.type} · {polityDisplayName(unit.ownerCode)} · {unitActivity(unit)}
+        {unitKindLabel(unit)} · {polityDisplayName(unit.ownerCode)} · {unitActivity(unit)}
       </div>
     </div>
     <span style={{ fontSize: "12px", fontWeight: 700, color: strengthColor(unit.strength) }}>
@@ -154,9 +164,15 @@ const smallButtonStyle = {
 // written straight to the unit (updateUnitAdmin) — no order, no AI step — and
 // a hand placement anywhere on the map (the admin-place mode Nations.jsx
 // handles with placeUnitAdmin).
+// (A unit's kind may be one of the scenario's own unit types: OWN_TYPE before its id, apart from the kinds.)
+// i18n-ignore
+const OWN_TYPE = "own:";
+const UNIT_TYPES_GROUP_LABEL = "Unit types";
 const UnitEditor = ({ unit, onPlace, onClose }) => {
   const [name, setName] = useState(unit.name);
-  const [type, setType] = useState(unit.type);
+  const [type, setType] = useState(() => (getUnitTypeOf(unit) ? `${OWN_TYPE}${unit.unitType}` : unit.type));
+  // The scenario's own unit types the unit may be: those its owner may field, and the one it is.
+  const ownTypes = getUnitTypes().filter((entry) => entry.id === unit.unitType || mayFieldUnitType(entry, unit.ownerCode));
   const [strength, setStrength] = useState(unit.strength);
   const [status, setStatus] = useState(unit.status);
   const [note, setNote] = useState(unit.note || "");
@@ -168,10 +184,11 @@ const UnitEditor = ({ unit, onPlace, onClose }) => {
     setSaving(true);
     setError("");
     let saved = null;
+    const own = type.startsWith(OWN_TYPE) ? ownTypes.find((entry) => `${OWN_TYPE}${entry.id}` === type) : null;
     try {
       saved = await updateUnitAdmin(unit.id, {
         name: name.trim() || unit.name,
-        type,
+        ...(own ? { type: own.base, unitType: own.id } : { type: type.startsWith(OWN_TYPE) ? unit.type : type, unitType: "" }),
         strength: Math.max(1, Math.min(100, Number(strength) || unit.strength)),
         status,
         note: note.trim(),
@@ -192,6 +209,13 @@ const UnitEditor = ({ unit, onPlace, onClose }) => {
           {UNIT_TYPES.map((entry) => (
             <option key={entry} value={entry} style={{ color: "black" }}>{TYPE_LABEL[entry] ?? entry}</option>
           ))}
+          {ownTypes.length > 0 && (
+            <optgroup label={uiString(UNIT_TYPES_GROUP_LABEL)} style={{ color: "black" }}>
+              {ownTypes.map((entry) => (
+                <option key={entry.id} value={`${OWN_TYPE}${entry.id}`} data-no-translate="" style={{ color: "black" }}>{entry.icon ? `${entry.icon} ${entry.name}` : entry.name}</option>
+              ))}
+            </optgroup>
+          )}
         </select>
         <input
           className="oh-tap-row"

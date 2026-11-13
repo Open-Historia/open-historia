@@ -31,6 +31,7 @@ import { airArmsForOrders } from "../../runtime/fronts/airStrikeOps.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
 import { DEFAULT_MUSTER, musterTable } from "../../runtime/mustering.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
+import { normalizeUnitTypes } from "../../runtime/unitTypes.js";
 import { normalizeClimateZones, normalizeFortifications, normalizeFreezingRegions, normalizeTerrainAreas, zoneWeightAt } from "../../runtime/warGeography.js";
 import { climateZonesOf, terrainAreasOf } from "../../runtime/worldGeographyDefaults.js";
 import { freezesAt } from "../../runtime/fronts/climate.js";
@@ -1324,6 +1325,9 @@ export const runTurnFronts = async ({
     }
   };
   if (struck.length > 0) strikes.push(...await placeStrikes(struck, { events: list, cities: asArray(map?.cities), world, strikePlaces, fromDate, toDate }));
+  // The scenario's own unit types (runtime/unitTypes.js): a formation of one fights by its type's figures, in the
+  // air, on the battlefields and at sea alike.
+  const unitTypes = normalizeUnitTypes(world?.unitTypes);
   // The air strikes the war room ordered (runtime/fronts/airStrike.js), flown as the period begins: who rose
   // against each and the air battle fought here, and their bombs on the battlefields in the engine's run below.
   // The same in the run made before the story and the one that applies it. (None in a scenario without air units.)
@@ -1340,6 +1344,7 @@ export const runTurnFronts = async ({
       markers: asArray(world?.markers),
       peopleOf: readers.peopleOf,
       date: fromDate,
+      ...(unitTypes.length > 0 ? { unitTypes } : {}),
     })
     : { strikes: [], moments: [], unitChanges: [] };
   // The formations as the strikes leave them: those that flew or rose are worn, and the land war begins with them so.
@@ -1498,6 +1503,8 @@ export const runTurnFronts = async ({
       isGroup: (name) => readers.isGroup(name) || foundedGroups.has(fold(name)),
       groupOwnerOf: readers.groupOwnerOf,
       units: flown,
+      // (A formation of one of the scenario's own unit types fights by its type's figures: runtime/unitTypes.js.)
+      ...(unitTypes.length > 0 ? { unitTypes } : {}),
       transports: normalizeTransports(world?.transports),
       // (What the Wars feature switched off carries nothing: runtime/fronts/transports.js transportBar.)
       ...(Array.isArray(transportMedia) ? { transportMedia } : {}),
@@ -1584,6 +1591,7 @@ export const runTurnFronts = async ({
         ...measureOptions(map),
         caps: unitCaps ?? {},
         raised: asArray(world?.naviesRaised),
+        ...(unitTypes.length > 0 ? { unitTypes } : {}),
         era: Number.isInteger(era) ? era : null,
         ...(mechanics?.military === true ? { militaryOf: readers.militaryOf } : {}),
         ...(mechanics?.weather === true && clean(climateSeed) ? { weatherSeed: clean(climateSeed) } : {}),

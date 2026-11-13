@@ -266,6 +266,8 @@ export const renamePolityInWorld = (world, fromName, toName) => {
   put("projects", mapRows(world?.projects, (project) => ({ ...project, ownerCode: one(project.ownerCode) })));
   // The fortified lines it holds (runtime/warGeography.js): a wall keeps its owner.
   put("fortifications", mapRows(world?.fortifications, (line) => ({ ...line, owner: one(line.owner) })));
+  // The scenario's own unit types it may field (runtime/unitTypes.js).
+  put("unitTypes", mapRows(world?.unitTypes, (type) => (Array.isArray(type.owners) ? { ...type, owners: mapList(type.owners, fromKey, to) } : type)));
   // How weary of war it is, and what it has left to fight with (runtime/warWeariness.js, warResources.js).
   put("warWeariness", mapRows(world?.warWeariness, (row) => ({ ...row, country: one(row.country) })));
   put("warResources", mapRows(world?.warResources, (row) => ({ ...row, country: one(row.country) })));

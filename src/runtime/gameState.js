@@ -13,6 +13,7 @@ import { MAX_WAR_SIDE_MEMBERS, normalizeWarRecord, normalizeWarRecords, referenc
 import { normalizeWarResources } from "./warResources.js";
 import { normalizeAttrition } from "./attrition.js";
 import { eraSettingOf, normalizeWarSettings } from "./warSettings.js";
+import { UNIT_TYPES, findUnitType, mayFieldUnitType, normalizeUnitTypes, unitFigures, unitTypeRef, withUnitTypesApplied } from "./unitTypes.js";
 import { normalizeClimateZones, normalizeFortifications, normalizeFreezingRegions, normalizeTerrainAreas, normalizeZoneWeather } from "./warGeography.js";
 import { normalizeMilitaryShift, normalizeMilitaryStats, shiftedMilitary } from "./militaryStats.js";
 import { MAX_GROUPS, applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
@@ -312,6 +313,8 @@ export const WORLD_DEFAULTS = {
   attrition: [],
   // How the scenario's wars are fought (warSettings.js): null where it says nothing.
   warSettings: null,
+  // The scenario's own unit types (unitTypes.js): a dragon is an air unit that hits harder and lasts longer.
+  unitTypes: [],
   // What the scenario draws on its map for war (warGeography.js): ground harder
   // to cross, walls that must be broken through, its own climates, and the
   // water that freezes in winter.
@@ -350,7 +353,8 @@ export const WORLD_DEFAULTS = {
 
 // Military units that ride along inside world state (world.units[]). Stored here
 // so they share every existing read/write/poll/normalize path with no server change.
-export const UNIT_TYPES = ["infantry", "armor", "air", "naval", "artillery", "garrison"];
+// (The kinds of unit are unitTypes.js's, beside the unit types a scenario names of its own.)
+export { UNIT_TYPES };
 const UNIT_TYPE_SET = new Set(UNIT_TYPES);
 // "pending" = a player deployment awaiting AI resolution (rendered translucent).
 export const UNIT_STATUSES = ["idle", "moving", "engaged", "defeated", "pending"];
@@ -1326,12 +1330,17 @@ export const normalizeUnitEntry = (entry, index = 0) => {
   const status = normalizeOptionalString(entry.status).toLowerCase();
   const source = normalizeOptionalString(entry.source).toLowerCase();
   const posture = normalizeOptionalString(entry.posture).toLowerCase();
+  const unitType = unitTypeRef(entry.unitType);
   const timestamp = new Date().toISOString();
 
   return {
     id: normalizeOptionalString(entry.id) || generateId(`unit-${index}`),
     name: normalizeOptionalString(entry.name) || "Unit",
     type: UNIT_TYPE_SET.has(type) ? type : "infantry",
+    // One of the scenario's own unit types (unitTypes.js), by its id: the world
+    // checks it against world.unitTypes (normalizeWorldState), where `type`
+    // becomes the type's base. Absent on every other unit.
+    ...(unitType ? { unitType } : {}),
     ownerCode,
     strength: clampUnitStrength(entry.strength ?? 100),
     lng,
@@ -3061,6 +3070,8 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
   let next = normalizeUnits(units);
   let nextOrders = normalizePendingUnitOrders(orders);
   const markers = normalizeArray(context.markers);
+  // The scenario's own unit types (unitTypes.js): what a spawn may name, and how fast each moves.
+  const unitTypes = normalizeUnitTypes(context.unitTypes);
   const stamp = () => new Date().toISOString();
   // Normalize defensively. Ops arriving from applyEventImpactsToWorld have been
   // through normalizeEventImpacts already (and normalizeUnitOp is idempotent),
@@ -3086,13 +3097,25 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
       // marked his oil and gas sites with units ("GSI Arzew", "Hub Sud"), and
       // each skip that told of them raised a twin beside or far from it.
       if (sameFormationOnMap(next, op.unit)) continue;
+      const unit = { ...op.unit };
+      // One of the scenario's own unit types (unitTypes.js), named by its name or its id: the unit is of that type's
+      // base kind, and a type its owner may not field is not raised at all. A type the scenario does not have is
+      // no type: the unit is an ordinary one of the kind it was given.
+      if (unit.unitType) {
+        const unitType = unit.storyVessel ? null : findUnitType(unitTypes, unit.unitType);
+        if (!unitType) delete unit.unitType;
+        else if (!mayFieldUnitType(unitType, unit.ownerCode)) continue;
+        else {
+          unit.unitType = unitType.id;
+          unit.type = unitType.base;
+        }
+      }
       // Nor of a kind the scenario fights without (the Wars feature): no air unit with air units off, no fleet
       // with navies off. (A story ship is no fleet: it is drawn, and guards nothing.)
       const wars = activeWars();
-      const spawnType = String(op.unit?.type ?? "").toLowerCase();
-      if ((!wars.air && spawnType === "air") || (!wars.navies && spawnType === "naval" && !op.unit?.storyVessel)) continue;
+      const spawnType = String(unit.type ?? "").toLowerCase();
+      if ((!wars.air && spawnType === "air") || (!wars.navies && spawnType === "naval" && !unit.storyVessel)) continue;
 
-      const unit = { ...op.unit };
       // A story ship is a ship whatever the model called it, unlisted because
       // nothing guards it, and kept for STORY_VESSEL_ROUNDS at most.
       if (unit.storyVessel) {
@@ -3109,7 +3132,11 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
         // would take rather than dropping the op, because a silently dropped op
         // leaves the event narrating a deployment the map never shows, which is
         // the failure describeUnitOpRejection exists to make visible.
-        if (unit.type === "garrison") unit.type = "infantry";
+        // (And a garrison of a type of the scenario's is no longer of that type.)
+        if (unit.type === "garrison") {
+          unit.type = "infantry";
+          delete unit.unitType;
+        }
         unit.covert = true;
         if (!unit.posture) unit.posture = "transit";
       }
@@ -3159,7 +3186,8 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
         }
 
         const posture = op.posture || unit.posture;
-        // A redeployment or an advance, each at its own pace (unitMotion.js).
+        // A redeployment or an advance, each at its own pace (unitMotion.js), and a unit of one of the scenario's
+        // own types at its type's speed (unitTypes.js: 1 for every other).
         const budget =
           elapsedDays === null || elapsedDays === undefined
             ? Infinity
@@ -3168,7 +3196,7 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
               era,
               seaShare: op.seaShare ?? null,
               remainingKm: kmOnMap(unit.lat, unit.lng, op.toLat, op.toLng),
-            });
+            }) * unitFigures(unitTypes, unit).speed;
         const step = stepToward(unit, { lng: op.toLng, lat: op.toLat }, budget);
 
         if (step.arrived) {
@@ -3299,6 +3327,7 @@ export const advanceStandingOrders = (
   const units = normalizeUnits(world?.units);
   const orders = normalizePendingUnitOrders(world?.pendingUnitOrders);
   if (orders.length === 0) return world;
+  const unitTypes = normalizeUnitTypes(world?.unitTypes);
 
   const elapsed = daysBetweenDates(fromDate, toDate) ?? 0;
   const ordersByUnit = new Map(orders.map((order) => [order.unitId, order]));
@@ -3342,12 +3371,13 @@ export const advanceStandingOrders = (
     const step = stepToward(
       unit,
       { lng: order.toLng, lat: order.toLat },
+      // (A unit of one of the scenario's own types at its type's speed: unitTypes.js.)
       maxTravelKm(unit.type, toDate || fromDate, unitElapsed, {
         posture: unit.posture,
         era: eraSettingOf(world),
         seaShare: order.seaShare ?? null,
         remainingKm: kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng),
-      }),
+      }) * unitFigures(unitTypes, unit).speed,
     );
     if (step.arrived && unit.posture === "patrol") stations.set(unit.id, { lng: step.lng, lat: step.lat, type: unit.type });
     return {
@@ -4440,7 +4470,11 @@ export const normalizeWorldState = (world) => {
       .filter(([code, sheet]) => code && sheet && typeof sheet === "object"),
   );
 
-  const units = withoutTwinsOfPlayerUnits(normalizeUnits(nextWorld.units));
+  // The scenario's own unit types (unitTypes.js), their owners folded like every
+  // other owner; a unit of one is of that type's base kind, and one naming a type
+  // the scenario does not have is an ordinary unit of its own kind.
+  const unitTypes = normalizeUnitTypes(nextWorld.unitTypes, { resolveOwner });
+  const units = withUnitTypesApplied(withoutTwinsOfPlayerUnits(normalizeUnits(nextWorld.units)), unitTypes);
 
   // The ledgers resolve their polity names against the overrides computed above,
   // not the raw input, so a renamed polity folds onto one identity.
@@ -4622,6 +4656,8 @@ export const normalizeWorldState = (world) => {
     attrition: normalizeAttrition(nextWorld.attrition),
     // How the scenario's wars are fought (warSettings.js): null where it says nothing.
     warSettings: normalizeWarSettings(nextWorld.warSettings),
+    // Its own unit types (unitTypes.js).
+    unitTypes,
     // What it draws on its map for war (warGeography.js).
     terrainAreas: normalizeTerrainAreas(nextWorld.terrainAreas),
     fortifications: normalizeFortifications(nextWorld.fortifications),
@@ -6147,6 +6183,8 @@ export const applyEventImpactsToWorld = ({
             : op)),
         {
           markers: nextWorld.markers,
+          // The scenario's own unit types a spawn may name (unitTypes.js).
+          unitTypes: nextWorld.unitTypes,
           gameDate: event.date || cursorDate,
           era: eraSettingOf(nextWorld),
           elapsedDays: motion ? daysBetweenDates(cursorDate, event.date) : null,
