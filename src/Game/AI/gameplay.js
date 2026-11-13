@@ -312,7 +312,7 @@ import {
   unassessedHighPriorityEntries,
 } from "../../runtime/projects.js";
 import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
-import { assertPoliticalLandscapeConsistency, describeElectionsDue, ideologyListText, normalizePoliticalLandscape } from "../../runtime/politics.js";
+import { assertPoliticalLandscapeConsistency, describeElectionsDue, normalizePoliticalLandscape } from "../../runtime/politics.js";
 import { foldLandscapeIntoActor } from "../../runtime/politicalLandscapeFold.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
 import { frontOrderLinesBlock } from "./frontPrompt.js";
@@ -14535,7 +14535,7 @@ export const ensureCountryAssessed = (target, options = {}) =>
   ensureCountryStatSheet(target, { ...options, rateIntelligence: true }).then(() => ensureIntelligenceRated(target, options));
 
 // One polity's government and parties as they stand, read on the player's asking and folded into its Political
-// World record (runtime/politicalLandscapeFold.js): its parties' native names, ideologies among the ten, roles and
+// World record (runtime/politicalLandscapeFold.js): its parties' native names, freeform ideologies and positions, roles and
 // seats, the legislature and the next election, for a record generated before the Political World kept them, or
 // one the player wants read afresh. Between readings turns move it with the Political World's own ops.
 export const assessPoliticalLandscape = async (target, { signal } = {}) => {
@@ -14561,8 +14561,7 @@ export const assessPoliticalLandscape = async (target, { signal } = {}) => {
       era ? `ERA & WORLD RULES:\n${era}` : "",
       `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
       sheet ? `STAT SHEET: government ${normalizeString(sheet.government) || "unknown"}; leader ${normalizeString(sheet.leader) || "unknown"}; stability ${sheet.stability ?? "unknown"}/100.` : "",
-      previous?.parties?.length ? `ITS PARTIES AS THE RECORD HAS THEM (keep what the events since have not changed, and their names as written here):\n${JSON.stringify(previous.parties.map((party) => ({ name: party.name, shortName: party.shortName, ideology: party.ideologyFamily || party.ideology, subideology: party.subideology, leader: typeof party.leader === "object" ? party.leader?.name : party.leader, role: party.ruling ? "governing" : party.coalition ? "coalition" : party.role, seats: party.seats, support: party.support?.percent })))}` : "",
-      `IDEOLOGIES AND THEIR SUBIDEOLOGIES:\n${ideologyListText()}`,
+      previous?.parties?.length ? `ITS PARTIES AS THE RECORD HAS THEM (keep what the events since have not changed, and their names as written here):\n${JSON.stringify(previous.parties.map((party) => ({ name: party.name, shortName: party.shortName, ideology: party.ideology || party.subideology || party.ideologyFamily, politicalPosition: party.politicalPosition, leader: typeof party.leader === "object" ? party.leader?.name : party.leader, role: party.ruling ? "governing" : party.coalition ? "coalition" : party.role, seats: party.seats, support: party.support?.percent })))}` : "",
     ].filter(Boolean).join("\n\n"),
     variables,
   });

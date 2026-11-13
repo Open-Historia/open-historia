@@ -373,13 +373,14 @@ export const normalizePoliticalParty = (value, { index = 0 } = {}) => {
     // world and just make it an enhancement of that" (the owner, 2026-11-03).
     //   nameNative, shortNameNative   the name and abbreviation as its own speakers write them
     //   ideologyFamily                one of the ten ideologies (politics.js IDEOLOGIES), by id
-    //   subideology                   one listed under it, or the party's own word
+    //   subideology                   legacy taxonomy detail (retained for saved campaigns)
+    //   politicalPosition             freeform self-description, e.g. centre-right
     //   role                          governing, coalition, opposition, outside parliament,
     //                                 underground, in exile or banned (politics.js PARTY_ROLES);
     //                                 the government's ruling and coalition parties say the first two
     //   seats                         its seats in the legislature
     //   founded                       the year it was founded
-    for (const [key, ...aliases] of [["nameNative"], ["shortNameNative", "abbrNative"], ["subideology"], ["founded"]]) {
+    for (const [key, ...aliases] of [["nameNative"], ["shortNameNative", "abbrNative"], ["subideology"], ["politicalPosition"], ["founded"]]) {
       const text = clean([value[key], ...aliases.map((alias) => value[alias])].find((entry) => clean(entry)));
       if (text) out[key] = text;
       else delete out[key];

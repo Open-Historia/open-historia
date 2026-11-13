@@ -9,7 +9,7 @@ test("Cheats Country Editor exposes the same canonical legislature and party fie
   assert.match(ui, /politicsPairedField\("Legislature", "legislature"\)/);
   assert.match(ui, /politicsPairedField\("Legislature seats", "legislatureSeats"/);
   assert.match(ui, /politicsPairedField\("Next election", "nextElection"\)/);
-  for (const label of ["Native name", "Native abbreviation", "Ideology family", "Subideology", "Party role", "Seats held", "Founded", "Party colour (hex)"]) {
+  for (const label of ["Native name", "Native abbreviation", "Ideology", "Political position", "Party role", "Seats held", "Founded", "Party colour (hex)"]) {
     assert.ok(ui.includes(label), `missing ${label}`);
   }
 });

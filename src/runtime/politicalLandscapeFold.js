@@ -91,6 +91,8 @@ export const foldLandscapeIntoActor = (actor, landscape, { polityKey = "", newer
     if (compiled.abbrEn && !clean(party.shortName)) party.shortName = compiled.abbrEn;
     if (compiled.abbrNative) party.shortNameNative = compiled.abbrNative;
     if (compiled.ideology) party.ideologyFamily = compiled.ideology;
+    if (compiled.ideologyText) party.ideology = compiled.ideologyText;
+    if (compiled.politicalPosition) party.politicalPosition = compiled.politicalPosition;
     if (compiled.subideology) {
       party.subideology = compiled.subideology;
       if (!clean(party.ideology)) party.ideology = compiled.subideology;

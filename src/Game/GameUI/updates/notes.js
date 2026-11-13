@@ -54,6 +54,26 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Political World / Pre-history player-facing editor refresh. Keep the
+    // delivery date aligned with the eventual Beta build before publishing.
+    id: "2026-11-political-world-prehistory",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Political World and starting history",
+        items: [
+          "Small parties now stay individually visible in the Political World party list, even when the chart groups them together.",
+          "Parties now use freeform Ideology and Political position fields in the Scenario Editor and Country Editor.",
+          "Generated political parties can use more flexible ideology and political-position descriptions.",
+          "Create and edit starting relationships, agreements and ongoing storylines without generating pre-game history.",
+          "Set relationship scores, treaty signatories, guarantees and access rights, and storyline participants, pressure and status.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it not play the war music whenever the war room is availible, because if you have deployed troops but no conflicts there should be no war music" (the owner, 2026-11-13):
     // the war room open on troops built up in peace played the battle music.
     id: "2026-11-war-music-only-in-war",

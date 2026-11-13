@@ -82,7 +82,7 @@ import { collectImpactOps, countImpactOps, otherImpactFamilies } from "./gmPrevi
 // The feature types, with the glyph the map draws for each (mapFeatureKinds.js).
 import { GM_MAP_FEATURE_KINDS as MAP_FEATURE_KINDS } from "./mapFeatureKinds.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld, politicalEditorComposition } from "./countryEditorPolitical.js";
-import { IDEOLOGIES, PARTY_ROLE_LABELS } from "../../runtime/politics.js";
+import { PARTY_ROLE_LABELS } from "../../runtime/politics.js";
 import {
     REMINDERS_LIMIT,
     REMINDER_MAX_CHARS,
@@ -847,7 +847,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         parties: [...(current.parties || []), {
             _editorKey: `custom-party-row:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`,
             id: `custom-party-${Date.now().toString(36)}`, name: "New political entity", shortName: "", nameNative: "", shortNameNative: "",
-            leader: "", ideology: "", ideologyFamily: "", subideology: "", role: "opposition", seats: "", founded: "", color: "", publicDescription: "",
+            leader: "", ideology: "", ideologyFamily: "", subideology: "", politicalPosition: "", role: "opposition", seats: "", founded: "", color: "", publicDescription: "",
             publicPrioritiesText: "", publicForeignPolicyText: "", supportPercent: "", influencePercent: "", influenceLabel: "", ruling: false, coalition: false,
         }],
     }));
@@ -1321,15 +1321,8 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Native name</label><input style={inputStyle} value={party.nameNative ?? ""} onChange={(event) => changeParty(index, "nameNative", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Native abbreviation</label><input style={inputStyle} value={party.shortNameNative ?? ""} onChange={(event) => changeParty(index, "shortNameNative", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Leader</label><input style={inputStyle} value={party.leader ?? ""} onChange={(event) => changeParty(index, "leader", event.target.value)} /></div>
-                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Ideology label</label><input style={inputStyle} value={party.ideology ?? ""} onChange={(event) => changeParty(index, "ideology", event.target.value)} /></div>
-                                            <div>
-                                                <label style={{ ...labelStyle, marginTop: 0 }}>Ideology family</label>
-                                                <select style={inputStyle} value={party.ideologyFamily ?? ""} onChange={(event) => changeParty(index, "ideologyFamily", event.target.value)}>
-                                                    <option value="">Not specified</option>
-                                                    {IDEOLOGIES.map((ideology) => <option key={ideology.id} value={ideology.id}>{ideology.name}</option>)}
-                                                </select>
-                                            </div>
-                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Subideology</label><input style={inputStyle} value={party.subideology ?? ""} onChange={(event) => changeParty(index, "subideology", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Ideology</label><input style={inputStyle} value={party.ideology ?? ""} onChange={(event) => changeParty(index, "ideology", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Political position</label><input style={inputStyle} value={party.politicalPosition ?? ""} onChange={(event) => changeParty(index, "politicalPosition", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Seats held</label><input type="number" min="0" max="100000" step="1" style={inputStyle} value={party.seats ?? ""} onChange={(event) => changeParty(index, "seats", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Founded</label><input style={inputStyle} value={party.founded ?? ""} onChange={(event) => changeParty(index, "founded", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Party colour (hex)</label><input style={inputStyle} value={party.color ?? ""} onChange={(event) => changeParty(index, "color", event.target.value)} /></div>

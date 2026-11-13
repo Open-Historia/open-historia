@@ -14,7 +14,7 @@ import { PLACE_FEED_MAX_TRENDS } from "../../runtime/placeFeed.js";
 import { WAR_ROOM_ORDERS, WAR_ROOM_STANCES } from "../../runtime/fronts/constants.js";
 import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
-import { IDEOLOGIES, PARTY_ROLES } from "../../runtime/politics.js";
+import { PARTY_ROLES } from "../../runtime/politics.js";
 import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
 import { OCCUPATION_SETTLEMENTS_FIELD, occupationOutcomesFor } from "../../runtime/occupationSettlements.js";
 import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
@@ -3565,7 +3565,8 @@ const POLITICAL_LANDSCAPE_SCHEMA = {
           nameNative: nonEmptyTextSchema("Name in the polity's own language; the English name again only where that is the language."),
           abbrEn: textSchema("English abbreviation, blank where none is used."),
           abbrNative: textSchema("Native abbreviation, blank where none is used."),
-          ideology: { type: "string", enum: IDEOLOGIES.map((ideology) => ideology.name), description: "One of the ten ideologies." },
+          ideology: nonEmptyTextSchema("The party's freely worded ideology, not a fixed game taxonomy."),
+          politicalPosition: textSchema("A freely worded political-spectrum position, e.g. centre-right; blank when unknown."),
           subideology: nonEmptyTextSchema("A subideology listed under that ideology."),
           leader: nonEmptyTextSchema("Current leader's name."),
           colour: textSchema("The party's colour as #RRGGBB, blank to use its ideology's."),
@@ -3575,7 +3576,7 @@ const POLITICAL_LANDSCAPE_SCHEMA = {
           founded: textSchema("Year founded, blank if unknown."),
           description: textSchema("One short line: who it speaks for and where it is strong."),
         },
-        required: ["nameEn", "nameNative", "ideology", "subideology", "leader", "role", "support"],
+        required: ["nameEn", "nameNative", "ideology", "leader", "role", "support"],
         additionalProperties: false,
       },
     },

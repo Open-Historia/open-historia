@@ -178,6 +178,7 @@ test("valid generation proposal fills missing state and returns generated-field 
       parties: [{
         id: "civic-league",
         name: "Civic League",
+        politicalPosition: "Centre-right",
         politicalResponse: { organization: 68, issues: { reform: { position: 45, sensitivity: 70 } } },
       }],
       traits: { riskTolerance: 48, opportunism: 55 },
@@ -194,6 +195,7 @@ test("valid generation proposal fills missing state and returns generated-field 
   assert.equal(result.actor.politicalSystem.representation, "electoral");
   assert.equal(result.actor.politicalSystem.regimeCharacter, "democratic");
   assert.equal(result.actor.government.rulingPartyIds[0], "civic-league");
+  assert.equal(result.actor.parties[0].politicalPosition, "Centre-right");
   assert.equal(result.provenance.source, "generated");
   assert.ok(result.provenance.appliedPaths.includes("politicalSystem"));
   assert.equal(result.actor.behavioralDisposition, undefined);

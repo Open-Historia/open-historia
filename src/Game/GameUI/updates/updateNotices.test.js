@@ -50,6 +50,21 @@ test("one Beta release entry covers the combined Advisor, country tools and curr
   assert.deepEqual(noticePages([update]).map((page) => page.key), [id + "#0"]);
 });
 
+test("Political World and pre-game history improvements have a Beta update notice", () => {
+  const id = "2026-11-political-world-prehistory";
+  const updates = UPDATES.filter((update) => update.id === id);
+  assert.equal(updates.length, 1, "the update is listed once in history");
+  const update = updates[0];
+  assert.equal(update.kind, "minor");
+  assert.equal(update.channel, "beta");
+  assert.equal(update.date, "2026-11-13");
+  assert.equal(update.banners.length, 1);
+  assert.equal(update.banners[0].items.length, 5);
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+  assert.deepEqual(noticePages([update]).map((page) => page.key), [id + "#0"]);
+});
+
 test("the website's browser version shows no update notices; the apps do", () => {
   // "make update announcements not appear on the website beta" (the owner, 2026-11-09).
   assert.equal(buildShowsUpdateNotices({ VITE_OH_WEB: true, VITE_OH_NATIVE: false }), false, "the website");

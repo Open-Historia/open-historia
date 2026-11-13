@@ -116,6 +116,7 @@ const GENERATED_PARTY_FIELDS = new Set([
   "shortNameNative",
   "ideologyFamily",
   "subideology",
+  "politicalPosition",
   "role",
   "seats",
   "founded",

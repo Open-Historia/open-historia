@@ -76,7 +76,8 @@ test("a two-percent coalition partner keeps its own slice (PWV2-007)", () => {
   assert.deepEqual(other.members.map((member) => member.name), ["D"]);
   assert.equal(other.support, 8);
   assert.equal(other.unlistedSupport, 5);
-  assert.equal(landscape.entries, landscape.slices);
+  assert.notEqual(landscape.entries, landscape.slices);
+  assert.deepEqual(landscape.entries.map((entry) => entry.name), ["A", "B", "C", "D", "E", "Other political support"]);
   assert.equal(landscape.hasQuantitativeValues, true);
 });
 
@@ -217,7 +218,7 @@ test("mixed electoral profile exposes separate party and bloc views without chan
   assert.equal(views.defaultView, "parties");
   assert.equal(views.canSwitch, true);
   assert.equal(views.parties.mode, "party");
-  assert.deepEqual(views.parties.entries.map((entry) => entry.name), ["Democratic Party", "Other"]);
+  assert.deepEqual(views.parties.entries.map((entry) => entry.name), ["Democratic Party", "Other political support"]);
   assert.equal(views.blocs.mode, "power");
   assert.equal(views.blocs.source, "blocs");
   assert.deepEqual(views.blocs.entries.map((entry) => entry.name), ["Silicon Valley Billionaires", "Military establishment"]);
@@ -277,4 +278,32 @@ test("no political rosters gives no fabricated view; qualitative-only blocs stil
   assert.equal(qualitative.blocs.entries[0].influence, null);
   assert.equal(qualitative.blocs.entries[0].displayValue, "very strong");
   assert.equal(qualitative.blocs.hasQuantitativeValues, false);
+});
+
+test("all named tiny opposition parties remain inspectable outside the compact chart", () => {
+  const profile = { politicalSystem: { representation: "electoral" }, parties: [
+    party("Major", 70, { id: "major" }),
+    party("Second", 15, { id: "second" }),
+    party("Third", 7, { id: "third" }),
+    party("Green Minority", 2, { id: "green", publicDescription: "Ecological reformers", politicalPosition: "Green left" }),
+    party("Local Reform", 1, { id: "local", publicDescription: "Regional activists" }),
+    party("Tiny", 0, { id: "tiny" }),
+  ] };
+  const view = buildPoliticalLandscapeViews(profile).parties;
+  assert.deepEqual(view.slices.map((p) => p.name), ["Major", "Second", "Third", "Other"]);
+  assert.deepEqual(view.entries.map((p) => p.name), ["Major", "Second", "Third", "Green Minority", "Local Reform", "Tiny", "Other political support"]);
+  assert.equal(view.entries.find((p) => p.id === "green").publicDescription, "Ecological reformers");
+  assert.equal(view.entries.find((p) => p.id === "green").politicalPosition, "Green left");
+  assert.equal(view.entries.find((p) => p.id === "tiny").support, 0);
+  assert.equal(view.entries.at(-1).support, 5);
+});
+test("authored Others party remains inspectable separately from genuinely unlisted support", () => {
+  const view = buildPoliticalLandscapeViews({ parties: [
+    party("Large", 75, { id: "large" }),
+    party("Others", 20, { id: "other-authored", publicDescription: "Recorded independents" }),
+  ] }).parties;
+  assert.deepEqual(view.entries.map((p) => p.name), ["Large", "Others", "Other political support"]);
+  assert.equal(view.entries[1].publicDescription, "Recorded independents");
+  assert.equal(view.entries[2].support, 5);
+  assert.deepEqual(view.slices.map((p) => p.name), ["Large", "Other"]);
 });

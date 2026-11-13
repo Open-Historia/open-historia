@@ -68,6 +68,7 @@ const publicPartyRow = (party, index) => {
     shortNameNative: clean(party.shortNameNative),
     ideologyFamily: clean(party.ideologyFamily),
     subideology: clean(party.subideology),
+    politicalPosition: clean(party.politicalPosition),
     role: clean(party.role),
     seats: Number.isFinite(Number(party.seats)) && party.seats !== null && party.seats !== "" ? Math.max(0, Math.round(Number(party.seats))) : null,
     founded: clean(party.founded),
@@ -163,7 +164,7 @@ export const buildPoliticalPartyLandscape = (
   ).sort((left, right) => (Number(right.support) || 0) - (Number(left.support) || 0) || left.name.localeCompare(right.name));
 
   const supported = rows.filter((party) => Number.isFinite(party.support) && party.support > 0);
-  if (!supported.length) return { parties: rows, slices: [], totalKnownSupport: 0, isApproximate: false };
+  if (!supported.length) return { parties: rows, listEntries: rows, slices: [], totalKnownSupport: 0, isApproximate: false };
 
   const explicitOther = supported.find((party) => /^(other|others|other parties|independent|independents)$/i.test(party.name));
   const namedCandidates = supported.filter((party) => party !== explicitOther);
@@ -219,8 +220,17 @@ export const buildPoliticalPartyLandscape = (
     chartPercent: Math.max(0, (party.support / chartTotal) * 100),
   }));
 
+  // Chart slices may be compact, but every named canonical party remains
+  // individually inspectable in the detailed list. Only genuinely unrecorded
+  // support receives a synthetic residual row.
+  const listEntries = remainder > 0.05 ? [
+    ...rows,
+    { id: "__unmapped_support__", name: "Other political support",
+      isOther: true, members: [], support: remainder, unlistedSupport: remainder },
+  ] : rows;
   return {
     parties: rows,
+    listEntries,
     slices: boundedSlices,
     totalKnownSupport: Math.round(Math.min(100, knownSupport) * 10) / 10,
     isApproximate: supported.some((party) => party.supportApproximate),
@@ -467,7 +477,7 @@ export const buildPoliticalLandscape = (publicPoliticalProfile, options = {}) =>
     return {
       ...meta,
       ...landscape,
-      entries: landscape.slices.length ? landscape.slices : landscape.parties,
+      entries: landscape.listEntries,
       totalKnownPercent: landscape.totalKnownSupport,
       hasQuantitativeValues: landscape.slices.length > 0,
     };
@@ -516,7 +526,7 @@ export const buildPoliticalLandscapeViews = (publicPoliticalProfile, options = {
       ...POLITICAL_LANDSCAPE_META.electoral,
       representation: meta.representation,
       ...data,
-      entries: data.slices.length ? data.slices : data.parties,
+      entries: data.listEntries,
       totalKnownPercent: data.totalKnownSupport,
       hasQuantitativeValues: data.slices.length > 0,
     };
