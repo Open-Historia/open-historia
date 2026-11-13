@@ -38,29 +38,45 @@ test("the orders answered this way are the queued ordinary ones, and on a retry 
     assert.deepEqual(ordersForOutcomes(null), []);
 });
 
-test("the contract requires an entry for every order, with an outcome and at least two reactions, and no field for the order itself", () => {
-    const schema = orderOutcomesSchema(orders);
-    assert.deepEqual(schema.required, ["a1", "a2"]);
-    const one = schema.properties.a1;
+test("the contract asks for the orders' entries, each with its order's number, an outcome and at least two reactions", () => {
+    const schema = orderOutcomesSchema();
+    assert.equal(schema.type, "array");
+    assert.equal(schema.minItems, 1);
+    assert.equal(schema.maxItems, MAX_OUTCOME_ORDERS);
+    const one = schema.items;
     assert.deepEqual(one.required, ["order", "date", "title", "outcome", "reactions"]);
-    assert.deepEqual(one.properties.order.enum, ["Open trade talks with Libya"], "the entry opens with its order's title, which the contract fixes");
+    assert.deepEqual(Object.keys(one.properties), ["order", "date", "title", "outcome", "reactions"], "the number first: the model knows which order it is writing");
+    assert.equal(one.properties.order.type, "integer");
+    assert.equal(one.properties.order.maximum, MAX_OUTCOME_ORDERS);
     assert.equal(one.properties.reactions.minItems, 2);
     assert.equal(one.properties.reactions.items.type, "string", "a reaction is a sentence, not a row of fields");
-    const long = orderOutcomesSchema([{ id: "a9", title: "x".repeat(200), text: "" }]).properties.a9;
-    assert.equal(long.properties.order.enum[0].length, 81, "a long order is named by its start");
-    assert.match(one.description, /Open trade talks with Libya/);
     assert.match(one.properties.outcome.description, /Never the order said again/);
-    assert.deepEqual(Object.keys(one.properties), ["order", "date", "title", "outcome", "reactions"]);
+});
+
+// A function that changes with the turn throws away the prompt a provider cached behind it.
+test("the contract is the same whatever the turn's orders are", () => {
+    const tool = GAMEPLAY_TOOLS.jumpForward;
+    const elsewhere = ["Egypt", "Hungary", "Iran", "Libya", "Poland", "Soviet Union"];
+    const one = withOrderOutcomes(tool, { orders, minEvents: 10, maxEvents: 15, elsewhere });
+    const other = withOrderOutcomes(tool, {
+        orders: [{ id: "z1", title: "Another turn's order", text: "With other words." }, { id: "z2", title: "Second" }, { id: "z3", title: "Third" }],
+        minEvents: 10,
+        maxEvents: 15,
+        elsewhere,
+    });
+    assert.equal(JSON.stringify(one), JSON.stringify(other));
+    assert.equal(JSON.stringify(one).includes("Open trade talks with Libya"), false, "no order's words are in the function");
+    assert.equal(JSON.stringify(one).includes("a1"), false, "nor its id");
 });
 
 test("a skip's contract is told how many events the rest of the period holds", () => {
     const tool = GAMEPLAY_TOOLS.jumpForward;
     const shaped = withOrderOutcomes(tool, { orders, minEvents: 10, maxEvents: 15 });
-    assert.equal(shaped.schema.properties.events.minItems, 8);
-    assert.equal(shaped.schema.properties.events.maxItems, 13);
+    assert.equal(shaped.schema.properties.events.minItems, 5, "half the period's count: the orders' entries are the rest");
+    assert.equal(shaped.schema.properties.events.maxItems, 15);
     assert.equal(shaped.schema.required[0], ORDER_OUTCOMES_FIELD, "a grammar writes the required fields in this order");
     assert.match(shaped.schema.properties.events.description, /None of them tells one of the player's orders/);
-    assert.ok(shaped.schema.properties[ORDER_OUTCOMES_FIELD].properties.a2);
+    assert.equal(shaped.schema.properties[ORDER_OUTCOMES_FIELD].type, "array");
     assert.equal(Object.keys(shaped.schema.properties)[0], ORDER_OUTCOMES_FIELD, "the orders are answered before the events are written");
     // The contract every other skip is sent is not touched.
     assert.equal(tool.schema.properties.events.minItems, undefined);
@@ -86,7 +102,7 @@ test("with orders to answer, each event of the list opens with a country that is
         assert.equal(withOrderOutcomes(tool, options).schema.properties.events.items, tool.schema.properties.events.items);
     }
     // The field is the contract's and leaves the answer with the entries.
-    const candidate = { events: [{ [EVENT_COUNTRY_FIELD]: "Hungary", date: "1989-01-11", title: "Budapest allows parties", description: "…" }], [ORDER_OUTCOMES_FIELD]: {} };
+    const candidate = { events: [{ [EVENT_COUNTRY_FIELD]: "Hungary", date: "1989-01-11", title: "Budapest allows parties", description: "…" }], [ORDER_OUTCOMES_FIELD]: [] };
     foldOrderOutcomes(candidate, orders);
     assert.equal(EVENT_COUNTRY_FIELD in candidate.events[0], false);
     assert.match(buildOrderOutcomesInstruction(orders), /opens with its country, which is never the player's/);
@@ -98,8 +114,8 @@ test("with no orders the events list still has its count, and never less than on
     assert.equal(shaped.schema.properties.events.maxItems, 6);
     assert.equal(ORDER_OUTCOMES_FIELD in shaped.schema.properties, false);
     assert.equal(withOrderOutcomes(GAMEPLAY_TOOLS.jumpForward, { orders: [], minEvents: 0, maxEvents: 0 }).schema.properties.events.minItems, 1);
-    // More orders than the period's count: the list may be empty, never negative.
-    assert.equal(withOrderOutcomes(GAMEPLAY_TOOLS.jumpForward, { orders, minEvents: 1, maxEvents: 2 }).schema.properties.events.minItems, 0);
+    // With orders, never less than one either.
+    assert.equal(withOrderOutcomes(GAMEPLAY_TOOLS.jumpForward, { orders, minEvents: 1, maxEvents: 2 }).schema.properties.events.minItems, 1);
 });
 
 test("a retry asks for the orders' entries and no events", () => {
@@ -110,12 +126,16 @@ test("a retry asks for the orders' entries and no events", () => {
     assert.equal(buildOrderOutcomesInstruction([], { amend: true }), "");
 });
 
-test("the model is told where the orders go, by id, and not to say them again", () => {
-    const text = buildOrderOutcomesInstruction(orders);
+test("the model is told where the orders go, by number, how many entries and events are wanted, and not to say the orders again", () => {
+    const text = buildOrderOutcomesInstruction(orders, { minEvents: 10, maxEvents: 15 });
     assert.match(text, /do not say the order again/);
-    assert.match(text, /- a1: "Open trade talks with Libya" — Send the foreign minister to Tripoli/);
-    assert.match(text, /- a2: "Sign a pact with Bulgaria"$/m, "a title that is the whole order is not said twice");
+    assert.match(text, /holds exactly 2 entries, one for each, in this order/);
+    assert.match(text, /^1\. \(id a1\) "Open trade talks with Libya" — Send the foreign minister to Tripoli/m);
+    assert.match(text, /^2\. \(id a2\) "Sign a pact with Bulgaria"$/m, "a title that is the whole order is not said twice");
     assert.match(text, /that list is for the rest of the world/);
+    assert.match(text, /never the player's\. Write 8 to 13 events there\. /, "the period's count less the orders");
+    assert.doesNotMatch(buildOrderOutcomesInstruction(orders), /\.\./, "no count known, nothing said of it");
+    assert.match(buildOrderOutcomesInstruction([orders[0]]), /holds exactly one entry, for it/);
     assert.match(buildOrderOutcomesInstruction([]), /number of events the function asks for/);
 });
 
@@ -137,10 +157,11 @@ test("the answer's entries become events that cite their orders, after the model
         events: [{ date: "1989-01-03", title: "A coup in Paraguay", description: "…", impacts: {} }],
         stopDate: "1989-01-31",
         summary: "A month.",
-        [ORDER_OUTCOMES_FIELD]: {
-            a1: entry("Tripoli agreed to barter oil for tractors.", ["Moscow Said nothing.", "Washington Protested."]),
-            a2: { date: "", title: "", outcome: "Sofia stalled.", reactions: [] },
-        },
+        // Out of order, and each finds its own by number.
+        [ORDER_OUTCOMES_FIELD]: [
+            { order: 2, date: "", title: "", outcome: "Sofia stalled.", reactions: [] },
+            { order: 1, ...entry("Tripoli agreed to barter oil for tractors.", ["Moscow Said nothing.", "Washington Protested."]) },
+        ],
     };
     assert.deepEqual(foldOrderOutcomes(candidate, orders, { fallbackDate: "1989-01-31" }), ["a1", "a2"]);
     assert.equal(ORDER_OUTCOMES_FIELD in candidate, false);
@@ -160,12 +181,25 @@ test("the answer's entries become events that cite their orders, after the model
 test("an empty entry leaves its order unanswered, and an order an event already cites is not written twice", () => {
     const candidate = {
         events: [{ date: "1989-01-05", title: "The pact is signed", description: "…", impacts: { actionIds: ["a2"] } }],
-        [ORDER_OUTCOMES_FIELD]: { a1: { outcome: "  ", reactions: [] }, a2: entry("Signed.", ["Sofia Signed too."]) },
+        [ORDER_OUTCOMES_FIELD]: [{ order: 1, outcome: "  ", reactions: [] }, { order: 2, ...entry("Signed.", ["Sofia Signed too."]) }],
     };
     assert.deepEqual(foldOrderOutcomes(candidate, orders), []);
     assert.equal(candidate.events.length, 1);
-    assert.deepEqual(foldOrderOutcomes({ events: [], [ORDER_OUTCOMES_FIELD]: "not an object" }, orders), []);
+    assert.deepEqual(foldOrderOutcomes({ events: [], [ORDER_OUTCOMES_FIELD]: "not a list" }, orders), []);
     assert.deepEqual(foldOrderOutcomes({ events: [] }, orders), []);
+});
+
+test("an entry with no number that fits takes the next order still unanswered, and a second entry for one order is dropped", () => {
+    const candidate = {
+        events: [],
+        [ORDER_OUTCOMES_FIELD]: [
+            { order: 2, ...entry("Sofia signed.", ["Ankara objected.", "Moscow approved."]), title: "The pact" },
+            { order: 2, ...entry("Sofia signed again.", ["Ankara objected twice.", "Moscow approved twice."]), title: "The pact, again" },
+            { order: 9, ...entry("Tripoli agreed.", ["Cairo asked for the same.", "Paris frowned."]), title: "Tripoli" },
+        ],
+    };
+    assert.deepEqual(foldOrderOutcomes(candidate, orders), ["a1", "a2"]);
+    assert.deepEqual(candidate.events.map((event) => [event.title, event.impacts.actionIds[0]]), [["Tripoli", "a1"], ["The pact", "a2"]]);
 });
 
 // Both seen in the first run in a game (2026-11-13).
@@ -176,7 +210,7 @@ test("an entry the model also wrote as an event is that event, and one order's s
             { date: "1989-01-12", title: "Talks open in Tripoli", description: "The order, said again.", impacts: {} },
             { date: "1989-01-20", title: "A coup in Paraguay", description: "…" },
         ],
-        [ORDER_OUTCOMES_FIELD]: { a1: told, a2: { ...told, title: "Talks open in Tripoli" } },
+        [ORDER_OUTCOMES_FIELD]: [{ order: 1, ...told }, { order: 2, ...told, title: "Talks open in Tripoli" }],
     };
     assert.deepEqual(foldOrderOutcomes(candidate, orders), ["a1"], "the second entry is the first one's story again");
     assert.equal(candidate.events.length, 2, "no second copy of the event");
@@ -193,7 +227,7 @@ test("an event that repeats an entry's sentences is that entry's event, whatever
             { date: "1989-01-12", title: "Envoys in Libya", description: "On 12 January Tripoli agreed to barter oil for tractors over three years. The first shipment leaves Constanta in March." },
             { date: "1989-01-20", title: "A coup in Paraguay", description: "The general who ruled for thirty-four years is out. His son-in-law holds the palace." },
         ],
-        [ORDER_OUTCOMES_FIELD]: { a1: entry(outcome, ["Moscow said nothing.", "Cairo asked for the same."]) },
+        [ORDER_OUTCOMES_FIELD]: [{ order: 1, ...entry(outcome, ["Moscow said nothing.", "Cairo asked for the same."]) }],
     };
     assert.deepEqual(foldOrderOutcomes(candidate, orders), ["a1"]);
     assert.equal(candidate.events.length, 2, "told once, and the other events keep their places");
@@ -208,9 +242,9 @@ test("an answer that carries the field passes the skip's own checks before it is
         events: [{ date: "1989-01-03", title: "A coup in Paraguay", description: "The general is out." }],
         stopDate: "1989-01-31",
         summary: "A month.",
-        [ORDER_OUTCOMES_FIELD]: { a1: entry("Agreed.", ["Moscow Silent.", "Paris Curious."]) },
+        [ORDER_OUTCOMES_FIELD]: [{ order: 1, ...entry("Agreed.", ["Moscow Silent.", "Paris Curious."]) }],
     });
-    assert.ok(answer[ORDER_OUTCOMES_FIELD]?.a1, "the field survives the answer's normalising");
+    assert.equal(answer[ORDER_OUTCOMES_FIELD]?.[0]?.order, 1, "the field survives the answer's normalising");
     assert.equal(validateGameplayPayload("jumpForward", answer).valid, true);
 });
 

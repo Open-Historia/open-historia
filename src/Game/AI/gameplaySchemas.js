@@ -1472,8 +1472,9 @@ export const JUMP_FORWARD_SCHEMA = {
     // with the setting on; each is made an event before anything reads them
     // (foldOrderOutcomes), and one written oddly costs that order its answer.
     orderOutcomes: {
-      type: "object",
+      type: "array",
       description: "The player's orders, one entry each; format in the function.",
+      items: { type: "object" },
     },
     // Anything at all: each entry is read on its own (socialFeed.js
     // readSkipPollResults), and one the model wrote oddly costs that poll its

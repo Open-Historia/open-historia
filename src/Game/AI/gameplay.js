@@ -16911,6 +16911,9 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         ? Math.max(1, normalizeArray(context.amend.failures?.events).length, normalizeArray(context.amend.failures?.orders).length)
         : 0;
       const minEvents = context.amend ? 1 : Math.max(pacedMin, scriptedBeats.length);
+      // The period's count with no orders counted, for a contract that does not
+      // move with the turn's orders (orderOutcomes.js "THE CONTRACT NAMES NO ORDER").
+      const [steadyMin, steadyMax] = segmentEventRange(safeDays, 0, { pace: direction?.eventPace });
       const maxEvents = context.amend ? amendCount + 1 : Math.max(pacedMax, scriptedBeats.length + 1);
       // "Orders answered with outcome and reactions" (orderOutcomes.js): the
       // contract of a skip written in one request, or of a retry of the player's
@@ -17101,7 +17104,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, riders) } : {}),
         ...(shapeOutcomes ? {
           toolTransform: (tool) => withOrderOutcomes(folded ? foldJumpTool(tool, riders) : tool, {
-            orders: outcomeOrders, minEvents, maxEvents, amend: Boolean(context.amend), elsewhere: outcomeElsewhere,
+            orders: outcomeOrders,
+            minEvents: steadyMin,
+            maxEvents: Math.max(steadyMax, scriptedBeats.length + 1),
+            amend: Boolean(context.amend),
+            elsewhere: outcomeElsewhere,
           }),
         } : {}),
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
@@ -17121,7 +17128,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // (playerTurnFailures.js): the whole skip again, or only those events.
           normalizeString(context.retryDirective),
           context.amend ? buildPlayerEventRetryDirective(context.amend.failures, { originDate, targetDate }) : "",
-          shapeOutcomes ? buildOrderOutcomesInstruction(outcomeOrders, { amend: Boolean(context.amend) }) : "",
+          shapeOutcomes ? buildOrderOutcomesInstruction(outcomeOrders, { amend: Boolean(context.amend), minEvents, maxEvents }) : "",
           buildSegmentInstruction({
           mode,
           segmentIndex,
