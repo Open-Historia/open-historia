@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import module, { createRequire } from "node:module";
+import { Worker as NodeWorker, isMainThread, parentPort, workerData } from "node:worker_threads";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -152,14 +153,105 @@ const idleCloser = (close) => {
   };
 };
 
+const readModelJson = (root, repo, file) => JSON.parse(fs.readFileSync(path.join(root, ...String(repo).split("/"), file), "utf8"));
+
+export const loadMarian = async ({ root, repo, token = "" }) => {
+  const { lib } = await loadLibrary();
+  lib.env.localModelPath = `${root}${path.sep}`;
+  const tokenizer = new lib.MarianTokenizer(readModelJson(root, repo, "tokenizer.json"), readModelJson(root, repo, "tokenizer_config.json"));
+  const model = await lib.AutoModelForSeq2SeqLM.from_pretrained(repo, { dtype: "q8", local_files_only: true, session_options: sessionOptions() });
+  const languageId = token ? tokenizer.get_vocab().get(token) : undefined;
+  return { lib, tokenizer, model, languageId };
+};
+
+export const generateRows = async ({ lib, tokenizer, model, languageId }, texts) => {
+  const rows = texts.map((text) => {
+    const ids = tokenizer.encode(text);
+    return languageId === undefined ? ids : [languageId, ...ids];
+  });
+  const width = Math.max(...rows.map((row) => row.length));
+  const pad = tokenizer.pad_token_id ?? 0;
+  const ids = new BigInt64Array(rows.length * width);
+  const mask = new BigInt64Array(rows.length * width);
+  rows.forEach((row, r) => {
+    for (let c = 0; c < width; c += 1) {
+      ids[r * width + c] = BigInt(c < row.length ? row[c] : pad);
+      mask[r * width + c] = c < row.length ? 1n : 0n;
+    }
+  });
+  const output = await model.generate({
+    inputs: new lib.Tensor("int64", ids, [rows.length, width]),
+    attention_mask: new lib.Tensor("int64", mask, [rows.length, width]),
+    max_new_tokens: Math.min(512, Math.ceil(width * 2.5) + 8),
+    num_beams: 1,
+    do_sample: false,
+  });
+  const eos = Number(model.generation_config?.eos_token_id ?? model.config?.eos_token_id ?? 0);
+  return output.tolist().map((row) => {
+    const tokens = row.map(Number);
+    const end = tokens.indexOf(eos, 1);
+    return tokenizer.decode(end === -1 ? tokens : tokens.slice(0, end), { skip_special_tokens: true }).trim();
+  });
+};
+
+const TRANSLATION_ROLE = "oh-translation";
+
+const marianWorker = () => {
+  let worker = null;
+  let next = 0;
+  const waiting = new Map();
+  const failAll = (error) => {
+    for (const entry of waiting.values()) entry.reject(error);
+    waiting.clear();
+  };
+  const start = () => {
+    if (worker) return worker;
+    const created = new NodeWorker(new URL(import.meta.url), { workerData: { role: TRANSLATION_ROLE } });
+    created.on("message", (message) => {
+      const entry = waiting.get(message?.id);
+      if (!entry) return;
+      waiting.delete(message.id);
+      if (message.ok) entry.resolve(message.value);
+      else entry.reject(new Error(String(message.error || "The translation model failed.")));
+    });
+    created.on("error", (error) => {
+      if (worker === created) worker = null;
+      failAll(error);
+    });
+    created.on("exit", () => {
+      if (worker === created) worker = null;
+      failAll(new Error("The translation model stopped."));
+    });
+    created.unref();
+    worker = created;
+    return worker;
+  };
+  const call = (type, payload = {}) => new Promise((resolve, reject) => {
+    next += 1;
+    waiting.set(next, { resolve, reject });
+    start().postMessage({ id: next, type, ...payload });
+  });
+  const stop = async () => {
+    const running = worker;
+    worker = null;
+    if (running) await running.terminate();
+  };
+  return { call, stop };
+};
+
 export const createTranslationRunner = ({ cacheDir, models }) => {
   let current = null;
   let chain = Promise.resolve();
+  const remote = runtimeKind() === "wasm" ? marianWorker() : null;
 
   const close = async () => {
     const loaded = current;
     current = null;
     idle.stop();
+    if (remote) {
+      await remote.stop();
+      return;
+    }
     try {
       await (await loaded?.ready)?.model?.dispose?.();
     } catch {
@@ -198,13 +290,10 @@ export const createTranslationRunner = ({ cacheDir, models }) => {
     const loading = {
       code,
       ready: (async () => {
-        const { lib } = await loadLibrary();
-        lib.env.localModelPath = `${modelsRoot(cacheDir)}${path.sep}`;
-        const tokenizer = new lib.MarianTokenizer(readJson(cacheDir, entry.repo, "tokenizer.json"), readJson(cacheDir, entry.repo, "tokenizer_config.json"));
-        const model = await lib.AutoModelForSeq2SeqLM.from_pretrained(entry.repo, { dtype: "q8", local_files_only: true, session_options: sessionOptions() });
-        const languageId = entry.token ? tokenizer.get_vocab().get(entry.token) : undefined;
+        const spec = { root: modelsRoot(cacheDir), repo: entry.repo, token: entry.token || "" };
+        const loaded = remote ? (await remote.call("load", spec), { remote: true }) : await loadMarian(spec);
         prune(entry.repo);
-        return { lib, tokenizer, model, languageId };
+        return loaded;
       })(),
     };
     loading.ready.catch(() => {
@@ -215,42 +304,13 @@ export const createTranslationRunner = ({ cacheDir, models }) => {
     return loading.ready;
   };
 
-  const generateRows = async ({ lib, tokenizer, model, languageId }, texts) => {
-    const rows = texts.map((text) => {
-      const ids = tokenizer.encode(text);
-      return languageId === undefined ? ids : [languageId, ...ids];
-    });
-    const width = Math.max(...rows.map((row) => row.length));
-    const pad = tokenizer.pad_token_id ?? 0;
-    const ids = new BigInt64Array(rows.length * width);
-    const mask = new BigInt64Array(rows.length * width);
-    rows.forEach((row, r) => {
-      for (let c = 0; c < width; c += 1) {
-        ids[r * width + c] = BigInt(c < row.length ? row[c] : pad);
-        mask[r * width + c] = c < row.length ? 1n : 0n;
-      }
-    });
-    const output = await model.generate({
-      inputs: new lib.Tensor("int64", ids, [rows.length, width]),
-      attention_mask: new lib.Tensor("int64", mask, [rows.length, width]),
-      max_new_tokens: Math.min(512, Math.ceil(width * 2.5) + 8),
-      num_beams: 1,
-      do_sample: false,
-    });
-    const eos = Number(model.generation_config?.eos_token_id ?? model.config?.eos_token_id ?? 0);
-    return output.tolist().map((row) => {
-      const tokens = row.map(Number);
-      const end = tokens.indexOf(eos, 1);
-      return tokenizer.decode(end === -1 ? tokens : tokens.slice(0, end), { skip_special_tokens: true }).trim();
-    });
-  };
-
   const translatePieces = async (code, strings) => {
     const loaded = await load(code);
     const outputs = new Array(strings.length).fill("");
     for (const group of models.groupByLength(strings)) {
       try {
-        const answers = await generateRows(loaded, group.map((index) => strings[index]));
+        const texts = group.map((index) => strings[index]);
+        const answers = loaded.remote ? await remote.call("generate", { texts }) : await generateRows(loaded, texts);
         group.forEach((index, at) => {
           outputs[index] = answers[at] || "";
         });
@@ -469,3 +529,32 @@ export const whisperRunnerFor = ({ cacheDir, engines, standIn = false }) => {
   if (!runners.has(key)) runners.set(key, standInOnDevice(standIn) ? createStandInWhisperRunner({ cacheDir, engines }) : createWhisperRunner({ cacheDir, engines }));
   return runners.get(key);
 };
+
+if (!isMainThread && workerData?.role === TRANSLATION_ROLE) {
+  let marian = null;
+  let queue = Promise.resolve();
+  const work = async (message) => {
+    if (message.type === "load") {
+      if (marian?.repo === message.repo) return true;
+      const previous = marian;
+      marian = null;
+      await previous?.loaded?.model?.dispose?.();
+      marian = { repo: message.repo, loaded: await loadMarian({ root: message.root, repo: message.repo, token: message.token }) };
+      return true;
+    }
+    if (message.type === "generate") {
+      if (!marian) throw new Error("The translation model is not loaded.");
+      return generateRows(marian.loaded, Array.isArray(message.texts) ? message.texts.map((text) => String(text ?? "")) : []);
+    }
+    throw new Error(`Unknown translation work: ${message.type}`);
+  };
+  parentPort.on("message", (message) => {
+    queue = queue.then(async () => {
+      try {
+        parentPort.postMessage({ id: message.id, ok: true, value: await work(message) });
+      } catch (error) {
+        parentPort.postMessage({ id: message.id, ok: false, error: String(error?.message || error) });
+      }
+    });
+  });
+}

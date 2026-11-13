@@ -50,7 +50,12 @@ copy(path.join(repo, "server"), path.join(stage, "server"), (file, isDir) => {
 fs.writeFileSync(path.join(stage, "package.json"), `${JSON.stringify({ name: "open-historia-native", private: true, type: "module" }, null, 2)}\n`);
 
 const wanted = ["express", "jszip", "pmtiles"];
-const ANDROID_SKIP = ["node-datachannel", "@node-datachannel", "@huggingface/transformers", "onnxruntime-node", "onnxruntime-web", "onnxruntime-common", "sharp", "@img"];
+const ANDROID_SKIP = ["node-datachannel", "@node-datachannel", "onnxruntime-node", "sharp", "@img", "@types"];
+const ON_DEVICE = ["@huggingface/transformers", "onnxruntime-web", "onnxruntime-common"];
+const ON_DEVICE_FILES = {
+  "onnxruntime-web": (relative) => relative === "package.json" || relative.startsWith("node_modules/") || ["dist/ort.node.min.js", "dist/ort.node.min.mjs", "dist/ort-wasm-simd-threaded.mjs", "dist/ort-wasm-simd-threaded.wasm"].includes(relative),
+  "@huggingface/transformers": (relative) => relative === "package.json" || ["dist/transformers.node.mjs", "dist/transformers.node.cjs"].includes(relative),
+};
 const builtins = new Set((await import("node:module")).builtinModules);
 for (const name of fs.readdirSync(path.join(sidecar, "handlers")).filter((entry) => entry.endsWith(".mjs"))) {
   const source = fs.readFileSync(path.join(sidecar, "handlers", name), "utf8");
@@ -84,14 +89,20 @@ const visit = (name, from) => {
   }
 };
 for (const name of wanted) visit(name, repo);
-for (const dir of seen) copy(dir, path.join(stage, path.relative(repo, dir)), noMaps);
+if (!lean) for (const name of ON_DEVICE) visit(name, sidecar);
+const trimmed = (dir) => {
+  const name = Object.keys(ON_DEVICE_FILES).find((key) => dir.endsWith(path.join("node_modules", key)));
+  if (!name) return noMaps;
+  return (file, isDir) => isDir || ON_DEVICE_FILES[name](path.relative(dir, file).split(path.sep).join("/"));
+};
+for (const dir of seen) copy(dir, path.join(stage, path.relative(repo, dir)), trimmed(dir));
 console.log(`bundled ${seen.size} server packages`);
 
 const publicDir = path.join(repo, "public");
 copy(path.join(repo, "scripts", "map-assets.json"), path.join(stage, "scripts", "map-assets.json"));
 const publicParts = lean
   ? ["logo.png", "icon-192.png", "icon-512.png", "scenario-placeholder.webp", "flags", "fonts", "assets"]
-  : ["logo.png", "icon-192.png", "icon-512.png", "scenario-placeholder.webp", "flags", "lang", "fonts", "offline-relief", "audio", "assets"];
+  : ["logo.png", "icon-192.png", "icon-512.png", "scenario-placeholder.webp", "flags", "lang", "fonts", "offline-relief", "audio", "assets", "models"];
 for (const name of publicParts) {
   if (fs.existsSync(path.join(publicDir, name))) copy(path.join(publicDir, name), path.join(stage, "public", name));
 }
@@ -123,8 +134,10 @@ console.log(`staged ${stagedFiles} files, ${(stagedBytes / 1048576).toFixed(1)} 
 fs.mkdirSync(payloadDir, { recursive: true });
 const bootDir = path.join(payloadDir, "boot");
 fs.rmSync(bootDir, { recursive: true, force: true });
-const bootFiles = ["public/logo.png", "public/icon-192.png", ...fs.readdirSync(path.join(publicDir, "fonts")).filter((name) => name.endsWith(".woff2")).map((name) => `public/fonts/${name}`)];
+const bootFiles = ["public/logo.png", "public/icon-192.png", "public/loading_screen.jpg", ...fs.readdirSync(path.join(publicDir, "fonts")).filter((name) => name.endsWith(".woff2")).map((name) => `public/fonts/${name}`)];
 for (const relative of bootFiles) copy(path.join(repo, relative), path.join(bootDir, `${relative}.bin`));
+copy(path.join(publicDir, "loading_screen.jpg"), path.join(bootDir, "splash.jpg"));
+fs.writeFileSync(path.join(bootDir, "splash.jpg.import"), '[remap]\n\nimporter="keep"\n');
 console.log(`boot files in the pck: ${bootFiles.length}`);
 const launcherDir = path.join(payloadDir, "launcher");
 fs.rmSync(launcherDir, { recursive: true, force: true });
@@ -137,4 +150,5 @@ if (process.platform === "win32") run(tar, ["-a", "-c", "-f", zip, "-C", stage, 
 else run("zip", ["-qr", zip, "."], { cwd: stage });
 const hash = crypto.createHash("sha256").update(fs.readFileSync(zip)).digest("hex").slice(0, 16);
 fs.writeFileSync(path.join(payloadDir, "app.stamp"), `${hash}\n`);
+fs.writeFileSync(path.join(payloadDir, "app.count"), `${stagedFiles}\n`);
 console.log(`payload ${zip} ${(fs.statSync(zip).size / 1048576).toFixed(1)} MB, stamp ${hash}`);
