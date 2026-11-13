@@ -26,7 +26,11 @@ import {
     contextWindowKey,
     createContextWindowMemory,
     estimateTokens,
+    fitsWindow,
+    nextRoundTokens,
     nothingFitsMessage,
+    readServerWindow,
+    serverPropsUrl,
     outputLimitFor,
     parseContextWindowError,
     requestChars,
@@ -125,7 +129,7 @@ import {
 } from "./toolTurns.js";
 import { GROUP_LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
 import { audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
-import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import {
     buildPromptContext,
     formatDateReadable,
@@ -2748,6 +2752,28 @@ const entryOutputLimit = (entry, maxTokens, koboldCpp) => {
 // from the cache (withCachedHistory).
 const defaultLookupRounds = () => lookupRoundLimit({ unlimited: unlimitedRequests() });
 
+// The window a local llama.cpp server loaded its model with (contextWindow.js,
+// "A local server's window, asked for"), or null: another kind of server, one
+// that does not answer in time, a page that may not ask it. Asked once a
+// minute at most for an address; the player changes it by loading the model
+// again, and a skip's rounds are over long before that matters.
+const LOCAL_WINDOW_TTL_MS = 60 * 1000;
+const LOCAL_WINDOW_TIMEOUT_MS = 1500;
+const localWindows = new Map();
+const localServerWindow = async (endpoint) => {
+    const url = serverPropsUrl(endpoint);
+    if (!url) return null;
+    const known = localWindows.get(url);
+    if (known && Date.now() - known.at < LOCAL_WINDOW_TTL_MS) return known.tokens;
+    let tokens = null;
+    try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(LOCAL_WINDOW_TIMEOUT_MS) });
+        if (response.ok) tokens = readServerWindow(await response.json());
+    } catch { /* not a llama.cpp server, or not answering: no window is known */ }
+    localWindows.set(url, { at: Date.now(), tokens });
+    return tokens;
+};
+
 // A chat's round comes back as { chatText, lookupCalls } when the model asked
 // (chatLookupsFor); once it stops asking, what the caller gets is the text.
 const chatAnswer = (result) => (result && typeof result === "object" && typeof result.chatText === "string" ? result.chatText : result);
@@ -2765,7 +2791,10 @@ const chatAnswer = (result) => (result && typeof result === "object" && typeof r
 // answer is above, and every request of the task after that offers only the
 // output function, this attempt's and the next one's (`carry.outputOnly`).
 // `outputToolName` is named in what the repeat is told; a chat has none.
-async function runWithLookups(lookups, history, dispatch, { label, provider, onRound = null, carry = null, outputToolName = "" }) {
+// `hasRoom(conversation)` says whether one more round of lookups would still
+// fit the server's window (callAI gives it for a local server with the setting
+// on); when it would not, the round is asked for the answer, as the last one is.
+async function runWithLookups(lookups, history, dispatch, { label, provider, onRound = null, carry = null, outputToolName = "", hasRoom = null }) {
     const tools = Array.isArray(lookups?.tools) ? lookups.tools.filter((entry) => entry?.name && entry?.schema) : [];
     if (!tools.length || typeof lookups?.execute !== "function") return dispatch(history, {});
     const maxRounds = Number.isInteger(lookups.maxRounds) && lookups.maxRounds >= 0 ? lookups.maxRounds : defaultLookupRounds();
@@ -2780,6 +2809,8 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
     let outputOnly = carry?.outputOnly === true;
     let roundStartedAt = Date.now();
     for (let round = 0; ; round += 1) {
+        // A round that would not fit the server's window offers only the answer, and so does every round after it.
+        if (!outputOnly && (round > 0 || carried > 0) && typeof hasRoom === "function" && !hasRoom(conversation)) outputOnly = true;
         const requireOutputTool = outputOnly || carried + round >= maxRounds;
         if (round > 0) lookups.onRound?.(round);
         // How many rounds are answered already, carried ones too: Gemini asks a
@@ -3026,6 +3057,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // is recorded with.
     let usage = null;
     let roundUsage = null;
+    // The last request a server counted, in its tokens and our characters: the
+    // rate the next lookup round is sized at (contextWindow.js nextRoundTokens).
+    let sentChars = 0;
+    let lastCounted = { chars: 0, tokens: 0 };
     let lookupRounds = 0;
     let lookupCalls = 0;
     // The answer handed back was cut at the model's output limit
@@ -3050,6 +3085,8 @@ export async function callAI(systemPrompt, history, opts = {}) {
         tools: [providerOpts.tool, ...(Array.isArray(lookups?.tools) ? lookups.tools : [])].filter(Boolean),
     }));
     const answerReserve = Number(providerOpts.maxTokens) > 0 ? Number(providerOpts.maxTokens) : DEFAULT_ANSWER_RESERVE_TOKENS;
+    const windowTools = [providerOpts.tool, ...(Array.isArray(lookups?.tools) ? lookups.tools : [])].filter(Boolean);
+    const roundChars = (roundHistory) => requestChars({ systemPrompt, history: roundHistory, tools: windowTools });
     // Lookup rounds answered on one entry go on to the next (runWithLookups);
     // a caller that retries hands in its own carry so its retry keeps them too.
     const lookupCarry = lookups?.carry && typeof lookups.carry === "object" ? lookups.carry : createLookupCarry();
@@ -3123,7 +3160,11 @@ export async function callAI(systemPrompt, history, opts = {}) {
                 // An Agent has no lookup rounds: it calls the task's lookups as
                 // tools while it answers (agentConnection.js), so none is a request.
                 const agentEntry = entry.provider === AGENT_PROVIDER;
-                return runWithLookups(agentEntry ? null : lookups, history, (roundHistory, roundOpts) => {
+                // "Stop lookups before a local window is full": the server's own
+                // window, asked for before the first round (contextWindow.js).
+                const guarded = !agentEntry && Boolean(lookups) && endpointIsLocal(entry.endpoint) && getMapSetting(MAP_SETTING_KEYS.lookupWindowGuard);
+                return (guarded ? localServerWindow(entry.endpoint) : Promise.resolve(null)).then((serverWindow) => runWithLookups(agentEntry ? null : lookups, history, (roundHistory, roundOpts) => {
+                    sentChars = roundChars(roundHistory);
                     // Open from here until this round's answer is in or has
                     // failed: one request, or several when the provider path
                     // asks again (it says so with onSend).
@@ -3151,6 +3192,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
                             const reported = normalizeUsage(data);
                             if (!reported) return;
                             roundUsage = reported;
+                            if (reported.promptTokens > 0 && sentChars > 0) lastCounted = { chars: sentChars, tokens: reported.promptTokens };
                             usage = sumUsage(usage, reported);
                         },
                         // The model the provider actually resolved (overrides, discovery).
@@ -3170,7 +3212,15 @@ export async function callAI(systemPrompt, history, opts = {}) {
                         attachLookupRound(record, { round, calls, elapsedMs, usage: roundUsage });
                         roundUsage = null;
                     },
-                });
+                    hasRoom: serverWindow ? (conversation) => {
+                        const tokens = nextRoundTokens({ chars: roundChars(conversation), lastChars: lastCounted.chars, lastPromptTokens: lastCounted.tokens });
+                        const fits = fitsWindow({ windowTokens: serverWindow, requestTokens: tokens, reserveTokens: answerReserve });
+                        if (!fits) {
+                            logDebugEvent("ai-call", `${label}: another lookup round (~${tokens} tokens) would not fit ${entry.label}'s window of ${serverWindow}; it is asked for its answer now.`);
+                        }
+                        return fits;
+                    } : null,
+                }));
             },
             onMark: ({ entry, failure, state }) => logFallbackMark(label, entry, failure, state),
             onSwitch: announceFallbackSwitch,

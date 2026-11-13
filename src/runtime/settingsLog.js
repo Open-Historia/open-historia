@@ -174,6 +174,7 @@ registerSettingsSnapshot("AI", () => {
         ["Limit AI generation", onOff(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration))],
         ["Generate long time skips in segments", onOff(getMapSetting(MAP_SETTING_KEYS.chunkLongJumps))],
         ["AI lookup functions", lookupFunctionsState()],
+        ["Stop lookups before a local window is full", onOff(getMapSetting(MAP_SETTING_KEYS.lookupWindowGuard))],
         ["Show time skip events as they are written", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents))],
         ["Stop when my events fail", onOff(getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures))],
         ["Batch background AI tasks", onOff(getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks))],
