@@ -165,6 +165,8 @@ func close() -> void:
 func set_open(open: bool) -> void:
 	var was := _open
 	_open = open
+	if open:
+		_phone_layer()
 	_apply_look()
 	_place(true)
 	mouse_filter = Control.MOUSE_FILTER_STOP if open else Control.MOUSE_FILTER_IGNORE
@@ -180,6 +182,14 @@ func set_open(open: bool) -> void:
 		if is_instance_valid(_search):
 			_search.set_shown(false)
 		_emit_unseen(0, true)
+
+
+func _phone_layer() -> void:
+	if not UI.phone() or get_parent() == null:
+		return
+	var layer := get_parent().get("_right_layer") as Control
+	if layer and layer.get_parent() == get_parent() and get_index() < layer.get_index():
+		get_parent().move_child(self, layer.get_index())
 
 
 func refresh() -> void:
@@ -366,9 +376,15 @@ static func fill_button(button: Button, child: Control) -> void:
 	button.add_child(child)
 	var keep := func() -> void:
 		if is_instance_valid(button) and is_instance_valid(child):
-			button.custom_minimum_size = child.get_combined_minimum_size()
+			button.custom_minimum_size = child.get_combined_minimum_size().max(tap_floor(button))
 	child.minimum_size_changed.connect(keep)
 	keep.call()
+
+
+static func tap_floor(button: Control) -> Vector2:
+	if not UI.phone() or button.has_meta("oh_tap_exempt"):
+		return Vector2.ZERO
+	return Vector2(UI.PHONE_TAP, UI.PHONE_TAP)
 
 
 static func round_button(name: String, glyph_size: int, color: Color, bg: Color, edge := Color(0, 0, 0, 0), size := 32.0) -> Button:
@@ -838,7 +854,7 @@ func _build_composer() -> void:
 
 func _apply_look() -> void:
 	var area := get_viewport_rect().size if is_inside_tree() else Vector2(1600, 900)
-	var touch := DisplayServer.is_touchscreen_available()
+	var touch := DisplayServer.is_touchscreen_available() or UI.phone()
 	framed = area.x > 700.0 and not (touch and area.y <= 500.0)
 	if framed:
 		var outer := UI.box(Color("#0e0e10"), Color(0, 0, 0, 0), int(round(41.6 + RING)), 0, Vector4(2, 2, 2, 2))
@@ -882,17 +898,19 @@ func frame_size() -> Vector2:
 		var width := maxf(height * 9.0 / 19.0, minf(280.0, area.x - 16.0))
 		return Vector2(minf(width, area.x - 16.0), height)
 	var tall := maxf(160.0, minf(area.y - 144.0, maxf(area.y - 256.0, 480.0)))
-	var wide := area.x - 16.0 if area.x <= 700.0 else minf(496.0, area.x - 16.0)
+	var inset := UI.safe_insets()
+	var wide := area.x - 16.0 - inset.x - inset.z if area.x <= 700.0 else minf(496.0, area.x - 16.0)
 	return Vector2(wide, tall)
 
 
 func _place(animate: bool) -> void:
 	var box := frame_size()
 	var grow := RING if framed else 0.0
-	var top := -BOTTOM_GAP - box.y - grow if _open else 200.0
-	var bottom := -BOTTOM_GAP + grow if _open else 200.0 + box.y + grow * 2.0
-	offset_left = 8.0 - grow
-	offset_right = 8.0 + box.x + grow
+	var inset := UI.safe_insets()
+	var top := -BOTTOM_GAP - inset.w - box.y - grow if _open else 200.0
+	var bottom := -BOTTOM_GAP - inset.w + grow if _open else 200.0 + box.y + grow * 2.0
+	offset_left = 8.0 + inset.x - grow
+	offset_right = 8.0 + inset.x + box.x + grow
 	for button in _side_buttons:
 		var on_left: bool = button.get_meta("left")
 		button.position = Vector2(0.0 if on_left else grow + box.x, grow + float(button.get_meta("top")))
@@ -1339,7 +1357,7 @@ func _on_draft_key(event: InputEvent) -> void:
 	var key := event as InputEventKey
 	if not key.pressed or key.echo:
 		return
-	if (key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER) and not key.shift_pressed and not DisplayServer.is_touchscreen_available():
+	if (key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER) and not key.shift_pressed and not DisplayServer.is_touchscreen_available() and not UI.phone():
 		_draft.accept_event()
 		_submit()
 

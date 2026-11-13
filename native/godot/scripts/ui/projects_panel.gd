@@ -72,6 +72,7 @@ var _expanded := ""
 var _pending := ""
 var _confirm_id := ""
 var _confirm_button: Button
+var _confirm_turn := 0
 var _poll: Timer
 var _filters: PanelContainer
 var _search: LineEdit
@@ -100,7 +101,6 @@ func _init() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	_build_filters()
-	add_child(_filters)
 	_banner = PanelContainer.new()
 	var banner_style := UI.box(Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.12), Color(0, 0, 0, 0), 0, 0, Vector4(16, 8, 16, 8))
 	banner_style.border_color = Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.3)
@@ -109,7 +109,6 @@ func _init() -> void:
 	_banner_label = UI.wrapped("", 11, Color(253 / 255.0, 230 / 255.0, 138 / 255.0, 0.95))
 	_banner.add_child(_leading(_banner_label, 11, 1.45))
 	_banner.visible = false
-	add_child(_banner)
 	_cards_scroll = ScrollContainer.new()
 	_cards_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_cards_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -122,7 +121,21 @@ func _init() -> void:
 	_cards.add_theme_constant_override("separation", 9)
 	_cards.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cards_margin.add_child(_cards)
-	_cards_scroll.add_child(cards_margin)
+	if UI.phone():
+		var whole := VBoxContainer.new()
+		whole.add_theme_constant_override("separation", 0)
+		whole.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		whole.add_child(_filters)
+		whole.add_child(_banner)
+		whole.add_child(cards_margin)
+		_cards_scroll.add_child(whole)
+		_cards_scroll.get_v_scroll_bar().value_changed.connect(func(_value: float) -> void:
+			if _menu_open:
+				_place_menu())
+	else:
+		add_child(_filters)
+		add_child(_banner)
+		_cards_scroll.add_child(cards_margin)
 	add_child(_cards_scroll)
 	_build_menu()
 	add_child(_menu)
@@ -390,6 +403,7 @@ func _build_filters() -> void:
 	var holder := Control.new()
 	holder.custom_minimum_size.y = 29
 	_search = LineEdit.new()
+	_search.set_meta("oh_tap_exempt", true)
 	_search.placeholder_text = "Search projects…"
 	_search.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var field := _style(UiTheme.pick("surface", Color(1, 1, 1, 0.06)), Color(1, 1, 1, 0.12), 9, Vector4(27, 0, 8, 0))
@@ -979,10 +993,23 @@ func _press_abandon(id: String, button: Button) -> void:
 		_confirm_id = id
 		_confirm_button = button
 		_style_abandon(button, true)
+		if UI.phone():
+			_confirm_turn += 1
+			_lapse_abandon(_confirm_turn)
 		return
 	_confirm_id = ""
 	_confirm_button = null
 	_run_op(id, "abandon", "")
+
+
+func _lapse_abandon(turn: int) -> void:
+	await get_tree().create_timer(4.0).timeout
+	if turn != _confirm_turn or _confirm_id.is_empty():
+		return
+	_confirm_id = ""
+	if is_instance_valid(_confirm_button):
+		_style_abandon(_confirm_button, false)
+	_confirm_button = null
 
 
 func _set_priority(id: String, current: String, priority: String) -> void:
@@ -1071,6 +1098,7 @@ func _build_menu() -> void:
 	var head_row := HBoxContainer.new()
 	head_row.add_theme_constant_override("separation", 6)
 	_menu_search = LineEdit.new()
+	_menu_search.set_meta("oh_tap_exempt", true)
 	_menu_search.placeholder_text = "Find a tag…"
 	_menu_search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_menu_search.custom_minimum_size.y = 26
@@ -1138,7 +1166,7 @@ func _open_menu() -> void:
 	_menu.visible = true
 	_render_chips()
 	await _fill_menu()
-	if not _menu_open:
+	if not _menu_open or UI.phone():
 		return
 	if _menu_search.visible:
 		_menu_search.grab_focus()
@@ -1280,7 +1308,7 @@ func _place_menu() -> void:
 	var width := _chips.size.x
 	var inner := width - 2.0 - 10.0
 	_menu_grid.columns = maxi(1, int(floor((inner + TAG_GAP) / (TAG_COLUMN + TAG_GAP))))
-	var limit := minf(288.0, _height() - 192.0)
+	var limit := minf(288.0, maxf(176.0, _height() - 224.0)) if UI.phone() else minf(288.0, _height() - 192.0)
 	var content := _menu_grid.get_combined_minimum_size().y + 10.0
 	_menu_scroll.custom_minimum_size.y = minf(content, maxf(limit - 39.0, 40.0))
 	_menu.size = Vector2(width, 0)

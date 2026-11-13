@@ -42,6 +42,7 @@ func _init() -> void:
 	box.mouse_filter = Control.MOUSE_FILTER_PASS
 	box.add_child(RostraPanel.glyph_rect("find", 16, INK_SOFT))
 	_input = LineEdit.new()
+	_input.set_meta("oh_tap_exempt", true)
 	_input.placeholder_text = "Search countries and regions"
 	_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_input.add_theme_font_override("font", UI.font(400))

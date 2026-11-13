@@ -16,6 +16,7 @@ const TURN_RUNNING_NOTE := "A turn is running. This can be changed once it ends.
 const ORDER_NOT_SAVED := "Your order could not be saved, so the next time skip would not see it. Try again."
 const ORDER_NOT_REMOVED := "The order could not be removed, so the next time skip would still carry it out. Try again."
 const COMPOSER_HINT := "Enter your action…  (Shift+Enter for a new line)"
+const COMPOSER_HINT_TOUCH := "Enter your action…"
 const REPORT_SAVE_TIP := "Saves the diagnostics log as a file, with this error's details at the top. Attach the file to your bug report."
 const REPORT_COPY_TIP := "Copies this error's details. Diagnostics logging is off — turn it on in Settings → Diagnostics to save the full log instead."
 const REPORT_SAVE_LABELS := {"working": "Saving…", "saved": "✓ Saved — attach the file to your report", "copied": "✓ Log copied — paste it into your report", "failed": "Couldn't save — try again", "idle": "💾 Save logging file"}
@@ -108,7 +109,7 @@ func _init() -> void:
 	_material.set_shader_parameter("highlight", 0.06)
 	_material.set_shader_parameter("blur_px", 8.0)
 	_restyle_close()
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER if UI.phone() else ScrollContainer.SCROLL_MODE_DISABLED
 	var margin := scroll.get_child(0) as MarginContainer
 	for side in [["margin_left", 20], ["margin_right", 20], ["margin_top", 14], ["margin_bottom", 14]]:
 		margin.add_theme_constant_override(side[0], side[1])
@@ -121,7 +122,7 @@ func _init() -> void:
 	body.add_child(_build_buttons())
 	_sections = VBoxContainer.new()
 	_sections.add_theme_constant_override("separation", 14)
-	_sections.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_sections.size_flags_vertical = Control.SIZE_SHRINK_BEGIN if UI.phone() else Control.SIZE_EXPAND_FILL
 	body.add_child(_sections)
 	var column := scroll.get_parent() as VBoxContainer
 	_notes_margin = MarginContainer.new()
@@ -158,10 +159,33 @@ func _init() -> void:
 
 
 func _ready() -> void:
+	_place_phone()
 	get_viewport().size_changed.connect(func() -> void:
+		_place_phone()
 		if _open:
-			offset_top = -BOTTOM_GAP - _height()
-			offset_bottom = -BOTTOM_GAP)
+			offset_top = -_gap() - _height()
+			offset_bottom = -_gap())
+
+
+func _place_phone() -> void:
+	if not UI.phone():
+		return
+	var inset := UI.safe_insets()
+	anchor_right = 1.0
+	offset_left = 8.0 + inset.x
+	offset_right = -8.0 - inset.z
+
+
+func _gap() -> float:
+	return BOTTOM_GAP + (UI.safe_insets().w if UI.phone() else 0.0)
+
+
+func _phone_layer() -> void:
+	if not UI.phone() or get_parent() == null:
+		return
+	var layer := get_parent().get("_right_layer") as Control
+	if layer and layer.get_parent() == get_parent() and get_index() < layer.get_index():
+		get_parent().move_child(self, layer.get_index())
 
 
 func setup(link: EngineLink, ctx: Dictionary = {}) -> void:
@@ -183,9 +207,11 @@ func set_open(open: bool) -> void:
 	var was := _open
 	_open = open
 	var height := _height()
+	if open:
+		_phone_layer()
 	var tween := create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tween.tween_property(self, "offset_top", -BOTTOM_GAP - height if open else 200.0, 0.35)
-	tween.tween_property(self, "offset_bottom", -BOTTOM_GAP if open else 200.0 + height, 0.35)
+	tween.tween_property(self, "offset_top", -_gap() - height if open else 200.0, 0.35)
+	tween.tween_property(self, "offset_bottom", -_gap() if open else 200.0 + height, 0.35)
 	tween.tween_property(self, "modulate:a", 1.0 if open else 0.0, 0.35)
 	mouse_filter = Control.MOUSE_FILTER_STOP if open else Control.MOUSE_FILTER_IGNORE
 	if _board:
@@ -240,7 +266,8 @@ func _build_tabs() -> void:
 	header_title.visible = false
 	var row := header_extra.get_parent() as HBoxContainer
 	var header := row.get_parent() as MarginContainer
-	for side in [["margin_left", 16], ["margin_right", 16], ["margin_top", 13], ["margin_bottom", 10]]:
+	var header_pad := [["margin_left", 14], ["margin_right", 14], ["margin_top", 10], ["margin_bottom", 9]] if UI.phone() else [["margin_left", 16], ["margin_right", 16], ["margin_top", 13], ["margin_bottom", 10]]
+	for side in header_pad:
 		header.add_theme_constant_override(side[0], side[1])
 	var close_button := row.get_child(header_extra.get_index() + 1) as Control
 	if close_button:
@@ -263,8 +290,9 @@ func _tab_button(key: String, caption_text: String) -> Button:
 	tab.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	var holder := MarginContainer.new()
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	for side in [["margin_left", 12], ["margin_right", 12], ["margin_top", 6], ["margin_bottom", 6]]:
-		holder.add_theme_constant_override(side[0], side[1])
+	var tab_pad := _tab_pad()
+	for side in [["margin_left", tab_pad.x], ["margin_right", tab_pad.x], ["margin_top", tab_pad.y], ["margin_bottom", tab_pad.y]]:
+		holder.add_theme_constant_override(side[0], int(side[1]))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -296,7 +324,7 @@ func _tab_button(key: String, caption_text: String) -> Button:
 	holder.add_child(row)
 	holder.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	tab.add_child(holder)
-	tab.custom_minimum_size = Vector2(row.get_combined_minimum_size().x + 26, 29)
+	tab.custom_minimum_size = Vector2(row.get_combined_minimum_size().x + _tab_pad().x * 2.0 + 2.0, 29)
 	tab.pressed.connect(func() -> void: set_tab(key))
 	return tab
 
@@ -319,7 +347,11 @@ func _style_tabs() -> void:
 		count_value.add_theme_color_override("font_color", UI.WHITE if chosen else Color(1, 1, 1, 0.6))
 		count_holder.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.14) if chosen else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.08)), Color(0, 0, 0, 0), 999, 0, Vector4(4, 0, 4, 0)))
 		var row := caption.get_parent() as HBoxContainer
-		tab.custom_minimum_size.x = row.get_combined_minimum_size().x + 26
+		tab.custom_minimum_size.x = row.get_combined_minimum_size().x + _tab_pad().x * 2.0 + 2.0
+
+
+static func _tab_pad() -> Vector2:
+	return Vector2(10, 5) if UI.phone() else Vector2(12, 6)
 
 
 func _set_project_count(count: int) -> void:
@@ -543,11 +575,12 @@ func _build_composer() -> Control:
 	var holder := Control.new()
 	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	holder.custom_minimum_size.y = 62
-	_composer = _text_edit(COMPOSER_HINT, 13)
+	_composer = _text_edit(COMPOSER_HINT_TOUCH if UI.phone() else COMPOSER_HINT, 13)
 	_composer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_composer_style = _style(Color(0, 0, 0, 0.2), UiTheme.pick("line", Color(1, 1, 1, 0.15)), 10, Vector4(14, 11, 45, 11))
+	var room := Vector4(14, 11, 48 if UI.phone() else 45, 11)
+	_composer_style = _style(Color(0, 0, 0, 0.2), UiTheme.pick("line", Color(1, 1, 1, 0.15)), 10, room)
 	_composer.add_theme_stylebox_override("normal", _composer_style)
-	_composer.add_theme_stylebox_override("focus", _style(Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.25), 10, Vector4(14, 11, 45, 11)))
+	_composer.add_theme_stylebox_override("focus", _style(Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.25), 10, room))
 	_composer.focus_exited.connect(func() -> void: _composer_style.border_color = Color(1, 1, 1, 0.12))
 	_composer.get_v_scroll_bar().modulate.a = 0.0
 	_composer.text_changed.connect(_update_composer)
@@ -564,10 +597,10 @@ func _build_composer() -> Control:
 	_improve_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_improve_button.anchor_left = 1.0
 	_improve_button.anchor_right = 1.0
-	_improve_button.offset_left = -36
-	_improve_button.offset_right = -7
-	_improve_button.offset_top = 9
-	_improve_button.offset_bottom = 38
+	_improve_button.offset_left = -46 if UI.phone() else -36
+	_improve_button.offset_right = -2 if UI.phone() else -7
+	_improve_button.offset_top = 2 if UI.phone() else 9
+	_improve_button.offset_bottom = 46 if UI.phone() else 38
 	var clear := StyleBoxEmpty.new()
 	for state in ["normal", "hover", "pressed", "focus", "disabled", "hover_pressed"]:
 		_improve_button.add_theme_stylebox_override(state, clear)
@@ -620,6 +653,8 @@ func _update_composer() -> void:
 
 func _on_composer_key(event: InputEvent) -> void:
 	if _composer.has_ime_text():
+		return
+	if UI.phone() and _send_key(event) in [1, 2]:
 		return
 	var kind := _send_key(event)
 	if kind == 1:
@@ -1123,7 +1158,7 @@ func _render_sections() -> void:
 	if show_suggested:
 		var section := VBoxContainer.new()
 		section.add_theme_constant_override("separation", 0)
-		section.size_flags_vertical = Control.SIZE_EXPAND_FILL if suggested_open else Control.SIZE_SHRINK_BEGIN
+		section.size_flags_vertical = Control.SIZE_EXPAND_FILL if suggested_open and not UI.phone() else Control.SIZE_SHRINK_BEGIN
 		section.add_child(_section_header("Suggested Actions", suggestions.size(), suggested_open, func() -> void:
 			_open_section = "submitted" if suggested_open else "suggested"
 			_render_sections()))
@@ -1139,13 +1174,16 @@ func _render_sections() -> void:
 			var queued: Array = _view.get("queuedIds", [])
 			for topic in suggestions:
 				list.add_child(_suggestion_card(topic, queued))
-			_list_scroller = _list_scroll(list)
-			_list_owner = "suggested"
-			section.add_child(_list_scroller)
+			if UI.phone():
+				section.add_child(list)
+			else:
+				_list_scroller = _list_scroll(list)
+				_list_owner = "suggested"
+				section.add_child(_list_scroller)
 		_sections.add_child(section)
 	var mine := VBoxContainer.new()
 	mine.add_theme_constant_override("separation", 0)
-	mine.size_flags_vertical = Control.SIZE_EXPAND_FILL if submitted_open else Control.SIZE_SHRINK_BEGIN
+	mine.size_flags_vertical = Control.SIZE_EXPAND_FILL if submitted_open and not UI.phone() else Control.SIZE_SHRINK_BEGIN
 	if show_suggested:
 		mine.add_child(_section_header("Your Submitted Actions", submitted.size(), submitted_open, func() -> void:
 			_open_section = "suggested" if submitted_open else "submitted"
@@ -1162,9 +1200,12 @@ func _render_sections() -> void:
 			rows.add_child(_italic_line("No actions submitted yet.", 13))
 		for entry in submitted:
 			rows.add_child(_action_row(entry))
-		_list_scroller = _list_scroll(rows)
-		_list_owner = "submitted"
-		mine.add_child(_list_scroller)
+		if UI.phone():
+			mine.add_child(rows)
+		else:
+			_list_scroller = _list_scroll(rows)
+			_list_owner = "submitted"
+			mine.add_child(_list_scroller)
 	_sections.add_child(mine)
 	if kept_offset > 0 and kept_owner == _list_owner and is_instance_valid(_list_scroller):
 		_keep_scroll(_list_scroller, kept_offset)
@@ -1263,19 +1304,19 @@ func _action_row(entry: Dictionary) -> Control:
 	remove.flat = false
 	remove.focus_mode = Control.FOCUS_NONE
 	remove.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	remove.custom_minimum_size = Vector2(26, 24)
+	remove.custom_minimum_size = Vector2(UI.PHONE_TAP, UI.PHONE_TAP) if UI.phone() else Vector2(26, 24)
 	remove.add_theme_font_override("font", UI.font(400))
 	remove.add_theme_font_size_override("font_size", 16)
-	var shown := UI.box(Color(0, 0, 0, 0) if locked else Color(RED, 0.1), Color(0, 0, 0, 0), 6, 0)
+	var shown := UI.box(Color(0, 0, 0, 0) if locked or UI.phone() else Color(RED, 0.1), Color(0, 0, 0, 0), 6, 0)
 	for state in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
 		remove.add_theme_stylebox_override(state, shown)
-	var ink := UiTheme.pick("line", Color(1, 1, 1, 0.18)) if locked else Color(RED, 0.95)
+	var ink := UiTheme.pick("line", Color(1, 1, 1, 0.18)) if locked else Color(RED, 0.8 if UI.phone() else 0.95)
 	for slot in ["font_color", "font_focus_color", "font_pressed_color", "font_hover_color", "font_hover_pressed_color", "font_disabled_color"]:
 		remove.add_theme_color_override(slot, ink)
 	remove.disabled = locked
 	remove.tooltip_text = TURN_RUNNING_NOTE if locked else "Delete action"
 	remove.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN if locked else Control.CURSOR_POINTING_HAND
-	remove.modulate.a = 0.0
+	remove.modulate.a = 1.0 if UI.phone() else 0.0
 	remove.pressed.connect(func() -> void: _delete(entry))
 	line.add_child(remove)
 	row.add_child(line)
@@ -1286,7 +1327,7 @@ func _action_row(entry: Dictionary) -> Control:
 		if row.get_global_rect().has_point(row.get_global_mouse_position()):
 			return
 		row.add_theme_stylebox_override("panel", normal)
-		remove.modulate.a = 0.0)
+		remove.modulate.a = 1.0 if UI.phone() else 0.0)
 	return row
 
 
