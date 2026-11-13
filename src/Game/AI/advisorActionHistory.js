@@ -6,36 +6,32 @@
 // The canonical [Current Planned Actions] section supplies the ONLY editable
 // order IDs. Redact fences from MODEL CONTEXT, never from persisted messages,
 // the UI's review cards, or the reply being validated by native Action review.
-const HISTORICAL_ACTION_NOTE =
-  "[Historical Action proposal omitted from conversation replay. Only the current planned Actions list identifies editable orders; new follow-up work requires a separate proposal and player review.]";
+// A prior build injected implementation notes into AI history. The model
+// repeated them verbatim to players, and those generated replies were persisted.
+// Strip only those known markers from MODEL CONTEXT and rendered Advisor prose;
+// preserve the underlying stored messages and native Action receipts.
+const LEGACY_ACTION_HISTORY_ANNOTATIONS =
+  /\[(?:Historical Action proposal omitted from conversation replay\.|Historical Action review cards, not editable queue entries:)[^\]\r\n]*\]/g;
+export const stripAdvisorActionHistoryAnnotations = (text) =>
+  typeof text === "string"
+    ? text.replace(LEGACY_ACTION_HISTORY_ANNOTATIONS, "")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+    : text;
 
 // Also consume an unfinished historical fence so malformed old output cannot
 // become a reusable edit example after reload or a partial-generation retry.
 export const redactHistoricalAdvisorActionBlocks = (text) =>
   typeof text === "string"
-    ? text.replace(/```actions\b[\s\S]*?(?:```|$)/gi, HISTORICAL_ACTION_NOTE)
+    ? stripAdvisorActionHistoryAnnotations(text.replace(/```actions\b[\s\S]*?(?:```|$)/gi, ""))
     : text;
 
-// Retain a bounded, non-executable description of real review cards saved with
-// older replies. The original JSON target IDs are never echoed. An old receipt
-// only establishes what happened THEN, not whether the Action is queued NOW.
-export const renderHistoricalAdvisorReply = (message) => {
-  const text = typeof message?.text === "string" ? message.text : "";
-  const redacted = redactHistoricalAdvisorActionBlocks(text);
-  const proposals = Array.isArray(message?.actionProposals) ? message.actionProposals : [];
-  if (redacted === text || proposals.length === 0) return redacted;
-  const items = proposals.filter((item) => item && typeof item === "object").slice(0, 4)
-    .map((item) => {
-      const name = String(item.title || item.text || "Untitled").trim().slice(0, 130);
-      const oldReceipt = message.actionReceipts?.[item.id]?.status;
-      const decision = ["queued", "updated", "removed", "cancelled"].includes(oldReceipt)
-        ? "historical receipt: " + oldReceipt + "; current status unknown"
-        : "no recorded approval receipt";
-      return name + " (" + decision + ")";
-    });
-  const extra = proposals.length > 4 ? "; " + (proposals.length - 4) + " additional review card(s)" : "";
-  return redacted + "\n[Historical Action review cards, not editable queue entries: " + items.join("; ") + extra + "]";
-};
+// The current queue, pending-draft inventory and stored review cards already
+// carry Action truth. Do not synthesize a second transcript made of engine
+// receipts: the Advisor interprets those annotations as words to say aloud.
+export const renderHistoricalAdvisorReply = (message) =>
+  redactHistoricalAdvisorActionBlocks(typeof message?.text === "string" ? message.text : "");
 
 // Preserve player instructions and every other message field/part. Only the
 // outgoing AI history changes; source Advisor messages remain byte-for-byte

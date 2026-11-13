@@ -7,6 +7,7 @@
 // the scenario forbids.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { describeReplyProblems, filterAdvisorDeployments, planAdvisorActionEdits } from "./advisorBlocks.js";
 import { buildMessageDrafts } from "./advisorDrafts.js";
@@ -297,7 +298,64 @@ test("a reply with no fences has no problems", () => {
   assert.deepEqual([parsed.draftProblems, parsed.institutionDraftProblems, parsed.deployProblems], [[], [], []]);
 });
 
-// I155: the receipt covered only chart, actions and projects, so the advisor
+test("Advisors still proactively submit ordinary strategic Actions through structured review cards", () => {
+  const source = readFileSync(new URL("../AI/main.jsx", import.meta.url), "utf8");
+  assert.match(source, /When the player asks for strategy, options, priorities or next steps, actively recommend one or two concrete Actions/);
+  assert.match(source, /use a fenced actions block for proposals worth reviewing even before the player agrees/);
+  const reply = "The French presidency should confirm the working visit.\n"
+    + fence("actions", JSON.stringify([{ title: "Paris Working Visit - Coordination & Agenda", text: "Confirm the dates with the French Presidency." }]));
+  const parsed = parseAdvisorReply(reply);
+  const { proposals, problems } = actionProposalsFromReply(parsed.actionsProposal, "advisor-reply-proactive-regression");
+  assert.equal(proposals.length, 1, "proactive proposals remain reviewable, without requiring the user to ask for an Action");
+  assert.equal(proposals[0].operation, "create");
+  assert.deepEqual(problems, []);
+  assert.equal(parsed.unreviewableActionTitle, null);
+});
+
+test("a missing formal Action is surfaced as a composer fallback, never a synthetic approval card", () => {
+  const ui = readFileSync(new URL("./advisor.jsx", import.meta.url), "utf8");
+  assert.match(ui, /!msg\.actionProposals\?\.length && unreviewableActionTitle && onRequestMissingAction/);
+  assert.match(ui, /onRequestMissingAction=\{i === visibleLastIndex \? onRequestMissingAction : undefined\}/);
+  assert.match(ui, /const handleRequestMissingAction = React\.useCallback/);
+  assert.match(ui, /setInput\(\(current\) => current\.trim\(\)/, "the fallback drafts a request; it never calls an Action mutator");
+  assert.match(ui, /Array\.isArray\(msg\.actionProposals\) && msg\.actionProposals\.map/, "existing review cards remain the canonical UI path");
+});
+
+test("prose-only formal Action plan is not treated as an approved or reviewable order", () => {
+  const reply = [
+    "I am initiating consultations.",
+    "Action: Bushehr Nuclear Safety Emergency Coordination",
+    "Lead: Foreign Minister Bondarev.",
+    "1. Emergency Consultations: Establish urgent communication with the IAEA.",
+    "2. Technical Status Assessment: Coordinate through Oman.",
+  ].join("\n");
+  const parsed = parseAdvisorReply(reply);
+  assert.equal(parsed.actionsProposal, null, "native approval cannot originate from prose");
+  assert.equal(parsed.unreviewableActionTitle, "Bushehr Nuclear Safety Emergency Coordination");
+  assert.equal(parsed.actionBlockProblems.length, 0, "absence of a machine block is distinct from invalid JSON");
+  const markdown = parseAdvisorReply("**Action: Paris Working Visit - Coordination & Agenda**\n"
+    + "**Lead:** Foreign Minister Bondarev.\n1. **Scheduling:** Coordinate with Paris.");
+  assert.equal(markdown.unreviewableActionTitle, "Paris Working Visit - Coordination & Agenda",
+    "bold Markdown around the heading and lead must not hide a missing proposal");
+});
+
+test("valid Action fences take precedence, and casual references do not trigger missing-proposal recovery", () => {
+  const plan = "Action: Bushehr Nuclear Safety Emergency Coordination\nLead: Foreign Minister Bondarev.\n1. Contact the IAEA.";
+  const valid = parseAdvisorReply(plan + "\n" + fence("actions", '[{"title":"Bushehr Nuclear Safety Emergency Coordination","text":"Contact the IAEA."}]'));
+  assert.equal(valid.unreviewableActionTitle, null);
+  assert.equal(valid.actionsProposal?.length, 1);
+  assert.equal(parseAdvisorReply("Action: Check the status of the old order.").unreviewableActionTitle, null);
+  assert.equal(parseAdvisorReply("Let's discuss whether we need an Action.").unreviewableActionTitle, null);
+});
+
+test("historical Action-engine annotations are hidden from rendered Advisor prose without touching user messages", () => {
+  const reply = "Real safety plan.\n[Historical Action proposal omitted from conversation replay. Only the current planned Actions list identifies editable orders; new follow-up work requires a separate proposal and player review.]\n[Historical Action review cards, not editable queue entries: Safety coordination (historical receipt: queued; current status unknown)]";
+  const parsed = parseAdvisorReply(reply);
+  assert.equal(parsed.text, "Real safety plan.");
+  assert.doesNotMatch(parsed.text, /Historical Action|historical receipt/);
+});
+
+ // I155: the receipt covered only chart, actions and projects, so the advisor
 // believed it had offered buttons that were never drawn.
 test("the receipt names every block type that drew nothing", () => {
   const problems = describeReplyProblems({
