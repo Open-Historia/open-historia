@@ -305,10 +305,16 @@ func _press(control: Control, what: String) -> bool:
 
 
 func _clear_shell() -> void:
+	await _until(func() -> bool: return main.get("shell") != null, 30.0)
 	var shell: ShellBoot = main.get("shell") as ShellBoot
 	if shell == null:
 		return
-	await _until(func() -> bool: return shell.door_state != "deciding", 30.0)
+	await _until(func() -> bool: return shell.get("first_setup") != null or shell.door_state != "deciding", 30.0)
+	var setup: Variant = shell.get("first_setup")
+	if setup is FirstSetup and is_instance_valid(setup):
+		(setup as FirstSetup).finished.emit()
+		await _wait(0.8)
+	await _until(func() -> bool: return shell.door_state != "deciding", 60.0)
 	if shell.door != null and is_instance_valid(shell.door):
 		await _until(func() -> bool: return shell.door_state == "shut", 20.0)
 		await _wait(1.0)
