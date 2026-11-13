@@ -7,6 +7,8 @@ import test from "node:test";
 import {
   ARCHIVE_MIN_SKIPS,
   BINDING_HEADER,
+  BINDING_LINE_CHARS,
+  BINDING_MAX_CHARS,
   CHAT_CHUNK_CHARS,
   CHAT_CHUNK_OVERLAP,
   PAST_DIPLOMACY_HEADER,
@@ -14,7 +16,6 @@ import {
   archiveExemption,
   archivedChunkRows,
   archivedCountLine,
-  bindingSentences,
   buildPastTalksQueries,
   chatArchiveContext,
   chatChunks,
@@ -26,8 +27,10 @@ import {
   partitionChats,
   pastTalksAnswer,
   renderArchivedChats,
+  renderBindingWord,
   renderPastDiplomacy,
   skipsSince,
+  standingWord,
   unfoldedChats,
 } from "./chatArchive.js";
 
@@ -240,13 +243,16 @@ test("PAST DIPLOMACY: within its budget, no chunk twice, neighbours as one passa
 test("a promise in an older chat stays visible when no excerpt is recalled, and is said once when it is", () => {
   const promise = longThread("p", "Austria", 6, { memory: "Austria promised Italy free passage on the Danube until 1940. The weather was discussed." });
   const idle = longThread("q", "Portugal", 4, { memory: "Pleasantries about wine." });
-  assert.equal(bindingSentences(promise), "Austria promised Italy free passage on the Danube until 1940.");
-  assert.equal(bindingSentences(idle), "");
+  // The memory as it last stood, whatever its words: it is the thread's record of what binds.
+  assert.equal(standingWord(promise), "Austria promised Italy free passage on the Danube until 1940. The weather was discussed.");
+  assert.equal(standingWord(idle), "Pleasantries about wine.");
+  assert.equal(standingWord(longThread("r", "Spain", 2)), "", "a thread with no memory has none to give");
 
   const without = renderArchivedChats([promise, idle], null, { player: "Italy" });
   assert.match(without, /^2 older conversations kept on file \(with Austria; Portugal\)\./);
   assert.ok(without.includes(BINDING_HEADER));
   assert.match(without, /- With Austria \([^)]+\): Austria promised Italy free passage on the Danube until 1940\./);
+  assert.match(without, /- With Portugal \([^)]+\): Pleasantries about wine\./);
   assert.equal(without.includes("PAST DIPLOMACY"), false);
 
   // Recalled with its memory: the promise is in the excerpt, not twice.
@@ -256,6 +262,30 @@ test("a promise in an older chat stays visible when no excerpt is recalled, and 
 
   assert.match(archivedCountLine([promise], { player: "Italy", lookups: true }), /ask past_talks, similar_events or chat_history/);
   assert.equal(renderArchivedChats([], [{ id: "p:0", score: 1 }]), "");
+});
+
+// The memory is written in the game's language. Its "binding" sentences were
+// picked by English words, so a French or a Chinese promise was never said
+// while its talks were kept on file: the player's ally forgot what it swore.
+test("the standing word is the same in every language: the memory as it last stood", () => {
+  const twins = [
+    ["Austria promised Italy free passage on the Danube until 1940. The weather was discussed.", "Austria"],
+    ["L'Autriche a promis à l'Italie le libre passage sur le Danube jusqu'en 1940. On a parlé du temps.", "Autriche"],
+    ["Австрия обещала Италии свободный проход по Дунаю до 1940 года. Говорили о погоде.", "Австрия"],
+    ["奥地利承诺在1940年前允许意大利自由通过多瑙河。双方还谈到了天气。", "奥地利"],
+  ];
+  for (const [memory, partner] of twins) {
+    const chat = longThread(`t-${partner}`, partner, 4, { memory });
+    assert.equal(standingWord(chat), memory, partner);
+    assert.ok(renderArchivedChats([chat], null, { player: "Italy" }).includes(`- With ${partner} (`), partner);
+  }
+
+  // Held to a line's room at its sentences, and to the block's room in all.
+  const long = longThread("l", "Austria", 4, { memory: Array.from({ length: 12 }, (_, at) => `Clause ${at + 1} binds Austria to a further duty on the Danube.`).join(" ") });
+  const said = standingWord(long);
+  assert.ok(said.length <= BINDING_LINE_CHARS && said.startsWith("Clause 1 binds") && said.endsWith("."), said);
+  const many = Array.from({ length: 12 }, (_, at) => longThread(`m${at}`, `Power ${at}`, 2, { memory: "x".repeat(200) }));
+  assert.ok(renderBindingWord(many, { player: "Italy" }).length <= BINDING_MAX_CHARS);
 });
 
 test("the query: orders, wars, what the open chats say, who is addressed, the powers in view", () => {

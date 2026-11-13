@@ -14,8 +14,8 @@
 // a leader's reply or the advisor is given the chunks nearest to what it is
 // about, in about 2,500 characters, as PAST DIPLOMACY; the rest of the
 // archived chats leave the prompt, but for one line counting them and the
-// word they gave that still binds (a promise, a treaty, a threat), so nothing
-// agreed is lost while it is not recalled.
+// memory each last held, the word they gave that still binds (a promise, a
+// treaty, a threat), so nothing agreed is lost while it is not recalled.
 //
 // Never archived, whatever its age:
 // - the conversation the player has open (runtime/openConversation.js);
@@ -462,19 +462,24 @@ const selectPastDiplomacy = (candidates, archived, { player = "", maxChars = PAS
 export const renderPastDiplomacy = (candidates, archived, options = {}) => selectPastDiplomacy(candidates, archived, options).text;
 
 // What an older conversation agreed, promised, threatened or holds against
-// someone: the sentences of its standing memory that say so.
-const BINDING = /\b(agree[ds]?|agreement|accord|promis\w*|pledg\w*|vow\w*|swor[en]|commit\w*|guarantee\w*|treaty|treaties|pact|alliance|allied|non-aggression|ceasefire|truce|armistice|deadline|ultimatum|threat\w*|warn\w*|retaliat\w*|grudge|betray\w*|resent\w*|owe[ds]?|debt|loan|reparation\w*|recogni[sz]\w*|withdraw\w*|cede[ds]?|hand(?:ed)? over|condemn\w*|sanction\w*|refus\w*|demand\w*)\b/i;
+// someone: its standing memory, as it last stood, from its first sentence up
+// to a line's room. The memory is that record already: the leader rewrites it
+// with every reply as the thread's whole durable memory, its commitments,
+// offers, deadlines and grievances first among them (diplomaticEnvelope.js
+// buildDiplomaticTurnInstruction), in the language the game is played in. Its
+// sentences were picked by English words (agreed, promised, treaty, warned…):
+// in any other language none was, and the promise was lost while the talks
+// were not recalled.
 export const BINDING_LINE_CHARS = 320;
 export const BINDING_MAX_CHARS = 1500;
-export const BINDING_HEADER = "STANDING WORD FROM OLDER TALKS (what conversations kept on file agreed, promised, threatened or hold against someone; it still binds):";
+export const BINDING_HEADER = "STANDING WORD FROM OLDER TALKS (the memory each conversation kept on file last held; what it agreed, promised, threatened or holds against someone still binds):";
 
-export const bindingSentences = (chat, { maxChars = BINDING_LINE_CHARS } = {}) => {
+export const standingWord = (chat, { maxChars = BINDING_LINE_CHARS } = {}) => {
   const memory = latestMemory(chat);
   if (!memory) return "";
   const kept = [];
   let length = 0;
   for (const sentence of memory.summary.split(SENTENCE_END).map((part) => part.trim()).filter(Boolean)) {
-    if (!BINDING.test(sentence)) continue;
     if (length && length + 1 + sentence.length > maxChars) break;
     kept.push(cut(sentence, maxChars));
     length += sentence.length + 1;
@@ -487,7 +492,7 @@ export const renderBindingWord = (archived, { player = "", skip = new Set(), max
   let used = BINDING_HEADER.length;
   for (const chat of list(archived)) {
     if (skip.has(clean(chat?.id))) continue;
-    const said = bindingSentences(chat);
+    const said = standingWord(chat);
     if (!said) continue;
     const memory = latestMemory(chat);
     const line = `- With ${chatPartners(chat, player)} (${readable(memory?.time) || "undated"}): ${said}`;
