@@ -356,7 +356,7 @@ import {
   renamePolityInFlags,
   renamePolityInGame,
 } from "../../../server/polityRename.js";
-import { renderTemplateCached, staticPrefixEndOf } from "./promptLayout.js";
+import { hoistSharedRules, renderTemplateCached, staticPrefixEndOf } from "./promptLayout.js";
 import { attachAttemptOutcome, attachSkipTiming, finishAiRecord, normalizeParsedSummary } from "./telemetry.js";
 import {
   JSON_URLS,
@@ -3286,7 +3286,10 @@ const taskToolFor = (taskKey, { customFullStatSheet, customStatRows, statIndexRo
 // skip can weigh what it adds to it before the prompt is built (fitSkipRiders).
 const jumpToolSent = async (taskKey, variables) => taskToolFor(taskKey, await loadTaskStatContract(taskKey), variables);
 
-const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, reminders = true, promptPack = null } = {}) => {
+// `hoistRules: false` for a prompt that is pasted into another one as a job (the
+// scene review's): the prompt it rides in has the scenario's rules already, and
+// an opening of its own in the middle of that would say they start twice.
+const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, reminders = true, promptPack = null, hoistRules = true } = {}) => {
   const prompts = promptPack ?? await loadPromptCatalog();
   const { statSheetDefinition, customFullStatSheet, customStatRows, customStatKeys, statIndexRows, statIndexKeys, customStatIndices } = await loadTaskStatContract(taskKey);
   // The GM operational contract is native behaviour: a campaign's frozen
@@ -3326,9 +3329,17 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   // can discount. Kept as text rather than an offset because the directives
   // and the de-duplication below rewrite the prompt; the offset is recomputed
   // when the call goes out.
-  const rendered = renderTemplateCached(promptTemplate, {
-    ...variables,
-    ...helperValues,
+  // The scenario's rules go first, under one heading that is the same in every
+  // task, with a pointer where the template had them (promptLayout.js
+  // hoistSharedRules): the part of the prompt every task shares then leads it.
+  // The demand above was read from the template as written, so the rules are
+  // resolved either way; `promptTemplate` itself stays the campaign's own text
+  // for what reads it after this (the fingerprint, the directive checks).
+  const templateValues = { ...variables, ...helperValues };
+  const hoisted = hoistRules ? hoistSharedRules(promptTemplate, templateValues) : { template: promptTemplate, values: {} };
+  const rendered = renderTemplateCached(hoisted.template, {
+    ...templateValues,
+    ...hoisted.values,
   });
   let systemPrompt = rendered.text;
   const staticPromptPrefix = rendered.text.slice(0, rendered.staticPrefixEnd);
@@ -17945,7 +17956,7 @@ const runSceneReview = async ({ context, merged, signal, state, agentKind = "" }
   const jobs = [];
   const sharedBlocks = [];
   const addJob = async (job, variables) => {
-    const { systemPrompt } = await buildTaskSystemPrompt(job.taskKey, { variables, lookups: null, reminders: false });
+    const { systemPrompt } = await buildTaskSystemPrompt(job.taskKey, { variables, lookups: null, reminders: false, hoistRules: false });
     jobs.push({ ...job, prompt: systemPrompt, schema: getGameplayTool(job.taskKey)?.schema });
     for (const value of Object.values(variables ?? {})) if (typeof value === "string") sharedBlocks.push(value);
   };

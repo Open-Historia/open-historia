@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A detailed preset's rules (92,000 characters on the reporter's) stood after a date or a country in the short tasks'
+    // prompts, so no cache held them: each stat sheet, feed or intercept read them again. AI/promptLayout.js
+    // hoistSharedRules, gameplay.js buildTaskSystemPrompt, main.jsx renderConversationTemplate.
+    id: "2026-11-scenario-rules-first",
+    kind: "minor",
+    date: "2026-11-13",
+    banners: [
+      {
+        title: "A scenario's rules are read once, not on every request",
+        items: [
+          "Every request that carries the scenario's rules now opens with them, word for word the same, so a provider's cache or a local model keeps them between requests of the same kind.",
+          "It shows most on a scenario with long rules: stat sheets, feeds and intelligence reports asked one after another start sooner and cost less.",
+          "Nothing is cut: the rules reach the model whole, only earlier in the prompt.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",
