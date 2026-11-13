@@ -215,9 +215,74 @@ func _map() -> void:
 		_check(plate_rect.size.y <= view.y - 13.0 * 16.0 + 1.0, "the fleets' plate is at most the screen less 13rem")
 		await _shoot("pw-05-fleets")
 		room.store.set_values({"fleets": false})
+	await _aircraft(view, inset)
+	await _carriers(view)
 	room._map_key.pressed.emit()
 	await _wait(0.6)
 	_check(not room._folded and room._sections_panel.is_visible_in_tree() and not room.rail.visible, "Generals brings the sheet back over the map")
+
+
+func _find_class(node: Node, kind: String, found: Array) -> Array:
+	if node.is_class(kind) and (node as CanvasItem).is_visible_in_tree():
+		found.append(node)
+	for child in node.get_children():
+		_find_class(child, kind, found)
+	return found
+
+
+func _aircraft(view: Vector2, inset: Vector4) -> void:
+	var air: Dictionary = room._record.get("air", {})
+	if not bool(air.get("on", true)) or (air.get("wings", []) as Array).is_empty():
+		_say("no air units in the test war: the aircraft plate is not shown")
+		return
+	room.store.set_values({"aircraft": true, "fleets": false})
+	await _wait(0.8)
+	var plate := room.plates.get("_aircraft") as Control
+	if plate == null or not plate.is_visible_in_tree():
+		_check(false, "the aircraft plate comes out beside the rail")
+		return
+	var r := _screen_rect(plate)
+	_check(absf(r.end.y - (view.y - 7.5 * 16.0 - inset.w)) < 1.5, "the aircraft plate stands 7.5rem over the foot (%s)" % str(r))
+	_check(r.end.x <= view.x + 0.5, "the aircraft plate fits the phone's width")
+	var sliders := _find_class(plate, "HSlider", []).filter(func(node: Node) -> bool: return node.has_meta("strike_radius"))
+	_check(not sliders.is_empty(), "the plate has the strike radius slider")
+	if not sliders.is_empty():
+		var slider := sliders[0] as HSlider
+		_check(_screen_rect(slider).end.x <= r.end.x + 0.5 and slider.size.x > 100.0, "the slider fits the plate (%s)" % str(_screen_rect(slider)))
+		_check(_shows(plate, "Smaller is deadlier; wider touches more, each less."), "the slider's hint is beside it")
+	await _shoot("pw-07-aircraft")
+	room.store.set_values({"aircraft": false})
+	await _wait(0.4)
+
+
+func _carriers(view: Vector2) -> void:
+	var carriers: Array = room._record.get("carriers", [])
+	var own: Array = room._record.get("ownTroops", [])
+	if carriers.is_empty() or own.is_empty():
+		_say("no carriers in the test war")
+		return
+	room.store.set_values({"selected": own.slice(0, mini(own.size(), 30))})
+	await _wait(0.4)
+	room.rail.choosing = true
+	room.rail._render()
+	await _wait(0.5)
+	var menu := room.rail.get("_carriers") as Control
+	_check(menu != null and menu.is_visible_in_tree(), "Transport opens the carriers")
+	if menu:
+		var r := _screen_rect(menu)
+		_check(r.end.x <= view.x + 0.5 and r.position.x >= 0.0, "the carriers fit the phone's width (%s)" % str(r))
+		_check(r.end.y <= view.y + 0.5, "the carriers fit the phone's height")
+	var air_row: Dictionary = {}
+	for entry in carriers:
+		if str((entry as Dictionary).get("medium", "")) == "air":
+			air_row = entry
+	if not air_row.is_empty() and str(air_row.get("bar", "")).is_empty():
+		_check(_shows(room.rail, "%d formations at most ·" % int(air_row.get("most", 0))), "an airlift says how many it takes at most")
+	await _shoot("pw-08-carriers")
+	room.rail.choosing = false
+	room.rail._render()
+	room.store.set_values({"selected": []})
+	await _wait(0.3)
 
 
 func _back() -> void:

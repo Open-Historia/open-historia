@@ -197,10 +197,42 @@ func _chat() -> void:
 		_check(_widest_right(panel) <= rect.end.x + 0.5, "the %s tab fits the panel (rightmost %.1f)" % [key, _widest_right(panel)])
 	panel._set_view("chats")
 	await _wait(0.4)
+	await _call_to_arms(panel, rect)
 	await _back()
 	await _wait(0.6)
 	_check(not panel.is_open(), "Back closes the diplomacy panel")
 	await _notices(hud)
+
+
+func _answer(node: Node, text: String) -> Button:
+	if node is Button and (node as Button).is_visible_in_tree() and (node as Button).text == text:
+		return node as Button
+	for child in node.get_children():
+		var found := _answer(child, text)
+		if found:
+			return found
+	return null
+
+
+func _call_to_arms(panel: ChatPanel, rect: Rect2) -> void:
+	var seeded: Dictionary = await main.engine.request("country.standin_seed")
+	_check(seeded.get("ok", false), "the stand-in call to arms is seeded")
+	panel.open_chat("Germany", "")
+	await _until(func() -> bool: return panel.conversation_visible() and not ChatPanel.a(panel.conversation.peace_info.get("calls", [])).is_empty(), 15.0)
+	await _wait(0.8)
+	var view := panel.conversation
+	var honour := _answer(view._box, "Honour the alliance")
+	var refuse := _answer(view._box, "Break the treaty")
+	_check(honour != null and refuse != null, "the ally's call to arms carries Honour the alliance and Break the treaty")
+	if honour and refuse:
+		_check(honour.size.y >= UI.PHONE_TAP - 0.5 and refuse.size.y >= UI.PHONE_TAP - 0.5, "the answers are finger-high")
+		_check(_screen_rect(honour).end.x <= rect.end.x + 0.5 and _screen_rect(refuse).end.x <= rect.end.x + 0.5, "the answers fit the panel (%s, %s)" % [str(_screen_rect(honour)), str(_screen_rect(refuse))])
+		view._scroll.ensure_control_visible(refuse)
+	_check(_widest_right(view) <= rect.end.x + 0.5, "the call to arms fits the panel (rightmost %.1f)" % _widest_right(view))
+	await _wait(0.4)
+	await _shoot("pc-chat-call-to-arms")
+	panel.leave_active()
+	await _wait(0.4)
 
 
 func _notices(hud: Hud) -> void:
