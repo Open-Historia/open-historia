@@ -54,6 +54,21 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player, 2026-11-13: the first month of a session on a local 27B model was 59,000 tokens read before a word
+    // was written, two to five minutes at that server's pace. AI/skipWarmUp.js.
+    id: "2026-11-skip-warm-up",
+    kind: "minor",
+    date: "2026-11-13",
+    banners: [
+      {
+        title: "A local model can read a time skip's opening ahead",
+        items: [
+          "Settings → AI has a new switch, \"Read a skip's opening ahead on a local server\", off by default. With it on, a model on your machine or network is sent the unchanging part of your last time skip again when you enter the game and after another task has used it, so that part is already read when you skip.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",

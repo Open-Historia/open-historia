@@ -125,7 +125,7 @@ import {
 } from "./toolTurns.js";
 import { GROUP_LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
 import { audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
-import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import {
     buildPromptContext,
     formatDateReadable,
@@ -159,6 +159,8 @@ import { describeWarsForAdvisor } from "./advisorWars.js";
 import { describeLeaderStanding, describeOurFigures, describeTerritoryForConversation } from "./standingContext.js";
 import { OWN_WARS_HEADING, buildWarStatsBlock, describePeaceTalk } from "./warStatsPrompt.js";
 import { beginAiRequestScope } from "./aiRequestControl.js";
+import { getActiveAiRequestCount } from "./aiRequestControl.js";
+import { createServerReadings, createSkipOpeningMemory, openingFromRequest, shouldWarmUp, warmUpBody } from "./skipWarmUp.js";
 
 // A time skip the player's Agent was answering is over once the game stops
 // simulating, so the Agent's `/skip` stops too (ADR 0008).
@@ -190,6 +192,104 @@ export const temperatureRefusals = createTemperatureMemory(settingsStorage);
 // Which endpoints are KoboldCpp servers (koboldCpp.js), kept the same way: the
 // one server that is sent an output limit when nobody named one.
 export const koboldCppServers = createKoboldCppMemory(settingsStorage);
+
+// "Read a skip's opening ahead on a local server" (skipWarmUp.js): the opening
+// of the last skip sent to a local server, what each such server last read, and
+// the one warm-up that may be on its way.
+const skipOpenings = createSkipOpeningMemory(settingsStorage);
+const serverReadings = createServerReadings();
+const SKIP_TASKS = new Set(["jumpForward", "autoJumpForward"]);
+// Long enough for a task that follows another at once to start first.
+const WARM_UP_DELAY_MS = 3000;
+let warmUp = null;
+let warmUpTimer = null;
+// The campaign being played, by the name its skips' requests carry (gameplay.js promptCacheKeyFor).
+let warmUpCampaign = "";
+const dropWarmUp = () => {
+    if (warmUpTimer) clearTimeout(warmUpTimer);
+    warmUpTimer = null;
+    warmUp?.abort();
+    warmUp = null;
+};
+
+// Every chat-completions request on its way to a local server passes through
+// here: a warm-up still being read makes way for it, what the server will have
+// read is noted, and a skip's own first request is kept as the next warm-up.
+// Not the round that must answer: it leaves the lookups out of its functions,
+// and the next skip does not open that way. Another task's request asks for a
+// warm-up of its own, which waits until the game is asking nothing.
+const noteLocalRequest = (body, { endpoint, taskKey = "", staticPrefixEnd = null, campaign = "", answerOnly = false } = {}) => {
+    try {
+        const address = normalizeEndpoint(endpoint);
+        if (!endpointIsLocal(address)) return body;
+        dropWarmUp();
+        const skip = SKIP_TASKS.has(taskKey);
+        serverReadings.note(address, skip ? "skip" : "other");
+        if (skip && !answerOnly && getMapSetting(MAP_SETTING_KEYS.skipWarmUp)) {
+            const opening = openingFromRequest({ body, staticPrefixEnd, endpoint: address, campaign });
+            if (opening && skipOpenings.set(opening)) {
+                logDebugEvent("ai-call", `A skip's opening is kept for reading ahead: ${opening.prefix.length} characters of its system prompt.`, null, { verbose: true });
+            }
+        }
+        if (!skip) warmSkipOpening();
+    } catch { /* a warm-up is a convenience: the request goes out as it was */ }
+    return body;
+};
+
+const sendWarmUp = async () => {
+    // Something is still being asked: looked at again a moment later.
+    if (getActiveAiRequestCount() > 0) {
+        warmSkipOpening();
+        return;
+    }
+    const opening = skipOpenings.get();
+    const ready = shouldWarmUp({
+        enabled: getMapSetting(MAP_SETTING_KEYS.skipWarmUp),
+        opening,
+        campaign: warmUpCampaign,
+        busy: Boolean(warmUp),
+        lastRead: serverReadings.last(opening?.endpoint),
+    });
+    if (!ready || !endpointIsLocal(opening.endpoint)) return;
+    // The server's key, if it has one, from the entry that still names this address: never kept with the opening.
+    const entry = resolveTaskFallbackEntries("jumpForward").entries
+        .find((candidate) => candidate?.provider === "openai-compatible" && normalizeEndpoint(candidate.endpoint) === opening.endpoint);
+    if (!entry) return;
+    const key = String(entry.apiKey ?? "").trim();
+    const controller = new AbortController();
+    warmUp = controller;
+    const startedAt = Date.now();
+    try {
+        const response = await providerFetch(`${opening.endpoint}/chat/completions`, {
+            headers: {
+                "Content-Type": "application/json",
+                // i18n-ignore: a request header, never shown.
+                ...(key ? { Authorization: `Bearer ${key}` } : {}),
+            },
+            signal: controller.signal,
+            payload: warmUpBody(opening),
+        });
+        if (response.ok && warmUp === controller) {
+            serverReadings.note(opening.endpoint, "skip");
+            logDebugEvent("ai-call", `${entry.label || "The local server"} read the next skip's opening ahead (${opening.prefix.length} characters) in ${elapsedSeconds(startedAt)}.`);
+        }
+    } catch { /* dropped for a real request, or the server is away: the skip reads it itself */ } finally {
+        if (warmUp === controller) warmUp = null;
+    }
+};
+
+// Asks for a warm-up a moment from now, if one is due by then (skipWarmUp.js
+// shouldWarmUp). `campaign` says which campaign is being played, when the
+// caller knows (gameplay.js warmUpNextSkip).
+export const warmSkipOpening = ({ campaign = "" } = {}) => {
+    if (campaign) warmUpCampaign = campaign;
+    if (!getMapSetting(MAP_SETTING_KEYS.skipWarmUp)) return;
+    if (warmUpTimer) clearTimeout(warmUpTimer);
+    warmUpTimer = setTimeout(() => {
+        warmUpTimer = null;
+        void sendWarmUp();
+    }, WARM_UP_DELAY_MS);
+};
 
 // One answer's word on what is serving an endpoint (koboldCpp.js
 // saysKoboldCpp): a whole body, the envelope a stream was rebuilt into, a chunk
@@ -1373,6 +1473,9 @@ async function callOpenAIStyleChatCompletions({
     // OpenAI's prompt_cache_key: requests that share a prefix go to the same
     // cache with it (callOpenAI passes it; nothing else does).
     promptCacheKey = "",
+    // Where the system prompt's unchanging part ends (promptLayout.js): what a
+    // local server is given to read ahead of the next skip (skipWarmUp.js).
+    staticPrefixEnd = null,
 }) {
     // A model under KoboldCpp's own prefix is its /v1/models speaking, typed
     // into the entry or found there a moment ago (resolveConfiguredModel).
@@ -1468,7 +1571,7 @@ async function callOpenAIStyleChatCompletions({
         const response = await providerFetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
             headers,
             signal,
-            payload: {
+            payload: noteLocalRequest({
                 model,
                 ...(streamThisRequest ? { stream: true } : {}),
                 messages: toOpenAIMessages(requestSystemPrompt, chatToolsRefused ? flattenLookupRounds(history) : history),
@@ -1551,7 +1654,14 @@ async function callOpenAIStyleChatCompletions({
                     })),
                     tool_choice: "auto",
                 } : {}),
-            },
+            }, {
+                endpoint,
+                taskKey,
+                // The offset is the prompt's own; a mode that appends to it leaves the opening where it was.
+                staticPrefixEnd,
+                campaign: promptCacheKey,
+                answerOnly: requireOutputTool,
+            }),
         });
         onRequest?.(response.status);
 

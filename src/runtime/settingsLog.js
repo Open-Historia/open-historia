@@ -173,6 +173,7 @@ registerSettingsSnapshot("AI", () => {
         ["Model reasoning", onOff(getReasoningEnabled())],
         ["Limit AI generation", onOff(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration))],
         ["Generate long time skips in segments", onOff(getMapSetting(MAP_SETTING_KEYS.chunkLongJumps))],
+        ["Read a skip's opening ahead on a local server", onOff(getMapSetting(MAP_SETTING_KEYS.skipWarmUp))],
         ["AI lookup functions", lookupFunctionsState()],
         ["Show time skip events as they are written", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents))],
         ["Stop when my events fail", onOff(getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures))],

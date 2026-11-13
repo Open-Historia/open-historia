@@ -1,6 +1,6 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { nextTask } from "../../runtime/nextTask.js";
-import { callAI, geminiDeclaresTaskFunction, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
+import { callAI, geminiDeclaresTaskFunction, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch, warmSkipOpening } from "./main.jsx";
 import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { clampTimelineDates, validatePregameEvents, validateTimelineDates } from "./timelineDates.js";
@@ -5539,6 +5539,11 @@ const promptCacheKeyFor = (taskKey) => {
   const kind = JUMP_TASK_KEYS.has(taskKey) ? "skip" : normalizeString(taskKey) || "task";
   return `oh-${placementHash(campaign).toString(36)}-${kind}`.slice(0, 64);
 };
+
+// "Read a skip's opening ahead on a local server" (skipWarmUp.js), asked for
+// when the game is entered: main.jsx is told which campaign is being played, by
+// the name its skips' requests carry, and sends the warm-up if one is due.
+export const warmUpNextSkip = () => warmSkipOpening({ campaign: promptCacheKeyFor("jumpForward") });
 
 // The same check for work nobody is waiting on — the idle pulse, spy reports,
 // suggestions, stat sheets, a batch that lands minutes later: stamp the
