@@ -290,8 +290,9 @@ static func _grain_tile() -> ImageTexture:
 func _load_artwork() -> void:
 	var start := randi() % IMAGES.size()
 	var paths: Array[String] = []
+	var unpacking := OS.get_name() == "Android" and not AndroidPayload.is_current()
 	for name in IMAGES:
-		var path := UI.repo_path("public/" + name)
+		var path := ("res://android_payload/boot/public/%s.bin" % name) if unpacking else UI.boot_file("public/" + name)
 		if FileAccess.file_exists(path):
 			paths.append(path)
 	if paths.is_empty():
@@ -300,7 +301,7 @@ func _load_artwork() -> void:
 	for at in range(paths.size()):
 		_art.add_layer(null, at == first_index)
 	_art.current = first_index
-	var first := Image.load_from_file(paths[first_index])
+	var first := UI._image_at(paths[first_index])
 	if first and not first.is_empty():
 		_art.set_texture(first_index, ImageTexture.create_from_image(first))
 	var rest: Array[int] = []
@@ -311,7 +312,7 @@ func _load_artwork() -> void:
 		return
 	_art_task = WorkerThreadPool.add_task(func() -> void:
 		for at in rest:
-			var image := Image.load_from_file(paths[at])
+			var image := UI._image_at(paths[at])
 			if image and not image.is_empty():
 				_deliver.call_deferred(at, image))
 

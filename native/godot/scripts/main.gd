@@ -1,6 +1,7 @@
 extends Node
 
 const BOOT_SCRIPTS := ["res://scripts/audio/sound_engine.gd", "res://scripts/ui/game_menu.gd", "res://scripts/ui/debug_console.gd", "res://scripts/ui/interactive_panel.gd", "res://scripts/ui/cheats_panel.gd", "res://scripts/shell/app_update.gd", "res://scripts/war/war_layers.gd", "res://scripts/map/map_extras.gd", "res://scripts/ui/forces_panel.gd", "res://scripts/ui/war_room.gd", "res://scripts/ui/war_room_button.gd", "res://scripts/multiplayer/shared_game_overlay.gd", "res://scripts/multiplayer/discord_invites.gd", "res://scripts/ui/scenario_editor.gd", "res://scripts/ui/after_action.gd", "res://scripts/shell/shell_notices.gd", "res://scripts/devtools/devtools.gd"]
+const UNPACK_STAGE := "Unpacking the game's files"
 const PROVIDERS := {"gemini": "Gemini — Google AI Studio / Gemini API", "openai": "OpenAI", "anthropic": "Anthropic"}
 
 var engine: EngineLink
@@ -61,6 +62,7 @@ var _city_renames_key := ""
 var _minimized := false
 var _presence_timer: Timer
 var _reload_asking := false
+var _unpack_fraction := -1.0
 
 
 func _ready() -> void:
@@ -74,6 +76,7 @@ func _ready() -> void:
 	Hud.warm_scripts(BOOT_SCRIPTS)
 	engine = EngineLink.new()
 	add_child(engine)
+	engine.unpacking.connect(_on_unpacking)
 	if UI.phone():
 		phone_shell = PhoneShell.new()
 		add_child(phone_shell)
@@ -111,6 +114,8 @@ func _ready() -> void:
 	_build_settings()
 	_build_boot()
 	_show("boot")
+	if _unpack_fraction >= 0.0:
+		_on_unpacking(_unpack_fraction)
 	_build_crash()
 	app_update = _make_node("res://scripts/shell/app_update.gd") if UI.has_feature("updater") else null
 	if app_update:
@@ -560,6 +565,16 @@ func _build_boot() -> void:
 	shell.map_view = map_view
 	shell.setup(engine, menu.loader, hud)
 	boot = shell.startup
+
+
+func _on_unpacking(fraction: float) -> void:
+	_unpack_fraction = fraction
+	if shell == null or shell.startup == null:
+		return
+	if fraction >= 1.0:
+		shell.startup.set_progress({"steps": [{"id": "library", "label": StartupScreen.STAGE, "status": "active"}], "progress": 0.0})
+		return
+	shell.startup.set_progress({"steps": [{"id": "unpack", "label": UNPACK_STAGE, "status": "active"}, {"id": "library", "label": StartupScreen.STAGE, "status": "pending"}], "progress": snappedf(fraction * 100.0, 1.0)})
 
 
 func _build_settings() -> void:
