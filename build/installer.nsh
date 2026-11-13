@@ -90,12 +90,14 @@
 !macro customInstall
   ; Where the app keeps its data (Electron's userData): the stable app's is named
   ; after package.json's "name"; the beta and the multiplayer build set their own
-  ; name, which is their product name (electron/main.cjs, app.setName).
+  ; name (electron/main.cjs, app.setName), which is their program's name. Not
+  ; PRODUCT_NAME: the Windows beta's is "Open Historia" so that it can be signed
+  ; (electron-builder.beta-win.yml), while its program is Open Historia Beta.
   !ifndef OH_DATA_DIR
-  !if "${PRODUCT_NAME}" == "Open Historia"
+  !if "${PRODUCT_FILENAME}" == "Open Historia"
     !define OH_DATA_DIR "$APPDATA\open-historia"
   !else
-    !define OH_DATA_DIR "$APPDATA\${PRODUCT_NAME}"
+    !define OH_DATA_DIR "$APPDATA\${PRODUCT_FILENAME}"
   !endif
   !endif
   ${If} $OHPrivacyShown == "1"

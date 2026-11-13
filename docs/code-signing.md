@@ -4,12 +4,12 @@
 
 | System | Signed by | Where |
 |---|---|---|
-| Windows (stable) | SignPath Foundation, once it is set up below | `.github/workflows/desktop-installer.yml` |
-| Windows (beta, native) | Not signed: SignPath Foundation signs only files named for the project (below) | — |
+| Windows (stable and beta) | SignPath Foundation, once it is set up below | `.github/workflows/desktop-installer.yml`, `desktop-beta.yml` |
+| Windows (native) | Not yet | — |
 | macOS | Not signed (ad-hoc only, `scripts/mac-adhoc-sign.cjs`) | — |
 | Android | The project's own release key | `android-apk.yml`, `android-apk-beta.yml` |
 
-Until the secret and the variables below exist, the stable desktop workflow builds exactly what it built before: unsigned, with the same files, names, feeds and update chunks. Every signing step is skipped.
+Until the secret and the variables below exist, both desktop workflows build exactly what they built before: unsigned, with the same files, names, feeds and update chunks. Every signing step is skipped.
 
 ## How a signed Windows build is made
 
@@ -33,8 +33,8 @@ The NSIS uninstaller that electron-builder generates inside the installer is not
 The conditions are at <https://signpath.org/terms>. Each one, and where this project meets it:
 
 - **OSI licence, no proprietary code:** AGPL-3.0-or-later for everything (`LICENSE`); Electron's own DLLs are upstream open source, shipped unsigned inside the signed installer, which the terms allow.
-- **Sign only our own binaries, built from source in a verifiable way:** only the stable workflow on GitHub-hosted runners submits, through SignPath's GitHub connector, which traces each artifact to its run. Only the app's program, the speech program built from `electron/speech/windows.cs`, and the installer are in the requests (`.signpath/artifact-configuration.xml`).
-- **Metadata set and enforced:** the artifact configuration restricts every signed file to product name *Open Historia* and product version `${version}`, a required parameter the workflow passes (the stamped `0.0.<run>`). electron-builder writes the program's product version as `0.0.N.0`, so `scripts/set-product-version.mjs` writes it back as `0.0.N`, like the installer, and `scripts/build-speech-helpers.mjs` gives the speech program the same name and version. The beta's product name is *Open Historia Beta*, so the beta is not signed; neither is the native app.
+- **Sign only our own binaries, built from source in a verifiable way:** only the two desktop workflows on GitHub-hosted runners submit, through SignPath's GitHub connector, which traces each artifact to its run. Only the app's program, the speech program built from `electron/speech/windows.cs`, and the installer are in the requests (`.signpath/artifact-configuration.xml`).
+- **Metadata set and enforced:** the artifact configuration restricts every signed file to product name *Open Historia* and product version `${version}`, a required parameter the workflow passes (the stamped `0.0.<run>`). electron-builder writes the program's product version as `0.0.N.0`, so `scripts/set-product-version.mjs` writes it back as `0.0.N`, like the installer, and `scripts/build-speech-helpers.mjs` gives the speech program the same name and version. The Windows beta is packed with `electron-builder.beta-win.yml`: product name *Open Historia*, while its program (`Open Historia Beta.exe`), install folder, shortcuts, uninstall entry (its own appId) and saves stay the beta's, so it still installs beside the stable app. macOS and Linux keep *Open Historia Beta*. The native app is not signed yet.
 - **Every release approved by hand:** each build makes two signing requests, both waiting for the approver.
 - **Privacy:** what the app contacts on its own is in the privacy policy (`public/privacy/`). The Windows installer shows a privacy page (`build/installer.nsh`) that names those things, links the policy, and has a box to switch off each of: update checks, the install count, and the Discord link handler. The answers go to `install-options.json` in the app's data folder; `electron/installOptions.cjs` reads it, and `main.cjs` and `server.js` honour it. Visit counting is already off until the player agrees to it in the game.
 - **Announce system changes:** the only change outside the install folder is the Discord link handler, named on the installer's page and switchable there.
@@ -67,7 +67,7 @@ The conditions are at <https://signpath.org/terms>. Each one, and where this pro
    ```
 
    Signing starts only when the secret and the three required variables are all set. Deleting any one of them switches it off again.
-4. **Test it** by dispatching *Desktop installers* with a throwaway tag such as `desktop-signing-test` (an empty tag falls back to `desktop-stable`, which players update from), and delete that release and its `-chunks` release afterwards. Approve the two signing requests in SignPath when they appear. In the run, `Check the Windows signatures` lists each file as `Valid` (with `test-signing`, Windows reports the test certificate as untrusted: that run only proves the wiring).
+4. **Test it** without offering the build to anyone: Actions, *Desktop beta installers*, Run workflow from `beta` with **publish** unticked. Approve the two signing requests in SignPath when they appear. In the run, `Check the Windows signatures` lists each file as `Valid` (with `test-signing`, Windows reports the test certificate as untrusted: that run only proves the wiring), and the `open-historia-beta-windows-latest` artifact holds the signed `Open-Historia-Beta-Setup.exe`. The stable workflow has no such switch (an empty tag falls back to `desktop-stable`), so test it by dispatching with a throwaway tag such as `desktop-signing-test` and delete that release and its `-chunks` release afterwards.
 5. Once a signed build is out, update the install texts that still say the Windows installer is not code-signed: `site/index.html` (the Windows tab), `wiki/start/install.md`, `wiki/reference/troubleshooting.md`. SmartScreen can still warn for the first downloads of a new certificate until it has built a reputation.
 
 ## macOS
