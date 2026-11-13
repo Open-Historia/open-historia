@@ -106,6 +106,7 @@ import {
 } from "./streamAssembly.js";
 import {
     answerLookupCalls,
+    answerNowDirective,
     answeredLookupKeys,
     anthropicMessagesFromHistory,
     appendLookupRound,
@@ -114,6 +115,7 @@ import {
     createLookupCarry,
     flattenLookupRounds,
     geminiContentsFromHistory,
+    keepsLookupsDeclared,
     lookupCallKey,
     lookupCallsFromAnthropic,
     lookupCallsFromGemini,
@@ -1382,7 +1384,16 @@ async function callOpenAIStyleChatCompletions({
     // tool declared, tool_choice "required" IS the forcing, on every gateway
     // that honours it at all. (The history still carries the earlier calls;
     // the chat-completions API does not require those tools to be declared.)
-    const lookupDeclarations = tool && Array.isArray(lookupTools) && !requireOutputTool ? lookupTools : [];
+    // Not on a local server: there the functions are part of what the server
+    // has read, and a round without them is read again whole. They stay, and
+    // the round is told to answer (toolTurns.js keepsLookupsDeclared); a model
+    // that asks again all the same is sent the one function after all.
+    let keepLookupsDeclared = keepsLookupsDeclared({
+        local: isLocalEndpoint(normalizeEndpoint(endpoint)),
+        answerOnly: Boolean(tool) && requireOutputTool,
+        lookups: Array.isArray(lookupTools) ? lookupTools.length : 0,
+    });
+    let lookupDeclarations = tool && Array.isArray(lookupTools) && (!requireOutputTool || keepLookupsDeclared) ? lookupTools : [];
     // The advisor's lookup functions (chatLookupsFor), until the endpoint refuses them.
     let chatToolsRefused = false;
     // Where to BEGIN on the ladder. "auto" (the default) starts at the strongest
@@ -1471,7 +1482,10 @@ async function callOpenAIStyleChatCompletions({
             payload: {
                 model,
                 ...(streamThisRequest ? { stream: true } : {}),
-                messages: toOpenAIMessages(requestSystemPrompt, chatToolsRefused ? flattenLookupRounds(history) : history),
+                messages: [
+                    ...toOpenAIMessages(requestSystemPrompt, chatToolsRefused ? flattenLookupRounds(history) : history),
+                    ...(keepLookupsDeclared && structuredMode === "tool" ? [{ role: "user", content: answerNowDirective(tool.name) }] : []),
+                ],
                 // Reasoning toggle (settings) — honored by o-series/gpt-5 models and
                 // most OpenAI-compatible gateways. Sent in EVERY mode, tool calls
                 // included: local backends (textgen/oobabooga, llama.cpp) map it onto
@@ -1741,6 +1755,14 @@ async function callOpenAIStyleChatCompletions({
             // Not the answer but a question: the model called lookup functions.
             if (structuredMode === "tool" && lookupDeclarations.length) {
                 const lookupCalls = lookupCallsFromOpenAI(data, tool.name);
+                if (lookupCalls.length && keepLookupsDeclared) {
+                    // Told to answer with the lookups still declared, it asked again:
+                    // once more, with the one function, as any other server is sent it.
+                    console.warn(`[ai] ${providerLabel}: asked for its answer, the model looked something up instead; asking again with only ${tool.name} declared.`);
+                    keepLookupsDeclared = false;
+                    lookupDeclarations = [];
+                    continue;
+                }
                 if (lookupCalls.length) return { rawText: text, toolInput: null, lookupCalls };
             }
 

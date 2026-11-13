@@ -272,6 +272,27 @@ export const repeatedLookupResponse = (outputToolName = "") => ({
     + `${clean(outputToolName) ? `call ${clean(outputToolName)} now` : "answer now"} with what you have.`,
 });
 
+// The round that must answer, on a server that runs on the player's machine or
+// network. Such a server keeps what it read of the last request and reads only
+// what differs, from the first token that does; and the functions are part of
+// what it reads, wherever the model's template puts them (the Qwen family's puts
+// them before the system prompt). Leaving the lookups out of that round, as a
+// hosted gateway is sent it, therefore changes the request near its start, and
+// the server reads the whole conversation again: on a player's 27B model
+// (2026-11-13) three lookup rounds took 3 to 6 seconds each, 900 to 1,800
+// tokens read and 70,000 from the cache, and the answer's round then read all
+// 72,000 again, three minutes before its first word.
+//
+// So there the lookups stay declared on that round, and the round is told in
+// words to answer (answerNowDirective, as the last message). A model that looks
+// something up all the same is asked once more the way every other server is.
+export const keepsLookupsDeclared = ({ local = false, answerOnly = false, lookups = 0 } = {}) =>
+  Boolean(local) && Boolean(answerOnly) && Number(lookups) > 0;
+
+export const answerNowDirective = (outputToolName = "") =>
+  "No more lookups are answered in this turn: you have what the game can tell you. "
+  + `Call ${clean(outputToolName) || "the output function"} now with your answer.`;
+
 // Answers one round's calls. `answeredKeys` holds the calls already answered in
 // this task (answeredLookupKeys); a call found there gets the note above
 // instead of its result. Two identical calls inside ONE round are both run:
