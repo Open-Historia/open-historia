@@ -17,6 +17,7 @@ import { buildPromptSnapshot, changedSinceSnapshot, neighbourPowers, splitInView
 import { IDLE_BACKGROUND_LIMIT, rankRelevantPolities } from "./idlePoliticalDiplomacyContext.js";
 import { HISTORY_TIERS, hasHistoryTiers, renderCanonFacts, renderHistoryTiers } from "../../runtime/historyTiers.js";
 import { waterTypeIds } from "../../runtime/regionTypes.js";
+import { describeUnitTypesForPrompt, normalizeUnitTypes, unitTypeOf } from "../../runtime/unitTypes.js";
 import { isPendingAction, selectFocusPowers } from "./regionFocus.js";
 import { filterChatsVisibleTo } from "./chatVisibility.js";
 import { buildForcePostureText } from "./forcePosture.js";
@@ -1126,14 +1127,21 @@ export const UNITS_SUMMARY_LIMIT = 60;
 // The most units of powers out of view a skip names, by name and type.
 export const UNITS_BRIEF_LIMIT = 240;
 
-const unitSummaryRow = (unit, handles) => {
+// What a unit is, as the AI reads it: its kind, or one of the scenario's own unit types by name with the kind it is
+// (runtime/unitTypes.js): "Dragon (air)".
+const unitKindOf = (unit, types) => {
+  const type = types?.length ? unitTypeOf(types, unit) : null;
+  return type ? `${type.name} (${normalizeString(unit.type) || type.base})` : normalizeString(unit.type);
+};
+
+const unitSummaryRow = (unit, handles, types = null) => {
   const lat = Number(unit.lat);
   const lng = Number(unit.lng);
   const coords = Number.isFinite(lat) && Number.isFinite(lng)
     ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
     : "unknown location";
   const detail = [
-    `${unit.type}`,
+    `${types?.length ? unitKindOf(unit, types) : unit.type}`,
     `owner ${unit.ownerCode}`,
     `${unit.strength}% of established strength`,
     unit.posture ? `posture ${unit.posture}` : `status ${unit.status}`,
@@ -1146,25 +1154,25 @@ const unitSummaryRow = (unit, handles) => {
 // fields said once (UNITS_TABLE_HEADER), and a field left out where it says
 // what it would say of most units (full strength, idle).
 export const UNITS_TABLE_HEADER = "By owner; each unit: name: type[, strength when under 100%][, posture or status when not idle]; what it is; lat, lng";
-const unitTableRow = (unit, handles) => {
+const unitTableRow = (unit, handles, types = null) => {
   const lat = Number(unit.lat);
   const lng = Number(unit.lng);
   const where = Number.isFinite(lat) && Number.isFinite(lng) ? `${lat.toFixed(2)}, ${lng.toFixed(2)}` : "location unknown";
   const strength = Number(unit.strength);
   const state = normalizeString(unit.posture) || (normalizeString(unit.status) && normalizeString(unit.status) !== "idle" ? normalizeString(unit.status) : "");
   const head = [
-    normalizeString(unit.type) || "unit",
+    (types?.length ? unitKindOf(unit, types) : normalizeString(unit.type)) || "unit",
     Number.isFinite(strength) && strength !== 100 ? `${Math.round(strength)}%` : "",
     state,
   ].filter(Boolean).join(", ");
   return `- ${handles.get(unit.id) || unit.name}: ${head}${unit.covert ? " [unconfirmed]" : ""}; ${normalizeString(unit.composition) ? `${normalizeString(unit.composition)}; ` : ""}${where}`;
 };
-const unitTable = (units, handles) => {
+const unitTable = (units, handles, types = null) => {
   const byOwner = new Map();
   for (const unit of units) {
     const owner = normalizeString(unit.ownerCode) || "unknown";
     if (!byOwner.has(owner)) byOwner.set(owner, []);
-    byOwner.get(owner).push(unitTableRow(unit, handles));
+    byOwner.get(owner).push(unitTableRow(unit, handles, types));
   }
   return [UNITS_TABLE_HEADER, ...[...byOwner].flatMap(([owner, rows]) => [`${owner}:`, ...rows])];
 };
@@ -1176,7 +1184,15 @@ const unitTable = (units, handles) => {
 // used to keep the first sixty in storage order, so the player's newest
 // formations vanished and orders naming them went unanswered. A list that fits
 // keeps its saved order.
-export const buildUnitsSummaryText = (world, {
+// And the scenario's own unit types follow its units, each in a line (runtime/unitTypes.js
+// describeUnitTypesForPrompt): what a "Dragon" in the list is, and who may raise one.
+export const buildUnitsSummaryText = (world, options = {}) => {
+  const types = normalizeUnitTypes(world?.unitTypes);
+  const text = unitsSummaryBody(world, options, types);
+  return types.length ? `${text}\n\n${describeUnitTypesForPrompt(types)}` : text;
+};
+
+const unitsSummaryBody = (world, {
   player = "",
   actions = [],
   chats = [],
@@ -1185,7 +1201,7 @@ export const buildUnitsSummaryText = (world, {
   // A time skip's powers in view (buildPromptFocus), lower-case: their units in
   // full, every other unit by name and type in a line per owner.
   inView = null,
-} = {}) => {
+} = {}, types = []) => {
   const units = normalizeArray(world?.units);
   if (units.length === 0) return "No military units are currently deployed on the map.";
   let ordered = units;
@@ -1217,7 +1233,7 @@ export const buildUnitsSummaryText = (world, {
     const full = viewed.slice(0, limit);
     const shownFull = new Set(full);
     const brief = ordered.filter((unit) => !shownFull.has(unit));
-    const lines = full.length ? unitTable(full, handles) : [];
+    const lines = full.length ? unitTable(full, handles, types) : [];
     if (brief.length) {
       const byOwner = new Map();
       let named = 0;
@@ -1225,7 +1241,7 @@ export const buildUnitsSummaryText = (world, {
         if (named >= UNITS_BRIEF_LIMIT) break;
         const owner = normalizeString(unit.ownerCode) || "unknown";
         if (!byOwner.has(owner)) byOwner.set(owner, []);
-        byOwner.get(owner).push(`${handles.get(unit.id) || unit.name} (${unit.type})`);
+        byOwner.get(owner).push(`${handles.get(unit.id) || unit.name} (${types.length ? unitKindOf(unit, types) : unit.type})`);
         named += 1;
       }
       lines.push(`${full.length ? "Other formations" : "Formations"}, by owner (powers not in play this turn; each is on the map):`);
@@ -1236,7 +1252,7 @@ export const buildUnitsSummaryText = (world, {
     return lines.join("\n");
   }
   const omitted = Math.max(0, units.length - limit);
-  const rows = ordered.slice(0, limit).map((unit) => unitSummaryRow(unit, handles));
+  const rows = ordered.slice(0, limit).map((unit) => unitSummaryRow(unit, handles, types));
   if (omitted > 0) {
     rows.push(omitted === 1
       ? "[1 more unit omitted; it remains on the map]"

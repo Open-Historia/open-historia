@@ -46,11 +46,19 @@
 // is gone. What became of the wings is handed back with the run, once a wing
 // (engine.js snapshot: unitChanges).
 //
+// A WING OF THE SCENARIO'S OWN (runtime/unitTypes.js: an air unit of one of
+// input.unitTypes, a dragon) weighs its type's `attack` times as much in the
+// sky, and is worn its `toughness` times less. It is the scenario's word that
+// it flies: in an era with no aircraft it reaches as far as the first aircraft
+// did, and a country whose figures give it no air arm still flies it, at the
+// worth every country had (1).
+//
 // Only + - * / and comparisons (sqrt for a distance).
 
 import { airWorth } from "./military.js";
 import { isLive } from "./troops.js";
 import { kmBetween, measureOptions } from "./worldGrid.js";
+import { ORDINARY, unitFigures } from "../unitTypes.js";
 
 // How far a wing reaches from its base, by era (before 1500, 1500-1849, 1850-1944, from 1945): none before there were any.
 export const AIR_REACH_KM = Object.freeze([0, 0, 500, 900]);
@@ -74,22 +82,51 @@ export const airMissionOf = (battle, side) => {
 
 const fold = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
 
+// How far a wing of one of the scenario's own air types reaches in an era: as any wing where the era has aircraft,
+// and as the first aircraft did where it has none.
+const OWN_TYPE_REACH_KM = AIR_REACH_KM.find((km) => km > 0) ?? 0;
+const ownTypeReach = (era) => ((AIR_REACH_KM[era] ?? 0) > 0 ? AIR_REACH_KM[era] : OWN_TYPE_REACH_KM);
+
+// What a wing's country's air arm makes of it (military.js airWorth); a wing of the scenario's own flies at 1 where
+// its country's figures give it no air arm.
+const worthOfWing = (run, wing) => {
+  const worth = airWorth(run.militaryOf(wing.owner));
+  return wing.own === true && !(worth > 0) ? 1 : worth;
+};
+
 // Which battle each wing is over today: once a day for the whole run, the nearest active battle within reach on which its country fights.
 const assignWings = (run, day) => {
   if (run.airDay === day) return;
   run.airDay = day;
   run.airOver = new Map();
   const reach = AIR_REACH_KM[run.era] ?? 0;
-  if (!(reach > 0)) return;
+  const types = run.input?.unitTypes;
+  const units = (Array.isArray(run.input?.units) ? run.input.units : []).filter((unit) => fold(unit?.type) === "air" && Number(unit.strength) > 0 && Number.isFinite(Number(unit.lng)) && Number.isFinite(Number(unit.lat)));
+  // (Before there were aircraft only the scenario's own air types fly.)
+  if (!(reach > 0) && !units.some((unit) => unitFigures(types, unit) !== ORDINARY)) return;
   run.wings = run.wings ?? new Map();
   const measure = measureOptions(run.input?.map);
-  const units = (Array.isArray(run.input?.units) ? run.input.units : []).filter((unit) => fold(unit?.type) === "air" && Number(unit.strength) > 0 && Number.isFinite(Number(unit.lng)) && Number.isFinite(Number(unit.lat)));
   units.sort((a, b) => (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0));
   for (const unit of units) {
     const id = String(unit.id);
-    if (!run.wings.has(id)) run.wings.set(id, { id, owner: String(unit.ownerCode ?? unit.owner ?? ""), strength: Math.min(100, Number(unit.strength)), began: Math.min(100, Number(unit.strength)), lng: Number(unit.lng), lat: Number(unit.lat) });
+    const figures = unitFigures(types, unit);
+    const own = figures !== ORDINARY;
+    const within = own ? ownTypeReach(run.era) : reach;
+    if (!(within > 0)) continue;
+    if (!run.wings.has(id)) {
+      run.wings.set(id, {
+        id,
+        owner: String(unit.ownerCode ?? unit.owner ?? ""),
+        strength: Math.min(100, Number(unit.strength)),
+        began: Math.min(100, Number(unit.strength)),
+        lng: Number(unit.lng),
+        lat: Number(unit.lat),
+        // (A wing of the scenario's own: what its type makes of it.)
+        ...(own ? { own: true, attack: figures.attack, toughness: figures.toughness } : {}),
+      });
+    }
     const wing = run.wings.get(id);
-    if (!(wing.strength > 0) || airWorth(run.militaryOf(wing.owner)) === 0) continue;
+    if (!(wing.strength > 0) || worthOfWing(run, wing) === 0) continue;
     let best = null;
     for (const battle of run.battles) {
       if (battle.status !== "active") continue;
@@ -97,13 +134,13 @@ const assignWings = (run, day) => {
       if (side === undefined) continue;
       const [lng, lat] = battle.place.toLngLat(battle.field.cols / 2, battle.field.rows / 2);
       const km = kmBetween(wing.lng, wing.lat, lng, lat, measure);
-      if (km <= reach && (!best || km < best.km)) best = { battle, side, km };
+      if (km <= within && (!best || km < best.km)) best = { battle, side, km };
     }
     if (!best) continue;
     if (!run.airOver.has(best.battle)) run.airOver.set(best.battle, [[], []]);
     run.airOver.get(best.battle)[best.side].push(wing);
   }
-  if (run.input?.airArms !== true) return;
+  if (!(reach > 0) || run.input?.airArms !== true) return;
   // The air arms of the countries with no wings of their own.
   const winged = new Set(units.map((unit) => fold(unit.ownerCode ?? unit.owner)));
   for (const battle of run.battles) {
@@ -136,9 +173,9 @@ export const skyOfWings = (run, battle, day) => {
   if (!wings) return null;
   const flies = battle.sky ? battle.sky.effects.air : 1;
   if (!(flies > 0)) return null;
-  // (Wings kept grounded do not fly.)
+  // (Wings kept grounded do not fly. A wing of the scenario's own weighs its type's attack times as much.)
   const weight = wings.map((list, side) => (airMissionOf(battle, side) === "grounded" ? 0
-    : list.reduce((sum, wing) => sum + (wing.strength > 0 ? wing.strength * airWorth(run.militaryOf(wing.owner)) : 0), 0) * flies));
+    : list.reduce((sum, wing) => sum + (wing.strength > 0 ? wing.strength * worthOfWing(run, wing) * (wing.attack ?? 1) : 0), 0) * flies));
   const total = weight[0] + weight[1];
   if (!(total > 0)) return null;
   const holds = weight[0] >= weight[1] ? 0 : 1;
@@ -182,7 +219,8 @@ export const wearWings = (run, battle) => {
     const wear = sky.strike > 0 && sky.holds === side ? AIR_STRIKE_WEAR : 1;
     for (const wing of sky.flying[side]) {
       if (!(wing.strength > 0)) continue;
-      wing.strength = Math.max(0, wing.strength - AIR_LOSS * (0.25 + lost) * wear);
+      // (A wing of the scenario's own is worn its type's toughness times less.)
+      wing.strength = Math.max(0, wing.strength - (AIR_LOSS * (0.25 + lost) * wear) / (wing.toughness ?? 1));
       wing.changed = true;
     }
   }

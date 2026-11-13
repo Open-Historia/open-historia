@@ -141,6 +141,12 @@ export const createTroop = ({ x = 0, y = 0, strength = 100, kind = KIND_INFANTRY
   punch: 1,
   guard: 1,
   legs: 1,
+  // A named troop of one of the scenario's own unit types (runtime/unitTypes.js): how much harder it hits, how much
+  // less it loses and how much faster it goes than an ordinary troop, under whatever the day makes of it. Set as it is
+  // taken in or read back (battle.js stampUnitType); exactly 1 for every other troop.
+  typeAttack: 1,
+  typeToughness: 1,
+  typeSpeed: 1,
   // Whether it attacked today (combat.js stepForward).
   fought: false,
 });

@@ -232,8 +232,10 @@ import {
   POLL_RESULTS_FIELD,
   withoutGroupOps,
   withoutEspionage,
+  withUnitTypeNames,
   withWarParts,
 } from "./gameplaySchemas.js";
+import { findUnitType, mayFieldUnitType, normalizeUnitTypes } from "../../runtime/unitTypes.js";
 import { placeRostraLines, readSkipPollResults, readSkipPosts, rostraRefreshRules, socialFeedPromptBlock, withSkipPosts } from "../../runtime/socialFeed.js";
 import { knownPolityNames } from "../../runtime/countryInfoPanel.js";
 import { airOn, frontsOn, naviesOn, strategyNetOn, transportMediaOn, warPartsOffBlock } from "./frontsGate.js";
@@ -1564,6 +1566,8 @@ const buildTemplateVariables = async (bundle, options = {}) => {
     variables.occupationsAfterWarContext = occupations.text;
     variables.occupationGroups = occupations.groups;
   }
+  // The names of the scenario's own unit types, for the task's output function (taskToolFor): not a template's.
+  variables.unitTypeNames = unitTypeNamesOf(bundle.world);
   // Groups switched off for this game (server/gameFeatures.js): no task is
   // given them, which also leaves out the time skip's [Groups] rule and the
   // Game Master's block (both read these).
@@ -2437,6 +2441,10 @@ const canonicalizeNamedThings = (containers, world) => {
 const resolvePlacements = async (containers, world, { receipt = null, renderedRegions = null, noteGround = false, formations = [], lookupContext = null } = {}) => {
   canonicalizeNamedThings(containers, world);
   const placing = [];
+  // A unit raised of one of the scenario's own unit types is placed as the kind it is (runtime/unitTypes.js): a dragon
+  // is an air unit, whatever kind the model wrote beside its name.
+  const scenarioUnitTypes = normalizeUnitTypes(world?.unitTypes);
+  const kindOf = (unit) => normalizeString(findUnitType(scenarioUnitTypes, unit?.unitType)?.base || unit?.type).toLowerCase();
   for (const { event, impacts, path } of normalizeArray(containers)) {
     if (!impacts || typeof impacts !== "object") continue;
     const title = normalizeString(event?.title);
@@ -2448,7 +2456,7 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
       const kind = normalizeString(op?.op).toLowerCase();
       if (kind === "spawn") {
         const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
-        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), atSea: normalizeString(unit.type).toLowerCase() === "naval", title, context, path, spawn: true, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
+        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(kindOf(unit)), atSea: kindOf(unit) === "naval", title, context, path, spawn: true, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
       } else if (kind === "move") {
         const mover = normalizeArray(world?.units).find((unit) => normalizeString(unit?.id) === normalizeString(op.unitId));
         // A land formation's march ends on land, as its raising does: seen in a
@@ -2932,6 +2940,10 @@ const forActiveFeatures = (tool) => {
   return frontsOn() ? withWarFigures(withFrontOrders(shown)) : shown;
 };
 
+// The names of the scenario's own unit types (runtime/unitTypes.js): what a spawned unit's unitType may be in the
+// tool the model is shown (gameplaySchemas.js withUnitTypeNames), and no such field where the scenario has none.
+const unitTypeNamesOf = (world) => normalizeUnitTypes(world?.unitTypes).map((type) => type.name);
+
 // The time skip templates' one line on the intelligence rating, which is
 // espionage's: reputation alone with espionage off. A campaign's own template
 // that words it otherwise is left as it is.
@@ -3273,9 +3285,10 @@ const loadTaskStatContract = async (taskKey) => {
 // and this game's features, the players' advice and the social posts on a time
 // skip, a first reading's rating.
 const taskToolFor = (taskKey, { customFullStatSheet, customStatRows, statIndexRows, customStatIndices }, variables) => {
-  const featureTool = forActiveFeatures(customFullStatSheet
+  // (A spawned unit's unitType as the scenario's own unit types have it: buildTemplateVariables unitTypeNames.)
+  const featureTool = withUnitTypeNames(forActiveFeatures(customFullStatSheet
     ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
-    : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
+    : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices })), variables?.unitTypeNames);
   // Occupations that outlived their war (issue #1000): settled in a field the answer must hold, when there are any.
   const settlingTool = JUMP_TASK_KEYS.has(taskKey) && normalizeArray(variables?.occupationGroups).length ? withOccupationSettlements(featureTool, variables.occupationGroups) : featureTool;
   // The players' advice, asked of the time skip whose prompt asks for it.
@@ -3951,9 +3964,9 @@ const runJsonTask = async (taskKey, {
   // Batch routing (see the parameter): a deferred task leaves here with no
   // answer and no attempt loop; its result arrives through pollPendingBatches.
   if (!sync && typeof onBatchResult === "function" && batchBackgroundTasksEnabled()) {
-    const batchTool = forActiveFeatures(customFullStatSheet
+    const batchTool = withUnitTypeNames(forActiveFeatures(customFullStatSheet
       ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
-      : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
+      : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices })), variables?.unitTypeNames);
     if (batchTool && providerSupportsBatch(taskKey)) {
       const customId = `oh_${taskKey}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`.slice(0, 64);
       const submitted = await submitAIBatch({
@@ -8285,6 +8298,9 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   if (institutionOutcomeError) return institutionOutcomeError;
 
   const unitIds = new Set(normalizeWorldState(world).units.map((unit) => normalizeString(unit.id)).filter(Boolean));
+  // The scenario's own unit types (runtime/unitTypes.js) a spawn may name, and who may field each.
+  const scenarioUnitTypes = normalizeUnitTypes(world?.unitTypes);
+  let unitTypeOwnerAliases = null;
   const generatedPolities = [];
   for (const { impacts } of containers) generatedPolities.push(...normalizeArray(impacts?.polityChanges));
 
@@ -8351,6 +8367,25 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
           if (strict) return `${operationPath}.unit must have nonblank name and ownerCode values.`;
           drop(path, "a unit spawn was dropped — it had no name or no ownerCode, so no formation appeared.", "unitNotRaised");
           continue;
+        }
+        // One of the scenario's own unit types, by its name (runtime/unitTypes.js): the unit is of that type's base
+        // kind. One its owner may not field is not raised, and the player and the model are told why; never a retry,
+        // so the skip stays one request. A name the scenario has no type of is no type: an ordinary unit of its kind.
+        const typeRef = normalizeString(operation.unit?.unitType);
+        if (typeRef) {
+          const unitType = findUnitType(scenarioUnitTypes, typeRef);
+          unitTypeOwnerAliases ??= buildOwnerAliasMap(world?.polityOverrides);
+          const fielder = canonicalOwnerName(normalizeString(operation.unit.ownerCode), unitTypeOwnerAliases);
+          if (!unitType) {
+            delete operation.unit.unitType;
+          } else if (!mayFieldUnitType(unitType, fielder)) {
+            const raised = normalizeString(operation.unit.name);
+            drop(path, `"${raised}" was not raised — ${fielder} cannot field the unit type ${unitType.name}; only ${unitType.owners.join(", ")} can.`, "unitTypeNotFielded", { name: raised, owner: fielder, type: unitType.name });
+            continue;
+          } else {
+            operation.unit.unitType = unitType.name;
+            operation.unit.type = unitType.base;
+          }
         }
         const spawnedId = normalizeString(operation.unit?.id);
         if (spawnedId && unitIds.has(spawnedId)) {
@@ -11831,7 +11866,7 @@ const runWorldBreadthRepair = async ({
       userMessage,
       signal,
       taskKey: "worldBreadthRepair",
-      tool: forActiveFeatures(getGameplayTool("jumpForward")),
+      tool: withUnitTypeNames(forActiveFeatures(getGameplayTool("jumpForward")), unitTypeNamesOf(bundle?.world)),
       onRequest,
     });
 
@@ -17833,7 +17868,7 @@ const runSceneReview = async ({ context, merged, signal, state, agentKind = "" }
   const sharedBlocks = [];
   const addJob = async (job, variables) => {
     const { systemPrompt } = await buildTaskSystemPrompt(job.taskKey, { variables, lookups: null, reminders: false });
-    jobs.push({ ...job, prompt: systemPrompt, schema: withoutFeaturesOff(getGameplayTool(job.taskKey))?.schema });
+    jobs.push({ ...job, prompt: systemPrompt, schema: withUnitTypeNames(withoutFeaturesOff(getGameplayTool(job.taskKey)), unitTypeNamesOf(bundle.world))?.schema });
     for (const value of Object.values(variables ?? {})) if (typeof value === "string") sharedBlocks.push(value);
   };
 

@@ -82,6 +82,8 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "attrition",
   // How the scenario's wars are fought (runtime/warSettings.js): the scenario's own rules.
   "warSettings",
+  // And its own unit types (runtime/unitTypes.js): what a dragon is, every player may know.
+  "unitTypes",
   // What the scenario draws on its map for war (runtime/warGeography.js): there for all to see.
   "terrainAreas",
   "fortifications",

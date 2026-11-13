@@ -341,6 +341,9 @@ const unitSchema = {
       description: "Unit type.",
       enum: ["infantry", "armor", "air", "naval", "artillery", "garrison"],
     },
+    // One of the scenario's own unit types (runtime/unitTypes.js), by its name. Read in every answer; shown to the
+    // model only where the scenario has some, as an enum of their names (withUnitTypeNames below).
+    unitType: textSchema("Only for one of the scenario's unit types: its name."),
     ownerCode: nonEmptyTextSchema("Owning polity's FULL country name (\"Spain\"), never a country code."),
     strength: {
       type: "integer",
@@ -1080,6 +1083,19 @@ const JUMP_COMPACT_IMPACT_DESCRIPTIONS = new Set([
   "groupOps",
 ]);
 
+// A time skip's unit operations as it is SENT them: a spawned unit without unitType, which only a scenario with unit
+// types of its own is offered (withUnitTypeNames), so every other is sent the contract it always was.
+const { unitType: _unitTypeNotSent, ...sentUnitProperties } = unitSchema.properties;
+const sentUnitOpsSchema = (schema) => ({
+  ...schema,
+  items: {
+    ...schema.items,
+    anyOf: schema.items.anyOf.map((branch) => (branch.properties?.op?.enum?.[0] === "spawn"
+      ? { ...branch, properties: { ...branch.properties, unit: { ...branch.properties.unit, properties: sentUnitProperties } } }
+      : branch)),
+  },
+});
+
 const jumpImpactsSchema = {
   ...impactsSchema,
   properties: Object.fromEntries(
@@ -1087,7 +1103,7 @@ const jumpImpactsSchema = {
       .filter(([key]) => key !== "projectOps")
       .map(([key, schema]) => [
         key,
-        JUMP_COMPACT_IMPACT_DESCRIPTIONS.has(key) ? compactJumpImpactSchema(schema) : schema,
+        JUMP_COMPACT_IMPACT_DESCRIPTIONS.has(key) ? compactJumpImpactSchema(schema) : key === "unitOps" ? sentUnitOpsSchema(schema) : schema,
       ]),
   ),
 };
@@ -1156,9 +1172,11 @@ const foldedProjectOpsSchema = compactJumpImpactSchema({
 
 // What the validation schema accepts under an event's impacts: the lean jump
 // impacts, and the board's op whole, so a folded answer and a habit both pass.
+// (And the unit operations whole: a unit raised of one of the scenario's own
+// unit types names it, though the contract only offers it where there are some.)
 const jumpAnswerImpactsSchema = {
   ...jumpImpactsSchema,
-  properties: { ...jumpImpactsSchema.properties, projectOps: impactsSchema.properties.projectOps },
+  properties: { ...jumpImpactsSchema.properties, projectOps: impactsSchema.properties.projectOps, unitOps: impactsSchema.properties.unitOps },
 };
 
 // The field a folded skip's agents' reports come back in (gameplay.js).
@@ -3830,6 +3848,33 @@ export const withWarParts = (tool, { air = true, navies = true } = {}) => (air &
     return true;
   },
 }));
+
+// The scenario's own unit types (runtime/unitTypes.js): a spawned unit's unitType offered as their names, one of
+// which it may be; and none at all where the scenario has none, so the model is sent what it always was. Only the tool
+// shown to the model changes: the payload is read against the full schema, and the engine checks the name
+// (gameplay.js validateGeneratedWorldChanges, gameState.js applyUnitOpBatch).
+const UNIT_TYPE_FIELD = "unitType";
+// (A unit to create is told by its own fields: its owner, strength and make-up.)
+const isUnitProperties = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value)
+  && Boolean(value.ownerCode) && Boolean(value.strength) && Boolean(value.composition);
+const offerUnitTypes = (schema, names) => {
+  if (Array.isArray(schema)) return schema.map((entry) => offerUnitTypes(entry, names));
+  if (!schema || typeof schema !== "object") return schema;
+  const out = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === "properties" && isUnitProperties(value)) {
+      const { [UNIT_TYPE_FIELD]: _was, ...rest } = value;
+      out.properties = { ...rest, [UNIT_TYPE_FIELD]: { ...unitSchema.properties[UNIT_TYPE_FIELD], enum: names } };
+    } else out[key] = offerUnitTypes(value, names);
+  }
+  return out;
+};
+export const withUnitTypeNames = (tool, names = []) => {
+  const offered = [...new Set((Array.isArray(names) ? names : []).map((name) => String(name ?? "").trim()).filter(Boolean))];
+  if (!tool?.schema) return tool;
+  if (offered.length === 0) return pruneTool(tool, { drop: (field, owner) => field === UNIT_TYPE_FIELD && owner === "unit" });
+  return { ...tool, schema: offerUnitTypes(tool.schema, offered) };
+};
 
 // Fronts on for a game (AI/frontsGate.js): a time skip's tool with the
 // battlefields' orders in its contract. Any other tool, and a skip's tool that
