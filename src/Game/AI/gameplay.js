@@ -154,6 +154,7 @@ import {
 } from "./pregameBootstrapCoverage.js";
 import { validateGameMasterRequestedPuppetCompleteness, requestExplicitlyInstallsPuppet } from "./gameMasterRequestCompleteness.js";
 import { GAME_MASTER_MODES, GM_AUTO_MODE, validateGameMasterModeSelection } from "./gameMasterAutoMode.js";
+import { STATS_DEMOGRAPHIC_TAGS, STATS_ECONOMIC_TAGS, eventConcernsTarget, eventHasAnyTag } from "./statsEventEvidence.js";
 import { GAME_MASTER_EDIT_TOOL, applyGameMasterPreviewEdits, validateGameMasterEditResponse } from "./gameMasterPreviewEdit.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
 import {
@@ -10402,8 +10403,6 @@ const STATS_ECONOMIC_EVENT_SCAN_LIMIT = 64;
 const STATS_ECONOMIC_EVIDENCE_LIMIT = 12;
 const STATS_ACCOUNTED_EVENT_LIMIT = 64;
 
-const ECONOMIC_EVENT_PATTERN = /\b(?:tax|taxation|levy|budget|fiscal|deficit|surplus|debt|bond|loan|credit|bank|banking|currency|monetary|inflation|unemployment|recession|depression|boom|growth|trade|tariff|customs|sanction|blockade|shortage|harvest|famine|food|coal|oil|energy|industry|industrial|factory|rail|railway|infrastructure|subsid|spending|appropriation|finance|financial|wage|strike|mobiliz|war finance|occupation|annex|cession|reparat|investment|export|import)\b/i;
-
 const stableStatsHash = (value) => {
   let hash = 2166136261;
   const text = String(value ?? "");
@@ -12118,63 +12117,25 @@ const statsElapsedYears = (fromDate, toDate) => {
   return (to - from) / (365.2425 * 86400000);
 };
 
-const statsPolityAliases = (world, canonicalName) => {
-  const values = new Set([normalizeString(canonicalName)]);
-  const target = normalizeString(canonicalName).toLowerCase();
-  for (const [key, polity] of Object.entries(world?.polityOverrides || {})) {
-    const candidates = [key, polity?.code, polity?.name, ...normalizeArray(polity?.aliases)]
-      .map(normalizeString)
-      .filter(Boolean);
-    const belongs = candidates.some((candidate) => {
-      const resolved = canonicalStatsPolity(candidate, world);
-      return normalizeString(resolved).toLowerCase() === target;
-    });
-    if (belongs) candidates.forEach((candidate) => values.add(candidate));
-  }
-  return [...values].filter(Boolean);
-};
-
-const STATS_GENERIC_POLITY_WORDS = new Set([
-  "empire", "kingdom", "republic", "state", "states", "federation", "federal",
-  "union", "united", "people", "peoples", "grand", "duchy", "commonwealth",
-]);
-
-const statsTextMentionsTarget = (textValue, aliases) => {
-  const text = normalizeString(textValue).toLowerCase();
-  if (!text) return false;
-
-  for (const alias of aliases) {
-    const phrase = normalizeString(alias).toLowerCase();
-    if (phrase.length >= 4 && text.includes(phrase)) return true;
-    const tokens = phrase
-      .replace(/[^\p{L}\p{N}\s-]/gu, " ")
-      .split(/[\s-]+/)
-      .filter((token) => token.length >= 5 && !STATS_GENERIC_POLITY_WORDS.has(token));
-    for (const token of tokens) {
-      if (text.includes(token)) return true;
-      // Conservative adjective/name-family bridge: Germany/German,
-      // Russia/Russian, Austria/Austrian, Serbia/Serbian, etc.
-      if (token.length >= 6 && text.includes(token.slice(0, 5))) return true;
-    }
-  }
-  return false;
+// Whether the country a Stats sheet is for is `token`: an exact identity check
+// on a name the records write (canonicalStatsPolity), never a search of prose.
+const statsTargetTest = (world, target) => {
+  const targetKey = normalizeString(target).toLowerCase();
+  return (token) => Boolean(normalizeString(token))
+    && normalizeString(canonicalStatsPolity(token, world)).toLowerCase() === targetKey;
 };
 
 const buildTargetEconomicEvidence = ({ bundle, statCode, previous, normalizedWorld = null }) => {
   const world = normalizedWorld || normalizeWorldState(bundle?.world);
   const target = canonicalStatsPolity(statCode, world) || normalizeString(statCode);
-  const targetKey = target.toLowerCase();
-  const aliases = statsPolityAliases(world, target);
   const accounted = new Set(
     normalizeArray(previous?.continuity?.accountedEventIds)
       .map(normalizeString)
       .filter(Boolean),
   );
 
-  const sameTarget = (token) => {
-    const resolved = canonicalStatsPolity(token, world);
-    return normalizeString(resolved).toLowerCase() === targetKey;
-  };
+  const sameTarget = statsTargetTest(world, target);
+  const playerIsTarget = sameTarget(bundle?.game?.country);
 
   const recent = normalizeEvents(bundle?.events).slice(-STATS_ECONOMIC_EVENT_SCAN_LIMIT);
   const relevant = [];
@@ -12182,20 +12143,18 @@ const buildTargetEconomicEvidence = ({ bundle, statCode, previous, normalizedWor
   for (const event of recent) {
     const id = normalizeString(event?.id);
     if (!id) continue;
-    const prose = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
     const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
 
     const statImpact = normalizeArray(impacts.polityChanges).some((change) =>
       change?.stats && sameTarget(change?.code || change?.name));
     const legalTerritoryImpact = normalizeArray(impacts.regionTransfers).some((transfer) =>
       sameTarget(transfer?.fromCode) || sameTarget(transfer?.toCode));
-    const controlImpact = normalizeArray(impacts.regionControlOps).some((op) =>
-      sameTarget(op?.fromCode) || sameTarget(op?.toCode) || sameTarget(op?.actorCode) || sameTarget(op?.claimantCode));
-    const combatant = normalizeArray(event?.combatants).some(sameTarget);
-    const mentioned = statsTextMentionsTarget(prose, aliases);
-    const economicCue = ECONOMIC_EVENT_PATTERN.test(prose);
+    // An economic, disaster or war event the country is a party to, by the
+    // event's own tags and structure (statsEventEvidence.js).
+    const economicEvent = eventHasAnyTag(event, STATS_ECONOMIC_TAGS)
+      && eventConcernsTarget(event, sameTarget, { playerIsTarget });
 
-    if (!(statImpact || legalTerritoryImpact || (economicCue && (mentioned || controlImpact || combatant)))) {
+    if (!(statImpact || legalTerritoryImpact || economicEvent)) {
       continue;
     }
 
@@ -12344,7 +12303,6 @@ const STATS_CALIBRATION_PREGAME_EVENT_LIMIT = 12;
 const STATS_CALIBRATION_CAMPAIGN_EVENT_LIMIT = 16;
 const STATS_CALIBRATION_HISTORY_LIMIT = 8;
 const STATS_CALIBRATION_CONSOLIDATED_LIMIT = 10;
-const STATS_DEMOGRAPHIC_CANON_PATTERN = /\b(?:war|battle|casualt|killed|deaths?|mortality|epidem|pandemic|disease|famine|starvation|refuge|migration|emigration|immigration|expulsion|deport|population|birth|annex|cession|partition|occupation|independence|secession|mobiliz|demobiliz|reconstruction|coloniz|settlement)\b/i;
 
 const compactStatsCalibrationEvent = (event) => {
   const date = normalizeString(event?.date) || "undated";
@@ -12359,16 +12317,12 @@ const compactStatsCalibrationEvent = (event) => {
 const buildStatsPopulationCalibrationCanon = ({ bundle, statCode, normalizedWorld = null } = {}) => {
   const world = normalizedWorld || normalizeWorldState(bundle?.world);
   const target = canonicalStatsPolity(statCode, world) || normalizeString(statCode);
-  const targetKey = target.toLowerCase();
-  const aliases = statsPolityAliases(world, target);
   const startDate = normalizeString(bundle?.game?.startDate || bundle?.game?.gameDate);
   const currentDate = normalizeString(bundle?.game?.gameDate || startDate);
   const events = normalizeEvents(bundle?.events);
 
-  const sameTarget = (token) => {
-    const resolved = canonicalStatsPolity(token, world);
-    return normalizeString(resolved).toLowerCase() === targetKey;
-  };
+  const sameTarget = statsTargetTest(world, target);
+  const playerIsTarget = sameTarget(bundle?.game?.country);
 
   const isBeforeStart = (event) => {
     if (normalizeString(event?.source).toLowerCase() === "pregame") return true;
@@ -12388,16 +12342,17 @@ const buildStatsPopulationCalibrationCanon = ({ bundle, statCode, normalizedWorl
   const campaignRelevant = events
     .filter((event) => !isBeforeStart(event))
     .filter((event) => {
-      const prose = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
       const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
       const directStats = normalizeArray(impacts.polityChanges).some((change) =>
         change?.stats && sameTarget(change?.code || change?.name));
       const territory = normalizeArray(impacts.regionTransfers).some((transfer) =>
         sameTarget(transfer?.fromCode) || sameTarget(transfer?.toCode));
       const combatant = normalizeArray(event?.combatants).some(sameTarget);
-      const mentioned = statsTextMentionsTarget(prose, aliases);
-      return directStats || territory || combatant || (mentioned && STATS_DEMOGRAPHIC_CANON_PATTERN.test(prose)) ||
-        STATS_DEMOGRAPHIC_CANON_PATTERN.test(prose) && /\b(?:pandemic|epidemic|global|worldwide)\b/i.test(prose);
+      // A war or a disaster the country is a party to, by the event's own tags
+      // and structure (statsEventEvidence.js).
+      const demographic = eventHasAnyTag(event, STATS_DEMOGRAPHIC_TAGS)
+        && eventConcernsTarget(event, sameTarget, { playerIsTarget });
+      return directStats || territory || combatant || demographic;
     })
     .slice(-STATS_CALIBRATION_CAMPAIGN_EVENT_LIMIT);
 
@@ -13837,16 +13792,17 @@ const generateScenarioCustomStatSheet = async ({
   // A saved custom sheet is canon, not a fresh opinion poll. The previous
   // provider path asked for every value on every Refresh, even if no native
   // evidence whatsoever had changed. Fingerprint only TARGET-relevant facts,
-  // never elapsed calendar time or unrelated countries' news.
-  const aliases = statsPolityAliases(worldAtStart, statCode);
-  const targetMatches = (text) => statsTextMentionsTarget(text, aliases);
+  // never elapsed calendar time or unrelated countries' news. A fact is the
+  // country's when a record names it as a party (statsEventEvidence.js), never
+  // when its name turns up in the record's text.
+  const sameTarget = statsTargetTest(worldAtStart, canonicalStatsPolity(statCode, worldAtStart) || normalizeString(statCode));
+  const playerIsTarget = sameTarget(bundle?.game?.country);
   const currentEvents = normalizeEvents(bundle?.events).filter((event) =>
     !event?.date || !currentDate || compareGameDates(event.date, currentDate) <= 0);
-  const relevantRecords = (rows) => normalizeArray(rows).filter((row) =>
-    targetMatches(JSON.stringify(row)));
+  const partyTo = (rows, partiesOf) => normalizeArray(rows).filter((row) => partiesOf(row).some(sameTarget));
   const political = getPoliticalProfile(worldAtStart, statCode);
   const polity = Object.entries(worldAtStart?.polityOverrides || {})
-    .filter(([key, value]) => targetMatches([key, value?.code, value?.name].join(" ")))
+    .filter(([key, value]) => [key, value?.code, value?.name].some(sameTarget))
     .map(([key, value]) => ({ key, name: value?.name, note: value?.note, tags: value?.tags, aliases: value?.aliases }));
   const sourceState = {
     polity,
@@ -13855,19 +13811,22 @@ const generateScenarioCustomStatSheet = async ({
     stability: political?.stability ?? null,
     domesticPressures: political?.domesticPressures ?? null,
     reputation: Object.entries(worldAtStart?.internationalReputation || {})
-      .filter(([key]) => targetMatches(key)),
-    wars: relevantRecords(worldAtStart?.wars),
-    agreements: relevantRecords(worldAtStart?.agreements),
-    relations: relevantRecords(worldAtStart?.relations),
-    projects: relevantRecords(worldAtStart?.projects).map((row) => ({
-      id: row?.id, title: row?.title, status: row?.status, progress: row?.progress, ownerCode: row?.ownerCode,
-    })),
+      .filter(([key]) => sameTarget(key)),
+    wars: partyTo(worldAtStart?.wars, (war) => [...normalizeArray(war?.sideA), ...normalizeArray(war?.sideB)]),
+    agreements: partyTo(worldAtStart?.agreements, (agreement) => normalizeArray(agreement?.parties)),
+    relations: partyTo(worldAtStart?.relations, (relation) => [relation?.a, relation?.b]),
+    // A Project is its owner's; one with no owner is the player's.
+    projects: normalizeArray(worldAtStart?.projects)
+      .filter((row) => (normalizeString(row?.ownerCode) ? sameTarget(row.ownerCode) : playerIsTarget))
+      .map((row) => ({
+        id: row?.id, title: row?.title, status: row?.status, progress: row?.progress, ownerCode: row?.ownerCode,
+      })),
   };
   const evidence = buildCustomStatContinuity({
     events: currentEvents,
     prior: previous?.continuity,
     currentState: sourceState,
-    targetMatches,
+    concernsTarget: (event) => eventConcernsTarget(event, sameTarget, { playerIsTarget }),
   });
   const decision = customStatRefreshDecision({
     previousValues,
