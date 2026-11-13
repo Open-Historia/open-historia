@@ -357,7 +357,7 @@ import {
   renamePolityInGame,
 } from "../../../server/polityRename.js";
 import { renderTemplateCached, staticPrefixEndOf } from "./promptLayout.js";
-import { buildDigestRequest, createRulesDigestMemory, digestIsDue, readDigestAnswer, rulesFingerprint, rulesForTask } from "./rulesDigest.js";
+import { buildDigestRequest, createRulesDigestMemory, digestIsDue, readDigestAnswer, rulesFingerprint, rulesForTask, shortenRulesElsewhere } from "./rulesDigest.js";
 import { attachAttemptOutcome, attachSkipTiming, finishAiRecord, normalizeParsedSummary } from "./telemetry.js";
 import {
   JSON_URLS,
@@ -1603,7 +1603,10 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (typeof variables.simulationRules === "string") {
     const digestOf = { taskKey, rules: variables.simulationRules, enabled: getMapSetting(MAP_SETTING_KEYS.rulesDigest), memory: rulesDigests };
     if (digestIsDue(digestOf)) scheduleRulesDigest(variables.simulationRules);
-    variables.simulationRules = rulesForTask(digestOf);
+    const given = rulesForTask(digestOf);
+    // The world summary writes the rules out too: not whole beside their digest.
+    shortenRulesElsewhere(variables, variables.simulationRules, given);
+    variables.simulationRules = given;
   }
   await nextTask();
   // The diplomatic slice is bounded to the player plus, for a chat task, the

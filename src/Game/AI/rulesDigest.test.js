@@ -14,6 +14,8 @@ import {
     readDigestAnswer,
     rulesFingerprint,
     rulesForTask,
+    RULES_ELSEWHERE_NOTE,
+    shortenRulesElsewhere,
 } from "./rulesDigest.js";
 import { MAP_SETTING_KEYS } from "../../runtime/mapSettings.js";
 
@@ -121,7 +123,7 @@ test("the setting is off unless switched on, and the rules are swapped where a t
     const from = gameplay.indexOf("const buildTemplateVariables = async");
     const build = gameplay.slice(from, gameplay.indexOf("canonicalWarContext", from));
     assert.match(build, /enabled: getMapSetting\(MAP_SETTING_KEYS\.rulesDigest\), memory: rulesDigests \};/);
-    assert.ok(build.indexOf("if (digestIsDue(digestOf)) scheduleRulesDigest(variables.simulationRules);") < build.indexOf("variables.simulationRules = rulesForTask(digestOf);"));
+    assert.ok(build.indexOf("if (digestIsDue(digestOf)) scheduleRulesDigest(variables.simulationRules);") < build.indexOf("const given = rulesForTask(digestOf);"));
     // Written in the background, once in a session for a text of rules.
     const schedule = gameplay.slice(gameplay.indexOf("const scheduleRulesDigest = "), gameplay.indexOf("const buildTemplateVariables = async"));
     assert.match(schedule, /if \(digestsAsked\.has\(fingerprint\)\) return;/);
@@ -132,4 +134,23 @@ test("each of the small tasks is a task whose template carries the rules", () =>
     for (const taskKey of DIGEST_TASKS) {
         assert.match(String(prompts.tasks[taskKey]), /HISTORICAL_PRESET_SIMULATION_RULES|simulationRules/, taskKey);
     }
+});
+
+test("a task given the digest does not get the rules whole through another variable", () => {
+    const whole = `${"RULE ".repeat(3000)}END`;
+    const given = "(in short)\nBe plausible.";
+    const variables = { simulationRules: whole, worldSummary: `Difficulty: medium\nSimulation rules:  ${whole}\n\nWorld: quiet.`, recentEvents: "none", round: 3 };
+    assert.equal(shortenRulesElsewhere(variables, `  ${whole}\n`, given), 1);
+    assert.equal(variables.worldSummary, `Difficulty: medium\nSimulation rules:  ${RULES_ELSEWHERE_NOTE}\n\nWorld: quiet.`);
+    assert.equal(variables.simulationRules, whole, "the caller sets that one");
+    assert.equal(variables.recentEvents, "none");
+
+    const kept = { worldSummary: `Simulation rules: ${whole}` };
+    assert.equal(shortenRulesElsewhere(kept, whole, whole), 0, "rules given whole are left whole everywhere");
+    assert.equal(kept.worldSummary, `Simulation rules: ${whole}`);
+    assert.equal(shortenRulesElsewhere({ worldSummary: "Simulation rules: short" }, "short", given), 0, "short rules are never digested");
+    assert.equal(shortenRulesElsewhere(null, whole, given), 0);
+
+    const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+    assert.match(source, /const given = rulesForTask\(digestOf\);\r?\n[^\n]*\r?\n\s*shortenRulesElsewhere\(variables, variables\.simulationRules, given\);\r?\n\s*variables\.simulationRules = given;/);
 });

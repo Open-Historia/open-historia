@@ -95,6 +95,25 @@ export const rulesForTask = ({ taskKey = "", rules = "", enabled = false, memory
         : textOf(rules);
 };
 
+// The rules also reach a prompt written out inside other variables (the world
+// summary's "Simulation rules:" line, promptContext.js). A task given the
+// digest was still sent them whole that way: 158,113 characters of system
+// prompt with a 4,172-character digest at its head (2026-11-13). So where the
+// digest is given, every other variable that holds the whole text has it
+// replaced by a line that says where the rules are. Returns how many were changed.
+export const RULES_ELSEWHERE_NOTE = "(the scenario's rules are given in short elsewhere in this prompt)";
+export const shortenRulesElsewhere = (variables, whole, given) => {
+    const text = textOf(whole).trim();
+    if (!variables || typeof variables !== "object" || text.length < MIN_RULES_CHARS || textOf(given) === textOf(whole)) return 0;
+    let changed = 0;
+    for (const [key, value] of Object.entries(variables)) {
+        if (key === "simulationRules" || typeof value !== "string" || !value.includes(text)) continue;
+        variables[key] = value.split(text).join(RULES_ELSEWHERE_NOTE);
+        changed++;
+    }
+    return changed;
+};
+
 // Is a digest of these rules still to be written?
 export const digestIsDue = ({ taskKey = "", rules = "", enabled = false, memory = null } = {}) =>
     digests(taskKey, rules, enabled) && !(memory?.get(rulesFingerprint(rules)) ?? "");
