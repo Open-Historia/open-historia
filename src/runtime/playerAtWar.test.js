@@ -49,7 +49,8 @@ test("nobody playing, or no ledger, is no war", () => {
 test("the game's screen plays the at-war music for a war in the ledger, battlefield or not", () => {
   const screen = read("../Game/GameUI/main.jsx");
   assert.ok(screen.includes("const inWar = useRuntimeState(\"world\", (world) => playerAtWar(world?.wars, playerCountry), playerCountry);"));
-  assert.ok(screen.includes("atWar: atWar || inWar, war: battlefieldShown });"));
+  // The war room shown plays the battle music only when there is a war: forces built up in peace have none.
+  assert.ok(screen.includes("atWar: atWar || inWar, war: battlefieldShown && (atWar || inWar) });"));
   // The war room's button is still the battlefields' alone.
   // (Battlefields being on is the Wars feature's Fronts switch.)
   assert.ok(screen.includes("const atWar = hasFronts && fightingIn(warFronts);"));
