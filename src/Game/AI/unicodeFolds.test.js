@@ -62,11 +62,11 @@ const FOLDS = [
     ["src/Game/AI/nativeDiplomaticDirector.js", "pregameTitleKey", { clean: cleaned }, true],
     ["src/Game/AI/nativeWarLedger.js", "pregameWarTitleKey", { normalizeString: trimmed }, true],
     ["src/Game/AI/nativeWorldDirector.js", "pregameStorylineTitleKey", { normalizeString: trimmed }, true],
-    // (nativeWorldDirector.js storylineLinkText and nativeWorldIntegrity.js
-    // normalizeInstitutionAuthorityPhrase went on 2026-11-13 with what they
-    // fed: a storyline is tied to its events by their ids, and an institution
-    // is found by its exact name, case and spacing aside.)
-    ["src/Game/AI/nativeTimelineCurator.js", "normalizeText", { normalizeString: trimmed }, true],
+    // (nativeWorldDirector.js storylineLinkText, nativeWorldIntegrity.js
+    // normalizeInstitutionAuthorityPhrase and nativeTimelineCurator.js
+    // normalizeText went on 2026-11-13 with what they fed: a storyline is tied
+    // to its events by their ids, an institution is found by its exact name,
+    // case and spacing aside, and the curator reads the analyst's own fields.)
     ["src/Game/AI/pregameBootstrapCompiler.js", "titleKey", { lower: lowered }, true],
     ["src/Game/AI/lookupTools.js", "foldForSearch", {}, true],
     ["src/Game/AI/playerFocus.js", "fold", { asText: trimmed }, true],
@@ -153,7 +153,7 @@ test("a word keeps its marks: a vowel sign or a voicing mark does not cut it in 
     // Devanagari and Thai write vowels as marks on a consonant, Arabic may, and
     // decomposed kana carry their voicing as one. A fold that kept letters and
     // dropped marks would hand back a string of single consonants.
-    const { now } = folds.find((fold) => fold.label.startsWith("normalizeText "));
+    const { now } = folds.find((fold) => fold.label.startsWith("normalizePlaceText "));
     assert.equal(now("शिमला समझौता"), "शिमला समझौता");
     assert.equal(now("สนธิสัญญา"), "สนธิสัญญา");
     assert.equal(now("ポーツマス条約").split(" ").length, 1);

@@ -175,6 +175,7 @@ const priorCanal = [{
   date: "1930-04-01",
   title: "Ruritania rejects the Bordurian canal proposal",
   description: "The cabinet formally rejects Borduria's proposal for a joint canal authority, citing sovereignty concerns.",
+  storylineIds: ["canal-dispute"],
 }];
 
 const curatorCandidates = [
@@ -183,13 +184,7 @@ const curatorCandidates = [
     date: "1930-04-20",
     title: "Ruritania again rejects the Bordurian canal proposal",
     description: "The cabinet formally rejects Borduria's proposal for a joint canal authority once more, citing the same sovereignty concerns.",
-    impacts: {},
-  },
-  {
-    id: "c1",
-    date: "1930-04-01",
-    title: "Ruritania rejects the Bordurian canal proposal",
-    description: "The cabinet formally rejects Borduria's proposal for a joint canal authority, citing sovereignty concerns.",
+    storylineIds: ["canal-dispute"],
     impacts: {},
   },
   {
@@ -209,7 +204,7 @@ const curatorJudgment = (index, overrides = {}) => ({
   matchedPriorIndexes: [],
   materiallyNewDimensions: ["something"],
   recurrenceMatters: false,
-  newTriggerAfterPriorPosture: "none",
+  newTriggerAfterPriorPosture: "",
   worthwhile: true,
   substantive: true,
   personalityTexture: false,
@@ -232,7 +227,7 @@ const curateWith = (firstJudgment) => curateGeneratedEventsWithHidden({
   mode: "jump",
   analyzeBatch: async () => ({
     payload: {
-      judgments: [firstJudgment, curatorJudgment(1), curatorJudgment(2)],
+      judgments: [firstJudgment, curatorJudgment(1)],
       recentHistoryMechanical: false,
       storylineSaturation: [],
       underrepresentedDomains: [],
@@ -240,7 +235,9 @@ const curateWith = (firstJudgment) => curateGeneratedEventsWithHidden({
   }),
 });
 
-test("an event the curator calls redundant is Hidden, and an exact duplicate is withheld", async () => {
+// A word-for-word repeat of the record never reaches the curator: the record's
+// own dedupe (runtime/eventDedup.js) takes it out first, and files it.
+test("an event the curator calls redundant is Hidden", async () => {
   const { events, hidden } = await curateWith(curatorJudgment(0, {
     verdict: "REDUNDANT",
     confidence: 0.95,
@@ -259,7 +256,7 @@ test("an unsupported reversal is rejected, never Hidden", async () => {
     verdict: "UNSUPPORTED_REVERSAL",
     confidence: 0.99,
     matchedPriorIndexes: [0],
-    newTriggerAfterPriorPosture: "none",
+    newTrigger: false,
   }));
   assert.deepEqual(events.map((event) => event.id), ["c2"]);
   assert.deepEqual(hidden, [], "a contradiction never happened, so the Board must never read it");

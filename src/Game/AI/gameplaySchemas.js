@@ -2853,7 +2853,7 @@ const curatorJudgmentSchema = {
     },
 
     newTriggerAfterPriorPosture: textSchema(
-      "New trigger explaining an apparent reversal, or 'none'.",
+      "New trigger explaining an apparent reversal; empty when there is none.",
     ),
 
     worthwhile: {
@@ -2902,6 +2902,13 @@ const curatorJudgmentSchema = {
     reason: textSchema(
       "Short explanation of the judgment.",
     ),
+
+    // kw7: read in place of a "none" written in newTriggerAfterPriorPosture
+    // (nativeTimelineCurator.js noNewTrigger). Optional, and last.
+    newTrigger: {
+      type: "boolean",
+      description: "Whether a new trigger explains an apparent reversal.",
+    },
   },
 
   required: [

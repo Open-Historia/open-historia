@@ -1,27 +1,34 @@
 /*! Open Historia — native timeline curator. */
 // The model may suggest that a freshly generated event is redundant or not
 // worth a timeline slot. Nothing is deleted on that opinion alone: the checks
-// below verify it against the campaign's own history (retrieved prior matches,
-// hard mechanical consequences, storyline saturation) before an event is
-// dropped, and every failure of the analysis keeps everything. The default is
-// KEEP.
+// below hold it to the record's own structure (the prior events it cites must
+// share a storyline with the event, hard mechanical consequences always keep
+// an event, storyline saturation is the analyst's own count) before an event
+// is dropped, and every failure of the analysis keeps everything. The default
+// is KEEP.
+//
+// Nothing here reads an event's words. The analyst reads them, in whatever
+// language the game is played in, and answers in fields: verdict, confidence,
+// matchedPriorIndexes, the booleans below. The engine reads those, the event's
+// tags and operations, and the storyline ids the events carry. It used to read
+// English word lists too (process words, modal verbs, harm words, military
+// words) and compared events by their shared words: none of that ever fired in
+// another language, and in English it misfired on negation and synonyms, so
+// the same world was curated differently by language.
 
-const VERSION = "curator-1";
+const VERSION = "curator-2";
 
 const CONFIG = Object.freeze({
-  historyLookbackEvents: 80,
-  priorMatchesPerCandidate: 5,
+  // The prior events the analyst is shown, and the only ones it may cite.
+  priorHistoryWindow: 50,
 
   redundancyConfidenceFloor: 0.85,
-  groundedStrongSimilarity: 0.40,
-  groundedModerateSimilarity: 0.28,
-  groundedModerateCount: 2,
   reversalDropConfidence: 0.97,
 
   saturationHardCount: 4,
   nativeProcessFillerConfidenceFloor: 0.82,
   saturatedIncrementalConfidenceFloor: 0.82,
-  saturatedRoutineMilitaryConfidenceFloor: 0.80,
+  routineMilitaryConfidenceFloor: 0.80,
 
   lowValueIncrementalConfidenceFloor: 0.88,
   lowValueIncrementalMinimumPriorCount: 2,
@@ -43,26 +50,21 @@ const cloneValue = (value) => {
   }
 };
 
-// ---- text helpers -----------------------------------------------------------
-
-const eventText = (event) =>
-  `${normalizeString(event?.title)}\n${normalizeString(event?.description)}`.trim();
-
-// The letters, marks and digits of every script are kept. Folded to a-z0-9, an
-// event written in Cyrillic, Arabic or Chinese was nothing but the digits in
-// it: two different events of one day that each named the year were "the same
-// text", a storyline's name was no key at all, and none of them had a word to
-// be matched by. ASCII text reads as it always did.
-const normalizeText = (text) =>
-  normalizeString(text)
+// The analyst names a storyline in its judgment and again in its saturation
+// rows; the two are matched as written, with case and spacing folded and
+// nothing else.
+const labelKey = (value) =>
+  normalizeString(value)
+    .normalize("NFKC")
     .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/\s+/g, " ");
 
-const storylineKey = (value) => normalizeText(value);
+// An event's category tags (runtime/eventTags.js), matched exactly.
+const hasTag = (event, tag) =>
+  asArray(event?.tags).some((entry) => normalizeString(entry).toLowerCase() === tag.toLowerCase());
+
+const storylineIdsOf = (event) =>
+  asArray(event?.storylineIds).map(normalizeString).filter(Boolean);
 
 // ---- event summaries --------------------------------------------------------
 
@@ -124,431 +126,85 @@ const structuredImpactReasons = (event) => {
   return result;
 };
 
-// ---- process framing --------------------------------------------------------
-// this does not mean "drop it". it means a meeting/review/etc has to prove
-// that something actually happened.
-
-const hasProcessFrameCue = (event) => {
-  const text = normalizeText(eventText(event));
-
-  return /\b(?:meet(?:s|ing)?|conven(?:e|es|ed|ing)|debat(?:e|es|ed|ing)|review(?:s|ed|ing)?|consult(?:s|ed|ing|ation|ations)?|conferenc(?:e|es)|session|stud(?:y|ies|ied|ying)|hearing|negotiat(?:e|es|ed|ing|ion|ions)|discuss(?:es|ed|ing|ion|ions)?)\b/.test(
-    text,
-  );
-};
-
-const hasNativeProcessFrameCue = (event) => {
-  if (hasProcessFrameCue(event)) return true;
-
-  const text = normalizeText(eventText(event));
-
-  return /\b(?:inspect(?:s|ed|ing|ion|ions)?|notification|notifications|notif(?:y|ies|ied|ying)|delegation|delegations|plenary|working group|technical commission|fact finding|factfinding)\b/.test(
-    text,
-  );
-};
-
-// ---- outcome grounding ------------------------------------------------------
-// the analyst is allowed to quote a result, but we're checking that the quote
-// is really in the native event and isn't just "plans to do x eventually".
-
-// ---- vague process progress -------------------------------------------------
-// "we made progress" is not a historical state transition.
-// it may be true, but without a concrete agreement/decision/result it does not
-// rescue an otherwise process-only event.
-
-const isVagueProcessOutcomeEvidence = (evidence) => {
-  const text = normalizeText(evidence);
-
-  if (!text) return false;
-
-  return /\b(?:make|makes|made|making)\s+(?:tangible\s+|significant\s+|substantial\s+|meaningful\s+)?progress\b|\b(?:talks?|discussions?|negotiations?)\s+(?:advance|advances|advanced|progress|progresses|progressed|continue|continues|continued)\b|\b(?:advance|advances|advanced)\s+(?:the\s+)?(?:talks?|discussions?|negotiations?)\b|\b(?:narrow|narrows|narrowed)\s+(?:the\s+)?(?:gap|gaps|difference|differences)\b|\bconstructive\s+(?:talks?|discussions?|negotiations?)\b|\bcautious\s+optimism\b|\bpositive\s+(?:step|movement|progress)\b|\bmove(?:s|d)?\s+closer\s+to\s+(?:agreement|accord|settlement)\b/.test(
-    text,
-  );
-};
-
-
-const isProspectiveOutcomeEvidence = (event, evidence) => {
-  const prose = normalizeText(eventText(event));
-  const quote = normalizeText(evidence);
-
-  if (!prose || !quote) return false;
-
-  if (
-    /^(?:to\b|in order to\b|aim(?:s|ed|ing)? to\b|seek(?:s|ed|ing)? to\b|plan(?:s|ned|ning)? to\b|intend(?:s|ed|ing)? to\b|expect(?:s|ed|ing)? to\b|scheduled to\b|set to\b|will\b|would\b|could\b|may\b|might\b|should\b)/.test(
-      quote,
-    )
-  ) {
-    return true;
-  }
-
-  const indexes = [];
-  let from = 0;
-
-  while (from < prose.length) {
-    const index = prose.indexOf(quote, from);
-
-    if (index === -1) break;
-
-    indexes.push(index);
-    from = index + Math.max(1, quote.length);
-  }
-
-  for (const index of indexes) {
-    const prefix = prose
-      .slice(Math.max(0, index - 96), index)
-      .trimEnd();
-
-    if (
-      /(?:\bin order to|\bto|\baim(?:s|ed|ing)? to|\bseek(?:s|ed|ing)? to|\bplan(?:s|ned|ning)? to|\bintend(?:s|ed|ing)? to|\bexpect(?:s|ed|ing)? to|\bscheduled to|\bset to|\bwill|\bwould|\bcould|\bmay|\bmight|\bshould)\s*$/.test(
-        prefix,
-      )
-    ) {
-      return true;
-    }
-  }
-
-  return false;
-};
-
-// ---- recurrence -------------------------------------------------------------
-// repeated actual incidents may matter precisely because they keep happening.
-// this is not a generic blacklist; it protects material recurrence from the
-// "yeah yeah same storyline" filter.
-
-const MATERIAL_RECURRENCE_TERM_RE =
-  /\b(?:incident|incidents|clash|clashes|skirmish|skirmishes|strike|strikes|protest|protests|riot|riots|unrest|detention|detentions|arrest|arrests|sanction|sanctions|embargo|blockade|shortage|shortages|disruption|disruptions|breakdown|breakdowns|failure|failures|casualty|casualties|killed|wounded|violence|violent|mutiny|mutinies|default|bankruptcy|bankruptcies|epidemic|outbreak|sabotage|collision|accident|losses|walkout|walkouts|shutdown|suspension|withdrawal)\b/g;
-
-const recurrenceCueIsNegated = (text, cueIndex) => {
-  const prefix = text
-    .slice(Math.max(0, cueIndex - 72), cueIndex)
-    .trimEnd();
-
-  return /(?:\bwithout|\bno|\bnot|\bneither|\babsence of|\bfree of|\bavoided|\baverted|\bprevented)(?:\s+[a-z0-9]+){0,5}$/.test(
-    prefix,
-  );
-};
-
-export const hasMaterialRecurrenceCue = (event) => {
-  const text = normalizeText(eventText(event));
-  if (!text) return false;
-
-  MATERIAL_RECURRENCE_TERM_RE.lastIndex = 0;
-  let match;
-
-  while ((match = MATERIAL_RECURRENCE_TERM_RE.exec(text))) {
-    if (!recurrenceCueIsNegated(text, match.index)) return true;
-  }
-
-  return false;
-};
-
-// Routine military recurrence is where saturated war storylines most often
-// game the generic recurrence safety valve: another probe/skirmish/artillery
-// exchange gets labelled "recurrence matters" despite changing nothing. This
-// cue never drops an event by itself; it only participates in the saturated,
-// high-confidence, incremental/no-qualitative-advance gate below.
-const hasRoutineMilitaryContinuationCue = (event) => {
-  const text = normalizeText(eventText(event));
-  if (!text) return false;
-
-  const routineMilitaryNoun =
-    /\b(?:artillery|barrage|bombardment|counter battery|counter-battery|patrol|patrols|probe|probing|skirmish|skirmishes|trench|trenches|frontline|frontlines|front line|front lines|entrenchment|entrenchments|cantonment|cantonments)\b/.test(text);
-
-  const continuationFrame =
-    /\b(?:continue|continues|continued|continuing|ongoing|periodic|sporadic|localized|localised|routine|again|renewed|exchange|exchanges|probe|probing|patrol|patrols|skirmish|skirmishes)\b/.test(text);
-
-  return routineMilitaryNoun && continuationFrame;
-};
-
-const hasStrongMilitaryConsequenceCue = (event) => {
-  const text = normalizeText(eventText(event));
-  if (!text) return false;
-
-  return /\b(?:breakthrough|breaks through|breach|breaches|captur(?:e|es|ed|ing)|seiz(?:e|es|ed|ing)|retreat|retreats|retreated|withdrawal|withdraws|withdrew|encircle|encirclement|surrender|surrenders|capitulat(?:e|es|ed|ion)|collapse|collapses|collapsed|destroy(?:s|ed|ing)|casualty|casualties|killed|wounded|losses|annihilat(?:e|es|ed|ion)|ceasefire|armistice|occupation|liberat(?:e|es|ed|ion)|control changes|changes control|front collapses|offensive begins|major offensive|general offensive)\b/.test(
-    text,
-  );
-};
-
-// ---- deterministic prior-history retrieval ---------------------------------
-
-const STOPWORDS = new Set([
-  "the",
-  "and",
-  "for",
-  "with",
-  "from",
-  "into",
-  "upon",
-  "under",
-  "over",
-  "after",
-  "before",
-  "through",
-  "between",
-  "among",
-  "that",
-  "this",
-  "these",
-  "those",
-  "their",
-  "there",
-  "while",
-  "where",
-  "which",
-  "following",
-  "recent",
-  "further",
-  "again",
-
-  "government",
-  "imperial",
-  "royal",
-  "ministry",
-  "authorities",
-  "officials",
-  "delegates",
-  "commission",
-  "committee",
-
-  "meeting",
-  "meets",
-  "convenes",
-  "reports",
-  "report",
-  "announces",
-  "announced",
-  "successfully",
-  "formal",
-  "formally",
-
-  "new",
-  "latest",
-  "current",
-  "continued",
-  "continuing",
-  "ongoing",
-  "effort",
-  "efforts",
-  "operation",
-  "operations",
-
-  "military",
-  "naval",
-  "army",
-  "navy",
-  "state",
-  "states",
-  "international",
-  "joint",
-  "bilateral",
-  "local",
-  "regional",
-]);
-
-const tokensForText = (text) =>
-  normalizeText(text)
-    .split(" ")
-    .filter((token) => token.length >= 4 && !STOPWORDS.has(token));
-
-const eventTokens = (event) => {
-  const title = tokensForText(event?.title);
-  const description = tokensForText(event?.description);
-
-  // titles count twice because they're usually the most reliable part.
-  return [...title, ...title, ...description];
-};
-
-const buildIdf = (events) => {
-  const documentFrequency = new Map();
-
-  for (const event of events) {
-    for (const token of new Set(eventTokens(event))) {
-      documentFrequency.set(
-        token,
-        (documentFrequency.get(token) || 0) + 1,
-      );
-    }
-  }
-
-  const total = Math.max(1, events.length);
-  const result = new Map();
-
-  for (const [token, count] of documentFrequency.entries()) {
-    result.set(
-      token,
-      Math.log((total + 1) / (count + 1)) + 1,
-    );
-  }
-
-  return result;
-};
-
-const weightedVector = (tokens, idf) => {
-  const termFrequency = new Map();
-
-  for (const token of tokens) {
-    termFrequency.set(
-      token,
-      (termFrequency.get(token) || 0) + 1,
-    );
-  }
-
-  const result = new Map();
-
-  for (const [token, count] of termFrequency.entries()) {
-    result.set(
-      token,
-      count * (idf.get(token) || 1),
-    );
-  }
-
-  return result;
-};
-
-const cosineSimilarity = (aTokens, bTokens, idf) => {
-  const a = weightedVector(aTokens, idf);
-  const b = weightedVector(bTokens, idf);
-
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-
-  for (const value of a.values()) {
-    normA += value * value;
-  }
-
-  for (const value of b.values()) {
-    normB += value * value;
-  }
-
-  if (!normA || !normB) return 0;
-
-  for (const [token, aValue] of a.entries()) {
-    const bValue = b.get(token);
-
-    if (bValue) {
-      dot += aValue * bValue;
-    }
-  }
-
-  return dot / Math.sqrt(normA * normB);
-};
-
-const retrievePriorMatches = (candidate, priorEvents) => {
+// ---- prior history ----------------------------------------------------------
+//
+// The prior events the analyst is shown, each with its absolute index. A
+// judgment may cite only these.
+const priorWindow = (priorEvents) => {
   const canonical = asArray(priorEvents);
-
-  const lookback = canonical.slice(
-    -CONFIG.historyLookbackEvents,
-  );
-
-  const idf = buildIdf([
-    ...lookback,
-    candidate,
-  ]);
-
-  const candidateTokens = eventTokens(candidate);
-
-  return lookback
-    .map((event, localIndex) => ({
-      priorIndex:
-        canonical.length -
-        lookback.length +
-        localIndex,
-
-      event,
-
-      similarity: cosineSimilarity(
-        candidateTokens,
-        eventTokens(event),
-        idf,
-      ),
-    }))
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, CONFIG.priorMatchesPerCandidate);
+  const shown = canonical.slice(-CONFIG.priorHistoryWindow);
+  const startIndex = canonical.length - shown.length;
+  return shown.map((event, offset) => ({ priorIndex: startIndex + offset, event }));
 };
 
-// ---- duplicate guard --------------------------------------------------------
-
-const deterministicNearDuplicate = (
-  candidate,
-  priorMatches,
-) => {
-  const candidateText = normalizeText(eventText(candidate));
-  const candidateDate = normalizeString(candidate?.date);
-
-  for (const match of priorMatches) {
-    if (
-      candidateDate &&
-      // A text with no letter or digit in it has no key, and repeats nothing.
-      candidateText &&
-      candidateDate === normalizeString(match.event?.date) &&
-      normalizeText(eventText(match.event)) === candidateText
-    ) {
-      return {
-        duplicate: true,
-        priorIndex: match.priorIndex,
-        similarity: 1,
-        reason: "same-date exact normalized duplicate",
-      };
-    }
-  }
-
-  return {
-    duplicate: false,
-  };
+// The prior events in the window that share a storyline with the candidate:
+// the record's own link between two events (event.storylineIds, written when
+// a skip's storyline updates name the events they move). This is what a
+// repeat is held to. It replaces a comparison of the two events' words, which
+// found nothing alike between a translated name and the canonical one.
+const storylinePriorsOf = (event, history) => {
+  const own = new Set(storylineIdsOf(event));
+  if (!own.size) return [];
+  return history.filter((row) => storylineIdsOf(row.event).some((id) => own.has(id)));
 };
 
 // ---- analyst packets --------------------------------------------------------
 
-const buildCandidatePacket = (event, index) => ({
-  index,
-  date: normalizeString(event?.date),
-  title: normalizeString(event?.title),
-  description: normalizeString(event?.description),
-  importance: normalizeString(event?.importance),
-  kind: normalizeString(event?.kind),
-  playerRelated: event?.playerRelated === true,
-  notable: event?.notable === true,
-
-  impacts: {
-    regionTransfers: cloneValue(
-      asArray(event?.impacts?.regionTransfers),
-    ),
-
-    polityChanges: cloneValue(
-      asArray(event?.impacts?.polityChanges),
-    ),
-
-    politicalActorOps: cloneValue(
-      asArray(event?.impacts?.politicalActorOps),
-    ),
-
-    unitOps: cloneValue(
-      asArray(event?.impacts?.unitOps),
-    ),
-
-    markerOps: cloneValue(
-      asArray(event?.impacts?.markerOps),
-    ),
-
-    createdChats: cloneValue(
-      asArray(event?.impacts?.createdChats),
-    ),
-  },
-});
-
-const buildPriorHistoryPacket = (priorEvents) => {
-  const canonical = asArray(priorEvents);
-  const window = canonical.slice(-50);
-  const startIndex = canonical.length - window.length;
-
-  return window.map((event, offset) => ({
-    priorIndex: startIndex + offset,
+const buildCandidatePacket = (event, index) => {
+  const storylineIds = storylineIdsOf(event);
+  const tags = asArray(event?.tags).map(normalizeString).filter(Boolean);
+  return {
+    index,
     date: normalizeString(event?.date),
     title: normalizeString(event?.title),
     description: normalizeString(event?.description),
     importance: normalizeString(event?.importance),
-  }));
+    kind: normalizeString(event?.kind),
+    playerRelated: event?.playerRelated === true,
+    notable: event?.notable === true,
+    ...(tags.length ? { tags } : {}),
+    ...(storylineIds.length ? { storylineIds } : {}),
+
+    impacts: {
+      regionTransfers: cloneValue(
+        asArray(event?.impacts?.regionTransfers),
+      ),
+
+      polityChanges: cloneValue(
+        asArray(event?.impacts?.polityChanges),
+      ),
+
+      politicalActorOps: cloneValue(
+        asArray(event?.impacts?.politicalActorOps),
+      ),
+
+      unitOps: cloneValue(
+        asArray(event?.impacts?.unitOps),
+      ),
+
+      markerOps: cloneValue(
+        asArray(event?.impacts?.markerOps),
+      ),
+
+      createdChats: cloneValue(
+        asArray(event?.impacts?.createdChats),
+      ),
+    },
+  };
 };
+
+const buildPriorHistoryPacket = (priorEvents) =>
+  priorWindow(priorEvents).map(({ priorIndex, event }) => {
+    const storylineIds = storylineIdsOf(event);
+    return {
+      priorIndex,
+      date: normalizeString(event?.date),
+      title: normalizeString(event?.title),
+      description: normalizeString(event?.description),
+      importance: normalizeString(event?.importance),
+      ...(storylineIds.length ? { storylineIds } : {}),
+    };
+  });
 
 // ---- analyst normalization --------------------------------------------------
 // omitted or malformed judgments are KEEP. fail open, because history is a
@@ -607,6 +263,13 @@ const normalizeJudgment = (
         judgment?.newTriggerAfterPriorPosture,
       ),
 
+    // Whether a new trigger explains an apparent reversal. Null when the
+    // answer does not say (one written before the field existed).
+    newTrigger:
+      typeof judgment?.newTrigger === "boolean"
+        ? judgment.newTrigger
+        : null,
+
     worthwhile:
       judgment?.worthwhile !== false,
 
@@ -644,13 +307,19 @@ const normalizeJudgment = (
   };
 };
 
+// No new trigger behind an apparent reversal: the analyst's newTrigger says
+// so; an answer without it says so by leaving the trigger it names empty.
+const noNewTrigger = (model) =>
+  model.newTrigger === false ||
+  (model.newTrigger === null && !model.newTriggerAfterPriorPosture);
+
 // ---- deterministic enforcement ---------------------------------------------
 
 const evaluateCandidate = ({
   event,
   index,
   judgment,
-  priorEvents,
+  history,
   saturationByStoryline,
 }) => {
   const model = normalizeJudgment(
@@ -659,91 +328,27 @@ const evaluateCandidate = ({
     index,
   );
 
-  const priorMatches = retrievePriorMatches(
-    event,
-    priorEvents,
-  );
+  // The prior events the candidate shares a storyline with. A prior event the
+  // analyst cites counts as evidence only when it is one of these.
+  const storylinePriors = storylinePriorsOf(event, history);
+  const onStoryline = new Set(storylinePriors.map((row) => row.priorIndex));
 
-  const retrievedMap = new Map(
-    priorMatches.map((match) => [
-      match.priorIndex,
-      Number(match.similarity) || 0,
-    ]),
-  );
-
-  const groundedPriorEvidence =
-    model.matchedPriorIndexes
-      .filter((priorIndex) =>
-        retrievedMap.has(priorIndex),
-      )
-      .map((priorIndex) => ({
-        priorIndex,
-        similarity:
-          retrievedMap.get(priorIndex),
-      }));
+  const groundedPriorIndexes =
+    model.matchedPriorIndexes.filter(
+      (priorIndex) => onStoryline.has(priorIndex),
+    );
 
   const ignoredPriorIndexes =
     model.matchedPriorIndexes.filter(
-      (priorIndex) =>
-        !retrievedMap.has(priorIndex),
+      (priorIndex) => !onStoryline.has(priorIndex),
     );
 
-  const strongCount =
-    groundedPriorEvidence.filter(
-      (entry) =>
-        entry.similarity >=
-        CONFIG.groundedStrongSimilarity,
-    ).length;
-
-  const moderateCount =
-    groundedPriorEvidence.filter(
-      (entry) =>
-        entry.similarity >=
-        CONFIG.groundedModerateSimilarity,
-    ).length;
-
-  const groundedEvidencePass =
-    strongCount >= 1 ||
-    moderateCount >=
-      CONFIG.groundedModerateCount;
-
-// the analyst may cite one mediocre prior event while javascript is sitting
-// here staring at five much better matches. use our own retrieval evidence
-// for saturated-churn detection instead of pretending that makes sense.
-const retrievalStrongCount =
-  priorMatches.filter(
-    (match) =>
-      match.similarity >=
-      CONFIG.groundedStrongSimilarity,
-  ).length;
-
-const retrievalModerateCount =
-  priorMatches.filter(
-    (match) =>
-      match.similarity >=
-      CONFIG.groundedModerateSimilarity,
-  ).length;
-
-const retrievalEvidencePass =
-  retrievalStrongCount >= 1 ||
-  retrievalModerateCount >=
-    CONFIG.groundedModerateCount;
-
-    // sometimes the analyst correctly points at one prior event, but that single
-// match lands just under our similarity threshold while the retriever finds
-// several other strong related matches. in that case the evidence isn't
-// magically wrong just because one number missed 0.40 by a hair.
-const retrievalAssistedRedundancyPass =
-  model.confidence >= 0.95 &&
-  groundedPriorEvidence.length >= 1 &&
-  retrievalEvidencePass &&
-  /^none$/i.test(
-    model.newTriggerAfterPriorPosture,
-  );
+  const groundedEvidencePass = groundedPriorIndexes.length > 0;
+  const storylineOnRecord = storylinePriors.length > 0;
 
   const saturation =
     saturationByStoryline.get(
-      storylineKey(model.storyline),
+      labelKey(model.storyline),
     ) || null;
 
   const recentStorylineCount =
@@ -754,61 +359,32 @@ const retrievalAssistedRedundancyPass =
     recentStorylineCount >=
       CONFIG.saturationHardCount;
 
-  const deterministicNativeProcessCue =
-    hasNativeProcessFrameCue(event);
-
+  // Process framing is the analyst's call: a meeting, a review, a
+  // consultation, in any language. Framed so, the event has to state a
+  // completed observable outcome, and the analyst quotes it; it does not
+  // mean "drop it".
   const nativeProcessEvidenceRequired =
-    model.processFramePresent === true ||
-    deterministicNativeProcessCue;
+    model.processFramePresent === true;
 
-  const normalizedOutcomeEvidence =
-    normalizeText(
-      model.observableOutcomeEvidence,
-    );
-
-  const normalizedEventProse =
-    normalizeText(eventText(event));
-
-  const nativeOutcomeEvidenceProspective =
-    nativeProcessEvidenceRequired &&
-    normalizedOutcomeEvidence.length >= 6 &&
-    isProspectiveOutcomeEvidence(
-      event,
-      model.observableOutcomeEvidence,
-    );
-
-  const nativeOutcomeEvidenceVague =
-    nativeProcessEvidenceRequired &&
-    normalizedOutcomeEvidence.length >= 6 &&
-    isVagueProcessOutcomeEvidence(
-    model.observableOutcomeEvidence,
-  );
-const nativeObservableOutcomeGrounded =
-  !nativeProcessEvidenceRequired ||
-  (
-    normalizedOutcomeEvidence.length >= 6 &&
-    normalizedEventProse.includes(
-      normalizedOutcomeEvidence,
-    ) &&
-    !nativeOutcomeEvidenceProspective &&
-    !nativeOutcomeEvidenceVague
-  );
+  const nativeObservableOutcomeStated =
+    !nativeProcessEvidenceRequired ||
+    model.observableOutcomeEvidence.length > 0;
 
   const nativePureProcessFiller =
     model.pureProcessFiller === true ||
     (
       nativeProcessEvidenceRequired &&
-      !nativeObservableOutcomeGrounded
+      !nativeObservableOutcomeStated
     );
 
-  const materialRecurrenceCue =
-    hasMaterialRecurrenceCue(event);
+  // A war event carries its war (warId) and is kept above; one tagged
+  // Military without a war is what the routine-military route weighs.
+  const militaryTagged = hasTag(event, "Military");
 
-  const routineMilitaryContinuationCue =
-    hasRoutineMilitaryContinuationCue(event);
-
-  const strongMilitaryConsequenceCue =
-    hasStrongMilitaryConsequenceCue(event);
+  // Repetition that matters is the analyst's recurrenceMatters, and nothing
+  // overrides it.
+  const effectiveRecurrenceMatters =
+    model.recurrenceMatters === true;
 
   const establishedLowValueIncremental =
     recentStorylineCount >=
@@ -819,34 +395,10 @@ const nativeObservableOutcomeGrounded =
     model.qualitativeAdvance === false &&
     model.worthwhile === false &&
     model.personalityTexture === false &&
-    !materialRecurrenceCue;
-
-  const routineProcessRecurrenceOverride =
-    model.recurrenceMatters === true &&
-    !materialRecurrenceCue &&
-    (
-      (
-        nativeProcessEvidenceRequired &&
-        model.incrementalProcess === true &&
-        model.qualitativeAdvance === false &&
-        model.worthwhile === false &&
-        model.personalityTexture === false
-      ) ||
-      establishedLowValueIncremental
-    );
-
-  const effectiveRecurrenceMatters =
-    model.recurrenceMatters === true &&
-    !routineProcessRecurrenceOverride;
+    effectiveRecurrenceMatters === false;
 
   const impacts =
     structuredImpactReasons(event);
-
-  const deterministicDuplicate =
-    deterministicNearDuplicate(
-      event,
-      priorMatches,
-    );
 
   let wouldAction = "KEEP";
   let route = "PRESUME_KEEP";
@@ -865,16 +417,6 @@ const nativeObservableOutcomeGrounded =
   }
 
   else if (
-    deterministicDuplicate.duplicate
-  ) {
-    wouldAction = "DROP";
-    route = "EXACT_DUPLICATE";
-
-    enforcementReason =
-      deterministicDuplicate.reason;
-  }
-
-  else if (
     model.verdict === "REDUNDANT"
   ) {
     const confidencePass =
@@ -890,34 +432,20 @@ const nativeObservableOutcomeGrounded =
       model.personalityTexture === false;
 
     if (
-  confidencePass &&
-  groundedEvidencePass &&
-  noNewDimensions &&
-  semanticPass
-) {
-  wouldAction = "DROP";
-  route = "EVIDENCED_REDUNDANCY";
+      confidencePass &&
+      groundedEvidencePass &&
+      noNewDimensions &&
+      semanticPass
+    ) {
+      wouldAction = "DROP";
+      route = "EVIDENCED_REDUNDANCY";
 
-  enforcementReason =
-    "grounded redundancy: specific prior evidence + no material novelty + recurrence immaterial";
-}
+      enforcementReason =
+        "grounded redundancy: a cited prior event on the same storyline + no material novelty + recurrence immaterial";
+    }
 
-else if (
-  retrievalAssistedRedundancyPass &&
-  noNewDimensions &&
-  semanticPass &&
-  model.qualitativeAdvance === false
-) {
-  wouldAction = "DROP";
-  route =
-    "RETRIEVAL_ASSISTED_REDUNDANCY";
-
-  enforcementReason =
-    "high-confidence redundancy: analyst cited retrieved prior history + deterministic retrieval independently found sufficient supporting evidence + no new trigger/material novelty";
-}
-
-else {
-  route = "REDUNDANCY_FAIL_OPEN";
+    else {
+      route = "REDUNDANCY_FAIL_OPEN";
 
       const failures = [];
 
@@ -929,7 +457,7 @@ else {
 
       if (!groundedEvidencePass) {
         failures.push(
-          "insufficient grounded prior evidence",
+          "no cited prior event on the same storyline",
         );
       }
 
@@ -969,17 +497,11 @@ else {
     model.verdict ===
     "UNSUPPORTED_REVERSAL"
   ) {
-    const noTrigger =
-      !model.newTriggerAfterPriorPosture ||
-      /^none$/i.test(
-        model.newTriggerAfterPriorPosture,
-      );
-
     if (
       model.confidence >=
         CONFIG.reversalDropConfidence &&
       groundedEvidencePass &&
-      noTrigger
+      noNewTrigger(model)
     ) {
       wouldAction = "DROP";
       route = "UNSUPPORTED_REVERSAL";
@@ -991,7 +513,7 @@ else {
       route = "REVERSAL_FAIL_OPEN";
 
       enforcementReason =
-        "reversal claim lacked sufficient grounded evidence/confidence";
+        "reversal claim lacked a cited prior event on the same storyline, confidence, or the absence of a new trigger";
     }
   }
 
@@ -1014,7 +536,7 @@ else {
     route = "NATIVE_PROCESS_FILLER";
 
     enforcementReason =
-      "process-only native event: no analyst-quoted completed observable outcome grounded in title/description";
+      "process-only event: the analyst found no completed observable outcome";
   }
 
   // completed micro-outcomes can still be unremarkable once a storyline has
@@ -1022,8 +544,7 @@ else {
   if (
     wouldAction === "KEEP" &&
     impacts.length === 0 &&
-    establishedLowValueIncremental &&
-    effectiveRecurrenceMatters === false
+    establishedLowValueIncremental
   ) {
     wouldAction = "DROP";
     route = "LOW_VALUE_INCREMENTAL_CHURN";
@@ -1036,21 +557,23 @@ else {
       "high-confidence incremental continuation + no qualitative advance/worthwhile value/personality/material recurrence";
   }
 
-  // Universal routine-military no-delta gate. Saturation is useful evidence but
-  // must NOT be required: otherwise the exact same artillery/patrol/probe loop
-  // escapes as soon as its recent count cools from "saturated" to "busy", then
-  // rebuilds the saturation again. If the analyst itself says the event is
-  // incremental and not a qualitative advance, and the prose contains no concrete
-  // military consequence, recurrence/grounding/worthwhile labels cannot buy a card.
+  // Routine military continuation: an event the skip tagged Military, with no
+  // war, unit or map operation of its own, that the analyst calls another
+  // incremental step that changes nothing in kind and adds no new dimension.
+  // Saturation is useful evidence but is not required: otherwise the same
+  // artillery/patrol/probe loop escapes as soon as its recent count cools from
+  // "saturated" to "busy", then rebuilds the saturation again. A concrete
+  // consequence (casualties, a breakthrough, a capture, a ceasefire) is a new
+  // dimension in the analyst's answer, or an operation on the event.
   if (
     wouldAction === "KEEP" &&
     impacts.length === 0 &&
-    model.confidence >= CONFIG.saturatedRoutineMilitaryConfidenceFloor &&
+    militaryTagged &&
+    model.confidence >= CONFIG.routineMilitaryConfidenceFloor &&
     model.incrementalProcess === true &&
     model.qualitativeAdvance === false &&
-    model.personalityTexture === false &&
-    routineMilitaryContinuationCue &&
-    !strongMilitaryConsequenceCue
+    model.materiallyNewDimensions.length === 0 &&
+    model.personalityTexture === false
   ) {
     wouldAction = "DROP";
     route = "ROUTINE_MILITARY_NO_DELTA";
@@ -1059,45 +582,20 @@ else {
       `routine military continuation with no material delta: ${
         saturation?.storyline ||
         model.storyline
-      }; incremental/no qualitative advance and no concrete military consequence`;
+      }; incremental/no qualitative advance and no new dimension`;
   }
 
-  // Saturated military loops retain the older stronger labelled backstop for any
-  // cases not caught above. Concrete consequences (casualties, breakthrough,
-  // capture, retreat, ceasefire, etc.) and qualitative advances still survive.
+  // old saturated-storyline guard. even here we still require recorded
+  // storyline history, high confidence, no qualitative advance and no
+  // meaningful recurrence.
   if (
     wouldAction === "KEEP" &&
     impacts.length === 0 &&
     storylineSaturated &&
     model.confidence >=
-      CONFIG.saturatedRoutineMilitaryConfidenceFloor &&
-    model.incrementalProcess === true &&
-    model.qualitativeAdvance === false &&
-    model.personalityTexture === false &&
-    routineMilitaryContinuationCue &&
-    !strongMilitaryConsequenceCue
-  ) {
-    wouldAction = "DROP";
-    route = "SATURATED_ROUTINE_MILITARY_CHURN";
-
-    enforcementReason =
-      `saturated routine military continuation: ${
-        saturation?.storyline ||
-        model.storyline
-      } (${recentStorylineCount} recent); ` +
-      "incremental/no qualitative advance and no concrete military consequence";
-  }
-
-  // old saturated-storyline guard. even here we still require grounded history,
-  // high confidence, no qualitative advance and no meaningful recurrence.
-  if (
-    wouldAction === "KEEP" &&
-    impacts.length === 0 &&
-    storylineSaturated &&
-      model.confidence >=
       CONFIG.saturatedIncrementalConfidenceFloor &&
-      retrievalEvidencePass &&
-      model.incrementalProcess === true &&
+    storylineOnRecord &&
+    model.incrementalProcess === true &&
     model.qualitativeAdvance === false &&
     effectiveRecurrenceMatters === false &&
     model.personalityTexture === false
@@ -1111,7 +609,7 @@ else {
         saturation?.storyline ||
         model.storyline
       } (${recentStorylineCount} recent); ` +
-      "grounded prior evidence + high-confidence incremental process + no qualitative advance/meaningful recurrence";
+      "prior events on the same storyline + high-confidence incremental process + no qualitative advance/meaningful recurrence";
   }
 
   return {
@@ -1120,8 +618,8 @@ else {
 
     wouldAction,
 
-// live mode means the deterministic decision actually counts now.
-actualAction: wouldAction,
+    // live mode means the deterministic decision actually counts now.
+    actualAction: wouldAction,
 
     hard,
     route,
@@ -1129,32 +627,24 @@ actualAction: wouldAction,
 
     structuredImpacts: impacts,
 
-    priorMatches: priorMatches.map(
-      (match) => ({
-        priorIndex: match.priorIndex,
-        similarity: Number(
-          match.similarity.toFixed(3),
-        ),
+    storylinePriors: storylinePriors.map(
+      (row) => ({
+        priorIndex: row.priorIndex,
         date:
           normalizeString(
-            match.event?.date,
+            row.event?.date,
           ),
         title:
           normalizeString(
-            match.event?.title,
+            row.event?.title,
           ),
       }),
     ),
 
-      groundedPriorEvidence,
-      ignoredPriorIndexes,
-      groundedEvidencePass,
-      retrievalStrongCount,
-      retrievalModerateCount,
-      retrievalEvidencePass,
-      retrievalAssistedRedundancyPass,
-
-    deterministicDuplicate,
+    groundedPriorIndexes,
+    ignoredPriorIndexes,
+    groundedEvidencePass,
+    storylineOnRecord,
 
     storylineSaturation:
       saturation
@@ -1164,16 +654,10 @@ actualAction: wouldAction,
     storylineSaturated,
     recentStorylineCount,
 
-    deterministicNativeProcessCue,
     nativeProcessEvidenceRequired,
-    nativeOutcomeEvidenceVague,
-    nativeOutcomeEvidenceProspective,
-    nativeObservableOutcomeGrounded,
+    nativeObservableOutcomeStated,
     nativePureProcessFiller,
-materialRecurrenceCue,
-    routineMilitaryContinuationCue,
-    strongMilitaryConsequenceCue,
-    routineProcessRecurrenceOverride,
+    militaryTagged,
     effectiveRecurrenceMatters,
     establishedLowValueIncremental,
 
@@ -1193,66 +677,54 @@ const shouldCurateMode = (mode) =>
 // event: the Board reads every Canonical event, and routine progress on a Board
 // entry is exactly what these routes keep off the timeline.
 //
-// An allowlist on purpose. EXACT_DUPLICATE (it is already in the batch or the
-// log) and UNSUPPORTED_REVERSAL (it contradicts history, so it never happened)
-// are withheld, and so is any route added later until someone decides which kind
-// it is — the safe default for a Board that must never record a contradiction.
+// An allowlist on purpose. UNSUPPORTED_REVERSAL (it contradicts history, so it
+// never happened) is withheld, and so is any route added later until someone
+// decides which kind it is — the safe default for a Board that must never
+// record a contradiction.
 const VISIBILITY_ROUTES = new Set([
   "EVIDENCED_REDUNDANCY",
-  "RETRIEVAL_ASSISTED_REDUNDANCY",
   "NATIVE_PROCESS_FILLER",
   "LOW_VALUE_INCREMENTAL_CHURN",
   "ROUTINE_MILITARY_NO_DELTA",
-  "SATURATED_ROUTINE_MILITARY_CHURN",
   "SATURATED_INCREMENTAL_REDUNDANCY",
 ]);
 
 // ---- is a judgment worth asking for? ----------------------------------------
 //
 // The analyst is a model request, and on a free key requests are what run out
-// (requestBudget.js). Whether it can change anything is knowable beforehand:
-// every route above that removes an event has a condition this file checks by
-// itself, without the analyst, and a candidate that meets none of them is kept
-// whatever the analyst says.
+// (requestBudget.js). Whether it is worth one is decided from the record's
+// structure alone, never from what the events say:
 //
-//   - an event with a hard mechanical consequence is always kept;
-//   - every redundancy and reversal route needs retrieved prior history above
-//     the similarity floors (groundedEvidencePass counts only priors the
-//     retriever also found, so it cannot pass where retrievalEvidencePass fails);
-//   - the routine-military routes need the routine cue without a concrete
-//     consequence;
-//   - process filler needs a process frame.
+//   - an event with a hard mechanical consequence (a transfer, a unit or
+//     marker op, a war, a new chat...) is always kept, whatever is said;
+//   - the routes that rest on history (a redundancy, a reversal, a saturated
+//     storyline) need a prior event on record that shares a storyline with the
+//     candidate, and a judgment can cite only those.
 //
-// Two model-only openings are given up when nothing else asks for a review: a
-// process frame the native cue does not recognise, and low-value churn on a
-// storyline the retriever finds nothing similar to. Both are rare, both fail
-// toward KEEP, and an exact duplicate is still removed without any analyst.
+// So the analyst is asked only when some candidate without a hard consequence
+// continues a storyline that already has an event in the window it is shown.
+// Three routes rest on the analyst's word alone — a process frame only it can
+// see, a storyline it calls crowded, a routine military step — and can remove
+// an event only when a review happens to run for another candidate. Asking on
+// their account would mean asking about nearly every skip. All three fail
+// toward KEEP.
 //
 // Returns the indexes worth a judgment; empty means the analyst can be skipped.
 export const candidatesWorthJudging = ({ events = [], priorEvents = [], mode = "jump" } = {}) => {
   if (!shouldCurateMode(mode)) return [];
 
+  const history = priorWindow(priorEvents);
   const worth = [];
   asArray(events).forEach((event, index) => {
     if (structuredImpactReasons(event).length) return;
-
-    const priorMatches = retrievePriorMatches(event, priorEvents);
-    // Already decided without anyone's opinion.
-    if (deterministicNearDuplicate(event, priorMatches).duplicate) return;
-
-    const strong = priorMatches.filter((match) => match.similarity >= CONFIG.groundedStrongSimilarity).length;
-    const moderate = priorMatches.filter((match) => match.similarity >= CONFIG.groundedModerateSimilarity).length;
-    const resemblesHistory = strong >= 1 || moderate >= CONFIG.groundedModerateCount;
-    const routineMilitary = hasRoutineMilitaryContinuationCue(event) && !hasStrongMilitaryConsequenceCue(event);
-
-    if (resemblesHistory || routineMilitary || hasNativeProcessFrameCue(event)) worth.push(index);
+    if (storylinePriorsOf(event, history).length) worth.push(index);
   });
   return worth;
 };
 
 // What the analyst is shown, or null when there is nothing to show. Its own
-// function so the turn review (gameplay.js runTurnReview) can ask for the
-// judgments as one job among several, with exactly this input.
+// function so a review can ask for the judgments as one job among several,
+// with exactly this input.
 export const buildCuratorInput = ({ events = [], priorEvents = [], mode = "jump" } = {}) => {
   const incoming = asArray(events);
   if (!shouldCurateMode(mode) || !incoming.length) return null;
@@ -1293,8 +765,8 @@ export const curateGeneratedEventsWithHidden = async ({
 
   // The analyst is a request. When no candidate is one it could remove
   // (candidatesWorthJudging: every event carries a transfer, a unit op or a
-  // war, or resembles nothing on record), every event is kept whatever it
-  // says, so it is not asked — the same rule the turn review applies.
+  // war, or continues no storyline on record), every event is kept whatever
+  // it says, so it is not asked.
   if (
     incoming.length &&
     typeof analyzeBatch === "function" &&
@@ -1358,7 +830,7 @@ export const curateGeneratedEventsWithHidden = async ({
     )
   ) {
     const key =
-      storylineKey(row?.storyline);
+      labelKey(row?.storyline);
 
     if (key) {
       saturationByStoryline.set(
@@ -1367,6 +839,8 @@ export const curateGeneratedEventsWithHidden = async ({
       );
     }
   }
+
+  const history = priorWindow(priorEvents);
 
   // An event that answers one of the player's orders, or a Project date due
   // this period, is what the player asked the jump for (AI/playerFocus.js
@@ -1384,7 +858,7 @@ export const curateGeneratedEventsWithHidden = async ({
           judgment:
             judgmentByIndex.get(index),
 
-          priorEvents,
+          history,
           saturationByStoryline,
         });
         if (evaluation.wouldAction === "KEEP" || !spared(event)) return evaluation;
@@ -1398,26 +872,26 @@ export const curateGeneratedEventsWithHidden = async ({
       },
     );
 
-    // audit is over. the deterministic gates decide.
-const keptEvents =
-  evaluations
-    .filter(
-      (entry) =>
-        entry.wouldAction === "KEEP",
-    )
-    .map(
-      (entry) => entry.event,
-    );
+  // audit is over. the deterministic gates decide.
+  const keptEvents =
+    evaluations
+      .filter(
+        (entry) =>
+          entry.wouldAction === "KEEP",
+      )
+      .map(
+        (entry) => entry.event,
+      );
 
-const droppedEvents =
-  evaluations
-    .filter(
-      (entry) =>
-        entry.wouldAction === "DROP",
-    )
-    .map(
-      (entry) => entry.event,
-    );
+  const droppedEvents =
+    evaluations
+      .filter(
+        (entry) =>
+          entry.wouldAction === "DROP",
+      )
+      .map(
+        (entry) => entry.event,
+      );
 
   const wouldDropCount =
     evaluations.filter(
@@ -1463,11 +937,8 @@ const droppedEvents =
         recurrence:
           entry.effectiveRecurrenceMatters,
 
-        routineMilitary:
-          entry.routineMilitaryContinuationCue,
-
-        militaryConsequence:
-          entry.strongMilitaryConsequenceCue,
+        military:
+          entry.militaryTagged,
 
         grounded:
           entry.groundedEvidencePass,
@@ -1479,7 +950,7 @@ const droppedEvents =
           entry.wouldAction,
 
         actualAction:
-  entry.actualAction,
+          entry.actualAction,
       }),
     );
 
@@ -1500,10 +971,10 @@ const droppedEvents =
       incoming.length,
 
     keptCount:
-  keptEvents.length,
+      keptEvents.length,
 
-droppedCount:
-  droppedEvents.length,
+    droppedCount:
+      droppedEvents.length,
 
     wouldKeepCount,
     wouldDropCount,
