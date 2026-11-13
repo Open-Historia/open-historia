@@ -20529,8 +20529,8 @@ const applyScenarioPrehistory = async (payload, { startDate, campaignId }) => {
   });
 
   // Round-zero ledgers: bind the Day-1 wars, relations and agreements to the
-  // backstory events and merge them into the world the game starts on. The
-  // version stamp tells the legacy migration there is nothing left to seed.
+  // backstory events and merge them into the world the game starts on, and
+  // stamp the ledger version on it.
   // Storyline ids are attached to the backstory events first, so every Day-1
   // process starts with real sourceEventIds and a last visible date.
   const storylineUpdates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
