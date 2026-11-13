@@ -9,6 +9,7 @@ import { normalizeBlockades } from "./naval/blockade.js";
 import { normalizeCallsToArms } from "./alliances.js";
 import { normalizePeaceOffers, normalizePeaceTreaties, normalizeReparations } from "./peaceTerms.js";
 import { normalizeWarWeariness } from "./warWeariness.js";
+import { MAX_WAR_SIDE_MEMBERS, normalizeWarRecord, normalizeWarRecords, referencedWarIds } from "./warRecord.js";
 import { normalizeWarResources } from "./warResources.js";
 import { normalizeAttrition } from "./attrition.js";
 import { eraSettingOf, normalizeWarSettings } from "./warSettings.js";
@@ -468,11 +469,9 @@ const normalizeOptionalString = (value) => {
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
 // Canonical ledger vocabularies (AI/nativeWarLedger.js, AI/nativeDiplomaticDirector.js).
-const WORLD_WAR_STATUS_SET = new Set(["active", "ceasefire", "ended"]);
 const WORLD_RELATION_STATUS_SET = new Set(["friendly", "cordial", "neutral", "cautious", "strained", "hostile", "rival"]);
 const WORLD_AGREEMENT_TYPE_SET = new Set(["alliance", "mutual_defense", "guarantee", "non_aggression", "friendship_consultation", "trade_economic", "military_cooperation", "military_access", "neutrality", "peace_settlement", "other"]);
 const WORLD_AGREEMENT_STATUS_SET = new Set(["active", "suspended", "ended", "expired"]);
-const MAX_WORLD_WARS = 64;
 const WORLD_STORYLINE_STATUS_SET = new Set(["active", "dormant", "resolved"]);
 const MAX_WORLD_STORYLINES = 96;
 const MAX_WORLD_RELATIONS = 256;
@@ -3849,7 +3848,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
       normalizeActionParticipants(entry.combatants)
         .map((name) => toCountryName(normalizeOptionalString(name)) || normalizeOptionalString(name))
         .filter(Boolean),
-    )].slice(0, 8),
+    )].slice(0, MAX_WAR_SIDE_MEMBERS),
     source: normalizeOptionalString(entry.source) || "scenario",
     title,
   };
@@ -4071,83 +4070,13 @@ const normalizeWorldStorylines = (value) => {
     .slice(0, MAX_WORLD_STORYLINES);
 };
 
-const normalizeWorldWar = (entry, index = 0) => {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
-
-  const canonicalPolity = (value) => {
-    const raw = normalizeOptionalString(value);
-    return raw ? (toCountryName(raw) || raw) : "";
-  };
-  const uniquePolities = (value, limit = 12) => {
-    const seen = new Set();
-    const result = [];
-    for (const raw of normalizeArray(value)) {
-      const polity = canonicalPolity(raw);
-      const key = polity.toLocaleLowerCase();
-      if (!polity || seen.has(key)) continue;
-      seen.add(key);
-      result.push(polity);
-      if (result.length >= limit) break;
-    }
-    return result;
-  };
-
-  const id = normalizeOptionalString(entry.id) || `war-${index}`;
-  // A polity's name has a letter in it. A war kept as "United Kingdom, Ireland" against "1, 2" (a time skip wrote its
-  // event numbers where the opponents go, battle-of-europe-session-2, 2026-10-25) is its two parties against each other.
-  const named = (list) => uniquePolities(list).filter((name) => /\p{L}/u.test(name));
-  const read = named(entry.sideA);
-  const readKeys = new Set(read.map((name) => name.toLocaleLowerCase()));
-  const others = named(entry.sideB).filter((name) => !readKeys.has(name.toLocaleLowerCase()));
-  const [sideA, sideB] = others.length === 0 && read.length === 2 ? [[read[0]], [read[1]]] : [read, others];
-  if (!sideA.length || !sideB.length) return null;
-
-  const rawStatus = normalizeOptionalString(entry.status).toLowerCase();
-  const status = WORLD_WAR_STATUS_SET.has(rawStatus) ? rawStatus : "active";
-  const sourceEventIds = [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24);
-  const storylineIds = [...new Set(normalizeActionParticipants(entry.storylineIds))].slice(-12);
-  // A name saved with its cause run on after a "~" or "|" ("Franco-Italian
-  // War~Dispute over…"): a start's note was cut only at a ";" until 2026-10-28
-  // (nativeWarLedger.js splitWarStartNote). The name is what comes before it,
-  // and the rest is the cause where none was kept.
-  const [savedTitle, ...runOn] = normalizeOptionalString(entry.title).split(/\s*[~|]\s*/);
-  const title = savedTitle || `${sideA[0]}–${sideB[0]} War`;
-  const cause = normalizeTextLike(entry.cause) || runOn.join(" ").trim();
-
-  return {
-    id,
-    title,
-    status,
-    sideA,
-    sideB,
-    startedDate: canonicalizeDateString(entry.startedDate),
-    endedDate: status === "ended" ? canonicalizeDateString(entry.endedDate || entry.lastUpdatedDate) : "",
-    lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate || entry.startedDate),
-    cause,
-    note: normalizeTextLike(entry.note),
-    sourceEventIds,
-    storylineIds,
-    createdRound: Number.isFinite(Number(entry.createdRound)) && Number(entry.createdRound) > 0 ? Math.trunc(Number(entry.createdRound)) : 0,
-    updatedRound: Number.isFinite(Number(entry.updatedRound)) && Number(entry.updatedRound) > 0 ? Math.trunc(Number(entry.updatedRound)) : 0,
-  };
-};
-
-const normalizeWorldWars = (value) => {
-  const deduped = new Map();
-  normalizeArray(value).forEach((entry, index) => {
-    const normalized = normalizeWorldWar(entry, index);
-    if (!normalized) return;
-    deduped.set(normalized.id, normalized);
-  });
-  const statusRank = { active: 0, ceasefire: 1, ended: 2 };
-  return [...deduped.values()]
-    .sort((a, b) =>
-      (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
-      compareGameDates(b.lastUpdatedDate || b.startedDate || "", a.lastUpdatedDate || a.startedDate || "") ||
-      a.id.localeCompare(b.id),
-    )
-    .slice(0, MAX_WORLD_WARS);
-};
+// The world's wars: the canonical war record (warRecord.js), the one shape the
+// ledger, the fronts and the peace all read. This used to be a second copy of
+// the ledger's own normalizer, with its own caps (12 a side, 64 wars in all,
+// cut whoever still named them) and an id made of the record's position in the
+// list, which moved every time the list was sorted. An ended war that a peace
+// treaty, reparations, an offer or a battlefield still names is kept.
+const normalizeWorldWars = (value, world = null) => normalizeWarRecords(value, { keep: referencedWarIds(world) });
 
 // One identity index per identity world. normalizeWorldState makes that world
 // afresh for each pass and only reads it, so the index built for its first
@@ -4677,7 +4606,7 @@ export const normalizeWorldState = (world) => {
     diplomaticLedgerVersion: Number.isFinite(Number(nextWorld.diplomaticLedgerVersion))
       ? Math.max(0, Math.trunc(Number(nextWorld.diplomaticLedgerVersion)))
       : 0,
-    wars: normalizeWorldWars(nextWorld.wars),
+    wars: normalizeWorldWars(nextWorld.wars, nextWorld),
     // Shape and length only: the engine wrote every record, and this runs on
     // every read of the world.
     battlefields: normalizeBattlefields(nextWorld.battlefields),

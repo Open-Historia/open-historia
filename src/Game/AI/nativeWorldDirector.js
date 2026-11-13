@@ -878,6 +878,22 @@ export const buildPregameStorylineBaselineRecord = ({
   return { record, error: "" };
 };
 
+// The participants a war's scheduler storyline follows: at most the twelve a
+// storyline holds, taken from the two sides in turn (each side's leading members
+// first), so a coalition larger than that is followed by its leaders on both
+// sides. A war with more belligerents used to have no mirror, and its whole
+// pre-game history was refused for it.
+export const warMirrorParticipants = (war) => {
+  const sides = [normalizeArray(war?.sideA), normalizeArray(war?.sideB)].map((side) => [...new Set(side.map(normalizeString).filter(Boolean))]);
+  const result = [];
+  for (let at = 0; result.length < 12 && at < Math.max(sides[0].length, sides[1].length); at += 1) {
+    for (const side of sides) {
+      if (result.length < 12 && side[at] && !result.includes(side[at])) result.push(side[at]);
+    }
+  }
+  return result;
+};
+
 export const buildPregameWarStorylineMirrorRecord = ({
   id = "",
   war = null,
@@ -887,12 +903,8 @@ export const buildPregameWarStorylineMirrorRecord = ({
 } = {}) => {
   const warId = normalizeString(war?.id);
   if (!warId) return { record: null, error: "Round-Zero war mirror requires a canonical war id." };
-  const participants = [...new Set([
-    ...normalizeArray(war?.sideA),
-    ...normalizeArray(war?.sideB),
-  ].map(normalizeString).filter(Boolean))];
+  const participants = warMirrorParticipants(war);
   if (participants.length < 2) return { record: null, error: `Round-Zero war mirror ${warId} requires both belligerent sides.` };
-  if (participants.length > 12) return { record: null, error: `Round-Zero war mirror ${warId} has ${participants.length} belligerents but canonical storylines support at most 12 total participants.` };
   const warStatus = normalizeString(war?.status).toLowerCase();
   if (!["active", "ceasefire"].includes(warStatus)) return { record: null, error: `Round-Zero war mirror ${warId} requires a live war.` };
   const observed = normalizeString(observedDate);

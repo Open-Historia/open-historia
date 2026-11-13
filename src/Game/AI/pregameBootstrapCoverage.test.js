@@ -37,159 +37,45 @@ Communities across America began preparing for an unknown future, and extremist 
 The systemic breakdown escalated further on August 20, 2020, when paramilitary organizations, notably the American People's Liberation Army (APLA) and the Patriot Front, publicly declared armed defiance against federal authority.
 `;
 
-test("Round-Zero coverage derives only explicit authoritative armed-opposition actors", () => {
-  const requirements = derivePregameBootstrapCoverageRequirements({
-    briefing,
-    world: fireRisesWorld(),
-    canonicalPolities,
-  });
-
-  assert.deepEqual(
-    requirements.map((entry) => entry.polity).sort(),
-    ["American People's Liberation Army", "Patriot Front"],
-  );
-  assert.equal(requirements.some((entry) => entry.polity === "Atomwaffen Division"), false, "weapon stockpiling alone is not a persistent conflict obligation");
-  assert.equal(requirements.some((entry) => entry.polity === "China"), false, "preparing for a potential intervention is not current belligerency");
-  assert.equal(requirements.some((entry) => entry.polity === "Taiwan"), false);
+// The owner, 2026-11-06: "dont do keywording its super unreliable". The
+// requirements used to be read out of the briefing by English word lists, and
+// an answer that left out an actor they picked was refused (another request,
+// and again at every open of the game); the same briefing in French required
+// nothing. Nothing is read from a briefing's words now.
+test("no coverage requirement is read out of a briefing's words, in any language", () => {
+  assert.deepEqual(derivePregameBootstrapCoverageRequirements({ briefing, world: fireRisesWorld(), canonicalPolities }), []);
+  assert.deepEqual(derivePregameBootstrapCoverageRequirements({ briefing: "In 1990 Iraq declared war on Kuwait. The war ended in 1991.", world: {}, canonicalPolities: ["Iraq", "Kuwait"] }), []);
+  assert.equal(validatePregameBootstrapCoverage({ canonicalUpdates: [] }, { briefing, world: fireRisesWorld(), canonicalPolities }), "", "an answer is not refused over a briefing's wording");
 });
 
-test("Fire Rises regression: Union-vs-ACG alone cannot account for briefing-named armed opposition", () => {
+// What a caller states outright is still held to.
+const stated = [{ polity: "American People's Liberation Army", evidence: "named by the scenario" }, { polity: "Patriot Front" }];
+
+test("a stated requirement is met by an unresolved non-war process, without inventing war sides", () => {
   const world = fireRisesWorld();
   const candidate = {
     canonicalUpdates: [
-      {
-        ref: "w1",
-        kind: "war",
-        title: "Second American Civil War",
-        status: "active",
-        sideA: ["Union of America"],
-        sideB: ["American Constitutional Government"],
-      },
-      {
-        ref: "s1",
-        kind: "storyline",
-        processKind: "political_crisis",
-        status: "active",
-        title: "Institutional Collapse and Factional Mobilization",
-        participants: ["Union of America", "American Constitutional Government"],
-      },
+      { ref: "w1", kind: "war", title: "Second American Civil War", status: "active", sideA: ["Union of America"], sideB: ["American Constitutional Government"] },
+      { ref: "s1", kind: "storyline", processKind: "political_crisis", status: "active", title: "Institutional Collapse and Factional Mobilization", participants: ["Union of America", "American Constitutional Government", "American People's Liberation Army", "Patriot Front"] },
     ],
   };
-
-  const error = validatePregameBootstrapCoverage(candidate, {
-    briefing,
-    world,
-    canonicalPolities,
-  });
-  assert.match(error, /American People's Liberation Army/);
-  assert.match(error, /Patriot Front/);
-  assert.match(error, /do not invent a new war unless the scenario canon supports one/);
+  assert.equal(validatePregameBootstrapCoverage(candidate, { world, requirements: stated }), "");
 });
 
-test("armed actors may be conserved by the appropriate unresolved non-war process without inventing war sides", () => {
-  const world = fireRisesWorld();
-  const candidate = {
-    canonicalUpdates: [
-      {
-        ref: "w1",
-        kind: "war",
-        title: "Second American Civil War",
-        status: "active",
-        sideA: ["Union of America"],
-        sideB: ["American Constitutional Government"],
-      },
-      {
-        ref: "s1",
-        kind: "storyline",
-        processKind: "political_crisis",
-        status: "active",
-        title: "Institutional Collapse and Factional Mobilization",
-        participants: [
-          "Union of America",
-          "American Constitutional Government",
-          "American People's Liberation Army",
-          "Patriot Front",
-        ],
-      },
-    ],
-  };
-
-  assert.equal(validatePregameBootstrapCoverage(candidate, {
-    briefing,
-    world,
-    canonicalPolities,
-  }), "");
+test("already-canonical active conflict or process state meets a stated requirement", () => {
+  const world = { ...fireRisesWorld(), storylines: [{ id: "scenario-american-fracture", kind: "crisis", status: "active", participants: ["American People's Liberation Army", "Patriot Front"] }] };
+  assert.equal(validatePregameBootstrapCoverage({ canonicalUpdates: [] }, { world, requirements: stated }), "");
 });
 
-test("already-canonical active conflict/process state satisfies Round-Zero coverage without duplication", () => {
-  const world = {
-    ...fireRisesWorld(),
-    storylines: [{
-      id: "scenario-american-fracture",
-      kind: "crisis",
-      status: "active",
-      participants: ["American People's Liberation Army", "Patriot Front"],
-    }],
-  };
-
-  assert.equal(validatePregameBootstrapCoverage({ canonicalUpdates: [] }, {
-    briefing,
-    world,
-    canonicalPolities,
-  }), "");
-});
-
-test("relations alone do not satisfy an armed-actor coverage obligation", () => {
+test("relations alone do not meet a stated requirement", () => {
   const candidate = {
     canonicalUpdates: [
       { ref: "r1", kind: "relation", a: "Union of America", b: "American People's Liberation Army", score: -100 },
       { ref: "r2", kind: "relation", a: "Union of America", b: "Patriot Front", score: -100 },
     ],
   };
-  const error = validatePregameBootstrapCoverage(candidate, {
-    briefing,
-    world: fireRisesWorld(),
-    canonicalPolities,
-  });
-  assert.match(error, /omits authoritative armed actors/);
+  assert.match(validatePregameBootstrapCoverage(candidate, { world: fireRisesWorld(), requirements: stated }), /omits authoritative armed actors/);
 });
-
-test("explicit war language creates coverage anchors for named current belligerents", () => {
-  const world = {
-    polityOverrides: {
-      Alpha: { name: "Alpha", status: "active" },
-      Beta: { name: "Beta", status: "active" },
-    },
-    wars: [],
-    storylines: [],
-  };
-  const requirements = derivePregameBootstrapCoverageRequirements({
-    briefing: "Alpha declared war on Beta after negotiations collapsed.",
-    world,
-    canonicalPolities: ["Alpha", "Beta"],
-  });
-  assert.deepEqual(requirements.map((entry) => entry.polity).sort(), ["Alpha", "Beta"]);
-});
-
-
-test("coverage stays actor-local when a third polity merely observes another war", () => {
-  const world = {
-    polityOverrides: {
-      China: { name: "China", status: "active" },
-      Russia: { name: "Russia", status: "active" },
-      Ukraine: { name: "Ukraine", status: "active" },
-    },
-    wars: [],
-    storylines: [],
-  };
-  const requirements = derivePregameBootstrapCoverageRequirements({
-    briefing: "China observes Russia as Russia remains at war with Ukraine.",
-    world,
-    canonicalPolities: ["China", "Russia", "Ukraine"],
-  });
-  assert.deepEqual(requirements.map((entry) => entry.polity).sort(), ["Russia", "Ukraine"]);
-});
-
 
 test("Round-Zero orchestration enforces authoritative coverage before acceptance and again inside guarded publication", () => {
   const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");

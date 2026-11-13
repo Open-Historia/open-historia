@@ -1715,6 +1715,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             logDebugEvent("advisor", "Advisor reply blocks reviewed.", {
                 actionsBlock: actionsProposal ? `${Array.isArray(actionsProposal) ? actionsProposal.length : 1} op(s)` : "(none in the reply)",
                 actionsProposed: `${actionProposals.length} pending review (zero auto-queued)`,
+                actionsProblems: actionsProblems.length ? actionsProblems : "(none)",
                 projectsBlock: projectsProposal ? `${Array.isArray(projectsProposal) ? projectsProposal.length : 1} op(s)` : "(none in the reply)",
                 projectsApplied: projectsSummary ? `${projectsSummary.length} change(s)` : "nothing",
                 projectsProblem: projectsProblem || "(none)",

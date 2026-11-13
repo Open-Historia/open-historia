@@ -12,7 +12,7 @@ import {
   canonicalPoliticalTraitKey,
   normalizePoliticalTraitValue,
 } from "../../runtime/politicalTraitRegistry.js";
-import { IDEOLOGIES, PARTY_ROLE_LABELS } from "../../runtime/politics.js";
+import { PARTY_ROLE_LABELS } from "../../runtime/politics.js";
 import { collectScenarioPoliticalPolities } from "../../runtime/scenarioPolities.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { removePoliticalActorFromWorld } from "../../../server/polityRename.js";
@@ -105,6 +105,7 @@ const emptyParty = () => {
   ideology: "",
   ideologyFamily: "",
   subideology: "",
+  politicalPosition: "",
   role: "opposition",
   seats: "",
   founded: "",
@@ -513,15 +514,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                         <details key={party._editorKey || `party-row-${index}`} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.075)", borderRadius: "10px", padding: "0.55rem" }}>
                           <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 800 }}>{party.name || `Political entity ${index + 1}`}{party.ruling ? " · Government" : party.coalition ? " · Coalition" : ""}</summary>
                           <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))", marginTop: "0.6rem" }}>
-                            {[["Name", "name"], ["Short name", "shortName"], ["Native name", "nameNative"], ["Native abbreviation", "shortNameNative"], ["Leader", "leader"], ["Ideology label", "ideology"], ["Founded", "founded"], ["Party colour (hex)", "color"], ["Influence label", "influenceLabel"]].map(([label, field]) => <div key={field}><label style={labelStyle}>{label}</label><input style={inputStyle} value={party[field] ?? ""} onChange={(event) => editParty(index, field, event.target.value)} /></div>)}
-                            <div>
-                              <label style={labelStyle}>Ideology family</label>
-                              <select style={inputStyle} value={party.ideologyFamily ?? ""} onChange={(event) => editParty(index, "ideologyFamily", event.target.value)}>
-                                <option style={optionStyle} value="">Not specified</option>
-                                {IDEOLOGIES.map((ideology) => <option key={ideology.id} style={optionStyle} value={ideology.id}>{ideology.name}</option>)}
-                              </select>
-                            </div>
-                            <div><label style={labelStyle}>Subideology</label><input style={inputStyle} value={party.subideology ?? ""} onChange={(event) => editParty(index, "subideology", event.target.value)} /></div>
+                            {[["Name", "name"], ["Short name", "shortName"], ["Native name", "nameNative"], ["Native abbreviation", "shortNameNative"], ["Leader", "leader"], ["Ideology", "ideology"], ["Political position", "politicalPosition"], ["Founded", "founded"], ["Party colour (hex)", "color"], ["Influence label", "influenceLabel"]].map(([label, field]) => <div key={field}><label style={labelStyle}>{label}</label><input style={inputStyle} value={party[field] ?? ""} onChange={(event) => editParty(index, field, event.target.value)} /></div>)}
                             <div>
                               <label style={labelStyle}>Party role</label>
                               <select style={inputStyle} value={party.ruling ? "governing" : party.coalition ? "coalition" : party.role || "opposition"} onChange={(event) => editParty(index, "role", event.target.value)}>

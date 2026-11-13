@@ -52,7 +52,7 @@ test("political composition is still driven by the bounded public projection", (
   assert.match(politics, /buildPoliticalLandscapeViews\(profile\)/);
   assert.match(politics, /<GovernmentOverview profile=\{profile\}/);
   assert.match(politics, /className="oh-country-landscape-overview"/);
-  assert.match(politics, /landscape\.entries\.slice\(0, 4\)\.map/);
+  assert.match(politics, /landscape\.slices\.slice\(0, 4\)\.map/);
   assert.match(politics, /<PartyDonut/);
   assert.match(politics, /<PartyRow/);
   assert.match(politics, /<InstitutionPortfolio rows=\{institutions\}/);

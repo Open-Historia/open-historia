@@ -54,6 +54,47 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "the entire war foundational archetecture is pretty weak ... we need to redesign the foundations and do a canonical war system rework" (the owner, 2026-11-13):
+    // one war record for everything (runtime/warRecord.js), ids never reused, whole coalitions, nothing live cut, one settlement per skip and no retries.
+    id: "2026-11-sturdier-wars",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Sturdier wars",
+        items: [
+          "A war that ends and flares up again is now a new war, so the first keeps its history, treaty and reparations.",
+          "Every member of a coalition counts, however large it is: a front opens wherever any of them borders the enemy.",
+          "Ongoing wars, open peace offers, unanswered calls to arms and unpaid reparations are never dropped from the record.",
+          "A time skip no longer asks the AI again over a war record that does not fit: it is fixed or left out, and the next turn is told.",
+          "A pre-game history is no longer thrown away over one war, and a war already being fought is never set up twice.",
+        ],
+      },
+    ],
+  },
+  {
+    // Political World / Pre-history player-facing editor refresh. Keep the
+    // delivery date aligned with the eventual Beta build before publishing.
+    id: "2026-11-political-world-prehistory",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Political World and starting history",
+        items: [
+          "Small parties now stay individually visible in the Political World party list, even when the chart groups them together.",
+          "Parties now use freeform Ideology and Political position fields in the Scenario Editor and Country Editor.",
+          "Generated political parties can use more flexible ideology and political-position descriptions.",
+          "Create and edit starting relationships, agreements and ongoing storylines without generating pre-game history.",
+          "Set relationship scores, treaty signatories, guarantees and access rights, and storyline participants, pressure and status.",
+          "Existing treaties generated with Political World can now be edited or removed from your scenario's starting history.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it not play the war music whenever the war room is availible, because if you have deployed troops but no conflicts there should be no war music" (the owner, 2026-11-13):
     // the war room open on troops built up in peace played the battle music.
     id: "2026-11-war-music-only-in-war",

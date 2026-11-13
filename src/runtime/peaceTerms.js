@@ -56,6 +56,7 @@
 // Pure, and loads in plain Node.
 
 import { PUPPET_KINDS, puppetKindLabel } from "./puppets.js";
+import { MAX_WAR_SIDE_MEMBERS, keepOpenRows } from "./warRecord.js";
 
 export const TERRITORY_AS_HELD = "as held";
 export const TERRITORY_RESTORED = "restored";
@@ -277,7 +278,8 @@ export const normalizePeaceOffers = (value) => {
     const offer = normalizePeaceOffer(raw);
     if (offer) kept.set(offer.id, offer);
   }
-  return [...kept.values()].slice(-OFFERS_KEPT_MOST);
+  // (An open offer is never cut: runtime/warRecord.js keepOpenRows.)
+  return keepOpenRows([...kept.values()], OFFERS_KEPT_MOST, (offer) => offer.status === "open");
 };
 
 // The offers that wait for an answer from one country ("" for anybody's).
@@ -433,8 +435,9 @@ export const readPeaceVerdict = (text, { from = "", to = "" } = {}) => {
   return { verdict, terms: readTermsLine(line.slice(word[0].length).replace(/^[\s:,-]+/, ""), { from, to }) };
 };
 
-// The open offers as a turn ends: those whose war is over, or that have stood
-// too long, lapse. A turn makes no offer of its own: the AI does (offerFromAi).
+// The open offers as a turn ends: those whose war is over, whose two parties
+// no longer face each other in it, or that have stood too long, lapse. A turn
+// makes no offer of its own: the AI does (offerFromAi).
 //   offers   world.peaceOffers as the turn ends
 //   wars     the war ledger as the turn ends
 //   round    the turn it now is
@@ -444,7 +447,11 @@ export const withTurnPeaceOffers = (offers, { wars = [], round = 0 } = {}) => {
   return normalizePeaceOffers(offers).map((offer) => {
     if (offer.status !== "open") return offer;
     const war = warsById.get(offer.warId);
-    const stale = !war || !settleable(war) || now - offer.round >= PEACE_OFFER_STANDS_ROUNDS;
+    // (A peace is between the two it was offered between: an offer of one war's
+    // parties is no peace for a war fought by others, whatever its id.)
+    const [first, second] = sidesOf(war).map((members) => new Set(members.map(fold)));
+    const facing = (first.has(fold(offer.from)) && second.has(fold(offer.to))) || (first.has(fold(offer.to)) && second.has(fold(offer.from)));
+    const stale = !war || !settleable(war) || !facing || now - offer.round >= PEACE_OFFER_STANDS_ROUNDS;
     return stale ? { ...offer, status: "lapsed", answeredRound: now } : offer;
   });
 };
@@ -588,7 +595,9 @@ export const normalizeReparations = (value) => {
     const entry = normalizeReparation(raw);
     if (entry && entry.paidDays < entry.days) kept.set(entry.id, entry);
   }
-  return [...kept.values()].slice(-REPARATIONS_KEPT_MOST);
+  // Every one kept is still owed, and none is forgiven by a cut (more than 24
+  // owed at once used to forgive the oldest).
+  return keepOpenRows([...kept.values()], REPARATIONS_KEPT_MOST, () => true);
 };
 
 // The reparations a peace begins: [] for terms with none.
@@ -655,7 +664,7 @@ export const normalizePeaceTreaties = (value) => {
       round: Math.max(0, Math.round(figure(raw.round))),
       from: clean(raw.from),
       to: clean(raw.to),
-      sides: [0, 1].map((side) => list(raw.sides?.[side]).map((name) => clean(name)).filter(Boolean).slice(0, 12)),
+      sides: [0, 1].map((side) => list(raw.sides?.[side]).map((name) => clean(name)).filter(Boolean).slice(0, MAX_WAR_SIDE_MEMBERS)),
       terms: normalizeTerms(raw.terms),
       by: TREATY_WAYS.includes(raw.by) ? raw.by : "offer",
     });

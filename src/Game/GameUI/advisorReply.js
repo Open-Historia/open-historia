@@ -23,7 +23,7 @@ const UNCLOSED_CHART = /```chart[\s\S]*$/;
 // only recognizably complete formal plans, not ordinary mentions or questions.
 // Keep model autonomy to propose actions without an explicit player request.
 export const unreviewableFormalActionTitle = (text) => {
-  const heading = /^\s*(?:#{1,6}\s*)?(?:\*\*)?Action:\s*(.+?)(?:\*\*)?\s*$/im.exec(text);
+  const heading = /^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:(?:Updated|Revised)\s+)?Action:\s*(.+?)(?:\*\*)?\s*$/im.exec(text);
   if (!heading) return null;
   const remaining = text.slice(heading.index + heading[0].length, heading.index + heading[0].length + 2200);
   if (!/^\s*(?:\*\*)?Lead:(?:\*\*)?\s+\S/im.test(remaining) || !/^\s*(?:\*\*)?1\.\s+\S/m.test(remaining)) return null;
