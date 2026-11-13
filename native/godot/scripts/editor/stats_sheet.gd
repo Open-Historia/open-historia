@@ -605,7 +605,10 @@ func _rebuild() -> void:
 		var texts := VBoxContainer.new()
 		texts.add_theme_constant_override("separation", 3)
 		texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		texts.add_child(UI.label("Standard National Stats sheet", 12, UI.WHITE, 800))
+		var heading := UI.label("Standard National Stats sheet", 12, UI.WHITE, 800)
+		if UI.phone():
+			heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		texts.add_child(heading)
 		texts.add_child(UI.wrapped("Uses the current audited population/GDP engine, strategic indices, and modern economy fields.", 10, Color(1, 1, 1, 0.42)))
 		row.add_child(texts)
 		var customize := _button("Customize full sheet", true)

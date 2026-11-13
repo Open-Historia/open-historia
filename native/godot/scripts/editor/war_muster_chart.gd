@@ -80,6 +80,10 @@ func _init(own_text := "Its own curve", fallback_text := "The game's default") -
 	_plot.mouse_filter = Control.MOUSE_FILTER_STOP
 	_plot.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_plot.custom_minimum_size = Vector2(MOST_WIDTH, MOST_WIDTH * VIEW_H / VIEW_W)
+	if UI.phone():
+		var tree := Engine.get_main_loop() as SceneTree
+		var first := minf(MOST_WIDTH, maxf(120.0, (tree.root.get_visible_rect().size.x if tree and tree.root else 412.0) - 116.0))
+		_plot.custom_minimum_size = Vector2(first, first * VIEW_H / VIEW_W)
 	_plot.tooltip_text = "Mustering curve"
 	add_child(_plot)
 	_legend = HBoxContainer.new()
@@ -163,6 +167,8 @@ func set_points(points: Variant, fallback: Variant = null) -> void:
 
 func _fit() -> void:
 	var width := minf(MOST_WIDTH, maxf(120.0, size.x))
+	if UI.phone() and is_inside_tree():
+		width = minf(width, maxf(120.0, get_viewport_rect().size.x - 116.0))
 	_plot.custom_minimum_size = Vector2(width, width * VIEW_H / VIEW_W)
 	_plot.queue_redraw()
 

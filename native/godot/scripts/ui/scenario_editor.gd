@@ -131,6 +131,9 @@ var _nav_groups: VBoxContainer
 var _nav_actions: VBoxContainer
 var _save_button: Button
 var _header_title: Label
+var _phone_tabs: HBoxContainer
+var _phone_actions: HFlowContainer
+var _phone_tab_scroll: ScrollContainer
 var _header_blurb: Label
 var _scroll: ScrollContainer
 var _content: VBoxContainer
@@ -503,13 +506,16 @@ func _build() -> void:
 	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_dim)
 	_dialog = PanelContainer.new()
-	_dialog.add_theme_stylebox_override("panel", UI.box(EditorKit.PANEL, Color(1, 1, 1, 0.09), 22, 1, Vector4(1, 1, 1, 1)))
+	if UI.phone():
+		_dialog.add_theme_stylebox_override("panel", UI.box(EditorKit.PANEL, Color(0, 0, 0, 0), 0, 0))
+	else:
+		_dialog.add_theme_stylebox_override("panel", UI.box(EditorKit.PANEL, Color(1, 1, 1, 0.09), 22, 1, Vector4(1, 1, 1, 1)))
 	_dialog.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_dialog)
-	var columns := HBoxContainer.new()
+	var columns: BoxContainer = VBoxContainer.new() if UI.phone() else HBoxContainer.new()
 	columns.add_theme_constant_override("separation", 0)
 	_dialog.add_child(columns)
-	columns.add_child(_build_nav())
+	columns.add_child(_build_phone_nav() if UI.phone() else _build_nav())
 	columns.add_child(_build_main())
 	_suggest_box = SuggestBox.new()
 	add_child(_suggest_box)
@@ -566,10 +572,107 @@ func _build_nav() -> Control:
 	return nav
 
 
+func _build_phone_nav() -> Control:
+	var inset := UI.safe_insets()
+	var nav := PanelContainer.new()
+	var style := UI.box(EditorKit.NAV, Color(1, 1, 1, 0.08), 0, 0, Vector4(12.8 + inset.x, 12.8 + inset.y, 12.8 + inset.z, 11.2))
+	style.border_width_bottom = 1
+	nav.add_theme_stylebox_override("panel", style)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 10)
+	nav.add_child(column)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 11)
+	_nav_cover = RoundedImage.new(Vector2(41.6, 41.6), 12, COVER_BG, UI.ACCENT, 2)
+	_nav_cover.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	head.add_child(_nav_cover)
+	var titles := VBoxContainer.new()
+	titles.add_theme_constant_override("separation", 2)
+	titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	titles.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_nav_kicker = UI.label("SCENARIO EDITOR", 11, Color(1, 1, 1, 0.5), 700, "Arial", 1)
+	titles.add_child(_nav_kicker)
+	_nav_name = UI.label("", 16, UI.WHITE, 800, "Arial", 0)
+	_nav_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_nav_name.clip_text = true
+	_nav_name.custom_minimum_size.x = 1
+	titles.add_child(_nav_name)
+	head.add_child(titles)
+	head.add_child(_close_key())
+	column.add_child(head)
+	_phone_tab_scroll = ScrollContainer.new()
+	_phone_tab_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_phone_tab_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	_phone_tabs = HBoxContainer.new()
+	_phone_tabs.add_theme_constant_override("separation", 6)
+	_phone_tab_scroll.add_child(_phone_tabs)
+	column.add_child(_phone_tab_scroll)
+	_nav_groups = VBoxContainer.new()
+	return nav
+
+
+func _close_key() -> Button:
+	var close := EditorKit.button("", "theme")
+	close.icon = UI.icon("close", 15, EditorKit.BUTTON_INK)
+	close.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	close.custom_minimum_size = Vector2(38, 35)
+	close.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
+		var box := close.get_theme_stylebox(state) as StyleBoxFlat
+		if box:
+			var copy := box.duplicate() as StyleBoxFlat
+			copy.content_margin_left = 0
+			copy.content_margin_right = 0
+			close.add_theme_stylebox_override(state, copy)
+	close.pressed.connect(close_editor)
+	close.set_meta("close_button", true)
+	UI.tap_size(close)
+	return close
+
+
+func _phone_tab(key: String) -> Button:
+	var active := key == _section
+	var node := Button.new()
+	node.focus_mode = Control.FOCUS_NONE
+	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var chosen_bg := UiTheme.pick("active", Color(1, 1, 1, 0.1))
+	var normal := UI.box(chosen_bg if active else Color(0, 0, 0, 0), Color(1, 1, 1, 0.18) if active else Color(1, 1, 1, 0.08), 9, 1, Vector4(11.2, 0, 11.2, 0))
+	for state in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
+		node.add_theme_stylebox_override(state, normal)
+	var ink := UI.WHITE if active else NAV_INK
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var glyph := TextureRect.new()
+	glyph.texture = EditorKit.svg_icon(_section_svg(key), 15, ink)
+	glyph.custom_minimum_size = Vector2(15, 15)
+	glyph.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	glyph.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(glyph)
+	var caption := UI.label(str(SECTION_LABELS.get(key, key)), 13, ink, 700 if active else 600)
+	caption.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(caption)
+	if key == "politics" and not _politics_badge.is_empty():
+		row.add_child(EditorKit.badge(_politics_badge, Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.16), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.28), EditorKit.WARN_INK, 9))
+	var holder := MarginContainer.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_theme_constant_override("margin_left", 11)
+	holder.add_theme_constant_override("margin_right", 11)
+	holder.add_child(row)
+	holder.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	node.add_child(holder)
+	node.custom_minimum_size = Vector2(row.get_combined_minimum_size().x + 22.0, UI.PHONE_TAP)
+	node.pressed.connect(func() -> void: _go_section(key))
+	return node
+
+
 func _build_main() -> Control:
 	var main := VBoxContainer.new()
 	main.add_theme_constant_override("separation", 0)
 	main.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if UI.phone():
+		main.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var header := MarginContainer.new()
 	for side in [["margin_left", 22], ["margin_right", 22], ["margin_top", 18], ["margin_bottom", 16]]:
 		header.add_theme_constant_override(side[0], side[1])
@@ -604,13 +707,17 @@ func _build_main() -> Control:
 	rule.color = Color(1, 1, 1, 0.07)
 	rule.custom_minimum_size.y = 1
 	main.add_child(rule)
+	if UI.phone():
+		header.visible = false
+		rule.visible = false
 	_scroll = ScrollContainer.new()
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var margin := MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for side in [["margin_left", 22], ["margin_right", 22], ["margin_top", 19], ["margin_bottom", 26]]:
-		margin.add_theme_constant_override(side[0], side[1])
+	var inset := UI.safe_insets()
+	for side in ([["margin_left", 14.4 + inset.x], ["margin_right", 14.4 + inset.z], ["margin_top", 16], ["margin_bottom", 16]] if UI.phone() else [["margin_left", 22], ["margin_right", 22], ["margin_top", 19], ["margin_bottom", 26]]):
+		margin.add_theme_constant_override(side[0], int(round(float(side[1]))))
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 0)
 	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -631,6 +738,18 @@ func _build_main() -> Control:
 	margin.add_child(stack)
 	_scroll.add_child(margin)
 	main.add_child(_scroll)
+	if UI.phone():
+		var foot := PanelContainer.new()
+		var foot_style := UI.box(EditorKit.PANEL, Color(1, 1, 1, 0.08), 0, 0, Vector4(14.4 + inset.x, 11.2, 14.4 + inset.z, 11.2 + inset.w))
+		foot_style.border_width_top = 1
+		foot.add_theme_stylebox_override("panel", foot_style)
+		var flow := HFlowContainer.new()
+		flow.add_theme_constant_override("h_separation", 7)
+		flow.add_theme_constant_override("v_separation", 7)
+		foot.add_child(flow)
+		_nav_actions = VBoxContainer.new()
+		_phone_actions = flow
+		main.add_child(foot)
 	return main
 
 
@@ -638,6 +757,11 @@ func _fit() -> void:
 	if not is_inside_tree():
 		return
 	var view := get_viewport_rect().size
+	if UI.phone():
+		_dialog.size = view
+		_dialog.custom_minimum_size = view
+		_dialog.position = Vector2.ZERO
+		return
 	var width := minf(DIALOG_MAX.x, view.x - 40.0)
 	var height := minf(DIALOG_MAX.y, view.y - 40.0)
 	_dialog.size = Vector2(width, height)
@@ -668,7 +792,13 @@ func _render_nav() -> void:
 	_nav_name.tooltip_text = _nav_name.text
 	EditorKit.clear(_nav_groups)
 	var visible_sections := _visible_sections()
-	for group in SECTION_GROUPS:
+	if UI.phone():
+		EditorKit.clear(_phone_tabs)
+		for group in SECTION_GROUPS:
+			for key in group[1]:
+				if visible_sections.has(key):
+					_phone_tabs.add_child(_phone_tab(key))
+	for group in ([] if UI.phone() else SECTION_GROUPS):
 		var keys: Array = (group[1] as Array).filter(func(key: String) -> bool: return visible_sections.has(key))
 		if keys.is_empty():
 			continue
@@ -706,6 +836,25 @@ func _render_nav() -> void:
 		var delete := _wide_action("Delete", EditorKit.DANGER_BG, EditorKit.DANGER_BORDER, EditorKit.DANGER_INK)
 		delete.pressed.connect(_delete)
 		_nav_actions.add_child(delete)
+	if UI.phone():
+		_phone_footer()
+
+
+func _phone_footer() -> void:
+	EditorKit.clear(_phone_actions)
+	var widths := [112.0, 144.0, 144.0, 96.0]
+	var at := 0
+	for child in _nav_actions.get_children():
+		_nav_actions.remove_child(child)
+		var control := child as Control
+		if control is Label:
+			control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			control.custom_minimum_size.x = maxf(1.0, get_viewport_rect().size.x - 28.8 - UI.safe_insets().x - UI.safe_insets().z)
+		else:
+			control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			control.custom_minimum_size.x = widths[mini(at, widths.size() - 1)]
+			at += 1
+		_phone_actions.add_child(control)
 
 
 func _wide_action(text: String, bg: Color, border: Color, ink: Color) -> Button:
@@ -767,7 +916,10 @@ func _go_section(key: String) -> void:
 	if key == _section:
 		return
 	_section = key
+	var slid := _phone_tab_scroll.scroll_horizontal if UI.phone() and is_instance_valid(_phone_tab_scroll) else 0
 	_render_nav()
+	if UI.phone() and is_instance_valid(_phone_tab_scroll):
+		_phone_tab_scroll.scroll_horizontal = slid
 	_render_header()
 	_render_section()
 	_scroll.scroll_vertical = 0
@@ -823,6 +975,8 @@ func _render_section() -> void:
 			_render_languages()
 		"bundles":
 			_render_bundles()
+	if UI.phone():
+		_fit.call_deferred()
 
 
 func _set_form(field: String, value: Variant) -> void:
@@ -839,7 +993,15 @@ func _field_area(label_text: String, field: String, min_height: float) -> VBoxCo
 	return EditorKit.field(label_text, edit)
 
 
-func _two(left: Control, right: Control) -> HBoxContainer:
+func _two(left: Control, right: Control) -> BoxContainer:
+	if UI.phone():
+		var stack := VBoxContainer.new()
+		stack.add_theme_constant_override("separation", 13)
+		left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		stack.add_child(left)
+		stack.add_child(right)
+		return stack
 	var row := EditorKit.row(13)
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -898,7 +1060,7 @@ func _suggest_line(value: String, options: Array, placeholder: String, on_change
 
 func _render_world() -> void:
 	var begins := EditorKit.card("Where play begins")
-	var grid := EditorKit.grid(2, 13)
+	var grid := EditorKit.grid(1 if UI.phone() else 2, 13)
 	var country_column := VBoxContainer.new()
 	country_column.add_theme_constant_override("separation", 7)
 	country_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1298,12 +1460,14 @@ func _render_prompts() -> void:
 	_content.add_child(outer[0])
 	var transfer := _kind == "scenario"
 	if transfer:
-		var head := EditorKit.row(7)
+		var head: Container = EditorKit.flow(7) if UI.phone() else EditorKit.row(7)
 		var texts := VBoxContainer.new()
 		texts.add_theme_constant_override("separation", 2)
 		texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		texts.add_child(UI.label("Prompt pack", 13, Color(1, 1, 1, 0.9), 700))
 		texts.add_child(EditorKit.hint("Move every scenario-authored prompt passage at once. Tooling and output contracts stay with the app.", 12, Color(1, 1, 1, 0.48)))
+		if UI.phone():
+			texts.custom_minimum_size.x = maxf(1.0, get_viewport_rect().size.x - 28.8 - 34.0 - UI.safe_insets().x - UI.safe_insets().z)
 		head.add_child(texts)
 		var export_button := EditorKit.button("Export all prompts", "theme")
 		export_button.custom_minimum_size.y = 32

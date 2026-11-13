@@ -168,6 +168,10 @@ static func inline(label: Label, host: Control) -> Label:
 				label.custom_minimum_size.x = wanted
 	host.resized.connect(fit)
 	label.custom_minimum_size.x = natural_width(label)
+	if UI.phone():
+		var tree := Engine.get_main_loop() as SceneTree
+		var room := (tree.root.get_visible_rect().size.x if tree and tree.root else 412.0) - 96.0
+		label.custom_minimum_size.x = minf(label.custom_minimum_size.x, maxf(40.0, room))
 	return label
 
 

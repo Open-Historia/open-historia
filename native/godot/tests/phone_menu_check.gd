@@ -192,7 +192,94 @@ func _run() -> void:
 	await _shoot("phone-menu-games")
 	await _scroll_page(500)
 	await _shoot("phone-menu-games-p2")
+	await _editor(view)
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _rightmost(node: Node) -> float:
+	var most := 0.0
+	for child in node.get_children():
+		if child is Control and (child as Control).is_visible_in_tree() and child.get_parent() is Container:
+			most = maxf(most, (child as Control).get_global_rect().end.x)
+		if not (child is ScrollContainer and (child as ScrollContainer).horizontal_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED):
+			most = maxf(most, _rightmost(child))
+	return most
+
+
+func _chain(node: Node, limit: float) -> String:
+	var best: Control = null
+	for child in node.get_children():
+		if child is Control and (child as Control).visible and (child as Control).get_combined_minimum_size().x > limit:
+			if best == null or (child as Control).get_combined_minimum_size().x > best.get_combined_minimum_size().x:
+				best = child
+	var text := ""
+	if node is Label or node is Button:
+		text = str(node.get("text")).left(50)
+	elif node is RichTextLabel:
+		text = (node as RichTextLabel).get_parsed_text().left(50)
+	var here := "%s(%s) %.0f \"%s\"" % [node.get_class(), str(node.get_script().resource_path.get_file()) if node.get_script() else "", (node as Control).get_combined_minimum_size().x if node is Control else 0.0, text]
+	if best:
+		return here + " > " + _chain(best, limit)
+	var kids: PackedStringArray = []
+	for child in node.get_children():
+		if child is Control and (child as Control).visible:
+			var label := ""
+			if child is Label or child is Button:
+				label = str(child.get("text")).left(30)
+			kids.append("%s %.0f \"%s\"" % [child.get_class(), (child as Control).get_combined_minimum_size().x, label])
+	return here + " [" + ", ".join(kids) + "]"
+
+
+func _editor(view: Vector2) -> void:
+	var editor: Control = main.editor
+	if editor == null:
+		_check(false, "the scenario editor is mounted")
+		return
+	await editor.open_scenario("default")
+	await _wait(1.5)
+	_check(editor.is_open(), "the scenario editor opens")
+	var dialog := editor.get("_dialog") as Control
+	var r := dialog.get_global_rect()
+	_check(r.position == Vector2.ZERO and absf(r.size.x - view.x) < 1.0 and absf(r.size.y - view.y) < 1.0, "on a phone the editor fills the screen (%s)" % str(r))
+	var tabs := editor.get("_phone_tabs") as Control
+	_check(tabs != null and tabs.is_visible_in_tree() and tabs.get_child_count() >= 8, "the sections are a row of tabs across the top")
+	if tabs and tabs.get_child_count() > 0:
+		_check((tabs.get_child(0) as Control).size.y >= 43.5, "a section tab is finger-high")
+	var close := _find(dialog, func(item: Node) -> bool: return item.has_meta("close_button") and (item as Control).is_visible_in_tree())
+	_check(close.size() == 1 and (close[0] as Control).size.x >= 43.5 and (close[0] as Control).size.y >= 43.5, "one close button, 44 px")
+	var actions := editor.get("_phone_actions") as Control
+	_check(actions != null and actions.is_visible_in_tree() and actions.get_global_rect().end.y <= view.y + 0.5, "Save and the editor's actions stand at the foot")
+	var content := editor.get("_content") as Control
+	for key in ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "languages", "bundles"]:
+		editor._go_section(key)
+		await _wait(1.4 if key in ["music", "features", "languages", "politics"] else 0.7)
+		var widest := _rightmost(content)
+		_check(widest <= view.x + 0.5, "the editor's %s fits the phone's width (rightmost %.1f)" % [key, widest])
+		if widest > view.x + 0.5:
+			_say("too wide: " + _chain(content, view.x - 40.0))
+		await _shoot("phone-editor-" + key)
+	await _region_picker(view)
+	editor.close_editor()
+	await _wait(0.6)
+
+
+func _region_picker(view: Vector2) -> void:
+	var picker := EditorRegionPicker.new()
+	(main.editor as Control).add_child(picker)
+	picker.open(main.engine, {"scenarioId": str(main.editor.current_id()), "customRegions": true, "ownerOverrides": null}, [], false)
+	await _until(func() -> bool: return picker.map_ready or picker.load_failed, 120.0)
+	await _wait(0.8)
+	_check(picker.map_ready, "the region picker draws the scenario's map")
+	var dialog := picker.get("_dialog") as Control
+	var r := dialog.get_global_rect()
+	_check(r.position == Vector2.ZERO and absf(r.size.x - view.x) < 1.0 and absf(r.size.y - view.y) < 1.0, "on a phone the region picker fills the screen (%s)" % str(r))
+	var frame := picker.get("_map_frame") as Control
+	var search := picker.get("_search") as Control
+	_check(frame.get_global_rect().end.y <= search.get_global_rect().position.y, "the map stands over the search and the list")
+	_check(_rightmost(dialog) <= view.x + 0.5, "the region picker fits the phone's width (rightmost %.1f)" % _rightmost(dialog))
+	await _shoot("phone-region-picker")
+	picker.queue_free()
+	await _wait(0.4)
 
 
 func _clear_shell() -> void:

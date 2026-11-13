@@ -600,6 +600,9 @@ func _number_row(key: String, setting: Dictionary) -> Control:
 	row.add_child(edit)
 	var unit := UI.label(str(setting.get("unit", "")), 13, Color(1, 1, 1, 0.58))
 	unit.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	if UI.phone():
+		unit.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		unit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(unit)
 	var status := UI.label("", 12, Color(1, 1, 1, 0.45))
 	status.size_flags_vertical = Control.SIZE_SHRINK_CENTER

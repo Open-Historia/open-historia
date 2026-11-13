@@ -122,18 +122,23 @@ func _build_card() -> void:
 
 func _render_card() -> void:
 	EditorKit.clear(_card_box)
-	var row := HBoxContainer.new()
+	var row: BoxContainer = VBoxContainer.new() if UI.phone() else HBoxContainer.new()
 	row.add_theme_constant_override("separation", 11)
 	var texts := VBoxContainer.new()
 	texts.add_theme_constant_override("separation", 3)
 	texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	texts.add_child(UI.label("Manual Political World authoring", 15, Color(1, 1, 1, 0.94), 800))
+	var heading := UI.label("Manual Political World authoring", 15, Color(1, 1, 1, 0.94), 800)
+	if UI.phone():
+		heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	texts.add_child(heading)
 	texts.add_child(PoliticalKit.text("Set each country's starting Political World: government, leaders, parties, blocs, strategy, perceptions and political traits.", 11, Color(1, 1, 1, 0.5)))
 	texts.add_child(PoliticalKit.gap(2))
 	texts.add_child(UI.label("%d actor%s configured across %d scenario polities." % [_actor_count, "" if _actor_count == 1 else "s", _rows.size()], 10, Color(1, 1, 1, 0.38)))
 	row.add_child(texts)
 	var manage := PoliticalKit.action_button("Manage Political World", "raised")
 	manage.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	if UI.phone():
+		manage.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	manage.pressed.connect(_open_manager)
 	row.add_child(manage)
 	_card_box.add_child(row)

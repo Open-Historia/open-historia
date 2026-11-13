@@ -108,6 +108,9 @@ func _build() -> void:
 	add_child(centre)
 	_dialog = PanelContainer.new()
 	var face := UI.box(UiTheme.pick("surface", SURFACE), UiTheme.pick("line", LINE), 16, 1, Vector4(0, 0, 0, 0))
+	if UI.phone():
+		var inset := UI.safe_insets()
+		face = UI.box(UiTheme.pick("surface", SURFACE), Color(0, 0, 0, 0), 0, 0, inset)
 	face.shadow_color = Color(0, 0, 0, 0.5)
 	face.shadow_size = 35
 	face.shadow_offset = Vector2(0, 24)
@@ -124,11 +127,19 @@ func _build() -> void:
 		body.add_theme_constant_override(side, 11)
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	column.add_child(body)
-	var row := HBoxContainer.new()
+	var row: BoxContainer = VBoxContainer.new() if UI.phone() else HBoxContainer.new()
 	row.add_theme_constant_override("separation", 11)
 	body.add_child(row)
-	row.add_child(_map_side())
-	row.add_child(_aside())
+	var map_side := _map_side()
+	var aside := _aside()
+	row.add_child(map_side)
+	row.add_child(aside)
+	if UI.phone():
+		map_side.size_flags_stretch_ratio = 46.0
+		aside.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		aside.size_flags_stretch_ratio = 54.0
+		aside.custom_minimum_size.x = 0
+		_map_frame.custom_minimum_size.y = 120
 	_fit()
 	get_viewport().size_changed.connect(_fit)
 
@@ -137,7 +148,7 @@ func _fit() -> void:
 	if not is_instance_valid(_dialog):
 		return
 	var view := get_viewport_rect().size
-	_dialog.custom_minimum_size = Vector2(minf(1152.0, view.x - 32.0), minf(736.0, view.y - 32.0))
+	_dialog.custom_minimum_size = view if UI.phone() else Vector2(minf(1152.0, view.x - 32.0), minf(736.0, view.y - 32.0))
 	_dialog.reset_size()
 
 
@@ -155,6 +166,7 @@ func _header() -> Control:
 	row.add_child(title)
 	var close_button := small_button("×", {"size": 16, "pad": 0.0})
 	close_button.custom_minimum_size = Vector2(35, 32)
+	UI.tap_size(close_button)
 	close_button.tooltip_text = "Close region picker"
 	close_button.pressed.connect(_close)
 	row.add_child(close_button)
@@ -285,13 +297,14 @@ func _aside() -> Control:
 	footer.add_child(_done_button)
 	aside.add_child(footer)
 	aside.resized.connect(_size_matches.bind(aside))
-	_search.grab_focus.call_deferred()
+	if not UI.phone():
+		_search.grab_focus.call_deferred()
 	return aside
 
 
 func _size_matches(aside: Control) -> void:
 	if is_instance_valid(_matches_scroll):
-		_matches_scroll.custom_minimum_size.y = minf(_matches.get_combined_minimum_size().y, aside.size.y * 0.4)
+		_matches_scroll.custom_minimum_size.y = minf(_matches.get_combined_minimum_size().y, 144.0 if UI.phone() else aside.size.y * 0.4)
 
 
 func _load(source: Dictionary) -> void:
@@ -376,6 +389,7 @@ func _zoom_box() -> Control:
 		button.tooltip_text = str(spec[1])
 		button.focus_mode = Control.FOCUS_NONE
 		button.custom_minimum_size = Vector2(24, 24)
+		UI.tap_size(button)
 		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		var idle := UI.box(Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 6, 0, Vector4(0, 0, 0, 0))
 		var lit := UI.box(Color(1, 1, 1, 0.22), Color(0, 0, 0, 0), 6, 0, Vector4(0, 0, 0, 0))

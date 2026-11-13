@@ -129,7 +129,7 @@ func _total_members() -> int:
 
 func _render_card() -> void:
 	EditorKit.clear(_card_box)
-	var row := HBoxContainer.new()
+	var row: BoxContainer = VBoxContainer.new() if UI.phone() else HBoxContainer.new()
 	row.add_theme_constant_override("separation", 11)
 	var texts := VBoxContainer.new()
 	texts.add_theme_constant_override("separation", 3)
@@ -143,6 +143,8 @@ func _render_card() -> void:
 	row.add_child(texts)
 	var manage := PoliticalKit.action_button("Manage institutions", "raised")
 	manage.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	if UI.phone():
+		manage.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	manage.pressed.connect(_open_manager)
 	row.add_child(manage)
 	_card_box.add_child(row)
