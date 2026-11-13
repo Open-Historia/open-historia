@@ -90,6 +90,11 @@ export const MAP_SETTING_KEYS = {
     // outcome, is held for the player to retry (AI/playerTurnFailures.js). OFF
     // by default: the skip lands and the orders carry over as overdue.
     stopOnPlayerFailures: "ai_stop_on_player_failures",
+    // A skip's contract has a required entry for each of the player's orders —
+    // what came of it and who reacted — and a count on its list of events
+    // (AI/orderOutcomes.js). OFF by default: it changes what the model is asked
+    // for, and is for a model that otherwise says the orders again.
+    orderOutcomes: "ai_order_outcomes",
     // Discord's "Playing Open Historia" with the country, the scenario and the
     // in-game date under it (runtime/discordPresence.js; the desktop app and
     // the local server only). ON by default — read with
@@ -204,6 +209,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.liveSkipEvents]: "Show time skip events as they are written",
     [MAP_SETTING_KEYS.idleDiplomacy]: "Countries write to me between time skips",
     [MAP_SETTING_KEYS.stopOnPlayerFailures]: "Stop when my events fail",
+    [MAP_SETTING_KEYS.orderOutcomes]: "Orders answered with outcome and reactions",
     [MAP_SETTING_KEYS.discordPresence]: "Show what I am playing on Discord",
     [MAP_SETTING_KEYS.ambientMusic]: "Music",
     [MAP_SETTING_KEYS.soundEffects]: "Sound effects",

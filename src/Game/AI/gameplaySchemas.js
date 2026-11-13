@@ -1467,6 +1467,14 @@ export const JUMP_FORWARD_SCHEMA = {
       description: "Social media posts of the period.",
       items: { type: "object" },
     },
+    // The player's orders answered one entry each (orderOutcomes.js). Loose
+    // here: the contract a skip is SENT declares the entries in full, and only
+    // with the setting on; each is made an event before anything reads them
+    // (foldOrderOutcomes), and one written oddly costs that order its answer.
+    orderOutcomes: {
+      type: "object",
+      description: "The player's orders, one entry each; format in the function.",
+    },
     // Anything at all: each entry is read on its own (socialFeed.js
     // readSkipPollResults), and one the model wrote oddly costs that poll its
     // answer this time, never the turn.
@@ -1514,6 +1522,7 @@ const JUMP_FORWARD_LEAN_SCHEMA = (() => {
     [WAR_FIGURES_FIELD]: _warFigures,
     [SOCIAL_POSTS_FIELD]: _socialPosts,
     [POLL_RESULTS_FIELD]: _pollResults,
+    orderOutcomes: _orderOutcomes,
     ...properties
   } = JUMP_FORWARD_SCHEMA.properties;
   return {
