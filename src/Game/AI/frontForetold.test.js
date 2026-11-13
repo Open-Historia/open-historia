@@ -122,11 +122,11 @@ test("a change of hands rides on an event that tells of its war: the first of it
 
 // "now ive captured berlin": the engine's capture of the capital rode on "Mud and Early Frost Stall Wehrmacht Armor
 // Outside Moscow", the one event of its war on its day or later (2026-11-10). A change of hands rides on an event of
-// its war that names its place, and what none names the engine tells itself, by name and on its own days.
+// its war whose places name its place, and what none names the engine tells itself, by name and on its own days.
 test("a change of hands rides on the event of its war that tells its place, and the engine tells the rest itself", () => {
   const events = [
     event("e1", "2024-03-05", { warId: "war-east", title: "Mud stalls the armour before Eastgate" }),
-    event("e2", "2024-03-12", { warId: "war-east", title: "The capital falls", description: "Aland's troops raise their flag over Brodgrad." }),
+    event("e2", "2024-03-12", { warId: "war-east", title: "The capital falls", description: "Aland's troops raise their flag over Brodgrad.", places: ["city: Brodgrad, country: Aland"] }),
     event("e3", "2024-03-14", { warId: "war-other", title: "A declaration made in Brodgrad", places: [{ kind: "city", name: "Brodgrad" }] }),
     event("e4", "2024-03-20", { warId: "war-east", places: [{ kind: "region", name: "Lowmark", regionId: "r7" }] }),
   ];
@@ -139,10 +139,17 @@ test("a change of hands rides on the event of its war that tells its place, and 
     flip(16, "r8", { name: "Highmark", cities: ["Hightown"] }),
     flip(18, "r9", { name: "Fenland" }),
   ];
-  assert.equal(frontPlaceTold(events[1], flips[0]), true, "by a town of it named in the text");
-  assert.equal(frontPlaceTold(events[3], flips[1]), true, "by its region among the places");
+  assert.equal(frontPlaceTold(events[1], flips[0]), true, "by a town of it among the places, as written");
+  assert.equal(frontPlaceTold(events[3], flips[1]), true, "by its region among the places, as found");
   assert.equal(frontPlaceTold(events[0], flips[0]), false);
-  assert.equal(frontPlaceTold({ title: "Brodgradians rally" }, flips[0]), false, "a name is matched whole");
+  assert.equal(frontPlaceTold({ title: "Brodgradians rally" }, flips[0]), false);
+  // The words are never read for a place, in English or any other language: only `places`.
+  const told = { title: "The capital falls", description: "Aland's troops raise their flag over Brodgrad." };
+  const toldFr = { title: "La capitale tombe", description: "Les troupes d'Aland hissent leur drapeau sur Brodgrad." };
+  assert.equal(frontPlaceTold(told, flips[0]), false, "a town named in the text alone does not tell it");
+  assert.equal(frontPlaceTold(toldFr, flips[0]), false);
+  assert.equal(frontPlaceTold({ ...told, places: ["city: Brodgrad"] }, flips[0]), true);
+  assert.equal(frontPlaceTold({ ...toldFr, places: ["city: Brodgrad"] }, flips[0]), true, "the French twin is told by its places exactly as the English");
   const { events: next, unattached } = attachFrontFlips(events, flips, { dayOf, aboutOf, tellsOf: frontPlaceTold });
   const carried = next.map((entry) => (entry.impacts.regionControlOps ?? []).map((op) => op.regionId));
   // The capital on the report of its fall, a week after it fell in the account, never on the mud before it; nor on

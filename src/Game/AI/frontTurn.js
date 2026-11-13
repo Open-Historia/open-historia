@@ -827,21 +827,19 @@ export const attachFrontFlips = (events, flips, { dayOf = () => 0, aboutOf = nul
   return { events: next, unattached };
 };
 
-// Whether an event tells the place a change of hands was at: one of its places
-// is that region (by its id or its name) or a town in it, or its title or text
-// names one of them. Names are matched whole, in any case: that is who the
-// place is, and nothing is read of what the event says happened there.
-const wholeName = (name) => new RegExp(`(?<![\\p{L}\\p{N}])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "iu");
+// Whether an event tells the place a change of hands was at: one of its
+// `places` (the field the skip fills, eventPlaces.js) is that region, by its id
+// or its name, or a town in it. Its title and text are never read for a name:
+// a story told in French names Moscou where the map says Moscow, and an English
+// one names Berlin as where a war was declared as readily as where it was won.
+// What no event's places tell, the engine tells itself (frontReportEvents).
 export const frontPlaceTold = (event, flip) => {
   const names = [clean(flip?.name), ...asArray(flip?.cities).map(clean)].filter(Boolean);
   const regionId = clean(flip?.regionId);
-  const placed = asArray(event?.places).some((place) => {
+  return asArray(event?.places).some((place) => {
     if (typeof place === "string") return names.some((name) => fold(place).replace(/^[a-z]+\s*:\s*/, "").split(",")[0].trim() === fold(name));
     return (regionId && clean(place?.regionId) === regionId) || names.some((name) => fold(place?.name) === fold(name));
   });
-  if (placed) return true;
-  const text = `${clean(event?.title)} ${clean(event?.description)}`;
-  return names.some((name) => wholeName(name).test(text));
 };
 
 // What the engine itself tells of the changes of hands no event of the story
