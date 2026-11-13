@@ -123,6 +123,9 @@ test("only a local server is warmed, a real request drops a warm-up on its way, 
     assert.match(send, /if \(!ready \|\| !endpointIsLocal\(opening\.endpoint\)\) return;/);
     assert.match(send, /const key = String\(entry\.apiKey \?\? ""\)\.trim\(\);/);
     assert.equal(JSON.stringify(opening).includes("Authorization"), false);
+    // A retry of failed events, or the round that must answer, is not what the next skip opens with.
+    assert.match(main, /answerOnly: requireOutputTool \|\| !opensLikeNextSkip,/);
+    assert.match(readFileSync(new URL("./gameplay.js", import.meta.url), "utf8"), /\.\.\.\(context\.amend \? \{ opensLikeNextSkip: false \} : \{\}\),/);
     // Every request to a chat-completions server passes the note; another task's asks for a warm-up, which waits for an idle game.
     assert.match(main, /payload: noteLocalRequest\(\{\n\s+model,/);
     assert.match(note, /if \(!skip\) warmSkipOpening\(\);/);

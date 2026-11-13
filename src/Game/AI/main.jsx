@@ -1476,6 +1476,8 @@ async function callOpenAIStyleChatCompletions({
     // Where the system prompt's unchanging part ends (promptLayout.js): what a
     // local server is given to read ahead of the next skip (skipWarmUp.js).
     staticPrefixEnd = null,
+    // False for a skip's request that the next skip will not open like (gameplay.js runJsonTask).
+    opensLikeNextSkip = true,
 }) {
     // A model under KoboldCpp's own prefix is its /v1/models speaking, typed
     // into the entry or found there a moment ago (resolveConfiguredModel).
@@ -1660,7 +1662,7 @@ async function callOpenAIStyleChatCompletions({
                 // The offset is the prompt's own; a mode that appends to it leaves the opening where it was.
                 staticPrefixEnd,
                 campaign: promptCacheKey,
-                answerOnly: requireOutputTool,
+                answerOnly: requireOutputTool || !opensLikeNextSkip,
             }),
         });
         onRequest?.(response.status);

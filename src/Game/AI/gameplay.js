@@ -3876,6 +3876,10 @@ const runJsonTask = async (taskKey, {
   // been sent, so a scenario's stat keys are already in it; the answer is still
   // validated by the task's schema, which accepts both contracts.
   toolTransform = null,
+  // False for a request that does not open the way the next skip will (a retry
+  // of the player's failed events, whose function is another): a local server
+  // is not given it to read ahead (skipWarmUp.js).
+  opensLikeNextSkip = true,
   // The request budget (requestBudget.js). `budget` is the time skip this task
   // belongs to and `spender` who it is within it: each attempt asks the budget
   // first, and a refusal ends the task the way a failure would (its fallback, or
@@ -4187,6 +4191,7 @@ const runJsonTask = async (taskKey, {
           // The provider's own name for the prefix (OpenAI prompt_cache_key):
           // one per campaign and kind of request, the skip's two modes as one.
           promptCacheKey: promptCacheKeyFor(taskKey),
+          opensLikeNextSkip,
           __debug: { taskKey, attempt: outputAttempt, maxAttempts: 2, simulatedDays: computeSimulatedDays(variables) },
           __debugSink: attemptSink,
           ...(requestKind ? { requestKind } : {}),
@@ -17089,6 +17094,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // left empty, and its answer is read only where there is one (the
         // history's below; foldedTurnReview for the board).
         ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, riders) } : {}),
+        ...(context.amend ? { opensLikeNextSkip: false } : {}),
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
