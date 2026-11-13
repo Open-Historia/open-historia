@@ -90,12 +90,21 @@ var _send: Button
 var _handle: Control
 var _handle_bar: ColorRect
 var _status_holder: PanelContainer
+var _status_name: Control
+var _head_sides: Label
+var _map_key: Button
+var _fit_key: Button
+var _close_key: Button
+var _phone := false
+var _folded := false
+var _drawer_styled: Array = []
 
 
 func _init() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	visible = false
+	_phone = UI.phone()
 	map_layer = WarRoomMap.new()
 	add_child(map_layer)
 	_build_frame()
@@ -142,7 +151,7 @@ func setup(engine_link: EngineLink, context: Dictionary = {}) -> void:
 	plates.aim.connect(func() -> void: store.take_tool("aircraft"))
 	plates.call_off.connect(func(unit: String) -> void: _order_with("warroom.airstrike", {"op": "unairstrike", "unit": unit}))
 	plates.aircraft_close.connect(func() -> void: store.set_values({"aircraft": false}))
-	if engine:
+	if engine and not _phone:
 		var reply: Dictionary = await engine.request("warroom.width")
 		if reply.get("ok", false) and float(reply.get("result", 0)) > 0.0:
 			_width = _clamp_width(float(reply["result"]))
@@ -409,10 +418,14 @@ func _withdraw_picked() -> void:
 
 func _pick_fleet(id: String) -> void:
 	store.set_values({"fleet": id, "fleets": true, "aircraft": false})
+	if _phone:
+		_fold(true)
 
 
 func _pick_wing(id: String) -> void:
 	store.set_values({"wing": id, "aircraft": true, "fleets": false})
+	if _phone:
+		_fold(true)
 
 
 func _on_store(keys: PackedStringArray) -> void:
@@ -498,6 +511,8 @@ func _notification(what: int) -> void:
 func _layout() -> void:
 	if not _drawer:
 		return
+	if _phone and is_inside_tree():
+		_width = get_viewport_rect().size.x
 	if _open and not (_drawer_tween and _drawer_tween.is_valid() and _drawer_tween.is_running()):
 		_drawer.offset_left = -_width
 		_drawer.offset_right = 0.0
@@ -506,9 +521,50 @@ func _layout() -> void:
 		_drawer.offset_right = _width
 	_bar.offset_right = -_width
 	_strip_bottom.offset_right = -_width
-	store.set_values({"cover": int(round(_width)) if _open else 0})
+	store.set_values({"cover": int(round(_width)) if _open and not _phone else 0})
+	if _phone:
+		_place_phone()
 	_size_sections()
 	_render_rail()
+
+
+func _style_phone_drawer() -> void:
+	var inset := UI.safe_insets()
+	var key := [inset, _folded]
+	if key == _drawer_styled:
+		return
+	_drawer_styled = key
+	var none := Color(0, 0, 0, 0)
+	var style := T.plate_style([none, none, none, none], Vector4(0, 0, 0, 0), Vector4(inset.x, 0.0 if _folded else inset.y, inset.z, inset.w))
+	_drawer_panel.add_theme_stylebox_override("panel", style)
+
+
+func _place_phone() -> void:
+	_style_phone_drawer()
+	_sections_panel.visible = not _folded
+	_talk_panel.visible = not _folded
+	_drawer.anchor_top = 1.0 if _folded else 0.0
+	_drawer.offset_top = -_folded_height() if _folded else 0.0
+	_drawer.offset_bottom = 0.0
+
+
+func _folded_height() -> float:
+	return ceilf(_drawer_panel.get_combined_minimum_size().y)
+
+
+func _fold(value: bool) -> void:
+	if not _phone or value == _folded:
+		return
+	_folded = value
+	if _map_key:
+		_map_key.text = "GENERALS" if _folded else "MAP"
+	_render_status()
+	_place_phone()
+	_render_rail()
+	await get_tree().process_frame
+	if _folded == value and is_instance_valid(_drawer):
+		_place_phone()
+		_render_rail()
 
 
 func _plate_panel(edges: Array, widths: Vector4, margins := Vector4(0, 0, 0, 0)) -> PanelContainer:
@@ -620,7 +676,15 @@ func _build_drawer() -> void:
 	_status_holder = PanelContainer.new()
 	_status_holder.add_theme_stylebox_override("panel", T.bevel(none, [none, none, none, T.SEAM], Vector4(0, 0, 0, 1), Vector4(T.px(0.8), T.px(0.5), T.px(0.8), T.px(0.5) + 1.0)))
 	_status_text = T.soft("")
-	_status_holder.add_child(_status_text)
+	if _phone:
+		var status_column := VBoxContainer.new()
+		status_column.add_theme_constant_override("separation", 0)
+		_status_name = T.pad(T.stencil("", 0.78, T.BONE), Vector4(0, 0, 0, T.px(0.35)))
+		status_column.add_child(_status_name)
+		status_column.add_child(_status_text)
+		_status_holder.add_child(status_column)
+	else:
+		_status_holder.add_child(_status_text)
 	_record_column.add_child(_status_holder)
 	_record_column.add_child(_lip())
 	_sections_panel = PanelContainer.new()
@@ -719,6 +783,12 @@ func _build_drawer() -> void:
 	_handle.add_child(_handle_bar)
 	_handle.gui_input.connect(_on_handle_input)
 	_drawer.add_child(_handle)
+	if _phone:
+		_handle.visible = false
+		_style_phone_drawer()
+		_drawer_column.minimum_size_changed.connect(func() -> void:
+			if _folded and _open:
+				_drawer.offset_top = -_folded_height())
 
 
 func _lip() -> ColorRect:
@@ -756,9 +826,31 @@ func _build_head() -> void:
 	var title := T.stencil("War Room", 1.25, T.BONE, 0.24)
 	title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(title)
-	row.add_child(_key_icon("wr-fit", FIT_SVG, 15, Vector2(T.px(0.5), 0), "Show the whole battlefield", func() -> void: store.set_values({"fit": int(store.value("fit")) + 1})))
-	row.add_child(_key_icon("wr-close", CLOSE_SVG, 14, Vector2(T.px(0.55), 0), "Close the war room", close))
+	if _phone:
+		var titles := VBoxContainer.new()
+		titles.add_theme_constant_override("separation", 0)
+		titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		titles.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		titles.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		titles.add_child(title)
+		_head_sides = T.text("", 0.66, T.BONE_SOFT)
+		_head_sides.autowrap_mode = TextServer.AUTOWRAP_OFF
+		_head_sides.clip_text = true
+		_head_sides.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		_head_sides.custom_minimum_size.x = 1.0
+		_head_sides.visible = false
+		titles.add_child(T.pad(_head_sides, Vector4(0, T.px(0.2), 0, 0)))
+		row.add_child(titles)
+		_map_key = T.key("Map")
+		_map_key.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		_map_key.pressed.connect(func() -> void: _fold(not _folded))
+		row.add_child(_map_key)
+	else:
+		row.add_child(title)
+	_fit_key = _key_icon("wr-fit", FIT_SVG, 15, Vector2(T.px(0.5), 0), "Show the whole battlefield", func() -> void: store.set_values({"fit": int(store.value("fit")) + 1}))
+	row.add_child(_fit_key)
+	_close_key = _key_icon("wr-close", CLOSE_SVG, 14, Vector2(T.px(0.55), 0), "Close the war room", close)
+	row.add_child(_close_key)
 	head.add_child(row)
 	_drawer_column.add_child(head)
 	_drawer_column.add_child(_lip())
@@ -898,9 +990,11 @@ func _render() -> void:
 	var mine: Array = record.get("mine", [])
 	var other: Array = record.get("other", [])
 	var has_record := not record.is_empty()
-	_bar.visible = has_record
-	_strip_left.visible = has_record
-	_strip_bottom.visible = has_record
+	_bar.visible = has_record and not _phone
+	_strip_left.visible = has_record and not _phone
+	_strip_bottom.visible = has_record and not _phone
+	if _head_sides:
+		_head_sides.visible = has_record
 	if has_record:
 		_bar_name.text = _name().to_upper()
 		var sides := "%s · forces at home" % ", ".join(PackedStringArray(mine)) if bool(record.get("home", false)) else "%s against %s" % [", ".join(PackedStringArray(mine)), ", ".join(PackedStringArray(other))]
@@ -909,17 +1003,30 @@ func _render() -> void:
 		if str(record.get("status", "")) == "standing" and not bool(record.get("home", false)):
 			sides += " · built up in peace"
 		_bar_sides.text = sides.to_upper()
+		if _head_sides:
+			_head_sides.text = sides
 		var date_label := str(_view.get("dateLabel", ""))
 		_bar_date.text = (date_label if not date_label.is_empty() else str(_view.get("gameDate", ""))).to_upper()
 	_render_tabs()
 	_empty.visible = not has_record
 	_record_column.visible = has_record
 	if has_record:
-		_status_text.text = ("A turn is being resolved. Orders are taken once it has landed." if _turn_running else "Nothing moves here: orders are carried out when time next passes.") + " The troop tools are on the left of the map."
+		_render_status()
 		_render_sections()
 		_render_talk()
 		_style_send()
 	_render_rail()
+	if _phone:
+		_place_phone()
+
+
+func _render_status() -> void:
+	var where := " The troop tools are beside the map: press Map to use them." if _phone and not _folded else " The troop tools are on the left of the map."
+	_status_text.text = ("A turn is being resolved. Orders are taken once it has landed." if _turn_running else "Nothing moves here: orders are carried out when time next passes.") + where
+	if _status_name:
+		var fronts: Array = _view.get("fronts", [])
+		_status_name.visible = fronts.size() == 1
+		((_status_name as MarginContainer).get_child(0) as Label).text = _name().to_upper()
 
 
 func _render_tabs() -> void:
@@ -951,8 +1058,10 @@ func _render_rail() -> void:
 	var has_record := _open and not _record.is_empty()
 	var draft: Variant = store.value("draft")
 	rail.set_props({
-		"shown": has_record,
-		"top": FRAME_BAR + T.px(0.7),
+		"shown": has_record and (not _phone or _folded),
+		"top": UI.safe_insets().y + T.px(0.6) if _phone else FRAME_BAR + T.px(0.7),
+		"phone": _phone,
+		"foot": _folded_height() if _phone and _folded else 0.0,
 		"locked": _locked(),
 		"turn_running": _turn_running,
 		"notice": _notice,
@@ -971,7 +1080,8 @@ func _render_rail() -> void:
 	})
 	store.set_values({"rail": int(round(rail.right_edge()))})
 	plates.set_props({
-		"shown": has_record,
+		"shown": has_record and (not _phone or _folded),
+		"phone": _phone,
 		"locked": _locked(),
 		"fleets": _record.get("fleets", []),
 		"enemies": _record.get("enemies", []),
@@ -1039,9 +1149,10 @@ func _generals_block() -> Control:
 	var block := VBoxContainer.new()
 	block.add_theme_constant_override("separation", 0)
 	block.mouse_filter = Control.MOUSE_FILTER_PASS
-	block.mouse_exited.connect(func() -> void:
-		if not Rect2(Vector2.ZERO, block.size).has_point(block.get_local_mouse_position()):
-			store.set_values({"highlight": -1}))
+	if not _phone:
+		block.mouse_exited.connect(func() -> void:
+			if not Rect2(Vector2.ZERO, block.size).has_point(block.get_local_mouse_position()):
+				store.set_values({"highlight": -1}))
 	block.add_child(T.heading("Your generals"))
 	var generals: Array = _record.get("generals", [])
 	if generals.is_empty():
@@ -1052,10 +1163,11 @@ func _generals_block() -> Control:
 		var command := int(general.get("command", 0))
 		var lit := highlight == command
 		var tray := T.tray(lit, Vector4(T.px(0.5), T.px(0.34), T.px(0.5), T.px(0.34)))
-		tray.mouse_entered.connect(func() -> void: store.set_values({"highlight": command}))
+		if not _phone:
+			tray.mouse_entered.connect(func() -> void: store.set_values({"highlight": command}))
 		tray.gui_input.connect(func(event: InputEvent) -> void:
 			if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
-				store.set_values({"highlight": command}))
+				store.set_values({"highlight": -1 if _phone and int(store.value("highlight")) == command else command}))
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", int(round(T.px(0.55))))
 		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1089,7 +1201,7 @@ func _generals_block() -> Control:
 			rank = T.stencil(title, 0.68, T.BONE_FAINT)
 			rank.size_flags_vertical = Control.SIZE_SHRINK_END
 			rank_width = rank.get_theme_font("font").get_string_size(rank.text, HORIZONTAL_ALIGNMENT_LEFT, -1, rank.get_theme_font_size("font_size")).x + T.px(0.4)
-		var room := _width - 3.0 - T.px(1.6) - T.px(1.0) - 2.0 - T.px(1.5) - T.px(0.55) * 2.0 - _link_width("Pick") - rank_width
+		var room := _content_width() - T.px(1.6) - T.px(1.0) - 2.0 - T.px(1.5) - T.px(0.55) * 2.0 - _link_width("Pick") - rank_width
 		var natural := UI.font(700).get_string_size(name_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, T.font_size(0.84)).x + 1.0
 		name_label.custom_minimum_size.x = maxf(20.0, minf(natural, room))
 		name_row.add_child(name_label)
@@ -1126,6 +1238,13 @@ func _generals_block() -> Control:
 		_general_tags[command] = [tag, number]
 		block.add_child(_top(tray, 0.3))
 	return T.pad(block, Vector4(0, 0, 0, T.px(0.8)))
+
+
+func _content_width() -> float:
+	if _phone:
+		var inset := UI.safe_insets()
+		return _width - inset.x - inset.z
+	return _width - 3.0
 
 
 func _link_width(text: String) -> float:
@@ -1879,7 +1998,7 @@ func _talk_line(line: Dictionary) -> Control:
 	var label := T.text(text, 0.84, T.BONE, 400, 1.45)
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var available := maxf(80.0, _width - T.px(1.6) - 8.0)
+	var available := maxf(80.0, (_content_width() if _phone else _width) - T.px(1.6) - 8.0)
 	var most := available * 0.92 - T.px(1.4) - 2.0
 	var font := UI.font(400)
 	var natural := 0.0

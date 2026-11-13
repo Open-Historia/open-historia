@@ -91,12 +91,14 @@ func _place(plate: PanelContainer, scroll: ScrollContainer, content: float) -> v
 	var rail := float(store.value("rail")) if store else 0.0
 	var width := minf(T.px(21.0), view.x - T.px(7.5))
 	var chrome := T.px(1.1) + 4.0
-	var height := minf(content + chrome, view.y - T.px(11.0))
+	var phone := bool(props.get("phone", false))
+	var height := minf(content + chrome, view.y - T.px(13.0 if phone else 11.0))
 	scroll.custom_minimum_size = Vector2(width - T.px(1.3) - 4.0, maxf(0.0, height - chrome))
 	plate.custom_minimum_size = Vector2(width, height)
 	plate.size = Vector2(width, height)
-	var left := rail + T.px(1.5) if rail > 0.0 else T.px(1.5)
-	plate.position = Vector2(left, view.y - T.px(1.6) - height)
+	var inset := UI.safe_insets()
+	var left := rail + T.px(1.5) if rail > 0.0 else inset.x + T.px(1.5)
+	plate.position = Vector2(left, view.y - T.px(7.5 if phone else 1.6) - inset.w - height)
 
 
 func _render() -> void:

@@ -231,8 +231,12 @@ func _render() -> void:
 		_column.add_child(_rail_key("Fleets", "Fleets: command your fleets at sea", "fleet", bool(store.value("fleets")) or tool == "fleet", int(props.get("fleets", 0)) == 0, func() -> void: fleets_toggled.emit()))
 	_column.add_child(_rail_key("Supply", "Supply: shade how well supplied the ground is", "supply", bool(store.value("supply")), false, func() -> void: supply_toggled.emit()))
 	var view := get_viewport_rect().size if is_inside_tree() else Vector2(1440, 900)
-	var width := T.px(0.3) * 2.0 + KEY_SIZE + 2.0
-	var height := minf(_column.get_combined_minimum_size().y + T.px(0.9) + 4.0, view.y - top - T.px(5.6))
+	var inset := UI.safe_insets()
+	var foot := float(props.get("foot", 0.0))
+	var width := T.px(0.3) * 2.0 + KEY_SIZE + 2.0 + inset.x
+	(_plate.get_theme_stylebox("panel") as StyleBox).content_margin_left = T.px(0.3) + inset.x
+	var room := view.y - top - foot - T.px(0.5) if foot > 0.0 else view.y - top - T.px(5.6) - inset.w
+	var height := minf(_column.get_combined_minimum_size().y + T.px(0.9) + 4.0, room)
 	_plate.position = Vector2(0.0 if out else -width, top)
 	_plate.size = Vector2(width, height)
 	_plate.custom_minimum_size = Vector2(width, height)
@@ -240,7 +244,7 @@ func _render() -> void:
 	_tab.visible = shown
 	_tab.icon = T.svg_icon("rail-chevron-right" if tucked else "rail-chevron-left", CHEVRON_RIGHT if tucked else CHEVRON_LEFT, 13, T.BRASS, 14.0)
 	_tab.tooltip_text = "Show the troop tools" if tucked else "Hide the troop tools"
-	_tab.position = Vector2(RAIL_WIDTH if out else 0.0, top + T.px(0.5))
+	_tab.position = Vector2(RAIL_WIDTH + inset.x if out else 0.0, top + T.px(0.5))
 	_tab.size = Vector2(T.px(1.0), T.px(2.5))
 	_render_carriers(choice, top)
 	_render_hint(shown, out, top)
@@ -302,7 +306,7 @@ func _render_carriers(choice: bool, top: float) -> void:
 	var width := minf(T.px(19.0), view.x - T.px(7.5))
 	_fit_width(column, width - T.px(1.1) - 4.0)
 	_carriers.custom_minimum_size = Vector2(width, 0)
-	_carriers.position = Vector2(RAIL_WIDTH + T.px(1.5), top + T.px(9.0))
+	_carriers.position = Vector2(RAIL_WIDTH + UI.safe_insets().x + T.px(1.5), top + T.px(9.0))
 	_carriers.reset_size()
 	_settle(_carriers)
 
@@ -449,7 +453,7 @@ func _render_hint(shown: bool, out: bool, top: float) -> void:
 	var natural := _natural_width(column, width)
 	_fit_width(column, natural - T.px(1.2) - 4.0)
 	_hint.custom_minimum_size = Vector2(natural, 0)
-	_hint.position = Vector2((RAIL_WIDTH if out else 0.0) + T.px(1.5), top)
+	_hint.position = Vector2((RAIL_WIDTH if out else 0.0) + UI.safe_insets().x + T.px(1.5), top + (T.px(3.4) if bool(props.get("phone", false)) else 0.0))
 	_hint.reset_size()
 	_settle(_hint)
 

@@ -97,7 +97,7 @@ func set_room_open(value: bool) -> void:
 
 
 func _apply() -> void:
-	visible = _game_shown() and (at_war or room_open)
+	visible = _game_shown() and (at_war or room_open) and not (room_open and UI.phone())
 	if _tween and _tween.is_valid():
 		_tween.kill()
 	var left := OPEN_INSET if room_open else _beside_dock()
