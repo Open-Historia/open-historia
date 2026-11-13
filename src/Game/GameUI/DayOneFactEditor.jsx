@@ -14,9 +14,16 @@ const numberOrBlank = (value) => {
 const words = (value) => clean(value).replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 
 export default function DayOneFactEditor({ row, fact, problems = [], onChange, onChangeType, onReciprocalChange, onRemove, disabled = false }) {
+  const canonicalAgreement = row.family === "worldAgreements";
   const kind = row.family === "canonicalUpdates" ? fact?.kind
-    : ({ relationUpdates: "relation", agreementUpdates: "agreement", storylineUpdates: "storyline" }[row.family]);
-  const legacy = row.family !== "canonicalUpdates";
+    : ({ relationUpdates: "relation", agreementUpdates: "agreement", storylineUpdates: "storyline", worldAgreements: "agreement" }[row.family]);
+  const legacy = row.family !== "canonicalUpdates" && !canonicalAgreement;
+  const reciprocal = canonicalAgreement ? fact?.reciprocalAccess === true : fact?.reciprocal === true;
+  const legacyUndirectedAccess = canonicalAgreement && fact?.type === "military_access" &&
+    !reciprocal && !fact?.grantor && !fact?.grantee;
+  const canonicalMetadata = canonicalAgreement
+    ? "Existing scenario agreement - ID: " + fact.id + " - Status: " + words(fact.status || "active") + ". Editing its starting record does not modify existing campaigns."
+    : "";
   const change = (field, value) => onChange({ [field]: value });
   const input = (label, key, { type = "text", hint = "", listCountries = false } = {}) => (
     <label style={{ minWidth: 0 }}>
@@ -78,6 +85,7 @@ export default function DayOneFactEditor({ row, fact, problems = [], onChange, o
       </summary>
       <div style={{ display: "grid", gap: "0.65rem", marginTop: "0.65rem" }}>
         {legacy ? <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.68rem" }}>Older generated record. Its internal ID and existing event links are preserved when you edit it.</div> : null}
+        {canonicalAgreement ? <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.68rem" }}>{canonicalMetadata}</div> : null}
         {kind === "relation" ? (
           <>
             {twoColumns(<>{input("First country", "a", { listCountries: true })}{input("Second country", "b", { listCountries: true })}</>)}
@@ -91,7 +99,7 @@ export default function DayOneFactEditor({ row, fact, problems = [], onChange, o
             {select("Agreement type", "type", DAY_ONE_AGREEMENT_TYPES, legacy ? (value) => change("type", value) : onChangeType)}
             {!legacy && fact?.type === "guarantee" ? (
               twoColumns(<>{input("Guarantor (protecting country)", "guarantor", { listCountries: true })}{input("Beneficiary (protected country)", "beneficiary", { listCountries: true })}</>)
-            ) : !legacy && fact?.type === "military_access" && fact?.reciprocal !== true ? (
+            ) : !legacy && fact?.type === "military_access" && !reciprocal && !legacyUndirectedAccess ? (
               <>
                 <label style={{ color: "#f4f4f5", display: "flex", gap: "0.45rem", fontSize: "0.72rem" }}>
                   <input checked={false} disabled={disabled} onChange={(event) => onReciprocalChange(event.target.checked)} type="checkbox" />
@@ -102,16 +110,21 @@ export default function DayOneFactEditor({ row, fact, problems = [], onChange, o
             ) : (
               <>
                 {!legacy && fact?.type === "military_access" ? (
-                  <label style={{ color: "#f4f4f5", display: "flex", gap: "0.45rem", fontSize: "0.72rem" }}>
-                    <input checked={true} disabled={disabled} onChange={(event) => onReciprocalChange(event.target.checked)} type="checkbox" />
-                    Reciprocal access (both countries grant access)
-                  </label>
+                  <>
+                    <label style={{ color: "#f4f4f5", display: "flex", gap: "0.45rem", fontSize: "0.72rem" }}>
+                      <input checked={reciprocal} disabled={disabled} onChange={(event) => onReciprocalChange(event.target.checked)} type="checkbox" />
+                      Reciprocal access (both countries grant access)
+                    </label>
+                    {legacyUndirectedAccess ? <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.68rem" }}>The original access direction was not recorded; editing this treaty does not invent one.</div> : null}
+                  </>
                 ) : null}
                 {countryRows("Signatory countries", "parties")}
               </>
             )}
             {multiline("Terms / obligations", "terms")}
-            {!legacy ? input("Signed / effective date (optional)", "startedDate", { hint: "YYYY-MM-DD, before the game begins." }) : null}
+            {!legacy ? input("Signed / effective date (optional)", "startedDate", { hint: canonicalAgreement ? "YYYY-MM-DD, no later than the scenario start." : "YYYY-MM-DD, before the game begins." }) : null}
+            {canonicalAgreement && ["ended", "expired"].includes(fact?.status) ?
+              input("Agreement ended date (optional)", "endedDate", { hint: "YYYY-MM-DD, no later than the scenario start." }) : null}
           </>
         ) : null}
         {kind === "storyline" ? (

@@ -12,12 +12,14 @@ test("pre-history exposes manual relationship, agreement and storyline controls 
   assert.match(panel, /withoutPrehistoryUpdate\(current, family, index\)/);
   assert.match(panel, /<DayOneFactEditor/);
   assert.match(panel, /<DayOneRow/);
-  assert.match(panel, /worldPatch: \{ prehistory: record \}/);
-  assert.doesNotMatch(panel, /worldPatch:\s*\{\s*(agreements|relations|storylines):/);
+  assert.match(panel, /changed \|\| \(!saved && Boolean\(briefing\)\) \? \{ prehistory: record \} : \{\}/);
+  assert.match(panel, /canonicalDirty \? \{ agreements: canonicalValidation\.agreements \} : \{\}/);
+  assert.match(panel, /saveScenario\(scenarioId, \{ worldPatch \}\)/);
+  assert.doesNotMatch(panel, /worldPatch:\s*\{\s*(relations|storylines):/);
 });
 
 test("saving uses native semantic compiler verification, without creating an AI request", () => {
-  assert.match(panel, /dayOneEditorProblems\(draft, \{ startDate, world, verifyWorld: true \}\)/);
+  assert.match(panel, /dayOneEditorProblems\(draft, \{ startDate, world: stagedWorld, verifyWorld: true \}\)/);
   assert.match(panel, /if \(verified\.length\)/);
   assert.match(panel, /MAX_SEMANTIC_DAY_ONE_FACTS/);
   assert.match(panel, /countPrehistoryUpdates\(draft\)/);
@@ -34,6 +36,11 @@ test("editor retains separate semantic and legacy fields rather than conflating 
   assert.match(editor, /legacy \? "kind" : "processKind"/);
   assert.match(editor, /sourceEventRefs|existing event links/);
   assert.match(editor, /Signatory countries/);
+  assert.match(editor, /worldAgreements/);
+  assert.match(panel, /Existing scenario agreements/);
+  assert.match(panel, /removeScenarioCanonicalAgreement\(current, agreement\.id\)/);
+  assert.match(panel, /validateScenarioCanonicalAgreementEdits/);
+  assert.match(panel, /world: stagedWorld, verifyWorld: true/);
   assert.match(editor, /guarantor/);
   assert.match(editor, /beneficiary/);
   assert.match(editor, /grantor/);
