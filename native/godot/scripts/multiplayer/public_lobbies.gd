@@ -77,7 +77,8 @@ func _init() -> void:
 	var words := VBoxContainer.new()
 	words.add_theme_constant_override("separation", 8)
 	words.alignment = BoxContainer.ALIGNMENT_CENTER
-	var title := UI.label("Coming soon", 54, Color(1, 1, 1), 900, "Arial", -2)
+	var phone := UI.phone()
+	var title := UI.label("Coming soon", 32 if phone else 54, Color(1, 1, 1), 900, "Arial", -2)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	words.add_child(title)
 	var line := UI.wrapped("Public lobbies need a server of our own. Until then, join a private lobby with its invite code, or host one.", 14, Color(1, 1, 1, 0.75))
@@ -85,6 +86,8 @@ func _init() -> void:
 	line.custom_minimum_size.x = 416
 	CommunityKit.leading(line, 14, 1.3)
 	words.add_child(line)
+	if phone:
+		stack.resized.connect(func() -> void: line.custom_minimum_size.x = minf(416.0, stack.size.x + 42.0))
 	cover.add_child(words)
 	stack.add_child(cover)
 	stack.resized.connect(func() -> void:
@@ -173,5 +176,11 @@ func _cell(value: String, head: bool, ruled: bool) -> PanelContainer:
 	cell.add_theme_stylebox_override("panel", style)
 	cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var words := UI.label(value, 11 if head else 13, HEAD_INK if head else CELL_INK, 700 if head else 400)
+	if UI.phone() and not head and value.contains(" "):
+		var longest := 0.0
+		for part in value.split(" ", false):
+			longest = maxf(longest, UI.font(400).get_string_size(part, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x)
+		words.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		words.custom_minimum_size.x = ceilf(longest)
 	cell.add_child(words)
 	return cell

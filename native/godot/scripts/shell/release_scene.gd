@@ -154,6 +154,7 @@ var _boxes_yw := {}
 var _water: ColorRect
 var _plane: ColorRect
 var _globe: MapGlobe
+var narrow := false
 
 
 func _init() -> void:
@@ -785,7 +786,7 @@ func _place_map() -> void:
 	var depth := 1400.0
 	var ox := w * 0.5
 	var oy := h * 0.5
-	var cx := w * 0.44
+	var cx := w * (0.5 if narrow else 0.44)
 	var cy := h * 0.5
 	var along_y := Vector3(sc * s, sc * c, -sc * (s * plane_w * 0.5 + c * plane_h * 0.5))
 	var along_x := Vector3(sc * c, -sc * s, -sc * (c * plane_w * 0.5 - s * plane_h * 0.5))
@@ -802,7 +803,7 @@ func _place_map() -> void:
 	material.set_shader_parameter("lift", 18.0 * p / 700.0)
 	var globe := _globe_size()
 	_globe.size = Vector2(globe, globe)
-	_globe.position = Vector2(w - minf(704.0, w * 0.48) - w * 0.03 - globe, h * 0.92 - globe)
+	_globe.position = Vector2(w - 16.0 - globe, 80.0) if narrow else Vector2(w - minf(704.0, w * 0.48) - w * 0.03 - globe, h * 0.92 - globe)
 	_globe.queue_redraw()
 
 

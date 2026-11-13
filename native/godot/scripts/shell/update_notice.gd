@@ -288,7 +288,8 @@ func _build_controls() -> void:
 func _arrow(glyph: String, disabled: bool, step: int, spec: Dictionary) -> Button:
 	var base := {"bg": Color(1, 1, 1, 0.07), "border": Color(1, 1, 1, 0.14), "ink": UpdateKit.INK, "radius": 999.0, "size": UpdateKit.px(1.1), "weight": 400, "pad": Vector2.ZERO, "min_width": UpdateKit.px(2.3), "min_height": UpdateKit.px(2.3), "font": UpdateKit.BASE_FONT}
 	var button := UpdateKit.chrome_button(glyph, base, spec)
-	button.custom_minimum_size = Vector2(UpdateKit.px(2.3), UpdateKit.px(2.3))
+	var side := maxf(UpdateKit.px(2.3), UI.PHONE_TAP) if UI.phone() else UpdateKit.px(2.3)
+	button.custom_minimum_size = Vector2(side, side)
 	button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	if disabled:
 		button.disabled = true
@@ -339,7 +340,8 @@ func _process(_delta: float) -> void:
 		return
 	var view := get_viewport_rect().size
 	var pad := UpdateKit.px(1.0)
-	var available := view - Vector2(pad * 2.0, pad * 2.0)
+	var safe := UI.safe_insets()
+	var available := view - Vector2(pad * 2.0, pad * 2.0 + safe.y + safe.w)
 	var minor := str((_pages[_at]["update"] as Dictionary).get("kind", "")) != "major"
 	var width := minf(UpdateKit.px(28.0) if minor else UpdateKit.px(62.0), available.x)
 	var gap := UpdateKit.px(0.7)
@@ -349,4 +351,4 @@ func _process(_delta: float) -> void:
 	_scroll.custom_minimum_size = Vector2(width, scroll_height)
 	var total := Vector2(width, scroll_height + gap + controls_height)
 	_column.size = total
-	_column.position = ((view - total) * 0.5).round()
+	_column.position = (Vector2((view.x - total.x) * 0.5, safe.y + pad + (available.y - total.y) * 0.5)).round()

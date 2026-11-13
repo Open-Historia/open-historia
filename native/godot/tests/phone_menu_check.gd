@@ -106,7 +106,7 @@ func _run() -> void:
 	_check(rail.is_visible_in_tree() and rail.size.x >= view.x - 1.0, "the pages are a row across the top")
 	_check(rail.size.y <= 70.0, "the top row is one row high (%d)" % rail.size.y)
 	var tabs: Dictionary = menu.get("_tiles")
-	_check(not tabs.has("lobbies") or not (tabs["lobbies"] as Control).visible, "no Lobbies tab on a phone")
+	_check(tabs.has("lobbies") and (tabs["lobbies"] as Control).visible, "the Lobbies tab is on a phone, read-only")
 	_check(tabs.has("games") and tabs.has("scenarios") and tabs.has("community"), "Games, Scenarios and Community tabs")
 	var order: Array = []
 	for key in ["games", "scenarios", "community"]:

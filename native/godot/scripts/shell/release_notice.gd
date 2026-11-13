@@ -53,6 +53,7 @@ var _cue: Control
 var _finale_copy: Control
 var _vh := 900.0
 var _vw := 1440.0
+var _narrow := false
 var _active := -1
 var _hud: Control
 var _rail: Control
@@ -103,6 +104,7 @@ func open(link: EngineLink, id: String, reduce_motion := false) -> void:
 	release = result["release"]
 	_vw = maxf(320.0, get_viewport_rect().size.x)
 	_vh = maxf(320.0, get_viewport_rect().size.y)
+	_narrow = UI.phone() and _vw < 760.0
 	_opened_at = Time.get_ticks_msec()
 	_factor = _scale_factor()
 	_build()
@@ -182,6 +184,7 @@ func _outlined(value: String, size: float, ink: Color, weight: int, stroke: floa
 
 func _view(key: String) -> ReleaseScene:
 	var view := ReleaseScene.new()
+	view.narrow = _narrow
 	view.setup(key, still)
 	view.size = Vector2(_vw, _vh)
 	return view
@@ -261,7 +264,7 @@ func _hero() -> Control:
 	var copy := VBoxContainer.new()
 	copy.add_theme_constant_override("separation", 0)
 	copy.alignment = BoxContainer.ALIGNMENT_BEGIN
-	copy.position = Vector2(_vw * 0.06, _vh * 0.24)
+	copy.position = Vector2(_vw * 0.06, _vh * _hero_top())
 	copy.size = Vector2(_vw * 0.88, 0)
 	copy.custom_minimum_size.x = _vw * 0.88
 	copy.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -310,9 +313,13 @@ func _hero() -> Control:
 	cue.add_child(chevron)
 	stage.add_child(cue)
 	var natural := cue.get_combined_minimum_size()
-	cue.position = Vector2((_vw - natural.x) * 0.5, _vh * 0.95 - natural.y)
+	cue.position = Vector2((_vw - natural.x) * 0.5, _vh * 0.95 - UI.safe_insets().w - natural.y)
 	_cue = cue
 	return section
+
+
+func _hero_top() -> float:
+	return 0.2 if _narrow else 0.24
 
 
 func _centered(control: Control) -> Control:
@@ -345,16 +352,17 @@ func _rule(wide: float) -> Control:
 
 func _intro() -> Control:
 	var holder := MarginContainer.new()
-	holder.add_theme_constant_override("margin_left", int(_vw * 0.08))
-	holder.add_theme_constant_override("margin_right", int(_vw * 0.08))
-	holder.add_theme_constant_override("margin_top", int(_vh * 0.16))
-	holder.add_theme_constant_override("margin_bottom", int(_vh * 0.14))
+	var side := 19.2 if _narrow else _vw * 0.08
+	holder.add_theme_constant_override("margin_left", int(side))
+	holder.add_theme_constant_override("margin_right", int(side))
+	holder.add_theme_constant_override("margin_top", int(_vh * (0.12 if _narrow else 0.16)))
+	holder.add_theme_constant_override("margin_bottom", int(_vh * (0.1 if _narrow else 0.14)))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
 	holder.add_child(column)
 	var lead := _text(str(release.get("lead", "")), clampf(_vw * 0.026, 20.8, 33.6), INK, true, 500)
 	lead.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lead.custom_minimum_size.x = minf(864.0, _vw * 0.84)
+	lead.custom_minimum_size.x = minf(864.0, _vw - 38.4 if _narrow else _vw * 0.84)
 	_lined(lead, 1.35)
 	column.add_child(_centered(_reveal(lead)))
 	var space := Control.new()
@@ -362,7 +370,7 @@ func _intro() -> Control:
 	column.add_child(space)
 	var contents := VBoxContainer.new()
 	contents.add_theme_constant_override("separation", 22)
-	var wide := minf(1248.0, _vw * 0.84)
+	var wide := minf(1248.0, _vw - 38.4 if _narrow else _vw * 0.84)
 	contents.custom_minimum_size.x = wide
 	var label := _text("Contents", 13.1, GOLD, true, 700, 0.32, true)
 	contents.add_child(label)
@@ -420,16 +428,21 @@ func _chapter(chapter: Dictionary, index: int, _count: int) -> Control:
 	section.set_meta("chapter_key", str(chapter.get("key", "")))
 	var item := _stage(section, scene, "chapter", highlights.size() + 1)
 	var stage := item.holder
-	var shade := Shade.new()
-	var shade_wide := minf(704.0, _vw * 0.48)
-	shade.position = Vector2(_vw - shade_wide, 0)
-	shade.size = Vector2(shade_wide, _vh)
-	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stage.add_child(shade)
-	var numeral_px := clampf(_vw * 0.22, 128.0, 320.0)
+	if not _narrow:
+		var shade := Shade.new()
+		var shade_wide := minf(704.0, _vw * 0.48)
+		shade.position = Vector2(_vw - shade_wide, 0)
+		shade.size = Vector2(shade_wide, _vh)
+		shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		stage.add_child(shade)
+	var numeral_px := 128.0 if _narrow else clampf(_vw * 0.22, 128.0, 320.0)
 	var numeral := _outlined(NUMERALS[index], numeral_px, Color(1, 1, 1, 0.16), 900, 2.0)
 	stage.add_child(numeral)
-	numeral.position = Vector2(160, _vh * 0.97 - numeral_px)
+	if _narrow:
+		var natural := numeral.get_combined_minimum_size()
+		numeral.position = Vector2(_vw - 16.0 - natural.x, 70.4 - (natural.y - numeral_px * 0.8) * 0.5)
+	else:
+		numeral.position = Vector2(160, _vh * 0.97 - numeral_px)
 	item.numeral = numeral
 	item.numeral_y = numeral.position.y
 	var passages := VBoxContainer.new()
@@ -467,7 +480,14 @@ func _chapter(chapter: Dictionary, index: int, _count: int) -> Control:
 	lead_gap.custom_minimum_size.y = 17.6
 	title_block.add_child(lead_gap)
 	title_block.add_child(_lined(_text(str(chapter.get("lead", "")), 17.3, SOFT), 1.65))
-	passages.add_child(_passage(title_block, _vh))
+	if _narrow:
+		var backed := PanelContainer.new()
+		backed.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		backed.add_theme_stylebox_override("panel", UI.box(Color(6 / 255.0, 8 / 255.0, 11 / 255.0, 0.86), Color(0, 0, 0, 0), 0, 0, Vector4(19.2, 20.8, 19.2, 20.8)))
+		backed.add_child(title_block)
+		passages.add_child(_passage(backed, _vh))
+	else:
+		passages.add_child(_passage(title_block, _vh))
 	for at in range(highlights.size()):
 		var highlight: Dictionary = highlights[at]
 		passages.add_child(_passage(_card(highlight, at, highlights.size(), accent), _vh * 0.95))
@@ -480,14 +500,17 @@ func _passage(content: Control, tall: float) -> Control:
 	var holder := Control.new()
 	holder.custom_minimum_size = Vector2(_vw, tall)
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var wide := minf(544.0, _vw * 0.4)
+	var wide := _vw - 32.0 if _narrow else minf(544.0, _vw * 0.4)
 	content.custom_minimum_size.x = wide
 	var shown := _reveal(content)
 	holder.add_child(shown)
 	var place := func() -> void:
 		if is_instance_valid(shown):
 			shown.size = Vector2(wide, shown.get_combined_minimum_size().y)
-			shown.position = Vector2(_vw - _vw * 0.05 - wide, (tall - shown.size.y) * 0.5)
+			if _narrow:
+				shown.position = Vector2(16.0, tall - _vh * 0.09 - shown.size.y)
+			else:
+				shown.position = Vector2(_vw - _vw * 0.05 - wide, (tall - shown.size.y) * 0.5)
 	place.call_deferred()
 	shown.minimum_size_changed.connect(place)
 	return holder
@@ -500,7 +523,8 @@ func _card(highlight: Dictionary, at: int, count: int, accent: Color) -> Control
 	card.accent = accent
 	var margin := MarginContainer.new()
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	for side in [["margin_left", 33], ["margin_right", 29], ["margin_top", 26], ["margin_bottom", 29]]:
+	var pads := [["margin_left", 25], ["margin_right", 21], ["margin_top", 21], ["margin_bottom", 22]] if _narrow else [["margin_left", 33], ["margin_right", 29], ["margin_top", 26], ["margin_bottom", 29]]
+	for side in pads:
 		margin.add_theme_constant_override(side[0], side[1])
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
@@ -525,11 +549,12 @@ func _card(highlight: Dictionary, at: int, count: int, accent: Color) -> Control
 func _ledger(chapter: Dictionary) -> Control:
 	var accent := Color(str(ACCENTS.get(str(chapter.get("scene", "")), "#d9a441")))
 	var holder := MarginContainer.new()
-	var left := _vw * 0.06 + 144.0
+	var left := 19.2 if _narrow else _vw * 0.06 + 144.0
+	var right := 19.2 if _narrow else _vw * 0.06
 	holder.add_theme_constant_override("margin_left", int(left))
-	holder.add_theme_constant_override("margin_right", int(_vw * 0.06))
-	holder.add_theme_constant_override("margin_top", int(_vh * 0.12))
-	holder.add_theme_constant_override("margin_bottom", int(_vh * 0.14))
+	holder.add_theme_constant_override("margin_right", int(right))
+	holder.add_theme_constant_override("margin_top", int(_vh * (0.1 if _narrow else 0.12)))
+	holder.add_theme_constant_override("margin_bottom", int(_vh * (0.12 if _narrow else 0.14)))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
 	holder.add_child(column)
@@ -546,8 +571,8 @@ func _ledger(chapter: Dictionary) -> Control:
 	var gap := Control.new()
 	gap.custom_minimum_size.y = 48
 	column.add_child(gap)
-	var wide := _vw - left - _vw * 0.06
-	var count := maxi(1, mini(3, int(floor((wide + 48.0) / (304.0 + 48.0)))))
+	var wide := _vw - left - right
+	var count := 1 if _narrow else maxi(1, mini(3, int(floor((wide + 48.0) / (304.0 + 48.0)))))
 	var column_wide := (wide - 48.0 * (count - 1)) / count
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 48)
@@ -642,7 +667,7 @@ func _finale() -> Control:
 	button.pressed.connect(close)
 	copy.add_child(_centered(button))
 	stage.add_child(copy)
-	copy.size = Vector2(_vw, _vh * 0.88)
+	copy.size = Vector2(_vw, _vh * 0.88 - UI.safe_insets().w)
 	copy.position = Vector2.ZERO
 	_finale_copy = copy
 	return section
@@ -651,8 +676,9 @@ func _finale() -> Control:
 func _build_hud() -> void:
 	var hud := HBoxContainer.new()
 	hud.add_theme_constant_override("separation", 16)
-	hud.position = Vector2(19.2, 12.8)
-	hud.size = Vector2(_vw - 38.4, 36.8)
+	var safe := UI.safe_insets()
+	hud.position = Vector2(19.2 + safe.x, 12.8 + safe.y)
+	hud.size = Vector2(_vw - 38.4 - safe.x - safe.z, 36.8)
 	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var mark := HBoxContainer.new()
 	mark.add_theme_constant_override("separation", 10)
@@ -667,6 +693,7 @@ func _build_hud() -> void:
 	version.autowrap_mode = TextServer.AUTOWRAP_OFF
 	version.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	version.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	version.visible = not _narrow
 	mark.add_child(version)
 	hud.add_child(mark)
 	_bar = Control.new()
@@ -687,6 +714,7 @@ func _build_hud() -> void:
 	skip.focus_mode = Control.FOCUS_NONE
 	skip.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	skip.custom_minimum_size.y = 36.8
+	skip.set_meta("oh_tap_exempt", true)
 	skip.add_theme_font_override("font", _spaced_font(font(true, 700), 3))
 	skip.add_theme_font_size_override("font_size", 13)
 	for name in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
@@ -820,6 +848,7 @@ func _relayout() -> void:
 	_active = -1
 	_vw = maxf(320.0, now.x)
 	_vh = maxf(320.0, now.y)
+	_narrow = UI.phone() and _vw < 760.0
 	_build()
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -881,7 +910,7 @@ func _on_scroll() -> void:
 		var hero_p := _stages[0].progress
 		if is_instance_valid(_hero_copy):
 			_hero_copy.modulate.a = clampf(1.0 - hero_p * 1.8, 0.0, 1.0)
-			_hero_copy.position.y = _vh * 0.24 - hero_p * 140.0
+			_hero_copy.position.y = _vh * _hero_top() - hero_p * 140.0
 			_hero_copy.pivot_offset = _hero_copy.size * 0.5
 			_hero_copy.scale = Vector2.ONE * (1.0 + hero_p * 0.06)
 		if is_instance_valid(_cue):

@@ -24,6 +24,7 @@ const JOIN_NOTE := "The host and the services that connect you (public relay ser
 const HOST_NOTE := "Players connect straight to your computer: you and each player see each other's network address, and so do the services that connect you (public relay servers, and Google's and Cloudflare's address-lookup servers). The game does not show a player's address to other players, but anyone you give the invite code to could find it out, so share the code only with people you trust. Some strict networks (many mobile carriers) cannot connect this way."
 const NO_WEBRTC := "This device cannot make WebRTC connections."
 const NO_HOST_ENGINE := "Hosting a shared game needs the desktop app."
+const NOT_ON_PHONES := "Multiplayer is not available in the phone app yet."
 const READY_SHARES := [["Half", 0.5], ["Two thirds", 2.0 / 3.0], ["Three quarters", 0.75], ["Everyone", 1.0]]
 
 var engine: EngineLink
@@ -46,9 +47,13 @@ var _code_field: Control
 var _name_field: Control
 var _join_button: Button
 var _host_grid: GridContainer
+var _off := false
+var _phone := false
 
 
 func _init() -> void:
+	_off = not UI.has_feature("multiplayer")
+	_phone = UI.phone()
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_theme_constant_override("separation", 0)
 	_column = VBoxContainer.new()
@@ -62,7 +67,9 @@ func _init() -> void:
 func setup(link: EngineLink, extra := {}) -> void:
 	engine = link
 	context = extra
-	hosting = bool(extra.get("hosting", false))
+	hosting = bool(extra.get("hosting", false)) and not _off
+	if _off:
+		return
 	if not engine.engine_event.is_connected(_on_event):
 		engine.engine_event.connect(_on_event)
 
@@ -84,6 +91,9 @@ func open() -> void:
 
 
 func refresh() -> void:
+	if _off:
+		_render()
+		return
 	var reply := await engine.request("multiplayer.state")
 	if not is_instance_valid(self):
 		return
@@ -110,12 +120,15 @@ func make_host_button() -> Button:
 	button.text = ""
 	button.add_child(content)
 	button.custom_minimum_size.x = UI.font(600).get_string_size("Host a lobby", HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x + 15 + 7 + 32
-	button.pressed.connect(func() -> void: set_hosting(true))
+	if _off:
+		UI.set_disabled_look(button, NOT_ON_PHONES)
+	else:
+		button.pressed.connect(func() -> void: set_hosting(true))
 	return button
 
 
 func set_hosting(open: bool) -> void:
-	if hosting == open:
+	if hosting == open or (open and _off):
 		return
 	hosting = open
 	if open:
@@ -184,6 +197,10 @@ func _text_input(value: String, placeholder: String, max_length: int) -> LineEdi
 	field.add_theme_font_override("font", UI.font(400))
 	field.add_theme_font_size_override("font_size", 14)
 	field.add_theme_color_override("font_color", FIELD_INK)
+	if _off:
+		field.editable = false
+		field.add_theme_stylebox_override("read_only", style)
+		field.add_theme_color_override("font_uneditable_color", FIELD_INK)
 	field.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.42))
 	field.add_theme_color_override("caret_color", FIELD_INK)
 	return field
@@ -234,6 +251,9 @@ func _render() -> void:
 
 func _fit() -> void:
 	var width := minf(size.x, MAX_WIDTH)
+	if _phone and is_inside_tree():
+		var safe := UI.safe_insets()
+		width = minf(width, floorf(get_viewport_rect().size.x - 25.6 - safe.x - safe.z))
 	if width <= 0.0:
 		return
 	_column.custom_minimum_size.x = width
@@ -244,6 +264,9 @@ func _fit() -> void:
 		if spare >= 0.0:
 			_code_field.custom_minimum_size.x = 256.0 + spare * 0.75
 			_name_field.custom_minimum_size.x = 144.0 + spare * 0.25
+		elif _phone:
+			_code_field.custom_minimum_size.x = inner
+			_name_field.custom_minimum_size.x = inner - button_width - 11.0
 		else:
 			_code_field.custom_minimum_size.x = inner
 			_name_field.custom_minimum_size.x = inner
@@ -258,7 +281,9 @@ func _build_invite() -> PanelContainer:
 	stack.add_theme_constant_override("separation", 0)
 	card.add_child(stack)
 	stack.add_child(CommunityKit.margin_below(_heading("Join a private lobby"), 6))
-	stack.add_child(CommunityKit.margin_below(_lead("Enter the invite code the host sent you. You will need the lobby's scenario in your library."), 16))
+	stack.add_child(CommunityKit.margin_below(_lead("Enter the invite code the host sent you. You will need the lobby's scenario in your library."), 6 if _off else 16))
+	if _off:
+		stack.add_child(CommunityKit.margin_below(CommunityKit.para(NOT_ON_PHONES, 13, Color(1, 1, 1, 0.85), 700, 1.5), 16))
 	_invite_row = CommunityKit.flow(11, 11)
 	var code := _text_input(_code, "oh1-…", 0)
 	code.text_changed.connect(func(value: String) -> void:
@@ -299,6 +324,9 @@ func _build_invite() -> PanelContainer:
 func _restyle_join() -> void:
 	if not is_instance_valid(_join_button):
 		return
+	if _off:
+		UI.set_disabled_look(_join_button, NOT_ON_PHONES)
+		return
 	if not _state.get("webrtc", false):
 		UI.set_disabled_look(_join_button, NO_WEBRTC)
 		return
@@ -309,7 +337,7 @@ func _restyle_join() -> void:
 
 
 func _join() -> void:
-	if not _state.get("webrtc", false) or _code.strip_edges().is_empty() or _shared_mode() != "off":
+	if _off or not _state.get("webrtc", false) or _code.strip_edges().is_empty() or _shared_mode() != "off":
 		return
 	_join_error = ""
 	var reply := await engine.request("multiplayer.join", {"token": _code, "name": _join_name})

@@ -316,8 +316,6 @@ func _build_phone_bar() -> void:
 	brand.add_child(mark)
 	row.add_child(brand)
 	for entry in [["games", "Games"], ["scenarios", "Scenarios"], ["community", "Community"], ["lobbies", "Lobbies"]]:
-		if entry[0] == "lobbies" and not UI.has_feature("multiplayer"):
-			continue
 		var key: String = entry[0]
 		var tab := Button.new()
 		tab.text = entry[1]
@@ -340,7 +338,7 @@ func _style_phone_tab(tab: Button, active: bool) -> void:
 		tab.add_theme_stylebox_override(state, style)
 	for state in ["hover", "pressed", "hover_pressed"]:
 		tab.add_theme_stylebox_override(state, hover)
-	tab.add_theme_font_override("font", UI.font(700 if active else 500))
+	tab.add_theme_font_override("font", UI.font(700 if active else 400, "Segoe UI"))
 	tab.add_theme_font_size_override("font_size", 14)
 	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
 		tab.add_theme_color_override(state, Color(246 / 255.0, 246 / 255.0, 248 / 255.0, 0.92))
@@ -566,7 +564,9 @@ func _build_lobbies_page() -> void:
 	page.visible = false
 	_page_root.add_child(page)
 	var host: Variant = page.call("make_host_button")
-	if host is Control:
+	if host is Control and _phone:
+		_add_action(host)
+	elif host is Control:
 		_actions.add_child(host)
 	await page.call("open")
 	if is_instance_valid(skeleton):

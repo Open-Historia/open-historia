@@ -40,6 +40,8 @@ var _options: Array = []
 var _current := "en"
 var _busy := ""
 var _leaving := false
+var _phone := false
+var _scroll_body: VBoxContainer
 
 
 func _ready() -> void:
@@ -49,10 +51,12 @@ func _ready() -> void:
 	_backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_backdrop)
+	_phone = UI.phone()
+	var safe := UI.safe_insets()
 	var frame := MarginContainer.new()
 	frame.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	for side in [["margin_left", 16], ["margin_right", 16], ["margin_top", 24], ["margin_bottom", 19]]:
-		frame.add_theme_constant_override(side[0], side[1])
+	for side in [["margin_left", 16 + safe.x], ["margin_right", 16 + safe.z], ["margin_top", 24 + safe.y], ["margin_bottom", 19 + safe.w]]:
+		frame.add_theme_constant_override(side[0], roundi(side[1]))
 	add_child(frame)
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
@@ -65,7 +69,14 @@ func _ready() -> void:
 	_page_holder = CenterContainer.new()
 	_page_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_page_holder.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_scroll.add_child(_page_holder)
+	if _phone:
+		_scroll_body = VBoxContainer.new()
+		_scroll_body.add_theme_constant_override("separation", 0)
+		_scroll_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_scroll.add_child(_scroll_body)
+		_scroll_body.add_child(_page_holder)
+	else:
+		_scroll.add_child(_page_holder)
 	_scroll.resized.connect(_fit_holder)
 	var steps_margin := MarginContainer.new()
 	steps_margin.add_theme_constant_override("margin_top", 19)
@@ -73,7 +84,10 @@ func _ready() -> void:
 	_steps.alignment = BoxContainer.ALIGNMENT_CENTER
 	_steps.add_theme_constant_override("separation", 7)
 	steps_margin.add_child(_steps)
-	column.add_child(steps_margin)
+	if _phone:
+		_scroll_body.add_child(steps_margin)
+	else:
+		column.add_child(steps_margin)
 	_greeting_timer = Timer.new()
 	_greeting_timer.wait_time = GREETING_SECONDS
 	_greeting_timer.timeout.connect(_next_greeting)
@@ -99,6 +113,9 @@ func open(link: EngineLink, language_switch: Callable, reduce_motion := false) -
 
 
 func _fit_holder() -> void:
+	if _phone:
+		_scroll_body.custom_minimum_size = Vector2(_scroll.size.x, _scroll.size.y)
+		return
 	_page_holder.custom_minimum_size = Vector2(_scroll.size.x, _scroll.size.y)
 
 
@@ -138,14 +155,14 @@ func _render_steps() -> void:
 
 func _page() -> VBoxContainer:
 	var page := VBoxContainer.new()
-	page.add_theme_constant_override("separation", 22)
+	page.add_theme_constant_override("separation", 18 if _phone else 22)
 	page.custom_minimum_size.x = _page_width()
 	page.alignment = BoxContainer.ALIGNMENT_CENTER
 	return page
 
 
 func _title(value: String, large: bool) -> Label:
-	var label := UI.label(value, 34 if large else 15, UiTheme.pick("text", INK) if large else UiTheme.pick("muted", MUTED), 800 if large else 600, "Arial", -1 if large else 0)
+	var label := UI.label(value, (24 if _phone else 34) if large else 15, UiTheme.pick("text", INK) if large else UiTheme.pick("muted", MUTED), 800 if large else 600, "Arial", -1 if large else 0)
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.set_meta("setup_title", true)
 	return label
@@ -154,7 +171,7 @@ func _title(value: String, large: bool) -> Label:
 func _language_page() -> VBoxContainer:
 	var page := _page()
 	_greeting = Control.new()
-	_greeting.custom_minimum_size = Vector2(0, 137.6)
+	_greeting.custom_minimum_size = Vector2(0, 112.0 if _phone else 137.6)
 	_greeting.clip_contents = true
 	_greeting.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_greeting.resized.connect(_place_greeting)
@@ -163,7 +180,7 @@ func _language_page() -> VBoxContainer:
 	page.add_child(_title("Choose your language", false))
 	var grid := GridContainer.new()
 	var wide := _page_width()
-	grid.columns = maxi(1, int(floor((wide + 8.8) / (153.6 + 8.8))))
+	grid.columns = 2 if _phone else maxi(1, int(floor((wide + 8.8) / (153.6 + 8.8))))
 	grid.add_theme_constant_override("h_separation", 9)
 	grid.add_theme_constant_override("v_separation", 9)
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -178,11 +195,11 @@ func _greeting_words(index: int) -> VBoxContainer:
 	var words := VBoxContainer.new()
 	words.add_theme_constant_override("separation", 6)
 	words.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var hello := UI.label(str(entry[1]), 74, UiTheme.pick("text", INK), 800, "Arial", -2)
+	var hello := UI.label(str(entry[1]), 45 if _phone else 74, UiTheme.pick("text", INK), 800, "Arial", -2)
 	hello.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hello.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	words.add_child(hello)
-	var welcome := UI.label(str(entry[2]), 22, UiTheme.pick("muted", SOFT), 600)
+	var welcome := UI.label(str(entry[2]), 17 if _phone else 22, UiTheme.pick("muted", SOFT), 600)
 	welcome.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	welcome.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	words.add_child(welcome)
@@ -295,7 +312,7 @@ func _theme_page() -> VBoxContainer:
 	page.add_child(_title("Choose your theme", true))
 	var grid := GridContainer.new()
 	var wide := _page_width()
-	grid.columns = maxi(1, int(floor((wide + 12.8) / (208.0 + 12.8))))
+	grid.columns = 2 if _phone else maxi(1, int(floor((wide + 12.8) / (208.0 + 12.8))))
 	grid.add_theme_constant_override("h_separation", 13)
 	grid.add_theme_constant_override("v_separation", 13)
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -307,6 +324,8 @@ func _theme_page() -> VBoxContainer:
 	actions.alignment = BoxContainer.ALIGNMENT_CENTER
 	actions.add_theme_constant_override("separation", 11)
 	var back := _action("Back", false)
+	if _phone:
+		actions.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	back.pressed.connect(func() -> void:
 		step = 0
 		_render()
@@ -314,6 +333,10 @@ func _theme_page() -> VBoxContainer:
 			_greeting_timer.start())
 	actions.add_child(back)
 	var go := _action("Continue", true)
+	if _phone:
+		for button in [back, go]:
+			button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			button.custom_minimum_size.x = 0
 	go.pressed.connect(_finish)
 	actions.add_child(go)
 	page.add_child(actions)
@@ -332,7 +355,7 @@ func _theme_button(id: String, label: String, colors: Dictionary) -> Choice:
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var sample := SetupSample.new()
 	sample.colors = colors
-	sample.custom_minimum_size.y = 102.4
+	sample.custom_minimum_size.y = 76.8 if _phone else 102.4
 	sample.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_child(sample)
 	var name_margin := MarginContainer.new()

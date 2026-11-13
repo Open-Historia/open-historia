@@ -51,9 +51,11 @@ var _search: LineEdit
 var _from: LineEdit
 var _to: LineEdit
 var _clear: Button
+var _phone := false
 
 
 func _init() -> void:
+	_phone = UI.phone()
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_theme_constant_override("separation", 0)
 	_offers_slot = CommunityKit.column(0)
@@ -255,6 +257,9 @@ func _controls_width() -> float:
 
 func _fit() -> void:
 	var width := size.x
+	if _phone and is_inside_tree():
+		var safe := UI.safe_insets()
+		width = minf(width, floorf(get_viewport_rect().size.x - 25.6 - safe.x - safe.z))
 	if width <= 0.0:
 		return
 	_controls.custom_minimum_size.x = minf(_controls_width(), width)
@@ -408,14 +413,14 @@ func _browse_header(top: float) -> Control:
 	var holder := MarginContainer.new()
 	holder.add_theme_constant_override("margin_top", int(round(top)))
 	holder.add_theme_constant_override("margin_bottom", 13)
-	var line := CommunityKit.row(11)
+	var line: BoxContainer = CommunityKit.column(11) if _phone else CommunityKit.row(11)
 	var words := CommunityKit.column(4)
 	words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	words.size_flags_vertical = Control.SIZE_SHRINK_END
 	words.add_child(CommunityKit.text("Browse Community", 17, Color(1, 1, 1, 0.96), 800))
 	words.add_child(CommunityKit.text("One catalog, sorted the way you want.", 12, INK_HELP))
 	line.add_child(words)
-	var pills := CommunityKit.row(6)
+	var pills: Container = CommunityKit.flow(6, 6) if _phone else CommunityKit.row(6)
 	pills.size_flags_vertical = Control.SIZE_SHRINK_END
 	for entry in SORTS:
 		var value: String = entry[0]
@@ -461,7 +466,7 @@ func _scenario_row(title: String, ids: Array, empty_text: String, layout: String
 		var scroller := ScrollContainer.new()
 		scroller.name = "Featured"
 		scroller.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-		scroller.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+		scroller.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER if _phone else ScrollContainer.SCROLL_MODE_AUTO
 		_thin_scrollbar(scroller.get_h_scroll_bar())
 		var line := CommunityKit.row(GRID_GAP)
 		for post in posts:
@@ -529,7 +534,7 @@ func _card(post: Dictionary, fill: bool) -> Control:
 	if fill:
 		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	else:
-		card.custom_minimum_size.x = CARD_WIDTH
+		card.custom_minimum_size.x = minf(CARD_WIDTH, get_viewport_rect().size.x - 32.0) if _phone and is_inside_tree() else CARD_WIDTH
 	card.gui_input.connect(func(event: InputEvent) -> void:
 		var click := event as InputEventMouseButton
 		if click and click.pressed and click.button_index == MOUSE_BUTTON_LEFT:
