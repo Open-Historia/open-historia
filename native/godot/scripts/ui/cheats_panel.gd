@@ -194,6 +194,8 @@ func open() -> void:
 	_open = true
 	visible = true
 	_panel.visible = true
+	if UI.phone() and get_parent():
+		get_parent().move_child(self, get_parent().get_child_count() - 1)
 	_tool = ""
 	_status = ""
 	_s = {}
@@ -410,14 +412,15 @@ func _fit() -> void:
 	if not is_inside_tree() or not _panel:
 		return
 	var view := get_viewport_rect().size
+	var inset := UI.safe_insets()
 	var width: float = min(WIDE if WIDE_TOOLS.has(_tool) else NARROW, view.x - 16.0)
-	var max_h: float = max(160.0, view.y - PANEL_TOP - 16.0)
+	var max_h: float = max(160.0, view.y - PANEL_TOP - inset.y - 16.0)
 	var wanted := _header_holder.get_combined_minimum_size().y + _body.get_combined_minimum_size().y + 30.0
 	var height: float = clamp(wanted, 120.0, max_h)
-	_panel.offset_left = -PANEL_RIGHT - width
-	_panel.offset_right = -PANEL_RIGHT
-	_panel.offset_top = PANEL_TOP
-	_panel.offset_bottom = PANEL_TOP + height
+	_panel.offset_left = -PANEL_RIGHT - inset.z - width
+	_panel.offset_right = -PANEL_RIGHT - inset.z
+	_panel.offset_top = PANEL_TOP + inset.y
+	_panel.offset_bottom = PANEL_TOP + inset.y + height
 
 
 func _build_toast() -> void:
@@ -446,6 +449,11 @@ func _begin_pick(label: String, handler: Callable) -> void:
 	_picking = true
 	_pick_queue.clear()
 	_toast_label.text = label
+	if UI.phone():
+		var room := get_viewport_rect().size.x - 16.0 - 28.0 - 10.0 - (_toast_label.get_parent().get_child(1) as Control).get_combined_minimum_size().x
+		var natural := _toast_label.get_theme_font("font").get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, _toast_label.get_theme_font_size("font_size")).x + 1.0
+		_toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if natural > room else TextServer.AUTOWRAP_OFF
+		_toast_label.custom_minimum_size.x = minf(natural, room)
 	_toast.visible = true
 	_toast.reset_size()
 	_toast.offset_left = -_toast.get_combined_minimum_size().x * 0.5
@@ -874,6 +882,7 @@ func _header(title: String, subtitle: String) -> void:
 	if not _tool.is_empty():
 		var back := _btn("←", "plain", 13)
 		back.custom_minimum_size = Vector2(30, 28)
+		UI.tap_size(back)
 		back.tooltip_text = "Back to the cheat tools"
 		back.pressed.connect(func() -> void:
 			if _picking:
@@ -887,6 +896,7 @@ func _header(title: String, subtitle: String) -> void:
 	row.add_child(title_label)
 	var close_button := _btn("✕", "plain", 13)
 	close_button.custom_minimum_size = Vector2(30, 28)
+	UI.tap_size(close_button)
 	close_button.tooltip_text = "Close cheats"
 	close_button.pressed.connect(close)
 	row.add_child(close_button)
