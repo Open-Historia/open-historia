@@ -535,8 +535,7 @@ export const placeStrikes = async (struck, { events = [], cities = [], world = n
 // battlefield being fought over, taking it from one side of that battlefield
 // for the other, is the story stating a result: the region was CAPTURED that
 // day. That is what a model writes when it does not write an order (it is how
-// every capture was written before there were battlefields), what a capture
-// told only in an event's prose becomes (narratedCapture.js), and what the
+// every capture was written before there were battlefields), and what the
 // Game Master writes. The operation stays on its event and is applied as it
 // always was; the engine is told of the change of control on that day, as it
 // is of any other, AND told the capture as a result, so that the nearest
