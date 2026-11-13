@@ -58,6 +58,8 @@ export const STATIC_PROMPT_KEYS = Object.freeze(new Set([
   // rounds, never by the turn reading it.
   "campaignHistory",
   "CAMPAIGN_HISTORY",
+  // The scenario's rules moved to the top of a prompt (hoistSharedRules below).
+  "SCENARIO_RULES_OPENING",
 ]));
 
 // A placeholder that renders as nothing and marks where the part of a prompt
@@ -135,4 +137,73 @@ export const splitSystemPromptForCache = (systemPrompt, staticPrefixEnd, { minCh
   return Number.isFinite(shared) && shared >= minChars && shared < end
     ? { ...split, shared: text.slice(0, shared) }
     : split;
+};
+
+// ---------------------------------------------------------------------------
+// The scenario's rules, first and the same in every task
+// ---------------------------------------------------------------------------
+//
+// A scenario's simulation rules are the largest constant a campaign has (tens
+// of thousands of characters on a detailed preset) and most tasks send them,
+// each after an opening of its own: the stat sheet after a date, the feeds
+// after a date and a place, a time skip after its instructions. A cache that
+// counts only a LEADING part therefore never holds them for the short tasks
+// (a per-turn key comes first, so their prefix is a few hundred characters),
+// and a local server that keeps one prompt in memory (llama.cpp's slot) reads
+// them again whenever the task changes, because the texts part ways at the
+// first character.
+//
+// Hoisting gives every such prompt the same opening: the rules under one
+// heading, then the task's own text with a pointer where the rules stood. A
+// stat sheet asked for five countries then reads the rules from the cache four
+// times, and a local server asked for a stat sheet after a time skip keeps the
+// rules it has already read. It is done on the template at render time, so a
+// campaign's frozen prompt pack gets it too, and nothing is added or removed
+// from what the model is told: the rules move, whole.
+export const SCENARIO_RULES_OPENING_KEY = "SCENARIO_RULES_OPENING";
+export const SCENARIO_RULES_HEADING = "Scenario Rules";
+export const SCENARIO_RULES_POINTER = "(The scenario's rules are given in full under [Scenario Rules], at the top of this prompt. Read them there; they apply here.)";
+// The two spellings a template reaches the rules by: the helper and its variable.
+export const SCENARIO_RULES_KEYS = Object.freeze(["HISTORICAL_PRESET_SIMULATION_RULES", "simulationRules"]);
+
+// The opening itself. Built from the rules alone, so it is byte-identical in
+// every task of a campaign. No closing heading in brackets: the prompt's
+// sections are told apart by their bracketed headings (contextDiagnostics.js).
+export const scenarioRulesOpening = (rules) =>
+  `[${SCENARIO_RULES_HEADING}]
+The scenario author's rules for this world and its lore. They are given once, here, ahead of the task; wherever the text below speaks of the scenario's simulation rules, it means these.
+${String(rules ?? "").trim()}
+(End of the scenario's rules. The task follows.)
+
+`;
+
+// `template` with the scenario's rules moved to its top, and the value the new
+// placeholder renders: { template, values }. Left exactly as it was when the
+// template does not send the rules, or when they are too short for a cache to
+// take (a provider ignores a shorter prefix, and a pointer in place of a
+// paragraph buys nothing). A rules placeholder whose value differs from the
+// hoisted text (a prompt pack whose helper wraps the rules in words of its
+// own) is left in place: nothing is pointed at text that is not above.
+export const hoistSharedRules = (template, values, { minChars = MIN_CACHEABLE_PREFIX_CHARS } = {}) => {
+  const source = String(template ?? "");
+  const unchanged = { template: source, values: {} };
+  if (source.includes(`\${${SCENARIO_RULES_OPENING_KEY}}`)) return unchanged;
+  const placeholder = new RegExp(PLACEHOLDER_SOURCE, "g");
+  let rules = null;
+  for (let match = placeholder.exec(source); match; match = placeholder.exec(source)) {
+    if (!SCENARIO_RULES_KEYS.includes(match[1])) continue;
+    const value = values?.[match[1]];
+    rules = value == null ? "" : String(value);
+    break;
+  }
+  if (rules == null || rules.trim().length < minChars) return unchanged;
+  const moved = source.replace(new RegExp(PLACEHOLDER_SOURCE, "g"), (whole, key) => {
+    if (!SCENARIO_RULES_KEYS.includes(key)) return whole;
+    const value = values?.[key];
+    return value != null && String(value) === rules ? SCENARIO_RULES_POINTER : whole;
+  });
+  return {
+    template: `\${${SCENARIO_RULES_OPENING_KEY}}${moved}`,
+    values: { [SCENARIO_RULES_OPENING_KEY]: scenarioRulesOpening(rules) },
+  };
 };
