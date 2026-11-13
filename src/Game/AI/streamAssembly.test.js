@@ -6,6 +6,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  advanceRootObject,
+  createRootTracker,
   applyAnthropicFrame,
   applyGeminiFrame,
   applyOpenAIFrame,
@@ -704,4 +706,67 @@ test("gemini: a JSON-text answer is counted as it is written, and a thought summ
   ], { done: false }));
   assert.equal(cut.closedEarly, true);
   assert.equal(cut.candidates[0].content.parts[0].text, first);
+});
+
+const contentFrames = (pieces) => pieces.map((content) => ({ choices: [{ delta: { content } }] }));
+
+test("the object that opens an answer is found closed across pieces, braces in strings aside", () => {
+  const tracker = createRootTracker();
+  let text = ' {"a":"x}\\"y","b":[{"c":1}';
+  assert.equal(advanceRootObject(tracker, text), -1);
+  text += ']}';
+  assert.equal(advanceRootObject(tracker, text), text.length);
+  assert.equal(advanceRootObject(tracker, text + "}]}"), text.length, "what follows does not move it");
+  const prose = createRootTracker();
+  assert.equal(advanceRootObject(prose, 'Here it is: {"a":1} and more'), -1, "an answer that opens with words is left alone");
+});
+
+test("a whole answer that goes on being written is stopped where it was whole", async () => {
+  let cancelled = false;
+  const frames = contentFrames(['{"summary":"s",', '"events":[{"title":"t"}]}', "}]}]", "}}]", "}]}"]);
+  const encoder = new TextEncoder();
+  let sent = 0;
+  const response = {
+    body: new ReadableStream({
+      pull(controller) {
+        if (sent < frames.length) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frames[sent++])}\n\n`));
+        else controller.close();
+      },
+      cancel() { cancelled = true; },
+    }),
+  };
+  const data = await readOpenAIStreamedResponse(response, null, null, null, { stopAtWholeAnswer: true });
+  assert.equal(data.choices[0].message.content, '{"summary":"s","events":[{"title":"t"}]}');
+  assert.equal(data.choices[0].finish_reason, "stop");
+  assert.equal(data.stoppedAtWholeAnswer, true);
+  assert.equal(data.closedEarly, undefined);
+  assert.equal(cancelled, true, "the connection is closed, which stops the server");
+  assert.ok(sent < frames.length, "the rest was never read");
+});
+
+test("without the option, and for an answer that simply ends, nothing changes", async () => {
+  const pieces = ['{"a":1}', "}]}"];
+  const kept = await readOpenAIStreamedResponse(sseResponse(contentFrames(pieces)));
+  assert.equal(kept.choices[0].message.content, '{"a":1}}]}');
+  assert.equal(kept.stoppedAtWholeAnswer, undefined);
+  const whole = await readOpenAIStreamedResponse(sseResponse([...contentFrames(['{"a":1}', "\n"]), { choices: [{ delta: {}, finish_reason: "stop" }] }]), null, null, null, { stopAtWholeAnswer: true });
+  assert.equal(whole.choices[0].message.content, '{"a":1}\n');
+  assert.equal(whole.stoppedAtWholeAnswer, undefined);
+  const afterThought = await readOpenAIStreamedResponse(sseResponse(contentFrames(["<think>{ not it }</think>", '{"a":1}', "{"])), null, null, null, { stopAtWholeAnswer: true });
+  assert.equal(afterThought.choices[0].message.content, '<think>{ not it }</think>{"a":1}');
+  assert.equal(afterThought.stoppedAtWholeAnswer, true);
+});
+
+test("a second call of the function whose first call is whole stops the reading", async () => {
+  const call = (index, fn) => ({ choices: [{ delta: { tool_calls: [{ index, function: fn }] } }] });
+  const frames = [call(0, { name: "submit", arguments: '{"a":' }), call(0, { arguments: "1}" }), call(1, { name: "submit", arguments: '{"a":' }), call(1, { arguments: "1}" })];
+  const stopped = await readOpenAIStreamedResponse(sseResponse(frames), null, null, null, { stopAtWholeAnswer: true });
+  assert.equal(stopped.choices[0].message.tool_calls.length, 1);
+  assert.equal(stopped.choices[0].message.tool_calls[0].function.arguments, '{"a":1}');
+  assert.equal(stopped.choices[0].finish_reason, "tool_calls");
+  assert.equal(stopped.stoppedAtWholeAnswer, true);
+  const other = await readOpenAIStreamedResponse(sseResponse([frames[0], frames[1], call(1, { name: "lookup", arguments: "{}" })]), null, null, null, { stopAtWholeAnswer: true });
+  assert.equal(other.choices[0].message.tool_calls.length, 2, "a call of another function is kept");
+  const plain = await readOpenAIStreamedResponse(sseResponse(frames));
+  assert.equal(plain.choices[0].message.tool_calls.length, 2);
 });

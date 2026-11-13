@@ -1715,8 +1715,12 @@ async function callOpenAIStyleChatCompletions({
         // stream is safe: a gateway that quietly ignores it still lands here.
         const responseType = String(response.headers.get("content-type") || "");
         const data = responseType.includes("text/event-stream")
-            ? await readOpenAIStreamedResponse(response, onActivity, onToolStream, onReceived)
+            ? await readOpenAIStreamedResponse(response, onActivity, onToolStream, onReceived, {
+                // One answer wanted from the player's own server: stop reading where it is whole (streamAssembly.js wholeAnswerWatch).
+                stopAtWholeAnswer: Boolean(tool) && oneOutputCallOnly({ local: isLocalEndpoint(normalizeEndpoint(endpoint)), lookups: lookupDeclarations.length }),
+            })
             : await readJsonAnswer(response, providerLabel);
+        if (data?.stoppedAtWholeAnswer) console.warn(`[ai] ${providerLabel}: the answer was whole and the model went on writing; stopped reading there and closed the request.`);
         onUsage?.(data);
         // The answer names its server: a KoboldCpp is remembered for one.
         noteKoboldCpp(endpoint, data);
