@@ -10,6 +10,7 @@ signal world_changed
 const PANEL_MAX_WIDTH := 928.0
 const PANEL_MAX_HEIGHT := 800.0
 const PANEL_MIN_HEIGHT := 384.0
+const PHONE_MIN_HEIGHT := 160.0
 const PANEL_LEFT := 17.0
 const PANEL_BOTTOM := 77.0
 const PANEL_CLOSED_BOTTOM := -823.0
@@ -408,6 +409,8 @@ func render_council(channel_id: String) -> Control:
 
 
 func _process(_delta: float) -> void:
+	if UI.phone():
+		return
 	var inset := _right_inset()
 	if not is_equal_approx(inset, _placed_inset):
 		_placed_inset = inset
@@ -432,13 +435,22 @@ func _place(open_state: bool, animate: bool) -> void:
 	_placed_inset = _right_inset() if is_inside_tree() else 0.0
 	var width := minf(PANEL_MAX_WIDTH, viewport.x - 16.0 - _placed_inset)
 	var height := maxf(PANEL_MIN_HEIGHT, minf(PANEL_MAX_HEIGHT, viewport.y - 128.0))
+	var left := PANEL_LEFT
+	var open_bottom := PANEL_BOTTOM
+	if UI.phone():
+		var safe := UI.safe_insets()
+		_placed_inset = 0.0
+		left = PANEL_LEFT + safe.x
+		open_bottom = PANEL_BOTTOM + safe.w
+		width = minf(PANEL_MAX_WIDTH, viewport.x - 24.0 - safe.x - safe.z)
+		height = maxf(PHONE_MIN_HEIGHT, minf(PANEL_MAX_HEIGHT, viewport.y - 164.0 - safe.y - safe.w))
 	anchor_left = 0.0
 	anchor_right = 0.0
 	anchor_top = 1.0
 	anchor_bottom = 1.0
-	offset_left = PANEL_LEFT
-	offset_right = PANEL_LEFT + width
-	var bottom := PANEL_BOTTOM if open_state else PANEL_CLOSED_BOTTOM
+	offset_left = left
+	offset_right = left + width
+	var bottom := open_bottom if open_state else PANEL_CLOSED_BOTTOM
 	var target_top := -bottom - height
 	var target_bottom := -bottom
 	if not animate or not is_inside_tree():
@@ -963,7 +975,8 @@ func _restyle_header() -> void:
 	_header_margin = row.get_parent() as MarginContainer
 	var column := _header_margin.get_parent() as VBoxContainer
 	_header_rule = column.get_child(_header_margin.get_index() + 1) as Control
-	for side in [["margin_left", 14], ["margin_right", 14], ["margin_top", 11], ["margin_bottom", 10]]:
+	var phone := UI.phone()
+	for side in [["margin_left", 14], ["margin_right", 14], ["margin_top", 6 if phone else 11], ["margin_bottom", 5 if phone else 10]]:
 		_header_margin.add_theme_constant_override(side[0], side[1])
 	header_title.add_theme_font_override("font", UI.font(800))
 	header_title.add_theme_font_size_override("font_size", 16)
@@ -982,14 +995,18 @@ func _restyle_header() -> void:
 	badge.add_child(icon_rect("contacts", 15, GREY_TEXT))
 	row.add_child(badge)
 	row.move_child(badge, 0)
+	if phone:
+		badge.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		titles.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	var close := text_button("✕", 18, Color(1, 1, 1, 0.5), UI.WHITE, 400, UiTheme.pick("line", Color(1, 1, 1, 0.08)))
 	close.tooltip_text = "Close diplomacy panel"
 	close.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	close.pressed.connect(func() -> void: closed.emit())
+	UI.tap_size(close)
 	row.add_child(close)
 	_header_margin.remove_child(row)
 	var stack := VBoxContainer.new()
-	stack.add_theme_constant_override("separation", 9)
+	stack.add_theme_constant_override("separation", 6 if phone else 9)
 	stack.add_child(row)
 	var tabs := HBoxContainer.new()
 	tabs.add_theme_constant_override("separation", 6)
@@ -997,7 +1014,14 @@ func _restyle_header() -> void:
 		var tab := _tab_button(entry[0], entry[1], entry[2])
 		tabs.add_child(tab)
 		_tab_buttons[entry[0]] = tab
-	stack.add_child(tabs)
+	if phone:
+		var strip := ScrollContainer.new()
+		strip.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+		strip.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		strip.add_child(tabs)
+		stack.add_child(strip)
+	else:
+		stack.add_child(tabs)
 	_header_margin.add_child(stack)
 
 
@@ -1007,7 +1031,7 @@ func _tab_button(key: String, icon_key: String, caption_text: String) -> Button:
 	tab.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	var holder := MarginContainer.new()
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	for side in [["margin_left", 11], ["margin_right", 11], ["margin_top", 5], ["margin_bottom", 5]]:
+	for side in [["margin_left", int(_tab_pad())], ["margin_right", int(_tab_pad())], ["margin_top", 5], ["margin_bottom", 5]]:
 		holder.add_theme_constant_override(side[0], side[1])
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
@@ -1034,9 +1058,13 @@ func _tab_button(key: String, icon_key: String, caption_text: String) -> Button:
 	holder.add_child(row)
 	holder.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	tab.add_child(holder)
-	tab.custom_minimum_size = Vector2(row.get_combined_minimum_size().x + 22, 29)
+	tab.custom_minimum_size = Vector2(row.get_combined_minimum_size().x + _tab_pad() * 2.0, UI.PHONE_TAP if UI.phone() else 29.0)
 	tab.pressed.connect(func() -> void: _set_view(key))
 	return tab
+
+
+func _tab_pad() -> float:
+	return 9.5 if UI.phone() else 11.0
 
 
 func _style_tabs() -> void:
@@ -1066,7 +1094,7 @@ func _style_tabs() -> void:
 		count_value.add_theme_color_override("font_color", UI.WHITE if chosen else SKY)
 		count_holder.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.14) if chosen else Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.16), Color(0, 0, 0, 0), 999, 0, Vector4(4, 0, 4, 0)))
 		var row := caption.get_parent() as HBoxContainer
-		tab.custom_minimum_size.x = row.get_combined_minimum_size().x + 22
+		tab.custom_minimum_size.x = row.get_combined_minimum_size().x + _tab_pad() * 2.0
 
 
 func _update_tab_visibility() -> void:
@@ -1455,6 +1483,7 @@ func _chat_row(chat: Dictionary) -> Control:
 			marker = t(found.get("label", ""))
 			break
 	var hovered := list_hover == id
+	var touch := UI.phone()
 	var confirming := list_confirm == id
 	var row := PanelContainer.new()
 	row.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -1464,7 +1493,7 @@ func _chat_row(chat: Dictionary) -> Control:
 	row.add_theme_stylebox_override("panel", UI.box(bg, border, 12, 1))
 	var margin := MarginContainer.new()
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	for side in [["margin_left", 14], ["margin_right", 48], ["margin_top", 12], ["margin_bottom", 12]]:
+	for side in [["margin_left", 14], ["margin_right", 107 if touch else 48], ["margin_top", 12], ["margin_bottom", 12]]:
 		margin.add_theme_constant_override(side[0], side[1])
 	if hovered:
 		margin.add_theme_constant_override("margin_top", 11)
@@ -1522,6 +1551,9 @@ func _chat_row(chat: Dictionary) -> Control:
 		prefix = "[color=#ffffff80][b]%s: [/b][/color]" % escape(speaker)
 	preview_label.text = prefix + escape(preview)
 	preview_label.custom_minimum_size.y = 16
+	if touch:
+		preview_label.fit_content = false
+		preview_label.custom_minimum_size.y = 17
 	texts.add_child(preview_label)
 	content.add_child(texts)
 	margin.add_child(content)
@@ -1533,7 +1565,7 @@ func _chat_row(chat: Dictionary) -> Control:
 	actions.alignment = BoxContainer.ALIGNMENT_END
 	actions.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	actions.add_theme_constant_override("separation", 4)
-	if hovered:
+	if hovered or touch:
 		var envelope := icon_button("envelope_filled" if is_new else "envelope", 14, UiTheme.pick("accent", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.78)), UiTheme.pick("overlay_strong", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.86)), UiTheme.pick("line", Color(1, 1, 1, 0.08)))
 		envelope.tooltip_text = "Mark as read" if is_new else "Mark as unread"
 		envelope.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -1555,7 +1587,9 @@ func _chat_row(chat: Dictionary) -> Control:
 				delete_chat(id)
 			else:
 				list_confirm = id
-				render_list())
+				render_list()
+				if touch:
+					_disarm_row_later(id))
 		actions.add_child(trash)
 		for button in [envelope, trash]:
 			(button as Control).mouse_exited.connect(func() -> void: _row_left(row, id))
@@ -1574,6 +1608,13 @@ func _chat_row(chat: Dictionary) -> Control:
 		if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and not (event as InputEventMouseButton).pressed:
 			open_chat_from_list(chat))
 	return row
+
+
+func _disarm_row_later(id: String) -> void:
+	await get_tree().create_timer(4.0).timeout
+	if list_confirm == id:
+		list_confirm = ""
+		render_list()
 
 
 func _row_left(row: Control, id: String) -> void:
@@ -1812,6 +1853,7 @@ func _build_modal() -> void:
 	close.tooltip_text = "Close"
 	close.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	close.pressed.connect(_close_selector)
+	UI.tap_size(close)
 	title_row.add_child(close)
 	head_column.add_child(title_row)
 	head_column.add_child(gap(14))
@@ -1831,6 +1873,8 @@ func _build_modal() -> void:
 	_modal_search = LineEdit.new()
 	_modal_search.placeholder_text = "Search countries..."
 	_modal_search.custom_minimum_size.y = 36
+	if UI.phone():
+		_modal_search.set_meta("oh_tap_exempt", true)
 	_modal_search.add_theme_stylebox_override("normal", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 10, 1, Vector4(35, 0, 14, 0)))
 	_modal_search.add_theme_stylebox_override("focus", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), Color(1, 1, 1, 0.25), 10, 1, Vector4(35, 0, 14, 0)))
 	_modal_search.add_theme_font_override("font", UI.font(400))
@@ -3042,6 +3086,8 @@ class Conversation extends VBoxContainer:
 	var _rendered_signature := ""
 	var _header: PanelContainer
 	var _header_flags: HBoxContainer
+	var _squeeze: Control
+	var _title_natural := 0.0
 	var _title: Label
 	var _title_row: HBoxContainer
 	var _title_editor: HBoxContainer
@@ -3135,13 +3181,14 @@ class Conversation extends VBoxContainer:
 		style.border_width_bottom = 1
 		style.corner_radius_top_left = 16
 		style.corner_radius_top_right = 16
+		var phone := UI.phone()
 		style.content_margin_left = 16
 		style.content_margin_right = 16
-		style.content_margin_top = 11
-		style.content_margin_bottom = 11
+		style.content_margin_top = 6 if phone else 11
+		style.content_margin_bottom = 6 if phone else 11
 		_header.add_theme_stylebox_override("panel", style)
 		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 11)
+		row.add_theme_constant_override("separation", 6 if phone else 11)
 		var back := ChatPanel.icon_button("back", 14, Color(1, 1, 1, 0.58), Color(0, 0, 0, 0), Color(0, 0, 0, 0))
 		back.tooltip_text = "Back to diplomacy"
 		back.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -3190,8 +3237,8 @@ class Conversation extends VBoxContainer:
 				editing_title = false
 				refresh_chrome())
 		var input_cap := MarginContainer.new()
-		input_cap.custom_minimum_size.x = 288
-		input_cap.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		input_cap.custom_minimum_size.x = 0 if phone else 288
+		input_cap.size_flags_horizontal = Control.SIZE_EXPAND_FILL if phone else Control.SIZE_SHRINK_BEGIN
 		input_cap.add_child(_title_input)
 		_title_editor.add_child(input_cap)
 		var save := ChatPanel.solid_button("Save", 10, ChatPanel.SKY, 700, Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.25), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.5), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.32), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6), 6, Vector4(7, 3, 7, 3))
@@ -3204,7 +3251,21 @@ class Conversation extends VBoxContainer:
 		_subtitle.clip_text = true
 		_subtitle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		titles.add_child(_subtitle)
-		row.add_child(titles)
+		if phone:
+			var squeeze := Control.new()
+			squeeze.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			squeeze.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			squeeze.add_child(titles)
+			titles.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+			var fit_height := func() -> void:
+				squeeze.custom_minimum_size.y = titles.get_combined_minimum_size().y
+			titles.minimum_size_changed.connect(fit_height)
+			fit_height.call()
+			_squeeze = squeeze
+			squeeze.resized.connect(_fit_title)
+			row.add_child(squeeze)
+		else:
+			row.add_child(titles)
 		_add_country = ChatPanel.icon_text_button("Add Country", "plus", 11, Color(1, 1, 1, 0.85), UiTheme.pick("hover", Color(1, 1, 1, 0.06)), Color(1, 1, 1, 0.14), 7, Vector4(8, 4, 8, 4))
 		_add_country.add_theme_font_override("font", UI.font(700))
 		for state in ["font_hover_color", "font_pressed_color", "font_hover_pressed_color", "icon_hover_color", "icon_pressed_color", "icon_hover_pressed_color"]:
@@ -3227,11 +3288,14 @@ class Conversation extends VBoxContainer:
 				panel.delete_chat(chat_id)
 			else:
 				confirm_delete = true
-				refresh_chrome())
+				refresh_chrome()
+				if UI.phone():
+					_disarm_later())
 		row.add_child(_trash)
 		var close := ChatPanel.text_button("✕", 16, Color(1, 1, 1, 0.4), UI.WHITE, 400, UiTheme.pick("line", Color(1, 1, 1, 0.08)))
 		close.tooltip_text = "Close conversation"
 		close.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		UI.tap_size(close)
 		close.pressed.connect(func() -> void: panel.leave_active())
 		row.add_child(close)
 		_header.add_child(row)
@@ -3386,7 +3450,7 @@ class Conversation extends VBoxContainer:
 		_send.focus_mode = Control.FOCUS_NONE
 		_send.tooltip_text = "Send message"
 		_send.custom_minimum_size = Vector2(69 if embedded else 40, 40)
-		_send.size_flags_vertical = Control.SIZE_SHRINK_END
+		_send.size_flags_vertical = Control.SIZE_SHRINK_CENTER if UI.phone() else Control.SIZE_SHRINK_END
 		if embedded:
 			_send.text = "Send ↗"
 			_send.add_theme_font_override("font", UI.font(800))
@@ -3400,12 +3464,30 @@ class Conversation extends VBoxContainer:
 				_send.add_theme_color_override(state, UI.WHITE)
 		_send.pressed.connect(submit_from_composer)
 		row.add_child(_send)
+		if UI.phone():
+			for button in [_peace_button, _vote_button, _demand_button]:
+				(button as Control).size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		column.add_child(row)
 		_hint = UI.label("Enter to send · Shift+Enter for a new line", 8 if embedded else 9, Color(1, 1, 1, 0.26))
 		column.add_child(ChatPanel.spaced(_hint, 4))
 		_composer_panel.add_child(column)
 		add_child(_composer_panel)
 		_update_send()
+
+
+	func _fit_title() -> void:
+		if _squeeze == null:
+			return
+		var room := _squeeze.size.x - (_pencil.size.x + 6.0 if _pencil.visible else 0.0)
+		_title.custom_minimum_size.x = clampf(room, 0.0, _title_natural)
+
+
+	func _disarm_later() -> void:
+		var armed_for := chat_id
+		await get_tree().create_timer(4.0).timeout
+		if confirm_delete and chat_id == armed_for:
+			confirm_delete = false
+			refresh_chrome()
 
 
 	func _input(event: InputEvent) -> void:
@@ -3682,6 +3764,8 @@ class Conversation extends VBoxContainer:
 			var title_font := _title.get_theme_font("font")
 			var title_width := title_font.get_string_size(_title.text, HORIZONTAL_ALIGNMENT_LEFT, -1, _title.get_theme_font_size("font_size")).x if title_font else 200.0
 			_title.custom_minimum_size.x = minf(ceilf(title_width) + 2.0, 440.0)
+			_title_natural = _title.custom_minimum_size.x
+			_fit_title()
 			var renamable := not is_institutional() and not is_lifecycle_conversation()
 			_pencil.visible = renamable
 			_add_country.visible = renamable
@@ -3896,6 +3980,8 @@ class Conversation extends VBoxContainer:
 
 
 	func _on_composer_input(event: InputEvent) -> void:
+		if UI.phone() or OS.has_feature("mobile"):
+			return
 		if event is InputEventKey:
 			var key := event as InputEventKey
 			if key.pressed and not key.echo and (key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER) and not key.shift_pressed and not _composer.has_ime_text():

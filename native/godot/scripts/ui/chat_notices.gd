@@ -47,8 +47,8 @@ func _ready() -> void:
 	_toast_box.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_toast_box.offset_left = -12.0 - TOAST_WIDTH
 	_toast_box.offset_right = -12.0
-	_toast_box.offset_top = 70.0
-	_toast_box.offset_bottom = 70.0
+	_toast_box.offset_top = 70.0 + UI.safe_insets().y
+	_toast_box.offset_bottom = _toast_box.offset_top
 	add_child(_toast_box)
 	_build_bell()
 	_audio = AudioStreamPlayer.new()
@@ -109,7 +109,7 @@ func _process(_delta: float) -> void:
 		else:
 			_render()
 		_check()
-	var right := 12.0 + _right_inset()
+	var right := 12.0 + (UI.safe_insets().z if UI.phone() else _right_inset())
 	if not is_equal_approx(_toast_box.offset_right, -right):
 		_toast_box.offset_right = -right
 		_toast_box.offset_left = -right - TOAST_WIDTH
@@ -176,6 +176,7 @@ func _push(item: Dictionary) -> void:
 			oldest_node.queue_free()
 	var id := _seq
 	timer.timeout.connect(func() -> void: _remove_toast(id))
+	_show_newest()
 	if _sound:
 		_play_chime()
 	if engine and _desktop_permission == "granted":
@@ -198,7 +199,17 @@ func _remove_toast(id: int) -> void:
 			if is_instance_valid(node):
 				node.queue_free()
 			_toasts.remove_at(index)
+			_show_newest()
 			return
+
+
+func _show_newest() -> void:
+	if not UI.phone():
+		return
+	for index in range(_toasts.size()):
+		var node: Control = _toasts[index]["node"]
+		if is_instance_valid(node):
+			node.visible = index == _toasts.size() - 1
 
 
 func _open_item(item: Dictionary) -> void:
@@ -252,7 +263,7 @@ func _size_center() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var viewport := get_viewport_rect().size
-	var height := minf(432.0, viewport.y - 112.0)
+	var height := minf(432.0, viewport.y - 128.0 - UI.safe_insets().y if UI.phone() else viewport.y - 112.0)
 	_center.offset_bottom = -48.0
 	_center.offset_top = -48.0 - minf(height, _center_list.get_combined_minimum_size().y + 44.0)
 
@@ -281,14 +292,16 @@ func _fade_out(node: Control) -> void:
 
 
 func _toast(item: Dictionary) -> Control:
-	var toast := GlassPanel.new(Color(30 / 255.0, 30 / 255.0, 33 / 255.0, 0.67), 14.0, Vector4(14, 12, 38, 12), Color(230 / 255.0, 230 / 255.0, 233 / 255.0, 0.2))
+	var phone := UI.phone()
+	var room := 53.0 if phone else 38.0
+	var toast := GlassPanel.new(Color(30 / 255.0, 30 / 255.0, 33 / 255.0, 0.67), 14.0, Vector4(14, 12, room, 12), Color(230 / 255.0, 230 / 255.0, 233 / 255.0, 0.2))
 	toast.mouse_filter = Control.MOUSE_FILTER_STOP
 	var has_chat := not _s(item.get("chatId", "")).is_empty()
 	toast.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if has_chat else Control.CURSOR_ARROW
 	toast.tooltip_text = "Open diplomatic chat" if has_chat else "Notification test"
 	toast.focus_mode = Control.FOCUS_ALL if has_chat else Control.FOCUS_NONE
 	var resting: StyleBox = toast.get_theme_stylebox("panel")
-	var ringed := UI.box(Color(0, 0, 0, 0), Color(1, 1, 1, 0.85), 14, 2, Vector4(14, 12, 38, 12))
+	var ringed := UI.box(Color(0, 0, 0, 0), Color(1, 1, 1, 0.85), 14, 2, Vector4(14, 12, room, 12))
 	toast.focus_entered.connect(func() -> void: toast.add_theme_stylebox_override("panel", ringed))
 	toast.focus_exited.connect(func() -> void: toast.add_theme_stylebox_override("panel", resting))
 	var column := VBoxContainer.new()
@@ -324,6 +337,11 @@ func _toast(item: Dictionary) -> Control:
 	close.offset_right = 32.0
 	close.offset_top = -5.0
 	close.offset_bottom = 20.0
+	if phone:
+		close.offset_left = room - 7.0 - UI.PHONE_TAP
+		close.offset_right = room - 7.0
+		close.offset_top = -5.0
+		close.offset_bottom = -5.0 + UI.PHONE_TAP
 	close_holder.add_child(close)
 	toast.add_child(close_holder)
 	var id := int(item.get("id", 0))
@@ -348,12 +366,22 @@ func _build_bell() -> void:
 	_bell_holder.offset_right = 12.0 + CENTER_WIDTH
 	_bell_holder.offset_top = -73.0 - 40.0
 	_bell_holder.offset_bottom = -73.0
+	if UI.phone():
+		var safe := UI.safe_insets()
+		var wide := minf(CENTER_WIDTH, maxf(0.0, (get_viewport_rect().size.x if is_inside_tree() else 412.0) - 24.0 - safe.x - safe.z))
+		_bell_holder.offset_left = 12.0 + safe.x
+		_bell_holder.offset_right = _bell_holder.offset_left + wide
+		_bell_holder.offset_bottom = -73.0 - safe.w
+		_bell_holder.offset_top = _bell_holder.offset_bottom - UI.PHONE_TAP
 	add_child(_bell_holder)
 	_center = GlassPanel.new(Color(29 / 255.0, 29 / 255.0, 32 / 255.0, 0.69), 16.0, Vector4(0, 0, 0, 0), Color(230 / 255.0, 230 / 255.0, 233 / 255.0, 0.18))
 	_center.anchor_top = 1.0
 	_center.anchor_bottom = 1.0
 	_center.offset_left = 0.0
 	_center.offset_right = CENTER_WIDTH
+	if UI.phone():
+		_center.anchor_right = 1.0
+		_center.offset_right = 0.0
 	_center.offset_bottom = -48.0
 	_center.offset_top = -48.0 - 200.0
 	_center.visible = false
