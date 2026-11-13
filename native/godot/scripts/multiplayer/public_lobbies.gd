@@ -87,6 +87,8 @@ func _init() -> void:
 	CommunityKit.leading(line, 14, 1.3)
 	words.add_child(line)
 	if phone:
+		cover.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		line.custom_minimum_size.x = 300.0
 		stack.resized.connect(func() -> void: line.custom_minimum_size.x = minf(416.0, stack.size.x + 42.0))
 	cover.add_child(words)
 	stack.add_child(cover)
@@ -164,6 +166,17 @@ func _build_list() -> void:
 		(join_cell.get_child(0) as Control).queue_free()
 		join_cell.add_child(join)
 		table.add_child(join_cell)
+	if UI.phone():
+		var slide := ScrollContainer.new()
+		slide.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		slide.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+		slide.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		slide.add_child(table)
+		var fit := func() -> void: slide.custom_minimum_size.y = table.get_combined_minimum_size().y
+		table.minimum_size_changed.connect(fit)
+		fit.call()
+		_content.add_child(slide)
+		return
 	_content.add_child(table)
 
 

@@ -379,6 +379,14 @@ func _lobbies_part(view: Vector2) -> void:
 	_check(_label(page, "Multiplayer is not available in the phone app yet.") != null, "the page says multiplayer is not on phones yet")
 	_check(_label(page, "Public lobbies") != null and _label(page, "Coming soon") != null, "Public lobbies, Coming soon")
 	_check(page.size.x <= view.x - 25.6 + 0.5, "the Lobbies page fits the phone (%d)" % page.size.x)
+	var cards := _find(page, func(item: Node) -> bool: return item is PublicLobbies)
+	var public_card := cards[0] as Control if not cards.is_empty() else null
+	_check(public_card != null, "the Public lobbies card is on the page")
+	if public_card:
+		var card_rect := public_card.get_global_rect()
+		_check(card_rect.end.x <= view.x - 12.0 and card_rect.position.x >= 12.0, "the Public lobbies card keeps inside the page (%s)" % str(card_rect))
+		var soon := _label(public_card, "Coming soon")
+		_check(soon != null and soon.get_global_rect().get_center().x > view.x * 0.5 - 2.0 and soon.get_global_rect().get_center().x < view.x * 0.5 + 2.0, "Coming soon stands in the card's middle")
 	await _shoot("phone-lobbies")
 	var lobbies := menu.get("_lobbies") as Control
 	if host:
