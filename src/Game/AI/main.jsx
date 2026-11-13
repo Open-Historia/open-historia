@@ -118,6 +118,7 @@ import {
     lookupCallsFromAnthropic,
     lookupCallsFromGemini,
     lookupCallsFromOpenAI,
+    oneOutputCallOnly,
     lookupRoundCount,
     openAiMessagesFromHistory,
     withCachedHistory,
@@ -1534,6 +1535,8 @@ async function callOpenAIStyleChatCompletions({
                     // one tool is ever sent, so "required" (accepted by OpenAI and
                     // the compatible gateways alike) forces that same tool.
                     tool_choice: "required",
+                    // One call of it, on a local server with nothing else to call (toolTurns.js).
+                    ...(oneOutputCallOnly({ local: isLocalEndpoint(normalizeEndpoint(endpoint)), lookups: lookupDeclarations.length }) ? { parallel_tool_calls: false } : {}),
                 } : {}),
                 ...(structuredMode === "json_schema" ? {
                     response_format: { type: "json_schema", json_schema: {
