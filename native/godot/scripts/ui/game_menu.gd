@@ -1385,6 +1385,11 @@ https://www.youtube-nocookie.com/"
 			row.add_theme_constant_override("separation", 8)
 		if not choice.is_empty():
 			row.add_child(_button("← Back", "quiet", back_to_choices))
+			if UI.phone():
+				var push := Control.new()
+				push.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				push.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				row.add_child(push)
 		if not UI.phone():
 			row.add_child(UI.spacer())
 		row.add_child(_button("Not now", "quiet", dismissed.emit))
@@ -1509,11 +1514,23 @@ https://www.youtube-nocookie.com/"
 		var steps := VBoxContainer.new()
 		steps.add_theme_constant_override("separation", 11)
 		for step: Array in [["1. Get the GOAT plan, $10 a month", "Open the plans ↗", _command_code("pricingUrl"), "Pricing"], ["2. Generate an API key", "Open the API keys page ↗", _command_code("keysUrl"), "Keys"]]:
-			var line := HBoxContainer.new()
-			line.add_theme_constant_override("separation", 8)
+			var line: Container
+			if UI.phone():
+				var flow := HFlowContainer.new()
+				flow.add_theme_constant_override("h_separation", 8)
+				flow.add_theme_constant_override("v_separation", 8)
+				line = flow
+			else:
+				var straight := HBoxContainer.new()
+				straight.add_theme_constant_override("separation", 8)
+				line = straight
 			var words := UI.wrapped(str(step[0]), 13, UI.WHITE, 800)
 			words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			words.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			if UI.phone():
+				var natural := words.get_theme_font("font").get_string_size(words.text, HORIZONTAL_ALIGNMENT_LEFT, -1, words.get_theme_font_size("font_size")).x + 1.0
+				var room := (get_viewport_rect().size.x if is_inside_tree() else 412.0) - 32.0 - 44.8 - 2.0 - 28.8
+				words.custom_minimum_size.x = minf(natural, room)
 			line.add_child(words)
 			var open_link := _button(str(step[1]), "grey", _open_outside.bind(str(step[2])))
 			open_link.name = "Open%s" % str(step[3])

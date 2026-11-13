@@ -110,8 +110,6 @@ func _run() -> void:
 	var seeded: Dictionary = await main.engine.request("country.standin_seed", {"blocs": true})
 	_check(seeded.get("ok", false), "the stand-in world is seeded")
 	await _wait(1.0)
-	if hud.war_cards:
-		hud.war_cards.visible = false
 	await _unit_and_feature(hud)
 	await _legend(hud)
 	await _ai_setup()
@@ -294,6 +292,20 @@ func _ai_setup() -> void:
 	for node in _find_all(prompt, func(item: Node) -> bool: return item is Button and (item as Button).text == "✕", []):
 		cross = node
 	_check(cross != null and _near(_rect(cross).size.x, 44.0, 0.6) and _rect(cross).position.y < r.position.y + 40.0, "a 44 px ✕ answers Not now at the top")
+	var choices := _find_all(prompt, func(node: Node) -> bool: return node.has_meta("setup_choice") and _shown(node as Control), [])
+	_check(choices.size() == 3, "three choices: Gemini, Command Code and Custom")
+	if choices.size() == 3:
+		var first := _rect(choices[0] as Control)
+		var second := _rect(choices[1] as Control)
+		var third := _rect(choices[2] as Control)
+		_check(_near(first.position.x, second.position.x, 0.5) and second.position.y > first.end.y and third.position.y > second.end.y, "on a phone the choices stand one under another")
+		_check(_near(second.position.y - first.end.y, 12.8, 1.0), "0.8rem between the choices (%.1f)" % (second.position.y - first.end.y))
+		_check(first.size.x > r.size.x - 50.0 and first.size.y >= 70.0, "a choice is the card's width and 4.4rem tall (%s)" % str(first.size))
+	for words in ["Gemini", "Best free option", "Best quality option", "Configure any provider and any model, or a local model"]:
+		_check(_label(prompt, words) != null, "the chooser says " + words)
+	await _shoot("m-ai-setup")
+	prompt.call("open_choice", "gemini")
+	await _wait(0.8)
 	var key := _button(prompt, "Get a key at Google AI Studio ↗")
 	var heading := _label(prompt, "New to API keys?")
 	_check(key != null and heading != null and _rect(key).position.y > _rect(heading).position.y + 20.0, "the key button wraps under New to API keys?")
@@ -304,17 +316,41 @@ func _ai_setup() -> void:
 	_check(watch != null and hide != null and _rect(watch).size.y >= 43.5 and _rect(hide).size.y >= 43.5, "the video's links are finger-high")
 	var lines := _find_all(prompt, func(node: Node) -> bool: return node is LineEdit and _shown(node as Control), [])
 	_check(lines.size() == 2 and lines.all(func(node: Node) -> bool: return _rect(node as Control).size.y < 40.0), "the key and model fields keep beta's height")
-	await _shoot("m-ai-setup")
+	await _shoot("m-ai-setup-gemini")
 	var scroll := _find_all(prompt, func(node: Node) -> bool: return node is ScrollContainer, [])
 	if not scroll.is_empty():
 		(scroll[0] as ScrollContainer).scroll_vertical = 100000
 	await _wait(0.4)
-	var later := _button(prompt, "Not now")
-	var full := _button(prompt, "Open full settings")
+	var back := _button(prompt, "← Back")
+	var worded := _find_all(prompt, func(item: Node) -> bool: return item is Button and _shown(item as Control) and (item as Button).text == "Not now", [])
+	var later := worded[0] as BaseButton if not worded.is_empty() else null
 	var save := _button(prompt, "Save and play")
-	_check(later != null and full != null and save != null and _rect(save).position.y > _rect(full).position.y + 20.0 and _near(_rect(save).end.x, _rect(full).end.x, 1.5), "the buttons wrap to the right, Save and play on its own row")
+	var inner := _rect(prompt.get("_body") as Control)
+	_check(back != null and later != null and save != null and _near(_rect(back).position.x, inner.position.x, 1.0) and _rect(later).end.x <= _rect(save).position.x + 0.5 and _near(_rect(save).end.x, inner.end.x, 1.0), "← Back stands at the left, Not now and Save and play at the right (%s %s %s in %s)" % [str(_rect(back)), str(_rect(later)), str(_rect(save)), str(inner)])
 	_check(later != null and _rect(later).size.y >= 43.5, "the buttons are finger-high")
-	await _shoot("m-ai-setup-p2")
+	await _shoot("m-ai-setup-gemini-p2")
+	prompt.call("open_choice", "commandcode")
+	await _wait(0.8)
+	if not scroll.is_empty():
+		(scroll[0] as ScrollContainer).scroll_vertical = 0
+	await _wait(0.3)
+	var plans := _button(prompt, "Open the plans ↗")
+	var goat := _label(prompt, "1. Get the GOAT plan, $10 a month")
+	_check(plans != null and goat != null and _rect(plans).position.y >= _rect(goat).end.y - 0.5, "Open the plans wraps under its step on a phone")
+	_check(plans != null and _rect(plans).end.x <= r.end.x - 20.0 and _rect(plans).size.y >= 43.5, "the step's link is inside the card, finger-high")
+	_check(_label(prompt, "GLM 5.3 Flash") != null, "the model is named")
+	await _shoot("m-ai-setup-commandcode")
+	prompt.call("open_choice", "custom")
+	await _wait(0.8)
+	var full := _button(prompt, "Open full settings")
+	_check(full != null, "Custom offers Open full settings")
+	await _shoot("m-ai-setup-custom")
+	if not scroll.is_empty():
+		(scroll[0] as ScrollContainer).scroll_vertical = 100000
+	await _wait(0.4)
+	await _shoot("m-ai-setup-custom-p2")
+	prompt.call("back_to_choices")
+	await _wait(0.5)
 	main.phone_shell.back()
 	await _wait(0.6)
 	_check(not is_instance_valid(menu.get("_prompt")) or menu.get("_prompt") == null, "Back answers the prompt with Not now")
