@@ -184,10 +184,26 @@ func press() -> void:
 	if phase != "idle" or disabled:
 		return
 	fallback = ""
+	if not await _microphone_allowed():
+		_show_problem("permission")
+		return
 	if speech_engine == "system":
 		_listen(speech_engine)
 		return
 	_press_on_device()
+
+
+func _microphone_allowed() -> bool:
+	const RECORD := "android.permission.RECORD_AUDIO"
+	if OS.get_name() != "Android" or OS.get_granted_permissions().has(RECORD):
+		return true
+	if OS.request_permission(RECORD):
+		return true
+	while is_inside_tree():
+		var answer: Array = await get_tree().on_request_permissions_result
+		if answer.size() >= 2 and str(answer[0]) == RECORD:
+			return bool(answer[1])
+	return false
 
 
 func download() -> void:

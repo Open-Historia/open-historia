@@ -23,11 +23,27 @@ export const register = (ctx) => {
   const WHISPER = engines.SPEECH_ENGINES.WHISPER;
   const SYSTEM = engines.SPEECH_ENGINES.SYSTEM;
   const whisper = whisperRunnerFor({ cacheDir, engines, standIn });
-  const system = engine.speechSystem.createSystemSpeech({
+  const androidSpeech = process.platform === "android" && process.env.OH_ANDROID_SPEECH === "1";
+  const relays = new Map();
+  let nextRelay = 0;
+  const relayedSpeech = {
+    listen: ({ language, onEvent }) => {
+      nextRelay += 1;
+      const relay = nextRelay;
+      relays.set(relay, onEvent);
+      emit("speech.system", { relay, action: "start", language });
+      return {
+        stop: () => {
+          if (relays.delete(relay)) emit("speech.system", { relay, action: "stop" });
+        },
+      };
+    },
+  };
+  const system = androidSpeech ? relayedSpeech : engine.speechSystem.createSystemSpeech({
     dir: process.env.OH_SPEECH_HELPER_DIR || sidecarDir,
     log: (level, event, message) => process.stderr.write(`[speech] ${level} ${event} ${message}\n`),
   });
-  const systemPlatform = process.platform === "win32" || process.platform === "darwin";
+  const systemPlatform = process.platform === "win32" || process.platform === "darwin" || androidSpeech;
   let systemAbsent = process.env.OH_SYSTEM_SPEECH === "0";
 
   const engineFor = (language, { skipSystem = false, microphone = true } = {}) => engines.pickSpeechEngine({
@@ -253,6 +269,13 @@ export const register = (ctx) => {
     },
     "speech.fail": async ({ session = 0, code = "failed" } = {}) => {
       sessions.get(Number(session))?.fail(clean(code) || "failed");
+      return true;
+    },
+    "speech.systemEvent": async ({ relay = 0, event = null } = {}) => {
+      const listener = relays.get(Number(relay));
+      if (!listener || !event || typeof event !== "object") return false;
+      if (event.type === "error" || event.type === "end") relays.delete(Number(relay));
+      listener({ type: clean(event.type), text: String(event.text ?? ""), code: clean(event.code) });
       return true;
     },
     "speech.forget": async () => {

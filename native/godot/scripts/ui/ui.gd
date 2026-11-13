@@ -89,6 +89,8 @@ static func phone_density() -> float:
 
 
 static func has_feature(feature: String) -> bool:
+	if feature == "microphone" and OS.get_name() == "Android":
+		return true
 	if OS.get_name() == "Android" or phone_preview() != Vector2.ZERO:
 		return not PHONE_FEATURES_OFF.has(feature)
 	return true
@@ -254,7 +256,10 @@ static func _image_at(path: String) -> Image:
 	if not path.begins_with("res://"):
 		return Image.load_from_file(path)
 	var image := Image.new()
-	return image if image.load_png_from_buffer(FileAccess.get_file_as_bytes(path)) == OK else null
+	var bytes := FileAccess.get_file_as_bytes(path)
+	var kind := path.trim_suffix(".bin").get_extension().to_lower()
+	var loaded := image.load_jpg_from_buffer(bytes) if kind in ["jpg", "jpeg"] else (image.load_webp_from_buffer(bytes) if kind == "webp" else image.load_png_from_buffer(bytes))
+	return image if loaded == OK else null
 
 
 static func flag(path: String, height := 32) -> Texture2D:
