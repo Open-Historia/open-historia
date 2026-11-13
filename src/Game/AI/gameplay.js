@@ -357,6 +357,7 @@ import {
   renamePolityInGame,
 } from "../../../server/polityRename.js";
 import { renderTemplateCached, staticPrefixEndOf } from "./promptLayout.js";
+import { buildDigestRequest, createRulesDigestMemory, digestIsDue, readDigestAnswer, rulesFingerprint, rulesForTask, shortenRulesElsewhere } from "./rulesDigest.js";
 import { attachAttemptOutcome, attachSkipTiming, finishAiRecord, normalizeParsedSummary } from "./telemetry.js";
 import {
   JSON_URLS,
@@ -1514,6 +1515,40 @@ const gameMasterPoliticalActorReferenceContext = (worldLike, request = "", playe
   return lines.join("\n").slice(0, 5000);
 };
 
+// "Small tasks get the rules in short" (rulesDigest.js): the digests this
+// browser keeps, and the one request that writes a digest of a text of rules.
+// Made a while after the task that found none, which is sent the rules whole,
+// so it does not stand in that task's way on a server that answers one request
+// at a time; nobody waits for it, and it is tried once in a session.
+const rulesDigests = createRulesDigestMemory({
+  getItem: (key) => { try { return localStorage.getItem(key); } catch { return null; } },
+  setItem: (key, value) => { try { localStorage.setItem(key, value); } catch { /* this session only */ } },
+});
+const RULES_DIGEST_DELAY_MS = 20000;
+const digestsAsked = new Set();
+const scheduleRulesDigest = (rules) => {
+  const fingerprint = rulesFingerprint(rules);
+  if (digestsAsked.has(fingerprint)) return;
+  digestsAsked.add(fingerprint);
+  setTimeout(async () => {
+    try {
+      const { systemPrompt, userMessage } = buildDigestRequest(rules);
+      const answer = await callAI(systemPrompt, [{ role: "user", parts: [{ text: userMessage }] }], {
+        languageMode: "none",
+        logLabel: "rules digest",
+        requestKind: BACKGROUND_REQUEST,
+      });
+      const digest = readDigestAnswer(typeof answer === "string" ? answer : normalizeString(answer?.rawText), { rules });
+      if (digest) rulesDigests.set(fingerprint, digest);
+      logDebugEvent("ai", digest
+        ? `The scenario's rules (${rules.length} characters) now have a digest of ${digest.length} for the small tasks.`
+        : "The answer to the rules' digest was no digest; the small tasks keep the rules whole.");
+    } catch (error) {
+      logDebugEvent("ai", "The rules' digest could not be written; the small tasks keep the rules whole.", error);
+    }
+  }, RULES_DIGEST_DELAY_MS);
+};
+
 const buildTemplateVariables = async (bundle, options = {}) => {
   const startedAt = perfNow();
   const taskKey = normalizeString(options?.taskKey);
@@ -1563,6 +1598,16 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   // Background work hands in nextTask: nobody is waiting on it, and the map may be moving.
   const pause = options?.pause;
   const variables = await buildPromptContext(bundle, { ...options, lookups, leanLookups, requiredKeys, taskKey });
+  // One of the small tasks is given the kept digest of these rules; where none
+  // is kept yet it gets them whole and a digest is asked for (rulesDigest.js).
+  if (typeof variables.simulationRules === "string") {
+    const digestOf = { taskKey, rules: variables.simulationRules, enabled: getMapSetting(MAP_SETTING_KEYS.rulesDigest), memory: rulesDigests };
+    if (digestIsDue(digestOf)) scheduleRulesDigest(variables.simulationRules);
+    const given = rulesForTask(digestOf);
+    // The world summary writes the rules out too: not whole beside their digest.
+    shortenRulesElsewhere(variables, variables.simulationRules, given);
+    variables.simulationRules = given;
+  }
   await nextTask();
   // The diplomatic slice is bounded to the player plus, for a chat task, the
   // polities in the thread; wars are few enough to show whole.
