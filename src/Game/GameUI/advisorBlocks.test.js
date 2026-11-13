@@ -58,6 +58,63 @@ test("malformed JSON in a closed fence is dropped, and the fence is still stripp
   assert.ok(!rest.includes("not json"));
 });
 
+// 2026-11-13: Boris's correction cited a literal ```actions token in prose,
+// before the real JSON fence. The old extractor started inside that sentence,
+// swallowed the real opening fence, and rejected otherwise valid proposals.
+test("inline example of actions syntax cannot steal a later real Action block", () => {
+  const body = '[{"title":"GNCCN Emergency Activation","text":"Coordinate the network","kind":"action"}]';
+  const reply = [
+    "I failed to provide the ` ```actions ` block earlier.",
+    "The planned queue no longer shows the old Action.",
+    "",
+    fence("actions", body),
+    "The mandate awaits approval.",
+  ].join("\n");
+  const result = extractFencedJson(reply, "actions", { streaming: true });
+  assert.deepEqual(result.json, [{ title: "GNCCN Emergency Activation", text: "Coordinate the network", kind: "action" }]);
+  assert.match(result.rest, /failed to provide/);
+  assert.match(result.rest, /mandate awaits approval/);
+  assert.equal(result.reason, "");
+});
+
+test("inline and blockquoted mentions of actions cannot become execution blocks", () => {
+  const reply = "I need a ```actions block.\n> ```actions\nUse an actual standalone code fence.";
+  for (const streaming of [false, true]) {
+    const result = extractFencedJson(reply, "actions", { streaming });
+    assert.equal(result.json, null);
+    assert.equal(result.rest, reply);
+  }
+});
+
+test("streaming malformed blocks report parse failure without warning on every re-render", () => {
+  const malformed = fence("actions", '{ "title": "missing array"');
+  const warnings = [];
+  const prior = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    for (let i = 0; i < 80; i += 1) {
+      const partial = extractFencedJson(malformed, "actions", { streaming: true });
+      assert.equal(partial.json, null);
+      assert.match(partial.reason, /invalid JSON/);
+    }
+    assert.deepEqual(warnings, [], "the live bubble must not log the same failure on every render");
+    const complete = extractFencedJson(malformed, "actions");
+    assert.equal(complete.json, null);
+    assert.match(complete.reason, /invalid JSON/);
+    assert.equal(warnings.length, 2, "final parse logs the failure and one excerpt only");
+  } finally {
+    console.warn = prior;
+  }
+});
+
+test("project mentions cannot swallow a later formal projects block", () => {
+  const reply = "There is no ```projects submission yet.\n"
+    + fence("projects", '[{"op":"create","name":"Technical review","summary":"Safety"}]');
+  const result = extractFencedJson(reply, "projects", { salvageTruncated: true });
+  assert.deepEqual(result.json, [{ op: "create", name: "Technical review", summary: "Safety" }]);
+  assert.match(result.rest, /no ```projects submission yet/);
+});
+
 // The bug this module exists for. A long board runs out of tokens partway
 // through the array, so there is an opening fence and no closing one: the strict
 // regex does not match, the block is neither applied nor stripped, and the raw

@@ -292,6 +292,44 @@ test("a block that is not valid JSON, or not a list, is reported whole", () => {
   assert.match(parsed.draftProblems[0], /^it was not a list/);
 });
 
+test("Bushehr Updated Action prose without structured submission uses native missing-proposal recovery", () => {
+  const reply = [
+    "The emergency response is underway.",
+    "**Updated Action: GNCCN Emergency Activation**",
+    "Lead: Foreign Minister Bondarev.",
+    "1. Protocol Initiation: Maintain formal crisis activation.",
+    "2. Communications Architecture: Coordinate secure threads.",
+  ].join("\n");
+  const parsed = parseAdvisorReply(reply);
+  assert.equal(parsed.actionsProposal, null, "prose alone is never a native Action");
+  assert.equal(parsed.unreviewableActionTitle, "GNCCN Emergency Activation");
+  assert.deepEqual(parsed.actionBlockProblems, [], "reuse the native recovery control, not a duplicate alert");
+});
+
+test("inline actions syntax before real Action JSON preserves two reviewable proposals", () => {
+  const reply = [
+    "**Updated Action: Bushehr Nuclear Safety Coordination**",
+    "Lead: Foreign Minister Bondarev.",
+    "1. Emergency Consultations: Contact the IAEA.",
+    "I previously omitted the ```actions block.",
+    fence("actions", JSON.stringify([
+      { title: "Bushehr Nuclear Safety Follow-up", text: "Seek IAEA verification.", kind: "action" },
+      { title: "GNCCN Crisis Follow-up", text: "Maintain authorized data exchange.", kind: "action" },
+    ])),
+    "These remain subject to human review.",
+  ].join("\n");
+  const parsed = parseAdvisorReply(reply);
+  assert.deepEqual(parsed.actionsProposal?.map((op) => op.title), [
+    "Bushehr Nuclear Safety Follow-up", "GNCCN Crisis Follow-up",
+  ]);
+  assert.equal(parsed.unreviewableActionTitle, null, "valid structured submissions win over recovery");
+  assert.deepEqual(parsed.actionBlockProblems, []);
+  const { proposals, problems } = actionProposalsFromReply(parsed.actionsProposal, "advisor-reply-bushehr-20261113");
+  assert.equal(proposals.length, 2);
+  assert.ok(proposals.every((p) => p.operation === "create"));
+  assert.deepEqual(problems, []);
+});
+
 test("a reply with no fences has no problems", () => {
   const parsed = parseAdvisorReply("Just advice.");
   assert.equal(parsed.text, "Just advice.");
@@ -319,6 +357,7 @@ test("a missing formal Action is surfaced as a composer fallback, never a synthe
   assert.match(ui, /const handleRequestMissingAction = React\.useCallback/);
   assert.match(ui, /setInput\(\(current\) => current\.trim\(\)/, "the fallback drafts a request; it never calls an Action mutator");
   assert.match(ui, /Array\.isArray\(msg\.actionProposals\) && msg\.actionProposals\.map/, "existing review cards remain the canonical UI path");
+  assert.match(ui, /actionsProblems: actionsProblems.length \? actionsProblems :/, "final native review failures reach diagnostics");
 });
 
 test("prose-only formal Action plan is not treated as an approved or reviewable order", () => {
