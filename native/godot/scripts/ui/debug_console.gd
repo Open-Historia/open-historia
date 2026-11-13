@@ -64,7 +64,10 @@ func _ready() -> void:
 	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(backdrop)
 	_card = PanelContainer.new()
-	_card.add_theme_stylebox_override("panel", UI.box(BG, BORDER, 14, 2))
+	if UI.phone():
+		_card.add_theme_stylebox_override("panel", UI.box(BG, Color(0, 0, 0, 0), 0, 0, UI.safe_insets()))
+	else:
+		_card.add_theme_stylebox_override("panel", UI.box(BG, BORDER, 14, 2))
 	_card.clip_contents = true
 	add_child(_card)
 	var column := VBoxContainer.new()
@@ -154,6 +157,10 @@ func _on_engine_event(name: String, _payload: Variant) -> void:
 
 func _layout() -> void:
 	var view := size if size.x > 0.0 else get_viewport_rect().size
+	if UI.phone():
+		_card.position = Vector2.ZERO
+		_card.size = view
+		return
 	var width := minf(view.x - 32.0, 1600.0)
 	_card.position = Vector2((view.x - width) * 0.5, 16)
 	_card.size = Vector2(width, view.y - 32.0)
@@ -188,24 +195,50 @@ func _button(text: String, on_press: Callable, primary := false, tooltip := "") 
 
 
 func _build_header() -> Control:
+	var phone := UI.phone()
 	var bar := PanelContainer.new()
-	var style := UI.box(RAISED, Color(0, 0, 0, 0), 0, 0, Vector4(16, 9.6, 16, 9.6))
+	var style := UI.box(RAISED, Color(0, 0, 0, 0), 0, 0, Vector4(12, 8, 12, 8) if phone else Vector4(16, 9.6, 16, 9.6))
 	bar.add_theme_stylebox_override("panel", style)
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 11)
-	row.add_child(_label("AI DEBUG CONSOLE", 13, UI.WHITE, 800, false, 1))
+	var title := _label("AI DEBUG CONSOLE", 13, UI.WHITE, 800, false, 1)
 	var pill := PanelContainer.new()
 	pill.add_theme_stylebox_override("panel", UI.box(BG, BORDER, 6, 1, Vector4(8, 1.6, 8, 1.6)))
 	pill.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_count_pill = _label("0 generations", 11, MUTED, 700, true)
 	pill.add_child(_count_pill)
-	row.add_child(pill)
-	row.add_child(UI.spacer())
-	row.add_child(_button("Refresh", func() -> void: refresh(), false, "Refresh"))
-	row.add_child(_button("✕ Close", func() -> void: close(), false, "Close"))
-	column.add_child(row)
+	var refresh_button := _button("Refresh", func() -> void: refresh(), false, "Refresh")
+	var close_button := _button("✕ Close", func() -> void: close(), false, "Close")
+	if phone:
+		UI.tap_size(close_button)
+		var flow := HFlowContainer.new()
+		flow.add_theme_constant_override("h_separation", 6)
+		flow.add_theme_constant_override("v_separation", 6)
+		var named := HBoxContainer.new()
+		named.add_theme_constant_override("separation", 11)
+		title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		named.add_child(title)
+		named.add_child(pill)
+		flow.add_child(named)
+		var push := Control.new()
+		push.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		push.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		flow.add_child(push)
+		var keys := HBoxContainer.new()
+		keys.add_theme_constant_override("separation", 6)
+		keys.add_child(refresh_button)
+		keys.add_child(close_button)
+		flow.add_child(keys)
+		column.add_child(flow)
+	else:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 11)
+		row.add_child(title)
+		row.add_child(pill)
+		row.add_child(UI.spacer())
+		row.add_child(refresh_button)
+		row.add_child(close_button)
+		column.add_child(row)
 	bar.add_child(column)
 	var holder := VBoxContainer.new()
 	holder.add_theme_constant_override("separation", 0)
@@ -218,10 +251,20 @@ func _build_header() -> Control:
 
 
 func _build_tabs() -> Control:
+	var phone := UI.phone()
 	var bar := PanelContainer.new()
-	bar.add_theme_stylebox_override("panel", UI.box(PANEL, Color(0, 0, 0, 0), 0, 0, Vector4(12.8, 6.4, 12.8, 6.4)))
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 4)
+	bar.add_theme_stylebox_override("panel", UI.box(PANEL, Color(0, 0, 0, 0), 0, 0, Vector4(12, 6.4, 12, 6.4) if phone else Vector4(12.8, 6.4, 12.8, 6.4)))
+	var row: Container
+	if phone:
+		var grid := GridContainer.new()
+		grid.columns = 2
+		grid.add_theme_constant_override("h_separation", 4)
+		grid.add_theme_constant_override("v_separation", 4)
+		row = grid
+	else:
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", 4)
+		row = line
 	for pair: Array in TABS:
 		var key: String = pair[0]
 		var button := Button.new()
@@ -233,6 +276,8 @@ func _build_tabs() -> Control:
 		button.pressed.connect(func() -> void:
 			active_tab = key
 			_render())
+		if phone:
+			button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_tab_buttons[key] = button
 		row.add_child(button)
 	bar.add_child(row)
@@ -318,8 +363,13 @@ func _section(title: String, right: Control = null) -> VBoxContainer:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 8)
 	var row := HBoxContainer.new()
-	row.add_child(_label(title.to_upper(), 11, Color("#60a5fa"), 800, false, 1))
-	row.add_child(UI.spacer())
+	var heading := _label(title.to_upper(), 11, Color("#60a5fa"), 800, false, 1)
+	row.add_child(heading)
+	if UI.phone():
+		heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	else:
+		row.add_child(UI.spacer())
 	if right:
 		row.add_child(right)
 	column.add_child(row)
@@ -378,8 +428,16 @@ func _generations() -> Control:
 	column.add_theme_constant_override("separation", 0)
 	var filters_bar := PanelContainer.new()
 	filters_bar.add_theme_stylebox_override("panel", UI.box(BG, Color(0, 0, 0, 0), 0, 0, Vector4(12.8, 6.4, 12.8, 6.4)))
-	var filters := HBoxContainer.new()
-	filters.add_theme_constant_override("separation", 6)
+	var filters: Container
+	if UI.phone():
+		var wrapped := HFlowContainer.new()
+		wrapped.add_theme_constant_override("h_separation", 6)
+		wrapped.add_theme_constant_override("v_separation", 6)
+		filters = wrapped
+	else:
+		var straight := HBoxContainer.new()
+		straight.add_theme_constant_override("separation", 6)
+		filters = straight
 	var tasks: Array = [["all", "All tasks"]]
 	for task: Variant in _data.get("tasks", []):
 		tasks.append([str(task), str(task)])
@@ -422,12 +480,16 @@ func _generations() -> Control:
 	filters_bar.add_child(filters)
 	column.add_child(filters_bar)
 	column.add_child(_rule(BORDER))
-	var split := HBoxContainer.new()
+	var phone := UI.phone()
+	var split: BoxContainer = VBoxContainer.new() if phone else HBoxContainer.new()
 	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	split.add_theme_constant_override("separation", 0)
 	var list_holder := VBoxContainer.new()
 	list_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	list_holder.size_flags_stretch_ratio = 46.0 if not _detail.is_empty() else 100.0
+	if phone:
+		list_holder.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		list_holder.size_flags_stretch_ratio = 40.0 if not _detail.is_empty() else 100.0
 	list_holder.add_theme_constant_override("separation", 0)
 	var filtered: Array = _data.get("filtered", [])
 	if filtered.is_empty():
@@ -495,11 +557,14 @@ func _generations() -> Control:
 	if not _detail.is_empty():
 		var divider := ColorRect.new()
 		divider.color = BORDER
-		divider.custom_minimum_size.x = 1
+		divider.custom_minimum_size = Vector2(0, 1) if phone else Vector2(1, 0)
 		split.add_child(divider)
 		var detail := _generation_detail()
 		detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		detail.size_flags_stretch_ratio = 54.0
+		if phone:
+			detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
+			detail.size_flags_stretch_ratio = 60.0
 		split.add_child(detail)
 	column.add_child(split)
 	return column
@@ -514,14 +579,23 @@ func _group_row(group: Dictionary, expanded: bool) -> Control:
 	face.border_width_left = 3
 	for state in ["normal", "focus", "hover", "pressed", "hover_pressed"]:
 		button.add_theme_stylebox_override(state, face)
-	var flow := HBoxContainer.new()
+	var phone := UI.phone()
+	var flow: Container
+	if phone:
+		var wrapped := HFlowContainer.new()
+		wrapped.add_theme_constant_override("h_separation", 7)
+		wrapped.add_theme_constant_override("v_separation", 3)
+		flow = wrapped
+	else:
+		var straight := HBoxContainer.new()
+		straight.add_theme_constant_override("separation", 7)
+		flow = straight
 	flow.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	flow.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	flow.offset_left = 13.4
 	flow.offset_right = -10.4
 	flow.offset_top = 10.4
 	flow.offset_bottom = -10.4
-	flow.add_theme_constant_override("separation", 7)
 	flow.add_child(_label("▾" if expanded else "▸", 11, TEXT))
 	var parts: Array = [
 		[I18n.ui("Group Chat: {{name}}", {"name": str(group.get("name", ""))}), TEXT, 700, false],
@@ -535,13 +609,21 @@ func _group_row(group: Dictionary, expanded: bool) -> Control:
 		parts.append([I18n.ui("{{pendingBatches}} pending", {"pendingBatches": int(group.get("pendingBatches", 0))}), GOLD, 400, false])
 	parts.append([I18n.ui("{{fmtInt}} input tokens / {{fmtInt2}} generated tokens", {"fmtInt": _thousands(int(group.get("promptTokens", 0))), "fmtInt2": _thousands(int(group.get("outputTokens", 0)))}), MUTED, 400, true])
 	for part: Array in parts:
+		var piece := _label(str(part[0]), 11, part[1], int(part[2]), bool(part[3]))
+		piece.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		if bool(part[3]) and phone:
+			var right := HBoxContainer.new()
+			right.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			right.alignment = BoxContainer.ALIGNMENT_END
+			right.add_child(piece)
+			flow.add_child(right)
+			continue
 		if bool(part[3]):
 			var push := Control.new()
 			push.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			push.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			flow.add_child(push)
-		var piece := _label(str(part[0]), 11, part[1], int(part[2]), bool(part[3]))
-		piece.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		flow.add_child(piece)
 	button.add_child(flow)
 	button.custom_minimum_size.y = 38
@@ -555,7 +637,7 @@ func _group_row(group: Dictionary, expanded: bool) -> Control:
 	return holder
 
 
-func _fit_group_row(button: Button, flow: HBoxContainer) -> void:
+func _fit_group_row(button: Button, flow: Container) -> void:
 	if is_instance_valid(button) and is_instance_valid(flow):
 		button.custom_minimum_size.y = flow.get_combined_minimum_size().y + 20.8
 
@@ -594,6 +676,8 @@ func _fixed(text: String, width: float, color: Color, mono := true, align := HOR
 
 
 func _generation_row(record: Dictionary) -> Control:
+	if UI.phone():
+		return _compact_row(record)
 	var id := str(record.get("id", ""))
 	var selected := id == _selected
 	var button := Button.new()
@@ -643,6 +727,74 @@ func _generation_row(record: Dictionary) -> Control:
 	row.add_child(_fixed(str(record.get("skip", "")), 86, GOLD))
 	row.add_child(_fixed(str(record.get("rating", "")), 45, GOLD))
 	button.add_child(row)
+	button.pressed.connect(func() -> void:
+		_selected = "" if _selected == id else id
+		refresh())
+	var holder := VBoxContainer.new()
+	holder.add_theme_constant_override("separation", 0)
+	holder.add_child(button)
+	holder.add_child(_rule(ROW_RULE))
+	return holder
+
+
+func _compact_row(record: Dictionary) -> Control:
+	var id := str(record.get("id", ""))
+	var selected := id == _selected
+	var button := Button.new()
+	button.focus_mode = Control.FOCUS_NONE
+	button.clip_contents = true
+	var normal := UI.box(UiTheme.pick("active", Color(0, 0, 0, 0.42)) if selected else Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0)
+	for state in ["normal", "focus", "hover", "pressed", "hover_pressed"]:
+		button.add_theme_stylebox_override(state, normal)
+	var flow := HFlowContainer.new()
+	flow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	flow.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	flow.offset_left = 11.2
+	flow.offset_right = -11.2
+	flow.offset_top = 7.2
+	flow.offset_bottom = -7.2
+	flow.add_theme_constant_override("h_separation", 8)
+	flow.add_theme_constant_override("v_separation", 3)
+	var dot := StatusDot.new(_status_color(str(record.get("ok", ""))))
+	dot.custom_minimum_size = Vector2(7, 7)
+	dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	flow.add_child(dot)
+	flow.add_child(_fixed(str(record.get("time", "")), 120, MUTED, true, HORIZONTAL_ALIGNMENT_LEFT))
+	var task := str(record.get("taskKey", "direct"))
+	if bool(record.get("batch", false)):
+		task += " (batch)"
+	if int(record.get("maxAttempts", 1)) > 1:
+		task += " #%d" % int(record.get("attempt", 1))
+	var task_label := _fixed(task, 1, TEXT, false, HORIZONTAL_ALIGNMENT_LEFT)
+	task_label.add_theme_font_override("font", UI.font(700))
+	task_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	flow.add_child(task_label)
+	var model := str(record.get("model", ""))
+	var model_label := _fixed(model if not model.is_empty() else "unknown model", 1, MUTED, false, HORIZONTAL_ALIGNMENT_LEFT)
+	flow.add_child(model_label)
+	var calls := int(record.get("lookupCalls", 0))
+	var rounds := int(record.get("lookupRounds", 0))
+	if calls > 0:
+		flow.add_child(_fixed("fn ×%d" % calls, 0, MUTED, true, HORIZONTAL_ALIGNMENT_RIGHT, "%d lookup call%s over %d round%s" % [calls, "" if calls == 1 else "s", rounds, "" if rounds == 1 else "s"]))
+	var requests: Variant = record.get("requests")
+	if typeof(requests) != TYPE_NIL:
+		flow.add_child(_fixed("req ×%d" % int(requests), 0, GOLD if int(requests) > 1 else MUTED, true, HORIZONTAL_ALIGNMENT_RIGHT, str(record.get("requestsTitle", ""))))
+	flow.add_child(_fixed(str(record.get("usage", "")), 0, MUTED))
+	flow.add_child(_fixed(str(record.get("latency", "")), 0, MUTED, true, HORIZONTAL_ALIGNMENT_RIGHT, str(record.get("skipTitle", ""))))
+	if not str(record.get("skip", "")).is_empty():
+		flow.add_child(_fixed(str(record.get("skip", "")), 0, GOLD))
+	flow.add_child(_fixed(str(record.get("rating", "")), 0, GOLD))
+	for child in flow.get_children():
+		if child is Label:
+			(child as Label).clip_text = child == task_label or child == model_label
+	button.add_child(flow)
+	var fit := func() -> void:
+		if not is_instance_valid(button) or not is_instance_valid(flow):
+			return
+		model_label.custom_minimum_size.x = flow.size.x
+		button.custom_minimum_size.y = flow.get_combined_minimum_size().y + 14.4
+	flow.minimum_size_changed.connect(fit)
+	flow.resized.connect(fit)
 	button.pressed.connect(func() -> void:
 		_selected = "" if _selected == id else id
 		refresh())
@@ -757,8 +909,16 @@ func _error_box(title: String, text: String) -> Control:
 
 
 func _rating(rating: int) -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 2)
+	var row: Container
+	if UI.phone():
+		var wrapped := HFlowContainer.new()
+		wrapped.add_theme_constant_override("h_separation", 2)
+		wrapped.add_theme_constant_override("v_separation", 2)
+		row = wrapped
+	else:
+		var straight := HBoxContainer.new()
+		straight.add_theme_constant_override("separation", 2)
+		row = straight
 	for value in range(1, 11):
 		var on := rating >= value
 		var button := Button.new()
@@ -782,6 +942,9 @@ func _rating(rating: int) -> Control:
 		row.add_child(button)
 	var note := _label("%d/10" % rating if rating > 0 else "unrated", 11, MUTED, 700, true)
 	note.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	if UI.phone():
+		row.add_child(note)
+		return row
 	var holder := HBoxContainer.new()
 	holder.add_theme_constant_override("separation", 6)
 	holder.add_child(row)
@@ -903,7 +1066,7 @@ func _models() -> Control:
 		section.add_child(_empty_note("No data yet — run a few turns first."))
 	else:
 		section.add_child(_table(analytics.get("models", []), "Model"))
-	section.add_child(_label("Compare models by running the same tasks with different per-task overrides (Settings → provider → Per-task models).", 11, MUTED))
+	section.add_child(_phone_wrap(_label("Compare models by running the same tasks with different per-task overrides (Settings → provider → Per-task models).", 11, MUTED)))
 	column.add_child(section)
 	return column
 
@@ -930,6 +1093,14 @@ func _export() -> Control:
 			_selected = ""
 			_detail = {}
 		await refresh())
+	if UI.phone():
+		var room := get_viewport_rect().size.x - 32.0 - UI.safe_insets().x - UI.safe_insets().z
+		for wide in [json, clear]:
+			var button := wide as Button
+			var natural := button.get_theme_font("font").get_string_size(button.text, HORIZONTAL_ALIGNMENT_LEFT, -1, button.get_theme_font_size("font_size")).x + 24.4
+			if natural > room:
+				button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				button.custom_minimum_size.x = room
 	clear.add_theme_color_override("font_color", Color("#ff7b72"))
 	clear.add_theme_color_override("font_hover_color", Color("#ff7b72"))
 	clear.mouse_exited.connect(func() -> void:
@@ -944,10 +1115,10 @@ func _export() -> Control:
 	var note := UI.wrapped("The JSON export carries every recorded generation at full fidelity — system prompt, user message, raw response, token usage, model, latency, validation errors and ratings. The CSV is a flat per-call summary. Prompts contain campaign text only; API keys never enter a record.", 11, MUTED)
 	section.add_child(note)
 	if not _notice.is_empty():
-		section.add_child(_label(_notice, 11, TEXT, 400, true))
+		section.add_child(_phone_wrap(_label(_notice, 11, TEXT, 400, true)))
 	column.add_child(section)
 	var storage := _section("Storage")
-	storage.add_child(_label("%d generation record(s) retained (200 persisted across sessions, 500 within this session)." % int(_data.get("count", 0)), 11, TEXT, 400, true))
+	storage.add_child(_phone_wrap(_label("%d generation record(s) retained (200 persisted across sessions, 500 within this session)." % int(_data.get("count", 0)), 11, TEXT, 400, true)))
 	column.add_child(storage)
 	return column
 
@@ -967,16 +1138,23 @@ func _export_file(kind: String) -> void:
 	_render()
 
 
+func _phone_wrap(label: Label) -> Label:
+	if UI.phone():
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	return label
+
+
 func _empty_note(text: String) -> Label:
 	var node := _label(text, 11, MUTED)
 	return node
 
 
 func _bar(label_text: String, value: float, top: float, right: String) -> Control:
+	var phone := UI.phone()
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 11)
 	var name := _label(label_text if not label_text.is_empty() else "—", 11, TEXT, 700)
-	name.custom_minimum_size.x = 160
+	name.custom_minimum_size.x = 1 if phone else 160
 	name.clip_text = true
 	name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	name.tooltip_text = label_text
@@ -991,9 +1169,16 @@ func _bar(label_text: String, value: float, top: float, right: String) -> Contro
 	track.add_child(fill)
 	row.add_child(track)
 	var figure := _label(right, 11, MUTED, 700, true)
-	figure.custom_minimum_size.x = 112
+	figure.custom_minimum_size.x = 0 if phone else 112
 	figure.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	row.add_child(figure)
+	if phone:
+		row.remove_child(name)
+		var stack := VBoxContainer.new()
+		stack.add_theme_constant_override("separation", 3)
+		stack.add_child(name)
+		stack.add_child(row)
+		return stack
 	return row
 
 
@@ -1036,6 +1221,18 @@ func _table(rows: Array, first_header: String) -> Control:
 		line.add_child(cells)
 		column.add_child(line)
 	frame.add_child(column)
+	if UI.phone():
+		var slide := ScrollContainer.new()
+		slide.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		slide.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+		slide.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		column.custom_minimum_size.x = 160 + 92 * TABLE_HEADERS.size() + 19.2
+		frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		slide.add_child(frame)
+		var fit := func() -> void: slide.custom_minimum_size.y = frame.get_combined_minimum_size().y
+		frame.minimum_size_changed.connect(fit)
+		fit.call()
+		return slide
 	return frame
 
 

@@ -117,6 +117,7 @@ func _advisor(hud: Hud) -> void:
 		if trigger:
 			trigger.pressed.emit()
 		await _wait(0.5)
+	await _groups(advisor, view)
 	var input: TextEdit = advisor.get("_input")
 	input.grab_focus()
 	input.text = "First line"
@@ -173,9 +174,182 @@ func _country(hud: Hud) -> void:
 			await _wait(0.5)
 			await _shoot("d-country-%s-p%d" % [tab, step + 1])
 		panel.scroll.scroll_vertical = 0
+		if tab == "economy":
+			await _rebuild(panel, view)
 	await _back()
 	await _wait(0.6)
 	_check(not panel.is_open(), "Back closes the Country dossier")
+
+
+func _console(view: Vector2) -> void:
+	var console: Control = main.debug_console
+	if console == null:
+		_check(false, "the AI debug console is mounted")
+		return
+	await console.open()
+	await _wait(1.0)
+	var card: Control = console.get("_card")
+	var r := _screen_rect(card)
+	_check(absf(r.position.x) < 1.0 and absf(r.size.x - view.x) < 1.0 and absf(r.position.y - UI.safe_insets().y) < 1.0 and absf(r.end.y - view.y) < 1.0, "on a phone the AI console fills the screen (%s)" % str(r))
+	var grouped: Array = (console.get("_data").get("rows", []) as Array).filter(func(row: Variant) -> bool: return str((row as Dictionary).get("kind", "")) == "group")
+	_check(not grouped.is_empty(), "the group turn is one row in the AI console")
+	_check(_widest_right(card) <= view.x + 0.5, "the AI console fits the phone's width (rightmost %.1f)" % _widest_right(card))
+	await _shoot("d-console")
+	if not grouped.is_empty():
+		console._toggle_group(str((grouped[0] as Dictionary).get("key", "")))
+		await _wait(0.5)
+		_check(_widest_right(card) <= view.x + 0.5, "the open group turn fits the phone's width (rightmost %.1f)" % _widest_right(card))
+		await _shoot("d-console-group")
+	var records: Array = console.get("_data").get("filtered", [])
+	if not records.is_empty():
+		console.set("_selected", str((records[0] as Dictionary).get("id", "")))
+		await console.refresh()
+		await _wait(0.8)
+		_check(_widest_right(card) <= view.x + 0.5, "a call's details fit the phone's width (rightmost %.1f)" % _widest_right(card))
+		await _shoot("d-console-detail")
+		console.set("_selected", "")
+		await console.refresh()
+	for tab in ["analytics", "models", "export"]:
+		console.set("active_tab", tab)
+		console._render()
+		await _wait(0.6)
+		_check(_widest_right(card) <= view.x + 0.5, "the console's %s fits the phone's width (rightmost %.1f)" % [tab, _widest_right(card)])
+		await _shoot("d-console-" + tab)
+	console.set("active_tab", "generations")
+	console.close()
+	await _wait(0.4)
+
+
+func _rebuild(panel: CountryPanel, view: Vector2) -> void:
+	var refresh := _buttons(panel, "↻", [])
+	_check(not refresh.is_empty() and (refresh[0] as Control).size.y >= UI.PHONE_TAP - 0.5, "the stat sheet's ↻ is a finger-sized button")
+	panel._toggle_refresh_menu()
+	await _wait(0.6)
+	var rebuild := _buttons(panel, "Rebuild baseline from scratch", [])
+	_check(not rebuild.is_empty(), "Refresh offers Rebuild baseline from scratch")
+	_check(_widest_right(panel.page) <= view.x + 0.5, "the refresh menu fits the phone's width")
+	if not rebuild.is_empty():
+		panel.scroll.ensure_control_visible(rebuild[0] as Control)
+	await _wait(0.4)
+	await _shoot("d-country-refresh")
+	panel.refresh_step = "confirm"
+	panel._render()
+	await _wait(0.6)
+	var sure := _buttons(panel, "Rebuild baseline", [])
+	var cancel := _buttons(panel, "Cancel", [])
+	_check(not sure.is_empty() and not cancel.is_empty() and (sure[0] as Control).size.y >= UI.PHONE_TAP - 0.5, "Rebuild baseline and Cancel are finger-high")
+	_check(_widest_right(panel.page) <= view.x + 0.5, "the rebuild question fits the phone's width")
+	if not sure.is_empty():
+		panel.scroll.ensure_control_visible(sure[0] as Control)
+	await _wait(0.4)
+	await _shoot("d-country-rebuild")
+	panel.refresh_step = ""
+	panel._render()
+	await _wait(0.4)
+	panel.scroll.scroll_vertical = 0
+
+
+func _buttons(node: Node, text: String, found: Array) -> Array:
+	if node is Button and (node as Button).is_visible_in_tree() and (node as Button).text == text:
+		found.append(node)
+	for child in node.get_children():
+		_buttons(child, text, found)
+	return found
+
+
+func _checkbox(node: Node, text: String) -> CheckBox:
+	if node is CheckBox and (node as CheckBox).text == text and (node as CheckBox).is_visible_in_tree():
+		return node as CheckBox
+	for child in node.get_children():
+		var found := _checkbox(child, text)
+		if found:
+			return found
+	return null
+
+
+func _on_screen(node: Node, view: Vector2) -> bool:
+	return _widest_right(node) <= view.x + 0.5
+
+
+func _add_contact(advisor: AdvisorPanel, name: String, title: String) -> void:
+	advisor._open_recipient_editor({})
+	await _wait(0.3)
+	advisor._recipient_draft["name"] = name
+	advisor._recipient_draft["title"] = title
+	await advisor._submit_recipient()
+	await _until(func() -> bool: return not bool(advisor.get("_recipient_saving")), 10.0)
+	await _wait(0.3)
+
+
+func _groups(advisor: AdvisorPanel, view: Vector2) -> void:
+	await _add_contact(advisor, "Michel Sapin", "Minister of Finance")
+	await _add_contact(advisor, "Jean-Yves Le Drian", "Minister of Defence")
+	_check(advisor.contacts.size() >= 2, "two contacts are added")
+	await advisor._select_recipient("chief")
+	await _wait(0.4)
+	advisor.set("_recipients_open", true)
+	advisor._render_recipients()
+	await _wait(0.5)
+	var handles := _buttons(advisor, "⠿", [])
+	_check(handles.size() >= 2, "each contact has its reorder grip")
+	if not handles.is_empty():
+		var grip := handles[0] as Control
+		_check(grip.size.y >= UI.PHONE_TAP - 0.5, "the reorder grip is finger-high (%s)" % str(grip.size))
+	_check(_on_screen(advisor.get("_recipients_holder"), view), "the contact list fits the phone's width")
+	await _shoot("d-advisor-contact-order")
+	var first := str((advisor.contacts[0] as Dictionary).get("id", ""))
+	var second := str((advisor.contacts[1] as Dictionary).get("id", ""))
+	await advisor._reorder_recipients(second, first)
+	await _wait(0.6)
+	_check(str((advisor.contacts[0] as Dictionary).get("id", "")) == second, "a contact moves up the list")
+	var add_group := _buttons(advisor, "+ Group", [])
+	_check(not add_group.is_empty(), "the bar offers + Group")
+	if not add_group.is_empty():
+		(add_group[0] as Button).pressed.emit()
+		await _wait(0.6)
+	var box := _checkbox(advisor, "Michel Sapin · Minister of Finance")
+	_check(box != null, "the group editor lists the contacts as boxes")
+	if box:
+		_check(box.size.y >= UI.PHONE_TAP - 0.5, "a member's box is finger-high (%s)" % str(box.size))
+		box.button_pressed = true
+		await _wait(0.3)
+	advisor._group_draft["name"] = "Budget Group"
+	advisor._render_recipients()
+	await _wait(0.5)
+	_check(_on_screen(advisor.get("_recipients_holder"), view), "the group editor fits the phone's width")
+	var list: ScrollContainer = advisor.get("_recipient_list")
+	if list:
+		list.scroll_vertical = 0
+	await _shoot("d-advisor-group-editor")
+	if list:
+		list.scroll_vertical = 100000
+		await _wait(0.4)
+		await _shoot("d-advisor-group-editor-p2")
+	var save := _buttons(advisor, "Save group", [])
+	_check(not save.is_empty() and not (save[0] as Button).disabled, "Save group is ready with a name and two members")
+	await advisor._submit_group()
+	await _until(func() -> bool: return str(advisor.active_thread).begins_with("advisor-group-") and not bool(advisor.get("_thread_switching")), 15.0)
+	await _wait(0.6)
+	_check(str(advisor.active_thread).begins_with("advisor-group-"), "the group's conversation opens")
+	await _shoot("d-advisor-group")
+	var input: TextEdit = advisor.get("_input")
+	input.text = "How do we fix the budget?"
+	advisor._update_send()
+	advisor._send_from_composer()
+	await _until(func() -> bool: return not bool(advisor.get("_loading")) and advisor.messages.size() >= 3, 90.0)
+	await _wait(1.0)
+	_check(advisor.messages.size() >= 3, "the group answers")
+	_check(_on_screen(advisor.scroll, view), "the group's replies fit the phone's width")
+	await _shoot("d-advisor-group-reply")
+	advisor.set("_recipients_open", true)
+	advisor._render_recipients()
+	await _wait(0.5)
+	await _shoot("d-advisor-group-list")
+	await _console(view)
+	advisor.set("_recipients_open", false)
+	await advisor._select_recipient("chief")
+	advisor._render_recipients()
+	await _wait(0.6)
 
 
 func _widest_right(node: Node) -> float:
