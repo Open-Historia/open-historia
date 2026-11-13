@@ -77,7 +77,6 @@ const FOLDS = [
     }, true],
     ["src/Game/AI/chatActions.js", "refFromLabel", { asText: trimmed, fold: (value) => trimmed(value).toLowerCase() }, false],
     ["src/runtime/projects.js", "foldWords", {}, true],
-    ["src/runtime/demandCheck.js", "shorn", { str: trimmed, norm: (value) => trimmed(value).toLocaleLowerCase() }, false],
     ["src/runtime/placeSearch.js", "normalizePlaceText", {}, true],
 ];
 

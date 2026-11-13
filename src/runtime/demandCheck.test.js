@@ -225,67 +225,40 @@ test("an AI Puppet that changes its mind after refusing is heard too", () => {
   assert.equal(events[0]?.demandId, "d1");
 });
 
-test("an Overlord acknowledging what was just agreed is not a fresh demand", () => {
-  // "Wise choice. Comply fully." after the Puppet accepted was opening a second
-  // demand for the same thing, and a third after that: a pile of cards for one
-  // obligation. A reply that only restates what is already agreed settles
-  // nothing new.
-  const settledDemands = [{ id: "d1", by: "Russia", target: "Belarus", summary: "Fulfil the Geneva protocols", status: "accepted" }];
-  const context = { role: "overlord", overlord: "Russia", puppet: "Belarus" };
-  const restated = interpretDemandCheck({
-    payload: { outcome: "demand", summary: "Fulfil the Geneva protocols." },
-    context, demands: settledDemands, time: "2016-01-05", idFor: (prefix) => `${prefix}-x`,
-  });
-  assert.deepEqual(restated, [], "the same obligation, worded again, opens nothing");
-
-  // Something genuinely new still becomes a demand.
-  const fresh = interpretDemandCheck({
-    payload: { outcome: "demand", summary: "Hand over the Dogger Bank patrol logs" },
-    context, demands: settledDemands, time: "2016-01-05", idFor: (prefix) => `${prefix}-x`,
-  });
-  assert.equal(fresh[0]?.kind, "demand_made");
-});
-
-// The summaries were compared by their a-z and 0-9, and one written in the
-// player's language has none: it was never a restatement of anything.
-test("an obligation restated in another script is not a fresh demand either", () => {
-  const context = { role: "overlord", overlord: "Russia", puppet: "Belarus" };
-  const outcome = (agreed, summary) => interpretDemandCheck({
-    payload: { outcome: "demand", summary },
-    context,
-    demands: [{ id: "d1", by: "Russia", target: "Belarus", summary: agreed, status: "accepted" }],
+// "Wise choice. Comply fully." after the Puppet accepted was opening a second
+// demand for the same thing, and a third after that: a pile of cards for one
+// obligation. The request is told what is already agreed and that insisting on
+// it is "none"; its answer decides. A "demand" whose summary held an agreed
+// one's words, or sat inside them, was dropped besides: by the words alone, so
+// a clause added in the player's language was the same obligation and the same
+// one reworded was new.
+test("an Overlord acknowledging what was just agreed opens nothing: the answer says none, in every language alike", () => {
+  const ask = (overlord, puppet, agreed, summary) => interpretDemandCheck({
+    payload: { outcome: "none", summary },
+    context: { role: "overlord", overlord, puppet },
+    // What is agreed, at hand as the request had it: it never overrides the answer.
+    demands: [{ id: "d1", by: overlord, target: puppet, summary: agreed, status: "accepted" }],
     time: "2016-01-05",
     idFor: (prefix) => `${prefix}-x`,
   });
-
-  assert.deepEqual(outcome("Выполнить Женевские протоколы", "Выполнить женевские протоколы."), []);
-  assert.deepEqual(outcome("Выполнить Женевские протоколы", "Выполнить Женевские протоколы полностью!"), [], "one wholly inside the other");
-  assert.equal(outcome("Выполнить Женевские протоколы", "Передать журналы патрулей")[0]?.kind, "demand_made", "another obligation is still a demand");
-
-  assert.deepEqual(outcome("履行日内瓦议定书", "履行日内瓦议定书。"), []);
-  assert.equal(outcome("履行日内瓦议定书", "交出巡逻日志")[0]?.kind, "demand_made");
+  assert.deepEqual(ask("Russia", "Belarus", "Fulfil the Geneva protocols", "Comply fully."), []);
+  assert.deepEqual(ask("Россия", "Беларусь", "Выполнить Женевские протоколы", "Выполняйте полностью."), []);
+  assert.deepEqual(ask("俄罗斯", "白俄罗斯", "履行日内瓦议定书", "全面遵守。"), []);
 });
 
-test("what is already agreed is recognised in any script, by its words and not by a number in it", () => {
-  // The summaries are written in the player's language. Shorn to a-z0-9, a
-  // Russian one was empty, restated nothing, and opened a card every time; one
-  // with a figure in it was that figure, and "restated" anything else with the
-  // same figure.
-  const context = { role: "overlord", overlord: "Россия", puppet: "Беларусь" };
-  const ask = (summary, demands) => interpretDemandCheck({
-    payload: { outcome: "demand", summary }, context, demands, time: "2016-01-05", idFor: (prefix) => `${prefix}-x`,
-  });
-  const protocols = [{ id: "d1", by: "Россия", target: "Беларусь", summary: "Выполнить Женевские протоколы", status: "accepted" }];
-  assert.deepEqual(ask("Выполнить Женевские протоколы!", protocols), [], "the same obligation, worded again");
-  assert.deepEqual(ask("Выполнить Женевские протоколы в полном объёме", protocols), [], "and with a clause added");
-  assert.equal(ask("Передать журналы патрулей", protocols)[0]?.kind, "demand_made");
-
-  const payment = [{ id: "d2", by: "Россия", target: "Беларусь", summary: "Выплатить 500 миллионов", status: "accepted" }];
-  assert.equal(ask("Передать 500 винтовок", payment)[0]?.kind, "demand_made", "another demand that happens to say 500");
-
-  const chinese = [{ id: "d3", by: "Россия", target: "Беларусь", summary: "履行日内瓦议定书", status: "settled" }];
-  assert.deepEqual(ask("履行日内瓦议定书。", chinese), []);
-  assert.equal(ask("移交巡逻日志", chinese)[0]?.kind, "demand_made");
+test("a demand the answer names opens a card, whatever its words share with one already agreed, in every language alike", () => {
+  const ask = (overlord, puppet, agreed, summary) => interpretDemandCheck({
+    payload: { outcome: "demand", summary },
+    context: { role: "overlord", overlord, puppet },
+    // What is agreed, at hand as the request had it: it never overrides the answer.
+    demands: [{ id: "d1", by: overlord, target: puppet, summary: agreed, status: "accepted" }],
+    time: "2016-01-05",
+    idFor: (prefix) => `${prefix}-x`,
+  }).map((event) => [event.kind, event.by, event.target, event.summary]);
+  const english = ask("Russia", "Belarus", "Fulfil the Geneva protocols", "Fulfil the Geneva protocols in full");
+  assert.deepEqual(english, [["demand_made", "Russia", "Belarus", "Fulfil the Geneva protocols in full"]]);
+  assert.deepEqual(ask("Россия", "Беларусь", "Выполнить Женевские протоколы", "Выполнить Женевские протоколы в полном объёме"), [["demand_made", "Россия", "Беларусь", "Выполнить Женевские протоколы в полном объёме"]]);
+  assert.deepEqual(ask("俄罗斯", "白俄罗斯", "履行日内瓦议定书", "全面履行日内瓦议定书"), [["demand_made", "俄罗斯", "白俄罗斯", "全面履行日内瓦议定书"]]);
 });
 
 test("the prompt tells the model what is already agreed, so it does not ask for it again", () => {

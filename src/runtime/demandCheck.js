@@ -48,27 +48,15 @@ export const answerableDemandOf = (chat) => [...(Array.isArray(chat?.demands) ? 
   .reverse()
   .find((demand) => ANSWERABLE.has(str(demand?.status))) ?? null;
 
-// Is this "demand" only the Overlord repeating something the Puppet has already
-// agreed to? A live game filled with cards that way: "Comply fully", "Ensure it
-// is done", "Control your personnel" — each classified as a fresh demand for the
-// obligation just accepted. One obligation, one card.
+// What the Puppet has already agreed to. A live game filled with cards for it:
+// "Comply fully", "Ensure it is done", "Control your personnel", each
+// classified as a fresh demand for the obligation just accepted. One
+// obligation, one card: the request is told what is already agreed, and that
+// insisting on it is "none" (demandCheckPrompt), and its answer is what
+// decides. A "demand" was also dropped when its summary held an agreed one's
+// words or sat inside them, a test of the words alone that read a clause added
+// in the player's language as the same obligation and a reworded one as new.
 const AGREED = new Set(["accepted", "settled"]);
-// A summary's words, in whatever script it is written: cut to a-z and 0-9, a
-// summary in Russian or Chinese had none, and the same obligation worded again
-// in the player's language opened a card every time.
-const shorn = (value) => norm(str(value).normalize("NFKC")).replace(/[^\p{L}\p{M}\p{N} ]+/gu, " ").replace(/\s+/g, " ").trim();
-const restatesAgreed = (summary, demands) => {
-  const text = shorn(summary);
-  if (!text) return false;
-  return (Array.isArray(demands) ? demands : []).some((demand) => {
-    if (!AGREED.has(str(demand?.status))) return false;
-    const agreed = shorn(demand?.summary);
-    if (!agreed) return false;
-    // The same words, or one wholly inside the other ("Fulfil the Geneva
-    // protocols" vs "Fulfil the Geneva protocols in full").
-    return agreed === text || agreed.includes(text) || text.includes(agreed);
-  });
-};
 
 // Whether a reply from `speaker` needs checking, and as which side. Only in the
 // one-on-one thread between the player and their OWN Overlord or Puppet, and
@@ -175,7 +163,7 @@ export const placeDemandCards = ({ messages = [], demands = [], isGroup = false 
 // demand_answered, or nothing. An outcome this speaker may not give in this
 // state is dropped, never guessed into something else — a false refusal costs
 // a Puppet Loyalty it never forfeited.
-export const interpretDemandCheck = ({ payload, context, openDemand = null, messageId = "", time = "", idFor, demands = [] } = {}) => {
+export const interpretDemandCheck = ({ payload, context, openDemand = null, messageId = "", time = "", idFor } = {}) => {
   const outcome = norm(payload?.outcome);
   const summary = str(payload?.summary);
   const role = context?.role;
@@ -186,8 +174,6 @@ export const interpretDemandCheck = ({ payload, context, openDemand = null, mess
   if (role === "overlord") {
     if (outcome === "demand") {
       if (!summary) return [];
-      // Not a second card for an obligation the Puppet already took on.
-      if (restatesAgreed(summary, demands)) return [];
       const demandId = mint("demand");
       return [{
         id: `${demandId}-made`, kind: "demand_made", time, by: context.overlord, demandId, target: context.puppet, summary,

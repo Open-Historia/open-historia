@@ -15817,7 +15817,7 @@ export const checkDemandReply = async ({ chat, speaker, reply, answering = "", m
     // (about thirty exchanges) and silently stopped the idle pulse, agent
     // reports and first readings.
   });
-  const events = interpretDemandCheck({ payload, context, openDemand, messageId, time, idFor: mintDemandId, demands: stored.demands });
+  const events = interpretDemandCheck({ payload, context, openDemand, messageId, time, idFor: mintDemandId });
   logDebugEvent("diplomacy",
     `Demand check on ${speaker}'s reply (${context.role}): ${normalizeString(payload?.outcome) || "none"}${events.length ? ` — ${events.map((event) => event.kind === "demand_made" ? "demand made" : `demand ${event.answer}`).join(", ")}` : ""}.`,
     { outcome: payload?.outcome, summary: payload?.summary, openDemand: openDemand?.id ?? null });
