@@ -12,10 +12,23 @@
 import { extractFencedJson, filterAdvisorDeployments, validateChartConfig } from "./advisorBlocks.js";
 import { buildMessageDrafts } from "./advisorDrafts.js";
 import { buildInstitutionDrafts } from "./advisorInstitutionDrafts.js";
+import { stripAdvisorActionHistoryAnnotations } from "../AI/advisorActionHistory.js";
 
 // A ```chart fence that never closed (the reply ran out) is not matched by
 // extractFencedJson and would print its JSON into the bubble.
 const UNCLOSED_CHART = /```chart[\s\S]*$/;
+
+// The model sometimes writes a formal "Action: ..." plan in prose but forgets
+// the structured actions fence. This is NOT a reviewable native Action; report
+// only recognizably complete formal plans, not ordinary mentions or questions.
+// Keep model autonomy to propose actions without an explicit player request.
+export const unreviewableFormalActionTitle = (text) => {
+  const heading = /^\s*(?:#{1,6}\s*)?(?:\*\*)?Action:\s*(.+?)(?:\*\*)?\s*$/im.exec(text);
+  if (!heading) return null;
+  const remaining = text.slice(heading.index + heading[0].length, heading.index + heading[0].length + 2200);
+  if (!/^\s*(?:\*\*)?Lead:(?:\*\*)?\s+\S/im.test(remaining) || !/^\s*(?:\*\*)?1\.\s+\S/m.test(remaining)) return null;
+  return heading[1].replace(/\*\*/g, "").trim().slice(0, 240) || null;
+};
 
 // Why a whole block drew nothing, before any entry was looked at.
 const blockProblems = (json, reason) => {
@@ -81,7 +94,9 @@ export const parseAdvisorReply = (rawText, { allowedUnitTypes = null, streaming 
   const deployments = filterAdvisorDeployments(deployRaw, allowedUnitTypes, deployProblems);
 
   return {
-    text: rest.trim(),
+    text: stripAdvisorActionHistoryAnnotations(rest.trim()),
+    unreviewableActionTitle: (!actionsRaw?.length && actionBlockProblems.length === 0)
+      ? unreviewableFormalActionTitle(rest) : null,
     chartConfig: chart.config,
     chartProblem: chart.problem,
     actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null,

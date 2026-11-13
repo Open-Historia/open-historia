@@ -188,6 +188,7 @@ import {
   JUMP_PROJECTS_RULES_HEADING,
 } from "./projectsDirective.js";
 import { filterBoundLedgerUpdatesToKeptEvents } from "./ledgerEventBinding.js";
+import { isolateUnsupportedWarReports } from "./warSegmentRecovery.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
 import { parkedTurnRecord, restoreParkedTurn } from "./parkedTurn.js";
 import { applyBoardCarriers } from "./boardPassApply.js";
@@ -440,6 +441,7 @@ import {
   bindWarUpdatesToEvents,
   buildCanonicalWarContext,
   decodeWarUpdates,
+  eventNarratesHardCombat,
   interpretWarLedger,
   normalizeWorldWarEventLinks,
   reconcileCombatWarState,
@@ -17574,7 +17576,49 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // a second writable copy of the same truth.
           clearPoliticalClaimBindings(candidate);
           delete candidate.politicalClaims;
-          const ledgerError = validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex, receipt: draft });
+          // The final native salvage can drop malformed war rows before
+          // returning a residual error. Remember the submitted ledger first:
+          // recovery must not mistake that emptied ledger for an independent
+          // unbound report and accidentally authorize its loss.
+          const submittedWarRecords = Array.isArray(candidate.warUpdates)
+            ? candidate.warUpdates.length > 0
+            : Boolean(normalizeString(candidate.warUpdates));
+          let ledgerError = validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex, receipt: draft });
+          // An unsupported, independent model-authored combat report cannot
+          // become canonical without a real war. If it carries no state change,
+          // order, or dependent ledger record, withhold that report alone rather
+          // than paying for a complete AI regeneration of otherwise valid work.
+          // Re-validate the reduced candidate with the SAME native contracts.
+          // A report with an effect, ambiguous dependency, or player relevance
+          // continues through the normal fail-closed corrective retry. With
+          // authored scripted beats due, none are dispensable by inference.
+          if (ledgerError && !submittedWarRecords && scriptedBeats.length === 0 && /Combat event .+ has no event\.warId\./.test(ledgerError)) {
+            const orphanReports = normalizeArray(candidate.events)
+              .flatMap((event, index) => !normalizeString(event?.warId) && eventNarratesHardCombat(event)
+                ? [{ index, title: normalizeString(event?.title), reason: "unbound hard combat" }] : []);
+            const recovery = isolateUnsupportedWarReports(candidate, orphanReports, {
+              protectedPolities: [...humanCountriesOf(bundle.game)],
+              protectedTitles: [
+                ...normalizeArray(scriptedBeats).map((beat) => normalizeString(beat?.title)),
+                ...normalizeArray(bundle.actions).map((action) => normalizeString(action?.title || action?.name)),
+              ],
+            });
+            if (recovery.candidate) {
+              const recoveredError = validateSegmentLedgers(recovery.candidate, {
+                world: ledgerWorld, strict, segmentIndex, receipt: draft,
+              });
+              if (!recoveredError) {
+                candidate.events = recovery.candidate.events;
+                candidate.summary = recovery.candidate.summary;
+                ledgerError = "";
+                noteReceipt(
+                  draft, "withheld",
+                  `Withheld ${recovery.dropped.length} unsupported model-generated combat report(s) because no canonical war could substantiate their fighting; other validated events were retained. No battle, Action or territorial change was invented.`,
+                );
+                console.warn(`[OH war ledger recovery] withheld ${recovery.dropped.length} unsupported independent combat report(s); all remaining ledgers revalidated.`);
+              }
+            }
+          }
           if (ledgerError) return ledgerError;
           screenSegmentFrontOrders(candidate, { game: bundle.game, actions: bundle.actions, receipt: draft });
           return validateSegmentStorylines(candidate, {
