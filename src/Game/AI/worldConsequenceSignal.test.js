@@ -10,8 +10,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
-import { buildWorldInitiativeContext } from "./nativeWorldDirector.js";
+import { assessRecentWorldConsequenceLiveness, buildWorldInitiativeContext } from "./nativeWorldDirector.js";
 
 const ORIGIN = "2014-06-30";
 const actors = ["France", "Germany"];
@@ -60,4 +61,32 @@ test("history with real outcomes adds nothing", () => {
   }));
   const { text } = buildWorldInitiativeContext(bundleWith(events), { targetDate: "2014-09-30" });
   assert.doesNotMatch(text, /Recent history is busy/);
+});
+
+// What an event changed is what it carries and what the ledgers record of it,
+// never its words: "declares war" or "ceasefire" counted in English only.
+test("a war the ledger says an event started is an outcome in any language, and the words alone are none", () => {
+  const titled = (titles) => titles.map((title, index) => ({ ...paperwork(index), title, description: "" }));
+  for (const events of [
+    titled(Array.from({ length: 10 }, (_, index) => `Germany declares war on France (${index})`)),
+    titled(Array.from({ length: 10 }, (_, index) => `Niemcy wypowiadają wojnę Francji (${index})`)),
+  ]) {
+    assert.equal(assessRecentWorldConsequenceLiveness({ events, referenceDate: ORIGIN }).consequentialCount, 0, events[0].title);
+    const world = { wars: [{ id: "war-1", status: "active", sideA: ["Germany"], sideB: ["France"], sourceEventIds: events.map((event) => event.id) }] };
+    assert.equal(assessRecentWorldConsequenceLiveness({ events, referenceDate: ORIGIN, world }).consequentialCount, 10, events[0].title);
+    const treaty = { agreements: [{ id: "pact-1", status: "active", parties: ["Germany", "France"], sourceEventIds: [events[0].id] }] };
+    assert.equal(assessRecentWorldConsequenceLiveness({ events, referenceDate: ORIGIN, world: treaty }).consequentialCount, 1);
+  }
+});
+
+test("the director reads no event's words, and both of its callers hand it the ledgers", () => {
+  const director = readFileSync(new URL("./nativeWorldDirector.js", import.meta.url), "utf8");
+  for (const gone of [
+    "STRATEGIC_CONSEQUENCE_RE", "HARD_MILITARY_CONSEQUENCE_RE", "STORYLINE_ESCALATION_OR_FAILURE_RE", "UNRESOLVED_CRISIS_CUE_RE",
+    "CRISIS_RESOLUTION_CUE_RE", "HUMAN_TEXTURE_RE", "SYSTEMIC_ESCALATION_CUE_RE",
+  ]) assert.ok(!new RegExp(`const ${gone}\\b`).test(director), `${gone} is gone`);
+  assert.ok(!director.includes("eventLooksLikeUnresolvedCrisis"));
+  assert.match(director, /assessRecentWorldConsequenceLiveness\(\{\s+events: bundle\?\.events,\s+referenceDate: originDate,\s+world: bundle\?\.world,\s+\}\);/);
+  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.match(gameplay, /assessRecentWorldConsequenceLiveness\(\{\s+events: bundle\?\.events,\s+additionalEvents: survivingEvents,\s+referenceDate: normalizeString\(context\?\.targetDate\),\s+world: bundle\?\.world,\s+\}\);/);
 });

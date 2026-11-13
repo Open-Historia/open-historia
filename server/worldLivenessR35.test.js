@@ -156,15 +156,30 @@ test("R3.5 modern era does not grant plot armor when current campaign state is g
     },
   };
 
-  const posture = deriveWorldConflictRiskPosture({
-    bundle: { game: { country: "A", gameDate: "2020-07-01" }, world },
+  // Escalation is read from the map, never from words: the powers with a
+  // formation massing on a border or blockading. The causal candidates' words
+  // (once SYSTEMIC_ESCALATION_CUE_RE, English only) change nothing.
+  const units = [
+    { id: "u1", ownerCode: "A", posture: "massing" },
+    { id: "u2", ownerCode: "A", posture: "massing" },
+    { id: "u3", ownerCode: "C", posture: "blockade" },
+    { id: "u4", ownerCode: "D", posture: "holding" },
+  ];
+  const postureWith = (causalCandidates, unitList = units) => deriveWorldConflictRiskPosture({
+    bundle: { game: { country: "A", gameDate: "2020-07-01" }, world: { ...world, units: unitList } },
     targetDate: "2020-08-01",
-    causalCandidates: [
-      { title: "Reserve mobilization follows ultimatum", detail: "Forward deployment and force concentration continue." },
-      { title: "Border clash triggers combat alert", detail: "Talks collapse after an armed incident." },
-    ],
+    causalCandidates,
   });
+  const posture = postureWith([
+    { title: "Reserve mobilization follows ultimatum", detail: "Forward deployment and force concentration continue." },
+    { title: "Border clash triggers combat alert", detail: "Talks collapse after an armed incident." },
+  ]);
 
   assert.ok(posture.score >= 70);
   assert.equal(posture.id, "acute");
+  assert.equal(posture.drivers.escalationSignals, 2, "two powers massing or blockading");
+  for (const candidates of [[], [{ title: "Мобилизация резервистов после ультиматума", detail: "Продолжается сосредоточение войск." }]]) {
+    assert.equal(postureWith(candidates).score, posture.score, "the same world gets the same posture in any language");
+  }
+  assert.equal(postureWith([], []).drivers.escalationSignals, 0);
 });

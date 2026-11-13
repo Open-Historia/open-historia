@@ -11979,6 +11979,7 @@ const maybeRepairWorldBreadthAfterCuration = async ({
     events: bundle?.events,
     additionalEvents: survivingEvents,
     referenceDate: normalizeString(context?.targetDate),
+    world: bundle?.world,
   });
   const sparseTrigger = survivorCount <= WORLD_BREADTH_REPAIR_TRIGGER_MAX_SURVIVORS;
   // Same composition pass, no extra AI layer: a busy-but-toothless rolling window

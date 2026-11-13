@@ -79,17 +79,22 @@ test("a closed Board entry earns no provisional pass", () => {
   );
 });
 
-test("an unresolved crisis still needs a Storyline, even when a Board entry caused it", () => {
-  const crisis = payloadWith({
-    importance: "major",
-    kind: "military",
-    title: "Operation Kingfisher's exposure triggers a standoff over the test range",
-    description: "Both governments move forces towards the range and neither backs down.",
-  });
-  assert.match(
-    validateWorldEventConsequencePayload(crisis, { board: [boardEntry()], strict: true }),
-    /no persistent storyline consequence/i,
-  );
+// A crisis owes a Storyline, and the skip is told to open one for every
+// process that runs on (jumpSegments.js STORYLINE_INSTRUCTION). Which event
+// was a crisis used to be read from English words ("standoff", "ultimatum"),
+// so the same event in another language passed: now no event is judged by its
+// words, and one tied to its storyline has a consequence of its own.
+test("a crisis's words decide nothing: a major event on an open Board entry passes provisionally, in any language", () => {
+  for (const [title, description] of [
+    ["Operation Kingfisher's exposure triggers a standoff over the test range", "Both governments move forces towards the range and neither backs down."],
+    ["La révélation de l'opération Kingfisher déclenche une crise autour du champ d'essai", "Les deux gouvernements déplacent des forces vers le champ d'essai et aucun ne recule."],
+  ]) {
+    const crisis = payloadWith({ importance: "major", kind: "military", title, description });
+    assert.equal(validateWorldEventConsequencePayload(crisis, { board: [boardEntry()], strict: true }), "", title);
+    assert.deepEqual(boardProvisionalConsequenceIndexes(crisis, { board: [boardEntry()] }), [0], title);
+    const told = payloadWith({ importance: "major", kind: "military", title, description, storylineIds: ["storyline-kingfisher"] });
+    assert.deepEqual(boardProvisionalConsequenceIndexes(told, { board: [boardEntry()] }), [], `${title}: tied to its storyline`);
+  }
 });
 
 test("an event with a consequence of its own is never provisional", () => {
