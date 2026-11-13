@@ -6,10 +6,18 @@
 // named: forty lines for half of a large country, which no model writes in a
 // skip. Now one entry does it. A control (civil war) or transfer (an agreed
 // partition) whose region is "country: <name>" carries `part`: the side of the
-// country the breakaway holds ("north", "the southeast") or the place its half
-// centres on ("around Aleppo", "Benghazi"), with a share if it is not half
-// ("east 30%"). This module picks the regions; gameplay.js (splitCountryOps)
-// writes one entry for each and, for a civil war, the war.
+// country the breakaway holds (one of the eight compass words: "north",
+// "southeast") or the place its half centres on ("city: Aleppo", "region:
+// Cyrenaica"), with a share if it is not half ("east 30%"). This module picks
+// the regions; gameplay.js (splitCountryOps) writes one entry for each and, for
+// a civil war, the war.
+//
+// The part is read by that grammar and nothing else: a compass word as the
+// rules write it, or a name the country's regions or towns have exactly. Its
+// English fillers ("the", "half", "around", "centred on") were read off it
+// and no other language's were (the owner, 2026-11-13: no keywording
+// anywhere); a part that names nothing is the far side from the capital, and
+// the receipt says what the breakaway took.
 //
 // The government keeps the region of its capital, unless the part names it.
 // Pure: positions in, region ids out.
@@ -20,7 +28,9 @@ import { decodeWarUpdates } from "./nativeWarLedger.js";
 
 const clean = (value) => String(value ?? "").trim();
 const list = (value) => (Array.isArray(value) ? value : []);
-const fold = (value) => clean(value).toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+// Case and spacing, in any script: a region of a Cyrillic or Arabic map folded
+// to nothing when only a-z and 0-9 were kept, and its civil war's id with it.
+const fold = (value) => clean(value).toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim();
 
 export const SPLIT_SHARE_DEFAULT = 0.5;
 export const SPLIT_SHARE_LEAST = 0.15;
@@ -39,8 +49,10 @@ const DIRECTIONS = Object.freeze({
   southwest: [-DIAGONAL, -DIAGONAL],
 });
 
-// "north", "the North-East", "northern half", "east 30%", "around Aleppo 40%", "Benghazi":
+// "north", "southeast", "east 30%", "city: Aleppo 40%", "region: Cyrenaica", "Benghazi":
 // { direction } or { place }, and the share (0.15 to 0.85; half when none is given).
+// A direction is one of the eight compass words exactly; anything else is the
+// name of a place, its kind tag taken off.
 export const readSplitPart = (value) => {
   let text = clean(value);
   let share = SPLIT_SHARE_DEFAULT;
@@ -49,23 +61,17 @@ export const readSplitPart = (value) => {
     share = Number(percent[1].replace(",", ".")) / 100;
     text = text.replace(percent[0], " ");
   } else {
-    const fraction = text.match(/\b(0?[.,]\d+)\b/);
+    const fraction = text.match(/(?:^|\s)(0?[.,]\d+)(?=\s|$)/);
     if (fraction) {
       share = Number(fraction[1].replace(",", "."));
-      text = text.replace(fraction[0], " ");
+      text = text.replace(fraction[1], " ");
     }
   }
   share = Math.min(SPLIT_SHARE_MOST, Math.max(SPLIT_SHARE_LEAST, Number.isFinite(share) ? share : SPLIT_SHARE_DEFAULT));
-  const words = fold(text)
-    .replace(/\b(the|of|half|part|side|regions?|country|its|around|centred|centered|on|in|from)\b/g, " ")
-    .replace(/\b(north|south)\s+(east|west)/g, "$1$2")
-    .replace(/\b(north|south|east|west)(?:ern)?\b/g, "$1")
-    .replace(/\b(northeast|northwest|southeast|southwest)(?:ern)?\b/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (DIRECTIONS[words]) return { direction: words, share };
-  const place = clean(text).replace(/^(?:around|centred on|centered on|from|in)\s+/i, "").replace(/^region:\s*/i, "").trim();
-  return { place: place || "", share };
+  const word = clean(text).toLowerCase();
+  if (Object.hasOwn(DIRECTIONS, word)) return { direction: word, share };
+  const place = clean(text).replace(/^(?:city|region)\s*:\s*/i, "").trim();
+  return { place, share };
 };
 
 // Longitudes of a country that crosses the antimeridian read on one side of it.
