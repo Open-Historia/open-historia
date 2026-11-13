@@ -84,6 +84,7 @@ import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
 import { unmarkedEndVerdict } from "./toolResponsePayload.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
 import { createTemperatureMemory, temperatureBody, temperatureRefusalKey } from "./sampling.js";
+import { isReasoningOffRefusal, openAiReasoningFields } from "./localReasoning.js";
 import { isForcedToolChoiceRefusal, refusesForcedToolChoice, structuredToolChoice, toolCallReminder, withToolCallReminder } from "./anthropicToolChoice.js";
 import { isEnabledThinkingRefusal, thinkingFor, thinksAdaptive } from "./anthropicThinking.js";
 import { nativeHttpAvailable, nativeHttpFetch } from "../../runtime/native/http.js";
@@ -1322,6 +1323,10 @@ const REASONING_HEADROOM_TOKENS = 8192;
 // the session only: streaming is the keep-alive a long turn needs, so a gateway
 // that starts accepting it again should get it back after a reload.
 const streamingRefusals = new Set();
+// Local servers that refused reasoning_effort "none" (localReasoning.js), by
+// endpoint and model: an older one that lists only low/medium/high. Session-
+// scoped like the set above: an upgraded server is asked again after a reload.
+const reasoningOffRefusals = new Set();
 const streamingRefusalKey = (samplingKey, withTools) => `${samplingKey}|${withTools ? "tools" : "plain"}`;
 // Anthropic models that refused a forced tool_choice, for the session, keyed like
 // the temperature refusals. The known ones never send it (anthropicToolChoice.js);
@@ -1420,6 +1425,7 @@ async function callOpenAIStyleChatCompletions({
     const samplingKey = temperatureRefusalKey({ provider: providerLabel, endpoint, model });
     const streamingKey = streamingRefusalKey(samplingKey, Boolean(tool) || isLookupChat(tool, onChunk, lookupTools));
     streamingDisabled = streamingRefusals.has(streamingKey);
+    let reasoningOffRefused = reasoningOffRefusals.has(streamingKey);
     const ownTemperature = temperatureBody(taskKey);
     let disableTemperature = temperatureRefusals.refuses(samplingKey);
     const wantsReasoning = getReasoningEnabled();
@@ -1445,6 +1451,12 @@ async function callOpenAIStyleChatCompletions({
             ? `${baseSystemPrompt}${TOOL_CALL_INSISTENCE}`
             : baseSystemPrompt;
         const streamLocalEndpoint = isLocalEndpoint(normalizeEndpoint(endpoint));
+        const reasoningFields = openAiReasoningFields({
+            enabled: getReasoningEnabled(),
+            local: streamLocalEndpoint,
+            toolRefused: disableToolReasoning,
+            offRefused: reasoningOffRefused,
+        });
         const outputLimit = outputLimitFor({ maxTokens, customParams: requestCustomParams, koboldCpp });
         const koboldCppLimit = outputLimit.source === "koboldcpp" ? outputLimit.tokens : 0;
         // Every call streams unless a gateway has refused to. Three things need it:
@@ -1481,14 +1493,15 @@ async function callOpenAIStyleChatCompletions({
                 // fell back to non-tool modes, which DID carry it). Providers that
                 // reject the tools+reasoning combination surface the documented
                 // error below and the call retries without it.
-                ...(getReasoningEnabled() && !disableToolReasoning ? { reasoning_effort: "medium" } : {}),
                 // Thinking-class local models (Qwen3, Seed-OSS) key on
                 // enable_thinking, not reasoning_effort — textgen/oobabooga
                 // honors it per-request, llama.cpp/LM Studio ignore unknown
                 // fields. Local endpoints only: strict cloud APIs reject
-                // unknown parameters. Sent only when the toggle is ON so a
-                // server-side --enable-thinking default is never overridden.
-                ...(streamLocalEndpoint && getReasoningEnabled() && !disableToolReasoning ? { enable_thinking: true } : {}),
+                // unknown parameters.
+                // With the setting OFF a local server is told "none": told
+                // nothing, a thinking model's template reasons anyway, for
+                // minutes on a long turn (localReasoning.js has the report).
+                ...reasoningFields,
                 // No cap unless a caller asked for a specific budget: omit the field so
                 // the provider uses the model's own maximum (long turns aren't truncated).
                 //
@@ -1575,6 +1588,18 @@ async function callOpenAIStyleChatCompletions({
                 disableTemperature = true;
                 temperatureRefusals.learn(samplingKey);
                 console.warn(`[ai] ${providerLabel} refused the requested temperature; retrying at the model's own, and remembering.`);
+                continue;
+            }
+
+            // A local server that does not know reasoning_effort "none": ask
+            // again without it and do not send it there again this session. Not
+            // when the player's own custom parameters set the field: that value
+            // is theirs, and the refusal is theirs to read.
+            if (!reasoningOffRefused && reasoningFields.reasoning_effort === "none"
+                && requestCustomParams.reasoning_effort === undefined && isReasoningOffRefusal(errorMessage)) {
+                reasoningOffRefused = true;
+                reasoningOffRefusals.add(streamingKey);
+                console.warn(`[ai] ${providerLabel} refused reasoning_effort "none"; retrying without it — the model may reason although the setting is off.`);
                 continue;
             }
 
