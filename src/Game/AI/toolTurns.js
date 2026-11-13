@@ -327,3 +327,14 @@ export const describeLookupCall = (call, { maxValue = 60 } = {}) => {
   const inner = Object.entries(args).map(([key, value]) => `${key}=${argValue(value, maxValue)}`).join(", ");
   return `${clean(call?.name) || "?"}(${inner})`;
 };
+
+// Whether a request is told that the output function is to be called once
+// (`parallel_tool_calls: false`): a server on the player's machine or network,
+// and no other function declared. llama.cpp lets a model call its functions any
+// number of times in one answer unless told otherwise, and a model with nothing
+// else to call wrote a turn's whole answer again and again until its window was
+// full: 14,000 and 16,000 tokens where 500 were asked for (2026-11-13, build
+// b12128; asked for twelve calls of one function, it made twelve, and one with
+// the switch off). With lookups declared the switch is left alone: several
+// lookups in one answer are wanted there.
+export const oneOutputCallOnly = ({ local = false, lookups = 0 } = {}) => Boolean(local) && !(Number(lookups) > 0);
