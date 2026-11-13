@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import { TREATY_BROKEN_REPUTATION } from "../../runtime/alliances.js";
 import { normalizeWorldState } from "../../runtime/gameState.js";
-import { TERRITORY_AS_HELD, TERRITORY_RESTORED, readTermsLine } from "../../runtime/peaceTerms.js";
+import { TERRITORY_AS_HELD, TERRITORY_RESTORED, readTermsLine, readTreatyLines } from "../../runtime/peaceTerms.js";
 import { WEARINESS_A_YEAR, wearinessOf } from "../../runtime/warWeariness.js";
 import { PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
 import { playerFronts } from "../GameUI/warRoomData.js";
@@ -456,15 +456,15 @@ test("a peace can annex a country whole, cede regions by name, make a puppet, an
   const make = (line, extra = {}) => makePeace(state, { warId: "war-1", from: "Aland", to: "Borduria", terms: readTermsLine(line, { from: "Aland", to: "Borduria" }), date: "1915-01-10", round: 9, regions: catalog, ...extra });
 
   // All of Borduria passes to Aland: every region it held, and those Aland had taken, in law as in fact.
-  const annexed = make("Borduria is annexed");
+  const annexed = make("annex~Borduria");
   for (let at = 1; at <= 10; at += 1) assert.deepEqual([holder(annexed, `b${at}`), sovereign(annexed, `b${at}`)], ["Aland", "Aland"], `b${at}`);
   assert.equal(holder(annexed, "c1"), "Cisland");
   assert.equal(war(annexed).status, "ended");
   assert.ok(war(annexed).note.includes("Borduria is annexed: all its land passes to Aland"));
 
-  // Regions ceded by name ("Dospad and Wesk" are two), the rest of the ground as held; a name nowhere on Borduria's
-  // land is told to the story as a condition; and Borduria becomes Aland's protectorate.
-  const ceded = make("as held; Borduria cedes Klow, Dospad and Wesk, Atlantis to Aland; Borduria becomes Aland's protectorate; the border forts are razed");
+  // Regions ceded by name, a part a region, the rest of the ground as held; a name nowhere on Borduria's land is
+  // told to the story as a condition; and Borduria becomes Aland's protectorate.
+  const ceded = make("as held; cede~Klow~Aland; cede~Dospad~Aland; cede~Wesk~Aland; cede~Atlantis~Aland; puppet~Borduria~protectorate; condition~the border forts are razed");
   for (const id of ["b1", "b3", "b4", "b8"]) assert.equal(holder(ceded, id), "Aland", id);
   for (const id of ["b2", "b5"]) assert.equal(holder(ceded, id), "Borduria", id);
   const terms = ceded.peaceTreaties[0].terms;
@@ -473,11 +473,48 @@ test("a peace can annex a country whole, cede regions by name, make a puppet, an
   const row = ceded.puppets.find((entry) => entry.status === "active");
   assert.deepEqual([row.overlord, row.puppet, row.kind], ["Aland", "Borduria", "protectorate"]);
 
+  // A cession is one region, by its name: "Dospad and Wesk" names no region of the map, and is not cut at its "and".
+  const joined = make("as held; cede~Dospad and Wesk~Aland");
+  for (const id of ["b3", "b4"]) assert.equal(holder(joined, id), "Borduria", id);
+  assert.deepEqual(joined.peaceTreaties[0].terms.conditions, ["Dospad and Wesk passes to Aland"]);
+
   // A third country is no part of it: Cisland can be neither annexed nor made a puppet by Aland and Borduria's peace.
-  const third = make("Cisland is annexed; Cisland becomes Aland's puppet");
+  const third = make("annex~Cisland; puppet~Cisland~satellite");
   assert.equal(holder(third, "c1"), "Cisland");
   assert.deepEqual(third.puppets.filter((entry) => entry.status === "active"), []);
-  assert.deepEqual(third.peaceTreaties[0].terms.conditions, ["Cisland is annexed", "Cisland becomes Aland's puppet"]);
+  assert.deepEqual(third.peaceTreaties[0].terms.annexed, undefined);
+});
+
+// The same peace told by a model playing in French: "Borduria cède Klow à Aland" was read as a mere condition
+// and the ground went back to the old borders. The terms are the game's own records now, in every language.
+test("a French cession moves the ground exactly as its English twin does", () => {
+  const state = world();
+  const catalog = [
+    { id: "b1", name: "Klow", country: "Borduria" },
+    { id: "b2", name: "Szohod", country: "Borduria" },
+    ...Array.from({ length: 8 }, (_, at) => ({ id: `b${at + 3}`, name: `Borduria ${at + 3}`, country: "Borduria" })),
+  ];
+  const settle = (line) => {
+    const [told] = readTreatyLines(line);
+    return turnWarAndPeace({ world: state, baseWorld: state, days: 30, date: "1915-01-10", round: 9, players: [], treaties: [told], regions: catalog });
+  };
+  const english = settle("Borduria | Aland | as held; cede~Klow~Aland; pay~Borduria~2~5; condition~the border forts are razed");
+  const french = settle("Borduria | Aland | as held; cede~Klow~Aland; pay~Borduria~2~5; condition~les forts frontaliers sont rasés");
+  for (const made of [english, french]) {
+    assert.equal(war(made).status, "ended");
+    for (const id of ["b1", "b8", "b9", "b10"]) assert.deepEqual([holder(made, id), sovereign(made, id)], ["Aland", "Aland"], id);
+    assert.equal(holder(made, "b2"), "Borduria");
+    assert.deepEqual(made.reparations.map((entry) => [entry.payer, entry.receiver, entry.share]), [["Borduria", "Aland", 0.02]]);
+  }
+  assert.deepEqual(french.regionOwnershipOverrides, english.regionOwnershipOverrides);
+  assert.deepEqual(french.regionSovereigntyOverrides, english.regionSovereigntyOverrides);
+  assert.deepEqual(french.peaceTreaties[0].terms.conditions, ["les forts frontaliers sont rasés"]);
+  // Words alone, in French or in English, are a condition: the war ends and nothing is ceded by them.
+  for (const words of ["Borduria cède Klow à Aland", "Borduria cedes Klow to Aland"]) {
+    const told = settle(`Borduria | Aland | restored; ${words}`);
+    assert.equal(holder(told, "b1"), "Borduria", words);
+    assert.deepEqual(told.peaceTreaties[0].terms.conditions, [words]);
+  }
 });
 
 // Two wars between the same pair, the player's offer waiting in the second: the skip's line accepting it was
