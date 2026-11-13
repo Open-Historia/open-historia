@@ -1,4 +1,5 @@
 [
+ "\"Retry the failed events\" on a held turn now asks for exactly the orders that were left, and asks again by itself while each answer carries out more of them. A model that answered one order at a time used to send you back to the notice after each one.",
  "\"{{fileName}}\" and its cover image were",
  "\"{{fileName}}\" and its cover image were downloaded.",
  "\"{{fileName}}\" and its cover image were downloaded. On the GitHub page that just opened, drag both files into the Description box, then submit. The cover image becomes the card's preview in the hub.{{extra}}",
@@ -10779,6 +10780,7 @@
  "Retrying the failed events…",
  "Retrying the final unresolved geopolitical profiles…",
  "Retrying the segment…",
+ "Retrying your failed orders finishes the job",
  "Retrying…",
  "Return the scene to just before this move — free; choosing again is one request",
  "Return to the scene",
@@ -12701,6 +12703,7 @@
  "That post is no longer there to quote.",
  "That reply was cut off before a single entry finished, so nothing could be added. Ask again for a shorter batch — around ten at a time works.",
  "That reply was cut off partway through, so only the entries that arrived complete were added. Ask for the rest to continue the board.",
+ "That retry no longer looks anything up first: the period is already written, and on a local model the lookups were most of its five minutes.",
  "That scenario city no longer exists.",
  "That scenario has no basemap inside it.",
  "That side is led by another player: make peace with them in a chat.",
