@@ -320,6 +320,7 @@ func _build_phone_bar() -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 7)
 	scroll.add_child(row)
+	scroll.resized.connect(_fit_phone_tabs)
 	var brand := Button.new()
 	brand.flat = true
 	brand.focus_mode = Control.FOCUS_NONE
@@ -365,6 +366,37 @@ func _style_phone_tab(tab: Button, active: bool) -> void:
 	tab.add_theme_font_size_override("font_size", 14)
 	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
 		tab.add_theme_color_override(state, Color(246 / 255.0, 246 / 255.0, 248 / 255.0, 0.92))
+	_fit_phone_tabs.call_deferred()
+
+
+func _fit_phone_tabs() -> void:
+	var tabs: Array[Button] = []
+	for key in ["games", "scenarios", "community", "lobbies"]:
+		if _tiles.has(key) and (_tiles[key] as Button).has_meta("phone"):
+			tabs.append(_tiles[key])
+	if tabs.is_empty() or not tabs[0].is_inside_tree():
+		return
+	var row := tabs[0].get_parent() as HBoxContainer
+	var scroll := row.get_parent() as Control
+	var gap := float(row.get_theme_constant("separation"))
+	var room := scroll.size.x - (row.get_child(0) as Control).get_combined_minimum_size().x - gap * tabs.size()
+	var texts: Array[float] = []
+	var natural := 0.0
+	var words := 0.0
+	for tab in tabs:
+		var font := tab.get_theme_font("font")
+		var width := font.get_string_size(tab.text, HORIZONTAL_ALIGNMENT_LEFT, -1, tab.get_theme_font_size("font_size")).x if font else 0.0
+		texts.append(width)
+		words += width
+		natural += width + 29.2
+	var short := maxf(0.0, natural - room) if room > 0.0 else 0.0
+	for index in range(tabs.size()):
+		var pad := maxf(0.0, 14.6 - (short * texts[index] / words * 0.5 if words > 0.0 else 0.0))
+		for state in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
+			var style := tabs[index].get_theme_stylebox(state) as StyleBoxFlat
+			if style and not is_equal_approx(style.content_margin_left, pad):
+				style.content_margin_left = pad
+				style.content_margin_right = pad
 
 
 func _style_tile(tile: Button, active: bool) -> void:
