@@ -27,7 +27,7 @@
 // Pure, and nothing here is left to chance twice: the same strike is the same
 // spectacle every time it is played.
 
-import { fliesAsAircraft, isNuclear } from "../../runtime/strikes.js";
+import { fliesAsAircraft, isDrone, isNuclear } from "../../runtime/strikes.js";
 import { mapKm, mapOffset } from "../../../server/mapDistance.js";
 import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 
@@ -36,12 +36,35 @@ const EARTH_KM = 6371;
 // The most of a strike that is drawn: a salvo of hundreds is a dozen arcs.
 export const MISSILES_SHOWN_MOST = 14;
 export const AIRCRAFT_SHOWN_MOST = 20;
+export const DRONES_SHOWN = 7;
 // How high things fly, in kilometres. A ballistic missile's arc is as high as
 // it is: about a quarter of its range, up to some 1,300 km. Aircraft are drawn
 // far higher than they fly, or on a globe they would not be seen to leave the ground.
-export const APOGEE_SHARE = Object.freeze({ "silo missile": 0.24, "submarine missile": 0.22, "missile strike": 0.09 });
-const APOGEE_KM = { "silo missile": [140, 1300], "submarine missile": [120, 1200], "missile strike": [22, 240] };
+export const APOGEE_SHARE = Object.freeze({ "silo missile": 0.24, "submarine missile": 0.22, "missile strike": 0.09, "drone strike": 0.04 });
+const APOGEE_KM = { "silo missile": [140, 1300], "submarine missile": [120, 1200], "missile strike": [22, 240], "drone strike": [15, 45] };
 export const AIRCRAFT_HEIGHT_KM = 90;
+export const DRONE_HEIGHT_KM = 35;
+export const DRONE_PX = [12, 18];
+// Arrowhead / V-formation offsets: [lateralOffset (in gap units), longitudinalStagger (in gap units)]
+export const DRONE_FORMATION = [
+  [0, 0],
+  [-1, 1], [1, 1],
+  [-2, 2], [2, 2],
+  [-3, 3], [3, 3],
+];
+
+const SHAHED_USERS = new Set([
+  "iran", "islamic republic of iran", "russia", "russian federation", "houthis",
+  "ansar allah", "hezbollah", "syria", "syrian arab republic", "belarus",
+]);
+
+export const droneShapeForOwner = (owner) => {
+  const norm = String(owner ?? "").trim().toLowerCase();
+  for (const user of SHAHED_USERS) {
+    if (norm.includes(user)) return 4;
+  }
+  return 5;
+};
 // On a flat map a missile's way bows aside by this much of its arc's height.
 const BOW_OF_HEIGHT = 0.55;
 // (and never so far that it would be carried over a pole, where a flat map ends)
@@ -235,33 +258,47 @@ const fallen = (shown, down) => {
 export const planStrike = (strike, { from, to, flat = false, kmPerPixel = 0 } = {}) => {
   if (!strike || !Array.isArray(from) || !Array.isArray(to) || ![from[0], from[1], to[0], to[1]].every(Number.isFinite)) return null;
   const km = Math.max(1, rangeKm(from, to));
+  const drone = isDrone(strike.weapon);
   const aircraft = fliesAsAircraft(strike.weapon);
   const nuclear = isNuclear(strike.weapon);
-  const most = aircraft ? AIRCRAFT_SHOWN_MOST : MISSILES_SHOWN_MOST;
-  const count = Math.max(1, Math.round(Number(strike.count) || 1));
-  const shown = Math.min(most, count);
+  const most = drone ? DRONES_SHOWN : aircraft ? AIRCRAFT_SHOWN_MOST : MISSILES_SHOWN_MOST;
+  const count = Math.max(1, Math.round(Number(strike.count) || (drone ? DRONES_SHOWN : 1)));
+  const shown = drone ? DRONES_SHOWN : Math.min(most, count);
   const wanted = Math.max(0, Math.min(count, Math.round(Number(strike.down) || 0)));
   // As many of those shown are lost as their share of the whole: all, when all were.
   const down = wanted >= count ? shown : wanted === 0 ? 0 : clamp(Math.round((wanted * shown) / count), 1, Math.max(1, shown - 1));
   const lost = fallen(shown, down);
-  const seconds = aircraft ? AIRCRAFT_SECONDS : MISSILE_SECONDS;
-  const flight = clamp(seconds[0] + km / (aircraft ? 1300 : 2400), seconds[0], seconds[1]) * (strike.weapon === "missile strike" ? 0.82 : 1);
+  const seconds = drone ? [6.0, 11.0] : aircraft ? AIRCRAFT_SECONDS : MISSILE_SECONDS;
+  const flight = clamp(seconds[0] + km / (drone ? 900 : aircraft ? 1300 : 2400), seconds[0], seconds[1]) * (strike.weapon === "missile strike" ? 0.82 : 1);
   // (A bombing run ordered with a strike radius scatters its bombs as wide as it was set: runtime/strikes.js spreadKm.)
-  const spread = aircraft ? (nuclear ? 6 : Number(strike.spreadKm) > 0 ? Number(strike.spreadKm) : 24) : nuclear ? 16 : 9;
+  const spread = drone ? 10 : aircraft ? (nuclear ? 6 : Number(strike.spreadKm) > 0 ? Number(strike.spreadKm) : 24) : nuclear ? 16 : 9;
   const share = APOGEE_SHARE[strike.weapon] ?? APOGEE_SHARE["silo missile"];
   const bow = !aircraft && flat ? share * BOW_OF_HEIGHT * bowSide(from, to, share * BOW_OF_HEIGHT) : 0;
   const bearing = bearingOf(from, to);
   const looked = Number.isFinite(kmPerPixel) && kmPerPixel > 0 ? kmPerPixel : 0;
-  const gap = aircraft ? Math.min(Math.max(Math.min(FORMATION_KM, km * 0.03), FORMATION_PX * looked), Math.max(1, km / 8)) : 0;
+  const gap = drone
+    ? Math.min(Math.max(12, km * 0.025), FORMATION_PX * looked)
+    : aircraft
+      ? Math.min(Math.max(Math.min(FORMATION_KM, km * 0.03), FORMATION_PX * looked), Math.max(1, km / 8))
+      : 0;
   // (How long an aircraft takes to fly as far as it keeps from the next.)
-  const gapSeconds = aircraft ? Math.max(0.22, (gap * flight) / km) : 0;
+  const gapSeconds = (drone || aircraft) ? Math.max(0.2, (gap * flight) / km) : 0;
+  const droneShape = drone ? droneShapeForOwner(strike.owner) : 0;
   const units = [];
   for (let index = 0; index < shown; index += 1) {
     const lands = placeFrom(to, chance(strike.id, index, "bearing") * 360, spread * Math.sqrt(chance(strike.id, index, "off")) * (shown > 1 ? 1 : 0));
     let way;
     let height;
     let start;
-    if (aircraft) {
+    if (drone) {
+      // Swarm of 7 kamikaze drones in an arrowhead V-formation
+      const [latOffset, longStagger] = DRONE_FORMATION[index % DRONE_FORMATION.length];
+      const aside = latOffset * gap;
+      way = bentWay(placeFrom(from, bearing + 90, aside), placeFrom(to, bearing + 90, aside), 0);
+      // Cruise at low altitude, then execute a steep kamikaze dive into the target
+      height = (at) => DRONE_HEIGHT_KM * (at < 0.88 ? clamp(at / 0.08, 0, 1) : Math.max(0, 1 - (at - 0.88) / 0.12));
+      start = longStagger * gapSeconds * 0.75;
+    } else if (aircraft) {
       // A formation: rows of five abreast, each row behind the one before.
       const row = Math.floor(index / 5);
       const place = (index % 5) - Math.min(4, shown - row * 5 - 1) / 2;
@@ -310,6 +347,8 @@ export const planStrike = (strike, { from, to, flat = false, kmPerPixel = 0 } = 
     weapon: strike.weapon,
     nuclear,
     aircraft,
+    drone,
+    droneShape,
     flat: flat === true,
     from: [from[0], from[1]],
     to: [to[0], to[1]],
@@ -379,6 +418,18 @@ const burst = (items, at, since, kmPerPixel, scale = 1) => {
   if (since < BURST.waveFor) {
     const gone = since / BURST.waveFor;
     waveRing(items, at, Math.max(0.5, atLeast(BURST.wave, BURST.wavePx) * easeOut(gone)), 1.6, 0.7 * (1 - gone), 1);
+  }
+  if (since > 0.12 && since < 2.6) {
+    const smokeLeft = 1 - since / 2.6;
+    const rise = easeOut(since / 2.6);
+    items.points.push({
+      at: [at[0], at[1], 0.3 + 3.5 * rise],
+      size: (14 + 32 * rise) * scale,
+      shape: 0,
+      colour: since < 0.7 ? [0.24, 0.24, 0.28] : COLOURS.smoke,
+      alpha: 0.6 * smokeLeft,
+      what: "smoke",
+    });
   }
 };
 // What is sent up at one that is intercepted: it leaves the ground `seconds`
@@ -485,17 +536,37 @@ export const strikeItemsAt = (plan, seconds, { kmPerPixel = 0 } = {}) => {
     const since = (share - ends) * entry.flight;
     const fade = flying ? 1 : 1 - clamp(since / 0.9, 0, 1);
     if (fade > 0) {
-      const tail = Math.max(0, head - (plan.aircraft ? 0.12 : TRAIL_SHARE));
-      const points = [];
-      for (let step = 0; step <= 14; step += 1) points.push(place(tail + ((head - tail) * step) / 14));
-      // On a globe a missile's arc is in the air: its shadow follows it over the ground.
-      if (!plan.aircraft && !plan.flat) items.ribbons.push({ points: points.map(([lng, lat]) => [lng, lat, 0]), width: 2, colour: COLOURS.shadow, from: 0, to: 0.3 * fade });
-      // The glow round a missile's fire, under the trail itself.
-      if (!plan.aircraft && flying) items.ribbons.push({ points, width: 7, colour: COLOURS.trail, from: 0, to: 0.22 });
-      items.ribbons.push({ points, width: plan.aircraft ? 1.3 : 2.4, colour: plan.aircraft ? COLOURS.contrail : flying ? COLOURS.trail : COLOURS.smoke, from: 0, to: (plan.aircraft ? 0.4 : 0.95) * fade });
+      if (plan.drone) {
+        // Faint, thin engine exhaust trail behind drones
+        const tail = Math.max(0, head - 0.08);
+        const points = [];
+        for (let step = 0; step <= 8; step += 1) points.push(place(tail + ((head - tail) * step) / 8));
+        items.ribbons.push({ points, width: 1.2, colour: COLOURS.smoke, from: 0, to: 0.35 * fade });
+      } else {
+        const tail = Math.max(0, head - (plan.aircraft ? 0.12 : TRAIL_SHARE));
+        const points = [];
+        for (let step = 0; step <= 14; step += 1) points.push(place(tail + ((head - tail) * step) / 14));
+        // On a globe a missile's arc is in the air: its shadow follows it over the ground.
+        if (!plan.aircraft && !plan.flat) items.ribbons.push({ points: points.map(([lng, lat]) => [lng, lat, 0]), width: 2, colour: COLOURS.shadow, from: 0, to: 0.3 * fade });
+        // The glow round a missile's fire, under the trail itself.
+        if (!plan.aircraft && flying) items.ribbons.push({ points, width: 7, colour: COLOURS.trail, from: 0, to: 0.22 });
+        items.ribbons.push({ points, width: plan.aircraft ? 1.3 : 2.4, colour: plan.aircraft ? COLOURS.contrail : flying ? COLOURS.trail : COLOURS.smoke, from: 0, to: (plan.aircraft ? 0.4 : 0.95) * fade });
+      }
     }
     if (flying) {
-      if (plan.aircraft) {
+      if (plan.drone) {
+        const at = place(head);
+        const toward = place(Math.min(1.0, head + 0.015));
+        const droneSize = scale > 0 ? clamp((plan.gapKm / scale) * 0.8, DRONE_PX[0], DRONE_PX[1]) : 15;
+        // Shadow on the ground a little way off
+        const off = Math.min(at[2] * SHADOW_OF_HEIGHT, scale > 0 ? SHADOW_PX_MOST * scale : Infinity);
+        if (off > 0) {
+          const under = placeFrom(at, SHADOW_BEARING, off);
+          const ahead = placeFrom(toward, SHADOW_BEARING, off);
+          items.points.push({ at: [under[0], under[1], 0], toward: [ahead[0], ahead[1], 0], size: droneSize, shape: plan.droneShape, colour: COLOURS.shadow, alpha: 0.35 });
+        }
+        items.points.push({ at, toward, size: droneSize, shape: plan.droneShape, colour: [1, 1, 1], alpha: 1.0 });
+      } else if (plan.aircraft) {
         // (An aircraft that has dropped its load goes on, and is lost to sight.)
         const seen = share > 1.04 ? 1 - clamp((share - 1.04) / (FLIES_ON - 1.04), 0, 1) : 1;
         const at = place(head);
@@ -526,13 +597,13 @@ export const strikeItemsAt = (plan, seconds, { kmPerPixel = 0 } = {}) => {
       continue;
     }
     // It arrives.
-    if (!plan.aircraft) {
+    if (plan.drone || !plan.aircraft) {
       // (Where its own way ends: the same place as `lands`, told as the way tells its longitudes.)
       const landed = (share - 1) * entry.flight;
       if (landed < 0) continue;
       const ended = entry.way(1);
       if (plan.nuclear) nuclearBlast(items, ended, landed, scale);
-      else burst(items, ended, landed, scale, 1.25);
+      else burst(items, ended, landed, scale, plan.drone ? 1.0 : 1.25);
       continue;
     }
     if (plan.nuclear) {
@@ -558,3 +629,101 @@ export const strikeItemsAt = (plan, seconds, { kmPerPixel = 0 } = {}) => {
 
 // How long a plan takes to play, in seconds.
 export const strikeLasts = (plan) => (plan ? plan.lasts : 0);
+
+// The craters and smoldering fires of recent strikes kept in the world (runtime/strikes.js STRIKE_ROUNDS_KEPT = 2).
+// For 1-2 turns (about 1-2 weeks in game), places hit by missiles or bombs continue to burn
+// with realistic flickering flames, glowing ember beds, and rising columns of atmospheric smoke.
+export const craterItemsAt = (strikes, currentRound, nowMs = 0, { kmPerPixel = 0 } = {}) => {
+  const items = { ribbons: [], points: [], discs: [] };
+  if (!Array.isArray(strikes) || strikes.length === 0) return items;
+
+  const roundNow = Number(currentRound ?? 0);
+  const scale = Number.isFinite(kmPerPixel) && kmPerPixel > 0 ? kmPerPixel : 0;
+  const timeSec = (nowMs || 0) / 1000;
+
+  for (const strike of strikes) {
+    if (!strike?.to || !Number.isFinite(strike.to.lng) || !Number.isFinite(strike.to.lat)) continue;
+    // An attack that was completely intercepted produces no ground crater
+    if (strike.count !== undefined && strike.down !== undefined && Number(strike.down) >= Number(strike.count) && Number(strike.count) > 0) {
+      continue;
+    }
+
+    const strikeRound = Number(strike.round || roundNow);
+    const ageRounds = Math.max(0, roundNow - strikeRound);
+    if (ageRounds > 2) continue; // After 2 turns the ground has cooled
+
+    // Round 0 (current round): intense blaze (1.0). Round 1 (next week): smoldering ember bed (0.45).
+    const heat = ageRounds === 0 ? 1.0 : 0.45;
+    const nuclear = Boolean(isNuclear(strike.weapon));
+    const to = [strike.to.lng, strike.to.lat];
+
+    // 1. Dark scorched ground disc
+    const scorchKm = Math.max(nuclear ? 32 : 10, (nuclear ? 16 : 7) * scale);
+    items.discs.push({
+      centre: to,
+      km: scorchKm,
+      colour: [0.06, 0.06, 0.07],
+      alpha: 0.58 * heat,
+    });
+
+    // 2. Burning ember bed / glowing thermal center
+    const coreKm = scorchKm * (nuclear ? 0.4 : 0.45);
+    items.discs.push({
+      centre: to,
+      km: coreKm,
+      colour: nuclear ? [0.95, 0.4, 0.1] : COLOURS.glow,
+      alpha: 0.72 * heat,
+    });
+
+    // 3. Flickering flame points (3-5 dancing fire embers)
+    const flameCount = nuclear ? 6 : 4;
+    for (let f = 0; f < flameCount; f += 1) {
+      const seed = (strike.id ? strike.id.charCodeAt(f % strike.id.length) : f) * 1.618;
+      const flicker = Math.sin(timeSec * (4.2 + (f % 3) * 1.7) + seed * 3.1) * 0.35 + 0.65;
+      const radiusKm = f === 0 ? 0 : coreKm * 0.45 * (0.35 + 0.65 * Math.cos(seed));
+      const angle = seed * 57 + timeSec * 0.25;
+      const pos = f === 0 ? to : placeFrom(to, angle, radiusKm);
+      const fireSize = (f === 0 ? (nuclear ? 19 : 13) : (nuclear ? 13 : 9)) * flicker;
+
+      items.points.push({
+        at: [pos[0], pos[1], 0.2],
+        size: fireSize,
+        shape: 0,
+        colour: f % 2 === 0 ? COLOURS.fire : COLOURS.head,
+        alpha: 0.9 * heat * flicker,
+      });
+
+      // Occasional flash spark at core
+      if (f === 0 && ageRounds === 0 && flicker > 0.88) {
+        items.points.push({
+          at: [pos[0], pos[1], 0.4],
+          size: fireSize * 0.75,
+          shape: 2,
+          colour: COLOURS.flash,
+          alpha: 0.7 * (flicker - 0.88) * 8,
+        });
+      }
+    }
+
+    // 4. Rising smoke plume (drifting upward and fading)
+    const smokePuffs = nuclear ? 5 : 3;
+    for (let s = 0; s < smokePuffs; s += 1) {
+      const phase = (timeSec * 0.32 + s * 0.31) % 1.0;
+      const altitudeKm = phase * (nuclear ? 45 : 18);
+      const driftKm = phase * (nuclear ? 16 : 8);
+      const driftPlace = placeFrom(to, 45, driftKm);
+      const smokeSize = (nuclear ? 18 : 12) + phase * (nuclear ? 34 : 22);
+      const smokeAlpha = (1 - phase) * (0.55 * heat);
+
+      items.points.push({
+        at: [driftPlace[0], driftPlace[1], altitudeKm],
+        size: smokeSize,
+        shape: 0,
+        colour: phase < 0.28 ? [0.22, 0.22, 0.26] : COLOURS.smoke,
+        alpha: smokeAlpha,
+      });
+    }
+  }
+
+  return items;
+};

@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { MAP_LAYER_ORDER } from "./mapLayerOrder.js";
 import { STRIKE_LAYER_ID, WORLD_COPIES_MOST, buildStrikeVertices, worldCopies } from "./strikeCustomLayer.js";
 import { findPlaceEntry, strikeEnds } from "./strikePlaces.js";
-import { AIRCRAFT_HEIGHT_KM, AIRCRAFT_SHOWN_MOST, APOGEE_SHARE, INTERCEPTOR_HEAD_PX, MISSILES_SHOWN_MOST, placeFrom, planStrike, rangeKm, ringOf, strikeItemsAt, strikeLasts } from "./strikeScene.js";
+import { AIRCRAFT_HEIGHT_KM, AIRCRAFT_SHOWN_MOST, APOGEE_SHARE, INTERCEPTOR_HEAD_PX, MISSILES_SHOWN_MOST, craterItemsAt, placeFrom, planStrike, rangeKm, ringOf, strikeItemsAt, strikeLasts } from "./strikeScene.js";
 import { forgetStrikeRequests, getStrikeRequest, replayStrikes, showStrikesOfEvent, subscribeStrikeRequests } from "./strikeStore.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -509,4 +509,91 @@ test("the strikes are wired to the map and to the Events panel", () => {
   assert.match(panel, /Watch it on the map/);
   // A place a distance from another is that far from it.
   assert.ok(Math.abs(rangeKm(placeFrom(LONDON, 77, 500), LONDON) - 500) < 0.5);
+});
+
+test("recent strikes show smoldering craters, flickering flames, and rising smoke plumes for 1-2 turns", () => {
+  const currentRound = 44;
+  const recentStrikes = [
+    {
+      id: "strike-fresh",
+      round: 44,
+      weapon: "missile strike",
+      count: 10,
+      down: 2,
+      to: { name: "Damascus", lng: 36.29, lat: 33.51 },
+    },
+    {
+      id: "strike-last-week",
+      round: 43,
+      weapon: "bombing run",
+      count: 4,
+      down: 0,
+      to: { name: "Beirut", lng: 35.50, lat: 33.89 },
+    },
+    {
+      id: "strike-old",
+      round: 40,
+      weapon: "silo missile",
+      count: 1,
+      down: 0,
+      to: { name: "Tehran", lng: 51.38, lat: 35.68 },
+    },
+    {
+      id: "strike-intercepted-all",
+      round: 44,
+      weapon: "missile strike",
+      count: 6,
+      down: 6,
+      to: { name: "Tel Aviv", lng: 34.78, lat: 32.08 },
+    },
+  ];
+
+  const craters = craterItemsAt(recentStrikes, currentRound, 1500, { kmPerPixel: 2.5 });
+  // Fresh and 1-round-old strikes produce scorched discs and burning cores (2 discs each = 4 discs)
+  assert.equal(craters.discs.length, 4, "fresh and 1-week old strikes produce scorch and ember discs");
+  // Old strikes (> 2 rounds) and fully intercepted strikes produce no craters
+  assert.ok(craters.discs.every((disc) => disc.centre[0] !== 51.38), "cooled strikes produce no scorch");
+  assert.ok(craters.discs.every((disc) => disc.centre[0] !== 34.78), "intercepted strikes produce no scorch");
+
+  // Flame and smoke points exist
+  assert.ok(craters.points.length >= 8, "flickering flames and rising smoke puffs are generated");
+  const flames = craters.points.filter((p) => p.shape === 0 && p.at[2] <= 0.5);
+  const smoke = craters.points.filter((p) => p.shape === 0 && p.at[2] > 0.5);
+  assert.ok(flames.length >= 4, "flame points burn at ground level");
+  assert.ok(smoke.length >= 4, "smoke plume rises into altitude");
+
+  // Empty or invalid strikes produce empty items
+  assert.deepEqual(craterItemsAt([], currentRound), { ribbons: [], points: [], discs: [] });
+  assert.deepEqual(craterItemsAt(null, currentRound), { ribbons: [], points: [], discs: [] });
+});
+
+test("drone strikes fly in a 7-drone arrowhead V-formation with correct Shahed or Western model", () => {
+  // 1. Russia / Iran uses Shahed-136 (shape 4)
+  const shahedPlan = planStrike(strike({ weapon: "drone strike", count: 25, owner: "Russia" }), { from: [35, 50], to: KYIV });
+  assert.equal(shahedPlan.drone, true);
+  assert.equal(shahedPlan.shown, 7, "exactly 7 drones fly in the swarm");
+  assert.equal(shahedPlan.droneShape, 4, "Russia uses Shahed delta-wing model (shape 4)");
+  assert.equal(shahedPlan.units.length, 7);
+
+  // V-formation: apex drone 0 starts first, wing drones are staggered behind
+  const [apex, wingLeft, wingRight] = shahedPlan.units;
+  assert.equal(apex.start, 0, "lead drone at apex flies first");
+  assert.ok(wingLeft.start > 0 && wingRight.start > 0, "wing drones staggered behind");
+  assert.equal(wingLeft.start, wingRight.start, "symmetrical V-formation");
+
+  // Flight altitude is low and dives into target at end
+  const midHeight = apex.height(0.5);
+  assert.ok(midHeight <= 35 && midHeight >= 30, "drones fly low altitude");
+  assert.equal(apex.height(1.0), 0, "terminal dive into target ground");
+
+  // 2. Ukraine / Western uses Western twin-boom model (shape 5)
+  const westernPlan = planStrike(strike({ weapon: "drone strike", count: 12, owner: "Ukraine" }), { from: KYIV, to: [35, 50] });
+  assert.equal(westernPlan.droneShape, 5, "Ukraine uses Western model (shape 5)");
+
+  // Mid-flight visual items check
+  const midFlight = strikeItemsAt(shahedPlan, shahedPlan.units[0].flight * 0.5);
+  const droneSprites = midFlight.points.filter((p) => p.shape === 4 && p.at[2] > 0);
+  const droneShadows = midFlight.points.filter((p) => p.shape === 4 && p.at[2] === 0);
+  assert.equal(droneSprites.length, 7, "all 7 drones rendered in flight");
+  assert.equal(droneShadows.length, 7, "ground shadows rendered for all 7 drones");
 });

@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Strike animations now play hyperrealistic rocket and drone swarm audio, volumetric exhaust trails, impact blasts,
+    // and lingering smoldering fire craters with rising smoke plumes for recent strikes (strikeScene.js, StrikeLayers.jsx).
+    id: "2026-11-strike-sounds",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Rocket strikes, drone swarms and impact craters",
+        items: [
+          "Missile salvos and drone swarms on the map now play authentic launch roars, engine buzz and concussive impact detonations.",
+          "Kamikaze drone strikes now fly in a seven-drone arrowhead formation using authentic Shahed or Western tactical drone models.",
+          "Rockets now fly with volumetric exhaust plumes and luminous warhead cores, followed by billowing explosion clouds.",
+          "Recent strike targets remain scorched with smoldering fires and drifting smoke plumes for their first two turns.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it not play the war music whenever the war room is availible, because if you have deployed troops but no conflicts there should be no war music" (the owner, 2026-11-13):
     // the war room open on troops built up in peace played the battle music.
     id: "2026-11-war-music-only-in-war",

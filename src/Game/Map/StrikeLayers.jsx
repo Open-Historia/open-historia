@@ -20,9 +20,10 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
 import { STRIKE_LAYER_ID, createStrikeLayer } from "./strikeCustomLayer.js";
 import { strikeEnds } from "./strikePlaces.js";
-import { planStrike, ringOf, strikeItemsAt } from "./strikeScene.js";
+import { planStrike, ringOf, strikeItemsAt, craterItemsAt } from "./strikeScene.js";
 import { getStrikeRequest, subscribeStrikeRequests } from "./strikeStore.js";
 import { getUnits } from "./unitsController.js";
+import { makeStrikeSounds } from "../../runtime/strikeSounds.js";
 
 // Strikes played together set off this far apart, in seconds.
 const BETWEEN = 0.7;
@@ -76,6 +77,14 @@ const StrikeLayers = () => {
   const worldRef = useRef(world);
   const strikesRef = useRef(strikes);
   const layerRef = useRef(null);
+  const soundsRef = useRef(null);
+  if (!soundsRef.current) soundsRef.current = makeStrikeSounds();
+
+  useEffect(() => () => {
+    soundsRef.current?.dispose?.();
+    soundsRef.current = null;
+  }, []);
+
   useEffect(() => {
     worldRef.current = world;
     strikesRef.current = strikes;
@@ -88,15 +97,21 @@ const StrikeLayers = () => {
       const now = heldRef.current ?? performance.now();
       const live = playingRef.current.filter((entry) => (now - entry.begins) / 1000 <= entry.plan.lasts);
       playingRef.current = live;
-      if (live.length === 0) return null;
-      const items = { ribbons: [], points: [], discs: [] };
       const kmPerPixel = kmPerPixelOf(map);
+      const items = { ribbons: [], points: [], discs: [] };
       for (const entry of live) {
         const seen = strikeItemsAt(entry.plan, (now - entry.begins) / 1000, { kmPerPixel });
         items.ribbons.push(...seen.ribbons);
         items.points.push(...seen.points);
         for (const disc of seen.discs) items.discs.push({ ...disc, rim: ringOf(disc.centre, disc.km, 1) });
       }
+      // Persistent smoldering fires & rising smoke plumes at impact craters from recent strikes:
+      const craters = craterItemsAt(strikesRef.current, worldRef.current?.round, now, { kmPerPixel });
+      items.ribbons.push(...craters.ribbons);
+      items.points.push(...craters.points);
+      for (const disc of craters.discs) items.discs.push({ ...disc, rim: ringOf(disc.centre, disc.km, 1) });
+
+      if (items.ribbons.length === 0 && items.points.length === 0 && items.discs.length === 0) return null;
       return items;
     };
     const layer = createStrikeLayer({ frame, onError: (error) => console.warn("[strikes] the strike layer could not draw:", error) });
@@ -145,21 +160,33 @@ const StrikeLayers = () => {
     list.forEach((strike) => {
       const placed = strike.to && Number.isFinite(strike.to.lng) && strike.from && Number.isFinite(strike.from.lng);
       const ends = placed ? { from: [strike.from.lng, strike.from.lat], to: [strike.to.lng, strike.to.lat] } : strikeEnds(strike, known());
+      // Detect drone strikes either from weapon type or from the story event text
+      const event = (worldRef.current?.events ?? []).find((e) => e?.id === strike.eventId);
+      const eventText = `${event?.title ?? ""} ${event?.description ?? ""}`;
+      const isDroneStrike = strike.weapon === "drone strike" || /\b(?:drone|drones|droneaanval|drone-aanval|kamikaze|shahed|geran|fpv|uav)\b/i.test(eventText);
+      if (isDroneStrike && strike.weapon !== "drone strike") {
+        strike = { ...strike, weapon: "drone strike" };
+      }
       const plan = ends.from && ends.to ? planStrike(strike, { ...ends, flat, kmPerPixel }) : null;
       playedRef.current.set(strike.id, now);
       if (!plan) return;
       // (One already being played starts afresh.)
       playingRef.current = playingRef.current.filter((entry) => entry.plan.id !== plan.id);
-      playingRef.current.push({ plan, begins: now + started.length * BETWEEN * 1000 });
+      const delayMs = started.length * BETWEEN * 1000;
+      playingRef.current.push({ plan, begins: now + delayMs });
+      soundsRef.current?.playPlan?.(plan, { beginsDelayMs: delayMs });
       started.push({ id: plan.id, weapon: plan.weapon, km: Math.round(plan.km), shown: plan.shown, down: plan.down, lasts: Math.round(plan.lasts * 10) / 10, from: plan.from, to: plan.to });
     });
     if (started.length === 0) return started;
     cancelAnimationFrame(frameRef.current);
+    const hasCraters = () => (strikesRef.current ?? []).some((s) => s?.to && Number.isFinite(s.to.lng));
     const tick = () => {
       try {
         map.triggerRepaint();
       } catch { /* the map is gone */ }
-      if (playingRef.current.length > 0) frameRef.current = requestAnimationFrame(tick);
+      if (playingRef.current.length > 0 || (!reduceMotionEnabled() && hasCraters())) {
+        frameRef.current = requestAnimationFrame(tick);
+      }
     };
     frameRef.current = requestAnimationFrame(tick);
     return started;
@@ -177,11 +204,24 @@ const StrikeLayers = () => {
     seenRef.current = new Set(strikes.map((strike) => strike.id));
     if (!before) {
       for (const strike of strikes) playedRef.current.set(strike.id, -Infinity);
+      // Trigger animation loop for existing smoldering craters if any
+      if (!reduceMotionEnabled() && strikes.some((s) => s?.to && Number.isFinite(s.to.lng))) {
+        cancelAnimationFrame(frameRef.current);
+        const tick = () => {
+          try {
+            map?.triggerRepaint?.();
+          } catch { /* the map is gone */ }
+          if (playingRef.current.length > 0 || (!reduceMotionEnabled() && (strikesRef.current ?? []).some((s) => s?.to && Number.isFinite(s.to.lng)))) {
+            frameRef.current = requestAnimationFrame(tick);
+          }
+        };
+        frameRef.current = requestAnimationFrame(tick);
+      }
       return;
     }
     const fresh = strikes.filter((strike) => !before.has(strike.id));
     if (fresh.length > 0) playRef.current(fresh);
-  }, [strikes]);
+  }, [strikes, map]);
 
   // An event has come into view, or a card asks to see its strike again.
   useEffect(() => subscribeStrikeRequests(() => {

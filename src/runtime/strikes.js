@@ -24,10 +24,12 @@
 //
 // Pure. Loads in plain Node.
 
-export const STRIKE_WEAPONS = Object.freeze(["silo missile", "submarine missile", "missile strike", "nuclear bomber", "bombing run"]);
+export const STRIKE_WEAPONS = Object.freeze(["silo missile", "submarine missile", "missile strike", "nuclear bomber", "bombing run", "drone strike"]);
 // Which of them are nuclear, which fly as aircraft, and which as missiles.
 export const NUCLEAR_WEAPONS = Object.freeze(["silo missile", "submarine missile", "nuclear bomber"]);
-export const AIRCRAFT_WEAPONS = Object.freeze(["nuclear bomber", "bombing run"]);
+export const AIRCRAFT_WEAPONS = Object.freeze(["nuclear bomber", "bombing run", "drone strike"]);
+export const DRONE_WEAPONS = Object.freeze(["drone strike"]);
+export const isDrone = (weapon) => DRONE_WEAPONS.includes(weapon);
 // The most a strike is said to be of, the most strikes a turn adds, and the most the world keeps.
 export const STRIKE_COUNT_MOST = 500;
 export const STRIKES_PER_TURN_MOST = 16;

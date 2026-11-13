@@ -92,6 +92,7 @@ const WEAPON_WORDS = wordTable(STRIKE_WEAPONS, {
   "missile strike": ["cruise missile", "cruise missiles", "missiles", "missile barrage", "missile attack", "rocket strike", "rockets", "conventional missile"],
   "nuclear bomber": ["nuclear bomb", "atomic bomb", "atom bomb", "bomber", "air-dropped bomb", "gravity bomb", "nuclear bombing", "atomic bombing"],
   "bombing run": ["bombing", "bombing raid", "air raid", "air strike", "airstrike", "air strikes", "airstrikes", "bombers", "strategic bombing", "raid", "carpet bombing"],
+  "drone strike": ["drone", "drones", "drone attack", "drone strike", "drone strikes", "drone swarm", "kamikaze drone", "kamikaze drones", "shahed", "shahed-136", "shaheds", "geran", "fpv", "fpv drone", "fpv drones", "loitering munition", "loitering munitions", "uav", "uav strike"],
 });
 const RESULT_WORDS = wordTable(FRONT_RESULTS, {
   breakthrough: ["broke through", "break through", "breaks through"],
