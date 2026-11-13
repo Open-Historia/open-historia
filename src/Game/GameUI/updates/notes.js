@@ -69,6 +69,7 @@ const NEW_UPDATES = [
           "Generated political parties can use more flexible ideology and political-position descriptions.",
           "Create and edit starting relationships, agreements and ongoing storylines without generating pre-game history.",
           "Set relationship scores, treaty signatories, guarantees and access rights, and storyline participants, pressure and status.",
+          "Existing treaties generated with Political World can now be edited or removed from your scenario's starting history.",
         ],
       },
     ],

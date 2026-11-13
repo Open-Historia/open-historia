@@ -59,7 +59,8 @@ test("Political World and pre-game history improvements have a Beta update notic
   assert.equal(update.channel, "beta");
   assert.equal(update.date, "2026-11-13");
   assert.equal(update.banners.length, 1);
-  assert.equal(update.banners[0].items.length, 5);
+  assert.equal(update.banners[0].items.length, 6);
+  assert.ok(update.banners[0].items.some((text) => /Existing treaties generated with Political World/.test(text)));
   assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
   assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
   assert.deepEqual(noticePages([update]).map((page) => page.key), [id + "#0"]);
