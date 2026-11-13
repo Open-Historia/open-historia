@@ -3147,6 +3147,10 @@ const SettingsWorkspace = ({
                             Player focus is set for each game on its own: open the game, then ☰ → Settings → AI.
                         </div>
                     )}
+                    <Toggle label="Small tasks get the rules in short" enabled={mapSettings.rulesDigest} onToggle={() => updateMapSetting("rulesDigest", MAP_SETTING_KEYS.rulesDigest, !mapSettings.rulesDigest)} />
+                    <div style={settingsHelper}>
+                    Off (default): every task is sent the scenario's rules whole. On: the tasks that answer in a line or two (reading an order, the first Rostra posts, a spy's report, progress toward your goal) are sent a digest of the rules of at most 5,000 characters, written by the AI once for a scenario's rules in one background request and kept on this device. For a scenario with long rules on a local model, which otherwise reads them again for each of those tasks. Time skips, scenes and conversations always get the rules whole.
+                    </div>
                     <Toggle label="Limit AI generation" enabled={mapSettings.limitAiGeneration} onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)} />
                     <div style={settingsHelper}>
                     Off (default): waits as long as the model needs, however stuck. On: the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Cancel works either way.
@@ -3385,6 +3389,8 @@ const SettingsMenu = ({
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
         // Off by default, so getMapSetting: an absent key reads as off.
         limitAiGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
+        // Off by default too (AI/rulesDigest.js).
+        rulesDigest: getMapSetting(MAP_SETTING_KEYS.rulesDigest),
         // Off by default too.
         chunkLongJumps: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
         // Ships ON: an absent key reads as on (see mapSettings.js).
