@@ -1,6 +1,6 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { nextTask } from "../../runtime/nextTask.js";
-import { callAI, geminiDeclaresTaskFunction, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
+import { callAI, geminiDeclaresTaskFunction, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch, warmSkipOpening } from "./main.jsx";
 import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { clampTimelineDates, validatePregameEvents, validateTimelineDates } from "./timelineDates.js";
@@ -3876,6 +3876,10 @@ const runJsonTask = async (taskKey, {
   // been sent, so a scenario's stat keys are already in it; the answer is still
   // validated by the task's schema, which accepts both contracts.
   toolTransform = null,
+  // False for a request that does not open the way the next skip will (a retry
+  // of the player's failed events, whose function is another): a local server
+  // is not given it to read ahead (skipWarmUp.js).
+  opensLikeNextSkip = true,
   // The request budget (requestBudget.js). `budget` is the time skip this task
   // belongs to and `spender` who it is within it: each attempt asks the budget
   // first, and a refusal ends the task the way a failure would (its fallback, or
@@ -4187,6 +4191,7 @@ const runJsonTask = async (taskKey, {
           // The provider's own name for the prefix (OpenAI prompt_cache_key):
           // one per campaign and kind of request, the skip's two modes as one.
           promptCacheKey: promptCacheKeyFor(taskKey),
+          opensLikeNextSkip,
           __debug: { taskKey, attempt: outputAttempt, maxAttempts: 2, simulatedDays: computeSimulatedDays(variables) },
           __debugSink: attemptSink,
           ...(requestKind ? { requestKind } : {}),
@@ -5539,6 +5544,11 @@ const promptCacheKeyFor = (taskKey) => {
   const kind = JUMP_TASK_KEYS.has(taskKey) ? "skip" : normalizeString(taskKey) || "task";
   return `oh-${placementHash(campaign).toString(36)}-${kind}`.slice(0, 64);
 };
+
+// "Read a skip's opening ahead on a local server" (skipWarmUp.js), asked for
+// when the game is entered: main.jsx is told which campaign is being played, by
+// the name its skips' requests carry, and sends the warm-up if one is due.
+export const warmUpNextSkip = () => warmSkipOpening({ campaign: promptCacheKeyFor("jumpForward") });
 
 // The same check for work nobody is waiting on — the idle pulse, spy reports,
 // suggestions, stat sheets, a batch that lands minutes later: stamp the
@@ -17084,6 +17094,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // left empty, and its answer is read only where there is one (the
         // history's below; foldedTurnReview for the board).
         ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, riders) } : {}),
+        ...(context.amend ? { opensLikeNextSkip: false } : {}),
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.

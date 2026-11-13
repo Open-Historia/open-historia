@@ -35,6 +35,7 @@ export const simulateTimelineJump = async (...args) => (await gameplay()).simula
 export const warRoomRehearse = async (...args) => (await gameplay()).warRoomRehearse(...args);
 export const prethinkFronts = async (...args) => (await gameplay()).prethinkFronts(...args);
 export const simulateAutoJump = async (...args) => (await gameplay()).simulateAutoJump(...args);
+export const warmUpNextSkip = async (...args) => (await gameplay()).warmUpNextSkip(...args);
 export const retryPendingJumpSegment = async (...args) => (await gameplay()).retryPendingJumpSegment(...args);
 export const retryPendingProjectsJump = async (...args) => (await gameplay()).retryPendingProjectsJump(...args);
 export const retryPendingChecksJump = async (...args) => (await gameplay()).retryPendingChecksJump(...args);
