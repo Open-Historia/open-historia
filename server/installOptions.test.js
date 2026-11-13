@@ -48,7 +48,15 @@ test("the installer's page names each thing, links the policy, and writes the fi
   // Where Electron keeps each build's data: package.json's name for the stable app, the set name (its
   // program's name) for the others. Not the product name, which the Windows beta shares with the stable app.
   assert.match(nsh, /!if "\$\{PRODUCT_FILENAME\}" == "Open Historia"\n\s*!define OH_DATA_DIR "\$APPDATA\\open-historia"\n\s*!else\n\s*!define OH_DATA_DIR "\$APPDATA\\\$\{PRODUCT_FILENAME\}"/);
-  assert.equal(JSON.parse(read("package.json")).name, "open-historia");
+  // The desktop-beta workflow deliberately stamps package.json before tests.
+  // The beta must keep a different updater/deb package identity from stable.
+  const channelStamp = path.join(ROOT, "electron", "channel.json");
+  const channel = fs.existsSync(channelStamp)
+    ? JSON.parse(read("electron/channel.json")).channel
+    : "stable";
+  const expectedPackageName = channel === "beta" ? "open-historia-beta" : "open-historia";
+  assert.equal(JSON.parse(read("package.json")).name, expectedPackageName,
+    "the package name must match the active release channel");
   // A silent update shows no page and leaves the player's answers alone.
   assert.match(nsh, /\$\{If\} \$OHPrivacyShown == "1"\n\s*CreateDirectory/);
 });
