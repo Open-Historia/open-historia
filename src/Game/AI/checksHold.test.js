@@ -164,6 +164,8 @@ test("a held turn's retry can be cancelled from its notice", () => {
     // Retry registers its AbortController where the skip's Cancel aborts it
     // (jumpAbortRef), so the notice's Cancel is the skip's own.
     assert.match(time, /isRetrying && typeof onCancel === "function"/);
-    assert.match(time, /onDiscard=\{onDiscardHeld\}\s*onCancel=\{onCancel\}/);
+    // The notice is the date widget's own dialog now (HeldTurnDialog), so it is
+    // handed the skip's cancel directly rather than through the skip panel.
+    assert.match(time, /onDiscard=\{discardHeld\}\s*onCancel=\{cancelJump\}/);
     assert.match(time, /const retryHeld = async[\s\S]*?jumpAbortRef\.current = controller;/);
 });
