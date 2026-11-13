@@ -779,7 +779,7 @@ func _puppet_summary(puppets: Dictionary) -> VBoxContainer:
 	link.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var target := str(puppets.get("country", ""))
 	link.pressed.connect(func() -> void: _open_country_dossier(target))
-	route.add_child(link)
+	route.add_child(_tap_link(link))
 	var arrow := Country.text("→", 11, Color(1, 1, 1, 0.55), 400, false)
 	arrow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	route.add_child(arrow)
@@ -788,6 +788,40 @@ func _puppet_summary(puppets: Dictionary) -> VBoxContainer:
 	route.add_child(tab)
 	box.add_child(route)
 	return box
+
+
+func _tap_link(link: LinkButton) -> Control:
+	if not UI.phone():
+		return link
+	link.set_meta("oh_tap_exempt", true)
+	link.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var hit := Button.new()
+	hit.flat = true
+	hit.focus_mode = Control.FOCUS_NONE
+	hit.tooltip_text = link.tooltip_text
+	hit.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	for state in ["normal", "hover", "pressed", "focus", "disabled", "hover_pressed"]:
+		hit.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+	hit.size_flags_horizontal = link.size_flags_horizontal
+	hit.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var right := link.size_flags_horizontal == Control.SIZE_SHRINK_END
+	link.anchor_left = 1.0 if right else 0.5
+	link.anchor_right = link.anchor_left
+	link.anchor_top = 0.5
+	link.anchor_bottom = 0.5
+	link.offset_left = 0.0
+	link.offset_right = 0.0
+	link.offset_top = 0.0
+	link.offset_bottom = 0.0
+	link.grow_horizontal = Control.GROW_DIRECTION_BEGIN if right else Control.GROW_DIRECTION_BOTH
+	link.grow_vertical = Control.GROW_DIRECTION_BOTH
+	var fit := func() -> void:
+		hit.custom_minimum_size = Vector2(maxf(UI.PHONE_TAP, link.get_combined_minimum_size().x), UI.PHONE_TAP)
+	link.minimum_size_changed.connect(fit)
+	fit.call()
+	hit.add_child(link)
+	hit.pressed.connect(func() -> void: link.pressed.emit())
+	return hit
 
 
 func _open_country_dossier(country: String) -> void:
@@ -820,7 +854,7 @@ func _load_unit(id: String, animate: bool) -> void:
 
 
 func _build_unit(animate: bool) -> void:
-	var width := 240.0
+	var width := sheet_width(get_viewport_rect().size.x) if UI.phone() else 240.0
 	var card := GlassPanel.new(Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.96), 12.0)
 	card.custom_minimum_size.x = width
 	var stack := Country.column(0)
@@ -994,7 +1028,7 @@ func _load_feature(payload: Dictionary, animate: bool) -> void:
 
 
 func _build_feature(animate: bool) -> void:
-	var width := 220.0
+	var width := sheet_width(get_viewport_rect().size.x) if UI.phone() else 220.0
 	var card := GlassPanel.new(Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.96), 12.0)
 	card.custom_minimum_size.x = width
 	var stack := Country.column(0)
@@ -1052,7 +1086,7 @@ func _build_feature(animate: bool) -> void:
 				_close_floating()
 				var screen := map_view.world_to_screen(_floating_anchor) if map_view else Vector2(-1, -1)
 				show_region(host, host_name, map_view.region_owner(host) if map_view else "", screen))
-			host_row.add_child(open_host)
+			host_row.add_child(_tap_link(open_host))
 		else:
 			host_row.add_child(UI.label(host_name, 11, Color(1, 1, 1, 0.9)))
 		inner.add_child(host_row)

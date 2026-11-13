@@ -31,6 +31,12 @@ func _init() -> void:
 	offset_bottom = -50.0
 	offset_left = -80.0 - 125.0
 	offset_top = -50.0 - 180.0
+	if UI.phone():
+		var inset := UI.safe_insets()
+		offset_right -= inset.z
+		offset_left -= inset.z
+		offset_bottom -= inset.w
+		offset_top -= inset.w
 	grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	grow_vertical = Control.GROW_DIRECTION_BEGIN
 	custom_minimum_size.x = 125
@@ -48,6 +54,7 @@ func _init() -> void:
 	shut.focus_mode = Control.FOCUS_NONE
 	shut.tooltip_text = "Close legend"
 	shut.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	shut.set_meta("oh_tap_exempt", true)
 	shut.add_theme_font_size_override("font_size", 12)
 	shut.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 	shut.add_theme_color_override("font_hover_color", Color(1, 1, 1, 0.8))

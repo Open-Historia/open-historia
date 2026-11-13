@@ -9,6 +9,8 @@ signal expanded_changed(expanded: bool)
 
 const COMPACT := 38.0
 const OPEN_WIDTH := 272.0
+const PHONE_SIZE := 3.2 * 16.0
+const PHONE_BAR := 3.0 * 16.0
 const LOCAL_LIMIT := 4
 const SUGGESTION_LIMIT := 7
 const DEBOUNCE := 0.3
@@ -39,6 +41,7 @@ var _debounce: Timer
 var _shell: GlassPanel
 var _list_panel: GlassPanel
 var _list: VBoxContainer
+var _list_scroll: ScrollContainer
 var _toggle: Button
 var _input: LineEdit
 var _go: Button
@@ -54,8 +57,8 @@ func _init() -> void:
 	anchor_bottom = 0.0
 	offset_left = 0.0
 	offset_top = 0.0
-	offset_right = COMPACT
-	offset_bottom = COMPACT
+	offset_right = _closed_size()
+	offset_bottom = _closed_size()
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_list_panel = GlassPanel.new(UI.HUD_BG_STRONG, 12.0)
 	_list_panel.visible = false
@@ -65,7 +68,15 @@ func _init() -> void:
 	_list_panel.offset_bottom = 1.0
 	_list = VBoxContainer.new()
 	_list.add_theme_constant_override("separation", 0)
-	_list_panel.add_child(_list)
+	if UI.phone():
+		_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_list_scroll = ScrollContainer.new()
+		_list_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		_list_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+		_list_scroll.add_child(_list)
+		_list_panel.add_child(_list_scroll)
+	else:
+		_list_panel.add_child(_list)
 	add_child(_list_panel)
 	_shell = GlassPanel.new(UI.HUD_BG, 12.0)
 	_shell.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -76,7 +87,7 @@ func _init() -> void:
 	line.add_theme_constant_override("separation", 0)
 	line.mouse_filter = Control.MOUSE_FILTER_PASS
 	_toggle = _glyph_button("search", Color(1, 1, 1, 0.8))
-	_toggle.custom_minimum_size = Vector2(COMPACT, COMPACT)
+	_toggle.custom_minimum_size = Vector2(_closed_size(), _closed_size())
 	_toggle.tooltip_text = "Search place"
 	_toggle.pressed.connect(_on_toggle)
 	_spinner = PlaceSpinner.new()
@@ -109,7 +120,7 @@ func _init() -> void:
 	_input.gui_input.connect(_on_input_key)
 	line.add_child(_input)
 	_go = _glyph_button("go", Color(1, 1, 1, 0.2), 15)
-	_go.custom_minimum_size = Vector2(35, COMPACT)
+	_go.custom_minimum_size = Vector2(UI.PHONE_TAP, PHONE_BAR) if UI.phone() else Vector2(35, COMPACT)
 	_go.tooltip_text = "Go"
 	_go.visible = false
 	_go.pressed.connect(commit)
@@ -132,6 +143,31 @@ func setup(link: EngineLink, setup_context: Dictionary = {}) -> void:
 	context = setup_context
 
 
+func _ready() -> void:
+	if UI.phone():
+		get_viewport().size_changed.connect(_place_phone_bar)
+
+
+func _closed_size() -> float:
+	return PHONE_SIZE if UI.phone() else COMPACT
+
+
+func _place_phone_bar() -> void:
+	if not UI.phone() or not expanded:
+		return
+	var inset := UI.safe_insets()
+	var view := get_viewport_rect().size
+	var bottom := 80.0 + inset.w
+	top_level = true
+	offset_left = 8.0 + inset.x
+	offset_top = view.y - bottom - PHONE_BAR
+	offset_bottom = view.y - bottom
+	if not (_width_tween and _width_tween.is_running()):
+		offset_right = view.x - 8.0 - inset.z
+	if _list_scroll:
+		_list_scroll.custom_minimum_size.y = minf(_list.get_combined_minimum_size().y, maxf(0.0, view.y - bottom - PHONE_BAR - 8.0))
+
+
 func open() -> void:
 	if expanded:
 		return
@@ -142,7 +178,15 @@ func open() -> void:
 	_toggle.tooltip_text = "Close"
 	_set_glyph(_toggle, "close", _toggle_color())
 	_go.visible = true
-	_animate_width(OPEN_WIDTH)
+	if UI.phone():
+		var from := offset_right - offset_left
+		_toggle.custom_minimum_size = Vector2(PHONE_BAR, PHONE_BAR)
+		_place_phone_bar()
+		offset_right = offset_left + from
+		var inset := UI.safe_insets()
+		_animate_width(get_viewport_rect().size.x - 16.0 - inset.x - inset.z)
+	else:
+		_animate_width(OPEN_WIDTH)
 	var fade := create_tween()
 	fade.tween_interval(0.15)
 	fade.tween_property(_input, "modulate:a", 1.0, 0.2)
@@ -181,7 +225,17 @@ func close() -> void:
 	_shell.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_toggle.tooltip_text = "Search place"
 	_go.visible = false
-	_animate_width(COMPACT)
+	if UI.phone():
+		var wide := offset_right - offset_left
+		top_level = false
+		_toggle.custom_minimum_size = Vector2(PHONE_SIZE, PHONE_SIZE)
+		offset_left = 0.0
+		offset_top = 0.0
+		offset_bottom = PHONE_SIZE
+		offset_right = wide
+		_animate_width(PHONE_SIZE)
+	else:
+		_animate_width(COMPACT)
 	_paint()
 	expanded_changed.emit(false)
 
@@ -346,6 +400,8 @@ func _paint() -> void:
 	for index in range(suggestions.size()):
 		var entry: Dictionary = suggestions[index]
 		var row := PlaceRow.new()
+		if UI.phone():
+			row.custom_minimum_size.y = UI.PHONE_TAP
 		row.index = index
 		row.highlight = index == selected
 		row.last = index == suggestions.size() - 1
@@ -366,6 +422,8 @@ func _paint() -> void:
 		words.add_theme_constant_override("separation", 0)
 		words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		words.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if UI.phone():
+			words.alignment = BoxContainer.ALIGNMENT_CENTER
 		var primary := UI.label(str(entry.get("primary", "")), 13, Color(1, 1, 1, 0.9))
 		primary.clip_text = true
 		primary.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
@@ -389,6 +447,9 @@ func _paint() -> void:
 		_list.add_child(row)
 	await get_tree().process_frame
 	var height := _list.get_combined_minimum_size().y
+	if _list_scroll:
+		_place_phone_bar()
+		height = _list_scroll.custom_minimum_size.y
 	_list_panel.offset_top = -height
 	_list_panel.offset_bottom = 1.0
 

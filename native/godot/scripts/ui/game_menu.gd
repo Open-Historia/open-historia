@@ -822,6 +822,8 @@ class ApiSetupPrompt extends Control:
 	var online := true
 	var _body: VBoxContainer
 	var _scroll: ScrollContainer
+	var _centre: CenterContainer
+	var _pad: MarginContainer
 	var _model_line: LineEdit
 	var _suggest_box: PanelContainer
 	var _suggest_list: VBoxContainer
@@ -842,9 +844,11 @@ class ApiSetupPrompt extends Control:
 		add_child(dim)
 		var centre := CenterContainer.new()
 		centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_centre = centre
 		add_child(centre)
+		var phone := UI.phone()
 		var card := PanelContainer.new()
-		card.add_theme_stylebox_override("panel", UI.box(Color(32 / 255.0, 32 / 255.0, 35 / 255.0, 0.965), UI.HUD_BORDER, 16, 1, Vector4(22.4, 21.6, 22.4, 19.2)))
+		card.add_theme_stylebox_override("panel", UI.box(Color(32 / 255.0, 32 / 255.0, 35 / 255.0, 0.965), UI.HUD_BORDER, 16, 1, Vector4(1, 1, 1, 1) if phone else Vector4(22.4, 21.6, 22.4, 19.2)))
 		_scroll = ScrollContainer.new()
 		_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 		_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
@@ -853,7 +857,15 @@ class ApiSetupPrompt extends Control:
 		_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_body.add_theme_constant_override("separation", 0)
 		_body.minimum_size_changed.connect(_queue_fit)
-		_scroll.add_child(_body)
+		if phone:
+			_pad = MarginContainer.new()
+			_pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			for side in [["margin_left", 22], ["margin_top", 22], ["margin_right", 22], ["margin_bottom", 19]]:
+				_pad.add_theme_constant_override(side[0], side[1])
+			_pad.add_child(_body)
+			_scroll.add_child(_pad)
+		else:
+			_scroll.add_child(_body)
 		card.add_child(_scroll)
 		centre.add_child(card)
 		resized.connect(_fit)
@@ -874,6 +886,14 @@ class ApiSetupPrompt extends Control:
 	func _ready() -> void:
 		_online_timer.start()
 		_check_online()
+
+	func _input(event: InputEvent) -> void:
+		if not UI.phone() or not is_visible_in_tree():
+			return
+		var key := event as InputEventKey
+		if key and key.pressed and key.keycode == KEY_ESCAPE:
+			get_viewport().set_input_as_handled()
+			dismissed.emit()
 
 	func _check_online() -> void:
 		if not link or not link.is_ready():
@@ -953,6 +973,16 @@ class ApiSetupPrompt extends Control:
 		if not is_inside_tree():
 			return
 		var view := get_viewport_rect().size
+		if _pad:
+			var inset := UI.safe_insets()
+			_centre.offset_left = inset.x
+			_centre.offset_top = inset.y
+			_centre.offset_right = -inset.z
+			_centre.offset_bottom = -inset.w
+			var wide := minf(34.0 * 16.0, view.x - 32.0 - inset.x - inset.z) - 2.0
+			var tall := maxf(120.0, view.y - 32.0 - inset.y - inset.w - 2.0)
+			_scroll.custom_minimum_size = Vector2(wide, minf(tall, _pad.get_combined_minimum_size().y))
+			return
 		var width := clampf(view.x - 32.0 - CARD_PADDING.x, 240.0, CONTENT_WIDTH)
 		var room := maxf(120.0, view.y - 32.0 - CARD_PADDING.y)
 		_scroll.custom_minimum_size = Vector2(width, minf(room, _body.get_combined_minimum_size().y))
@@ -1126,7 +1156,37 @@ https://www.youtube-nocookie.com/"
 			child.queue_free()
 		var self_hosted := _requirement() == "endpoint"
 		var label := _meta_label()
-		_body.add_child(UI.label("Set up your AI provider", 17, UI.WHITE, 900))
+		var phone := UI.phone()
+		var heading := UI.label("Set up your AI provider", 17, UI.WHITE, 900)
+		if phone:
+			var top := Control.new()
+			top.custom_minimum_size.y = UI.PHONE_TAP - 9.6
+			heading.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+			heading.offset_right = -UI.PHONE_TAP
+			top.add_child(heading)
+			var cross := Button.new()
+			cross.text = "✕"
+			cross.flat = true
+			cross.focus_mode = Control.FOCUS_NONE
+			cross.tooltip_text = "Not now"
+			cross.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+			for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
+				cross.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+			cross.add_theme_font_size_override("font_size", 18)
+			for ink in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color"]:
+				cross.add_theme_color_override(ink, Color(1, 1, 1, 0.55))
+			cross.anchor_left = 1.0
+			cross.anchor_right = 1.0
+			cross.offset_left = 11.2 - UI.PHONE_TAP
+			cross.offset_right = 11.2
+			cross.offset_top = -9.6
+			cross.offset_bottom = UI.PHONE_TAP - 9.6
+			cross.custom_minimum_size = Vector2(UI.PHONE_TAP, UI.PHONE_TAP)
+			cross.pressed.connect(func() -> void: dismissed.emit())
+			top.add_child(cross)
+			_body.add_child(top)
+		else:
+			_body.add_child(heading)
 		_gap(8)
 		var intro := UI.wrapped("Open Historia writes every turn, advisor reply and diplomatic message with an AI model, and %s has %s missing. Until it is set, time skips fall back to canned events and the advisor cannot answer. Paste your details below and you are ready to play." % [str(setup.get("providerLabel", "the selected provider")), str(setup.get("missing", "an API key"))], 13, Color(1, 1, 1, 0.64))
 		intro.add_theme_constant_override("line_spacing", 5)
@@ -1136,7 +1196,7 @@ https://www.youtube-nocookie.com/"
 		box.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.09), 12, 1, Vector4(14.4, 12.8, 14.4, 12.8)))
 		var box_column := VBoxContainer.new()
 		box_column.add_theme_constant_override("separation", 0)
-		var head := HBoxContainer.new()
+		var head: BoxContainer = VBoxContainer.new() if phone else HBoxContainer.new()
 		head.add_theme_constant_override("separation", 8)
 		var texts := VBoxContainer.new()
 		texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1146,6 +1206,8 @@ https://www.youtube-nocookie.com/"
 		head.add_child(texts)
 		var get_key := _button("Get a key at Google AI Studio ↗", "link", func() -> void: OS.shell_open(AI_STUDIO_KEY_URL))
 		get_key.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		if phone:
+			get_key.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 		head.add_child(get_key)
 		box_column.add_child(head)
 		if show_tutorial and not online:
@@ -1200,7 +1262,7 @@ https://www.youtube-nocookie.com/"
 			watch.add_theme_font_size_override("font_size", 11)
 			watch.add_theme_color_override("font_color", Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.9))
 			watch.pressed.connect(func() -> void: _open_outside(TUTORIAL_VIDEO_URL))
-			links.add_child(watch)
+			links.add_child(_tap_link(watch) if phone else watch)
 			links.add_child(UI.spacer())
 			var hide := Button.new()
 			hide.text = "Hide the video"
@@ -1229,6 +1291,7 @@ https://www.youtube-nocookie.com/"
 		_body.add_child(_label("Provider"))
 		_gap(4.8)
 		var select := OptionButton.new()
+		select.set_meta("oh_tap_exempt", true)
 		select.focus_mode = Control.FOCUS_NONE
 		select.custom_minimum_size.y = 38
 		select.fit_to_longest_item = false
@@ -1268,6 +1331,7 @@ https://www.youtube-nocookie.com/"
 			_body.add_child(_label("API endpoint"))
 			_gap(4.8)
 			var endpoint_line := LineEdit.new()
+			endpoint_line.set_meta("oh_tap_exempt", true)
 			endpoint_line.text = endpoint
 			endpoint_line.placeholder_text = str(ENDPOINT_PLACEHOLDERS.get(provider, "https://…"))
 			endpoint_line.custom_minimum_size.y = 38
@@ -1284,6 +1348,7 @@ https://www.youtube-nocookie.com/"
 		var key_holder := Control.new()
 		key_holder.custom_minimum_size.y = 38
 		var key_line := LineEdit.new()
+		key_line.set_meta("oh_tap_exempt", true)
 		key_line.text = api_key
 		key_line.secret = not show_key
 		key_line.placeholder_text = "Leave empty if your server needs none" if self_hosted else "Paste your %s API key" % label
@@ -1307,6 +1372,11 @@ https://www.youtube-nocookie.com/"
 		eye.offset_right = -4
 		eye.offset_top = 3
 		eye.offset_bottom = 35
+		if phone:
+			eye.offset_right = -5.6
+			eye.offset_left = -5.6 - UI.PHONE_TAP
+			eye.offset_top = 19.0 - UI.PHONE_TAP * 0.5
+			eye.offset_bottom = 19.0 + UI.PHONE_TAP * 0.5
 		eye.pressed.connect(func() -> void:
 			show_key = not show_key
 			key_line.secret = not show_key
@@ -1320,6 +1390,7 @@ https://www.youtube-nocookie.com/"
 		_body.add_child(_label("Model (optional)"))
 		_gap(4.8)
 		var model_line := LineEdit.new()
+		model_line.set_meta("oh_tap_exempt", true)
 		model_line.text = model
 		model_line.placeholder_text = _model_placeholder()
 		model_line.custom_minimum_size.y = 38
@@ -1347,9 +1418,17 @@ https://www.youtube-nocookie.com/"
 			_gap(11.2)
 			_body.add_child(UI.wrapped(error, 12, Color("#fca5a5")))
 		_gap(17.6)
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 8)
-		row.add_child(UI.spacer())
+		var row: Container
+		if phone:
+			var flow := HFlowContainer.new()
+			flow.alignment = FlowContainer.ALIGNMENT_END
+			flow.add_theme_constant_override("h_separation", 8)
+			flow.add_theme_constant_override("v_separation", 8)
+			row = flow
+		else:
+			row = HBoxContainer.new()
+			row.add_theme_constant_override("separation", 8)
+			row.add_child(UI.spacer())
 		row.add_child(_button("Not now", "quiet", func() -> void: dismissed.emit()))
 		row.add_child(_button("Open full settings", "quiet", func() -> void: configure.emit()))
 		var save_button := _button("Save and play", "primary", func() -> void: _save())
@@ -1358,6 +1437,26 @@ https://www.youtube-nocookie.com/"
 		_body.add_child(row)
 		_refresh_save()
 		_queue_fit()
+
+	func _tap_link(link: LinkButton) -> Control:
+		link.set_meta("oh_tap_exempt", true)
+		link.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var hit := Button.new()
+		hit.flat = true
+		hit.focus_mode = Control.FOCUS_NONE
+		hit.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		for state in ["normal", "hover", "pressed", "focus", "disabled", "hover_pressed"]:
+			hit.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+		link.anchor_top = 0.5
+		link.anchor_bottom = 0.5
+		link.grow_vertical = Control.GROW_DIRECTION_BOTH
+		var fit := func() -> void:
+			hit.custom_minimum_size = Vector2(link.get_combined_minimum_size().x, UI.PHONE_TAP)
+		link.minimum_size_changed.connect(fit)
+		fit.call()
+		hit.add_child(link)
+		hit.pressed.connect(func() -> void: link.pressed.emit())
+		return hit
 
 	func _refresh_save() -> void:
 		var button := _body.find_child("SaveAndPlay", true, false) as Button
