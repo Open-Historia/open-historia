@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "add custom units types that have their own custom stats for scenarios so like a dragon troop that is an air troop and super strong and very tough"
+    // (the owner, 2026-11-13): a scenario's own unit types (runtime/unitTypes.js), set in the scenario editor under Wars.
+    id: "2026-11-custom-unit-types",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Unit types of your own",
+        items: [
+          "Scenario authors can create their own unit types under Wars in the scenario editor's Features tab, each with a name, an icon and a kind.",
+          "Set how hard each type hits, how much it can take and how fast it moves: a dragon can be an air unit five times as strong.",
+          "Units of these types fight by their own figures in the air, on land and at sea, and only the countries you choose can raise them.",
+        ],
+      },
+    ],
+  },
+  {
     // The owner's three follow-ups to the war foundations (2026-11-13): "Battlefields that seat a whole coalition", "Pin every ledger to its events before sorting",
     // "Remove the last word-list gates near the war system" (an annexation or capture told in words alone no longer moves the map).
     id: "2026-11-whole-coalitions",
