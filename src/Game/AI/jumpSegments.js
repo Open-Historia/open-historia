@@ -161,7 +161,21 @@ export const buildSegmentInstruction = ({
   targetDate,
   segmentTargetDate,
   priorEvents = [],
+  amend = 0,
 } = {}) => {
+  // A retry of the player's failed events (playerTurnFailures.js) adds events
+  // to a period already written. It used to be sent the whole-period wording
+  // below ("Simulate everything that happens in the world... between 1 and N
+  // events") under the list of what failed, and a model that read the two
+  // together wrote one event and stopped: seen on a local model, 2026-11-13,
+  // five orders settled one retry at a time.
+  if (amend > 0) {
+    return "Return JSON only. Do not simulate the period again: it is written. "
+      + `The "events" array must contain the events the list above asks for and no others — ${amend === 1
+        ? "one event"
+        : `${amend} events, one for each entry of the list, unless one event truly carries out several of them`}. `
+      + "Every entry of the list must be answered by an event of this answer.";
+  }
   const autoMessage =
     "Simulate an auto-jump: run the world forward from the Origin Date and stop at the first event that needs the "
     + "player, which comes last and is notable. Return JSON only. Scale the events to the time you actually cover "
