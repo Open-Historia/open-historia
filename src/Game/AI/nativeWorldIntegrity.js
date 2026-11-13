@@ -59,38 +59,20 @@ const EXPLORATION_DOMAINS = Object.freeze([
   "strategic risk / coercive escalation / mobilization / brinkmanship / miscalculation when current interests support it",
 ]);
 
-const ROUTINE_MILITARY_CUE_RE =
-  /\b(skirmish(?:es)?|reconnaissance|patrol(?:s|ling)?|prob(?:e|es|ing)|artillery(?:\s+(?:fire|exchange|exchanges|bombardment|bombardments))?|counter[- ]battery|sporadic\s+(?:fire|clashes|fighting)|trench\s+(?:raid|raids)|outpost\s+(?:clash|clashes)|localized\s+(?:fighting|clashes|attacks?)|readiness\s+(?:remains?|stays?|continues?)\s+(?:elevated|heightened|high)|(?:elevated|heightened)\s+(?:military\s+)?readiness\s+(?:remains?|continues?)|maintain(?:s|ed|ing)?\s+(?:a\s+)?(?:heavy\s+|heightened\s+|elevated\s+)?(?:military\s+|security\s+)?posture|continued\s+(?:vigilance|monitoring|surveillance|alert\s+status)|security\s+posture\s+(?:remains?|continues?)|forces?\s+remain(?:s|ed)?\s+on\s+(?:heightened|high)\s+alert)\b/i;
-
-const STRONG_MILITARY_CONSEQUENCE_RE =
-  /\b(breakthrough|breaks?\s+through|captur(?:e|es|ed|ing)|seiz(?:e|es|ed|ing)|occup(?:y|ies|ied|ation)|liberat(?:e|es|ed|ion)|retreat(?:s|ed|ing)?|withdraw(?:s|al|n|ing)?|encircl(?:e|es|ed|ement)|surrender(?:s|ed|ing)?|ceasefire|armistice|collapse(?:s|d)?|destroy(?:s|ed|ing)?|annihilat(?:e|es|ed|ion)|casualt(?:y|ies)|loss(?:es)?|killed|wounded|captured|gain(?:s|ed)?\s+ground|advance(?:s|d|ing)?|repuls(?:e|es|ed)|defeat(?:s|ed)?|front\s+(?:breaks|collapses)|decisive\s+(?:victory|defeat)|major\s+offensive|general\s+offensive)\b/i;
-
-// A milestone reached: the one thing a routine-patrol card never reports.
-const CONCRETE_MILESTONE_RE =
-  /\b(complet(?:es|ed|ion)|enters?\s+service|entered\s+service|commission(?:s|ed)|launch(?:es|ed)|inaugurat(?:es|ed|ion)|becomes?\s+operational|became\s+operational|production\s+begins|ratif(?:y|ies|ied)|sign(?:s|ed)\s+(?:a|an|the)\s+(?:treaty|accord|agreement|pact))\b/i;
-
-// High-signal civilian/scientific titles must not be hidden because their body
-// happens to mention a patrol, reconnaissance, readiness or another routine
-// military word. This guard is deliberately title-scoped: a genuinely military
-// card can still be screened even if its description mentions politics/science.
-const CLEARLY_NON_MILITARY_TITLE_RE =
-  /\b(?:elections?|referendum|protests?|demonstrations?|parliament|legislature|court|judicial|scientific|research|spacecraft|satellite|lunar|moon|mars|lander|space mission|space probe)\b/i;
-
-// Material endogenous changes that can legitimately wake a deferred process even
-// when they do not yet carry a hard map/ledger impact. The associated storyline
-// update must ALSO move objective state (status/pressure/momentum); this regex alone
-// never turns routine prose into a valid re-entry.
-const ENDOGENOUS_MATERIAL_CUE_RE =
-  /\b(counter[- ]?offensive|counter[- ]?attack|offensive|assault|mutiny|desertion|rebellion|uprising|riot|strike|mass\s+protest|resign(?:s|ed|ation)?|dismiss(?:es|ed|al)?|appoint(?:s|ed|ment)?|replac(?:e|es|ed|ement)|command\s+change|leadership\s+change|mobiliz(?:e|es|ed|ation)|reinforc(?:e|es|ed|ement)|conscription|ammunition\s+shortage|supply\s+(?:crisis|collapse|shortage)|food\s+shortage|epidemic|disease\s+outbreak|peace\s+(?:feelers?|talks?|proposal)|negotiat(?:e|es|ed|ion|ions)|mediat(?:e|es|ed|ion)|sanction(?:s|ed)?|election|vote|prototype|production\s+begins|enters\s+service|inaugurat(?:e|es|ed|ion)|complet(?:e|es|ed|ion)|bankrupt(?:cy)?|financial\s+crisis|political\s+crisis|government\s+crisis|cabinet\s+crisis|general\s+staff\s+shakeup)\b/i;
-
-const WAR_DEPENDENT_HOMEFRONT_RE =
-  /\b(wartime\s+(?:economy|rationing|food\s+(?:policy|distribution)|mobilization|demobilization|tax(?:es|ation)?|controls?|shortages?|production|administration)|war\s+economy|war\s+tax(?:es|ation)?|home[- ]front\s+(?:rationing|shortages?|mobilization)|demobilization\s+(?:crisis|strain|pressures?))\b/i;
-
-const PREPAREDNESS_RE =
-  /\b(prepare(?:s|d|ing|ation)?|preparedness|contingenc(?:y|ies)|simulate(?:s|d|ing|ion)?|test(?:s|ed|ing)?|exercise(?:s|d)?|reserve(?:s)?|stockpil(?:e|es|ed|ing)|study|studies|examin(?:e|es|ed|ing)|plan(?:s|ned|ning)?|potential\s+war|future\s+war|in\s+the\s+event\s+of\s+war|if\s+war|emergency\s+planning)\b/i;
-
-const FOREIGN_SPILLOVER_RE =
-  /\b(spillover|foreign\s+war|neighbou?r(?:ing)?\s+(?:war|conflict)|disrupted\s+imports?|refugee\s+pressure|border\s+trade\s+(?:disruption|interruption)|external\s+conflict|sanctions?|embargo|shipping\s+disruption|trade\s+disruption)\b/i;
+// No word list reads an event for the war: who is at war, who lives under war
+// conditions and whether fighting changed anything are the war ledger's
+// records and the event's own operations, in every language. "dont do
+// keywording its super unreliable" (the owner, 2026-11-06). Removed on
+// 2026-11-13: the rejection of a homefront condition for a polity the
+// pre-segment ledger had at peace (WAR_DEPENDENT_HOMEFRONT_RE, with
+// PREPAREDNESS_RE and FOREIGN_SPILLOVER_RE to excuse it), which also refused
+// "Poland introduces wartime rationing" in the very segment that opened
+// Poland's war; the hiding of "routine" military news (ROUTINE_MILITARY_CUE_RE,
+// excused by STRONG_MILITARY_CONSEQUENCE_RE, CONCRETE_MILESTONE_RE,
+// CLEARLY_NON_MILITARY_TITLE_RE and a "burn" word); and the words that woke or
+// kept asleep a deferred storyline (ENDOGENOUS_MATERIAL_CUE_RE and the same
+// two). The skip is told the rules instead: the war ledger's (a polity at peace
+// does not live under war conditions) and FOLDED_SKIP_CONSEQUENCES' (no filler).
 
 const PROCESS_ONLY_POLITY_UPDATE_RE =
   /\b(debate(?:s|d)?|review(?:s|ed)?|meeting(?:s)?|committee|study|studies|proposal|discussion(?:s)?|consultation(?:s)?|hearing(?:s)?|assessment|conference|deliberation(?:s)?)\b/i;
@@ -250,17 +232,6 @@ const activeWarEntries = (world) =>
   normalizeArray(world?.wars).filter((war) =>
     ["active", "ceasefire"].includes(normalizeString(war?.status).toLowerCase())
   );
-
-const activeBelligerentSet = (world) => {
-  const set = new Set();
-  for (const war of activeWarEntries(world)) {
-    for (const actor of [...normalizeArray(war?.sideA), ...normalizeArray(war?.sideB)]) {
-      const key = normalizeString(actor).toLowerCase();
-      if (key) set.add(key);
-    }
-  }
-  return set;
-};
 
 // `humans` are a shared game's other human polities (runtime/humanPolities.js):
 // known here even when no ledger names them yet, like the player.
@@ -542,20 +513,6 @@ export const worldActorsEquivalent = (
 const actorMentionedInText = (actor, text, world, gameCountry = "") =>
   createWorldActorResolver(world, gameCountry).mentions(actor, text);
 
-const actorIsActiveBelligerent = (actor, world, records = polityAliasRecords(world)) => {
-  const rawBelligerents = activeBelligerentSet(world);
-  const target = normalizeString(actor).toLowerCase();
-  if (!target) return false;
-  if (rawBelligerents.has(target)) return true;
-
-  const record = records
-    .find((entry) => entry.canonical.toLowerCase() === target);
-
-  return Boolean(record?.aliases.some((alias) =>
-    rawBelligerents.has(normalizeString(alias).toLowerCase())
-  ));
-};
-
 const hardImpactKeysForEvent = (event) => {
   const impacts =
     event?.impacts && typeof event.impacts === "object"
@@ -656,6 +613,14 @@ const deferredUpdateHasObjectiveDelta = (prior, update) => {
   return Math.abs(nextMomentum - priorMomentum) >= 6;
 };
 
+// Whether a deferred storyline's linked events give it a reason to come back
+// into this pass, from what they carry and never from their words: an
+// operation of their own, a war, relation, agreement or front record, a new
+// participant, or, with the storyline's own state moved, an event the model
+// rated major or notable. A minor event that changes nothing wakes nothing,
+// whatever it says, in any language (the words used to: "counteroffensive",
+// "mutiny", "election" and the rest woke a storyline, and "artillery" or
+// "patrol" kept one asleep, in English only).
 export const deferredStorylineReentryHasConcreteTrigger = (
   candidate,
   eventIndexes,
@@ -672,23 +637,7 @@ export const deferredStorylineReentryHasConcreteTrigger = (
     if (eventHasLedgerTrigger(candidate, eventIndex)) return true;
     if (newParticipantsMentionedInEvent(prior, update, event)) return true;
 
-    const text =
-      `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-
-    // Routine battlefield continuity is still not a trigger, even if the model
-    // tries to buy re-entry by nudging pressure/momentum. A concrete consequence
-    // such as casualties, capture, retreat, breakthrough, etc. escapes this gate.
-    if (
-      ROUTINE_MILITARY_CUE_RE.test(text) &&
-      !STRONG_MILITARY_CONSEQUENCE_RE.test(text)
-    ) {
-      return false;
-    }
-
     if (requireObjectiveDelta && !deferredUpdateHasObjectiveDelta(prior, update)) return false;
-
-    if (STRONG_MILITARY_CONSEQUENCE_RE.test(text)) return true;
-    if (ENDOGENOUS_MATERIAL_CUE_RE.test(text)) return true;
 
     const importance = normalizeString(event?.importance).toLowerCase();
     if (event?.notable === true || ["major", "critical"].includes(importance)) {
@@ -1688,65 +1637,6 @@ const sanitizeProcessOnlyPolityUpdates = (event) => {
     removed,
   };
 };
-
-const falseNonBelligerentWartimeReason = (
-  event,
-  world,
-  gameCountry = "",
-  resolver = null,
-) => {
-  const text =
-    `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-
-  if (!WAR_DEPENDENT_HOMEFRONT_RE.test(text)) return "";
-  if (PREPAREDNESS_RE.test(text) || FOREIGN_SPILLOVER_RE.test(text)) return "";
-
-  const actors = (resolver || createWorldActorResolver(world, gameCountry)).mentionedPolities(text);
-
-  if (!actors.length && event?.playerRelated && normalizeString(gameCountry)) {
-    actors.push(normalizeString(gameCountry));
-  }
-
-  if (!actors.length) return "";
-  const records = polityAliasRecords(world);
-  if (actors.some((actor) => actorIsActiveBelligerent(actor, world, records))) return "";
-
-  return `war-dependent domestic/economic condition asserted for non-belligerent actor(s): ${actors.join(", ")}`;
-};
-
-const routineMilitaryNoDeltaReason = (event) => {
-  const title = normalizeString(event?.title);
-  const text = `${title} ${normalizeString(event?.description)}`;
-
-  if (CLEARLY_NON_MILITARY_TITLE_RE.test(title)) return "";
-  if (!ROUTINE_MILITARY_CUE_RE.test(text)) return "";
-  if (STRONG_MILITARY_CONSEQUENCE_RE.test(text)) return "";
-  // Burning the dead destroys them, which a patrol that only looked does not:
-  // "Rangers of the Night's Watch Burn Twenty-Two Wights Beside Whitetree" was
-  // hidden as routine in a Game of Thrones skip. Not "burning", which is fires
-  // seen in the distance.
-  if (/\bburn(?:s|ed|t)?\b/i.test(text)) return "";
-  // A chapter of a storyline is not routine, however quiet: the story it belongs
-  // to is the reason it was written. (The administrative rule below already
-  // spares them.)
-  if (normalizeArray(event?.storylineIds).length) return "";
-  // The cue is single words, so it fires on a noun in passing: a drone
-  // programme's "unmanned surface patrol vessels" hid a Project milestone as
-  // "routine military activity". Something finished or brought into service is
-  // not a routine continuation, whatever it mentions on the way.
-  if (CONCRETE_MILESTONE_RE.test(text)) return "";
-  // The player's own news is left to the curator, which judges routine
-  // military continuation with the analyst's reading rather than a word list.
-  if (event?.playerRelated === true || normalizeString(event?.kind).toLowerCase() === "player") return "";
-  // An event explicitly bound to a queued player Action is the order's
-  // canonical answer. Hiding it here would make settleOrders carry the
-  // same order over as overdue even though the simulator cited it exactly.
-  if (normalizeArray(event?.impacts?.actionIds).length) return "";
-  if (hardImpactKeysForEvent(event).length) return "";
-
-  return "routine military continuation with no native material consequence";
-};
-
 
 const routineAdministrativeNoDeltaReason = (event) => {
   const text =
@@ -3617,23 +3507,17 @@ const playerSovereignChoiceReason = (event, verdict, actions) => {
   return `${verdict.reason}: the human-controlled polity makes a fresh sovereign choice that no queued order or player-authored message authorizes`;
 };
 
-// The rules that judge one event on its own, in the order the screen applies
-// them: a rejection (it cannot have happened) or a visibility rule (it happened,
-// but is too routine for the timeline). The batch rules — the low-trajectory
-// feed guard — need the whole segment and are not here. Shared with the live
+// The rule that judges one event on its own: a visibility rule (it happened,
+// but is too routine for the timeline). The batch rule, the low-trajectory
+// feed guard, needs the whole segment and is not here. Shared with the live
 // preview (previewScreenedEvent), so a card marked while the model is still
 // writing is marked by exactly the rule that will judge it when the turn lands.
-// The screen hands in its one identity index for the batch (`resolver`); the
-// preview, judging one card, builds its own.
-// `ordered`: an order to a battlefield rests on this event (nativeFrontLedger.js).
-// It carries no operation of its own, because the front engine works out what
-// comes of the order, so it reads as military news with no consequence when it
-// is the one event the map is about to move on. It is not routine.
-const singleEventScreenVerdict = (event, { world = {}, game = {}, resolver = null, ordered = false } = {}) => {
-  const wartimeReason = falseNonBelligerentWartimeReason(event, world, normalizeString(game?.country), resolver);
-  if (wartimeReason) return { fate: "reject", route: "NON_BELLIGERENT_WARTIME_CAUSALITY", reason: wartimeReason };
-  const routineReason = ordered ? "" : routineMilitaryNoDeltaReason(event);
-  if (routineReason) return { fate: "hide", route: "ROUTINE_MILITARY_PRECURATION", reason: routineReason };
+// Nothing here reads an event for the war (the note on word lists at the top
+// of this file): a homefront under war conditions, a battle report and a
+// patrol are kept as written, in every language. The routes the war rules
+// gave (NON_BELLIGERENT_WARTIME_CAUSALITY, ROUTINE_MILITARY_PRECURATION) are
+// still read from the filed cards of older turns (runtime/filedEvents.js).
+const singleEventScreenVerdict = (event) => {
   const administrativeReason = routineAdministrativeNoDeltaReason(event);
   if (administrativeReason) return { fate: "hide", route: "ROUTINE_ADMINISTRATIVE_PROCESS", reason: administrativeReason };
   return null;
@@ -3645,13 +3529,13 @@ const singleEventScreenVerdict = (event, { world = {}, game = {}, resolver = nul
 // control op stripped there is not an impact that could keep an event. The
 // segment's storyline tags are not known yet, so an event the model later ties
 // to a storyline can still be kept: this is a preview.
-export const previewScreenedEvent = (event, { world = {}, game = {} } = {}) => {
+export const previewScreenedEvent = (event, { world = {} } = {}) => {
   if (!event || typeof event !== "object") return null;
   const sanitized = sanitizeNoOpRegionControlOps(
     sanitizeDuplicatePolityUpdates(sanitizeProcessOnlyPolityUpdates(event).event, world).event,
     world,
   ).event;
-  return singleEventScreenVerdict(sanitized, { world, game });
+  return singleEventScreenVerdict(sanitized);
 };
 
 export const screenGeneratedWorldEvents = ({
@@ -3668,19 +3552,13 @@ export const screenGeneratedWorldEvents = ({
   // And its war records: the side that starts or joins a war by an event made
   // that choice.
   warUpdates = [],
-  // The segment's orders to its battlefields, bound the same way: an event one
-  // rests on is not routine military news.
-  frontOrders = [],
 } = {}) => {
   const kept = [];
   const dropped = [];
-  const orderedEventIds = new Set(normalizeArray(frontOrders)
-    .flatMap((order) => normalizeArray(order?.eventIds).map(normalizeString))
-    .filter(Boolean));
   // Canonical events kept off the timeline by a VISIBILITY rule (routine,
   // low-value) are handed on whole: they still happened, and the Board reads
   // every Canonical event. `dropped` stays the audit of everything removed; a
-  // rejection (the wartime-causality rule) is in `dropped` and never here.
+  // rejection (the player-agency rule) is in `dropped` and never here.
   const hidden = [];
   const keepOffTimeline = (event, route, reason) => {
     dropped.push({ id: normalizeString(event?.id), title: normalizeString(event?.title), route, reason });
@@ -3773,23 +3651,7 @@ export const screenGeneratedWorldEvents = ({
       });
       continue;
     }
-    const verdict = singleEventScreenVerdict(event, {
-      world,
-      game,
-      resolver,
-      ordered: orderedEventIds.has(normalizeString(event?.id)),
-    });
-
-    if (verdict?.fate === "reject") {
-      dropped.push({
-        id: normalizeString(event?.id),
-        title: normalizeString(event?.title),
-        route: verdict.route,
-        reason: verdict.reason,
-      });
-      continue;
-    }
-
+    const verdict = singleEventScreenVerdict(event);
     if (verdict?.fate === "hide") {
       keepOffTimeline(event, verdict.route, verdict.reason);
       continue;

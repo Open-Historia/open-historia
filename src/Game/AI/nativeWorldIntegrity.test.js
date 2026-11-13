@@ -1,6 +1,7 @@
 /*! Open Historia — native world integrity screen tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   buildNativeWorldExplorationSlate,
@@ -93,10 +94,9 @@ test("screening a segment on a two-hundred-polity map takes well under a few sec
 
   // Before the resolver was shared this took over ten seconds.
   assert.ok(elapsed < 3000, `took ${Math.round(elapsed)} ms`);
-  // The rationing rule still runs: only the belligerents' own homefront survives.
-  const kept = screened.events.map((event) => event.id);
-  assert.ok(kept.includes("e1") && kept.includes("e2"), kept.join(","));
-  assert.ok(!kept.includes("e5"));
+  // Every homefront stands: no word list reads an event for the war (the
+  // belligerents' own used to survive a rationing rule read from English words).
+  assert.equal(screened.events.length, events.length);
 });
 
 // --- The player's sovereign choices belong to the player ---
@@ -320,13 +320,35 @@ const empireEvent = (title, description, impacts = {}) => ({
 });
 const screenEmpire = (event) => quietly(() => screenGeneratedWorldEvents({ events: [event], world: empireWorld, game: empireGame }));
 
-test("a non-belligerent's wartime rationing is rejected", () => {
-  const screened = screenEmpire(empireEvent(
-    "German Wartime Rationing Continues",
-    "Germany expands its wartime rationing as shortages deepen.",
-  ));
-  assert.equal(screened.events.length, 0);
-  assert.equal(screened.dropped[0].route, "NON_BELLIGERENT_WARTIME_CAUSALITY");
+// A homefront under war conditions used to be rejected, for English words
+// (WAR_DEPENDENT_HOMEFRONT_RE), when the ledger as it stood BEFORE the segment
+// had its polity at peace, which refused "Poland introduces wartime rationing"
+// in the very segment that opened Poland's war; its twin in any other language
+// went through. Who lives under war conditions is the war ledger's rule, told to
+// the skip (gameplay.js warLedgerRules), and no word decides it.
+test("a homefront under war conditions is kept as written, in English or not", () => {
+  for (const [title, description] of [
+    ["German Wartime Rationing Continues", "Germany expands its wartime rationing as shortages deepen."],
+    ["Deutsche Kriegsrationierung geht weiter", "Deutschland weitet seine Kriegsrationierung aus, während sich die Engpässe verschärfen."],
+  ]) {
+    const screened = screenEmpire(empireEvent(title, description));
+    assert.deepEqual(screened.events.map((event) => event.title), [title]);
+    assert.deepEqual(screened.dropped, []);
+  }
+});
+
+test("a polity's rationing in the segment that opens its war is kept", () => {
+  const atPeace = { ...empireWorld, wars: [] };
+  const opening = empireEvent("Russia Declares War on Poland", "Russian troops cross the Polish border.");
+  const rationing = empireEvent("Poland introduces wartime rationing", "Warsaw rations bread and fuel as the army mobilises.");
+  const screened = quietly(() => screenGeneratedWorldEvents({
+    events: [opening, rationing],
+    world: atPeace,
+    game: empireGame,
+    warUpdates: [{ id: "war-russia-poland", op: "start", actors: ["Russian Empire"], opponents: ["Poland"], eventIds: [opening.id], eventIndexes: [] }],
+  }));
+  assert.deepEqual(screened.events.map((event) => event.title), [opening.title, rationing.title]);
+  assert.deepEqual(screened.dropped, []);
 });
 
 test("preparing for a possible war stays legal", () => {
@@ -337,13 +359,18 @@ test("preparing for a possible war stays legal", () => {
   assert.equal(screened.events.length, 1);
 });
 
-test("routine artillery that changes nothing stays off the timeline", () => {
-  const screened = screenEmpire(empireEvent(
-    "Russian Artillery Bombardment Outside Warsaw",
-    "Russian artillery resumes bombardment and localized probing outside Warsaw.",
-  ));
-  assert.equal(screened.events.length, 0);
-  assert.equal(screened.hidden[0].route, "ROUTINE_MILITARY_PRECURATION");
+// Hidden as routine for English words (ROUTINE_MILITARY_CUE_RE), and kept in
+// any other language. The skip is told to leave out fire that changed nothing
+// (FOLDED_SKIP_CONSEQUENCES); what it writes, the screen keeps.
+test("routine artillery is kept as written, as its twin in another language is", () => {
+  for (const [title, description] of [
+    ["Russian Artillery Bombardment Outside Warsaw", "Russian artillery resumes bombardment and localized probing outside Warsaw."],
+    ["Rosyjski ostrzał artyleryjski pod Warszawą", "Rosyjska artyleria wznawia ostrzał i lokalne rozpoznanie pod Warszawą."],
+  ]) {
+    const screened = screenEmpire(empireEvent(title, description));
+    assert.deepEqual(screened.events.map((event) => event.title), [title]);
+    assert.deepEqual(screened.hidden, []);
+  }
 });
 
 test("a breakthrough with a control consequence survives", () => {
@@ -385,15 +412,16 @@ test("same-lineage polity updates merge before persistence", () => {
   assert.equal(changes[0].stats.economy.budgetBalance, "-16% GDP");
 });
 
-test("an already-existing contest cannot smuggle routine combat onto the timeline", () => {
+test("a contest the map already has is stripped as a no-op, and the event stays as written", () => {
   const screened = screenEmpire(empireEvent(
     "Russian Artillery Probe in Masovia",
     "Russian artillery resumes localized probing in Masovia; Polish positions remain unchanged.",
     { regionControlOps: [{ op: "contest", regionId: "reg-masovia", regionName: "Masovia", fromCode: "Poland", actorCode: "Russian Empire" }] },
   ));
-  assert.equal(screened.events.length, 0);
   assert.equal(screened.strippedNoOpRegionControlOps, 1);
-  assert.equal(screened.dropped[0].route, "ROUTINE_MILITARY_PRECURATION");
+  assert.equal(screened.events.length, 1);
+  assert.deepEqual(screened.events[0].impacts.regionControlOps, []);
+  assert.deepEqual(screened.dropped, []);
 });
 
 const deferredPrior = {
@@ -403,27 +431,62 @@ const deferredPrior = {
   momentum: 20,
   participants: ["Poland", "Russian Empire"],
 };
-const reentry = (title, description, momentum) => deferredStorylineReentryHasConcreteTrigger(
-  { events: [empireEvent(title, description)], warUpdates: "", relationUpdates: "", agreementUpdates: "" },
+const reentryOf = (event, momentum) => deferredStorylineReentryHasConcreteTrigger(
+  { events: [event], warUpdates: "", relationUpdates: "", agreementUpdates: "" },
   [0],
   deferredPrior,
   { ...deferredPrior, pressure: 82, momentum },
 );
+const reentry = (title, description, momentum, extra = {}) => reentryOf({ ...empireEvent(title, description), ...extra }, momentum);
+const OFFENSIVE = [
+  ["Polish Counteroffensive Retakes Forward Positions", "Polish forces launch a counteroffensive, repulse Russian units and regain ground after exploiting an overextended sector."],
+  ["Polska kontrofensywa odbija wysunięte pozycje", "Polskie siły rozpoczynają kontrofensywę, odpierają rosyjskie oddziały i odzyskują teren na przeciągniętym odcinku."],
+];
 
-test("routine artillery cannot reactivate a deferred storyline", () => {
+// What wakes a deferred storyline is what its event carries, never its words:
+// "counteroffensive", "mutiny" or "election" used to wake one, and "artillery"
+// keep one asleep, in English only.
+test("a minor event that changes nothing cannot reactivate a deferred storyline, whatever it says", () => {
   assert.equal(reentry(
     "Russian Artillery Exchanges Continue",
     "Russian and Polish batteries exchange localized artillery fire while the trench line remains unchanged.",
     28,
   ), false);
+  for (const [title, description] of OFFENSIVE) assert.equal(reentry(title, description, 34), false, title);
 });
 
-test("a material offensive can reactivate a deferred storyline", () => {
+test("a major event, or one that carries an operation, can reactivate a deferred storyline, in any language", () => {
+  for (const [title, description] of OFFENSIVE) {
+    assert.equal(reentry(title, description, 34, { importance: "major" }), true, title);
+    assert.equal(reentry(title, description, 34, { notable: true }), true, title);
+    const moved = empireEvent(title, description, { unitOps: [{ op: "move", unitId: "Polish 3rd Army", at: "Masovia" }] });
+    assert.equal(reentryOf(moved, 20), true, `${title}: an operation is enough on its own`);
+  }
   assert.equal(reentry(
-    "Polish Counteroffensive Retakes Forward Positions",
-    "Polish forces launch a counteroffensive, repulse Russian units and regain ground after exploiting an overextended sector.",
-    34,
-  ), true);
+    "Russian Artillery Exchanges Continue",
+    "Russian and Polish batteries exchange localized artillery fire while the trench line remains unchanged.",
+    28,
+    { importance: "major" },
+  ), true, "a major event's words do not keep it asleep");
+});
+
+// gameplay.js does not load under bare node: its wiring is read.
+test("no word list reads an event for the war, and the skip is told the rules instead", () => {
+  const integrity = readFileSync(new URL("./nativeWorldIntegrity.js", import.meta.url), "utf8");
+  for (const gone of [
+    "WAR_DEPENDENT_HOMEFRONT_RE", "PREPAREDNESS_RE", "FOREIGN_SPILLOVER_RE", "ROUTINE_MILITARY_CUE_RE",
+    "STRONG_MILITARY_CONSEQUENCE_RE", "CONCRETE_MILESTONE_RE", "CLEARLY_NON_MILITARY_TITLE_RE", "ENDOGENOUS_MATERIAL_CUE_RE",
+  ]) assert.ok(!new RegExp(`const ${gone}\\b`).test(integrity), `${gone} is gone`);
+  for (const gone of ["falseNonBelligerentWartimeReason", "routineMilitaryNoDeltaReason", "actorIsActiveBelligerent"]) {
+    assert.ok(!integrity.includes(gone), `${gone} is gone`);
+  }
+  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.ok(!gameplay.includes("filterStorylineUpdatesAfterIntegrityScreen"));
+  const segment = gameplay.slice(gameplay.indexOf("const screenSegmentPayload = "), gameplay.indexOf("const selectBreadthRepairContext = "));
+  assert.ok(segment.length > 0 && !segment.includes("frontOrders: payload?.frontOrders"), "the screen is not handed the orders");
+  assert.match(segment, /payload\.storylineUpdates = normalizeArray\(decodedStorylineUpdates\);/);
+  assert.match(gameplay, /A polity at peace does not live under war conditions — rationing, war taxes, mobilisation — because others are fighting, unless the war reaches it through something concrete/);
+  assert.match(gameplay, /or one that reports a meeting, a review or a statement with no outcome, or patrols, exchanges of fire or a state of readiness that changed nothing\./);
 });
 
 const emptyCandidate = () => ({

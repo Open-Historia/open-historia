@@ -1058,10 +1058,10 @@ const validateSegmentStorylines = (candidate, {
 };
 
 // Native integrity screening of an accepted segment BEFORE it joins the round:
-// an event that is objectively impossible in this world (a non-belligerent's
-// wartime economy) or an obvious no-delta restatement never feeds the next
-// segment or the curator, and a ledger or storyline record bound only to a
-// dropped event goes with it. The exploration audit of what survived is kept
+// an event that makes the player's sovereign choice with nothing of the
+// player's behind it, or an obvious no-delta restatement, never feeds the next
+// segment or the curator, and a ledger record bound only to a dropped event
+// goes with it (a war record stays). The exploration audit of what survived is kept
 // per segment for the post-curation breadth repair. The segment's temporary
 // event ids are already bound into its ledger records (validateSegmentLedgers),
 // so storyline ids are attached to the events in place, never by re-labelling.
@@ -1115,7 +1115,6 @@ const screenSegmentPayload = (payload, {
     analysis,
     agreementUpdates: payload?.agreementUpdates,
     warUpdates: payload?.warUpdates,
-    frontOrders: payload?.frontOrders,
   });
   if (screened.dropped?.length) {
     console.warn(
@@ -1141,12 +1140,11 @@ const screenSegmentPayload = (payload, {
   payload.puppetUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.puppetUpdates, taggedEvents, screened.events);
   payload.agreementUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.agreementUpdates, taggedEvents, screened.events);
   payload.frontOrders = filterBoundLedgerUpdatesToKeptEvents(payload?.frontOrders, taggedEvents, screened.events);
-  payload.storylineUpdates = filterStorylineUpdatesAfterIntegrityScreen({
-    updates: decodedStorylineUpdates,
-    allEvents: taggedEvents,
-    existingStorylines: world?.storylines,
-    dropped: screened.dropped,
-  });
+  // Storyline records stay whole: a storyline whose events the screen drops or
+  // hides is still the world's process. (A new one used to go with an event
+  // rejected as a non-belligerent's wartime economy, a rule read from English
+  // words, now gone: nativeWorldIntegrity.js.)
+  payload.storylineUpdates = normalizeArray(decodedStorylineUpdates);
   payload.summary = String(payload?.summary ?? "").replace(/\s+/g, " ").trim();
 };
 
@@ -1665,7 +1663,7 @@ const FOLDED_SKIP_CONSEQUENCES = [
   "• Orders. An event that gives one of the player's orders its outcome lists that order's id in impacts.actionIds. When that outcome moves land (an annexation carried out, a region taken), the same event carries the regionTransfers or regionControlOps that move it; an order that fails or is put off moves none.",
   "• The board. An event that moved one of the player's projects or operations carries its impacts.projectOps, as [Projects & Operations] says.",
   "An event whose text changes nothing material carries no ops, and that is correct: never invent one to fill a field. But an event that says a town fell, a fleet sailed or a base opened, with nothing in its impacts, leaves the player looking at a map that contradicts the story.",
-  "Nothing takes a repeat or a filler event off the timeline afterwards either. Do not write an event that restates the record, or one that reports a meeting, a review or a statement with no outcome.",
+  "Nothing takes a repeat or a filler event off the timeline afterwards either. Do not write an event that restates the record, or one that reports a meeting, a review or a statement with no outcome, or patrols, exchanges of fire or a state of readiness that changed nothing.",
   // Measured against the live API (2026-10-05): asked to finish each event,
   // the model wrote six and seven events for a month that called for ten.
   "Finishing each event is not a reason to write fewer of them: the period still holds the number of events its instruction asks for, and most of the world's events need few ops or none.",
@@ -12100,56 +12098,6 @@ const attachDecodedStorylineIds = (events, decodedStorylineUpdates, passLabel = 
     })),
     decodedStorylineUpdates,
   );
-
-const filterStorylineUpdatesAfterIntegrityScreen = ({
-  updates,
-  allEvents,
-  existingStorylines,
-  dropped,
-} = {}) => {
-  const existingIds = new Set(
-    normalizeArray(existingStorylines)
-      .map((entry) => normalizeString(entry?.id))
-      .filter(Boolean),
-  );
-
-  const fatalDroppedIds = new Set(
-    normalizeArray(dropped)
-      .filter((entry) =>
-        ["NON_BELLIGERENT_WARTIME_CAUSALITY"].includes(
-          normalizeString(entry?.route),
-        )
-      )
-      .map((entry) => normalizeString(entry?.id))
-      .filter(Boolean),
-  );
-
-  if (!fatalDroppedIds.size) return normalizeArray(updates);
-
-  const fatalIndexes = new Set();
-  normalizeArray(allEvents).forEach((event, index) => {
-    if (fatalDroppedIds.has(normalizeString(event?.id))) {
-      fatalIndexes.add(index);
-    }
-  });
-
-  return normalizeArray(updates).filter((update) => {
-    const id = normalizeString(update?.id);
-    if (!id || existingIds.has(id)) return true;
-
-    const indexes = normalizeArray(update?.eventIndexes)
-      .filter((index) => Number.isInteger(index) && index >= 0);
-
-    if (!indexes.length) return true;
-
-    // A NEW storyline whose only establishing event(s) were rejected for an
-    // objective causal impossibility must not survive invisibly and poison the
-    // next pass. Existing selected storylines are intentionally preserved so
-    // routine no-delta cards can collapse into hidden state updates.
-    return !indexes.every((index) => fatalIndexes.has(index));
-  });
-};
-
 
 let countryStatsWorker = null;
 let countryStatsWorkerBroken = false;

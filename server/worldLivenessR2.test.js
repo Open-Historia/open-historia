@@ -148,31 +148,31 @@ test("pressure-60 active crisis now receives the tighter 21-day review cadence",
   assert.equal(storyline.nextReviewDate, "2019-09-04");
 });
 
-test("status-only military readiness cards are removed before curation", () => {
-  const screened = screenGeneratedWorldEvents({
-    events: [{
-      id: "event-ai-r0070-20190829-001",
-      date: "2019-08-29",
-      importance: "major",
-      title: "Military Readiness Remains Elevated on the Korean Peninsula",
-      description: "Forces remain on heightened alert and both sides maintain an elevated military posture while monitoring continues.",
-      impacts: {
-        actionIds: [],
-        createdChats: [],
-        markerOps: [],
-        polityChanges: [],
-        regionTransfers: [],
-        regionClaims: [],
-        unitOps: [],
-      },
-    }],
-    world: koreaWorld(),
-    game: { country: "Republic of Latvia" },
-  });
-
-  assert.equal(screened.events.length, 0);
-  assert.equal(screened.dropped.length, 1);
-  assert.equal(screened.dropped[0].route, "ROUTINE_MILITARY_PRECURATION");
+// The screen hid this card for its English words (ROUTINE_MILITARY_CUE_RE) and
+// kept its Korean twin: no word list reads an event for the war any more. The
+// skip is told to leave such a card out (FOLDED_SKIP_CONSEQUENCES).
+test("status-only military readiness cards are kept as written, in English or not", () => {
+  const impacts = {
+    actionIds: [],
+    createdChats: [],
+    markerOps: [],
+    polityChanges: [],
+    regionTransfers: [],
+    regionClaims: [],
+    unitOps: [],
+  };
+  for (const [title, description] of [
+    ["Military Readiness Remains Elevated on the Korean Peninsula", "Forces remain on heightened alert and both sides maintain an elevated military posture while monitoring continues."],
+    ["한반도 군사 대비 태세 격상 유지", "양측 군은 고도의 경계 태세를 유지하며 감시를 계속하고 있다."],
+  ]) {
+    const screened = screenGeneratedWorldEvents({
+      events: [{ id: "event-ai-r0070-20190829-001", date: "2019-08-29", importance: "major", title, description, impacts }],
+      world: koreaWorld(),
+      game: { country: "Republic of Latvia" },
+    });
+    assert.deepEqual(screened.events.map((event) => event.title), [title]);
+    assert.deepEqual(screened.dropped, []);
+  }
 });
 
 test("world exploration reserves two deterministic latent-active actor slots", () => {

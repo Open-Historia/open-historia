@@ -104,19 +104,33 @@ const screenOne = (event, world = {}, game = { country: "Republic of Latvia" }) 
   screenGeneratedWorldEvents({ events: [{ impacts: baseImpacts(), ...event }], world, game });
 
 test("a routine event the screen keeps off the timeline is handed on whole, as a Hidden event", () => {
-  const patrol = {
-    id: "event-patrol",
+  const admin = {
+    id: "event-admin-whole",
     date: "2019-10-12",
     importance: "minor",
-    title: "Operation Kingfisher patrols continue along the northern coast",
-    description: "Reconnaissance flights maintain a heightened posture with continued surveillance.",
+    title: "Canada Finalizes Streamlined Agricultural Inspection Standards",
+    description: "Officials finalize technical inspection standards and a compliance tracking protocol after a committee review.",
   };
-  const screened = screenOne(patrol);
+  const screened = screenOne(admin);
   assert.equal(screened.events.length, 0, "the timeline rule itself is unchanged");
   assert.equal(screened.hidden.length, 1);
-  assert.equal(screened.hidden[0].route, "ROUTINE_MILITARY_PRECURATION");
-  assert.equal(screened.hidden[0].event.title, patrol.title);
-  assert.equal(screened.hidden[0].event.description, patrol.description);
+  assert.equal(screened.hidden[0].event.title, admin.title);
+  assert.equal(screened.hidden[0].event.description, admin.description);
+});
+
+// No word list reads an event for the war any more (nativeWorldIntegrity.js):
+// a patrol was hidden, and a homefront under war conditions rejected, by
+// English words only.
+const patrolIn = (title, description) => ({ id: `event-patrol-${title.length}`, date: "2019-10-12", importance: "minor", title, description });
+test("a patrol is kept as written, in English or not: no word hides it", () => {
+  for (const patrol of [
+    patrolIn("Operation Kingfisher patrols continue along the northern coast", "Reconnaissance flights maintain a heightened posture with continued surveillance."),
+    patrolIn("Les patrouilles de l'opération Kingfisher se poursuivent le long de la côte nord", "Les vols de reconnaissance maintiennent une posture renforcée sous une surveillance continue."),
+  ]) {
+    const screened = screenOne(patrol);
+    assert.deepEqual(screened.events.map((event) => event.id), [patrol.id], patrol.title);
+    assert.deepEqual(screened.hidden, []);
+  }
 });
 
 test("a routine administrative event is a Hidden event too", () => {
@@ -130,20 +144,16 @@ test("a routine administrative event is a Hidden event too", () => {
   assert.deepEqual(screened.hidden.map((row) => row.route), ["ROUTINE_ADMINISTRATIVE_PROCESS"]);
 });
 
-test("an event judged untrue is rejected, never Hidden", () => {
-  const screened = screenOne(
-    {
-      id: "event-false-war-economy",
-      date: "2019-10-12",
-      importance: "minor",
-      title: "Latvia introduces wartime rationing",
-      description: "The Latvian government imposes wartime rationing and war taxation across the country.",
-    },
-    {},
-    { country: "Latvia" },
-  );
-  assert.equal(screened.dropped[0]?.route, "NON_BELLIGERENT_WARTIME_CAUSALITY");
-  assert.deepEqual(screened.hidden, [], "it never happened, so the Board must never read it");
+test("a homefront under war conditions is kept as written, in English or not: the skip is told who lives under them", () => {
+  for (const [title, description] of [
+    ["Latvia introduces wartime rationing", "The Latvian government imposes wartime rationing and war taxation across the country."],
+    ["Latvija ievieš kara laika normēšanu", "Latvijas valdība visā valstī ievieš kara laika normēšanu un kara nodokli."],
+  ]) {
+    const screened = screenOne({ id: "event-war-economy", date: "2019-10-12", importance: "minor", title, description }, {}, { country: "Latvia" });
+    assert.deepEqual(screened.events.map((event) => event.title), [title]);
+    assert.deepEqual(screened.dropped, [], "nothing rejects it for its words");
+    assert.deepEqual(screened.hidden, []);
+  }
 });
 
 // --- The curator hides; only duplicates and contradictions are withheld ---
