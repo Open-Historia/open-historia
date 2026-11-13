@@ -614,13 +614,14 @@ const deferredUpdateHasObjectiveDelta = (prior, update) => {
 };
 
 // Whether a deferred storyline's linked events give it a reason to come back
-// into this pass, from what they carry and never from their words: an
-// operation of their own, a war, relation, agreement or front record, a new
-// participant, or, with the storyline's own state moved, an event the model
-// rated major or notable. A minor event that changes nothing wakes nothing,
-// whatever it says, in any language (the words used to: "counteroffensive",
-// "mutiny", "election" and the rest woke a storyline, and "artillery" or
-// "patrol" kept one asleep, in English only).
+// into this pass, from what they carry and whom they name, never from what
+// their words say happened: an operation of their own, a war, relation,
+// agreement or front record, a new participant the event names, or, with the
+// storyline's own state moved, an event the model rated major or notable.
+// A minor event that changes nothing wakes nothing, whatever it says, in any
+// language (the words used to: "counteroffensive", "mutiny", "election" and
+// the rest woke a storyline, and "artillery" or "patrol" kept one asleep, in
+// English only).
 export const deferredStorylineReentryHasConcreteTrigger = (
   candidate,
   eventIndexes,
