@@ -24,7 +24,7 @@ test("Boris's resolved and fictional Action IDs never re-enter one-to-one model 
   for (const row of replay.slice(1)) {
     const text = row.parts[0].text;
     assert.match(text, /I will coordinate this|I will report the verified result/);
-    assert.match(text, /Historical Action proposal omitted/);
+    assert.doesNotMatch(text, /Historical Action proposal omitted|Historical Action review cards/, "engine annotations must never enter model history");
     assert.doesNotMatch(text, /```actions|action-advisor-reply-/i);
   }
   assert.match(saved[1].parts[0].text, /action-advisor-reply-/, "saved and diagnostic text is never rewritten");
@@ -37,12 +37,12 @@ test("Irina's fabricated placeholder is removed, not promoted to a new Action", 
     + "\n```";
   const scrubbed = redactHistoricalAdvisorActionBlocks(reply);
   assert.match(scrubbed, /Preserve evidence, maintain due process/);
-  assert.match(scrubbed, /Historical Action proposal omitted/);
+  assert.doesNotMatch(scrubbed, /Historical Action proposal omitted|Historical Action review cards/);
   assert.doesNotMatch(scrubbed, /xxxx-moreau-accountability|Moreau Case - Independent Merit Review/);
   assert.equal(scrubbed, redactHistoricalAdvisorActionBlocks(scrubbed), "rendering is idempotent");
 });
 
-test("saved Action review cards retain bounded history without reviving old IDs or claiming a live queue", () => {
+test("saved Action review cards remain native evidence without turning their receipts into Advisor speech", () => {
   const message = {
     role: "advisor",
     text: priorReply(resolvedBorisId, "Sirte Basin Settlement - Staged Sanctions Relief Roadmap"),
@@ -53,12 +53,13 @@ test("saved Action review cards retain bounded history without reviving old IDs 
     actionReceipts: { "proposal-0": { status: "queued" } },
   };
   const rendered = renderHistoricalAdvisorReply(message);
-  assert.match(rendered, /Sirte Basin Settlement - Staged Sanctions Relief Roadmap/);
-  assert.match(rendered, /Priority Green - Personnel & Data Protection/);
-  assert.match(rendered, /historical receipt: queued; current status unknown/);
-  assert.match(rendered, /no recorded approval receipt/);
+  assert.match(rendered, /I will coordinate this with the responsible institutions/);
+  assert.match(rendered, /I will report the verified result/);
+  assert.doesNotMatch(rendered, /Sirte Basin Settlement|Priority Green|historical receipt:|Historical Action|no recorded approval receipt/);
   assert.doesNotMatch(rendered, /action-advisor-reply-|\\`\\`\\`actions/);
-  assert.match(message.text, /action-advisor-reply-/, "historical content remains available in persisted messages");
+  assert.equal(message.actionProposals.length, 2, "native review cards remain in the original message");
+  assert.equal(message.actionReceipts["proposal-0"].status, "queued", "native approval receipt is preserved");
+  assert.match(message.text, /action-advisor-reply-/, "persisted diagnostic text remains intact");
   assert.equal(renderHistoricalAdvisorReply({ text: "Ordinary reply without Action proposals" }),
     "Ordinary reply without Action proposals");
 });
@@ -87,8 +88,23 @@ test("an unterminated historical Action fence is not replayed into another AI tu
     + JSON.stringify([{ id: resolvedBorisId, text: "Repeat expired instructions." }]);
   const clean = redactHistoricalAdvisorActionBlocks(incomplete);
   assert.match(clean, /This work is planned in principle/);
-  assert.match(clean, /Historical Action proposal omitted/);
+  assert.doesNotMatch(clean, /Historical Action proposal omitted|Historical Action review cards/);
   assert.doesNotMatch(clean, /action-advisor-reply-|Repeat expired instructions/);
+});
+
+test("legacy internal Action-history annotations cannot contaminate later Advisor replies", () => {
+  const text = [
+    "I will coordinate a safety assessment.",
+    "[Historical Action proposal omitted from conversation replay. Only the current planned Actions list identifies editable orders; new follow-up work requires a separate proposal and player review.]",
+    "[Historical Action review cards, not editable queue entries: Bushehr Nuclear Safety Emergency Coordination (historical receipt: queued; current status unknown)]",
+    "I will report verified findings.",
+  ].join("\n");
+  const replay = sanitizeAdvisorModelHistory([{ role: "model", parts: [{ text }] }]);
+  assert.match(replay[0].parts[0].text, /coordinate a safety assessment/);
+  assert.match(replay[0].parts[0].text, /report verified findings/);
+  assert.doesNotMatch(replay[0].parts[0].text, /Historical Action|historical receipt|current status unknown/);
+  assert.equal(sanitizeAdvisorModelHistory(replay)[0].parts[0].text, replay[0].parts[0].text);
+  assert.equal(renderHistoricalAdvisorReply({ text }).includes("Historical Action"), false);
 });
 
 test("production sanitizes both loaded histories and immediate prior replies without mutating raw output", () => {

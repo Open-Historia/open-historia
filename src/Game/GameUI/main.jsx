@@ -716,7 +716,11 @@ const Main = ({
   useEffect(() => {
     if (gameEntered && activeGame?.id && !showGameLoading) noteGameDrawn(activeGame.id);
   }, [gameEntered, activeGame?.id, showGameLoading]);
-  const musicScene = musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading && !reopening, atWar: atWar || inWar, war: battlefieldShown });
+  // The war room is there for troops built up on a border in peace too: open
+  // then, it is no war, and its music is the game's ("if you have deployed
+  // troops but no conflicts there should be no war music", the owner,
+  // 2026-11-13).
+  const musicScene = musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading && !reopening, atWar: atWar || inWar, war: battlefieldShown && (atWar || inWar) });
   useEffect(() => { setMusicScene(musicScene); }, [musicScene]);
   const closeWarRoomPanel = useCallback(() => setIsWarRoomOpen(false), []);
   const toggleWarRoom = () => {

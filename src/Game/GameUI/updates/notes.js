@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "make it not play the war music whenever the war room is availible, because if you have deployed troops but no conflicts there should be no war music" (the owner, 2026-11-13):
+    // the war room open on troops built up in peace played the battle music.
+    id: "2026-11-war-music-only-in-war",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "War music only in war",
+        items: [
+          "Opening the War Room on troops gathered at a border in peacetime no longer plays the war music; it plays only while your country is in a conflict.",
+        ],
+      },
+    ],
+  },
+  {
     // "make sure to follow all the signpath requirements for oss stuff" (the owner, 2026-11-12): SignPath Foundation requires the installer to show the privacy policy
     // and offer to switch off what the app sends on its own; the stable Windows app's files now carry its name and version for signing.
     id: "2026-11-installer-privacy-page",

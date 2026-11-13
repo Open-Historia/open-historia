@@ -815,8 +815,8 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
-    const { text, chartConfig, chartProblem, messageDrafts, institutionDrafts, deployments } = msg.role === "advisor"
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onRequestMissingAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
+    const { text, chartConfig, chartProblem, messageDrafts, institutionDrafts, deployments, unreviewableActionTitle } = msg.role === "advisor"
         ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null, streaming: Boolean(msg.streaming) })
         : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
     const asWritten = msg.role === "advisor" && chatDiffers;
@@ -860,6 +860,15 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
         {msg.actionsSummary &&<AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
         {Array.isArray(msg.actionsProblems) && msg.actionsProblems.length > 0 && (
             <div role="alert" style={{ marginTop: "0.5rem", fontSize: "0.72rem", color: "#fca5a5" }}>Some Action proposals could not be reviewed: {msg.actionsProblems.join(" ")}</div>
+        )}
+        {canReviewActions && !msg.streaming && !msg.actionProposals?.length && unreviewableActionTitle && onRequestMissingAction && (
+            <div role="status" style={{ marginTop: "0.55rem", fontSize: "0.72rem", color: "#e4cda2", borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: "0.55rem" }}>
+                {uiString("The Advisor described an Action but did not provide a reviewable proposal. Nothing was queued.")}
+                {" "}
+                <button type="button" className="oh-tap" onClick={() => onRequestMissingAction(unreviewableActionTitle)} disabled={retrying}>
+                    {uiString("Request Action proposal")}
+                </button>
+            </div>
         )}
         {canReviewActions && Array.isArray(msg.actionProposals) && msg.actionProposals.map((proposal) => (
             <AdvisorActionProposalCard
@@ -986,7 +995,7 @@ const ADVISOR_RENDER_WINDOW_STEP = 20;
 // Only the last `visibleLimit` messages are drawn. `i` stays the index into
 // the WHOLE transcript: placedDeployments and completedInstitutionDrafts are
 // written back through it.
-const AdvisorMessageList = React.memo(({ messages, groupMemberIds = [], visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", speakerNameFor = null, emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => {
+const AdvisorMessageList = React.memo(({ messages, groupMemberIds = [], visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", speakerNameFor = null, emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onRequestMissingAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => {
     // Silent group-participation markers are persisted for resume/idempotence,
     // but never consume visible history slots or display empty bubbles.
     const silentTurnEnds = new Set(completedSilentGroupTurnIndices(messages, groupMemberIds));
@@ -1025,7 +1034,7 @@ const AdvisorMessageList = React.memo(({ messages, groupMemberIds = [], visibleL
             {uiString("All group members passed on this turn. No answer or execution was recorded.")}
           </div>
         : (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerNameFor ? speakerNameFor(msg) : speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} actionStates={actionStates} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={i === visibleLastIndex && msg.projectsProblem ? onRetryProjects : undefined} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onCancelAction={onCancelAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerNameFor ? speakerNameFor(msg) : speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} actionStates={actionStates} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={i === visibleLastIndex && msg.projectsProblem ? onRetryProjects : undefined} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onRequestMissingAction={i === visibleLastIndex ? onRequestMissingAction : undefined} onProceedAction={onProceedAction} onCancelAction={onCancelAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === visibleLastIndex && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     )))}
 
@@ -1835,6 +1844,17 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         inputRef.current?.focus();
     }, []);
 
+    // A missing structured Action is a provider-output failure, not permission
+    // to create an order from prose. Offer a composer draft without sending it;
+    // ordinary proactive proposals still require no explicit player request.
+    const handleRequestMissingAction = React.useCallback((title) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
+        const subject = String(title || "the proposed work").trim().slice(0, 240);
+        const prompt = `You outlined "${subject}" as an Action, but no reviewable Action proposal appeared. If this work is still warranted, please submit a new complete Action proposal for my review. Do not claim it is already queued or reuse an old Action ID.`;
+        setInput((current) => current.trim() ? `${current.replace(/\s+$/, "")}\n\n${prompt}` : prompt);
+        inputRef.current?.focus();
+    }, []);
+
     // Cancel is a native queue mutation, not a cosmetic toggle. The original
     // proposal, recipient authority and the exact still-planned order are all
     // revalidated before anything is removed.
@@ -2253,6 +2273,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         retrying={isLoading}
         onDraftMessage={handleDraftMessage}
         onDiscussAction={handleDiscussAction}
+        onRequestMissingAction={handleRequestMissingAction}
         onProceedAction={handleProceedAction}
         onCancelAction={handleCancelAction}
         onExecuteInstitutionDraft={handleExecuteInstitutionDraft}

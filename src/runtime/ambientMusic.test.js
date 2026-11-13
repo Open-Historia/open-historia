@@ -1212,7 +1212,10 @@ test("the scene is where the player is", () => {
   // At war is what puts the war room's button on the screen: the player's troops on a battlefield.
   // (Battlefields being on is the Wars feature's Fronts switch.)
   assert.ok(screen.includes("const atWar = hasFronts && fightingIn(warFronts);"));
-  assert.ok(screen.includes("musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading && !reopening, atWar: atWar || inWar, war: battlefieldShown })"));
+  // The war room open on troops built up in peace (no war fought or frozen) is no war: the game's music
+  // ("if you have deployed troops but no conflicts there should be no war music", 2026-11-13).
+  assert.ok(screen.includes("musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading && !reopening, atWar: atWar || inWar, war: battlefieldShown && (atWar || inWar) })"));
+  assert.equal(musicSceneOf({ war: false, atWar: false }), "game", "war room open in peace");
   assert.ok(screen.includes("useEffect(() => { setMusicScene(musicScene); }, [musicScene]);"));
   // The open game's scenario's own music, told before the scene it is for.
   // Of the OPEN game: the game last played has no say before the player opens one (gameEntry.js).
