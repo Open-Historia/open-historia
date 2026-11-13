@@ -31,7 +31,7 @@
 // them. normalizeWorldState runs on every read of the world, so this is shape
 // and length only.
 
-import { PACKED_TEXT, TROOP_LETTERS, decodeMask, decodeTroops } from "./codec.js";
+import { PACKED_TEXT, decodeMask, decodeTroops, troopLayoutOf } from "./codec.js";
 import {
   BATTLEFIELD_NAME_MAX,
   BATTLEFIELD_STATUSES,
@@ -91,9 +91,12 @@ const amount = (fallback) => (value) => {
   return Number.isFinite(number) && number >= 0 ? number : fallback;
 };
 const packed = (value) => (typeof value === "string" && value.length <= PACKED_MAX && PACKED_TEXT.test(value) ? value : "");
+// (Cut at a whole troop, in either layout: codec.js troopLayoutOf.)
 const troopText = (value) => {
   const text = packed(value);
-  return text.slice(0, Math.min(Math.floor(text.length / TROOP_LETTERS), MAX_TROOPS_PER_SIDE) * TROOP_LETTERS);
+  const { letters, from } = troopLayoutOf(text);
+  const body = text.slice(from, from + Math.min(Math.floor((text.length - from) / letters), MAX_TROOPS_PER_SIDE) * letters);
+  return body ? text.slice(0, from) + body : "";
 };
 const sideIndex = (value) => (value === 0 || value === 1 ? value : -1);
 

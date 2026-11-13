@@ -255,3 +255,16 @@ test("who holds a point is read from the saved mask", () => {
   assert.equal(holderAt(record, 0, 0), HOLDER_WALL, "off the frame");
   assert.equal(holderAt(null, westLng, lat), HOLDER_WALL);
 });
+
+test("a saved side's troops are cut at a whole troop in either layout, and a side holds a whole coalition", async () => {
+  const { encodeTroops, decodeTroops } = await import("./codec.js");
+  const { MAX_SIDE_MEMBERS } = await import("./constants.js");
+  const { MAX_WAR_SIDE_MEMBERS } = await import("../warRecord.js");
+  assert.equal(MAX_SIDE_MEMBERS, MAX_WAR_SIDE_MEMBERS, "a battlefield seats as many a side as a war's side holds");
+  const troops = Array.from({ length: 10 }, (_, owner) => ({ x: 1.5, y: 1.5, strength: 100, kind: "infantry", owner, state: "holding" }));
+  const wide = encodeTroops(troops);
+  const members = Array.from({ length: 10 }, (_, index) => `Member ${index + 1}`);
+  const [kept] = normalizeBattlefields([battlefield({ sides: [members, ["Ukraine"]], troops: [`${wide}AB`, encodeTroops([])], named: [] })]);
+  assert.equal(kept.sides[0].length, 10, "ten members seated, not eight");
+  assert.deepEqual(decodeTroops(kept.troops[0]).map((troop) => troop.owner), troops.map((troop) => troop.owner), "the stray letters are cut, the troops kept");
+});
