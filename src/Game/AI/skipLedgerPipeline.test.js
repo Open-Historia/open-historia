@@ -2,10 +2,10 @@
 // Run: node --test src/Game/AI/skipLedgerPipeline.test.js
 //
 // gameplay.js cannot be imported without the whole app, so this walks its main
-// steps with the pieces it calls: each segment is validated (which repairs an
-// unbound line) and bound to its own temporary event ids, the segments are
-// merged into one round, the round's events get their canonical ids and the
-// records follow them, and the round is applied. The integrity screen and the
+// steps with the pieces it calls: each segment is validated and bound to its
+// own temporary event ids, the segments are merged into one round, the round's
+// events get their canonical ids and the records follow them, and the round is
+// applied (a record tied to no event dated by the skip). The integrity screen and the
 // curator, which only drop records whose events they drop, are left out. The
 // hand-off between the merge and the apply (finishTimelineJump's result) is
 // read as source, like checksHold.test.js does.
@@ -28,6 +28,7 @@ import {
   validateDiplomaticLedgerPayload,
 } from "./nativeDiplomaticDirector.js";
 import { journalTurn, truncateTurn } from "./intervene.js";
+import { pinLedgersToEvents } from "./ledgerPins.js";
 import { mergeSegmentPayloads } from "./jumpSegments.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 
@@ -57,12 +58,11 @@ const world = {
   }],
 };
 
-// What validateSegmentLedgers does to one accepted segment.
+// What the skip does to one accepted segment: its ledgers tied to its events
+// (pinSegmentLedgers, ledgerPins.js), then validateSegmentLedgers.
 const acceptSegment = (candidate, segmentIndex) => {
-  candidate.events.forEach((event, index) => {
-    if (!event.id) event.id = `segment-${segmentIndex + 1}-event-${index + 1}`;
-  });
-  assert.equal(validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true }), "");
+  pinLedgersToEvents(candidate, { segmentIndex });
+  assert.equal(validateDiplomaticLedgerPayload(candidate, { world, authority: "skip" }), "");
   candidate.relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(candidate.relationUpdates), candidate.events);
   candidate.agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(candidate.agreementUpdates), candidate.events);
   candidate.puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(candidate.puppetUpdates), candidate.events);
@@ -109,7 +109,9 @@ const quietSegment = () => ({
 });
 
 // The playtest's turn: the model moved House Bolton's Loyalty without naming
-// the event, and native binding tied it to the one event naming both houses.
+// the event. It was tied to the one event whose words named both houses, and
+// would have been thrown away had none (or two) done so; it is the skip's
+// change all the same, dated by the skip.
 const muster = () => ({
   events: [
     { date: "0298-12-13", kind: "world", title: "Lord Tywin's agent reaches the Dreadfort", description: "A Lannister envoy sizes up Roose Bolton." },
@@ -125,15 +127,26 @@ const muster = () => ({
   puppetUpdates: "loyalty~House Stark~House Bolton~~45~~~The Dreadfort holds back its levies",
 });
 
-test("a skip's unbound Loyalty change is tied to its event and reaches the world", () => {
+test("a skip's Loyalty change with no event number reaches the world, dated by the skip", () => {
   const second = acceptSegment(muster(), 1);
-  assert.deepEqual(second.puppetUpdates[0].eventIds, ["segment-2-event-2"], "native binding found the muster");
+  assert.deepEqual(second.puppetUpdates[0].eventIds, [], "tied to no event: none was named");
 
   const merge = applyRound([acceptSegment(quietSegment(), 0), second]);
   assert.deepEqual(merge.droppedPuppetUpdates, []);
   const row = merge.world.puppets.find((entry) => entry.puppet === "House Bolton");
   assert.equal(row.loyalty, 45);
+  assert.deepEqual(row.sourceEventIds, [], "it cites no event");
+  assert.equal(row.lastUpdatedDate, "0299-01-27", "the skip's date");
+});
+
+test("a puppet line naming its event is tied to it, through the round's ids", () => {
+  const segment = muster();
+  segment.puppetUpdates = "loyalty~House Stark~House Bolton~~45~~2~The Dreadfort holds back its levies";
+  const merge = applyRound([acceptSegment(quietSegment(), 0), acceptSegment(segment, 1)]);
+  const row = merge.world.puppets.find((entry) => entry.puppet === "House Bolton");
+  assert.equal(row.loyalty, 45);
   assert.deepEqual(row.sourceEventIds, ["event-ai-r0008-02981219-004"]);
+  assert.equal(row.lastUpdatedDate, "0298-12-19", "the muster's date");
 });
 
 test("a single-segment skip keeps its puppet lines too", () => {
@@ -143,14 +156,17 @@ test("a single-segment skip keeps its puppet lines too", () => {
 
 // An event number is the segment's own. One that names no event in its segment
 // can name some other segment's event once the round is joined, so a line no
-// event of its own segment could be tied to stays tied to nothing.
+// event of its own segment could be tied to stays tied to nothing: it is
+// applied as a line that named none, dated by the skip.
 test("a puppet line naming an event its segment does not have binds to no other segment's event", () => {
   const second = quietSegment();
   second.puppetUpdates = "loyalty~House Stark~House Bolton~~45~~4~Cited an event the segment does not have";
   const first = { ...muster(), puppetUpdates: "" };
   const merge = applyRound([acceptSegment(first, 0), acceptSegment(second, 1)]);
-  assert.equal(merge.world.puppets.find((entry) => entry.puppet === "House Bolton").loyalty, 60);
-  assert.match(merge.droppedPuppetUpdates[0]?.reason ?? "", /tied to no event/);
+  const row = merge.world.puppets.find((entry) => entry.puppet === "House Bolton");
+  assert.equal(row.loyalty, 45);
+  assert.deepEqual(row.sourceEventIds, [], "not the muster, the round's fourth event");
+  assert.deepEqual(merge.droppedPuppetUpdates, []);
 });
 
 // A record's event number counts its own segment's events; once its event ids
@@ -158,7 +174,8 @@ test("a puppet line naming an event its segment does not have binds to no other 
 // Intervene that cut the record's event must not keep it on that other one.
 test("an Intervene that cuts a later segment's event cuts the records bound to it", () => {
   const second = muster();
-  second.relationUpdates = "House Stark~House Bolton~-20~strained~~The levies are withheld";
+  second.puppetUpdates = "loyalty~House Stark~House Bolton~~45~~2~The Dreadfort holds back its levies";
+  second.relationUpdates = "House Stark~House Bolton~-20~strained~2~The levies are withheld";
   const joined = joinRound([acceptSegment(quietSegment(), 0), acceptSegment(second, 1)]);
   const { result } = truncateTurn(journalTurn(joined), 2, { originDate: "0298-11-28" });
   assert.deepEqual(result.puppetUpdates, [], "its event was the round's fourth");
@@ -174,11 +191,11 @@ test("relations and agreements naming an event their segment does not have bind 
   second.relationUpdates = "House Stark~House Bolton~-20~strained~4~Cited an event the segment does not have";
   second.agreementUpdates = "stark-bolton-levy~start~military_cooperation~House Stark,House Bolton~4~Levy Accord~Cited an event the segment does not have";
   const merge = applyRound([acceptSegment(muster(), 0), acceptSegment(second, 1)]);
-  assert.deepEqual(merge.relations, []);
-  assert.deepEqual(merge.agreements, []);
+  assert.deepEqual(merge.relations.map((relation) => [relation.score, relation.sourceEventIds, relation.lastUpdatedDate]), [[-20, [], "0299-01-27"]]);
+  assert.deepEqual(merge.agreements.map((agreement) => [agreement.id, agreement.sourceEventIds, agreement.startedDate]), [["stark-bolton-levy", [], "0299-01-27"]]);
 });
 
-test("relations and agreements tied by native binding reach the world the same way", () => {
+test("relations and agreements with no event number reach the world the same way, dated by the skip", () => {
   const segment = muster();
   segment.puppetUpdates = "";
   segment.relationUpdates = "House Stark~House Bolton~-20~strained~~The levies are withheld";
@@ -186,9 +203,11 @@ test("relations and agreements tied by native binding reach the world the same w
   const merge = applyRound([acceptSegment(quietSegment(), 0), acceptSegment(segment, 1)]);
   assert.equal(merge.relations.length, 1);
   assert.equal(merge.relations[0].score, -20);
-  assert.deepEqual(merge.relations[0].sourceEventIds ?? merge.relations[0].eventIds, ["event-ai-r0008-02981219-004"]);
+  assert.deepEqual(merge.relations[0].sourceEventIds, []);
+  assert.equal(merge.relations[0].lastUpdatedDate, "0299-01-27");
   assert.equal(merge.agreements.length, 1);
   assert.equal(merge.agreements[0].id, "stark-bolton-levy");
+  assert.equal(merge.agreements[0].startedDate, "0299-01-27");
 });
 
 // The merge is handed to the apply as a result object built field by field, so

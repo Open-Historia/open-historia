@@ -457,7 +457,6 @@ import {
   DIPLOMATIC_SLICE_RULES,
   decodeAgreementUpdates,
   decodeRelationUpdates,
-  migrateLegacyDiplomaticState,
   reconcileRelationScoresWithStatus,
   salvageDiplomaticLedgerPayload,
   validateDiplomaticLedgerPayload,
@@ -950,7 +949,10 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
     const playerNotes = [];
     salvageDiplomaticLedgerPayload(candidate, { world, playerNotes })
       .forEach((note, index) => noteReceipt(receipt, "dropped", note, playerNotes[index]));
-  }  const diplomaticError = validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true });
+  }
+  // Each record keeps the events it was tied to above (pinSegmentLedgers); one
+  // tied to none is kept too, and dated by the skip when it is applied.
+  const diplomaticError = validateDiplomaticLedgerPayload(candidate, { world, authority: "skip" });
   if (diplomaticError) return diplomaticError;
 
   const boundEvents = normalizeArray(candidate.events);
@@ -1213,29 +1215,6 @@ const advanceLedgerWorld = (world, payload, { stopDate = "", round = 0 } = {}) =
     stopDate,
     round,
   }).world;
-};
-
-// A save from before the ledgers existed has its treaties and alliances only as
-// events (and some standing alliances only in chats). Seed the two ledgers from
-// them once; the version stamp keeps it from running again.
-const withDiplomaticLedgerMigration = (bundle) => {
-  const migration = migrateLegacyDiplomaticState({
-    world: bundle.world,
-    events: bundle.events,
-    chats: bundle.chats,
-    game: bundle.game,
-  });
-  if (!migration.migrated) return bundle;
-  console.info(
-    `[ai] diplomacy ledger seeded from ${migration.scannedEvents} legacy event(s) and ${migration.scannedChats || 0} chat(s): ` +
-    `${migration.agreementsAdded} agreement(s), ${migration.relationsAdded} relation(s).`,
-  );
-  logDebugEvent("turn", "Diplomacy ledger seeded from the save's legacy treaty events.", {
-    scannedEvents: migration.scannedEvents,
-    agreementsAdded: migration.agreementsAdded,
-    relationsAdded: migration.relationsAdded,
-  }, { verbose: true });
-  return { ...bundle, world: migration.world };
 };
 
 // ---- Native country stats (Continuum C7) ------------------------------------
@@ -13232,7 +13211,7 @@ export const warRoomRouteAttacks = ({ world, game, record } = {}) =>
 // made (runtime/fronts/mind/trained.js), so a skip that fights these days has
 // them again rather than thinking them through.
 const foreseeFrom = async ({ days, signal }) => {
-  const bundle = withDiplomaticLedgerMigration(await readGameStateBundle({ force: true }));
+  const bundle = await readGameStateBundle({ force: true });
   const fromDate = normalizeString(bundle.game.gameDate);
   const span = Math.max(0, Number(days) || 0);
   if (!(span >= 1)) return null;
@@ -18288,7 +18267,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   const phases = createSkipPhases({ requestsUsed: () => budgetForPhases?.used ?? 0, onChange: onProgress });
   phases.enter("reading");
   try {
-  const bundle = withDiplomaticLedgerMigration(await readGameStateBundle({ force: true }));
+  const bundle = await readGameStateBundle({ force: true });
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   // Fractional days are allowed so sub-day skips (e.g. 6h = 0.25) work; the game
   // date only advances in whole days, so a sub-day skip keeps the same date.

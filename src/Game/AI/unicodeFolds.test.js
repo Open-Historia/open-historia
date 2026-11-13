@@ -60,7 +60,6 @@ const lowered = (value) => cleaned(value).toLocaleLowerCase();
 // [file, the fold, what it reads from its file's scope, whether it folds accents away]
 const FOLDS = [
     ["src/Game/AI/nativeDiplomaticDirector.js", "pregameTitleKey", { clean: cleaned }, true],
-    ["src/Game/AI/nativeDiplomaticDirector.js", "diplomaticSearchText", {}, true],
     ["src/Game/AI/nativeWarLedger.js", "pregameWarTitleKey", { normalizeString: trimmed }, true],
     ["src/Game/AI/nativeWorldDirector.js", "pregameStorylineTitleKey", { normalizeString: trimmed }, true],
     ["src/Game/AI/nativeWorldDirector.js", "storylineLinkText", { normalizeString: trimmed }, true],

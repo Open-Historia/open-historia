@@ -275,8 +275,9 @@ export const WORLD_DEFAULTS = {
   // too, for the usual reason.
   relations: [],
   agreements: [],
-  // Bumped once migrateLegacyDiplomaticState has seeded the two ledgers from a
-  // save's older treaty/alliance events, so that only ever happens once.
+  // Set when the pregame bootstrap has written the two ledgers for a fresh
+  // game. A save from before the ledgers keeps 0, and keeps what its records
+  // hold: nothing is seeded into them from its old events or chats.
   diplomaticLedgerVersion: 0,
   wars: [],
   // Where land wars are fought: two sides, the troops each has there, and the
