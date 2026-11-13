@@ -10,12 +10,14 @@ config/features=PackedStringArray("4.7")
 boot_splash/show_image=false
 boot_splash/bg_color=Color(0.0745098, 0.0745098, 0.0823529, 1)
 boot_splash/minimum_display_time=0
+boot_splash/show_image.android=true
+boot_splash/image.android="res://android_payload/boot/splash.jpg"
+boot_splash/stretch_mode.android=4
 config/quit_on_go_back=false
 
 [audio]
 
 driver/enable_input=true
-driver/enable_input.android=false
 
 [display]
 
@@ -26,9 +28,17 @@ window/energy_saving/keep_screen_on=false
 window/stretch/aspect="expand"
 window/handheld/orientation=1
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/oh_android/plugin.cfg")
+
 [gui]
 
 common/snap_controls_to_pixels=true
+
+[input_devices]
+
+pointing/android/enable_pan_and_scale_gestures=true
 
 [rendering]
 

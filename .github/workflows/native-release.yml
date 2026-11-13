@@ -1148,7 +1148,7 @@ jobs:
           test ${#editor} -eq 128 && test ${#templates} -eq 128
           echo "editor=$editor" >> "$GITHUB_OUTPUT"
           echo "templates=$templates" >> "$GITHUB_OUTPUT"
-          echo "key=godot-android-4.7.2-${editor:0:16}-${templates:0:16}" >> "$GITHUB_OUTPUT"
+          echo "key=godot-android-gradle-4.7.2-${editor:0:16}-${templates:0:16}" >> "$GITHUB_OUTPUT"
 
       - name: Restore Godot from the cache
         id: godot-cache
@@ -1170,7 +1170,7 @@ jobs:
           curl -fsSL --retry 3 "$GODOT_BASE/Godot_v4.7.2-stable_export_templates.tpz" -o templates.tpz
           echo "$TEMPLATES_SHA  templates.tpz" | sha512sum -c -
           unzip -q -o editor.zip -d ~/godot-cache
-          unzip -q -j templates.tpz templates/android_debug.apk templates/android_release.apk templates/version.txt -d ~/godot-cache
+          unzip -q -j templates.tpz templates/android_debug.apk templates/android_release.apk templates/android_source.zip templates/version.txt -d ~/godot-cache
           chmod +x ~/godot-cache/Godot_v4.7.2-stable_linux.x86_64
           cat ~/godot-cache/version.txt
           rm -rf "$RUNNER_TEMP/godot-dl"
@@ -1186,7 +1186,7 @@ jobs:
         run: |
           templates="$HOME/.local/share/godot/export_templates/4.7.2.stable"
           mkdir -p "$templates" "$HOME/.config/godot"
-          cp ~/godot-cache/android_debug.apk ~/godot-cache/android_release.apk ~/godot-cache/version.txt "$templates/"
+          cp ~/godot-cache/android_debug.apk ~/godot-cache/android_release.apk ~/godot-cache/android_source.zip ~/godot-cache/version.txt "$templates/"
           keytool -genkeypair -keystore "$RUNNER_TEMP/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
           for name in editor_settings-4.7.tres editor_settings-4.tres; do
             {
