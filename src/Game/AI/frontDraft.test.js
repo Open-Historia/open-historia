@@ -84,12 +84,14 @@ test("by default a side raises half the troops it did: half for each point of st
   assert.ok(Math.abs(was - mine * 2) <= 1 && Math.abs(wasTheirs - theirs * 2) <= 1, `${mine} now, ${was} before`);
 });
 
-test("an order for more troops is read from a line: reinforce, a draft, a mobilisation, with how many", () => {
+test("an order for more troops is read from a line: reinforce, with how many", () => {
   const read = (line) => decodeFrontOrders([line]).map(({ side, order, sector, count, objective, problem }) => [side, order, sector, count, objective, problem])[0];
   assert.equal(REINFORCE_ORDER, "reinforce");
   assert.deepEqual(read("The War~Aland~reinforce~south~1~30"), ["Aland", "reinforce", "south", 30, "", undefined]);
-  for (const word of ["draft", "Mobilise", "mobilization", "send reinforcements", "conscription", "reinforcements"]) {
-    assert.deepEqual(read(`The War~Aland~${word}~all~1~12 divisions`), ["Aland", "reinforce", "all", 12, "", undefined], word);
+  assert.deepEqual(read("The War~Aland~Reinforce~all~1~12 divisions"), ["Aland", "reinforce", "all", 12, "", undefined]);
+  // The order is the rules' own word: a draft or a mobilisation said in other words is no order, in any language.
+  for (const word of ["draft", "Mobilise", "send reinforcements", "mobilisation générale", "Mobilmachung"]) {
+    assert.match(read(`The War~Aland~${word}~all~1~12 divisions`)[5], /is not an order/, word);
   }
   // No number leaves it to the game; more than an order may bring is the most it may.
   assert.deepEqual(read("The War~Aland~reinforce~all~1"), ["Aland", "reinforce", "all", undefined, "", undefined]);
