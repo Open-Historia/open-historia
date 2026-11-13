@@ -21,8 +21,11 @@ export const MAX_HOME_FORCES = 6;
 export const MAX_BATTLEFIELDS_CHARS = 160000;
 export const BATTLEFIELD_NAME_MAX = 80;
 
-// A side is the countries (or groups) fighting together on it.
-export const MAX_SIDE_MEMBERS = 8;
+// A side is the countries (or groups) fighting together on it: as many as a
+// war's side may hold (runtime/warRecord.js MAX_WAR_SIDE_MEMBERS, the same
+// number: a test keeps the two equal), every one with troops of its own (a
+// troop's owner is kept in eight bits once a side passes eight: codec.js).
+export const MAX_SIDE_MEMBERS = 64;
 // Hundreds a side: a front is to be thick with troops, close together.
 export const MAX_TROOPS_PER_SIDE = 400;
 export const MAX_NAMED_TROOPS = 64;

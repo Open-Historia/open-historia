@@ -82,7 +82,6 @@ import {
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
 import { landlessFoundings, successorTransfers } from "./polityTransitions.js";
 import { splitCountryOps } from "./countrySplit.js";
-import { hasAnnexOrders, orderedAnnexations } from "./orderedAnnexations.js";
 import {
   detectExplicitBaseTerritoryScope,
   requestDemandsExhaustiveTerritorialScope,
@@ -188,6 +187,7 @@ import {
   JUMP_PROJECTS_RULES_HEADING,
 } from "./projectsDirective.js";
 import { filterBoundLedgerUpdatesToKeptEvents, keepWarRecordsBeyondEvents } from "./ledgerEventBinding.js";
+import { giveSegmentEventIds, pinLedgersToEvents } from "./ledgerPins.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
 import { parkedTurnRecord, restoreParkedTurn } from "./parkedTurn.js";
 import { applyBoardCarriers } from "./boardPassApply.js";
@@ -254,7 +254,7 @@ import { reshelveJumpAnswer } from "./jumpAnswerShelves.js";
 import { readPeaceVerdict, readTreatyLines, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { PEACE_ANSWERS_FIELD, buildWarStatsBlock, describePeaceTalk, warsOf } from "./warStatsPrompt.js";
 import { readWarRoomAnswer, warRoomRequest, warRoomStanding, warRoomVariables } from "./warRoomContext.js";
-import { bindFrontOrdersToEvents, decodeEventStrikes, describeDroppedFrontOrders, frontOrderProseLines, screenFrontOrders } from "./nativeFrontLedger.js";
+import { bindFrontOrdersToEvents, decodeEventStrikes, describeDroppedFrontOrders, screenFrontOrders } from "./nativeFrontLedger.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, foldedRegionIndex, matchRegionName, nearestRegionNames, regionsFoldedAs, stripRegionAffixes } from "./regionMatch.js";
@@ -263,7 +263,6 @@ import { countryClaimWithdrawals } from "./claimsByCountry.js";
 import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
 import { findUnitByRef, newestTwinByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedAreas.js";
-import { CAPTURE_REACH_KM, findNarratedCaptures, mayNarrateCapture, statedAnnexations, statesCapture } from "./narratedCapture.js";
 import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, placesAsWritten, readEventPlace } from "./eventPlaces.js";
 import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 import { describeTravelPace, eraOf, kmOnMap, seaShareOf } from "../../runtime/unitMotion.js";
@@ -442,7 +441,6 @@ import {
   decodeWarUpdates,
   interpretWarLedger,
   settleWarLedger,
-  warUpdateProseLines,
 } from "./nativeWarLedger.js";
 import {
   DIPLOMATIC_LEDGER_VERSION,
@@ -895,26 +893,17 @@ const filedEventsFromRows = (droppedRows, hiddenRows, sourceEvents) => {
     .filter(Boolean);
 };
 
-// A segment's war records tied to its events by id, in the order the model
-// wrote them, before anything reorders or inserts events. Events without an id
-// get the segment's temporary one here (the same validateSegmentLedgers would
-// give them: the round's own ids are minted later, and the records follow).
-// Prose where records go is said once and dropped.
-const pinWarRecordsToEvents = (candidate, segmentIndex = 0) => {
-  if (!candidate || typeof candidate !== "object") return;
-  const events = normalizeArray(candidate.events);
-  events.forEach((event, index) => {
-    if (event && typeof event === "object" && !normalizeString(event.id)) {
-      event.id = `segment-${segmentIndex + 1}-event-${index + 1}`;
-    }
-  });
-  const prose = warUpdateProseLines(candidate.warUpdates);
-  if (prose.length) {
-    logDebugEvent("ai", `warUpdates: ${prose.length} line(s) that are not war records were ignored.`, { lines: prose });
+// A segment's ledger records, every ledger of them, tied to its events by id
+// in the order the model wrote them, before anything reorders or inserts
+// events (ledgerPins.js). Events without an id get the segment's temporary one
+// here: the round's own ids are minted later, and the records follow. Prose
+// where records go is said once and dropped.
+const pinSegmentLedgers = (candidate, segmentIndex = 0) => {
+  const { warProse, frontProse } = pinLedgersToEvents(candidate, { segmentIndex });
+  if (warProse.length) {
+    logDebugEvent("ai", `warUpdates: ${warProse.length} line(s) that are not war records were ignored.`, { lines: warProse });
   }
-  const records = decodeWarUpdates(candidate.warUpdates, { limit: Infinity });
-  if (!records.length) return;
-  candidate.warUpdates = bindWarUpdatesToEvents(records, events, { limit: Infinity });
+  if (frontProse.length && frontsOn()) console.info(`[OH fronts] ignored ${frontProse.length} line(s) of prose where front orders go.`);
 };
 
 // One jump segment's ledger records, checked against the world as the earlier
@@ -922,23 +911,13 @@ const pinWarRecordsToEvents = (candidate, segmentIndex = 0) => {
 // diplomatic ledgers are strict while a retry remains and salvaged on the last
 // attempt. Record event links before mergeSegmentPayloads concatenates segments.
 const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, receipt = null }) => {
-  const events = normalizeArray(candidate?.events);
   // Temporary ids: the canonical round-scoped ones are minted once the whole
   // round is in hand (applySimulationResult), and the records follow them.
-  events.forEach((event, index) => {
-    if (event && typeof event === "object" && !normalizeString(event.id)) {
-      event.id = `segment-${segmentIndex + 1}-event-${index + 1}`;
-    }
-  });
-
-  // Prose where war records go (a heading, "No changes.") is not a record and
-  // never reaches the ledger (nativeWarLedger.js parseWarUpdateRecord). Said
-  // here, once for the answer and before anything rewrites the field. It is
-  // not a rejection and not a note for the next turn: such a line names no war.
-  const warProse = warUpdateProseLines(candidate?.warUpdates);
-  if (warProse.length) {
-    logDebugEvent("ai", `warUpdates: ${warProse.length} line(s) that are not war records were ignored.`, { lines: warProse });
-  }
+  // Every event has one by now, and every record is tied to its events by it
+  // (pinSegmentLedgers, before the answer was put in date order). Prose where
+  // war records go was said there, and is no rejection and no note for the
+  // next turn: such a line names no war.
+  giveSegmentEventIds(candidate?.events, segmentIndex);
 
   // The answer's wars, settled by the engine alone (nativeWarLedger.js
   // settleWarLedger): what the answer's structure tells is made explicit, every
@@ -991,8 +970,7 @@ const screenSegmentFrontOrders = (candidate, { game, actions, receipt = null } =
     delete candidate.frontOrders;
     return;
   }
-  const prose = frontOrderProseLines(candidate?.frontOrders);
-  if (prose.length) console.info(`[OH fronts] ignored ${prose.length} line(s) of prose where front orders go.`);
+  // (Prose where orders go was said, and dropped, when they were tied to their events: pinSegmentLedgers.)
   const events = normalizeArray(candidate?.events);
   const owners = new Map(normalizeArray(actions).map((action) => [
     normalizeString(action?.id),
@@ -1080,10 +1058,10 @@ const validateSegmentStorylines = (candidate, {
 };
 
 // Native integrity screening of an accepted segment BEFORE it joins the round:
-// an event that is objectively impossible in this world (a non-belligerent's
-// wartime economy) or an obvious no-delta restatement never feeds the next
-// segment or the curator, and a ledger or storyline record bound only to a
-// dropped event goes with it. The exploration audit of what survived is kept
+// an event that makes the player's sovereign choice with nothing of the
+// player's behind it, or an obvious no-delta restatement, never feeds the next
+// segment or the curator, and a ledger record bound only to a dropped event
+// goes with it (a war record stays). The exploration audit of what survived is kept
 // per segment for the post-curation breadth repair. The segment's temporary
 // event ids are already bound into its ledger records (validateSegmentLedgers),
 // so storyline ids are attached to the events in place, never by re-labelling.
@@ -1137,7 +1115,6 @@ const screenSegmentPayload = (payload, {
     analysis,
     agreementUpdates: payload?.agreementUpdates,
     warUpdates: payload?.warUpdates,
-    frontOrders: payload?.frontOrders,
   });
   if (screened.dropped?.length) {
     console.warn(
@@ -1163,12 +1140,11 @@ const screenSegmentPayload = (payload, {
   payload.puppetUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.puppetUpdates, taggedEvents, screened.events);
   payload.agreementUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.agreementUpdates, taggedEvents, screened.events);
   payload.frontOrders = filterBoundLedgerUpdatesToKeptEvents(payload?.frontOrders, taggedEvents, screened.events);
-  payload.storylineUpdates = filterStorylineUpdatesAfterIntegrityScreen({
-    updates: decodedStorylineUpdates,
-    allEvents: taggedEvents,
-    existingStorylines: world?.storylines,
-    dropped: screened.dropped,
-  });
+  // Storyline records stay whole: a storyline whose events the screen drops or
+  // hides is still the world's process. (A new one used to go with an event
+  // rejected as a non-belligerent's wartime economy, a rule read from English
+  // words, now gone: nativeWorldIntegrity.js.)
+  payload.storylineUpdates = normalizeArray(decodedStorylineUpdates);
   payload.summary = String(payload?.summary ?? "").replace(/\s+/g, " ").trim();
 };
 
@@ -1684,10 +1660,10 @@ const FOLDED_SKIP_CONSEQUENCES = [
   "• Units. Check the event against Current Military Units. A formation the text has advancing, retreating, redeploying, massing on a border or going into action is MOVED: its name in unitId, an `at`, and the posture it now has (fighting is a move into contact with posture assaulting). Losses, attrition, reinforcement or refit change its strength; destruction or disbandment removes it. Reuse the formation that already exists before raising another: the army that fought last month is the army fighting this month. A ship, submarine or squadron commissioned, delivered or stood up, and a division raised or mobilised, is a NEW formation: spawn it for the power that raised it, at its named port or base, even when that power already has units. A war is fought by formations the map shows, on BOTH sides, whether or not the player is in it: when an event has a power or a group attacking, defending, besieging or falling back somewhere and it has no formation there among Current Military Units, spawn one where the event puts it (a group's formation carries the group's exact name as ownerCode), and move it in later events as the front moves.",
   "• Structures. Anything physical and fixed that the text says was built, opened, completed, commissioned, activated or begun (a base, shipyard, port, airfield, factory, plant, reactor, laboratory, data centre, radar or ground station, launch site, depot, embassy, fortification) is a markerOps build: a specific name, a short lowercase kind, its owner's full name, `at` the place the event names, and a status of planned, under_construction or active. A meeting, study, budget or plan builds nothing; nothing in orbit is a structure, though the ground station that serves it is; a ship or an aircraft is a unit; and nothing already on the map is built twice.",
   EVENT_PLACES_RULE,
-  "• Orders. An event that gives one of the player's orders its outcome lists that order's id in impacts.actionIds.",
+  "• Orders. An event that gives one of the player's orders its outcome lists that order's id in impacts.actionIds. When that outcome moves land (an annexation carried out, a region taken), the same event carries the regionTransfers or regionControlOps that move it; an order that fails or is put off moves none.",
   "• The board. An event that moved one of the player's projects or operations carries its impacts.projectOps, as [Projects & Operations] says.",
   "An event whose text changes nothing material carries no ops, and that is correct: never invent one to fill a field. But an event that says a town fell, a fleet sailed or a base opened, with nothing in its impacts, leaves the player looking at a map that contradicts the story.",
-  "Nothing takes a repeat or a filler event off the timeline afterwards either. Do not write an event that restates the record, or one that reports a meeting, a review or a statement with no outcome.",
+  "Nothing takes a repeat or a filler event off the timeline afterwards either. Do not write an event that restates the record, or one that reports a meeting, a review or a statement with no outcome, or patrols, exchanges of fire or a state of readiness that changed nothing.",
   // Measured against the live API (2026-10-05): asked to finish each event,
   // the model wrote six and seven events for a month that called for ten.
   "Finishing each event is not a reason to write fewer of them: the period still holds the number of events its instruction asks for, and most of the world's events need few ops or none.",
@@ -2877,7 +2853,7 @@ ${describeTravelPace(gameDate, era)}`;
 const WHAT_CHATS_BIND_HEADING = "[What Chats Bind]";
 const WHAT_CHATS_BIND = "What earlier chats agreed, promised, threatened or declared, and what still binds. Carry each through when its time comes: an agreed meeting, withdrawal or hand-over happens on its date, or an event says why it did not; a declared intention is acted on or visibly dropped; a credible threat is answered by the power it threatens, before its deadline. Where a summary and the exact words differ, follow the words, and a later pleasantry does not cancel an earlier threat or promise. A proposal nobody accepted is not an agreement.";
 const TAKING_GROUND_BLOCK = `[Taking Ground]
-An army may take a region in this period wherever what has led up to it makes that likely, or where history took it at this time and nothing in this game has turned that aside. Tell it in the event that takes it, and put the region in the taker's hands on that event: a regionControlOps control entry, basis occupation, the region by name. Move the formation that took it there in the same event when it has one on the map. A region is taken only where enough of the taker's troops stand near it, more for a larger region: where too few do, move them up first, in an earlier event, or the region stays where it was. From that event's date the map follows: the taker's nearest troops stand in the region, and the other side's fall back out of it.`;
+An army may take a region in this period wherever what has led up to it makes that likely, or where history took it at this time and nothing in this game has turned that aside. Tell it in the event that takes it, and put the region in the taker's hands on that event: a regionControlOps control entry, basis occupation, the region by name. Move the formation that took it there in the same event when it has one on the map. A region is taken only where enough of the taker's troops stand near it, more for a larger region: where too few do, move them up first, in an earlier event, or the region stays where it was. From that event's date the map follows: the taker's nearest troops stand in the region, and the other side's fall back out of it. Only that entry moves the map: a region an event says was taken, with no entry for it, stays with its holder.`;
 const whoSpiesOnThePlayerBlock = (spiedOn) => `[Who Spies on the Player]
 Write spiesOnPlayer: the polities, by exact name and comma-separated, that would really try to place an agent in ${spiedOn} this period. Choose them as the world stands: enemies and rivals, powers with a real stake in ${spiedOn}'s affairs, a patron keeping watch on a client. A polity with no reason to, no reach, or no intelligence service to speak of sends nobody. An empty string when none would.`;
 
@@ -7799,175 +7775,6 @@ const validateChatOpener = (chatLike, path) => {
   return "";
 };
 
-// Event text that claims control changed hands (capture verbs) or that legal
-// sovereignty moved (cession, annexation, treaty). Word-boundary anchored so
-// "preoccupied" never matches; deliberately narrow so a defensive battle that
-// moved no borders never trips the reluctance guards below.
-const CONTROL_CHANGE_LANGUAGE = /\b(captur\w*|seiz\w*|conquer\w*|occup(?:y|ies|ied|ation)|overr[au]n|liberat\w*|retak\w*|retaken|recaptur\w*|fell to|falls? to|takes? control|assumes? control)\b/i;
-const LEGAL_TRANSFER_LANGUAGE = /\b(annex\w*|cedes?|ceded|ceding|cession|sovereignty (?:passes|transfers?|is transferred)|treaty transfer|formal(?:ly)? transfer(?:red)?|incorporat\w*|unification|territorial award|sold|sale of territory)\b/i;
-
-// A capture an event tells of and does not carry is put on the map, where the
-// event's own operations show who took what (narratedCapture.js). Seen in a
-// 45-skip test (2026-10-09): a time skip is one request, so the reluctance
-// guard above never gets its retry, and an event that had a formation storm a
-// town and wrote no control operation left the map as it was.
-//
-// Only for a land formation the same event moves or raises, at the place the
-// event's own words say fell: the region it ends in, or the region of a city
-// within CAPTURE_REACH_KM of where it ends. The pure module decides whether the
-// words state a capture and whose it is; this finds the places and writes the
-// operation, after the event's own territory operations and placements have
-// been resolved. Mutates the events' impacts; returns how many were added.
-const completeNarratedCaptures = async (containers, world, { receipt = null, renderedRegions = null, lookupContext = null } = {}) => {
-  const worldState = normalizeWorldState(world);
-  const unitsById = new Map(normalizeArray(worldState.units).map((unit) => [normalizeString(unit?.id), unit]));
-  const finitePoint = (lng, lat) => (lng != null && lat != null && Number.isFinite(Number(lng)) && Number.isFinite(Number(lat))
-    && !(Number(lng) === 0 && Number(lat) === 0) ? [Number(lng), Number(lat)] : null);
-  const pending = [];
-  for (const container of normalizeArray(containers)) {
-    const { event, impacts } = container;
-    if (!impacts || typeof impacts !== "object") continue;
-    // Read before the map is: most events tell of no capture at all.
-    if (!mayNarrateCapture(`${normalizeString(event?.title)} ${normalizeString(event?.description)}`)) continue;
-    const moves = [];
-    for (const op of normalizeArray(impacts.unitOps)) {
-      const kind = normalizeString(op?.op).toLowerCase();
-      const unit = kind === "move" ? unitsById.get(normalizeString(op.unitId))
-        : kind === "spawn" ? (op.unit && typeof op.unit === "object" ? op.unit : op)
-          : null;
-      if (!unit || !LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase())) continue;
-      const point = kind === "move" ? finitePoint(op.toLng, op.toLat) : finitePoint(unit.lng, unit.lat);
-      const owner = normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode);
-      if (point && owner) moves.push({ owner, unitName: normalizeString(unit.name), point });
-    }
-    if (moves.length) pending.push({ container, moves });
-  }
-  if (!pending.length) return 0;
-
-  let context;
-  try {
-    context = await (lookupContext ?? lazyLookupContext({ world }, { renderedRegions }))();
-  } catch (error) {
-    console.warn("[narrated capture] the map could not be read; nothing was added.", error);
-    return 0;
-  }
-  const regionAt = (point) => context.rows.find((row) => row.geometry && row.bbox
-    && point[0] >= row.bbox[0] && point[0] <= row.bbox[2] && point[1] >= row.bbox[1] && point[1] <= row.bbox[3]
-    && pointInGeometry(point, row.geometry)) ?? null;
-  const labelOf = (name) => context.resolveOwner(name) || normalizeString(name);
-  const samePower = (a, b) => Boolean(foldRegionKey(labelOf(a))) && foldRegionKey(labelOf(a)) === foldRegionKey(labelOf(b));
-  const groupNames = isActiveFeatureEnabled("groups") ? Object.keys(worldState.groups ?? {}) : [];
-  const powers = [...context.ownerRows.keys(), ...normalizeArray(context.landless), ...groupNames];
-  const aliasesOf = (owner) => {
-    const label = labelOf(owner);
-    return Object.entries(worldState.polityOverrides ?? {})
-      .filter(([token, record]) => samePower(token, label) || samePower(record?.name, label))
-      .flatMap(([token, record]) => [token, record?.name, ...normalizeArray(record?.aliases)])
-      .map(normalizeString)
-      .filter(Boolean);
-  };
-
-  let added = 0;
-  for (const { container, moves } of pending) {
-    const { event, impacts } = container;
-    const candidates = [];
-    for (const move of moves) {
-      const mover = { owner: move.owner, aliases: aliasesOf(move.owner), unitName: move.unitName };
-      const standsIn = regionAt(move.point);
-      if (standsIn) {
-        candidates.push({ regionId: standsIn.id, regionName: standsIn.name, names: [standsIn.name, ...standsIn.aliases], controller: standsIn.owner, move: mover });
-      }
-      for (const city of context.cityRows) {
-        if (placementDistanceKm(move.point, city.coordinates) > CAPTURE_REACH_KM) continue;
-        // A city the map puts in one region; a guess at its region is not enough.
-        const placed = context.placeCity(city);
-        if (!placed?.row || placed.approximate) continue;
-        candidates.push({ regionId: placed.row.id, regionName: placed.row.name, names: [city.name, ...city.aliases], controller: placed.row.owner, move: mover });
-      }
-    }
-    const changed = [
-      ...normalizeArray(impacts.regionControlOps).map((op) => op?.regionId),
-      ...normalizeArray(impacts.regionTransfers).map((transfer) => transfer?.regionId),
-      ...normalizeArray(impacts.groupOps).flatMap((op) => normalizeArray(op?.regionIds)),
-    ].map(normalizeString).filter(Boolean);
-    const captures = findNarratedCaptures({
-      title: normalizeString(event?.title),
-      description: normalizeString(event?.description),
-      candidates,
-      powers,
-      changed,
-      samePower,
-    });
-    for (const capture of captures) {
-      const taker = context.resolveOwner(capture.toCode);
-      const group = taker ? "" : groupNames.find((name) => name.toLowerCase() === capture.toCode.toLowerCase()) ?? "";
-      const note = `Taken, as the event tells: ${capture.place}.`;
-      if (taker) {
-        impacts.regionControlOps = [...normalizeArray(impacts.regionControlOps), {
-          op: "control", regionId: capture.regionId, regionName: capture.regionName,
-          fromCode: labelOf(capture.fromCode), toCode: taker, basis: "occupation", note,
-        }];
-      } else if (group) {
-        // A side that is no country holds ground as a group does.
-        impacts.groupOps = [...normalizeArray(impacts.groupOps), { op: "take", name: group, regionIds: [capture.regionId], note }];
-      } else {
-        continue;
-      }
-      added += 1;
-      const title = normalizeString(event?.title);
-      noteReceipt(receipt, "adjusted",
-        `${title ? `Event "${title}": ` : ""}the text says ${capture.place} was taken and the event moved ${taker || group}'s formation there, `
-        + `but it carried no control operation, so ${capture.regionName} was put under ${taker || group}'s control. `
-        + "Write the regionControlOps control entry yourself for every capture an event tells of.");
-      console.info(`[narrated capture] ${container.path}: ${capture.regionName} (${capture.regionId}) ${capture.fromCode} -> ${taker || group}, from "${capture.sentence}".`);
-    }
-  }
-  return added;
-};
-
-// A whole polity an event says was annexed ("Indonesia formally annexes
-// Timor-Leste"), with no transfer written for it (#798). A time skip is one
-// request and is never sent back, so the transfer the words state is written
-// here, as a wholeCountry transfer the resolver below expands to every region
-// the annexed polity holds. Both must be powers on the map, and the event must
-// carry no transfer of its own from the annexed one. Mutates the events'
-// impacts; returns how many were added.
-const completeNarratedAnnexations = async (containers, { receipt = null, lookupContext } = {}) => {
-  const pending = normalizeArray(containers).filter(({ event, impacts }) => impacts && typeof impacts === "object"
-    && /\b(annex|incorporated|absorbed)/i.test(normalizeString(event?.description)));
-  if (!pending.length) return 0;
-  let context;
-  try {
-    context = await lookupContext();
-  } catch (error) {
-    console.warn("[narrated annexation] the map could not be read; nothing was added.", error);
-    return 0;
-  }
-  const powers = [...context.ownerRows.keys()];
-  let added = 0;
-  for (const { event, impacts, path } of pending) {
-    for (const { annexer, annexed, sentence } of statedAnnexations(normalizeString(event?.description), powers)) {
-      const from = context.resolveOwner(annexed);
-      const to = context.resolveOwner(annexer);
-      if (!from || !to || !context.ownerRows.get(from)?.length) continue;
-      const already = normalizeArray(impacts.regionTransfers).some((transfer) =>
-        [transfer?.fromCode, transfer?.regionId].some((value) => context.resolveOwner(normalizeString(value).replace(/^country:\s*/i, "")) === from));
-      if (already) continue;
-      impacts.regionTransfers = [...normalizeArray(impacts.regionTransfers), {
-        regionId: `country: ${from}`, fromCode: from, toCode: to, wholeCountry: true, basis: "annexation",
-        note: `Annexed, as the event tells: ${from} into ${to}.`,
-      }];
-      added += 1;
-      const title = normalizeString(event?.title);
-      noteReceipt(receipt, "adjusted",
-        `${title ? `Event "${title}": ` : ""}the text says ${to} annexed ${from}, but it carried no transfer, so every region ${from} held was given to ${to}. `
-        + "Write the regionTransfers entry yourself for every annexation an event tells of.");
-      console.info(`[narrated annexation] ${path}: ${from} -> ${to}, from "${sentence}".`);
-    }
-  }
-  return added;
-};
-
 // A region an event gives a power away from any battlefield: the taker's
 // nearest land formations march in, and with too few near it is not taken
 // (storyMarch.js, where the rule is told in full). The map is read here.
@@ -8115,8 +7922,6 @@ const buildProjectFeedback = (operationPath, operation, knownProjects) => {
     + `If this is genuinely a new effort, open it with {"op":"create","name":"...","summary":"..."} instead.`;
 };
 
-// captureGuard: the reluctance check below is for turn narration; an administrative
-// GM correction may legitimately mention an annexation without moving a border.
 // What to tell the NEXT turn about a territorial operation the resolver could not
 // place. buildTransferFeedback above is the in-turn version: it spends up to two
 // hundred region names on the one retry. By the next turn that vocabulary is a
@@ -8144,7 +7949,6 @@ const describeUnresolvedTerritory = (entry, family, eventTitle) => {
 
 export const validateGeneratedWorldChanges = async (candidate, world, {
   strictTransfers = false,
-  captureGuard = true,
   resolvedRegionIdsOnly = false,
   explicitScopeText = "",
   // Collects what salvage drops or changes (runtime/applicationReceipt.js), so
@@ -8236,22 +8040,6 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     noteReceipt(receipt, "short", `${title ? `Event "${title}": ` : ""}it founded ${polity}, which holds no land on the map. If ${polity} now governs a country, write that: rename the country it took over to ${polity} (polityChanges rename), or give ${polity} the land it holds.`);
     console.info(`[ai] ${polity} was founded and holds no land; the next skip is told.`);
   }
-  if (Array.isArray(candidate?.events) && normalizeString(playerCountry) && hasAnnexOrders(actions)) {
-    const catalog = filterToRenderedRegions(await loadRegionCatalog().catch(() => []), world);
-    const overrides = world?.regionOwnershipOverrides ?? {};
-    const rowOwner = new Map(catalog.map((region) => [normalizeString(region?.id), normalizeString(region?.country)]));
-    const ownerOf = (id) => normalizeString(overrides[id]) || rowOwner.get(normalizeString(id)) || "";
-    const polities = [...new Set([...Object.keys(world?.polityOverrides ?? {}), ...Object.values(overrides), ...rowOwner.values()].map(normalizeString).filter(Boolean))];
-    for (const { index, transfers } of orderedAnnexations({ events: candidate.events, actions, playerCountry, regions: catalog, ownerOf, polities })) {
-      const { impacts, path } = containers[index];
-      if (!impacts || typeof impacts !== "object") continue;
-      impacts.regionTransfers = [...normalizeArray(impacts.regionTransfers), ...transfers];
-      for (const transfer of transfers) {
-        noteReceipt(receipt, "adjusted", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}it carries out the order to annex ${transfer.regionName} but moved no land, so ${transfer.regionName} passes to ${transfer.toCode}.`);
-        console.info(`[ai] ${path}.regionTransfers: the player's annexation of ${transfer.regionName} added; the event told it and moved nothing.`);
-      }
-    }
-  }
   // Groups switched off for this game (server/gameFeatures.js): what the model
   // wrote about them is left out, and it is not told, as it is never told the
   // system exists. The world's own groups are kept for a game switched back on.
@@ -8277,12 +8065,6 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   const renderedRegions = createRenderedRegionsReader();
   // The map's names, read at most once for everything below that asks.
   const lookupContext = lazyLookupContext({ world }, { renderedRegions });
-  // An annexation the text states and no transfer carries is written before the
-  // transfers are resolved, so it is expanded like any other. Only on the answer
-  // that is kept: an attempt that can still be sent back is told instead.
-  if (!strict && captureGuard && !resolvedRegionIdsOnly && Array.isArray(candidate?.events)) {
-    await completeNarratedAnnexations(containers, { receipt, lookupContext });
-  }
   // A country split in two by one entry (splitCountryOps), on every attempt: it is how the entry is read.
   if (!resolvedRegionIdsOnly) await splitCountryOps(candidate, containers, { receipt, lookupContext, playerCountry, titleAt, wars: world?.wars });
   const unresolvedTransfers = await resolveRegionTransfers(containers, world, {
@@ -8351,15 +8133,14 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // coordinates it came with. Not on the Game Master's apply-time pass, which
   // may not reopen the map's geometry: its preview already placed everything.
   if (!resolvedRegionIdsOnly) await resolvePlacements(containers, world, { receipt, renderedRegions, lookupContext });
-  // A capture the text states and the event's own formation shows, with no
-  // control operation written for it, is finished here. Only on the answer
-  // that is kept: an attempt that can still be sent back is told instead, by
-  // the reluctance guard below.
-  if (!strict && captureGuard && !resolvedRegionIdsOnly && Array.isArray(candidate?.events)) {
-    await completeNarratedCaptures(containers, world, { receipt, renderedRegions, lookupContext });
-  }
-  // And the other way round: a region an event gives a power, with none of its
-  // formations sent there, has the nearest of them march in (marchCapturersIn).
+  // A region an event gives a power, with none of its formations sent there,
+  // has the nearest of them march in (marchCapturersIn). The map moves only by
+  // what an event's impacts say: a capture or an annexation told only in its
+  // words moves nothing, in every language, as the skip is told (the Land and
+  // Orders lines of FOLDED_SKIP_CONSEQUENCES, [Taking Ground]). An English
+  // reader of the words used to write the operation it took them to mean
+  // (narratedCapture.js, orderedAnnexations.js), and send a strict attempt back
+  // over them: "dont do keywording its super unreliable" (the owner, 2026-11-06).
   if (!strict && !resolvedRegionIdsOnly && Array.isArray(candidate?.events)) {
     await marchCapturersIn(containers, world, { receipt, renderedRegions, lookupContext });
   }
@@ -8372,66 +8153,6 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     if (exactClaimError) return exactClaimError;
     const exactGroupError = validateExactApprovedGroupAreas(containers);
     if (exactGroupError) return exactGroupError;
-  }
-  // Reluctance guards (strict attempt only): events that NARRATE a change of
-  // hands while the map does not move are the recurring field report — "two
-  // turns of invasions and not a single province transferred". Two checks: a
-  // capture/occupation with ZERO regionControlOps, and a legal settlement
-  // (annexation, cession, treaty) with ZERO regionTransfers. One corrective
-  // retry asks the model to reconcile narration with the map (or to strip the
-  // wording if genuinely nothing changed hands). English
-  // verb heuristic only — a non-English game just never gets this extra nudge —
-  // and the final attempt always passes through salvage, so it can never cost a
-  // finished turn. Only for event-shaped payloads: a $.impacts container has no
-  // narration to check.
-  if (strict && captureGuard && Array.isArray(candidate?.events)) {
-    const totalTransfers = containers.reduce(
-      (sum, { impacts }) => sum + normalizeArray(impacts?.regionTransfers).length,
-      0,
-    );
-    const totalControlOps = containers.reduce(
-      (sum, { impacts }) => sum + normalizeArray(impacts?.regionControlOps).length,
-      0,
-    );
-    const text = (event) => `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-    if (totalControlOps === 0) {
-      const controlEvent = candidate.events.find((event) =>
-        CONTROL_CHANGE_LANGUAGE.test(text(event)) && !LEGAL_TRANSFER_LANGUAGE.test(text(event)));
-      if (controlEvent) {
-        return `Your events describe a wartime capture/occupation/control change (e.g. "${normalizeString(controlEvent.title) || "an event"}") but the payload contains ZERO impacts.regionControlOps. Either add the matching control operations (op=control for a capture/occupation/liberation, op=contest while a region is actively disputed; regionId = the region's name as the map spells it, written "region: <name>", or the grounded place wording; fromCode = the current controller) or rewrite the event so that no control changed hands.`;
-      }
-    }
-    if (totalTransfers === 0) {
-      const legalEvent = candidate.events.find((event) => LEGAL_TRANSFER_LANGUAGE.test(text(event)));
-      if (legalEvent) {
-        return `Your events describe a legal territorial settlement (e.g. "${normalizeString(legalEvent.title) || "an event"}") but the payload contains ZERO impacts.regionTransfers. Either add the matching legal transfers (one per region as "region: <name>", or regionId "country: <name>" for a total annexation/unification) or rewrite the event so that no sovereignty changed.`;
-      }
-    }
-    // The same, event by event: one event's operations do not cover another
-    // event that states a capture or an annexation and carries none (#893,
-    // #798). Read on the description only, which states it as a fact.
-    for (const { event, impacts } of containers) {
-      const title = normalizeString(event?.title) || "an event";
-      const description = normalizeString(event?.description);
-      const ownTerritory = normalizeArray(impacts?.regionControlOps).length + normalizeArray(impacts?.regionTransfers).length
-        + normalizeArray(impacts?.groupOps).filter((op) => normalizeArray(op?.regionIds).length).length;
-      const captured = ownTerritory === 0 ? statesCapture(description) : null;
-      if (captured) {
-        return `The event "${title}" states a capture ("${captured}") but carries no territory operation of its own. Either add the regionControlOps control entry to THAT event (regionId "region: <name>" as the map spells it, fromCode = the current controller) or rewrite the sentence so that no place changed hands.`;
-      }
-      if (normalizeArray(impacts?.regionTransfers).length === 0 && /\b(annex|incorporated|absorbed)/i.test(description)) {
-        let powers = [];
-        try {
-          powers = [...(await lookupContext()).ownerRows.keys()];
-        } catch {
-          powers = [];
-        }
-        const annexation = statedAnnexations(description, powers)[0];
-        if (annexation) {
-          return `The event "${title}" states that ${annexation.annexer} annexed ${annexation.annexed} but carries no regionTransfers. Either add the transfer to THAT event (regionId "country: ${annexation.annexed}", fromCode "${annexation.annexed}", toCode "${annexation.annexer}", wholeCountry true, basis "annexation") or rewrite it so that no sovereignty changed.`;
-        }
-      }
-    }
   }
 
   // Provider transport validation is not enough for politicalActorOps because
@@ -12258,6 +11979,7 @@ const maybeRepairWorldBreadthAfterCuration = async ({
     events: bundle?.events,
     additionalEvents: survivingEvents,
     referenceDate: normalizeString(context?.targetDate),
+    world: bundle?.world,
   });
   const sparseTrigger = survivorCount <= WORLD_BREADTH_REPAIR_TRIGGER_MAX_SURVIVORS;
   // Same composition pass, no extra AI layer: a busy-but-toothless rolling window
@@ -12377,56 +12099,6 @@ const attachDecodedStorylineIds = (events, decodedStorylineUpdates, passLabel = 
     })),
     decodedStorylineUpdates,
   );
-
-const filterStorylineUpdatesAfterIntegrityScreen = ({
-  updates,
-  allEvents,
-  existingStorylines,
-  dropped,
-} = {}) => {
-  const existingIds = new Set(
-    normalizeArray(existingStorylines)
-      .map((entry) => normalizeString(entry?.id))
-      .filter(Boolean),
-  );
-
-  const fatalDroppedIds = new Set(
-    normalizeArray(dropped)
-      .filter((entry) =>
-        ["NON_BELLIGERENT_WARTIME_CAUSALITY"].includes(
-          normalizeString(entry?.route),
-        )
-      )
-      .map((entry) => normalizeString(entry?.id))
-      .filter(Boolean),
-  );
-
-  if (!fatalDroppedIds.size) return normalizeArray(updates);
-
-  const fatalIndexes = new Set();
-  normalizeArray(allEvents).forEach((event, index) => {
-    if (fatalDroppedIds.has(normalizeString(event?.id))) {
-      fatalIndexes.add(index);
-    }
-  });
-
-  return normalizeArray(updates).filter((update) => {
-    const id = normalizeString(update?.id);
-    if (!id || existingIds.has(id)) return true;
-
-    const indexes = normalizeArray(update?.eventIndexes)
-      .filter((index) => Number.isInteger(index) && index >= 0);
-
-    if (!indexes.length) return true;
-
-    // A NEW storyline whose only establishing event(s) were rejected for an
-    // objective causal impossibility must not survive invisibly and poison the
-    // next pass. Existing selected storylines are intentionally preserved so
-    // routine no-delta cards can collapse into hidden state updates.
-    return !indexes.every((index) => fatalIndexes.has(index));
-  });
-};
-
 
 let countryStatsWorker = null;
 let countryStatsWorkerBroken = false;
@@ -16393,7 +16065,6 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
   });
   if (outcome && normalizeArray(outcome.impacts?.regionTransfers).length) {
     const transferError = await validateGeneratedWorldChanges({ events: [outcome] }, bundle.world, {
-      captureGuard: true,
       playerCountry: normalizeString(bundle.game?.country),
     }).catch((error) => error?.message || "the transfers could not be checked");
     if (transferError) {
@@ -17344,11 +17015,13 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
               `${politicalClaimContext.discardedReason} The transient claim ledger was ignored and legacy prose completeness validation was used for this answer.`,
             );
           }
-          // War records name their events by their place in the answer as it
-          // was written: they are tied to the events themselves first, or once
-          // the answer is in date order a record's "1" names whichever event is
-          // first by date (a probe: a war's id and sides stamped onto a flood).
-          pinWarRecordsToEvents(candidate, segmentIndex);
+          // Every ledger of the answer (wars, relations, agreements, puppets,
+          // storylines, the battlefields' orders) names its events by their
+          // place in the answer as it was written: each is tied to the events
+          // themselves first, or once the answer is in date order a record's
+          // "1" names whichever event is first by date (a probe: a war's id
+          // and sides stamped onto a flood, a revolt onto a treaty).
+          pinSegmentLedgers(candidate, segmentIndex);
           // Mechanical: a batch whose dates are all real is put in date order
           // before anything counts positions (a malformed date is left for the
           // date validator below to report).
@@ -17423,6 +17096,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             const scripted = ensureScriptedEventsWithImpacts(candidate?.events, due, { language: scriptedLanguage });
             if (scripted.inserted.length) {
               candidate.events = scripted.events;
+              // The engine's events come after the answer's and are named by
+              // their place there, before the sort: one named by its place in
+              // date order took the id of the answer's event that stood there,
+              // and every record tied to that event with it.
+              giveSegmentEventIds(candidate.events, segmentIndex);
               sortTimelineEventsChronologically(candidate);
               for (const beat of scripted.inserted) {
                 noteReceipt(draft, "adjusted", `${scriptedBeatWrittenNote(beat)} It is history in this world: its consequences are yours to carry forward.`,
@@ -19515,7 +19193,6 @@ const validateGameMasterPreviewPayload = async (candidate, {
   // an exact map region, but it never writes world state.
   const worldChangeError = await validateGeneratedWorldChanges(candidate, world, {
     strictTransfers: true,
-    captureGuard: false,
     resolvedRegionIdsOnly,
     explicitScopeText: resolvedRegionIdsOnly ? "" : request,
     playerCountry: game?.country || "",

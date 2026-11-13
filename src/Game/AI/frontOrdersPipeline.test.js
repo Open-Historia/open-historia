@@ -112,16 +112,14 @@ test("an event an order rests on is not filed away as routine military news", ()
     combatants: ["Russia", "Ukraine"],
     impacts: {},
   };
-  assert.equal(previewScreenedEvent(event, { world, game })?.route, "ROUTINE_MILITARY_PRECURATION", "on its own it is routine");
+  // Nor on its own: the screen once hid it for its English words, and kept it
+  // in any other language. No word list reads an event for the war now.
+  assert.equal(previewScreenedEvent(event, { world, game }), null);
   const alone = screenGeneratedWorldEvents({ events: [event], world, game });
-  assert.equal(alone.events.length, 0);
-  const ordered = screenGeneratedWorldEvents({
-    events: [event],
-    world,
-    game,
-    frontOrders: [{ id: "front-0", battlefield: "Eastern Ukraine", side: "Russia", order: "advance", sector: "north", eventIds: ["e1"] }],
-  });
-  assert.deepEqual(ordered.events.map((kept) => kept.id), ["e1"]);
+  assert.deepEqual(alone.events.map((kept) => kept.id), ["e1"]);
+  assert.deepEqual(alone.hidden, []);
+  const integrity = read("./nativeWorldIntegrity.js");
+  assert.ok(!/frontOrders = \[\]/.test(integrity.slice(integrity.indexOf("export const screenGeneratedWorldEvents"))), "the screen needs no orders to keep it");
 });
 
 test("the curator spares it too, and the screen reads an order's raw line the way it reads a ledger's", () => {

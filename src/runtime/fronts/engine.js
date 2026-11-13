@@ -109,9 +109,11 @@ const fold = (value) => clean(value).toLowerCase();
 // first eight of each side, in the order the record happened to list them,
 // and a ninth member was a country outside the war: its land a wall, its
 // border no contact, so whether a front opened at all hung on the order the
-// coalition was written in (the owner, 2026-11-13). A BATTLEFIELD still seats
-// at most MAX_SIDE_MEMBERS a side (a troop's owner is kept as an index into
-// them, in three bits: codec.js), and who is seated is decided by seatOrder.
+// coalition was written in (the owner, 2026-11-13). A battlefield seats as
+// many a side (MAX_SIDE_MEMBERS: a troop's owner is kept in eight bits once a
+// side passes eight, codec.js), so every member of a war fights on its
+// battlefields with troops of its own; it seated eight, and a ninth member's
+// land there was a wall.
 const memberList = (value, limit = MAX_WAR_SIDE_MEMBERS) => {
   const members = [];
   for (const entry of Array.isArray(value) ? value : []) {
@@ -277,11 +279,12 @@ const warSideOf = (run, war, id) => {
   return owner >= 0 ? owner : sideOf(run.controllerOf(id));
 };
 
-// Who of a side of a war is seated on a battlefield, in order, when the side
-// has more members than a battlefield seats (MAX_SIDE_MEMBERS): a country a
-// person plays first, then the members holding the most of the battlefield's
-// ground, then the larger armies, then by name. Never the order the war's
-// record lists them in. A side that fits is seated as it stands.
+// Who of a side of a war is seated on a battlefield, in order, should a side
+// ever hold more members than a battlefield seats (MAX_SIDE_MEMBERS; a war's
+// side holds no more today, runtime/warRecord.js): a country a person plays
+// first, then the members holding the most of the battlefield's ground, then
+// the larger armies, then by name. Never the order the war's record lists
+// them in. A side that fits is seated as it stands.
 const seatOrder = (run, arena, members) => {
   const list = memberList(members);
   if (list.length <= MAX_SIDE_MEMBERS) return list;

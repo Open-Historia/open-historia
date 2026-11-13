@@ -62,26 +62,20 @@ const RECENT_VISIBLE_EVENT_PENALTY_DAYS = Object.freeze([
 // whether any mature pressure has actually crossed a threshold.
 const CONSEQUENCE_LOOKBACK_DAYS = 90;
 const CONSEQUENCE_MIN_VISIBLE_EVENTS = 8;
-const STRATEGIC_CONSEQUENCE_RE =
-  /\b(annex(?:es|ed|ation)?|incorporat(?:e|es|ed|ion)|cede[sd]?|cession|independence|proclaim(?:s|ed)?\s+(?:the\s+)?(?:republic|kingdom|state|government)|abdica(?:te|tes|ted|tion)|resign(?:s|ed|ation)|assassinat(?:e|es|ed|ion)|coup|revolution|uprising|rebellion|mutiny|surrender(?:s|ed)?|armistice|ceasefire|peace treaty|declares? war|declaration of war|joins? (?:the )?war|withdraw(?:s|al)? from (?:the )?war|capture(?:s|d)?|seiz(?:e|es|ed)|occup(?:y|ies|ied)|liberat(?:e|es|ed)|breakthrough|government falls?|cabinet resign(?:s|ed)?|election results?|elected president|elected prime minister|ratif(?:y|ies|ied|ication)|signs? (?:a |the )?(?:treaty|pact|accord|agreement)|treaty (?:is )?(?:signed|concluded|ratified)|strike (?:begins|erupts|ends)|calls? off .*strike|bank(?:ing)? panic|financial crash|defaults? on|bankruptcy|martial law|state of emergency|mobiliz(?:e|es|ed|ation)|reserve(?:s)? (?:called|mobilized|activated)|calls? up (?:the )?reserves|force concentration|troop buildup|ultimatum|blockade|nuclear alert|combat alert|evacuat(?:e|es|ed|ion)|border closure|airspace closure|martial law)\b/i;
-const HARD_MILITARY_CONSEQUENCE_RE =
-  /\b(capture(?:s|d)?|seiz(?:e|es|ed)|occup(?:y|ies|ied)|liberat(?:e|es|ed)|retreat(?:s|ed)?|withdraw(?:s|n|al)?|surrender(?:s|ed)?|ceasefire|armistice|breakthrough|encircl(?:e|es|ed)|destroy(?:s|ed)?|defeat(?:s|ed)?|repuls(?:e|es|ed)|casualt(?:y|ies)|killed|wounded|front collapses?)\b/i;
 
-const STORYLINE_ESCALATION_OR_FAILURE_RE =
-  /\b(?:without agreement|fail(?:s|ed|ure|ing)?|break(?:s|ing)? down|collapse(?:s|d)?|walk(?:s|ed)? out|reject(?:s|ed|ion)?|renewed? warnings?|threat(?:s|en|ened|ening)?|ultimatum|missile test|weapons? test|mobiliz(?:e|es|ed|ation)|call(?:s|ed)? up (?:the )?reserves|reserve activation|force concentration|troop buildup|deploy(?:s|ed|ment)|dispers(?:e|es|ed|al)|combat alert|nuclear alert|border incident|airspace violation|blockade|sanction(?:s|ed)?|retaliat(?:e|es|ed|ion)|strike|attack|clash(?:es)?|warning shots?|sabotage|covert operation)\b/i;
-
-
-const UNRESOLVED_CRISIS_CUE_RE =
-  /\b(?:crisis|standoff|showdown|deadlock|without agreement|talks? (?:fail|collapse|break down)|missile test|nuclear test|nuclear alert|mobiliz(?:e|es|ed|ation)|reserve call[- ]?up|ultimatum|blockade|border clash|border incident|incursion|airspace violation|coup attempt|mutiny|uprising|rebellion|insurgency|mass protest|general strike|nationwide strike|state of emergency|martial law|banking panic|currency crash|financial panic|government crisis|constitutional crisis|secession crisis|separatist crisis|military confrontation|armed confrontation)\b/i;
-
-const CRISIS_RESOLUTION_CUE_RE =
-  /\b(?:crisis (?:ends|resolved)|agreement reached|deal reached|peace agreement|ceasefire|armistice|settlement reached|stands? down|de[- ]?escalat(?:e|es|ed|ion)|demobiliz(?:e|es|ed|ation)|coup (?:fails|is defeated|collapses)|uprising (?:ends|is defeated|is suppressed)|strike (?:ends|is called off)|government restored|constitutional settlement|stabilization package succeeds?|withdraw(?:s|n|al)|lifts? blockade)\b/i;
+// Nothing here reads an event's words for its weight: what it carries, the
+// records it changed and the model's own rating of it (importance, notable)
+// say it, in every language. "dont do keywording its super unreliable" (the
+// owner, 2026-11-06). Removed on 2026-11-13: STRATEGIC_CONSEQUENCE_RE and
+// HARD_MILITARY_CONSEQUENCE_RE (an event's consequence score),
+// STORYLINE_ESCALATION_OR_FAILURE_RE, UNRESOLVED_CRISIS_CUE_RE and
+// CRISIS_RESOLUTION_CUE_RE (which events were major, and which an unresolved
+// crisis owing a storyline), HUMAN_TEXTURE_RE (what spared an administrative
+// card) and SYSTEMIC_ESCALATION_CUE_RE (the conflict risk's escalation
+// signals). Each counted in an English game and nowhere else.
 
 const ROUTINE_ADMINISTRATIVE_PROCESS_RE =
   /\b(?:technical review|committee review|working group|administrative implementation|implementation review|compliance review|compliance tracking|inspection protocol|inspection standards|regulatory harmonization|protocol refinement|procedural update|standards update|report(?:s|ed)? (?:on|its)|publishes? (?:a )?(?:review|assessment|report)|issues? (?:a )?(?:review|assessment|report)|streamlined (?:procedures|protocols|standards)|finaliz(?:e|es|ed) (?:technical|administrative|inspection|compliance|procedural|regulatory)|monitoring framework|coordination mechanism|advisory committee)\b/i;
-
-const HUMAN_TEXTURE_RE =
-  /\b(?:festival|funeral|wedding|ceremony|sport|football|university|concert|film|literature|art|scandal|accident|disaster|storm|flood|earthquake|wildfire|public mourning|popular craze|public celebration|scientific discovery|record broken)\b/i;
 
 const ESCALATION_LADDER = Object.freeze([
   {
@@ -145,8 +139,9 @@ const HOSTILE_RELATION_STATUS_RE =
   /\b(hostile|enemy|adversarial|rival|severe|confrontational|very tense|crisis)\b/i;
 const DEFENSE_COUPLING_RE =
   /\b(alliance|defen[cs]e|mutual assistance|guarantee|security pact|collective security)\b/i;
-const SYSTEMIC_ESCALATION_CUE_RE =
-  /\b(mobiliz(?:e|es|ed|ation)|reserve call[- ]?up|ultimatum|blockade|invasion|incursion|border clash|armed clash|direct clash|combat alert|nuclear alert|force concentration|troop buildup|forward deploy(?:ment|ed)|airspace closure|border closure|missile test|nuclear test|failed talks|talks? collapse|ceasefire collapse|coup attempt|mutiny|uprising|secession)\b/i;
+// The postures a skip gives a build-up and a blockade (runtime/gameState.js
+// UNIT_POSTURES): escalation the map shows, in every language.
+const ESCALATION_POSTURES = new Set(["massing", "blockade"]);
 const CRISIS_LIKE_STORYLINE_KIND_RE =
   /\b(war|crisis|revolution|uprising|insurgency|secession|standoff|security|constitutional|succession|financial|banking)\b/i;
 
@@ -158,10 +153,11 @@ const CRISIS_LIKE_STORYLINE_KIND_RE =
 // claims and fresh escalation signals — does the heavy lifting. This lets a 1914
 // start naturally tolerate much higher war risk while a stable 2020 remains more
 // restrained, without creating either "1914 must go to war" or "2020 cannot" rules.
+// All of it is read from the records, never from words: the same world gets the
+// same posture in every language.
 export const deriveWorldConflictRiskPosture = ({
   bundle,
   targetDate = "",
-  causalCandidates = [],
 } = {}) => {
   const world = bundle?.world || {};
   const date = normalizeString(targetDate || bundle?.game?.gameDate);
@@ -222,11 +218,14 @@ export const deriveWorldConflictRiskPosture = ({
     .filter((claimants) => normalizeArray(claimants).length > 0)
     .length;
 
-  const escalationSignals = normalizeArray(causalCandidates).filter((candidate) =>
-    SYSTEMIC_ESCALATION_CUE_RE.test(
-      `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`,
-    )
-  ).length;
+  // Fresh escalation: the powers with a formation massing on a border or
+  // blockading. It used to be the causal candidates whose English words
+  // sounded like escalation (SYSTEMIC_ESCALATION_CUE_RE), which no game in
+  // another language ever had.
+  const escalationSignals = new Set(normalizeArray(world?.units)
+    .filter((unit) => ESCALATION_POSTURES.has(normalizeString(unit?.posture).toLowerCase()))
+    .map((unit) => normalizeString(unit?.ownerCode || unit?.owner).toLowerCase())
+    .filter(Boolean)).size;
 
   const structural =
     Math.min(18, activeWars.length * 8) +
@@ -280,14 +279,19 @@ export const deriveWorldConflictRiskPosture = ({
   };
 };
 
-const linkedRecordTouchesEvent = (records, eventIndex) =>
+// A record tied to the event by its id, or by its place among the events. A
+// skip's ledgers are tied by id before its events are put in date order
+// (ledgerPins.js), and a place they were written with names another event.
+const linkedRecordTouchesEvent = (records, eventIndex, eventId = "") =>
   normalizeArray(records).some((entry) =>
-    normalizeArray(entry?.eventIndexes).some((value) => Number(value) === eventIndex)
+    (eventId && normalizeArray(entry?.eventIds).map(normalizeString).includes(eventId))
+    || normalizeArray(entry?.eventIndexes).some((value) => Number(value) === eventIndex)
   );
 
 const eventCanonicalConsequenceChannels = (candidate, eventIndex) => {
   const event = normalizeArray(candidate?.events)[eventIndex];
   if (!event || typeof event !== "object") return [];
+  const eventId = normalizeString(event?.id);
 
   const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
   const channels = [];
@@ -309,44 +313,36 @@ const eventCanonicalConsequenceChannels = (candidate, eventIndex) => {
   if (normalizeArray(event?.storylineIds).length) channels.push("storyline");
   if (normalizeString(event?.warId)) channels.push("war-event");
 
-  if (linkedRecordTouchesEvent(candidate?.storylineUpdates, eventIndex)) channels.push("storyline-update");
-  if (linkedRecordTouchesEvent(candidate?.warUpdates, eventIndex)) channels.push("war-update");
-  if (linkedRecordTouchesEvent(candidate?.relationUpdates, eventIndex)) channels.push("relation-update");
-  if (linkedRecordTouchesEvent(candidate?.agreementUpdates, eventIndex)) channels.push("agreement-update");
-  if (linkedRecordTouchesEvent(candidate?.countryStatPatches, eventIndex)) channels.push("stats");
+  if (linkedRecordTouchesEvent(candidate?.storylineUpdates, eventIndex, eventId)) channels.push("storyline-update");
+  if (linkedRecordTouchesEvent(candidate?.warUpdates, eventIndex, eventId)) channels.push("war-update");
+  if (linkedRecordTouchesEvent(candidate?.relationUpdates, eventIndex, eventId)) channels.push("relation-update");
+  if (linkedRecordTouchesEvent(candidate?.agreementUpdates, eventIndex, eventId)) channels.push("agreement-update");
+  if (linkedRecordTouchesEvent(candidate?.countryStatPatches, eventIndex, eventId)) channels.push("stats");
 
   return [...new Set(channels)];
 };
 
+// A major event: one the model rated major or notable, whatever it says. It
+// used to take English words as well (strategic, escalating or unresolved-crisis
+// cues) or the military kind, so a major event in another language was major
+// only when military.
 const eventLooksStrategicallyMajor = (event) => {
   if (!event || typeof event !== "object") return false;
-  const importance = normalizeString(event?.importance).toLowerCase();
-  if (importance !== "major" && event?.notable !== true) return false;
-  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  return STRATEGIC_CONSEQUENCE_RE.test(text)
-    || STORYLINE_ESCALATION_OR_FAILURE_RE.test(text)
-    || UNRESOLVED_CRISIS_CUE_RE.test(text)
-    || normalizeString(event?.kind).toLowerCase() === "military";
+  return normalizeString(event?.importance).toLowerCase() === "major" || event?.notable === true;
 };
 
-const eventLooksLikeUnresolvedCrisis = (event) => {
-  if (!eventLooksStrategicallyMajor(event)) return false;
-  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  if (!UNRESOLVED_CRISIS_CUE_RE.test(text)) return false;
-  return !CRISIS_RESOLUTION_CUE_RE.test(text);
-};
-
+// Routine paperwork: an administrative card the model rated neither major nor
+// notable. (Its exemptions used to be English words too: anything strategic,
+// escalating or of human texture.)
 const eventLooksLikeRoutineAdministrativeCard = (event) => {
   if (!event || typeof event !== "object") return false;
   if (event?.playerRelated === true) return false;
   const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
   if (normalizeArray(impacts?.actionIds).length) return false;
+  if (eventLooksStrategicallyMajor(event)) return false;
 
   const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  return ROUTINE_ADMINISTRATIVE_PROCESS_RE.test(text)
-    && !STRATEGIC_CONSEQUENCE_RE.test(text)
-    && !STORYLINE_ESCALATION_OR_FAILURE_RE.test(text)
-    && !HUMAN_TEXTURE_RE.test(text);
+  return ROUTINE_ADMINISTRATIVE_PROCESS_RE.test(text);
 };
 
 // A major event whose only consequence is a Board entry. The Board is not a
@@ -355,10 +351,12 @@ const eventLooksLikeRoutineAdministrativeCard = (event) => {
 // it concerns an open Board entry, and the turn must later see the board pass
 // materially change a Board entry because of it, or the event is kept off the
 // timeline. "Probably about Westbird" is never taken for "Westbird changed".
-// A crisis is not eligible: a crisis is a Storyline by definition.
+// A crisis that runs on is a Storyline by definition, and the skip is told to
+// open one for it (jumpSegments.js STORYLINE_INSTRUCTION): an event tied to one
+// has a consequence of its own here. Its words no longer make it a crisis.
 const eventRestsOnBoardConsequence = (candidate, index, board, playerCountry) => {
   const event = normalizeArray(candidate?.events)[index];
-  if (!eventLooksStrategicallyMajor(event) || eventLooksLikeUnresolvedCrisis(event)) return false;
+  if (!eventLooksStrategicallyMajor(event)) return false;
   if (eventCanonicalConsequenceChannels(candidate, index).length) return false;
   return boardEntriesConcernedByEvent(event, board, { playerCountry }).length > 0;
 };
@@ -383,10 +381,6 @@ export const validateWorldEventConsequencePayload = (
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
     const channels = eventCanonicalConsequenceChannels(candidate, index);
-
-    if (eventLooksLikeUnresolvedCrisis(event) && !channels.some((value) => value.startsWith("storyline"))) {
-      return `Major unresolved crisis event ${index + 1} ("${normalizeString(event?.title)}") has no persistent storyline consequence. Create/update the canonical storyline for the unresolved process and link this event; do not let a multi-turn crisis vanish after one card.`;
-    }
 
     if (
       eventLooksStrategicallyMajor(event) &&
@@ -421,10 +415,22 @@ export const validateWorldEventConsequencePayload = (
   return "";
 };
 
-const eventConsequenceScore = (event) => {
+// The events a war, an agreement or a subordination names as its source (each
+// record's sourceEventIds): a declaration, an entry, a ceasefire, a peace, a
+// treaty signed or ended, a puppet installed or freed. What the ledgers say an
+// event did, in every language.
+const ledgerSourceEventIds = (world) => new Set(["wars", "agreements", "puppets"]
+  .flatMap((ledger) => normalizeArray(world?.[ledger]))
+  .flatMap((record) => normalizeArray(record?.sourceEventIds))
+  .map(normalizeString)
+  .filter(Boolean));
+
+// How much an event changed: by what it carries and what the ledgers record of
+// it, never by its words (an English "captures", "ceasefire", "declares war" or
+// "coup" used to add 3, twice over for a war event).
+const eventConsequenceScore = (event, recordedEventIds = new Set()) => {
   if (!event || typeof event !== "object") return 0;
   const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
   let score = 0;
 
   if (normalizeArray(impacts.regionTransfers).length) score += 5;
@@ -435,8 +441,7 @@ const eventConsequenceScore = (event) => {
 
   const unitOps = normalizeArray(impacts.unitOps);
   if (unitOps.some((op) => ["remove"].includes(normalizeString(op?.op).toLowerCase()))) score += 3;
-  if (normalizeString(event?.warId) && HARD_MILITARY_CONSEQUENCE_RE.test(text)) score += 3;
-  if (STRATEGIC_CONSEQUENCE_RE.test(text)) score += 3;
+  if (recordedEventIds.has(normalizeString(event?.id))) score += 3;
 
   // Major events with a concrete durable map/capability object are meaningful,
   // but ordinary administrative completions do not become "strategic thresholds"
@@ -446,12 +451,14 @@ const eventConsequenceScore = (event) => {
 
   return score;
 };
-
+// `world`: the ledgers, whose records say which events started, joined,
+// paused or ended a war, a treaty or a subordination.
 export const assessRecentWorldConsequenceLiveness = ({
   events = [],
   additionalEvents = [],
   referenceDate = "",
   lookbackDays = CONSEQUENCE_LOOKBACK_DAYS,
+  world = {},
 } = {}) => {
   const reference = parseIsoDate(referenceDate);
   if (reference == null) {
@@ -471,8 +478,9 @@ export const assessRecentWorldConsequenceLiveness = ({
     recent.push(event);
   }
 
+  const recordedEventIds = ledgerSourceEventIds(world);
   const consequential = recent
-    .map((event) => ({ event, score: eventConsequenceScore(event) }))
+    .map((event) => ({ event, score: eventConsequenceScore(event, recordedEventIds) }))
     .filter((row) => row.score >= 3);
   const eventCount = recent.length;
   const consequentialCount = consequential.length;
@@ -1706,6 +1714,25 @@ export const decodeWorldStorylineUpdates = (value, { limit = MAX_STORYLINE_UPDAT
     .slice(0, limit);
 };
 
+// The records with the ids of the events their numbers name, as the other
+// ledgers' binders tie theirs: a skip's answer is tied this way before its
+// events are put in date order (ledgerPins.js), so its numbers still name the
+// events the model meant. A record that has ids keeps them.
+// normalizeWorldStorylineEventLinks reads them as the places those events then
+// stand in, and the record leaves it with places alone, as it always has.
+export const bindWorldStorylineUpdatesToEvents = (value, events, { limit } = {}) => {
+  const ids = normalizeArray(events).map((event) => normalizeString(event?.id));
+  return decodeWorldStorylineUpdates(value, { limit }).map((update) => {
+    const pinned = normalizeArray(update?.eventIds).map(normalizeString).filter(Boolean);
+    return {
+      ...update,
+      eventIds: [...new Set(pinned.length
+        ? pinned
+        : normalizeArray(update?.eventIndexes).map((index) => ids[index]).filter(Boolean))].slice(0, 12),
+    };
+  });
+};
+
 const STORYLINE_LINK_STOPWORDS = new Set([
   "about", "after", "again", "against", "among", "because", "between", "during",
   "from", "into", "over", "that", "their", "there", "these", "this", "through",
@@ -2065,11 +2092,21 @@ export const normalizeWorldStorylineEventLinks = (
   const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
   let rebound = 0;
   let strippedInvalid = 0;
+  // A record tied to its events by id (bindWorldStorylineUpdatesToEvents) names
+  // them where they stand now: its ids are the numbers it was written with.
+  const placeOfId = new Map();
+  events.forEach((event, index) => {
+    const id = normalizeString(event?.id);
+    if (id && !placeOfId.has(id)) placeOfId.set(id, index);
+  });
 
-  const normalized = updates.map((update) => {
-    const supplied = normalizeArray(update?.eventIndexes)
-      .map(Number)
-      .filter((index) => Number.isInteger(index));
+  const normalized = updates.map(({ eventIds, ...update }) => {
+    const pinned = normalizeArray(eventIds).map(normalizeString).filter(Boolean);
+    const supplied = pinned.length
+      ? pinned.map((id) => (placeOfId.has(id) ? placeOfId.get(id) : -1))
+      : normalizeArray(update?.eventIndexes)
+        .map(Number)
+        .filter((index) => Number.isInteger(index));
     const validSupplied = supplied.filter(
       (index) => index >= 0 && index < events.length,
     );
@@ -3324,7 +3361,6 @@ export const buildWorldInitiativeContext = (
   const conflictRiskPosture = deriveWorldConflictRiskPosture({
     bundle,
     targetDate: horizonDate,
-    causalCandidates: bounded,
   });
 
   const explorationActors = explorationSlate
@@ -3409,6 +3445,7 @@ export const buildWorldInitiativeContext = (
   const consequenceSignal = assessRecentWorldConsequenceLiveness({
     events: bundle?.events,
     referenceDate: originDate,
+    world: bundle?.world,
   });
 
   const text = [

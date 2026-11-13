@@ -21,12 +21,23 @@ test("routine military screening cannot hide the retained event that explicitly 
   assert.deepEqual(screened.dropped, []);
 });
 
-test("ordinary routine military continuation remains eligible to stay off the timeline", () => {
-  const event = routinePatrol();
-  const screened = screenGeneratedWorldEvents({ events: [event] });
-  assert.deepEqual(screened.events, []);
-  assert.equal(screened.hidden.length, 1);
-  assert.equal(screened.hidden[0].route, "ROUTINE_MILITARY_PRECURATION");
+// The screen hid an English patrol card for its words (ROUTINE_MILITARY_CUE_RE)
+// and kept the same card in any other language. No word list reads an event for
+// the war any more: the skip is told to leave such a card out, and the curator
+// judges what it writes anyway.
+test("an ordinary patrol report is kept as written, as its twin in another language is", () => {
+  const twin = {
+    ...routinePatrol(),
+    id: "routine-patrol-de",
+    title: "Aufklärungspatrouillen entlang der Grenze gehen weiter",
+    description: "Die Aufklärungspatrouillen gehen ohne größeres Gefecht weiter.",
+  };
+  for (const event of [routinePatrol(), twin]) {
+    const screened = screenGeneratedWorldEvents({ events: [event] });
+    assert.deepEqual(screened.events, [event]);
+    assert.deepEqual(screened.hidden, []);
+    assert.equal(previewScreenedEvent(event), null);
+  }
 });
 
 // In a real world the screen can tell who acted from an event's title, and
@@ -120,20 +131,19 @@ test("the player's own patrol news is left for the curator to judge", () => {
   assert.deepEqual(screened.events, [event]);
 });
 
-test("a quiet inspection report that mentions patrols is still kept off the timeline", () => {
-  const screened = screenGeneratedWorldEvents({
-    events: [{
-      id: "omani-audit",
-      date: "2019-08-27",
-      kind: "world",
-      playerRelated: false,
-      title: "Omani Auditing Panel Reports Continued Compliance in Strait of Hormuz",
-      description: "The Omani-chaired maritime auditing panel released its weekly inspection summary in Muscat, confirming zero non-compliance infractions across commercial tanker traffic through the Strait of Hormuz amid ongoing regional naval patrols.",
-      impacts: {},
-    }],
-  });
-  assert.equal(screened.events.length, 0);
-  assert.equal(screened.hidden[0].route, "ROUTINE_MILITARY_PRECURATION");
+test("an inspection report that mentions patrols is not taken for military news", () => {
+  const event = {
+    id: "omani-audit",
+    date: "2019-08-27",
+    kind: "world",
+    playerRelated: false,
+    title: "Omani Auditing Panel Reports Continued Compliance in Strait of Hormuz",
+    description: "The Omani-chaired maritime auditing panel released its weekly inspection summary in Muscat, confirming zero non-compliance infractions across commercial tanker traffic through the Strait of Hormuz amid ongoing regional naval patrols.",
+    impacts: {},
+  };
+  const screened = screenGeneratedWorldEvents({ events: [event] });
+  assert.deepEqual(screened.events, [event]);
+  assert.deepEqual(screened.hidden, []);
 });
 
 // Regression corpus from a community live playthrough: civilian/scientific
@@ -172,15 +182,22 @@ test("civilian protest news cannot be hidden because security patrols appear in 
 // The live preview marks a streamed card with the rule that will judge it when
 // the turn lands, and changes nothing about the event it looks at.
 test("the live preview gives a streamed card the screen's own verdict", () => {
-  const patrol = routinePatrol();
-  const before = structuredClone(patrol);
-  assert.deepEqual(previewScreenedEvent(patrol), {
+  const review = {
+    id: "inspection-review",
+    date: "2019-10-12",
+    title: "Ministry Finalizes Technical Inspection Standards",
+    description: "Officials finalize technical inspection standards after a committee review.",
+    impacts: {},
+  };
+  const before = structuredClone(review);
+  assert.deepEqual(previewScreenedEvent(review), {
     fate: "hide",
-    route: "ROUTINE_MILITARY_PRECURATION",
-    reason: "routine military continuation with no native material consequence",
+    route: "ROUTINE_ADMINISTRATIVE_PROCESS",
+    reason: "routine administrative/process card with no material native consequence",
   });
-  assert.deepEqual(patrol, before);
-  assert.equal(previewScreenedEvent(routinePatrol(["order-frontier-patrol"])), null);
+  assert.deepEqual(review, before);
+  assert.equal(previewScreenedEvent({ ...review, impacts: { actionIds: ["order-standards"] } }), null);
+  assert.equal(previewScreenedEvent(routinePatrol()), null, "a patrol is military news, kept");
   assert.equal(previewScreenedEvent(null), null);
 });
 
@@ -209,7 +226,7 @@ test("an event that belongs to a storyline is not hidden as routine", () => {
     title: "Rangers Patrol the Haunted Forest's Edge",
     description: "A patrol of rangers from Castle Black rode the edge of the Haunted Forest and reported the camps unchanged.",
   });
-  assert.equal(screenGeneratedWorldEvents({ events: [quiet] }).hidden.length, 1, "on its own it is routine");
+  assert.deepEqual(screenGeneratedWorldEvents({ events: [quiet] }).hidden, [], "nor on its own: no word hides it");
   const told = screenGeneratedWorldEvents({ events: [{ ...quiet, storylineIds: ["storyline-the-dead"] }] });
   assert.equal(told.events.length, 1);
   assert.deepEqual(told.hidden, []);

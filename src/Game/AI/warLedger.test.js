@@ -609,7 +609,8 @@ test("the time skip settles its wars in one pass, never a retry, with its record
   for (const gone of ["reconcileCombatWarState", "repairWarLedgerPayload", "normalizeWorldWarEventLinks", "validateWarLedgerPayload", "eventNarratesHardCombat", "isolateUnsupportedWarReports"]) {
     assert.ok(!source.includes(gone), `${gone} is gone`);
   }
-  const pin = source.indexOf("pinWarRecordsToEvents(candidate, segmentIndex);");
+  // Every ledger is tied there, wars with them (ledgerPins.test.js).
+  const pin = source.indexOf("pinSegmentLedgers(candidate, segmentIndex);");
   assert.ok(pin > 0 && pin < source.indexOf("sortTimelineEventsChronologically(candidate);", pin), "pinned before the answer is put in date order");
   assert.match(source, /and keep to it while that war lasts; a war that has ended keeps its id, and fighting between its sides that breaks out again is a new war, with a start record of its own\./);
 });

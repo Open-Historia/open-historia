@@ -627,12 +627,18 @@ const decodeRelationLine = (line, index) => {
   };
 };
 
+// A figure a record left blank stays blank as an object too: Number(null) is 0,
+// so a record tied to its events (ledgerPins.js, which hands every record on as
+// an object) read a blank score as a relation at 0 and a blank loyalty as a
+// client state at 0, where the line read them as "derive it" and 50.
+const figureOrBlank = (value) => (value === null || value === undefined || (typeof value === "string" && !value.trim()) ? NaN : Number(value));
+
 export const decodeRelationUpdates = (value, { limit = MAX_RELATION_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
       if (typeof entry === "string") return isRecordLine(entry) ? decodeRelationLine(entry, index) : null;
       if (!entry || typeof entry !== "object") return null;
-      const score = Number(entry.score);
+      const score = figureOrBlank(entry.score);
       const normalizedScore = Number.isFinite(score) ? clamp(Math.round(score), -100, 100) : null;
       return {
         id: clean(entry.id) || `relation-update-${index}`,
@@ -1962,7 +1968,7 @@ export const decodePuppetUpdates = (value, { limit = MAX_PUPPET_UPDATES_PER_PASS
     return value.map((entry, index) => {
       if (typeof entry === "string") return isRecordLine(entry) ? decodePuppetLine(entry, index) : null;
       if (!entry || typeof entry !== "object") return null;
-      const loyalty = Number(entry.loyalty);
+      const loyalty = figureOrBlank(entry.loyalty);
       return {
         id: clean(entry.id) || `puppet-update-${index}`,
         op: lower(entry.op),
