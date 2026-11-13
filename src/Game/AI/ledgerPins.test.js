@@ -242,3 +242,24 @@ test("the time skip ties every ledger to its events before it sorts them, and na
   assert.ok(!source.includes("event.id = `segment-${segmentIndex + 1}-event-"), "no event is named anywhere else by its place");
   assert.ok(!source.includes("pinWarRecordsToEvents"), "the war ledger's own pin is every ledger's now");
 });
+
+// Pinned records leave as objects, and an object is read as its line was: a
+// client state's blank loyalty stays blank (it begins at 50), where Number(null)
+// made it 0.
+test("a record tied to its events means what its line meant, a blank figure included", async () => {
+  const diplomacy = await import("./nativeDiplomaticDirector.js");
+  const events = [{ id: "e1", date: "2016-01-01", title: "Belarus is made a satellite", description: "" }];
+  const candidate = {
+    events,
+    puppetUpdates: "install~Russia~Belarus~satellite~~open~1~note",
+    relationUpdates: "Russia~Belarus~~friendly~1~closer ties",
+  };
+  const asLines = {
+    loyalty: diplomacy.decodePuppetUpdates(candidate.puppetUpdates).map((record) => record.loyalty),
+    score: diplomacy.decodeRelationUpdates(candidate.relationUpdates).map((record) => record.score),
+  };
+  pinLedgersToEvents(candidate);
+  assert.deepEqual(asLines.loyalty, [null]);
+  assert.deepEqual(diplomacy.decodePuppetUpdates(candidate.puppetUpdates).map((record) => record.loyalty), asLines.loyalty);
+  assert.deepEqual(diplomacy.decodeRelationUpdates(candidate.relationUpdates).map((record) => record.score), asLines.score);
+});
