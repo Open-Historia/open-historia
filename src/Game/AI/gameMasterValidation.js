@@ -22,7 +22,6 @@ const gameMasterCanonicalPolityKey = (token, world) => {
   const resolution = resolvePolityIdentity(raw, normalizeWorldState(world), {
     allowUnknown: false,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
     // Administrative/state-mutation comparisons must not let map provenance
     // redirect a polity token to some other active actor.
@@ -91,7 +90,6 @@ const resolveGameMasterLifecycleIdentity = (token, world) => {
     // modern maps with no polity registry, but that is not enough evidence for GM
     // lifecycle semantics in a historical save (1915 Poland was the bug here).
     requireActive: false,
-    allowCoreMatch: true,
     // Stock/base geography and mapRefs are vocabulary/provenance, not proof that
     // a political actor already exists. GM lifecycle identity must come from the
     // campaign's declared political registry/aliases/lineage only.

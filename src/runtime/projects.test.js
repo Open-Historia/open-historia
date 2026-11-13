@@ -463,6 +463,18 @@ test("owner identity ignores case, accents and punctuation", () => {
   assert.equal(isPlayerProject(project({ ownerCode: "Ruritania" }), "Spain"), false);
 });
 
+// Under the old a-z fold every name in another script folded to nothing, and a
+// name that folded to nothing counted as blank: a programme owned by "中国"
+// landed on the player's own Board, with the player's levers on it. Blank is
+// the text itself, and a name in any script is that name.
+test("an owner named in another script is that owner, never the player", () => {
+  assert.equal(isPlayerProject(project({ ownerCode: "中国" }), "France"), false);
+  assert.equal(isForeignProject(project({ ownerCode: "Россия" }), "France"), true);
+  assert.equal(isPlayerProject(project({ ownerCode: "РОССИЯ" }), "Россия"), true, "the player's own, in another case");
+  assert.equal(isPlayerProject(project({ ownerCode: "中国" }), "中国"), true);
+  assert.equal(isPlayerProject(project({ ownerCode: "!!!" }), "France"), false, "a name with no letters is nobody's, not the player's");
+});
+
 // A blank owner has always meant the player: the model is not made to restate
 // their own country on every entry, since a field it has to repeat is a field it
 // eventually gets wrong.

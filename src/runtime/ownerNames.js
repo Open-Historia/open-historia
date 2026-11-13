@@ -10,6 +10,7 @@
 // come out as the name, so a code can never enter the world state and mint a phantom
 // country sitting alongside the real one ("ESP" painted next to "Spain").
 import COUNTRY_NAMES from "./generated/countryNames.js";
+import { nameKey } from "../../server/nameKey.js";
 
 // Canonicalises one owner token to its full country name. Anything that is not a
 // known GADM code — an invented polity ("Roman Empire"), an era name, a name already
@@ -45,15 +46,13 @@ export const regionBaseOwner = (region) =>
 // resolver).
 // ---------------------------------------------------------------------------
 
-// Case-, diacritic- and punctuation-insensitive identity for an owner token, so
-// "Côte d'Ivoire", "cote divoire" and "COTE D'IVOIRE" are one polity. Separators
-// are dropped rather than folded to a space: the model spells a name back the way
-// it remembers it, and an apostrophe it left out must not make a new country.
-export const ownerIdentityKey = (value) =>
-  String(value ?? "")
-    .normalize("NFD")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
+// Case-, accent- and punctuation-insensitive identity for an owner token, so
+// "Côte d'Ivoire", "cote divoire" and "COTE D'IVOIRE" are one polity, and
+// "РОССИЯ" is "Россия". Separators are dropped rather than folded to a space:
+// the model spells a name back the way it remembers it, and an apostrophe it
+// left out must not make a new country. The game's one name fold
+// (server/nameKey.js): every script keeps its letters, and "" is no name.
+export const ownerIdentityKey = nameKey;
 
 // Every real country's name is an identity of its own and can never be redirected
 // to some other polity — the guard that stops a scenario whose polity happens to

@@ -158,7 +158,6 @@ const canonicalPolity = (value, world, allowedByLower) => {
   const resolved = resolvePolityIdentity(token, world || {}, {
     allowUnknown: false,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
   });
   const canonical = clean(resolved?.resolved);

@@ -56,7 +56,6 @@ const uniqueResolvedIdentity = (polity, world, givenIdentityIndex = null) => {
     const result = resolvePolityIdentity(token, world, {
       allowUnknown: false,
       requireActive: false,
-      allowCoreMatch: true,
       allowStockBase: true,
       identityIndex,
     });
@@ -225,7 +224,6 @@ export const canonicalizeFlagMap = (flags, world) => {
     const resolved = resolvePolityIdentity(rawKey, world, {
       allowUnknown: false,
       requireActive: false,
-      allowCoreMatch: true,
       allowStockBase: true,
     });
     const key = resolved.resolved || rawKey;

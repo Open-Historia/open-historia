@@ -13,6 +13,7 @@ import {
 } from "../../runtime/politicalWorldGeneration.js";
 import { POLITICAL_TRAIT_KEYS, validatePoliticalTraitPatch } from "../../runtime/politicalTraitRegistry.js";
 import { compareGameDates, isCanonicalGameDate } from "../../runtime/gameDates.js";
+import { nameKey } from "../../../server/nameKey.js";
 
 export const POLITICAL_WORLD_GENERATOR_RESULT_VERSION = 1;
 export const POLITICAL_WORLD_GENERATOR_MAX_ATTEMPTS = 2;
@@ -84,15 +85,11 @@ const historyAuthorityPromptBlock = (historyAuthority, scenarioDate) => {
 // slug/case variant (for example "Republic of Austria" ->
 // "republic-of-austria"). Exact canonical identity remains authoritative, but
 // the temporal sentinel may safely recover a transport-only variant when it
-// maps to exactly one requested polity in the current batch. Ambiguous matches
-// deliberately fail closed.
-const normalizedPolityTransportKey = (value) => clean(value)
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .toLocaleLowerCase()
-  .replace(/&/g, " and ")
-  .replace(/[^a-z0-9]+/g, " ")
-  .trim();
+// maps to exactly one requested polity in the current batch: the same name
+// under the game's one name fold (server/nameKey.js: case, accents and
+// punctuation, in every script), never a word added, dropped or translated
+// ("&" is not "and"). Ambiguous matches deliberately fail closed.
+const normalizedPolityTransportKey = nameKey;
 
 const buildRequestedPolityTransportResolver = (entries = []) => {
   const exact = new Set();

@@ -4,6 +4,7 @@ import { resolveStockCountryCode } from "./polityIdentity.js";
 import { normalizePoliticalPressureState } from "./politicalPressure.js";
 import { PARTY_ROLES, findIdeology } from "./politics.js";
 import { lookedUp } from "./worldLookups.js";
+import { nameKey } from "../../server/nameKey.js";
 
 export const POLITICAL_ACTORS_SCHEMA_VERSION = 6;
 
@@ -269,12 +270,10 @@ const normalizeOfficeholder = (value) => {
     return out;
 };
 
-const partyTokenKey = (value) =>
-    clean(value)
-        .toLocaleLowerCase()
-        .normalize("NFKD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^\p{L}\p{N}]+/gu, "");
+// A party, bloc or officeholder is found by its name through the game's one name
+// fold (server/nameKey.js): case, accents and punctuation, in every script, with a
+// Devanagari or Thai vowel sign kept as part of its word.
+const partyTokenKey = nameKey;
 
 const asciiPartySlug = (value) =>
     clean(value)
@@ -686,12 +685,7 @@ export const normalizePoliticalGovernment = (value, parties = []) => {
 
 const officeholderIdentityKey = (value) => {
     const normalized = normalizeOfficeholder(value);
-    const name = typeof normalized === "string" ? normalized : normalized?.name;
-    return clean(name)
-        .toLocaleLowerCase()
-        .normalize("NFKD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^\p{L}\p{N}]+/gu, "");
+    return nameKey(typeof normalized === "string" ? normalized : normalized?.name);
 };
 
 const sameOfficeholder = (left, right) => {
@@ -1025,13 +1019,7 @@ function findPoliticalProfile(world, polityKey) {
     const byPolity = world?.politicalActors?.byPolity;
     if (!byPolity) return null;
 
-    const normalizeActorKey = (value) =>
-        String(value ?? "")
-            .trim()
-            .toLowerCase()
-            .normalize("NFKD")
-            .replace(/[\u0300-\u036f]/g, "")
-            .replace(/[^\p{L}\p{N}]+/gu, "");
+    const normalizeActorKey = nameKey;
 
     for (const candidate of candidatesForPolity(world, polityKey)) {
         if (byPolity[candidate]) return byPolity[candidate];

@@ -4116,7 +4116,6 @@ const resolveWorldDiplomaticPolity = (token, identityWorld) => {
   const resolved = resolvePolityIdentity(raw, identityWorld, {
     allowUnknown: true,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
     identityIndex: diplomaticIdentityIndexOf(identityWorld),
   });

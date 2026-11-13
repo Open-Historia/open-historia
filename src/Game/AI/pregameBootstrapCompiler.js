@@ -264,7 +264,6 @@ const resolvePolity = (token, world) => {
   const resolved = resolvePolityIdentity(raw, world, {
     allowUnknown: false,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
   });
   return clean(resolved?.resolved);

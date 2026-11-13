@@ -180,57 +180,55 @@ test("single-party party-state governing alignment is repaired natively with zer
   assert.equal(result.governingAlignmentRepair.nativeResolved, 1);
 });
 
-test("bounded governing-alignment retry accepts a unique shortened polity transport key", async () => {
-  const polityKey = "State of Israel";
-  const byPolity = {
-    [polityKey]: {
-      politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-      government: { form: "Parliamentary republic", headOfGovernment: "Benjamin Netanyahu", rulingPartyIds: [], coalitionPartyIds: [] },
-      parties: [
-        { id: "likud", name: "Likud" },
-        { id: "yesh-atid", name: "Yesh Atid" },
-        { id: "jewish-home", name: "The Jewish Home" },
-        { id: "yisrael-beiteinu", name: "Yisrael Beiteinu" },
-      ],
-    },
-  };
-  let calls = 0;
-  const result = await generatePoliticalGoverningAlignmentRepairCore({
-    scenarioDate: "2014-03-22",
-    polities: [polityKey],
-    politicalActors: { byPolity },
-    generatedAt: fixedNow,
-    maxAttempts: 2,
-    callModel: async () => {
-      calls += 1;
-      if (calls === 1) {
-        return { toolInput: { alignments: [{
-          polityKey,
-          confidence: "high",
-          alignmentJson: JSON.stringify({
-            rulingPartyIds: ["likud"],
-            coalitionPartyIds: ["yesh-atid", "jewish-home", "yisrael-beiteinu", "haredi-parties"],
-          }),
-        }] } };
-      }
-      return { toolInput: { alignments: [{
-        polityKey: "israel",
+// An answer is found by its polity's exact label, or the same label in another
+// case, spacing or punctuation, in any script. A shortened label ("israel" for
+// "State of Israel") was taken by word containment, when it named one polity of
+// the batch, and only in English: it now names nobody, in every language alike,
+// and that polity's alignment is left for the next pass.
+test("a governing-alignment answer is found by its polity's own label in any script; a shortened label names nobody", async () => {
+  for (const [polityKey, sameLabel, shortened] of [
+    ["State of Israel", "state-of-israel", "israel"],
+    ["Государство Израиль", "ГОСУДАРСТВО  ИЗРАИЛЬ", "Израиль"],
+  ]) {
+    const run = (answerKey) => generatePoliticalGoverningAlignmentRepairCore({
+      scenarioDate: "2014-03-22",
+      polities: [polityKey],
+      politicalActors: { byPolity: {
+        [polityKey]: {
+          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
+          government: { form: "Parliamentary republic", headOfGovernment: "Benjamin Netanyahu", rulingPartyIds: [], coalitionPartyIds: [] },
+          parties: [
+            { id: "likud", name: "Likud" },
+            { id: "yesh-atid", name: "Yesh Atid" },
+            { id: "jewish-home", name: "The Jewish Home" },
+            { id: "yisrael-beiteinu", name: "Yisrael Beiteinu" },
+          ],
+        },
+      } },
+      generatedAt: fixedNow,
+      maxAttempts: 1,
+      callModel: async () => ({ toolInput: { alignments: [{
+        polityKey: answerKey,
         confidence: "high",
         alignmentJson: JSON.stringify({
           rulingPartyIds: ["likud"],
           coalitionPartyIds: ["yesh-atid", "jewish-home", "yisrael-beiteinu"],
         }),
-      }] } };
-    },
-  });
+      }] } }),
+    });
 
-  assert.equal(calls, 2);
-  assert.equal(result.failedPolities, 0, JSON.stringify(result.failures));
-  assert.equal(result.generatedPolities, 1);
-  assert.deepEqual(result.proposals[0].proposal.actorPatch.government, {
-    rulingPartyIds: ["likud"],
-    coalitionPartyIds: ["yesh-atid", "jewish-home", "yisrael-beiteinu"],
-  });
+    const same = await run(sameLabel);
+    assert.equal(same.failedPolities, 0, `${polityKey}: ${JSON.stringify(same.failures)}`);
+    assert.equal(same.generatedPolities, 1);
+    assert.deepEqual(same.proposals[0].proposal.actorPatch.government, {
+      rulingPartyIds: ["likud"],
+      coalitionPartyIds: ["yesh-atid", "jewish-home", "yisrael-beiteinu"],
+    });
+
+    const short = await run(shortened);
+    assert.equal(short.generatedPolities, 0, `${polityKey}: "${shortened}" is not its label`);
+    assert.equal(short.failedPolities, 1);
+  }
 });
 
 test("shortened governing-alignment polity keys remain rejected when ambiguous", async () => {

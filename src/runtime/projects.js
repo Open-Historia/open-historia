@@ -1,4 +1,5 @@
 import { addGameDays, compareGameDates, diffGameDays, formatGameDate, formatGameDateReadable, gameDateDaysInMonth, parseGameDate, shiftGameYear } from "./gameDates.js";
+import { sameName } from "../../server/nameKey.js";
 
 /*! Open Historia — portions (projects & operations board: derived status, sorting, filtering) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Everything the Projects & Operations board can work out for ITSELF, with no AI
@@ -14,7 +15,8 @@ import { addGameDays, compareGameDates, diffGameDays, formatGameDate, formatGame
 // DELIBERATELY IMPORT-FREE, the same trick unitMotion.js / eventFocus.js /
 // forcePosture.js use: gameState.js reaches assets.js, which imports maplibre-gl,
 // so anything importing it cannot be tested without a full install. Keeping this
-// file dependency-free means `node --test src/runtime/projects.test.js` runs in a
+// file dependency-free (its two imports, gameDates.js and server/nameKey.js,
+// import nothing) means `node --test src/runtime/projects.test.js` runs in a
 // bare checkout. Worth preserving.
 
 // A milestone landing inside this window is "due soon". Sized against the jump
@@ -278,29 +280,23 @@ export const sortProjects = (projects, key = "updated") => {
 
 // ---- filtering -------------------------------------------------------------
 
-// Case-, diacritic- and punctuation-insensitive identity for an owner name.
-//
-// A HAND-KEPT DUPLICATE of ownerIdentityKey in ownerNames.js — same reasoning as
-// OPEN_STATUSES above: importing it would cost this file its import-free promise,
-// and the two must not drift. If you change the fold there, change it here.
-//
-// A plain toLowerCase() was not enough. The model spells a country back the way
-// it remembers it, so the player's own programme arrives owned by "Cote dIvoire"
-// while game.country is "Côte d'Ivoire", the entry files itself under Foreign,
-// and the player loses the two levers they have over their own work.
-const ownerIdentity = (value) => String(value ?? "")
-  .normalize("NFD")
-  .toLowerCase()
-  .replace(/[^a-z0-9]+/g, "");
-
 // Owner is compared by NAME, because that is the namespace every polity-keyed
-// field in world state uses. A blank ownerCode means the player: the model is not
-// made to restate their own country on every entry, since a field it has to
-// repeat is a field it eventually gets wrong.
+// field in world state uses, through the game's one name fold
+// (server/nameKey.js, which imports nothing, so this file still runs in a bare
+// checkout). Case, accents and punctuation do not make a different owner: the
+// model spells a country back the way it remembers it, so the player's own
+// programme may arrive owned by "Cote dIvoire" while game.country is "Côte
+// d'Ivoire", and filing it under Foreign would cost the player the two levers
+// they have over their own work.
+//
+// A blank ownerCode means the player: the model is not made to restate their
+// own country on every entry, since a field it has to repeat is a field it
+// eventually gets wrong. Blank is judged on the text itself, never on its fold:
+// under the old a-z fold every Chinese or Russian name folded to nothing, so a
+// programme owned by "中国" counted as the player's own.
 export const isPlayerProject = (project, playerCountry) => {
-  const owner = ownerIdentity(project?.ownerCode);
-  if (!owner) return true;
-  return owner === ownerIdentity(playerCountry);
+  if (!asText(project?.ownerCode)) return true;
+  return sameName(project.ownerCode, playerCountry);
 };
 
 export const isForeignProject = (project, playerCountry) => !isPlayerProject(project, playerCountry);

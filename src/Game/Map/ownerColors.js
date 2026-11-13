@@ -6,6 +6,7 @@
 // had its armies in an unrelated hash colour and its bases in parchment, beside
 // territory painted correctly.
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { nameKey } from "../../../server/nameKey.js";
 
 // Procedural colour for an owner with no entry in the palette. Takes the owner —
 // a country NAME now ("Russia", "Roman Empire"), not a GID_0 code.
@@ -89,13 +90,11 @@ export const normalizePoliticalRgb = (rgb) => {
   return [r, g, b].map((value) => Math.round(Math.max(0, Math.min(255, value))));
 };
 
-// Case/diacritic/punctuation-folded owner key, so "Côte d'Ivoire", "cote divoire"
-// and "COTE D'IVOIRE" all reach the same palette entry.
-export const ownerFoldKey = (value) =>
-  String(value ?? "")
-    .normalize("NFD")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "");
+// Case/accent/punctuation-folded owner key, so "Côte d'Ivoire", "cote divoire"
+// and "COTE D'IVOIRE" all reach the same palette entry, and "РОССИЯ" the one
+// under "Россия": the game's one name fold (server/nameKey.js), in which a
+// name in any script keeps its letters and "" is no name.
+export const ownerFoldKey = nameKey;
 
 // ONE owner -> rgb resolver for every paint path. colors.json and the live
 // polity registry (world.polityOverrides) are two different namespaces: a

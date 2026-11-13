@@ -116,7 +116,6 @@ const resolveLiveSelectionProps = async (props) => {
         ? resolvePolityIdentity(rawController, world, {
             allowUnknown: true,
             requireActive: false,
-            allowCoreMatch: true,
             allowStockBase: true,
         }).resolved || rawController
         : "";
@@ -487,7 +486,6 @@ const RegionPopup = () => {
         const identity = resolvePolityIdentity(controller || sel?.GID_0 || sel?.COUNTRY, worldState, {
             allowUnknown: false,
             requireActive: false,
-            allowCoreMatch: true,
             allowStockBase: true,
         });
         const polityKey = identity.resolved || controller || sel?.GID_0 || "";
@@ -655,7 +653,6 @@ const RegionPopup = () => {
         const identity = resolvePolityIdentity(code, worldState, {
             allowUnknown: true,
             requireActive: false,
-            allowCoreMatch: true,
             allowStockBase: true,
         });
         const key = identity.resolved || code;
@@ -677,7 +674,6 @@ const RegionPopup = () => {
     const controllerKey = isUnclaimed ? "" : (resolvePolityIdentity(controllerCode, worldState, {
         allowUnknown: true,
         requireActive: false,
-        allowCoreMatch: true,
         allowStockBase: true,
     }).resolved || controllerCode || "");
     const subordination = controllerKey && worldState ? puppetSummaryFor(worldState, playerCountry, controllerKey) : null;

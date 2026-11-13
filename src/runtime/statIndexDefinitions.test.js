@@ -9,7 +9,9 @@ import {
   hasRecordedCustomStatValues,
   normalizeStatIndexRows,
   normalizeStatSheetDefinition,
+  normalizeStatSheetSections,
   serializeStatSheet,
+  STAT_INDEX_KEY_PATTERN,
   statSheetKeys,
   toStatIndexKey,
 } from "./statIndexDefinitions.js";
@@ -130,6 +132,29 @@ test("legacy key generation and index bounding remain deterministic", () => {
   assert.equal(rows[0].key, "timber");
   assert.equal(rows[1].key, "timber2");
   assert.equal(toStatIndexKey("Horse & cart capacity"), "horseCartCapacity");
+});
+
+// A label is a name in any script. Made by keeping only a-z, the key of
+// "Стабильность" was "", and a stat written that way with no key of its own
+// left the sheet; its English twin stayed.
+test("a stat labelled in another script stays in the sheet, as its English twin does", () => {
+  const sheetOf = (labels) => normalizeStatSheetSections([{ label: labels[0], stats: labels.slice(1).map((label) => ({ label })) }]);
+  const english = sheetOf(["Army", "Stability", "Readiness", "Morale"]);
+  const russian = sheetOf(["Армия", "Стабильность", "Боеготовность", "Боевой дух"]);
+  const chinese = sheetOf(["军队", "稳定", "战备", "士气"]);
+  for (const sheet of [english, russian, chinese]) {
+    assert.equal(sheet.length, 1);
+    assert.equal(sheet[0].stats.length, 3);
+    const keys = [sheet[0].key, ...sheet[0].stats.map((stat) => stat.key)];
+    for (const key of keys) assert.match(key, STAT_INDEX_KEY_PATTERN);
+    assert.equal(new Set(keys).size, keys.length, "every stat its own key");
+  }
+  assert.deepEqual(russian[0].stats.map((stat) => stat.label), ["Стабильность", "Боеготовность", "Боевой дух"]);
+  // The same label is the same key, on every reading.
+  assert.equal(toStatIndexKey("Стабильность"), toStatIndexKey("  СТАБИЛЬНОСТЬ "));
+  assert.notEqual(toStatIndexKey("Стабильность"), toStatIndexKey("Армия"));
+  // A label with no letters or digits still names nothing.
+  assert.equal(toStatIndexKey("!!!"), "");
 });
 
 test("custom numeric values distinguish unavailable data from recorded zero", () => {

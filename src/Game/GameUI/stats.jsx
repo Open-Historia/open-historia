@@ -477,7 +477,6 @@ const canonicalPolityKey = (value, world) => {
         const resolved = resolvePolityIdentity(raw, world, {
             allowUnknown: true,
             requireActive: false,
-            allowCoreMatch: true,
             allowStockBase: true,
         });
         if (cleanText(resolved?.resolved)) return cleanText(resolved.resolved);
