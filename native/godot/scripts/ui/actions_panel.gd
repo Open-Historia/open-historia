@@ -1711,7 +1711,7 @@ class ActionsResizeHandle extends Control:
 		offset_left = 0.0
 		offset_right = 0.0
 		offset_top = 0.0
-		offset_bottom = 8.0
+		offset_bottom = 10.0 if UI.phone() else 8.0
 		mouse_filter = Control.MOUSE_FILTER_STOP
 		mouse_default_cursor_shape = Control.CURSOR_VSIZE
 		focus_mode = Control.FOCUS_NONE

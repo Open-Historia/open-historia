@@ -172,6 +172,8 @@ func _actions(hud: Hud) -> void:
 	_check(_rect(panel._submit_button).size.x >= 43.5 and _rect(panel._improve_button).size.x >= 43.5, "send and improve are finger-sized")
 	var r := _rect(panel)
 	_check(_rect(panel._submit_button).end.x <= r.end.x - 15.0 and _rect(panel._composer).position.x >= r.position.x + 15.0, "the composer row keeps its padding inside the panel")
+	_check(panel._resize != null and _near(panel._resize.size.y, 10.0, 0.5) and _near(_rect(panel._resize).position.y, r.position.y, 1.0), "the top edge is a 10 px grip on a touch screen")
+	await _goal(panel)
 	await main.engine.request("actions.testSeed", {"actions": [
 		{"id": "phone-1", "kind": "action", "title": "Recall the ambassador from Rome", "text": "Recall the ambassador from Rome for consultations.", "source": "manual", "status": "planned"},
 		{"id": "phone-2", "kind": "action", "title": "Raise the defence budget", "text": "Raise the defence budget by two percent of GDP over the next three years.", "source": "manual", "status": "planned"},
@@ -193,6 +195,49 @@ func _actions(hud: Hud) -> void:
 	_check(not panel._submit_button.disabled, "a typed order can be sent")
 	panel._composer.text = ""
 	panel._composer.text_changed.emit()
+
+
+func _goal(panel: ActionsPanel) -> void:
+	_find_button(panel, "🎯 Set a standing goal").pressed.emit()
+	await _wait(0.4)
+	if not is_instance_valid(panel._goal_edit):
+		_check(false, "the goal editor opens")
+		return
+	panel._goal_edit.text = "Keep out of the war and grow the economy"
+	panel._goal_edit.text_changed.emit()
+	await _wait(0.2)
+	await _shoot("p-actions-goal-edit")
+	_check(_rect(panel._goal_holder).end.x <= _rect(panel).end.x + 0.5, "the goal editor fits the panel")
+	panel._goal_save.pressed.emit()
+	await _until(func() -> bool: return str(panel._view.get("goal", "")) == "Keep out of the war and grow the economy" and not panel._goal_editing, 15.0)
+	await _wait(0.4)
+	var assess := _find_button(panel, "Assess progress")
+	if assess:
+		assess.pressed.emit()
+		await _until(func() -> bool: return typeof(panel._view.get("goalProgress")) == TYPE_DICTIONARY and not panel._progress_busy, 30.0)
+		await _wait(0.6)
+	_check(_find_label(panel, "STANDING GOAL") != null, "the saved goal shows its card")
+	var widest := 0.0
+	for node in panel._goal_holder.find_children("*", "Control", true, false):
+		var c := node as Control
+		if c.is_visible_in_tree() and c.get_parent() is Container:
+			widest = maxf(widest, _rect(c).end.x)
+	_check(widest <= _rect(panel).end.x + 0.5, "the goal card fits the panel (%.1f)" % widest)
+	await _shoot("p-actions-goal")
+	if panel.goal_open():
+		(panel.find_child("GoalHeader", true, false) as Button).pressed.emit()
+		await _until(func() -> bool: return not panel.goal_open(), 5.0)
+		await _wait(0.4)
+	var line := panel.find_child("GoalLine", true, false) as Label
+	var percent := panel.find_child("GoalPercent", true, false) as Label
+	_check(line != null and line.is_visible_in_tree() and _rect(line).end.x <= _rect(panel).end.x - 10.0, "the folded goal is one line inside the panel")
+	_check(percent == null or _rect(percent).end.x <= _rect(panel).end.x - 10.0, "its figure stays inside the panel")
+	var header := panel.find_child("GoalHeader", true, false) as Control
+	_check(header != null and header.size.y >= 43.5, "the folded goal is a finger-high row")
+	await _shoot("p-actions-goal-folded")
+	(panel.find_child("GoalHeader", true, false) as Button).pressed.emit()
+	await _until(func() -> bool: return panel.goal_open(), 5.0)
+	await _wait(0.3)
 
 
 func _projects(hud: Hud) -> void:
@@ -294,6 +339,50 @@ func _social(hud: Hud) -> void:
 	panel._set_tab("all")
 	hud.set_active_panel("")
 	await _wait(0.5)
+	await _looks(hud)
+
+
+func _looks(hud: Hud) -> void:
+	for look in ["newspaper", "scroll", "tablet"]:
+		var reply: Dictionary = await main.engine.request("social.testFeature", {"on": true, "look": look})
+		_check(reply.get("ok", false) and str((reply.get("result", {}) as Dictionary).get("look", "")) == look, "the scenario draws Rostra as a %s" % look)
+		hud.set_active_panel("social")
+		var panel := hud.panels.get("social") as RostraPanel
+		await _until(func() -> bool: return RostraPanel.LOOK == look and panel.get("_look_built") == look and panel.is_open() and (panel.view.get("posts", []) as Array).size() > 0, 20.0)
+		await _wait(1.0)
+		_check(RostraPanel.LOOK == look and panel.get("_look_built") == look, "%s: the panel is drawn in the look" % look)
+		_bottom_box(panel, "Rostra as a " + look)
+		_check(not panel.framed, "%s: no frame on a phone" % look)
+		var rolls: Array = panel.get("_rolls")
+		_check(rolls.all(func(roll: Control) -> bool: return not roll.visible), "%s: no rolls on a phone" % look)
+		_check(_rect(panel._pen).size.x >= 43.5 and _rect(panel._close).size.x >= 43.5, "%s: the pen and close buttons are finger-sized" % look)
+		var widest := 0.0
+		for node in panel.find_children("*", "Control", true, false):
+			var c := node as Control
+			if c.is_visible_in_tree() and not (c is ScrollContainer) and _rect(c).end.x > widest and c.get_parent() is Container:
+				widest = _rect(c).end.x
+		_check(widest <= _rect(panel).end.x + 0.5, "%s: nothing is wider than the phone (%.1f)" % [look, widest])
+		var tabs: Array = []
+		for key in ["all", "search", "mentions", "mine"]:
+			tabs.append(panel._tab_buttons[key])
+		_check(_rect(tabs[3]).end.x <= _rect(panel).end.x + 0.5 and (tabs[0] as Control).size.y >= 43.5, "%s: the four tabs fit, finger-high" % look)
+		await _shoot("p-social-%s" % look)
+		if look == "scroll":
+			panel._pen.pressed.emit()
+			await _wait(0.5)
+			await _shoot("p-social-scroll-compose")
+			panel._close_composer()
+		if look == "tablet":
+			panel._set_tab("search")
+			await _until(func() -> bool: return is_instance_valid(panel._search) and not panel._search.view.is_empty(), 20.0)
+			await _wait(0.6)
+			await _shoot("p-social-tablet-search")
+			panel._set_tab("all")
+			await _wait(0.4)
+		hud.set_active_panel("")
+		await _wait(0.5)
+	var back: Dictionary = await main.engine.request("social.testFeature", {"on": true, "look": "phone"})
+	_check(str((back.get("result", {}) as Dictionary).get("look", "")) == "phone", "the look goes back to the phone")
 
 
 func _clear_shell() -> void:
