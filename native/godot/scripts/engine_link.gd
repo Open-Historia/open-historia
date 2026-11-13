@@ -20,7 +20,7 @@ var _inbox: Array[Dictionary] = []
 
 const BACKGROUND_PARSE_CHARS := 262144
 const LONG_WORK := ["turn.skip", "turn.retry", "turn.rerun", "turn.applyParked", "turn.intervene"]
-const SKIP_TITLE := "Open Historia"
+const SKIP_TITLE := "Open Historia Native"
 const SKIP_RUNNING := "Simulating…"
 const SKIP_DONE := "The time skip has finished."
 const SKIP_CHANNEL := "Time skips"

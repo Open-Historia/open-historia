@@ -34,7 +34,7 @@ on:
         type: string
         default: ""
       android:
-        description: Also build the Android APKs (Node for Android comes from the cache, or is built once per Node version and ABI)
+        description: Also build the Android APKs (pushes to native always do; Node for Android comes from the cache, or is built once per Node version and ABI)
         required: false
         type: boolean
         default: false
@@ -1044,10 +1044,13 @@ jobs:
           if [ "${{ inputs.tours }}" = true ]; then test "${{ steps.tour.outcome }}" = success && test "${{ steps.tour2x.outcome }}" = success; fi
 
   android-node:
-    name: Build Node for Android (${{ matrix.abi }})
-    if: github.event_name == 'workflow_dispatch' && inputs.android
+    name: Node for Android (${{ matrix.abi }})
+    if: (github.event_name == 'push' && github.repository == 'Open-Historia/open-historia') || (github.event_name == 'workflow_dispatch' && inputs.android)
     runs-on: ubuntu-22.04
     timeout-minutes: 360
+    concurrency:
+      group: native-android-node-${{ matrix.abi }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
@@ -1057,13 +1060,16 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: native/android/node
 
-      - name: Restore Node for Android from the cache
+      - name: Look for Node for Android in the cache
         id: node-cache
         uses: actions/cache/restore@v4
         with:
           path: native/android/node/out/${{ matrix.abi }}
-          key: node-android-v${{ env.NODE_VERSION }}-${{ matrix.abi }}-${{ hashFiles('native/android/node/build.sh') }}
+          key: node-android-v${{ env.NODE_VERSION }}-${{ matrix.abi }}-${{ hashFiles('native/android/node/build.sh', 'native/android/node/patch_node.py') }}
+          lookup-only: true
 
       - name: Build Node for Android with the NDK (only when the cache missed)
         if: steps.node-cache.outputs.cache-hit != 'true'
@@ -1079,6 +1085,7 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" native/android/node/out
 
       - name: Check the build
+        if: steps.node-cache.outputs.cache-hit != 'true'
         run: |
           ls -la "native/android/node/out/${{ matrix.abi }}"
           file "native/android/node/out/${{ matrix.abi }}/node.stripped"
@@ -1089,26 +1096,26 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: native/android/node/out/${{ matrix.abi }}
-          key: node-android-v${{ env.NODE_VERSION }}-${{ matrix.abi }}-${{ hashFiles('native/android/node/build.sh') }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: node-android-${{ matrix.abi }}
-          path: native/android/node/out/${{ matrix.abi }}
-          retention-days: 7
-          if-no-files-found: error
+          key: node-android-v${{ env.NODE_VERSION }}-${{ matrix.abi }}-${{ hashFiles('native/android/node/build.sh', 'native/android/node/patch_node.py') }}
 
   android:
     name: Build the Android app
     needs: android-node
-    if: github.event_name == 'workflow_dispatch' && inputs.android
+    if: (github.event_name == 'push' && github.repository == 'Open-Historia/open-historia') || (github.event_name == 'workflow_dispatch' && inputs.android)
     runs-on: ubuntu-22.04
     timeout-minutes: 120
+    concurrency:
+      group: native-release-${{ github.ref }}-android
+      cancel-in-progress: true
+    outputs:
+      kind: ${{ steps.apks.outputs.kind }}
     defaults:
       run:
         shell: bash
     env:
       NDK_VERSION: 29.0.14206865
+      ANDROID_BUILD_TOOLS: 36.1.0
+      OH_ANDROID_CERT_SHA256: bb087cdd17aa83874e9c57ce9e48dac105050e91694008033558750e7009745a
     steps:
       - uses: actions/checkout@v4
 
@@ -1121,15 +1128,16 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Install the NDK
+      - name: Install the NDK and the Android platform
         run: |
-          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" "platform-tools" "build-tools;35.0.0" "platforms;android-35" >/dev/null
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" "platform-tools" "build-tools;$ANDROID_BUILD_TOOLS" "platforms;android-36" >/dev/null
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
-          ls "$ANDROID_HOME/ndk/$NDK_VERSION"
+          ls "$ANDROID_HOME/ndk/$NDK_VERSION" "$ANDROID_HOME/platforms/android-36"
 
       - name: Install the Rust toolchain for Android
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-linux-android --target x86_64-linux-android
+          rustup default "$RUST_TOOLCHAIN"
           cargo install cargo-ndk --version 4.1.2 --locked
           cargo ndk --version
 
@@ -1202,17 +1210,25 @@ jobs:
           done
           echo "OH_GODOT_EXE=$HOME/godot-cache/Godot_v4.7.2-stable_linux.x86_64" >> "$GITHUB_ENV"
 
-      - uses: actions/download-artifact@v4
+      - name: Restore Node for Android (arm64-v8a)
+        uses: actions/cache/restore@v4
         with:
-          pattern: node-android-*
-          path: native/android/node/out
+          path: native/android/node/out/arm64-v8a
+          key: node-android-v${{ env.NODE_VERSION }}-arm64-v8a-${{ hashFiles('native/android/node/build.sh', 'native/android/node/patch_node.py') }}
+          fail-on-cache-miss: true
 
-      - name: Lay out the Node builds by ABI
+      - name: Restore Node for Android (x86_64)
+        uses: actions/cache/restore@v4
+        with:
+          path: native/android/node/out/x86_64
+          key: node-android-v${{ env.NODE_VERSION }}-x86_64-${{ hashFiles('native/android/node/build.sh', 'native/android/node/patch_node.py') }}
+          fail-on-cache-miss: true
+
+      - name: Check Node for Android
         run: |
-          cd native/android/node/out
           for abi in arm64-v8a x86_64; do
-            if [ -d "node-android-$abi" ]; then rm -rf "$abi"; mv "node-android-$abi" "$abi"; fi
-            ls -la "$abi"
+            ls -la "native/android/node/out/$abi"
+            test "$(cat "native/android/node/out/$abi/VERSION")" = "v$NODE_VERSION"
           done
 
       - name: Install the server and sidecar packages
@@ -1220,18 +1236,111 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           cd native/sidecar && npm ci --ignore-scripts --no-audit --no-fund
 
-      - name: Build the APKs (one per ABI)
-        run: node native/android/build.mjs --abi arm64-v8a,x86_64 --godot "$OH_GODOT_EXE"
+      - name: Build the APKs (one per ABI; signed with the release key when it is set)
+        id: apks
+        env:
+          KEYSTORE_B64: ${{ secrets.NATIVE_ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.NATIVE_ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.NATIVE_ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ] && [ -n "$ANDROID_KEY_ALIAS" ]; then
+            kind=release
+            trap 'rm -f "$RUNNER_TEMP/release.jks"' EXIT
+            ( umask 077; printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks" )
+            export OH_ANDROID_KEYSTORE="$RUNNER_TEMP/release.jks"
+            export OH_ANDROID_BUILD=$(( ($(date -u +%s) - 1767225600) / 60 ))
+            echo "versionCode $OH_ANDROID_BUILD"
+            node native/android/build.mjs --abi arm64-v8a,x86_64 --godot "$OH_GODOT_EXE" --release
+          else
+            kind=debug
+            echo "::notice::the NATIVE_ANDROID_* secrets are not set in this repository; debug APKs, nothing is published"
+            node native/android/build.mjs --abi arm64-v8a,x86_64 --godot "$OH_GODOT_EXE"
+          fi
+          mkdir -p "$RUNNER_TEMP/android"
+          for abi in arm64-v8a x86_64; do
+            cp "native/android/out/open-historia-native-$abi-$kind.apk" "$RUNNER_TEMP/android/Open-Historia-Native-Android-$abi.apk"
+          done
+          ls -la "$RUNNER_TEMP/android"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
 
-      - name: Sizes
-        run: ls -la native/android/out/*.apk
+      - name: Check the APKs are signed with the release key
+        if: steps.apks.outputs.kind == 'release'
+        run: |
+          apksigner="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS/apksigner"
+          for apk in "$RUNNER_TEMP"/android/*.apk; do
+            "$apksigner" verify --print-certs "$apk" > "$RUNNER_TEMP/certs.txt"
+            cat "$RUNNER_TEMP/certs.txt"
+            grep -qi "certificate SHA-256 digest: $OH_ANDROID_CERT_SHA256" "$RUNNER_TEMP/certs.txt" || { echo "::error::$(basename "$apk") is not signed with the release key"; exit 1; }
+          done
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Open-Historia-Native-Android-debug
-          path: native/android/out/*.apk
-          retention-days: 7
+          name: Open-Historia-Native-Android${{ steps.apks.outputs.kind == 'debug' && '-debug' || '' }}
+          path: ${{ runner.temp }}/android/*.apk
+          retention-days: 3
+          compression-level: 0
           if-no-files-found: error
+
+  android-publish:
+    name: Publish the Android app to Open-Historia/open-historia
+    needs: android
+    if: needs.android.outputs.kind == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: native-release-android-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: native
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Open-Historia-Native-Android
+          path: ${{ runner.temp }}/android
+
+      - name: Publish the Android app (a dry run without the release token)
+        id: publish
+        env:
+          RELEASE_TOKEN: ${{ secrets.OH_PUBLIC_RELEASE_TOKEN || (github.repository == 'Open-Historia/open-historia' && github.token || '') }}
+          LAB_TOKEN: ${{ github.token }}
+          WANTED: ${{ github.event_name == 'push' || inputs.publish }}
+        run: |
+          mode=--dry-run
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::notice::OH_PUBLIC_RELEASE_TOKEN is not set in this repository; a dry run, nothing is published"
+            export GH_TOKEN="$LAB_TOKEN"
+          elif [ "$GITHUB_REF" != refs/heads/native ]; then
+            echo "::notice::only native publishes; a dry run for $GITHUB_REF"
+            export GH_TOKEN="$RELEASE_TOKEN"
+          elif [ "$WANTED" != true ]; then
+            echo "::notice::publishing was turned off for this run; a dry run"
+            export GH_TOKEN="$RELEASE_TOKEN"
+          else
+            export GH_TOKEN="$RELEASE_TOKEN"
+            mode=--publish
+          fi
+          bash native/android/publish.sh "$RUNNER_TEMP/android" "$mode"
+          if [ "$mode" = --publish ]; then echo "published=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Drop this run's APKs from the artifact storage
+        if: steps.publish.outputs.published == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name == "Open-Historia-Native-Android") | "\(.id) \(.name)"' |
+          while read -r id name; do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" && echo "removed $name from the artifact storage"
+          done
 
   publish:
     name: Publish to Open-Historia/open-historia
