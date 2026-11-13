@@ -18,13 +18,17 @@ export const TASK_TEMPERATURES = Object.freeze({
   territoryDirector: 0.2,
   timelineCurator: 0.2,
   unitDirector: 0.2,
+  // A scenario's language packs (runtime/scenarioLanguagePacks.js): one right
+  // name for a place, and the same term every time.
+  scenarioTranslation: 0.2,
 
   // Bounded estimation: the model must supply what the record does not.
   countryStatSheet: 0.3,
   intelligenceAssessment: 0.3,
   interactiveSummary: 0.3,
 
-  // A compromise: one request carrying the four 0.2 reconcilers plus written agent reports.
+  // A Scene's map check (gameplay.js runSceneReview): one request carrying the
+  // three directors and the board, all 0.2 on their own.
   turnReview: 0.3,
 });
 

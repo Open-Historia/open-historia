@@ -16,6 +16,7 @@ signal open_history
 signal scenario_updated(id: String)
 
 const CARD_WIDTH := 305.0
+const SCENARIO_PILL_MOST := 176.0
 const CARD_GAP := 16
 
 var loader: ImageLoader
@@ -88,7 +89,10 @@ func _on_theme_changed() -> void:
 	if _phone:
 		_rail_panel.add_theme_stylebox_override("panel", _phone_bar_style())
 	else:
-		_rail_panel.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("header", UI.RAIL), Color(0, 0, 0, 0), 0, 0, Vector4(12, 16, 12, 16)))
+		_rail_panel.add_theme_stylebox_override("panel", _rail_style())
+	for tile_key in _tiles.keys():
+		var tile: Button = _tiles[tile_key]
+		_style_tile(tile, tile_key == _page)
 	var key := _page
 	_page = ""
 	_show_page(key)
@@ -204,7 +208,7 @@ func set_status(text: String, problem := false) -> void:
 func _build_rail() -> void:
 	var rail := PanelContainer.new()
 	_rail_panel = rail
-	rail.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("header", UI.RAIL), Color(0, 0, 0, 0), 0, 0, Vector4(12, 16, 12, 16)))
+	rail.add_theme_stylebox_override("panel", _rail_style())
 	rail.anchor_bottom = 1.0
 	rail.offset_right = 110
 	add_child(rail)
@@ -244,6 +248,25 @@ func _build_rail() -> void:
 	column.add_child(UI.spacer(false))
 	var settings := _rail_tile("settings", "Settings")
 	column.add_child(settings)
+
+
+func _rail_style() -> StyleBoxFlat:
+	var style := UI.box(UiTheme.pick("header", UI.RAIL), UiTheme.pick("line", Color(1, 1, 1, 0.08)), 0, 0, Vector4(12, 16, 12, 16))
+	style.border_width_right = 1
+	return style
+
+
+func _theme_button(button: Button) -> Button:
+	if not UiTheme.themed():
+		return button
+	for state in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
+		var lifted := button.get_theme_stylebox(state)
+		if lifted is StyleBoxFlat:
+			var style := (lifted as StyleBoxFlat).duplicate() as StyleBoxFlat
+			style.bg_color = UiTheme.pick("overlay_card", style.bg_color)
+			style.border_color = UiTheme.pick("line", style.border_color)
+			button.add_theme_stylebox_override(state, style)
+	return button
 
 
 func _rail_tile(key: String, text: String) -> Button:
@@ -353,6 +376,9 @@ func _style_tile(tile: Button, active: bool) -> void:
 	if not active:
 		hover.bg_color = Color(1, 1, 1, 0.07)
 		hover.border_color = Color(1, 1, 1, 0.12)
+	if UiTheme.themed():
+		var rim := Color(UiTheme.pick("accent", Color(1, 1, 1)), 0.38)
+		hover.border_color = hover.border_color.blend(rim) if active else rim
 	for state in ["normal", "focus", "disabled"]:
 		tile.add_theme_stylebox_override(state, style)
 	for state in ["hover", "pressed", "hover_pressed"]:
@@ -1358,6 +1384,22 @@ func _count_chip(title: String, count: int) -> PanelContainer:
 	return chip
 
 
+func _fit_pill(pill: PanelContainer, most: float, room: float) -> void:
+	var text_label := pill.get_child(0) as Label
+	var font := text_label.get_theme_font("font")
+	var font_size := text_label.get_theme_font_size("font_size")
+	var text_width := ceilf(font.get_string_size(text_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x) if font else 0.0
+	var chrome := pill.get_theme_stylebox("panel").get_minimum_size().x
+	var full := text_width + chrome
+	var width := maxf(0.0, minf(full, minf(most, room)))
+	text_label.clip_text = true
+	text_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	text_label.custom_minimum_size.x = maxf(0.0, width - chrome)
+	text_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	pill.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	pill.visible = width > chrome + 12.0
+
+
 func _game_card(game: Dictionary, active: bool) -> Control:
 	var accent_text := str(game.get("accentColor", ""))
 	var accent := Color(accent_text if not accent_text.is_empty() else "#2bc1f3")
@@ -1377,23 +1419,32 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 	badges.offset_left = 14
 	badges.offset_top = 13
 	badges.offset_right = -13
-	badges.add_theme_constant_override("separation", 6)
+	badges.add_theme_constant_override("separation", 8)
+	var tags := HFlowContainer.new()
+	tags.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tags.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	tags.add_theme_constant_override("h_separation", 6)
+	tags.add_theme_constant_override("v_separation", 6)
+	tags.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badges.add_child(tags)
 	var eyebrow := str(game.get("eyebrow", ""))
-	badges.add_child(UI.pill("Current Game" if active else (eyebrow if not eyebrow.is_empty() else "Game"), Color(accent, 0.533) if active else Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.72), Color(1, 1, 1, 0.18), Color(0.973, 0.973, 0.98, 0.96), true))
-	var scenario_pill := UI.pill(str(game.get("scenarioName", "")), Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.72), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.85))
+	var kind_pill := UI.pill("Current Game" if active else (eyebrow if not eyebrow.is_empty() else "Game"), Color(accent, 0.8) if active else Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.18), Color(0.973, 0.973, 0.98, 0.96), true)
+	kind_pill.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	tags.add_child(kind_pill)
+	var scenario_pill := UI.pill(str(game.get("scenarioName", "")), Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.85))
 	scenario_pill.tooltip_text = str(game.get("scenarioName", ""))
-	scenario_pill.clip_contents = true
-	scenario_pill.custom_minimum_size.x = 0
-	badges.add_child(scenario_pill)
-	badges.add_child(UI.spacer())
+	scenario_pill.mouse_filter = Control.MOUSE_FILTER_PASS
+	_fit_pill(scenario_pill, SCENARIO_PILL_MOST, CARD_WIDTH - 2 - 27 - 32 - 8)
+	tags.add_child(scenario_pill)
 	var menu := Button.new()
 	menu.icon = UI.icon("more", 16)
 	menu.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	menu.custom_minimum_size = Vector2(32, 35)
+	menu.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	menu.focus_mode = Control.FOCUS_NONE
 	menu.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	menu.tooltip_text = "More for %s" % str(game.get("name", ""))
-	var menu_style := UI.box(Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.72), Color(1, 1, 1, 0.12), 9, 1)
+	var menu_style := UI.box(Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.12), 9, 1)
 	menu.add_theme_stylebox_override("normal", menu_style)
 	menu.add_theme_stylebox_override("hover", UI.box(Color(1, 1, 1, 0.18), Color(1, 1, 1, 0.2), 9, 1))
 	menu.add_theme_stylebox_override("pressed", UI.box(Color(1, 1, 1, 0.18), Color(1, 1, 1, 0.2), 9, 1))
@@ -1450,7 +1501,7 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 		return card
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 7)
-	var archive := UI.button("Unarchive", "small", "archive")
+	var archive := _theme_button(UI.button("Unarchive", "small", "archive"))
 	archive.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	archive.tooltip_text = "Move back into your library"
 	archive.pressed.connect(func() -> void: _archive_game(game))
@@ -1807,16 +1858,16 @@ func _scenario_card(scenario: Dictionary) -> Control:
 	badges.offset_top = 13
 	badges.offset_right = -13
 	badges.add_theme_constant_override("separation", 6)
-	badges.add_child(UI.pill("Scenario", Color(accent, 0.533), Color(1, 1, 1, 0.18), Color(0.973, 0.973, 0.98, 0.96), true))
+	badges.add_child(UI.pill("Scenario", Color(accent, 0.8), Color(1, 1, 1, 0.18), Color(0.973, 0.973, 0.98, 0.96), true))
 	if scenario.get("builtIn", false):
-		badges.add_child(UI.pill("Built-In", Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.72), Color(1, 1, 1, 0.22), UI.WHITE, true))
+		badges.add_child(UI.pill("Built-In", Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.22), UI.WHITE, true))
 	badges.add_child(UI.spacer())
 	var badge := _suggestion_badge(str(scenario.get("id", "")))
 	if badge:
 		badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		badges.add_child(badge)
 	var count := int(scenario.get("games", 0))
-	badges.add_child(UI.pill("%d game%s" % [count, "" if count == 1 else "s"], Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.72), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.85)))
+	badges.add_child(UI.pill("%d game%s" % [count, "" if count == 1 else "s"], Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.85)))
 	top.add_child(badges)
 	column.add_child(top)
 	var body := MarginContainer.new()
@@ -1844,11 +1895,11 @@ func _scenario_card(scenario: Dictionary) -> Control:
 		stack.add_child(start)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 7)
-	var edit := UI.button("Edit", "small", "edit")
+	var edit := _theme_button(UI.button("Edit", "small", "edit"))
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	edit.pressed.connect(func() -> void: edit_scenario.emit(id))
 	row.add_child(edit)
-	var clone := UI.button("Clone Scenario", "small", "clone")
+	var clone := _theme_button(UI.button("Clone Scenario", "small", "clone"))
 	clone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	clone.size_flags_stretch_ratio = 1.25
 	clone.pressed.connect(func() -> void: clone_scenario.emit(scenario))
@@ -1893,7 +1944,8 @@ class DashedCard extends Control:
 	func _draw() -> void:
 		var rect := Rect2(Vector2(1, 1), size - Vector2(2, 2))
 		var radius := 24.0
-		var ink := Color(1, 1, 1, 0.22)
+		draw_style_box(UI.box(UiTheme.pick("overlay_card", Color(0, 0, 0, 0)), Color(0, 0, 0, 0), 24, 0), rect)
+		var ink := UiTheme.pick("line", Color(1, 1, 1, 0.22))
 		var edges := [
 			[Vector2(rect.position.x + radius, rect.position.y), Vector2(rect.end.x - radius, rect.position.y)],
 			[Vector2(rect.end.x, rect.position.y + radius), Vector2(rect.end.x, rect.end.y - radius)],

@@ -91,6 +91,7 @@ func _run() -> void:
 	await _shoot("h-diplomatic")
 	hud.set_map_mode("political", true)
 	hud._apply_map_mode()
+	await _themed_trays(hud)
 	await _renamed_city(hud)
 	_say("static memory %.1f MB" % (OS.get_static_memory_usage() / 1048576.0))
 	_say("done: %d failure(s) %s" % [failures.size(), ", ".join(failures)])
@@ -120,6 +121,31 @@ func _city_row(rows: Array, label: String) -> Array:
 		if item is Array and (item as Array).size() > 7 and str(item[0]) == label:
 			return item
 	return []
+
+
+func _themed_trays(hud: Hud) -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell != null and shell.door != null and is_instance_valid(shell.door):
+		shell.door.opened.emit()
+		await _wait(0.3)
+	if shell != null and shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+		await _wait(0.3)
+	var search := hud.search as SearchBox
+	var date := hud.date_widget
+	for preset in ["forest", "oxblood"]:
+		UiTheme.select(preset)
+		await _wait(0.8)
+		var pill := UiTheme.pick("glass_pill", Color(0, 0, 0, 0))
+		_check(hud._dock.tint.is_equal_approx(pill), "%s: the dock's tray takes the theme's glass" % preset)
+		_check(search == null or search._shell.tint.is_equal_approx(pill), "%s: the search button takes the theme's glass" % preset)
+		_check(date._pill.tint.is_equal_approx(pill), "%s: the date bar takes the theme's glass" % preset)
+		_check(date._country_label.get_theme_color("font_color").is_equal_approx(UiTheme.pick("accent", UI.HUD_BLUE)), "%s: the date bar's country reads the accent" % preset)
+		await _shoot("h-theme-%s" % preset)
+	UiTheme.select("default")
+	await _wait(0.6)
+	_check(hud._dock.tint.is_equal_approx(UI.HUD_BG) and date._pill.tint.is_equal_approx(UI.HUD_BG_STRONG), "Default keeps the HUD's own glass")
+	await _shoot("h-theme-default")
 
 
 func _renamed_city(hud: Hud) -> void:

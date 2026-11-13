@@ -104,7 +104,11 @@ export const isBoundToDefend = (world, ally, country) => defendersOf(world, coun
 
 // ---- calls to arms ------------------------------------------------------------------------
 
-// world.callsToArms: { id, warId, ally, defender, attackers: [names], via: { kind, id, title }, date, round, status, answeredRound? }
+// world.callsToArms: { id, warId, ally, defender, attackers: [names], via: { kind, id, title }, date, round, status, answeredRound?, messageId? }
+//   messageId   the message in which the defender asks the ally for help (Game/AI/gameplay.js), under which the
+//               ally answers it (GameUI/warAndPeace.jsx CallToArmsCard)
+//   askedRound  the turn that message was sent, where it was sent later than the call opened (an old save's call,
+//               or one whose message could not be sent at first): the call stands from then
 export const normalizeCallToArms = (raw) => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const id = clean(raw.id, 120);
@@ -125,6 +129,8 @@ export const normalizeCallToArms = (raw) => {
     round: Math.max(0, Math.round(figure(raw.round))),
     status,
     ...(status !== "open" && answered > 0 ? { answeredRound: answered } : {}),
+    ...(clean(raw.messageId, 160) ? { messageId: clean(raw.messageId, 160) } : {}),
+    ...(Math.round(figure(raw.askedRound)) > 0 ? { askedRound: Math.round(figure(raw.askedRound)) } : {}),
   };
 };
 
@@ -170,7 +176,10 @@ export const callsForTurn = ({ world = {}, wars = [], began = [], calls = [], pl
     const [sideA, sideB] = sidesOf(war);
     // The war is over, or the country came into it some other way: nothing is owed.
     if (!war || !active(war) || [...sideA, ...sideB].some((name) => fold(name) === fold(call.ally))) return { ...call, status: "lapsed", answeredRound: now };
-    if (now - call.round < CALL_STANDS_ROUNDS) return call;
+    // A person's call no message has asked yet (Game/AI/gameplay.js sends it at the end of the turn) was never
+    // heard: silence is no answer to it. Once asked, it stands from the turn it was.
+    if (!call.messageId && played.has(fold(call.ally))) return call;
+    if (now - Math.max(call.round, call.askedRound ?? 0) < CALL_STANDS_ROUNDS) return call;
     // Silence is an answer.
     broken.push({ ally: call.ally, defender: call.defender, via: call.via, warId: call.warId });
     return { ...call, status: "refused", answeredRound: now };

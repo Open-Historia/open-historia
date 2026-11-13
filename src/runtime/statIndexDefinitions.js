@@ -248,6 +248,19 @@ export const flattenStatSheetRows = (definitionInput) => {
 
 export const statSheetKeys = (definitionInput) => flattenStatSheetRows(definitionInput).map((stat) => stat.key);
 
+// Custom values are numbers, never JavaScript truthiness/coercion defaults.
+// Missing values stay omitted; zero is a recorded observation.
+export const readCustomStatNumber = (value) => {
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  if (typeof value === "string" && !value.trim()) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+// Display can use a partial saved sheet; generation/tracking still require completeness.
+export const hasRecordedCustomStatValues = (values, definition) =>
+  flattenStatSheetRows(definition).some((stat) => readCustomStatNumber(values?.[stat.key]) !== null);
+
 export const normalizeCustomStatValues = (value, definitionInput, { partial = false } = {}) => {
   const definition = normalizeStatSheetDefinition(definitionInput);
   if (!definition.custom) return {};
@@ -258,8 +271,8 @@ export const normalizeCustomStatValues = (value, definitionInput, { partial = fa
       if (!partial) continue;
       continue;
     }
-    const numeric = Number(source[stat.key]);
-    if (!Number.isFinite(numeric)) continue;
+    const numeric = readCustomStatNumber(source[stat.key]);
+    if (numeric === null) continue;
     let next = numeric;
     if (Number.isFinite(stat.minimum)) next = Math.max(stat.minimum, next);
     if (Number.isFinite(stat.maximum)) next = Math.min(stat.maximum, next);

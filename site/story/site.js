@@ -16,31 +16,81 @@
 
   // ---------- the buttons point at the visitor's own build ----------
   var RELEASES = "https://github.com/Open-Historia/open-historia/releases/download/";
-  var label = { windows: "Download for Windows", mac: "Download for macOS", linux: "Download for Linux",
-                android: "Download the Android app", ios: "Download the Desktop app", desktop: "Download for Desktop" }[os];
-  // Mac goes to the downloads: Apple Silicon and Intel need different builds,
-  // and the user agent can't tell them apart.
-  var href = os === "android" ? RELEASES + "android/open-historia.apk"
-           : os === "windows" ? RELEASES + "desktop-stable/Open-Historia-Setup.exe"
-           // The .deb installs a root-owned chrome-sandbox, so Chromium's sandbox works (#658).
-           : os === "linux" ? RELEASES + "desktop-stable/Open-Historia-amd64.deb"
-           : "#download";
-  var betaLabel = { windows: "Beta for Windows", mac: "Beta for macOS", linux: "Beta for Linux",
-                    android: "Beta Android app", ios: "Download the Beta", desktop: "Download the Beta" }[os];
-  var betaHref = os === "android" ? RELEASES + "android-beta/open-historia-beta.apk"
-               : os === "windows" ? RELEASES + "desktop-beta/Open-Historia-Beta-Setup.exe"
-               : os === "linux" ? RELEASES + "desktop-beta/Open-Historia-Beta-amd64.deb"
-               : "#download";
-
-  function point(id, textId, url, text) {
-    var link = byId(id);
-    var span = byId(textId);
-    if (link) link.href = url;
-    if (span) span.textContent = text;
+  // ---------- one Download button, and the three apps it offers ----------
+  // Stable, Native and Beta, each for the visitor's own platform; Native is the one recommended.
+  var NATIVE = RELEASES + "native-experimental/";
+  var STABLE = RELEASES + "desktop-stable/";
+  var BETA = RELEASES + "desktop-beta/";
+  var BUILDS = {
+    windows: {
+      stable: [["Download for Windows", STABLE + "Open-Historia-Setup.exe"]],
+      native: [["Download for Windows", NATIVE + "Open-Historia-Native-Setup.exe"]],
+      beta: [["Download for Windows", BETA + "Open-Historia-Beta-Setup.exe"]]
+    },
+    mac: {
+      stable: [["Apple Silicon", STABLE + "Open-Historia-mac-arm64.zip"], ["Intel", STABLE + "Open-Historia-mac-x64.zip"]],
+      native: [["Download for macOS", NATIVE + "Open-Historia-Native-macOS.dmg"]],
+      beta: [["Apple Silicon", BETA + "Open-Historia-Beta-mac-arm64.zip"], ["Intel", BETA + "Open-Historia-Beta-mac-x64.zip"]]
+    },
+    linux: {
+      stable: [[".deb", STABLE + "Open-Historia-amd64.deb"], ["AppImage", STABLE + "Open-Historia-x86_64.AppImage"]],
+      native: [["Download for Linux", NATIVE + "Open-Historia-Native-Linux-x86_64.tar.gz"]],
+      beta: [[".deb", BETA + "Open-Historia-Beta-amd64.deb"], ["AppImage", BETA + "Open-Historia-Beta-x86_64.AppImage"]]
+    },
+    android: {
+      stable: [["Download the APK", RELEASES + "android/open-historia.apk"]],
+      native: [],
+      beta: [["Download the APK", RELEASES + "android-beta/open-historia-beta.apk"]]
+    }
+  };
+  var APPS = [
+    ["stable", "Stable", "Updates every couple of months, and is usually a little more stable."],
+    ["native", "Native", "Runs extremely smoothly, with by far the best performance. Gets each update shortly after the beta."],
+    ["beta", "Beta", "The newest features as soon as possible, with updates every couple of days."]
+  ];
+  var PLATFORM_NAME = { windows: "Windows", mac: "macOS", linux: "Linux", android: "Android" };
+  var picker = null;
+  var lastFocus = null;
+  function buildPicker() {
+    var mine = BUILDS[os] ? os : "windows";
+    var card = function (app, recommended) {
+      var builds = BUILDS[mine][app[0]];
+      return '<div class="dlp-card' + (recommended ? " featured" : "") + '"><h3>' + app[1] + "</h3><p>" + app[2] + '</p><div class="dlp-btns">' +
+        (builds.length ? builds.map(function (b, i) { return '<a class="btn ' + (recommended && i === 0 ? "btn-primary" : "btn-ghost") + '" href="' + b[1] + '"><span class="i">⬇</span> ' + b[0] + "</a>"; }).join("") : '<span class="dlp-none">Desktop only: Windows, macOS and Linux.</span>') + "</div></div>";
+    };
+    var shell = document.createElement("div");
+    shell.className = "dlp";
+    shell.hidden = true;
+    shell.innerHTML = '<div class="dlp-box" role="dialog" aria-modal="true" aria-labelledby="dlpTitle"><button type="button" class="dlp-x" data-dlp-close aria-label="Close">✕</button>' +
+      '<p class="eyebrow">Download the app</p><h2 id="dlpTitle">Pick your version</h2><p class="dlp-for">For ' + PLATFORM_NAME[mine] + (os === "ios" || os === "desktop" ? ' · <a href="#download" data-dlp-close>other platforms</a>' : "") + '</p><div class="dlp-grid">' +
+      // Native and Beta are both recommended: one golden border holds the two.
+      card(APPS[0], false) + '<div class="dlp-rec"><span class="tag">Recommended</span>' + card(APPS[1], true) + card(APPS[2], true) + "</div>" +
+      '</div><p class="dlp-foot">Each is its own app with its own saves, and updates itself. <a href="#download" data-dlp-close>All platforms and files</a></p></div>';
+    document.body.appendChild(shell);
+    shell.addEventListener("click", function (event) {
+      if (event.target === shell || event.target.closest("[data-dlp-close]")) closePicker();
+    });
+    document.addEventListener("keydown", function (event) { if (event.key === "Escape" && picker && !picker.hidden) closePicker(); });
+    return shell;
   }
-  point("primaryDownload", "primaryLabel", href, label);
-  point("bandDownload", "bandLabel", href, label);
-  point("betaDownload", "betaLabel", betaHref, betaLabel);
+  function openPicker(event) {
+    if (event) event.preventDefault();
+    picker = picker || buildPicker();
+    lastFocus = document.activeElement;
+    picker.hidden = false;
+    document.documentElement.classList.add("dlp-open");
+    var first = picker.querySelector(".dlp-card.featured .btn") || picker.querySelector(".dlp-x");
+    if (first) first.focus();
+  }
+  function closePicker() {
+    if (!picker) return;
+    picker.hidden = true;
+    document.documentElement.classList.remove("dlp-open");
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("[data-download-app]"), function (button) {
+    button.addEventListener("click", openPicker);
+  });
   if (os === "ios") {
     var note = byId("heroNote");
     if (note) note.innerHTML = "On iPhone &amp; iPad, tap <b>Demo</b> to try it in Safari — expect lag, and add it to your Home Screen for fullscreen.";

@@ -70,6 +70,7 @@ export const deployFor = ({ world, actions }, seat, request, { orderId, unitId, 
     updatedAt: at,
   });
   if (!unit || unit.type !== type) return { error: "That is not a place on the map, or not a kind of unit." };
+  // i18n-ignore: the order as the model reads it.
   const text =
     `Deploy request: ${name || type} (${type}, strength ${strength}% of establishment` +
     `${composition ? `, ${composition}` : ""}, owner ${owner}) at ` +
@@ -103,6 +104,7 @@ export const disbandFor = ({ world, actions }, seat, unitId, { orderId, at, maxO
   }
   const queued = list(actions).filter((action) => same(action?.ownerCode, owner) && planned(action));
   if (queued.length >= maxOrders) return { error: `At most ${maxOrders} orders a round.` };
+  // i18n-ignore: the order as the model reads it.
   const text = `Disband order: ${unit.name} (${unit.type}, owner ${unit.ownerCode}) is decommissioned and stood down.`;
   return {
     world: nextWorld,

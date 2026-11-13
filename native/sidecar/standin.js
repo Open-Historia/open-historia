@@ -12,7 +12,7 @@ const textOf = (body) => [...(body.system_instruction?.parts ?? []), ...(body.co
   .map((part) => part.text ?? "")
   .join("\n");
 
-export const installStandInModel = ({ expected }) => {
+export const installStandInModel = ({ expected, strikes = () => [] }) => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (input, init = undefined) => {
     const url = typeof input === "string" || input instanceof URL ? String(input) : String(input?.url ?? "");
@@ -30,11 +30,12 @@ export const installStandInModel = ({ expected }) => {
     let text = null;
     if (tool === "submit_jump_result" && origin && target) {
       const who = country || "The government";
+      const struck = strikes();
       args = {
         stopDate: target,
         summary: "A quiet stretch: markets steady, ministers travel, storms at sea.",
         events: [
-          { date: addDays(origin, 2), title: `${who} opens a new rail line`, description: `${who} opens a long-planned rail line between two regional capitals.`, importance: "moderate", kind: "world", playerRelated: true },
+          { date: addDays(origin, 2), title: `${who} opens a new rail line`, description: `${who} opens a long-planned rail line between two regional capitals.`, importance: "moderate", kind: "world", playerRelated: true, ...(struck.length ? { impacts: { strikes: struck } } : {}) },
           { date: addDays(origin, 5), title: "Oil prices slide further", description: "Brent falls again as producers keep pumping.", importance: "moderate", kind: "world", playerRelated: false },
           { date: addDays(origin, 9), title: "Storms batter the North Sea coast", description: "A winter storm floods ports along the North Sea.", importance: "minor", kind: "world", playerRelated: false },
           { date: target, title: `${who} hosts a regional summit`, description: `Leaders of neighbouring states meet in the capital of ${who}.`, importance: "major", kind: "world", playerRelated: true },

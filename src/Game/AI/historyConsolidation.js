@@ -14,6 +14,17 @@
 import { normalizeActions, normalizeChats, normalizeWorldState } from "../../runtime/gameState.js";
 import { HISTORY_FIELD } from "./gameplaySchemas.js";
 import { getUnconsolidatedEvents } from "./promptContext.js";
+import {
+  HISTORY_TIERS,
+  eraWordCount,
+  hasHistoryTiers,
+  judgeHistoryTiers,
+  mergeHistoryTiers,
+  normalizeCanonFacts,
+  renderCanonFacts,
+  renderHistoryTiers,
+  yearOfDate,
+} from "../../runtime/historyTiers.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 
@@ -33,9 +44,8 @@ export const HISTORY_CONSOLIDATION = Object.freeze({
   documentWordBudget: 1500,
   documentWordCeiling: 1800,
   // A fold a time skip carried and got no usable answer for simply waits for
-  // the next skip. Past this many unfolded events it has waited long enough,
-  // and is asked for as a request of its own (gameplay.js compactHistoryIfNeeded).
-  ownRequestThreshold: 96,
+  // the next skip, however many events pile up: the request of its own it was
+  // once asked as went on 2026-11-07 (gameplay.js applySkipHistoryFold).
   // What a skip's answer has to give for its fold to be taken at all
   // (judgeSkipHistoryAnswer): a document of at least this many words, or
   // failing that a summary of this many, which is then appended.
@@ -110,6 +120,12 @@ export const deferredConsolidationStillDue = ({ throughEvent = null, closedChats
 // of pass summaries, which the first document pass rewrites into one text.
 export const seedHistoryDocumentText = (worldLike) => {
   const world = normalizeWorldState(worldLike);
+  // In tiers (runtime/historyTiers.js): the eras and years, every one, and any
+  // note appended since the last fold that wrote them.
+  if (hasHistoryTiers(world.historyDocument)) {
+    return [renderHistoryTiers(world.historyDocument, { scale: 100 }), normalizeString(world.historyDocument.text)]
+      .filter(Boolean).join("\n\n");
+  }
   const live = normalizeString(world.historyDocument?.text);
   if (live) return live;
   return world.consolidatedHistory
@@ -120,23 +136,36 @@ export const seedHistoryDocumentText = (worldLike) => {
 // The call-time instruction for the eventConsolidator task. Every campaign
 // carries frozen prompt templates, so the document and the rules for revising
 // it cannot live in the template; runJsonTask appends this to the prompt.
-export const buildHistoryDocumentDirective = (worldLike) => {
-  const { documentWordBudget, documentWordCeiling } = HISTORY_CONSOLIDATION;
-  const current = seedHistoryDocumentText(worldLike);
-  const words = countWords(current);
-  const lines = [
+// The years a pass's material covers, [first, last], from the dates of its
+// events (an event without a year is not counted); null when none has one.
+export const yearSpanOf = (events) => {
+  const years = (Array.isArray(events) ? events : []).map((event) => yearOfDate(event?.date)).filter(Number.isFinite);
+  return years.length ? [Math.min(...years), Math.max(...years)] : null;
+};
+
+// The history in tiers (runtime/historyTiers.js): what a pass returns besides
+// its summary. `span` is the years its material covers (yearSpanOf).
+export const HISTORY_TIERS_OUTPUT = "{\"summary\": \"<this period's compressed history>\", \"years\": [{\"year\": 1936, \"text\": \"<the whole paragraph for that year>\"}], \"canon\": [{\"date\": \"YYYY-MM-DD\", \"kind\": \"treaty\", \"text\": \"<the fact>\", \"key\": \"<an office, or empty>\"}]}";
+export const buildHistoryDocumentDirective = (worldLike, { span = null } = {}) => {
+  const world = normalizeWorldState(worldLike);
+  const eraWords = eraWordCount(world.historyDocument);
+  const condense = eraWords > HISTORY_TIERS.eraWordBudget;
+  const yearsCovered = Array.isArray(span) ? (span[0] === span[1] ? `${span[0]}` : `${span[0]} to ${span[1]}`) : "";
+  const canon = renderCanonFacts(world.canonFacts, { maxChars: 3000 });
+  const current = seedHistoryDocumentText(world);
+  return [
     "[History Document]",
-    "The campaign keeps ONE living history document, and this call maintains it. Return two fields: \"summary\" — this period's compressed history on its own, a few paragraphs covering the material below — and \"document\" — the WHOLE history document as it should read from now on, with this period folded in. The document replaces what it covers: the events, conversations and orders below are never sent to the simulation again, and the previous version of the document is discarded, so whatever the new document leaves out is gone for good.",
-    `Keep the document near ${documentWordBudget} words and never above ${documentWordCeiling}. When folding the new period in would take it past that, make room by condensing or removing the LEAST important older material first: minor incidents, routine notes, interim states that later developments superseded, and the detail of concluded episodes that changed nothing lasting. Never remove, however old: how this world has diverged from real history; the causes and current state of every war and crisis still running; borders, regimes and polities that changed; treaties, alliances, occupations, debts and grievances still in force; and the lasting consequences of the player's own orders. When something is condensed, keep its date range and its outcome.`,
-    "Keep the document in chronological order under date-range headings, written as standing facts rather than narration; refer to polities by their full names and never to \"the player\".",
-  ];
-  if (!current) {
-    lines.push("There is no history document yet: write the first one from the material below.");
-  } else {
-    const overBudget = words > documentWordBudget ? ` — over the ${documentWordBudget}-word budget, so condense it` : "";
-    lines.push(`The current document (${words} words${overBudget}) follows. Fold the new period into it and return the whole revised text as "document":\n${current}`);
-  }
-  return lines.join("\n");
+    "The campaign keeps its history in parts, and this call maintains them. The events, conversations and orders below are never sent to the simulation again, so whatever these parts leave out is gone for good. Return:",
+    "- \"summary\": this period's compressed history on its own, a few paragraphs covering the material below.",
+    `- "years": a paragraph for each game year the material below covers${yearsCovered ? ` (${yearsCovered})` : ""}, {"year": 1936, "text": "..."}: the WHOLE paragraph as that year should read from now on, keeping what its current paragraph below already says and folding the new material in. Standing facts rather than narration, at most 250 words a year.`,
+    "- \"canon\": the facts in the material below that must never fade, one each, {\"date\": \"YYYY-MM-DD\", \"kind\": \"treaty | death | regime | border | office | war | other\", \"text\": \"...\", \"key\": \"...\"}: a treaty signed or broken, the death of a ruler or leader, a regime that fell or rose, a border or an annexation, who now holds an office (key: the office, such as \"Chancellor of Germany\", so that a later holder replaces this one), a war begun or ended. Only what is new here: the canon the campaign has is listed below and kept as it is. An empty list when nothing in the material is of that weight.",
+    ...(condense
+      ? [`- "eras": the earlier years below run to ${eraWords} words, over the ${HISTORY_TIERS.eraWordBudget} they are kept near: return them condensed, the whole list, {"from": 1900, "to": 1920, "text": "..."}, an era a paragraph. Condense the least important first (minor incidents, interim states that later ones superseded, the detail of episodes that changed nothing lasting) and keep every divergence from real history, the cause and state of every war and crisis still running, and every commitment still in force.`]
+      : []),
+    "Never drop, however old: how this world has diverged from real history; the causes and current state of every war and crisis still running; borders, regimes and polities that changed; treaties, alliances, occupations, debts and grievances still in force; and the lasting consequences of the player's own orders. Refer to polities by their full names and never to \"the player\".",
+    ...(canon ? [canon] : ["The campaign has no canon yet."]),
+    current ? `The history as it stands (fold the new material into its years):\n${current}` : "There is no history yet: write the years of the material below.",
+  ].join("\n");
 };
 
 // What a finished pass does to the document. The consolidator's revised text
@@ -144,6 +173,13 @@ export const buildHistoryDocumentDirective = (worldLike) => {
 // pass that came back without one (an older prompt, the deterministic
 // fallback), or against a document edited by hand in the meantime, appends
 // its own summary under a dated heading instead, so nothing is lost.
+//
+// `tiers` ({ years, eras, canon }, a pass's answer as it came) are taken entry
+// by entry (judgeHistoryTiers, with `span`, the years its material covers):
+// years and eras written in (mergeHistoryTiers; a document from before them
+// becomes the first era, from `startYear`), and the canon added to the
+// campaign's. The answer's `canonFacts` is the campaign's canon after it,
+// which the caller writes to world.canonFacts.
 export const applyHistoryDocumentUpdate = (worldLike, {
   document = "",
   summary = "",
@@ -152,8 +188,35 @@ export const applyHistoryDocumentUpdate = (worldLike, {
   throughEventId = "",
   throughRound = 0,
   baseRevision = null,
+  tiers = null,
+  span = null,
+  startYear = NaN,
 } = {}) => {
-  const current = normalizeWorldState(worldLike).historyDocument;
+  const world = normalizeWorldState(worldLike);
+  const current = world.historyDocument;
+  const judged = tiers ? judgeHistoryTiers(tiers, { span, eraWords: eraWordCount(current) }) : null;
+  const canonFacts = judged?.canon.length ? normalizeCanonFacts([...world.canonFacts, ...judged.canon]) : world.canonFacts;
+  if (judged && (judged.years.length || judged.eras)) {
+    const merged = mergeHistoryTiers(current, judged, { startYear });
+    return {
+      mode: "tiered",
+      canonFacts,
+      notes: judged.notes,
+      historyDocument: {
+        // A note appended since the last fold that wrote years was shown to
+        // this one, which folded it in.
+        text: "",
+        years: merged.years,
+        eras: merged.eras,
+        revision: (current?.revision ?? 0) + 1,
+        updatedAt: new Date().toISOString(),
+        source,
+        throughDate: throughDate || current?.throughDate || "",
+        throughEventId: throughEventId || current?.throughEventId || "",
+        throughRound: throughRound || current?.throughRound || 0,
+      },
+    };
+  }
   const revised = normalizeString(document);
   const addition = normalizeString(summary);
   const currentRevision = current?.revision ?? 0;
@@ -165,11 +228,14 @@ export const applyHistoryDocumentUpdate = (worldLike, {
   } else if (addition) {
     text = [current?.text, `Through ${throughDate || "the latest pass"}:\n${addition}`].filter(Boolean).join("\n\n");
   } else {
-    return { historyDocument: current, mode: "unchanged" };
+    return { historyDocument: current, mode: "unchanged", canonFacts };
   }
   return {
     mode: rewrite ? "rewritten" : "appended",
+    canonFacts,
     historyDocument: {
+      ...(current?.years ? { years: current.years } : {}),
+      ...(current?.eras ? { eras: current.eras } : {}),
       text,
       revision: currentRevision + 1,
       updatedAt: new Date().toISOString(),
@@ -204,7 +270,7 @@ export const buildSkipHistoryJob = (brief) => {
   return [
     historyJobFence("BEGINNING"),
     "One more job rides on this answer, and it is separate from the period you are simulating: the campaign's older history is due to be folded into its history document. Everything between these two fence lines is that job's own brief. The role it gives you, its inputs and its rules belong to it alone, and nothing in it changes how you write the events.",
-    `Do it LAST, after the events and everything else, and put its answer in the "${HISTORY_FIELD}" field: {"summary": "<this period's compressed history>", "document": "<the whole revised history document>"}. Where the brief tells you to return JSON, to use a tool, or shows an output format, that describes the content of this one field.`,
+    `Do it LAST, after the events and everything else, and put its answer in the "${HISTORY_FIELD}" field: ${HISTORY_TIERS_OUTPUT}, with "eras" too where the brief asks for them. Where the brief tells you to return JSON, to use a tool, or shows an output format, that describes the content of this one field.`,
     "It covers ONLY the events, conversations and orders its brief lists. The events you write in this answer are not part of it: they are folded on a later turn.",
     "",
     text,
@@ -222,12 +288,29 @@ export const buildSkipHistoryJob = (brief) => {
 // is appended to the one the campaign has (applyHistoryDocumentUpdate does that
 // for a pass that came back without a document). A summary too short to stand
 // for the events it replaces is no fold at all: it waits for the next skip.
-export const judgeSkipHistoryAnswer = (answer, { currentText = "" } = {}) => {
+//
+// An answer in tiers (years, eras, canon: runtime/historyTiers.js) is judged
+// entry by entry against `span`, the years the fold covers, and `eraWords`, the
+// words the campaign's eras have; it is taken when any of its tiers is, and
+// its parts come back as `tiers` for applyHistoryDocumentUpdate.
+export const judgeSkipHistoryAnswer = (answer, { currentText = "", span = null, eraWords = 0 } = {}) => {
   const source = answer && typeof answer === "object" && !Array.isArray(answer) ? answer : null;
   const summary = normalizeString(source?.summary);
   if (!summary) {
     return { ok: false, summary: "", document: "", reason: source ? "its history had no summary" : "it carried no history" };
   }
+  const judged = judgeHistoryTiers(source, { span, eraWords });
+  if (judged.years.length || judged.eras) {
+    return {
+      ok: true,
+      summary,
+      document: "",
+      tiers: { years: judged.years, eras: judged.eras, canon: judged.canon },
+      reason: judged.notes.length ? `parts of its history were left out: ${judged.notes.join("; ")}` : "",
+    };
+  }
+  // Canon with a document or a summary: the canon is kept with whichever is.
+  const canonOnly = judged.canon.length ? { tiers: { years: [], eras: null, canon: judged.canon } } : {};
   const { documentWordBudget, minDocumentWords, minSummaryWords } = HISTORY_CONSOLIDATION;
   const document = normalizeString(source?.document);
   const before = countWords(currentText);
@@ -235,14 +318,14 @@ export const judgeSkipHistoryAnswer = (answer, { currentText = "" } = {}) => {
   // Half of what the campaign has, or of the budget when it has more than that:
   // a document condensed to its budget is still a document.
   const floor = Math.max(minDocumentWords, Math.min(before, documentWordBudget) * 0.5);
-  if (document && written >= floor) return { ok: true, summary, document, reason: "" };
+  if (document && written >= floor) return { ok: true, summary, document, reason: "", ...canonOnly };
   const why = document
     ? `its document came back at ${written} word${written === 1 ? "" : "s"} against the ${before} the campaign has`
     : "it gave no document";
   if (countWords(summary) < minSummaryWords) {
     return { ok: false, summary: "", document: "", reason: `${why}, and its summary is too short to stand for what it would replace` };
   }
-  return { ok: true, summary, document: "", reason: `${why}; its summary is appended instead` };
+  return { ok: true, summary, document: "", reason: `${why}; its summary is appended instead`, ...canonOnly };
 };
 
 // The plain-words state the Cheats tool shows above the document.
@@ -252,7 +335,7 @@ export const describeHistoryConsolidation = (bundle) => {
   const passes = world.consolidatedHistory.length;
   const since = plan.unconsolidatedEvents.length;
   const { sizeThreshold, intervalRounds, retainEvents, documentWordBudget } = HISTORY_CONSOLIDATION;
-  const documentWords = countWords(world.historyDocument?.text);
+  const documentWords = countWords(seedHistoryDocumentText(world));
   const documentText = world.historyDocument
     ? `The history document is ${documentWords} words of a ${documentWordBudget}-word budget (revision ${world.historyDocument.revision}, ${world.historyDocument.source === "manual" ? "last edited by hand" : "last written by the AI"}${world.historyDocument.throughDate ? `, through ${world.historyDocument.throughDate}` : ""}).`
     : passes > 0

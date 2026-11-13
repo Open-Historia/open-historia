@@ -164,6 +164,7 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, active = fal
         type="button"
         title={`${displayName} · Open country panel`}
         aria-label={`Open ${displayName} country panel`}
+        data-oh-theme-hud=""
         onClick={onToggle}
         style={{
             ...baseStyle,
@@ -181,8 +182,9 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, active = fal
             cursor: "pointer",
             appearance: "none",
             background: active
-                ? "rgba(75,143,251,0.17)"
-                : "rgba(35,35,39,0.53)",
+                ? "var(--oh-ui-glass-active, rgba(75,143,251,0.17))"
+                : "var(--oh-ui-glass-pill, rgba(35,35,39,0.53))",
+            borderColor: active ? "var(--oh-ui-glass-active-line, var(--oh-hud-border))" : "var(--oh-hud-border)",
             transition: `${dockStyle.transition || ""}${dockStyle.transition ? ", " : ""}background 0.15s ease`,
         }}
         >

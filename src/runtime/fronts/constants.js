@@ -369,7 +369,9 @@ export const LINE_MARKS = Object.freeze([STAFF_MARK, SCENARIO_MARK]);
 // incident is no war and opens no battlefield.
 export const WAR_EFFORTS = Object.freeze(["major", "total"]);
 export const STAFF_REVIEW_DAYS = 10;
-export const STAFF_STORY_ORDER_DAYS = 45;
+// A week (the owner, 2026-11-10: "make it be 7 days"; it was 45): a story order is the side's for its first week, then
+// its own staff may change it again.
+export const STAFF_STORY_ORDER_DAYS = 7;
 export const STAFF_ATTACKER_ADVANCES = 1.25;
 export const STAFF_ATTACKER_PROBES = 0.9;
 export const STAFF_CHANCE_ATTACKER = 0.7;
@@ -378,6 +380,41 @@ export const STAFF_DEFENDER_PROBES = 1.15;
 export const STAFF_CHANCE_DEFENDER = 0.5;
 export const STAFF_DIGS_IN_UNDER = 0.55;
 export const STAFF_SECTOR_TROOPS_LEAST = 3;
+// A STAFF CALLS UP TROOPS. "make it so the war engine makes other countries
+// reinforce more, it doesnt seem like they almost ever reenforce/deploy troops"
+// (a player, 2026-11-10). A side nobody plays had fresh formations only when the
+// story wrote an order for them with an event: a war of months wore both sides
+// down to "reserves none" and nobody was ever drafted. Now its staff calls up
+// from its country's men, at most once in STAFF_CALL_UP_DAYS, when the side
+// needs them (staff.js callUpNeed):
+//   its line is thin      fewer than STAFF_THIN_SHARE of the formations its
+//                         strength raises there, or outmatched by the other
+//                         side's: STAFF_CALL_UP_THIN of that number;
+//   it has lost ground    the other side has taken more of its own land since
+//                         the run began: STAFF_CALL_UP_LOSING;
+//   its heart is at stake its capital is held by the other side or has the
+//                         other side within STAFF_CAPITAL_THREAT_KM, or the
+//                         other side holds STAFF_HOMELAND_SHARE of its land
+//                         on the battlefield: STAFF_CALL_UP_MOBILISE.
+// Less what the country is short of (supplies, war weariness, a blockade
+// together), times the reserves the game's difficulty gives the side
+// (DIFFICULTY_EDGES), and held, as every draft is, to the men it has left and
+// the room the line has (engine.js reinforceOnFront), and never past
+// STAFF_CALL_UP_CEILING times that number on the battlefield: a staff keeps an
+// army up, and a general mobilisation beyond it is the story's to order. (At a
+// whole number a month and three times the army, the Germany that had lost
+// Berlin fielded 315 formations against 88 in three months.)
+export const STAFF_CALL_UP_DAYS = 30;
+export const STAFF_THIN_SHARE = 0.8;
+export const STAFF_CALL_UP_THIN = 0.15;
+export const STAFF_CALL_UP_LOSING = 0.25;
+export const STAFF_CALL_UP_MOBILISE = 0.5;
+export const STAFF_CALL_UP_CEILING = 1.5;
+export const STAFF_CAPITAL_THREAT_KM = 150;
+export const STAFF_HOMELAND_SHARE = 0.1;
+// A side whose own capital the other holds goes for it: at these odds or
+// better it attacks on the line nearest it, where it would otherwise hold.
+export const STAFF_RETAKE_ODDS = 0.7;
 // A country's PEACETIME ARMY (muster.js): this share of its levy stands on the
 // line from a war's first day, and its call-up brings in the rest. The side a
 // war was begun against used to begin it from nothing, and any thrust walked
@@ -508,6 +545,12 @@ export const CORRIDOR_COST = 4;
 // power and waste away by this much a day, and it gives up after this many
 // days, or once no troop is left in it.
 export const PATCH_MAX_KM2 = 1500;
+// A body that holds the most of a piece of its side's home ground is fed by it
+// when it holds at least this share as much of that piece as of the piece it
+// holds most of. A stretch of its own country that it alone holds feeds it,
+// even where it holds a little more of a piece another body holds most of; a
+// scrap of home ground inside a ring (an islet, a sliver a lake cuts off) does not.
+export const SUPPLY_PIECE_SHARE = 0.5;
 export const POCKET_DAYS = 10;
 export const POCKET_LOSS = 2;
 export const POCKET_ATTACK = 0.7;

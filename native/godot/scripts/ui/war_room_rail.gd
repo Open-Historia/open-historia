@@ -214,12 +214,13 @@ func _render() -> void:
 		_column.add_child(_rail_key("Withdraw", "Withdraw: these troops leave the battlefield and go home. With none picked out, all of yours do", "withdraw", null, locked or (none and int(props.get("own", 0)) == 0), func() -> void: withdraw.emit()))
 	_column.add_child(_rule())
 	var choice := choosing and shown and not none and not locked
-	_column.add_child(_rail_key("Transport", "Transport: carry these troops by ship, rail or air to a place your side has no border with", "sea", tool == "transport" or choice, locked or none, func() -> void:
-		if str(store.value("tool")) == "transport":
-			store.take_tool("pan")
-		else:
-			choosing = not choosing
-			_render()))
+	if not (props.get("carriers", []) as Array).is_empty():
+		_column.add_child(_rail_key("Transport", "Transport: carry these troops by ship, rail or air to a place your side has no border with", "sea", tool == "transport" or choice, locked or none, func() -> void:
+			if str(store.value("tool")) == "transport":
+				store.take_tool("pan")
+			else:
+				choosing = not choosing
+				_render()))
 	if not home:
 		_column.add_child(_rail_key("Diversion", "Draw a diversion: a movement you want the other side to believe", "diversion", tool == "diversion", locked, func() -> void: store.take_tool("diversion")))
 	_column.add_child(_rail_key("Deploy", "Deploy: choose where your new troops on this battlefield come in, along a front or as a swarm", "deploy", tool == "deploy", locked, func() -> void: store.take_tool("deploy")))
@@ -272,29 +273,48 @@ func _render_carriers(choice: bool, top: float) -> void:
 	for entry in carriers:
 		var row: Dictionary = entry
 		var medium := str(row.get("medium", ""))
+		var bar := str(row.get("bar", ""))
+		var barred := not bar.is_empty()
+		var most := int(row.get("most", 0))
+		var fewer := medium == "air" and most > 0 and selected.size() > most
+		var ink := T.BONE_FAINT if barred else T.BONE
 		var key := PanelContainer.new()
 		key.add_theme_stylebox_override("panel", T.key_style(false, Vector4(T.px(0.55), T.px(0.4), T.px(0.55), T.px(0.4))))
 		key.mouse_filter = Control.MOUSE_FILTER_STOP
-		key.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		key.mouse_default_cursor_shape = Control.CURSOR_ARROW if barred else Control.CURSOR_POINTING_HAND
+		key.modulate.a = 0.5 if barred else 1.0
+		key.set_meta("carrier", medium)
+		key.set_meta("barred", barred)
 		var line := HBoxContainer.new()
 		line.add_theme_constant_override("separation", int(round(T.px(0.55))))
 		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var glyph := _icon(medium if ICONS.has(medium) else "sea", T.BONE)
+		var glyph := _icon(medium if ICONS.has(medium) else "sea", ink)
 		glyph.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		line.add_child(glyph)
 		var words := VBoxContainer.new()
 		words.add_theme_constant_override("separation", int(round(T.px(0.14))))
 		words.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		words.add_child(T.stencil(W.carrier_word(medium), 0.76, T.BONE, 0.05))
-		var detail := T.text("%s · %d formations each · %d km a day" % [str(row.get("kind", "")), int(row.get("capacity", 0)), int(row.get("speed", 0))], 0.68, T.BONE_SOFT, 400, 1.2)
+		words.add_child(T.stencil(W.carrier_word(medium), 0.76, ink, 0.05))
+		var said := ""
+		if bar == "no-navy":
+			said = "You have no navy."
+		elif bar == "no-air-force":
+			said = "You have no air force."
+		elif not barred and medium == "air":
+			said ="%s · %d formations at most · %d km a day" % [str(row.get("kind", "")), most, int(row.get("speed", 0))]
+		elif not barred:
+			said = "%s · %d formations each · %d km a day" % [str(row.get("kind", "")), int(row.get("capacity", 0)), int(row.get("speed", 0))]
+		var detail := T.text(said, 0.68, T.BONE_SOFT, 400, 1.2)
 		detail.custom_minimum_size.x = words_width
 		words.add_child(detail)
+		if not barred and fewer:
+			var rest := T.text("%d of the %d go: the rest stay where they are." % [most, selected.size()], 0.68, T.BONE_SOFT, 400, 1.2)
+			rest.custom_minimum_size.x = words_width
+			words.add_child(rest)
 		line.add_child(words)
 		key.add_child(line)
-		key.gui_input.connect(func(event: InputEvent) -> void:
-			if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and not (event as InputEventMouseButton).pressed:
-				choosing = false
-				carrier.emit(medium))
+		if not barred:
+			key.gui_input.connect(_on_carrier_input.bind(medium))
 		column.add_child(key)
 	var cancel := T.link("Cancel")
 	cancel.pressed.connect(func() -> void:
@@ -309,6 +329,12 @@ func _render_carriers(choice: bool, top: float) -> void:
 	_carriers.position = Vector2(RAIL_WIDTH + UI.safe_insets().x + T.px(1.5), top + T.px(9.0))
 	_carriers.reset_size()
 	_settle(_carriers)
+
+
+func _on_carrier_input(event: InputEvent, medium: String) -> void:
+	if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and not (event as InputEventMouseButton).pressed:
+		choosing = false
+		carrier.emit(medium)
 
 
 func _rich(size_rem := 0.74, colour := T.BONE_SOFT) -> RichTextLabel:
@@ -387,6 +413,8 @@ func _render_hint(shown: bool, out: bool, top: float) -> void:
 		lead = "Draw the movement you want the other side to believe."
 	elif tool == "replan":
 		lead = "Draw the operation’s way anew."
+	elif tool == "transport" and str(store.value("medium")) == "air":
+		lead = "Click the place the %d picked out are to be flown to: anywhere, enemy land too. Over enemy ground they can be intercepted. Drag to move the map. They board when time next passes." % selected.size()
 	elif tool == "transport":
 		lead = "Click the place the %d picked out are to be carried to. Drag to move the map. They board when time next passes." % selected.size()
 	elif tool == "fortify":

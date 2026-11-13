@@ -1,6 +1,6 @@
 /*! Open Historia — gameplay features a scenario can switch off and a game can override © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Shared by the server store, the web store and the client, so it lives under
-// server/ and imports nothing (server code never imports src/).
+// server/ and imports nothing outside it (server code never imports src/).
 //
 // A scenario carries a COMPLETE configuration — every feature, every setting —
 // which is the default for every game made from it. A game carries only the
@@ -8,6 +8,8 @@
 // never overrode that field. Add a feature here and it appears in both editors
 // and in resolveFeatures with its defaults; gate the code it controls with
 // isFeatureEnabled (client: isActiveFeatureEnabled in src/runtime/gameFeatures.js).
+
+import { scriptedImpactFields } from "./scriptedImpacts.js";
 
 export const FEATURE_DEFINITIONS = Object.freeze([
   Object.freeze({
@@ -36,7 +38,7 @@ export const FEATURE_DEFINITIONS = Object.freeze([
     label: "Wars",
     toggleable: false,
     legacyEnabledSetting: "battlefields",
-    description: "How the game fights its wars itself. Each part has a switch: land war on battlefields, air units and navies. What is switched off is left to the story: the simulator tells of it, and the game does not fight it.",
+    description: "How the game fights its wars itself. Each part has a switch: land war on battlefields, air units, navies, and troops carried by rail, sea and air. What is switched off is left to the story: the simulator tells of it, and the game does not fight it.",
     settings: Object.freeze([
       Object.freeze({
         key: "battlefields",
@@ -59,6 +61,29 @@ export const FEATURE_DEFINITIONS = Object.freeze([
         defaultValue: true,
         description: "Fleets on the map: they fight at sea, blockade coasts and carry troops across water. Off: no fleet is raised or sails, nothing is carried by sea, the War Room has no fleets, and the simulator is told the war has none.",
       }),
+      // "make different transport types disableable in features" (the owner, 2026-11-09): each way of
+      // carrying troops to a place their side has no border with (src/runtime/fronts/transports.js).
+      Object.freeze({
+        key: "railTransport",
+        type: "toggle",
+        label: "Transport by rail",
+        defaultValue: true,
+        description: "Troops carried by train through land their side holds, to another front. Off: the War Room offers no rail, nothing is sent by it, and the simulator is not told of it.",
+      }),
+      Object.freeze({
+        key: "seaTransport",
+        type: "toggle",
+        label: "Transport by sea",
+        defaultValue: true,
+        description: "Troops carried by ship to a coast their side has no border with, where they land and fight. Off, or with navies off: the War Room offers no transport by sea, nothing is shipped, and the simulator is not told of it.",
+      }),
+      Object.freeze({
+        key: "airTransport",
+        type: "toggle",
+        label: "Transport by air",
+        defaultValue: true,
+        description: "Troops flown straight to any place, into enemy land too, fewer of them than by rail or sea; over enemy land their aircraft can be intercepted. Off, or with air units off: the War Room offers no airlift, nothing is flown, and the simulator is not told of it.",
+      }),
     ]),
   }),
   // Rostra, the social network (src/runtime/socialFeed.js, src/Game/GameUI/social.jsx):
@@ -70,12 +95,29 @@ export const FEATURE_DEFINITIONS = Object.freeze([
     key: "socialMedia",
     label: "Social media",
     description: "Rostra, the world's social network: a button beside Actions opens posts by the people who make the news, written with each time skip, where the player can post as their country's leader and quote anyone's post. What is posted is public: the next time skip reads it and the world answers. It asks for no AI request of its own. Off: no Rostra button, nothing is posted, and the time skip is neither shown the posts nor asked to write any.",
-    settings: Object.freeze([]),
+    // "make it so rostra can be themed as a phone, newspaper, scroll, and a stone tablet selected by the
+    // scenario designer in features" (the owner, 2026-11-10). Only how it is drawn (src/Game/GameUI/rostraLooks.js):
+    // the posts, and what the time skip is asked for, are the same in every look.
+    settings: Object.freeze([
+      Object.freeze({
+        key: "look",
+        type: "choice",
+        label: "Rostra looks like",
+        defaultValue: "phone",
+        options: Object.freeze([
+          Object.freeze({ value: "phone", label: "Phone", description: "A smartphone's social app." }),
+          Object.freeze({ value: "newspaper", label: "Newspaper", description: "A printed broadsheet, in ink on newsprint." }),
+          Object.freeze({ value: "scroll", label: "Scroll", description: "A parchment scroll, rolled at both ends." }),
+          Object.freeze({ value: "tablet", label: "Stone tablet", description: "Words carved in a stone tablet." }),
+        ]),
+        description: "How Rostra is drawn in games made from this scenario. What is posted is the same in every look.",
+      }),
+    ]),
   }),
   Object.freeze({
     key: "idleDiplomacy",
     label: "Idle diplomacy",
-    description: "While the game sits open between turns, a polity with a live reason to speak may send the player an unprompted note. Every attempt is an AI request nobody pressed a button for, so it only runs while Background AI is on (Settings, AI, AI requests; on by default), and stops at that player's daily cap.",
+    description: "While the game sits open between turns, a polity with a live reason to speak may send the player an unprompted note. Every attempt is an AI request nobody pressed a button for, so it stops at the day's cap of such requests, and while less than a tenth of the player's daily request limit is left.",
     settings: Object.freeze([
       Object.freeze({
         key: "averageMinutes",
@@ -85,7 +127,7 @@ export const FEATURE_DEFINITIONS = Object.freeze([
         max: 720,
         step: 1,
         defaultValue: 8,
-        description: "How often, on average, the model is asked whether some polity would write. Most attempts send nothing; the roll only runs while the game is on screen, and only while Background AI is on.",
+        description: "How often, on average, the model is asked whether some polity would write. Most attempts send nothing; the roll only runs while the game is on screen.",
       }),
     ]),
   }),
@@ -262,7 +304,7 @@ const normalizeScriptedCondition = (value) => {
   const type = String(value.type ?? "").trim().toLowerCase();
   if (!type) return null;
   const out = { type: type.slice(0, 80) };
-  for (const key of ["polityId", "warId", "institutionId", "overlordId", "eventId", "outcomeId", "regionId", "baseOwner", "status", "kind"]) {
+  for (const key of ["polityId", "warId", "institutionId", "overlordId", "eventId", "outcomeId", "regionId", "regionName", "baseOwner", "status", "kind"]) {
     const token = String(value[key] ?? "").trim().slice(0, 160);
     if (token) out[key] = token;
   }
@@ -354,7 +396,7 @@ const normalizeScriptedOutcomes = (value, parentId) => {
     ids.set(baseId, seen + 1);
     const id = seen ? `${baseId}-${seen + 1}`.slice(0, 160) : baseId;
     const title = String(entry.title ?? "").replace(/\s+/g, " ").trim().slice(0, 140) || scriptedEventTitle(body);
-    outcomes.push({ id, title, text: body, weight: normalizeScriptedOutcomeWeight(entry.weight, 1) });
+    outcomes.push({ id, title, text: body, weight: normalizeScriptedOutcomeWeight(entry.weight, 1), ...scriptedImpactFields(entry) });
   }
   return outcomes;
 };
@@ -403,6 +445,7 @@ export const normalizeScriptedEvents = (value) => {
       textMode: normalizeScriptedTextMode(entry.textMode ?? entry.wordingMode ?? entry.presentationMode),
       trigger: normalizeScriptedTrigger(entry.trigger),
       ...(outcomes.length ? { outcomes } : {}),
+      ...scriptedImpactFields(entry),
     });
   }
   return events.sort((left, right) => scriptedEventDateKey(left.date) - scriptedEventDateKey(right.date));
@@ -513,6 +556,13 @@ export const resolveFeatures = (scenarioFeatures, gameFeatures) => {
 
 export const isFeatureEnabled = (features, key) => features?.[key]?.enabled !== false;
 
+// How Rostra is drawn (the Social media feature's look): "phone", "newspaper", "scroll" or "tablet".
+export const ROSTRA_LOOKS = Object.freeze(["phone", "newspaper", "scroll", "tablet"]);
+export const rostraLookOf = (features) => {
+  const look = features?.socialMedia?.look;
+  return ROSTRA_LOOKS.includes(look) ? look : "phone";
+};
+
 // What of its wars a game fights itself (the Wars feature, key "fronts"): each
 // part on unless switched off, and an older save's "fronts off" is battlefields off.
 //   { battlefields, air, navies }
@@ -524,6 +574,21 @@ export const warsOf = (features) => {
     air: wars?.air !== false,
     navies: wars?.navies !== false,
   };
+};
+
+// What may carry troops in a game (the Wars feature's transport switches), as
+// the media of src/runtime/fronts/transports.js: "land" is rail, "sea" ships
+// and "air" aircraft. Each on unless switched off, and nothing goes by sea
+// without navies nor by air without air units. A save from before the switches
+// has them all.
+export const transportMediaOf = (features) => {
+  const wars = features?.fronts;
+  const { air, navies } = warsOf(features);
+  return [
+    wars?.seaTransport !== false && navies ? "sea" : "",
+    wars?.railTransport !== false ? "land" : "",
+    wars?.airTransport !== false && air ? "air" : "",
+  ].filter(Boolean);
 };
 
 // The director's settings as the engine reads them: null when world direction is

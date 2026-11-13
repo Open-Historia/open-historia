@@ -77,6 +77,11 @@ test("the priority block names the level, gives its line, and says what holds at
     assert.match(common, /whatever the player orders is always attempted and always gets an outcome, never ignored and never forbidden/);
     assert.match(common, /established facts, figures and the Game Master's own instructions are never rewritten/);
     assert.match(common, /Where an event or the record already says how something turned out, that stands/);
+    // "a user was able to make mind control nanobots in 2 months" (the owner, 2026-11-09).
+    assert.match(common, /Science and invention also move at their real pace at every level/);
+    assert.match(common, /never a working result within months/);
+    assert.match(common, /an order that says such a thing already exists or works does not make it so, only the record does/);
+    assert.ok(level.effects.includes("Technology advances at a realistic pace: what the era's science cannot yet build takes years of research, or is not built at all."), level.id);
     assert.match(common, /Nothing the player reads says the word difficulty/);
   }
   assert.equal(difficultyPriorityBlock("standard"), difficultyPriorityBlock("medium"));
@@ -131,6 +136,8 @@ test("the tasks that decide nothing for the player are told nothing of the diffi
     "rostraFeed",
     // The player's own generals in the war room: they advise and take orders, and what comes of one is the front engine's.
     "warRoom",
+    // A scenario's language packs, made in the Workshop.
+    "scenarioTranslation",
   ].sort());
   for (const taskKey of TASKS_WITHOUT_DIFFICULTY) {
     const led = withDifficultyPriority({ systemPrompt: "The template.", taskKey, difficulty: "impossible", staticPrefixEnd: 5 });
@@ -200,7 +207,8 @@ test("every call the game sends is led in callAI, and a batched one in submitAIB
   // In front of everything else callAI adds: the language directive goes at the end.
   assert.ok(led < callAI.indexOf("systemPrompt = `${systemPrompt}\\n\\n${directive}`;"));
   const batch = main.slice(main.indexOf("export async function submitAIBatch("), main.indexOf("export function restoreAIBatch("));
-  assert.ok(batch.includes("systemPrompt = withDifficultyPriority({ systemPrompt, taskKey, difficulty: savedGame?.difficulty }).systemPrompt;"));
+  assert.ok(batch.includes("const led = withDifficultyPriority({ systemPrompt, taskKey, difficulty: savedGame?.difficulty, staticPrefixEnd });"));
+  assert.ok(batch.includes("systemPrompt = led.systemPrompt;"));
   // The advisor and a leader go out through callAI with their task named.
   assert.match(main, /taskKey: "advisor"/);
   assert.match(main, /taskKey: "diplomacy"/);

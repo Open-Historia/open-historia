@@ -13,6 +13,7 @@ export const WORKER_ENTRIES = Object.freeze({
   "frontWorker.js": "../../src/Game/AI/frontWorker.js",
   "rehearserWorker.js": "../../src/Game/AI/rehearserWorker.js",
   "rustFrontWorker.js": "./rustFrontWorker.js",
+  "embeddingWorker.js": "./embeddingWorker.js",
 });
 
 export const frontsRoute = ({ env = process.env, distDir = path.join(here, "dist", "workers") } = {}) => {

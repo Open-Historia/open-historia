@@ -292,6 +292,9 @@ pub fn pick_battle(run: &Run, value: &Val) -> Battle {
     if let Val::Str(called) = value.get("calledOn") {
         battle.called_on = called.clone();
     }
+    if value.get("mobilised").as_array().is_some() {
+        battle.mobilised = Some([0, 1].map(|side| value.get("mobilised").at(side).string_or_empty()));
+    }
     if let Val::Num(pace) = value.get("ownPace") {
         battle.own_pace = *pace;
     }

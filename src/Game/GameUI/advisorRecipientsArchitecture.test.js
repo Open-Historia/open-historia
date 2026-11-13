@@ -31,7 +31,10 @@ test("Advisor runs each recipient using isolated AI conversation state and persi
 test("Chief and minister Actions require player review while both can auto-apply Projects", () => {
   const ui = read("./advisor.jsx");
   assert.doesNotMatch(ui, /applyAdvisorActions\(/);
-  assert.match(ui, /actionProposalsFromReply\(actionsProposal, replyId\)/);
+  // Native planned-Action target validation must happen BEFORE a proposal
+  // becomes reviewable; syntax-only parsing would revive stale Action cards.
+  assert.match(ui, /reviewAdvisorActionProposals\(actionsProposal, replyId,/);
+  assert.match(ui, /await readJson\(JSON_URLS\.actions, \{ force: true \}\)/);
   assert.match(ui, /await approveAdvisorAction\(/);
   assert.match(ui, /onDiscussAction=\{handleDiscussAction\}/);
   assert.match(ui, /onProceedAction=\{handleProceedAction\}/);
@@ -109,6 +112,10 @@ test("character conversations never enter the government's Advisor prompt or pri
   assert.match(panel, /publicOnly: Boolean\(recipient/);
   assert.match(panel, /publicCharacterEvents\(events/);
   assert.match(panel, /gmChanges: publicOnly \? \[\]/);
-  assert.match(panel, /canDraft=\{activeThreadId === CHIEF_ADVISOR_THREAD/);
+  // Only actual government members participate in groups. Their Action cards
+  // retain the same explicit Proceed review, while institution execution is
+  // still limited to the chief's own authorized conversation.
+  assert.match(panel, /canDraft=\{Boolean\(selectedGroup\) \|\| activeThreadId === CHIEF_ADVISOR_THREAD/);
+  assert.match(panel, /canReviewActions=\{!recipientLocked && \(Boolean\(selectedGroup\)/);
   assert.match(panel, /canExecute=\{activeThreadId === CHIEF_ADVISOR_THREAD\}/);
 });

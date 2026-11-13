@@ -850,6 +850,15 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
     }
   }
 
+  // A war this batch ends or halts, as it stood while it was still being
+  // fought, and the date it stopped. The battle that ends a war is fought in
+  // it: "People's Army of Vietnam Overruns Saigon" carried the end of the
+  // Vietnam War, was then refused as fighting in a war already ended, and the
+  // last-attempt repair dropped the end, so the war (and its battlefield) went
+  // on for years after the story had ended it. Fighting dated on or before the
+  // day a war stops is read against the war as it was until then.
+  const halted = new Map();
+
   for (const [eventIndex, event] of normalizedEvents.entries()) {
     const eventId = normalizeString(event.id);
     const eventUpdates = byEventId.get(eventId) || [];
@@ -861,6 +870,10 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
       }
 
       if (!hoisted.has(update)) {
+        const updateId = normalizeString(update?.id);
+        const was = working.get(updateId) || null;
+        // (One record tied to two events is applied at the first: at the second it is already done.)
+        if (halted.has(updateId) && ((op === "end" && was?.status === "ended") || (op === "ceasefire" && was?.status === "ceasefire"))) continue;
         const result = applyUpdateToWarMap({
           map: working,
           update,
@@ -868,6 +881,9 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
           linkedEvents: [event],
         });
         if (result.error) return result.error;
+        const now = working.get(updateId);
+        if (was?.status === "active" && now && now.status !== "active") halted.set(updateId, { war: was, date: normalizeString(event.date) });
+        else if (now?.status === "active") halted.delete(updateId);
       }
     }
 
@@ -892,7 +908,11 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
       if (!warId) {
         return `Combat event "${normalizeString(event.title)}" has no event.warId. Battles, invasions, offensives, bombardments, active fronts and unit attacks require an active canonical war.`;
       }
-      const war = working.get(warId);
+      const stopped = halted.get(warId);
+      // (Only against an end with a date: compareGameDates(date, "") is -1, and every battle after an undated end
+      // would pass as fought before it.)
+      const fought = stopped && stopped.date && working.get(warId)?.status !== "active" && normalizeString(event.date) && compareGameDates(normalizeString(event.date), stopped.date) <= 0;
+      const war = fought ? stopped.war : working.get(warId);
       if (!war || war.status !== "active") {
         return `Combat event "${normalizeString(event.title)}" cannot occur because canonical war ${warId} is ${war?.status || "missing"}, not active.`;
       }
@@ -1303,7 +1323,28 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
       continue;
     }
 
-    const combatants = uniquePolities(event.combatants, 8);
+    let combatants = uniquePolities(event.combatants, 8);
+    // Fighting tagged with a war the ledger holds, or one this answer starts, is that war's: who fights it is its
+    // sides, and nothing is guessed. The first of each side stands in for a side the event did not name. A long
+    // skip's battles came tagged and with no combatants, and lost their war (2026-11-10, a world war's 90 days).
+    const taggedWar = normalizeString(event.warId)
+      ? wars.find((war) => war.id === normalizeString(event.warId) && war.status !== "ended")
+        ?? (() => {
+          const start = updates.find((update) => normalizeString(update?.id) === normalizeString(event.warId) && update?.op === "start");
+          return start ? { sideA: normalizeArray(start.actors), sideB: normalizeArray(start.opponents) } : null;
+        })()
+      : null;
+    if (combatants.length < 2 && taggedWar) {
+      const sides = [uniquePolities(taggedWar.sideA, 8), uniquePolities(taggedWar.sideB, 8)];
+      if (sides[0].length && sides[1].length) {
+        const named = sides.map((side) => combatants.filter((name) => side.some((member) => polityKey(member) === polityKey(name))));
+        const filled = uniquePolities([...named[0], ...(named[0].length ? [] : [sides[0][0]]), ...named[1], ...(named[1].length ? [] : [sides[1][0]])], 8);
+        if (filled.length >= 2) {
+          event.combatants = filled;
+          combatants = filled;
+        }
+      }
+    }
     if (combatants.length < 2) {
       unresolved.push({
         index,

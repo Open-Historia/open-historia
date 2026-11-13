@@ -33,6 +33,9 @@ const TRANSLATION_MODEL_CACHE_NAME = "oh-translation-model-v1";
 // Transformers.js's own name for its cache): swept on every start before, so
 // the model was downloaded again each time the game opened.
 const WHISPER_CACHE_NAME = "transformers-cache";
+// Not the related-events model's old store (oh-embed-model-v1): the model ships
+// with the game now (embeddingModels.js), so the copy an older version
+// downloaded is swept with the rest.
 const KEPT_CACHE_NAMES = new Set([
   PRELOAD_CACHE_NAME,
   KEPT_MUSIC_CACHE_NAME,

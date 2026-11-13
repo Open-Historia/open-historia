@@ -1,10 +1,11 @@
 /*! Open Historia — importing a hub post again is not an import © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/runtime/hubReimport.test.js
 //
-// The hub counts a post's imports by the downloads of its checked copy. A post
-// this player has imported before (still in the library or deleted since) is
-// downloaded from the copy's update copy, which the hub does not count. Which
-// posts were imported is kept by post number in ui-settings (hubImported).
+// A post's first import on an install is reported to the import counter
+// (hubImportCount.js); importing it again is not. A post this player has
+// imported before (still in the library or deleted since) is downloaded from
+// the copy's update copy. Which posts were imported is kept by post number in
+// ui-settings (hubImported).
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -19,6 +20,7 @@ import { HUB_IMPORTED_KEY, MAX_HUB_IMPORTED, hubImportedIncludes, mergeHubImport
 installFakeIndexedDb();
 const { handleUiSettings } = await import("./web/settingsStore.js");
 const { downloadHubScenario, hubPostImportedBefore } = await import("./hubPosts.js");
+const { IMPORT_COUNTER_URL, hubImportCountsSettled } = await import("./hubImportCount.js");
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const RELEASES = "https://github.com/Open-Historia/Open-historia-scenarios/releases/download";
@@ -36,14 +38,19 @@ const INDEX = {
   updates: { [COPY(1)]: UPDATE(1), [COPY(2)]: UPDATE(2), [COPY(3)]: UPDATE(3) },
 };
 
-const zip = new Uint8Array(await (await zipBundle({ "scenario.json": JSON.stringify({ schema: "pax-historia-scenario-bundle/2", scenario: { name: "S" }, data: {}, assets: {} }) })).arrayBuffer());
+const zip = new Uint8Array(await (await zipBundle({ "scenario.json": JSON.stringify({ schema: "old-scenario-bundle/2", scenario: { name: "S" }, data: {}, assets: {} }) })).arrayBuffer());
 const downloads = [];
+const reports = [];
 // ui-settings is answered by the website's own store (settingsStore.js), which
 // keeps it as the desktop server does.
 let settingsWorks = true;
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
   if (url === HUB_INDEX_URL) return Response.json(INDEX);
+  if (url === `${IMPORT_COUNTER_URL}/import`) {
+    reports.push(JSON.parse(init.body));
+    return Response.json({ counted: true });
+  }
   if (url === "/api/ui-settings") {
     if (!settingsWorks) throw new TypeError("Failed to fetch");
     const method = init.method ?? "GET";
@@ -54,14 +61,23 @@ globalThis.fetch = async (input, init = {}) => {
   return new Response(zip, { headers: { "content-type": "application/octet-stream" } });
 };
 const take = () => downloads.splice(0);
+const reported = async () => {
+  await hubImportCountsSettled();
+  return reports.splice(0);
+};
 
-test("the first import of a post downloads the counted copy; every later one the update copy", async () => {
+test("the first import of a post is reported to the counter once; every later one downloads the update copy", async () => {
   await downloadHubScenario({ postId: 1, bundleUrl: FILE(1) });
-  assert.deepEqual(take(), [COPY(1)], "a first import counts");
+  assert.deepEqual(take(), [COPY(1)]);
+  const [first, ...more] = await reported();
+  assert.deepEqual(more, []);
+  assert.equal(first.post, 1, "a first import is counted");
+  assert.match(first.token, /^[0-9a-f]{64}$/);
   assert.equal(await hubPostImportedBefore(1), true);
   // Imported again: the scenario was deleted, or the player imports a second copy.
   const again = await downloadHubScenario({ postId: 1, bundleUrl: FILE(1) });
-  assert.deepEqual(take(), [UPDATE(1)], "importing again does not count");
+  assert.deepEqual(take(), [UPDATE(1)]);
+  assert.deepEqual(await reported(), [], "importing again is not reported");
   assert.equal(again.hubOrigin.release, COPY(1), "the link still names the checked copy");
 });
 
@@ -70,23 +86,39 @@ test("a post the library already holds is not counted again, and an Update never
   assert.deepEqual(take(), [UPDATE(2)]);
   await downloadHubScenario({ postId: 3, bundleUrl: FILE(3), update: true });
   assert.deepEqual(take(), [UPDATE(3)]);
+  assert.deepEqual(await reported(), []);
   assert.equal(await hubPostImportedBefore(2), true, "both are remembered from then on");
   assert.equal(await hubPostImportedBefore(3), true);
 });
 
-test("a post with no update copy yet falls back to the counted copy", async () => {
+test("a post with no update copy yet downloads its first copy again, and is still reported once", async () => {
   await downloadHubScenario({ postId: 4, bundleUrl: FILE(4) });
   await downloadHubScenario({ postId: 4, bundleUrl: FILE(4) });
   assert.deepEqual(take(), [COPY(4), COPY(4)]);
+  assert.deepEqual((await reported()).map((report) => report.post), [4]);
 });
 
-test("with no record to read, an import downloads the counted copy as it always did", async () => {
+test("one install's tokens differ from post to post and stay the same for a post", async () => {
+  const { importToken, installCountKey } = await import("./hubImportCount.js");
+  const key = await installCountKey();
+  assert.match(key, /^[0-9a-f]{64}$/);
+  assert.equal(await installCountKey(), key, "made once, then kept");
+  assert.equal(await importToken(key, 5), await importToken(key, "5"));
+  assert.notEqual(await importToken(key, 5), await importToken(key, 6));
+  assert.equal(await importToken("short", 5), null);
+  const stored = await (await handleUiSettings({ method: "GET" })).json();
+  await handleUiSettings({ method: "PUT", body: { hubCountKey: "f".repeat(64) } });
+  assert.equal((await (await handleUiSettings({ method: "GET" })).json()).hubCountKey, stored.hubCountKey, "a key is never replaced");
+});
+
+test("with no record to read, an import still goes on and nothing is counted", async () => {
   settingsWorks = false;
   try {
     assert.equal(await hubPostImportedBefore(1), false);
     const bundle = await downloadHubScenario({ postId: 1, bundleUrl: FILE(1) });
     assert.equal(bundle.hubOrigin.postId, 1, "the import itself goes on");
     assert.deepEqual(take(), [COPY(1)]);
+    assert.deepEqual(await reported(), [], "without the install's key there is no token to count");
   } finally {
     settingsWorks = true;
   }
@@ -112,6 +144,7 @@ test("the record keeps post numbers only, is added to and never replaced, and ke
 test("the desktop server keeps the record the same way, and the Community tab says when the library holds the post", () => {
   const server = fs.readFileSync(path.join(ROOT, "server/server.js"), "utf8");
   assert.match(server, /app\.put\("\/api\/ui-settings"[\s\S]{0,600}?next\[HUB_IMPORTED_KEY\] = mergeHubImported\(next\[HUB_IMPORTED_KEY\], req\.body\[HUB_IMPORTED_KEY\]\)/);
+  assert.match(server, /app\.put\("\/api\/ui-settings"[\s\S]{0,900}?keepHubCountKey\(next\[HUB_COUNT_KEY\], req\.body\?\.\[HUB_COUNT_KEY\]\)/);
   const hub = fs.readFileSync(path.join(ROOT, "src/Game/GameUI/communityHub.jsx"), "utf8");
   assert.ok(hub.includes("again: Boolean(libraryOf(post).status)"));
 });

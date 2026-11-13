@@ -27,5 +27,12 @@ test("the update window still offers the beta's download, opened in the player's
   const main = read("../electron/main.cjs");
   assert.match(main, /ipcMain\.handle\("setup:open-beta", \(\) => shell\.openExternal\(BETA_DOWNLOAD_URL\)\)/);
   const page = read("../electron/setup.html");
-  assert.match(page, /<button type="button" class="recommended" id="getBeta">Download the beta<\/button>/);
+  // Native or Beta, Native the one highlighted.
+  assert.match(page, /Do you want the Native or the Beta version for the best experience\?/);
+  assert.match(page, /<button type="button" class="recommended" id="getNative">Download Native<\/button>/);
+  assert.match(page, /<button type="button" class="quiet" id="getBeta">Download the beta<\/button>/);
+  assert.match(main, /ipcMain\.handle\("setup:open-native", \(\) => shell\.openExternal\(NATIVE_DOWNLOAD_URL\)\)/);
+  assert.match(main, /native-experimental\/Open-Historia-Native-Setup\.exe/);
+  assert.match(read("../electron/preload.cjs"), /openNative: \(\) => ipcRenderer\.invoke\("setup:open-native"\)/);
+  assert.match(page, /window\.ohSetup\.openNative\(\)/);
 });

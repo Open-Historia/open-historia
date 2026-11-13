@@ -19,6 +19,7 @@ const MAP_KEYS = {
   chunkLongJumps: "ai_chunk_long_jumps",
   lookupFunctions: "ai_lookup_functions",
   liveSkipEvents: "ai_live_skip_events",
+  idleDiplomacy: "ai_idle_diplomacy",
   stopOnPlayerFailures: "ai_stop_on_player_failures",
   discordPresence: "privacy_discord_presence",
   ambientMusic: "audio_ambient_music",
@@ -27,10 +28,11 @@ const MAP_KEYS = {
   vaultDoorAlways: "vault_door_every_time",
   seasonsWeather: "map_seasons_weather",
   weatherEffects: "map_weather_effects",
+  translateWithAi: "i18n_translate_with_ai",
 };
 
 const DEFAULT_ON = new Set([
-  MAP_KEYS.lookupFunctions, MAP_KEYS.liveSkipEvents, MAP_KEYS.discordPresence, MAP_KEYS.ambientMusic,
+  MAP_KEYS.lookupFunctions, MAP_KEYS.liveSkipEvents, MAP_KEYS.idleDiplomacy, MAP_KEYS.discordPresence, MAP_KEYS.ambientMusic,
   MAP_KEYS.soundEffects, MAP_KEYS.seasonsWeather, MAP_KEYS.weatherEffects,
 ]);
 
@@ -43,6 +45,7 @@ const FLAG_LABELS = {
   [MAP_KEYS.chunkLongJumps]: "Generate long time skips in segments",
   [MAP_KEYS.lookupFunctions]: "AI lookup functions",
   [MAP_KEYS.liveSkipEvents]: "Show time skip events as they are written",
+  [MAP_KEYS.idleDiplomacy]: "Countries write to me between time skips",
   [MAP_KEYS.stopOnPlayerFailures]: "Stop when my events fail",
   [MAP_KEYS.discordPresence]: "Show what I am playing on Discord",
   [MAP_KEYS.ambientMusic]: "Music",
@@ -51,6 +54,7 @@ const FLAG_LABELS = {
   [MAP_KEYS.seasonsWeather]: "Seasons and weather",
   [MAP_KEYS.weatherEffects]: "Weather effects",
   [MAP_KEYS.defaultBasemapOn]: "Use my default basemap",
+  [MAP_KEYS.translateWithAi]: "Translate with my AI",
 };
 
 const VALUE_LABELS = {
@@ -73,7 +77,8 @@ const LANGUAGES = [
   ["sv", "Swedish", "Svenska"], ["he", "Hebrew", "עברית"], ["ms", "Malay", "Bahasa Melayu"], ["fil", "Filipino", "Filipino"],
   ["am", "Amharic", "አማርኛ"], ["ne", "Nepali", "नेपाली"], ["si", "Sinhala", "සිංහල"], ["km", "Khmer", "ខ្មែរ"],
   ["so", "Somali", "Soomaali"], ["az", "Azerbaijani", "Azərbaycanca"], ["uz", "Uzbek", "Oʻzbekcha"], ["yo", "Yoruba", "Yorùbá"],
-  ["fi", "Finnish", "Suomi"], ["da", "Danish", "Dansk"],
+  ["fi", "Finnish", "Suomi"], ["da", "Danish", "Dansk"], ["lv", "Latvian", "Latviešu"], ["lt", "Lithuanian", "Lietuvių"],
+  ["sk", "Slovak", "Slovenčina"], ["et", "Estonian", "Eesti"], ["ga", "Irish", "Gaeilge"], ["mt", "Maltese", "Malti"],
 ].map(([code, name, native]) => ({ code, name, native }));
 
 const SHIPPED_PACKS = new Set(["ar", "bn", "de", "es", "fa", "fr", "hi", "id", "it", "ja", "ko", "nl", "pl", "pt", "ru", "sv", "th", "tr", "uk", "ur", "vi", "zh"]);
@@ -86,7 +91,6 @@ const PLAYER_FOCUS_LEVELS = [
 ];
 
 const OTHER_REQUEST_TASKS = [
-  { key: "translation", label: "Translation" },
   { key: "other", label: "Other" },
   { key: "direct", label: "Other" },
 ];
@@ -323,6 +327,7 @@ export const register = (ctx) => {
       rating: storage.getItem("ai_rate_generations") === "1",
       uiLanguage,
       chatLanguage,
+      aiTranslationOffered: engine.aiTranslation?.aiTranslationOffered?.({ language: uiLanguage, modelChoice: engine.tlModels?.readModelChoice?.(storage.getItem(engine.tlModels.modelChoiceKey(uiLanguage))) }) === true,
       languages: LANGUAGES.map((entry) => ({ ...entry, builtIn: entry.code === "en" || SHIPPED_PACKS.has(entry.code) })),
       uiLanguages: (engine.shellI18n?.getUiLanguageOptions?.() ?? LANGUAGES).map((entry) => ({ code: entry.code, name: entry.name, native: entry.native })),
       deviceProfile: deviceOverride === "constrained" || deviceOverride === "full" ? deviceOverride : "",
@@ -435,6 +440,7 @@ export const register = (ctx) => {
     const control = engine.aiRequestControl ?? null;
     const active = control?.getActiveAiRequestCount ? control.getActiveAiRequestCount() : activeRequests;
     const share = day.limit > 0 ? Math.min(1, day.used / day.limit) : 0;
+    const noLimitCost = budget.describeJumpCost({ lookups: true, unlimited: true });
     return {
       used: day.used,
       limit: day.limit,
@@ -446,12 +452,12 @@ export const register = (ctx) => {
       refused: day.refused,
       failed: day.failed,
       tasks: budget.requestsByTask(day.byTask, labels),
-      saving: budget.requestSettings.saveRequests(),
-      backgroundOn: budget.requestSettings.backgroundAi(),
+      noLimit: day.noLimit,
       dailyLimit: String(budget.requestSettings.dailyLimit()),
-      backgroundDailyCap: String(budget.requestSettings.backgroundDailyCap()),
-      lookupCap: budget.describeJumpCost({ lookups: true }).max,
+      noLimitCap: noLimitCost.max,
+      noLimitRounds: noLimitCost.rounds,
       active,
+      groupAi: engine.advisorGroupSettings.readAdvisorGroupSettings(),
     };
   };
 
@@ -836,18 +842,21 @@ export const register = (ctx) => {
     "settings.requests.set": async ({ field, value }) => {
       const settings = rb().requestSettings;
       let message = "";
-      if (field === "saveRequests") {
-        settings.setSaveRequests(Boolean(value));
-        message = `Save AI requests turned ${value ? "on" : "off"}.`;
-      } else if (field === "backgroundAi") {
-        settings.setBackgroundAi(Boolean(value));
-        message = `Background AI turned ${value ? "on" : "off"}.`;
+      if (field === "noRequestLimit") {
+        rb().setNoRequestLimit(Boolean(value));
+        message = `My key has no request limit turned ${value ? "on" : "off"}.`;
       } else if (field === "dailyLimit") {
         settings.setDailyLimit(String(value ?? ""));
         message = `Daily request limit set to ${clean(value) || "the default"}.`;
-      } else if (field === "backgroundDailyCap") {
-        settings.setBackgroundDailyCap(String(value ?? ""));
-        message = `Background AI daily cap set to ${clean(value) || "the default"}.`;
+      } else if (field === "groupIndividual") {
+        const next = engine.advisorGroupSettings.setAdvisorGroupSettings({ individual: Boolean(value) });
+        logSetting("Individual AI responses in group chats", next.individual ? "on" : "off");
+        storage.flush();
+        return requestsView();
+      } else if (field === "groupBatchSize") {
+        engine.advisorGroupSettings.setAdvisorGroupSettings({ batchSize: Number(value) });
+        storage.flush();
+        return requestsView();
       } else {
         throw new Error(`Unknown request setting: ${field}`);
       }
@@ -1015,13 +1024,18 @@ export const register = (ctx) => {
         geminiChain: [...config.GEMINI_DEFAULT_CHAIN],
         openaiDefault: config.OPENAI_DEFAULT_MODEL,
         defaultProvider: config.DEFAULT_PROVIDER,
+        choices: [...engine.aiSetupChoices.SETUP_CHOICES],
+        commandCode: { name: config.COMMANDCODE_TEMPLATE.name, provider: config.COMMANDCODE_TEMPLATE.provider, pricingUrl: config.COMMANDCODE_PRICING_URL, keysUrl: config.COMMANDCODE_KEYS_URL },
       };
     },
-    "settings.quickSetup": async ({ provider, apiKey = "", endpoint = "", model = "" }) => {
-      pc().applyQuickAiSetup({ provider, apiKey, endpoint, model });
+    "settings.quickSetup": async ({ choice = "custom", provider, apiKey = "", endpoint = "", model = "" }) => {
+      engine.aiSetupChoices.saveSetupChoice(choice, { provider, apiKey, endpoint, model });
       storage.flush();
       return { ready: pc().isFallbackListConfigured() };
     },
+    "settings.setupNoRequestLimit": async ({ choice = "custom", provider = "", endpoint = "" } = {}) => ({
+      on: engine.aiSetupChoices.noRequestLimitFor(choice, { provider, endpoint }) === true,
+    }),
     "telemetry.records": async ({ task = "all", model = "", status = "all", search = "", sort = "newest" } = {}) => {
       const records = await telemetryRecords();
       const filtered = filterRecords(records, { task, model, status, search, sort });
@@ -1030,6 +1044,9 @@ export const register = (ctx) => {
         count: records.length,
         completed: generationCount,
         filtered: filtered.map(summaryOf),
+        rows: engine.groupTelemetry.groupGenerationRows(filtered).map((row) => row.kind === "group"
+          ? { kind: "group", key: String(row.key), name: String(row.name ?? ""), completedSpeakers: row.completedSpeakers, totalSpeakers: row.totalSpeakers, calls: row.records.length, requests: row.requests, promptTokens: row.promptTokens, outputTokens: row.outputTokens, failedBatches: row.failedBatches, pendingBatches: row.pendingBatches, ids: row.records.map((record) => record.id) }
+          : { kind: "record", id: row.record.id }),
         tasks: [...new Set(records.map((record) => record.taskKey).filter(Boolean))].sort(),
         models: [...new Set(records.map((record) => record.model).filter(Boolean))].sort(),
         analytics: analyticsOf(records),

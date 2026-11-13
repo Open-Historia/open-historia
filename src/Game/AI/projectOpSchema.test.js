@@ -219,7 +219,15 @@ test("the board no longer costs the jump anything", () => {
   // Rostra, the social network, raised it by about 400, on purpose: the posts of
   // the period (socialPosts, seven flat fields named in words) ride in the skip's
   // one answer, where a feed of its own would have been a request a skip.
-  assert.ok(jumpChars < 29650, `the jump schema grew back to ${jumpChars} chars`);
+  // The strikes an event tells of (impacts.strikes) raised it by about 190, on purpose: a strike was a battlefield
+  // line only, and with Fronts off or no war under way none was ever drawn.
+  // An event's one-line digest raised it by about 160, on purpose: later skips
+  // read an older event by it instead of by its whole story. The description
+  // audit of 2026-11-07 (docs/prompt-budget.md) took it to 28,273: each field
+  // says what it is, and the rules it repeated are in the prompt.
+  // A civil war split in one entry (regionControlOps[].part, AI/countrySplit.js) raised it by about 160, on
+  // purpose, the field pointing at the prompt that explains it: half a country was forty entries the model never wrote.
+  assert.ok(jumpChars < 28450, `the jump schema grew back to ${jumpChars} chars`);
 
   // ...and the game master, which has no second pass to hand the board to, keeps
   // it on its authored events (the provider sees a shallow transport; the

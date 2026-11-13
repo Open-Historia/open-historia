@@ -12,12 +12,15 @@ import {
   normalizeEvents,
   normalizeWorldState,
 } from "../../runtime/gameState.js";
-import { buildRegionOwnershipText, buildUnruledBordersText, hasUnruledLand, regionOwnerName, regionTouchingMapSliced } from "./regionVocab.js";
+import { buildRegionOwnershipText, buildUnruledBordersText, hasUnruledLand, ownerRoster, regionOwnerName, regionTouchingMapSliced } from "./regionVocab.js";
+import { buildPromptSnapshot, changedSinceSnapshot, neighbourPowers, splitInView, storylinePowers } from "./promptFocus.js";
+import { IDLE_BACKGROUND_LIMIT, rankRelevantPolities } from "./idlePoliticalDiplomacyContext.js";
+import { HISTORY_TIERS, hasHistoryTiers, renderCanonFacts, renderHistoryTiers } from "../../runtime/historyTiers.js";
 import { waterTypeIds } from "../../runtime/regionTypes.js";
 import { isPendingAction, selectFocusPowers } from "./regionFocus.js";
 import { filterChatsVisibleTo } from "./chatVisibility.js";
 import { buildForcePostureText } from "./forcePosture.js";
-import { unitHandles } from "./nameRefs.js";
+import { regionNamer, unitHandles } from "./nameRefs.js";
 import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
@@ -32,6 +35,10 @@ import { openPolls } from "../../runtime/socialFeed.js";
 import { unitsOffBattlefields } from "./frontsGate.js";
 import { readingLanguageName } from "../../runtime/i18n.js";
 import { advisorMessagesFor, CHIEF_ADVISOR_THREAD } from "../../runtime/advisorThreads.js";
+import { renderRelatedPastEvents } from "./relatedEvents.js";
+import { chatArchiveContext, partitionChats, renderArchivedChats } from "./chatArchive.js";
+import { openConversationId } from "../../runtime/openConversation.js";
+import { leaderOf } from "../../runtime/socialFeed.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -87,6 +94,10 @@ const joinWithinCharBudget = (
   }
   return kept.join(separator);
 };
+
+// The time skip's two tasks, whose templates state some of what other tasks
+// get only from these variables (the briefing, an order's id).
+const SKIP_TASKS = new Set(["jumpForward", "autoJumpForward"]);
 
 export const renderTemplate = (template, variables) =>
   String(template ?? "").replace(/\$\{([^}]+)\}/g, (_match, key) => {
@@ -224,8 +235,14 @@ const compactImpactList = (entries) => {
   return `${shown.join(", ")}${more > 0 ? `, (+${more} more)` : ""}`;
 };
 
-const describeControlOp = (op) => {
-  const place = op.regionName || op.regionId;
+// A region in an impact note, by name (nameRefs.js regionNamer): the map's
+// name for it, else the name the operation was written with, never its id.
+const UNNAMED_REGION = "an unnamed region";
+const impactRegion = (entry, regionName) =>
+  (regionName ? regionName(entry?.regionId) : "") || normalizeString(entry?.regionName) || UNNAMED_REGION;
+
+const describeControlOp = (op, regionName) => {
+  const place = impactRegion(op, regionName);
   if (op.op === "contest") return `${place} contested by ${op.actorCode} (held by ${op.fromCode})`;
   if (op.op === "clear_contest") return `${place} contest by ${op.clearAll ? "all claimants" : op.claimantCode} ended`;
   return `${place} -> ${op.toCode} (from ${op.fromCode})`;
@@ -240,6 +257,32 @@ const describeGroupOp = (op) => {
   return `${op.name} changed${op.newName ? ` (now ${op.newName})` : ""}`;
 };
 
+// What an event's line in the history says when it is not shown in full: the
+// digest it was written with, or the opening of its story where it has none.
+export const EVENT_DIGEST_FALLBACK_CHARS = 200;
+export const eventDigestOf = (event) => {
+  const digest = normalizeString(event?.digest);
+  if (digest) return digest;
+  const story = normalizeString(event?.description).replace(/\s+/g, " ");
+  if (story.length <= EVENT_DIGEST_FALLBACK_CHARS) return story;
+  const cut = story.slice(0, EVENT_DIGEST_FALLBACK_CHARS - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > EVENT_DIGEST_FALLBACK_CHARS * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+};
+
+// `digests`: only the newest skip's events (the last entry of
+// world.simulationHistory) are told in full; older ones by their one-line
+// digest (eventDigestOf). They were told in full when they were the newest, and
+// the history document carries what they set in motion. A world with no
+// recorded skip tells every event in full.
+//
+// `regionName(id)`: what a region of an impact note is called
+// (promptRegionNamer); without it the name the operation was written with.
+//
+// `alsoListed`: the events the ranking left out (selectRankedEvents) are not
+// yet in the history document either, so without this they were in neither:
+// the newest of them, up to this many and ALSO_LISTED_MAX_CHARS, follow as one
+// line each (date, title, digest), and the rest are counted.
 export const buildEventHistoryText = (
   events,
   {
@@ -249,29 +292,37 @@ export const buildEventHistoryText = (
     limit = 10,
     maxChars = 0,
     world = null,
+    digests = false,
+    alsoListed = 0,
+    regionName = null,
   } = {},
 ) => {
   const normalizedEvents = world ? getUnconsolidatedEvents(events, world) : normalizeEvents(events);
   if (normalizedEvents.length === 0) {
     return "No unconsolidated events have been recorded yet.";
   }
+  const newest = digests && world
+    ? new Set(normalizeArray(normalizeWorldState(world).simulationHistory?.[0]?.eventIds).map(normalizeString).filter(Boolean))
+    : null;
+  const inFull = (event) => !newest || newest.size === 0 || newest.has(event.id);
 
-  const rendered = selectRankedEvents(normalizedEvents, { limit, world, currentDate })
+  const selected = selectRankedEvents(normalizedEvents, { limit, world, currentDate });
+  const rendered = selected
     .map((event) => {
       const date = normalizeString(event.date) || "undated";
-      const description = normalizeString(event.description);
+      const description = inFull(event) ? normalizeString(event.description) : eventDigestOf(event);
       const impactNotes = [];
 
       if (event.impacts.regionTransfers.length > 0) {
         impactNotes.push(
           `Territorial shifts: ${event.impacts.regionTransfers
-            .map((entry) => `${entry.regionName || entry.regionId} -> ${entry.toCode}`)
+            .map((entry) => `${impactRegion(entry, regionName)} -> ${entry.toCode}`)
             .join(", ")}`,
         );
       }
 
       if (event.impacts.regionControlOps.length > 0) {
-        impactNotes.push(`Control: ${compactImpactList(event.impacts.regionControlOps.map(describeControlOp))}`);
+        impactNotes.push(`Control: ${compactImpactList(event.impacts.regionControlOps.map((op) => describeControlOp(op, regionName)))}`);
       }
 
       if (event.impacts.groupOps.length > 0) {
@@ -301,12 +352,48 @@ export const buildEventHistoryText = (
       ].filter(Boolean).join("\n");
     });
 
-  return joinWithinCharBudget(rendered, {
+  const told = joinWithinCharBudget(rendered, {
     maxChars,
     separator: "\n",
     take: "tail",
     omissionMarker: "- [${count} earlier event record(s) omitted from this task context; canonical save history is unchanged.]",
   });
+  if (!(alsoListed > 0)) return told;
+  const shown = new Set(selected);
+  const others = normalizedEvents.filter((event) => !shown.has(event));
+  if (!others.length) return told;
+  const lines = [];
+  let room = ALSO_LISTED_MAX_CHARS;
+  for (const event of others.slice().reverse()) {
+    if (lines.length >= alsoListed) break;
+    const digest = normalizeString(event.digest);
+    const line = `- ${normalizeString(event.date) || "undated"}: ${event.title}${digest ? ` — ${digest}` : ""}`;
+    if (line.length + 1 > room) break;
+    room -= line.length + 1;
+    lines.unshift(line);
+  }
+  const unlisted = others.length - lines.length;
+  return [
+    told,
+    "",
+    `ALSO RECENT (the other events since the story so far, which are not told above; one line each):`,
+    ...(unlisted > 0 ? [`- (${unlisted} earlier of them not listed)`] : []),
+    ...lines,
+  ].join("\n");
+};
+
+// The most the "also recent" lines of a skip's history take (buildEventHistoryText alsoListed).
+const ALSO_LISTED_MAX_CHARS = 6000;
+
+// What a skip's window of recent events shows, for the related past events
+// (relatedEvents.js) to leave out: the events not yet folded into the history,
+// and those of them the window shows. With the "also recent" lines
+// (`alsoListed`) every one of them is shown, a line at least, so only the
+// folded history is left to find related events in.
+const relatedEventsWindow = (bundle, { currentDate, limit, alsoListed = 0 }) => {
+  const unfolded = getUnconsolidatedEvents(bundle.events, bundle.world);
+  const shown = alsoListed > 0 ? unfolded : selectRankedEvents(unfolded, { limit, world: bundle.world, currentDate });
+  return { events: bundle.events, unfolded, shown };
 };
 
 const renderConsolidatedHistoryEntry = (entry) =>
@@ -470,10 +557,26 @@ export const buildConsolidatedHistoryText = (
   } = {},
 ) => {
   const normalizedWorld = normalizeWorldState(world);
+  // The history in tiers (runtime/historyTiers.js): the canon first, which
+  // never fades, then the eras and the years, each within its own share of
+  // `maxChars` (all of their budgets when there is none).
+  const budget = Math.max(0, Math.trunc(Number(maxChars) || 0));
+  const scale = budget ? budget / (HISTORY_TIERS.canonChars + HISTORY_TIERS.eraChars + HISTORY_TIERS.yearChars) : 1;
+  const canon = renderCanonFacts(normalizedWorld.canonFacts, { maxChars: Math.max(600, HISTORY_TIERS.canonChars * Math.min(1, scale)) });
+  const withCanon = (text) => (canon ? `${canon}\n\n${text}` : text);
+  const document = normalizedWorld.historyDocument;
+  if (hasHistoryTiers(document)) {
+    const notes = normalizeString(document.text);
+    return withCanon([
+      `History (maintained across consolidations${document.throughDate ? `, through ${document.throughDate}` : ""}):`,
+      renderHistoryTiers(document, { scale }),
+      ...(notes ? ["", `Since then:\n${notes}`] : []),
+    ].join("\n"));
+  }
   // Once the document exists it IS the older history; the pass ledger behind
   // it is bookkeeping, and rendering both would tell the story twice.
-  if (normalizedWorld.historyDocument?.text) {
-    return fitHistoryDocumentWithinCharBudget(normalizedWorld.historyDocument, { maxChars });
+  if (document?.text) {
+    return withCanon(fitHistoryDocumentWithinCharBudget(document, { maxChars: budget && canon ? Math.max(1, budget - canon.length) : maxChars }));
   }
   const entries = normalizedWorld.consolidatedHistory;
   if (entries.length === 0) return "No earlier campaign history has been consolidated yet.";
@@ -789,6 +892,12 @@ export const buildChatSummaryText = (chats, { limit = 4 } = {}) => {
 // Distinct wording per case: "this polity has no correspondence" is a very
 // different fact from "nothing happened this round", and a leader told the
 // latter when the former is true may invent a conversation to fill the gap.
+//
+// `memoryThreads`: a time skip's [Diplomacy So Far] is also its diplomatic
+// memory (it once had both, the memory and the last words of each thread sent
+// twice): the threads with a standing memory beyond the `limit` shown in full
+// follow, up to this many threads with a memory in all, each with its memory
+// and its last few words, as buildDiplomaticContinuityText gave them.
 export const buildDetailedChatHistoryText = (
   chats,
   {
@@ -796,6 +905,7 @@ export const buildDetailedChatHistoryText = (
     maxChars = 0,
     messageLimit = 10,
     visibleTo = "",
+    memoryThreads = 0,
   } = {},
 ) => {
   // sortDiplomaticChatsByRecentActivity normalizes; filterChatsVisibleTo takes
@@ -811,12 +921,32 @@ export const buildDetailedChatHistoryText = (
       : "No chats occurred in these rounds.";
   }
 
-  const rendered = normalizedChats.slice(0, limit).map((chat, index) => {
+  const headerOf = (chat, index) => {
     // A shared game's thread is one person's: say whose (AI/sharedLetters.js).
     const owner = hostingSharedGame() ? normalizeString(chat.player) || sharedGameHostCountry() : "";
-    const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}${owner ? ` (with ${owner})` : ""}`;
-    return `${header}\n${buildSingleChatHistoryText(chat, { messageLimit })}`;
-  });
+    return `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}${owner ? ` (with ${owner})` : ""}`;
+  };
+  const rendered = normalizedChats.slice(0, limit).map((chat, index) => `${headerOf(chat, index)}\n${buildSingleChatHistoryText(chat, { messageLimit })}`);
+  if (memoryThreads > 0) {
+    const shownWithMemory = normalizedChats.slice(0, limit).filter((chat) => getLatestDiplomaticMemory(chat)).length;
+    const older = normalizedChats.slice(limit).filter((chat) => getLatestDiplomaticMemory(chat));
+    let room = MEMORY_THREADS_MAX_CHARS;
+    for (const chat of older.slice(0, Math.max(0, memoryThreads - shownWithMemory))) {
+      const recent = normalizeArray(chat.messages)
+        .filter((message) => ["user", "leader"].includes(normalizeString(message?.role)))
+        .slice(-4)
+        .map(buildDiplomaticMessageLine)
+        .join("\n");
+      const row = [
+        `${headerOf(chat, rendered.length)} (an older thread with a standing memory)`,
+        buildDiplomaticMemoryLine(chat, { maxChars: 1000 }),
+        recent.length > 1800 ? `…${recent.slice(-1799).trimStart()}` : recent,
+      ].filter(Boolean).join("\n");
+      if (row.length > room) break;
+      room -= row.length;
+      rendered.push(row);
+    }
+  }
 
   return joinWithinCharBudget(rendered, {
     maxChars,
@@ -827,6 +957,11 @@ export const buildDetailedChatHistoryText = (
       + "their canonical chat records remain in the save.]",
   });
 };
+
+// The most the older threads with a memory add to a skip's [Diplomacy So Far]
+// (buildDetailedChatHistoryText memoryThreads): the budget the separate memory
+// block had.
+const MEMORY_THREADS_MAX_CHARS = 12000;
 
 // Compact diplomatic continuity ledger for the world simulator. Long-term meaning
 // comes from rolling memory, while a tiny recent verbatim tail preserves exact
@@ -916,14 +1051,19 @@ export { joinPolityNames };
 // already carried out (PLAYER_EVERY_ACTION_NOT_PREVIOUS). The planned ones are
 // given beside it (PLAYER_ACTIONS_THIS_ROUND), and a skip that read them under
 // that label could treat a live order as done, or carry it out twice.
-export const buildActionHistoryText = (actions, { includeResolved = false, includePlanned = true, limit = ACTION_HISTORY_LIMIT } = {}) => {
+//
+// `ids`: a planned order opens with its id in brackets. A time skip cites an
+// order by it (impacts.actionIds), and its [Player Focus] list names the
+// orders by id alone, so their words are sent once (playerFocus.js).
+export const buildActionHistoryText = (actions, { includeResolved = false, includePlanned = true, limit = ACTION_HISTORY_LIMIT, ids = false } = {}) => {
   const normalizedActions = normalizeActions(actions)
     .filter((action) => includePlanned || action.status !== "planned");
   const renderAction = (action) => {
     // In a shared game every order names the polity that gave it.
     const kindLabel = `${action.kind === "chat" ? "chat" : "action"}${action.ownerCode ? `, ${action.ownerCode}` : ""}`;
     const statusLabel = action.status !== "planned" ? ` [${action.status}]` : "";
-    return `- (${kindLabel}) ${action.title}${statusLabel}: ${buildActionDisplayText(action)}`;
+    const id = ids && action.status === "planned" && action.id ? `[${action.id}] ` : "";
+    return `- ${id}(${kindLabel}) ${action.title}${statusLabel}: ${buildActionDisplayText(action)}`;
   };
 
   if (!includeResolved) {
@@ -983,6 +1123,51 @@ export const buildRecentRoundsWithDates = (bundle) => {
 };
 
 export const UNITS_SUMMARY_LIMIT = 60;
+// The most units of powers out of view a skip names, by name and type.
+export const UNITS_BRIEF_LIMIT = 240;
+
+const unitSummaryRow = (unit, handles) => {
+  const lat = Number(unit.lat);
+  const lng = Number(unit.lng);
+  const coords = Number.isFinite(lat) && Number.isFinite(lng)
+    ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
+    : "unknown location";
+  const detail = [
+    `${unit.type}`,
+    `owner ${unit.ownerCode}`,
+    `${unit.strength}% of established strength`,
+    unit.posture ? `posture ${unit.posture}` : `status ${unit.status}`,
+  ].join(", ");
+  return `- ${handles.get(unit.id) || unit.name} (${detail})${unit.composition ? ` — ${unit.composition}` : ""}` +
+    `${unit.covert ? " [unconfirmed]" : ""} at ${coords}`;
+};
+
+// A time skip's table of the units in view: grouped by owner, the order of the
+// fields said once (UNITS_TABLE_HEADER), and a field left out where it says
+// what it would say of most units (full strength, idle).
+export const UNITS_TABLE_HEADER = "By owner; each unit: name: type[, strength when under 100%][, posture or status when not idle]; what it is; lat, lng";
+const unitTableRow = (unit, handles) => {
+  const lat = Number(unit.lat);
+  const lng = Number(unit.lng);
+  const where = Number.isFinite(lat) && Number.isFinite(lng) ? `${lat.toFixed(2)}, ${lng.toFixed(2)}` : "location unknown";
+  const strength = Number(unit.strength);
+  const state = normalizeString(unit.posture) || (normalizeString(unit.status) && normalizeString(unit.status) !== "idle" ? normalizeString(unit.status) : "");
+  const head = [
+    normalizeString(unit.type) || "unit",
+    Number.isFinite(strength) && strength !== 100 ? `${Math.round(strength)}%` : "",
+    state,
+  ].filter(Boolean).join(", ");
+  return `- ${handles.get(unit.id) || unit.name}: ${head}${unit.covert ? " [unconfirmed]" : ""}; ${normalizeString(unit.composition) ? `${normalizeString(unit.composition)}; ` : ""}${where}`;
+};
+const unitTable = (units, handles) => {
+  const byOwner = new Map();
+  for (const unit of units) {
+    const owner = normalizeString(unit.ownerCode) || "unknown";
+    if (!byOwner.has(owner)) byOwner.set(owner, []);
+    byOwner.get(owner).push(unitTableRow(unit, handles));
+  }
+  return [UNITS_TABLE_HEADER, ...[...byOwner].flatMap(([owner, rows]) => [`${owner}:`, ...rows])];
+};
 
 // When the map holds more units than the list does, the list keeps the
 // player's first, then those of the powers the turn is about (the ranking the
@@ -997,11 +1182,14 @@ export const buildUnitsSummaryText = (world, {
   chats = [],
   events = [],
   limit = UNITS_SUMMARY_LIMIT,
+  // A time skip's powers in view (buildPromptFocus), lower-case: their units in
+  // full, every other unit by name and type in a line per owner.
+  inView = null,
 } = {}) => {
   const units = normalizeArray(world?.units);
   if (units.length === 0) return "No military units are currently deployed on the map.";
   let ordered = units;
-  if (units.length > limit) {
+  if (inView instanceof Set || units.length > limit) {
     const counts = new Map();
     for (const unit of units) {
       const owner = normalizeString(unit?.ownerCode);
@@ -1021,25 +1209,34 @@ export const buildUnitsSummaryText = (world, {
       .sort((a, b) => a.rank - b.rank || a.index - b.index)
       .map((entry) => entry.unit);
   }
-  const omitted = Math.max(0, units.length - limit);
   // Each unit by its name, which is what an order on it writes (nameRefs.js);
   // its owner follows in brackets only where another unit shares the name.
   const handles = unitHandles(units);
-  const rows = ordered.slice(0, limit).map((unit) => {
-    const lat = Number(unit.lat);
-    const lng = Number(unit.lng);
-    const coords = Number.isFinite(lat) && Number.isFinite(lng)
-      ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
-      : "unknown location";
-    const detail = [
-      `${unit.type}`,
-      `owner ${unit.ownerCode}`,
-      `${unit.strength}% of established strength`,
-      unit.posture ? `posture ${unit.posture}` : `status ${unit.status}`,
-    ].join(", ");
-    return `- ${handles.get(unit.id) || unit.name} (${detail})${unit.composition ? ` — ${unit.composition}` : ""}` +
-      `${unit.covert ? " [unconfirmed]" : ""} at ${coords}`;
-  });
+  if (inView instanceof Set) {
+    const viewed = ordered.filter((unit) => inView.has(normalizeString(unit?.ownerCode).toLowerCase()));
+    const full = viewed.slice(0, limit);
+    const shownFull = new Set(full);
+    const brief = ordered.filter((unit) => !shownFull.has(unit));
+    const lines = full.length ? unitTable(full, handles) : [];
+    if (brief.length) {
+      const byOwner = new Map();
+      let named = 0;
+      for (const unit of brief) {
+        if (named >= UNITS_BRIEF_LIMIT) break;
+        const owner = normalizeString(unit.ownerCode) || "unknown";
+        if (!byOwner.has(owner)) byOwner.set(owner, []);
+        byOwner.get(owner).push(`${handles.get(unit.id) || unit.name} (${unit.type})`);
+        named += 1;
+      }
+      lines.push(`${full.length ? "Other formations" : "Formations"}, by owner (powers not in play this turn; each is on the map):`);
+      for (const [owner, names] of byOwner) lines.push(`- ${owner}: ${names.join(", ")}`);
+      const left = brief.length - named;
+      if (left > 0) lines.push(left === 1 ? "[1 more unit omitted; it remains on the map]" : `[${left} more units omitted; they remain on the map]`);
+    }
+    return lines.join("\n");
+  }
+  const omitted = Math.max(0, units.length - limit);
+  const rows = ordered.slice(0, limit).map((unit) => unitSummaryRow(unit, handles));
   if (omitted > 0) {
     rows.push(omitted === 1
       ? "[1 more unit omitted; it remains on the map]"
@@ -1151,6 +1348,7 @@ const buildMarkerAttentionEvidence = (bundle, { chat = null } = {}) => {
   };
 };
 
+export const MARKERS_TABLE_HEADER = "Each: name: kind, owner[, status when not active]; lat, lng[; dates][ — what it is]";
 export const buildMarkersSummaryText = (
   worldLike,
   {
@@ -1159,6 +1357,7 @@ export const buildMarkersSummaryText = (
     limit = 16,
     recentEventIds = new Set(),
     seed = "",
+    inView = null,
   } = {},
 ) => {
   const markers = normalizeArray(worldLike?.markers);
@@ -1198,8 +1397,21 @@ export const buildMarkersSummaryText = (
     || a.rotation - b.rotation
     || a.index - b.index);
 
-  const selected = scored.slice(0, boundedLimit).map(({ marker }) => marker);
+  const chosen = scored.slice(0, boundedLimit);
+  const selected = chosen.map(({ marker }) => marker);
+  // A time skip's powers in view (buildPromptFocus): a feature the turn is
+  // about (its score) or one a power in view owns is told in full; one the
+  // rotation brought up for another power's sake is named, with its kind and
+  // owner, in a line.
+  const briefOnly = inView instanceof Set
+    ? new Set(chosen
+      .filter(({ marker, score }) => score <= 0 && !inView.has(normalizeString(marker.ownerCode).toLowerCase()))
+      .map(({ marker }) => marker))
+    : new Set();
   const rows = selected.map((marker) => {
+    if (briefOnly.has(marker)) {
+      return `- ${marker.name}: ${marker.kind}${marker.ownerCode ? `, ${marker.ownerCode}` : ""}${normalizeString(marker.status) && normalizeString(marker.status) !== "active" ? `, ${normalizeString(marker.status)}` : ""}`;
+    }
     const lat = Number(marker.lat);
     const lng = Number(marker.lng);
     const coords = Number.isFinite(lat) && Number.isFinite(lng)
@@ -1214,6 +1426,11 @@ export const buildMarkersSummaryText = (
       changed && changed !== founded ? `last changed ${changed}` : "",
     ].filter(Boolean).join(", ");
     const note = compactMarkerNote(marker.note, 180);
+    // A time skip's table: kind and owner, the status where it is not
+    // active, then lat, lng, said once where the list opens (MARKERS_TABLE_HEADER).
+    if (inView instanceof Set) {
+      return `- ${marker.name}: ${marker.kind}${marker.ownerCode ? `, ${marker.ownerCode}` : ""}${status !== "active" ? `, ${status}` : ""}; ${coords.replace(/lat |lng /g, "")}${dates ? `; ${dates}` : ""}${aliases.length ? `; former name${aliases.length === 1 ? "" : "s"}: ${aliases.join(" / ")}` : ""}${note ? ` — ${note}` : ""}`;
+    }
     return `- ${marker.name} (${marker.kind}${marker.ownerCode ? `, owner ${marker.ownerCode}` : ""}, status ${status}) at ${coords}${dates ? `; ${dates}` : ""}${aliases.length ? `; former name${aliases.length === 1 ? "" : "s"}: ${aliases.join(" / ")}` : ""}${note ? ` — ${note}` : ""}`;
   });
 
@@ -1221,6 +1438,7 @@ export const buildMarkersSummaryText = (
   if (omitted > 0) {
     rows.push(`[${omitted} additional persistent world feature${omitted === 1 ? "" : "s"} omitted from this task context; they remain canonical in the save.]`);
   }
+  if (inView instanceof Set) rows.unshift(MARKERS_TABLE_HEADER);
   return rows.join("\n");
 };
 
@@ -1293,8 +1511,15 @@ export const buildPlannedActionsWithIdsText = (actions) => {
 // neglected programme moved along, and it cannot be argued with — it is a
 // function of the calendar, not of anyone's memory.
 const FULL_DETAIL_PROJECTS = 20;
+// Finished and abandoned entries are named, newest first, up to this many; the
+// rest are counted. A long campaign closed 110 and listed every one, id and
+// all, on every skip: 13,000 characters of entries the model is only told not
+// to re-open.
+export const CLOSED_PROJECTS_LISTED = 15;
 
-export const buildProjectsSummaryText = (world, game) => {
+// `compact` (a time skip): an open entry without its tags, which steer the
+// panel's filters and nothing a skip decides.
+export const buildProjectsSummaryText = (world, game, { compact = false, closedLimit = CLOSED_PROJECTS_LISTED } = {}) => {
   const projects = normalizeArray(world?.projects);
   if (projects.length === 0) {
     return "No projects or operations are being tracked yet.";
@@ -1370,9 +1595,9 @@ export const buildProjectsSummaryText = (world, game) => {
     const roundsSince = round > 0 && project.updatedRound > 0 ? round - project.updatedRound : 0;
     const warnings = warningsOf(project, flags);
     return [
-      `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}% complete.`,
+      `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}%${compact ? "" : " complete"}.`,
       project.summary,
-      project.tags.length ? `Tags: ${project.tags.join(", ")}.` : "",
+      !compact && project.tags.length ? `Tags: ${project.tags.join(", ")}.` : "",
       timeline,
       next,
       project.lastUpdate ? `Last reported: ${project.lastUpdate}` : "",
@@ -1383,7 +1608,7 @@ export const buildProjectsSummaryText = (world, game) => {
 
   // Everything the model needs to ADDRESS a project and judge whether it needs
   // touching, minus the prose it only needs to reason about one in depth.
-  const compact = (project) => {
+  const compactLine = (project) => {
     const flags = deriveProjectFlags(project, gameDate, round);
     const warnings = warningsOf(project, flags);
     const next = flags.nextMilestone
@@ -1408,13 +1633,18 @@ export const buildProjectsSummaryText = (world, game) => {
 
   const sections = detailed.length > 0 ? [detailed.map(full).join("\n")] : [];
   if (brief.length > 0) {
-    sections.push(`Also running (same rules apply — use these ids to update them):\n${brief.map(compact).join("\n")}`);
+    sections.push(`Also running (same rules apply — use these ids to update them):\n${brief.map(compactLine).join("\n")}`);
   }
   if (stalled.length > 0) {
-    sections.push(`Stalled, waiting on the player — leave these alone: no event and no projectOps about them, unless an order this period names one (then use its id):\n${stalled.map(compact).join("\n")}`);
+    sections.push(`Stalled, waiting on the player — leave these alone: no event and no projectOps about them, unless an order this period names one (then use its id):\n${stalled.map(compactLine).join("\n")}`);
   }
   if (closed.length > 0) {
-    sections.push(`Finished or abandoned — do not re-open these:\n${closed.map(compact).join("\n")}`);
+    const newest = [...closed].sort((a, b) =>
+      normalizeString(b.updatedAt).localeCompare(normalizeString(a.updatedAt)));
+    const listed = newest.slice(0, Math.max(0, closedLimit));
+    const more = closed.length - listed.length;
+    sections.push(`Finished or abandoned — do not re-open these:\n${listed.map(compactLine).join("\n")}`
+      + (more > 0 ? `\nand ${more} more finished or abandoned (older; do not start any of them again under a new name)` : ""));
   }
 
   // The engine's own verdict on what has gone quiet, restated at the END as a
@@ -1466,8 +1696,9 @@ let _stockCityCatalogCache = null;
 // folder, on every build (runtime/worldFiles.js).
 const CITY_SEED_URL = worldFileUrl("cities");
 
+// "lat, lng" is said once, where the list opens (the skip templates' [City Coordinates]).
 const formatCityLine = (name, country, lat, lng, extra = "") =>
-  `- ${name}${country ? ` (${country})` : ""}: lat ${Number(lat).toFixed(2)}, lng ${Number(lng).toFixed(2)}${extra}`;
+  `- ${name}${country ? ` (${country})` : ""}${extra}: ${Number(lat).toFixed(2)}, ${Number(lng).toFixed(2)}`;
 
 export const buildCityCatalogText = async (world) => {
   try {
@@ -1523,8 +1754,6 @@ const LANDLESS_PLAYER_TEXT =
   + "and its story is about influence, alliances, insurgency, and the fight to gain "
   + "or retake territory — not about administering provinces it does not have.";
 
-const regionNameById = (catalog, id) => (Array.isArray(catalog) ? catalog.find((region) => region?.id === id)?.name : null) || id;
-
 // `groups` false while groups are switched off for the game
 // (server/gameFeatures.js): a player leading one reads as a landless polity.
 export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null, { groups = isActiveFeatureEnabled("groups") } = {}) => {
@@ -1542,7 +1771,7 @@ export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null,
     // area it controls, and what it is.
     const groupCatalog = groups && world.groups && Object.keys(world.groups).length ? (regionCatalog ?? await loadRegions()) : [];
     const groupText = groups ? describePlayerGroupForPrompt(world, playerCode, {
-      regionName: (id) => regionNameById(groupCatalog, id),
+      regionName: groupCatalog.length ? await promptRegionNamer(world, groupCatalog) : () => "",
     }) : "";
     if (groupText) return `None — ${playerCode} is a group, not a country.\n${groupText}`;
     return isPolityLandless(world, playerCode)
@@ -1560,6 +1789,19 @@ export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null,
   // not read as the whole holding.
   const more = owned.length - names.length;
   return `${names.join(", ")}${more > 0 ? `, (+${more} more)` : ""}`;
+};
+
+// What a prompt calls a region its record keys by id (an event's impact notes,
+// a group's area, the World Director's pressures): the map's name for it,
+// "region: X" where the name alone could be read as another region or a
+// country (nameRefs.js regionNamer), and "" for one the map does not have.
+// The polities the game knows count as countries beside those the map's rows
+// carry.
+export const promptRegionNamer = async (worldLike, catalog = null) => {
+  const world = normalizeWorldState(worldLike);
+  const rows = Array.isArray(catalog) && catalog.length ? catalog : await loadRegions();
+  const countries = Object.entries(world.polityOverrides ?? {}).flatMap(([key, entry]) => [key, entry?.name]);
+  return regionNamer(filterToRenderedRegions(rows, world), { countries });
 };
 
 const STOCK_REGION_ID = /^[A-Z]{3}\.\d+(?:_\d+)?$/;
@@ -1590,7 +1832,14 @@ const recentEventList = (events, count = 12) => {
 // active wars, chat partners, the powers the recent events moved or mentioned,
 // claimants of contested land, then size (regionFocus.js). Declared scenario
 // actors that scored nothing are appended so a scripted power is never lost.
-export const rankFocusPowers = (regions, world, bundle, { playerName, actorNames = [], polityNames = {} } = {}) => {
+export const rankFocusPowers = (regions, world, bundle, options = {}) =>
+  rankFocusEntries(regions, world, bundle, options).map((entry) => entry.label);
+
+// The same ranking with each power's score and reasons (regionFocus.js), which a
+// time skip splits into the powers it shows in full and the rest
+// (buildPromptFocus). `signals`: the neighbours, relevant countries, changed
+// powers and storyline parties a skip adds.
+const rankFocusEntries = (regions, world, bundle, { playerName, actorNames = [], polityNames = {}, signals = {} } = {}) => {
   const overrides = world.regionOwnershipOverrides ?? {};
   const groups = new Map();
   const ownerById = new Map();
@@ -1625,16 +1874,182 @@ export const rankFocusPowers = (regions, world, bundle, { playerName, actorNames
     claimants: world.regionClaimants ?? {},
     ownerOfRegion: (regionId) => ownerById.get(String(regionId)) ?? "",
     regions,
+    ...signals,
   });
-  const labels = ranked.map((entry) => entry.label);
+  const entries = ranked.map((entry) => ({ ...entry, regions: groups.get(entry.label.toLowerCase())?.regions ?? 0 }));
   for (const name of actorNames) {
-    if (name && !labels.some((label) => label.toLowerCase() === name.toLowerCase())) labels.push(name);
+    if (name && !entries.some((entry) => entry.label.toLowerCase() === name.toLowerCase())) {
+      entries.push({ label: name, score: 0, reasons: [], regions: 0 });
+    }
   }
-  return labels;
+  return entries;
+};
+
+// What a time skip shows in full and what in a line (promptFocus.js): the
+// powers in view (the player, its neighbours, every power at war, every power
+// the orders name, its relevant countries, those that changed since the last
+// skip or are in a live storyline, the chat partners and the powers the recent
+// events moved). Also the
+// snapshot of the world as this skip reads it, which the skip stores when it is
+// written (gameplay.js applySimulationResult), so the next one can tell what
+// changed.
+//   regions     the rendered region catalog (filterToRenderedRegions)
+//   regionRows  the scenario's own rows, with their boxes and adjacencies
+//   baseTags    the map's nation tags (getNationTags)
+export const buildPromptFocus = (bundle, regions, world, {
+  playerName = toCountryName(normalizeString(bundle?.game?.country)),
+  actorNames = [],
+  polityNames = {},
+  regionRows = null,
+  baseTags = {},
+} = {}) => {
+  const overrides = world.regionOwnershipOverrides ?? {};
+  const snapshot = worldSnapshotOf(bundle, regions, world, { polityNames, baseTags });
+  const changedKeys = changedSinceSnapshot(world.promptSnapshot, snapshot);
+  const changed = changedKeys ? [...changedKeys] : [];
+  const neighbours = neighbourPowers(regionRows ?? regions, (row) => regionOwnerName(row, overrides), playerName);
+  const storylines = storylinePowers(world.storylines);
+  // Idle diplomacy's relevant countries, as many as it gives the background of;
+  // on a map without political profiles, ranked among the map's own powers.
+  const owners = [...new Set(regions.map((region) => regionOwnerName(region, overrides)).filter(Boolean))];
+  const relevant = rankRelevantPolities({ ...bundle, world }, { candidates: owners })
+    .slice(0, IDLE_BACKGROUND_LIMIT)
+    .map((entry) => entry.name);
+  const ranked = rankFocusEntries(regions, world, bundle, {
+    playerName,
+    actorNames,
+    polityNames,
+    signals: { neighbours, relevant, changed, storylines },
+  });
+  const { inView } = splitInView(ranked);
+  return {
+    ranked,
+    labels: ranked.map((entry) => entry.label),
+    inView: new Set(inView.map((entry) => entry.label.toLowerCase())),
+    inViewLabels: inView.map((entry) => entry.label),
+    relevant,
+    changed: changedKeys,
+    snapshot,
+  };
+};
+
+// The polities' lore, by lower-case name: what the reference block and the
+// snapshot read.
+const polityNotesOf = (world) => {
+  const notes = {};
+  for (const entry of Object.values(world?.polityOverrides ?? {})) {
+    const note = normalizeString(entry?.note);
+    if (!note) continue;
+    const name = normalizeString(entry?.name) || toCountryName(normalizeString(entry?.code));
+    if (name) notes[name.toLowerCase()] = { name, note };
+  }
+  return notes;
+};
+
+const worldSnapshotOf = (bundle, regions, world, { polityNames = {}, baseTags = {} } = {}) => {
+  const tagged = resolveAllCountryTags(baseTags, world);
+  const tagsByName = new Map();
+  for (const [code, tags] of Object.entries(tagged)) {
+    for (const name of [code, toCountryName(code)]) {
+      if (normalizeString(name)) tagsByName.set(normalizeString(name).toLowerCase(), tags);
+    }
+  }
+  const notes = polityNotesOf(world);
+  return buildPromptSnapshot({
+    round: Number(bundle?.game?.round) || 0,
+    date: normalizeString(bundle?.game?.gameDate),
+    powers: ownerRoster(regions, world.regionOwnershipOverrides ?? {}, { polityNames }).map((power) => ({
+      label: power.label,
+      regions: power.regions,
+      line: power.line,
+      tags: tagsByName.get(power.key) ?? [],
+      note: notes[power.key]?.note ?? "",
+    })),
+  });
+};
+
+// Owner name -> display name: base country names from the catalog, with the
+// dynamic polity overrides layered on top (a re-owned or renamed power wins).
+const polityNamesOf = (regions, polities) => {
+  const polityNames = {};
+  for (const region of regions) {
+    const name = String(region.country || toCountryName(region.countryCode) || "").toLowerCase();
+    if (name && !polityNames[name]) polityNames[name] = region.country || toCountryName(region.countryCode);
+  }
+  for (const entry of polities) {
+    if (entry?.code) polityNames[toCountryName(String(entry.code)).toLowerCase()] = entry.name || toCountryName(entry.code);
+  }
+  return polityNames;
+};
+
+// The snapshot a time skip stores when it is written (world.promptSnapshot):
+// the world it started from, as its prompt read it. `bundle` is that world's
+// { world, game }.
+export const buildWorldPromptSnapshot = async (bundle, regionCatalog = null) => {
+  const world = normalizeWorldState(bundle?.world);
+  const regions = filterToRenderedRegions(regionCatalog ?? await loadRegions(), world);
+  const baseTags = await getNationTags().catch(() => ({}));
+  return worldSnapshotOf(bundle, regions, world, { polityNames: polityNamesOf(regions, Object.values(world.polityOverrides)), baseTags });
+};
+
+// The polity lore a time skip carries in its cached opening
+// (${POLITY_LORE_REFERENCE}): every polity's note as of world.promptReference,
+// the reference a skip refreshes now and then (refreshPromptReference), so the
+// opening stays the same from skip to skip while the notes do not move. A note
+// written since is in the live part (buildWorldSummary). Without a reference,
+// the notes as they stand.
+export const POLITY_LORE_REFERENCE_MAX_CHARS = 8000;
+export const buildPolityLoreReference = (worldLike) => {
+  const reference = worldLike?.promptReference?.notes;
+  const notes = reference && typeof reference === "object"
+    ? Object.values(reference).filter((entry) => normalizeString(entry?.name) && normalizeString(entry?.note))
+    : Object.values(polityNotesOf(worldLike));
+  if (!notes.length) return "";
+  const lines = [];
+  let used = 0;
+  for (const entry of [...notes].sort((a, b) => a.name.localeCompare(b.name))) {
+    const line = `- ${entry.name}: ${normalizeString(entry.note).replace(/\s+/g, " ")}`;
+    if (used + line.length > POLITY_LORE_REFERENCE_MAX_CHARS) break;
+    lines.push(line);
+    used += line.length + 1;
+  }
+  return lines.join("\n");
+};
+
+// When the reference the cached opening carries is renewed, after a skip: when
+// there is none, when this many notes have moved since it, or when it is this
+// many rounds old and anything moved at all. Between renewals the opening is
+// the same, and the notes that moved ride in the live part.
+export const PROMPT_REFERENCE_REFRESH = Object.freeze({ changedNotes: 6, rounds: 25 });
+export const refreshPromptReference = (worldLike, round = 0) => {
+  const current = polityNotesOf(worldLike);
+  const reference = worldLike?.promptReference;
+  const stored = reference?.notes && typeof reference.notes === "object" ? reference.notes : null;
+  const fresh = { round: Math.max(0, Math.trunc(Number(round) || 0)), notes: current };
+  if (!stored) return fresh;
+  const keys = new Set([...Object.keys(current), ...Object.keys(stored)]);
+  let moved = 0;
+  for (const key of keys) if (normalizeString(current[key]?.note) !== normalizeString(stored[key]?.note)) moved += 1;
+  if (moved >= PROMPT_REFERENCE_REFRESH.changedNotes) return fresh;
+  if (moved > 0 && fresh.round - (Number(reference.round) || 0) >= PROMPT_REFERENCE_REFRESH.rounds) return fresh;
+  return reference;
+};
+
+// The notes that differ from the reference the opening carries: what the live
+// part says of the polities' lore.
+const notesSinceReference = (world) => {
+  const current = polityNotesOf(world);
+  const stored = world?.promptReference?.notes && typeof world.promptReference.notes === "object" ? world.promptReference.notes : null;
+  if (!stored) return {};
+  return Object.fromEntries(Object.entries(current).filter(([key, entry]) => normalizeString(stored[key]?.note) !== entry.note));
 };
 
 export const POLITY_SUMMARY_LIMIT = 16;
 export const TAG_SUMMARY_LIMIT = 40;
+// With no request limit (`leanLookups`): the recent events in view, and the
+// territorial changes listed, before the lookup functions carry the rest.
+export const LEAN_RECENT_EVENTS = 4;
+export const LEAN_TERRITORY_CHANGES = 20;
 
 // `items` with the powers in `focusCodes` (rankFocusPowers' order) first, in
 // that order, and everything else after them in its own order. `namesOf`
@@ -1657,6 +2072,11 @@ export const orderByFocus = (items, namesOf, focusCodes) => {
 // `regionListsViaTools`: the task has the lookup functions (lookupTools.js),
 // so the summary names the powers with their region counts and leaves the
 // region names and ids to find_region / list_regions / map_around.
+//
+// `countsOnly`: My key has no request limit is on (requestBudget.js), so the model may
+// look up more and is sent less: each power with its region count and nothing
+// else (no territories), and the territorial changes cut shorter, with what was
+// left out counted. Only with `regionListsViaTools`.
 //
 // `conversation`: the advisor or a leader, which talk and never write
 // regionTransfers. They get each power's region count, the region names (no
@@ -1704,14 +2124,314 @@ const regionBordersOfThisMap = () => {
   return work;
 };
 
+//
+// A time skip's world summary (buildWorldSummary `tiers`). Everything the
+// untiered one says is here; what changes is how much of each part is in full:
+//   - the territorial changes, grouped by who lost and who gained, the moves of
+//     the powers in view first;
+//   - region names in full for the powers in view (the region vocabulary for
+//     regionTransfers), a roster line for the other powers in view, and every
+//     other power by name and size in one paragraph, or
+//     in one line where the lookup functions can give any of them;
+//   - the polities' codes and former names for the powers in view, and the lore
+//     only where it moved since the reference the cached opening carries;
+//   - the tags grouped, so every tagged country fits.
+const TIERED_TERRITORY_REGIONS = 120;
+
+// What a skip's one-line list says of a power out of view, after its region
+// count: who leads it, whom it is at war with, its alliances and agreements,
+// its latest peace, and who holds its land or whose land it holds. These are
+// what a model is asked of a power it is not shown in full: in the quality A/B
+// of 2026-11-07 the new prompt answered "unknown" for five of six such facts
+// that the old one, which listed more powers' regions, had right. Each field
+// only where the records have it; a power with nothing on record is its name
+// and count, as before. `regions`: the rendered catalog, whose `country` is a
+// region's owner on the scenario's map.
+const ONE_LINE_NAMES = 3;
+const ALLIANCE_TYPES = /alliance|defen[cs]e|military|security|mutual/i;
+export const buildOneLineDetail = (world, regions, { polityNames = {}, bakedAliases = buildOwnerAliasMap(world?.polityOverrides) } = {}) => {
+  const fold = (value) => normalizeString(value).toLowerCase();
+  const overrides = world?.regionOwnershipOverrides ?? {};
+  // Every name a power goes by, as the ledgers write it.
+  const records = Object.entries(world?.polityOverrides ?? {});
+  const namesOf = (label) => {
+    const names = new Set([fold(label), fold(polityNames[fold(label)])]);
+    for (const [key, record] of records) {
+      const own = [key, record?.name, record?.code, toCountryName(normalizeString(record?.code))].map(fold);
+      if (!own.includes(fold(label))) continue;
+      for (const name of [...own, ...normalizeArray(record?.aliases).map(fold), ...normalizeArray(record?.formerNames).map(fold)]) names.add(name);
+    }
+    names.delete("");
+    return names;
+  };
+  const listed = (items) => (items.length > ONE_LINE_NAMES
+    ? `${items.slice(0, ONE_LINE_NAMES).join(", ")} and ${items.length - ONE_LINE_NAMES} more`
+    : items.join(", "));
+  // Who holds whose land: by each region's owner on the scenario's map.
+  const lost = new Map();
+  const taken = new Map();
+  for (const region of regions) {
+    const base = region?.country ? canonicalOwnerName(region.country, bakedAliases) : "";
+    const holder = regionOwnerName(region, overrides);
+    if (!base || !holder || fold(base) === fold(holder)) continue;
+    const add = (map, key, other) => {
+      const counts = map.get(fold(key)) ?? new Map();
+      counts.set(other, (counts.get(other) ?? 0) + 1);
+      map.set(fold(key), counts);
+    };
+    add(lost, base, holder);
+    add(taken, holder, base);
+  }
+  const counted = (counts, say) => [...(counts ?? new Map())]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 2)
+    .map(([other, count]) => say(count, other));
+  const activeWars = normalizeArray(world?.wars).filter((war) => !/ended|concluded|closed/i.test(String(war?.status ?? "")));
+  const agreements = normalizeArray(world?.agreements).filter((entry) => !normalizeString(entry?.status) || /active|in force/i.test(entry.status));
+  const treaties = normalizeArray(world?.peaceTreaties);
+  return (label) => {
+    const names = namesOf(label);
+    const is = (name) => names.has(fold(name));
+    const parts = [];
+    const leader = leaderOf(world, label);
+    if (leader?.name) parts.push(`led by ${leader.name}`);
+    const foes = [];
+    for (const war of activeWars) {
+      const sideA = normalizeArray(war?.sideA).map(normalizeString);
+      const sideB = normalizeArray(war?.sideB).map(normalizeString);
+      const other = sideA.some(is) ? sideB : sideB.some(is) ? sideA : null;
+      for (const name of other ?? []) if (name && !foes.includes(name)) foes.push(name);
+    }
+    if (foes.length) parts.push(`at war with ${listed(foes)}`);
+    const allies = [];
+    const pacts = [];
+    for (const entry of agreements) {
+      const parties = normalizeArray(entry?.parties).map(normalizeString);
+      if (!parties.some(is)) continue;
+      const others = parties.filter((name) => name && !is(name));
+      if (ALLIANCE_TYPES.test(`${entry?.type ?? ""}`)) for (const name of others) { if (!allies.includes(name)) allies.push(name); }
+      else if (normalizeString(entry?.title)) pacts.push(`${normalizeString(entry.title)}${others.length ? ` with ${listed(others)}` : ""}`);
+    }
+    if (allies.length) parts.push(`allied with ${listed(allies)}`);
+    if (pacts.length) parts.push(`${pacts.length === 1 ? "agreement" : "agreements"}: ${listed(pacts)}`);
+    const peace = [...treaties].reverse().find((treaty) => normalizeArray(treaty?.sides).flat().some(is) || is(treaty?.from) || is(treaty?.to));
+    if (peace) {
+      const other = normalizeArray(peace.sides).flat().map(normalizeString).find((name) => name && !is(name)) || (is(peace.from) ? peace.to : peace.from);
+      if (normalizeString(other)) parts.push(`at peace with ${normalizeString(other)} since ${normalizeString(peace.date) || "the treaty"}`);
+    }
+    parts.push(...counted(lost.get(fold(label)), (count, other) => `${count} of its regions held by ${other}`));
+    parts.push(...counted(taken.get(fold(label)), (count, other) => `holds ${count} of ${other}'s`));
+    return parts.join("; ");
+  };
+};
+// The powers in view whose regions the budget left out. Where a place in one is
+// named: a skip is one request, and a region name the map does not have is
+// dropped, not corrected.
+export const TIERED_ROSTER_INTRO =
+  "Other powers in play, by full name (every owner field takes the name exactly as written here). Their regions are not listed: "
+  + "place an event in one by a city of [City Coordinates] or as \"country: <name>\", and name a region of it that changes hands "
+  + "as the map would spell it.";
+const TIERED_REST_POWERS = 80;
+const TIERED_TAG_CHARS = 4000;
+const TIERED_POLITIES = 24;
+const buildTieredWorldSummary = async (bundle, world, regions, { regionListsViaTools = false, countsOnly = false, nationTags = null, briefed = false, focus: given = null } = {}) => {
+  const regionLookup = new Map(regions.map((region) => [region.id, region]));
+  const bakedAliases = buildOwnerAliasMap(world.polityOverrides);
+  // The regions of this map that changed hands. An override for a region the
+  // map does not have (a save carried over from an older map) names nothing a
+  // skip can use, and would be printed as its id.
+  const territoryEntries = Object.entries(world.regionOwnershipOverrides).filter(([regionId, ownerCode]) => {
+    const region = regionLookup.get(regionId);
+    if (!region) return false;
+    const baked = normalizeString(region.country);
+    if (!baked) return true;
+    return canonicalOwnerName(baked, bakedAliases).toLowerCase() !== canonicalOwnerName(ownerCode, bakedAliases).toLowerCase();
+  });
+  const polities = Object.values(world.polityOverrides);
+  const playerName = toCountryName(normalizeString(bundle.game.country));
+  const actorNames = polities.map((entry) => toCountryName(normalizeString(entry?.code))).filter(Boolean);
+  const polityNames = polityNamesOf(regions, polities);
+  const baseTags = nationTags ?? await getNationTags().catch(() => ({}));
+  const regionRows = await loadScenarioRegionCatalog().catch(() => null) ?? regions;
+  const focus = given ?? buildPromptFocus(bundle, regions, world, { playerName, actorNames, polityNames, regionRows, baseTags });
+  const inView = focus.inView;
+  const isInView = (name) => inView.has(normalizeString(name).toLowerCase());
+
+  // Who lost what to whom, the moves of the powers in view first.
+  const leanSummary = regionListsViaTools && countsOnly;
+  const byMove = new Map();
+  for (const [regionId, ownerCode] of territoryEntries) {
+    const region = regionLookup.get(regionId);
+    const from = region?.country ? canonicalOwnerName(region.country, bakedAliases) : "";
+    const key = `${from.toLowerCase()}|${normalizeString(ownerCode).toLowerCase()}`;
+    const move = byMove.get(key) ?? { from, to: ownerCode, names: [] };
+    move.names.push(region.name || regionId);
+    byMove.set(key, move);
+  }
+  const moves = [...byMove.values()].sort((a, b) =>
+    Number(isInView(b.to) || isInView(b.from)) - Number(isInView(a.to) || isInView(a.from))
+    || b.names.length - a.names.length);
+  let room = leanSummary ? LEAN_TERRITORY_CHANGES : TIERED_TERRITORY_REGIONS;
+  let unlisted = 0;
+  const moveLines = [];
+  for (const move of moves) {
+    const shown = move.names.slice(0, Math.max(0, room));
+    room -= shown.length;
+    unlisted += move.names.length - shown.length;
+    if (shown.length) moveLines.push(`- ${move.from || "no former owner"} -> ${move.to}: ${shown.join(", ")}${move.names.length > shown.length ? `, (+${move.names.length - shown.length} more)` : ""}`);
+  }
+  const territorySummary = territoryEntries.length === 0
+    ? "No territorial changes from the base scenario are currently recorded."
+    : [
+      ...moveLines,
+      ...(unlisted > 0
+        ? [`(+${unlisted} more changed region${unlisted === 1 ? "" : "s"}; ${regionListsViaTools ? "region_info and map_around say who holds a region now" : "the ownership below is the map as it stands"})`]
+        : []),
+    ].join("\n");
+
+  const unchanged = Boolean(focus.changed);
+  // The region names a regionTransfers entry or an event's place copies: the
+  // powers in view first, then, while the names listed stay under the budget
+  // (buildRegionOwnershipText focusTotalCap), the next powers by rank, as the
+  // untiered summary does. A small campaign whose powers in view hold few
+  // regions otherwise listed far fewer names than it may, and its events named
+  // regions of powers it never listed (the quality A/B of 2026-11-07).
+  const regionOwnershipCatalog = buildRegionOwnershipText(regions, world.regionOwnershipOverrides, {
+    focusCodes: [...focus.labels.filter(isInView), ...focus.labels.filter((label) => !isInView(label))],
+    polityNames,
+    rosterDetail: inView,
+    rosterIntro: TIERED_ROSTER_INTRO,
+    restIntro: unchanged
+      ? "Every other power, none of them changed since the last skip, with the regions it holds and what the records say of it:"
+      : "Every other power, with the regions it holds and what the records say of it:",
+    restDetail: buildOneLineDetail(world, regions, { polityNames, bakedAliases }),
+    ...(regionListsViaTools
+      ? {
+          focusTotalCap: 0,
+          ...(countsOnly ? { territories: false } : {}),
+          restLine: (count) => `${unchanged ? "Unchanged since the last skip and not in play" : "Not in play this turn"}: ${count} other power${count === 1 ? "" : "s"}; list_regions and power_info give any of them.`,
+        }
+      : { rosterCap: TIERED_REST_POWERS }),
+  });
+
+  const waterTypes = waterTypeIds(world.regionTypes);
+  const touching = hasUnruledLand(regionRows, world.regionOwnershipOverrides, { waterTypes })
+    ? await regionBordersOfThisMap()
+    : null;
+  const unruledBorders = buildUnruledBordersText(regionRows, world.regionOwnershipOverrides, { waterTypes, touching, firstOwners: inView });
+
+  // A polity's code, its other names and its lore: the lore is in the cached
+  // opening (buildPolityLoreReference) unless it moved since; a code that is
+  // the name and no other name say nothing, and a colour is the map's.
+  const since = notesSinceReference(world);
+  const polityLines = [];
+  for (const entry of orderByFocus(polities, (record) => [record.code, toCountryName(normalizeString(record.code)), record.name], focus.labels)) {
+    const name = normalizeString(entry.name) || normalizeString(entry.code);
+    const fold = (value) => normalizeString(value).toLowerCase();
+    const aliases = normalizeArray(entry.aliases).map(normalizeString)
+      .filter((alias) => alias && fold(alias) !== fold(name) && fold(alias) !== fold(entry.code));
+    const moved = since[fold(name)] ?? null;
+    const named = isInView(name) || isInView(toCountryName(normalizeString(entry.code)));
+    const coded = fold(entry.code) !== fold(name);
+    if (!moved && !(named && (coded || aliases.length))) continue;
+    polityLines.push(`- ${entry.code}${coded ? `: ${name}` : ""}${aliases.length ? ` (also called ${aliases.join(", ")})` : ""}${moved ? ` — ${moved.note}` : ""}`);
+  }
+  const politySummary = polityLines.slice(0, TIERED_POLITIES).join("\n")
+    + (polityLines.length > TIERED_POLITIES ? `\n(+${polityLines.length - TIERED_POLITIES} more polities not listed)` : "");
+
+  // What each country is, grouped by the same tags, the powers in view first.
+  const tagged = resolveAllCountryTags(baseTags, world);
+  const byTags = new Map();
+  for (const code of orderByFocus(Object.keys(tagged), (key) => [key, toCountryName(key)], focus.labels)) {
+    const key = tagged[code].join(", ");
+    if (!byTags.has(key)) byTags.set(key, []);
+    byTags.get(key).push(code);
+  }
+  const tagLines = [];
+  let tagChars = 0;
+  let tagsLeft = 0;
+  for (const [key, codes] of byTags) {
+    const line = `- ${key}: ${codes.join(", ")}`;
+    if (tagChars + line.length > TIERED_TAG_CHARS) {
+      tagsLeft += codes.length;
+      continue;
+    }
+    tagLines.push(line);
+    tagChars += line.length + 1;
+  }
+  const tagSummary = byTags.size === 0
+    ? "No countries have defining tags."
+    : tagLines.join("\n") + (tagsLeft ? `\n(+${tagsLeft} more tagged countries not listed)` : "");
+  const playerTags = resolveCountryTags(baseTags, world, bundle.game.country);
+
+  const header = briefed
+    ? (playerTags.length ? [`${bundle.game.country || "The player's polity"} is: ${playerTags.join(", ")}`, ""] : [])
+    : [
+      `Player polity: ${bundle.game.country || "Unknown polity"}${playerTags.length ? ` (${playerTags.join(", ")})` : ""}`,
+      `Current round: ${bundle.game.round || 1}`,
+      `Current date: ${bundle.game.gameDate || "unknown"}`,
+      `Language: ${readingLanguageName(world.language || bundle.game.language)}`,
+      `Difficulty: ${bundle.game.difficulty || "standard"}`,
+      `World before round one: ${world.startingTimelineText || "No world briefing provided."}`,
+      `Simulation rules: ${world.simulationRules || "No extra simulation rules were provided."}`,
+      "",
+    ];
+  return [
+    ...header,
+    "Territorial changes from the base scenario (former owner -> holder now: regions):",
+    territorySummary,
+    "",
+    regionListsViaTools
+      ? "Map ownership by power (region counts only; region names and ids come from the lookup functions find_region, list_regions and map_around):"
+      : "Map ownership (this IS the comma-separated region list referenced above — the "
+        + "region vocabulary for regionTransfers):",
+    regionOwnershipCatalog,
+    // Who holds a region this description never names: the scenario's map
+    // says, but for the changes above (the quality A/B of 2026-11-07: asked who
+    // holds a region of a power shown in a line, the model said "unknown").
+    ...(regionListsViaTools ? [] : ["", unlisted > 0
+      ? `A region named nowhere in this description is held by the power it belongs to on the scenario's map, unless it is one of the ${unlisted} changed regions left out of the territorial changes above.`
+      : "A region named nowhere in this description is held by the power it belongs to on the scenario's map: every region that changed hands is among the territorial changes above."]),
+    ...(unruledBorders ? ["", unruledBorders] : []),
+    ...(politySummary
+      ? ["", "Polity codes and other names for the powers in view, and any lore written since the [Polity Lore] above:", politySummary]
+      : []),
+    "",
+    "What each country is (ideology, alignment, posture), countries grouped by their tags. Treat these as binding "
+      + "characterisation: act, speak and react in keeping with them, and only change "
+      + "them via polityChanges when events genuinely reshape a country.",
+    tagSummary,
+    "",
+    world.activeInteractive
+      ? `Interactive event in progress: ${world.activeInteractive.title || "untitled"} - ${world.activeInteractive.premise || world.activeInteractive.opening || ""}`
+      : "No interactive event in progress.",
+  ].join("\n");
+};
+
+// `briefed`: the prompt states the player, the round, the date, the language,
+// the difficulty, the briefing and the scenario's rules itself (a time skip's
+// template does), so the summary leaves them out and keeps only the player's
+// tags. The tasks whose only briefing is this summary (actions,
+// countryStatSheet, idleDiplomacy: promptDedupe.js) keep them.
 export const buildWorldSummary = async (bundle, regionCatalog = null, {
   regionListsViaTools = false,
+  countsOnly = false,
   conversation = false,
   speakingAs = "",
   nationTags = null,
+  briefed = false,
+  // A time skip's tiers (buildPromptFocus): the powers in view in full, every
+  // other power in a line, the territorial changes and tags grouped, and the
+  // polities' lore once, in the cached opening (buildPolityLoreReference). A
+  // focus the caller already built is passed as `focus`.
+  tiers = false,
+  focus = null,
 } = {}) => {
   const world = normalizeWorldState(bundle.world);
   const regions = filterToRenderedRegions(regionCatalog ?? await loadRegions(), world);
+  if (tiers && !conversation) {
+    return buildTieredWorldSummary(bundle, world, regions, { regionListsViaTools, countsOnly, nationTags, briefed, focus });
+  }
   const regionLookup = new Map(regions.map((region) => [region.id, region]));
   // Only overrides that CHANGE an owner are changes: on a hand-drawn world every
   // region carries an override equal to its baked owner, and listing sixty of
@@ -1724,13 +2444,18 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
     if (!baked) return true;
     return canonicalOwnerName(baked, bakedAliases).toLowerCase() !== canonicalOwnerName(ownerCode, bakedAliases).toLowerCase();
   });
+  const leanSummary = regionListsViaTools && countsOnly;
+  const territoryCap = leanSummary ? LEAN_TERRITORY_CHANGES : 60;
   const territorySummary = territoryEntries.length === 0
     ? "No territorial changes from the base scenario are currently recorded."
-    : territoryEntries.slice(0, 60).map(([regionId, ownerCode]) => {
+    : territoryEntries.slice(0, territoryCap).map(([regionId, ownerCode]) => {
       const region = regionLookup.get(regionId);
       const bakedOwner = region?.country ? canonicalOwnerName(region.country, bakedAliases) : "";
       return `- ${region?.name || regionId}${bakedOwner ? ` (${bakedOwner})` : ""} -> ${ownerCode}`;
-    }).join("\n");
+    }).join("\n")
+      + (leanSummary && territoryEntries.length > territoryCap
+        ? `\n(+${territoryEntries.length - territoryCap} more; region_info and map_around say who holds a region now)`
+        : "");
   const polities = Object.values(world.polityOverrides);
 
   // The region vocabulary the jump prompt promises ("every ... region ... separated
@@ -1804,7 +2529,7 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
     : buildRegionOwnershipText(regions, world.regionOwnershipOverrides, {
         focusCodes,
         polityNames,
-        ...(regionListsViaTools ? { focusTotalCap: 0, rosterCap: 120 } : {}),
+        ...(regionListsViaTools ? { focusTotalCap: 0, rosterCap: 120, ...(countsOnly ? { territories: false } : {}) } : {}),
       });
 
   // The wild land beside each power (regionVocab.js): the lists above name only
@@ -1826,15 +2551,20 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
     unruledBorders = buildUnruledBordersText(regionRows, world.regionOwnershipOverrides, { waterTypes, touching });
   }
 
+  const header = briefed
+    ? (playerTags.length ? [`${bundle.game.country || "The player's polity"} is: ${playerTags.join(", ")}`, ""] : [])
+    : [
+      `Player polity: ${bundle.game.country || "Unknown polity"}${playerTags.length ? ` (${playerTags.join(", ")})` : ""}`,
+      `Current round: ${bundle.game.round || 1}`,
+      `Current date: ${bundle.game.gameDate || "unknown"}`,
+      `Language: ${readingLanguageName(world.language || bundle.game.language, { chat: conversation })}`,
+      `Difficulty: ${bundle.game.difficulty || "standard"}`,
+      `World before round one: ${world.startingTimelineText || "No world briefing provided."}`,
+      `Simulation rules: ${world.simulationRules || "No extra simulation rules were provided."}`,
+      "",
+    ];
   return [
-    `Player polity: ${bundle.game.country || "Unknown polity"}${playerTags.length ? ` (${playerTags.join(", ")})` : ""}`,
-    `Current round: ${bundle.game.round || 1}`,
-    `Current date: ${bundle.game.gameDate || "unknown"}`,
-    `Language: ${readingLanguageName(world.language || bundle.game.language, { chat: conversation })}`,
-    `Difficulty: ${bundle.game.difficulty || "standard"}`,
-    `World before round one: ${world.startingTimelineText || "No world briefing provided."}`,
-    `Simulation rules: ${world.simulationRules || "No extra simulation rules were provided."}`,
-    "",
+    ...header,
     "Territorial changes from the base scenario:",
     territorySummary,
     "",
@@ -1893,9 +2623,25 @@ export const buildPromptContext = async (bundle, {
   gameMasterRequest = "",
   longEventHistoryMaxChars = 0,
   longEventLimit = 24,
+  // The past events found nearest to this turn on the player's device
+  // ([{ id, score }], relatedEventsSearch.js), or null: rendered under the
+  // recent events, never one shown there (relatedEvents.js).
+  relatedEvents = null,
+  // The chunks of the older conversations kept on file found nearest to this
+  // task ([{ id: "chatId:chunk", score }], relatedEventsSearch.js findPastTalks),
+  // or null: rendered after the chats sent, as PAST DIPLOMACY (chatArchive.js).
+  pastTalks = null,
+  // The conversation the player has open, which is never put away
+  // (runtime/openConversation.js); the panel's own by default.
+  openChatId = null,
   // The task has the lookup functions: the prompt keeps the overview and the
   // functions carry the detail (region lists, older events, full chats).
   lookups = false,
+  // ...and My key has no request limit is on (requestBudget.js): the model may ask more
+  // rounds, so the overview is slimmer still. Four recent events instead of
+  // eight, region counts only, fewer territorial changes. The history document
+  // is never cut for it. Read only with `lookups`.
+  leanLookups = false,
   // The advisor or a leader in conversation (buildPromptVariables, main.jsx):
   // the world summary's map section is sized and worded for talk, not for a
   // jump's regionTransfers (buildWorldSummary).
@@ -1937,14 +2683,50 @@ export const buildPromptContext = async (bundle, {
     "numberOfRegions",
   );
   const regionCatalog = needsRegionCatalog ? (mapSource?.regionCatalog ?? await loadRegions()) : [];
+  // The region names of the events' impact notes, made once when first wanted.
+  let eventNamer = null;
+  const eventRegionName = async () => (eventNamer ??= await promptRegionNamer(bundle.world, mapSource?.regionCatalog ?? regionCatalog));
+
+  // A time skip shows in full what the turn is about and the rest in a line
+  // (buildPromptFocus): the world summary, the units and the structures here,
+  // the occupied regions and the groups in gameplay.js, all from one focus.
+  const skipTiers = SKIP_TASKS.has(taskKey) && !mapSource;
+  let focus = null;
+  if (skipTiers && wants("worldSummary", "worldSummaryNoCity", "unitsSummary", "markersSummary")) {
+    const world = normalizeWorldState(bundle.world);
+    const tierCatalog = needsRegionCatalog ? regionCatalog : await loadRegions();
+    const regions = filterToRenderedRegions(tierCatalog, world);
+    const polities = Object.values(world.polityOverrides);
+    focus = buildPromptFocus(bundle, regions, world, {
+      actorNames: polities.map((entry) => toCountryName(normalizeString(entry?.code))).filter(Boolean),
+      polityNames: polityNamesOf(regions, polities),
+      regionRows: await loadScenarioRegionCatalog().catch(() => null),
+      baseTags: await getNationTags().catch(() => ({})),
+    });
+    // Not a template variable: kept off the variables' keys (and so off what
+    // diagnostics and the demand checks count), for gameplay.js to read.
+    Object.defineProperty(result, "promptFocus", { value: focus, enumerable: false });
+  }
+  // Ends with its own blank line, or is "": the template runs it into the next heading.
+  if (wants("polityLoreReference")) {
+    const lore = buildPolityLoreReference(normalizeWorldState(bundle.world));
+    result.polityLoreReference = lore
+      ? `[Polity Lore]\nWho each polity is, in its own lore. Lore written since is under [Game Map Description].\n${lore}\n\n`
+      : "";
+  }
 
   let worldSummary = "";
   if (wants("worldSummary", "worldSummaryNoCity")) {
     worldSummary = await buildWorldSummary(bundle, regionCatalog, {
+      tiers: skipTiers,
+      focus,
       regionListsViaTools: lookups,
+      countsOnly: Boolean(lookups && leanLookups),
       conversation,
       speakingAs: respondingPolityName,
       nationTags: mapSource?.nationTags ?? null,
+      // A skip's template states the briefing, the round and the date itself.
+      briefed: SKIP_TASKS.has(taskKey),
     });
   }
 
@@ -1956,6 +2738,7 @@ export const buildPromptContext = async (bundle, {
   await pause?.();
   if (wants("recentEvents")) {
     result.recentEvents = buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate,
+      regionName: await eventRegionName(),
       limit: eventLimit,
       maxChars: eventHistoryMaxChars,
       world: bundle.world,
@@ -1965,6 +2748,7 @@ export const buildPromptContext = async (bundle, {
   // Long-history attention is computed only for tasks that actually render one of
   // its outputs. The selection/budget semantics are unchanged from 9.4A.
   const needsLongHistory = wants(
+    "campaignHistory",
     "consolidatedHistory",
     "historicalAnchors",
     "historicalAttentionStatus",
@@ -2018,20 +2802,44 @@ export const buildPromptContext = async (bundle, {
         : `inactive: full consolidated history ${fullConsolidatedHistory.length} chars${historicalAnchorThreshold ? ` <= ${historicalAnchorThreshold} activation chars` : ""}`;
 
     put("consolidatedHistory", consolidatedHistory);
+    // Ends with its own blank line: the template runs it into the next heading.
+    if (wants("campaignHistory")) {
+      result.campaignHistory = SKIP_TASKS.has(taskKey)
+        ? `[The Story So Far]\nThe campaign's history before the recent events below, kept across consolidations.\n${consolidatedHistory}\n\n`
+        : "";
+    }
     put("historicalAnchors", historicalAnchors);
     put("historicalAttentionStatus", historicalAttentionStatus);
 
     if (wants("recentEventsLong")) {
+      // With lookups, the last eight events in view and recent_events for
+      // the rest (four with no request limit); a caller's own tighter
+      // cap still wins.
+      const recentEventLimit = lookups ? Math.min(longEventLimit, leanLookups ? LEAN_RECENT_EVENTS : 8) : longEventLimit;
+      const recentAlsoListed = SKIP_TASKS.has(taskKey) && !lookups ? 40 : 0;
       const campaignRecentEvents = buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate,
-        // With lookups, the last eight events in view and recent_events for
-        // the rest; a caller's own tighter cap still wins.
-        limit: lookups ? Math.min(longEventLimit, 8) : longEventLimit,
+        regionName: await eventRegionName(),
+        limit: recentEventLimit,
         maxChars: lookups && !longEventHistoryMaxChars ? 3000 : longEventHistoryMaxChars,
         world: bundle.world,
+        // A skip: the newest skip's events in full, the older ones by digest,
+        // and a line each for those the ranking left out (with the lookup
+        // functions, recent_events has them).
+        digests: SKIP_TASKS.has(taskKey),
+        alsoListed: recentAlsoListed,
       });
+      // A time skip carries the story so far in its cached opening
+      // (${CAMPAIGN_HISTORY}, below): it changes only when a fold rewrites it,
+      // so the skips between two folds read it from the provider's cache.
+      const storyAbove = SKIP_TASKS.has(taskKey) && wants("campaignHistory");
+      const relatedPastEvents = relatedEvents ? renderRelatedPastEvents(relatedEvents, relatedEventsWindow(bundle, {
+        currentDate: bundle.game?.gameDate,
+        limit: recentEventLimit,
+        alsoListed: recentAlsoListed,
+      })) : "";
       result.recentEventsLong = [
         "STORY SO FAR:",
-        consolidatedHistory,
+        storyAbove ? "Under [The Story So Far] above." : consolidatedHistory,
         ...(historicalAnchors
           ? [
               "",
@@ -2043,6 +2851,7 @@ export const buildPromptContext = async (bundle, {
         "",
         "RECENT EVENTS:",
         campaignRecentEvents,
+        ...(relatedPastEvents ? ["", relatedPastEvents] : []),
       ].join("\n");
     }
   }
@@ -2057,7 +2866,7 @@ export const buildPromptContext = async (bundle, {
     result.resolvedActions = buildActionHistoryText(bundle.actions, { includeResolved: true, includePlanned: false });
   }
   if (wants("plannedActions")) {
-    result.plannedActions = buildActionHistoryText(bundle.actions);
+    result.plannedActions = buildActionHistoryText(bundle.actions, { ids: SKIP_TASKS.has(taskKey) });
   }
 
   // Chat normalization/sorting can become substantial in long campaigns. Do it
@@ -2075,6 +2884,10 @@ export const buildPromptContext = async (bundle, {
   ) || (wants("chatsToConsolidate") && !chatsToConsolidate);
 
   let promptChats = [];
+  // The chats kept on file (chatArchive.js): not sent, but counted, their
+  // binding word kept, and the excerpts that bear on this task recalled.
+  let archivedChats = [];
+  let unfoldedVisibleChats = [];
   let currentChat = null;
   if (needsChatState) {
     const normalizedChat =
@@ -2087,7 +2900,14 @@ export const buildPromptContext = async (bundle, {
     // Every chat-derived variable - chat, chatHistory, chatSummary,
     // diplomaticContinuity, chatHistoryLong - comes from this one list, so the
     // visibility rule is applied once, here, and they cannot disagree.
-    promptChats = filterChatsVisibleTo(sortDiplomaticChatsByRecentActivity(unconsolidatedChats), chatVisibleTo);
+    unfoldedVisibleChats = filterChatsVisibleTo(sortDiplomaticChatsByRecentActivity(unconsolidatedChats), chatVisibleTo);
+    // A chat not used in more than a game year and for at least four skips is
+    // kept on file instead of sent (chatArchive.js isArchivedChat).
+    const split = partitionChats(unfoldedVisibleChats, chatArchiveContext(bundle, {
+      openChatId: openChatId ?? (normalizedChat?.id || openConversationId()),
+    }));
+    promptChats = split.active;
+    archivedChats = split.archived;
     currentChat = normalizedChat ?? promptChats[0] ?? null;
   }
 
@@ -2097,13 +2917,21 @@ export const buildPromptContext = async (bundle, {
       ? buildSingleChatHistoryText(currentChat, { messageLimit: 18 })
       : "No chat history.";
   }
+  // A time skip without the lookup functions gets each thread once: its memory
+  // and its last words in [Diplomacy So Far], and no separate memory block
+  // repeating both (buildDetailedChatHistoryText memoryThreads). With them, the
+  // short view stays short and the memory keeps its own block.
+  const chatsOnce = SKIP_TASKS.has(taskKey) && !lookups;
   if (wants("chatHistoryLong")) {
     result.chatHistoryLong = buildDetailedChatHistoryText(promptChats, {
       limit: chatLimit,
       // With lookups, a short view; chat_history has the transcripts.
       maxChars: lookups && !chatHistoryLongMaxChars ? 1500 : chatHistoryLongMaxChars,
       visibleTo: chatVisibleTo,
+      ...(chatsOnce ? { memoryThreads: 12 } : {}),
     });
+    const onFile = renderArchivedChats(archivedChats, pastTalks, { player: bundle.game?.country, lookups });
+    if (onFile) result.chatHistoryLong = `${result.chatHistoryLong}\n\n${onFile}`;
   }
   if (wants("chatParticipants")) {
     result.chatParticipants =
@@ -2111,7 +2939,7 @@ export const buildPromptContext = async (bundle, {
   }
   if (wants("chatSummary")) result.chatSummary = buildChatSummaryText(promptChats);
   if (wants("diplomaticContinuity")) {
-    result.diplomaticContinuity = buildDiplomaticContinuityText(promptChats);
+    result.diplomaticContinuity = chatsOnce ? "" : buildDiplomaticContinuityText(promptChats);
   }
   if (wants("lastSpeaker")) {
     result.lastSpeaker = currentChat?.messages?.at(-1)?.speaker || "";
@@ -2125,12 +2953,13 @@ export const buildPromptContext = async (bundle, {
   if (wants("chatsToConsolidate")) {
     result.chatsToConsolidate =
       chatsToConsolidate ||
-      buildDetailedChatHistoryText(promptChats, { limit: 12, messageLimit: 50 });
+      // Every chat not yet folded, those kept on file too: a fold must not lose them.
+      buildDetailedChatHistoryText(unfoldedVisibleChats, { limit: 12, messageLimit: 50 });
   }
 
   if (wants("eventsToConsolidate")) {
     result.eventsToConsolidate =
-      eventsToConsolidate || buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate, limit: 12 });
+      eventsToConsolidate || buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate, limit: 12, regionName: await eventRegionName() });
   }
 
   if (wants("advisorMessages")) {
@@ -2177,6 +3006,7 @@ export const buildPromptContext = async (bundle, {
     const markerAttention = buildMarkerAttentionEvidence(bundle, { chat });
     result.markersSummary = buildMarkersSummaryText(bundle.world, {
       ...markerAttention,
+      inView: focus?.inView ?? null,
       limit: markerAttentionLimitForTask(taskKey),
       seed: `${taskKey || "compatibility"}|${target}|${bundle.game.round || 1}|${bundle.game.country || ""}`,
     });
@@ -2235,6 +3065,7 @@ export const buildPromptContext = async (bundle, {
       actions: bundle.actions,
       chats: bundle.chats,
       events: bundle.events,
+      inView: focus?.inView ?? null,
     });
     put("playerBattalionSummaries", unitsText);
     put("unitsSummary", unitsText);
@@ -2278,7 +3109,7 @@ export const buildPromptContext = async (bundle, {
     result.plannedActionsWithIds = buildPlannedActionsWithIdsText(bundle.actions);
   }
   if (wants("projectsSummary")) {
-    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game);
+    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game, { compact: SKIP_TASKS.has(taskKey) });
   }
 
   const worldBeforeRoundOne =

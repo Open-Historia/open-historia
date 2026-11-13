@@ -26,6 +26,7 @@ const { createPayloadUpdater } = require("./payloadUpdate.cjs");
 const payloadBoot = require("./payloadBoot.cjs");
 const { clearOtherPortsCaches } = require("./staleCaches.cjs");
 const { fetchAppFileOnce } = require("./appFile.cjs");
+const { configureUiWords, uiWord } = require("./uiWords.cjs");
 
 // The map is drawn with WebGL, and without it the game is a black window with
 // "WebGL Not Available" on it (seen on a player's Mac, 2026-10-12, in the middle
@@ -87,6 +88,14 @@ const BETA_UPDATE_MANIFEST =
 const BETA_DOWNLOAD_URL = process.platform === "win32"
   ? "https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-Setup.exe"
   : "https://github.com/Open-Historia/open-historia/releases/tag/desktop-beta";
+// The native app (the Godot build), offered on the same screen and recommended
+// there ("make it say native or beta ... with the native button being
+// highlighted"): its installer for this system, as the website links it.
+const NATIVE_DOWNLOAD_URL = process.platform === "win32"
+  ? "https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-Setup.exe"
+  : process.platform === "darwin"
+    ? "https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-macOS.dmg"
+    : "https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-Linux-x86_64.tar.gz";
 
 // Everything the app writes lives under Electron's per-user data directory.
 // Program Files is read-only for a normal user and the app bundle is read-only
@@ -121,6 +130,9 @@ const ASSETS_DIR = IS_BETA && app.isPackaged
 // the stable app's, so the map never rendered however often it downloaded.
 process.env.OH_DATA_DIR = DATA_DIR;
 process.env.OH_ASSETS_DIR = ASSETS_DIR;
+// The menus and dialogs of this process, in the language the player chose in
+// the game (electron/uiWords.cjs), from the packs the server serves the page.
+configureUiWords({ dataDir: DATA_DIR, langDirs: [path.join(__dirname, "..", "dist", "lang"), path.join(__dirname, "..", "public", "lang")] });
 
 // Read by server.js, which startServer() imports into THIS process, so setting it
 // here is enough — there is no second process to pass it to. A stable build sets
@@ -393,8 +405,8 @@ const installAutoUpdater = () => {
             : setUpdateState({
                 state: "error",
                 error: result
-                  ? "No newer version in the update feed."
-                  : "This build cannot replace itself in place.",
+                  ? uiWord("No newer version in the update feed.")
+                  : uiWord("This build cannot replace itself in place."),
               }),
         )
         .catch((error) => setUpdateState({ state: "error", error: String(error?.message || error) }));
@@ -782,7 +794,7 @@ const attachEditingContextMenu = (win) => {
 
     if (misspelledWord) {
       if (dictionarySuggestions.length === 0) {
-        menu.append(new MenuItem({ label: "No spelling suggestions", enabled: false }));
+        menu.append(new MenuItem({ label: uiWord("No spelling suggestions"), enabled: false }));
       } else {
         for (const suggestion of dictionarySuggestions) {
           menu.append(new MenuItem({
@@ -792,20 +804,20 @@ const attachEditingContextMenu = (win) => {
         }
       }
       menu.append(new MenuItem({
-        label: "Add to dictionary",
+        label: uiWord("Add to dictionary"),
         click: () => win.webContents.session.addWordToSpellCheckerDictionary(misspelledWord),
       }));
       menu.append(new MenuItem({ type: "separator" }));
     }
 
-    if (editFlags.canUndo) menu.append(new MenuItem({ label: "Undo", role: "undo" }));
-    if (editFlags.canRedo) menu.append(new MenuItem({ label: "Redo", role: "redo" }));
+    if (editFlags.canUndo) menu.append(new MenuItem({ label: uiWord("Undo"), role: "undo" }));
+    if (editFlags.canRedo) menu.append(new MenuItem({ label: uiWord("Redo"), role: "redo" }));
     if (editFlags.canUndo || editFlags.canRedo) menu.append(new MenuItem({ type: "separator" }));
 
-    if (editFlags.canCut) menu.append(new MenuItem({ label: "Cut", role: "cut" }));
-    if (editFlags.canCopy) menu.append(new MenuItem({ label: "Copy", role: "copy" }));
-    if (editFlags.canPaste) menu.append(new MenuItem({ label: "Paste", role: "paste" }));
-    if (editFlags.canSelectAll) menu.append(new MenuItem({ label: "Select All", role: "selectAll" }));
+    if (editFlags.canCut) menu.append(new MenuItem({ label: uiWord("Cut"), role: "cut" }));
+    if (editFlags.canCopy) menu.append(new MenuItem({ label: uiWord("Copy"), role: "copy" }));
+    if (editFlags.canPaste) menu.append(new MenuItem({ label: uiWord("Paste"), role: "paste" }));
+    if (editFlags.canSelectAll) menu.append(new MenuItem({ label: uiWord("Select All"), role: "selectAll" }));
 
     // Right-clicking blank space with nothing selected/editable earns none of
     // the above — popping up an empty menu would just be a dead flash. Pinned
@@ -826,8 +838,8 @@ const attachEditingContextMenu = (win) => {
 let quitting = false;
 
 const pageGoneWording = (reason, name) => ({
-  message: reason === "oom" ? `${name} ran out of memory.` : `${name}'s page stopped unexpectedly.`,
-  detail: `The game's page closed (${reason}). Reload to go back to the game; everything saved before this is kept.`,
+  message: reason === "oom" ? uiWord("{{name}} ran out of memory.", { name }) : uiWord("{{name}}'s page stopped unexpectedly.", { name }),
+  detail: uiWord("The game's page closed ({{reason}}). Reload to go back to the game; everything saved before this is kept.", { reason }),
 });
 
 const handlePageGone = (win, details, { quitting: isQuitting = false } = {}) => {
@@ -837,7 +849,7 @@ const handlePageGone = (win, details, { quitting: isQuitting = false } = {}) => 
   const name = APP_NAME;
   const { message, detail } = pageGoneWording(reason, name);
   dialog
-    .showMessageBox(win, { type: "error", title: name, message, detail, buttons: ["Reload", "Quit"], defaultId: 0, cancelId: 1, noLink: true })
+    .showMessageBox(win, { type: "error", title: name, message, detail, buttons: [uiWord("Reload"), uiWord("Quit")], defaultId: 0, cancelId: 1, noLink: true })
     .then(({ response }) => {
       if (win.isDestroyed()) return;
       if (response === 0) win.webContents.reload();
@@ -1185,14 +1197,11 @@ const reportFatalBootError = (error) => {
   const name = APP_NAME;
   const portClash = (error && error.code === "EADDRINUSE") || message.includes("EADDRINUSE") || message.startsWith("No free port");
   dialog.showErrorBox(
-    `${name} could not start`,
+    uiWord("{{name}} could not start", { name }),
     portClash
-      ? `${name} runs its own local server, and every port it tried is already taken `
-        + `by another program.\n\n`
-        + `Docker Desktop is the usual culprit — it holds 3000 and 3001 on many `
-        + `machines. Close it, or set PORT to a free port before launching, then `
-        + `start ${name} again.\n\n${message}`
-      : `${message}\n\nThe full error is in the diagnostics log under Settings.`,
+      ? `${uiWord("{{name}} runs its own local server, and every port it tried is already taken by another program.", { name })}\n\n`
+        + `${uiWord("Docker Desktop is the usual culprit — it holds 3000 and 3001 on many machines. Close it, or set PORT to a free port before launching, then start {{name}} again.", { name })}\n\n${message}`
+      : `${message}\n\n${uiWord("The full error is in the diagnostics log under Settings.")}`,
   );
   app.quit();
 };
@@ -1245,4 +1254,5 @@ if (!app.requestSingleInstanceLock()) {
   // the download is where they can see it. Nothing about this launch changes:
   // the update goes on installing.
   ipcMain.handle("setup:open-beta", () => shell.openExternal(BETA_DOWNLOAD_URL));
+  ipcMain.handle("setup:open-native", () => shell.openExternal(NATIVE_DOWNLOAD_URL));
 }

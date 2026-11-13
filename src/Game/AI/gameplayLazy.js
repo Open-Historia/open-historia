@@ -121,8 +121,8 @@ export const refinePlayerAction = async (...args) => (await gameplay()).refinePl
 
 // --- Game master (cheats panel, itself already lazy) -------------------------
 export const previewGameMasterCommand = hostOnly(async (...args) => (await gameplay()).previewGameMasterCommand(...args));
+export const previewGameMasterRevision = hostOnly(async (...args) => (await gameplay()).previewGameMasterRevision(...args));
 export const applyGameMasterPreview = hostOnly(async (...args) => (await gameplay()).applyGameMasterPreview(...args));
-export const consolidateHistoryNow = hostOnly(async (...args) => (await gameplay()).consolidateHistoryNow(...args));
 
 // --- Stats and intelligence -------------------------------------------------
 export const ensureIntelligenceRated = hostQuietly(async (...args) => (await gameplay()).ensureIntelligenceRated(...args));

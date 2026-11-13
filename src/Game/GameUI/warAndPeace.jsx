@@ -8,10 +8,12 @@
 // What the game itself decides of these is in AI/warAndPeace.js. This is what
 // a player sees and answers:
 //
-//   WarAndPeaceCards   over the map, while a call to arms waits for the player:
-//                      from an ally that was attacked (Honour the alliance /
-//                      Break the treaty). It stays until it is answered, and
-//                      can be folded away to a small button.
+//   CallToArmsCard     in a diplomatic chat, under the message in which an ally
+//                      that was attacked asks the player for help: Honour the
+//                      alliance / Break the treaty, and nothing said of what
+//                      either does ("it should not explain what happens if you
+//                      choose each option as that breaks immersion", the owner,
+//                      2026-11-06). It was a card over the map.
 //   PeaceOfferCard     in a diplomatic chat (chat.jsx), on the message that
 //                      made it: an offer of peace and its terms. The player's
 //                      to accept or decline when it was made to them; their
@@ -29,11 +31,8 @@
 // is playing a shared game it goes to the host as a request.
 
 import React, { useState } from "react";
-import { openCallsFor, TREATY_BROKEN_REPUTATION } from "../../runtime/alliances.js";
-import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { TERRITORY_AS_HELD, TERRITORY_RESTORED, cessionsByReceiver, normalizeReparations } from "../../runtime/peaceTerms.js";
 import { puppetKindLabel } from "../../runtime/puppets.js";
-import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { wearinessOf, wearinessWord } from "../../runtime/warWeariness.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { answerDiplomacy } from "../AI/gameplayLazy.js";
@@ -42,8 +41,6 @@ import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
 const NONE = Object.freeze([]);
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLowerCase();
-const selectCountry = (game) => clean(game?.country);
-const selectCalls = (world) => (Array.isArray(world?.callsToArms) ? world.callsToArms : NONE);
 
 // Why nothing was done, in the player's words.
 const refusalText = (error) => {
@@ -101,18 +98,6 @@ export const TermsText = ({ terms }) => {
   );
 };
 
-const cardStyle = {
-  backgroundColor: "rgba(16,21,24,0.97)",
-  border: "1px solid rgba(255,255,255,0.16)",
-  borderRadius: "12px",
-  boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
-  color: "#e7e9ea",
-  fontFamily: "sans-serif",
-  fontSize: "0.76rem",
-  lineHeight: 1.45,
-  padding: "0.7rem 0.8rem",
-};
-const titleStyle = { color: "rgba(255,255,255,0.55)", fontSize: "0.64rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" };
 const buttonStyle = (primary) => ({
   backgroundColor: primary ? "#2bc1f3" : "rgba(255,255,255,0.06)",
   border: `1px solid ${primary ? "#2bc1f3" : "rgba(255,255,255,0.18)"}`,
@@ -126,73 +111,46 @@ const buttonStyle = (primary) => ({
   padding: "0.35rem 0.6rem",
 });
 
-// One thing waiting for the player, with its two answers.
-const DecisionCard = ({ title, children, yes, no, onYes, onNo }) => {
+// ---- in a diplomatic chat -----------------------------------------------------------------
+
+const CALL_STATUS_TEXT = Object.freeze({
+  honoured: "You answered the call",
+  refused: "You refused",
+  lapsed: "No longer open",
+});
+
+// A call to arms, under the message in which the ally that was attacked asked
+// for help (runtime/alliances.js world.callsToArms). Asked of the player and
+// still open: its two answers. Answered: what the answer was.
+//   call      a world.callsToArms entry
+//   viewer    the player's country
+export const CallToArmsCard = ({ call, viewer }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const act = async (run) => {
+  if (fold(call?.ally) !== fold(viewer)) return null;
+  const open = call?.status === "open";
+  const act = async (op) => {
     if (busy) return;
     setBusy(true);
     setError("");
-    const answer = await run();
+    const answer = await send(op, call.id);
     setBusy(false);
     if (!answer.ok) setError(refusalText(answer.error));
   };
   return (
-    <div style={cardStyle} role="group">
-      <div style={titleStyle}>{title}</div>
-      <div style={{ marginTop: "0.3rem" }}>{children}</div>
-      {error ? <div role="alert" style={{ color: "#fca5a5", marginTop: "0.4rem" }}>{error}</div> : null}
-      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.6rem" }}>
-        <button type="button" className="oh-tap" disabled={busy} onClick={() => act(onYes)} style={buttonStyle(true)}>{yes}</button>
-        <button type="button" className="oh-tap" disabled={busy} onClick={() => act(onNo)} style={buttonStyle(false)}>{no}</button>
-      </div>
+    <div role="group" data-call-to-arms={call?.id} style={{ display: "flex", flexDirection: "column", gap: "0.4rem", margin: "0.35rem 0" }}>
+      {error ? <div role="alert" style={{ color: "#fca5a5", fontSize: "0.74rem" }}>{error}</div> : null}
+      {open ? (
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <button type="button" className="oh-tap" disabled={busy} onClick={() => act("honour")} style={buttonStyle(true)}>Honour the alliance</button>
+          <button type="button" className="oh-tap" disabled={busy} onClick={() => act("refuse")} style={buttonStyle(false)}>Break the treaty</button>
+        </div>
+      ) : (
+        <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", fontWeight: 700 }}>{CALL_STATUS_TEXT[call?.status] ?? ""}</span>
+      )}
     </div>
   );
 };
-
-// Over the map: the calls to arms that wait for the player. An offer of peace
-// is not here: it is in the chat it was made in (PeaceOfferCard).
-export const WarAndPeaceCards = () => {
-  const country = useRuntimeState("game", selectCountry);
-  const calls = useRuntimeState("world", selectCalls);
-  const isMobile = useIsMobile();
-  const [folded, setFolded] = useState(false);
-  const called = country ? openCallsFor(calls, country) : NONE;
-  const waiting = called.length;
-  if (waiting === 0) return null;
-  const place = isMobile
-    ? { left: "0.5rem", right: "0.5rem", top: "4.75rem" }
-    : { right: "1rem", top: "4.5rem", width: "min(22rem, calc(100vw - 2rem))" };
-  if (folded) {
-    return (
-      <button type="button" className="oh-tap" onClick={() => setFolded(false)} style={{ ...cardStyle, cursor: "pointer", fontWeight: 800, position: "fixed", zIndex: 9000, ...place, width: "auto", left: "auto" }}>
-        {`Waiting for your answer: ${waiting}`}
-      </button>
-    );
-  }
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxHeight: "calc(100vh - 9rem)", overflowY: "auto", position: "fixed", zIndex: 9000, ...place }}>
-      <button type="button" className="oh-tap" onClick={() => setFolded(true)} style={{ alignSelf: "flex-end", background: "rgba(16,21,24,0.9)", border: "1px solid rgba(255,255,255,0.16)", borderRadius: "999px", color: "rgba(255,255,255,0.7)", cursor: "pointer", fontSize: "0.66rem", fontWeight: 700, padding: "0.2rem 0.6rem" }}>Fold away</button>
-      {called.map((call) => (
-        <DecisionCard
-          key={call.id}
-          title="Call to arms"
-          yes="Honour the alliance"
-          no="Break the treaty"
-          onYes={() => send("honour", call.id)}
-          onNo={() => send("refuse", call.id)}
-        >
-          <div>{`${call.defender} has been attacked by ${call.attackers.join(", ") || "an enemy"} and calls on you to defend it.`}</div>
-          {call.via.title ? <div style={{ color: "rgba(255,255,255,0.6)" }}>{`You are bound by ${call.via.title}.`}</div> : null}
-          <div style={{ color: "rgba(255,255,255,0.6)", marginTop: "0.25rem" }}>{`Honouring it puts you at war. Breaking the treaty costs ${TREATY_BROKEN_REPUTATION} of your reputation, and ends it. Left unanswered, it counts as broken.`}</div>
-        </DecisionCard>
-      ))}
-    </div>
-  );
-};
-
-// ---- in a diplomatic chat -----------------------------------------------------------------
 
 const OFFER_STATUS_TEXT = Object.freeze({
   accepted: "Accepted: the war is over",
@@ -400,4 +358,3 @@ export const ReparationsNote = ({ world, target }) => {
   );
 };
 
-export default WarAndPeaceCards;

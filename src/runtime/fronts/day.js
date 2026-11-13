@@ -46,7 +46,8 @@ import {
   TRAIT_DRIVE,
   WHOLE_AT,
 } from "./constants.js";
-import { holderOf, memberIndex, paintGround, readRegions, sideOfName } from "./battle.js";
+import { groupSideOf, holderOf, memberIndex, paintGround, readRegions, sideOfName } from "./battle.js";
+import { forceGroupName } from "../groups.js";
 import { findPrey } from "./closing.js";
 import { closeDay, stepForward } from "./combat.js";
 import { dusk } from "./dawn.js";
@@ -169,6 +170,30 @@ const captorOf = (battle, run, region, side) => {
     if (best < 0 || near[index] > near[best]) best = index;
   }
   return best >= 0 ? battle.sides[side][best] : "";
+};
+
+// The force of `country`'s that takes ground on `land`'s territory from a group it is at war with (settleRegions):
+// the one it has there on this battlefield already, else the one of its name for that land (runtime/groups.js
+// forceGroupName), founded by the run the first time it takes anything. A group of that name that is not the
+// country's own is passed over for "(2)", "(3)" and so on. "" where none can be had.
+const FORCE_NAMES_MOST = 9;
+const forceFor = (battle, run, country, land, side) => {
+  const { arena } = battle;
+  const mine = (name) => Boolean(name) && run.groupOwnerOf(name).toLowerCase() === country.toLowerCase();
+  for (let region = 1; region < arena.ids.length; region += 1) {
+    const id = arena.ids[region];
+    const held = run.groupOf(id);
+    if (mine(held) && run.controllerOf(id).toLowerCase() === land.toLowerCase() && groupSideOf(battle, run, held) === side) return held;
+  }
+  const base = forceGroupName(country, land);
+  for (let count = 1; count <= FORCE_NAMES_MOST; count += 1) {
+    const name = count === 1 ? base : `${base} (${count})`;
+    if (mine(name)) return name;
+    if (run.isGroup(name) || sideOfName(battle, name) >= 0) continue;
+    run.foundForce(name, country);
+    return name;
+  }
+  return "";
 };
 
 // A region all but held is finished off at night. Where a side holds at least
@@ -313,13 +338,28 @@ export const settleRegions = (battle, run, day) => {
     if (!captor) continue;
     const group = run.groupOf(id);
     const controller = run.controllerOf(id);
+    // Whether the war is against the group whose area it lies in (itself, or the country whose force it is). A
+    // group the war is not against keeps its area: "only if the war is against the group. otherwise the group keeps
+    // its occupation" (the owner, 2026-11-09).
+    const against = Boolean(group) && groupSideOf(battle, run, group) === owner;
     const flip = { day, date, battlefield: battle, regionId: id };
     if (run.isGroup(captor)) {
-      // A group holds an area without owning it.
-      run.flips.push({ ...flip, from: group && sideOfName(battle, group) === owner ? group : controller, to: captor, kind: "groupTake" });
+      // A group holds an area without owning it, and a region holds one group's: one inside the area of a group
+      // outside this war stays that group's, and the captor takes nothing of it in name.
+      if (group && !against) continue;
+      run.flips.push({ ...flip, from: against ? group : controller, to: captor, kind: "groupTake" });
       run.setGroup(id, captor);
+    } else if (against && controller && sideOfName(battle, controller) < 0) {
+      // A country at war with a group on a third country's land, the war not against that country: it annexes
+      // nothing. Its own force takes the ground into its area from the group, and the land stays its country's
+      // ("it should create another group there that takes the area from the group without actually annexing the
+      // territory", the owner, 2026-11-09). Ground of the captor's own side's goes back to it, below.
+      const force = forceFor(battle, run, captor, controller, taker);
+      if (!force) continue;
+      run.flips.push({ ...flip, from: group, to: force, kind: "groupTake", owner: captor, land: controller });
+      run.setGroup(id, force);
     } else {
-      if (group && sideOfName(battle, group) === owner) {
+      if (against) {
         run.flips.push({ ...flip, from: group, to: captor, kind: "groupRelease" });
         run.setGroup(id, "");
       }

@@ -9,7 +9,7 @@ use super::field::trace_contour;
 use super::js::{self, Obj, Val};
 use super::line::measure_line;
 use super::muster::levy_pending;
-use super::sectors::{describe_point, in_sector, read_sectors, Cut, Sector};
+use super::sectors::{describe_point, in_sector, read_sectors, Cut, Sector, Sectors};
 use super::troops::{is_live, Troop};
 use crate::jsmath;
 use std::cmp::Ordering;
@@ -81,7 +81,156 @@ fn n(value: f64) -> Val {
     Val::Num(value)
 }
 
-pub fn build_brief(battle: &mut Battle, since: &Val) -> Val {
+pub const ALONG_MOST: usize = 10;
+pub const HELD_REGIONS_MOST: usize = 12;
+pub const HELD_CITIES_MOST: usize = 8;
+
+fn named_region(arena: &super::arena::Arena, region: usize) -> bool {
+    region > 0 && region < arena.names.len() && !arena.names[region].is_empty() && arena.names[region] != arena.ids[region]
+}
+
+fn by_or(by: f64, then: f64) -> f64 {
+    if by != 0.0 && !by.is_nan() {
+        by
+    } else {
+        then
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Held {
+    pub cities: Vec<(String, bool)>,
+    pub regions: Vec<String>,
+    pub more: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Geography {
+    pub along: Vec<String>,
+    pub holds: [Held; 2],
+}
+
+pub fn line_geography(battle: &Battle, sectors: &Sectors) -> Geography {
+    let field = battle.field.as_ref().unwrap();
+    let arena = &battle.arena;
+    let home = battle.home_side.as_deref();
+    let (cols, size) = (field.cols, field.size);
+    let axis = sectors.names.get(1).and_then(|high| sectors.cut(high));
+    let count = arena.names.len();
+    let mut line_cells = vec![0.0f64; count];
+    let mut line_along = vec![0.0f64; count];
+    let mark = |cell: usize, line_cells: &mut Vec<f64>, line_along: &mut Vec<f64>| {
+        let region = arena.region[cell] as usize;
+        if !named_region(arena, region) {
+            return;
+        }
+        let col = cell % cols;
+        line_cells[region] += 1.0;
+        line_along[region] += match &axis {
+            Some(axis) => (col as f64 + 0.5) * axis.x + (((cell - col) / cols) as f64 + 0.5) * axis.y,
+            None => 0.0,
+        };
+    };
+    for cell in 0..size {
+        let side = field.holders[cell];
+        if side > 1 || field.play[cell] == 0 {
+            continue;
+        }
+        let col = cell % cols;
+        let right = if col + 1 < cols { Some(cell + 1) } else { None };
+        let down = if cell + cols < size { Some(cell + cols) } else { None };
+        for next in [right, down] {
+            let Some(next) = next else { continue };
+            if field.play[next] == 0 {
+                continue;
+            }
+            let other = field.holders[next];
+            if other > 1 || other == side {
+                continue;
+            }
+            mark(cell, &mut line_cells, &mut line_along);
+            mark(next, &mut line_cells, &mut line_along);
+        }
+    }
+    let mut touched: Vec<usize> = (1..count).filter(|&region| line_cells[region] > 0.0).collect();
+    js::stable_sort_by(&mut touched, |&a, &b| by_or(line_cells[b] - line_cells[a], a as f64 - b as f64));
+    touched.truncate(ALONG_MOST);
+    js::stable_sort_by(&mut touched, |&a, &b| by_or(line_along[b] / line_cells[b] - line_along[a] / line_cells[a], a as f64 - b as f64));
+    let along: Vec<String> = touched.iter().map(|&region| arena.names[region].clone()).collect();
+    let mut holds: [Held; 2] = [Held::default(), Held::default()];
+    if let Some(home) = home {
+        let mut in_play = vec![0.0f64; count];
+        let mut by_other = vec![0.0f64; count];
+        for cell in 0..size {
+            if field.play[cell] == 0 {
+                continue;
+            }
+            let region = arena.region[cell] as usize;
+            let owner = home.get(region).copied().unwrap_or(-1);
+            if owner != 0 && owner != 1 {
+                continue;
+            }
+            in_play[region] += 1.0;
+            if field.holders[cell] as i32 == 1 - owner as i32 {
+                by_other[region] += 1.0;
+            }
+        }
+        for side in 0..2usize {
+            let other = 1 - side as i8;
+            let mut taken: Vec<usize> = (1..count)
+                .filter(|&region| home.get(region).copied() == Some(other) && in_play[region] > 0.0 && by_other[region] * 2.0 >= in_play[region] && named_region(arena, region))
+                .collect();
+            js::stable_sort_by(&mut taken, |&a, &b| by_or(by_other[b] - by_other[a], a as f64 - b as f64));
+            holds[side].regions = taken.iter().take(HELD_REGIONS_MOST).map(|&region| arena.names[region].clone()).collect();
+            holds[side].more = taken.len().saturating_sub(HELD_REGIONS_MOST);
+            let mut cities: Vec<&super::arena::City> = arena
+                .cities
+                .iter()
+                .filter(|city| city.cell >= 0.0 && city.cell < size as f64 && field.holders[city.cell as usize] as usize == side && home.get(arena.region[city.cell as usize] as usize).copied() == Some(other))
+                .collect();
+            js::stable_sort_by(&mut cities, |a, b| {
+                let capital = (if b.capital { 1.0 } else { 0.0 }) - (if a.capital { 1.0 } else { 0.0 });
+                let name = match js::compare_units(&a.name, &b.name) {
+                    Ordering::Less => -1.0,
+                    Ordering::Greater => 1.0,
+                    Ordering::Equal => 0.0,
+                };
+                by_or(capital, by_or(b.population - a.population, name))
+            });
+            holds[side].cities = cities.iter().take(HELD_CITIES_MOST).map(|city| (city.name.clone(), city.capital)).collect();
+        }
+    }
+    Geography { along, holds }
+}
+
+pub fn geography_val(geography: &Geography) -> (Val, Val) {
+    let along = Val::Arr(geography.along.iter().map(|name| Val::str(name)).collect());
+    let holds = Val::Arr(
+        geography
+            .holds
+            .iter()
+            .map(|held| {
+                let cities = Val::Arr(
+                    held.cities
+                        .iter()
+                        .map(|(name, capital)| {
+                            let mut city = Obj::new();
+                            city.set("name", Val::str(name));
+                            if *capital {
+                                city.set("capital", Val::Bool(true));
+                            }
+                            Val::Obj(city)
+                        })
+                        .collect(),
+                );
+                Val::obj([("cities", cities), ("regions", Val::Arr(held.regions.iter().map(|name| Val::str(name)).collect())), ("more", n(held.more as f64))])
+            })
+            .collect(),
+    );
+    (along, holds)
+}
+
+pub fn build_brief(battle: &mut Battle, since: &Val, alive: &dyn Fn(&str) -> bool) -> Val {
     let contour = trace_contour(battle.field.as_mut().unwrap());
     let home_near = if battle.home {
         measure(battle.field.as_ref().unwrap(), &mut battle.to_side);
@@ -108,6 +257,7 @@ pub fn build_brief(battle: &mut Battle, since: &Val) -> Val {
     let line = measure_line(field, &contour);
     let measured = &line.measured;
     let sectors = read_sectors(&contour, measured.count);
+    let geography = line_geography(battle, &sectors);
     let mut rows: Vec<Val> = Vec::new();
     for name in &sectors.names {
         if name == "all" {
@@ -293,6 +443,9 @@ pub fn build_brief(battle: &mut Battle, since: &Val) -> Val {
     out.set("km", n(jsmath::round(measured.total)));
     out.set("axis", Val::Str(sectors.axis.clone()));
     out.set("sectors", Val::Arr(rows));
+    let (along, holds) = geography_val(&geography);
+    out.set("along", along);
+    out.set("holds", holds);
     out.set("commands", Val::Arr(commands));
     out.set("strength", Val::Arr(strength));
     if battle.home && home_near > 0.0 {
@@ -302,7 +455,7 @@ pub fn build_brief(battle: &mut Battle, since: &Val) -> Val {
     out.set("cities", Val::Arr(vec![unique(&battle.cities_taken[0]), unique(&battle.cities_taken[1])]));
     out.set("pockets", Val::Arr(pockets));
     out.set("since", since.clone());
-    if let Some(held) = sky_held(battle) {
+    if let Some(held) = sky_held(battle, alive) {
         let mut air = Obj::new();
         air.set("holds", n(held.holds as f64));
         air.set("wings", Val::nums(&[held.wings[0] as f64, held.wings[1] as f64]));
@@ -492,6 +645,18 @@ pub fn describe_since(record: &Val, most: usize) -> Since {
     }
 }
 
+pub fn sky_stronger_note(held: &Val, against: &Val) -> &'static str {
+    let mine = js::or_zero(js::to_number(held));
+    let theirs = js::or_zero(js::to_number(against));
+    if mine < theirs {
+        ", fewer but stronger"
+    } else if mine == theirs {
+        ", as many but stronger"
+    } else {
+        ""
+    }
+}
+
 fn add(sum: Val, value: &Val) -> Val {
     match (&sum, value) {
         (Val::Str(_), _) | (_, Val::Str(_)) => Val::Str(format!("{}{}", text(&sum), text(value))),
@@ -607,7 +772,7 @@ pub fn describe_battlefield_within(record: &Val, viewer: &Val, max: f64) -> Stri
     let air = match air_of.get("holds") {
         Val::Num(holds) if air_of.truthy() && (*holds == 0.0 || *holds == 1.0) && air_of.get("wings").as_array().is_some() => {
             let holds = *holds as usize;
-            format!("  Air: {} holds the sky ({} wings against {})", text(&lead[holds]), text(&item(air_of.get("wings"), holds)), text(&item(air_of.get("wings"), 1 - holds)))
+            format!("  Air: {} holds the sky ({} wings against {}{})", text(&lead[holds]), text(&item(air_of.get("wings"), holds)), text(&item(air_of.get("wings"), 1 - holds)), sky_stronger_note(&item(air_of.get("wings"), holds), &item(air_of.get("wings"), 1 - holds)))
         }
         _ => String::new(),
     };
@@ -623,7 +788,7 @@ pub fn describe_battlefield_within(record: &Val, viewer: &Val, max: f64) -> Stri
     let sectors = brief.get("sectors").as_array().cloned().unwrap_or_default();
     let place: Vec<&Val> = sectors.iter().filter(|sector| sector.get("from").truthy() && sector.get("to").truthy()).collect();
     let line_text = |most: usize| -> String {
-        if place.is_empty() {
+        if place.is_empty() || most == 0 {
             return String::new();
         }
         format!(
@@ -636,6 +801,64 @@ pub fn describe_battlefield_within(record: &Val, viewer: &Val, max: f64) -> Stri
                 .join("; ")
         )
     };
+    let whose = |side: usize| -> String {
+        if length_of(&item(sides, side)) > 1.0 {
+            format!("{}'s side", text(&lead[side]))
+        } else {
+            text(&lead[side])
+        }
+    };
+    let along: Vec<Val> = match brief.get("along") {
+        Val::Arr(list) => list.iter().filter(|name| matches!(name, Val::Str(name) if !name.is_empty())).cloned().collect(),
+        _ => Vec::new(),
+    };
+    let axis_text = if brief.get("axis").is_nullish() { String::new() } else { text(brief.get("axis")) };
+    let ends: Vec<&str> = axis_text.split('-').collect();
+    let runs = if !place.is_empty() && ends.len() == 2 {
+        if js::strict_equals(place[0].get("name"), &Val::str(ends[0])) {
+            format!(" {} to {}", ends[0], ends[1])
+        } else {
+            format!(" {} to {}", ends[1], ends[0])
+        }
+    } else {
+        String::new()
+    };
+    let along_text = |most: usize| -> String {
+        if along.is_empty() || most == 0 {
+            return String::new();
+        }
+        format!("  The line runs{runs} through {}", names_list(&along, "region", most))
+    };
+    let holds = match brief.get("holds") {
+        Val::Arr(list) => Some(list.clone()),
+        _ => None,
+    };
+    let held_text = |most: usize| -> String {
+        let Some(holds) = &holds else { return String::new() };
+        if most == 0 {
+            return String::new();
+        }
+        let parts: Vec<String> = (0..2)
+            .map(|side| {
+                let held = holds.get(side).filter(|held| !held.is_nullish()).cloned().unwrap_or(Val::Obj(Obj::new()));
+                let cities: Vec<String> = held
+                    .get("cities")
+                    .as_array()
+                    .map(|list| list.iter().take(most).map(|city| format!("city: {}{}", text(city.get("name")), if city.get("capital").truthy() { " (a capital)" } else { "" })).collect())
+                    .unwrap_or_default();
+                let regions: Vec<Val> = held.get("regions").as_array().cloned().unwrap_or_default();
+                let more = (regions.len() - regions.len().min(most)) as f64 + js::or_zero(js::to_number(held.get("more")));
+                let mut shown = cities;
+                shown.extend(regions.iter().take(most).map(|name| format!("region: {}", text(name))));
+                if shown.is_empty() {
+                    return String::new();
+                }
+                format!("{} holds {}{} of {}'s land", whose(side), shown.join(", "), if more > 0.0 { format!(" and {} more regions", js::number_to_string(more)) } else { String::new() }, whose(1 - side))
+            })
+            .filter(|part| !part.is_empty())
+            .collect();
+        format!("  Occupied: {}", if !parts.is_empty() { format!("{}.", parts.join("; ")) } else { "neither side holds any of the other's land.".to_string() })
+    };
     let since_text = |most: usize| -> String {
         let since = brief.get("since");
         format!("  Since {}: {}", if since.is_nullish() { String::new() } else { text(since) }, describe_since(record, most).text)
@@ -643,10 +866,28 @@ pub fn describe_battlefield_within(record: &Val, viewer: &Val, max: f64) -> Stri
     let standing: Vec<String> = (0..2).filter(|&side| viewing < 0 || side as i64 == viewing).map(|side| format!("{}: {}.", text(&lead[side]), orders_of(record, side))).collect();
     let orders = format!("  Standing orders: {}", standing.join(" "));
     let words: Vec<Val> = sectors.iter().map(|sector| sector.get("name").clone()).collect();
-    let valid = format!("  Sectors: {}", if !words.is_empty() { format!("{}, or a place on the line.", join(&words, ", ")) } else { "all, or a place on the line.".to_string() });
+    let every = ["north", "south", "east", "west", "northeast", "southwest", "southeast", "northwest", "centre"].iter().all(|word| words.iter().any(|name| js::same_value_zero(name, &Val::str(word))));
+    let valid = format!("  Sectors: {}", if every { "centre and all eight points of the compass, or a place on the line.".to_string() } else if !words.is_empty() { format!("{}, or a place on the line.", join(&words, ", ")) } else { "all, or a place on the line.".to_string() });
     let mut text_out = String::new();
-    for (most_sectors, most_names) in [(3, 4), (3, 2), (3, 1), (2, 1), (0, 1)] {
-        text_out = [head.clone(), strength.clone(), weather.clone(), attrition.clone(), ice.clone(), air.clone(), gone.clone(), line_text(most_sectors), since_text(most_names), orders.clone(), valid.clone()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n");
+    for (most_sectors, most_names, most_along, most_held, extras) in [
+        (3, 4, 8, 6, true),
+        (3, 2, 5, 4, true),
+        (3, 1, 3, 2, true),
+        (2, 1, 2, 2, true),
+        (1, 1, 2, 1, true),
+        (3, 2, 5, 4, false),
+        (3, 1, 3, 3, false),
+        (3, 1, 2, 2, false),
+        (2, 1, 2, 2, false),
+        (1, 1, 2, 1, false),
+        (0, 1, 1, 1, false),
+    ] {
+        let mut parts = vec![head.clone(), strength.clone()];
+        if extras {
+            parts.extend([weather.clone(), attrition.clone(), ice.clone(), air.clone()]);
+        }
+        parts.extend([gone.clone(), line_text(most_sectors), along_text(most_along), held_text(most_held), since_text(most_names), orders.clone(), valid.clone()]);
+        text_out = parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n");
         if js::utf16_len(&text_out) as f64 <= max {
             return text_out;
         }

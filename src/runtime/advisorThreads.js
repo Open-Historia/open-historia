@@ -6,6 +6,8 @@ import { getPoliticalProfile } from "./politicalActors.js";
 export const CHIEF_ADVISOR_THREAD = "chief";
 export const ADVISOR_PERSONALITY_MAX_CHARS = 1200;
 export const ADVISOR_CONTACT_ROLE = "advisor-contact";
+export const ADVISOR_GROUP_ROLE = "advisor-group";
+export const ADVISOR_GROUP_MAX_MEMBERS = 10;
 // This classifies the conversation, not a canonical person, office or authority.
 // Older advisor-contact records have no recipientType and remain ministers.
 export const ADVISOR_RECIPIENT_TYPES = Object.freeze({
@@ -33,6 +35,7 @@ const cleanParagraphs = (value, max) => String(value ?? "").replace(/\r\n?/g, "\
   .map((line) => line.replace(/\s+/g, " ").trim()).join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, max);
 const array = (value) => Array.isArray(value) ? value : [];
 const validId = (id) => /^advisor-[a-z0-9][a-z0-9_-]{5,79}$/.test(String(id || ""));
+const validGroupId = (id) => /^advisor-group-[a-z0-9][a-z0-9_-]{5,79}$/.test(String(id || ""));
 const threadOf = (entry) => clean(entry?.threadId, 100) || CHIEF_ADVISOR_THREAD;
 
 // Never infer a foreign character's government access from a typed label.
@@ -124,6 +127,86 @@ export const advisorContacts = (entries) => array(entries)
   .filter((entry) => entry?.role === ADVISOR_CONTACT_ROLE && validId(entry.id))
   .filter((entry, index, records) => records.findIndex((other) => other.id === entry.id) === index);
 
+// Move only contact records within their existing slots. Messages, chief profile,
+ // native notices and proposal receipts retain their exact positions and identities.
+// Group chats are first-class conversations, never synthetic Advisor
+// recipients. Only verified government advisors may attend: foreign/civilian
+// characters cannot inherit a minister's private government briefing.
+export const advisorGroups = (entries) => array(entries)
+  .filter((entry) => entry?.role === ADVISOR_GROUP_ROLE && validGroupId(entry.id))
+  .filter((entry, index, records) => records.findIndex((other) => other.id === entry.id) === index);
+
+const validatedGroupMembers = (entries, members) => {
+  const ids = array(members);
+  if (ids.length < 2 || ids.length > ADVISOR_GROUP_MAX_MEMBERS || new Set(ids).size !== ids.length) {
+    throw new Error("Advisor groups require 2 to 10 distinct members.");
+  }
+  const contacts = advisorContacts(entries);
+  for (const id of ids) {
+    if (id === CHIEF_ADVISOR_THREAD) continue;
+    const contact = contacts.find((row) => row.id === id);
+    if (!contact || contact.archived || advisorRecipientType(contact) !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
+      throw new Error("Advisor groups may include only active government advisors or the chief advisor.");
+    }
+  }
+  return ids.slice();
+};
+
+export const createAdvisorGroup = (entries, proposed) => {
+  const id = clean(proposed?.id, 100);
+  const name = clean(proposed?.name, 100);
+  if (!validGroupId(id) || !name) throw new Error("Advisor groups require a valid ID and name.");
+  if (advisorGroups(entries).some((group) => group.id === id) || advisorContacts(entries).some((contact) => contact.id === id)) {
+    throw new Error("This Advisor group already exists.");
+  }
+  if (advisorGroups(entries).length >= 8) throw new Error("An Advisor inbox supports at most eight groups.");
+  return [...array(entries), { role: ADVISOR_GROUP_ROLE, id, name,
+    memberIds: validatedGroupMembers(entries, proposed?.memberIds), archived: false }];
+};
+
+export const reviseAdvisorGroup = (entries, groupId, changes) => {
+  const current = advisorGroups(entries).find((group) => group.id === groupId);
+  if (!current) throw new Error("Unknown Advisor group.");
+  const name = clean(changes?.name, 100);
+  if (!name) throw new Error("Advisor groups require a name.");
+  const members = validatedGroupMembers(entries, changes?.memberIds ?? current.memberIds);
+  if (advisorMessagesFor(entries, groupId).length
+      && JSON.stringify(members) !== JSON.stringify(current.memberIds)) {
+    throw new Error("Established group membership is fixed to preserve speaker identity. Create another group.");
+  }
+  return array(entries).map((entry) => entry?.role === ADVISOR_GROUP_ROLE && entry.id === groupId
+    ? { ...entry, name, memberIds: members } : entry);
+};
+
+export const archiveAdvisorGroup = (entries, groupId, archived = true) => {
+  if (!advisorGroups(entries).some((group) => group.id === groupId)) throw new Error("Unknown Advisor group.");
+  return array(entries).map((entry) => entry?.role === ADVISOR_GROUP_ROLE && entry.id === groupId
+    ? { ...entry, archived: Boolean(archived) } : entry);
+};
+
+export const advisorGroupForReply = (entries, threadId) => {
+  const group = advisorGroups(entries).find((entry) => entry.id === threadId);
+  if (!group || group.archived) throw new Error("Advisor group is unavailable or retired.");
+  validatedGroupMembers(entries, group.memberIds);
+  return group;
+};
+
+export const reorderAdvisorContact = (entries, sourceId, targetId) => {
+  const source = array(entries);
+  const contacts = advisorContacts(source);
+  const from = contacts.findIndex((contact) => contact.id === sourceId);
+  const to = contacts.findIndex((contact) => contact.id === targetId);
+  if (from < 0 || to < 0 || contacts.length !== source.filter((entry) => entry?.role === ADVISOR_CONTACT_ROLE).length) {
+    throw new Error("Cannot reorder unknown or duplicate Advisor contacts.");
+  }
+  if (from === to) return source;
+  const ordered = contacts.slice();
+  const [moved] = ordered.splice(from, 1);
+  ordered.splice(to, 0, moved);
+  let index = 0;
+  return source.map((entry) => entry?.role === ADVISOR_CONTACT_ROLE ? ordered[index++] : entry);
+};
+
 export const advisorMessagesFor = (entries, threadId = CHIEF_ADVISOR_THREAD) => array(entries)
   .filter((entry) => MESSAGE_ROLES.has(entry?.role)
     && threadOf(entry) === threadId
@@ -205,8 +288,37 @@ export const archiveAdvisorContact = (entries, contactId, archived = true) => {
 // Writers always merge only their own thread into the *latest* advisor.json
 // within the canonical document queue. Preserve unrelated contacts, conversations
 // and native document notices (which undo/rollback may have removed).
+// The panel's copy of a conversation with each reply's Action receipts as the saved one has them: added where an
+// approval wrote one, gone where the saved conversation no longer has it (an Undo put it back to before the
+// approval). Receipts are written only by an approval (recordAdvisorActionReceipt), so the saved ones are the truth;
+// a copy that kept a receipt the file lost offered it with every save. Returns current itself when nothing differs.
+export const withSavedActionReceipts = (current, saved) => {
+  if (!Array.isArray(current)) return current;
+  const savedReceipts = new Map();
+  for (const entry of Array.isArray(saved) ? saved : []) {
+    if (entry?.role === "advisor" && entry.id) savedReceipts.set(entry.id, entry.actionReceipts);
+  }
+  let changed = false;
+  const next = current.map((entry) => {
+    if (entry?.role !== "advisor" || !entry.id || entry.streaming) return entry;
+    const receipts = savedReceipts.get(entry.id);
+    const has = receipts && typeof receipts === "object" && !Array.isArray(receipts) && Object.keys(receipts).length > 0;
+    if (!has) {
+      if (entry.actionReceipts === undefined) return entry;
+      changed = true;
+      const { actionReceipts: _gone, ...rest } = entry;
+      return rest;
+    }
+    if (JSON.stringify(entry.actionReceipts ?? null) === JSON.stringify(receipts)) return entry;
+    changed = true;
+    return { ...entry, actionReceipts: { ...receipts } };
+  });
+  return changed ? next : current;
+};
+
 export const replaceAdvisorThread = (entries, threadId, messages, { clearNotices = false } = {}) => {
-  if (threadId !== CHIEF_ADVISOR_THREAD && !advisorContacts(entries).some((entry) => entry.id === threadId)) {
+  const group = advisorGroups(entries).find((entry) => entry.id === threadId);
+  if (threadId !== CHIEF_ADVISOR_THREAD && !group && !advisorContacts(entries).some((entry) => entry.id === threadId)) {
     throw new Error("Cannot write an unknown Advisor conversation.");
   }
   const source = array(entries);
@@ -216,11 +328,75 @@ export const replaceAdvisorThread = (entries, threadId, messages, { clearNotices
   if (messages.some((entry) => entry.threadId && entry.threadId !== threadId)) {
     throw new Error("A message cannot be moved between Advisor recipients.");
   }
+  if (group && messages.some((entry) => entry.role === "advisor"
+    && (!group.memberIds.includes(entry.speakerId)
+      || (entry.speakerId !== CHIEF_ADVISOR_THREAD && !advisorContacts(entries).some((contact) =>
+        contact.id === entry.speakerId && !contact.archived
+        && advisorRecipientType(contact) === ADVISOR_RECIPIENT_TYPES.MINISTER))))) {
+    throw new Error("Group replies must identify an active, invited government advisor.");
+  }
+  if (group && messages.some((entry) => entry.role === "advisor" && entry.silent === true
+    && (entry.text !== "" || entry.memory || entry.actionProposals || entry.actionReceipts
+      || entry.projectsSummary || entry.projectsProblem || entry.deployments))) {
+    throw new Error("A silent group participant cannot write prose or canonical operations.");
+  }
+  // Structured Action proposals are review-only in BOTH group and individual
+  // conversations. The receipt integrity check below forbids UI-origin writes
+  // to the canonical Actions ledger, even when an advisor proposes an order.
+  // Action approvals are written by recordAdvisorActionReceipt in the
+  // canonical document queue. A UI conversation snapshot is never authority
+  // to create, cancel or overwrite one of those receipts.
+  const savedReplies = new Map();
+  for (const entry of source) {
+    if (entry?.role !== "advisor" || threadOf(entry) !== threadId || !entry.id) continue;
+    const prior = savedReplies.get(entry.id);
+    if (prior && (prior.actionReceipts || entry.actionReceipts)) {
+      throw new Error("Duplicate Advisor message IDs prevent safe receipt preservation.");
+    }
+    savedReplies.set(entry.id, entry);
+  }
+  const incomingReplyIds = new Set();
   const notices = new Set(source.filter((entry) => entry?.role === "notice").map((entry) => entry.id));
   const own = messages
     .filter((entry) => !entry.streaming && (entry.role !== "notice" || (threadId === CHIEF_ADVISOR_THREAD && !clearNotices && notices.has(entry.id))))
     .map((entry) => {
       const record = { ...entry };
+      if (record.role === "advisor" && record.id) {
+        if (incomingReplyIds.has(record.id)) {
+          throw new Error("Duplicate Advisor message IDs prevent safe receipt preservation.");
+        }
+        incomingReplyIds.add(record.id);
+        const saved = savedReplies.get(record.id);
+        const receipts = saved?.actionReceipts;
+        const incoming = record.actionReceipts;
+        if (incoming != null && (typeof incoming !== "object" || Array.isArray(incoming))) {
+          throw new Error("Malformed Advisor Action receipts in conversation snapshot.");
+        }
+        if (receipts != null && (typeof receipts !== "object" || Array.isArray(receipts))) {
+          throw new Error("Malformed canonical Advisor Action receipts.");
+        }
+        const confirmed = Object.keys(receipts || {});
+        if (confirmed.length) {
+          // A receipt belongs to its original reply AND proposal. Matching by
+          // list index would attach it to an unrelated message after a stale
+          // UI snapshot or an interleaved native notice.
+          for (const proposalId of confirmed) {
+            const previous = saved.actionProposals?.filter((item) => item?.id === proposalId) || [];
+            const current = record.actionProposals?.filter((item) => item?.id === proposalId) || [];
+            const identity = ["id", "actionId", "operation", "targetId", "title", "text", "kind"];
+            if (previous.length !== 1 || current.length !== 1
+                || identity.some((key) => previous[0][key] !== current[0][key])) {
+              throw new Error("Advisor Action proposal identity changed since the receipt was saved.");
+            }
+          }
+          record.actionReceipts = { ...receipts };
+        } else {
+          delete record.actionReceipts;
+        }
+        // A receipt the panel holds and the saved reply does not is not written: the saved receipts are the only ones
+        // kept. It used to refuse the whole save, and the panel, still holding it (the saved conversation put back by an
+        // Undo after an approval), failed every save after: a player's log, 13 in a row, every reply in between lost.
+      }
       if (threadId === CHIEF_ADVISOR_THREAD) delete record.threadId;
       else record.threadId = threadId;
       return record;
@@ -230,11 +406,18 @@ export const replaceAdvisorThread = (entries, threadId, messages, { clearNotices
   // their exact positions (verified against the 413-entry Russia campaign).
   const next = [];
   const replacements = own.filter((entry) => entry.role !== "notice");
+  const retainedReplyIds = new Set(replacements.filter((entry) => entry.role === "advisor" && entry.id).map((entry) => entry.id));
   let used = 0;
   for (const entry of source) {
     if (MESSAGE_ROLES.has(entry?.role) && threadOf(entry) === threadId) {
       if (entry.role === "notice") {
         if (!clearNotices) next.push(entry);
+      } else if (!clearNotices && entry.role === "advisor" && entry.id
+          && Object.keys(entry.actionReceipts || {}).length && !retainedReplyIds.has(entry.id)) {
+        // The UI omitted this reply entirely. Preserve an acknowledged native
+        // decision instead of replacing it with an unrelated older message.
+        // Explicit conversation clearing still removes the full thread.
+        next.push(entry);
       } else if (used < replacements.length) {
         next.push(replacements[used++]);
       }

@@ -10,9 +10,10 @@
 // Accepted changes become one scenario save plus the asset uploads they need.
 // Pure: the caller does the saving.
 
-import { normalizePackGuidance, PROMPT_MODEL_VERSION } from "../Game/AI/promptGuidance.js";
+import { guidanceCharLimit, normalizePackGuidance, promptCharCount, PROMPT_MODEL_VERSION } from "../Game/AI/promptGuidance.js";
 import { normalizeFeatureSettings } from "../../server/gameFeatures.js";
 import { normalizeScenarioMusic } from "../../server/scenarioMusic.js";
+import { normalizeScenarioLanguages, scenarioLanguagePack } from "../../server/scenarioLanguages.js";
 import { buildScenarioSnapshot, isDetailFieldPath, politicsEntries, POLITICS_FIELDS, POLITICS_LEDGER_KEYS, sameValue } from "./scenarioChanges.js";
 import { CANON_MODEL_VERSION } from "./scenarioCanon.js";
 import { normalizeScenarioPrehistory } from "./scenarioPrehistory.js";
@@ -49,6 +50,8 @@ export const detailValueIn = (snapshot, change) => {
       return snapshot.institutionLogos ?? null;
     case "music":
       return snapshot.music ?? null;
+    case "languages":
+      return snapshot.languages?.[change.code] ?? null;
     case "cover":
       return snapshot.cover?.hash ?? null;
     default:
@@ -58,9 +61,15 @@ export const detailValueIn = (snapshot, change) => {
 
 // A suggestion's music is a file's: read as the stores would keep it, so what
 // is compared and applied is only ever lists of track ids.
+// A language pack the same: only strings, under a language's code.
+const packOrNull = (code, value) => {
+  const pack = scenarioLanguagePack({ [code]: value }, code);
+  return Object.keys(pack).length ? pack : null;
+};
 const sideOf = (change, value) => (change.kind === "cover" ? value?.hash ?? null
   : change.kind === "music" ? normalizeScenarioMusic(value)
-    : value);
+    : change.kind === "languages" ? packOrNull(change.code, value)
+      : value);
 const suggestedValueOf = (change) => sideOf(change, change.to);
 const postedValueOf = (change) => sideOf(change, change.from);
 
@@ -153,6 +162,12 @@ export const applyToSnapshot = (snapshot, change) => {
   } else if (change.kind === "stats") snapshot.stats = value ?? null;
   else if (change.kind === "institutionLogos") snapshot.institutionLogos = value ?? null;
   else if (change.kind === "music") snapshot.music = value ?? null;
+  else if (change.kind === "languages") {
+    const languages = { ...(snapshot.languages ?? {}) };
+    if (value) languages[change.code] = value;
+    else delete languages[change.code];
+    snapshot.languages = Object.keys(languages).length ? languages : null;
+  }
   else if (change.kind === "history") snapshot.history = applyHistoryChange(snapshot.history, change);
   else if (change.kind === "cover") snapshot.cover = value ? { hash: value } : null;
 };
@@ -226,11 +241,32 @@ const applyHistoryChange = (current, change) => {
   return normalizeScenarioPrehistory({ ...record, events });
 };
 
+// A suggested prompt passage longer than its limit (guidanceCharLimit: 20%
+// over the longest built-in version), as { length, limit }, or null for any
+// other change. `guidanceDefaults` are the English defaults
+// (PROMPT_GUIDANCE_DEFAULTS). Such a passage is never accepted: the game would
+// not use it (normalizePackGuidance leaves it out), so the review says so
+// instead of saving text that does nothing.
+export const promptChangeOverLimit = (change, guidanceDefaults) => {
+  if (change?.area !== "details" || change.kind !== "field" || change.path?.[0] !== "prompts" || !guidanceDefaults) return null;
+  const text = String(change.to ?? "").trim();
+  if (!text) return null;
+  const [, ...path] = change.path;
+  const englishDefault = path[0] === "tasks"
+    ? guidanceDefaults.tasks?.[path[1]]?.[path[2]]
+    : guidanceDefaults[path[0]]?.[path[1]];
+  const length = promptCharCount(text);
+  const limit = guidanceCharLimit(englishDefault);
+  return length > limit ? { length, limit } : null;
+};
+
 // The save that applies `accepted` (details changes) to the scenario described
 // by `details` (loadScenarioDetails): { patch, uploads, clears }. `patch` goes
 // to saveScenario; each upload is { key, json } or { key, base64, contentType };
 // each clear is an asset key.
-export const buildDetailSave = (accepted, details) => {
+// With `guidanceDefaults`, a prompt passage over its limit is left out
+// (promptChangeOverLimit).
+export const buildDetailSave = (accepted, details, { guidanceDefaults = null } = {}) => {
   const patch = {};
   const uploads = [];
   const clears = [];
@@ -259,6 +295,7 @@ export const buildDetailSave = (accepted, details) => {
         features ??= normalizeFeatureSettings(scenario.features);
         features[key] = { ...(features[key] ?? {}), [setting]: change.to };
       } else if (area === "prompts") {
+        if (promptChangeOverLimit(change, guidanceDefaults)) continue;
         guidance ??= normalizePackGuidance(data.prompts);
         const [, ...path] = change.path;
         const text = String(change.to ?? "").trim();
@@ -294,6 +331,14 @@ export const buildDetailSave = (accepted, details) => {
       // A scenario detail like the features: part of the save itself. null
       // takes the author's music away, which is what the suggestion asked.
       patch.music = normalizeScenarioMusic(change.to);
+    } else if (change.kind === "languages") {
+      // The author's packs with this language's replaced, or taken away: the
+      // others stay as they are.
+      const languages = { ...(patch.languages ?? normalizeScenarioLanguages(details?.scenario?.languages) ?? {}) };
+      const pack = packOrNull(change.code, change.to);
+      if (pack) languages[change.code] = pack;
+      else delete languages[change.code];
+      patch.languages = normalizeScenarioLanguages(languages);
     } else if (change.kind === "cover") {
       if (!change.to) clears.push("cover");
       else if (change.to.base64) uploads.push({ key: "cover", base64: change.to.base64, contentType: change.to.contentType || "image/jpeg" });
@@ -302,6 +347,6 @@ export const buildDetailSave = (accepted, details) => {
   if (Object.keys(worldPatch).length) patch.worldPatch = worldPatch;
   if (Object.keys(gamePatch).length) patch.gamePatch = gamePatch;
   if (features) patch.features = features;
-  if (guidance) patch.prompts = { promptModel: PROMPT_MODEL_VERSION, guidance };
+  if (guidance) patch.prompts = { promptModel: PROMPT_MODEL_VERSION, ...(data?.prompts?.bypassLengthLimit === true ? { bypassLengthLimit: true } : null), guidance };
   return { patch, uploads, clears };
 };

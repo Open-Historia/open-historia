@@ -5,9 +5,10 @@
 // skip", says why and what each of the old checks became).
 //
 // gameplay.js does the work, and cannot be loaded under bare node. These are
-// the three decisions in it that are pure, kept here so they can be tested:
-// when a provider has refused the folded request as such, what an event is
-// without the board ops written on it, and which agent each report is for.
+// the decisions in it that are pure, kept here so they can be tested: when a
+// provider has refused the folded request as such, what an event is without
+// the board ops written on it, which agent each report is for, and which
+// riders a skip's function can carry (fitSkipRiders).
 //
 // Import-free.
 
@@ -83,4 +84,78 @@ export const assignAgentReports = (jobs, reports, { sameName = (left, right) => 
         assigned.push({ job, report });
     }
     return assigned;
+};
+
+// ---- What a folded skip can carry ------------------------------------------------
+// A provider can refuse a function declaration for its size alone. Gemini took
+// a skip's function at 30,489 characters (its own form, geminiSchema.js) and
+// refused one at 32,672; the riders a skip adds to its lean contract (the
+// board's ops on every event, the agents' reports, the history fold) are some
+// 3,200 characters between them, on a contract that is 27,200 to 28,100 before
+// them (a shared game's host sends more: the events' audience and the players'
+// advice). So each skip weighs its function before it asks, against
+// FOLDED_SKIP_SCHEMA_BUDGET, and leaves out what does not fit
+// (foldedSkipSent.test.js builds every combination). Weighed with the lookup
+// functions declared beside it where there are any, since Gemini counts those
+// against the same ceiling (gameplay.js skipDeclaredChars): with 25 of them
+// beside it, a skip's function was refused at 28,894.
+export const FOLDED_SKIP_SCHEMA_BUDGET = 30400;
+
+// The riders a skip carries: { board, agentReports, history }, and which of
+// them to leave out until the function fits under `ceiling`. `sizeOf(riders)`
+// is the size of the function with those riders. Left out first:
+//   - a rider with no job: the history field when no fold is due, and the
+//     board's ops when the skip is shown no board (`boardShown` false). Each
+//     is offered only so the function stays the same from turn to turn;
+//   - then the history fold that IS due, and the agents' reports. Neither is
+//     lost: a fold left out waits for the next skip, and so do the agents (the
+//     ones left out are the longest silent next time: agentReports.js
+//     agentsReportingWithSkip), who also report between turns as background
+//     work (gameplay.js maybeGatherIntelligence). Whichever of the two was left
+//     out last skip (`waited`) goes after the other, so neither waits twice
+//     running for the other;
+//   - then the board: its ops are the record of this skip's events, and
+//     nothing writes them later. A skip without it has its board stand still,
+//     as a skip that is not folded always had;
+//   - and last a due fold that already waited a skip. On the games that ship
+//     the board and a fold always fit together (foldedSkipSent.test.js); only
+//     under a ceiling a refusal has lowered (ceilingAfterRefusal) can they
+//     not, and then the board stands still on every other fold rather than
+//     the history document never folding again in the session.
+// Returns the riders kept, the names left out in the order they were, the
+// size, and whether it fits at all (a lean contract over the ceiling does not).
+export const fitSkipRiders = ({ wanted = {}, historyDue = false, boardShown = true, sizeOf, ceiling = FOLDED_SKIP_SCHEMA_BUDGET, waited = [] } = {}) => {
+    const riders = { board: Boolean(wanted.board), agentReports: Boolean(wanted.agentReports), history: Boolean(wanted.history) };
+    const measure = typeof sizeOf === "function" ? () => Number(sizeOf({ ...riders })) || 0 : () => 0;
+    const waiting = new Set(asArray(waited));
+    const idle = [...(historyDue ? [] : ["history"]), ...(boardShown ? [] : ["board"])];
+    const foldWaited = historyDue && waiting.has("history");
+    const contested = (historyDue && !foldWaited ? ["history", "agentReports"] : ["agentReports"])
+        .sort((a, b) => Number(waiting.has(a)) - Number(waiting.has(b)));
+    const order = [...idle, ...contested, ...(boardShown ? ["board"] : []), ...(foldWaited ? ["history"] : [])];
+    const leftOut = [];
+    let chars = measure();
+    for (const name of order) {
+        if (chars <= ceiling) break;
+        if (!riders[name]) continue;
+        riders[name] = false;
+        leftOut.push(name);
+        chars = measure();
+    }
+    return { riders, leftOut, chars, fits: chars <= ceiling };
+};
+
+// The riders left out that had a job to do, which go after the others next
+// skip (`waited` above): the agents' reports, and a history fold that was due.
+export const ridersThatWaited = (leftOut, { historyDue = false } = {}) => asArray(leftOut)
+    .filter((name) => name === "agentReports" || (name === "history" && historyDue));
+
+// After a provider refused a folded skip's function, the ceiling the next skip
+// fits its riders under: below the size that was refused, so it carries at
+// least one rider fewer. Each refusal lowers it again, for the rest of the
+// session; a skip whose riders all go is asked with the lean contract.
+export const ceilingAfterRefusal = (ceiling, refusedChars) => {
+    const current = Number.isFinite(Number(ceiling)) ? Number(ceiling) : FOLDED_SKIP_SCHEMA_BUDGET;
+    const refused = Number(refusedChars);
+    return Number.isFinite(refused) && refused > 0 ? Math.min(current, refused - 1) : current;
 };

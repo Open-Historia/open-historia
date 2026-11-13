@@ -14,6 +14,7 @@ const SECTION_LABELS := {
 	"bundles": "Bundles",
 	"features": "Features",
 	"history": "Pre-history",
+	"languages": "Languages",
 	"music": "Music",
 	"overview": "Overview",
 	"politics": "Politics",
@@ -22,7 +23,7 @@ const SECTION_LABELS := {
 	"world": "World",
 }
 const SECTION_GROUPS := [
-	["Presentation", ["overview", "assets", "music"]],
+	["Presentation", ["overview", "assets", "music", "languages"]],
 	["Setting", ["world", "history", "politics"]],
 	["Rules and AI", ["stats", "features", "prompts"]],
 	["Sharing", ["bundles"]],
@@ -31,6 +32,7 @@ const SECTION_BLURBS := {
 	"overview": "How it appears in the library: its name, colour and the words on its card.",
 	"assets": "The cover and the files the map is drawn from.",
 	"music": "The hub's tracks it plays while a game opens, in the game, at war and in the war room.",
+	"languages": "Its own text in other languages, translated once by your AI and shipped with it.",
 	"world": "Where play begins: the player's country, the date, the troops and the story so far.",
 	"history": "The events that led to the start date.",
 	"politics": "Governments, parties and institutions.",
@@ -39,12 +41,13 @@ const SECTION_BLURBS := {
 	"prompts": "The instructions the AI follows.",
 	"bundles": "Download it as one file to share or keep.",
 }
-const SCENARIO_SECTIONS := ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]
+const SCENARIO_SECTIONS := ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "languages", "bundles"]
 const GAME_SECTIONS := ["overview", "world", "features", "prompts", "assets"]
 const SECTION_ICONS := {
 	"overview": "<rect x='3.5' y='4.5' width='17' height='15' rx='2.5'/><path d='M7 9h10M7 13h6'/>",
 	"assets": "<rect x='3.5' y='5' width='17' height='14' rx='2.5'/><circle cx='9' cy='10' r='1.6'/><path d='m4 17 5-4.5 4 3.5 3-2.5 4 3.5'/>",
 	"music": "<path d='M9 17.5V6l10-2v11.5'/><circle cx='6.5' cy='17.5' r='2.5'/><circle cx='16.5' cy='15.5' r='2.5'/>",
+	"languages": "<path d='M4 5.5h8M8 4v1.5c0 3.5-1.8 6.3-4 7.5M5.5 9c1 1.8 2.8 3.2 5 3.8'/><path d='m12 19.5 3.5-8.5 3.5 8.5M13.2 16.8h4.6'/>",
 	"world": "<circle cx='12' cy='12' r='8.5'/><path d='M3.5 12h17M12 3.5c2.3 2.3 3.5 5.2 3.5 8.5s-1.2 6.2-3.5 8.5c-2.3-2.3-3.5-5.2-3.5-8.5s1.2-6.2 3.5-8.5z'/>",
 	"history": "<path d='M5 4.5h11.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2z'/><path d='M5 17.5a2 2 0 0 1 2-2h11.5M9 8.5h6'/>",
 	"politics": "<path d='M4 9.5 12 5l8 4.5M5.5 19.5h13M7 10.5v7M12 10.5v7M17 10.5v7'/>",
@@ -79,6 +82,10 @@ const PROMPT_INFO := "Only the guidance is editable: the role, the tone, what to
 const DATE_PLACEHOLDER := "YYYY-MM-DD — before AD 1 use a minus: -0218-03-01 is 1 March 218 BC"
 const DATE_TITLE := "Dates are YYYY-MM-DD. A year before AD 1 carries a leading minus and counts backwards with no year zero: -0218-03-01 is 1 March 218 BC, -0001-12-31 the last day of 1 BC."
 const LICENSE_URL_FALLBACK := "https://creativecommons.org/licenses/by/4.0/"
+const PROMPT_TOO_LONG_TEXT := "A prompt passage is longer than its limit. Shorten it or reset it in the Prompts tab to save."
+const PROMPT_LIMIT_NOTE := "Each passage can be up to 20% longer than the built-in one."
+const OVER_LIMIT_BORDER := Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.7)
+const OVER_LIMIT_INK := Color("#fca5a5")
 
 var engine: EngineLink
 var context := {}
@@ -99,6 +106,12 @@ var _section := "overview"
 var _prompt_section := "leader"
 var _prompt_status := {}
 var _prompt_catalog: Array = []
+var _prompt_over: Array = []
+var _prompt_counts := {}
+var _prompt_check := 0
+var _prompt_widgets := {}
+var _prompt_tabs := {}
+var _prompt_alert: Label
 var _constants := {}
 var _data_root := ""
 var _panels: Array = []
@@ -409,11 +422,13 @@ func _adopt_open(pack: Dictionary) -> void:
 	_section = "overview"
 	_prompt_section = "leader"
 	_prompt_status = {}
+	_prompt_over = []
 	visible = true
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	move_to_front()
 	_fit()
 	_render_all()
+	_check_prompts()
 
 
 func _hide() -> void:
@@ -431,6 +446,7 @@ func _hide() -> void:
 	_section = "overview"
 	_prompt_section = "leader"
 	_prompt_status = {}
+	_prompt_over = []
 	visible = false
 	closed.emit()
 
@@ -672,6 +688,10 @@ func _render_nav() -> void:
 	_save_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_save_button.pressed.connect(_save)
 	_nav_actions.add_child(_save_button)
+	_prompt_alert = UI.wrapped(PROMPT_TOO_LONG_TEXT, 11, OVER_LIMIT_INK)
+	_prompt_alert.name = "PromptTooLong"
+	_nav_actions.add_child(_prompt_alert)
+	_apply_save_state()
 	if _kind == "scenario":
 		var map := _wide_action("🗺️ Open Map Editor", Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.12), EditorKit.BUTTON_INK)
 		map.pressed.connect(_open_workshop)
@@ -707,8 +727,10 @@ func _nav_button(key: String) -> Button:
 	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	node.custom_minimum_size.y = 37
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var normal := UI.box(Color(1, 1, 1, 0.1) if active else Color(0, 0, 0, 0), Color(1, 1, 1, 0.18) if active else Color(0, 0, 0, 0), 9, 1, Vector4(11, 0, 11, 0))
-	var hover := UI.box(Color(1, 1, 1, 0.1) if active else Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.18) if active else Color(0, 0, 0, 0), 9, 1, Vector4(11, 0, 11, 0))
+	var chosen_bg := UiTheme.pick("active", Color(1, 1, 1, 0.1))
+	var chosen_edge := UiTheme.pick("accent", Color(1, 1, 1, 0.18))
+	var normal := UI.box(chosen_bg if active else Color(0, 0, 0, 0), chosen_edge if active else Color(0, 0, 0, 0), 9, 1, Vector4(11, 0, 11, 0))
+	var hover := UI.box(chosen_bg if active else Color(1, 1, 1, 0.05), chosen_edge if active else Color(0, 0, 0, 0), 9, 1, Vector4(11, 0, 11, 0))
 	for state in [["normal", normal], ["hover", hover], ["pressed", hover], ["hover_pressed", hover], ["focus", normal]]:
 		node.add_theme_stylebox_override(state[0], state[1])
 	var ink := UI.WHITE if active else NAV_INK
@@ -797,6 +819,8 @@ func _render_section() -> void:
 			_render_assets()
 		"music":
 			_render_music()
+		"languages":
+			_render_languages()
 		"bundles":
 			_render_bundles()
 
@@ -1101,6 +1125,13 @@ func _render_music() -> void:
 	_host(EditorMusicPanel.new(), {"value": _form.get("music"), "value_field": "music"}, func(value: Variant) -> void: _set_form("music", value))
 
 
+func _render_languages() -> void:
+	_content.add_theme_constant_override("separation", 15)
+	_host(EditorLanguagesPanel.new(), {"value": _form.get("languages"), "value_field": "languages", "scenarioId": _id}, func(value: Variant) -> void:
+		_set_form("languages", value)
+		_update_panels())
+
+
 func _prompt_catalog_ready() -> void:
 	if not _prompt_catalog.is_empty():
 		return
@@ -1159,10 +1190,108 @@ func _change_prompt(section: Dictionary, segment_id: Variant, value: Variant) ->
 	_form["prompts"] = prompts
 
 
+func prompts_over_limit() -> Array:
+	return _prompt_over
+
+
+func _prompt_bypass() -> bool:
+	var prompts: Variant = _form.get("prompts")
+	return prompts is Dictionary and (prompts as Dictionary).get("bypassLengthLimit") == true
+
+
+func _set_prompt_bypass(on: bool) -> void:
+	var prompts: Dictionary = (_form.get("prompts", {}) as Dictionary).duplicate(true) if _form.get("prompts") is Dictionary else {}
+	prompts["bypassLengthLimit"] = on
+	_form["prompts"] = prompts
+	_check_prompts()
+
+
+func _check_prompts() -> void:
+	if engine == null or _form.is_empty():
+		return
+	_prompt_check += 1
+	var call := _prompt_check
+	var current := _prompt_section_entry() if not _prompt_catalog.is_empty() else {}
+	var values := {}
+	if not current.is_empty():
+		var edits := _prompt_edits(current)
+		var defaults: Dictionary = current.get("defaults", {})
+		for segment in current.get("segments", []):
+			if segment is Dictionary:
+				var segment_id := str((segment as Dictionary).get("id", ""))
+				values[segment_id] = str(edits[segment_id]) if edits.get(segment_id) is String else str(defaults.get(segment_id, ""))
+	var reply := await engine.request("editor.prompts.check", {"prompts": _form.get("prompts", {}), "section": str(current.get("key", "")), "values": values})
+	if call != _prompt_check or not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY:
+		return
+	var result: Dictionary = reply["result"]
+	_prompt_over = result.get("over", [])
+	_prompt_counts = result.get("counts", {})
+	_apply_prompt_marks()
+	_apply_save_state()
+
+
+func _apply_save_state() -> void:
+	var over := not _prompt_over.is_empty()
+	if _save_button and is_instance_valid(_save_button):
+		_save_button.disabled = over
+		_save_button.modulate.a = 0.5 if over else 1.0
+		_save_button.tooltip_text = PROMPT_TOO_LONG_TEXT if over else ""
+		_save_button.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN if over else Control.CURSOR_POINTING_HAND
+	if _prompt_alert and is_instance_valid(_prompt_alert):
+		_prompt_alert.visible = over
+
+
+func _apply_prompt_marks() -> void:
+	var sections := {}
+	for entry in _prompt_over:
+		if entry is Dictionary:
+			sections[str((entry as Dictionary).get("sectionKey", ""))] = true
+	for key in _prompt_tabs:
+		if not is_instance_valid(_prompt_tabs[key]):
+			continue
+		var tab: Button = _prompt_tabs[key]
+		for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
+			var face := tab.get_theme_stylebox(state)
+			if face is StyleBoxFlat:
+				var edge := (face as StyleBoxFlat).duplicate() as StyleBoxFlat
+				edge.border_color = OVER_LIMIT_BORDER if sections.has(key) else Color(tab.get_meta("edge", edge.border_color))
+				tab.add_theme_stylebox_override(state, edge)
+	var bypass := _prompt_bypass()
+	for segment_id in _prompt_widgets:
+		var parts: Dictionary = _prompt_widgets[segment_id]
+		var count := int(_prompt_counts.get(segment_id, 0))
+		var limit := int(parts.get("limit", 0))
+		var over := 0 if bypass else count - limit
+		var ink := OVER_LIMIT_INK if over > 0 else Color(1, 1, 1, 0.42)
+		if not is_instance_valid(parts.get("count")) or not is_instance_valid(parts.get("over")) or not is_instance_valid(parts.get("area")):
+			continue
+		var count_label: Label = parts["count"]
+		var over_label: Label = parts["over"]
+		if is_instance_valid(count_label):
+			count_label.text = "%d / %d characters" % [count, limit]
+			count_label.add_theme_color_override("font_color", ink)
+		if is_instance_valid(over_label):
+			over_label.text = "%d characters over the limit: shorten it to save." % over if over > 0 else ""
+			over_label.add_theme_color_override("font_color", ink)
+		var area: TextEdit = parts["area"]
+		if is_instance_valid(area):
+			var normal := (area.get_theme_stylebox("normal") as StyleBoxFlat).duplicate() as StyleBoxFlat
+			var focus := (area.get_theme_stylebox("focus") as StyleBoxFlat).duplicate() as StyleBoxFlat
+			if not area.has_meta("edge"):
+				area.set_meta("edge", normal.border_color)
+				area.set_meta("focus_edge", focus.border_color)
+			normal.border_color = OVER_LIMIT_BORDER if over > 0 else Color(area.get_meta("edge"))
+			focus.border_color = OVER_LIMIT_BORDER if over > 0 else Color(area.get_meta("focus_edge"))
+			area.add_theme_stylebox_override("normal", normal)
+			area.add_theme_stylebox_override("focus", focus)
+
+
 func _render_prompts() -> void:
 	await _prompt_catalog_ready()
 	if _section != "prompts" or not is_instance_valid(_content):
 		return
+	_prompt_widgets = {}
+	_prompt_tabs = {}
 	var outer := EditorKit.soft_card(0, 18)
 	var column: VBoxContainer = outer[1]
 	column.add_theme_constant_override("separation", 0)
@@ -1208,6 +1337,8 @@ func _render_prompts() -> void:
 			continue
 		var key := str(section.get("key", ""))
 		var tab := EditorKit.button(str(section.get("label", key)), "tab_on" if key == str(current.get("key", "")) else "tab")
+		tab.set_meta("edge", (tab.get_theme_stylebox("normal") as StyleBoxFlat).border_color)
+		_prompt_tabs[key] = tab
 		tab.pressed.connect(func() -> void:
 			_prompt_section = key
 			_render_section())
@@ -1218,9 +1349,33 @@ func _render_prompts() -> void:
 	column.add_child(EditorKit.gap(8))
 	var info := PanelContainer.new()
 	info.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.11), 12, 1, Vector4(11, 9, 11, 9)))
-	info.add_child(UI.wrapped(PROMPT_INFO, 12, Color(1, 1, 1, 0.62), 400))
+	var info_text := UI.wrapped("%s %s" % [I18n.now(PROMPT_INFO), I18n.now(PROMPT_LIMIT_NOTE)], 12, Color(1, 1, 1, 0.62), 400)
+	info_text.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	info.add_child(info_text)
 	column.add_child(info)
 	column.add_child(EditorKit.gap(14))
+	if transfer:
+		var bypass_row := HBoxContainer.new()
+		bypass_row.name = "BypassLimit"
+		bypass_row.add_theme_constant_override("separation", 9)
+		var bypass := CheckBox.new()
+		bypass.name = "BypassToggle"
+		bypass.button_pressed = _prompt_bypass()
+		bypass.focus_mode = Control.FOCUS_NONE
+		bypass.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		bypass.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		bypass.add_theme_icon_override("unchecked", UI.svg_texture(EditorLanguagesPanel.BOX_OFF, 1.0))
+		bypass.add_theme_icon_override("checked", UI.svg_texture(EditorLanguagesPanel.BOX_ON, 1.0))
+		bypass.toggled.connect(_set_prompt_bypass)
+		bypass_row.add_child(bypass)
+		var bypass_texts := VBoxContainer.new()
+		bypass_texts.add_theme_constant_override("separation", 2)
+		bypass_texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		bypass_texts.add_child(UI.label("Bypass prompt length limit", 13, Color(1, 1, 1, 0.9), 700))
+		bypass_texts.add_child(UI.wrapped("Passages can be any length. Players are warned when they start a game that it will use a lot more tokens.", 12, Color(1, 1, 1, 0.48)))
+		bypass_row.add_child(bypass_texts)
+		column.add_child(bypass_row)
+		column.add_child(EditorKit.gap(14))
 	var segments_box := VBoxContainer.new()
 	segments_box.add_theme_constant_override("separation", 14)
 	var reset_all := EditorKit.button("Reset every passage in this section", "small")
@@ -1276,20 +1431,38 @@ func _render_prompts() -> void:
 			refresh_reset_all.call()
 		area.text_changed.connect(func() -> void:
 			_change_prompt(current, segment_id, area.text)
-			mark_state.call())
+			mark_state.call()
+			_check_prompts())
 		reset.pressed.connect(func() -> void:
 			_change_prompt(current, segment_id, null)
 			_render_section())
 		block.add_child(area)
+		var tally := HBoxContainer.new()
+		tally.add_theme_constant_override("separation", 10)
+		var over_label := UI.label("", 11, Color(1, 1, 1, 0.42))
+		over_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tally.add_child(over_label)
+		var count_label := UI.label("", 11, Color(1, 1, 1, 0.42))
+		count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		tally.add_child(count_label)
+		block.add_child(EditorKit.gap(4))
+		block.add_child(tally)
+		_prompt_widgets[segment_id] = {"area": area, "count": count_label, "over": over_label, "limit": int(segment.get("limit", 0))}
 		segments_box.add_child(block)
 		mark_state.call()
 	column.add_child(segments_box)
 	column.add_child(reset_all_holder)
 	refresh_reset_all.call()
+	_check_prompts()
 
 
 func _export_prompts() -> void:
 	if _kind != "scenario" or _details.is_empty():
+		return
+	if not _prompt_over.is_empty():
+		_prompt_status = {"error": true, "text": PROMPT_TOO_LONG_TEXT}
+		if _section == "prompts":
+			_render_section()
 		return
 	var target := await EditorKit.pick_file(self, true, "%s-prompts.json" % _id, PackedStringArray(["*.json ; JSON"]))
 	if target.is_empty():
@@ -1313,7 +1486,12 @@ func _import_prompts() -> void:
 	var reply := await engine.request("editor.prompts.import", {"path": source})
 	if reply.get("ok", false):
 		_form["prompts"] = reply["result"].get("prompts", _form.get("prompts", {}))
-		_prompt_status = {"error": false, "text": "Imported %s. Save the scenario to persist these prompt edits." % str(reply["result"].get("name", source.get_file()))}
+		var imported_name := str(reply["result"].get("name", source.get_file()))
+		if bool(reply["result"].get("overLimit", false)):
+			_prompt_status = {"error": true, "text": "Imported %s. Some passages are longer than the limit and are marked in red: shorten or reset them to save." % imported_name}
+		else:
+			_prompt_status = {"error": false, "text": "Imported %s. Save the scenario to persist these prompt edits." % imported_name}
+		_check_prompts()
 	else:
 		_prompt_status = {"error": true, "text": "Import failed: %s" % str(reply.get("error", ""))}
 	if _section == "prompts":
@@ -1580,6 +1758,9 @@ func _save() -> void:
 	if _kind.is_empty() or _details.is_empty() or _form.is_empty():
 		return
 	if _busy:
+		return
+	if not _prompt_over.is_empty():
+		_show_error(PROMPT_TOO_LONG_TEXT)
 		return
 	_error = ""
 	_render_error()

@@ -125,6 +125,51 @@ export const stripKindTags = (phrase) => {
 export const kindOfName = (kinds, name) => (kinds?.size ? kinds.get(foldName(asText(name).replace(/^(?:the|a|an)\s+/i, ""))) ?? "" : "");
 
 // ---------------------------------------------------------------------------
+// Regions, by name
+// ---------------------------------------------------------------------------
+//
+// What a region is called where the model is told of it: its name, and
+// "region: <name>" where the name alone could be read as something else — a
+// name several regions of the map share, or a region named like a country
+// (the state of Georgia beside the country). `regions` are catalog rows
+// ({ id, name, country }; a lookup row's `base` or `owner` stands for the
+// country); `countries` adds the names of polities the rows do not carry.
+// Answers "" for an id the rows do not have: the caller says what it can
+// instead, never the id. The name counts are kept per rows array, which the
+// region catalog hands out once per map.
+const regionNameIndex = new WeakMap();
+const indexRegionNames = (regions) => {
+    const cached = regionNameIndex.get(regions);
+    if (cached) return cached;
+    const byId = new Map();
+    const count = new Map();
+    const countries = new Set();
+    for (const region of regions) {
+        const id = asText(region?.id);
+        const name = asText(region?.name);
+        if (!id || !name) continue;
+        byId.set(id, name);
+        const key = foldName(name);
+        if (key) count.set(key, (count.get(key) ?? 0) + 1);
+        const country = foldName(region?.country ?? region?.base ?? region?.owner);
+        if (country) countries.add(country);
+    }
+    const index = { byId, count, countries };
+    regionNameIndex.set(regions, index);
+    return index;
+};
+export const regionNamer = (regions, { countries = [] } = {}) => {
+    const index = indexRegionNames(Array.isArray(regions) ? regions : []);
+    const extra = new Set(asArray(countries).map(foldName).filter(Boolean));
+    return (id) => {
+        const name = index.byId.get(asText(id));
+        if (!name) return "";
+        const key = foldName(name);
+        return (index.count.get(key) ?? 0) > 1 || index.countries.has(key) || extra.has(key) ? `region: ${name}` : name;
+    };
+};
+
+// ---------------------------------------------------------------------------
 // Units, by name
 // ---------------------------------------------------------------------------
 //

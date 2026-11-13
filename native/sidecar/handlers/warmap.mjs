@@ -1025,6 +1025,16 @@ export const register = (ctx) => {
       if (Number.isFinite(Number(args?.gone))) phaseGone = Number(args.gone);
       return seedWar(args ?? {});
     },
+    "warmap.test.strikeNextJump": async ({ lines = [] } = {}) => {
+      if (!ctx.standIn) throw new Error("Only the stand-in model may be told what to strike.");
+      ctx.strikeNextJump?.(lines);
+      return true;
+    },
+    "warmap.test.strikes": async () => {
+      if (!ctx.standIn) throw new Error("Only the stand-in model may read the test strikes.");
+      const world = await engine.gameState.readWorldState({ force: true });
+      return ctx.plain(engine.strikes.normalizeStrikes(world?.strikes));
+    },
     "warmap.test.groups": async ({ group = "Rhine Liberation Front", regions = [], claimants = null } = {}) => {
       if (!ctx.standIn) throw new Error("Only the stand-in model may seed a test war.");
       const world = await engine.gameState.readWorldState({ force: true });

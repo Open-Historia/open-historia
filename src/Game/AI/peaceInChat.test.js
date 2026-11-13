@@ -165,7 +165,8 @@ test("a skip's answer with a peace offer lands as a chat message carrying its te
   const gameplay = read("gameplay.js");
   assert.ok(gameplay.includes("const terms = peaceOffer && typeof peaceOffer === \"object\" ? termsOfLetter(peaceOffer) : null;"));
   assert.ok(gameplay.includes("const nextChat = await opening({ ...letter, source: \"outreach\", ...(offerMessageId ? { openingMessageId: offerMessageId } : {}) }, \"\", { revealWith: lastTurnEventId });"));
-  assert.ok(gameplay.includes("treaties: readTreatyLines(result.peaceTreaties),"));
+  // The skip's treaty lines, with the offers its end of a player's war accepted (playersWarsHold.js), reach the turn.
+  assert.ok(gameplay.includes("const toldTreaties = readTreatyLines(result.peaceTreaties);") && gameplay.includes("treaties: turnTreaties,"));
   assert.ok(gameplay.includes("peaceTreaties: merged.peaceTreaties,"));
   // Weariness 90 alone sends nothing.
   const spent = turnWarAndPeace({ world: world({ warWeariness: [{ country: "Borduria", value: 90 }] }), baseWorld: world(), days: 30, date: "1915-02-01", round: 9, players: ["Aland"] });
@@ -173,10 +174,10 @@ test("a skip's answer with a peace offer lands as a chat message carrying its te
 });
 
 test("an offer of peace no longer pops up over the map, and the skip's contract carries it safely", () => {
+  // Nor a call to arms (2026-11-06): nothing is drawn over the map for either; both are answered in a chat.
   const cards = fs.readFileSync(path.join(here, "../GameUI/warAndPeace.jsx"), "utf8").split("\r\n").join("\n");
-  const popup = cards.slice(cards.indexOf("export const WarAndPeaceCards = () => {"), cards.indexOf("// ---- in a diplomatic chat"));
-  assert.equal(popup.includes("offer"), false, "the cards over the map are calls to arms only");
-  assert.ok(popup.includes("openCallsFor(calls, country)"));
+  assert.equal(cards.includes("WarAndPeaceCards"), false);
+  assert.equal(read("../GameUI/main.jsx").includes("WarAndPeaceCards"), false);
   const chat = read("../GameUI/chat.jsx");
   assert.ok(chat.includes("{(peaceByMessage.get(String(msg.id ?? \"\")) ?? []).map(renderPeaceCard)}") && chat.includes("{strandedPeace.map(renderPeaceCard)}"));
   // The letter's terms and the treaties' lines ride in the skip's one answer: no array bounds (Gemini rejects them).

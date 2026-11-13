@@ -23,8 +23,15 @@ const KEYFRAMES := {
 	"ohRostraRise": {"order": ["ty", "s"], "opacity": [[0.0, 0.0], [0.2, 1.0], [1.0, 0.0]], "ty": [[0.0, 0.0], [1.0, -70.0]], "s": [[0.0, 0.6], [1.0, 1.1]]},
 	"ohRostraSlide": {"order": ["tx"], "tx": [[0.0, 0.0], [0.42, 0.0], [0.5, "slide"], [0.92, "slide"], [1.0, 0.0]]},
 	"ohRostraType": {"order": ["sx"], "sx": [[0.0, 0.0], [1.0, 1.0]]},
+	"ohAiPacket": {"order": ["tx"], "opacity": [[0.0, 0.0], [0.12, 1.0], [0.88, 1.0], [1.0, 0.0]], "tx": [[0.0, 0.0], [1.0, "run"]]},
+	"ohAiTrim": {"order": ["sx"], "sx": [[0.0, 1.0], [0.25, 1.0], [0.6, "to"], [1.0, "to"]]},
+	"ohAiBeam": {"order": [], "dash": [[0.0, "length"], [0.45, 0.0], [0.8, 0.0], [1.0, 0.0]], "opacity": [[0.0, 1.0], [0.45, 1.0], [0.8, 0.9], [1.0, 0.0]]},
+	"ohAiLight": {"order": [], "opacity": [[0.0, 0.25], [0.4, 0.25], [0.55, 1.0], [0.85, 1.0], [1.0, 0.25]]},
+	"ohAiKnob": {"order": ["tx"], "tx": [[0.0, 0.0], [0.3, 0.0], [0.45, "run"], [1.0, "run"]]},
+	"ohAiTrack": {"order": [], "opacity": [[0.0, 0.0], [0.3, 0.0], [0.45, 1.0], [1.0, 1.0]]},
+	"ohAiFill": {"order": ["sx"], "sx": [[0.0, 0.1], [0.1, 0.1], [0.7, "to"], [1.0, "to"]]},
 }
-const DEFAULT_VARS := {"fall": 160.0, "length": 1000.0, "tilt": -6.0, "from": 0.0, "to": 0.0, "scroll": -150.0, "slide": 96.0}
+const DEFAULT_VARS := {"fall": 160.0, "length": 1000.0, "tilt": -6.0, "from": 0.0, "to": 0.0, "scroll": -150.0, "slide": 96.0, "run": 200.0}
 const TRANSFORM_KEYS := ["tx", "ty", "rot", "s", "sx"]
 
 

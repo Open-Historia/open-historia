@@ -196,6 +196,8 @@ func _run() -> void:
 		await _settings_checks()
 	if _wants("port"):
 		await _port_checks()
+	if _wants("strikes"):
+		await _event_strikes()
 	_finish(0 if failures.is_empty() else 1)
 
 
@@ -1538,6 +1540,51 @@ func _terrain_names_checks(view: MapView) -> void:
 	view.bearing = 0.0
 	view.call("_after_camera_move")
 	await _frames(2)
+
+
+func _event_strikes() -> void:
+	var war := main.get("war") as WarLayers
+	_check(war != null, "the map has its war layers to draw strikes on")
+	if war == null:
+		return
+	var view: MapView = main.map_view
+	extras.apply_map_settings({"Globe": false})
+	await main.engine.request("warmap.test.strikeNextJump", {"lines": ["France~missile strike~city: Paris~city: Berlin~6~some"]})
+	var watched: Array = [false, 0]
+	var watch := func() -> void:
+		if war._strikes_playing:
+			watched[0] = true
+		var drawn: Array = war.overlay.strikes.get("ribbons", [])
+		watched[1] = maxi(int(watched[1]), drawn.size())
+	process_frame.connect(watch)
+	view.fit_lonlat_bounds([[1.0, 47.0], [15.0, 54.5]], 5.2, 0.0)
+	await _wait(0.4)
+	var skipped: Dictionary = await main.engine.request("skip", {"days": 7})
+	_check(bool(skipped.get("ok", false)), "a 7-day skip lands in a game with no war")
+	await main._world_changed()
+	var strikes: Array = (await main.engine.request("warmap.test.strikes")).get("result", [])
+	var mine: Array = strikes.filter(func(strike: Dictionary) -> bool: return str(strike.get("id", "")).begins_with("event-strike:"))
+	var strike: Dictionary = mine[0] if not mine.is_empty() else {}
+	var to: Dictionary = strike.get("to", {}) if strike.get("to") is Dictionary else {}
+	var from: Dictionary = strike.get("from", {}) if strike.get("from") is Dictionary else {}
+	_check(mine.size() == 1 and str(strike.get("weapon", "")) == "missile strike" and int(strike.get("count", 0)) == 6, "a story event's strike is kept for the map with no war under way (%s)" % JSON.stringify(strikes))
+	_check(str(from.get("name", "")).ends_with("Paris") and str(to.get("name", "")).ends_with("Berlin") and absf(float(to.get("lng", 0)) - 13.4) < 0.6 and absf(float(from.get("lng", 0)) - 2.35) < 0.6, "it is placed: launched from Paris, aimed at Berlin (%s -> %s)" % [JSON.stringify(from), JSON.stringify(to)])
+	var record: Dictionary = (await main.engine.request("turn.history")).get("result", {})
+	var turn: Dictionary = record.get("turn", {}) if record.get("turn") is Dictionary else {}
+	var struck: Array = (turn.get("events", []) as Array).filter(func(event: Dictionary) -> bool: return bool(event.get("struck", false)))
+	_check(struck.size() == 1 and str(struck[0].get("id", "")) == str(strike.get("eventId", "-")), "its event carries the strike, with a way to watch it again (%d struck)" % struck.size())
+	await _until(func() -> bool: return int(watched[1]) > 0, 8.0)
+	_check(bool(watched[0]) and int(watched[1]) > 0, "the strike plays on the map when the turn lands (%d ribbons at most)" % int(watched[1]))
+	await _until(func() -> bool: return not war._strikes_playing, 20.0)
+	_check(not war._strikes_playing and (war.overlay.strikes.get("ribbons", []) as Array).is_empty(), "and finishes")
+	watched[0] = false
+	watched[1] = 0
+	war.replay_strikes(str(strike.get("eventId", "")))
+	await _until(func() -> bool: return int(watched[1]) > 0, 8.0)
+	await _wait(1.6)
+	await _shoot("mapx-event-strike-replayed")
+	process_frame.disconnect(watch)
+	_check(int(watched[1]) > 0, "its event plays it again on request (%d ribbons)" % int(watched[1]))
 
 
 func _finish(code: int) -> void:

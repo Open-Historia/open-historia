@@ -162,7 +162,7 @@ func _run() -> void:
 		var track: Dictionary = entry
 		if not FileAccess.file_exists(str(track.get("file", ""))):
 			missing.append(str(track.get("file", "")))
-	_check("every piece the game ships is found on disk", (tracks.get("own", []) as Array).size() == 7 and missing.is_empty(), "%d pieces, missing %s" % [(tracks.get("own", []) as Array).size(), ", ".join(missing)])
+	_check("every piece the game ships is found on disk", (tracks.get("own", []) as Array).size() == 8 and missing.is_empty(), "%d pieces, missing %s" % [(tracks.get("own", []) as Array).size(), ", ".join(missing)])
 	_say("menu pieces %s, game pieces %s, war pieces %s, volumes %s" % [JSON.stringify(tracks.get("menu", [])), JSON.stringify(tracks.get("game", [])), JSON.stringify(tracks.get("war", [])), JSON.stringify(tracks.get("volumes", {}))])
 
 	var settings: Dictionary = await sound.apply_settings({"music": true, "volume": 25, "effects": true})
@@ -350,9 +350,32 @@ func _run() -> void:
 	_check("a let-go build is read again and plays", bool(build_voice.get("playing", false)) and bool(build_voice.get("loaded", false)), JSON.stringify(build_voice))
 	_agree(reloaded, "reloaded")
 	await sound.enter_game({"country": "France"})
+	await _music_reentry()
 	_say("scenes seen: %s" % ", ".join(scenes))
 	await _shoot("audio-1-menu")
 	_finish()
+
+
+func _music_reentry() -> void:
+	var id := str(main.game_id)
+	_check("a game is open to go back into", main.in_game and not id.is_empty(), id)
+	if id.is_empty():
+		return
+	main._show("menu")
+	await _wait(1.0)
+	var from := scenes.size()
+	await main._open_game(id)
+	await _wait(1.0)
+	var back := scenes.slice(from)
+	_check("going back into the game already open skips the build-up", not back.has("loading") and sound.scene() in ["game", "atWar"], ", ".join(back))
+	main._show("menu")
+	await _wait(1.0)
+	main.game_id = "a-game-opened-before"
+	from = scenes.size()
+	await main._open_game(id)
+	await _wait(1.0)
+	var switched := scenes.slice(from)
+	_check("switching to another game plays the wind-up again", switched.has("loading") and sound.scene() in ["game", "atWar"] and str(main.game_id) == id, ", ".join(switched))
 
 
 func _finish() -> void:

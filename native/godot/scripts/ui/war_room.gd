@@ -47,6 +47,9 @@ var _turn_running := false
 var _acting := false
 var _notice := ""
 var _sending: Dictionary = {}
+var _sent: Variant = null
+var _air_blast := 0.0
+var _order_radius_seen := ""
 var _failure: Dictionary = {}
 var _took: Array = []
 var _say_call := 0
@@ -151,6 +154,9 @@ func setup(engine_link: EngineLink, context: Dictionary = {}) -> void:
 	plates.aim.connect(func() -> void: store.take_tool("aircraft"))
 	plates.call_off.connect(func(unit: String) -> void: _order_with("warroom.airstrike", {"op": "unairstrike", "unit": unit}))
 	plates.aircraft_close.connect(func() -> void: store.set_values({"aircraft": false}))
+	plates.strike_radius.connect(_set_strike_radius)
+	plates.strike_radius_set.connect(_order_strike_radius)
+	plates.radius_sizing.connect(_set_sizing)
 	if engine and not _phone:
 		var reply: Dictionary = await engine.request("warroom.width")
 		if reply.get("ok", false) and float(reply.get("result", 0)) > 0.0:
@@ -221,6 +227,7 @@ func set_open(value: bool) -> void:
 		if _rehearse_call > 0:
 			engine.cancel(_rehearse_call)
 			_rehearse_call = 0
+		_order_radius_seen = ""
 		store.close_room()
 		_slide(false)
 		shown_changed.emit(false)
@@ -279,7 +286,10 @@ func _sync_store_from_view() -> void:
 		plans.append({"id": "deploy", "kind": "deploy", "form": str(line.get("form", "front")), "ways": [line.get("way", [])], "picked": [], "troops": 0})
 	var intel: Dictionary = _record.get("intel", {})
 	var air: Dictionary = _record.get("air", {})
-	store.set_values({"plans": plans, "known": intel.get("plans", []), "blast": float(air.get("blast", 0.0))})
+	_air_blast = float(air.get("blast", 0.0))
+	store.set_values({"plans": plans, "known": intel.get("plans", [])})
+	_follow_order_radius()
+	_size_blast()
 	map_layer.set_record(_record)
 	if _rehearsed_name != _name():
 		if _rehearse_call > 0:
@@ -344,6 +354,7 @@ func _order_with(method: String, op: Dictionary) -> bool:
 func _send_op(method: String, op: Dictionary) -> bool:
 	_acting = true
 	_notice = ""
+	_sent = null
 	_render_rail()
 	var reply: Dictionary = await engine.request(method, {"op": op})
 	_acting = false
@@ -351,6 +362,7 @@ func _send_op(method: String, op: Dictionary) -> bool:
 		_notice = str(reply.get("error", ""))
 		_render_rail()
 		return false
+	_sent = reply.get("result")
 	await refresh()
 	return true
 
@@ -372,6 +384,13 @@ func _on_way(tool: String, way: Array, extra: Dictionary) -> void:
 				op["form"] = "swarm"
 			if await _act(op):
 				store.set_values({"tool": "pan"})
+				var target := str((_sent as Dictionary).get("battlefield", "")) if _sent is Dictionary else ""
+				if not target.is_empty() and target.strip_edges().to_lower() != name.strip_edges().to_lower():
+					for entry in _view.get("fronts", []):
+						var front: Dictionary = entry
+						if str(front.get("name", "")).strip_edges().to_lower() == target.strip_edges().to_lower():
+							store.show_battlefield(str(front.get("name", "")), int(front.get("side", -1)))
+							break
 		"replan":
 			if not str(extra.get("replan", "")).is_empty():
 				await _act({"op": "plan", "battlefield": name, "project": str(extra["replan"]), "way": way})
@@ -385,7 +404,7 @@ func _on_way(tool: String, way: Array, extra: Dictionary) -> void:
 		"aircraft":
 			if not str(extra.get("wing", "")).is_empty() and not way.is_empty():
 				var at: Array = way[0]
-				await _order_with("warroom.airstrike", {"op": "airstrike", "unit": str(extra["wing"]), "kind": str(extra.get("kind", "troops")), "at": [at[0], at[1]], "battlefield": name})
+				await _order_with("warroom.airstrike", {"op": "airstrike", "unit": str(extra["wing"]), "kind": str(extra.get("kind", "troops")), "at": [at[0], at[1]], "battlefield": name, "radius": float(extra.get("radius", 1.0))})
 		"fleet":
 			if not str(extra.get("fleet", "")).is_empty() and not way.is_empty():
 				await _order_with("warroom.fleet", {"op": "station", "unit": str(extra["fleet"]), "to": way[0], "order": "patrol" if str(extra.get("station", "")) == "patrol" else "move"})
@@ -428,6 +447,48 @@ func _pick_wing(id: String) -> void:
 		_fold(true)
 
 
+func _picked_order() -> Dictionary:
+	var picked := str(store.value("wing"))
+	for entry in (_record.get("air", {}) as Dictionary).get("wings", []):
+		var wing: Dictionary = entry
+		if str(wing.get("id", "")) == picked and typeof(wing.get("order")) == TYPE_DICTIONARY:
+			return wing["order"]
+	return {}
+
+
+func _follow_order_radius() -> void:
+	var order := _picked_order()
+	var radius := float(order.get("radius", 0.0))
+	var seen := "%s|%s" % [str(store.value("wing")), str(radius)]
+	if seen == _order_radius_seen:
+		return
+	_order_radius_seen = seen
+	if radius > 0.0:
+		store.set_values({"strike_radius": radius})
+
+
+func _size_blast() -> void:
+	store.set_values({"blast": _air_blast * float(store.value("strike_radius"))})
+
+
+func _set_strike_radius(radius: float) -> void:
+	store.set_values({"strike_radius": float(radius)})
+
+
+func _set_sizing(on: bool) -> void:
+	store.set_values({"sizing": on})
+
+
+func _order_strike_radius(radius: float) -> void:
+	_set_strike_radius(radius)
+	var order := _picked_order()
+	if order.is_empty() or is_equal_approx(float(order.get("radius", 1.0)), float(store.value("strike_radius"))):
+		return
+	var done := await _order_with("warroom.strikeradius", {"unit": str(store.value("wing")), "radius": float(store.value("strike_radius"))})
+	if not done:
+		store.set_values({"strike_radius": float(order.get("radius", 1.0))})
+
+
 func _on_store(keys: PackedStringArray) -> void:
 	if not _open:
 		return
@@ -442,6 +503,10 @@ func _on_store(keys: PackedStringArray) -> void:
 		else:
 			plates.reset_name()
 			plates.set_cost({})
+	if "wing" in keys:
+		_follow_order_radius()
+	if "strike_radius" in keys:
+		_size_blast()
 	if "supply" in keys and bool(store.value("supply")):
 		_fetch_supply()
 	if "supply" in keys and not bool(store.value("supply")):
@@ -1083,6 +1148,7 @@ func _render_rail() -> void:
 		"shown": has_record and (not _phone or _folded),
 		"phone": _phone,
 		"locked": _locked(),
+		"radius_locked": _turn_running,
 		"fleets": _record.get("fleets", []),
 		"enemies": _record.get("enemies", []),
 		"convoys": _record.get("convoys", []),

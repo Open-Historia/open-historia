@@ -994,6 +994,20 @@ test("a gazetteer that throws on one of the list's towns costs that town, not th
     assert.deepEqual([address.lng, address.lat], [32, 51], "and an address still falls back to what the spot is in");
 });
 
+// "region: Métropole du Grand Paris, country: France" on a map where Italy holds
+// Paris and the region ids are not ISO-prefixed (the quality A/B of
+// 2026-11-07): the country a region lies in on the base map (the row's base,
+// "French Republic") places it as the ISO3 of a stock map's id does, and
+// nothing else is loosened.
+test("a region said with the country it lies in on the base map is found there, whoever holds it", () => {
+    const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+    const body = source.slice(source.indexOf("const buildPlacementGazetteer = "), source.indexOf("const resolvePlacements = async"));
+    const rank = body.slice(body.indexOf("const countryRank = "), body.indexOf("// A name said to be a city"));
+    assert.ok(rank.includes("if (want.label && fold(row.owner) === fold(want.label)) return 2;"), "the holder ranks first");
+    assert.ok(rank.includes("|| baseIso3(row) === want.iso3 ? 1 : 0;"), "the base map's country ranks next");
+    assert.ok(body.includes("normalizeString(resolveStockCountryCode(base) || countryGidFromIdentity(base)).toUpperCase()"));
+});
+
 test("the placing pass fetches the world's list only when a phrase has named a place the map does not have", () => {
     const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
     // The list is read in one place, and that place is reached one way: by a

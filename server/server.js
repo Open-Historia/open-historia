@@ -24,6 +24,7 @@ import {
   getLibraryCatalog,
   getScenarioCatalog,
   getScenarioDetails,
+  readScenarioLanguagePack,
   importGameBundle,
   importScenarioBundle,
   listScenariosNamingTiledBasemap,
@@ -58,6 +59,7 @@ import {
   writeGameParkedTurn,
   writeRuntimeJsonAsset,
   writeRuntimeTurnState,
+  MAP_ASSETS_DIR,
 } from "./libraryStore.js";
 import {
   createMapEditorDocument,
@@ -98,7 +100,7 @@ import {
   latestOfficialVersion,
 } from "./officialBasemaps.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
-import { HUB_IMPORTED_KEY, mergeHubImported } from "./hubImported.js";
+import { HUB_COUNT_KEY, HUB_IMPORTED_KEY, keepHubCountKey, mergeHubImported } from "./hubImported.js";
 import { HUB_CACHE_NAMES_MARKER, renameHubCacheBundles, renameScenarioBundleBytes, writeFileAtomic } from "./scenarioBundleNames.js";
 import {
   clearHubCache,
@@ -542,6 +544,9 @@ app.put("/api/ui-settings", jsonParser, (req, res) => {
     if (Array.isArray(req.body?.[HUB_IMPORTED_KEY])) {
       next[HUB_IMPORTED_KEY] = mergeHubImported(next[HUB_IMPORTED_KEY], req.body[HUB_IMPORTED_KEY]);
     }
+    // The install's counting key (hubImported.js): set once, never replaced.
+    const countKey = keepHubCountKey(next[HUB_COUNT_KEY], req.body?.[HUB_COUNT_KEY]);
+    if (countKey) next[HUB_COUNT_KEY] = countKey;
     fs.mkdirSync(path.dirname(uiSettingsFile), { recursive: true });
     fs.writeFileSync(uiSettingsFile, JSON.stringify(next, null, 2));
     res.json(next);
@@ -601,8 +606,10 @@ app.get("/api/library", (_req, res) => {
 // thousands of clients polling don't each hit GitHub. We read the tiny latest.json
 // release asset (a CDN download, not the rate-limited REST API) for the app's track.
 const APP_UPDATE_MANIFESTS = {
-  stable: "https://github.com/Open-Historia/open-historia/releases/download/android/latest.json",
-  beta: "https://github.com/Open-Historia/open-historia/releases/download/android-beta/latest.json",
+  // The Android app's own feeds (src/runtime/web/router.js). latest.json beside
+  // them is the feed of the apps installed under the app's earlier id.
+  stable: "https://github.com/Open-Historia/open-historia/releases/download/android/update.json",
+  beta: "https://github.com/Open-Historia/open-historia/releases/download/android-beta/update.json",
   // The desktop app checks through here rather than from the page: a release asset
   // sends no CORS headers, and the GitHub API is rate limited per IP. Exactly the
   // reason the Android tracks are served this way.
@@ -850,6 +857,16 @@ app.post("/api/desktop/speech/listen", jsonParser, (req, res) => {
 app.get("/api/scenarios/:scenarioId", (req, res) => {
   try {
     res.json(getScenarioDetails(req.params.scenarioId));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+// One language's pack of a scenario's own text (server/scenarioLanguages.js),
+// for a game played in that language: { code, strings }.
+app.get("/api/scenarios/:scenarioId/languages/:code", (req, res) => {
+  try {
+    res.json({ code: req.params.code, strings: readScenarioLanguagePack(req.params.scenarioId, req.params.code) });
   } catch (error) {
     sendError(res, 404, error);
   }
@@ -2048,14 +2065,11 @@ app.delete("/api/music", (req, res) => {
   }
 });
 
-// Imports are no longer reported from here. A scenario's import count is how many
-// times its file has been downloaded from the hub's releases, as GitHub counts
-// it; the page reads the counts from the hub's own index (src/runtime/hubFiles.js).
-// The routes that pinged and read the old counter on Cloudflare
-// (/api/hub/import-log, /api/hub/import-counts, OH_IMPORT_COUNTER_URL) are gone:
-// its free allowance was spent within hours of every day. /api/hub/file above
-// serves a file it has already downloaded from its cache, so importing the same
-// file again on this machine does not count twice.
+// Imports are not reported from here. The page reports a post's first import
+// to the import counter itself and reads the counts from it
+// (src/runtime/hubImportCount.js, tools/import-counter/worker.js); downloading
+// a hub file, here or anywhere, counts nothing. The old routes
+// (/api/hub/import-log, /api/hub/import-counts, OH_IMPORT_COUNTER_URL) stay gone.
 
 // ---- Map editor documents ------------------------------------------------
 app.get("/api/mapeditor/documents", (_req, res) => {
@@ -2342,6 +2356,20 @@ if (fs.existsSync(fmgDistDir)) {
 }
 
 app.use(express.static(distDir));
+
+// The map files a packaged build downloads after install (scripts/map-assets.json,
+// electron/main.cjs OH_ASSETS_DIR) are in none of dist/: the world's cities
+// (cities-seed.json, the time skip's place finder, AI/worldCities.js) and the
+// editor's seed world. Served from where they were downloaded, after the build's
+// own files. Where dist/ is the source checkout's public/ copy the folder is the
+// same one and nothing changes. A player's log, 2026-11-06: "the world city list
+// could not be read", every skip, on the desktop beta.
+if (MAP_ASSETS_DIR && path.resolve(MAP_ASSETS_DIR) !== path.resolve(distDir, "assets")) {
+  app.use("/assets", express.static(MAP_ASSETS_DIR, { index: false }));
+}
+// A file under /assets that is nowhere is a 404, never the app's own page: the
+// page came back with a 200 where the city list was asked for.
+app.use("/assets", (_req, res) => { res.status(404).type("text/plain").send("Not found"); });
 
 app.get("*splat", (_req, res) => {
   res.sendFile(path.join(distDir, "index.html"));

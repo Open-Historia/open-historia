@@ -43,8 +43,9 @@ import { PUPPET_COUP_LOYALTY, puppetKindLabel } from "../../runtime/puppets.js";
 import { PUPPET_KIND_OPTIONS, PUPPET_SECRECY_OPTIONS } from "../../Editor/scenarioPuppets.js";
 import { applyGmPuppetChange, gmPuppetRows } from "./puppetStatesTool.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
-import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand } from "../AI/gameplayLazy.js";
-import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation } from "../AI/historyConsolidation.js";
+import { applyGameMasterPreview, previewGameMasterCommand, previewGameMasterRevision } from "../AI/gameplayLazy.js";
+import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, seedHistoryDocumentText } from "../AI/historyConsolidation.js";
+import { normalizeCanonFacts } from "../../runtime/historyTiers.js";
 import {
     POLITICAL_TRAIT_REGISTRY,
     canonicalPoliticalTraitKey,
@@ -2683,6 +2684,11 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                                         quote: quote || null,
                                                         npcReaction: nextReaction(entry),
                                                         title,
+                                                        // The one-line digest later skips read
+                                                        // (runtime/gameState.js normalizeEventDigest)
+                                                        // was the old story's: a rewritten event
+                                                        // drops it, and is read by its own opening.
+                                                        ...(cleanEventBody(entry.description) !== description || cleanEventText(entry.title) !== title ? { digest: "" } : {}),
                                                     }),
                                                 });
                                                 const persistedEvent = persisted.find((candidate) => eventReactionIdentity(candidate) === eventReactionIdentity(event));
@@ -3254,8 +3260,10 @@ const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy,
 const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool, closePanel }) => {
     const meta = TOOLS.find((entry) => entry.id === tool);
     const [text, setText] = useState("");
-    const [gmMode, setGmMode] = useState("world-intervention");
+    const [gmMode, setGmMode] = useState("auto");
     const [gmPreview, setGmPreview] = useState(null);
+    const [gmEditOpen, setGmEditOpen] = useState(false);
+    const [gmEditText, setGmEditText] = useState("");
     const [gmApplyResult, setGmApplyResult] = useState(null);
     const [gmExpandedSections, setGmExpandedSections] = useState({});
     const [target, setTarget] = useState("");
@@ -3296,12 +3304,19 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const bundle = { world, events, chats, actions, game };
         const data = {
             document: world?.historyDocument ?? null,
+            // The document as the panel shows it (in tiers its own text is only
+            // what was added since the last fold), and the canon beside it.
+            seeded: world?.historyDocument ? seedHistoryDocumentText(world) : "",
+            canon: normalizeCanonFacts(world?.canonFacts),
             passes: Array.isArray(world?.consolidatedHistory) ? world.consolidatedHistory : [],
-            status: { ...describeHistoryConsolidation(bundle), canFoldNow: planHistoryConsolidation(bundle, { force: true }).due },
+            status: describeHistoryConsolidation(bundle),
             totalEvents: Array.isArray(events) ? events.length : 0,
         };
         setItems(data);
-        setFields({ document: data.document?.text ?? "" });
+        // In tiers (runtime/historyTiers.js), the eras and years as one text:
+        // saved by hand, it is one document again, and the next fold makes it
+        // the first era.
+        setFields({ document: data.seeded });
         return data;
     };
 
@@ -3374,6 +3389,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         setItems(null);
         setEditingId(null);
         setGmPreview(null);
+        setGmEditOpen(false);
+        setGmEditText("");
         setGmApplyResult(null);
         setGmExpandedSections({});
         setSearch("");
@@ -3396,7 +3413,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             loadMapFeatureData().catch(() => setItems({ customCities: false, markers: [], cities: [] }));
         }
         if (tool === "history-document") {
-            loadHistoryDocument().catch((error) => setItems({ document: null, passes: [], status: { text: `Could not read the campaign: ${error.message}`, canFoldNow: false }, totalEvents: 0 }));
+            loadHistoryDocument().catch((error) => setItems({ document: null, passes: [], status: { text: `Could not read the campaign: ${error.message}` }, totalEvents: 0 }));
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tool]);
@@ -3607,6 +3624,11 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
         const modeOptions = [
             {
+                id: "auto",
+                title: "Auto - Recommended",
+                description: "Describe the change freely. GM selects one validated mode before preview.",
+            },
+            {
                 id: "direct",
                 title: "Direct / OOC correction",
                 description: "Exact canonical/admin edits with the smallest possible scope.",
@@ -3659,7 +3681,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <label style={labelStyle}>Mode</label>
                 {/* One per row on a phone: a third of the panel squeezed each
                     mode's description into a column a word or two wide. */}
-                <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(3, minmax(0, 1fr))", marginBottom: "0.7rem" }}>
+                <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr))", marginBottom: "0.7rem" }}>
                     {modeOptions.map((option) => {
                         const active = gmMode === option.id;
                         return (
@@ -3667,7 +3689,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 key={option.id}
                                 type="button"
                                 disabled={busy}
-                                onClick={() => { setGmMode(option.id); setGmPreview(null); setGmApplyResult(null); setGmExpandedSections({}); }}
+                                onClick={() => { setGmMode(option.id); setGmPreview(null); setGmEditOpen(false); setGmEditText(""); setGmApplyResult(null); setGmExpandedSections({}); }}
                                 style={{
                                     ...buttonStyle,
                                     alignItems: "flex-start",
@@ -3691,8 +3713,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <label style={labelStyle}>GM request</label>
                 <textarea
                     value={text}
-                    onChange={(event) => { setText(event.target.value); setGmPreview(null); setGmApplyResult(null); setGmExpandedSections({}); }}
-                    placeholder={gmMode === "direct"
+                    onChange={(event) => { setText(event.target.value); setGmPreview(null); setGmEditOpen(false); setGmEditText(""); setGmApplyResult(null); setGmExpandedSections({}); }}
+                    placeholder={gmMode === "auto"
+                        ? 'Example: "A major Berlin bank collapses, triggering a prolonged financial panic. Let the game reflect the consequences over time."'
+                        : gmMode === "direct"
                         ? 'Example: "Germany should have a population of 72 million and GDP of €500 billion. Do not add a timeline event."'
                         : gmMode === "exact-event"
                             ? 'Example: "On 4 March 1927 Britain and Germany sign a naval consultation accord. Make it major and notable, create the agreement, and set relations to +45."'
@@ -3707,6 +3731,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     onClick={() => runBusy(async () => {
                         const result = await previewGameMasterCommand(text.trim(), { mode: gmMode });
                         setGmPreview(result);
+                        setGmEditOpen(false);
+                        setGmEditText("");
                         setGmApplyResult(null);
                         setGmExpandedSections({});
                         return result?.summary
@@ -3715,7 +3741,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     })}
                     style={{ ...primaryButtonStyle, marginTop: "0.6rem", opacity: busy || !text.trim() ? 0.6 : 1, width: "100%" }}
                 >
-                    {busy ? "Planning canonical transaction…" : gmPreview ? "Regenerate Preview" : "Generate Preview"}
+                    {busy ? "Planning canonical transaction…" : gmPreview ? "Generate New Preview" : "Generate Preview"}
                 </button>
                 <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.69rem", lineHeight: 1.4, marginTop: "0.45rem" }}>
                     AI interpretation is constrained by the live native GM schema. Wars, relations, agreements and subordinations are structured objects now — no encoded string mini-language and no turn simulation path.
@@ -3745,6 +3771,67 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         <div data-no-translate={gmPreview.summary ? "" : undefined} style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.75rem", lineHeight: 1.45, marginTop: "0.55rem" }}>
                             {gmPreview.summary || "No summary returned."}
                         </div>
+                        {gmPreview.requestedMode === "auto" && (
+                            <div style={{ border: "1px solid rgba(147,197,253,0.2)", borderRadius: 8, color: "rgba(219,234,254,0.88)", fontSize: "0.68rem", lineHeight: 1.4, marginTop: "0.5rem", padding: "0.48rem 0.55rem" }}>
+                                <strong>Auto mode selected:</strong> {modeOptions.find((option) => option.id === gmPreview.mode)?.title || gmPreview.mode}.
+                                <span data-no-translate={gmPreview.modeReason ? "" : undefined}> {gmPreview.modeReason || "The selected native GM mode governs all proposed operations."}</span>
+                            </div>
+                        )}
+
+                        {!gmApplied && (
+                            <div style={{ marginTop: "0.65rem" }}>
+                                <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: "space-between" }}>
+                                    <button
+                                        type="button"
+                                        className="oh-tap-row"
+                                        disabled={busy}
+                                        onClick={() => { setGmEditOpen((open) => !open); setGmEditText(""); }}
+                                        style={{ ...buttonStyle, fontSize: "0.68rem", padding: "0.38rem 0.65rem" }}
+                                    >
+                                        {gmEditOpen ? "Cancel Edit" : "Edit Preview"}
+                                    </button>
+                                    {gmPreview.revisionCount > 0 && (
+                                        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.64rem" }}>
+                                            {`Revision ${gmPreview.revisionCount}`}
+                                        </span>
+                                    )}
+                                </div>
+                                {gmEditOpen && (
+                                    <div style={{ background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, marginTop: "0.5rem", padding: "0.55rem" }}>
+                                        <label style={labelStyle} htmlFor="gm-preview-revision">What should change?</label>
+                                        <textarea
+                                            id="gm-preview-revision"
+                                            aria-label="GM preview revision instructions"
+                                            value={gmEditText}
+                                            onChange={(event) => setGmEditText(event.target.value)}
+                                            placeholder='Example: Change only the REPLACE-LEADER office to headOfState. Preserve the coalition, strategy and event.'
+                                            rows={3}
+                                            style={{ ...inputStyle, marginTop: "0.35rem", resize: "vertical" }}
+                                        />
+                                        <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.63rem", lineHeight: 1.35, marginTop: "0.35rem" }}>
+                                            Unmentioned operations stay in the preview. Nothing is applied until you approve the full revised transaction.
+                                        </div>
+                                        <button
+                                            type="button"
+                                            className="oh-tap-row"
+                                            disabled={busy || !gmEditText.trim()}
+                                            onClick={() => runBusy(async () => {
+                                                const result = await previewGameMasterRevision(gmPreview, gmEditText.trim());
+                                                setGmPreview(result);
+                                                setGmEditOpen(false);
+                                                setGmEditText("");
+                                                setGmApplyResult(null);
+                                                setGmExpandedSections({});
+                                                return result?.summary ? `Edited preview ready - ${result.summary}` : "Edited preview ready. Nothing applied.";
+                                            })}
+                                            style={{ ...primaryButtonStyle, marginTop: "0.55rem", opacity: busy || !gmEditText.trim() ? 0.55 : 1, width: "100%" }}
+                                        >
+                                            {busy ? "Editing Preview…" : "Generate Edited Preview"}
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
 
                         {gmNotes.length > 0 && (
                             <div style={{ border: "1px solid rgba(255,255,255,0.14)", borderRadius: 8, marginTop: "0.55rem", padding: "0.45rem 0.55rem" }}>
@@ -4176,7 +4263,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const data = items;
         const doc = data?.document ?? null;
         const passes = data?.passes ?? [];
-        const savedText = doc?.text ?? "";
+        const savedText = data?.seeded ?? doc?.text ?? "";
+        const canon = data?.canon ?? [];
         const draft = typeof fields.document === "string" ? fields.document : savedText;
         const dirty = draft !== savedText;
         const draftWords = countWords(draft);
@@ -4187,6 +4275,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             const world = await readWorldState({ force: true });
             const current = world?.historyDocument ?? null;
             const text = draft.trim();
+            if (current && text === seedHistoryDocumentText(world).trim()) {
+                return "The history document is unchanged.";
+            }
             const next = text
                 ? {
                     text,
@@ -4199,7 +4290,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 }
                 : null;
             await writeWorldState({ ...world, historyDocument: next });
-            if ((current?.text ?? "").trim() !== text) {
+            if ((current ? seedHistoryDocumentText(world) : "").trim() !== text) {
                 await noteGmChange("history", next
                     ? "Rewrote the history document by hand; it is the account of the past to go by."
                     : "Cleared the history document by hand.");
@@ -4232,22 +4323,6 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <div style={{ ...editorFieldStyle, color: "rgba(255,255,255,0.72)", fontSize: "0.74rem", lineHeight: 1.45, marginBottom: "0.5rem" }}>
                 <div>{data.totalEvents} events in the timeline. {data.status.text}</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.45rem" }}>
-                <button
-                type="button"
-                className="oh-tap-row"
-                disabled={busy || !data.status.canFoldNow}
-                title={data.status.canFoldNow ? "Runs the AI consolidator on the older events now" : "Only the retained tail is waiting; there is nothing older to fold"}
-                style={{ ...primaryButtonStyle, opacity: busy || !data.status.canFoldNow ? 0.55 : 1, padding: "0.3rem 0.6rem" }}
-                onClick={() => runBusy(async () => {
-                    const result = await consolidateHistoryNow();
-                    await loadHistoryDocument();
-                    return result.consolidated
-                        ? `Folded ${result.events} event${result.events === 1 ? "" : "s"} and ${result.chats} chat${result.chats === 1 ? "" : "s"}; the document is now revision ${result.documentRevision}, ${result.documentWords} words. The newest ${result.retained} events stay in full.`
-                        : "Nothing was folded: only the retained tail is waiting, or the consolidator came back empty.";
-                })}
-                >
-                Fold the older events now
-                </button>
                 {confirmingReset ? (
                     <>
                     <button type="button" className="oh-tap-row" disabled={busy} style={{ ...primaryButtonStyle, padding: "0.3rem 0.6rem" }} onClick={() => runBusy(resetCompression)}>Confirm reset</button>
@@ -4291,6 +4366,18 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <button type="button" className="oh-tap-row" disabled={busy || !dirty} style={{ ...buttonStyle, opacity: busy || !dirty ? 0.55 : 1, padding: "0.3rem 0.6rem" }} onClick={() => setFields({ document: savedText })}>Revert</button>
                 </div>
                 </>
+            )}
+            {canon.length > 0 && (
+                <details style={{ marginTop: "0.6rem" }}>
+                <summary style={{ cursor: "pointer", color: "rgba(255,255,255,0.6)", fontSize: "0.74rem", ...(touch ? TOUCH_SUMMARY : null) }}>{canon.length} standing fact{canon.length === 1 ? "" : "s"} the AI is always shown</summary>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginTop: "0.4rem", maxHeight: "14rem", overflowY: "auto" }}>
+                {canon.map((fact, index) => (
+                    <div key={`${fact.date}-${index}`} style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.74rem", lineHeight: 1.45 }}>
+                    <span style={{ color: "rgba(255,255,255,0.45)" }}>{fact.date} · {fact.kind} · </span>{fact.text}
+                    </div>
+                ))}
+                </div>
+                </details>
             )}
             {passes.length > 0 && (
                 <details style={{ marginTop: "0.6rem" }}>

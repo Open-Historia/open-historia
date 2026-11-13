@@ -6,11 +6,12 @@ const gameplay = await readFile(new URL("./gameplay.js", import.meta.url), "utf8
 const background = await readFile(new URL("../../runtime/politicalBackground.js", import.meta.url), "utf8");
 
 test("latest Beta applies native PWv2 background motion after settled turn impacts and before Stats history snapshot", () => {
-  const statsRefresh = gameplay.indexOf("nextWorld = await refreshTrackedCountryStatsIfDue({");
+  // (After the history fold; the Stats refresh that also came before it went on 2026-11-07.)
+  const settled = gameplay.indexOf("nextWorld = applySkipHistoryFold({");
   const politics = gameplay.indexOf("const political = await advancePoliticalBackgroundSimulation({");
   const statsHistory = gameplay.indexOf("nextWorld = captureCountryStatsHistory(nextWorld, {", politics);
-  assert.ok(statsRefresh > 0);
-  assert.ok(politics > statsRefresh, "political background must see settled impacts and due Stats refreshes");
+  assert.ok(settled > 0);
+  assert.ok(politics > settled, "political background must see settled impacts");
   assert.ok(statsHistory > politics, "Stats history must snapshot the world after native political evolution");
 });
 

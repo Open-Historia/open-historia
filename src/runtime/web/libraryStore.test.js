@@ -104,6 +104,8 @@ const GENERATED = {
   // An empty regionsUrl keeps usesBuiltInMap false, so nothing is fetched.
   "defaultScenarioMeta.js": `export const builtInMap = "test-map"; export const builtInRevision = 2; export const regionsUrl = ""; export const earlierMaps = {};`,
   "fallbackColors.js": `export default { Palette: [9, 9, 9] };`,
+  // The seed's [formal, common] names (scripts/seed-web-defaults.mjs).
+  "commonNames.js": `export default [["Kingdom of Spain", "Spain"], ["French Republic", "France"]];`,
 };
 const moduleUrl = (source) => `data:text/javascript,${encodeURIComponent(source)}`;
 
@@ -154,7 +156,7 @@ const BACKGROUND = { kind: "image", opacity: 0.5 };
 
 // A bundle in the shape both exporters write today: the geometry as parsed JSON.
 const scenarioBundle = (name, extra = {}) => ({
-  schema: "pax-historia-scenario-bundle/2",
+  schema: "old-scenario-bundle/2",
   version: 2,
   scenario: { id: "hub-map", name },
   data: { game: { country: "Testland" }, world: { ownerSchema: 4, polityOverrides: { Testland: { name: "Testland" } } } },
@@ -654,6 +656,78 @@ test("a code-keyed game migrates to names on first read, once, and drops its res
   const migrated = structuredClone(db.get("games").get(id));
   ok(await runtime("GET", "world"));
   assert.deepEqual(db.get("games").get(id), migrated, "a second read changes nothing");
+});
+
+// The owner's website Modern Day (2026-11-09): "Modern Day (your edited copy)"
+// still held the hand-drawn map's first, formally named world, its colours (an
+// upload, stored as the file's text) keyed by the common names, and his game on
+// it read those colours, so "Kingdom of Spain" had none.
+const olderModernDayWorld = (extra = {}) => ({
+  ownerSchema: 4,
+  builtInMap: "fault-lines-2014-v1",
+  polityOverrides: {
+    "Kingdom of Spain": { name: "Kingdom of Spain", aliases: ["Kingdom of Spain"], color: "#c1a66e" },
+    "French Republic": { name: "French Republic", aliases: ["French Republic"], color: "#4d7893" },
+    "United States of America": { name: "United States of America", aliases: ["United States of America"], color: "#557b98" },
+    Algeria: { name: "Algeria", aliases: ["Algeria"], color: "#b79a75" },
+  },
+  regionOwnershipOverrides: { r1: "Kingdom of Spain", r2: "French Republic", r3: "United States of America", r4: "Algeria" },
+  ...extra,
+});
+const SEED_PALETTE = { Spain: [193, 166, 110], France: [77, 120, 147], Algeria: [183, 154, 117] };
+
+test("an older Modern Day copy and its game take the common names when the game is opened, once", async () => {
+  await reset();
+  const scenarioId = ok(await scenarios("POST", "", { id: "modern-day-edited", name: "Modern Day (your edited copy)" })).scenario.id;
+  assert.equal(scenarioId, "modern-day-edited");
+  const id = await newGame("Modern Day Session", { scenarioId });
+  const scenario = db.get("scenarios").get(scenarioId);
+  scenario.json.world = olderModernDayWorld();
+  scenario.json.game = { country: "Kingdom of Spain", gameDate: "2016-01-01" };
+  scenario.colors = JSON.stringify(SEED_PALETTE);
+  const game = db.get("games").get(id);
+  game.json.world = olderModernDayWorld();
+  game.json.game = { country: "United States of America", gameDate: "2016-03-01" };
+  game.json.chat = [{ id: "c1", countries: ["United States of America", "French Republic"] }];
+  delete game.colors;
+
+  const world = ok(await runtime("GET", "world"));
+  assert.deepEqual(Object.keys(world.polityOverrides).sort(), ["Algeria", "France", "Spain", "United States of America"]);
+  assert.deepEqual(world.regionOwnershipOverrides, { r1: "Spain", r2: "France", r3: "United States of America", r4: "Algeria" });
+  assert.ok(world.polityOverrides.Spain.formerNames.includes("Kingdom of Spain"));
+  assert.equal(ok(await runtime("GET", "game")).country, "United States of America", "the United States keep their name");
+  assert.deepEqual(ok(await runtime("GET", "chat"))[0].countries, ["United States of America", "France"]);
+  assert.deepEqual(ok(await runtime("GET", "colors")), SEED_PALETTE, "colours stored as text are read as colours, and now name the game's countries");
+
+  const migratedGame = structuredClone(db.get("games").get(id));
+  ok(await runtime("GET", "world"));
+  assert.deepEqual(db.get("games").get(id), migratedGame, "a second read changes nothing");
+
+  // The copy itself is brought across when it is read as a scenario.
+  ok(await runtime("GET", "regionsGeojson"));
+  const copy = db.get("scenarios").get(scenarioId);
+  assert.ok(copy.json.world.polityOverrides.Spain && !copy.json.world.polityOverrides["Kingdom of Spain"]);
+  assert.equal(copy.json.game.country, "Spain");
+  assert.equal(copy.colors, JSON.stringify(SEED_PALETTE), "colours that already name the countries are left as they were stored");
+});
+
+test("a game with no map stamp on an older Modern Day copy is judged by its copy; any other keeps its names", async () => {
+  await reset();
+  const scenarioId = ok(await scenarios("POST", "", { id: "modern-day-edited", name: "Modern Day (your edited copy)" })).scenario.id;
+  const onCopy = await newGame("On the copy", { scenarioId });
+  db.get("scenarios").get(scenarioId).json.world = olderModernDayWorld();
+  const { builtInMap: _stamp, ...unstamped } = olderModernDayWorld();
+  db.get("games").get(onCopy).json.world = structuredClone(unstamped);
+  assert.ok(ok(await runtime("GET", "world")).polityOverrides.France);
+
+  const community = ok(await scenarios("POST", "", { id: "europe-1900", name: "Europe 1900" })).scenario.id;
+  const onCommunity = await newGame("Belle Epoque", { scenarioId: community });
+  db.get("scenarios").get(community).json.world = structuredClone(unstamped);
+  db.get("games").get(onCommunity).json.world = structuredClone(unstamped);
+  const kept = ok(await runtime("GET", "world"));
+  assert.deepEqual(Object.keys(kept.polityOverrides).sort(), ["Algeria", "French Republic", "Kingdom of Spain", "United States of America"]);
+  ok(await runtime("GET", "regionsGeojson"));
+  assert.ok(db.get("scenarios").get(community).json.world.polityOverrides["French Republic"], "the community scenario too");
 });
 
 test("a game and a scenario that share an id each migrate as their own record", async () => {
@@ -1439,4 +1513,79 @@ test("where the browser keeps no music (the Android app), deleting a scenario st
   ok(await scenarios("DELETE", id));
   assert.equal((await library()).scenarios.some((scenario) => scenario.id === id), false);
   keptMusic.resetKeptMusicForTests();
+});
+
+// ---- a scenario's language packs (server/scenarioLanguages.js, shared with the desktop store) ----
+//
+// Its own text in other languages, keyed by the English. Every path a
+// scenario's details take has to carry it here as it does on the desktop
+// (server/scenarioLanguages.test.js), and the library's listings and their
+// lean meta index carry only which languages it has.
+
+const LANGUAGE_PACKS = {
+  de: { "Kingdom of Bohemia": "Königreich Böhmen", "The Defenestration of Prague": "Der Prager Fenstersturz" },
+  fr: { "Kingdom of Bohemia": "Royaume de Bohême" },
+};
+const languagePack = async (id, code) => ok(await scenarios("GET", `${id}/languages/${code}`));
+
+test("a save keeps a scenario's language packs, a listing carries only their codes, and a game fetches one language", async () => {
+  await reset();
+  const id = ok(await scenarios("POST", "", { name: "Thirty Years" })).scenario.id;
+  assert.equal("languages" in ok(await scenarios("GET", id)).scenario, false, "a scenario that never had a pack has no such field");
+
+  const saved = ok(await scenarios("PUT", id, { languages: { ...LANGUAGE_PACKS, en: { a1: "b" }, ja: "junk", de: { ...LANGUAGE_PACKS.de, Number: 4 } } })).scenario;
+  assert.deepEqual(saved.languages, LANGUAGE_PACKS, "written strictly, and the details carry them");
+  assert.deepEqual(db.get("scenarios").get(id).meta.languages, LANGUAGE_PACKS);
+  assert.equal("languages" in db.get("scenarioMeta").get(id).meta, false, "the lean meta index never holds the packs");
+  assert.deepEqual(db.get("scenarioMeta").get(id).meta.languageCodes, ["de", "fr"]);
+  assert.deepEqual(ok(await scenarios("PUT", id, { name: "Renamed" })).scenario.languages, LANGUAGE_PACKS, "a save that does not mention them keeps them");
+
+  const card = (await library()).scenarios.find((entry) => entry.id === id);
+  assert.equal("languages" in card, false, "a listing never carries the packs");
+  assert.deepEqual(card.languageCodes, ["de", "fr"]);
+  ok(await games("POST", "", { name: "Campaign", scenarioId: id, setActive: true }));
+  assert.deepEqual((await library()).runtimeScenario.languageCodes, ["de", "fr"]);
+
+  assert.deepEqual(await languagePack(id, "de"), { code: "de", strings: LANGUAGE_PACKS.de });
+  assert.deepEqual((await languagePack(id, "ja")).strings, {});
+  assert.deepEqual((await languagePack(id, "__proto__")).strings, {});
+
+  const cleared = ok(await scenarios("PUT", id, { languages: null })).scenario;
+  assert.equal("languages" in cleared, false);
+  assert.equal("languages" in db.get("scenarios").get(id).meta, false);
+  assert.equal("languageCodes" in (await library()).scenarios.find((entry) => entry.id === id), false);
+});
+
+test("a bundle carries the language packs out and back in, a clone keeps them, and a hub Update replaces them", async () => {
+  await reset();
+  const id = ok(await scenarios("POST", "", { name: "Thirty Years", languages: LANGUAGE_PACKS })).scenario.id;
+  const bundle = ok(await scenarios("GET", `${id}/export`));
+  assert.deepEqual(bundle.scenario.languages, LANGUAGE_PACKS);
+  const imported = ok(await scenarios("POST", "import", bundle)).scenario;
+  assert.notEqual(imported.id, id);
+  assert.deepEqual(ok(await scenarios("GET", imported.id)).scenario.languages, LANGUAGE_PACKS);
+  assert.deepEqual(ok(await scenarios("GET", `${imported.id}/export`)).scenario.languages, LANGUAGE_PACKS, "export, import, export again: the same record");
+  const cloned = ok(await scenarios("POST", "", { name: "Clone", seedScenarioId: id })).scenario;
+  assert.deepEqual(ok(await scenarios("GET", cloned.id)).scenario.languages, LANGUAGE_PACKS, "a clone keeps them");
+  assert.equal("languages" in ok(await scenarios("GET", ok(await scenarios("POST", "", { name: "Fresh" })).scenario.id)).scenario, false);
+
+  ok(await scenarios("PUT", id, { languages: null }));
+  const plain = ok(await scenarios("GET", `${id}/export`));
+  assert.equal("languages" in plain.scenario, false, "omitted from the file when there is none");
+  const hostile = ok(await scenarios("POST", "import", {
+    ...plain,
+    scenario: { ...plain.scenario, languages: { de: { Bohemia: "Böhmen", Bad: { x: 1 } }, "../x": { a1: "b" } } },
+  })).scenario;
+  assert.deepEqual(ok(await scenarios("GET", hostile.id)).scenario.languages, { de: { Bohemia: "Böhmen" } }, "read as a stranger's");
+
+  const version = (name, languages, file) => {
+    const hub = hubBundle(name, file);
+    return { ...hub, scenario: { ...hub.scenario, ...(languages ? { languages } : {}) } };
+  };
+  const copy = ok(await scenarios("POST", "import", version("Hub Map", LANGUAGE_PACKS, 1))).scenario.id;
+  const second = ok(await scenarios("PUT", `${copy}/import`, version("Hub Map v2", { es: { "Kingdom of Bohemia": "Reino de Bohemia" } }, 2))).scenario;
+  assert.equal(second.hubOrigin.editedAt, undefined, "still the post's copy, unedited");
+  assert.deepEqual(ok(await scenarios("GET", copy)).scenario.languages, { es: { "Kingdom of Bohemia": "Reino de Bohemia" } }, "the new version's packs, none of the old");
+  ok(await scenarios("PUT", `${copy}/import`, version("Hub Map v3", null, 3)));
+  assert.equal("languages" in ok(await scenarios("GET", copy)).scenario, false, "a version without packs keeps none of the old");
 });

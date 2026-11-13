@@ -1,6 +1,6 @@
 The music of Open Historia
 
-All seven pieces are by Scott Buckley (https://www.scottbuckley.com.au/) and are
+All eight pieces are by Scott Buckley (https://www.scottbuckley.com.au/) and are
 released under the Creative Commons Attribution 4.0 International License
 (CC BY 4.0): https://creativecommons.org/licenses/by/4.0/
 
@@ -8,7 +8,8 @@ Changes: the files are the composer's own recordings, re-encoded at a lower
 bitrate (MP3, about half the size together) so that the game is smaller to
 download. Nothing else about them is changed: every piece is whole, at its
 own length. Each file names its piece, its composer and this licence in its
-tags.
+tags. One is not re-encoded: a-kind-of-hope.mp3 is the composer's own file,
+only with the licence added to its tags.
 
 passage-of-time.mp3
     "Passage Of Time" by Scott Buckley
@@ -31,6 +32,11 @@ honour-among-thieves.mp3
     "Honour Among Thieves" by Scott Buckley
     https://www.scottbuckley.com.au/library/honour-among-thieves/
     Plays in a game, in the background.
+
+a-kind-of-hope.mp3
+    "A Kind Of Hope" by Scott Buckley
+    https://www.scottbuckley.com.au/library/a-kind-of-hope/
+    Plays in a game, in the background. As released, not re-encoded.
 
 discovery.mp3
     "Discovery" by Scott Buckley

@@ -13,6 +13,11 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Open Historia Native Setup")]
 [assembly: AssemblyProduct("Open Historia Native")]
+[assembly: AssemblyDescription("Installs, updates and removes Open Historia Native")]
+[assembly: AssemblyCompany("Open Historia")]
+[assembly: AssemblyCopyright("Open Historia contributors")]
+[assembly: AssemblyVersion("0.1.0.0")]
+[assembly: AssemblyFileVersion("0.1.0.0")]
 
 namespace OpenHistoriaSetup
 {
@@ -500,6 +505,7 @@ namespace OpenHistoriaSetup
 					return;
 				}
 				File.WriteAllText(Mark(stage, "applied"), PlanValue("build"));
+				PointUninstall(target);
 				if (Relaunch)
 				{
 					Say("Starting " + AppName + "…", 1f);
@@ -704,10 +710,9 @@ namespace OpenHistoriaSetup
 					Say("Closing the running game…", 0.87f);
 					StopRunning(target, names);
 				}
-				var uninstall = Path.Combine(io, "uninstall.ps1");
-				if (File.Exists(uninstall)) File.Copy(uninstall, Path.Combine(staging, "uninstall.ps1"), true);
 				Say("Replacing the previous version…", 0.92f);
 				Swap(staging, previous, names);
+				PointUninstall(target);
 				if (Relaunch)
 				{
 					Say("Starting " + AppName + "…", 1f);
@@ -779,25 +784,13 @@ namespace OpenHistoriaSetup
 					linkType.InvokeMember("Description", BindingFlags.SetProperty, null, link, new object[] { AppName });
 					linkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, link, null);
 				}
-				var uninstall = Path.Combine(target, "uninstall.ps1");
-				File.WriteAllText(Path.Combine(io, "uninstall.ps1"), string.Join("\r\n", new[]
-				{
-					"$ErrorActionPreference = \"SilentlyContinue\"",
-					"Get-Process -Name \"Open Historia\" | Where-Object { $_.Path -like \"" + target + "*\" } | Stop-Process -Force",
-					"Get-Process -Name node | Where-Object { $_.Path -like \"" + target + "*\" } | Stop-Process -Force",
-					"Remove-Item (Join-Path ([Environment]::GetFolderPath(\"Programs\")) \"" + AppName + ".lnk\")",
-					"Remove-Item (Join-Path ([Environment]::GetFolderPath(\"Desktop\")) \"" + AppName + ".lnk\")",
-					"Remove-Item -Recurse -Force \"HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\OpenHistoriaNative\"",
-					"Start-Process cmd.exe -ArgumentList \"/c timeout /t 2 >nul & rmdir /s /q `\"" + target + "`\"\" -WindowStyle Hidden",
-					"",
-				}));
-				using (var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenHistoriaNative"))
+				using (var key = Registry.CurrentUser.CreateSubKey(UninstallKey))
 				{
 					key.SetValue("DisplayName", AppName);
 					key.SetValue("DisplayIcon", icon);
 					key.SetValue("Publisher", "Open Historia");
 					key.SetValue("InstallLocation", target);
-					key.SetValue("UninstallString", "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" + uninstall + "\"");
+					key.SetValue("UninstallString", UninstallCommand(target));
 					key.SetValue("NoModify", 1, RegistryValueKind.DWord);
 					key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
 				}
@@ -812,11 +805,96 @@ namespace OpenHistoriaSetup
 			}
 		}
 
+		const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenHistoriaNative";
+
+		static string UninstallCommand(string folder)
+		{
+			return "\"" + Path.Combine(folder, "runtime", "Open Historia Updater.exe") + "\" --uninstall \"" + folder + "\"";
+		}
+
+		static void PointUninstall(string folder)
+		{
+			try
+			{
+				using (var key = Registry.CurrentUser.OpenSubKey(UninstallKey, true))
+				{
+					if (key != null) key.SetValue("UninstallString", UninstallCommand(folder));
+				}
+			}
+			catch (Exception)
+			{
+			}
+		}
+
+		static int Uninstall(string chosen)
+		{
+			var folder = LongPath(Path.GetFullPath(chosen).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+			var io = Extended(folder);
+			var self = LongPath(Assembly.GetExecutingAssembly().Location);
+			if (self.StartsWith(folder + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+			{
+				var copy = Path.Combine(Path.GetTempPath(), "Open Historia Native Uninstall " + Process.GetCurrentProcess().Id + ".exe");
+				File.Copy(self, copy, true);
+				Process.Start(new ProcessStartInfo(copy, "--uninstall \"" + folder + "\"") { UseShellExecute = false });
+				return 0;
+			}
+			if (!File.Exists(Path.Combine(io, Marker)))
+			{
+				MessageBox.Show("The folder " + folder + " was not made by the " + AppName + " installer, so it was left alone.", AppName, MessageBoxButtons.OK, MessageBoxIcon.Error);
+				return 1;
+			}
+			StopRunning(folder, ExeNames(io));
+			WaitForClose(folder, ExeNames(io), 10000);
+			foreach (var place in new[] { Environment.GetFolderPath(Environment.SpecialFolder.Programs), Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory) })
+			{
+				try
+				{
+					File.Delete(Path.Combine(place, AppName + ".lnk"));
+				}
+				catch (Exception)
+				{
+				}
+			}
+			try
+			{
+				Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, false);
+			}
+			catch (Exception)
+			{
+			}
+			for (var attempt = 0; attempt < 20; attempt++)
+			{
+				try
+				{
+					RemoveFolder(io);
+					break;
+				}
+				catch (Exception)
+				{
+					Thread.Sleep(500);
+				}
+			}
+			try
+			{
+				RemoveLeftovers(folder);
+			}
+			catch (Exception)
+			{
+			}
+			if (Directory.Exists(io))
+			{
+				MessageBox.Show("Some of " + folder + " could not be removed. Close " + AppName + " and delete the folder by hand.", AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+				return 1;
+			}
+			return 0;
+		}
+
 		[STAThread]
 		static int Main(string[] args)
 		{
 			AppContext.SetSwitch("Switch.System.IO.UseLegacyPathHandling", false);
 			AppContext.SetSwitch("Switch.System.IO.BlockLongPaths", false);
+			if (args.Length >= 2 && args[0] == "--uninstall") return Uninstall(args[1]);
 			for (var index = 0; index < args.Length; index++)
 			{
 				if (args[index] == "--to" && index + 1 < args.Length)

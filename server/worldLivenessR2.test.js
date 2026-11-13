@@ -282,13 +282,13 @@ test("selected storyline participants do not consume independent actor sweep slo
   }
 });
 
-test("failed talks cannot lower crisis pressure without an actual de-escalatory fact", async () => {
+test("failed talks do not veto an otherwise valid storyline pressure change by keyword", async () => {
   const mod = await import("../src/Game/AI/nativeWorldDirector.js");
   const world = koreaWorld();
   world.storylines[0].pressure = 65;
   world.storylines[0].momentum = 60;
 
-  const error = mod.validateWorldStorylinePayload({
+  const candidate = {
     events: [{
       id: "event-ai-r0071-20191005-001",
       date: "2019-10-05",
@@ -308,24 +308,43 @@ test("failed talks cannot lower crisis pressure without an actual de-escalatory 
       eventIndexes: [0],
       state: "Negotiations failed and regional tension remains elevated.",
     }],
-  }, {
+  };
+  const scope = {
     existingStorylines: world.storylines,
     selectedStorylines: world.storylines,
     deferredStorylines: [],
     originDate: "2019-09-25",
     stopDate: "2019-10-25",
     world,
-  });
+  };
 
-  assert.match(error, /lowers pressure/i);
+  assert.equal(mod.validateWorldStorylinePayload(candidate, scope), "",
+    "a keyword in historical prose does not override the selected numeric trajectory");
+  const merged = mod.applyWorldStorylineUpdates({
+    world,
+    updates: candidate.storylineUpdates,
+    events: candidate.events,
+    stopDate: "2019-10-25",
+    round: 71,
+  });
+  const saved = merged.storylines.find((row) => row.id === "storyline-korean-peninsula-crisis");
+  assert.equal(saved.pressure, 60, "the validated pressure persists unchanged");
+  assert.equal(saved.momentum, 55);
+  assert.ok(saved.sourceEventIds.includes(candidate.events[0].id));
+
+  const malformed = {
+    ...candidate,
+    storylineUpdates: [{ ...candidate.storylineUpdates[0], eventIndexes: [1] }],
+  };
+  assert.match(mod.validateWorldStorylinePayload(malformed, scope), /references event 2/,
+    "removing the keyword veto does not bypass event referential validation");
 });
 
-// A player's Iran game fell back to canned events over this: its cyber
-// programme sat at pressure 18, eased to 14, and the one event bound to it
-// "deploys" hardware — a keyword the escalation cue list counts. The event and
-// the record are transcribed from the player's debug report; the prior pressure
-// of 18 is what the report's "lowers pressure by 4" implies.
-test("a low-pressure programme may ease while its event 'deploys' hardware; a crisis may not", async () => {
+// An Iran playtest had a cyber-modernization programme held at pressure 18
+// because the event said hardware "deploys"; keyword matching interpreted it
+// as escalation. A high-pressure crisis used the same keyword veto. The newer
+// contract trusts the time skip's numeric trajectory, not prose cue lists.
+test("deployment wording cannot veto either low- or high-pressure storyline updates", async () => {
   const mod = await import("../src/Game/AI/nativeWorldDirector.js");
   const candidate = () => ({
     events: [{
@@ -348,14 +367,13 @@ test("a low-pressure programme may ease while its event 'deploys' hardware; a cr
     startedDate: "2024-01-09",
     state: "Sovereign network hardening is under way across the ministries.",
   });
-  const validate = (pressure) => {
+  for (const pressure of [18, 65]) {
     const payload = candidate();
-    // The jump binds events to storylines natively before judging them; the
-    // record's own event field is blank, exactly as the model sent it.
     mod.normalizeWorldStorylineEventLinks(payload, { world: {} });
-    assert.deepEqual(payload.storylineUpdates[0].eventIndexes, [0], "the deploys event binds to the programme");
+    assert.deepEqual(payload.storylineUpdates[0].eventIndexes, [0],
+      "the deployment event still binds to the programme");
     const storylines = [storyline(pressure)];
-    return mod.validateWorldStorylinePayload(payload, {
+    assert.equal(mod.validateWorldStorylinePayload(payload, {
       existingStorylines: storylines,
       selectedStorylines: storylines,
       deferredStorylines: [],
@@ -364,11 +382,9 @@ test("a low-pressure programme may ease while its event 'deploys' hardware; a cr
       enforceAntiStasis: false,
       enforceSelectedCoverage: false,
       world: {},
-    });
-  };
-
-  assert.equal(validate(18), "", "a programme at pressure 18 easing to 14 is not crisis pressure being erased");
-  assert.match(validate(65), /lowers pressure/i, "the same drop on a crisis-level storyline is still refused");
+    }), "", "the event's word choice cannot veto the pressure number");
+    assert.equal(payload.storylineUpdates[0].pressure, 14, "the numeric update survives validation");
+  }
 });
 
 // What a small model writes where it has nothing to report: a heading and a

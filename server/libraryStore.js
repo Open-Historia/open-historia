@@ -10,6 +10,7 @@ import {
   migrateOwnerRecord,
   needsMigration as needsOwnerMigration,
 } from "./ownerMigration.js";
+import { commonNameRenames, migrateToCommonNames, needsCommonNames, scenarioPredatesCommonNames } from "./commonNames.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.join(__dirname, "..");
@@ -39,6 +40,7 @@ import {
 } from "./hubProvenance.js";
 import { planRestorePointSlots, publicRestorePointIndex } from "./restorePoints.js";
 import { scenarioMusicField } from "./scenarioMusic.js";
+import { scenarioLanguagePack, scenarioLanguagesField, withoutScenarioLanguages } from "./scenarioLanguages.js";
 import { musicTracksDropped, usedMusicTrackIds } from "./keptMusic.js";
 import { musicLibraryUsage, sweepMusicLibrary } from "./musicLibrary.js";
 const SCENARIOS_DIR = path.join(SERVER_DATA_DIR, "scenarios");
@@ -53,6 +55,9 @@ const GAME_MANIFEST_PATH = path.join(SERVER_DATA_DIR, "game-manifest.json");
 const PMTILES_ASSETS_DIR = process.env.OH_ASSETS_DIR
   ? path.resolve(process.env.OH_ASSETS_DIR)
   : path.join(PUBLIC_DIR, "assets");
+// The same folder, for server.js to serve at /assets: the world's cities and the
+// editor's seed world are in it, and on a packaged build nowhere else.
+export const MAP_ASSETS_DIR = PMTILES_ASSETS_DIR;
 
 const DEFAULT_SCENARIO_ID = "default";
 const DEFAULT_GAME_ID = "default";
@@ -904,6 +909,9 @@ const readScenarioMeta = (scenarioId) => {
     // The hub tracks the scenario plays, by situation (scenarioMusic.js). Only
     // there while it names one.
     ...scenarioMusicField(raw?.music),
+    // Its own text in other languages (scenarioLanguages.js). Only there while
+    // it has a pack; never in a listing (buildScenarioCatalogEntry).
+    ...scenarioLanguagesField(raw?.languages),
     name,
     playCount: normalizePlayCount(raw?.playCount),
     subtitle,
@@ -977,6 +985,11 @@ const writeScenarioMeta = (scenarioId, updates, { touch = true } = {}) => {
   // (null, or four empty lists, takes it away); any other write keeps it.
   delete next.music;
   Object.assign(next, scenarioMusicField(updates?.music !== undefined ? updates.music : current.music));
+  // The language packs the same way: a write that carries them replaces them
+  // (null takes them away), any other write keeps them.
+  delete next.languages;
+  delete next.languageCodes;
+  Object.assign(next, scenarioLanguagesField(updates?.languages !== undefined ? updates.languages : current.languages));
 
   writeJsonFile(getScenarioMetaPath(scenarioId), next);
   // A track this scenario named and no longer does may be nobody's now.
@@ -2043,7 +2056,10 @@ const getScenarioSummary = (scenarioId) => {
 // (buildScenarioCatalog) or only named by a game (getGameScenarioSummary,
 // buildGameCatalog): one shape, built here and nowhere else.
 const buildScenarioCatalogEntry = (scenarioId, { gameCount = 0, canDelete = true, missing = false } = {}) => {
-  const meta = readScenarioMeta(scenarioId);
+  // Without its language packs, which can be large: a listing says only which
+  // languages it has (`languageCodes`), and the packs are read where they are
+  // used (getScenarioDetails, readScenarioLanguagePack).
+  const meta = withoutScenarioLanguages(readScenarioMeta(scenarioId));
   const assetStatus = getScenarioAssetStatus(scenarioId);
   // A scenario that is not there has no updatedAt of its own — readScenarioMeta
   // mints one per read — so its token is fixed, or it would differ on every call.
@@ -2125,8 +2141,21 @@ const getScenarioDetails = (scenarioId) => {
       prompts: readJsonFile(getScenarioJsonPath(scenarioId, "prompts"), {}),
       world: readJsonFile(getScenarioJsonPath(scenarioId, "world"), {}),
     },
-    scenario: summary,
+    // With its language packs, which the listing leaves out: the editor's
+    // Languages tab edits them.
+    scenario: { ...summary, ...scenarioLanguagesField(readScenarioMeta(scenarioId).languages) },
   };
+};
+
+// One language's pack of a scenario (source -> translation), for a game in
+// that language (GET /api/scenarios/:id/languages/:code). Empty when it has
+// none.
+const readScenarioLanguagePack = (scenarioId, code) => {
+  ensureScenarioStore();
+  if (!fs.existsSync(getScenarioDirectory(scenarioId))) {
+    throw new Error(`Scenario not found: ${scenarioId}`);
+  }
+  return scenarioLanguagePack(readScenarioMeta(scenarioId).languages, code);
 };
 
 const getGameDetails = (gameId) => {
@@ -2258,6 +2287,7 @@ const createScenario = ({
   heroSubtitle,
   heroTitle,
   id,
+  languages,
   music,
   name,
   seedScenarioId,
@@ -2333,6 +2363,10 @@ const createScenario = ({
                 DEFAULT_SCENARIO_META.heroTitle,
                 // A bundle's music, or the music of the scenario this one is a copy of.
                 ...scenarioMusicField(music !== undefined ? music : sourceScenario?.music),
+                // A bundle's language packs, or those of the scenario this one
+                // is a copy of (which its listing leaves out).
+                ...scenarioLanguagesField(languages !== undefined ? languages
+                  : sourceScenario ? readScenarioMeta(seedScenarioId).languages : null),
                 name: String(name ?? "").trim() || "Custom Scenario",
                 subtitle:
                 String(subtitle ?? "").trim() ||
@@ -2502,6 +2536,7 @@ const updateScenario = (scenarioId, body = {}) => {
     gamePatch,
     heroSubtitle,
     heroTitle,
+    languages,
     music,
     name,
     prompts,
@@ -2522,7 +2557,7 @@ const updateScenario = (scenarioId, body = {}) => {
   // updatedAt, and must not mark a downloaded copy as changed.
   const provenance = pickHubProvenance(body);
   const edits = [accentColor, countryNameOverrides, description, eyebrow, features, game, gamePatch, heroSubtitle,
-    heroTitle, music, name, prompts, promptsPatch, storage, subtitle, world, worldPatch].some((value) => value !== undefined);
+    heroTitle, languages, music, name, prompts, promptsPatch, storage, subtitle, world, worldPatch].some((value) => value !== undefined);
   if (Object.keys(provenance).length && !edits) {
     writeScenarioMeta(scenarioId, provenance, { touch: false });
     if (setActive) setSelectedScenario(scenarioId);
@@ -2544,6 +2579,8 @@ const updateScenario = (scenarioId, body = {}) => {
                     heroTitle: String(heroTitle ?? currentMeta.heroTitle).trim() || currentMeta.heroTitle,
                     // null takes the music away; a save that does not mention it keeps it.
                     ...(music !== undefined ? { music } : {}),
+                    // The same for its language packs.
+                    ...(languages !== undefined ? { languages } : {}),
                     name: String(name ?? currentMeta.name).trim() || currentMeta.name,
                     subtitle: String(subtitle ?? currentMeta.subtitle).trim() || currentMeta.subtitle,
   });
@@ -3344,6 +3381,41 @@ const migrateOwnerRecordAtPaths = (label, paths) => {
   return true;
 };
 
+// ---------------------------------------------------------------------------
+// Common country names (server/commonNames.js): a world that took the built-in's
+// old formal names ("Kingdom of Spain") is re-keyed to the common ones ("Spain")
+// once, on disk, in the same once-per-record pass as the owner migration, after
+// it. The table is the packaged seed's formerNames, read once.
+// ---------------------------------------------------------------------------
+let commonNameRenameTable = null;
+const readCommonNameRenames = () => {
+  if (!commonNameRenameTable) commonNameRenameTable = commonNameRenames(readJsonFile(path.join(BUILT_IN_SEED_DIR, "world.json"), null));
+  return commonNameRenameTable;
+};
+
+const migrateCommonNamesAtPaths = (label, paths, { scenarioId = "", parentPredates = false } = {}) => {
+  const world = readJsonFile(paths.world, null);
+  if (!needsCommonNames(world, { scenarioId, parentPredates })) return false;
+  const own = (file) => (file && fs.existsSync(file) ? readJsonFile(file, null) : undefined);
+  const migrated = migrateToCommonNames({
+    world,
+    game: own(paths.game),
+    colors: own(paths.colors),
+    flags: own(paths.flags),
+    tags: own(paths.tags),
+    chat: own(paths.chat),
+    actions: own(paths.actions),
+  }, readCommonNameRenames());
+  if (!migrated) return false;
+  for (const part of ["game", "colors", "flags", "tags", "chat", "actions"]) {
+    if (migrated[part] !== undefined) writeJsonFile(paths[part], migrated[part]);
+  }
+  // World last: it carries the marker, so a failure part-way is redone next time.
+  writeJsonFile(paths.world, migrated.world);
+  console.log(`[common-names] ${label}: ${migrated.renamed.length} countr${migrated.renamed.length === 1 ? "y" : "ies"} renamed to their common names`);
+  return true;
+};
+
 const ensureScenarioOwnerSchema = (scenarioId) => {
   const key = `scenario:${scenarioId}`;
   if (ownerSchemaChecked.has(key)) return;
@@ -3375,6 +3447,20 @@ const ensureScenarioOwnerSchema = (scenarioId) => {
   } catch (error) {
     ownerSchemaChecked.delete(key); // let the next read retry rather than pin a half state
     console.warn(`[owner-migration] ${key} failed: ${error.message}`);
+    return;
+  }
+  try {
+    migrateCommonNamesAtPaths(key, {
+      world: getScenarioJsonPath(scenarioId, "world"),
+      game: getScenarioJsonPath(scenarioId, "game"),
+      colors: getScenarioJsonPath(scenarioId, "colors"),
+      flags: getScenarioJsonPath(scenarioId, "flags"),
+      tags: getScenarioJsonPath(scenarioId, "tags"),
+      chat: getScenarioJsonPath(scenarioId, "chat"),
+      actions: getScenarioJsonPath(scenarioId, "actions"),
+    }, { scenarioId });
+  } catch (error) {
+    console.warn(`[common-names] ${key} failed: ${error.message}`);
   }
 };
 
@@ -3431,6 +3517,26 @@ const ensureGameOwnerSchema = (gameId) => {
   } catch (error) {
     ownerSchemaChecked.delete(key);
     console.warn(`[owner-migration] ${key} failed: ${error.message}`);
+    return;
+  }
+  try {
+    // The game's own world, chats, actions, colours, flags and tags; the
+    // scenario's colours it reads when it has none are the scenario's to move
+    // (ensureScenarioOwnerSchema above already did).
+    const parentId = getGameSummary(gameId)?.scenarioId || DEFAULT_SCENARIO_ID;
+    migrateCommonNamesAtPaths(key, {
+      world: getGameJsonPath(gameId, "world"),
+      game: getGameJsonPath(gameId, "game"),
+      colors: getGameJsonPath(gameId, "colors"),
+      flags: getGameJsonPath(gameId, "flags"),
+      tags: getGameJsonPath(gameId, "tags"),
+      chat: getGameJsonPath(gameId, "chat"),
+      actions: getGameJsonPath(gameId, "actions"),
+    }, {
+      parentPredates: scenarioPredatesCommonNames(parentId, readJsonFile(getScenarioJsonPath(parentId, "world"), null)),
+    });
+  } catch (error) {
+    console.warn(`[common-names] ${key} failed: ${error.message}`);
   }
 };
 
@@ -4293,6 +4399,8 @@ const exportScenarioBundle = (scenarioId) => {
       // Which hub tracks it plays (ids and versions only): left out of the
       // file altogether when it names none.
       ...scenarioMusicField(summary.music),
+      // Its own text in other languages: left out of the file when it has none.
+      ...scenarioLanguagesField(readScenarioMeta(scenarioId).languages),
       name: summary.name,
       subtitle: summary.subtitle,
     },
@@ -4363,6 +4471,7 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
     // null rather than nothing for a bundle without any: an import is a copy
     // of the bundle, never of another scenario.
     music: scenario.music ?? null,
+    languages: scenario.languages ?? null,
     name: scenario.name,
     setActive: false,
     subtitle: scenario.subtitle,
@@ -4487,6 +4596,8 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
   // The new version's music, or none: a version that dropped its music must
   // not go on playing the old version's.
   metaPatch.music = scenario.music ?? null;
+  // Its language packs the same way: the new version's, or none.
+  metaPatch.languages = scenario.languages ?? null;
   writeScenarioMeta(scenarioId, metaPatch);
 
   // A community basemap the game could not download arrives as its reference
@@ -4879,6 +4990,7 @@ export {
   getLibraryCatalog,
   getScenarioCatalog,
   getScenarioDetails,
+  readScenarioLanguagePack,
   importGameBundle,
   importScenarioBundle,
   listTrash,

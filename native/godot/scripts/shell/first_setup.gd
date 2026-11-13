@@ -3,7 +3,8 @@ extends Control
 
 signal finished
 
-const GREETING_SECONDS := 2.2
+const GREETING_SECONDS := 4.4
+const GREETING_FADE := 0.6
 const ORIGINAL_COLORS := {"background": "#131315", "surface": "#232327", "accent": "#D4D4D8"}
 const GREETINGS := [
 	["en", "Hello", "Welcome"], ["es", "Hola", "Bienvenido"], ["fr", "Bonjour", "Bienvenue"], ["de", "Hallo", "Willkommen"],
@@ -13,7 +14,10 @@ const GREETINGS := [
 	["id", "Halo", "Selamat datang"], ["uk", "Привіт", "Ласкаво просимо"], ["vi", "Xin chào", "Chào mừng"], ["th", "สวัสดี", "ยินดีต้อนรับ"],
 	["sv", "Hej", "Välkommen"], ["bn", "নমস্কার", "স্বাগতম"], ["ro", "Salut", "Bun venit"], ["hu", "Szia", "Üdvözöljük"],
 	["ur", "آداب", "خوش آمدید"], ["da", "Goddag", "Velkommen"], ["cs", "Ahoj", "Vítejte"], ["fi", "Hei", "Tervetuloa"],
+	["el", "Γεια σας", "Καλώς ήρθατε"], ["he", "שלום", "ברוכים הבאים"], ["sk", "Ahoj", "Vitajte"], ["lt", "Labas", "Sveiki atvykę"],
+	["lv", "Sveiki", "Laipni lūdzam"], ["et", "Tere", "Tere tulemast"], ["ga", "Dia duit", "Fáilte"], ["mt", "Bonġu", "Merħba"],
 ]
+const RTL_GREETINGS := ["ar", "he", "fa", "ur"]
 const BG := Color("#0f0f11")
 const INK := Color("#f4f4f5")
 const MUTED := Color(231 / 255.0, 231 / 255.0, 234 / 255.0, 0.62)
@@ -195,13 +199,18 @@ func _greeting_words(index: int) -> VBoxContainer:
 	var words := VBoxContainer.new()
 	words.add_theme_constant_override("separation", 6)
 	words.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var direction := Control.TEXT_DIRECTION_RTL if str(entry[0]) in RTL_GREETINGS else Control.TEXT_DIRECTION_LTR
 	var hello := UI.label(str(entry[1]), 45 if _phone else 74, UiTheme.pick("text", INK), 800, "Arial", -2)
 	hello.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hello.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	hello.text_direction = direction
+	hello.language = str(entry[0])
 	words.add_child(hello)
 	var welcome := UI.label(str(entry[2]), 17 if _phone else 22, UiTheme.pick("muted", SOFT), 600)
 	welcome.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	welcome.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	welcome.text_direction = direction
+	welcome.language = str(entry[0])
 	words.add_child(welcome)
 	words.set_meta("greeting", str(entry[0]))
 	return words
@@ -210,13 +219,25 @@ func _greeting_words(index: int) -> VBoxContainer:
 func _show_greeting() -> void:
 	if not is_instance_valid(_greeting):
 		return
+	var leaving := false
 	for child in _greeting.get_children():
-		_greeting.remove_child(child)
-		child.queue_free()
+		var old := child as Control
+		if still or old == null or old.modulate.a <= 0.01:
+			_greeting.remove_child(child)
+			child.queue_free()
+			continue
+		leaving = true
+		old.set_meta("leaving", true)
+		var from := old.position.y
+		var out := old.create_tween().set_parallel(true)
+		out.tween_property(old, "modulate:a", 0.0, GREETING_FADE).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+		out.tween_property(old, "position:y", from - 12.0, GREETING_FADE).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+		out.chain().tween_callback(old.queue_free)
 	var words := _greeting_words(_greeting_at)
 	_greeting.add_child(words)
 	if not still:
 		words.modulate.a = 0.0
+		words.set_meta("lift", 18.0)
 	_place_greeting.call_deferred()
 	if still:
 		return
@@ -225,20 +246,18 @@ func _show_greeting() -> void:
 			words.set_meta("lift", value)
 			_place_greeting()
 	var tween := words.create_tween()
-	tween.set_parallel(true)
-	tween.tween_property(words, "modulate:a", 1.0, GREETING_SECONDS * 0.14).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	tween.tween_method(rise, 18.0, 0.0, GREETING_SECONDS * 0.14).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	tween.set_parallel(false)
-	tween.tween_interval(GREETING_SECONDS * 0.7)
-	tween.set_parallel(true)
-	tween.tween_property(words, "modulate:a", 0.0, GREETING_SECONDS * 0.16).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	tween.tween_method(rise, 0.0, -12.0, GREETING_SECONDS * 0.16).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	if leaving:
+		tween.tween_interval(GREETING_FADE)
+	tween.tween_property(words, "modulate:a", 1.0, GREETING_FADE).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	tween.parallel().tween_method(rise, 18.0, 0.0, GREETING_FADE).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
 
 
 func _place_greeting() -> void:
 	if not is_instance_valid(_greeting) or _greeting.get_child_count() == 0:
 		return
 	var words := _greeting.get_child(_greeting.get_child_count() - 1) as Control
+	if words == null or words.has_meta("leaving"):
+		return
 	var natural := words.get_combined_minimum_size()
 	words.size = Vector2(_greeting.size.x, natural.y)
 	words.position = Vector2(0, (_greeting.size.y - natural.y) * 0.5 + float(words.get_meta("lift", 0.0)))

@@ -191,7 +191,7 @@ func _text_input(value: String, placeholder: String, max_length: int) -> LineEdi
 	field.max_length = max_length
 	field.custom_minimum_size.y = 40
 	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var style := UI.box(FIELD_BG, FIELD_BORDER, 9, 1, Vector4(14, 0, 14, 0))
+	var style := UI.box(UiTheme.pick("overlay_card", FIELD_BG), UiTheme.pick("line", FIELD_BORDER), 9, 1, Vector4(14, 0, 14, 0))
 	field.add_theme_stylebox_override("normal", style)
 	field.add_theme_stylebox_override("focus", style)
 	field.add_theme_font_override("font", UI.font(400))
@@ -208,8 +208,8 @@ func _text_input(value: String, placeholder: String, max_length: int) -> LineEdi
 
 func _button(caption: String, primary := false, height := 37.0) -> Button:
 	return CommunityKit.pill_button(caption, {
-		"bg": UiTheme.accented(PRIMARY_BG) if primary else BUTTON_BG,
-		"border": UiTheme.accented(PRIMARY_BORDER) if primary else BUTTON_BORDER,
+		"bg": UiTheme.accented(PRIMARY_BG) if primary else UiTheme.pick("overlay_card", BUTTON_BG),
+		"border": UiTheme.accented(PRIMARY_BORDER) if primary else UiTheme.pick("line", BUTTON_BORDER),
 		"ink": PRIMARY_INK if primary else BUTTON_INK,
 		"size": 13,
 		"weight": 650,
@@ -433,7 +433,7 @@ func _number(key: String, low: int, high: int) -> SpinBox:
 	spin.custom_minimum_size.y = 40
 	spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var line := spin.get_line_edit()
-	var style := UI.box(FIELD_BG, FIELD_BORDER, 9, 1, Vector4(14, 0, 14, 0))
+	var style := UI.box(UiTheme.pick("overlay_card", FIELD_BG), UiTheme.pick("line", FIELD_BORDER), 9, 1, Vector4(14, 0, 14, 0))
 	line.add_theme_stylebox_override("normal", style)
 	line.add_theme_stylebox_override("focus", style)
 	line.add_theme_font_override("font", UI.font(400))
@@ -455,7 +455,7 @@ func _ready_select() -> OptionButton:
 	select.selected = picked
 	select.focus_mode = Control.FOCUS_NONE
 	select.custom_minimum_size.y = 40
-	var style := UI.box(FIELD_BG, FIELD_BORDER, 9, 1, Vector4(14, 0, 14, 0))
+	var style := UI.box(UiTheme.pick("overlay_card", FIELD_BG), UiTheme.pick("line", FIELD_BORDER), 9, 1, Vector4(14, 0, 14, 0))
 	for state in ["normal", "hover", "pressed", "focus"]:
 		select.add_theme_stylebox_override(state, style)
 	select.add_theme_font_override("font", UI.font(400))

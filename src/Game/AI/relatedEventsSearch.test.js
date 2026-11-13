@@ -1,0 +1,228 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { OLD_EMBEDDING_MODEL_CACHE, contentHash } from "../../runtime/embeddingModels.js";
+import { LOOKUP_TOOLS, SIMILAR_EVENTS_FUNCTION, SIMILAR_EVENTS_TOOL, withSimilarEvents } from "./lookupTools.js";
+import {
+  OLD_SETTING_KEY,
+  findRelatedForSkip,
+  forgetOldDownload,
+  indexOpenGame,
+  relatedEventsReady,
+  setRelatedEventsDepsForTests,
+  similarEventsSearch,
+} from "./relatedEventsSearch.js";
+
+// localStorage, which node has none of: the old setting's key lived there.
+const storage = new Map();
+const fakeStorage = {
+  getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+  setItem: (key, value) => storage.set(key, String(value)),
+  removeItem: (key) => storage.delete(key),
+};
+globalThis.localStorage = fakeStorage;
+
+// A fake model: a text's vector is which of three words it holds.
+const WORDS = ["war", "treaty", "harvest"];
+const vectorOf = (text) => {
+  const hits = WORDS.map((word) => (String(text).toLowerCase().includes(word) ? 1 : 0));
+  // A text with none of the words points somewhere else entirely.
+  const raw = [...hits, hits.some(Boolean) ? 0 : 1];
+  const norm = Math.hypot(...raw);
+  return Float32Array.from(raw.map((value) => value / norm));
+};
+const fakeModel = ({ delayMs = 0 } = {}) => {
+  const calls = [];
+  return {
+    calls,
+    module: async () => ({
+      embedTexts: async (texts) => {
+        calls.push(texts);
+        if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        return texts.map(vectorOf);
+      },
+    }),
+  };
+};
+const fakeStore = () => {
+  const games = new Map();
+  return {
+    games,
+    readGame: async (gameId) => new Map(games.get(gameId) ?? []),
+    write: async (gameId, rows) => {
+      const game = games.get(gameId) ?? new Map();
+      for (const row of rows) game.set(row.eventId, { hash: row.hash, vector: row.vector });
+      games.set(gameId, game);
+    },
+    remove: async (gameId, ids) => { for (const id of ids) games.get(gameId)?.delete(id); },
+  };
+};
+
+const events = [
+  { id: "e1", date: "1939-09-01", title: "The war begins", description: "Armies cross the border." },
+  { id: "e2", date: "1939-10-01", title: "A treaty is signed", description: "Peace in the north." },
+  { id: "e3", date: "1939-11-01", title: "A harvest festival", description: "Bread for all." },
+];
+const bundle = {
+  game: { country: "Italy" },
+  events,
+  actions: [{ status: "planned", title: "Sign a treaty with France" }],
+  world: { wars: [], storylines: [] },
+};
+
+test("always on: a player who had the old setting off (or never touched it) is indexed with no setting at all", async () => {
+  for (const before of [null, "0", "1"]) {
+    storage.clear();
+    if (before !== null) storage.set(OLD_SETTING_KEY, before);
+    const model = fakeModel();
+    const store = fakeStore();
+    setRelatedEventsDepsForTests({ model: model.module, store: () => store, campaign: () => "g1", readEvents: async () => events, busy: () => false });
+    await indexOpenGame();
+    assert.equal(store.games.get("g1")?.size, 3, `indexed with the old setting ${before}`);
+    assert.ok(model.calls.length > 0);
+  }
+  setRelatedEventsDepsForTests(null);
+});
+
+test("the old download goes once: the old setting's key and the model an older version downloaded", async () => {
+  const deleted = [];
+  const deleteCache = async (name) => { deleted.push(name); };
+  // Never had the setting: nothing to delete, nothing touched.
+  storage.clear();
+  assert.equal(await forgetOldDownload({ storage: fakeStorage, deleteCache }), false);
+  assert.deepEqual(deleted, []);
+  // Had it on (the model downloaded) or off: the key goes, the old store with it.
+  for (const before of ["1", "0"]) {
+    storage.clear();
+    storage.set(OLD_SETTING_KEY, before);
+    storage.set("ai_lookup_functions", "1");
+    assert.equal(await forgetOldDownload({ storage: fakeStorage, deleteCache }), true);
+    assert.equal(storage.has(OLD_SETTING_KEY), false);
+    assert.equal(storage.get("ai_lookup_functions"), "1", "other settings stay");
+  }
+  assert.deepEqual(deleted, [OLD_EMBEDDING_MODEL_CACHE, OLD_EMBEDDING_MODEL_CACHE]);
+  assert.equal(OLD_EMBEDDING_MODEL_CACHE, "oh-embed-model-v1");
+  // Once: the key is gone, so the next start does nothing.
+  assert.equal(await forgetOldDownload({ storage: fakeStorage, deleteCache }), false);
+  assert.equal(deleted.length, 2);
+  // A store that fails to delete never throws into the game's start.
+  storage.set(OLD_SETTING_KEY, "1");
+  assert.equal(await forgetOldDownload({ storage: fakeStorage, deleteCache: async () => { throw new Error("blocked"); } }), false);
+});
+
+test("the index embeds new and changed events only while idle, and drops deleted ones", async () => {
+  storage.clear();
+  const model = fakeModel();
+  const store = fakeStore();
+  let busy = 2;
+  const slept = [];
+  let readEvents = events;
+  setRelatedEventsDepsForTests({
+    model: model.module,
+    store: () => store,
+    campaign: () => "g1",
+    readEvents: async () => readEvents,
+    busy: () => busy > 0,
+    sleep: async (ms) => { slept.push(ms); busy -= 1; },
+  });
+  await indexOpenGame();
+  assert.equal(slept.length, 2, "it waited for the turn to finish before starting");
+  assert.deepEqual(model.calls.flat().length, 3);
+  assert.deepEqual([...store.games.get("g1").keys()].sort(), ["e1", "e2", "e3"]);
+  assert.equal(store.games.get("g1").get("e1").hash, contentHash("The war begins. Armies cross the border."));
+
+  // Nothing new: nothing embedded again.
+  model.calls.length = 0;
+  await indexOpenGame();
+  assert.deepEqual(model.calls, []);
+
+  // One changed, one deleted.
+  readEvents = [{ ...events[0], description: "Armies cross the river." }, events[1]];
+  await indexOpenGame();
+  assert.deepEqual(model.calls, [["The war begins. Armies cross the river."]]);
+  assert.deepEqual([...store.games.get("g1").keys()].sort(), ["e1", "e2"]);
+  setRelatedEventsDepsForTests(null);
+});
+
+test("the index stops when the player switches games", async () => {
+  storage.clear();
+  const model = fakeModel();
+  const store = fakeStore();
+  const many = Array.from({ length: 40 }, (_, at) => ({ id: `e${at}`, title: `War ${at}`, description: "x" }));
+  let campaign = "g1";
+  let reads = 0;
+  setRelatedEventsDepsForTests({
+    model: async () => ({ embedTexts: async (texts) => { campaign = "g2"; return texts.map(vectorOf); } }),
+    store: () => store,
+    campaign: () => campaign,
+    readEvents: async () => { reads += 1; return reads === 1 ? many : []; },
+    busy: () => false,
+  });
+  await indexOpenGame();
+  assert.equal(store.games.get("g1").size, 4, "one batch, then it stopped");
+  assert.equal(model.calls.length, 0);
+  setRelatedEventsDepsForTests(null);
+});
+
+test("a skip gets ranked candidates, quickly, or nothing: it never waits on the model", async () => {
+  storage.clear();
+  const store = fakeStore();
+  await store.write("g1", events.map((event) => ({ eventId: event.id, hash: "h", vector: vectorOf(`${event.title} ${event.description}`) })));
+  setRelatedEventsDepsForTests({ model: fakeModel().module, store: () => store, focusPowers: async () => ["France"] });
+  const ranked = await findRelatedForSkip(bundle, { campaignId: "g1" });
+  assert.equal(ranked[0].id, "e2", "the treaty the order is about comes first");
+  assert.ok(!ranked.some((row) => row.id === "e3"), "the harvest is not related");
+
+  // A model that is not ready in time: the skip goes without, and does not wait.
+  setRelatedEventsDepsForTests({ model: fakeModel({ delayMs: 400 }).module, store: () => store, focusPowers: async () => [] });
+  const started = Date.now();
+  assert.equal(await findRelatedForSkip(bundle, { campaignId: "g1", timeoutMs: 50 }), null);
+  assert.ok(Date.now() - started < 300);
+
+  // A model that fails: the skip goes without.
+  setRelatedEventsDepsForTests({ model: async () => { throw new Error("no wasm"); }, store: () => store, focusPowers: async () => [] });
+  assert.equal(await findRelatedForSkip(bundle, { campaignId: "g1" }), null);
+
+  // Nothing indexed yet: nothing, and no model needed.
+  const model = fakeModel();
+  setRelatedEventsDepsForTests({ model: model.module, store: fakeStore, focusPowers: async () => [] });
+  assert.equal(await findRelatedForSkip(bundle, { campaignId: "g1" }), null);
+  assert.deepEqual(model.calls, []);
+  setRelatedEventsDepsForTests(null);
+});
+
+test("similar_events is offered once the model has loaded, and answers from this game", async () => {
+  storage.clear();
+  const store = fakeStore();
+  await store.write("g1", events.map((event) => ({ eventId: event.id, hash: "h", vector: vectorOf(`${event.title} ${event.description}`) })));
+  setRelatedEventsDepsForTests({ model: fakeModel().module, store: () => store, focusPowers: async () => [] });
+  assert.equal(relatedEventsReady(), false, "not before the model has answered once");
+  assert.equal(similarEventsSearch(bundle, { campaignId: "g1" }), null);
+  await findRelatedForSkip(bundle, { campaignId: "g1" });
+  assert.equal(relatedEventsReady(), true);
+  const search = similarEventsSearch(bundle, { campaignId: "g1" });
+  assert.equal(typeof search, "function");
+
+  const base = { tools: LOOKUP_TOOLS, maxRounds: 2, execute: async (name) => `answered ${name}` };
+  const lookups = withSimilarEvents(base, search);
+  assert.equal(lookups.tools.length, LOOKUP_TOOLS.length + 1);
+  assert.equal(lookups.tools.at(-1), SIMILAR_EVENTS_TOOL);
+  assert.equal(lookups.maxRounds, 2);
+  assert.equal(await lookups.execute("war_ledger", {}), "answered war_ledger");
+  const answer = await lookups.execute(SIMILAR_EVENTS_FUNCTION, { query: "the war at the border", limit: 1 });
+  assert.deepEqual(answer.events.map((event) => event.title), ["The war begins"]);
+  assert.ok((await lookups.execute(SIMILAR_EVENTS_FUNCTION, {})).error, "a query is required");
+
+  // No game, no search; no search, the lookups unchanged.
+  assert.equal(similarEventsSearch(bundle, {}), null);
+  assert.equal(withSimilarEvents(base, null), base);
+  assert.equal(withSimilarEvents(null, search), null, "no lookups at all (Save AI requests), nothing added");
+  setRelatedEventsDepsForTests(null);
+});
+
+test("the tool has the lookup shape: a name, a description and an object schema needing a query", () => {
+  assert.equal(SIMILAR_EVENTS_TOOL.name, "similar_events");
+  assert.equal(SIMILAR_EVENTS_TOOL.schema.type, "object");
+  assert.deepEqual(SIMILAR_EVENTS_TOOL.schema.required, ["query"]);
+  assert.equal(SIMILAR_EVENTS_TOOL.schema.additionalProperties, false);
+  assert.ok(!LOOKUP_TOOLS.some((tool) => tool.name === "similar_events"), "never declared before the model has loaded");
+});

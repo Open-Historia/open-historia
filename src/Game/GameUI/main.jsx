@@ -14,8 +14,9 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { brushedMetalUrl } from "./brushedMetal.js";
 import { fightingIn, playerFrontsKey } from "./warRoomData.js";
 import { presenceFor, useDiscordPresence } from "../../runtime/discordPresence.js";
-import { musicSceneOf, setMusicScene } from "../../runtime/ambientMusic.js";
+import { musicSceneOf, noteGameDrawn, reopensDrawnGame, setMusicScene } from "../../runtime/ambientMusic.js";
 import { followScenarioMusic } from "../../runtime/scenarioMusic.js";
+import { useScenarioLanguagePack } from "../../runtime/useScenarioLanguagePack.js";
 import { useWarRoom } from "../Map/warRoomStore.js";
 import { DISCORD_URL, GITHUB_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
@@ -46,8 +47,9 @@ import {
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
 import { AgentWaitingNotice } from "./agentWaitingNotice.jsx";
 import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
-import { WarAndPeaceCards } from "./warAndPeace.jsx";
+import { PromptLimitNotice } from "./promptLimitNotice.jsx";
 import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
+import { MAP_SETTING_KEYS, useMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import { inSharedGame, sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
@@ -225,6 +227,7 @@ const AdvisorButton = ({ isAdvisorOpen, isMobile, dockStyle, onToggle }) => (
     type="button"
     title="Advisor"
     aria-label="Advisor"
+    data-oh-theme-hud=""
     onClick={onToggle}
     style={{
       ...baseStyle,
@@ -240,8 +243,9 @@ const AdvisorButton = ({ isAdvisorOpen, isMobile, dockStyle, onToggle }) => (
       fontSize: isMobile ? "1.25rem" : "1.5rem",
       borderRadius: isMobile ? "12px" : "14px",
       background: isAdvisorOpen
-        ? "rgba(255,255,255,0.085)"
-        : "rgba(35,35,39,0.53)",
+        ? "var(--oh-ui-glass-active, rgba(255,255,255,0.085))"
+        : "var(--oh-ui-glass-pill, rgba(35,35,39,0.53))",
+      borderColor: isAdvisorOpen ? "var(--oh-ui-glass-active-line, var(--oh-hud-border))" : "var(--oh-hud-border)",
       transition: `${dockStyle.transition}, background 0.15s ease`,
     }}
   >
@@ -483,8 +487,12 @@ const Main = ({
   // command, or interactive event stage is in flight, never overlaps itself, and stays
   // silent on any failure. Hidden tabs don't roll the dice, and neither does a
   // window nobody has touched for ten minutes (runtime/playerActivity.js): each
-  // attempt is a background request, and a window left open while the player
-  // was away spent the day's cap on notes nobody was there to read.
+  // attempt is a request, and a window left open while the player was away
+  // spent them on notes nobody was there to read. Nothing is scheduled while
+  // the player has "Countries write to me between time skips" off (Settings →
+  // AI → AI requests); on, the background daily cap does not stop it
+  // (AI/requestBudget.js UNCAPPED_BACKGROUND_TASKS).
+  const idleDiplomacyOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy);
   useEffect(() => {
     // The main menu owns Scenario Workshop / Map Editor as overlays while the
     // previously active campaign may still exist underneath. Idle diplomacy is
@@ -494,6 +502,8 @@ const Main = ({
     // while the page's first game is on its way, and the active game is still
     // the one last played.
     if (hasNoGames || mainMenuOpen || !gameEntered) return undefined;
+    // The player's switch is off: no pulse is scheduled.
+    if (!idleDiplomacyOn) return undefined;
     const activity = createPlayerActivity();
     const listenerOptions = { capture: true, passive: true };
     for (const type of PLAYER_ACTIVITY_EVENTS) window.addEventListener(type, activity.note, listenerOptions);
@@ -509,7 +519,7 @@ const Main = ({
       clearInterval(iv);
       for (const type of PLAYER_ACTIVITY_EVENTS) window.removeEventListener(type, activity.note, listenerOptions);
     };
-  }, [hasNoGames, mainMenuOpen, gameEntered]);
+  }, [idleDiplomacyOn, hasNoGames, mainMenuOpen, gameEntered]);
 
   // Spy reports, on the same rhythm and with the same guards: a roll each
   // minute the tab is visible, at odds that work out to roughly one report
@@ -692,12 +702,21 @@ const Main = ({
   // scenario's is asked of the hub.
   const scenarioMusicKey = JSON.stringify((gameEntered && activeGame?.id && runtimeScenario?.music) || null);
   useEffect(() => { followScenarioMusic(JSON.parse(scenarioMusicKey)); }, [scenarioMusicKey]);
+  // The scenario's own text in the player's language, from the pack it ships
+  // (runtime/useScenarioLanguagePack.js), when it has one for that language.
+  useScenarioLanguagePack(activeGame?.id ? runtimeScenario : null);
   // And it follows where the player is (runtime/ambientMusic.js): the menu, a
   // game opening under its cover, the game, the game with the player at war,
   // and the war room or a battlefield being shown, which the war room's own
   // store knows.
   const battlefieldShown = useWarRoom((room) => room.open || Boolean(room.battlefield));
-  const musicScene = musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading, atWar: atWar || inWar, war: battlefieldShown });
+  // The game open behind the menu opens again at once: no build-up for it.
+  // Another game being opened from this screen gets its build.
+  const reopening = reopensDrawnGame(activeGame?.id, gameLoading.opening);
+  useEffect(() => {
+    if (gameEntered && activeGame?.id && !showGameLoading) noteGameDrawn(activeGame.id);
+  }, [gameEntered, activeGame?.id, showGameLoading]);
+  const musicScene = musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading && !reopening, atWar: atWar || inWar, war: battlefieldShown });
   useEffect(() => { setMusicScene(musicScene); }, [musicScene]);
   const closeWarRoomPanel = useCallback(() => setIsWarRoomOpen(false), []);
   const toggleWarRoom = () => {
@@ -1005,10 +1024,9 @@ const Main = ({
       {/* Same place on screen: the lasting borders note goes first so a
           passing fallback-switch notice draws over it, not under it. */}
       <BordersFallbackNotice />
+      <PromptLimitNotice />
       <FallbackSwitchNotice />
       <AgentWaitingNotice />
-      {/* An offer of peace or a call to arms that waits for the player's answer. */}
-      <WarAndPeaceCards />
     </>
   );
 };

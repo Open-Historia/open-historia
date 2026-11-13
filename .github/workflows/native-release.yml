@@ -2,7 +2,20 @@ name: Native app
 
 on:
   push:
-    branches: [native/godot-app]
+    branches: [native]
+    # A push that touches only what the native app is not made from (the docs,
+    # the website, the phone app, the hub templates, the other workflows) builds
+    # nothing: every run here spends macOS minutes, which count 10x.
+    paths:
+      - "**"
+      - "!*.md"
+      - "!docs/**"
+      - "!wiki/**"
+      - "!site/**"
+      - "!mobile/**"
+      - "!hub-templates/**"
+      - "!.github/**"
+      - ".github/workflows/native-release.yml"
   workflow_dispatch:
     inputs:
       tours:
@@ -29,9 +42,10 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: native-release-${{ github.ref }}
-  cancel-in-progress: true
+# A newer push cancels the builds of the one before it (each build job has its
+# own group below), but never a publish that has started: a publish cut off
+# halfway leaves the feeds naming pieces that are not up yet. A newer publish
+# waits for it instead.
 
 env:
   GODOT_VERSION: 4.7.2-stable
@@ -43,10 +57,35 @@ env:
   OH_NATIVE_NOTES: ${{ inputs.notes || 'A new super-experimental build of Open Historia Native.' }}
 
 jobs:
+  # When the account's artifact storage is full, every upload fails, and it
+  # fails at the END of each build, after the Mac has spent its minutes (three
+  # attempts of one run on 2026-11-07 did exactly that). One tiny upload first,
+  # on Linux, stops the run before any build starts.
+  preflight:
+    name: Check there is room for this run's artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Write a marker
+        run: echo "$GITHUB_SHA" > "$RUNNER_TEMP/preflight.txt"
+
+      - name: Upload it
+        uses: actions/upload-artifact@v4
+        with:
+          name: preflight
+          path: ${{ runner.temp }}/preflight.txt
+          retention-days: 1
+          if-no-files-found: error
+
   windows:
     name: Build the Windows app
+    needs: preflight
     runs-on: windows-latest
-    timeout-minutes: 90
+    # Typically 6 to 12 minutes; a hang stops here instead of at 90 (minutes count 2x).
+    timeout-minutes: 30
+    concurrency:
+      group: native-release-${{ github.ref }}-windows
+      cancel-in-progress: true
     defaults:
       run:
         shell: bash
@@ -158,7 +197,7 @@ jobs:
             ${{ runner.temp }}/out/Open-Historia-Native-Setup.exe
             ${{ runner.temp }}/out/native-latest.json
           compression-level: 0
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload the update chunks
@@ -176,13 +215,19 @@ jobs:
         with:
           name: Open-Historia-Native-Windows-logs
           path: ${{ runner.temp }}/package.log
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: warn
 
   macos:
     name: Build, sign and smoke-test the macOS app
+    needs: preflight
     runs-on: macos-latest
-    timeout-minutes: 90
+    # Typically 5 to 12 minutes without the tours. macOS minutes count 10x, so a
+    # hang has to stop well before the old 90.
+    timeout-minutes: ${{ inputs.tours && 75 || 35 }}
+    concurrency:
+      group: native-release-${{ github.ref }}-macos
+      cancel-in-progress: true
     defaults:
       run:
         shell: bash
@@ -193,18 +238,35 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      # The two Rust builds were close to five of the job's eleven minutes, and
+      # most pushes do not touch native/engine. Their two universal outputs are
+      # kept by the hash of everything they are built from (the toolchain is
+      # pinned in rust-toolchain.toml and named in the key), so an unchanged
+      # engine is the same build, restored in seconds.
+      - name: Restore the engine build for this source
+        id: engine
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            native/engine/target/universal-apple-darwin/release/liboh_gdext.dylib
+            native/engine/target/universal-apple-darwin/release/ohfronts-host
+          key: engine-macos-universal-${{ env.RUST_TOOLCHAIN }}-11.0-${{ hashFiles('native/engine/Cargo.lock', 'native/engine/Cargo.toml', 'native/engine/rust-toolchain.toml', 'native/engine/crates/**') }}
+
       - name: Install the Rust targets
+        if: steps.engine.outputs.cache-hit != 'true'
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-apple-darwin,x86_64-apple-darwin
           rustup show
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.engine.outputs.cache-hit != 'true'
         with:
           workspaces: native/engine -> target
           key: macos-universal
           cache-on-failure: true
 
       - name: Build the engine library for both Macs and join them
+        if: steps.engine.outputs.cache-hit != 'true'
         working-directory: native/engine
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
@@ -213,11 +275,10 @@ jobs:
           cargo build -p oh_gdext --release --target x86_64-apple-darwin
           mkdir -p target/universal-apple-darwin/release
           lipo -create target/aarch64-apple-darwin/release/liboh_gdext.dylib target/x86_64-apple-darwin/release/liboh_gdext.dylib -output target/universal-apple-darwin/release/liboh_gdext.dylib
-          lipo -info target/universal-apple-darwin/release/liboh_gdext.dylib
-          ls -la target/aarch64-apple-darwin/release/liboh_gdext.dylib target/x86_64-apple-darwin/release/liboh_gdext.dylib target/universal-apple-darwin/release/liboh_gdext.dylib
-          otool -L target/universal-apple-darwin/release/liboh_gdext.dylib | grep -E "WebKit|AppKit"
+          ls -la target/aarch64-apple-darwin/release/liboh_gdext.dylib target/x86_64-apple-darwin/release/liboh_gdext.dylib
 
       - name: Build the front engine for both Macs and join them
+        if: steps.engine.outputs.cache-hit != 'true'
         working-directory: native/engine
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
@@ -226,9 +287,26 @@ jobs:
           cargo build -p ohfronts --bin ohfronts-host --release --target x86_64-apple-darwin
           mkdir -p target/universal-apple-darwin/release
           lipo -create target/aarch64-apple-darwin/release/ohfronts-host target/x86_64-apple-darwin/release/ohfronts-host -output target/universal-apple-darwin/release/ohfronts-host
+
+      - name: Check the engine library and the front engine
+        working-directory: native/engine
+        run: |
+          echo "engine build restored from the cache: ${{ steps.engine.outputs.cache-hit == 'true' }}"
+          lipo -info target/universal-apple-darwin/release/liboh_gdext.dylib
+          ls -la target/universal-apple-darwin/release/liboh_gdext.dylib target/universal-apple-darwin/release/ohfronts-host
+          otool -L target/universal-apple-darwin/release/liboh_gdext.dylib | grep -E "WebKit|AppKit"
           lipo -info target/universal-apple-darwin/release/ohfronts-host
           echo '{"t":"ping","id":1}' | arch -arm64 target/universal-apple-darwin/release/ohfronts-host | grep -q '"t":"pong"'
           echo '{"t":"ping","id":1}' | arch -x86_64 target/universal-apple-darwin/release/ohfronts-host | grep -q '"t":"pong"' || echo "::warning::the x86_64 slice of the front engine could not be run here"
+
+      - name: Keep the engine build for the next push
+        if: steps.engine.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            native/engine/target/universal-apple-darwin/release/liboh_gdext.dylib
+            native/engine/target/universal-apple-darwin/release/ohfronts-host
+          key: ${{ steps.engine.outputs.cache-primary-key }}
 
       - name: Read the Godot checksums
         id: godot
@@ -376,13 +454,18 @@ jobs:
         run: |
           node native/macos/smoke-mac.mjs "$RUNNER_TEMP/out/Open Historia Native.app" "$RUNNER_TEMP/out/probe/Open Historia.pck" "$RUNNER_TEMP/out/smoke-arm64-headless.log"
 
+      # The Rosetta and windowed smoke tests never fail the run (continue-on-error)
+      # and cost a minute and a quarter of macOS time, 12 minutes of quota, on
+      # every push; they run with the tours, beside the Intel Mac's own smoke test.
       - name: Smoke-test the app headless (Intel slice under Rosetta)
+        if: inputs.tours
         continue-on-error: true
         run: |
           /usr/bin/pgrep -q oahd || softwareupdate --install-rosetta --agree-to-license
           node native/macos/smoke-mac.mjs "$RUNNER_TEMP/out/Open Historia Native.app" "$RUNNER_TEMP/out/probe/Open Historia.pck" "$RUNNER_TEMP/out/smoke-x86_64-rosetta.log" --arch x86_64
 
       - name: Smoke-test the app in a window
+        if: inputs.tours
         continue-on-error: true
         run: |
           node native/macos/smoke-mac.mjs "$RUNNER_TEMP/out/Open Historia Native.app" "$RUNNER_TEMP/out/probe/Open Historia.pck" "$RUNNER_TEMP/out/smoke-arm64-windowed.log" --windowed
@@ -476,7 +559,7 @@ jobs:
         with:
           name: Open-Historia-Native-macOS-tour
           path: ${{ runner.temp }}/tour
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: warn
 
       - name: Gather the smoke logs
@@ -502,7 +585,7 @@ jobs:
             ${{ runner.temp }}/out/Open-Historia-Native-macOS.dmg
             ${{ runner.temp }}/out/native-latest-mac.json
           compression-level: 0
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload the update chunks
@@ -514,12 +597,14 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      # Only the Intel Mac job reads it, and that runs with the tours.
       - name: Upload the probe pack
+        if: inputs.tours
         uses: actions/upload-artifact@v4
         with:
           name: Open-Historia-Native-macOS-probe
           path: ${{ runner.temp }}/out/probe
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload the smoke logs
@@ -528,7 +613,7 @@ jobs:
         with:
           name: Open-Historia-Native-macOS-smoke-logs
           path: ${{ runner.temp }}/logs
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: warn
 
       - name: Stop here if a desktop check failed
@@ -580,13 +665,17 @@ jobs:
         with:
           name: Open-Historia-Native-macOS-smoke-intel
           path: ${{ runner.temp }}/logs
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: warn
 
   linux:
     name: Build and smoke-test the Linux app
+    needs: preflight
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: ${{ inputs.tours && 90 || 60 }}
+    concurrency:
+      group: native-release-${{ github.ref }}-linux
+      cancel-in-progress: true
     defaults:
       run:
         shell: bash
@@ -603,22 +692,42 @@ jobs:
           sudo apt-get install -y -qq meson ninja-build nasm cmake pkg-config zlib1g-dev xvfb xauth libgl1 libgl1-mesa-dri libglx-mesa0 libegl1 libxcursor1 libxinerama1 libxrandr2 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxext6 libxrender1 libdbus-1-3 fontconfig fonts-dejavu-core libfontconfig1 libwebkit2gtk-4.1-dev patchelf openbox dunst libnotify-bin dbus-x11 x11-utils xdotool imagemagick desktop-file-utils xdg-utils python3-venv fonts-liberation fonts-noto-color-emoji >/dev/null
           meson --version; ninja --version; nasm --version; cmake --version | head -1; ldd --version | head -1
 
+      # As on the Mac: the engine's outputs are kept by the hash of what they are
+      # built from, and an unchanged engine skips the Rust build.
+      - name: Restore the engine build for this source
+        id: engine
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            native/engine/target/release/liboh_gdext.so
+            native/engine/target/release/libohweb.so
+            native/engine/target/release/ohfronts-host
+          key: engine-linux-x86_64-ubuntu-22.04-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('native/engine/Cargo.lock', 'native/engine/Cargo.toml', 'native/engine/rust-toolchain.toml', 'native/engine/crates/**') }}
+
       - name: Install the Rust toolchain
+        if: steps.engine.outputs.cache-hit != 'true'
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
           rustup show
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.engine.outputs.cache-hit != 'true'
         with:
           workspaces: native/engine -> target
           key: linux-x86_64
           cache-on-failure: true
 
       - name: Build the engine library
+        if: steps.engine.outputs.cache-hit != 'true'
         working-directory: native/engine
         run: |
           cargo build -p oh_gdext -p ohweb --release
           cargo build -p ohfronts --bin ohfronts-host --release
+
+      - name: Check the engine library and the front engine
+        working-directory: native/engine
+        run: |
+          echo "engine build restored from the cache: ${{ steps.engine.outputs.cache-hit == 'true' }}"
           file target/release/ohfronts-host
           echo '{"t":"ping","id":1}' | target/release/ohfronts-host | grep -q '"t":"pong"'
           file target/release/liboh_gdext.so target/release/libohweb.so
@@ -627,6 +736,16 @@ jobs:
           objdump -p target/release/libohweb.so | grep NEEDED
           if objdump -p target/release/liboh_gdext.so | grep NEEDED | grep -qiE 'webkit|gtk|soup'; then echo "::error::liboh_gdext.so must not link WebKitGTK; the web view lives in libohweb.so"; exit 1; fi
           ls -la target/release/liboh_gdext.so target/release/libohweb.so
+
+      - name: Keep the engine build for the next push
+        if: steps.engine.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            native/engine/target/release/liboh_gdext.so
+            native/engine/target/release/libohweb.so
+            native/engine/target/release/ohfronts-host
+          key: ${{ steps.engine.outputs.cache-primary-key }}
 
       - name: Restore the AVIF reader's libraries from the cache
         id: codec-cache
@@ -859,7 +978,7 @@ jobs:
         with:
           name: Open-Historia-Native-Linux-tour
           path: ${{ runner.temp }}/tour
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: warn
 
       - name: Gather the logs
@@ -884,7 +1003,7 @@ jobs:
             ${{ runner.temp }}/out/Open-Historia-Native-Linux-x86_64.tar.gz
             ${{ runner.temp }}/out/native-latest-linux.json
           compression-level: 0
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload the update chunks
@@ -896,12 +1015,14 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+      # Nothing downstream reads it; kept for the runs with the tours.
       - name: Upload the probe pack
+        if: inputs.tours
         uses: actions/upload-artifact@v4
         with:
           name: Open-Historia-Native-Linux-probe
           path: ${{ runner.temp }}/out/probe
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload the logs
@@ -910,7 +1031,7 @@ jobs:
         with:
           name: Open-Historia-Native-Linux-logs
           path: ${{ runner.temp }}/logs
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: warn
 
       - name: Stop here if a desktop check failed
@@ -1116,7 +1237,14 @@ jobs:
     name: Publish to Open-Historia/open-historia
     needs: [windows, macos, linux]
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
+    # Never cancelled by a newer push: the newer publish waits for this one.
+    concurrency:
+      group: native-release-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: write
     outputs:
       published: ${{ steps.publish.outputs.published }}
     defaults:
@@ -1164,7 +1292,7 @@ jobs:
       - name: Publish the Windows, macOS and Linux apps (a dry run without the release token)
         id: publish
         env:
-          RELEASE_TOKEN: ${{ secrets.OH_PUBLIC_RELEASE_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.OH_PUBLIC_RELEASE_TOKEN || (github.repository == 'Open-Historia/open-historia' && github.token || '') }}
           LAB_TOKEN: ${{ github.token }}
           WANTED: ${{ github.event_name == 'push' || inputs.publish }}
         run: |
@@ -1173,8 +1301,8 @@ jobs:
           if [ -z "$RELEASE_TOKEN" ]; then
             echo "::notice::OH_PUBLIC_RELEASE_TOKEN is not set in this repository; a dry run, nothing is published"
             export GH_TOKEN="$LAB_TOKEN"
-          elif [ "$GITHUB_REF" != refs/heads/native/godot-app ]; then
-            echo "::notice::only native/godot-app publishes; a dry run for $GITHUB_REF"
+          elif [ "$GITHUB_REF" != refs/heads/native ] && [ "$GITHUB_REF" != refs/heads/native/godot-app ]; then
+            echo "::notice::only native publishes; a dry run for $GITHUB_REF"
             export GH_TOKEN="$RELEASE_TOKEN"
           elif [ "$WANTED" != true ]; then
             echo "::notice::publishing was turned off for this run; a dry run"
@@ -1194,12 +1322,32 @@ jobs:
           echo "::endgroup::"
           if [ "$mode" = --publish ]; then echo "published=true" >> "$GITHUB_OUTPUT"; fi
 
+      # The artifact storage quota is counted by the hour. Once a build is up on
+      # the public release, its installers and pieces are there, so this run's
+      # copies come out of the artifact storage now instead of a day later. The
+      # Linux app stays (the multiplayer guest workflow downloads it from the
+      # newest green run), and so do the logs; a run with the tours keeps all of
+      # it, as the Intel Mac job may still be reading the macOS app.
+      - name: Drop this run's published files from the artifact storage
+        if: steps.publish.outputs.published == 'true' && !inputs.tours
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name | test("^Open-Historia-Native-(Windows|Windows-chunks|macOS|macOS-chunks|Linux-chunks)$")) | "\(.id) \(.name)"' |
+          while read -r id name; do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" && echo "removed $name from the artifact storage"
+          done
+
   prune-chunks:
     name: Remove the update pieces no feed names
     needs: publish
     if: ${{ needs.publish.outputs.published == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1211,5 +1359,5 @@ jobs:
 
       - name: Remove the pieces and file lists no system's feed leads to
         env:
-          GH_TOKEN: ${{ secrets.OH_PUBLIC_RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.OH_PUBLIC_RELEASE_TOKEN || github.token }}
         run: node native/prune-chunks.mjs --prune

@@ -76,8 +76,16 @@ await waitForServer();
 const { storage, setVisible } = installShims({ origin, storageFile: path.join(nativeDir, "local-storage.json") });
 if (process.env.OH_NATIVE_WORKERS !== "0") installWorkerShim({ origin });
 let expectedJump = { origin: "", target: "", country: "" };
+let jumpStrikes = [];
 if (process.env.OH_STANDIN_MODEL === "1") {
-  installStandInModel({ expected: () => expectedJump });
+  installStandInModel({
+    expected: () => expectedJump,
+    strikes: () => {
+      const lines = jumpStrikes;
+      jumpStrikes = [];
+      return lines;
+    },
+  });
   storage.setItem("api_provider", "gemini");
   storage.setItem("gemini_api_key", "stand-in");
 }
@@ -258,7 +266,7 @@ const INVOKABLE = {
     "maybeOpenScenarioFronts", "rollBackToSnapshot", "canInterveneInLastTurn", "interveneAfterEvent", "createInteractive",
     "declineInteractiveOffer", "answerDiplomacy", "advanceActiveInteractive", "rewindActiveInteractive", "endActiveInteractive",
     "setAsideActiveInteractive", "runChatActionBatch", "checkDemandReply", "ensureCountryAssessed", "processPendingEventOutreach",
-    "generateActionSuggestions", "refinePlayerAction", "previewGameMasterCommand", "applyGameMasterPreview", "consolidateHistoryNow",
+    "generateActionSuggestions", "refinePlayerAction", "previewGameMasterCommand", "applyGameMasterPreview",
     "ensureIntelligenceRated", "ensureMilitaryFigures", "readOpenedIntercepts", "generateCountryStatSheet", "pendingCountryStatSheet",
     "generateCountryStats", "generatePlaceFeed", "generateWarRoomReply", "warRoomRouteAttacks", "warRoomTransportWays", "warRoomChart",
     "maybeSendIdleDiplomacy", "maybeGatherIntelligence", "prethinkFronts", "warRoomRehearse",
@@ -464,6 +472,7 @@ const methods = {
   "game.open": async ({ id }) => {
     await api("/api/games/active", { method: "PUT", body: { gameId: id } });
     await engine.refreshLibraryCatalog({ force: true });
+    engine.aiGameEntry.enterGame();
     regionCache = { sha: "", features: [] };
     return gameView();
   },
@@ -533,7 +542,7 @@ const handlersDir = path.join(here, "handlers");
 if (fs.existsSync(handlersDir)) {
   const { addStandIn } = await import("./standin.js");
   const standIn = process.env.OH_STANDIN_MODEL === "1";
-  const context = { engine, api, emit, plain, storage, clean, list, repo, dataRoot, cacheDir, gameView, mapState, regionRecords, setVisible, addStandIn, standIn, expectJump: (value) => { expectedJump = value; } };
+  const context = { engine, api, emit, plain, storage, clean, list, repo, dataRoot, cacheDir, gameView, mapState, regionRecords, setVisible, addStandIn, standIn, expectJump: (value) => { expectedJump = value; }, strikeNextJump: (lines) => { jumpStrikes = list(lines).map(clean).filter(Boolean); } };
   for (const file of fs.readdirSync(handlersDir).filter((name) => name.endsWith(".mjs")).sort()) {
     try {
       const module = await import(pathToFileURL(path.join(handlersDir, file)).href);

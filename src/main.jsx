@@ -1,10 +1,12 @@
 import { createRoot } from "react-dom/client";
 import { installUiTheme } from "./runtime/uiTheme.js";
 import { installAppHeight } from "./runtime/mobileUi.js";
+import { installScrollHoverFreeze } from "./runtime/scrollHoverFreeze.js";
 import { installNativeBackgroundPause } from "./runtime/native/backgroundPause.js";
 import { reportRendererRestart } from "./runtime/native/rendererRestart.js";
 import { isGenerating } from "./Game/AI/simulationStatus.js";
-import { startTranslator } from "./runtime/translator.js";
+import { startTranslator, translateNow } from "./runtime/translator.js";
+import { installNativeDialogTranslation } from "./runtime/nativeDialogs.js";
 import {
     installDebugLogCapture,
     logDebugEvent,
@@ -40,6 +42,7 @@ const mount = () => {
     // Before the first render: every panel sizes itself from the visible height
     // (runtime/mobileUi.js), which on a phone is not 100vh.
     installAppHeight();
+    installScrollHoverFreeze();
     installUiTheme();
     // MapLibre is configured by the map's own chunk as it loads
     // (Game/Map/mapLibreSetup.js), so the library stays out of this one.
@@ -54,6 +57,9 @@ const mount = () => {
     );
     // Live-translates the UI when a non-English language is set in Settings.
     startTranslator();
+    // The browser draws confirm() and alert() itself, where the translator above
+    // never looks: their messages are looked up in the same pack (nativeDialogs.js).
+    installNativeDialogTranslation(window, translateNow);
     registerServiceWorker();
     // Listen in kept the feeds it had shown in IndexedDB (oh-listen-in). Rostra,
     // the social network, took its place on 2026-11-02 and nothing reads them now.

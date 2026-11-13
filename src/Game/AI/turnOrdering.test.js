@@ -113,7 +113,8 @@ test("the Hidden events ride in the turn's result, so a held board Retry sees th
   assert.notEqual(start, -1, "finishTimelineJump has been renamed; this guard needs updating");
   const body = source.slice(start, source.indexOf("const applyArgs = {", start));
   assert.match(body, /hiddenEvents: state.hiddenEvents/, "the segments' Hidden events must be carried in result");
-  assert.match(body, /boardProvisionalEventIds: state.boardProvisionalEventIds/, "the provisional event ids must be carried in result");
+  // (Only with a board part to prove them: without one no event is provisional.)
+  assert.match(body, /boardProvisionalEventIds: review\.parts\?\.board \? state\.boardProvisionalEventIds : \[\]/, "the provisional event ids must be carried in result");
 });
 
 test("the agents' operations are decided once a skip, told to its first part alone, and carried out from the turn's result", () => {

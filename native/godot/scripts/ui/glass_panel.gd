@@ -48,6 +48,10 @@ var border := UI.HUD_BORDER
 var padding := Vector4(0, 0, 0, 0)
 var _backdrop: ColorRect
 var _material: ShaderMaterial
+var _tint_token := ""
+var _tint_base := UI.HUD_BG
+var _border_token := ""
+var _border_base := UI.HUD_BORDER
 
 
 func _init(tint_color := UI.HUD_BG, corner := 14.0, inner := Vector4(0, 0, 0, 0), border_color := UI.HUD_BORDER) -> void:
@@ -93,3 +97,21 @@ func set_radius(corner: float) -> void:
 func set_border(color: Color) -> void:
 	border = color
 	_material.set_shader_parameter("border_color", border)
+
+
+func theme_as(tint_token := "", border_token := "") -> GlassPanel:
+	_tint_token = tint_token
+	_tint_base = tint
+	_border_token = border_token
+	_border_base = border
+	if not UiTheme.events().changed.is_connected(_retheme):
+		UiTheme.events().changed.connect(_retheme)
+	_retheme()
+	return self
+
+
+func _retheme() -> void:
+	if not _tint_token.is_empty():
+		set_tint(UiTheme.pick(_tint_token, _tint_base))
+	if not _border_token.is_empty():
+		set_border(UiTheme.pick(_border_token, _border_base))

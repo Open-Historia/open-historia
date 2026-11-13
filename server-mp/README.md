@@ -51,7 +51,7 @@ Node 20 or later. The tests are written for Node 22 (what the container runs); `
 | `MAX_CONNECTIONS` | `1000` | Sockets open in all. |
 | `MAX_MEMORY_MB` | `256` | Above this resident size, new sockets are refused (503). Set it under the container's memory limit. |
 | `TRUST_PROXY` | `false` | `true` only behind our own proxy (Caddy): the client's address is then the **last** `X-Forwarded-For` entry, the one the proxy added. Never set it on a server clients can reach directly, or they choose their own address. |
-| `ALLOWED_ORIGINS` | *(empty)* | Comma list of origins whose pages may connect: exact (`https://openhistoria.com`, `http://app.paxhistoria`) or any port (`http://localhost:*`). Empty allows any origin, which is logged as a warning (`server.any-origin`) unless the server listens on loopback. With a list, a socket without an `Origin` header is refused too: browsers always send one, and any other program can send an allowed one itself. |
+| `ALLOWED_ORIGINS` | *(empty)* | Comma list of origins whose pages may connect: exact (`https://openhistoria.com`, `http://app.openhistoria`) or any port (`http://localhost:*`). Empty allows any origin, which is logged as a warning (`server.any-origin`) unless the server listens on loopback. With a list, a socket without an `Origin` header is refused too: browsers always send one, and any other program can send an allowed one itself. |
 
 "One address" is an IPv4 address or an IPv6 /64, because one IPv6 home or phone holds a whole /64. An IPv6 /48 may hold four addresses' worth of sockets and rooms.
 

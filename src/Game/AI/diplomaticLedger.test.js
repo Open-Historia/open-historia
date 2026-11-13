@@ -3,9 +3,11 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { normalizeWorldState } from "../../runtime/gameState.js";
 import {
   applyDiplomaticUpdates,
   buildBoundedDiplomaticContext,
+  buildPregameRelationBaselineRecord,
   decodeAgreementUpdates,
   decodeRelationUpdates,
   migrateLegacyDiplomaticState,
@@ -70,6 +72,78 @@ test("relation and agreement lines bind to their event and merge into the world"
   const { text } = buildBoundedDiplomaticContext(merge.world, { playerPolity: "France", maxActors: 4 });
   assert.match(text, /France ↔ Russia \| friendly \+70/);
   assert.match(text, /franco-russian-alliance \| ACTIVE \| alliance \| Franco-Russian Alliance/);
+});
+
+test("a collapsed multi-relation payload cannot become one pair's canonical summary", () => {
+  // Android Beta #42, round 133: the Peru summary swallowed other countries'
+  // compact relation rows, and a later event was incorrectly treated as causal.
+  // The rule is generic: a relation summary is prose, never packed ledger data.
+  const corrupted = "France~Russia~70~friendly~1~Germany~85~friendly~,France~Germany~40~cordial~";
+  const valid = "France~Germany~40~cordial~1~Trade contacts resumed";
+  const original = {
+    events: alliance(),
+    relationUpdates: corrupted + "\n" + valid,
+    agreementUpdates: "",
+  };
+
+  const decoded = decodeRelationUpdates(corrupted);
+  assert.equal(decoded[0].summary, "Germany~85~friendly~,France~Germany~40~cordial~");
+
+  const strict = structuredClone(original);
+  assert.match(validateDiplomaticLedgerPayload(strict, { world, allowNativeBinding: true }),
+    /relation update.*summary.*separator/i, "strict validation refuses packed relationship data");
+
+  const structured = {
+    events: alliance(),
+    relationUpdates: [{
+      a: "France", b: "Russia", score: 70, status: "friendly", eventIndexes: [0],
+      summary: "Germany~85~friendly~,France~Germany~40~cordial~",
+    }],
+    agreementUpdates: [],
+  };
+  assert.match(validateDiplomaticLedgerPayload(structured, { world, allowNativeBinding: true }),
+    /relation update.*summary.*separator/i, "structured records have the same invariant");
+
+  const salvaged = structuredClone(original);
+  const playerNotes = [];
+  const notes = salvageDiplomaticLedgerPayload(salvaged, { world, playerNotes });
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /summary.*separator/i);
+  assert.equal(playerNotes.length, 1, "the player is told why the relation was dropped");
+  assert.match(playerNotes[0].text, /was incomplete/i, "the existing localized relation receipt is reused");
+  assert.deepEqual(decodeRelationUpdates(salvaged.relationUpdates).map((entry) => [entry.a, entry.b]),
+    [["France", "Germany"]], "unrelated valid updates survive");
+  assert.equal(validateDiplomaticLedgerPayload(salvaged, { world, allowNativeBinding: true }), "");
+
+  const direct = applyDiplomaticUpdates({
+    world,
+    relationUpdates: original.relationUpdates,
+    agreementUpdates: "",
+    events: alliance(),
+    stopDate: "1894-01-31",
+    round: 2,
+  });
+  assert.deepEqual(direct.relations.map((entry) => [entry.a, entry.b]),
+    [["France", "Germany"]], "direct merge cannot bypass the canonical guard");
+
+  const persisted = { ...world, relations: [{
+    id: "legacy-relation", a: "France", b: "Russia", score: 70, status: "friendly",
+    summary: "Germany~85~friendly~,France~Germany~40~cordial~",
+    sourceEventIds: ["e1"],
+  }] };
+  const restored = normalizeWorldState(persisted);
+  assert.equal(restored.relations.length, 1, "keep the old relationship itself");
+  assert.equal(restored.relations[0].score, 70, "keep its canonical score");
+  assert.equal(restored.relations[0].summary, "", "quarantine invalid historical explanation");
+  assert.deepEqual(restored.relations[0].sourceEventIds, ["e1"], "do not fabricate or rewrite event provenance");
+  assert.match(persisted.relations[0].summary, /Germany~85/, "normalization never mutates the raw source");
+
+  const baseline = buildPregameRelationBaselineRecord({
+    a: "France", b: "Russia", score: 70, summary: "Germany~85~friendly~",
+    world, observedDate: "1894-01-01",
+  });
+  assert.equal(baseline.record, null, "round-zero baseline cannot bypass the guard");
+  assert.match(baseline.error, /summary.*separator/i);
 });
 
 test("bounded diplomatic context pulls a seed actor's active Puppet counterpart into attention", () => {
@@ -551,7 +625,9 @@ test("two wordings of one agreement's title agree in another script, and two agr
 test("chat deals become agreements, and an agreement's due terms are carried out (#798)", async () => {
   const { readFileSync } = await import("node:fs");
   const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  const directive = gameplay.slice(gameplay.indexOf("const buildDiplomaticLedgerDirective"), gameplay.indexOf("const IDLE_RELATION_DECISION_MODEL"));
+  // The rules, stated once in the skip's static part (buildJumpStaticRules), and the directive that points at them.
+  const directive = gameplay.slice(gameplay.indexOf("const diplomaticLedgerRules"), gameplay.indexOf("const IDLE_RELATION_DECISION_MODEL"));
+  assert.match(directive, /\$\{rulesAbove \? `Relations, agreements and client states are recorded as \$\{DIPLOMATIC_LEDGER_RULES_HEADING\} above says\.` : diplomaticLedgerRules\(playerName\)\}/);
   assert.match(directive, /A deal both sides accepted in a chat is an agreement from the moment it is made/);
   assert.match(directive, /The terms of an active agreement are commitments/);
   assert.match(directive, /an impacts\.regionTransfers entry for land/);

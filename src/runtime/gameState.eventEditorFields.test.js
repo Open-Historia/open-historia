@@ -115,3 +115,18 @@ test("the engine reads a flagged event as flagged, and keeps the reaction's reco
   assert.deepEqual(saved.npcReaction, { enabled: true, evaluatedAt: "2026-09-25T10:00:12.000Z", result: "sent", chatId: "ru-us-1" });
   assert.equal(saved.quote.speaker, "The Kremlin");
 });
+
+// The one-line digest a time skip writes beside each event, which later
+// skips' history shows of it (AI/promptContext.js buildEventHistoryText).
+test("an event's digest survives a save as one line of at most 140 characters, and an event without one saves as before", () => {
+  const base = { id: "e", date: "2014-03-02", title: "T", description: "D" };
+  assert.equal(normalizeEventEntry({ ...base, digest: "  Russia's parliament\n authorises force in Ukraine.  " }).digest, "Russia's parliament authorises force in Ukraine.");
+  const long = normalizeEventEntry({ ...base, digest: `${"word ".repeat(60)}end` }).digest;
+  assert.ok(long.length <= 140 && long.endsWith("…"), long);
+  assert.equal("digest" in normalizeEventEntry(base), false);
+  assert.equal("digest" in normalizeEventEntry({ ...base, digest: "   " }), false);
+  assert.equal("digest" in normalizeEventEntry({ ...base, digest: 42 }), false);
+  const [event] = normalizeEvents([{ ...base, digest: "One line." }]);
+  assert.deepEqual(normalizeEvents(JSON.parse(JSON.stringify([event])))[0], event, "normalizing what was normalized changes nothing");
+  assert.equal(eventCanonicalKey(event), eventCanonicalKey(normalizeEventEntry(base)), "nor is it part of the event's identity");
+});

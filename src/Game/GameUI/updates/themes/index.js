@@ -16,6 +16,7 @@
 
 import { lazy } from "react";
 
+import { AI_OVERHAUL_CHROME } from "./aiOverhaulChrome.js";
 import { AIR_RAID_CHROME } from "./airRaidChrome.js";
 import { CHRONICLE_CHROME } from "./chronicleChrome.js";
 import { ESPIONAGE_2_CHROME } from "./espionage2Chrome.js";
@@ -27,6 +28,7 @@ import { THEMES_CHROME } from "./themesChrome.js";
 import { WARS_AND_FRONTS_2_CHROME } from "./warsAndFronts2Chrome.js";
 
 export const THEMES = Object.freeze({
+  aiOverhaul: { Page: lazy(() => import("./AiOverhaul.jsx")), chrome: AI_OVERHAUL_CHROME },
   themes: { Page: lazy(() => import("./Themes.jsx")), chrome: THEMES_CHROME },
   rostra: { Page: lazy(() => import("./Rostra.jsx")), chrome: ROSTRA_CHROME },
   airRaid: { Page: lazy(() => import("./AirRaid.jsx")), chrome: AIR_RAID_CHROME },

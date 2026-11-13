@@ -16,6 +16,7 @@ import { toCountryName } from "../../runtime/ownerNames.js";
 import { resolvePolityIdentity, buildPolityIdentityIndex } from "../../runtime/polityIdentity.js";
 import { compareGameDates, isGameDate } from "../../runtime/gameDates.js";
 import { receiptPlayerNote } from "../../runtime/receiptPlayerNotes.js";
+import { hasMalformedRelationSummary as relationSummaryHasReservedSeparator } from "../../runtime/relationSummary.js";
 
 export const DIPLOMATIC_LEDGER_VERSION = 1;
 export const DIPLOMATIC_DIRECTOR_VERSION = "0.1.7-round-zero-baseline";
@@ -267,6 +268,7 @@ export const buildPregameRelationBaselineRecord = ({
   const numeric = Number(score);
   if (!left || !right || !pairKey) return { record: null, error: "Round-Zero relation requires two distinct current polities." };
   if (!Number.isFinite(numeric)) return { record: null, error: `Round-Zero relation ${left} ↔ ${right} requires a finite absolute score.` };
+  if (relationSummaryHasReservedSeparator(summary)) return { record: null, error: `Round-Zero relation ${left} ↔ ${right} has a summary containing a reserved compact-record separator.` };
   const ordered = [left, right].sort((x, y) => lower(x).localeCompare(lower(y)));
   const clamped = clamp(Math.round(numeric), -100, 100);
   const date = clean(observedDate);
@@ -1394,6 +1396,10 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world, playerNotes =
     else if (lower(a) === lower(b)) { why = "both sides are the same polity"; key = "relationSameCountry"; }
     else if (!Number.isFinite(update.score)) why = "it carries no score from -100 to 100";
     else if (!RELATION_STATUS_SET.has(update.status)) why = `"${update.status}" is not a relation status`;
+    else if (relationSummaryHasReservedSeparator(update.summary)) {
+      why = "its summary contains a reserved compact-record separator";
+      key = "relationIncomplete";
+    }
     // A side the model left blank has no name to show the player.
     if (key === "relationUnknownCountry" && (!clean(update.a) || !clean(update.b))) key = "relationUnnamed";
     if (why) {
@@ -1478,6 +1484,14 @@ export const validateDiplomaticLedgerPayload = (
     // The GM/admin preview (allowNativeBinding false) stays fail-closed: an
     // administrator naming an agreement that does not exist should be told so.
     normalizeUnknownAgreementLifecycle(candidate, world);
+  }
+
+  // Summaries are one pair's plain-text reason, not additional packed relation
+  // records. Check before score/binding repairs can give malformed text authority.
+  for (const update of decodeRelationUpdates(candidate?.relationUpdates)) {
+    if (relationSummaryHasReservedSeparator(update.summary)) {
+      return `Relation update ${update.a} ↔ ${update.b} has a summary containing a reserved compact-record separator (~).`;
+    }
   }
 
   // A declared status that contradicts the absolute score is the model writing
@@ -1600,7 +1614,7 @@ export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "
     const a = canonicalDiplomaticPolity(update.a, nextWorld);
     const b = canonicalDiplomaticPolity(update.b, nextWorld);
     const key = relationPairKey(a, b);
-    if (!a || !b || !key || !Number.isFinite(update.score) || !RELATION_STATUS_SET.has(update.status)) {
+    if (!a || !b || !key || !Number.isFinite(update.score) || !RELATION_STATUS_SET.has(update.status) || relationSummaryHasReservedSeparator(update.summary)) {
       console.warn(`[OH diplomacy] dropped invalid relation update ${update.a} ↔ ${update.b}.`);
       continue;
     }
@@ -2465,6 +2479,16 @@ const relationDisplay = (relation, world) =>
 
 const politySetKey = (value) => lower(value);
 
+// How the slice is read, the same under every slice: a time skip states it
+// once, in the part of its prompt that never changes (gameplay.js
+// buildJumpStaticRules), and takes it out of the slice it is sent.
+export const DIPLOMATIC_SLICE_RULES = [
+  "A Puppet is a SEPARATE COUNTRY: it holds its own territory and its own sovereignty, and only its will is directed. A COVERT subordination is known only to the two parties and anyone listed; a covert Puppet speaking to anyone else must present itself as fully independent. Loyalty is never public knowledge, not even for an open arrangement.",
+  "Sparse-ledger rule: an untracked pair is NOT secretly hostile and is NOT a numeric score of zero. It only means no material bilateral state has yet been canonically recorded.",
+  "Formal commitments and bilateral warmth are different facts. An alliance may be strained; friendly countries may have no alliance.",
+  "world.wars remains the sole authority for actual belligerency. A hostile relation does not itself start a war. An alliance, a mutual defence agreement or a guarantee binds: when a party is attacked the game itself enters the others in that war, and one that will not come has broken the treaty and pays for it in reputation.",
+].join("\n");
+
 export const buildBoundedDiplomaticContext = (
   worldLike,
   {
@@ -2579,10 +2603,7 @@ export const buildBoundedDiplomaticContext = (
     "",
     "SUBORDINATIONS (who directs whom)",
     puppets.length ? puppets.map((row) => puppetDisplay(row, world)).join("\n") : "No polity here directs another.",
-    "A Puppet is a SEPARATE COUNTRY: it holds its own territory and its own sovereignty, and only its will is directed. A COVERT subordination is known only to the two parties and anyone listed; a covert Puppet speaking to anyone else must present itself as fully independent. Loyalty is never public knowledge, not even for an open arrangement.",
-    "Sparse-ledger rule: an untracked pair is NOT secretly hostile and is NOT a numeric score of zero. It only means no material bilateral state has yet been canonically recorded.",
-    "Formal commitments and bilateral warmth are different facts. An alliance may be strained; friendly countries may have no alliance.",
-    "world.wars remains the sole authority for actual belligerency. A hostile relation does not itself start a war. An alliance, a mutual defence agreement or a guarantee binds: when a party is attacked the game itself enters the others in that war, and one that will not come has broken the treaty and pays for it in reputation.",
+    DIPLOMATIC_SLICE_RULES,
   ].join("\n");
 
   return { actors, relations, agreements, puppets, text };

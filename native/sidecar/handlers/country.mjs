@@ -20,7 +20,6 @@ const EXTRA_MODULES = Object.freeze({
   warSettings: "ctWarSettings",
   attrition: "ctAttrition",
   warResources: "ctWarResources",
-  alliances: "ctAlliances",
   peaceTerms: "ctPeaceTerms",
   warWeariness: "ctWarWeariness",
   afterActionData: "ctAfterActionData",
@@ -43,6 +42,7 @@ const EXTRA_MODULES = Object.freeze({
   gameFlagChoices: "ctGameFlagChoices",
   hubFiles: "ctHubFiles",
   politics: "ctPolitics",
+  customStatFormatting: "ctCustomStatFormatting",
 });
 
 let extrasFound = null;
@@ -235,7 +235,6 @@ export const resolveIdentity = (extras, value, world, allowUnknown = true) => {
 };
 
 const STORAGE_KEY = "oh-stat-sheets-v2";
-const TRACKING_STORAGE_KEY = "oh-stat-tracking-v1";
 const MAX_STORED_SHEETS = 20;
 const MAX_LOCAL_CACHE_COMPONENTS = 64;
 const MAX_MEMORY_SHEETS = 24;
@@ -306,21 +305,7 @@ const formatPercent = (value, { signed = false } = {}) => {
   return `${prefix}${rounded}%`;
 };
 
-const formatCustomStatValue = (stat, value) => {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "—";
-  const decimals = Math.max(0, Math.min(4, Math.trunc(Number(stat?.decimals) || 0)));
-  let body;
-  if (stat?.compact) {
-    body = formatCompactNumber(number, { digits: Math.min(2, decimals || 1) });
-  } else {
-    body = number.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-  }
-  const prefix = String(stat?.prefix || "");
-  const suffix = String(stat?.suffix || "");
-  const suffixText = suffix ? (/^[%°]/.test(suffix) ? suffix : ` ${suffix}`) : "";
-  return `${prefix}${body}${suffixText}`;
-};
+const formatCustomStatValue = (stat, value) => extrasFound.customStatFormatting.formatCustomStatValue(stat, value);
 
 const customMetricUnit = (stat) => ["custom", stat?.kind || "number", String(stat?.prefix || ""), String(stat?.suffix || "")].join(":");
 
@@ -329,12 +314,6 @@ const customMetricUnitLabel = (stat) => {
   if (stat?.kind === "percentage") return stat?.suffix || "Percent";
   const display = [stat?.prefix, stat?.suffix].filter(Boolean).join(" … ");
   return display || "Value";
-};
-
-const countryStatsTrackingIntervalLabel = (months) => {
-  const count = Math.max(0, Math.trunc(Number(months) || 0));
-  if (!count) return "Manual only";
-  return count === 1 ? "Every month" : `Every ${count} months`;
 };
 
 const stabilityColor = (value) => (value < 40 ? "#ef4444ff" : value < 70 ? "#f59e0bff" : "#22c55eff");
@@ -450,35 +429,6 @@ export const answerDiplomacy = async (ctx, op, ref, terms = null, where = {}) =>
   } catch (error) {
     return { ok: false, error: cleanText(error?.message) || "That could not be done.", accepted: false, to: "" };
   }
-};
-
-export const warPeaceState = async (ctx) => {
-  const extras = await loadExtras(ctx);
-  const [world, game] = await Promise.all([
-    ctx.engine.readJson(ctx.engine.JSON_URLS.world, { defaultValue: {}, force: false }).catch(() => ({})),
-    ctx.engine.gameState.readGameData({ force: false }).catch(() => ({})),
-  ]);
-  const country = cleanText(game?.country);
-  if (!country) return { country: "", waiting: 0, calls: [] };
-  const calls = extras.alliances.openCallsFor(asArray(world?.callsToArms), country);
-  const reputation = extras.alliances.TREATY_BROKEN_REPUTATION;
-  return {
-    country,
-    waiting: calls.length,
-    calls: calls.map((call) => ({
-      id: cleanText(call.id),
-      title: "Call to arms",
-      yes: "Honour the alliance",
-      no: "Break the treaty",
-      yesOp: "honour",
-      noOp: "refuse",
-      lines: [
-        { text: `${call.defender} has been attacked by ${asArray(call.attackers).join(", ") || "an enemy"} and calls on you to defend it.`, tone: "main" },
-        ...(call.via?.title ? [{ text: `You are bound by ${call.via.title}.`, tone: "soft" }] : []),
-        { text: `Honouring it puts you at war. Breaking the treaty costs ${reputation} of your reputation, and ends it. Left unanswered, it counts as broken.`, tone: "soft", gap: true },
-      ],
-    })),
-  };
 };
 
 export const register = (ctx) => {
@@ -644,7 +594,7 @@ export const register = (ctx) => {
     const { countryStats } = extras;
     const isValidStatSheet = (value, definition) => {
       const sheet = countryStats.finalizeCountryStatSheet(value);
-      if (definition?.custom) return countryStats.isCompleteCustomCountryStatSheet(sheet, engine.statsSheet.statSheetKeys(definition));
+      if (definition?.custom) return engine.statsSheet.hasRecordedCustomStatValues(sheet?.customStats, definition);
       return countryStats.isCompleteCountryStatSheet(sheet) && extras.gameplaySchemas.validateGameplayPayload("countryStatSheet", withoutBackendFields(sheet)).valid;
     };
     const calibration = (value) => Math.max(0, Math.trunc(Number(value?.continuity?.populationCalibrationVersion) || 0));
@@ -754,8 +704,8 @@ export const register = (ctx) => {
   };
 
   const indexValue = (value) => {
-    const numeric = value === null || value === undefined || value === "" ? NaN : Number(value);
-    return Number.isFinite(numeric) ? clamp01(numeric) : null;
+    const numeric = engine.statsSheet.readCustomStatNumber(value);
+    return numeric === null ? null : clamp01(numeric);
   };
 
   const economyView = (extras, { sheet, definition, indexRows, intelligence }) => {
@@ -769,11 +719,10 @@ export const register = (ctx) => {
         .map((section) => ({
           title: `${section.icon || "◆"} ${section.label}`,
           stats: section.stats.map((stat) => {
-            const numeric = Number(values[stat.key]);
             if (stat.kind === "index") {
               return { kind: "index", label: cleanText(`${stat.icon ?? ""} ${stat.label}`), value: indexValue(values[stat.key]), color: cssHex(stat.color || "#a1a1aa") };
             }
-            return { kind: "value", label: `${stat.icon ?? ""} ${stat.label}`.toUpperCase(), value: formatCustomStatValue(stat, numeric), color: cssHex(stat.color || "#e7e7e9") };
+            return { kind: "value", label: `${stat.icon ?? ""} ${stat.label}`.toUpperCase(), value: formatCustomStatValue(stat, values[stat.key]), color: cssHex(stat.color || "#e7e7e9") };
           }),
         }));
       return { custom: true, intelligence, sections };
@@ -1210,69 +1159,6 @@ export const register = (ctx) => {
     };
   };
 
-  const trackingSettingsOf = async (extras, player) => {
-    const { countryStats } = extras;
-    const fallback = () => {
-      try {
-        const all = JSON.parse(storage.getItem(TRACKING_STORAGE_KEY) || "{}");
-        return countryStats.normalizeCountryStatsTracking(all?.[player.gameKey], { playerCountry: player.code });
-      } catch {
-        return countryStats.normalizeCountryStatsTracking({}, { playerCountry: player.code });
-      }
-    };
-    try {
-      const world = await engine.gameState.readWorldStateView({ force: false });
-      const canonical = world?.countryStatsTracking && typeof world.countryStatsTracking === "object" && !Array.isArray(world.countryStatsTracking);
-      const next = canonical ? countryStats.normalizeCountryStatsTracking(world.countryStatsTracking, { playerCountry: player.code }) : fallback();
-      if (!canonical && (next.intervalMonths > 0 || next.trackedPolities.length > 0)) {
-        try {
-          const raw = await engine.gameState.readWorldState({ force: false });
-          await engine.gameState.writeWorldState({ ...(raw || {}), countryStatsTracking: next });
-        } catch {
-          return next;
-        }
-      }
-      return next;
-    } catch {
-      return fallback();
-    }
-  };
-
-  const persistTracking = async (extras, player, next) => {
-    if (engine.simulationStatus.isSimulationBusy()) return false;
-    const { countryStats } = extras;
-    const normalized = countryStats.normalizeCountryStatsTracking(next, { playerCountry: player.code });
-    try {
-      const all = JSON.parse(storage.getItem(TRACKING_STORAGE_KEY) || "{}");
-      all[player.gameKey] = normalized;
-      storage.setItem(TRACKING_STORAGE_KEY, JSON.stringify(all));
-    } catch {
-      normalized.intervalMonths = normalized.intervalMonths ?? 0;
-    }
-    try {
-      const world = await engine.gameState.readWorldState({ force: false });
-      const prior = countryStats.normalizeCountryStatsTracking(world?.countryStatsTracking, { playerCountry: player.code });
-      const canonical = countryStats.normalizeCountryStatsTracking({
-        ...prior,
-        intervalMonths: normalized.intervalMonths,
-        trackedPolities: normalized.trackedPolities,
-      }, { playerCountry: player.code });
-      await engine.gameState.writeWorldState({ ...(world || {}), countryStatsTracking: canonical });
-    } catch (error) {
-      emit("log", { category: "country", message: `Tracking settings were kept on this device only: ${error?.message ?? error}` });
-    }
-    return true;
-  };
-
-  const trackingSummary = (extras, settings, identity) => {
-    const max = extras.countryStats.COUNTRY_STATS_TRACKING_MAX_POLITIES;
-    const names = asArray(settings?.trackedPolities).map((key) => (identity ? identity.displayName(key) : cleanText(key))).filter(Boolean);
-    return {
-      line: `Auto-refresh: ${countryStatsTrackingIntervalLabel(settings?.intervalMonths)} · Tracked: ${asArray(settings?.trackedPolities).length}/${max}`,
-      preview: !names.length ? "No tracked countries yet" : names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} +${names.length - 3} more`,
-    };
-  };
-
   const drawerFlag = (extras, { world, identity, target, polity, displayName, customFlags, isPlayer, landless }) => {
     const resolvedKey = identity ? (identity.canonicalKey(target) || target) : target;
     const flagArgs = {
@@ -1297,16 +1183,13 @@ export const register = (ctx) => {
     const identity = identityIndexFor(extras, world);
     const asked = cleanText(requested);
     const target = asked ? (identity?.canonicalKey(asked) || asked) : player.code;
-    const busy = engine.simulationStatus.isSimulationBusy();
     const base = {
       player: { code: player.code, date: player.date, round: player.round, gameKey: player.gameKey },
       target,
       custom: Boolean(definition.custom),
       economyTab: definition.custom ? "📊 National" : "📈 Economy",
       definitionError,
-      turnRunning: busy,
-      turnRunningNote: TURN_RUNNING_NOTE,
-      refreshHint: definition.custom ? "Uses 1 request." : "Uses a request only if something has changed since the last assessment.",
+      refreshHint: "\"Uses a request only if relevant canonical evidence has changed since the last assessment.\"",
     };
     if (!target) return { ...base, empty: "No active game. Start one to see national statistics." };
     const countries = await countryNameRows(ctx);
@@ -1357,7 +1240,6 @@ export const register = (ctx) => {
     } catch {
       institutions = [];
     }
-    const settings = await trackingSettingsOf(extras, player);
     const sheet = cachedSheet;
     return {
       ...base,
@@ -1384,7 +1266,6 @@ export const register = (ctx) => {
       diplomacy: world ? diplomacyView(extras, { world, identity, target, viewer: player.code, relationSearch, relationSort }) : null,
       economy: economyView(extras, { sheet, definition, indexRows, intelligence }),
       military: world && sheet && tab === "economy" ? militaryView(extras, world, resolvedKey || target) : null,
-      tracking: trackingSummary(extras, settings, identity),
       generating: generating.has(target),
       worldRead: Boolean(world),
     };
@@ -1462,8 +1343,6 @@ export const register = (ctx) => {
       unrankedCount: ranking.unranked > 0 ? `(${ranking.rows.length}/${ranking.total})` : "",
     };
   };
-
-  const historyMetricValue = (sample, key) => sample?.[key] ?? sample?.indices?.[key] ?? sample?.customStats?.[key];
 
   const metricGroupsFor = (indexRows, definition) => {
     if (definition?.custom) {
@@ -1638,9 +1517,11 @@ export const register = (ctx) => {
     const sampleSpan = visible.length > 1
       ? `${formatHistoryDate(visible[0].date, { compact: true })} – ${formatHistoryDate(visible[visible.length - 1].date, { compact: true })}`
       : visible[0] ? formatHistoryDate(visible[0].date, { compact: true }) : "No history yet";
-    const valid = visible.filter((sample) => selected.some((metric) => Number.isFinite(Number(historyMetricValue(sample, metric.key)))));
+    const { historyMetricValue, historyMetricChange } = extras.statsHistoricalTracking;
+    const valid = visible.filter((sample) => Number.isFinite(dateMs(sample.date)));
+    const hasValues = valid.some((sample) => selected.some((metric) => Number.isFinite(historyMetricValue(sample, metric.key))));
     let chart = null;
-    if (valid.length && selected.length) {
+    if (hasValues && selected.length) {
       const width = 900;
       const height = 470;
       const pad = { left: 78, right: 34, top: 34, bottom: 58 };
@@ -1650,7 +1531,7 @@ export const register = (ctx) => {
       const minTime = Math.min(...times);
       const maxTime = Math.max(...times);
       const timeSpan = Math.max(1, maxTime - minTime);
-      const values = valid.flatMap((sample) => selected.map((metric) => Number(historyMetricValue(sample, metric.key))).filter(Number.isFinite));
+      const values = valid.flatMap((sample) => selected.map((metric) => historyMetricValue(sample, metric.key)).filter(Number.isFinite));
       let minValue = Math.min(...values);
       let maxValue = Math.max(...values);
       const unit = selected[0]?.unit;
@@ -1687,7 +1568,7 @@ export const register = (ctx) => {
           const runs = [];
           let current = [];
           for (const sample of valid) {
-            const value = Number(historyMetricValue(sample, metric.key));
+            const value = historyMetricValue(sample, metric.key);
             if (!Number.isFinite(value)) {
               if (current.length) runs.push(current);
               current = [];
@@ -1703,7 +1584,7 @@ export const register = (ctx) => {
           x: xFor(sample),
           date: formatHistoryDate(sample.date).toUpperCase(),
           values: selected.map((metric) => {
-            const value = Number(historyMetricValue(sample, metric.key));
+            const value = historyMetricValue(sample, metric.key);
             return Number.isFinite(value) ? { label: metric.label, color: cssHex(metric.color), text: metric.format(value), y: yFor(value) } : null;
           }).filter(Boolean),
         })),
@@ -1712,9 +1593,7 @@ export const register = (ctx) => {
     const first = visible[0];
     const last = visible[visible.length - 1];
     const summary = first && last ? selected.map((metric) => {
-      const start = Number(historyMetricValue(first, metric.key));
-      const end = Number(historyMetricValue(last, metric.key));
-      const delta = Number.isFinite(start) && Number.isFinite(end) ? end - start : null;
+      const { end, delta } = historyMetricChange(visible, metric.key);
       const deltaText = delta == null
         ? "—"
         : String(metric.unit || "").startsWith("custom:")
@@ -1729,7 +1608,7 @@ export const register = (ctx) => {
       return {
         label: metric.label.toUpperCase(),
         color: cssHex(metric.color),
-        value: metric.format(end),
+        value: end === null ? "—" : metric.format(end),
         delta: `${deltaText} over range`,
         tone: delta == null ? "#ffffff4d" : delta > 0 ? "#86efacff" : delta < 0 ? "#fca5a5ff" : "#ffffff6b",
       };
@@ -1744,67 +1623,6 @@ export const register = (ctx) => {
       emptyText: "No historical samples are available for this selection yet.",
       summary,
       campaign: `${history.persistentCount} permanent sample${history.persistentCount === 1 ? "" : "s"}${history.recoveredCount > 0 ? ` · ${history.recoveredCount} recovered from rollback snapshots` : ""}. A completed turn that changes these figures is recorded automatically.`,
-    };
-  };
-
-  const trackingView = async ({ target = "", search = "" } = {}) => {
-    const extras = await loadExtras(ctx);
-    const { countryStats } = extras;
-    const player = await readPlayer();
-    const { definition } = await readDefinition();
-    const world = (await engine.gameState.readWorldStateView({ force: false }).catch(() => null)) ?? {};
-    const identity = identityIndexFor(extras, world);
-    const settings = await trackingSettingsOf(extras, player);
-    const stockNames = Object.values(extras.countryNames.default ?? {});
-    const candidates = extras.statsHistoricalTracking.buildHistoricalTrackingCandidateRows({ world, playerCountry: player.code, currentCountry: target, index: identity, stockNames });
-    const index = candidates.index;
-    const customKeys = definition?.custom ? engine.statsSheet.statSheetKeys(definition) : null;
-    const ready = (key) => countryStats.isTrackedStatSheetReady(world?.countryStats?.[index.canonicalKey(key) || key], customKeys);
-    const refreshRecord = countryStats.normalizeCountryStatsTracking(world?.countryStatsTracking, { playerCountry: player.code });
-    const lastRefresh = (key) => refreshRecord.lastAutoRefreshByPolity?.[index.canonicalKey(key) || key] || "";
-    const max = countryStats.COUNTRY_STATS_TRACKING_MAX_POLITIES;
-    const tracked = asArray(settings.trackedPolities);
-    const filtered = extras.statsHistoricalTracking.filterHistoricalTrackingCandidateRows(candidates.rows, search);
-    const interval = Number(settings?.intervalMonths);
-    const intervalLabel = countryStatsTrackingIntervalLabel(settings?.intervalMonths);
-    return {
-      intervals: countryStats.COUNTRY_STATS_TRACKING_INTERVALS.map((months) => ({ months, label: months === 0 ? "Off" : `${months} months`, active: interval === months })),
-      intervalLabel,
-      max,
-      count: `${tracked.length}/${max}`,
-      pickText: `Pick up to ${max} countries to keep historical charts rich without overloading the simulation.`,
-      chips: tracked.map((key) => ({ key, label: index.displayName(key), isPlayer: lowerText(key) === lowerText(player.code), ready: ready(key) })),
-      rows: filtered.map((row) => {
-        const isTracked = tracked.some((item) => lowerText(item) === lowerText(row.key));
-        const isPlayer = lowerText(row.key) === lowerText(player.code);
-        const isViewed = lowerText(row.key) === lowerText(target);
-        const maxed = !isTracked && tracked.length >= max;
-        return {
-          key: row.key,
-          label: row.label,
-          tracked: isTracked,
-          isPlayer,
-          isViewed: isViewed && !isPlayer,
-          keyText: !isPlayer && !isViewed ? cleanText(row.key) : "",
-          ready: ready(row.key),
-          maxed,
-          action: isTracked ? "Tracked" : maxed ? "Full" : "Add",
-        };
-      }),
-      lastBatch: refreshRecord.lastBatchDate
-        ? `The last automatic refresh ran on ${extras.gameDates.formatGameDateReadable(refreshRecord.lastBatchDate)}.`
-        : "No automatic refresh has run yet.",
-      status: tracked.map((key) => {
-        const isReady = ready(key);
-        const last = lastRefresh(key);
-        return {
-          key: index.canonicalKey(key) || key,
-          label: index.displayName(key),
-          ready: isReady,
-          text: !isReady ? "Needs a first reading" : last ? `Last refreshed on ${extras.gameDates.formatGameDateReadable(last)}` : "Not refreshed automatically yet",
-        };
-      }),
-      turnRunning: engine.simulationStatus.isSimulationBusy(),
     };
   };
 
@@ -1922,28 +1740,6 @@ export const register = (ctx) => {
       return relationRoster(extras, relationRows(identity, world, key), { search, sort });
     },
     "country.chart": async (args) => chartView(args),
-    "country.tracking": async (args) => trackingView(args),
-    "country.tracking.interval": async ({ months = 0, target = "", search = "" } = {}) => {
-      const extras = await loadExtras(ctx);
-      const player = await readPlayer();
-      const settings = await trackingSettingsOf(extras, player);
-      await persistTracking(extras, player, { ...(settings || {}), intervalMonths: Number(months) || 0 });
-      return trackingView({ target, search });
-    },
-    "country.tracking.toggle": async ({ key = "", target = "", search = "" } = {}) => {
-      const extras = await loadExtras(ctx);
-      const player = await readPlayer();
-      const world = (await engine.gameState.readWorldStateView({ force: false }).catch(() => null)) ?? {};
-      const identity = identityIndexFor(extras, world);
-      const canonical = identity?.canonicalKey(key) || key;
-      const current = extras.countryStats.normalizeCountryStatsTracking(await trackingSettingsOf(extras, player), { playerCountry: player.code });
-      const already = current.trackedPolities.some((item) => lowerText(item) === lowerText(canonical));
-      const nextTracked = already
-        ? current.trackedPolities.filter((item) => lowerText(item) !== lowerText(canonical))
-        : [...current.trackedPolities, canonical];
-      await persistTracking(extras, player, { ...current, trackedPolities: nextTracked });
-      return trackingView({ target, search });
-    },
     "country.answer": async ({ op = "", ref = "", territory = "", money = "none", theirs = "", country = "free", cede = "", ours = "", more = "", chatId = "", messageId = "" } = {}) => {
       if (op === "propose") {
         const player = await readPlayer();
@@ -1966,7 +1762,6 @@ export const register = (ctx) => {
       const answer = await answerDiplomacy(ctx, op, ref);
       return { ok: answer.ok, said: answer.ok ? "" : refusalText(answer.error) };
     },
-    "country.warpeace": async () => warPeaceState(ctx),
     "country.width": async ({ width = 0 } = {}) => {
       const next = Math.round(Number(width) || 0);
       if (next > 0) {
@@ -1976,6 +1771,5 @@ export const register = (ctx) => {
       const saved = Number(storage.getItem("oh-advisor-width"));
       return { width: Number.isFinite(saved) && saved > 0 ? saved : 0 };
     },
-    "country.busy": async () => ({ busy: engine.simulationStatus.isSimulationBusy(), note: TURN_RUNNING_NOTE }),
   };
 };

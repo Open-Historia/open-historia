@@ -82,6 +82,11 @@ pub fn staff_decision(battle: &Battle, side: usize, began: bool, today: Option<&
     if ratio >= advances {
         return decided("advance", "all", ratio);
     }
+    if let Some(capital) = capital_of(battle, side) {
+        if capital.held && ratio >= STAFF_RETAKE_ODDS {
+            return decided("advance", &format!("city: {}", capital.name), ratio);
+        }
+    }
     if ratio < STAFF_DIGS_IN_UNDER {
         return decided("dig in", "all", ratio);
     }
@@ -122,6 +127,87 @@ pub fn staff_decision(battle: &Battle, side: usize, began: bool, today: Option<&
         Some((_, there)) if there < 1.0 => decided("hold", "all", ratio),
         Some((name, _)) => decided("advance", &name, ratio),
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Capital {
+    pub name: String,
+    pub x: f64,
+    pub y: f64,
+    pub held: bool,
+    pub near: bool,
+}
+
+pub fn capital_of(battle: &Battle, side: usize) -> Option<Capital> {
+    let field = battle.field.as_ref()?;
+    let arena = &battle.arena;
+    let lawful = battle.home_side.as_deref()?;
+    let mut best: Option<&super::arena::City> = None;
+    for city in &arena.cities {
+        if !city.capital || !(city.cell >= 0.0 && city.cell < field.size as f64) {
+            continue;
+        }
+        if lawful.get(arena.region[city.cell as usize] as usize).map(|&owner| owner as i64) != Some(side as i64) {
+            continue;
+        }
+        if best.is_none_or(|known| city.population > known.population) {
+            best = Some(city);
+        }
+    }
+    let best = best?;
+    let held = field.holders[best.cell as usize] as i64 == 1 - side as i64;
+    let near = held
+        || battle.troops[1 - side].iter().any(|troop| {
+            if !is_live(troop) {
+                return false;
+            }
+            let km = battle.place.km_at((troop.y + best.y) / 2.0);
+            let dx = (troop.x - best.x) * km;
+            let dy = (troop.y - best.y) * km;
+            dx * dx + dy * dy <= STAFF_CAPITAL_THREAT_KM * STAFF_CAPITAL_THREAT_KM
+        });
+    Some(Capital { name: best.name.clone(), x: best.x, y: best.y, held, near })
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Need {
+    pub share: f64,
+    pub why: &'static str,
+}
+
+pub fn call_up_need(battle: &Battle, side: usize, usual: f64) -> Need {
+    let live = battle.troops[side].iter().filter(|troop| is_live(troop)).count() as f64;
+    let mut home = 0.0;
+    let mut lost = 0.0;
+    let mut lost_before = 0.0;
+    if let (Some(lawful), Some(field)) = (battle.home_side.as_deref(), battle.field.as_ref()) {
+        let arena = &battle.arena;
+        for cell in 0..field.size {
+            if field.play[cell] == 0 || lawful.get(arena.region[cell] as usize).map(|&owner| owner as i64) != Some(side as i64) {
+                continue;
+            }
+            home += 1.0;
+            if field.holders[cell] as i64 == 1 - side as i64 {
+                lost += 1.0;
+            }
+            if battle.start_holders.as_ref().and_then(|start| start.get(cell)).map(|&holder| holder as i64) == Some(1 - side as i64) {
+                lost_before += 1.0;
+            }
+        }
+    }
+    let capital = capital_of(battle, side);
+    if capital.as_ref().is_some_and(|capital| capital.held || capital.near) || (home > 0.0 && lost >= home * STAFF_HOMELAND_SHARE) {
+        return Need { share: STAFF_CALL_UP_MOBILISE, why: "mobilise" };
+    }
+    if lost > lost_before {
+        return Need { share: STAFF_CALL_UP_LOSING, why: "losing" };
+    }
+    let own = worth_of(battle, side, None);
+    let theirs = worth_of(battle, 1 - side, None);
+    if live < usual * STAFF_THIN_SHARE || own.worth < theirs.worth {
+        return Need { share: STAFF_CALL_UP_THIN, why: "thin" };
+    }
+    Need { share: 0.0, why: "" }
 }
 
 const COMPASS: [[f64; 2]; 8] = [[1.0, 0.0], [0.7071, 0.7071], [0.0, 1.0], [-0.7071, 0.7071], [-1.0, 0.0], [-0.7071, -0.7071], [0.0, -1.0], [0.7071, -0.7071]];

@@ -246,7 +246,8 @@ export const planStrike = (strike, { from, to, flat = false, kmPerPixel = 0 } = 
   const lost = fallen(shown, down);
   const seconds = aircraft ? AIRCRAFT_SECONDS : MISSILE_SECONDS;
   const flight = clamp(seconds[0] + km / (aircraft ? 1300 : 2400), seconds[0], seconds[1]) * (strike.weapon === "missile strike" ? 0.82 : 1);
-  const spread = aircraft ? (nuclear ? 6 : 24) : nuclear ? 16 : 9;
+  // (A bombing run ordered with a strike radius scatters its bombs as wide as it was set: runtime/strikes.js spreadKm.)
+  const spread = aircraft ? (nuclear ? 6 : Number(strike.spreadKm) > 0 ? Number(strike.spreadKm) : 24) : nuclear ? 16 : 9;
   const share = APOGEE_SHARE[strike.weapon] ?? APOGEE_SHARE["silo missile"];
   const bow = !aircraft && flat ? share * BOW_OF_HEIGHT * bowSide(from, to, share * BOW_OF_HEIGHT) : 0;
   const bearing = bearingOf(from, to);

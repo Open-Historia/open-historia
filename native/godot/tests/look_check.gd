@@ -164,6 +164,7 @@ func _run() -> void:
 	await _clear_shell()
 	await _theme_runtime()
 	await _settings_part()
+	await _library_part()
 	await _setup_part()
 	await _release_part()
 	await _history_part()
@@ -229,6 +230,9 @@ func _settings_part() -> void:
 	_check(UiTheme.preset == "midnight", "a preset card applies its palette")
 	var card: PanelContainer = (workspace as Control).get("_card")
 	_check(_same(_bg(card), Color("#111D2A")), "Settings itself takes the palette")
+	var primaries: Array = _find_all(workspace, func(item: Node) -> bool: return item is Button and item.has_meta("settings_primary"), [])
+	var primary_style := (primaries[0] as Button).get_theme_stylebox("normal") as StyleBoxFlat if not primaries.is_empty() else null
+	_check(primary_style == null or (_same(primary_style.bg_color, UiTheme.pick("active", Color())) and _same(primary_style.border_color, UiTheme.pick("accent", Color()))), "Settings' primary actions follow the palette, not blue", str(primaries.size()))
 	_check(page != null, "the settings page is there")
 	settings = _find_all(workspace, func(item: Node) -> bool: return item is ThemeSettings, [])[0]
 	_check(bool(_theme_button(settings, "midnight").get_meta("pressed")), "the chosen card is marked")
@@ -253,6 +257,37 @@ func _settings_part() -> void:
 	await _until(func() -> bool: return not (workspace as Control).is_visible_in_tree(), 5.0)
 	_check(not (workspace as Control).is_visible_in_tree(), "Settings closes")
 	await _wait(0.4)
+
+
+func _library_part() -> void:
+	var menu: Variant = main.menu
+	for preset in ["default", "forest"]:
+		UiTheme.select(preset)
+		await _frames(4)
+		menu.call("_show_page", "scenarios")
+		await _wait(1.0)
+		var rail := (menu.get("_rail_panel") as Control).get_theme_stylebox("panel") as StyleBoxFlat
+		_check(rail != null and rail.border_width_right == 1 and (_same(rail.border_color, UiTheme.pick("line", Color(1, 1, 1, 0.08))) or _same(_border_of(rail), UiTheme.pick("line", Color(1, 1, 1, 0.08))) or _same(rail.border_color, UiTheme.pick("header", UI.RAIL).blend(Color(1, 1, 1, 0.08)))), "the menu rail has its edge in %s" % preset, "%s %s" % [str(rail.border_width_right if rail else -1), str(rail.border_color if rail else Color())])
+		var edit: Array = _find_all(menu, func(item: Node) -> bool: return item is Button and (item as Button).is_visible_in_tree() and not _labels(item, "Edit").is_empty(), [])
+		var edit_style := (edit[0] as Button).get_theme_stylebox("normal") as StyleBoxFlat if not edit.is_empty() else null
+		_check(edit_style != null and _same(edit_style.bg_color, UiTheme.pick("overlay_card", Color(1, 1, 1, 0.06))) and _same(edit_style.border_color, UiTheme.pick("line", Color(1, 1, 1, 0.12))), "a scenario card's Edit takes the palette's card and line in %s" % preset)
+		var tile: Button = (menu.get("_tiles") as Dictionary)["games"]
+		var tile_hover := tile.get_theme_stylebox("hover") as StyleBoxFlat
+		var rim := Color(UiTheme.pick("accent", Color(1, 1, 1)), 0.38) if preset != "default" else Color(1, 1, 1, 0.12)
+		_check(tile_hover != null and _same(tile_hover.border_color, rim), "a rail tile's hover rim in %s" % preset, str(tile_hover.border_color if tile_hover else Color()))
+		await _shoot("look-%s-library-scenarios" % preset)
+		menu.call("_show_page", "community")
+		await _wait(2.0)
+		await _shoot("look-%s-library-community" % preset)
+		menu.call("_show_page", "lobbies")
+		await _wait(1.0)
+		var fields: Array = _find_all(menu, func(item: Node) -> bool: return item is LineEdit and (item as LineEdit).is_visible_in_tree(), [])
+		var field_style := (fields[0] as LineEdit).get_theme_stylebox("normal") as StyleBoxFlat if not fields.is_empty() else null
+		_check(field_style != null and _same(field_style.bg_color, UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04))) and _same(field_style.border_color, UiTheme.pick("line", Color(1, 1, 1, 0.1))), "a lobby field takes the palette in %s" % preset)
+		await _shoot("look-%s-library-lobbies" % preset)
+	menu.call("_show_page", "games")
+	UiTheme.reset()
+	await _frames(4)
 
 
 func _scroll_into_view(workspace: Variant, control: Control) -> void:
@@ -298,7 +333,7 @@ func _setup_part() -> void:
 	await _frames(4)
 
 
-const GREETING_WAIT := 2.4
+const GREETING_WAIT := 5.4
 
 
 class HeldLink extends EngineLink:
@@ -550,6 +585,8 @@ func _game_part() -> void:
 	main.game_menu.call("close")
 	await _wait(0.4)
 	await _themed_panels()
+	await _map_controls()
+	await _scroll_hover()
 	await _themes_notice()
 
 
@@ -561,6 +598,23 @@ func _themed_panels() -> void:
 		for name in ["chat", "actions", "history"]:
 			main.hud.set_active_panel(name)
 			await _wait(1.2)
+			if name == "actions":
+				var actions: Variant = main.hud.get("panels").get("actions")
+				var chosen: Button = (actions.get("_tab_buttons") as Dictionary)[actions.get("_tab")]
+				var tab_style := chosen.get_theme_stylebox("normal") as StyleBoxFlat
+				_check(tab_style != null and _same(tab_style.bg_color, UiTheme.pick("active", Color())) and _same(tab_style.border_color, UiTheme.pick("accent", Color())), "the chosen Actions tab takes the palette in %s" % preset)
+				var brainstorm: Button = actions.get("_brainstorm")
+				var brainstorm_style := brainstorm.get_theme_stylebox("normal") as StyleBoxFlat
+				_check(brainstorm_style != null and _same(brainstorm_style.bg_color, UiTheme.pick("overlay_card", Color())) and _same(brainstorm_style.border_color, UiTheme.pick("line", Color())), "Brainstorm takes the palette's card and line in %s" % preset)
+				var composer: TextEdit = actions.get("_composer")
+				composer.text = "Fund the rail network."
+				composer.text_changed.emit()
+				await _frames(2)
+				var send_style := (actions.get("_submit_button") as Button).get_theme_stylebox("normal") as StyleBoxFlat
+				_check(send_style != null and _same(send_style.bg_color, UiTheme.pick("active", Color())) and _same(send_style.border_color, UiTheme.pick("accent", Color())) and send_style.border_width_left == 1, "the send button is the palette's active tone with an accent ring in %s" % preset)
+				await _shoot("look-%s-actions-typed" % preset)
+				composer.text = ""
+				composer.text_changed.emit()
 			await _shoot("look-%s-%s" % [preset, name])
 		main.hud.set_active_panel("")
 		await _wait(0.5)
@@ -581,6 +635,133 @@ func _themed_panels() -> void:
 	_check(chat_panel != null, "the Diplomacy panel is there to theme")
 	UiTheme.reset()
 	await _wait(0.4)
+
+
+func _map_controls() -> void:
+	await _close_notices()
+	var hud: Hud = main.hud
+	var dock: GlassPanel = hud.get("_dock")
+	var toggle := (hud.get("_mode_buttons") as Dictionary)["diplomatic"].get_parent().get_parent() as GlassPanel
+	var advisor_frame: GlassPanel = hud.get("_advisor_frame")
+	var expected := {
+		"default": {"dock": UI.HUD_BG, "edge": UI.HUD_BORDER, "pill": UI.HUD_BUTTON, "diplo": Color(37 / 255.0, 99 / 255.0, 235 / 255.0, 0.3), "diplo_ink": Color("#60a5fa"), "diplo_line": Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.4), "open": Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.16), "rest": Color(1, 1, 1, 0.04)},
+	}
+	for preset in ["forest", "oxblood"]:
+		var palette: Dictionary = UiTheme.preset_named(preset)["colors"]
+		var surface := Color(str(palette["surface"]))
+		var accent := Color(str(palette["accent"]))
+		expected[preset] = {
+			"dock": Color(surface, 0.6), "edge": Color(Color(UiTheme.mix(str(palette["surface"]), "#FFFFFF", 0.55)), 0.2), "pill": Color(surface, 0.6),
+			"diplo": Color(accent, 0.22), "diplo_ink": Color(UiTheme.mix(str(palette["accent"]), "#FFFFFF", 0.3)), "diplo_line": Color(accent, 0.45),
+			"open": Color(accent, 0.22), "rest": Color(Color(UiTheme.mix(str(palette["surface"]), "#FFFFFF", 0.08)), 0.42),
+		}
+	for preset in ["default", "forest"]:
+		UiTheme.select(preset)
+		hud.open_drawer_named("advisor")
+		await _wait(0.9)
+		var line_open := UiTheme.pick("glass_active_line", UiTheme.pick("hud_border", UI.HUD_BORDER))
+		_check(_same(advisor_frame.border, line_open), "the open Advisor button takes the active line in %s" % preset, str(advisor_frame.border))
+		var advisor_button: Button = hud.get("_advisor_button")
+		advisor_button.mouse_entered.emit()
+		await _frames(2)
+		var rims: Array = _find_all(advisor_frame, func(item: Node) -> bool: return item.has_meta("theme_rim"), [])
+		_check(rims.size() == 1 and (rims[0] as Control).visible == (preset != "default"), "a HUD control is ringed in the accent on hover only with a palette (%s)" % preset)
+		await _shoot("look-%s-advisor-open-hover" % preset)
+		advisor_button.mouse_exited.emit()
+		hud.close_drawer()
+		await _wait(0.6)
+		_check(_same(advisor_frame.border, UiTheme.pick("hud_border", UI.HUD_BORDER)), "the closed Advisor button keeps the HUD line in %s" % preset)
+	for preset in ["default", "forest", "oxblood"]:
+		UiTheme.select(preset)
+		((hud.get("_mode_buttons") as Dictionary)["diplomatic"] as Button).pressed.emit()
+		hud.set_active_panel("")
+		await _wait(0.9)
+		await _shoot("look-%s-map-controls" % preset)
+		hud.set_active_panel("actions")
+		await _wait(0.9)
+		var want: Dictionary = expected[preset]
+		var diplo: Button = (hud.get("_mode_buttons") as Dictionary)["diplomatic"]
+		var political: Button = (hud.get("_mode_buttons") as Dictionary)["political"]
+		var diplo_style := diplo.get_theme_stylebox("normal") as StyleBoxFlat
+		var launchers: Dictionary = hud.get("_launchers")
+		var open_style := (launchers["actions"] as Button).get_theme_stylebox("normal") as StyleBoxFlat
+		var rest_style := (launchers["chat"] as Button).get_theme_stylebox("normal") as StyleBoxFlat
+		_check(_same(dock.tint, want["dock"]) and _same(dock.border, want["edge"]) and _same(toggle.tint, want["dock"]), "the dock and the map-mode switch take the glass of %s" % preset, "%s %s" % [dock.tint, toggle.tint])
+		_check(_same(advisor_frame.tint, want["pill"]) and _same(advisor_frame.border, want["edge"]), "the Advisor button takes the pill of %s" % preset, str(advisor_frame.tint))
+		_check(diplo_style != null and _same(diplo_style.bg_color, want["diplo"]) and _same(diplo.get_theme_color("font_color"), want["diplo_ink"]) and _same(_border_of(diplo_style), want["diplo_line"]), "Diplomatic, chosen, is drawn as beta's in %s" % preset, "%s %s" % [diplo_style.bg_color if diplo_style else Color(), diplo.get_theme_color("font_color")])
+		_check(_same(political.get_theme_color("font_color"), Color(1, 1, 1, 0.55)), "Political, not chosen, stays dimmed white in %s" % preset)
+		_check(open_style != null and _same(open_style.bg_color, want["open"]) and rest_style != null and _same(rest_style.bg_color, want["rest"]), "the dock's open and resting buttons take %s" % preset, "%s %s" % [open_style.bg_color if open_style else Color(), rest_style.bg_color if rest_style else Color()])
+		await _shoot("look-%s-map-controls-open" % preset)
+		political.pressed.emit()
+		await _wait(0.4)
+		var political_style := political.get_theme_stylebox("normal") as StyleBoxFlat
+		_check(political_style != null and _same(political_style.bg_color, Color(1, 1, 1, 0.14) if preset == "default" else Color(want["diplo"])), "Political, chosen, takes %s" % preset, str(political_style.bg_color if political_style else Color()))
+		await _shoot("look-%s-map-controls-political" % preset)
+		hud.set_active_panel("")
+	UiTheme.reset()
+	await _wait(0.4)
+
+
+func _border_of(style: StyleBoxFlat) -> Color:
+	if style.has_meta(StyleSettle.TINT_FROM):
+		return style.get_meta(StyleSettle.TINT_FROM)
+	return style.border_color
+
+
+func _scroll_hover() -> void:
+	var holder := ScrollContainer.new()
+	holder.position = Vector2(40, 140)
+	holder.size = Vector2(260, 220)
+	var rows := VBoxContainer.new()
+	rows.custom_minimum_size = Vector2(240, 0)
+	for index in range(30):
+		var row := Button.new()
+		row.text = "Row %d" % index
+		row.custom_minimum_size = Vector2(240, 30)
+		rows.add_child(row)
+	holder.add_child(rows)
+	var layer := CanvasLayer.new()
+	layer.layer = 120
+	layer.add_child(holder)
+	main.add_child(layer)
+	await _frames(3)
+	_check(holder.has_meta(ScrollHoverFreeze.HOOKED), "a list put on screen is watched for the wheel")
+	var lists: Array = _find_all(main, func(node: Node) -> bool: return node is ScrollContainer, [])
+	_check(lists.all(func(node: Node) -> bool: return node.has_meta(ScrollHoverFreeze.HOOKED)), "every list in the game is", "%d lists" % lists.size())
+	var at := holder.global_position + Vector2(120, 100)
+	var move := InputEventMouseMotion.new()
+	move.position = at
+	move.global_position = at
+	root.get_viewport().push_input(move)
+	await _frames(2)
+	holder.scroll_vertical = 90
+	await _frames(2)
+	_check(not ScrollHoverFreeze.scrolling(holder) and rows.mouse_behavior_recursive == Control.MOUSE_BEHAVIOR_INHERITED, "a list that scrolls itself keeps taking the pointer")
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_DOWN
+	wheel.pressed = true
+	wheel.factor = 1.0
+	wheel.position = at
+	wheel.global_position = at
+	root.get_viewport().push_input(wheel)
+	var up := wheel.duplicate() as InputEventMouseButton
+	up.pressed = false
+	root.get_viewport().push_input(up)
+	await _frames(2)
+	_check(holder.scroll_vertical > 90, "the wheel scrolls the list", str(holder.scroll_vertical))
+	_check(ScrollHoverFreeze.scrolling(holder) and rows.mouse_behavior_recursive == Control.MOUSE_BEHAVIOR_DISABLED, "while the wheel scrolls it, what is inside takes no hover")
+	root.get_viewport().push_input(wheel)
+	root.get_viewport().push_input(up)
+	await _frames(2)
+	_check(ScrollHoverFreeze.scrolling(holder) and rows.mouse_behavior_recursive == Control.MOUSE_BEHAVIOR_DISABLED, "the wheel still reaches the list while it is held")
+	var hovered: Array = rows.get_children().filter(func(row: Button) -> bool: return row.is_hovered())
+	_check(hovered.is_empty(), "no row lights up as it passes under the cursor", "%d hovered" % hovered.size())
+	await _wait(0.1)
+	_check(ScrollHoverFreeze.scrolling(holder), "it is held until the list has been still a moment")
+	await _wait(0.12)
+	_check(not ScrollHoverFreeze.scrolling(holder) and rows.mouse_behavior_recursive == Control.MOUSE_BEHAVIOR_INHERITED, "150 ms after the last turn of the wheel the rows take the pointer again")
+	layer.queue_free()
+	await _frames(2)
 
 
 func _update_banner(preset: String) -> void:

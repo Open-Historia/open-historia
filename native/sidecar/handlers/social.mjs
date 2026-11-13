@@ -22,6 +22,39 @@ export const register = (ctx) => {
       return true;
     }
   };
+  const look = () => {
+    try {
+      return engine.gameFeatures.rostraLookOf(engine.gameFeatures.getActiveFeatures());
+    } catch {
+      return "phone";
+    }
+  };
+  const EDGES = { scroll: { amp: 4, steps: 52, seed: 41, sides: ["left", "right"] }, tablet: { amp: 2.6, steps: 34, seed: 97, sides: ["left", "right", "bottom"] } };
+  const side = (value) => {
+    const found = /calc\((-?[\d.]+)%(?:\s*([+-])\s*([\d.]+)px)?\)/.exec(value);
+    if (!found) return [0, 0];
+    const share = Number(found[1]) / 100;
+    const px = found[2] ? Number(found[3]) * (found[2] === "-" ? -1 : 1) : 0;
+    return [share, px];
+  };
+  const edgeOf = (drawn) => {
+    const spec = EDGES[drawn];
+    if (!spec) return [];
+    const polygon = String(engine.rostraLooks.roughEdge(spec));
+    const inner = polygon.slice(polygon.indexOf("(") + 1, polygon.lastIndexOf(")"));
+    return inner.split(/,\s*(?=calc)/).map((point) => {
+      const parts = point.trim().match(/calc\([^)]*\)/g) || [];
+      return [...side(parts[0] || ""), ...side(parts[1] || "")];
+    });
+  };
+  const dress = () => {
+    const drawn = look();
+    try {
+      return { look: drawn, vars: { ...engine.rostraLooks.rostraLookVars(drawn) }, edge: edgeOf(drawn) };
+    } catch {
+      return { look: drawn, vars: {}, edge: [] };
+    }
+  };
   const shared = () => Boolean(engine.mpBridge?.inSharedGame?.());
   const busy = () => Boolean(engine.simulationStatus.isSimulationBusy());
   const gameId = () => clean(engine.getLibraryState?.()?.activeGameId) || "game";
@@ -172,6 +205,8 @@ export const register = (ctx) => {
     const shown = tab === "search" ? [] : social.socialFeedView(feed, { tab, country, leader });
     return {
       enabled: enabled(),
+      look: look(),
+      dress: dress(),
       shared: shared(),
       country,
       author: account.author,
@@ -197,7 +232,7 @@ export const register = (ctx) => {
     const world = await readWorld(false);
     const feed = list(world?.socialFeed);
     const seen = Number(readSeen()[gameId()]) || 0;
-    return { enabled: enabled(), newest: sf().newestPostNumber(feed), unseen: sf().postsAfter(feed, seen) };
+    return { enabled: enabled(), look: look(), dress: dress(), newest: sf().newestPostNumber(feed), unseen: sf().postsAfter(feed, seen) };
   };
 
   const post = async ({ text = "", quote = "", choices = null } = {}) => {
@@ -498,15 +533,15 @@ export const register = (ctx) => {
         });
         return { ok: true };
       },
-      "social.testFeature": async ({ on = true } = {}) => {
+      "social.testFeature": async ({ on = true, look: drawn = "" } = {}) => {
         await engine.refreshLibraryCatalog({ force: true });
         const library = engine.getLibraryState?.() ?? {};
         const id = clean(library.activeGameId);
         if (!id) return { ok: false, enabled: enabled() };
-        const features = engine.cmServerFeatures.withFeatureOverride(library.activeGame?.features, "socialMedia", { enabled: Boolean(on) });
+        const features = engine.cmServerFeatures.withFeatureOverride(library.activeGame?.features, "socialMedia", { enabled: Boolean(on), ...(drawn ? { look: drawn } : {}) });
         await engine.library.saveGame(id, { features });
         await engine.refreshLibraryCatalog({ force: true });
-        return { ok: true, enabled: enabled() };
+        return { ok: true, enabled: enabled(), look: look() };
       },
     } : {}),
   };

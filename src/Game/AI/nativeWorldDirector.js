@@ -70,9 +70,6 @@ const HARD_MILITARY_CONSEQUENCE_RE =
 const STORYLINE_ESCALATION_OR_FAILURE_RE =
   /\b(?:without agreement|fail(?:s|ed|ure|ing)?|break(?:s|ing)? down|collapse(?:s|d)?|walk(?:s|ed)? out|reject(?:s|ed|ion)?|renewed? warnings?|threat(?:s|en|ened|ening)?|ultimatum|missile test|weapons? test|mobiliz(?:e|es|ed|ation)|call(?:s|ed)? up (?:the )?reserves|reserve activation|force concentration|troop buildup|deploy(?:s|ed|ment)|dispers(?:e|es|ed|al)|combat alert|nuclear alert|border incident|airspace violation|blockade|sanction(?:s|ed)?|retaliat(?:e|es|ed|ion)|strike|attack|clash(?:es)?|warning shots?|sabotage|covert operation)\b/i;
 
-const STORYLINE_DEESCALATION_RE =
-  /\b(?:agreement reached|deal reached|ceasefire|armistice|stand(?:s|ing)? down|de[- ]?escalat(?:e|es|ed|ion)|demobiliz(?:e|es|ed|ation)|withdraw(?:s|n|al|ing)?|pulls? back|redeploys? away|sanctions? relief|lifts? sanctions?|reopens? talks|resumes? talks|confidence[- ]building|hotline established|inspection agreement|mediation succeeds?|accepts? mediation|restraint agreement|moratorium|suspends? (?:the )?(?:test|exercise|deployment))\b/i;
-
 
 const UNRESOLVED_CRISIS_CUE_RE =
   /\b(?:crisis|standoff|showdown|deadlock|without agreement|talks? (?:fail|collapse|break down)|missile test|nuclear test|nuclear alert|mobiliz(?:e|es|ed|ation)|reserve call[- ]?up|ultimatum|blockade|border clash|border incident|incursion|airspace violation|coup attempt|mutiny|uprising|rebellion|insurgency|mass protest|general strike|nationwide strike|state of emergency|martial law|banking panic|currency crash|financial panic|government crisis|constitutional crisis|secession crisis|separatist crisis|military confrontation|armed confrontation)\b/i;
@@ -704,7 +701,13 @@ const actorSuppressedByDeferredSet = (
     worldActorsEquivalent(actor, deferredActor, world, gameCountry)
   );
 
-const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "") => {
+// A region in a pressure's line, by its name: `regionNames` maps the ids the
+// world's ledgers key by to what the model reads (nameRefs.js regionNamer),
+// a plain object so it crosses to the worker. Never the id.
+const UNNAMED_REGION = "an unnamed region";
+const regionNameIn = (regionNames, regionId) => normalizeString(regionNames?.[regionId]) || UNNAMED_REGION;
+
+const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "", regionNames = {}) => {
   const claimants = world?.regionClaimants && typeof world.regionClaimants === "object"
     ? world.regionClaimants
     : {};
@@ -746,7 +749,7 @@ const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set
       type: "territorial-pressure",
       score: 10,
       date: "",
-      title: `Active territorial pressure: ${regionId}`,
+      title: `Active territorial pressure: ${regionNameIn(regionNames, regionId)}`,
       detail: [
         controller ? `controller ${controller}` : "",
         sovereign ? `legal sovereign ${sovereign}` : "",
@@ -759,7 +762,7 @@ const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set
   }
 };
 
-const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "") => {
+const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "", regionNames = {}) => {
   let added = 0;
   for (const unit of normalizeArray(world?.units)) {
     if (added >= ACTIVE_UNIT_SAMPLE_LIMIT) break;
@@ -781,7 +784,7 @@ const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(
       score: 7,
       date: "",
       title: `Active military state: ${owner ? `${owner} — ` : ""}${name}`,
-      detail: [status ? `status ${status}` : "", region ? `region ${region}` : ""]
+      detail: [status ? `status ${status}` : "", region ? `in ${regionNameIn(regionNames, region)}` : ""]
         .filter(Boolean)
         .join("; "),
       ageDays: 0,
@@ -2674,41 +2677,6 @@ export const validateWorldStorylinePayload = (
     const prior = existingById.get(id) || normalizeStorylineForDirector(selected);
     const activeWar = Boolean(activeCanonicalWarForStoryline(prior, world));
 
-    // Hidden numeric direction must agree with the linked visible development.
-    // Failed talks + renewed threats cannot quietly lower crisis pressure unless
-    // the same event establishes a concrete de-escalatory fact.
-    //
-    // Only for a storyline that is actually a crisis: pressure already at the
-    // high-pressure threshold, or a war. The cue list is plain keywords, and on
-    // a quiet programme they fire on ordinary words — a player's Iranian cyber
-    // programme at pressure 18 lost a whole jump to the canned fallback because
-    // its event "deploys" new cryptographic hardware and it eased from 18 to 14.
-    // A low-pressure process drifting a few points lower is not crisis pressure
-    // being quietly erased. "Crisis" is judged from the numbers the engine keeps,
-    // not from the storyline's kind label: the model writes that label freely
-    // and could call a hardware rollout a crisis.
-    const crisisStoryline =
-      activeWar ||
-      normalizeString(prior?.kind).toLowerCase() === "war" ||
-      clampPercent(prior?.pressure) >= HIGH_PRESSURE_STAGNATION_THRESHOLD;
-    const linkedEventText = normalizeArray(update?.eventIndexes)
-      .map((eventIndex) => normalizeArray(candidate?.events)[eventIndex])
-      .filter(Boolean)
-      .map((event) =>
-        `${normalizeString(event?.title)} ${normalizeString(event?.description)}`
-      )
-      .join(" ");
-    const pressureDelta =
-      clampPercent(update?.pressure) - clampPercent(prior?.pressure);
-    if (
-      crisisStoryline &&
-      pressureDelta <= -4 &&
-      STORYLINE_ESCALATION_OR_FAILURE_RE.test(linkedEventText) &&
-      !STORYLINE_DEESCALATION_RE.test(linkedEventText)
-    ) {
-      return `Storyline ${id} lowers pressure by ${Math.abs(pressureDelta)} point(s), but its linked event(s) contain escalation/failure cues and no concrete de-escalatory outcome. Keep/increase pressure, or establish the factual de-escalation that justifies the drop.`;
-    }
-
     if (
       passDays >= 21 &&
       clampPercent(prior?.momentum) >= 70 &&
@@ -3126,12 +3094,23 @@ const installDebugApi = () => {
 
 installDebugApi();
 
+// The regions buildWorldInitiativeContext may name: those the claimants
+// ledger keys and those its active units stand in. Its caller turns them into
+// names (the `regionNames` option).
+export const directorRegionIds = (world) => [...new Set([
+  ...Object.keys(world?.regionClaimants && typeof world.regionClaimants === "object" ? world.regionClaimants : {}),
+  ...normalizeArray(world?.units).map((unit) => normalizeString(unit?.regionId)),
+].filter(Boolean))];
+
 export const buildWorldInitiativeContext = (
   bundle,
   {
     targetDate = "",
     maxCandidates = DEFAULT_MAX_CANDIDATES,
     playerFocus = "",
+    // { [regionId]: name } for the regions the world's ledgers name
+    // (directorRegionIds); a region it lacks is "an unnamed region".
+    regionNames = {},
   } = {},
 ) => {
   const originDate = normalizeString(bundle?.game?.gameDate);
@@ -3273,12 +3252,14 @@ export const buildWorldInitiativeContext = (
     bundle?.world || {},
     suppressedDeferredParticipantKeys,
     normalizeString(bundle?.game?.country),
+    regionNames,
   );
   pushActiveUnitCandidates(
     candidates,
     bundle?.world || {},
     suppressedDeferredParticipantKeys,
     normalizeString(bundle?.game?.country),
+    regionNames,
   );
 
   const activeInteractive = bundle?.world?.activeInteractive;

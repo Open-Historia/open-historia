@@ -5,6 +5,8 @@ import {
   isFeatureEnabled,
   playerFocusOf,
   resolveFeatures,
+  rostraLookOf,
+  transportMediaOf,
   warsOf,
   worldDirectionOf,
 } from "../../server/gameFeatures.js";
@@ -21,6 +23,9 @@ export {
   SCRIPTED_EVENT_CONDITION_TYPES,
   SCRIPTED_EVENT_TRIGGER_MODES,
   resolveFeatures,
+  ROSTRA_LOOKS,
+  rostraLookOf,
+  transportMediaOf,
   warsOf,
 } from "../../server/gameFeatures.js";
 
@@ -63,3 +68,9 @@ export const getActivePlayerFocus = () => playerFocusOf(activeFeatures);
 
 // What of its wars this game fights itself: { battlefields, air, navies } (the Wars feature).
 export const activeWars = () => warsOf(activeFeatures);
+
+// What may carry troops in this game: "sea", "land" and "air", less what the Wars feature switched off.
+export const activeTransportMedia = () => transportMediaOf(activeFeatures);
+
+// How Rostra is drawn in this game: "phone", "newspaper", "scroll" or "tablet" (the Social media feature).
+export const useRostraLook = () => rostraLookOf(useActiveFeatures());

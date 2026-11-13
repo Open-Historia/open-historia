@@ -279,6 +279,13 @@ pub struct WingChange {
     pub strength: Option<f64>,
 }
 
+pub fn wing_alive(run: &Run, id: &str) -> bool {
+    match &*run.wings.borrow() {
+        Some(wings) => wings.get(&id.to_string()).map(|wing| wing.strength > 0.0).unwrap_or(false),
+        None => false,
+    }
+}
+
 pub fn wing_changes(run: &Run) -> Vec<WingChange> {
     match &*run.wings.borrow() {
         Some(wings) => wings
@@ -299,11 +306,11 @@ pub struct SkyHeld {
     pub strike: bool,
 }
 
-pub fn sky_held(battle: &Battle) -> Option<SkyHeld> {
+pub fn sky_held(battle: &Battle, alive: &dyn Fn(&str) -> bool) -> Option<SkyHeld> {
     let wings = battle.wings.as_ref()?;
     Some(SkyHeld {
         holds: wings.holds,
-        wings: [wings.flying[0].len(), wings.flying[1].len()],
+        wings: [wings.flying[0].iter().filter(|id| alive(id)).count(), wings.flying[1].iter().filter(|id| alive(id)).count()],
         superiority: jsmath::round(wings.superiority * 100.0) / 100.0,
         missions: [air_mission_of(battle, 0), air_mission_of(battle, 1)],
         strike: wings.strike.map(|strike| strike > 0.0).unwrap_or(false),

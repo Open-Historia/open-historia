@@ -278,10 +278,130 @@ func _run() -> void:
 		var long_preview: bool = cheats._body.get_combined_minimum_size().y > cheats._scroll.size.y + 40.0
 		_check(not long_preview or (button_rect.end.y <= view_rect.end.y + 0.5 and button_rect.position.y >= view_rect.position.y), "Apply stays pinned in view over a long preview", "%s in %s" % [str(button_rect), str(view_rect)])
 		await _shoot("cheats-06-gm-apply-pinned")
+		_check(_find_button(cheats, "Generate New Preview") != null and _find_button(cheats, "Edit Preview") != null and not _has_text(cheats, "Revision "), "a pending preview offers Edit Preview and Generate New Preview")
+		var before: Dictionary = cheats._sd("gm_view").duplicate(true)
+		_find_button(cheats, "Edit Preview").pressed.emit()
+		await _wait(0.4)
+		var edit_go := _find_button(cheats, "Generate Edited Preview")
+		_check(_find_button(cheats, "Cancel Edit") != null and _has_text(cheats, "WHAT SHOULD CHANGE?") and _has_text(cheats, "Unmentioned operations stay in the preview. Nothing is applied until you approve the full revised transaction.") and edit_go != null and edit_go.disabled, "Edit Preview opens the revision box, its button waiting for words")
+		await _gm_scroll(cheats)
+		await _shoot("cheats-07-gm-edit-open")
+		var revised: Dictionary = await cheats.gm_revise("Make it a reading room, not an annex.")
+		await _wait(0.6)
+		var after: Dictionary = cheats._sd("gm_view")
+		var titles: Array = (after.get("events", []) as Array).map(func(event: Dictionary) -> String: return str(event.get("title", "")))
+		_check(revised.get("ok", false) and int(revised.get("revision", 0)) == 1 and str(after.get("id", "")) == str(before.get("id", "")) and titles == ["France opens a national library reading room"], "a revision edits the pending preview and keeps its transaction", "%s %s" % [str(revised), str(titles)])
+		_check(JSON.stringify(after.get("chips", [])) == JSON.stringify(before.get("chips", [])) and JSON.stringify(after.get("sections", [])) == JSON.stringify(before.get("sections", [])), "the operations the revision did not name stay in the preview")
+		_check(cheats._status == "Edited preview ready - Adds one event: France opens a national library reading room." and _has_text(cheats, "Revision 1") and _find_button(cheats, "Edit Preview") != null and _find_button(cheats, "Generate Edited Preview") == null, "the revised preview says so and counts its revision", cheats._status)
+		await _gm_scroll(cheats)
+		await _shoot("cheats-08-gm-revised")
+		UiTheme.select("forest")
+		await _wait(0.6)
+		await _gm_scroll(cheats)
+		await _shoot("cheats-08b-gm-revised-forest")
+		_find_button(cheats, "Edit Preview").pressed.emit()
+		await _wait(0.4)
+		await _gm_scroll(cheats)
+		await _shoot("cheats-07b-gm-edit-open-forest")
+		_find_button(cheats, "Cancel Edit").pressed.emit()
+		UiTheme.reset()
+		await _wait(0.4)
+		var applied: Dictionary = await cheats._run("cheats.gm.apply", {"id": str(after.get("id", ""))})
+		_check(applied.get("ok", false), "the revised preview applies", str(applied.get("error", "")))
+		var applied_reply: Dictionary = await main.engine.request("cheats.gm.apply", {"id": str(after.get("id", ""))})
+		_check(not applied_reply.get("ok", false), "an applied preview is not applied twice")
+		var stale: Dictionary = await main.engine.request("cheats.gm.revise", {"id": str(after.get("id", "")), "text": "Change the date."})
+		_check(not stale.get("ok", false), "an applied preview cannot be edited", str(stale.get("error", "")))
+	await _gm_auto(cheats)
+	await _history_and_digest(cheats)
 	cheats.close()
 	await _console()
 	_say("done: %d failure(s) %s" % [failures.size(), ", ".join(failures)])
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _gm_auto(cheats: Node) -> void:
+	cheats._s.erase("gm_mode")
+	cheats._s["gm_text"] = ""
+	cheats._s["gm_view"] = {}
+	await cheats._go("master-ai")
+	await _wait(0.5)
+	_check(cheats._sv("gm_mode", "auto") == "auto" and _has_text(cheats, "Auto - Recommended") and _has_text(cheats, "Describe the change freely. GM selects one validated mode before preview."), "the GM Console opens on Auto, recommended")
+	var modes: Array = []
+	for option in CheatsPanel.MODE_OPTIONS:
+		modes.append(str((option as Dictionary)["id"]))
+	_check(modes == ["auto", "direct", "exact-event", "world-intervention"], "Auto comes first, the three modes after it", str(modes))
+	await _shoot("cheats-09-gm-auto-modes")
+	var routed: Dictionary = await cheats.gm_preview("France opens a national library annex in Paris.", "auto")
+	await _wait(0.8)
+	var view: Dictionary = cheats._sd("gm_view")
+	_check(routed.get("ok", false) and str(view.get("requestedMode", "")) == "auto" and str(view.get("mode", "")) == "world-intervention", "Auto routes the request to one concrete mode", "%s %s %s" % [str(routed.get("error", "")), str(view.get("requestedMode", "")), str(view.get("mode", ""))])
+	_check(_has_text(cheats, "Auto mode selected:") and _has_text(cheats, "World Intervention.") and _has_text(cheats, "One finished occurrence with its lasting effects, told as an event."), "the preview says which mode Auto chose, and why")
+	await _gm_scroll(cheats)
+	await _shoot("cheats-10-gm-auto-preview")
+	var manual: Dictionary = await cheats.gm_preview("France opens a national library annex in Paris.", "exact-event")
+	await _wait(0.6)
+	_check(manual.get("ok", false) and not _has_text(cheats, "Auto mode selected:"), "a mode chosen by hand says nothing of Auto", str(manual.get("error", "")))
+	cheats._s["gm_view"] = {}
+
+
+func _history_and_digest(cheats: Node) -> void:
+	var saved: Dictionary = await main.engine.request("cheats.history.save", {"draft": "The Republic stood firm through the winter of 2016."})
+	_check(saved.get("ok", false), "a history document is written by hand", str(saved.get("error", "")))
+	var history: Dictionary = await main.engine.request("cheats.history.get")
+	var draft := str((history.get("result", {}) as Dictionary).get("draft", ""))
+	_check(draft == "The Republic stood firm through the winter of 2016.", "the editor is given the history as one text", draft)
+	await cheats._go("history-document")
+	await _wait(0.6)
+	_check(_has_text(cheats, "events in the timeline.") and _has_text(cheats, "Reset compression") and not _has_text(cheats, "Fold the older events now"), "the history editor has no Fold the older events now: a time skip folds the history itself")
+	await _shoot("cheats-11-history-document")
+	var again: Dictionary = await main.engine.request("cheats.history.save", {"draft": draft})
+	_check(str(again.get("result", "")) == "The history document is unchanged.", "saving it unchanged changes nothing", str(again.get("result", again.get("error", ""))))
+	await main.engine.request("cheats.history.save", {"draft": ""})
+	var added: Dictionary = await main.engine.request("cheats.events.add", {"form": {"date": "2016-01-01", "title": "A digest to drop", "description": "The first telling of it.", "importance": "minor", "kind": "world"}})
+	_check(added.get("ok", false), "an event is written for the digest", str(added.get("error", "")))
+	var file := OS.get_environment("OH_NATIVE_ROOT").path_join("server/data/games").path_join(str(main.get("game_id"))).path_join("storage/events.json")
+	var events: Variant = JSON.parse_string(FileAccess.get_file_as_string(file))
+	var marked := false
+	if events is Array:
+		for entry in events:
+			if entry is Dictionary and str((entry as Dictionary).get("title", "")) == "A digest to drop":
+				(entry as Dictionary)["digest"] = "The old one-line digest."
+				marked = true
+		var out := FileAccess.open(file, FileAccess.WRITE)
+		if out:
+			out.store_string(JSON.stringify(events))
+			out.close()
+	_check(marked, "the event carries a digest", file)
+	var rows: Dictionary = await main.engine.request("cheats.events.load", {"search": "A digest to drop"})
+	var index := -1
+	for row in ((rows.get("result", {}) as Dictionary).get("rows", []) as Array):
+		if str((row as Dictionary).get("title", "")) == "A digest to drop":
+			index = int((row as Dictionary).get("index", -1))
+	var kept: Dictionary = await main.engine.request("cheats.events.edit", {"index": index, "form": {"date": "2016-01-01", "title": "A digest to drop", "description": "The first telling of it.", "importance": "major", "kind": "world"}})
+	var ledger: Dictionary = await main.engine.request("doc.read", {"key": "events"})
+	_check(kept.get("ok", false) and JSON.stringify(ledger.get("result", [])).contains("The old one-line digest."), "an edit that leaves the story as it was keeps its digest", str(kept.get("error", "")))
+	rows = await main.engine.request("cheats.events.load", {"search": "A digest to drop"})
+	for row in ((rows.get("result", {}) as Dictionary).get("rows", []) as Array):
+		if str((row as Dictionary).get("title", "")) == "A digest to drop":
+			index = int((row as Dictionary).get("index", -1))
+	var edited: Dictionary = await main.engine.request("cheats.events.edit", {"index": index, "form": {"date": "2016-01-01", "title": "A digest to drop, retold", "description": "The first telling of it.", "importance": "major", "kind": "world"}})
+	_check(edited.get("ok", false), "the event is retitled by hand", str(edited.get("error", "")))
+	var read: Variant = JSON.parse_string(FileAccess.get_file_as_string(file))
+	var dropped := false
+	if read is Array:
+		for entry in read:
+			if entry is Dictionary and str((entry as Dictionary).get("title", "")) == "A digest to drop, retold":
+				dropped = str((entry as Dictionary).get("digest", "")).is_empty()
+	_check(dropped, "a rewritten event drops the digest that told the old one")
+
+
+func _gm_scroll(cheats: Node) -> void:
+	await _frames(2)
+	var node: Control = cheats._gm_preview_node
+	if node:
+		cheats._scroll.scroll_vertical = int(node.position.y) - 40
+	await _wait(0.3)
 
 
 func _option_after(node: Node, label: String) -> OptionButton:

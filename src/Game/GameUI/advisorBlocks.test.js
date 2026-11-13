@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  closeObjectsBeforeList,
   extractFencedJson,
   looksLikeProjectOps,
   recoverOpsElementwise,
@@ -20,6 +21,28 @@ test("extracts a well-formed block and strips it from the prose", () => {
   assert.equal(truncated, false);
   assert.ok(!rest.includes("Do a thing"));
   assert.ok(rest.includes("Here is the plan."));
+});
+
+test("complete adjacent project arrays are one strict payload, not a partially salvaged batch", () => {
+  // A real 2029 campaign report contained "...}] [{\"op\":\"update\"...";
+  // Both independent JSON arrays must survive in source order, with no false
+  // malformed-entry receipt or demand to recover historical projects.
+  const body = '[{"op":"update","id":"energy","name":"Strategic Energy Autonomy","status":"stalled"}] '
+    + '[{"op":"update","id":"assets","name":"Asset Recovery project","progress":28}]';
+  assert.throws(() => JSON.parse(body), /non-whitespace|Unexpected token/);
+  const result = extractFencedJson(fence("projects", body), "projects", { salvageTruncated: true });
+  assert.deepEqual(result.json?.map((op) => op.id), ["energy", "assets"]);
+  assert.equal(result.reason, "");
+  assert.equal(result.dropped, 0);
+  assert.equal(result.truncated, false);
+});
+
+test("adjacent arrays inside string values do not become false top-level splits", () => {
+  const body = '[{"op":"create","name":"Telemetry ] [ reference"}] '
+    + '[{"op":"update","id":"energy","name":"Energy","progress":60}]';
+  const result = extractFencedJson(fence("projects", body), "projects", { salvageTruncated: true });
+  assert.deepEqual(result.json?.map((op) => op.name), ["Telemetry ] [ reference", "Energy"]);
+  assert.equal(result.dropped, 0);
 });
 
 test("a missing block is not an error", () => {
@@ -294,4 +317,17 @@ test("a closed block parses the same whether or not the reply is streaming", () 
   const complete = extractFencedJson(text, "projects", { salvageTruncated: true });
   assert.deepEqual(streaming, complete);
   assert.deepEqual(complete.json, [{ op: "create", name: "Dam" }]);
+});
+
+// A player's log, 2026-11-06: the suggested actions lost eighteen times to a list closed over an open object.
+test("a list closed while its last object is still open gets the brace it lacks, and nothing else", () => {
+  const body = '[\n  {"title":"A","kind":"action"},\n  {"title":"B","text":"x ] y {","kind":"action"]';
+  assert.deepEqual(extractFencedJson(fence("actions", body), "actions", { streaming: true }).json, [
+    { title: "A", kind: "action" },
+    { title: "B", text: "x ] y {", kind: "action" },
+  ]);
+  assert.equal(closeObjectsBeforeList('[{"a":1}]'), null, "valid JSON is left alone");
+  assert.equal(closeObjectsBeforeList('{"a":"]"}'), null, "a bracket inside a string is not one");
+  // Cut off rather than mis-closed: still nothing, as before (an incomplete fence is never an Action).
+  assert.equal(extractFencedJson(fence("actions", '[{"title":"A","kind":"action"},{"title":"B"'), "actions", { streaming: true }).json, null);
 });

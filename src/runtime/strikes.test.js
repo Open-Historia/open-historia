@@ -203,3 +203,23 @@ test("an event's strikes, and the box round where they fly for the camera", () =
   assert.equal(strikeBounds([strike({ to: { name: "city: Nowhere" } })]), null);
   assert.equal(strikeBounds([]), null);
 });
+
+test("a place qualified by its country is found by its own name", () => {
+  assert.deepEqual(parsePlace("city: Isfahan, country: Iran"), { kind: "city", name: "Isfahan", country: "Iran" });
+  assert.deepEqual(findStrikePlace("city: Isfahan, country: Iran", { cities: [{ name: "Isfahan", lng: 51.67, lat: 32.65 }] }), { lng: 51.67, lat: 32.65 });
+  // A name with a comma of its own keeps it.
+  assert.deepEqual(parsePlace("city: Washington, D.C."), { kind: "city", name: "Washington, D.C." });
+});
+
+// "city: Alexandria, country: United States" was found in Egypt: the country after the name was thrown away, and
+// the first Alexandria the map listed was taken.
+test("of two places of one name, the one in the country written after it is taken", () => {
+  const cities = [{ name: "Alexandria", country: "Egypt", lng: 29.92, lat: 31.2 }, { name: "Alexandria", country: "United States", lng: -77.05, lat: 38.8 }];
+  assert.deepEqual(findStrikePlace("city: Alexandria, country: United States", { cities }), { lng: -77.05, lat: 38.8 });
+  assert.deepEqual(findStrikePlace("city: Alexandria, country: Egypt", { cities }), { lng: 29.92, lat: 31.2 });
+  assert.deepEqual(findStrikePlace("city: Alexandria", { cities }), { lng: 29.92, lat: 31.2 }, "with no country, the first");
+  assert.deepEqual(findStrikePlace("city: Alexandria, country: Greece", { cities }), { lng: 29.92, lat: 31.2 }, "and with a country none is in");
+  // A structure's owner says where it is.
+  const markers = [{ name: "North Silo", ownerCode: "Aland", lng: 40, lat: 50 }, { name: "North Silo", ownerCode: "Borduria", lng: 10, lat: 20 }];
+  assert.deepEqual(findStrikePlace("structure: North Silo, country: Borduria", { markers }), { lng: 10, lat: 20 });
+});

@@ -1,6 +1,6 @@
 # AI Return Schemas & Validation
 
-Every AI gameplay task in Open Historia hands the model a JSON Schema (as a provider "tool") and gets back a JSON object it must trust before mutating the world. This page documents the schemas the model must return (`src/Game/AI/gameplaySchemas.js`), the hand-rolled two-layer validator that gates every response, and the strict-vs-salvage retry discipline in `runJsonTask` (`src/Game/AI/gameplay.js`) that decides whether a bad answer earns a corrective retry or gets repaired in place. If you are adding a field the model should emit, read the [`additionalProperties: false` trap](#the-additionalpropertiesfalse-trap) first — it is the single most common way a new feature silently does nothing.
+Every AI gameplay task in Open Historia hands the model a JSON Schema (as a provider "tool") and gets back a JSON object it must trust before mutating the world. This page documents the schemas the model must return (`src/Game/AI/gameplaySchemas.js`), the hand-rolled two-layer validator that gates every response, and the strict-vs-salvage retry discipline in `runJsonTask` (`src/Game/AI/gameplay.js`) that decides whether a bad answer earns a corrective retry or gets repaired in place. If you are adding a field the model should emit, read the [`additionalProperties: false` trap](#7-the-additionalproperties-false-trap) first — it is the single most common way a new feature silently does nothing.
 
 Related pages: [World state](world-state.md) (what these payloads mutate), [AI providers](ai-overview.md) (how the schema becomes a tool call in `main.jsx`), [Gameplay orchestration](ai-overview.md) (the task callers), [Gameplay prompts](ai-prompts.md) (the templates rendered alongside each schema).
 
@@ -35,7 +35,7 @@ Diplomatic speaker routing is deliberately absent from this table: one-on-one th
 | `jumpForward` | `JUMP_FORWARD_SCHEMA` | `submit_jump_result` | `simulateTimelineJump` |
 | `autoJumpForward` | `AUTO_JUMP_FORWARD_SCHEMA` (**= `JUMP_FORWARD_SCHEMA`**) | `submit_jump_result` | `simulateAutoJump` |
 | `descriptionToAction` | `DESCRIPTION_TO_ACTION_SCHEMA` | `submit_description_to_action` | freeform-intent → command |
-| `eventConsolidator` | `EVENT_CONSOLIDATOR_SCHEMA` | `submit_event_consolidation` | `consolidateHistoryBatch` |
+| `eventConsolidator` | `EVENT_CONSOLIDATOR_SCHEMA` | `submit_event_consolidation` | none of its own: a time skip carries the fold in its `history` field (`foldJumpTool`, without the field notes); a batch sent before 2026-11-07 still lands through `deferredConsolidationApplier` |
 | `interactiveCreation` | `INTERACTIVE_CREATION_SCHEMA` (**= `interactiveSchema`**) | `submit_interactive_creation` | opening an interactive event's scene |
 | `interactiveExecutor` | `INTERACTIVE_EXECUTOR_SCHEMA` | `submit_interactive_execution` | advance an interactive event |
 | `interactiveSummary` | `INTERACTIVE_SUMMARY_SCHEMA` | `submit_interactive_summary` | finished interactive event → event |
@@ -72,7 +72,7 @@ Small factory helpers keep the schemas DRY (`gameplaySchemas.js`):
 | `stringArraySchema(desc)` | `{ type: "array", items: { type: "string" } }` | e.g. `aliases`, `tags`, `invitees` |
 | `percentageSchema(desc)` | `{ type: "integer", minimum: 0, maximum: 100 }` | all stat-sheet indices |
 
-Every object schema sets `additionalProperties: false`. Understand what that means before adding fields — see [§7](#7-the-additionalpropertiesfalse-trap).
+Every object schema sets `additionalProperties: false`. Understand what that means before adding fields — see [§7](#7-the-additionalproperties-false-trap).
 
 ---
 
@@ -127,7 +127,7 @@ A creation/rename/recolor/metadata change. Only `code` is required; send other f
 | `tags` | `string[]` | Complete new trait list (ideology/alignment/posture) — send the whole list, not a delta | no |
 | `note` | string | Brief reason | no |
 
-> `reputation` is the canonical example of the [`additionalProperties: false` trap](#7-the-additionalpropertiesfalse-trap): the prompt asked for it and `gameState` clamped/wrote it, but it was **absent from `properties`** — so a strict `json_schema` provider could never emit it and reputation silently never moved. Declaring it is what connected the feature.
+> `reputation` is the canonical example of the [`additionalProperties: false` trap](#7-the-additionalproperties-false-trap): the prompt asked for it and `gameState` clamped/wrote it, but it was **absent from `properties`** — so a strict `json_schema` provider could never emit it and reputation silently never moved. Declaring it is what connected the feature.
 
 ### 4.4 `unitOpSchema` — `anyOf` on `op`
 
@@ -234,9 +234,13 @@ Also used for `autoJumpForward`. This is the largest task.
 | `socialPosts` | `{ author*, role, country, date, text*, quote, offTopic }[]` | Rostra's posts of the period (`SOCIAL_POSTS_FIELD`): field notes in the prompt (`[Social Media]`), no bounds on the list (Gemini refuses them on a list of objects). Sent last before the riders (`withSocialPosts`), and not at all while the Social media feature is off; read against a loose `{ type: "object" }[]`, each post on its own by `readSkipPosts` (`runtime/socialFeed.js`), so a malformed post costs that post, never the turn, and a broken or cut-off list is cut away with the riders (`parseWithoutTrailingFields`). It cost the schema about 400 characters: the guard is 29,650 (`projectOpSchema.test.js`) | no |
 | `pollResults` | `{ poll*, shares*: number[], votes, consensus }[]` | The public's votes on the player's open Rostra polls (`POLL_RESULTS_FIELD`), field notes under `[Social Media]`. Sent only while a poll is open, just before `socialPosts` (`withSocialPosts(tool, on, { polls })`), so the guard above is unchanged; read against nothing at all (any value is accepted) and each entry on its own by `readSkipPollResults`, so an odd one costs that poll its answer this time, never the turn | no |
 
-`eventSchema`: `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `places` (below), `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`).
+`eventSchema`: `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `places` (below), `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`), `digest`.
 
-`places`: optional, `string[]`, at most 4. Where the event happens, each entry one place with its kind and, for a city or a region, its country: `"city: Kharkiv, country: Ukraine"`, `"region: Crimea"`, `"country: Poland"`, `"building: Camp Humphreys"` (or `structure:`), `"sea: Black Sea"`, `"unit: 3rd Infantry Division"`. It is what the event's card links to and where the camera goes; nothing else reads it. The engine finds each on the map as that kind and no other and keeps what it found on the event as `{ kind, name, regionId? , lng?, lat? }` (`src/runtime/eventPlaces.js`); an entry with no kind, or that the map does not have, is dropped silently. In the jump's schema the field costs 223 characters, taken back from the descriptions of `id`, `date`, `importance`, `notable`, `playerRelated` and the region field, so the schema stays under its 28,000-character guard (27,985); the rule in the skip's own text (`EVENT_PLACES_RULE`) is 584 characters.
+`digest`: optional in the event's schema and in a save, asked of every event a skip sends (as `impacts` is; `gameplaySchemas.js` adds it to the asked fields when the event has it). One line of at most 140 characters: what happened and what it changed. The normaliser keeps it tidied to one line (`normalizeEventDigest`, `EVENT_DIGEST_MAX_CHARS`), and a later skip's history tells the event by it once the event is not among the newest skip's ([world state §2f](world-state.md#2f-turn-machinery--narrative-history)).
+
+**The sizes.** Since 2026-11-07 every field of the skip's function says what it is in fewer words, the rules several of them repeated being in the prompt already (`[The Map]`, `[Polities]`, `[Levers]`, `[Every Event Carries Its Consequences]`): the descriptions went from 13.7k to 12.0k characters, the digest included, and the lean contract from 29,982 to 28,273, under the guard of 28,400 (`projectOpSchema.test.js`). What the guards pin stays in the words (player sovereignty and PWv2 for institutions, "region: Hamhung"). A folded skip's function is the same from turn to turn for the board, the history fold and the poll answers, so a provider caches it with the prompt; the agents' reports are offered only on a skip with agents due, since on every skip they took it to 33.8k characters, past the 32,672 Gemini refused. The turn-to-turn function is about 29.8k as Gemini gets it, under the 30,435 that went through (`foldedSkipSent.test.js`). The fold's `history` field takes `{ summary, years, canon, eras, document }` loose, with `years`, `canon` and `eras` as arrays of objects with no properties, which Gemini fills with empty objects ([ai-prompts.md §7.6](ai-prompts.md#the-history-in-tiers-and-the-canon)).
+
+`places`: optional, `string[]`, at most 4. Where the event happens, each entry one place with its kind and, for a city or a region, its country: `"city: Kharkiv, country: Ukraine"`, `"region: Crimea"`, `"country: Poland"`, `"building: Camp Humphreys"` (or `structure:`), `"sea: Black Sea"`, `"unit: 3rd Infantry Division"`. It is what the event's card links to and where the camera goes; nothing else reads it. The engine finds each on the map as that kind and no other and keeps what it found on the event as `{ kind, name, regionId? , lng?, lat? }` (`src/runtime/eventPlaces.js`); an entry with no kind, or that the map does not have, is dropped silently. In the jump's schema the field costs 223 characters, taken back from the descriptions of `id`, `date`, `importance`, `notable`, `playerRelated` and the region field, so the schema stayed under what was then its 28,000-character guard (27,985; the guard is 28,400 since the descriptions were cut, above); the rule in the skip's own text (`EVENT_PLACES_RULE`) is 584 characters.
 
 There is **no scene** in the answer: a scene begins only when the player takes up an interactive event, an event of the skip that the engine offers for it now and then at no cost (`runtime/interactiveOffer.js`; `interactiveCreation`). The schema used to carry a `catalyst` on every skip, into a save no panel showed it from; an answer that still carries one has it dropped by `normalizeGameplayPayload` before validation, never refused.
 
@@ -507,7 +511,7 @@ This ladder is what lets local/self-hosted models without tool support still pla
 
 | You want to… | Go to |
 |---|---|
-| Add/change a field the model returns | `gameplaySchemas.js` `properties` + [§7 trap](#7-the-additionalpropertiesfalse-trap) |
+| Add/change a field the model returns | `gameplaySchemas.js` `properties` + [§7 trap](#7-the-additionalproperties-false-trap) |
 | Add a whole new task | Add schema → `GAMEPLAY_SCHEMAS` + tool → `GAMEPLAY_TOOLS`, then a caller using `runJsonTask` |
 | Change what makes a payload invalid (generic) | `validateGameplayPayload` (`gameplaySchemas.js`) |
 | Change map/world-aware validation | `validateGeneratedWorldChanges` (`gameplay.js`) |

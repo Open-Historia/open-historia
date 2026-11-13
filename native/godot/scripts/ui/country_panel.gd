@@ -48,7 +48,6 @@ var institutions_all := false
 var landscape_view := ""
 var landscape_polity := ""
 var findings_all := false
-var tracking_search := ""
 var chart_keys: Array = []
 var chart_range := "all"
 var _sequence := 0
@@ -77,8 +76,6 @@ var _sticky: Control
 var _toolbar_header: Control
 var _toolbar_mark: Label
 var _toolbar_rule: ColorRect
-var _busy_timer: Timer
-var _tracking_model: Dictionary = {}
 var compiling := false
 var compile_error := ""
 var _compile_call := 0
@@ -105,10 +102,6 @@ func _init() -> void:
 	body.add_theme_constant_override("separation", 0)
 	page = body
 	_style_scroll()
-	_busy_timer = Timer.new()
-	_busy_timer.wait_time = 0.8
-	_busy_timer.timeout.connect(_poll_busy)
-	add_child(_busy_timer)
 
 
 func setup(link: EngineLink, setup_context: Dictionary = {}) -> void:
@@ -138,14 +131,12 @@ func show_country(name := "") -> void:
 		_reset_relations()
 	if not is_open():
 		set_open(true)
-	_busy_timer.start()
 	await _load(asked)
 
 
 func open() -> void:
 	if not is_open():
 		set_open(true)
-	_busy_timer.start()
 	var sequence := _sequence
 	await get_tree().process_frame
 	if sequence == _sequence and is_open():
@@ -154,7 +145,6 @@ func open() -> void:
 
 func close() -> void:
 	_close_modal()
-	_busy_timer.stop()
 	_sequence += 1
 	set_open(false)
 
@@ -518,22 +508,6 @@ func _background(fn: String, sequence: int) -> void:
 		var view: Dictionary = await engine.request("country.view", {"target": target, "tab": tab, "relationSearch": relation_search, "relationSort": relation_sort})
 		if sequence == _sequence and is_open() and view.get("ok", false):
 			data = view.get("result", {})
-			_render()
-
-
-func _poll_busy() -> void:
-	if not engine or not is_open() or tab != "economy" or data.is_empty() or data.has("empty"):
-		return
-	var reply: Dictionary = await engine.request("country.busy")
-	if not reply.get("ok", false) or not is_open() or data.is_empty():
-		return
-	var busy := bool((reply.get("result", {}) as Dictionary).get("busy", false))
-	if _modal_kind == "tracking" and not _tracking_model.is_empty() and busy != bool(_tracking_model.get("turnRunning", false)):
-		_tracking_model["turnRunning"] = busy
-		await _render_tracking(_tracking_model)
-	if busy != bool(data.get("turnRunning", false)):
-		data["turnRunning"] = busy
-		if tab == "economy":
 			_render()
 
 
@@ -905,7 +879,7 @@ func _render_refresh_menu() -> void:
 	first.add_child(again)
 	first.add_child(text(str(data.get("refreshHint", "")), 10, Color(1, 1, 1, 0.42)))
 	stack.add_child(first)
-	if not data.get("custom", false) and refresh_step == "open":
+	if refresh_step == "open":
 		var second := column(4)
 		var rebuild := _menu_button("Rebuild baseline from scratch")
 		rebuild.pressed.connect(func() -> void:
@@ -914,7 +888,7 @@ func _render_refresh_menu() -> void:
 		second.add_child(rebuild)
 		second.add_child(text("Uses 1 request and replaces the current numbers with a fresh assessment of the country as it stands now.", 10, Color(1, 1, 1, 0.42)))
 		stack.add_child(second)
-	if not data.get("custom", false) and refresh_step == "confirm":
+	if refresh_step == "confirm":
 		var third := column(7)
 		third.add_child(text("Rebuild this country's baseline from scratch? It uses 1 request and replaces the current numbers.", 12, Color(1, 1, 1, 0.82)))
 		var buttons := flow(7, 7)
@@ -2396,21 +2370,6 @@ func _render_economy() -> void:
 	var advanced := _wide_button("📊", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.18), Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.2), Color.WHITE, "Advanced statistics", ["Explore campaign trends and historical snapshots"], Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.75), false)
 	advanced.clicked.connect(_open_advanced)
 	page.add_child(advanced)
-	page.add_child(gap(9))
-	var tracking: Dictionary = data.get("tracking", {})
-	var running: bool = data.get("turnRunning", false)
-	var lines: Array = [str(tracking.get("line", "")), str(tracking.get("preview", ""))]
-	if running:
-		lines.append(str(data.get("turnRunningNote", "")))
-	var history := _wide_button("⚙", Color(234 / 255.0, 179 / 255.0, 8 / 255.0, 0.12), Color(250 / 255.0, 204 / 255.0, 21 / 255.0, 0.22), Color("#fbbf24"), "Historical tracking", lines, Color(1, 1, 1, 0.5), running)
-	if running:
-		history.enabled = false
-		history.modulate.a = 0.55
-		history.tooltip_text = str(data.get("turnRunningNote", ""))
-		history.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN
-	else:
-		history.clicked.connect(_open_tracking)
-	page.add_child(history)
 
 
 func _bar(value: float, color: Color, height := 6.0, mark := -1.0) -> StatBar:
@@ -2748,7 +2707,7 @@ func _modal_frame(width: float, height: float) -> VBoxContainer:
 	var view := holder.get_viewport_rect().size
 	var sheet := PanelContainer.new()
 	sheet.custom_minimum_size = Vector2(min(view.x * 0.96, width), min(height, view.y - 38.0))
-	sheet.add_theme_stylebox_override("panel", UI.box(Color(20 / 255.0, 20 / 255.0, 22 / 255.0, 0.995), UI.HUD_BORDER, 18, 1))
+	sheet.add_theme_stylebox_override("panel", UI.box(Color(20 / 255.0, 20 / 255.0, 22 / 255.0, 0.995), UiTheme.pick("hud_border", UI.HUD_BORDER), 18, 1))
 	sheet.clip_contents = true
 	centre.add_child(sheet)
 	var stack := column(0)
@@ -2994,262 +2953,6 @@ func _toggle_metric(metric: Dictionary, model: Dictionary) -> void:
 		current.append(key)
 	chart_keys = current
 	await _render_advanced()
-
-
-func _open_tracking() -> void:
-	tracking_search = ""
-	_modal_kind = "tracking"
-	await _render_tracking(null)
-
-
-func _render_tracking(model_in: Variant) -> void:
-	var model: Dictionary = {}
-	if typeof(model_in) == TYPE_DICTIONARY:
-		model = model_in
-	else:
-		var reply: Dictionary = await engine.request("country.tracking", {"target": target, "search": tracking_search})
-		if not reply.get("ok", false):
-			return
-		model = reply.get("result", {})
-	_tracking_model = model
-	var stack := _modal_frame(980.0, 760.0)
-	_modal_kind = "tracking"
-	var glyph := PanelContainer.new()
-	glyph.custom_minimum_size = Vector2(40, 40)
-	glyph.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	glyph.add_theme_stylebox_override("panel", UI.box(Color(234 / 255.0, 179 / 255.0, 8 / 255.0, 0.12), Color(250 / 255.0, 204 / 255.0, 21 / 255.0, 0.22), 12, 1))
-	var cog := UI.label("⚙", 19, Color("#fbbf24"), 400, "Segoe UI Symbol")
-	cog.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	cog.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	glyph.add_child(cog)
-	_modal_header(stack, glyph, "Historical tracking", "", "Choose how often Stats should re-check tracked countries, and which countries you want on your long-term graphs.", "Close historical tracking")
-	var outer := MarginContainer.new()
-	for side in [["margin_left", 17], ["margin_right", 17], ["margin_top", 16], ["margin_bottom", 17]]:
-		outer.add_theme_constant_override(side[0], side[1])
-	outer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var split := row(16)
-	var left := column(14)
-	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var cadence := card(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 12, Vector4(14, 14, 14, 14))
-	var cadence_stack := column(8)
-	cadence_stack.add_child(text("Auto-refresh cadence", 12, Color(1, 1, 1, 0.8), 800))
-	var choices := flow(7, 7)
-	var running: bool = model.get("turnRunning", false)
-	for item in model.get("intervals", []):
-		var interval: Dictionary = item
-		var active: bool = interval.get("active", false)
-		var choice := small_button(str(interval.get("label", "")), Color(0, 0, 0, 0.42) if active else Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.28) if active else Color(1, 1, 1, 0.08), Color("#f4f4f5") if active else Color(1, 1, 1, 0.68), 12, 800 if active else 700, Vector4(11, 7, 11, 7), 999)
-		choice.pressed.connect(_set_interval.bind(int(interval.get("months", 0))))
-		if running:
-			UI.set_disabled_look(choice, str(data.get("turnRunningNote", "")))
-		choices.add_child(choice)
-	cadence_stack.add_child(choices)
-	var current := RichTextLabel.new()
-	current.add_theme_font_override("normal_font", UI.font(400))
-	current.bbcode_enabled = true
-	current.fit_content = true
-	current.scroll_active = false
-	current.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	current.add_theme_font_size_override("normal_font_size", 11)
-	current.add_theme_color_override("default_color", Color(1, 1, 1, 0.42))
-	current.text = "Current setting: [color=#dbeafe]%s[/color]. Your country is automatically kept in the tracked list whenever auto-refresh is enabled." % _escape(str(model.get("intervalLabel", "")))
-	cadence_stack.add_child(current)
-	cadence.add_child(cadence_stack)
-	left.add_child(cadence)
-	var tracked := card(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 12, Vector4(14, 14, 14, 14))
-	tracked.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var tracked_stack := column(0)
-	var tracked_top := row(11)
-	var tracked_titles := column(2)
-	tracked_titles.add_child(text("Tracked countries", 12, Color(1, 1, 1, 0.8), 800))
-	tracked_titles.add_child(text(str(model.get("pickText", "")), 11, Color(1, 1, 1, 0.42)))
-	tracked_top.add_child(tracked_titles)
-	var count := pill(str(model.get("count", "")), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.09), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.18), Color("#bfdbfe"), 11, 800, Vector4(9, 4, 9, 4))
-	count.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	tracked_top.add_child(count)
-	tracked_stack.add_child(tracked_top)
-	tracked_stack.add_child(gap(12))
-	var search := LineEdit.new()
-	search.placeholder_text = "Search countries..."
-	search.text = tracking_search
-	search.custom_minimum_size.y = 34
-	search.add_theme_font_size_override("font_size", 12)
-	search.add_theme_stylebox_override("normal", UI.box(Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.09), 10, 1, Vector4(11, 6, 11, 6)))
-	search.add_theme_stylebox_override("focus", UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.16), 10, 1, Vector4(11, 6, 11, 6)))
-	search.text_changed.connect(_search_tracking)
-	tracked_stack.add_child(search)
-	tracked_stack.add_child(gap(11))
-	var chips := flow(6, 6)
-	var chip_rows: Array = model.get("chips", [])
-	for item in chip_rows:
-		var chip: Dictionary = item
-		var button := StatClickable.new(UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.12), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.2), 999, 1, Vector4(10, 5, 10, 5)), UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.18), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.3), 999, 1, Vector4(10, 5, 10, 5)))
-		button.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		button.tooltip_text = "Remove from tracked countries"
-		var line := row(7)
-		line.add_child(UI.label(str(chip.get("label", "")), 11, Color("#dbeafe")))
-		if chip.get("isPlayer", false):
-			line.add_child(UI.label("you", 10, Color("#fbbf24"), 800))
-		if not chip.get("ready", false):
-			line.add_child(UI.label("baseline needed", 10, Color("#fbbf24"), 800))
-		line.add_child(UI.label("×", 11, Color(1, 1, 1, 0.45)))
-		button.add_child(line)
-		button.clicked.connect(_toggle_tracked.bind(str(chip.get("key", ""))))
-		if running:
-			button.enabled = false
-		chips.add_child(button)
-	if chip_rows.is_empty():
-		chips.add_child(UI.label("No countries tracked yet.", 11, Color(1, 1, 1, 0.35)))
-	tracked_stack.add_child(chips)
-	tracked_stack.add_child(gap(13))
-	tracked_stack.add_child(_rule())
-	tracked_stack.add_child(gap(13))
-	var list_scroll := ScrollContainer.new()
-	list_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	list_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var list := column(6)
-	for item in model.get("rows", []):
-		var entry: Dictionary = item
-		list.add_child(_tracking_row(entry, running))
-	list_scroll.add_child(list)
-	tracked_stack.add_child(list_scroll)
-	tracked.add_child(tracked_stack)
-	left.add_child(tracked)
-	split.add_child(left)
-	var aside := column(14)
-	aside.custom_minimum_size.x = 310
-	var glance := card(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.07), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.14), 12, Vector4(14, 14, 14, 14))
-	var glance_stack := column(5)
-	glance_stack.add_child(text("At a glance", 12, Color("#bfdbfe"), 850))
-	var glance_text := RichTextLabel.new()
-	glance_text.add_theme_font_override("normal_font", UI.font(400))
-	glance_text.bbcode_enabled = true
-	glance_text.fit_content = true
-	glance_text.scroll_active = false
-	glance_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	glance_text.add_theme_font_size_override("normal_font_size", 11)
-	glance_text.add_theme_color_override("default_color", Color(1, 1, 1, 0.5))
-	glance_text.text = "Auto-refresh is currently set to [color=#dbeafe]%s[/color]. When tracked countries become due, Continuum refreshes all initialized sheets in one bounded AI batch after a completed turn. Countries marked [color=#fbbf24]baseline needed[/color] begin auto-refreshing after their first normal Stats sheet exists." % _escape(str(model.get("intervalLabel", "")))
-	glance_stack.add_child(glance_text)
-	glance.add_child(glance_stack)
-	aside.add_child(glance)
-	var status_rows: Array = model.get("status", [])
-	if not status_rows.is_empty():
-		var refresh_box := card(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 12, Vector4(14, 14, 14, 14))
-		var refresh_stack := column(5)
-		refresh_stack.add_child(text("Refresh status", 12, Color(1, 1, 1, 0.8), 800))
-		refresh_stack.add_child(text(str(model.get("lastBatch", "")), 11, Color(1, 1, 1, 0.48)))
-		refresh_stack.add_child(gap(4))
-		for item in status_rows:
-			var entry: Dictionary = item
-			var line := row(8)
-			var words := column(1)
-			words.add_child(clipped(str(entry.get("label", "")), 11, Color(1, 1, 1, 0.82), 700))
-			var ready: bool = entry.get("ready", false)
-			words.add_child(text(str(entry.get("text", "")), 10, Color(1, 1, 1, 0.42) if ready else Color("#fbbf24")))
-			line.add_child(words)
-			if not ready:
-				var assess := small_button("Assess now", Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.1), Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.3), UI.ACCENT, 10, 800, Vector4(10, 4, 10, 4), 999)
-				assess.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-				assess.pressed.connect(_assess_now.bind(str(entry.get("key", ""))))
-				line.add_child(assess)
-			refresh_stack.add_child(line)
-		refresh_stack.add_child(gap(4))
-		refresh_stack.add_child(text("A country without a complete Stats sheet is skipped by the automatic refresh. Assessing it opens its Stats, which builds the first sheet with one request.", 10, Color(1, 1, 1, 0.38)))
-		refresh_box.add_child(refresh_stack)
-		aside.add_child(refresh_box)
-	var advice := card(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 12, Vector4(14, 14, 14, 14))
-	var advice_stack := column(5)
-	advice_stack.add_child(text("Suggested approach", 12, Color(1, 1, 1, 0.8), 800))
-	for value in ["Keep your country tracked.", "Add nearby powers or direct rivals.", "6 months is a good default.", "Stay bounded: 4–8 countries is usually plenty."]:
-		advice_stack.add_child(prose("•  %s" % value, 11, Color(1, 1, 1, 0.48)))
-	advice.add_child(advice_stack)
-	aside.add_child(advice)
-	aside.add_child(UI.spacer(false))
-	var done := small_button("Done", Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.75), 12, 800, Vector4(14, 11, 14, 11), 10)
-	done.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	done.pressed.connect(_close_tracking)
-	aside.add_child(done)
-	split.add_child(aside)
-	outer.add_child(split)
-	stack.add_child(outer)
-	if not tracking_search.is_empty():
-		search.grab_focus()
-		search.caret_column = search.text.length()
-
-
-func _tracking_row(entry: Dictionary, running: bool) -> StatClickable:
-	var tracked: bool = entry.get("tracked", false)
-	var maxed: bool = entry.get("maxed", false)
-	var cell := StatClickable.new(UI.box(Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.08) if tracked else Color(1, 1, 1, 0.02), Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.24) if tracked else Color(1, 1, 1, 0.07), 10, 1, Vector4(11, 9, 11, 9)), UI.box(Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.12) if tracked else Color(1, 1, 1, 0.05), Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.3) if tracked else Color(1, 1, 1, 0.12), 10, 1, Vector4(11, 9, 11, 9)))
-	cell.enabled = not maxed and not running
-	if maxed:
-		cell.modulate.a = 0.75
-		cell.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN
-	var line := row(8)
-	var words := column(3)
-	var top := row(6)
-	var box := PanelContainer.new()
-	box.custom_minimum_size = Vector2(14, 14)
-	box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	box.add_theme_stylebox_override("panel", UI.box(Color("#22c55e") if tracked else Color(1, 1, 1, 0.06), Color("#22c55e") if tracked else Color(1, 1, 1, 0.12), 4, 1))
-	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if tracked:
-		var tick := UI.label("✓", 9, Color("#121214"), 900)
-		tick.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		box.add_child(tick)
-	top.add_child(box)
-	top.add_child(clipped(str(entry.get("label", "")), 12, Color(1, 1, 1, 0.92) if tracked else (Color(1, 1, 1, 0.32) if maxed else Color(1, 1, 1, 0.7)), 800 if tracked else 700))
-	words.add_child(top)
-	var notes := row(6)
-	if entry.get("isPlayer", false):
-		notes.add_child(UI.label("your country", 10, Color("#fbbf24")))
-	if entry.get("isViewed", false):
-		notes.add_child(UI.label("currently viewed", 10, Color("#93c5fd")))
-	if not str(entry.get("keyText", "")).is_empty():
-		notes.add_child(UI.label(str(entry["keyText"]), 10, Color(1, 1, 1, 0.42)))
-	var ready: bool = entry.get("ready", false)
-	notes.add_child(UI.label("Stats ready" if ready else "baseline needed", 10, Color("#86efac") if ready else Color("#fbbf24")))
-	words.add_child(notes)
-	line.add_child(words)
-	var action := UI.label(str(entry.get("action", "")), 11, Color("#86efac") if tracked else Color(1, 1, 1, 0.38), 800)
-	action.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	line.add_child(action)
-	cell.add_child(line)
-	cell.clicked.connect(_toggle_tracked.bind(str(entry.get("key", ""))))
-	return cell
-
-
-func _search_tracking(value: String) -> void:
-	tracking_search = value
-	var asked := value
-	var reply: Dictionary = await engine.request("country.tracking", {"target": target, "search": value})
-	if asked != tracking_search or _modal_kind != "tracking" or not reply.get("ok", false):
-		return
-	await _render_tracking(reply.get("result", {}))
-
-
-func _set_interval(months: int) -> void:
-	var reply: Dictionary = await engine.request("country.tracking.interval", {"months": months, "target": target, "search": tracking_search})
-	if reply.get("ok", false) and _modal_kind == "tracking":
-		await _render_tracking(reply.get("result", {}))
-
-
-func _toggle_tracked(key: String) -> void:
-	var reply: Dictionary = await engine.request("country.tracking.toggle", {"key": key, "target": target, "search": tracking_search})
-	if reply.get("ok", false) and _modal_kind == "tracking":
-		await _render_tracking(reply.get("result", {}))
-
-
-func _close_tracking() -> void:
-	_close_modal()
-	await _load(target)
-
-
-func _assess_now(key: String) -> void:
-	_close_modal()
-	tab = "economy"
-	await show_country(key)
 
 
 class StatClickable extends PanelContainer:

@@ -132,3 +132,8 @@ export const startingWearinessOf = (world) => {
   const lookup = militaryLookup(world);
   return (name) => lookup(name)?.weariness ?? null;
 };
+
+// A country's military figures as what may carry its troops reads them (runtime/fronts/transports.js
+// transportBar, airliftMost): its own, where the scenario weighs its countries' figures; null where it has them
+// off, which is what the engine's run reads then too (fronts/engine.js militaryOf).
+export const transportFiguresOf = (world, name) => (warSettingsOf(world).mechanics.military === true ? militaryLookup(world)(name) : null);

@@ -114,8 +114,11 @@ export const register = (ctx) => {
 
   const slimPrompts = (pack) => ({
     promptModel: pack?.promptModel ?? 2,
+    ...(pack?.bypassLengthLimit === true ? { bypassLengthLimit: true } : {}),
     guidance: pack?.guidance ?? { advisor: {}, leader: {}, tasks: {} },
   });
+  const PROMPT_TOO_LONG_TEXT = "A prompt passage is longer than its limit. Shorten it or reset it in the Prompts tab to save.";
+  const promptsOverLimit = (pack) => prompts().overLimitEdits(pack?.guidance, pack?.bypassLengthLimit === true);
 
   const buildScenarioEditorState = (details) => {
     const scenario = details?.scenario ?? {};
@@ -133,8 +136,9 @@ export const register = (ctx) => {
       heroTitle: scenario.heroTitle ?? "",
       language: game.language ?? world.language ?? "English",
       music: engine.edMusic.normalizeScenarioMusic(scenario.music),
+      languages: engine.scenarioLanguages.normalizeScenarioLanguages(scenario.languages),
       name: scenario.name ?? "",
-      prompts: slimPrompts(prompts().normalizePromptPack(details?.data?.prompts ?? {})),
+      prompts: slimPrompts(prompts().editablePromptPack(details?.data?.prompts ?? {})),
       labelFont: world.labelFont ?? "",
       labelHaloColor: world.labelHaloColor ?? "",
       labelTextColor: world.labelTextColor ?? "",
@@ -161,7 +165,7 @@ export const register = (ctx) => {
       heroTitle: gameMeta.heroTitle ?? "",
       language: game.language ?? world.language ?? "English",
       name: gameMeta.name ?? "",
-      prompts: slimPrompts(prompts().normalizePromptPack(details?.data?.prompts ?? {})),
+      prompts: slimPrompts(prompts().editablePromptPack(details?.data?.prompts ?? {})),
       labelFont: world.labelFont ?? "",
       labelHaloColor: world.labelHaloColor ?? "",
       labelTextColor: world.labelTextColor ?? "",
@@ -355,6 +359,7 @@ export const register = (ctx) => {
 
     "editor.save": async ({ kind = "scenario", id, form, savedForm, stats = null, statsFailed = false }) => {
       const editorState = form ?? {};
+      if (promptsOverLimit(editorState.prompts).length) throw new Error(PROMPT_TOO_LONG_TEXT);
       const promptPack = prompts().serializePromptPack(editorState.prompts);
       if (kind === "scenario") {
         const editorDetails = await lib.loadScenarioDetails(clean(id));
@@ -375,6 +380,7 @@ export const register = (ctx) => {
           heroSubtitle: editorState.heroSubtitle,
           heroTitle: editorState.heroTitle,
           music: editorState.music ?? null,
+          languages: engine.scenarioLanguages.normalizeScenarioLanguages(editorState.languages),
           name: editorState.name,
           prompts: promptPack,
           subtitle: editorState.subtitle,
@@ -560,6 +566,7 @@ export const register = (ctx) => {
             id: segment.id,
             label: segment.label,
             hint: segment.hint ?? "",
+            limit: pack.guidanceLimitFor(section.key, segment.id),
           })),
           defaults: plain(section.type === "root" ? localized[section.key] ?? {} : localized.tasks?.[section.key] ?? {}),
           englishDefaults: plain(section.type === "root"
@@ -584,7 +591,16 @@ export const register = (ctx) => {
 
     "editor.prompts.import": async ({ path: source }) => {
       const parsed = JSON.parse(fs.readFileSync(clean(source), "utf8"));
-      return { prompts: slimPrompts(prompts().normalizePromptPack(promptPackFromImport(parsed))), name: path.basename(clean(source)) };
+      const imported = slimPrompts(prompts().editablePromptPack(promptPackFromImport(parsed)));
+      return { prompts: imported, name: path.basename(clean(source)), overLimit: promptsOverLimit(imported).length > 0 };
+    },
+
+    "editor.prompts.check": async ({ prompts: promptState = {}, section = "", values = {} } = {}) => {
+      const counts = {};
+      for (const [segmentId, text] of Object.entries(values && typeof values === "object" ? values : {})) {
+        counts[segmentId] = engine.edGuidance.promptCharCount(text);
+      }
+      return plain({ over: promptsOverLimit(promptState), counts, section: clean(section), message: PROMPT_TOO_LONG_TEXT });
     },
 
     "editor.music.list": async ({ known = false } = {}) => {

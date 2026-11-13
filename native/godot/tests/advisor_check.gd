@@ -94,6 +94,24 @@ func _find_button(node: Node, text: String) -> Button:
 	return null
 
 
+func _find_all_buttons(node: Node, text: String, into: Array = []) -> Array:
+	if node is Button and (node as Button).text == text and (node as Button).is_visible_in_tree():
+		into.append(node)
+	for child in node.get_children():
+		_find_all_buttons(child, text, into)
+	return into
+
+
+func _receipt_status(index: int) -> String:
+	if panel.messages.size() <= index:
+		return ""
+	var receipts: Variant = (panel.messages[index] as Dictionary).get("actionReceipts")
+	if typeof(receipts) != TYPE_DICTIONARY:
+		return ""
+	var entry: Variant = (receipts as Dictionary).get("proposal-0")
+	return str((entry as Dictionary).get("status", "")) if typeof(entry) == TYPE_DICTIONARY else ""
+
+
 func _find_text(node: Node, text: String) -> bool:
 	if node is Label and (node as Label).text == text and (node as Label).is_visible_in_tree():
 		return true
@@ -277,14 +295,14 @@ func _run() -> void:
 		await _scroll_to(proceed)
 		await _shoot("advisor-04b-proposal")
 		proceed.pressed.emit()
-		_check("Proceed queues the Action", await _until(func() -> bool: return _find_text(panel, "Queued"), 20.0))
+		_check("Proceed queues the Action", await _until(func() -> bool: return _find_text(panel, "Queued") and _receipt_status(1) == "queued", 20.0))
 		await _frames(3)
 		actions = await _doc("actions")
 		_check("the Action is on the Actions board once", JSON.stringify(actions).count("Convene the budget cabinet") == 1, JSON.stringify(actions).left(300))
 		saved = await _doc("advisor")
 		var receipts: Variant = panel.messages[1].get("actionReceipts")
 		_check("the receipt is kept on the reply and in the file", typeof(receipts) == TYPE_DICTIONARY and str(((receipts as Dictionary).get("proposal-0", {}) as Dictionary).get("status", "")) == "queued" and JSON.stringify(saved).contains("\"actionReceipts\""))
-		_check("a confirmed card says the board took it", _find_text(panel, "Confirmed by Actions board. Execution still requires game-time resolution.") and _find_button(panel, "Proceed / Queue") == null and _find_button(panel, "Discuss") == null)
+		_check("a queued card says the board took it and offers Discuss and Cancel", _find_text(panel, "Queued on the Actions board. It will resolve when game time advances.") and _find_button(panel, "Proceed / Queue") == null and _find_button(panel, "Discuss") != null and _find_button(panel, "Cancel") != null and _find_button(panel, "Open Actions") == null)
 		var again: Dictionary = await main.engine.request("advisor.proceed", {"threadId": "chief", "messageId": str(panel.messages[1].get("id", "")), "proposalId": "proposal-0"})
 		var again_result: Dictionary = again.get("result", {}) if again.get("ok", false) else {}
 		_check("approving the same proposal twice queues it once", bool(again_result.get("ok", false)) and JSON.stringify(await _doc("actions")).count("Convene the budget cabinet") == 1, JSON.stringify(again_result))
@@ -302,8 +320,11 @@ func _run() -> void:
 		panel.views.pop_back()
 		panel._render()
 		await _frames(2)
-		await _scroll_to(_find_button(panel, "Open Actions"))
+		await _scroll_to(_find_button(panel, "Cancel"))
 		await _shoot("advisor-04c-proposal-queued")
+		await _stale_targets()
+		await _cancel_and_requeue()
+		await _receipts_kept()
 	var chart := _find_chart(panel)
 	_check("the chart is drawn natively", chart != null)
 	if chart:
@@ -324,10 +345,7 @@ func _run() -> void:
 	await _frames(3)
 	await _shoot("advisor-06-reply-top")
 
-	var open_actions_button := _find_button(panel, "Open Actions")
-	_check("Open Actions is offered", open_actions_button != null)
-	if open_actions_button:
-		open_actions_button.pressed.emit()
+	_check("a queued proposal has no Open Actions", _find_button(panel, "Open Actions") == null)
 	_check("Open Actions asks for the Actions panel", opened_actions == 1)
 	var open_projects_button := _find_button(panel, "Open Projects")
 	if open_projects_button:
@@ -484,6 +502,39 @@ func _run() -> void:
 	panel.views.pop_back()
 	panel._render()
 
+	var broken := [
+		{"role": "advisor", "text": "I put what I could on the board.", "time": "2016-01-08", "projectsProblem": "unusable", "projectsDetail": "The projects block was not valid JSON."},
+		{"role": "advisor", "text": "Here is the rest.", "time": "2016-01-09", "projectsProblem": "partial", "projectsDetail": "2 entries were skipped.", "projectsExcerpt": "[{\"title\": \"Energy hub\""},
+	]
+	var broken_views: Dictionary = (await main.engine.request("advisor.views", {"json": JSON.stringify(broken, "", false, true)})).get("result", {})
+	for index in range(broken.size()):
+		panel.messages.append(broken[index])
+		panel.views.append((broken_views.get("views", [{}, {}]) as Array)[index])
+	panel._render()
+	await _wait(0.6)
+	var retries := _find_all_buttons(panel, "Retry missing entries", [])
+	_check("only the newest reply with a broken board offers Retry missing entries", retries.size() == 1 and _find_all_buttons(panel, "Ask for the next batch", []).is_empty(), str(retries.size()))
+	if retries.size() == 1:
+		panel._input.text = ""
+		(retries[0] as Button).pressed.emit()
+		await _frames(2)
+		_check("Retry missing entries asks only for what the last reply lost", panel._input.text == "Recover only the specific Project operations missing from your immediately previous reply. Its Projects block was malformed or incomplete; this is not a request to backfill history or open new programmes. Skip entries already on the board, and do not turn old reviews, agreements or frameworks into new active projects. Send at most ten concise entries. If you cannot identify exactly what was missed, tell me and add nothing." and not panel._loading, panel._input.text.left(60))
+		panel.scroll.scroll_vertical = int(panel.scroll.get_v_scroll_bar().max_value)
+		await _frames(3)
+		await _shoot("advisor-13b-retry-missing-entries")
+		panel._input.text = ""
+		panel._resize_input()
+		panel._update_send()
+	panel.messages.append({"role": "user", "text": "Thanks.", "time": "2016-01-09"})
+	panel.views.append({})
+	panel._render()
+	await _wait(0.4)
+	_check("a newer message takes the retry off older replies", _find_all_buttons(panel, "Retry missing entries", []).is_empty())
+	for index in range(3):
+		panel.messages.pop_back()
+		panel.views.pop_back()
+	panel._render()
+
 	var sample_text := "# Briefing\nA line with `inline code`, ~~struck~~ words and a [link](https://example.org).\n\n### Steps\n1. First step\n2. Second step\n   - nested point\n- [x] done item\n- [ ] open item\n\n#### Small label\n```\ncode block line\n```\n---\nAfter the rule.\n```chart\n{\"type\":\"line\",\"data\":{\"labels\":[\"Jan\",\"Feb\",\"Mar\",\"Apr\",\"May\"],\"datasets\":[{\"label\":\"Approval\",\"data\":[41,44,39,47,52]}]},\"options\":{\"unit\":\"percent\"}}\n```"
 	var pie_text := "Where the budget goes:\n```chart\n{\"type\":\"doughnut\",\"data\":{\"labels\":[\"Defence\",\"Health\",\"Schools\",\"Debt\"],\"datasets\":[{\"label\":\"Share\",\"data\":[18,34,22,26]}]}}\n```"
 	var samples := [{"role": "advisor", "text": sample_text, "time": "2016-01-08"}, {"role": "advisor", "text": pie_text, "time": "2016-01-08"}]
@@ -635,6 +686,128 @@ func _run() -> void:
 	await _contacts()
 	_say("%d failures" % failures.size())
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _rich_texts(node: Node) -> PackedStringArray:
+	var out: PackedStringArray = []
+	if node is RichTextLabel and (node as RichTextLabel).is_visible_in_tree():
+		out.append((node as RichTextLabel).get_parsed_text())
+	for child in node.get_children():
+		out.append_array(_rich_texts(child))
+	return out
+
+
+func _budget_orders() -> int:
+	return JSON.stringify(await _doc("actions")).count("Convene the budget cabinet")
+
+
+func _saved_receipt(message_id: String) -> String:
+	var saved: Variant = await _doc("advisor")
+	if typeof(saved) != TYPE_ARRAY:
+		return ""
+	for entry in saved:
+		if typeof(entry) == TYPE_DICTIONARY and str((entry as Dictionary).get("id", "")) == message_id:
+			var receipts: Variant = (entry as Dictionary).get("actionReceipts")
+			if typeof(receipts) == TYPE_DICTIONARY:
+				return str(((receipts as Dictionary).get("proposal-0", {}) as Dictionary).get("status", ""))
+	return ""
+
+
+func _stale_targets() -> void:
+	await main.engine.request("actions.testSeed", {"actions": [{"id": "action-done-stalecheck-0001", "title": "Hold the budget summit", "text": "Hold the budget summit", "kind": "action", "source": "player", "status": "resolved"}]})
+	var missing := {"role": "advisor", "id": "advisor-reply-stalecheck-0001", "text": "We could widen it.", "time": "2016-01-01", "actionProposals": [{"id": "proposal-0", "actionId": "action-advisor-reply-stalecheck-0001-0", "operation": "edit", "targetId": "action-gone-stalecheck-0001", "title": "Widen the budget talks", "text": "Widen the budget talks"}]}
+	var resolved := {"role": "advisor", "id": "advisor-reply-stalecheck-0002", "text": "We could revisit it.", "time": "2016-01-01", "actionProposals": [{"id": "proposal-0", "actionId": "action-advisor-reply-stalecheck-0002-0", "operation": "edit", "targetId": "action-done-stalecheck-0001", "title": "Reopen the budget summit", "text": "Reopen the budget summit"}]}
+	var reply: Dictionary = (await main.engine.request("advisor.views", {"json": JSON.stringify([missing, resolved], "", false, true)})).get("result", {})
+	var stale_views: Array = reply.get("views", [{}, {}])
+	_check("an edit of a missing order reads Target unavailable, of a resolved one Target resolved", str(((stale_views[0] as Dictionary).get("proposalStates", {}) as Dictionary).get("proposal-0", "")) == "target-unavailable" and str(((stale_views[1] as Dictionary).get("proposalStates", {}) as Dictionary).get("proposal-0", "")) == "target-resolved", JSON.stringify(stale_views).left(300))
+	panel.messages.append(missing)
+	panel.views.append(stale_views[0])
+	panel.messages.append(resolved)
+	panel.views.append(stale_views[1])
+	panel._render()
+	await _wait(0.4)
+	_check("a stale edit has no Proceed, says so, and offers Discuss and Open Actions", _find_text(panel, "Target unavailable") and _find_text(panel, "Target resolved") and _find_button(panel, "Proceed / Queue") == null and _count_buttons(panel, "Open Actions") == 2 and _labels_with(panel, "The referenced Action is no longer queued. Discuss a new Action if further work is needed."))
+	await _scroll_to(_find_button(panel, "Open Actions"))
+	await _shoot("advisor-04f-stale-targets")
+	var stale_open := _find_button(panel, "Open Actions")
+	if stale_open:
+		stale_open.pressed.emit()
+	panel._input.text = ""
+	panel._discuss_action(missing["actionProposals"][0], true)
+	await _frames(2)
+	_check("Discuss on a stale edit asks for a new Action instead", panel._input.text == "Assess whether any separate new work is actually needed concerning \"Widen the budget talks\". If so, propose a fresh Action for my review. Do not reuse an old order ID or treat an Action's normal resolution as a system failure.", panel._input.text)
+	panel._input.text = ""
+	panel._resize_input()
+	panel._update_send()
+	panel.messages.pop_back()
+	panel.views.pop_back()
+	panel.messages.pop_back()
+	panel.views.pop_back()
+	panel._render()
+	await _frames(2)
+
+
+func _cancel_and_requeue() -> void:
+	var reply_id := str(panel.messages[1].get("id", ""))
+	var cancel := _find_button(panel, "Cancel")
+	_check("the queued card has its Cancel", cancel != null)
+	if cancel == null:
+		return
+	cancel.pressed.emit()
+	_check("Cancel takes the Action off the board", await _until(func() -> bool: return _find_text(panel, "Cancelled"), 20.0))
+	await _frames(3)
+	var got_0: Variant = await _budget_orders()
+	var got_1: Variant = await _saved_receipt(reply_id)
+	_check("the cancelled order is gone and its receipt says cancelled", got_0 == 0 and got_1 == "cancelled")
+	_check("a cancelled card can be queued again", _find_button(panel, "Proceed / Queue") != null and _find_button(panel, "Discuss") != null and _find_button(panel, "Cancel") == null)
+	await _scroll_to(_find_button(panel, "Proceed / Queue"))
+	await _shoot("advisor-04e-proposal-cancelled")
+	_find_button(panel, "Proceed / Queue").pressed.emit()
+	_check("Proceed queues it again", await _until(func() -> bool: return _find_text(panel, "Queued") and _receipt_status(1) == "queued", 20.0))
+	await _frames(3)
+	var got_2: Variant = await _budget_orders()
+	var got_3: Variant = await _saved_receipt(reply_id)
+	_check("the requeued order keeps its id and is on the board once", got_2 == 1 and got_3 == "queued")
+	panel._input.text = ""
+	_find_button(panel, "Discuss").pressed.emit()
+	_check("Discuss on a queued Action cancels it first", await _until(func() -> bool: return _find_text(panel, "Cancelled") and not panel._input.text.is_empty(), 20.0), "%s | %s | %s" % [panel._input.text, JSON.stringify(panel.views[1].get("proposalStates", {})), " / ".join(PackedStringArray(Array(_rich_texts(panel)).filter(func(t: String) -> bool: return t.contains("Action") or t.contains("busy"))))])
+	await _frames(3)
+	var got_4: Variant = await _budget_orders()
+	_check("then puts it in the composer", panel._input.text == "Let's discuss the proposed Action \"Convene the budget cabinet\" before I authorize it." and got_4 == 0, panel._input.text)
+	panel._input.text = ""
+	panel._resize_input()
+	panel._update_send()
+	_find_button(panel, "Proceed / Queue").pressed.emit()
+	await _until(func() -> bool: return _find_text(panel, "Queued"), 20.0)
+	await _frames(3)
+	var refused: Dictionary = await main.engine.request("advisor.cancel", {"threadId": "chief", "messageId": reply_id, "proposalId": "proposal-9"})
+	var got_5: Variant = await _budget_orders()
+	_check("a cancel of a proposal that is not there changes nothing", not bool((refused.get("result", {}) as Dictionary).get("ok", true)) and got_5 == 1)
+
+
+func _receipts_kept() -> void:
+	var reply_id := str(panel.messages[1].get("id", ""))
+	var stale: Array = []
+	for message in panel.messages:
+		var copy: Dictionary = (message as Dictionary).duplicate(true)
+		copy.erase("actionReceipts")
+		stale.append(copy)
+	var saved: Dictionary = await main.engine.request("advisor.save", {"json": JSON.stringify(stale, "", false, true), "threadId": "chief"})
+	var got_6: Variant = await _saved_receipt(reply_id)
+	_check("a stale save without the receipt keeps it", bool((saved.get("result", {}) as Dictionary).get("saved", false)) and got_6 == "queued", JSON.stringify(saved))
+	saved = await main.engine.request("advisor.save", {"json": JSON.stringify([stale[0]], "", false, true), "threadId": "chief"})
+	var got_7: Variant = await _saved_receipt(reply_id)
+	_check("a stale save that leaves the reply out keeps it", bool((saved.get("result", {}) as Dictionary).get("saved", false)) and got_7 == "queued")
+	var forged: Array = []
+	for message in panel.messages:
+		forged.append((message as Dictionary).duplicate(true))
+	(forged[1] as Dictionary)["actionReceipts"] = {"proposal-0": {"status": "queued", "actionId": "x"}, "proposal-7": {"status": "queued", "actionId": "action-advisor-reply-forged-0001-7"}}
+	saved = await main.engine.request("advisor.save", {"json": JSON.stringify(forged, "", false, true), "threadId": "chief"})
+	var got_8: Variant = await _saved_receipt(reply_id)
+	var after_forged := JSON.stringify(await _doc("advisor"))
+	_check("a conversation save drops a forged receipt and keeps saving", bool((saved.get("result", {}) as Dictionary).get("saved", false)) and got_8 == "queued" and not after_forged.contains("action-advisor-reply-forged-0001-7"), JSON.stringify(saved))
+	saved = await main.engine.request("advisor.save", {"json": JSON.stringify(panel.messages, "", false, true), "threadId": "chief"})
+	_check("the conversation saves again as it is", bool((saved.get("result", {}) as Dictionary).get("saved", false)))
 
 
 func _tone(seconds: float, amplitude: float, hertz: float) -> PackedFloat32Array:
@@ -963,8 +1136,8 @@ func _contacts() -> void:
 		_find_button(panel, "Retire contact").pressed.emit()
 	await _until(func() -> bool: return panel.active_thread == "chief" and not panel._thread_switching and bool(_contact_named("Manuel Valls").get("archived", false)), 10.0)
 	await _frames(3)
-	_check("a retired contact leaves for the chief advisor", bool(_contact_named("Manuel Valls").get("archived", false)) and panel.active_thread == "chief" and _find_button(panel, "Show retired contacts") != null)
-	_find_button(panel, "Show retired contacts").pressed.emit()
+	_check("a retired contact leaves for the chief advisor", bool(_contact_named("Manuel Valls").get("archived", false)) and panel.active_thread == "chief" and _find_button(panel, "Show retired contacts and groups") != null)
+	_find_button(panel, "Show retired contacts and groups").pressed.emit()
 	await _frames(3)
 	_check("retired contacts can be shown", _find_text(panel, "Manuel Valls · Retired") and _find_button(panel, "Restore") != null)
 	await panel._select_recipient(contact_thread)
@@ -991,6 +1164,7 @@ func _contacts() -> void:
 	await _chief_identity()
 	await _unsupported_type()
 	await _several_action_fences()
+	await _groups()
 
 
 func _character() -> void:
@@ -1108,6 +1282,186 @@ func _several_action_fences() -> void:
 	if card:
 		await _scroll_to(card)
 	await _shoot("advisor-28-several-action-fences")
+
+
+func _group_named(name: String) -> Dictionary:
+	for item in panel.groups:
+		if str((item as Dictionary).get("name", "")) == name:
+			return item
+	return {}
+
+
+func _checkbox(node: Node, text: String) -> CheckBox:
+	if node is CheckBox and (node as CheckBox).text == text and (node as CheckBox).is_visible_in_tree():
+		return node as CheckBox
+	for child in node.get_children():
+		var found := _checkbox(child, text)
+		if found:
+			return found
+	return null
+
+
+func _groups() -> void:
+	await panel._select_recipient("chief")
+	await _frames(3)
+	var add_group := _find_button(panel, "+ Group")
+	_check("the recipients bar offers + Group before + Contact", add_group != null and add_group.tooltip_text == "Convene multiple advisors with independent voices" and add_group.get_index() < _find_button(panel, "+ Contact").get_index())
+	if add_group:
+		add_group.pressed.emit()
+		await _frames(3)
+	_check("+ Group opens the group editor with the chief advisor already in", _find_text(panel, "Create group chat") and _find_text(panel, "Group name") and panel._group_draft.get("memberIds", []) == ["chief"] and _checkbox(panel, "Chief advisor · Chief advisor") != null and _checkbox(panel, "Chief advisor · Chief advisor").button_pressed)
+	_check("only government advisors can be invited", _checkbox(panel, "Manuel Valls · Prime Minister") != null and _checkbox(panel, "Jeanne Martin · Baker in Lyon") == null)
+	var save_group := _find_button(panel, "Save group")
+	_check("Save group waits for a name and a second member", save_group != null and save_group.disabled)
+	var valls_box := _checkbox(panel, "Manuel Valls · Prime Minister")
+	if valls_box:
+		valls_box.button_pressed = true
+		await _frames(3)
+	panel._group_draft["name"] = "Budget Group"
+	panel._render_recipients()
+	await _frames(3)
+	await _shoot("advisor-29-group-editor")
+	_check("with a name and two members the group can be saved", _find_button(panel, "Save group") != null and not _find_button(panel, "Save group").disabled)
+	await panel._submit_group()
+	_check("saving the group opens its conversation", await _until(func() -> bool: return panel.active_thread.begins_with("advisor-group-") and not panel._thread_switching, 15.0), panel.active_thread)
+	await _frames(3)
+	var group := _group_named("Budget Group")
+	_check("the group keeps its two members", (group.get("memberIds", []) as Array).size() == 2 and (group.get("memberIds", []) as Array).has("chief"), JSON.stringify(group))
+	_check("the bar names the group and its members", _trigger("Budget Group", "▴") != null and _find_text(panel, "2 group members · individual personalities") and _find_text(panel, "No group conversation yet. Ask the participants a question to start."))
+	await _shoot("advisor-30-group-empty")
+	_check("the group answers, each member under their own name", await _ask_panel("How do we fix the budget?", 3), str(panel.messages.size()))
+	await _wait(0.8)
+	var speakers := {}
+	for message in panel.messages:
+		var entry: Dictionary = message
+		if str(entry.get("role", "")) == "advisor":
+			speakers[str(entry.get("speakerId", ""))] = entry
+	_check("both members spoke, each reply carrying its speaker", speakers.size() == 2 and speakers.has("chief"), JSON.stringify(speakers.keys()))
+	_check("each speaker is labelled by name", _labels_with(panel, " Chief advisor") and _labels_with(panel, " Manuel Valls") and _labels_with(panel, "I am Manuel Valls."))
+	var group_proposals := 0
+	for key in speakers.keys():
+		group_proposals += ((speakers[key] as Dictionary).get("actionProposals", []) as Array).size()
+	_check("a group member's Action waits for review on their own reply", group_proposals == 2 and _count_buttons(panel, "Proceed / Queue") >= 2 and not JSON.stringify(await _doc("actions")).contains("Publish the spending review"))
+	var stored_group := JSON.stringify(await _doc("advisor"))
+	_check("the group, its question and both replies are saved", stored_group.contains("advisor-group") and stored_group.count("\"threadId\":\"%s\"" % panel.active_thread) == 3, stored_group.left(200))
+	panel.scroll.scroll_vertical = 0
+	await _frames(3)
+	await _shoot("advisor-31-group-reply")
+	_check("everyone may pass", await _ask_panel("If you agree, say nothing at all.", 6), str(panel.messages.size()))
+	await _wait(0.6)
+	var silent := 0
+	for message in panel.messages:
+		if bool((message as Dictionary).get("silent", false)):
+			silent += 1
+	_check("both passes are kept as silent replies with no bubble", silent == 2 and _bubbles("advisor").size() == 2, "%d silent, %d bubbles" % [silent, _bubbles("advisor").size()])
+	_check("a turn everyone passed on says so", _find_text(panel, "All group members passed on this turn. No answer or execution was recorded."))
+	await _shoot("advisor-32-group-all-passed")
+	var group_id: String = panel.active_thread
+	var console: Control = (load("res://scripts/ui/debug_console.gd") as GDScript).new()
+	var layer := CanvasLayer.new()
+	layer.layer = 120
+	root.add_child(layer)
+	layer.add_child(console)
+	console.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	console.setup(main.engine, {"export_dir": OS.get_environment("OH_NATIVE_DOWNLOADS"), "reveal_saved_files": false})
+	await console.open()
+	await _wait(0.6)
+	var grouped: Array = (console._data.get("rows", []) as Array).filter(func(row: Variant) -> bool: return str((row as Dictionary).get("kind", "")) == "group" and str((row as Dictionary).get("name", "")) == "Budget Group")
+	_check("the AI console folds a group turn into one row", grouped.size() == 2 and _labels_with(console, "Group Chat: Budget Group") and _labels_with(console, "speakers completed") and _labels_with(console, "INTERACTIONS"), "%d group rows" % grouped.size())
+	if not grouped.is_empty():
+		console._toggle_group(str((grouped[0] as Dictionary).get("key", "")))
+		await _wait(0.3)
+	await _shoot("advisor-33-console-group-turn")
+	console.close()
+	layer.queue_free()
+	await _frames(2)
+	await _edit_proposal_note()
+	var retire_group := _row_button(panel, "◈ Budget Group", "Retire")
+	if retire_group == null:
+		panel._recipients_open = true
+		panel._render_recipients()
+		await _frames(3)
+		retire_group = _row_button(panel, "◈ Budget Group", "Retire")
+	_check("a group offers Retire", retire_group != null)
+	if retire_group:
+		retire_group.pressed.emit()
+		await _frames(3)
+	_check("Retire asks before retiring a group", _find_text(panel, "Retire this group chat?") and _find_text(panel, "Its transcript and each participant's existing conversation are preserved.") and _find_button(panel, "Retire group") != null)
+	await _shoot("advisor-34-group-retire-confirm")
+	if _find_button(panel, "Retire group"):
+		_find_button(panel, "Retire group").pressed.emit()
+	await _until(func() -> bool: return panel.active_thread == "chief" and not panel._thread_switching and bool(_group_named("Budget Group").get("archived", false)), 10.0)
+	await _frames(3)
+	_check("a retired group returns to the chief advisor", panel.active_thread == "chief" and bool(_group_named("Budget Group").get("archived", false)))
+	panel._recipients_open = true
+	panel._recipient_show_archived = false
+	panel._render_recipients()
+	await _frames(3)
+	_check("retired contacts and groups are shown together", _find_button(panel, "Show retired contacts and groups") != null and not _labels_with(panel, "◈ Budget Group"))
+	await panel._select_recipient(group_id)
+	await _frames(3)
+	_check("a retired group cannot be written to", panel._input.placeholder_text == "This group chat is retired — restore to reply" and not panel._input.editable)
+	await panel._retire_group(_group_named("Budget Group"), false)
+	await _frames(3)
+	_check("Restore brings the group back", not bool(_group_named("Budget Group").get("archived", true)) and panel._input.editable)
+	await panel._select_recipient("chief")
+	await _frames(3)
+	await _reorder()
+
+
+func _edit_proposal_note() -> void:
+	var actions: Variant = await _doc("actions")
+	var planned := {}
+	for item in (actions as Array) if typeof(actions) == TYPE_ARRAY else []:
+		if str((item as Dictionary).get("status", "")) == "planned":
+			planned = item
+			break
+	_check("a queued Action exists to edit", not planned.is_empty())
+	if planned.is_empty():
+		return
+	var kept: Array = panel.messages.duplicate()
+	var kept_views: Array = panel.views.duplicate()
+	panel.messages.append({"id": "advisor-reply-forged-edit", "role": "advisor", "speakerId": "chief", "text": "Rename it.", "time": "", "actionProposals": [{"id": "proposal-0", "operation": "edit", "targetId": str(planned.get("id", "")), "title": "Renamed order"}], "actionReceipts": {"proposal-0": {"status": "updated"}}})
+	panel.views.append({})
+	await panel._sync_receipts()
+	await _frames(2)
+	var forged: Dictionary = panel.messages[panel.messages.size() - 1]
+	_check("a receipt the saved conversation lacks is dropped from the panel", not forged.has("actionReceipts"), JSON.stringify(forged.get("actionReceipts", null)))
+	await panel._refresh_views()
+	await _frames(3)
+	_check("an edit of a queued Action says it updates that Action", _labels_with(panel, "This updates the existing queued Action %s. It will not create a separate Action." % str(planned.get("title", ""))) and _find_button(panel, "Proceed / Update") != null)
+	var update := _find_button(panel, "Proceed / Update")
+	if update:
+		await _scroll_to(update)
+	await _shoot("advisor-35-edit-updates-queued")
+	panel.messages = kept
+	panel.views = kept_views
+	panel._render(false)
+
+
+func _reorder() -> void:
+	panel._recipients_open = true
+	panel._render_recipients()
+	await _frames(3)
+	var first := str((panel.contacts[0] as Dictionary).get("name", "")) if not panel.contacts.is_empty() else ""
+	_check("each contact has a drag handle", _find_button(panel, "⠿") != null and _find_button(panel, "⠿").tooltip_text == "Drag the row to reorder; Arrow Up or Down moves this contact")
+	var valls := str(_contact_named("Manuel Valls").get("id", ""))
+	var jeanne := str(_contact_named("Jeanne Martin").get("id", ""))
+	panel._drag_id = valls
+	panel._drag_hover = jeanne
+	panel._render_recipients()
+	await _frames(3)
+	await _shoot("advisor-36-contact-drag")
+	panel._drag_id = ""
+	panel._drag_hover = ""
+	await panel._reorder_recipients(valls, jeanne)
+	await _frames(3)
+	var names: Array = panel.contacts.map(func(item: Variant) -> String: return str((item as Dictionary).get("name", "")))
+	_check("dropping a contact on another moves it there", first == "Manuel Valls" and names.find("Jeanne Martin") < names.find("Manuel Valls"), JSON.stringify(names))
+	var stored := JSON.stringify(await _doc("advisor"))
+	_check("the new order is saved", stored.find("Jeanne Martin") < stored.find("Manuel Valls"))
+	panel._recipients_open = false
+	panel._render_recipients()
 
 
 func _unsupported_type() -> void:

@@ -573,6 +573,7 @@ export const deployUnit = async ({ type, strength, name, composition, lng, lat }
   // Forces panel offers only those, but the advisor names its own.
   const allowedNow = effectiveAllowedUnitTypes();
   if (allowedNow && !allowedNow.includes(unit.type)) return { ok: false, error: UNIT_TYPE_NOT_ALLOWED };
+  // i18n-ignore: the order as the model reads it.
   const text =
     `Deploy request: ${name || type} (${type}, strength ${strength}% of establishment` +
     `${composition ? `, ${composition}` : ""}, owner ${playerCode || "PLAYER"}) at ` +
@@ -592,6 +593,7 @@ export const deployUnit = async ({ type, strength, name, composition, lng, lat }
 // against the front, the era and everyone else's plans on the next jump — the
 // same treatment every other action they plan gets. Nothing on the map moves now.
 // Resolves to whether the order was written.
+// i18n-ignore: the order as the model reads it.
 export const requestUnitOrders = async (unitId, text) => {
   const request = String(text ?? "").trim();
   const unit = getUnitById(unitId);
@@ -626,6 +628,7 @@ export const requestUnitOrders = async (unitId, text) => {
 // Resolves to { ok: true } once both halves are saved, else to
 // { ok: false, error } with the unit and the queue as they were (while a turn
 // runs, nothing is changed and the error says so).
+// i18n-ignore: the order as the model reads it.
 export const disbandUnit = async (unitId) => {
   const unit = getUnitById(unitId);
   if (!unit) return { ok: false, error: ORDER_NOT_SAVED };

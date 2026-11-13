@@ -351,6 +351,9 @@ func _features_scenario(details: Dictionary, form: Dictionary) -> void:
 		await _wait(0.2)
 		await _shoot("rules-3b-manager-outcomes")
 		manager_scroll.scroll_vertical = 0
+	if manager_scroll:
+		manager_scroll.scroll_vertical = 0
+	await _impacts(editor)
 	await _press(_find_button(host, "Duplicate", 0), "Duplicate")
 	events = (last_features as Dictionary)["worldDirection"]["scriptedEvents"]
 	_check(events.size() == 2 and str((events[1] as Dictionary)["id"]) != str((events[0] as Dictionary)["id"]), "duplicate made a second event with its own id")
@@ -391,6 +394,146 @@ not a dated line
 		if not same:
 			_say("mine:   " + JSON.stringify(mine_events))
 			_say("engine: " + JSON.stringify(engine_events))
+
+
+func _named(under: Node, node_name: String, index := 0) -> Node:
+	var nodes: Array = []
+	_collect(under, nodes)
+	var found := 0
+	for node in nodes:
+		if node.name == node_name and (node as Control).is_visible_in_tree():
+			if found == index:
+				return node
+			found += 1
+	return null
+
+
+func _until(condition: Callable, seconds: float) -> bool:
+	var deadline := Time.get_ticks_msec() + int(seconds * 1000.0)
+	while Time.get_ticks_msec() < deadline:
+		if condition.call():
+			return true
+		await process_frame
+	return bool(condition.call())
+
+
+func _first_event() -> Dictionary:
+	var events: Array = (last_features as Dictionary)["worldDirection"]["scriptedEvents"]
+	return events[0] if not events.is_empty() and events[0] is Dictionary else {}
+
+
+func _pick_in(picker: EditorRegionPicker, query: String) -> String:
+	EditorKit.clear(picker._matches)
+	picker._search.text = query
+	picker._search.text_changed.emit(query)
+	await _until(func() -> bool: return picker._matches.get_child_count() > 0 and picker._matches.get_child(0) is Button, 10.0)
+	var first := picker._matches.get_child(0) as Button
+	if first == null:
+		return ""
+	var id := str(first.get_meta("region", ""))
+	var before := picker.selected.size()
+	first.pressed.emit()
+	await _until(func() -> bool: return picker.selected.size() != before, 10.0)
+	return id
+
+
+func _impacts(editor: EditorScriptedEvents) -> void:
+	var section := _named(host, "ImpactsSection") as Control
+	_check(section != null and _find_type(section, "Label", 0) != null and (_find_type(section, "Label", 0) as Label).text == "IMPACTS", "the event has an Impacts section after Event wording")
+	await _press(_named(host, "AddImpact") as Button, "+ Add impact")
+	var rows: Array = _first_event().get("impactRows", [])
+	_check(rows.size() == 1 and str((rows[0] as Dictionary).get("type", "")) == "transfer", "+ Add impact adds a Regions change hands row")
+	var needed_ok := await _until(func() -> bool:
+		var label := _named(host, "ImpactNeeded") as Label
+		return label != null and label.text == "Still needed: Regions, New owner. This impact is left out until it is complete.", 10.0)
+	_check(needed_ok, "an empty row says what it still needs")
+	var owner := _find_line(_named(host, "ImpactRow"), "Search country", 0)
+	_check(owner != null and owner.tooltip_text == "New owner", "the row asks for the new owner")
+	if owner:
+		await _type(owner, "France")
+		owner.release_focus()
+		editor._hide_suggest()
+	rows = _first_event().get("impactRows", [])
+	_check(str((rows[0] as Dictionary).get("to", "")) == "France", "the new owner is written to the row")
+	section = _named(host, "ImpactsSection") as Control
+	await _scroll_to(section)
+	var impacts_scroll := section.get_parent()
+	while impacts_scroll and not (impacts_scroll is ScrollContainer):
+		impacts_scroll = impacts_scroll.get_parent()
+	if impacts_scroll:
+		(impacts_scroll as ScrollContainer).ensure_control_visible(section)
+		await _frames(2)
+		(impacts_scroll as ScrollContainer).scroll_vertical = int(section.get_global_rect().position.y - (impacts_scroll as ScrollContainer).get_global_rect().position.y + (impacts_scroll as ScrollContainer).scroll_vertical - 150)
+		await _frames(3)
+	await _shoot("rules-3c-impact-empty")
+	await _press(_named(host, "PickImpactRegions") as Button, "Pick on map")
+	var picker := editor.picker()
+	_check(picker != null, "Pick on map opens the region picker")
+	if picker == null:
+		return
+	var baked := await _until(func() -> bool: return picker.map_ready or picker.load_failed, 120.0)
+	_check(baked and picker.map_ready, "the picker draws this scenario's map (%d regions)" % picker.rows.size())
+	var bay := await _pick_in(picker, "bay")
+	var saxony := await _pick_in(picker, "sachsen")
+	await _wait(0.5)
+	_check(picker.selected.size() == 2 and not bay.is_empty() and not saxony.is_empty(), "two regions picked from the search")
+	_check(picker.region_fill(saxony).is_equal_approx(Color(EditorRegionPicker.ACCENT, 0.9)), "a picked region is drawn in the accent")
+	_check(picker._count_label.text == "2 SELECTED" and picker._chips.get_child_count() == 2, "the picker lists what is picked")
+	await _shoot("rules-3d-region-picker")
+	picker._done_button.pressed.emit()
+	await _frames(3)
+	_check(editor.picker() == null, "Insert closes the picker")
+	var compiled := await _until(func() -> bool:
+		var impacts: Variant = _first_event().get("impacts")
+		return impacts is Dictionary and ((impacts as Dictionary).get("regionTransfers", []) as Array).size() == 2, 10.0)
+	rows = _first_event().get("impactRows", [])
+	_check(((rows[0] as Dictionary).get("regions", []) as Array).size() == 2, "the row keeps the picked regions")
+	_check(compiled, "the row compiles to the engine's region transfers")
+	if compiled:
+		var transfer: Dictionary = (_first_event()["impacts"]["regionTransfers"] as Array)[1]
+		_check(str(transfer.get("toCode", "")) == "France" and str(transfer.get("regionId", "")) == saxony, "each transfer names the region and its new owner: %s" % JSON.stringify(transfer))
+	var names := _named(host, "RegionNames") as Label
+	_check(names != null and names.text.ends_with("Sachsen") and (_named(host, "PickImpactRegions") as Button).text == "Pick on map (2)", "the row shows how many regions and their names (%s)" % (names.text if names else ""))
+	_check(_named(host, "ImpactNeeded") == null or not (_named(host, "ImpactNeeded") as Label).visible, "a complete row has no warning")
+	section = _named(host, "ImpactsSection") as Control
+	if impacts_scroll:
+		(impacts_scroll as ScrollContainer).scroll_vertical = int(section.get_global_rect().position.y - (impacts_scroll as ScrollContainer).get_global_rect().position.y + (impacts_scroll as ScrollContainer).scroll_vertical - 150)
+		await _frames(3)
+	await _shoot("rules-3e-impact-rows")
+	await _press(_named(host, "AddImpact") as Button, "+ Add impact again")
+	await _press(_named(host, "PickImpactRegions", 1) as Button, "Pick on map, second row")
+	picker = editor.picker()
+	if picker:
+		await _until(func() -> bool: return picker.map_ready or picker.load_failed, 60.0)
+		await _pick_in(picker, "sachsen")
+		picker._done_button.pressed.emit()
+		await _frames(3)
+	var twice_ok := await _until(func() -> bool:
+		var label := _named(host, "ImpactRepeated") as Label
+		return label != null and label.text == "Already chosen in another impact: Sachsen", 10.0)
+	_check(twice_ok, "a region chosen twice is flagged")
+	await _press(_named(host, "RemoveImpact", 1) as Button, "Remove the second impact")
+	rows = _first_event().get("impactRows", [])
+	_check(rows.size() == 1, "Remove drops the row")
+	var instruction: TextEdit = null
+	var nodes: Array = []
+	_collect(host, nodes)
+	for node in nodes:
+		if node is TextEdit and (node as TextEdit).placeholder_text == "What happens on this date?":
+			instruction = node
+	if instruction:
+		instruction.set_caret_line(0)
+		instruction.set_caret_column(instruction.get_line(0).length())
+	await _press(_named(host, "PickRegions") as Button, "Pick regions for the instruction")
+	picker = editor.picker()
+	if picker:
+		await _until(func() -> bool: return picker.map_ready or picker.load_failed, 60.0)
+		await _pick_in(picker, "sachsen")
+		picker._done_button.pressed.emit()
+	var inserted := await _until(func() -> bool: return str(_first_event().get("text", "")).ends_with(" Sachsen"), 10.0)
+	_check(inserted, "Pick regions writes the names where the cursor was: %s" % str(_first_event().get("text", "")))
+	if instruction:
+		_check(instruction.text.ends_with(" Sachsen"), "the instruction box shows the inserted names")
 
 
 func _stats(value: Dictionary) -> void:

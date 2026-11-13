@@ -169,7 +169,7 @@ test("the parsed summary counts beta's payload shape", () => {
 
 test("the CSV export is one row per record with quoted free text", async () => {
   const record = startAiRecord({ taskKey: "jumpForward", provider: "openai" });
-  attachCallMetrics(record, { model: "gpt-x", usage: { promptTokens: 100, outputTokens: 20, cachedTokens: 60 } });
+  attachCallMetrics(record, { model: "gpt-x", usage: { promptTokens: 100, outputTokens: 20, cachedTokens: 60, cacheWriteTokens: 15 } });
   finishAiRecord(record, { ok: true, rawResponse: "{}" });
   attachAttemptOutcome(record, { ok: false, validationError: 'bad "shape",\nreally', parsedSummary: { eventCount: 2 } });
   const csv = exportTelemetryCsv(await getAiRecords());
@@ -177,7 +177,8 @@ test("the CSV export is one row per record with quoted free text", async () => {
   assert.ok(header.startsWith("id,startedAt,provider,model,taskKey,"));
   assert.equal(csv.split("\n").length, 2);
   assert.ok(row.includes(",openai,gpt-x,jumpForward,"));
-  assert.ok(row.includes(",100,20,60,"));
+  assert.ok(row.includes(",100,20,60,15,"), "what the request wrote to the cache, beside what it read from it");
+  assert.ok(header.includes(",cachedTokens,cacheWriteTokens,"));
   assert.ok(row.includes('"bad ""shape"", really"'));
   assert.ok(row.endsWith(",failed,\"bad \"\"shape\"\", really\",,2,,,,,,,"), row);
 });

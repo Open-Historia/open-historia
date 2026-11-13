@@ -15,6 +15,8 @@ const MODEL_TEXT := {
 	"retry": "Try again",
 	"unavailable": "The translation model could not be loaded. What it translates stays in English.",
 }
+const AI_FAILED_TEXT := "Your AI could not translate, so the translation model on this device did."
+const AI_STEP_STRINGS := 240
 const MISSING_LIMIT := 3000
 const MODEL_BATCH_STRINGS := 8
 const MODEL_BATCH_CHARS := 1200
@@ -55,6 +57,7 @@ var _layer: CanvasLayer
 var _pill: PanelContainer
 var _pill_label: Label
 var _pill_up := false
+var _notice_up := false
 var _notice_serial := 0
 var _queue_timer: Timer
 var _rtl_connected := false
@@ -62,6 +65,19 @@ var _card_layer: CanvasLayer
 var _card_text: Label
 var _card_fill: ColorRect
 var _card_words: PhraseBook
+var _pack_info: Dictionary = {}
+var _model_learned := {}
+var ai_setting := false
+var ai_entries := {}
+var ai_shown := false
+var ai_halted := false
+var ai_tried := {}
+var content_strings := {}
+var _shipped_keys := {}
+var _shipped_ready := false
+var _ai_notice_shown := false
+var scenario_pack := {"code": "", "entries": {}}
+var _scenario_version := ""
 
 class BookTranslation extends Translation:
 	var owner_ref: WeakRef
@@ -146,6 +162,11 @@ func activate() -> void:
 			return
 		model_ready = prepared_model == language
 		await _reload_offer()
+		if serial != _serial:
+			return
+		if ai_in_use() != ai_shown:
+			_lay_book()
+			_refresh_controls()
 	_collect_and_translate()
 
 
@@ -217,6 +238,7 @@ func apply_language(code: String) -> void:
 	model_failed = false
 	model_downloading = false
 	_model_loading = false
+	_reset_ai()
 	if wanted == "en":
 		packed = false
 		native_name = "English"
@@ -238,7 +260,17 @@ func apply_language(code: String) -> void:
 	var info: Dictionary = reply.get("result", {}) if reply.get("ok", false) else {}
 	packed = bool(info.get("packed", false))
 	native_name = str(info.get("native", wanted))
+	_pack_info = info
 	book = _book_from(info)
+	await _read_ai_state(wanted, true)
+	if serial != _serial:
+		return
+	if ai_in_use():
+		_lay_book()
+	await _fetch_scenario_pack()
+	if serial != _serial:
+		return
+	_apply_scenario_pack()
 	_install_translation(wanted)
 	_set_rtl(bool(info.get("rtl", wanted in ["ar", "he", "fa", "ur"])))
 	_refresh_controls()
@@ -281,6 +313,146 @@ func _refresh_controls() -> void:
 	translations_changed.emit()
 
 
+func ai_in_use() -> bool:
+	return language != "en" and ai_setting and bool(offer.get("has", false)) and str(offer.get("choice", "")) == "yes" and _shipped_ready and not ai_halted
+
+
+func translating() -> bool:
+	return model_in_use() or ai_in_use()
+
+
+func _in_scenario_pack(text: String) -> bool:
+	return str(scenario_pack.get("code", "")) == language and (scenario_pack.get("entries", {}) as Dictionary).has(text)
+
+
+func _ai_wants(text: String) -> bool:
+	return _shipped_ready and not _shipped_keys.has(text) and not ai_entries.has(text) and not _in_scenario_pack(text) and not pending.has(text) and not unusable.has(text) and not ai_tried.has(text) and PhraseBook.is_translatable(text) and ai_in_use()
+
+
+func _note_for_ai(trimmed: String) -> void:
+	if not _ai_wants(trimmed) or not book.has_entry(trimmed):
+		return
+	if packed and not region_names.has(trimmed) and not content_strings.has(trimmed):
+		return
+	pending[trimmed] = true
+	_schedule.call_deferred()
+
+
+func _read_ai_state(code: String, reset := false) -> void:
+	if engine == null or code == "en":
+		return
+	var reply: Dictionary = await engine.request("shell.language.ai", {"code": code, "reset": reset})
+	if code != language:
+		return
+	var state: Dictionary = reply.get("result", {}) if reply.get("ok", false) and reply.get("result") is Dictionary else {}
+	ai_setting = bool(state.get("setting", false))
+	var stored: Variant = state.get("entries", {})
+	if stored is Dictionary:
+		for source in (stored as Dictionary):
+			if not ai_entries.has(source):
+				ai_entries[source] = str(stored[source])
+	if ai_setting and not _shipped_ready:
+		_shipped_keys.clear()
+		var file := str(state.get("shippedFile", ""))
+		if not packed:
+			_shipped_ready = true
+		elif not file.is_empty() and FileAccess.file_exists(file):
+			var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(file))
+			if parsed is Dictionary:
+				for key in (parsed as Dictionary):
+					_shipped_keys[str(key).strip_edges()] = true
+				_shipped_ready = true
+
+
+func _lay_book() -> void:
+	ai_shown = ai_in_use()
+	book = _book_from(_pack_info)
+	book.set_all(_model_learned)
+	if ai_shown:
+		for source in ai_entries:
+			if not _shipped_keys.has(source):
+				book.set_entry(str(source), str(ai_entries[source]))
+	_apply_scenario_pack()
+
+
+func follow_ai_switch() -> void:
+	if language == "en":
+		return
+	var serial := _serial
+	await _read_ai_state(language)
+	if serial != _serial or not active or ai_in_use() == ai_shown:
+		return
+	_lay_book()
+	for source in pending.keys():
+		if book.has_entry(str(source)):
+			pending.erase(source)
+	unusable.clear()
+	_refresh_controls()
+	_collect_and_translate()
+
+
+func _fetch_scenario_pack() -> void:
+	if engine == null or language == "en":
+		return
+	var code := language
+	var reply: Dictionary = await engine.request("shell.language.scenarioPack", {"code": code})
+	if code != language:
+		return
+	var result: Dictionary = reply.get("result", {}) if reply.get("ok", false) and reply.get("result") is Dictionary else {}
+	var entries: Variant = result.get("entries", {})
+	_scenario_version = str(result.get("version", ""))
+	scenario_pack = {"code": str(result.get("code", "")), "entries": entries if entries is Dictionary else {}}
+
+
+func _apply_scenario_pack() -> bool:
+	if language == "en" or str(scenario_pack.get("code", "")) != language:
+		return false
+	var entries: Dictionary = scenario_pack.get("entries", {})
+	book.set_all(entries)
+	for source in entries:
+		pending.erase(str(source).strip_edges())
+	return true
+
+
+func set_scenario_pack(code: String, entries: Dictionary) -> void:
+	var had := not (scenario_pack.get("entries", {}) as Dictionary).is_empty()
+	scenario_pack = {"code": code, "entries": entries}
+	if had and language != "en" and not _pack_info.is_empty():
+		_lay_book()
+	elif not _apply_scenario_pack():
+		return
+	if active:
+		_refresh_controls()
+
+
+func _follow_scenario() -> void:
+	if language == "en" or engine == null:
+		return
+	var serial := _serial
+	var before := _scenario_version
+	var previous := scenario_pack
+	await _fetch_scenario_pack()
+	if serial != _serial or _scenario_version == before:
+		return
+	var fresh := scenario_pack
+	scenario_pack = previous
+	set_scenario_pack(str(fresh.get("code", "")), fresh.get("entries", {}))
+
+
+func _reset_ai() -> void:
+	_pack_info = {}
+	_model_learned.clear()
+	ai_setting = false
+	ai_entries.clear()
+	ai_shown = false
+	ai_halted = false
+	ai_tried.clear()
+	content_strings.clear()
+	_shipped_keys.clear()
+	_shipped_ready = false
+	_ai_notice_shown = false
+
+
 func _reset_queue() -> void:
 	pending.clear()
 	content_queued.clear()
@@ -288,6 +460,7 @@ func _reset_queue() -> void:
 	unusable.clear()
 	missing.clear()
 	_in_flight = false
+	_notice_up = false
 	_hide_pill()
 
 
@@ -303,6 +476,8 @@ func lookup_value(value: String) -> String:
 		if not numeric:
 			_note_unknown(trimmed)
 		return ""
+	if ai_shown and not numeric:
+		_note_for_ai(trimmed)
 	var leading := value.substr(0, value.length() - value.strip_edges(true, false).length())
 	var trailing := value.substr(value.strip_edges(false, true).length())
 	return leading + str(translated) + trailing
@@ -317,17 +492,20 @@ func _note_unknown(trimmed: String) -> void:
 		if missing.size() < MISSING_LIMIT:
 			missing[trimmed] = true
 		return
-	elif model_in_use():
+	elif translating():
 		content_queued.erase(trimmed)
 		pending[trimmed] = true
 		_schedule.call_deferred()
 
 
 func _queue_content(value: String) -> bool:
-	if not model_in_use():
+	if not translating():
 		return false
 	var trimmed := value.strip_edges()
-	if trimmed.is_empty() or not PhraseBook.is_translatable(trimmed) or book.has_entry(trimmed) or pending.has(trimmed) or unusable.has(trimmed):
+	if trimmed.is_empty() or not PhraseBook.is_translatable(trimmed) or pending.has(trimmed) or unusable.has(trimmed):
+		return false
+	content_strings[trimmed] = true
+	if book.has_entry(trimmed) and not (ai_shown and _ai_wants(trimmed)):
 		return false
 	pending[trimmed] = true
 	content_queued[trimmed] = true
@@ -359,11 +537,15 @@ func _plan(strings: Array) -> Array:
 
 
 func _process_queue() -> void:
-	if _in_flight or not active or pending.is_empty() or engine == null or not model_in_use():
+	if _in_flight or not active or pending.is_empty() or engine == null or not translating():
 		return
 	_in_flight = true
 	var serial := _serial
-	while not pending.is_empty() and active and serial == _serial and model_in_use():
+	while not pending.is_empty() and active and serial == _serial and translating():
+		if ai_shown and ai_in_use():
+			if not await _ai_step(serial):
+				break
+			continue
 		if not model_ready:
 			await _ensure_model()
 			if not model_ready or serial != _serial:
@@ -380,6 +562,7 @@ func _process_queue() -> void:
 		for pair in result.get("pairs", []):
 			var entry: Array = pair
 			book.set_entry(str(entry[0]), str(entry[1]))
+			_model_learned[str(entry[0])] = str(entry[1])
 			_settle(str(entry[0]))
 		for source in result.get("unusable", []):
 			unusable[str(source)] = true
@@ -389,6 +572,57 @@ func _process_queue() -> void:
 	if serial == _serial:
 		_in_flight = false
 	_update_progress()
+
+
+func _ai_step(serial: int) -> bool:
+	var strings: Array = pending.keys().slice(0, AI_STEP_STRINGS)
+	var known: Array = strings.filter(func(source: Variant) -> bool: return book.has_entry(str(source)))
+	var reply: Dictionary = await engine.request("shell.language.step", {"code": language, "strings": strings, "known": known, "ai": true, "packed": packed})
+	if serial != _serial:
+		return false
+	var result: Dictionary = reply.get("result", {}) if reply.get("ok", false) else {"ok": false, "error": str(reply.get("error", "unknown"))}
+	if not bool(result.get("ok", false)):
+		push_warning("[i18n] the translation step failed (%s)." % str(result.get("error", "unknown")))
+		return false
+	if str(result.get("asked", "")) == "ai":
+		for source in strings:
+			ai_tried[str(source)] = true
+	var failed: Variant = result.get("aiFailed")
+	if failed is Dictionary:
+		var halted := bool((failed as Dictionary).get("halted", false))
+		push_warning("[i18n] your AI did not translate (%s); the translation model on this device did instead%s" % [str((failed as Dictionary).get("message", "unknown")), ", and does for the rest of this session." if halted else "."])
+		if not _ai_notice_shown:
+			_ai_notice_shown = true
+			_show_notice(AI_FAILED_TEXT)
+	if not str(result.get("modelFailed", "")).is_empty():
+		model_failed = true
+		push_warning("[i18n] the translation model stopped (%s); what it would translate stays in English." % str(result.get("modelFailed", "")))
+	var settled := 0
+	for item in result.get("translated", []):
+		var entry: Dictionary = item
+		var source := str(entry.get("source", ""))
+		var text := str(entry.get("text", ""))
+		if str(entry.get("by", "")) == "ai":
+			ai_entries[source] = text
+			if ai_shown:
+				book.set_entry(source, text)
+		else:
+			book.set_entry(source, text)
+			_model_learned[source] = text
+		_settle(source)
+		settled += 1
+	for source in result.get("kept", []):
+		_settle(str(source))
+		settled += 1
+	for source in result.get("unusable", []):
+		unusable[str(source)] = true
+		_settle(str(source))
+		settled += 1
+	if bool(result.get("halted", false)):
+		ai_halted = true
+	_update_progress()
+	_refresh_controls()
+	return settled > 0 or str(result.get("asked", "")) == "ai"
 
 
 func _ensure_model() -> void:
@@ -421,6 +655,8 @@ func _on_engine_event(event_name: String, data: Variant) -> void:
 		"translation.progress":
 			_on_model_progress(data)
 		"shell.activeGameChanged":
+			if language != "en":
+				await _follow_scenario()
 			if active and language != "en":
 				_collect_and_translate()
 
@@ -451,10 +687,10 @@ func _collect_and_translate() -> void:
 		_queue_content(str(value))
 	for value in result.get("regions", []):
 		region_names[str(value)] = true
-	if pending.size() > 10 and model_in_use():
+	_process_queue()
+	if pending.size() > 10 and _in_flight and translating():
 		_show_pill()
 		_update_progress()
-	_process_queue()
 
 
 func _show_pill() -> void:
@@ -469,9 +705,9 @@ func _hide_pill() -> void:
 
 
 func _update_progress() -> void:
-	if not _pill_up or model_downloading:
+	if not _pill_up or model_downloading or _notice_up:
 		return
-	if pending.is_empty() or is_instance_valid(_card_layer) or not model_in_use():
+	if pending.is_empty() or is_instance_valid(_card_layer) or not translating() or not _in_flight:
 		_hide_pill()
 		return
 	var english := PROGRESS_LABEL.replace("{{language}}", native_name)
@@ -483,10 +719,12 @@ func _show_notice(english: String) -> void:
 	_show_pill()
 	var translated: Variant = book.translate(english)
 	_pill_label.text = str(translated) if translated != null else english
+	_notice_up = true
 	_notice_serial += 1
 	var serial := _notice_serial
 	get_tree().create_timer(NOTICE_SECONDS).timeout.connect(func() -> void:
 		if serial == _notice_serial:
+			_notice_up = false
 			_hide_pill())
 
 

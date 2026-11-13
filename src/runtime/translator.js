@@ -22,11 +22,20 @@
 // 3. What the AI writes during play (events, chats, the advisor) arrives in
 //    the player's language already (languageDirective) and is left alone.
 //
-// Nothing here is ever an AI request. A language with a model is played in
-// only once the player has said yes to its download (switchLanguage); said no,
-// the game is in English. The interface language changes where the player is,
-// without a reload: what was written over the page is put back to English and
-// the new language is laid over it.
+// A scenario may ship its own text translated by its author's AI
+// (server/scenarioLanguages.js, made in the Workshop's Languages tab). For the
+// open game's scenario that pack is laid over everything else in the book
+// (setScenarioLanguagePack): its strings come from it first, and never reach
+// the model or the player's own AI.
+//
+// Nothing here is an AI request unless the player turned on Translate with my
+// AI (aiTranslation.js): then what the model would translate goes to their AI
+// provider instead, in big batches, and the model takes over whenever a
+// request fails; with it off the AI is never asked. A language with a model is
+// played in only once the player has said yes to its download
+// (switchLanguage); said no, the game is in English. The interface language
+// changes where the player is, without a reload: what was written over the
+// page is put back to English and the new language is laid over it.
 //
 // What is translated is decided in translationRules.js, which the tests call
 // directly.
@@ -48,10 +57,17 @@ import { loadPromptTranslations, setPromptTranslations } from "./promptTranslati
 import {
   formatModelSize,
   modelChoiceKey,
-  planModelBatch,
   readModelChoice,
   translationModelFor,
 } from "./translationModels.js";
+import {
+  AI_CACHE_PREFIX,
+  AI_TRANSLATION_SETTING,
+  aiTranslationOffered,
+  aiTranslationPrompt,
+  createTranslationRouter,
+  readAiTranslationSetting,
+} from "./aiTranslation.js";
 import {
   authoredEventText,
   collectContentText,
@@ -108,6 +124,10 @@ const MODEL_PROMPT_TEXT = {
   unavailable: "The translation model could not be loaded. What it translates stays in English.",
 };
 
+// Said once a session, when a request to the player's AI fails and the model
+// translates instead.
+const AI_FAILED_TEXT = "Your AI could not translate, so the translation model on this device did.";
+
 let language = DEFAULT_LANGUAGE;
 // A shipped pack covers the interface: only content goes to the model.
 let packed = false;
@@ -141,6 +161,8 @@ let preparedModel = "";
 let modelDownloading = false;
 let modelCardEl = null;
 let noticeTimer = null;
+// The pill holds a notice (showNotice) until its time is up.
+let noticeUp = false;
 let observer = null;
 let scanTimer = null;
 let persistTimer = null;
@@ -151,6 +173,21 @@ let updatedEventTimer = null;
 let translatorActive = false;
 let listenersInstalled = false;
 let switching = null;
+// Translate with my AI (aiTranslation.js). The AI's translations, kept on this
+// device apart from the model's; the shipped pack's own strings, never asked
+// for (null until known; empty for a language with no pack); the server's
+// pack as it was read, so the book can be laid again when the switch changes;
+// the content strings seen, which in a language with a pack are all the model
+// translates; who translates the next batch; and whether the AI's
+// translations are laid over the book now.
+let aiEntries = new Map();
+let shippedKeys = null;
+let serverPack = {};
+let contentStrings = new Set();
+let router = null;
+let aiShown = false;
+let aiPersistTimer = null;
+let aiNoticeShown = false;
 
 // node → { english, written }: the English last rendered there, and what this
 // module wrote over it. A value equal to `written` is ours; anything else is
@@ -242,6 +279,29 @@ const persistCache = () => {
   persistTimer = setTimeout(writeCache, 1500);
 };
 
+// The AI's translations (Translate with my AI), on this device only: never
+// sent to the server's pack, which holds the model's.
+const aiCacheKey = () => `${AI_CACHE_PREFIX}${language}`;
+
+const loadAiCache = () => {
+  aiEntries = new Map(Object.entries(readStoredEntries(aiCacheKey()) ?? {}).filter(([, value]) => typeof value === "string"));
+};
+
+const writeAiCache = () => {
+  if (language === DEFAULT_LANGUAGE || !aiEntries.size) return;
+  try {
+    const entries = Array.from(aiEntries.entries()).slice(-CACHE_LIMIT);
+    localStorage.setItem(aiCacheKey(), JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // Storage full/blocked: they still apply for this session.
+  }
+};
+
+const persistAiCache = () => {
+  clearTimeout(aiPersistTimer);
+  aiPersistTimer = setTimeout(writeAiCache, 1500);
+};
+
 // ---- progress pill (plain DOM — must exist before/outside React) ----
 
 const showProgress = () => {
@@ -256,10 +316,14 @@ const showProgress = () => {
   document.body.appendChild(progressEl);
 };
 
+// The pill is up only while the queue is being worked through: when the queue
+// stops, done, given up or with nothing to do, so does the pill, whatever is
+// still pending (it is taken up again by the next scan).
 const updateProgress = () => {
-  // The download's own words stay in the pill while it lasts.
-  if (!progressEl || modelDownloading) return;
-  if (pending.size === 0 || modelCardEl || !modelInUse()) {
+  // The download's own words stay in the pill while it lasts, and a notice
+  // its time: the model failing is said, not taken off the screen at once.
+  if (!progressEl || modelDownloading || noticeUp) return;
+  if (pending.size === 0 || modelCardEl || !translating() || !inFlight) {
     progressEl.remove();
     progressEl = null;
     return;
@@ -274,8 +338,10 @@ const showNotice = (english) => {
   showProgress();
   if (!progressEl) return;
   progressEl.textContent = book.translate(english) ?? english;
+  noticeUp = true;
   clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => {
+    noticeUp = false;
     progressEl?.remove();
     progressEl = null;
   }, NOTICE_MS);
@@ -294,9 +360,18 @@ const noteUnknown = (trimmed) => {
     queueContent(trimmed);
   } else if (route === "missing") {
     if (missing.size < MISSING_LIMIT) missing.add(trimmed);
-  } else if (modelInUse()) {
+  } else if (translating()) {
     pending.add(trimmed);
   }
+};
+
+// A string the book has a translation for that the AI is to translate again:
+// with Translate with my AI on, one the model made (never the pack's), in a
+// language with a pack only content, as the model only translates that there.
+const noteForAi = (trimmed) => {
+  if (!aiWants(trimmed) || book.get(trimmed) === undefined) return;
+  if (packed && !regionNames.has(trimmed) && !contentStrings.has(trimmed)) return;
+  pending.add(trimmed);
 };
 
 // The translation of a whole value with its surrounding whitespace kept, or
@@ -310,6 +385,7 @@ const translateValue = (value, { note = true } = {}) => {
     if (note && !numericDate) noteUnknown(trimmed);
     return null;
   }
+  if (note && aiShown && !numericDate) noteForAi(trimmed);
   const leading = value.slice(0, value.length - value.trimStart().length);
   const trailing = value.slice(value.trimEnd().length);
   return leading + translated + trailing;
@@ -537,6 +613,140 @@ const storeModelChoice = (choice, code) => {
 // yes to it, and it has not failed this session.
 const modelInUse = () => Boolean(translationModelFor(language)) && modelChoice() === "yes" && !modelFailed;
 
+// ---- Translate with my AI (aiTranslation.js) ----
+
+// The switch, read once and again whenever a setting changes (it is asked
+// about for every string on the page).
+let aiSetting = null;
+const aiSettingOn = () => {
+  if (aiSetting === null) {
+    try {
+      aiSetting = readAiTranslationSetting(localStorage.getItem(AI_TRANSLATION_SETTING));
+    } catch {
+      aiSetting = false;
+    }
+  }
+  return aiSetting;
+};
+
+// The AI translates for the language in use: the switch is on, it is offered
+// there (a model the player downloaded), the pack's own strings are known so
+// none is ever asked for, and the AI has not been given up on this session.
+const aiInUse = () => language !== DEFAULT_LANGUAGE && aiSettingOn()
+  && aiTranslationOffered({ language, modelChoice: modelChoice() })
+  && shippedKeys !== null && Boolean(router) && !router.halted();
+
+// Someone translates for the language in use: the model, or the AI.
+const translating = () => modelInUse() || aiInUse();
+
+// A string the AI may be asked for: not the pack's, not answered by it
+// already, not put to it this session, and not given up on.
+const aiWants = (text) => Boolean(shippedKeys && router) && !shippedKeys.has(text) && !aiEntries.has(text)
+  && !inScenarioPack(text) && !pending.has(text) && !unusable.has(text) && !router.tried(text) && isTranslatable(text) && aiInUse();
+
+// Whether the switch is offered for the interface language (Settings).
+export const aiTranslationAvailable = () => {
+  const code = getStoredLanguage();
+  return aiTranslationOffered({ language: code, modelChoice: modelChoice(code) });
+};
+
+// The shipped pack's own strings: never the AI's. Read from the pack itself,
+// as the server's merges in the model's. Only while the switch is on; until it
+// is read (and should it not be), the AI is not used.
+const loadShippedKeys = async (run) => {
+  if (shippedKeys || !packed) {
+    if (!shippedKeys) shippedKeys = new Set();
+    return;
+  }
+  try {
+    const base = typeof import.meta !== "undefined" && import.meta.env?.BASE_URL ? import.meta.env.BASE_URL : "/";
+    const response = await fetch(`${base.replace(/\/?$/, "/")}lang/${encodeURIComponent(language)}.json`, { cache: "no-cache" });
+    if (!response.ok) return;
+    const pack = await response.json();
+    if (run !== generation || !pack || typeof pack !== "object" || Array.isArray(pack)) return;
+    shippedKeys = new Set(Object.keys(pack).map((key) => key.trim()));
+  } catch {
+    // Offline: the model translates, as with the switch off.
+  }
+};
+
+// The book laid again: what this device's model learned, the server's pack
+// over it, and with the AI in use its translations over all but the pack's.
+const layBook = () => {
+  aiShown = aiInUse();
+  book = createPhraseBook({ localizeValue: createDateLocalizer(language) });
+  book.setAll(learned);
+  book.setAll(serverPack);
+  if (aiShown) {
+    for (const [source, translated] of aiEntries) {
+      if (!shippedKeys.has(source)) book.set(source, translated);
+    }
+  }
+  // The scenario's own pack over all of it (setScenarioLanguagePack).
+  applyScenarioPack();
+};
+
+// The switch, or whether it applies, changed: the book is laid again and the
+// page walked with it, at once. Off, the model's translations are back and
+// what only the AI had goes to the model; on, what the model made is asked of
+// the AI (once each, in big batches).
+const followAiSwitch = async () => {
+  const run = generation;
+  aiSetting = null;
+  if (aiSettingOn()) await loadShippedKeys(run);
+  if (run !== generation || !translatorActive || aiInUse() === aiShown) return;
+  layBook();
+  for (const source of [...pending]) {
+    if (book.has(source)) pending.delete(source);
+  }
+  unusable.clear();
+  scan();
+  // Content is queued as it is gathered (in a language with a pack the page's
+  // own unknown text is not), so it is gathered again for whoever takes it now.
+  void collectAndTranslate();
+};
+
+const askAi = async (batch) => {
+  // Loaded only here: with the switch off the AI's modules are never touched.
+  const [{ callAI }, { BACKGROUND_REQUEST }] = await Promise.all([
+    import("../Game/AI/main.jsx"),
+    import("../Game/AI/requestBudget.js"),
+  ]);
+  // Named, so Settings → AI → Used today says what these were; a background
+  // request, as nobody pressed a button for it.
+  return callAI(aiTranslationPrompt({ language, name: languageDisplayName(language), packed, count: batch.length }), [
+    { role: "user", parts: [{ text: JSON.stringify(batch) }] },
+  ], {
+    languageMode: "none",
+    taskKey: "translation",
+    requestKind: BACKGROUND_REQUEST,
+  });
+};
+
+// Nobody pressed anything for a translation, so it is background work
+// (requestBudget.js), like idle diplomacy and the agents' reports between
+// turns: it stops at the day's fixed cap and never takes the last tenth of
+// the day's limit, and the translation model on this device translates
+// meanwhile. Loaded only here, as the AI's modules are.
+const mayAskAi = async () => {
+  const { backgroundAiAllowance } = await import("../Game/AI/requestBudget.js");
+  return backgroundAiAllowance().allowed;
+};
+
+const aiFailed = (error, { halted }) => {
+  console.warn(
+    `[i18n] your AI did not translate (${error?.message || "unknown"}); the translation model on this device did instead` +
+    (halted ? ", and does for the rest of this session." : "."),
+  );
+  if (!aiNoticeShown) {
+    aiNoticeShown = true;
+    showNotice(AI_FAILED_TEXT);
+  }
+};
+
+// The model's translation already in hand for a string, if any.
+const modelKnows = (source) => (Object.hasOwn(serverPack, source) ? serverPack[source] : learned.get(source));
+
 const loadModelModule = () => import("./translationModel.js");
 
 const removeModelCard = () => {
@@ -731,47 +941,67 @@ const ensureModel = () => {
   return modelLoading;
 };
 
-// One batch through the model. What it answers well is kept and saved to the
-// server's pack; what it does not stays English for the session.
-const translateOnDevice = async (batch, run) => {
+// One batch through the model: its translation of each string, or null where
+// it has none (that string stays English for the session). Loaded first if it
+// is not yet; one that will not load or stops answers nothing.
+const modelAnswers = async (batch) => {
+  const none = () => batch.map(() => null);
+  if (!modelInUse()) return none();
+  const run = generation;
+  if (!modelReady) {
+    await ensureModel();
+    if (!modelReady || run !== generation) return none();
+  }
   try {
     const { translateWithModel } = await loadModelModule();
-    const answers = await translateWithModel(language, batch);
-    if (run !== generation) return;
-    batch.forEach((source, index) => {
-      const value = answers[index];
-      if (value == null) {
-        unusable.add(source);
-        settle(source);
-        return;
-      }
-      book.set(source, value);
-      learned.set(source, value);
-      unsyncedEntries[source] = value;
-      settle(source);
-    });
+    return await translateWithModel(language, batch);
   } catch (error) {
-    if (run !== generation) return;
-    modelFailed = true;
-    console.warn(`[i18n] the translation model stopped (${error?.message || "unknown"}); what it would translate stays in English.`);
+    if (run === generation) {
+      modelFailed = true;
+      console.warn(`[i18n] the translation model stopped (${error?.message || "unknown"}); what it would translate stays in English.`);
+    }
+    return none();
+  }
+};
+
+// What a step of the router settled. The model's translations are kept and
+// saved to the server's pack; the AI's are kept on this device.
+const applyStep = (result) => {
+  for (const { source, text, by } of result.translated) {
+    if (by === "ai") {
+      aiEntries.set(source, text);
+      if (aiShown) book.set(source, text);
+      persistAiCache();
+    } else {
+      book.set(source, text);
+      learned.set(source, text);
+      unsyncedEntries[source] = text;
+    }
+    settle(source);
+  }
+  for (const source of result.kept) settle(source);
+  for (const source of result.unusable) {
+    unusable.add(source);
+    settle(source);
   }
 };
 
 const processQueue = async () => {
   const run = generation;
-  if (inFlight === run || stopped || pending.size === 0 || !modelInUse()) {
+  if (inFlight === run || stopped || pending.size === 0 || !translating() || !router) {
     return;
   }
 
   inFlight = run;
   try {
-    while (pending.size > 0 && !stopped && run === generation && modelInUse()) {
-      if (!modelReady) {
-        await ensureModel();
-        if (!modelReady || run !== generation) break;
-      }
-      await translateOnDevice(planModelBatch([...pending]), run);
+    while (pending.size > 0 && !stopped && run === generation && translating()) {
+      // A request to the AI when the switch is on (the model takes what it
+      // fails), else a batch through the model (aiTranslation.js).
+      const result = await router.step(pending);
       if (run !== generation) break;
+      applyStep(result);
+      const settled = result.translated.length + result.kept.length + result.unusable.length;
+      if (!settled && result.asked !== "ai") break;
       updateProgress();
       persistCache();
       syncEntriesToServer();
@@ -788,10 +1018,13 @@ const processQueue = async () => {
 // ---- content ----
 
 // A content string for the model: once, and only when nothing has it yet.
+// With Translate with my AI on, also one only the model has translated.
 const queueContent = (value) => {
-  if (typeof value !== "string" || !modelInUse()) return false;
+  if (typeof value !== "string" || !translating()) return false;
   const trimmed = value.trim();
-  if (!trimmed || !isTranslatable(trimmed) || book.has(trimmed) || pending.has(trimmed) || unusable.has(trimmed)) return false;
+  if (!trimmed || !isTranslatable(trimmed) || pending.has(trimmed) || unusable.has(trimmed)) return false;
+  contentStrings.add(trimmed);
+  if (book.has(trimmed) && !(aiShown && aiWants(trimmed))) return false;
   pending.add(trimmed);
   return true;
 };
@@ -871,11 +1104,45 @@ const collectAndTranslate = async () => {
   const run = generation;
   await collectContentStrings();
   if (stopped || run !== generation) return;
-  if (pending.size > 10) {
+  // Started first, so the pill only comes up over a queue that is running.
+  void processQueue();
+  if (pending.size > 10 && inFlight) {
     showProgress();
     updateProgress();
   }
-  void processQueue();
+};
+
+// ---- a scenario's own pack ----
+
+// The open game's scenario's translations of its own strings into one
+// language (scenarioLanguagePacks.js useScenarioLanguagePack), or none.
+let scenarioPack = { code: "", entries: {} };
+
+// Laid over the book while the game is in that language: after the server's
+// pack and this device's, so the author's translation wins, and anything
+// queued for the model that it has is taken off the queue.
+const applyScenarioPack = () => {
+  if (language === DEFAULT_LANGUAGE || scenarioPack.code !== language) return false;
+  book.setAll(scenarioPack.entries);
+  for (const source of Object.keys(scenarioPack.entries)) pending.delete(source.trim());
+  return true;
+};
+
+// Whether the scenario's pack for the language in use has a string: then it is
+// never asked of the player's AI (aiWants).
+const inScenarioPack = (text) => scenarioPack.code === language && Object.hasOwn(scenarioPack.entries, text);
+
+// The pack of the scenario in play for `code` (source -> translation); an
+// empty one when it has none. Kept for the language it is in, and applied once
+// the game is in it.
+export const setScenarioLanguagePack = (code, entries) => {
+  scenarioPack = {
+    code: typeof code === "string" ? code : "",
+    entries: entries && typeof entries === "object" && !Array.isArray(entries) ? entries : {},
+  };
+  if (!applyScenarioPack() || !translatorActive) return;
+  scan();
+  announceUpdate();
 };
 
 // ---- public lookups (map labels, proactive callers) ----
@@ -889,6 +1156,7 @@ export const translateLabel = (text) => {
   }
   const translated = book.get(text);
   if (translated) {
+    if (aiShown && queueContent(text)) scheduleScan();
     return translated;
   }
   if (queueContent(text)) {
@@ -968,6 +1236,7 @@ const loadServerPack = async () => {
     if (!response.ok) return;
     const pack = await response.json();
     if (!pack || typeof pack !== "object") return;
+    serverPack = pack;
     book.setAll(pack);
     for (const [source, translated] of learned) {
       if (Object.hasOwn(pack, source)) {
@@ -1034,6 +1303,11 @@ const installListeners = () => {
   window.addEventListener("oh:active-game-changed", () => {
     if (translatorActive) void collectAndTranslate();
   });
+  // Translate with my AI turned on or off (Settings; mapSettings.js).
+  window.addEventListener("mapSettings:updated", () => {
+    aiSetting = null;
+    if (translatorActive) void followAiSwitch();
+  });
 };
 
 const startInLanguage = (code) => {
@@ -1057,10 +1331,26 @@ const startInLanguage = (code) => {
   document.body.style.direction = isRtlLanguage(language) ? "rtl" : "";
 
   loadCache();
+  loadAiCache();
+  shippedKeys = packed ? null : new Set();
+  router = createTranslationRouter({
+    isAiOn: () => run === generation && aiShown && aiInUse(),
+    mayAskAi,
+    askAi,
+    askModel: modelAnswers,
+    known: modelKnows,
+    cache: aiEntries,
+    onAiFailure: aiFailed,
+  });
 
   void (async () => {
     // Server pack first (cheap, instant), then wait out the loading screen.
     await loadServerPack();
+    if (aiSettingOn()) await loadShippedKeys(run);
+    if (run !== generation) return;
+    if (aiInUse()) layBook();
+    // The scenario's own pack over it, when there is one for this language.
+    applyScenarioPack();
     await whenStartupScreenGone();
     if (stopped || run !== generation) return;
 
@@ -1087,6 +1377,7 @@ const startInLanguage = (code) => {
         return;
       }
       modelReady = preparedModel === language;
+      if (aiInUse() !== aiShown) layBook();
       scan();
     }
 
@@ -1103,6 +1394,7 @@ const leaveLanguage = () => {
   observer = null;
   clearTimeout(scanTimer);
   clearTimeout(noticeTimer);
+  noticeUp = false;
   clearTimeout(persistTimer);
   writeCache();
   clearTimeout(syncTimer);
@@ -1117,6 +1409,15 @@ const leaveLanguage = () => {
   unusable = new Set();
   regionNames = new Set();
   learned = new Map();
+  clearTimeout(aiPersistTimer);
+  writeAiCache();
+  aiEntries = new Map();
+  shippedKeys = null;
+  serverPack = {};
+  contentStrings = new Set();
+  router = null;
+  aiShown = false;
+  aiNoticeShown = false;
   modelReady = false;
   modelFailed = false;
   modelLoading = null;
@@ -1169,6 +1470,7 @@ export const stopTranslator = () => {
   observer?.disconnect();
   clearTimeout(scanTimer);
   clearTimeout(noticeTimer);
+  noticeUp = false;
   progressEl?.remove();
   progressEl = null;
   removeModelCard();

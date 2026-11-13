@@ -75,3 +75,23 @@ test("models go to the app's own cache folder and count as there only when compl
   await whisper.forget();
   assert.equal(whisper.cached(), false);
 });
+
+test("models converted for the game download from the scenario repository, Xenova's from Hugging Face", async () => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "oh-mirror-"));
+  const asked = [];
+  const fetcher = async (url) => {
+    asked.push(url);
+    return { ok: true, body: [Buffer.from("{}")] };
+  };
+  for (const code of ["lv", "fi"]) {
+    const entry = models.translationModelFor(code);
+    await onDevice.downloadModel(cacheDir, { host: models.MODEL_HOST, repo: entry.repo, revision: entry.revision, files: [...models.MODEL_FILES], total: entry.bytes, urlOf: (file) => models.modelFileUrl(entry, file) }, { fetcher });
+  }
+  assert.equal(asked.length, models.MODEL_FILES.length * 2);
+  assert.equal(asked[0], `https://raw.githubusercontent.com/Open-Historia/Open-historia-scenarios/${models.MIRROR.commit}/models/opus-mt-en-bat/${models.MODEL_FILES[0]}`);
+  assert.ok(asked.at(-1).startsWith("https://huggingface.co/Xenova/opus-mt-en-fi/resolve/"));
+  const runner = onDevice.createStandInTranslationRunner({ cacheDir, models });
+  assert.equal(runner.cached("lv"), true);
+  assert.equal(runner.cached("lt"), true, "Latvian and Lithuanian share one download");
+  assert.equal(runner.cached("fi"), true);
+});

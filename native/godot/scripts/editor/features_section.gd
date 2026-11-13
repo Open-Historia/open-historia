@@ -13,6 +13,7 @@ var _kind := "scenario"
 var _features: Variant = {}
 var _scenario_features: Variant = {}
 var _world: Dictionary = {}
+var _scenario_id := ""
 var _host: Node
 var _current_date := ""
 var _first_skip_ahead := true
@@ -76,6 +77,9 @@ func _read(props: Dictionary) -> void:
 		var details: Dictionary = props["details"] if props["details"] is Dictionary else {}
 		var data: Dictionary = details.get("data", {}) if details.get("data") is Dictionary else {}
 		_world = data.get("world", {}) if data.get("world") is Dictionary else {}
+		var scenario: Dictionary = details.get("scenario", {}) if details.get("scenario") is Dictionary else {}
+		var game: Dictionary = details.get("game", {}) if details.get("game") is Dictionary else {}
+		_scenario_id = str(scenario.get("id", "")) if not str(scenario.get("id", "")).is_empty() else str(game.get("scenarioId", ""))
 	if props.has("world") and props["world"] is Dictionary:
 		_world = props["world"]
 	if props.has("currentDate"):
@@ -106,6 +110,7 @@ func _start() -> void:
 		return
 	_options["memberStatuses"] = definitions.get("memberStatuses", [])
 	_options["puppetKinds"] = definitions.get("puppetKinds", [])
+	_options["impactTypes"] = definitions.get("impactTypes", [])
 	await _load_options()
 	_rebuild()
 
@@ -400,6 +405,7 @@ func _scripted_props(key: String, setting_key: String) -> Dictionary:
 		"isGame": _is_game(),
 		"overridden": (not _is_game()) or overridden,
 		"world": _world,
+		"scenarioId": _scenario_id,
 		"host": _host,
 		"options": _options,
 	}

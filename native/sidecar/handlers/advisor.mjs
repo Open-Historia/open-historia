@@ -72,6 +72,15 @@ const STAND_IN_FENCES_REPLY = [
 
 const FENCES_MARK = "each order separately";
 
+const GROUP_MARK = "[Current Group Chat:";
+const GROUP_PASS_MARK = "say nothing at all";
+const STAND_IN_GROUP_REPLY = [
+  "We should hold the line on the budget before anything else.",
+  "```actions",
+  "[{\"title\":\"Publish the spending review\",\"text\":\"Publish the spending review before the next cabinet meeting.\",\"kind\":\"action\"}]",
+  "```",
+].join("\n");
+
 const ADVISOR_MARK = "[Drafting Messages to Send]";
 const CHARACTER_MARK = "[Character Conversation — Public Context Only]";
 const PRIVATE_MARKS = ["[Action Planning]", "[Current Planned Actions]", "[Current Projects]", ADVISOR_MARK];
@@ -416,9 +425,16 @@ export const register = (ctx) => {
   let loadFailed = false;
   let storedNotices = [];
   let lastNoticeViews = "";
+  let lastActionStates = null;
 
   if (ctx.standIn) {
     ctx.addStandIn(({ tool, text, body }) => {
+      if (!tool && String(text).includes(GROUP_MARK)) {
+        const speaker = /You are (.+?), ONE specific participant/.exec(String(text));
+        const transcript = String(text).split("[Group Chat Transcript]")[1] ?? "";
+        if (transcript.includes(GROUP_PASS_MARK)) return { text: "[[PASS]]" };
+        return { text: `I am ${speaker ? speaker[1] : "an advisor"}.\n\n${STAND_IN_GROUP_REPLY}` };
+      }
       if (!tool && String(text).includes(CHARACTER_MARK)) {
         const leaked = PRIVATE_MARKS.filter((mark) => String(text).includes(mark));
         return { text: leaked.length ? `LEAKED ${leaked.join(" ")}\n${STAND_IN_CHARACTER_REPLY}` : STAND_IN_CHARACTER_REPLY };
@@ -517,6 +533,44 @@ export const register = (ctx) => {
     return targets;
   };
 
+  const actionsById = (actions) => {
+    const found = {};
+    for (const action of list(actions)) {
+      if (typeof action?.id !== "string" || !action.id) continue;
+      found[action.id] = action;
+    }
+    return found;
+  };
+
+  const proposalUpdatesOf = (message, actions) => {
+    const updates = {};
+    const byId = actionsById(actions);
+    for (const proposal of list(message?.actionProposals)) {
+      if (proposal?.operation !== "edit") continue;
+      const target = byId[String(proposal?.targetId ?? "")];
+      if (target?.status === "planned") updates[String(proposal.id)] = String(target.title ?? "");
+    }
+    return updates;
+  };
+
+  const proposalStatesOf = (message, actions) => {
+    const states = {};
+    const proposals = list(message?.actionProposals);
+    if (!proposals.length) return states;
+    const byId = actionsById(actions);
+    const receipts = message?.actionReceipts && typeof message.actionReceipts === "object" ? message.actionReceipts : {};
+    for (const proposal of proposals) {
+      const id = String(proposal?.id ?? "");
+      if (!id) continue;
+      states[id] = engine.advisorActionReview.advisorActionCardState(proposal, receipts[id], byId[proposal.actionId], byId[proposal.targetId]);
+    }
+    return states;
+  };
+
+  const actionStatesStamp = (actions) => JSON.stringify(list(actions)
+    .filter((action) => typeof action?.id === "string" && action.id)
+    .map((action) => [action.id, action.title, action.text, action.kind, action.source, action.status]));
+
   const viewOf = (message, world, unseen = null, chats = null, actions = null) => {
     const role = message?.role;
     if (role === "notice") return noticeView(message, world, unseen ?? unseenOf(world));
@@ -525,6 +579,8 @@ export const register = (ctx) => {
       const drafts = parsed.messageDrafts ? parsed.messageDrafts.map((draft) => ({ ...draft, sentNote: sentNote(draft, chats) })) : null;
       return {
         proposalTargets: proposalTargetsOf(message, actions),
+        proposalUpdates: proposalUpdatesOf(message, actions),
+        proposalStates: proposalStatesOf(message, actions),
         text: parsed.text,
         md: normalizeMarkdown(parsed.text),
         chartConfig: parsed.chartConfig,
@@ -554,10 +610,31 @@ export const register = (ctx) => {
     return { text: String(message?.text ?? "") };
   };
 
-  const viewsOf = async (messages) => {
-    const [world, chats, actions] = await Promise.all([readWorld(), readChats(), readActions()]);
+  const settledReceipts = async (thread, messageId, proposalId, receipt) => {
+    const [saved, actions] = await Promise.all([gameState.readAdvisorMessages({ force: true }), readActions()]);
+    const stored = threads.advisorMessagesFor(saved, thread).find((entry) => entry?.role === "advisor" && entry.id === String(messageId));
+    const receipts = stored?.actionReceipts ?? { [String(proposalId)]: receipt };
+    return { receipts, states: stored ? proposalStatesOf(stored, actions) : {} };
+  };
+
+  const groupMembersOf = async (threadId) => {
+    if (!threadId || threadId === CHIEF) return [];
+    try {
+      const saved = await gameState.readAdvisorMessages();
+      return list(threads.advisorGroups(saved).find((group) => group.id === threadId)?.memberIds);
+    } catch {
+      return [];
+    }
+  };
+
+  const viewsOf = async (messages, threadId = "") => {
+    const [world, chats, actions, members] = await Promise.all([readWorld(), readChats(), readActions(), groupMembersOf(threadId)]);
     const unseen = unseenOf(world);
-    return list(messages).map((message) => viewOf(message, world, unseen, chats, actions));
+    const passes = new Set(members.length ? engine.advisorGroupMeetings.completedSilentGroupTurnIndices(list(messages), members) : []);
+    return list(messages).map((message, index) => {
+      const view = viewOf(message, world, unseen, chats, actions);
+      return passes.has(index) ? { ...view, groupPassAfter: true } : view;
+    });
   };
 
   const loadMessages = async () => {
@@ -612,6 +689,12 @@ export const register = (ctx) => {
       }),
       offices: threads.politicalAdvisorOffices(political, polity),
       chief: chief ? { name: chief.name, title: chief.title, personality: chief.personality } : null,
+      groups: threads.advisorGroups(saved).map((group) => ({
+        id: group.id,
+        name: String(group.name ?? ""),
+        memberIds: list(group.memberIds).map(String),
+        archived: Boolean(group.archived),
+      })),
       types: Object.entries(labels).map(([value, label]) => ({ value, label })),
       minister: threads.ADVISOR_RECIPIENT_TYPES.MINISTER,
     };
@@ -708,7 +791,15 @@ export const register = (ctx) => {
 
   if (typeof globalThis.addEventListener === "function") {
     globalThis.addEventListener("oh:runtime-json-updated", (event) => {
+      if (event?.detail?.url === urls.actions) {
+        const stamp = actionStatesStamp(event.detail.value);
+        if (stamp === lastActionStates) return;
+        lastActionStates = stamp;
+        emit("advisor.actions", {});
+        return;
+      }
       if (event?.detail?.url !== urls.advisor) return;
+      emit("advisor.file", {});
       storedNotices = noticesOf(event.detail.value);
       scheduleNotices();
       if (lastContacts) pushContacts(list(event.detail.value)).catch(() => {});
@@ -728,6 +819,139 @@ export const register = (ctx) => {
     });
   }
 
+  const askGroup = async ({ text, messages, retry, token, thread }) => {
+    const question = String(text ?? "");
+    const transcript = list(messages).slice();
+    if (retry) {
+      while (transcript.length && transcript[transcript.length - 1]?.role === "error") transcript.pop();
+    }
+    const campaignId = clean(engine.getLibraryState()?.activeGameId);
+    const leftCampaign = () => campaignChanged(campaignId, engine.getLibraryState()?.activeGameId);
+    const { gameDate, round: gameRound } = await engine.readJson(urls.game, {
+      defaultValue: { gameDate: null, round: 0 },
+      force: true,
+    }).catch(() => ({ gameDate: null, round: 0 }));
+    const moment = await readSeenMoment(gameDate);
+    const askedOn = moment.date || gameDate;
+    const asked = retry ? null : { role: "user", text: question, time: askedOn, at: new Date().toISOString() };
+    if (asked) transcript.push(asked);
+    emit("advisor.asked", plain({ token, message: asked, view: asked ? viewOf(asked, moment.world) : null }));
+    const allowedUnitTypes = Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null;
+    const makeReplyId = newReplyId;
+    let pending = null;
+    let timer = null;
+    const flushChunk = () => {
+      timer = null;
+      if (pending === null) return;
+      const { speakerId, full } = pending;
+      pending = null;
+      const streaming = { role: "advisor", speakerId, text: engine.advisorMemory.stripAdvisorMemory(full), time: askedOn, streaming: true };
+      emit("advisor.chunk", plain({ token, message: streaming, view: viewOf(streaming, moment.world) }));
+    };
+    const stopChunks = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      pending = null;
+    };
+    const persist = async (problem) => {
+      const result = await saveMessages(transcript, thread);
+      if (!result.saved) throw new Error(problem);
+    };
+    const reveal = async (rows) => {
+      const [world, chats, actions] = await Promise.all([readWorld(), readChats(), readActions()]);
+      for (const row of rows) emit("advisor.group.reply", plain({ token, message: row, view: viewOf(row, world, null, chats, actions) }));
+    };
+    const onSpeakerChunk = (speakerId, _delta, full) => {
+      pending = { speakerId, full };
+      if (!timer) timer = setTimeout(flushChunk, 60);
+    };
+    const onSpeakerComplete = async (record) => {
+      stopChunks();
+      if (leftCampaign()) throw new Error("Campaign changed during group chat.");
+      const latest = await gameState.readAdvisorMessages({ force: true });
+      const currentGroup = threads.advisorGroupForReply(latest, thread);
+      if (!currentGroup.memberIds.includes(record.speakerId)) {
+        throw new Error("This speaker is no longer invited to the group chat.");
+      }
+      const currentRecipient = record.speakerId === CHIEF ? null
+        : threads.advisorContacts(latest).find((item) => item.id === record.speakerId && !item.archived
+          && threads.advisorRecipientType(item) === threads.ADVISOR_RECIPIENT_TYPES.MINISTER);
+      if (record.speakerId !== CHIEF && !currentRecipient) {
+        throw new Error("This group participant is no longer an active government Advisor / Minister.");
+      }
+      const replyId = makeReplyId();
+      const completed = {
+        ...(record.silent === true
+          ? { role: "advisor", speakerId: record.speakerId, silent: true, text: "", id: replyId }
+          : await engine.advisorGroupOrders.prepareAdvisorGroupMemberReply({
+            ...record, replyId, recipient: currentRecipient, allowedUnitTypes,
+            gameDate, round: gameRound, mutateWorldState: gameState.mutateWorldState,
+            applyProjectOpsToWorld: gameState.applyProjectOpsToWorld,
+            currentActions: await engine.readJson(urls.actions, { force: true }),
+          })),
+        time: askedOn, at: new Date().toISOString(),
+      };
+      if (leftCampaign()) throw new Error("Campaign changed before saving group reply.");
+      transcript.push(completed);
+      await persist("The group reply was not saved; its participation decision cannot be treated as complete.");
+      await reveal([completed]);
+      return completed;
+    };
+    const onBatchComplete = async (rawRecords) => {
+      stopChunks();
+      if (leftCampaign()) throw new Error("Campaign changed during group chat.");
+      const latest = await gameState.readAdvisorMessages({ force: true });
+      const currentGroup = threads.advisorGroupForReply(latest, thread);
+      const members = threads.advisorContacts(latest);
+      for (const record of rawRecords) {
+        if (!currentGroup.memberIds.includes(record.speakerId)) throw new Error("Uninvited speaker in group batch.");
+        if (record.speakerId !== CHIEF && !members.some((person) => person.id === record.speakerId && !person.archived
+          && threads.advisorRecipientType(person) === threads.ADVISOR_RECIPIENT_TYPES.MINISTER)) {
+          throw new Error("An invited group participant is no longer an active government advisor.");
+        }
+      }
+      const staged = engine.advisorGroupOrders.stageAdvisorGroupBatch(rawRecords, {
+        allowedUnitTypes,
+        currentActions: await engine.readJson(urls.actions, { force: true }),
+        makeReplyId,
+      });
+      if (leftCampaign()) throw new Error("Campaign changed before group Project validation.");
+      const projectsBySpeaker = await engine.advisorProjectRouting.applyAdvisorGroupProjectBatch({
+        entries: staged.map((record) => ({ speakerId: record.speakerId, proposal: record.projectOps })),
+        gameDate, round: gameRound, mutateWorldState: gameState.mutateWorldState,
+        applyProjectOpsToWorld: gameState.applyProjectOpsToWorld,
+      });
+      const at = new Date().toISOString();
+      const completed = staged.map(({ projectOps: _ops, ...record }) => {
+        const summary = projectsBySpeaker.get(record.speakerId);
+        return { ...record, time: askedOn, at, ...(summary?.length ? { projectsSummary: summary } : {}) };
+      });
+      if (leftCampaign()) throw new Error("Campaign changed before saving group replies.");
+      transcript.push(...completed);
+      await persist("The group batch was not saved; its participation decisions cannot be treated as complete.");
+      await reveal(completed);
+      return completed;
+    };
+    try {
+      await engine.aiMain.sendAdvisorGroupMessage({ threadId: thread, messages: transcript,
+        onSpeakerChunk, onSpeakerComplete, onBatchComplete, shouldAbort: leftCampaign });
+      stopChunks();
+      if (leftCampaign()) return { dropped: true };
+      await saveMessages(transcript, thread);
+      return plain({ group: true, messages: transcript, views: await viewsOf(transcript, thread) });
+    } catch (error) {
+      stopChunks();
+      if (leftCampaign()) return { dropped: true };
+      const failed = {
+        role: "error",
+        text: error?.message ?? String(error),
+        time: askedOn,
+        ...(error?.diagnostics ? { diagnostics: error.diagnostics } : {}),
+      };
+      return plain({ group: true, messages: transcript, views: await viewsOf(transcript, thread), error: failed, view: viewOf(failed, {}) });
+    }
+  };
+
   return {
     "advisor.load": async ({ restore = true, threadId = CHIEF } = {}) => {
       const thread = threadOf(threadId);
@@ -746,7 +970,7 @@ export const register = (ctx) => {
       return plain({
         failed: saved === null,
         messages,
-        views: await viewsOf(messages),
+        views: await viewsOf(messages, thread),
         ...people,
         ...flags(),
       });
@@ -754,14 +978,15 @@ export const register = (ctx) => {
     "advisor.select": async ({ threadId = CHIEF } = {}) => {
       const thread = threadOf(threadId);
       const saved = await gameState.readAdvisorMessages({ force: true });
-      if (thread !== CHIEF && !threads.advisorContacts(saved).some((contact) => contact.id === thread)) {
+      if (thread !== CHIEF && !threads.advisorContacts(saved).some((contact) => contact.id === thread)
+        && !threads.advisorGroups(saved).some((group) => group.id === thread)) {
         throw new Error("The selected Advisor recipient no longer exists.");
       }
       const messages = threads.advisorMessagesFor(saved, thread);
-      engine.aiMain.loadHistory(messages, thread);
+      if (!threads.advisorGroups(saved).some((group) => group.id === thread)) engine.aiMain.loadHistory(messages, thread);
       const people = await contactsOf(saved);
       lastContacts = JSON.stringify(people);
-      return plain({ messages, views: await viewsOf(messages), ...people });
+      return plain({ messages, views: await viewsOf(messages, thread), ...people });
     },
     "advisor.contacts": async () => {
       const saved = await gameState.readAdvisorMessages();
@@ -778,6 +1003,23 @@ export const register = (ctx) => {
     },
     "advisor.contact.revise": async ({ id = "", draft = {} } = {}) => plain(await contactMutation((all) => threads.reviseAdvisorContact(all, String(id), draft))),
     "advisor.contact.archive": async ({ id = "", archived = true } = {}) => plain(await contactMutation((all) => threads.archiveAdvisorContact(all, String(id), Boolean(archived)))),
+    "advisor.contact.reorder": async ({ sourceId = "", targetId = "" } = {}) => plain(await contactMutation((all) => threads.reorderAdvisorContact(all, String(sourceId), String(targetId)))),
+    "advisor.group.create": async ({ draft = {} } = {}) => {
+      const random = globalThis.crypto?.randomUUID?.().replace(/-/g, "")
+        || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 15)}`;
+      const id = `advisor-group-${random}`;
+      const people = await contactMutation((all) => threads.createAdvisorGroup(all, { name: String(draft?.name ?? ""), memberIds: list(draft?.memberIds).map(String), id }));
+      return plain({ id, ...people });
+    },
+    "advisor.group.revise": async ({ id = "", draft = {} } = {}) => plain(await contactMutation((all) => threads.reviseAdvisorGroup(all, String(id), { name: String(draft?.name ?? ""), memberIds: list(draft?.memberIds).map(String) }))),
+    "advisor.group.archive": async ({ id = "", archived = true } = {}) => plain(await contactMutation((all) => threads.archiveAdvisorGroup(all, String(id), Boolean(archived)))),
+    "advisor.sync": async ({ messages = [], json = "", threadId = CHIEF } = {}) => {
+      const current = list(fromWire(json, messages));
+      const saved = await gameState.readAdvisorMessages({ force: true });
+      const synced = threads.withSavedActionReceipts(current, threads.advisorMessagesFor(saved, threadOf(threadId)));
+      if (synced === current) return { changed: false };
+      return plain({ changed: true, messages: synced, views: await viewsOf(synced, threadOf(threadId)) });
+    },
     "advisor.chief.save": async ({ draft = {} } = {}) => plain(await contactMutation((all) => threads.saveChiefAdvisorProfile(all, draft))),
     "advisor.chief.reset": async () => plain(await contactMutation((all) => threads.resetChiefAdvisorProfile(all))),
     "advisor.proceed": async ({ threadId = CHIEF, messageId = "", proposalId = "" } = {}) => {
@@ -804,12 +1046,37 @@ export const register = (ctx) => {
         if (campaignChanged(campaignId, engine.getLibraryState()?.activeGameId)) {
           throw new Error("The campaign changed while the Action was being reviewed. Reopen the correct game.");
         }
-        const saved = await gameState.readAdvisorMessages({ force: true });
-        const stored = threads.advisorMessagesFor(saved, thread).find((entry) => entry?.role === "advisor" && entry.id === String(messageId));
-        return plain({ ok: true, receipt, receipts: stored?.actionReceipts ?? { [String(proposalId)]: receipt } });
+        return plain({ ok: true, receipt, ...(await settledReceipts(thread, messageId, proposalId, receipt)) });
       } catch (error) {
         console.warn("[advisor] the Action proposal was not fully confirmed:", error?.message ?? error);
         return { ok: false, error: `${error?.message || String(error)} If a write succeeded before an error, retrying uses the same Action ID.` };
+      }
+    },
+    "advisor.cancel": async ({ threadId = CHIEF, messageId = "", proposalId = "" } = {}) => {
+      const thread = threadOf(threadId);
+      const campaignId = clean(engine.getLibraryState()?.activeGameId);
+      try {
+        engine.simulationStatus.assertNoTurnRunning();
+        if (campaignChanged(campaignId, engine.getLibraryState()?.activeGameId)) {
+          throw new Error("The campaign changed before the Action could be cancelled.");
+        }
+        const receipt = await engine.advisorActionApproval.cancelApprovedAdvisorAction({
+          threadId: thread,
+          messageId: String(messageId),
+          proposalId: String(proposalId),
+          readAdvisorMessages: gameState.readAdvisorMessages,
+          mutateActionsState: gameState.mutateActionsState,
+          mutateAdvisorState: gameState.mutateAdvisorState,
+          sharedGame: engine.mpBridge.inSharedGame(),
+          assertReady: engine.simulationStatus.assertNoTurnRunning,
+        });
+        if (campaignChanged(campaignId, engine.getLibraryState()?.activeGameId)) {
+          throw new Error("The campaign changed while the Action was being cancelled. Reopen the correct game.");
+        }
+        return plain({ ok: true, receipt, ...(await settledReceipts(thread, messageId, proposalId, receipt)) });
+      } catch (error) {
+        console.warn("[advisor] the Action cancellation was not fully confirmed:", error?.message ?? error);
+        return { ok: false, error: `${error?.message || String(error)} If the Action is already absent from the board, do not repeat a separate manual removal.` };
       }
     },
     "advisor.history": async ({ messages = [], json = "", threadId = CHIEF } = {}) => {
@@ -817,7 +1084,7 @@ export const register = (ctx) => {
       engine.aiMain.loadHistory(list(messages), threadOf(threadId));
       return true;
     },
-    "advisor.views": async ({ messages = [], json = "" } = {}) => plain({ views: await viewsOf(fromWire(json, messages)) }),
+    "advisor.views": async ({ messages = [], json = "", threadId = "" } = {}) => plain({ views: await viewsOf(fromWire(json, messages), String(threadId || "")) }),
     "advisor.notices": async () => {
       let stored = [];
       try {
@@ -874,11 +1141,14 @@ export const register = (ctx) => {
       messages = fromWire(json, messages);
       const thread = threadOf(threadId);
       let recipient = null;
+      let group = null;
       if (thread !== CHIEF) {
         const saved = await gameState.readAdvisorMessages().catch(() => []);
-        recipient = threads.advisorContacts(saved).find((contact) => contact.id === thread && !contact.archived) || null;
-        if (!recipient) return plain({ unavailable: true, problem: "This recipient is unavailable." });
+        group = threads.advisorGroups(saved).find((entry) => entry.id === thread && !entry.archived) || null;
+        recipient = group ? null : threads.advisorContacts(saved).find((contact) => contact.id === thread && !contact.archived) || null;
+        if (!recipient && !group) return plain({ unavailable: true, problem: "This recipient is unavailable." });
       }
+      if (group) return askGroup({ text, messages, retry, token, thread });
       const question = String(text ?? "");
       const transcript = list(messages);
       const library = engine.getLibraryState();
@@ -940,7 +1210,8 @@ export const register = (ctx) => {
         });
         const minister = thread === CHIEF || threads.advisorRecipientType(recipient) === threads.ADVISOR_RECIPIENT_TYPES.MINISTER;
         const { proposals: actionProposals, problems: invalidProposals } = minister
-          ? engine.advisorActionReview.actionProposalsFromReply(actionsProposal, replyId)
+          ? engine.advisorActionReview.reviewAdvisorActionProposals(actionsProposal, replyId,
+            await engine.readJson(urls.actions, { force: true }))
           : { proposals: [], problems: [] };
         const actionsProblems = [...(Array.isArray(actionBlockProblems) ? actionBlockProblems : []), ...invalidProposals];
         const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason,

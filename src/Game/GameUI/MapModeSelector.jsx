@@ -64,7 +64,7 @@ export const MapModeSelector = memo(function MapModeSelector({ dockStyle = DEFAU
       {isDiplo && showLegend && (
         <div
           style={{
-            background: "var(--oh-hud-bg)",
+            background: "var(--oh-ui-glass-pill, var(--oh-hud-bg))",
             backdropFilter: "var(--oh-hud-blur)",
             WebkitBackdropFilter: "var(--oh-hud-blur)",
             border: "1px solid var(--oh-hud-border)",
@@ -142,10 +142,10 @@ export const MapModeSelector = memo(function MapModeSelector({ dockStyle = DEFAU
         </div>
       )}
 
-      {/* Mode switcher bar */}
+      {/* Mode switcher bar: the theme's glass, as the dock's tray (chat.jsx Toolbar). */}
       <div
         style={{
-          background: "var(--oh-hud-bg)",
+          background: "var(--oh-ui-glass-pill, var(--oh-hud-bg))",
           backdropFilter: "var(--oh-hud-blur)",
           WebkitBackdropFilter: "var(--oh-hud-blur)",
           border: "1px solid var(--oh-hud-border)",
@@ -160,6 +160,7 @@ export const MapModeSelector = memo(function MapModeSelector({ dockStyle = DEFAU
           type="button"
           onClick={() => setMode("political")}
           title="Political map mode"
+          data-oh-theme-hud=""
           style={{
             display: "flex",
             alignItems: "center",
@@ -168,7 +169,7 @@ export const MapModeSelector = memo(function MapModeSelector({ dockStyle = DEFAU
             borderRadius: "8px",
             border: "none",
             cursor: "pointer",
-            background: !isDiplo ? "rgba(255,255,255,0.14)" : "transparent",
+            background: !isDiplo ? "var(--oh-ui-glass-active, rgba(255,255,255,0.14))" : "transparent",
             color: !isDiplo ? "#ffffff" : "rgba(255,255,255,0.55)",
             fontSize: "0.75rem",
             fontWeight: !isDiplo ? 600 : 400,
@@ -186,6 +187,7 @@ export const MapModeSelector = memo(function MapModeSelector({ dockStyle = DEFAU
             setShowLegend(true);
           }}
           title="Diplomatic map mode"
+          data-oh-theme-hud=""
           style={{
             display: "flex",
             alignItems: "center",
@@ -194,11 +196,11 @@ export const MapModeSelector = memo(function MapModeSelector({ dockStyle = DEFAU
             borderRadius: "8px",
             border: "none",
             cursor: "pointer",
-            background: isDiplo ? "rgba(37,99,235,0.3)" : "transparent",
-            color: isDiplo ? "#60a5fa" : "rgba(255,255,255,0.55)",
+            background: isDiplo ? "var(--oh-ui-glass-active, rgba(37,99,235,0.3))" : "transparent",
+            color: isDiplo ? "var(--oh-ui-glass-active-text, #60a5fa)" : "rgba(255,255,255,0.55)",
             borderWidth: "1px",
             borderStyle: "solid",
-            borderColor: isDiplo ? "rgba(96,165,250,0.4)" : "transparent",
+            borderColor: isDiplo ? "var(--oh-ui-glass-active-line, rgba(96,165,250,0.4))" : "transparent",
             fontSize: "0.75rem",
             fontWeight: isDiplo ? 600 : 400,
             transition: "all 0.15s ease",

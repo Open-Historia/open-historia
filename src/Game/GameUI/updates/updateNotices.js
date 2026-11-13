@@ -79,13 +79,26 @@ export const rememberUpdate = (id, storage = browserStorage()) => {
   }
 };
 
+// Whether this build shows update notices at all. The website's browser version
+// does not: "make update announcements not appear on the website beta" (the
+// owner, 2026-11-09). It is a demo that reloads onto each new build of the
+// site, and a notice there told of updates to the apps. Known by the build's own
+// flags (vite.config.ts, compile-time literals): the website is a web build
+// (VITE_OH_WEB) that is not the Android app, which is a web build too
+// (VITE_OH_NATIVE) and keeps its notices like the desktop app. A preview asked
+// for by the address (?updateNotice=) is shown all the same. Pure: App.jsx hands
+// in import.meta.env.
+export const buildShowsUpdateNotices = (env = {}) => !(env.VITE_OH_WEB && !env.VITE_OH_NATIVE);
+
 // The updates to show at this opening, newest first ([] for none; none where nothing can be kept).
 export const pendingUpdates = ({ updates = NOTICE_UPDATES, seen = seenUpdate(), keeps = canRememberUpdates() } = {}) => {
   if (updates.length === 0 || !keeps) return [];
   const at = seen ? updates.findIndex((update) => update.id === seen) : -1;
   if (at === 0) return [];
-  // A release (notesReleases.js) tells everything under it: a device owed one is shown it alone.
-  if (updates[0].kind === "release") return [updates[0]];
+  // A release (notesReleases.js) tells everything under it: a device owed one is shown it alone, even when updates
+  // have come since (the first after 2.5, 2026-11-06, hid it), and those come at the next opening, the release kept.
+  const owedRelease = (at < 0 ? updates : updates.slice(0, at)).find((update) => update.kind === "release");
+  if (owedRelease) return [owedRelease];
   if (at < 0) return updates.filter((update, index) => index === 0 || (update.kind === "major" && daysBetween(update.date, updates[0].date) <= FIRST_LOOK_DAYS)).slice(0, UPDATES_SHOWN_MOST);
   return updates.slice(0, Math.min(at, UPDATES_SHOWN_MOST));
 };
@@ -119,8 +132,22 @@ export const previewedUpdates = (search = "", updates = UPDATES) => {
   return update ? [update] : null;
 };
 
+// The changelog page's own banner: what several minor updates shown together are titled (UpdateNotice.jsx ChangelogBanner).
+export const CHANGELOG_BANNER = Object.freeze({ title: "What's new" });
+
 // The pages of a notice: every banner of every update in it, each with its update. A major update's pages come
 // before every minor one's ("make major update popups always appear in front of the minor update popups": the owner,
 // 2026-11-03), newest first within each; the list itself stays newest first, for which one is remembered as seen.
-export const noticePages = (updates = []) => [...updates.filter((update) => update.kind === "major"), ...updates.filter((update) => update.kind !== "major")].flatMap((update) => (Array.isArray(update.banners) ? update.banners : [])
-  .map((banner, index) => ({ key: `${update.id}#${index}`, update, banner })));
+// Several minor updates are ONE page, a changelog of them all, newest first ("make it so if there are multiple minor
+// update annoucements, it merges them all into one changelog": the owner, 2026-11-09): its `changelog` is those
+// updates, its `update` the newest of them (dressed as a minor one), and it comes after the major pages as each minor
+// page did. A single minor update keeps its own pages.
+const bannerPages = (update) => (Array.isArray(update.banners) ? update.banners : []).map((banner, index) => ({ key: `${update.id}#${index}`, update, banner }));
+export const noticePages = (updates = []) => {
+  const majors = updates.filter((update) => update.kind === "major");
+  const minors = updates.filter((update) => update.kind !== "major" && Array.isArray(update.banners) && update.banners.length > 0);
+  const merged = minors.length > 1
+    ? [{ key: `changelog#${minors[0].id}`, update: minors[0], banner: CHANGELOG_BANNER, changelog: minors }]
+    : minors.flatMap(bannerPages);
+  return [...majors.flatMap(bannerPages), ...merged];
+};

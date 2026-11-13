@@ -28,6 +28,10 @@
 // conflict was ever resolved by taking one side.
 //
 // --also records the passages in a JSON array of strings too.
+//
+// It also rewrites src/Game/AI/guidanceLengths.js: how long the longest
+// shipped translation of each current default passage runs, which the length
+// limit on edited passages is measured against (guidanceCharLimit).
 
 import fs from "node:fs";
 import os from "node:os";
@@ -39,7 +43,9 @@ const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), "../
 const LIST_FILE = path.join(ROOT, "src/Game/AI/shippedGuidance.js");
 const AI_DIR = "src/Game/AI";
 
-const { buildGuidanceDefaults, guidanceFingerprint } = await import(url.pathToFileURL(path.join(ROOT, AI_DIR, "promptGuidance.js")).href);
+const LENGTHS_FILE = path.join(ROOT, AI_DIR, "guidanceLengths.js");
+
+const { buildGuidanceDefaults, guidanceFingerprint, promptCharCount } = await import(url.pathToFileURL(path.join(ROOT, AI_DIR, "promptGuidance.js")).href);
 const { SHIPPED_GUIDANCE_FINGERPRINTS } = await import(url.pathToFileURL(LIST_FILE).href);
 
 const passages = [];
@@ -50,13 +56,46 @@ const walk = (value) => {
 };
 walk(buildGuidanceDefaults(JSON.parse(fs.readFileSync(path.join(ROOT, AI_DIR, "defaultPrompts.json"), "utf8"))));
 const english = passages.length;
+const englishPassages = passages.slice();
 
 const packDir = path.join(ROOT, "public/lang/prompts");
+const packs = [];
 for (const file of fs.existsSync(packDir) ? fs.readdirSync(packDir) : []) {
   if (!file.endsWith(".json") || file === "catalog-en.json") continue;
-  walk(JSON.parse(fs.readFileSync(path.join(packDir, file), "utf8")));
+  const pack = JSON.parse(fs.readFileSync(path.join(packDir, file), "utf8"));
+  packs.push(pack);
+  walk(pack);
 }
 const translated = passages.length - english;
+
+// The length limit's measure (guidanceCharLimit in promptGuidance.js): for
+// each current English passage that a shipped translation makes longer, the
+// longest translation's length, so the limit is the same in every language
+// and a translated default always passes. Rewritten whole on every run.
+const translatedLengths = new Map();
+for (const passage of englishPassages) {
+  const own = promptCharCount(passage);
+  let longest = 0;
+  for (const pack of packs) {
+    const text = pack?.[passage];
+    if (typeof text === "string" && text.trim()) longest = Math.max(longest, promptCharCount(text));
+  }
+  if (longest > own) translatedLengths.set(guidanceFingerprint(passage), longest);
+}
+const lengthsHeader = `/*! Open Historia — how long the shipped translations of the default guidance run © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// Written by scripts/prompts/record-shipped-guidance.mjs; do not edit by hand.
+// For each default guidance passage (keyed by its English text's
+// guidanceFingerprint) that a shipped translation (public/lang/prompts/) makes
+// longer than the English, the longest translation's length in characters
+// (promptCharCount). An edited passage may be 20% longer than the longest
+// built-in version of it (guidanceCharLimit in promptGuidance.js). One entry
+// per line; a key that appears twice (after a union merge) counts its longest.
+`;
+fs.writeFileSync(
+  LENGTHS_FILE,
+  `${lengthsHeader}const LENGTHS = [\n${[...translatedLengths].sort(([a], [b]) => a.localeCompare(b)).map(([fingerprint, length]) => `  ["${fingerprint}", ${length}],`).join("\n")}\n];\n\nexport const TRANSLATED_GUIDANCE_LENGTHS = new Map();\nfor (const [fingerprint, length] of LENGTHS) {\n  TRANSLATED_GUIDANCE_LENGTHS.set(fingerprint, Math.max(length, TRANSLATED_GUIDANCE_LENGTHS.get(fingerprint) ?? 0));\n}\n`.replace(/\n/g, "\r\n"),
+);
+console.log(`${translatedLengths.size} passages run longer in a translation than in English (${path.relative(ROOT, LENGTHS_FILE)})`);
 
 const args = process.argv.slice(2);
 const historyRefs = [];

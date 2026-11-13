@@ -29,6 +29,23 @@ export const register = (ctx) => {
 
   const preparing = new Map();
 
+  if (standIn && typeof ctx.addStandIn === "function") {
+    ctx.addStandIn(({ tool, body }) => {
+      if (tool) return null;
+      const system = (body.system_instruction?.parts ?? []).map((part) => part.text ?? "").join("\n");
+      if (!system.includes("You are the translation engine for a grand-strategy game.")) return null;
+      const user = (body.contents ?? []).flatMap((entry) => entry.parts ?? []).map((part) => part.text ?? "").join("\n");
+      let batch = [];
+      try {
+        batch = JSON.parse(user);
+      } catch {
+        return null;
+      }
+      if (!Array.isArray(batch) || batch.some((text) => String(text).includes("[stand-in fails]"))) return null;
+      return { text: JSON.stringify(batch.map((text) => `AI·${text}`)) };
+    });
+  }
+
   return {
     "translation.languages": async () => ({
       options: plain(list(i18n.getUiLanguageOptions()).map((item) => ({ ...item, model: Boolean(models.translationModelFor(item.code)), packed: i18n.hasShippedPack(item.code) === true }))),

@@ -59,6 +59,8 @@ import {
   loadSecondsMemory,
   musicAddress,
   musicSceneOf,
+  noteGameDrawn,
+  reopensDrawnGame,
   musicVolumeOf,
   setMusicPlaylists,
   setMusicScene,
@@ -698,11 +700,15 @@ test("a game drawn while the big hit is still far off: the build fades out on it
 // And then: "have frankincense and discovery be the only 2 game songs, get rid of the other two".
 const FRANKINCENSE = "/audio/frankincense-and-myrrh.mp3";
 const DISCOVERY = "/audio/discovery.mp3";
-const GAME_LENGTHS = { [FRANKINCENSE]: 192.2, [DISCOVERY]: 235.3, "/audio/honour-among-thieves.mp3": 240 };
+const HOPE = "/audio/a-kind-of-hope.mp3";
+const GAME_LENGTHS = { [FRANKINCENSE]: 192.2, [DISCOVERY]: 235.3, "/audio/honour-among-thieves.mp3": 240, [HOPE]: 342.6 };
 const levelOf = (name, at) => calmGainAt(at, { ...PASSAGE_CALM, ...MUSIC_TRACKS[name].loud });
 
 test("in a game the game's own music plays in the background: after a breath of silence, one piece and then the other, levelled", () => {
-  assert.deepEqual(MUSIC_GAME_PIECES, ["frankincenseAndMyrrh", "discovery", "honourAmongThieves"]);
+  assert.deepEqual(MUSIC_GAME_PIECES, ["frankincenseAndMyrrh", "discovery", "honourAmongThieves", "aKindOfHope"]);
+  // "For this one dont actually flatten the loudness, let it be": no table, so it is never levelled.
+  assert.equal(MUSIC_TRACKS.aKindOfHope.loud, undefined);
+  assert.equal(fs.existsSync(path.join(root, "public", "audio", "a-kind-of-hope.mp3")), true);
   assert.equal(MUSIC_TRACKS.hourOfTheWitch, undefined);
   assert.equal(fs.existsSync(path.join(root, "public", "audio", "hour-of-the-witch.mp3")), false);
   assert.equal(fs.existsSync(path.join(root, "public", "audio", "honour-among-thieves.mp3")), true);
@@ -765,8 +771,14 @@ test("in a game the game's own music plays in the background: after a breath of 
   time.advance(235300 + 600);
   assert.equal(audio.src, "/audio/honour-among-thieves.mp3");
   assert.ok(audio.currentTime < 2.5, `from its start: ${audio.currentTime}`);
-  // And round: the first again after it, from its start.
+  // Then the fourth, as recorded: the game's level whole, wherever it is.
   time.advance(240000 + 600);
+  assert.equal(audio.src, HOPE);
+  assert.ok(audio.currentTime < 2.5, `from its start: ${audio.currentTime}`);
+  time.advance(200000);
+  near(audio.volume, 0.25, 0.001);
+  // And round: the first again after it, from its start.
+  time.advance((342.6 - audio.currentTime) * 1000 + 600);
   assert.equal(audio.src, FRANKINCENSE);
   assert.ok(audio.currentTime < 2.5, `from its start: ${audio.currentTime}`);
   assert.deepEqual(sounding(), ["game"]);
@@ -806,7 +818,7 @@ test("the war room takes the game's music's place, and the game's carries on fro
 // "Have it randomly pick one track or the other, make it do the same for the war room."
 test("each game starts on one of the game's pieces, picked at random, from its start", () => {
   // The rolls: the menu the game opens on, the first game's piece, the menu come back to, the second game's piece.
-  const { director, time, of, sounding } = stage({ gamePieces: MUSIC_GAME_PIECES, lengths: GAME_LENGTHS, random: rolls(0, 0.5, 0, 0.1) });
+  const { director, time, of, sounding } = stage({ gamePieces: MUSIC_GAME_PIECES, lengths: GAME_LENGTHS, random: rolls(0, 0.3, 0, 0.1) });
   director.unlock();
   director.setScene("game");
   time.advance(40000);
@@ -1170,6 +1182,26 @@ test("a browser that still refuses is asked again at the next click; a file that
 test("the scene is where the player is", () => {
   assert.deepEqual([...MUSIC_SCENES], ["menu", "loading", "game", "atWar", "war"]);
   assert.equal(musicSceneOf({ inMenu: true, loading: true, atWar: true, war: true }), "menu");
+  // "When entering a game thats already opened ... dont do the whole music ramp up thing": a game drawn once
+  // this session is remembered, and the screen reports no loading for it.
+  assert.equal(reopensDrawnGame("game-a"), false);
+  noteGameDrawn("game-a");
+  assert.equal(reopensDrawnGame("game-a"), true);
+  assert.equal(reopensDrawnGame("game-a", "game-a"), true);
+  assert.equal(reopensDrawnGame("game-b"), false);
+  assert.equal(reopensDrawnGame(""), false);
+  // "if you have an open game but then switch games it still doesnt do the wind up": the open game's
+  // screen is still up while another is being opened, and that opening gets its build...
+  assert.equal(reopensDrawnGame("game-a", "game-b"), false);
+  // ...as does the open game's own screen when it comes up for the second time after another was drawn.
+  noteGameDrawn("game-b");
+  assert.equal(reopensDrawnGame("game-a", "game-a"), false);
+  assert.equal(reopensDrawnGame("game-b", "game-b"), true);
+  const gameScreen = read("src/Game/GameUI/main.jsx");
+  assert.match(gameScreen, /loading: showGameLoading && !reopening/);
+  assert.match(gameScreen, /const reopening = reopensDrawnGame\(activeGame\?\.id, gameLoading\.opening\);/);
+  assert.match(read("src/Game/GameUI/gameLoadingScreen.jsx"), /setOpening\(String\(event\?\.detail\?\.gameId \?\? openingGameId\(\)\)\)/);
+  assert.match(gameScreen, /if \(gameEntered && activeGame\?\.id && !showGameLoading\) noteGameDrawn\(activeGame\.id\);/);
   assert.equal(musicSceneOf({ loading: true, atWar: true, war: true }), "loading");
   assert.equal(musicSceneOf({ atWar: true, war: true }), "war");
   assert.equal(musicSceneOf({ war: true }), "war");
@@ -1180,7 +1212,7 @@ test("the scene is where the player is", () => {
   // At war is what puts the war room's button on the screen: the player's troops on a battlefield.
   // (Battlefields being on is the Wars feature's Fronts switch.)
   assert.ok(screen.includes("const atWar = hasFronts && fightingIn(warFronts);"));
-  assert.ok(screen.includes("musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading, atWar: atWar || inWar, war: battlefieldShown })"));
+  assert.ok(screen.includes("musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading && !reopening, atWar: atWar || inWar, war: battlefieldShown })"));
   assert.ok(screen.includes("useEffect(() => { setMusicScene(musicScene); }, [musicScene]);"));
   // The open game's scenario's own music, told before the scene it is for.
   // Of the OPEN game: the game last played has no say before the player opens one (gameEntry.js).
@@ -1244,7 +1276,7 @@ test("it is on unless the player turns it off, and Settings says whose music it 
     assert.ok(piece.loud.rms.every((figure) => figure > 0), piece.work);
   }
   const pieces = Object.values(MUSIC_TRACKS).filter(Boolean);
-  assert.equal(pieces.length, 7);
+  assert.equal(pieces.length, 8);
   for (const piece of pieces) {
     assert.deepEqual([piece.artist, piece.licence], ["Scott Buckley", "CC BY 4.0"]);
   }
@@ -1258,7 +1290,8 @@ test("it is on unless the player turns it off, and Settings says whose music it 
   for (const piece of pieces) {
     const tags = fs.readFileSync(path.join(root, "public", piece.file)).subarray(0, 2048).toString("latin1");
     assert.ok(tags.startsWith("ID3"), piece.file);
-    for (const part of [piece.work, "Scott Buckley", "CC BY 4.0", "Re-encoded at a lower bitrate for Open Historia"]) assert.ok(tags.includes(part), `${piece.file}: ${part}`);
+    const change = piece === MUSIC_TRACKS.aKindOfHope ? "As released by the composer, not re-encoded" : "Re-encoded at a lower bitrate for Open Historia";
+    for (const part of [piece.work, "Scott Buckley", "CC BY 4.0", change]) assert.ok(tags.includes(part), `${piece.file}: ${part}`);
   }
   // A piece the game is put at a time in, part of the way through, is constant
   // bitrate: a browser lands about 0.3 s off in a variable-bitrate MP3, and
@@ -1270,9 +1303,9 @@ test("it is on unless the player turns it off, and Settings says whose music it 
   };
   for (const piece of [MUSIC_TRACKS.passage, ...pieces.filter((entry) => entry.drama)]) assert.equal(kindOf(piece), "constant", piece.file);
   assert.equal(kindOf(MUSIC_TRACKS.clearSkies), "constant");
-  // And they are small: the seven together under 35 MB.
+  // And they are small: the eight together under 50 MB ("A Kind Of Hope" is the composer's own 320 kbps file, at the owner's word).
   const total = pieces.reduce((sum, piece) => sum + fs.statSync(path.join(root, "public", piece.file)).size, 0);
-  assert.ok(total < 35 * 1024 * 1024, `${Math.round(total / 1048576)} MB`);
+  assert.ok(total < 50 * 1024 * 1024, `${Math.round(total / 1048576)} MB`);
   // Each file by its name, its piece, where it is from, and where it plays.
   const literally = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   for (const piece of pieces) {
@@ -1280,10 +1313,11 @@ test("it is on unless the player turns it off, and Settings says whose music it 
   }
   assert.match(credits, /vanguard\.mp3\r?\n {4}"Vanguard" by Scott Buckley\r?\n {4}https:\/\/www\.scottbuckley\.com\.au\/library\/vanguard\/\r?\n {4}Plays in the war room and while a battlefield is shown\./);
   const readme = read("README.md");
-  assert.ok(readme.includes("\"Passage Of Time\", \"Clear Skies\", \"Frankincense and Myrrh\", \"Discovery\", \"Honour Among Thieves\", \"Legionnaire (2022 Remaster)\" and \"Vanguard\", all released under [CC BY 4.0]"));
+  assert.ok(readme.includes("\"Passage Of Time\", \"Clear Skies\", \"Frankincense and Myrrh\", \"Discovery\", \"Honour Among Thieves\", \"A Kind Of Hope\", \"Legionnaire (2022 Remaster)\" and \"Vanguard\", all released under [CC BY 4.0]"));
   for (const gone of ["Hour Of The Witch"]) assert.ok(!credits.includes(gone) && !readme.includes(gone), gone);
   assert.ok(readme.includes("re-encoded at a lower bitrate to make the game smaller and otherwise unchanged"));
-  for (const file of ["frankincense-and-myrrh", "discovery", "honour-among-thieves"]) {
+  assert.ok(credits.includes("a-kind-of-hope.mp3 is the composer's own file"));
+  for (const file of ["frankincense-and-myrrh", "discovery", "honour-among-thieves", "a-kind-of-hope"]) {
     assert.match(credits, new RegExp(`${file}\\.mp3\\r?\\n {4}"[^"]+" by Scott Buckley\\r?\\n {4}https://www\\.scottbuckley\\.com\\.au/library/${file}/\\r?\\n {4}Plays in a game, in the background\\.`), file);
   }
   assert.match(credits, /clear-skies\.mp3\r?\n {4}"Clear Skies" by Scott Buckley\r?\n {4}https:\/\/www\.scottbuckley\.com\.au\/library\/clear-skies\/\r?\n {4}Plays on the menu, in turn with Passage Of Time, and from its own build\r?\n {4}on while a game opened under it loads\./);

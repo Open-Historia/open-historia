@@ -251,6 +251,7 @@ func _run() -> void:
 			await _wait(0.3)
 			await _scroll_to(menu._workspace, "AI requests")
 			await _shoot("m24b-ai-requests")
+			await _requests_switch(menu)
 			await _scroll_to(menu._workspace, "Connections")
 			await _shoot("m24c-ai-connections")
 			menu._workspace._scroll.scroll_vertical = 100000
@@ -284,6 +285,7 @@ func _run() -> void:
 	await _wait(0.5)
 	_check("the AI setup prompt opens", menu._prompt != null and _all_text(menu._prompt).contains("Set up your AI provider"))
 	await _shoot("m30-ai-setup")
+	await _ai_setup_choices(menu)
 	if menu._prompt:
 		menu._prompt.dismissed.emit()
 	await _wait(0.3)
@@ -413,6 +415,111 @@ func _run() -> void:
 	_say("signals: %s" % ", ".join(signals_seen))
 	_say("failures: %d %s" % [failures.size(), ", ".join(failures)])
 	_finish()
+
+
+func _requests_text(menu: Variant) -> String:
+	var label := _find_label(menu._workspace._content, "AI requests")
+	var node: Node = label
+	while node and not node.has_meta("settings_section"):
+		node = node.get_parent()
+	return _all_text(node) if node else ""
+
+
+func _requests_switch(menu: Variant) -> void:
+	var text := _requests_text(menu)
+	_check("AI requests opens on My key has no request limit, off for a Gemini key", text.contains("My key has no request limit") and text.contains("Off (default): for a free key, where requests run out.") and text.contains("of 500 used today"), text.substr(0, 240))
+	_check("Save AI requests and Background AI are gone", not text.contains("Save AI requests") and not text.contains("Background AI") and not text.contains("Background requests a day, at most"))
+	_check("the daily limit field shows with the switch off", text.contains("Requests a day your key allows") and text.contains("Only used for the count above and to keep requests nobody pressed a button for from spending the end of your day."))
+	_check("Countries write to me between time skips, on by default", text.contains("Countries write to me between time skips") and text.contains("Off: between time skips, no country writes to you unless you write first.") and menu._workspace._flag("ai_idle_diplomacy"))
+	_check("AI lookup functions left Generation behavior", not _all_text(menu._workspace).contains("Only used while Save AI requests"))
+	_check("group chats answer one advisor per request by default, with the batch size beside it", text.contains("Individual AI responses in group chats") and text.contains("On: each group member gets an individual AI request. Off: members share requests in batches. In both modes, members may speak or deliberately stay silent.") and text.contains("Advisors per AI request") and text.contains("All group members are consulted, but only those with something to contribute need to speak.") and bool((menu._workspace._requests.get("groupAi", {}) as Dictionary).get("individual", false)))
+	await menu._workspace._requests_set("groupIndividual", false)
+	await _wait(0.4)
+	var group_ai: Dictionary = menu._workspace._requests.get("groupAi", {})
+	var batch_sliders: Array = menu._workspace._content.find_children("*", "HSlider", true, false).filter(func(node: Node) -> bool: return (node as HSlider).tooltip_text == "Advisors per AI request")
+	_check("turning individual responses off lets members share a request, three at a time by default", not bool(group_ai.get("individual", true)) and int(group_ai.get("effectiveBatchSize", 0)) == 3 and batch_sliders.size() == 1 and (batch_sliders[0] as HSlider).editable and int((batch_sliders[0] as HSlider).value) == 3, JSON.stringify(group_ai))
+	if batch_sliders.size() == 1:
+		var holder: Variant = (batch_sliders[0] as Node).get_parent()
+		while holder != null and not (holder is ScrollContainer):
+			holder = (holder as Node).get_parent()
+		if holder is ScrollContainer:
+			(holder as ScrollContainer).ensure_control_visible(batch_sliders[0] as Control)
+	await _shoot("m03b-ai-group-requests")
+	await menu._workspace._requests_set("groupBatchSize", 5)
+	await menu._workspace._requests_set("groupIndividual", true)
+	group_ai = menu._workspace._requests.get("groupAi", {})
+	_check("individual mode keeps the saved batch size and sends one advisor a request", bool(group_ai.get("individual", false)) and int(group_ai.get("batchSize", 0)) == 5 and int(group_ai.get("effectiveBatchSize", 0)) == 1, JSON.stringify(group_ai))
+	await menu._workspace._set_flag("ai_idle_diplomacy", false)
+	var values: Variant = await _request("settings.values")
+	var flags: Dictionary = (values as Dictionary).get("flags", {}) if typeof(values) == TYPE_DICTIONARY else {}
+	_check("the idle diplomacy switch writes ai_idle_diplomacy", not bool(flags.get("ai_idle_diplomacy", true)))
+	await menu._workspace._set_flag("ai_idle_diplomacy", true)
+	await menu._workspace._requests_set("noRequestLimit", true)
+	await _wait(0.5)
+	text = _requests_text(menu)
+	_check("the switch on says what it allows", text.contains("On: for a paid key or a local model.") and text.contains("A time skip may use up to 8 requests, with up to 6 rounds of questions.") and text.contains("used today") and not text.contains("of 500 used today"), text.substr(0, 240))
+	_check("the switch on hides the daily limit and offers Advanced", not text.contains("Requests a day your key allows") and text.contains("Advanced") and not text.contains("AI lookup functions"))
+	var caption: Variant = await _request("timeline.caption")
+	_check("the time controls count without a limit", typeof(caption) == TYPE_DICTIONARY and bool((caption as Dictionary).get("noLimit", false)) and str((caption as Dictionary).get("second", "")).contains("at most 8"), str(caption))
+	menu._workspace._details["requestsAdvanced"] = true
+	menu._workspace._render()
+	await _wait(0.5)
+	text = _requests_text(menu)
+	_check("Advanced holds AI lookup functions", text.contains("AI lookup functions") and text.contains("in up to 6 extra requests a task"))
+	await _scroll_to(menu._workspace, "AI requests")
+	await _shoot("m24d-ai-requests-no-limit")
+	menu._workspace._details.erase("requestsAdvanced")
+	await menu._workspace._requests_set("noRequestLimit", false)
+	await _wait(0.5)
+	var back: Variant = await _request("settings.requests")
+	_check("the switch turns off again", typeof(back) == TYPE_DICTIONARY and not bool((back as Dictionary).get("noLimit", true)))
+
+
+func _ai_setup_choices(menu: Variant) -> void:
+	var prompt: Variant = menu._prompt
+	if prompt == null:
+		return
+	var text := _all_text(prompt)
+	_check("the AI setup opens on three choices", text.contains("Gemini") and text.contains("Best free option") and text.contains("Command Code") and text.contains("Best quality option") and text.contains("Custom") and text.contains("Configure any provider and any model, or a local model"), text.substr(0, 300))
+	_check("no choice is marked recommended", not text.to_lower().contains("recommended"))
+	_check("the choices have Not now and Open full settings, no Save", text.contains("[Not now]") and text.contains("[Open full settings]") and not text.contains("[Save and play]"))
+	var cards: Node = prompt.find_child("SetupChoices", true, false)
+	_check("the three cards sit side by side", cards is HBoxContainer and cards.get_child_count() == 3)
+	for choice_key in ["gemini", "commandcode", "custom"]:
+		var mark := prompt.find_child("Mark_%s" % choice_key, true, false) as TextureRect
+		_check("the %s card shows its mark" % choice_key, mark != null and mark.texture != null)
+	prompt.open_choice("gemini")
+	await _wait(0.5)
+	text = _all_text(prompt)
+	_check("Gemini opens the free-key steps", text.contains("New to API keys?") and text.contains("GEMINI API KEY") and text.contains("MODEL (OPTIONAL)") and text.contains("[← Back]") and text.contains("[Save and play]") and not text.contains("[Open full settings]"), text.substr(0, 300))
+	await _shoot("m30b-ai-setup-gemini")
+	prompt.open_choice("commandcode")
+	await _wait(0.5)
+	text = _all_text(prompt)
+	_check("Command Code opens its plan, its keys page and only the key", text.contains("1. Get the GOAT plan, $10 a month") and text.contains("[Open the plans ↗]") and text.contains("2. Generate an API key") and text.contains("[Open the API keys page ↗]") and text.contains("COMMAND CODE API KEY") and text.contains("GLM 5.3 Flash") and text.contains("MY KEY HAS NO REQUEST LIMIT") and not text.contains("MODEL (OPTIONAL)"), text.substr(0, 400))
+	await _shoot("m30c-ai-setup-commandcode")
+	prompt.open_choice("custom")
+	await _until(func() -> bool: return prompt.custom_no_limit, 5.0)
+	text = _all_text(prompt)
+	_check("Custom starts on a local server", text.contains("PROVIDER") and text.contains("API ENDPOINT") and str(prompt.endpoint) == "http://localhost:11434/v1" and text.contains("[Open full settings]"), text.substr(0, 300))
+	_check("a local server shows My key has no request limit: On", bool(prompt.custom_no_limit) and text.contains("MY KEY HAS NO REQUEST LIMIT"))
+	await _shoot("m30d-ai-setup-custom")
+	prompt._on_endpoint_changed("https://api.example.com/v1")
+	await _until(func() -> bool: return not prompt.custom_no_limit, 5.0)
+	_check("a hosted endpoint leaves the switch as it is", not bool(prompt.custom_no_limit) and not _all_text(prompt).contains("MY KEY HAS NO REQUEST LIMIT"))
+	for pair: Array in [["commandcode", "", true], ["gemini", "", false], ["custom", "http://127.0.0.1:1234/v1", true], ["custom", "https://api.example.com/v1", false]]:
+		var answer: Variant = await _request("settings.setupNoRequestLimit", {"choice": str(pair[0]), "provider": "openai-compatible", "endpoint": str(pair[1])})
+		_check("%s %s sets no request limit %s" % [str(pair[0]), str(pair[1]), str(pair[2])], typeof(answer) == TYPE_DICTIONARY and bool((answer as Dictionary).get("on", false)) == bool(pair[2]))
+	prompt.back_to_choices()
+	await _wait(0.3)
+	_check("Back returns to the three choices", _all_text(prompt).contains("Best free option"))
+	prompt.open_choice("gemini")
+	prompt.api_key = "stand-in"
+	await prompt._save()
+	await _wait(0.4)
+	_check("saving Gemini closes the prompt", menu._prompt == null)
+	var requests: Variant = await _request("settings.requests")
+	_check("Gemini's free key leaves no request limit off", typeof(requests) == TYPE_DICTIONARY and not bool((requests as Dictionary).get("noLimit", true)))
 
 
 func _display_mode(menu: Variant) -> void:

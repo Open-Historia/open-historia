@@ -22,6 +22,7 @@ var _rows: VBoxContainer
 
 func _init() -> void:
 	super._init(UI.HUD_BG, 10.0, Vector4(10, 7, 10, 8))
+	theme_as("glass_pill", "hud_border")
 	anchor_left = 1.0
 	anchor_right = 1.0
 	grow_horizontal = Control.GROW_DIRECTION_BEGIN

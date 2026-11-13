@@ -167,6 +167,12 @@ func open(data: Dictionary) -> void:
 	_camera.zoom = Vector2.ONE * pow(2.0, 2.0) / 8.0
 	_render()
 	_sync.call_deferred()
+	if bool(data.get("bypassWarning", false)) and _play_game_id.is_empty():
+		var warning := LongerPromptsWarning.new()
+		warning.name = "LongerPromptsWarning"
+		add_child(warning)
+		warning.show_for(str((data.get("scenario", {}) as Dictionary).get("name", "")))
+		warning.cancelled.connect(_close)
 
 
 func _close() -> void:

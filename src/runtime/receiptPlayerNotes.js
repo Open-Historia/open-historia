@@ -64,6 +64,8 @@ export const RECEIPT_PLAYER_TEXTS = Object.freeze({
   controlUnknownOwner: "The change of control over {{region}} was not applied: {{owner}} is not a country on this map.",
   transferNoRegion: "The transfer of {{region}} was not applied: no region on the map matches that name.",
   controlNoRegion: "The change of control over {{region}} was not applied: no region on the map matches that name.",
+  dissolutionRefusedOne: "{{country}} was not dissolved: 1 of its regions was given to no one.",
+  dissolutionRefusedMany: "{{country}} was not dissolved: {{count}} of its regions were given to no one.",
   politicalRefused: "A change to a government, party or leader was not applied: the engine's political records refused it.",
   institutionRefused: "A change to an institution or its membership was not applied: the institution's rules refused it.",
   chatNotOpened: "The conversation \"{{title}}\" was not opened: none of its participants is a country on this map.",
@@ -239,6 +241,11 @@ export const schemaRemovalNote = (removal) => {
   if (removal?.kind === "truncate") return one(removal.removedCount, "schemaTruncatedOne", "schemaTruncatedMany", {}, event);
   return receiptPlayerNote("schemaMalformed", {}, event);
 };
+
+// A dissolution the engine refuses (gameState.js dissolvedPolityLand): the
+// polity, by name, still holds `count` regions its event gives to no one.
+export const dissolutionRefusedNote = ({ polity = "", count = 0 } = {}, event = "") =>
+  one(count, "dissolutionRefusedOne", "dissolutionRefusedMany", { country: clean(polity) }, event);
 
 export const eventCountNote = ({ count, min, max }) =>
   one(count, "eventCountOne", "eventCountMany", { min: whole(min), max: whole(max) });

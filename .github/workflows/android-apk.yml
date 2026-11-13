@@ -30,6 +30,7 @@ permissions:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # A dispatch run picks its own branch from a dropdown, and `beta` is in that
       # dropdown too — a run from there would publish the beta's code as the stable
@@ -43,16 +44,44 @@ jobs:
 
       - uses: actions/checkout@v5
 
+      # latest.json is the feed every app installed under the earlier id reads,
+      # forever: its update banner installs whatever APK it names. It used to
+      # name open-historia.apk, which is now the app under its new id, a different
+      # app: offered as an update it would install beside the old one, without
+      # the player's games. So until a handover build has been published (and
+      # latest.json names it), a run without the handover variables stops here.
+      - name: Keep the earlier id's feed off the new app
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LEGACY_APP_ID: ${{ vars.ANDROID_LEGACY_APP_ID }}
+        run: |
+          if [ -n "$LEGACY_APP_ID" ]; then exit 0; fi
+          if gh release download android --repo "${{ github.repository }}" -p latest.json -O feed-now.json 2>/dev/null \
+            && grep -q '/open-historia.apk"' feed-now.json; then
+            echo "::error::android/latest.json still offers open-historia.apk to the apps installed under the earlier id. Set the repository variables ANDROID_LEGACY_APP_ID and ANDROID_LEGACY_HOST (docs/mobile.md) so this run publishes the handover build."
+            exit 1
+          fi
+
+      # The npm cache is keyed by package-lock.json alone, the same key the
+      # Tests and website workflows use, so it adds nothing to the cache storage.
       - uses: actions/setup-node@v5
         with:
+          cache: npm
           # Node 24 is the Active LTS; Node 20 went end-of-life in March 2026 and
           # GitHub removes the Node 20 action runtime on 23 Sep 2026.
           node-version: 24
 
+      # Gradle's dependencies and wrapper, kept between builds by the Android
+      # project's build files instead of downloaded again every run.
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            mobile/android/*.gradle*
+            mobile/android/app/*.gradle*
+            mobile/android/gradle/wrapper/gradle-wrapper.properties
 
       # VITE_APP_BUILD is what makes the in-app update banner take its APK path:
       # it compares this number against the one in the release manifest and offers
@@ -78,6 +107,8 @@ jobs:
         env:
           # versionCode/versionName come from the run number, so every build is
           # an upgrade over the last one (Android refuses a lower versionCode).
+          # The handover build gets the same number: it is higher than any build
+          # this workflow made under the earlier id, so it installs over them.
           OH_ANDROID_BUILD: ${{ github.run_number }}
           # One keystore across builds, or an APK cannot install over its
           # predecessor (each fresh debug keystore is a different certificate).
@@ -86,7 +117,18 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # The handover build (docs/mobile.md, "Moving to the new app id"): the
+          # same code under the application id and WebView address the app had
+          # until November 2026, for the phones that still have it installed.
+          # Both come from repository variables, so neither is in the repository;
+          # with both set, this run builds it after the app.
+          LEGACY_APP_ID: ${{ vars.ANDROID_LEGACY_APP_ID }}
+          LEGACY_HOST: ${{ vars.ANDROID_LEGACY_HOST }}
         run: |
+          if [ -n "$LEGACY_APP_ID$LEGACY_HOST" ] && { [ -z "$LEGACY_APP_ID" ] || [ -z "$LEGACY_HOST" ]; }; then
+            echo "::error::The repository variables ANDROID_LEGACY_APP_ID and ANDROID_LEGACY_HOST go together: set both or neither."
+            exit 1
+          fi
           cd mobile
           npm ci
           npm run map
@@ -97,38 +139,63 @@ jobs:
           if [ -n "$ANDROID_KEYSTORE_B64" ]; then
             echo "$ANDROID_KEYSTORE_B64" | base64 -d > app/release.keystore
             export OH_ANDROID_KEYSTORE="$PWD/app/release.keystore"
-            ./gradlew assembleRelease --no-daemon
-            cp app/build/outputs/apk/release/app-release.apk ../../open-historia.apk
+            TASK=assembleRelease
+            BUILT=app/build/outputs/apk/release/app-release.apk
           else
             echo "No ANDROID_KEYSTORE_B64 secret: debug-signed build (cannot upgrade in place over a build signed with another key)."
-            ./gradlew assembleDebug --no-daemon
-            cp app/build/outputs/apk/debug/app-debug.apk ../../open-historia.apk
+            TASK=assembleDebug
+            BUILT=app/build/outputs/apk/debug/app-debug.apk
+          fi
+          ./gradlew "$TASK" --no-daemon
+          cp "$BUILT" ../../open-historia.apk
+          if [ -n "$LEGACY_APP_ID" ]; then
+            # The same web bundle; the earlier id, and the earlier address the
+            # page opens at (that is where the WebView keeps its saves).
+            OH_ANDROID_LEGACY_APP_ID="$LEGACY_APP_ID" OH_ANDROID_LEGACY_HOST="$LEGACY_HOST" node ../scripts/legacy-config.mjs
+            OH_ANDROID_LEGACY_APP_ID="$LEGACY_APP_ID" ./gradlew "$TASK" --no-daemon
+            cp "$BUILT" ../../open-historia-handover.apk
+            node ../scripts/legacy-config.mjs
           fi
 
       - uses: actions/upload-artifact@v6
         with:
           name: open-historia.apk
-          path: open-historia.apk
+          path: |
+            open-historia.apk
+            open-historia-handover.apk
+          if-no-files-found: ignore
 
-      # latest.json is what the app's update banner reads (src/runtime/web/router.js
-      # answers /api/app-update from it). The asset name open-historia.apk is
+      # update.json is what the app's update banner reads (src/runtime/web/router.js
+      # answers /api/app-update from it). latest.json is the earlier id's feed,
+      # written only with the handover build. The asset name open-historia.apk is
       # contractual: the site and the banner both link to it by name.
       - name: Publish to the rolling "android" release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat > latest.json <<EOF
+          cat > update.json <<EOF
           {
             "build": ${{ github.run_number }},
             "apk": "https://github.com/${{ github.repository }}/releases/download/android/open-historia.apk",
             "notes": "Build ${{ github.run_number }}: the whole game on your phone — saves, scenarios, the workshop and the world map — with the community hub and your AI provider as the only network use."
           }
           EOF
+          ASSETS="open-historia.apk update.json"
+          if [ -f open-historia-handover.apk ]; then
+            cat > latest.json <<EOF
+          {
+            "build": ${{ github.run_number }},
+            "apk": "https://github.com/${{ github.repository }}/releases/download/android/open-historia-handover.apk",
+            "notes": "One last update: it installs the new Open Historia app beside this one and moves your games to it."
+          }
+          EOF
+            ASSETS="$ASSETS open-historia-handover.apk latest.json"
+          fi
           NOTES="Open Historia for Android. Download open-historia.apk below and open it to install (allow installs from your browser when Android asks). Everything is on the device: your saves and scenarios, the scenario workshop, and the world map — it plays in airplane mode from the first launch. The community hub and your own AI provider are the only things that use the network. It updates itself when a newer build is published here.
 
-          Had the older Open Historia app (from before 23 September 2026)? Uninstall it first. This app is signed with a new key, and Android will not install it over the old one. Uninstalling deletes the old app's saves on that phone. From here on, updates install over the app and keep your saves.
+          Already had Open Historia on your phone? The app has a new Android id, so this one installs beside it instead of over it. The one you had updates itself one last time and then shows you the way across: tap Install the new app, then Move my games. Your games and settings come with you, and nothing in the old app is deleted; once you have checked your games in the new app, you can uninstall the old one. (open-historia-handover.apk and latest.json are that last update; the old app downloads them itself.)
 
           Build: ${{ github.run_number }}"
           gh release create android --title "Android app" --notes "$NOTES" 2>/dev/null \
             || gh release edit android --notes "$NOTES"
-          gh release upload android open-historia.apk latest.json --clobber
+          gh release upload android $ASSETS --clobber

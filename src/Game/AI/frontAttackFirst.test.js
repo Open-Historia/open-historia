@@ -89,7 +89,9 @@ test("the story has a country attack the player's across their border, and the w
   assert.deepEqual(field.sides, [["Aland"], ["Borduria"]]);
   // The player's country was given troops to meet it, and no order: those are the player's to give.
   assert.ok(live(field, 0) > 0 && live(field, 1) > 0, `${live(field, 0)} against ${live(field, 1)}`);
-  assert.deepEqual(field.orders.map((entry) => [field.sides[entry.s][0], entry.order]), [["Aland", "blitz"]]);
+  // The story's blitz is Aland's order for its first week (STAFF_STORY_ORDER_DAYS); after that its own staff may change it.
+  assert.deepEqual(field.orders.map((entry) => field.sides[entry.s][0]), ["Aland"]);
+  assert.ok(field.orders[0].order === "blitz" || field.orders[0].mark === "staff", JSON.stringify(field.orders[0]));
   // Sixteen days of it: the attacker has taken ground, on events of the turn.
   assert.ok(run.flips.length > 0, `${run.flips.length} regions changed hands`);
   assert.ok(run.flips.every((flip) => flip.from === "Borduria" && flip.to === "Aland"));

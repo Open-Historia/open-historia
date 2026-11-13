@@ -172,6 +172,7 @@ static func wrapped(text: String, size := 13, color := MUTED, weight := 400, lin
 
 static func box(bg: Color, border := Color(0, 0, 0, 0), radius := 0, border_width := 1, margin := Vector4(0, 0, 0, 0)) -> StyleBoxFlat:
 	StyleSettle.install()
+	ScrollHoverFreeze.install()
 	var style := StyleBoxFlat.new()
 	style.bg_color = bg
 	style.border_color = border

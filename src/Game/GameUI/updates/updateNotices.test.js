@@ -8,7 +8,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { NOTICE_UPDATES, UPDATES } from "./notes.js";
 import { PAST_UPDATES } from "./notesPast.js";
 import { RELEASES } from "./notesReleases.js";
-import { UPDATES_SHOWN_MOST, UPDATE_NOTE_KEY, canRememberUpdates, noticePages, pendingUpdates, previewedUpdates, releaseChapterEntries, rememberUpdate, seenUpdate } from "./updateNotices.js";
+import { CHANGELOG_BANNER, UPDATES_SHOWN_MOST, UPDATE_NOTE_KEY, buildShowsUpdateNotices, canRememberUpdates, noticePages, pendingUpdates, previewedUpdates, releaseChapterEntries, rememberUpdate, seenUpdate } from "./updateNotices.js";
 
 const memory = () => {
   const kept = new Map();
@@ -35,13 +35,26 @@ test("only an update with a notice is shown, once, and nothing where it could no
   assert.doesNotMatch(app, /closeNotice = useCallback\([^\n]*rememberUpdate/);
 });
 
+test("the website's browser version shows no update notices; the apps do", () => {
+  // "make update announcements not appear on the website beta" (the owner, 2026-11-09).
+  assert.equal(buildShowsUpdateNotices({ VITE_OH_WEB: true, VITE_OH_NATIVE: false }), false, "the website");
+  assert.equal(buildShowsUpdateNotices({ VITE_OH_WEB: true, VITE_OH_NATIVE: true }), true, "the Android app, a web build too");
+  assert.equal(buildShowsUpdateNotices({ VITE_OH_WEB: false, VITE_OH_NATIVE: false }), true, "the desktop app");
+  assert.equal(buildShowsUpdateNotices({ DEV: true }), true, "a dev server");
+  assert.equal(buildShowsUpdateNotices(), true);
+  const app = readFileSync(new URL("../../../App.jsx", import.meta.url), "utf8");
+  assert.match(app, /updates: buildShowsUpdateNotices\(import\.meta\.env\) \? pendingUpdates\(\) : \[\]/);
+  // Nothing else asks for the pending notices.
+  assert.equal(app.match(/pendingUpdates\(/g)?.length, 1);
+});
+
 test("each update is shown once a device; one that missed several is shown all of them, newest first", () => {
   assert.deepEqual(pendingUpdates({ updates: list, seen: null, keeps: true }).map((update) => update.id), ["c"], "a first opening: the newest");
   // ... and the major ones of the month before it (the music, released before there was a notice); a minor one waits in the history.
   const recent = [list[0], { ...list[1], date: "2026-10-13" }, { ...list[2], date: "2026-10-12" }];
   assert.deepEqual(pendingUpdates({ updates: recent, seen: null, keeps: true }).map((update) => update.id), ["c", "a"]);
   const firstLook = pendingUpdates({ seen: null, keeps: true }).map((update) => update.id);
-  assert.equal(firstLook[0], NOTICE_UPDATES[0].id);
+  assert.equal(firstLook[0], NOTICE_UPDATES.find((update) => update.kind === "release").id, "the newest release, owed to everyone");
   assert.ok(firstLook.length <= UPDATES_SHOWN_MOST);
   // Only the updates written as notices, never the history before them: "make sure people ONLY see the update popup
   // things for the updates that are actually being added (plus the music one), not for every update in the history"
@@ -49,7 +62,19 @@ test("each update is shown once a device; one that missed several is shown all o
   // A release tells everything under it, so a device owed one is shown it alone.
   assert.deepEqual(firstLook, ["2026-11-version-2-5"]);
   assert.deepEqual(pendingUpdates({ seen: "2026-11-themes", keeps: true }).map((update) => update.id), ["2026-11-version-2-5"]);
-  assert.deepEqual(pendingUpdates({ seen: "2026-11-version-2-5", keeps: true }), []);
+  // The updates since the release, once it is kept.
+  const sinceRelease = NOTICE_UPDATES.slice(0, NOTICE_UPDATES.findIndex((update) => update.id === "2026-11-version-2-5"));
+  assert.ok(sinceRelease.some((update) => update.id === "2026-11-nine-languages"));
+  assert.deepEqual(
+    pendingUpdates({ seen: "2026-11-version-2-5", keeps: true }).map((update) => update.id),
+    sinceRelease.slice(0, UPDATES_SHOWN_MOST).map((update) => update.id),
+  );
+  assert.deepEqual(pendingUpdates({ seen: NOTICE_UPDATES[0].id, keeps: true }), []);
+  // A release newer than the one kept, under updates newer still, is still shown alone.
+  const after = [{ id: "n", kind: "minor", banners: [{ title: "x" }] }, { id: "r", kind: "release" }, { id: "o", kind: "minor", banners: [{ title: "y" }] }];
+  assert.deepEqual(pendingUpdates({ updates: after, seen: "o", keeps: true }).map((update) => update.id), ["r"]);
+  assert.deepEqual(pendingUpdates({ updates: after, seen: null, keeps: true }).map((update) => update.id), ["r"]);
+  assert.deepEqual(pendingUpdates({ updates: after, seen: "r", keeps: true }).map((update) => update.id), ["n"]);
   const past = new Set(PAST_UPDATES.map((update) => update.id));
   for (const seen of [null, "gone", ...past]) {
     assert.deepEqual(pendingUpdates({ seen, keeps: true }).filter((update) => past.has(update.id)), [], `seen ${seen}: no history entry`);
@@ -76,6 +101,50 @@ test("every banner of the updates shown is a page, and a preview shows one updat
   assert.deepEqual(previewedUpdates("?updateNotice=latest", list).map((update) => update.id), ["c"]);
   assert.deepEqual(previewedUpdates("?updateNotice=b&x=1", list).map((update) => update.id), ["b"]);
   assert.equal(previewedUpdates("?updateNotice=nope", list), null);
+});
+
+test("several minor updates are one changelog page; one minor, the majors and a release are shown as before", () => {
+  // "make it so if there are multiple minor update annoucements, it merges them all into one changelog" (the owner, 2026-11-09).
+  const owed = [
+    { id: "m3", kind: "minor", date: "2026-11-05", banners: [{ title: "Three", items: ["c"] }, { title: "Three more", items: ["d"] }] },
+    { id: "big", kind: "major", date: "2026-11-04", banners: [{ title: "Big 1" }, { title: "Big 2" }] },
+    { id: "m2", kind: "minor", date: "2026-11-03", banners: [{ title: "Two", items: ["b"] }] },
+    { id: "m1", kind: "minor", date: "2026-11-02", banners: [{ title: "One", items: ["a"] }] },
+  ];
+  const pages = noticePages(owed);
+  // The major's own pages first (each in its theme), then ONE changelog of every minor update, newest first.
+  assert.deepEqual(pages.map((page) => page.key), ["big#0", "big#1", "changelog#m3"]);
+  const changelog = pages[2];
+  assert.equal(changelog.banner, CHANGELOG_BANNER);
+  assert.equal(changelog.banner.title, "What's new");
+  assert.deepEqual(changelog.changelog.map((update) => update.id), ["m3", "m2", "m1"]);
+  assert.equal(changelog.update.id, "m3", "dressed as the newest minor update");
+  assert.equal(changelog.update.kind, "minor");
+  assert.ok(changelog.changelog.every((update) => update.kind === "minor"), "no major inside it");
+  // Only minors: one page, the changelog.
+  assert.deepEqual(noticePages(owed.filter((update) => update.kind === "minor")).map((page) => page.key), ["changelog#m3"]);
+  // A single minor update looks as it did: its own banners, a page each.
+  assert.deepEqual(noticePages([owed[1], owed[0]]).map((page) => page.key), ["big#0", "big#1", "m3#0", "m3#1"]);
+  assert.deepEqual(noticePages([owed[2]]).map((page) => page.key), ["m2#0"]);
+  assert.equal(noticePages([owed[2]])[0].changelog, undefined);
+  // Majors only: untouched.
+  assert.deepEqual(noticePages([owed[1], list[2]]).map((page) => page.key), ["big#0", "big#1", "a#0"]);
+  // A release is still shown alone, minors under it and all.
+  const withRelease = [owed[0], { id: "r", kind: "release" }, owed[2], owed[3]];
+  assert.deepEqual(pendingUpdates({ updates: [owed[0], { id: "r", kind: "release" }, owed[2]], seen: "m1", keeps: true }).map((update) => update.id), ["r"]);
+  assert.deepEqual(pendingUpdates({ updates: withRelease, seen: "m1", keeps: true }).map((update) => update.id), ["r"]);
+  // Seen bookkeeping is the list's, not the pages': the newest update owed is what is remembered (App.jsx keeps
+  // notice.updates[0]), whichever page shows it.
+  const shown = pendingUpdates({ updates: owed, seen: "m1", keeps: true });
+  assert.deepEqual(shown.map((update) => update.id), ["m3", "big", "m2"]);
+  assert.deepEqual(noticePages(shown).map((page) => page.key), ["big#0", "big#1", "changelog#m3"]);
+  const storage = memory();
+  rememberUpdate(shown[0].id, storage);
+  assert.equal(seenUpdate(storage), "m3");
+  assert.deepEqual(pendingUpdates({ updates: owed, seen: seenUpdate(storage), keeps: true }), [], "nothing comes back");
+  // The notice draws the changelog page as one card.
+  const notice = readFileSync(new URL("./UpdateNotice.jsx", import.meta.url), "utf8");
+  assert.match(notice, /if \(page\.changelog\) return <ChangelogBanner banner=\{banner\} updates=\{page\.changelog\} \/>;/);
 });
 
 test("the notes are well made: new ids, dates, banners with what their kind needs, and themes that exist", () => {
