@@ -224,7 +224,7 @@ export const retryDelayMsFromPayload = (error) => {
 };
 
 // ---------------------------------------------------------------------------
-// The model thought out loud instead of calling the tool
+// The model wrote words instead of calling the tool
 // ---------------------------------------------------------------------------
 //
 // main.jsx already recovers from "it spent its whole budget reasoning", but that
@@ -245,35 +245,28 @@ export const retryDelayMsFromPayload = (error) => {
 // (idleDiplomacy) succeeded every time, so the model is capable — it is the size
 // of the jump contract that tips it into deliberating.
 //
-// Note this only has to be judged in TOOL mode, where any text without a tool
-// call is ALREADY a failure. So the question is not "is this prose?" but "is
-// retrying worth one more request?", and the bar is correspondingly low.
-
-// First-person planning, in the register models actually use. Anchored at a
-// sentence start so a legitimate answer that happens to contain "we need" in
-// narration does not match.
-const DELIBERATION_TEXT =
-    /(^|[.!?]\s+|\n)\s*(we|i|let'?s|let me|okay|ok|alright|first|now|so)\b[^.!?\n]{0,60}\b(need|must|should|have to|want|will|can|could|'ll|going to|think|consider|plan|figure|decide|start|begin|produce|generate|write|include|make|use)\b/i;
-
-// A second, cheaper signal: models narrating a plan talk ABOUT the output shape
-// rather than producing it.
-const DELIBERATION_META = /\b(we|i)\s+(need|have|want|should|must)\s+to\s+(produce|generate|create|output|return|write|include|emit)\b/i;
+// This is judged only where the call asked for a structured answer and no tool
+// call came back, so any text is ALREADY a failure. What it is decided by is
+// the reply's structure, never its language: text with nothing in it that
+// could hold a JSON payload is no answer, whether it is a plan, an apology or a
+// story, and whatever language it is written in. It used to be decided by an
+// English planning register ("we need to", "let me"), so a model deliberating
+// in French or Chinese was never given the step down, and an English one
+// writing its events as prose was not either.
 
 /**
- * In tool mode, did the model deliberate instead of answering?
+ * Where a structured answer was asked for and no tool call came back: is the
+ * text words with no payload in them?
  *
- * `text` is the assistant's content when no tool call came back. Returns false
- * for anything that even looks like it might carry a payload — a fenced block or
- * a balanced brace — because that is the tolerant-parsing path's job
- * (jsonSalvage.js), not this one, and retrying would throw away a salvageable
- * answer.
+ * Returns false for empty text, and for anything that might carry a payload —
+ * a fenced block, a brace or a bracket, whole or cut off — because that is the
+ * tolerant-parsing path's job (jsonSalvage.js), not this one, and asking again
+ * would throw away an answer it could salvage.
  */
-export const looksLikeDeliberation = (text) => {
+export const isProseWithoutPayload = (text) => {
     const body = String(text ?? "").trim();
     if (!body) return false;
-    // Anything that might parse is not ours to judge.
-    if (body.includes("```") || body.includes("{") || body.includes("[")) return false;
-    return DELIBERATION_META.test(body) || DELIBERATION_TEXT.test(body);
+    return !(body.includes("```") || body.includes("{") || body.includes("["));
 };
 
 // What to add to the system prompt for the one retry. Deliberately blunt and

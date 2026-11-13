@@ -72,8 +72,8 @@ import {
     isStreamingRefusal,
     isStreamingRequired,
     isTemperatureRefusal,
+    isProseWithoutPayload,
     isUnreachableError,
-    looksLikeDeliberation,
     providerErrorReplyMessage,
     shouldRetryProviderFailure,
     stoppedAtOutputLimit,
@@ -1418,8 +1418,8 @@ async function callOpenAIStyleChatCompletions({
     // costs structured output, so the cheaper concession goes first.
     // Remembered, so the next call on this gateway starts buffered.
     let streamingDisabled = false;
-    // The model answered with its own planning monologue instead of calling the
-    // tool (see looksLikeDeliberation in providerErrors.js). One-shot, same
+    // The model answered in words, with no payload in them, instead of calling
+    // the tool (see isProseWithoutPayload in providerErrors.js). One-shot, same
     // discipline as the two above: it drives a retry that does not consume one of
     // runJsonTask's two output attempts, so it must only ever flip once.
     let insistedOnToolCall = false;
@@ -1772,11 +1772,12 @@ async function callOpenAIStyleChatCompletions({
             }
 
             // The model talked itself out of answering: no tool call, and the text
-            // is a planning monologue rather than anything a salvage pass could
-            // parse. Left alone this returns unparseable prose, runJsonTask spends
-            // an attempt on it, the same thing happens again, and the player loses
+            // holds nothing a salvage pass could parse (isProseWithoutPayload: the
+            // reply's structure decides, never the language it is written in).
+            // Left alone this returns unparseable prose, runJsonTask spends an
+            // attempt on it, the same thing happens again, and the player loses
             // the turn to canned events — 3 of 4 turns in the field report behind
-            // looksLikeDeliberation.
+            // this step.
             //
             // The first version of this just re-asked for the tool call, more
             // firmly. That does not work, and the log says why: the model spent
@@ -1794,7 +1795,7 @@ async function callOpenAIStyleChatCompletions({
             // Reasoning that came back alone is judged here as it was before it
             // was read apart from the answer, so this step is taken when it
             // always was and not more often.
-            if (looksLikeDeliberation(text || reasoningText) && canRetryBeforeDeadline(deadline, 0)) {
+            if (isProseWithoutPayload(text || reasoningText) && canRetryBeforeDeadline(deadline, 0)) {
                 // The rung order lives in structuredMode.js, with the tests that
                 // pin it. Native OpenAI enforces tool_choice, so it never steps
                 // down out of tool mode - a deliberating model there is a
@@ -1802,7 +1803,7 @@ async function callOpenAIStyleChatCompletions({
                 const canStepDown = structuredMode !== "tool" || allowJsonSchemaFallback;
                 const nextMode = canStepDown ? nextStructuredMode(structuredMode) : null;
                 if (nextMode) {
-                    console.warn(`[ai] ${providerLabel} deliberated instead of calling ${tool.name}; dropping from ${structuredMode} to ${nextMode}`);
+                    console.warn(`[ai] ${providerLabel} answered in words instead of calling ${tool.name}; dropping from ${structuredMode} to ${nextMode}`);
                     structuredMode = nextMode;
                     liftedCapForReasoning = true;
                     insistedOnToolCall = true;
@@ -1811,7 +1812,7 @@ async function callOpenAIStyleChatCompletions({
                 if (!insistedOnToolCall) {
                     insistedOnToolCall = true;
                     liftedCapForReasoning = true;
-                    console.warn(`[ai] ${providerLabel} deliberated instead of calling ${tool.name}; retrying once, insisting on the tool call`);
+                    console.warn(`[ai] ${providerLabel} answered in words instead of calling ${tool.name}; retrying once, insisting on the tool call`);
                     continue;
                 }
             }
@@ -2632,16 +2633,16 @@ async function callAnthropicCompatible(systemPrompt, history, {
             const anthropicText = extractAnthropicText(data);
             // Still refusing: say so, rather than hand back an empty "answer".
             if (!anthropicText && data?.error) throw toolStreamRefusalError("Anthropic Compatible", data.error, retriedAfterOverload);
-            // No tool call, and what came back is a planning monologue rather
-            // than anything a salvage pass could parse. The proxy accepted
+            // No tool call, and what came back holds nothing a salvage pass could
+            // parse (isProseWithoutPayload). The proxy accepted
             // tool_choice without enforcing it, so asking again more firmly
             // achieves nothing — change the channel instead. There is only one
             // step down on this API, but it is the step that matters.
             if (structuredMode === "tool" && !insistedOnToolCall && attempt < retries
-                && looksLikeDeliberation(anthropicText) && canRetryBeforeDeadline(deadline, 0)) {
+                && isProseWithoutPayload(anthropicText) && canRetryBeforeDeadline(deadline, 0)) {
                 insistedOnToolCall = true;
                 structuredMode = "text_json";
-                console.warn(`[ai] Anthropic Compatible deliberated instead of calling ${tool.name}; dropping from tool to text_json`);
+                console.warn(`[ai] Anthropic Compatible answered in words instead of calling ${tool.name}; dropping from tool to text_json`);
                 continue;
             }
             if (anthropicText) {
