@@ -45,7 +45,7 @@ test("an Italian declaration of war is applied as the administrator asked, its w
   assert.equal(error, "");
   assert.deepEqual(notes, []);
   assert.equal(candidate.events[0].warId, "guerra-italo-etiopica", "the war's id is written on its event");
-  assert.deepEqual(candidate.events[0].combatants, ["Italy", "Ethiopia"], "and its two sides as the combatants");
+  assert.equal(candidate.events[0].combatants, undefined, "and nobody is put among its combatants who was not named");
   assert.equal(candidate.events[0].title, "L'Italia dichiara guerra all'Etiopia", "apostrophes kept");
   assert.equal(candidate.events[0].description, description, "accents kept");
   const merge = applied(candidate);
@@ -79,7 +79,7 @@ test("what the answer leaves out is worked out: the record's event, its sides, t
   const [record] = decodeWarUpdates(candidate.warUpdates);
   assert.deepEqual([record.actors, record.opponents, record.eventIndexes], [["Germany"], ["France"], [0]]);
   assert.equal(candidate.events[0].warId, "war-germany-france");
-  assert.deepEqual(candidate.events[0].combatants, ["Germany", "France"]);
+  assert.equal(candidate.events[0].combatants, undefined, "combatants are what the event named: none here");
 
   // No record at all: the event's own war id and its two combatants are one.
   const bare = { events: [gmEvent("Germany declares war on France", "", { warId: "war-de-fr", combatants: ["Germany", "France"] })], warUpdates: [] };

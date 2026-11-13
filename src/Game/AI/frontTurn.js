@@ -1171,7 +1171,6 @@ const listed = (names, most = 3) => `${names.slice(0, most).join("; ")}${names.l
 //   difficulty       the game's difficulty, by its id: above Medium the side
 //                    fighting a person's country has an edge in the land war,
 //                    below it that side is held back (runtime/fronts/handicap.js)
-//   narratesCombat   (event) => whether an event tells of fighting
 //   foretold         true when the period was fought BEFORE the story was asked
 //                    for and the story was given its account (frontApply.js
 //                    forecastTurnFronts): the same run, then, with the answer's
@@ -1260,7 +1259,6 @@ export const runTurnFronts = async ({
   // The campaign's own seed for its weather (runtime/fronts/weather.js): the same whatever the turn.
   climateSeed = "",
   difficulty = "",
-  narratesCombat = null,
   // The fronts a scenario begins with (runtime/fronts/scenarioFronts.js), on
   // the one run that builds them: what they are called and how many troops
   // each side has. No other run is given any.
@@ -1635,9 +1633,13 @@ export const runTurnFronts = async ({
 
   // Fighting told on a battlefield no order was written for: the troops there
   // kept the orders they had, and the model is told so it writes them next time.
-  // (Not where the story was told the fighting before it wrote: it tells what
-  // standing orders did, and owes no line for it.)
-  if (typeof narratesCombat === "function" && !foretold) {
+  // Fighting is what an event's own fields say: belligerents of both sides on
+  // the field (its combatants), in the battlefield's war or in none. Its words
+  // are not read: an English word list asked them, and a battle told in the
+  // player's language was no battle to it. (Not where the story was told the
+  // fighting before it wrote: it tells what standing orders did, and owes no
+  // line for it.)
+  if (!foretold) {
     const human = new Set(asArray(players).map(fold).filter(Boolean));
     const ordered = new Set(orders.map((order) => foldBattlefieldName(order.battlefield)));
     const unordered = asArray(result.battlefields).filter((record) => record.status === "active"
@@ -1645,10 +1647,8 @@ export const runTurnFronts = async ({
       && !record.sides.flat().every((member) => human.has(fold(member)))
       && list.some((event) => {
         const bound = clean(event?.warId);
-        const onIt = bound
-          ? bound === record.warId
-          : record.sides.every((members) => asArray(event?.combatants).some((name) => members.some((member) => fold(member) === fold(nameOf(name)))));
-        return onIt && narratesCombat(event);
+        const both = record.sides.every((members) => asArray(event?.combatants).some((name) => members.some((member) => fold(member) === fold(nameOf(name)))));
+        return both && (!bound || bound === record.warId);
       }));
     if (unordered.length) {
       notes.push({

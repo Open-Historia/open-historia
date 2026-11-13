@@ -187,8 +187,7 @@ import {
   buildJumpProjectsRules,
   JUMP_PROJECTS_RULES_HEADING,
 } from "./projectsDirective.js";
-import { filterBoundLedgerUpdatesToKeptEvents } from "./ledgerEventBinding.js";
-import { isolateUnsupportedWarReports } from "./warSegmentRecovery.js";
+import { filterBoundLedgerUpdatesToKeptEvents, keepWarRecordsBeyondEvents } from "./ledgerEventBinding.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
 import { parkedTurnRecord, restoreParkedTurn } from "./parkedTurn.js";
 import { applyBoardCarriers } from "./boardPassApply.js";
@@ -441,13 +440,8 @@ import {
   bindWarUpdatesToEvents,
   buildCanonicalWarContext,
   decodeWarUpdates,
-  eventNarratesHardCombat,
   interpretWarLedger,
-  normalizeWorldWarEventLinks,
-  reconcileCombatWarState,
-  repairWarLedgerPayload,
-  validateCanonicalWarEvents,
-  validateWarLedgerPayload,
+  settleWarLedger,
   warUpdateProseLines,
 } from "./nativeWarLedger.js";
 import {
@@ -718,7 +712,7 @@ const relationStatusForScore = (value) => {
 const WAR_LEDGER_RULES_HEADING = "[How Wars Are Recorded]";
 const warLedgerRules = (playerName) => `Only this ledger makes polities belligerents: tension or a mobilisation does not, and an alliance does only through the game, which itself enters here those bound to defend a country that is attacked (see ${PEACE_BLOCK_HEADING} below). A war real history holds begins here only when you open it, with a warUpdates record and the event that starts it. Every battle, offensive, invasion, bombardment, siege or front carries event.warId and event.combatants naming both sides. If you write fighting, open the war in the same answer: a declaration, an entry, an exit, a ceasefire, a resumption or a peace each needs a warUpdates record and an event carrying the same warId, or the engine strips the war from the fighting and records peace. Two sides genuinely trading blows are at war; if you cannot say who is fighting whom, it is unrest, a raid or a deployment, so write it as that. A polity at peace does not live under war conditions — rationing, war taxes, mobilisation — because others are fighting, unless the war reaches it through something concrete (lost imports, refugees, sanctions). Nobody may join a war on ${playerName}'s behalf; another power declaring war on ${playerName} is that power's decision, and yours to write.
 A country nobody plays that the story takes out of a war (its forces pulled out under an accord, a separate peace, its last troops brought home) leaves it in that event, with a leave record: without one it is still at war, and its troops stay on the battlefield and fight on. The battle or surrender that ends a war between countries nobody plays carries its end record; a war a player fights ends only by a peace (see ${PEACE_BLOCK_HEADING} below), so no battle in it tells its end. History yields to this game's record: a war the ledger shows ended, or never opened, is fought by nobody, and where the wars, the battlefields or who holds a region differ from what history had at this time, history has been turned aside here. Events follow the record, not the history: no fighting in a war that ended here, and no siege or offensive where the game's lines do not put one. A war that has gone otherwise here is told where the map and the battlefields' accounts put it, between the sides that hold what they show, with the places they name: no campaign, siege, offensive or battle that real history had at this date is fought unless an account or the map puts fighting there, and a side whose capital or heartland its enemy holds is losing that war, whatever real history says of it.
-warUpdates is one string, one record per line, fields separated by ~ (never inside a field): warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note. op is start, join-a, join-b, leave, ceasefire, resume or end; for start the actors are side A and the opponents side B; for join and leave the actors are the polities joining or leaving, and for a join the opponents are the polities it fights (join-a joins SIDE A, against SIDE B); eventNumbersCSV is the number in this answer's events (1 for the first) of the event that makes the change, never a date or an id. A start's note may open with the war's name, as Title: <name>; then its cause. Give a war a stable id (war-france-germany-1914) and reuse it. An empty string when nothing changes.`;
+warUpdates is one string, one record per line, fields separated by ~ (never inside a field): warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note. op is start, join-a, join-b, leave, ceasefire, resume or end; for start the actors are side A and the opponents side B; for join and leave the actors are the polities joining or leaving, and for a join the opponents are the polities it fights (join-a joins SIDE A, against SIDE B); eventNumbersCSV is the number in this answer's events (1 for the first) of the event that makes the change, never a date or an id. A start's note may open with the war's name, as Title: <name>; then its cause. Give a war a stable id (war-france-germany-1914) and keep to it while that war lasts; a war that has ended keeps its id, and fighting between its sides that breaks out again is a new war, with a start record of its own. An empty string when nothing changes.`;
 
 const buildWarLedgerDirective = (variables, { rulesAbove = false } = {}) => {
   const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
@@ -901,12 +895,32 @@ const filedEventsFromRows = (droppedRows, hiddenRows, sourceEvents) => {
     .filter(Boolean);
 };
 
+// A segment's war records tied to its events by id, in the order the model
+// wrote them, before anything reorders or inserts events. Events without an id
+// get the segment's temporary one here (the same validateSegmentLedgers would
+// give them: the round's own ids are minted later, and the records follow).
+// Prose where records go is said once and dropped.
+const pinWarRecordsToEvents = (candidate, segmentIndex = 0) => {
+  if (!candidate || typeof candidate !== "object") return;
+  const events = normalizeArray(candidate.events);
+  events.forEach((event, index) => {
+    if (event && typeof event === "object" && !normalizeString(event.id)) {
+      event.id = `segment-${segmentIndex + 1}-event-${index + 1}`;
+    }
+  });
+  const prose = warUpdateProseLines(candidate.warUpdates);
+  if (prose.length) {
+    logDebugEvent("ai", `warUpdates: ${prose.length} line(s) that are not war records were ignored.`, { lines: prose });
+  }
+  const records = decodeWarUpdates(candidate.warUpdates, { limit: Infinity });
+  if (!records.length) return;
+  candidate.warUpdates = bindWarUpdatesToEvents(records, events, { limit: Infinity });
+};
+
 // One jump segment's ledger records, checked against the world as the earlier
-// segments left it. Strict while a retry remains (the model gets the exact
-// error); the final attempt repairs independently unsupported war changes.
-// If the result still fails canonical validation, the segment fails closed,
-// rather than publishing hard-combat narration without an active war.
-// Record event links before mergeSegmentPayloads concatenates segments.
+// segments left it. Its wars are settled, never refused (settleWarLedger); the
+// diplomatic ledgers are strict while a retry remains and salvaged on the last
+// attempt. Record event links before mergeSegmentPayloads concatenates segments.
 const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, receipt = null }) => {
   const events = normalizeArray(candidate?.events);
   // Temporary ids: the canonical round-scoped ones are minted once the whole
@@ -926,118 +940,24 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
     logDebugEvent("ai", `warUpdates: ${warProse.length} line(s) that are not war records were ignored.`, { lines: warProse });
   }
 
-  // What the answer tells of its wars and does not spell out (a record's event,
-  // a side, the war's id on its events, the combatants), worked out before
-  // anything is checked, in whatever language the events are written.
-  interpretWarLedger(candidate, { world, authority: "skip" });
-
-  // Combat the model narrated but did not bind: attach it to the one matching
-  // active war, resume the one matching ceasefire, or start a war from two
-  // explicit opposing combatants; anything ambiguous comes back as an error.
-  const combatWarRepair = reconcileCombatWarState(candidate, { world });
-  if (combatWarRepair.unresolved.length && strict) {
-    const first = combatWarRepair.unresolved[0];
-    return `Combat event "${first.title || `event ${first.index + 1}`}" could not be canonically bound: ${first.reason}. ` +
-      "If this is real battlefield combat, name the direct opposing combatants in event.combatants and supply the matching warUpdates lifecycle record. If it is deployment, readiness, an exercise, deterrence, military cooperation or other non-combat activity, remove warId/combatants/warUpdates rather than inventing belligerency.";
+  // The answer's wars, settled by the engine alone (nativeWarLedger.js
+  // settleWarLedger): what the answer's structure tells is made explicit, every
+  // record applies or is left out and said, and an event tagged with a war no
+  // record opens loses only the tag. Never a reason to ask again: the war checks
+  // used to refuse a segment over the words of one event (English word lists,
+  // in a game written in the player's language), and every refusal was a second
+  // request for the same period (the owner, 2026-11-13: "Missing or invalid war
+  // references can trigger expensive retries").
+  const settled = settleWarLedger(candidate, { world, authority: "skip" });
+  for (const note of settled.notes) {
+    noteReceipt(receipt, note.kind, note.text, receiptPlayerNote(note.key, note.params, note.event));
   }
-
-  normalizeWorldWarEventLinks(candidate);
-  let warError = validateWarLedgerPayload(candidate, { world });
-
-  if (warError && !strict && combatWarRepair.unresolved.length) {
-    // What FAILS CLOSED here is the belligerency, not the event. This used to
-    // delete the whole event, and a live run showed what that costs: "Tragic
-    // Clashes and Fire in Odessa" and "Explosion Rocks Regional Administration
-    // Building in Luhansk" — real, dated, consequential events the model wrote
-    // and the player never saw, because a riot and a bombing read as hard combat
-    // to the detector and neither named two belligerents. Under salvage-first
-    // there is no second attempt to correct them, so the loss was permanent.
-    //
-    // Now the event stays as narrative and loses only what it could not support:
-    // its warId and its combatants. No war is created, no ledger record binds to
-    // it, and nothing about the canonical war state is guessed — which is the
-    // whole point of the guard. The same rule reconcileCombatWarState already
-    // applies to a non-combat event carrying an impossible warId.
-    const unboundIndexes = new Set(combatWarRepair.unresolved.map((entry) => entry.index));
-    // A war record is causal with the event that established it: if every
-    // establishing event of a record is being unbound, the record goes too.
-    const boundBefore = decodeWarUpdates(candidate?.warUpdates);
-    const orphaned = new Set();
-    boundBefore.forEach((update, updateIndex) => {
-      const eventIndexes = normalizeArray(update?.eventIndexes)
-        .map(Number)
-        .filter((index) => Number.isInteger(index) && index >= 0);
-      if (eventIndexes.length && eventIndexes.every((index) => unboundIndexes.has(index))) orphaned.add(updateIndex);
+  if (settled.dropped.length || settled.unbound.length) {
+    logDebugEvent("warn", "[turn] War ledger: records left out or war tags removed.", {
+      dropped: settled.dropped.map((update) => `${update.id} ${update.op}`),
+      unbound: settled.unbound,
     });
-    for (const entry of combatWarRepair.unresolved) {
-      noteReceipt(
-        receipt,
-        "adjusted",
-        `"${normalizeString(entry?.title) || `event ${Number(entry?.index) + 1}`}" — kept, but its war link was removed: it narrated combat that could not be tied to a war (${firstComplaintLine(entry?.reason, 90) || "no matching war"}). `
-          + "The event stands as history; nothing about the war ledger was assumed from it. Combat that IS part of a war needs event.combatants naming both sides plus a matching warUpdates record.",
-        receiptPlayerNote("warLinkRemoved", {}, normalizeString(entry?.title)),
-      );
-    }
-    candidate.events = normalizeArray(candidate.events).map((event, index) => (
-      unboundIndexes.has(index) && event && typeof event === "object"
-        ? { ...event, warId: "", combatants: [] }
-        : event
-    ));
-    if (orphaned.size) candidate.warUpdates = boundBefore.filter((_, index) => !orphaned.has(index));
-    console.warn(
-      `[ai] war ledger salvage: unbound ${unboundIndexes.size} hard-combat event(s) from the war ledger and dropped ${orphaned.size} orphaned war record(s) ` +
-      "after the model failed its corrective retry; the events themselves are kept.",
-    );
-    normalizeWorldWarEventLinks(candidate);
-    warError = validateWarLedgerPayload(candidate, { world });
   }
-  if (warError && !strict) {
-    // The last attempt: after asking for correction, repairWarLedgerPayload
-    // stamps supported event links and drops unsupported war records. An
-    // invalid residual is never accepted merely because the model is done:
-    // narrative hard combat without an active war must fail closed.
-    const first = warError;
-    const repair = repairWarLedgerPayload(candidate, { world });
-    const summary = `stamped warId on ${repair.stamped} event(s)`
-      + `${repair.anchored ? `, moved ${repair.anchored} war start(s) onto the event that opens the war` : ""}`
-      + `, dropped ${repair.droppedIds.length} war record(s)`
-      + `${repair.droppedIds.length ? ` (${repair.droppedIds.join(", ")})` : ""}, unbound ${repair.strippedEvents} event(s)`;
-    console.warn(
-      `[ai] war ledger salvage after the model failed its corrective retry: ${summary}; ${repair.residual ? "rejecting the still-invalid segment" : "keeping the repaired segment"}. `
-      + `First rejection: ${first}${repair.residual ? ` The ledger still says: ${repair.residual}` : ""}`,
-    );
-    logDebugEvent("warn", repair.residual
-      ? "[turn] War ledger salvage could not restore canonical integrity; the segment is rejected."
-      : "[turn] War ledger salvage on the final attempt repaired or removed unsupported war changes.", {
-      firstRejection: first,
-      stamped: repair.stamped,
-      anchored: repair.anchored,
-      droppedWarIds: repair.droppedIds,
-      unboundEvents: repair.strippedEvents,
-      residual: repair.residual,
-    });
-    if (repair.droppedIds.length || repair.strippedEvents) {
-      // The ids are quoted short (quoteReceiptIds): a malformed record's "id" is
-      // whatever the model wrote there, and this note is read by it next turn.
-      noteReceipt(
-        receipt,
-        "dropped",
-        `War ledger: ${repair.droppedIds.length} war record(s) were dropped`
-          + `${repair.droppedIds.length ? ` (${quoteReceiptIds(repair.droppedIds)})` : ""} and ${repair.strippedEvents} event(s) lost their war binding `
-          + `because the records could not be tied to their events — ${firstComplaintLine(first)}`,
-        repair.droppedIds.length
-          ? countedNote(repair.droppedIds.length, "warRecordsOne", "warRecordsMany")
-          : countedNote(repair.strippedEvents, "warLinksOne", "warLinksMany"),
-      );
-    }
-    // A residual is NOT a successful salvage. The old path cleared the error
-    // unconditionally and committed events the merged canonical validator still
-    // rejected (BETA-10). Reject this segment instead of publishing impossible
-    // battlefield history. The caller can retry or fall back under its existing
-    // task budget; unrelated events remain in its uncommitted candidate.
-    warError = repair.residual;
-  }
-  if (warError) return warError;
 
   // On the salvage pass a malformed ledger row - an agreement with one
   // resolvable party, a relation with a name the map does not know - is dropped
@@ -1237,7 +1157,8 @@ const screenSegmentPayload = (payload, {
     ...normalizeArray(payload?.boardProvisionalEventIds).filter((id) => keptIds.has(id)),
   );
   delete payload.boardProvisionalEventIds;
-  payload.warUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.warUpdates, taggedEvents, screened.events);
+  // (A war record stays when its event is screened out: ledgerEventBinding.js keepWarRecordsBeyondEvents.)
+  payload.warUpdates = keepWarRecordsBeyondEvents(payload?.warUpdates, taggedEvents, screened.events);
   payload.relationUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.relationUpdates, taggedEvents, screened.events);
   payload.puppetUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.puppetUpdates, taggedEvents, screened.events);
   payload.agreementUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.agreementUpdates, taggedEvents, screened.events);
@@ -9664,8 +9585,9 @@ const applySimulationResult = async ({
       noteReceipt(receipt, "dropped", `"${update.op}" for ${warNameOf(update.id)}, and the events that told it: a war a player fights ends only by a peace that player makes or accepts. To bring them to peace, offer it in a letter.`);
     }
   }
-  // A ledger record bound to an event the curator removed goes with it.
-  const keptWarUpdates = filterBoundLedgerUpdatesToKeptEvents(playersWars.updates, dedupedEvents, curatedEvents);
+  // A ledger record bound to an event the curator removed goes with it; a war
+  // record stays, tied to what is kept (ledgerEventBinding.js keepWarRecordsBeyondEvents).
+  const keptWarUpdates = keepWarRecordsBeyondEvents(playersWars.updates, dedupedEvents, curatedEvents);
   const keptRelationUpdates = filterBoundLedgerUpdatesToKeptEvents(result.relationUpdates, dedupedEvents, curatedEvents);
   const keptAgreementUpdates = filterBoundLedgerUpdatesToKeptEvents(result.agreementUpdates, dedupedEvents, curatedEvents);
   const keptPuppetUpdates = filterBoundLedgerUpdatesToKeptEvents(result.puppetUpdates, dedupedEvents, curatedEvents);
@@ -10268,14 +10190,6 @@ const applySimulationResult = async ({
   // The figures the skip wrote of the countries that fight (warFiguresPrompt.js), kept where a country has
   // none, before anything after the turn asks for them (requestConflictSheets).
   if (frontsOn()) worldWithImpacts = keepWarFigures(worldWithImpacts, result.warFigures);
-  // Each segment was checked on its own; this is the merged round. A finished
-  // turn is never lost to this check, but its verdict is worth a report. Read
-  // as the one period it is (startsInForce), as the last attempt's repair
-  // reads it: a war the round starts is in force for all of the round.
-  const canonicalWarError = validateCanonicalWarEvents({ events: freshEvents, updates: warUpdates, world: baseWorld, startsInForce: true, limit: Infinity });  if (canonicalWarError) {
-    console.warn(`[ai] canonical war-state check on the merged turn: ${canonicalWarError}`);
-    logDebugEvent("warn", "[turn] The canonical war-state check flagged the merged turn.", { error: canonicalWarError });
-  }
   if (warMerge.appliedIds.length || diplomaticMerge.appliedRelationIds.length || diplomaticMerge.appliedAgreementIds.length) {
     logDebugEvent("turn", `Ledgers updated: ${warMerge.appliedIds.length} war op(s), ${diplomaticMerge.appliedRelationIds.length} relation(s), ${diplomaticMerge.appliedAgreementIds.length} agreement(s).`, undefined, { verbose: true });
   }
@@ -17430,6 +17344,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
               `${politicalClaimContext.discardedReason} The transient claim ledger was ignored and legacy prose completeness validation was used for this answer.`,
             );
           }
+          // War records name their events by their place in the answer as it
+          // was written: they are tied to the events themselves first, or once
+          // the answer is in date order a record's "1" names whichever event is
+          // first by date (a probe: a war's id and sides stamped onto a flood).
+          pinWarRecordsToEvents(candidate, segmentIndex);
           // Mechanical: a batch whose dates are all real is put in date order
           // before anything counts positions (a malformed date is left for the
           // date validator below to report).
@@ -17575,49 +17494,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // a second writable copy of the same truth.
           clearPoliticalClaimBindings(candidate);
           delete candidate.politicalClaims;
-          // The final native salvage can drop malformed war rows before
-          // returning a residual error. Remember the submitted ledger first:
-          // recovery must not mistake that emptied ledger for an independent
-          // unbound report and accidentally authorize its loss.
-          const submittedWarRecords = Array.isArray(candidate.warUpdates)
-            ? candidate.warUpdates.length > 0
-            : Boolean(normalizeString(candidate.warUpdates));
-          let ledgerError = validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex, receipt: draft });
-          // An unsupported, independent model-authored combat report cannot
-          // become canonical without a real war. If it carries no state change,
-          // order, or dependent ledger record, withhold that report alone rather
-          // than paying for a complete AI regeneration of otherwise valid work.
-          // Re-validate the reduced candidate with the SAME native contracts.
-          // A report with an effect, ambiguous dependency, or player relevance
-          // continues through the normal fail-closed corrective retry. With
-          // authored scripted beats due, none are dispensable by inference.
-          if (ledgerError && !submittedWarRecords && scriptedBeats.length === 0 && /Combat event .+ has no event\.warId\./.test(ledgerError)) {
-            const orphanReports = normalizeArray(candidate.events)
-              .flatMap((event, index) => !normalizeString(event?.warId) && eventNarratesHardCombat(event)
-                ? [{ index, title: normalizeString(event?.title), reason: "unbound hard combat" }] : []);
-            const recovery = isolateUnsupportedWarReports(candidate, orphanReports, {
-              protectedPolities: [...humanCountriesOf(bundle.game)],
-              protectedTitles: [
-                ...normalizeArray(scriptedBeats).map((beat) => normalizeString(beat?.title)),
-                ...normalizeArray(bundle.actions).map((action) => normalizeString(action?.title || action?.name)),
-              ],
-            });
-            if (recovery.candidate) {
-              const recoveredError = validateSegmentLedgers(recovery.candidate, {
-                world: ledgerWorld, strict, segmentIndex, receipt: draft,
-              });
-              if (!recoveredError) {
-                candidate.events = recovery.candidate.events;
-                candidate.summary = recovery.candidate.summary;
-                ledgerError = "";
-                noteReceipt(
-                  draft, "withheld",
-                  `Withheld ${recovery.dropped.length} unsupported model-generated combat report(s) because no canonical war could substantiate their fighting; other validated events were retained. No battle, Action or territorial change was invented.`,
-                );
-                console.warn(`[OH war ledger recovery] withheld ${recovery.dropped.length} unsupported independent combat report(s); all remaining ledgers revalidated.`);
-              }
-            }
-          }
+          const ledgerError = validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex, receipt: draft });
           if (ledgerError) return ledgerError;
           screenSegmentFrontOrders(candidate, { game: bundle.game, actions: bundle.actions, receipt: draft });
           return validateSegmentStorylines(candidate, {
