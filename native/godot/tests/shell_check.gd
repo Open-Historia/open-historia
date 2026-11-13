@@ -7,7 +7,7 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
-const NEWEST_UPDATES := ["2026-11-older-history-kept", "2026-11-armies-on-their-own-land-stay-supplied", "2026-11-civil-wars-split-countries", "2026-11-overthrown-governments-rename"]
+const NEWEST_UPDATES := ["2026-11-native-android", "2026-11-older-history-kept", "2026-11-armies-on-their-own-land-stay-supplied", "2026-11-civil-wars-split-countries", "2026-11-overthrown-governments-rename"]
 const NEWEST_TITLES := ["Older history kept", "Armies on their own land stay supplied", "Civil wars split countries", "Overthrown governments change the map"]
 const RELEASE := "2026-11-version-2-5"
 

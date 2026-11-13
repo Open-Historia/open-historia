@@ -54,6 +54,31 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-native-android",
+    kind: "minor",
+    date: "2026-11-12",
+    banners: [
+      {
+        title: "Open Historia Native on Android",
+        items: [
+          "Open Historia Native now runs on Android phones and tablets. Its APKs are on the native-experimental release page, beside the Windows, macOS and Linux apps.",
+          "A time skip keeps running with the screen off, under a notification that shows how far it has got and says when it has finished.",
+          "The on-screen keyboard opens on every text field, and the field moves up above it.",
+          "Two fingers zoom the country picker's map and the game map.",
+          "The Advisor's microphone works on phones, and asks for permission the first time it is pressed.",
+          "Translation models and the related-events model run on the phone itself.",
+          "Every screen fits a phone as the beta's phone app does, the War Room, Cheats, the AI setup, the AI debug console, the scenario editor and Lobbies included.",
+        ],
+      },
+      {
+        title: "Soft weather on the map",
+        items: [
+          "The weather's speckle on the map is drawn soft, as on the beta, instead of as hard white specks.",
+        ],
+      },
+    ],
+  },
+  {
     // "why doesnt it show the stuff anymore in cheats then" (the owner, 2026-11-10): a save's history from before the tiers was replaced whole by
     // a stub of eras the first tiered fold wrote unasked (runtime/historyTiers.js eraWordCount counted it as 0 words).
     id: "2026-11-older-history-kept",
