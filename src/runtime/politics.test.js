@@ -159,7 +159,8 @@ test("the task has a default prompt and a tool, and its schema takes a full answ
     parties: [{ ...party(), colour: "", founded: "1989", description: "" }],
   };
   assert.equal(validateGameplayPayload("politicalLandscape", answer).valid, true);
-  assert.equal(validateGameplayPayload("politicalLandscape", { ...answer, parties: [{ ...party(), ideology: "Monarchism" }] }).valid, false);
+  assert.equal(validateGameplayPayload("politicalLandscape", { ...answer, parties: [{ ...party(), ideology: "Monarchism", politicalPosition: "Conservative monarchist" }] }).valid, true);
+  assert.equal(validateGameplayPayload("politicalLandscape", { ...answer, parties: [{ ...party(), ideology: "" }] }).valid, false);
 });
 
 test("a turn moves the parties with the Political World's own ops: seats, roles, native names, a party dissolved", () => {
@@ -210,4 +211,20 @@ test("a compiled landscape whose shares total 100 before rounding is not refused
   });
   assert.equal(entry.parties.reduce((sum, p) => sum + p.support, 0), 102);
   assert.doesNotThrow(() => assertPoliticalLandscapeConsistency(entry));
+});
+
+test("freeform compiled party ideology and position become canonical without losing legacy taxonomy", () => {
+  const compiled = normalizePoliticalLandscape({
+    government: "Parliamentary republic", headOfState: "President Example", kind: "parties",
+    parties: [{ nameEn: "Ecological League", nameNative: "Ecological League", ideology: "Community environmentalism",
+      politicalPosition: "Green left", leader: "Mira Example", role: "opposition", support: 6 }],
+  });
+  assert.equal(compiled.parties[0].ideologyText, "Community environmentalism");
+  assert.equal(compiled.parties[0].politicalPosition, "Green left");
+  const folded = foldLandscapeIntoActor(null, compiled, { polityKey: "Exampleland" });
+  assert.equal(folded.parties[0].ideology, "Community environmentalism");
+  assert.equal(folded.parties[0].politicalPosition, "Green left");
+  const old = normalizePoliticalLandscape({ government: "Parliamentary republic", parties: [party()] });
+  assert.equal(old.parties[0].ideology, "socialConservatism");
+  assert.equal(old.parties[0].ideologyText, undefined);
 });

@@ -289,6 +289,8 @@ const normalizeParty = (value) => {
   const nameNative = text(value.nameNative);
   if (!nameEn && !nameNative) return null;
   const ideology = findIdeology(value.ideology);
+  const ideologyText = text(value.ideologyText || (!ideology ? value.ideology : ""), 160);
+  const politicalPosition = text(value.politicalPosition, 120);
   const colour = /^#[0-9a-f]{6}$/i.test(text(value.colour)) ? text(value.colour).toLowerCase() : ideology?.colour ?? "#94a3b8";
   return {
     nameEn: nameEn || nameNative,
@@ -296,6 +298,8 @@ const normalizeParty = (value) => {
     abbrEn: text(value.abbrEn, 16),
     abbrNative: text(value.abbrNative, 16),
     ideology: ideology?.id ?? "",
+    ...(ideologyText ? { ideologyText } : {}),
+    ...(politicalPosition ? { politicalPosition } : {}),
     subideology: text(value.subideology, 80),
     leader: text(value.leader),
     colour,

@@ -17,6 +17,7 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { EVENT_TAG_ENUM } from "../../runtime/eventTags.js";
 import {
   emptyScenarioPrehistory,
+  countPrehistoryUpdates,
   newPrehistoryEventId,
   normalizeScenarioPrehistory,
   PREHISTORY_IMPORTANCE,
@@ -28,6 +29,17 @@ import {
 } from "../../runtime/scenarioPrehistory.js";
 import { generateScenarioPrehistory } from "../AI/gameplayLazy.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
+import { collectScenarioPoliticalPolities } from "../../runtime/scenarioPolities.js";
+import {
+  AUTHORABLE_DAY_ONE_KINDS,
+  MAX_SEMANTIC_DAY_ONE_FACTS,
+  changeManualAccessReciprocal,
+  changeManualAgreementType,
+  dayOneEditorProblems,
+  insertManualDayOneFact,
+  updateDayOneFact,
+} from "../../runtime/scenarioPrehistoryDayOne.js";
+import DayOneFactEditor from "./DayOneFactEditor.jsx";
 
 const buttonStyle = {
   alignItems: "center",
@@ -247,6 +259,18 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
     return map;
   }, [problems]);
   const dayOne = useMemo(() => prehistoryUpdateRows(draft), [draft]);
+  const world = useMemo(() => details?.data?.world || {}, [details?.data?.world]);
+  const polities = useMemo(() => collectScenarioPoliticalPolities(world)
+    .map((entry) => entry.polityKey), [world]);
+  const dayOneProblems = useMemo(() => dayOneEditorProblems(draft, { startDate }), [draft, startDate]);
+  const dayOneProblemsByKey = useMemo(() => {
+    const map = new Map();
+    for (const entry of dayOneProblems) {
+      const key = String(entry.family) + ":" + String(entry.index);
+      map.set(key, [...(map.get(key) || []), entry.problem]);
+    }
+    return map;
+  }, [dayOneProblems]);
   const eventCount = draft.events.length;
 
   const setEvents = (events) => setDraft((current) => ({ ...current, events }));
@@ -260,10 +284,37 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
     setEvents(events);
   };
   const removeEvent = (index) => setEvents(draft.events.filter((_, at) => at !== index));
+  const addDayOne = (kind) => {
+    try {
+      setDraft((current) => insertManualDayOneFact(current, kind));
+      setError("");
+      setMessage("");
+    } catch (nextError) {
+      setError(nextError?.message || String(nextError));
+    }
+  };
+  const editDayOne = (family, index, patch) => {
+    setDraft((current) => updateDayOneFact(current, family, index, patch));
+    setError("");
+    setMessage("");
+  };
+  const changeAgreementType = (index, type) => {
+    setDraft((current) => changeManualAgreementType(current, index, type));
+    setError("");
+  };
+  const changeAccessReciprocal = (index, reciprocal) => {
+    setDraft((current) => changeManualAccessReciprocal(current, index, reciprocal));
+    setError("");
+  };
+  const removeDayOne = (family, index) => {
+    setDraft((current) => withoutPrehistoryUpdate(current, family, index));
+    setError("");
+    setMessage("");
+  };
 
   const generate = async () => {
     if (!scenarioId || busy) return;
-    if (draft.events.length && !window.confirm("Replace the events below with a newly generated pre-history? You can still discard the result before saving.")) return;
+    if ((draft.events.length || countPrehistoryUpdates(draft)) && !window.confirm("Replace the events and Day-one facts below with a newly generated pre-history? You can still discard the result before saving.")) return;
     setError("");
     setMessage("");
     setBusy(true);
@@ -296,7 +347,12 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
   };
 
   const save = async () => {
-    if (!scenarioId || busy || problems.length) return;
+    if (!scenarioId || busy || problems.length || dayOneProblems.length) return;
+    const verified = dayOneEditorProblems(draft, { startDate, world, verifyWorld: true });
+    if (verified.length) {
+      setError("Day-one facts could not be saved: " + verified.map((entry) => entry.problem).join(" "));
+      return;
+    }
     setBusy(true);
     setError("");
     setMessage("");
@@ -385,21 +441,55 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
         />
       </section>
 
-      {dayOne.length ? (
-        <section style={sectionStyle}>
-          <div style={sectionTitleStyle}>Day-one facts</div>
-          <div style={{ ...hintStyle, marginBottom: "0.4rem" }}>Wars, relations and agreements already true on the start date, written by the generation. A new game starts with them in its records.</div>
-          {dayOne.map((row) => (
-            <DayOneRow key={`${row.family}-${row.index}`} onRemove={() => setDraft((current) => withoutPrehistoryUpdate(current, row.family, row.index))} row={row} touch={touch} />
-          ))}
-        </section>
-      ) : null}
-
+      <section style={sectionStyle}>
+        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: "space-between", marginBottom: "0.55rem" }}>
+          <div style={{ ...sectionTitleStyle, marginBottom: 0 }}>Day-one facts</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+            {AUTHORABLE_DAY_ONE_KINDS.map((kind) => (
+              <button className="oh-tap" disabled={busy || draft.updates.canonicalUpdates.length >= MAX_SEMANTIC_DAY_ONE_FACTS}
+                key={kind} onClick={() => addDayOne(kind)} style={touchFit(buttonStyle, touch)} type="button">
+                {kind === "relation" ? "+ Relationship" : kind === "agreement" ? "+ Agreement" : "+ Storyline"}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ ...hintStyle, marginBottom: "0.5rem" }}>
+          Add or edit the diplomatic relationships, treaties and ongoing processes that already exist on the start date.
+          They become canonical game records when a new campaign opens. Use the exact scenario country names.
+          Existing wars and subordinations remain removable; the native war and puppet authoring contracts are unchanged.
+        </div>
+        {polities.length ? <datalist id="oh-prehistory-polities">{polities.map((name) => <option key={name} value={name} />)}</datalist> : null}
+        {!dayOne.length ? <div style={hintStyle}>No Day-one facts yet. You can add one without generating pre-history.</div> : null}
+        <div style={{ display: "grid", gap: "0.45rem" }}>
+          {dayOne.map((row) => {
+            const fact = draft.updates?.[row.family]?.[row.index];
+            const kind = row.family === "canonicalUpdates" ? fact?.kind :
+              ({ relationUpdates: "relation", agreementUpdates: "agreement", storylineUpdates: "storyline" }[row.family]);
+            const editable = AUTHORABLE_DAY_ONE_KINDS.includes(kind);
+            const key = row.family + ":" + (fact?.ref || fact?.id || row.index);
+            const problemText = dayOneProblemsByKey.get(row.family + ":" + row.index) || [];
+            return editable ? (
+              <DayOneFactEditor disabled={busy} fact={fact} key={key}
+                onChange={(patch) => editDayOne(row.family, row.index, patch)}
+                onChangeType={(type) => changeAgreementType(row.index, type)}
+                onReciprocalChange={(reciprocal) => changeAccessReciprocal(row.index, reciprocal)}
+                onRemove={() => removeDayOne(row.family, row.index)}
+                problems={problemText} row={row} />
+            ) : (
+              <DayOneRow key={key} onRemove={() => removeDayOne(row.family, row.index)} row={row} touch={touch} />
+            );
+          })}
+        </div>
+        {dayOneProblemsByKey.get("canonicalUpdates:-1")?.map((problem, index) => (
+          <div key={index} style={{ color: "#fca5a5", fontSize: "0.69rem", marginTop: "0.45rem" }}>{problem}</div>
+        ))}
+      </section>
       {error ? <div style={{ color: "#fca5a5", fontSize: "0.72rem", lineHeight: 1.5, marginTop: "0.7rem", overflowWrap: "anywhere" }}>{error}</div> : null}
       {message ? <div style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.72rem", lineHeight: 1.5, marginTop: "0.7rem" }}>{message}</div> : null}
       {problems.length ? <div style={{ color: "#fca5a5", fontSize: "0.72rem", lineHeight: 1.5, marginTop: "0.7rem" }}>Fix the events marked above before saving.</div> : null}
+      {dayOneProblems.length ? <div style={{ color: "#fca5a5", fontSize: "0.72rem", marginTop: "0.35rem" }}>Fix the Day-one facts marked above before saving.</div> : null}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.75rem" }}>
-        <button className="oh-tap" disabled={busy || !dirty || problems.length > 0} onClick={save} style={touchFit({ ...primaryButtonStyle, opacity: busy || !dirty || problems.length ? 0.55 : 1 }, touch)} type="button">Save pre-history</button>
+        <button className="oh-tap" disabled={busy || !dirty || problems.length > 0 || dayOneProblems.length > 0} onClick={save} style={touchFit({ ...primaryButtonStyle, opacity: busy || !dirty || problems.length || dayOneProblems.length ? 0.55 : 1 }, touch)} type="button">Save pre-history</button>
         <button className="oh-tap" disabled={busy || !changed} onClick={discard} style={touchFit({ ...buttonStyle, opacity: busy || !changed ? 0.55 : 1 }, touch)} type="button">Discard changes</button>
       </div>
     </div>

@@ -133,7 +133,7 @@ const publicParty = (party) => {
     ...(clean(party.publicDescription) ? { publicDescription: clean(party.publicDescription) } : {}),
     ...(clean(party.color) ? { color: clean(party.color) } : {}),
     // What the Politics tab kept apart, the Political World's now (politicalActors.js): all of it public.
-    ...Object.fromEntries(["nameNative", "shortNameNative", "ideologyFamily", "subideology", "role", "founded"]
+    ...Object.fromEntries(["nameNative", "shortNameNative", "ideologyFamily", "subideology", "politicalPosition", "role", "founded"]
       .filter((key) => clean(party[key]))
       .map((key) => [key, clean(party[key])])),
     ...(Number.isFinite(Number(party.seats)) && party.seats !== null && party.seats !== "" ? { seats: Math.max(0, Math.round(Number(party.seats))) } : {}),
