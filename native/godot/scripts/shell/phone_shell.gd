@@ -36,6 +36,9 @@ var _fling_velocity := Vector2.ZERO
 var _held_press: InputEventMouseButton
 var _router: TouchRouter
 var _debug_timer: Timer
+var _forced_keyboard := false
+var _trace_touch := false
+var _traced_drags := {}
 
 
 func _init() -> void:
@@ -48,6 +51,7 @@ func setup(link: EngineLink, owner_node: Node) -> void:
 	host = owner_node
 	if not get_tree().node_added.is_connected(_on_node_added):
 		get_tree().node_added.connect(_on_node_added)
+	_trace_touch = OS.get_name() == "Android" and OS.is_debug_build() and FileAccess.file_exists(OS.get_user_data_dir().path_join("trace-touch"))
 	if OS.is_debug_build() and FileAccess.file_exists(OS.get_user_data_dir().path_join("standin-model")) and _debug_timer == null:
 		_debug_timer = Timer.new()
 		_debug_timer.wait_time = 1.0
@@ -58,6 +62,43 @@ func setup(link: EngineLink, owner_node: Node) -> void:
 		_router = TouchRouter.new()
 		_router.shell = self
 		get_tree().root.add_child.call_deferred(_router)
+	if OS.get_name() == "Android" and not get_viewport().gui_focus_changed.is_connected(_on_focus_changed):
+		get_viewport().gui_focus_changed.connect(_on_focus_changed)
+
+
+func _keyboard_plugin() -> Object:
+	if engine == null:
+		return null
+	var plugin := engine.android_plugin()
+	if plugin == null or not bool(plugin.call("keyboardBlockedByHardware")):
+		return null
+	return plugin
+
+
+func _on_focus_changed(control: Control) -> void:
+	var field: Control = control if (control is LineEdit or control is TextEdit) else null
+	if field == null:
+		if _forced_keyboard:
+			_forced_keyboard = false
+			var plugin := _keyboard_plugin()
+			if plugin:
+				plugin.call("hideKeyboard")
+		return
+	_force_keyboard(field)
+
+
+func _force_keyboard(field: Control) -> void:
+	var plugin := _keyboard_plugin()
+	if plugin == null or not bool(field.get("virtual_keyboard_enabled")) or not bool(field.get("editable")):
+		return
+	_forced_keyboard = true
+	if field is LineEdit:
+		var line := field as LineEdit
+		var start := line.get_selection_from_column() if line.has_selection() else line.caret_column
+		var finish := line.get_selection_to_column() if line.has_selection() else -1
+		plugin.call("showKeyboard", line.text, int(line.virtual_keyboard_type), line.max_length, start, finish)
+	else:
+		plugin.call("showKeyboard", (field as TextEdit).text, DisplayServer.KEYBOARD_TYPE_MULTILINE, -1, -1, -1)
 
 
 func _debug_requests() -> void:
@@ -77,7 +118,7 @@ func _debug_requests() -> void:
 			continue
 		var started := Time.get_ticks_msec()
 		var reply: Dictionary = await engine.request(method, (item as Dictionary).get("args", {}))
-		print("[debug-request] %s ok=%s in %d ms" % [method, reply.get("ok", false), Time.get_ticks_msec() - started])
+		print("[debug-request] %s ok=%s in %d ms %s" % [method, reply.get("ok", false), Time.get_ticks_msec() - started, JSON.stringify(reply.get("result", reply.get("error", ""))).left(700)])
 		host.call("_world_changed")
 		host.call("_refresh_war_parts")
 
@@ -216,6 +257,14 @@ func _typing_in() -> Control:
 
 
 func route_input(event: InputEvent) -> void:
+	if _trace_touch:
+		if event is InputEventScreenTouch:
+			var touch := event as InputEventScreenTouch
+			print("[touch] index %d %s at %s after %d drag(s)" % [touch.index, "down" if touch.pressed else "up", str(touch.position), int(_traced_drags.get(touch.index, 0))])
+			_traced_drags[touch.index] = 0
+		elif event is InputEventScreenDrag:
+			var drag_index := (event as InputEventScreenDrag).index
+			_traced_drags[drag_index] = int(_traced_drags.get(drag_index, 0)) + 1
 	if event is InputEventScreenTouch:
 		_on_touch(event as InputEventScreenTouch)
 	elif event is InputEventScreenDrag:
@@ -285,6 +334,9 @@ func _on_touch(touch: InputEventScreenTouch) -> void:
 		return
 	_touch_index = -1
 	if not _scrolling:
+		var field := _typing_in()
+		if field and Rect2(field.get_global_transform_with_canvas().origin, field.size).has_point(touch.position) and keyboard_height() <= 0.0:
+			_force_keyboard.call_deferred(field)
 		return
 	get_viewport().set_input_as_handled()
 	if _scroller and is_instance_valid(_scroller) and Time.get_ticks_msec() - _last_drag_ms < 80:
