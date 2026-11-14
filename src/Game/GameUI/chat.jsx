@@ -1171,7 +1171,7 @@ const selectPeaceOffers = (world) => (Array.isArray(world?.peaceOffers) ? world.
 const selectCallsToArms = (world) => (Array.isArray(world?.callsToArms) ? world.callsToArms : NO_PEACE_ROWS);
 const selectWars = (world) => (Array.isArray(world?.wars) ? world.wars : NO_PEACE_ROWS);
 
-const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onSharedThreadOpened = null, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, onInstitutionBusinessOpened, embeddedInstitution = false, puppetMarkers = {}, availableCountries = [] }) => {    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
+const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onSharedThreadOpened = null, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", draftFrom = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, onInstitutionBusinessOpened, embeddedInstitution = false, puppetMarkers = {}, availableCountries = [] }) => {    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
     useTouchDisarm(confirmingDelete, setConfirmingDelete);
@@ -1244,6 +1244,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     const [visibleMessageLimit, setVisibleMessageLimit] = useState(CHAT_INITIAL_RENDER_WINDOW);
     const [isLoading, setIsLoading]             = useState(false);
     const [playerInput, setPlayerInput]         = useState("");
+    const draftFromRef = useRef("");
     const [pollComposerOpen, setPollComposerOpen] = useState(false);
     const [pollQuestion, setPollQuestion] = useState("");
     const [pollOptionsText, setPollOptionsText] = useState("Yes\nNo\nAbstain");
@@ -1444,6 +1445,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     useEffect(() => {
         if (!draft) return;
         setPlayerInput(draft);
+        // Which drafted letter the box now holds (advisorDrafts.js draftIdOf): the
+        // message sent from it carries the id, edited or not.
+        draftFromRef.current = String(draftFrom || "");
         onDraftApplied?.();
         // After paint, so the textarea holds the new value: put the caret at the
         // end, ready to edit.
@@ -1460,7 +1464,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             el.selectionStart = el.selectionEnd = el.value.length;
             el.scrollTop = 0;
         });
-    }, [draft, onDraftApplied]);
+    }, [draft, draftFrom, onDraftApplied]);
+
+    // Emptied, the box holds no draft any more: what is typed next is the player's own.
+    useEffect(() => {
+        if (!playerInput.trim()) draftFromRef.current = "";
+    }, [playerInput]);
 
     // Covers the changes onInput never sees: a draft arriving, and the box being
     // emptied on send (which would otherwise leave it standing at letter height).
@@ -1746,13 +1755,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // host. A pending thread the host opened is followed until the view
         // brings it, and stays shut till then; one it did not name leaves for the
         // list, where it arrives.
-        const sayToHost = async (target, text, baseMessages) => {
+        const sayToHost = async (target, text, baseMessages, { fromDraft = "" } = {}) => {
             setIsLoading(true);
             let waiting = false;
             try {
                 let answer;
                 try {
-                    answer = await requestFromHost("say", sayRequestFor(target, text));
+                    answer = await requestFromHost("say", sayRequestFor(target, text, { fromDraft }));
                 } catch (error) {
                     answer = { ok: false, error: error?.message || "" };
                 }
@@ -2090,12 +2099,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         const handlePlayerSubmit = async () => {
             const text = playerInput.trim();
             if (!text || isLoading) return;
+            const fromDraft = draftFromRef.current;
+            draftFromRef.current = "";
             setPlayerInput("");
             // "Make this a demand" — only offered to an Overlord writing to its
             // own Puppet, and only for this one message.
             const asDemand = canDemand && makeDemand;
             setMakeDemand(false);
             await submitPlayerText(text, {
+                fromDraft,
                 // Rejecting an alternative from the card is demanding again; so is
                 // this. Either replaces whatever demand was still in play.
                 onSent: asDemand
@@ -2118,7 +2130,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // id — which is what a demand made by this line is attached to.
         // `id`: the message's own, when something already points at it (the
         // player's terms of peace, kept with the war, name it).
-        const submitPlayerText = async (text, { onSent = null, id = "" } = {}) => {
+        // `fromDraft`: the id of the advisor's drafted letter the line was sent from.
+        const submitPlayerText = async (text, { onSent = null, id = "", fromDraft = "" } = {}) => {
             if (!text || isLoading) return;
             // Speaking while the table is still talking cuts it off.
             cutIn();
@@ -2129,7 +2142,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             // view holds it; a host that does not say which it opened leaves the
             // player at the list, where it arrives.
             if (inSharedGame()) {
-                await sayToHost(chat, text, messagesRef.current);
+                await sayToHost(chat, text, messagesRef.current, { fromDraft });
                 return;
             }
             // What the world did since this thread last spoke, told to the
@@ -2140,6 +2153,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             const messageId = id || newThreadId("msg");
             const nextMessages = [...messagesRef.current, {
                 id: messageId, role: "user", speaker: playerCountry, text, time: moment.date || gameDate,
+                ...(fromDraft ? { fromDraft } : {}),
                 ...(catchUp.text ? { catchUp: catchUp.text, catchUpLabel: catchUp.label } : {}),
             }];
             pushMessages(nextMessages);
@@ -3026,8 +3040,11 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
 // and so the advisor can hand one a letter it drafted, which lands in the
 // composer for the player to read over and send themselves. Nothing here sends
 // anything: `draft` is text in a textarea until the player presses the button.
+// `fromDraft`: the drafted letter's id (advisorDrafts.js draftIdOf), which the
+// message the player sends from the composer carries, so the advisor's button
+// can say the letter went.
 const _chatOpenSubs = new Set();
-export const requestDiplomaticChat = (target, { draft = "" } = {}) => {
+export const requestDiplomaticChat = (target, { draft = "", fromDraft = "" } = {}) => {
     if (!target) return;
     const normalized = typeof target === "string"
         ? { targetType: "private", country: target, name: target }
@@ -3043,7 +3060,8 @@ export const requestDiplomaticChat = (target, { draft = "" } = {}) => {
     if (normalized.targetType === "private" && !normalized.name) return;
     if (normalized.targetType === "institution-council" && !normalized.institutionId && !normalized.threadId) return;
     if (normalized.targetType === "institution-lifecycle" && !normalized.threadId && (!normalized.institutionId || !normalized.caseId)) return;
-    _chatOpenSubs.forEach((fn) => { try { fn(normalized, draft); } catch { /* noop */ } });
+    const handed = draft ? { text: String(draft), fromDraft: String(fromDraft || "") } : "";
+    _chatOpenSubs.forEach((fn) => { try { fn(normalized, handed); } catch { /* noop */ } });
 };
 
 // ---- Spy tab ----------------------------------------------------------------
@@ -4376,8 +4394,11 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     };
 
     // Open (or reuse) a 1-on-1 chat with a country requested from the region popup
-    // or from the advisor, optionally seeding the composer with a drafted letter.
-    const consumePending = (request, draftText = "") => {
+    // or from the advisor, optionally seeding the composer with a drafted letter
+    // ({ text, fromDraft }: requestDiplomaticChat).
+    const consumePending = (request, handed = "") => {
+        const draftText = typeof handed === "string" ? handed : String(handed?.text ?? "");
+        const fromDraft = typeof handed === "string" ? "" : String(handed?.fromDraft ?? "");
         setShowSelector(false);
         const targetType = String(request?.targetType || "private").trim().toLowerCase();
 
@@ -4398,7 +4419,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             if (exact) {
                 setHeldUnreadId(null);
                 setChatReadState(shownVersion(exact), true);
-                if (draftText) setComposerDraft({ chatId: exact.id, text: draftText });
+                if (draftText) setComposerDraft({ chatId: exact.id, text: draftText, fromDraft });
                 if (targetType === "institution-council") {
                     setActiveChat(null);
                     setView("institutions");
@@ -4444,7 +4465,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             if (existing) {
                 setView("chats");
                 setActiveChat(existing);
-                if (draftText) setComposerDraft({ chatId: existing.id, text: draftText });
+                if (draftText) setComposerDraft({ chatId: existing.id, text: draftText, fromDraft });
                 return prev;
             }
             // In a shared game the host opens the thread with its first line, as
@@ -4454,7 +4475,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 const pending = pendingSharedThread([{ name: country.name, code }]);
                 setView("chats");
                 setActiveChat(pending);
-                if (draftText) setComposerDraft({ chatId: pending.id, text: draftText });
+                if (draftText) setComposerDraft({ chatId: pending.id, text: draftText, fromDraft });
                 return prev;
             }
             const newChat = { id: newChatId(), countries: [{ name: country.name, code }], messages: [], status: "open" };
@@ -4462,7 +4483,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             persistChats(u);
             setView("chats");
             setActiveChat(newChat);
-            if (draftText) setComposerDraft({ chatId: newChat.id, text: draftText });
+            if (draftText) setComposerDraft({ chatId: newChat.id, text: draftText, fromDraft });
             return u;
         });
     };
@@ -4551,6 +4572,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 <ConversationView key={String(activeChat.id)} chat={activeChat} puppetMarkers={puppetMarkers} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onSharedThreadOpened={followThreadFromAck} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
                 unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => toggleActiveChatRead(activeChat)}
                 draft={sameChatId(composerDraft?.chatId, activeChat.id) ? composerDraft.text : ""}
+                draftFrom={sameChatId(composerDraft?.chatId, activeChat.id) ? composerDraft.fromDraft || "" : ""}
                 onDraftApplied={() => setComposerDraft(null)}
                 availableCountries={availableCountries}
                 onInstitutionNavigate={(section) => { const institutionId = activeChat.institutionId || activeChat.lifecycleInstitutionId; if (institutionId) navigateInstitution(institutionId, section); }} onLifecycleResult={adoptInstitutionalResult} onInstitutionBusinessOpened={runInstitutionCouncilTurn} />
@@ -4614,6 +4636,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                                 unread={unreadIds.has(String(channel.id))}
                                 onToggleRead={() => toggleActiveChatRead(channel)}
                                 draft={sameChatId(composerDraft?.chatId, channel.id) ? composerDraft.text : ""}
+                                draftFrom={sameChatId(composerDraft?.chatId, channel.id) ? composerDraft.fromDraft || "" : ""}
                                 onDraftApplied={() => setComposerDraft(null)}
                                 onInstitutionNavigate={(section) => navigateInstitution(channel.institutionId, section)}
                                 onLifecycleResult={adoptInstitutionalResult}

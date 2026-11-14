@@ -767,6 +767,9 @@ const normalizeChatMessage = (message, index = 0) => {
   // and the few words the panel shows for it.
   const catchUp = normalizeOptionalString(message.catchUp);
   const catchUpLabel = normalizeOptionalString(message.catchUpLabel);
+  // The advisor's drafted letter a player's message was sent from (the
+  // composer stamps its id: GameUI/advisorDrafts.js sentLetterDate).
+  const fromDraft = normalizeOptionalString(message.fromDraft).slice(0, 160);
 
   return {
     code: normalizeOptionalString(message.code),
@@ -782,6 +785,7 @@ const normalizeChatMessage = (message, index = 0) => {
     time: normalizeOptionalString(message.time || message.date),
     ...(eventId ? { eventId } : {}),
     ...(catchUp ? { catchUp, ...(catchUpLabel ? { catchUpLabel } : {}) } : {}),
+    ...(fromDraft ? { fromDraft } : {}),
   };
 };
 

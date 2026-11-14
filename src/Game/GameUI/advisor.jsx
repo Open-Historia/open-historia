@@ -22,7 +22,7 @@ import { describeReplyProblems, extractFencedJson, looksLikeProjectOps } from ".
 import { reviewAdvisorActionProposals, advisorActionCardState, mergeAdvisorActionReceiptIntoView } from "./advisorActionReview.js";
 import { approveAdvisorAction, cancelApprovedAdvisorAction } from "./advisorActionApproval.js";
 import { applyAdvisorProjectProposal, canAdvisorApplyProjectOps } from "./advisorProjectRouting.js";
-import { sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.js";
+import { draftIdOf, sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.js";
 import { repeatedOrder } from "../AI/playerFocus.js";
 import { institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
 import { parseAdvisorReply } from "./advisorReply.js";
@@ -413,8 +413,8 @@ const AdvisorActionProposalCard = ({ proposal, receipt, queueAction, targetActio
 // to fail: at worst the chat opens with the text waiting in it.
 const AdvisorDraftSend = ({ draft, onDraft }) => {
     const [handedOff, setHandedOff] = useState(false);
-    // The same letter already in the chat with that country (advisorDrafts.js):
-    // the advisor re-drafts letters the player has sent, and nothing said so.
+    // When the player sent a message from this very draft (advisorDrafts.js:
+    // the message carries the draft's id), so it is not sent twice.
     const sentOn = useRuntimeState("chat", (chats) => sentLetterDate(draft, chats));
     const resetTimer = useRef(null);
 
@@ -816,9 +816,14 @@ const formatAdvisorDate = (dateStr) => {
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
 const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
-    const { text, chartConfig, chartProblem, messageDrafts, institutionDrafts, deployments } = msg.role === "advisor"
+    const { text, chartConfig, chartProblem, messageDrafts: parsedDrafts, institutionDrafts, deployments } = msg.role === "advisor"
         ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null, streaming: Boolean(msg.streaming) })
         : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
+    // Each letter's own id (advisorDrafts.js draftIdOf), which the message sent
+    // from it carries: how its button knows it went.
+    const messageDrafts = Array.isArray(parsedDrafts)
+        ? parsedDrafts.map((draft, index) => ({ ...draft, id: draftIdOf(msg.id, index) }))
+        : parsedDrafts;
     const asWritten = msg.role === "advisor" && chatDiffers;
 
     return (
@@ -1935,7 +1940,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             ? draft.country
             : `${target.targetType === "institution-council" ? "Council" : "hearing"} ${draft.institutionId}${draft.caseId ? ` / ${draft.caseId}` : ""}`;
         logDebugEvent("advisor", `Draft handed to the Diplomacy composer for ${destination}.`, draft.text, { verbose: true });
-        requestDiplomaticChat(target, { draft: draft.text });
+        // With its id: the message the player sends from it says which draft it was.
+        requestDiplomaticChat(target, { draft: draft.text, fromDraft: draft.id || "" });
         stepAsideRef.current?.();
     }, []);
 
