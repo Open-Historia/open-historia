@@ -1024,7 +1024,6 @@ const validateSegmentStorylines = (candidate, {
   // Only on a strict attempt — the final attempt is fail-soft for every event.
   const playerCountry = toCountryName(normalizeString(gameCountry)) || normalizeString(gameCountry);
   const consequenceError = validateWorldEventConsequencePayload(candidate, {
-    selectedStorylines: analysis?.attentionStorylines,
     strict,
     board,
     playerCountry,

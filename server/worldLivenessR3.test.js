@@ -103,42 +103,37 @@ test("routine administrative no-delta event is screened out", () => {
   assert.equal(screened.dropped[0].route, "ROUTINE_ADMINISTRATIVE_PROCESS");
 });
 
-test("administrative saturation triggers corrective retry", () => {
-  const admin = (n) => ({
+// A pass "dominated by administrative cards" (by English words) was sent back
+// for another: a second request, in an English game only. No word decides it.
+test("a pass of administrative-sounding cards is no reason to ask again, in any language", () => {
+  const admin = (n, title, description) => ({
     date: `2019-10-${String(10 + n).padStart(2, "0")}`,
     importance: "minor",
-    title: `Ministry Finalizes Technical Compliance Review ${n}`,
-    description: "Officials finalize a technical compliance review and streamlined administrative protocol after committee assessment.",
+    title: `${title} ${n}`,
+    description,
     impacts: baseImpacts(),
     storylineIds: [],
   });
-
-  const candidate = {
-    events: [admin(1), admin(2), admin(3), {
-      date: "2019-10-20",
-      importance: "minor",
-      title: "University Researchers Publish Battery Discovery",
-      description: "A university research team demonstrates a materially improved battery chemistry.",
-      impacts: baseImpacts(),
-      storylineIds: [],
-    }],
-    storylineUpdates: [],
-    warUpdates: [],
-    relationUpdates: [],
-    agreementUpdates: [],
-  };
-
-  const error = validateWorldEventConsequencePayload(candidate, {
-    selectedStorylines: [{
-      id: "storyline-crisis",
-      status: "active",
-      pressure: 70,
-      momentum: 60,
-    }],
-    strict: true,
-  });
-
-  assert.match(error, /dominated by 3\/4 low-consequence administrative cards/i);
+  for (const [title, description] of [
+    ["Ministry Finalizes Technical Compliance Review", "Officials finalize a technical compliance review and streamlined administrative protocol after committee assessment."],
+    ["Ministerium schließt technische Konformitätsprüfung ab", "Beamte schließen eine technische Konformitätsprüfung und ein vereinfachtes Verwaltungsprotokoll nach einer Ausschussbewertung ab."],
+  ]) {
+    const candidate = {
+      events: [admin(1, title, description), admin(2, title, description), admin(3, title, description), {
+        date: "2019-10-20",
+        importance: "minor",
+        title: "University Researchers Publish Battery Discovery",
+        description: "A university research team demonstrates a materially improved battery chemistry.",
+        impacts: baseImpacts(),
+        storylineIds: [],
+      }],
+      storylineUpdates: [],
+      warUpdates: [],
+      relationUpdates: [],
+      agreementUpdates: [],
+    };
+    assert.equal(validateWorldEventConsequencePayload(candidate, { strict: true }), "", title);
+  }
 });
 
 test("final-attempt consequence guard remains fail-soft", () => {

@@ -13,6 +13,7 @@ import {
 } from "./nativeWorldIntegrity.js";
 import { addGameDays, compareGameDates, gameDateDayNumber, gameDateYear } from "../../runtime/gameDates.js";
 import { boardEntriesConcernedByEvent, isProjectOpen } from "../../runtime/projects.js";
+import { DEFENSIVE_AGREEMENT_TYPES, GUARANTEE_TYPE } from "../../runtime/alliances.js";
 import {
   CONFLICT_STORYLINE_KINDS,
   NEUTRAL_STORYLINE_KIND,
@@ -78,10 +79,14 @@ const CONSEQUENCE_MIN_VISIBLE_EVENTS = 8;
 // CRISIS_RESOLUTION_CUE_RE (which events were major, and which an unresolved
 // crisis owing a storyline), HUMAN_TEXTURE_RE (what spared an administrative
 // card) and SYSTEMIC_ESCALATION_CUE_RE (the conflict risk's escalation
-// signals). Each counted in an English game and nowhere else.
-
-const ROUTINE_ADMINISTRATIVE_PROCESS_RE =
-  /\b(?:technical review|committee review|working group|administrative implementation|implementation review|compliance review|compliance tracking|inspection protocol|inspection standards|regulatory harmonization|protocol refinement|procedural update|standards update|report(?:s|ed)? (?:on|its)|publishes? (?:a )?(?:review|assessment|report)|issues? (?:a )?(?:review|assessment|report)|streamlined (?:procedures|protocols|standards)|finaliz(?:e|es|ed) (?:technical|administrative|inspection|compliance|procedural|regulatory)|monitoring framework|coordination mechanism|advisory committee)\b/i;
+// signals). Each counted in an English game and nowhere else. Removed the same
+// day, for the same reason: ROUTINE_ADMINISTRATIVE_PROCESS_RE (a world pass
+// "dominated by administrative cards" sent back for another), the relation
+// summaries read for hostility (HOSTILE_RELATION_STATUS_RE), the agreement
+// titles and terms read for a defence pact (DEFENSE_COUPLING_RE), and a
+// storyline's free-text kind read for a crisis (CRISIS_LIKE_STORYLINE_KIND_RE).
+// A relation's status, an agreement's type and a storyline's kind are each one
+// word of a fixed list, and those words are read instead.
 
 const ESCALATION_LADDER = Object.freeze([
   {
@@ -141,15 +146,14 @@ export const worldStorylineEscalationPosture = (storyline = {}) => {
 };
 
 
-const HOSTILE_RELATION_STATUS_RE =
-  /\b(hostile|enemy|adversarial|rival|severe|confrontational|very tense|crisis)\b/i;
-const DEFENSE_COUPLING_RE =
-  /\b(alliance|defen[cs]e|mutual assistance|guarantee|security pact|collective security)\b/i;
+// The relation statuses that are hostility (nativeDiplomaticDirector.js
+// RELATION_STATUS_VALUES), and the agreement types that bind a party to fight
+// for another (runtime/alliances.js): fixed vocabularies, read exactly.
+const HOSTILE_RELATION_STATUSES = new Set(["hostile", "rival"]);
+const DEFENSIVE_COMMITMENT_TYPES = new Set([...DEFENSIVE_AGREEMENT_TYPES, GUARANTEE_TYPE]);
 // The postures a skip gives a build-up and a blockade (runtime/gameState.js
 // UNIT_POSTURES): escalation the map shows, in every language.
 const ESCALATION_POSTURES = new Set(["massing", "blockade"]);
-const CRISIS_LIKE_STORYLINE_KIND_RE =
-  /\b(war|crisis|revolution|uprising|insurgency|secession|standoff|security|constitutional|succession|financial|banking)\b/i;
 
 // R3.5 — campaign-state conflict propensity.
 //
@@ -207,17 +211,13 @@ export const deriveWorldConflictRiskPosture = ({
   }
 
   const hostileRelations = normalizeArray(world?.relations).filter((relation) =>
-    HOSTILE_RELATION_STATUS_RE.test(normalizeString(
-      relation?.status || relation?.state || relation?.summary,
-    ))
+    HOSTILE_RELATION_STATUSES.has(normalizeString(relation?.status).toLowerCase())
   ).length;
 
   const defenseCoupling = normalizeArray(world?.agreements).filter((agreement) => {
     const status = normalizeString(agreement?.status).toLowerCase();
     if (["ended", "expired", "terminated", "suspended"].includes(status)) return false;
-    return DEFENSE_COUPLING_RE.test(normalizeString(
-      `${agreement?.type || ""} ${agreement?.title || ""} ${agreement?.terms || ""}`,
-    ));
+    return DEFENSIVE_COMMITMENT_TYPES.has(normalizeString(agreement?.type).toLowerCase());
   }).length;
 
   const contestedRegions = Object.values(world?.regionClaimants || {})
@@ -337,20 +337,6 @@ const eventLooksStrategicallyMajor = (event) => {
   return normalizeString(event?.importance).toLowerCase() === "major" || event?.notable === true;
 };
 
-// Routine paperwork: an administrative card the model rated neither major nor
-// notable. (Its exemptions used to be English words too: anything strategic,
-// escalating or of human texture.)
-const eventLooksLikeRoutineAdministrativeCard = (event) => {
-  if (!event || typeof event !== "object") return false;
-  if (event?.playerRelated === true) return false;
-  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-  if (normalizeArray(impacts?.actionIds).length) return false;
-  if (eventLooksStrategicallyMajor(event)) return false;
-
-  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  return ROUTINE_ADMINISTRATIVE_PROCESS_RE.test(text);
-};
-
 // A major event whose only consequence is a Board entry. The Board is not a
 // channel the jump can write — the board pass records it after the segments —
 // so such an event passes the check PROVISIONALLY: the engine's own matcher says
@@ -372,10 +358,14 @@ export const boardProvisionalConsequenceIndexes = (candidate, { board = [], play
     .map((_, index) => index)
     .filter((index) => eventRestsOnBoardConsequence(candidate, index, board, playerCountry));
 
+// A strict pass's one consequence rule: an event the model rated major or
+// notable changes something on record. A pass "dominated by administrative
+// cards" was refused here too, by English words (ROUTINE_ADMINISTRATIVE_PROCESS_RE),
+// a second request for an English game only; the skip is told to write no
+// filler instead.
 export const validateWorldEventConsequencePayload = (
   candidate,
   {
-    selectedStorylines = [],
     strict = true,
     board = [],
     playerCountry = "",
@@ -395,26 +385,6 @@ export const validateWorldEventConsequencePayload = (
     ) {
       const boardOwner = normalizeArray(board).some(isProjectOpen) ? ", a Board entry named exactly as the Board names it" : "";
       return `Strategically major event ${index + 1} ("${normalizeString(event?.title)}") has no canonical consequence at all. Keep the event only if something materially changes in an existing owner (storyline, Stats, relations, agreements, units, war, territory/control, polity metadata, markers${boardOwner}, or a created diplomatic chat); otherwise downgrade/drop the card instead of narrating a consequence-free crisis.`;
-    }
-  }
-
-  if (events.length >= 4) {
-    const adminIndexes = events
-      .map((event, index) => ({ event, index }))
-      .filter(({ event, index }) =>
-        eventLooksLikeRoutineAdministrativeCard(event)
-        && eventCanonicalConsequenceChannels(candidate, index).length === 0
-      )
-      .map(({ index }) => index);
-
-    const adminThreshold = Math.max(3, Math.ceil(events.length * 0.6));
-    if (adminIndexes.length >= adminThreshold) {
-      const selectedHighPressure = normalizeArray(selectedStorylines)
-        .some((storyline) =>
-          normalizeString(storyline?.status).toLowerCase() === "active"
-          && clampPercent(storyline?.pressure) >= HIGH_PRESSURE_STAGNATION_THRESHOLD
-        );
-      return `World pass is dominated by ${adminIndexes.length}/${events.length} low-consequence administrative cards${selectedHighPressure ? " while a high-pressure process is active" : ""}. Re-search the same causal world for fewer, stronger outcomes (political decisions/failures, escalation or de-escalation, strikes/unrest, deployments/mobilization, market shocks, leadership change, diplomatic rupture/agreement, concrete capability changes, or human/public texture). Do not invent chaos; do not spend most visible slots on process paperwork.`;
     }
   }
 

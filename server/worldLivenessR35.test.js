@@ -139,18 +139,20 @@ test("R3.5 modern era does not grant plot armor when current campaign state is g
       { id: "war-1", status: "active", sideA: ["A"], sideB: ["B"] },
       { id: "war-2", status: "active", sideA: ["C"], sideB: ["D"] },
     ],
+    // A storyline's kind, a relation's status and an agreement's type are each
+    // one word of a fixed list, read exactly: "security crisis", "adversarial",
+    // "very tense" or "mutual defense alliance" were read by English word lists.
     storylines: [
       { id: "c1", kind: "crisis", status: "active", pressure: 92, momentum: 82 },
-      // A storyline kind is one word of a fixed list (runtime/storylineKinds.js).
       { id: "c2", kind: "unrest", status: "active", pressure: 86, momentum: 70 },
     ],
     relations: [
-      { polityA: "A", polityB: "E", status: "hostile" },
-      { polityA: "B", polityB: "F", status: "adversarial" },
-      { polityA: "C", polityB: "E", status: "very tense" },
+      { polityA: "A", polityB: "E", status: "hostile", summary: "Border incidents multiply." },
+      { polityA: "B", polityB: "F", status: "rival", summary: "Les deux capitales s'accusent mutuellement." },
+      { polityA: "C", polityB: "E", status: "strained", summary: "Very tense: a crisis in all but name." },
     ],
     agreements: [
-      { status: "active", type: "mutual defense alliance", parties: ["A", "E"] },
+      { status: "active", type: "mutual_defense", title: "Pacte de défense mutuelle", parties: ["A", "E"] },
     ],
     regionClaimants: {
       r1: ["A"], r2: ["B"], r3: ["C"], r4: ["D"],
@@ -179,8 +181,32 @@ test("R3.5 modern era does not grant plot armor when current campaign state is g
   assert.ok(posture.score >= 70);
   assert.equal(posture.id, "acute");
   assert.equal(posture.drivers.escalationSignals, 2, "two powers massing or blockading");
+  assert.equal(posture.drivers.hostileRelations, 2, "hostile and rival, by status alone: a summary's words count for nothing");
+  assert.equal(posture.drivers.defenseCoupling, 1, "a mutual defence agreement, by its type");
   for (const candidates of [[], [{ title: "Мобилизация резервистов после ультиматума", detail: "Продолжается сосредоточение войск." }]]) {
     assert.equal(postureWith(candidates).score, posture.score, "the same world gets the same posture in any language");
   }
   assert.equal(postureWith([], []).drivers.escalationSignals, 0);
+
+  // The same records with every free word in another language: the same posture.
+  const translated = deriveWorldConflictRiskPosture({
+    bundle: {
+      game: { country: "A", gameDate: "2020-07-01" },
+      world: {
+        ...world,
+        units,
+        relations: world.relations.map((relation) => ({ ...relation, summary: "Отношения резко ухудшились." })),
+        agreements: world.agreements.map((agreement) => ({ ...agreement, title: "Договор о взаимной обороне", terms: "Взаимная помощь." })),
+        storylines: world.storylines.map((storyline) => ({ ...storyline, title: "Кризис", state: "Напряжённость растёт." })),
+      },
+    },
+    targetDate: "2020-08-01",
+  });
+  assert.equal(translated.score, posture.score);
+  // A free-text kind outside the list is the neutral kind, and no crisis.
+  const freeKinds = deriveWorldConflictRiskPosture({
+    bundle: { game: { country: "A", gameDate: "2020-07-01" }, world: { ...world, units, storylines: world.storylines.map((storyline) => ({ ...storyline, kind: "security crisis" })) } },
+    targetDate: "2020-08-01",
+  });
+  assert.equal(freeKinds.drivers.crisisPressure, 0);
 });
