@@ -5112,14 +5112,24 @@ const normalizeProjectsShape = (value) => {
 // Raw-JSON chat turns (used by lifecycle negotiations) do not receive Gemini's
 // submit_chat_actions function declaration, so providers sometimes answer in a
 // natural dialogue shape and/or return lifecycleResponsesJson as a real array.
-// Normalize those transport aliases before CHAT_ACTIONS_SCHEMA validation. The
+// Normalize those transport shapes before CHAT_ACTIONS_SCHEMA validation. The
 // canonical task schema stays unchanged for function-calling providers.
+const CHAT_ACTION_TYPES = new Set(chatActionSchema.properties.type.enum);
 const normalizeChatActionsShape = (value) => {
   // Institution Council turns use raw JSON transport for Gemini. In live play it
-  // has returned the action array directly and used conversational aliases such
-  // as `speak`, `polity` and `vote`. Canonicalize those transport spellings
+  // has returned the action array directly and put the fields under other names
+  // (`polity` for actorName, `vote` for voteChoice). Those field names are read
   // before CHAT_ACTIONS_SCHEMA sees them; native chat/institution validators still
   // decide whether the resulting action is legal.
+  //
+  // The action's type is one of the schema's kinds, as the schema spells them
+  // (case, spaces and hyphens aside). Another word in it is not read for what it
+  // seems to mean: "speak", "say" and "message" were once taken as send_message,
+  // in English only, and the same verbs in any other language failed the turn
+  // (the owner, 2026-11-13: no keywording anywhere). An action whose type is
+  // none of the kinds, or missing, but which has a speaker and words, is a
+  // message by its shape, in every language alike; any other is left as written
+  // for the schema to name.
   const source = Array.isArray(value) ? { actions: value } : value;
   if (!isPlainRecord(source)) return value;
   const candidate = { ...source };
@@ -5129,12 +5139,12 @@ const normalizeChatActionsShape = (value) => {
     const action = { ...entry };
     const rawType = action.type ?? action.action ?? action.op;
     const foldedType = String(rawType ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
-    const type = ({ speak: "send_message", say: "send_message", message: "send_message" })[foldedType] || foldedType;
     const speaker = action.actorName ?? action.actor ?? action.speaker ?? action.polity;
     const text = action.content ?? action.text ?? action.message;
     if (action.actorName === undefined && speaker !== undefined) action.actorName = speaker;
-    if (type) action.type = type;
-    if (!action.type && speaker !== undefined && text !== undefined) action.type = "send_message";
+    if (CHAT_ACTION_TYPES.has(foldedType)) action.type = foldedType;
+    else if (speaker !== undefined && text !== undefined) action.type = "send_message";
+    else if (foldedType) action.type = foldedType;
     const canonicalType = String(action.type ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
     if (action.content === undefined && text !== undefined && canonicalType === "send_message") action.content = text;
     if (canonicalType === "institution_vote" && action.voteChoice === undefined) {
