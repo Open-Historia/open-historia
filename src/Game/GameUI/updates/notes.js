@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player's turn, 2026-11-12 (a small model writing Russian): every storyline record came back as
+    // "id~status~pressure~momentum~~state" with a short state and no full stop, the recovery did not take it for prose,
+    // and the skip was refused over "record 1 must describe the process state". AI/nativeWorldDirector.js
+    // parseStorylineRecord.
+    id: "2026-11-short-storyline-states",
+    kind: "minor",
+    date: "2026-11-12",
+    banners: [
+      {
+        title: "Fewer time skips lost to a small model",
+        items: [
+          "A time skip is no longer thrown away when the model writes an ongoing story's new state in a few words.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",

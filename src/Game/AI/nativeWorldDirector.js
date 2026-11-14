@@ -1604,7 +1604,13 @@ const parseStorylineRecord = (line, index = 0) => {
     separators >= 5 &&
     separators <= 7 &&
     !normalizeString(fields[9]) &&
-    looksLikeStorylineStateProse(fields[separators])
+    (looksLikeStorylineStateProse(fields[separators]) ||
+      // Five separators put the line's last field in the kind slot, and a kind
+      // is a label of a word or two ("war", "border crisis"). Three words or
+      // more there are the state, however short and with or without a full
+      // stop: "id~active~72~62~~Вывод войск завершается; Кабул отверг коалицию"
+      // cost a whole turn to "record 1 must describe the process state".
+      (separators === 5 && normalizeString(fields[5]).split(/\s+/).filter(Boolean).length >= 3))
   ) {
     fields[9] = fields[separators];
     fields[separators] = "";
