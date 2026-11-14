@@ -68,15 +68,15 @@ const FOLDS = [
     ["src/Game/AI/pregameBootstrapCompiler.js", "titleKey", { lower: lowered }, true],
     ["src/Game/AI/lookupTools.js", "foldForSearch", {}, true],
     ["src/Game/AI/playerFocus.js", "fold", { asText: trimmed }, true],
-    ["src/Game/AI/worldDirection.js", "fold", {}, true],
-    ["src/Game/AI/worldDirection.js", "words", { STOP_WORDS: new Set() }, true],
+    // (worldDirection.js `fold` and `words`, and projects.js `foldWords`, are
+    // gone: the player's share counts the playerRelated mark, scripted beats are
+    // matched by their ids, and Board entries by the events' own board ops.)
     ["src/Game/AI/regionFocus.js", "foldName", {}, true],
     ["src/Game/AI/promptContext.js", "markerAttentionTokens", {
         MARKER_ATTENTION_STOP_WORDS: new Set(),
         markerAttentionKey: evaluate(statementOf("src/Game/AI/promptContext.js", "markerAttentionKey"), "markerAttentionKey", { normalizeString: trimmed }),
     }, true],
     ["src/Game/AI/chatActions.js", "refFromLabel", { asText: trimmed, fold: (value) => trimmed(value).toLowerCase() }, false],
-    ["src/runtime/projects.js", "foldWords", {}, true],
     ["src/runtime/placeSearch.js", "normalizePlaceText", {}, true],
 ];
 

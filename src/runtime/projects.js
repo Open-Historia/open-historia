@@ -654,89 +654,20 @@ export const describeDoubtedForPrompt = (pending) => {
 
 // ---- Which Board entries an event concerns ------------------------------------
 //
-// The engine's own answer to "is this event about something on the Board?", so
-// nothing new has to be asked of the model. Its one job is the world director's
-// consequence check: a major event with no other consequence may pass it
-// provisionally when it concerns an open Board entry, and the board pass then
-// has to prove it by actually changing a Board entry. A false match therefore
-// costs one provisional pass that verification takes back, while a miss costs a
-// retried segment — so this leans towards matching.
-//
-// Words are folded the way ownerIdentity folds a polity name (accents dropped,
-// case ignored), then compared as crude stems so "shipyards" meets "shipyard".
-// They are words of any script: folded to a-z0-9, a Board kept in Russian or
-// Chinese had no words at all, so every event missed every entry on it.
-
-// Words that say what KIND of thing an entry is rather than which one, so they
-// can never be the reason an event matches.
-const GENERIC_ENTRY_WORDS = new Set([
-  "project", "projects", "operation", "operations", "programme", "programmes",
-  "program", "programs", "plan", "initiative", "campaign", "effort", "scheme",
-  "the", "and", "for", "with", "from", "into", "its", "their", "our", "new",
-  "national", "state", "phase", "stage", "first", "second", "third",
-]);
-
-const foldWords = (value) => String(value ?? "")
-  .normalize("NFD")
-  .replace(/[̀-ͯ]/g, "")
-  .toLowerCase()
-  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
-  .trim()
-  .split(" ")
-  .filter(Boolean);
-
-const stemWord = (word) => (word.length > 4 ? word.replace(/(?:ies|es|s)$/, "") : word);
-
-const distinctiveStems = (value, minLength) => [
-  ...new Set(
-    foldWords(value)
-      .filter((word) => word.length >= minLength && !GENERIC_ENTRY_WORDS.has(word))
-      .map(stemWord),
-  ),
-];
-
-// Enough of the summary to name the thing without its name: three distinctive
-// words, or two when the event also names the owner.
-const SUMMARY_WORDS_ALONE = 3;
-const SUMMARY_WORDS_WITH_OWNER = 2;
-
-export const boardEntriesConcernedByEvent = (event, board, { playerCountry = "" } = {}) => {
-  const eventWords = foldWords(`${asText(event?.title)} ${asText(event?.description)}`);
-  if (!eventWords.length) return [];
-  const eventStems = new Set(eventWords.map(stemWord));
-  const eventPhrase = ` ${eventWords.join(" ")} `;
-
-  const matches = [];
-  for (const entry of asArray(board)) {
-    if (!isProjectOpen(entry)) continue;
-
-    const nameWords = foldWords(entry?.name).filter((word) => !GENERIC_ENTRY_WORDS.has(word));
-    const namedExactly = nameWords.length > 0 && eventPhrase.includes(` ${nameWords.join(" ")} `);
-
-    const nameStems = distinctiveStems(entry?.name, 3);
-    const nameHits = nameStems.filter((stem) => eventStems.has(stem)).length;
-    const namedEnough = nameStems.length > 0 && nameHits >= Math.ceil(nameStems.length / 2);
-
-    // At the start of a word, so "Iranian" names Iran but "Romania" never names
-    // Oman. A blank owner is the player's, as everywhere on the Board.
-    const ownerWords = foldWords(asText(entry?.ownerCode) || playerCountry);
-    const ownerNamed = ownerWords.length > 0 && eventPhrase.includes(` ${ownerWords.join(" ")}`);
-
-    const summaryHits = distinctiveStems(entry?.summary, 4).filter((stem) => eventStems.has(stem)).length;
-    const describedEnough = summaryHits >= (ownerNamed ? SUMMARY_WORDS_WITH_OWNER : SUMMARY_WORDS_ALONE);
-
-    if (!namedExactly && !namedEnough && !describedEnough) continue;
-    matches.push({ entry, ownerNamed, score: (namedExactly ? 10 : 0) + nameHits * 3 + summaryHits });
-  }
-
-  // The owner decides between entries the words alone cannot tell apart — two
-  // countries' naval Projects. Only when at least one matched entry's owner is
-  // named: an event that names nobody keeps every candidate.
-  const anyOwnerNamed = matches.some((match) => match.ownerNamed);
-  return matches
-    .filter((match) => !anyOwnerNamed || match.ownerNamed)
-    .sort((a, b) => b.score - a.score)
-    .map((match) => match.entry);
+// The open entries the event's own board ops address (impacts.projectOps: an
+// update, a checkpoint or an ending names its entry by id, or by the name the
+// Board gives it, case aside; opTargetsEntry below), in the Board's order. What
+// the event SAYS it did to the Board, never what its words resemble: its title
+// and description used to be compared with each entry's name, summary and
+// owner as stemmed English words, so "Projet Québec" was found in "Quebec
+// project advances", a Board kept in Chinese was found only where punctuation
+// cut a name out of a sentence, and a request was bought on the strength of it.
+// Read by the world director's consequence check (nativeWorldDirector.js) and
+// by boardPassReasons below. (The options a caller passes are not needed.)
+export const boardEntriesConcernedByEvent = (event, board) => {
+  const ops = asArray(event?.impacts?.projectOps).filter((op) => op && typeof op === "object");
+  if (!ops.length) return [];
+  return asArray(board).filter((entry) => isProjectOpen(entry) && ops.some((op) => opTargetsEntry(op, entry)));
 };
 
 // ---- Where the board pass's ops go ------------------------------------------
@@ -860,9 +791,10 @@ export const unassessedHighPriorityEntries = (board, ops, { playerCountry = "" }
 // entry and nothing was due. Everything that makes a pass worth making is visible
 // from here, without asking anyone:
 //
-//   - an event names, or plainly describes, an open entry;
-//   - an event reads like the START of a long effort (the pass is the only thing
-//     that opens entries);
+//   - an event's own board ops address an open entry;
+//   - an event opens a new effort itself (a create op), or carries out one of the
+//     player's orders (its actionIds), which is where the Board's entries come
+//     from: either may start an entry, and the pass is what opens entries;
 //   - the calendar has caught up with an entry — overdue, a slipped milestone, or
 //     nothing reported for STALE_ROUNDS — and nobody has looked at it for
 //     BOARD_PASS_QUIET_ROUNDS;
@@ -881,29 +813,22 @@ export const unassessedHighPriorityEntries = (board, ops, { playerCountry = "" }
 // Returns the reasons, for the turn log; empty means the pass can be skipped.
 export const BOARD_PASS_QUIET_ROUNDS = 2;
 
-const EFFORT_START_PATTERN = new RegExp(
-  "\\b(?:launch(?:es|ed|ing)?|begins?|began|begun|starts?|started|initiat\\w+|commission(?:s|ed|ing)?|"
-  + "authori[sz]\\w+|approv\\w+|green-?lights?|breaks? ground|broke ground|lays? (?:down )?the keel|"
-  + "funds?|funded|unveil\\w*|announc\\w+|orders?|ordered|embarks?|embarked|sets? up|establish\\w*)\\b"
-  + "[^.!?]{0,90}"
-  + "\\b(?:programmes?|programs?|projects?|operations?|construction|initiatives?|campaigns?|build-?up|"
-  + "moderni[sz]ation|rearmament|expansion|reactors?|canals?|railways?|railroads?|pipelines?|shipyards?|"
-  + "fleets?|five-year plan|reforms?|networks?|academ(?:y|ies)|bureau|agenc(?:y|ies))\\b",
-  "i",
-);
-
+// An event that may start a Board entry, by what it carries: a board op that
+// opens one, or the id of a player's order it carries out. Its words used to
+// decide (an English "launches ... programme" and its kin): "La France lance un
+// programme" started nothing, and "orders a review of the fleet" started one.
 export const eventStartsLongEffort = (event) =>
-  EFFORT_START_PATTERN.test(`${asText(event?.title)}. ${asText(event?.description)}`);
+  asArray(event?.impacts?.projectOps).some((op) => asText(op?.op).toLowerCase() === "create")
+  || asArray(event?.impacts?.actionIds).some((id) => asText(id));
 
 // An entry the ENGINE keeps in step by itself: the covert-operation entries
 // spyOperationOps opens and closes for every agent in place (they carry
 // linkedSpyIds, and that sync runs before the board pass every turn). Such an
-// entry must never be the REASON a request is made. One is called "Agent in
-// Ukraine", so half its distinctive words are a country name — and in a
-// campaign fought over Ukraine, every event that mentions the place matched it
-// and bought the board job a request a skip (seen in a live run, 2026-09-17).
-// The model may still move one if it looks at the board for some other reason;
-// this only stops it being what wakes the board.
+// entry must never be the REASON a request is made: one is called "Agent in
+// Ukraine", and while events were matched to entries by their words, every
+// event of a campaign fought over Ukraine bought the board job a request a skip
+// (seen in a live run, 2026-09-17). The model may still move one if it looks at
+// the board for some other reason; this only stops it being what wakes the board.
 const isEngineSyncedEntry = (entry) => asArray(entry?.linkedSpyIds).length > 0;
 
 export const boardPassReasons = ({ board, events = [], gameDate = "", round = 0, reviewedRound = 0, playerCountry = "" } = {}) => {
@@ -913,7 +838,7 @@ export const boardPassReasons = ({ board, events = [], gameDate = "", round = 0,
   const reasons = [];
 
   for (const event of happened) {
-    const concerned = asks.length ? boardEntriesConcernedByEvent(event, asks, { playerCountry }) : [];
+    const concerned = asks.length ? boardEntriesConcernedByEvent(event, asks) : [];
     if (concerned.length) {
       reasons.push(`"${asText(event?.title)}" concerns ${concerned.slice(0, 2).map((entry) => `"${asText(entry?.name)}"`).join(", ")}`);
     } else if (eventStartsLongEffort(event)) {

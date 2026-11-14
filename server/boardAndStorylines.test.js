@@ -46,11 +46,18 @@ const payloadWith = (event) => ({
   agreementUpdates: [],
 });
 
-const majorBoardEvent = () => payloadWith({
+// The Board entry an event moves is the one its own board op addresses
+// (runtime/projects.js boardEntriesConcernedByEvent): its words used to be
+// matched against the entry's name and summary, which a telling in another
+// language, or a paraphrase, never matched.
+const kingfisherOp = () => ({ projectOps: [{ op: "milestone", projectId: "kingfisher", milestone: { title: "First flight", status: "done" } }] });
+
+const majorBoardEvent = ({ op = true } = {}) => payloadWith({
   importance: "major",
   kind: "military",
   title: "Operation Kingfisher's prototype interceptor flies for the first time",
   description: "The covert interceptor completes its first full flight over the test range.",
+  impacts: { ...baseImpacts(), ...(op ? kingfisherOp() : {}) },
 });
 
 test("a major event whose only consequence is a Board entry passes provisionally", () => {
@@ -62,6 +69,11 @@ test("a major event whose only consequence is a Board entry passes provisionally
     boardProvisionalConsequenceIndexes(majorBoardEvent(), { board: [boardEntry()] }),
     [0],
     "the pass is provisional: the turn must know which event the board pass has to back",
+  );
+  // Naming the entry in its words, with no op on it, is no Board consequence.
+  assert.match(
+    validateWorldEventConsequencePayload(majorBoardEvent({ op: false }), { board: [boardEntry()], strict: true }),
+    /no canonical consequence/i,
   );
 });
 
@@ -88,12 +100,17 @@ test("a crisis's words decide nothing: a major event on an open Board entry pass
   for (const [title, description] of [
     ["Operation Kingfisher's exposure triggers a standoff over the test range", "Both governments move forces towards the range and neither backs down."],
     ["La révélation de l'opération Kingfisher déclenche une crise autour du champ d'essai", "Les deux gouvernements déplacent des forces vers le champ d'essai et aucun ne recule."],
+    ["Утечка об операции «Зимородок» вызывает противостояние у полигона", "Обе стороны стягивают силы к полигону."],
   ]) {
-    const crisis = payloadWith({ importance: "major", kind: "military", title, description });
+    const impacts = { ...baseImpacts(), ...kingfisherOp() };
+    const crisis = payloadWith({ importance: "major", kind: "military", title, description, impacts });
     assert.equal(validateWorldEventConsequencePayload(crisis, { board: [boardEntry()], strict: true }), "", title);
     assert.deepEqual(boardProvisionalConsequenceIndexes(crisis, { board: [boardEntry()] }), [0], title);
-    const told = payloadWith({ importance: "major", kind: "military", title, description, storylineIds: ["storyline-kingfisher"] });
+    const told = payloadWith({ importance: "major", kind: "military", title, description, impacts, storylineIds: ["storyline-kingfisher"] });
     assert.deepEqual(boardProvisionalConsequenceIndexes(told, { board: [boardEntry()] }), [], `${title}: tied to its storyline`);
+    // Without its op, every telling is judged alike: no Board consequence.
+    const unmoved = payloadWith({ importance: "major", kind: "military", title, description });
+    assert.deepEqual(boardProvisionalConsequenceIndexes(unmoved, { board: [boardEntry()] }), [], `${title}: no op`);
   }
 });
 
