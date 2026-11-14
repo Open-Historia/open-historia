@@ -12,6 +12,7 @@ import {
     hasPlayerTurnFailures,
     keepRetryBoundRecords,
     restrictToRetriedOrders,
+    retriesUnasked,
 } from "./playerTurnFailures.js";
 import { normalizeFiledEvents, toFiledEvent } from "../../runtime/filedEvents.js";
 import { bindPuppetUpdatesToEvents } from "./nativeDiplomaticDirector.js";
@@ -217,4 +218,52 @@ test("the retry's segment is filtered to its own puppet, war, relation, agreemen
     const segments = section("const runJumpSegments = async", "\nexport const ");
     assert.match(segments, /for \(const key of \["warUpdates", "relationUpdates", "agreementUpdates", "puppetUpdates", "frontOrders"\]\) \{\s+payload\[key\] = keepRetryBoundRecords\(payload\[key\], retryEventIds\);/);
     assert.ok(segments.indexOf("keepRetryBoundRecords(payload[key]") < segments.indexOf("state.segmentPayloads.push(payload)"), "before the segment is added to the turn");
+});
+
+// ---- A retry that carried out some of the orders ------------------------------
+// Seen on a local model, 2026-11-13: five orders, one settled a retry.
+
+test("a retry that settled some and left others is worth asking again; one that settled nothing is not", async () => {
+    const { MAX_RETRY_FOLLOW_UPS, retryMadeProgress } = await import("./playerTurnFailures.js");
+    const orders = (count) => ({ events: [], orders: Array.from({ length: count }, (_, index) => ({ id: `o${index}` })) });
+    assert.equal(retryMadeProgress(orders(4), orders(3)), true);
+    assert.equal(retryMadeProgress(orders(3), orders(3)), false, "nothing settled: the player decides");
+    assert.equal(retryMadeProgress(orders(3), orders(0)), false, "nothing left to ask for");
+    assert.equal(retryMadeProgress(orders(4), orders(3), { followUps: MAX_RETRY_FOLLOW_UPS }), false, "bounded");
+    assert.equal(retryMadeProgress({ events: [{ title: "a" }], orders: [{ id: "o" }] }, { events: [{ title: "a" }], orders: [] }), true);
+});
+
+test("the retry asks again by itself only for a turn held again on its events, and never after a cancel", () => {
+    const retry = section("export const retryHeldPlayerEvents = async", "\n};\n");
+    assert.match(retry, /error\?\.heldKind === HELD_TURN\.events && !signal\?\.aborted\s+&& Boolean\(getHeldTurn\(HELD_TURN\.events\)\)\s+&& retryMadeProgress\(failures, error\.playerFailures, \{ followUps \}\)/);
+    assert.match(retry, /if \(!goOn\) throw error;/);
+    assert.match(retry, /return retryHeldPlayerEvents\(\{ onEvents, onProgress, signal, followUps: followUps \+ 1 \}\);/);
+    assert.ok(retry.indexOf("endSimulation();") < retry.lastIndexOf("return retryHeldPlayerEvents("), "the first attempt's lock is given back before the next takes its own");
+});
+
+test("a retry looks nothing up, is told how many events its list asks for, and leaves no count note", () => {
+    const segments = section("const runJumpSegments = async", "\nexport const ");
+    assert.match(segments, /\.\.\.\(context\.amend \? \{ lookups: withFrontOrderFunction\(null, frontOrderCall\(context\)\) \} : \{\}\),/);
+    assert.match(segments, /const minEvents = context\.amend \? amendCount :/);
+    assert.match(segments, /amend: amendCount,/);
+    assert.match(segments, /mode !== "auto" && !context\.amend && \(eventCount < minEvents/);
+});
+
+test("a skip asks again unasked only with the setting on, something failed and no Cancel", () => {
+    const failures = { events: [], orders: [{ id: "a1", title: "Raise the levy" }] };
+    assert.equal(retriesUnasked({ enabled: true, failures }), true);
+    assert.equal(retriesUnasked({ enabled: false, failures }), false);
+    assert.equal(retriesUnasked({ failures }), false, "off unless turned on");
+    assert.equal(retriesUnasked({ enabled: true, failures, cancelled: true }), false);
+    assert.equal(retriesUnasked({ enabled: true, failures: { events: [], orders: [] } }), false);
+    assert.equal(retriesUnasked({ enabled: true, failures: null }), false);
+});
+
+test("the skip itself runs the notice's retry, once, and marks what it leaves as tried", () => {
+    const jump = section("export const simulateTimelineJump = async", "\nexport const ");
+    assert.match(jump, /retryPlayerFailuresUnasked: getMapSetting\(MAP_SETTING_KEYS\.retryPlayerFailuresUnasked\),/);
+    assert.match(jump, /error\?\.heldKind === HELD_TURN\.events && Boolean\(getHeldTurn\(HELD_TURN\.events\)\)/);
+    assert.match(jump, /if \(!unasked\) throw error;/);
+    assert.equal(jump.split("retryHeldPlayerEvents(").length - 1, 1, "one retry, never a loop of them");
+    assert.match(jump, /if \(retryError\?\.heldKind === HELD_TURN\.events\) retryError\.triedUnasked = true;/);
 });

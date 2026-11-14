@@ -54,6 +54,40 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player, 2026-11-13: "why was the retry button not pressed by itself, without waiting for us?" A month's skip
+    // on a local model had been held on one unanswered order for as long as nobody was at the screen.
+    // AI/gameplay.js simulateTimelineJump, AI/playerTurnFailures.js retriesUnasked.
+    id: "2026-11-retry-my-events-unasked",
+    kind: "minor",
+    date: "2026-11-13",
+    banners: [
+      {
+        title: "A skip can retry your failed events before it asks you",
+        items: [
+          "Settings → AI has a new switch, \"Retry my failed events once before asking\", off by default. With it and \"Stop when my events fail\" on, a skip that would stop on your failed events first asks once more for them by itself, and shows its notice only if some still failed.",
+        ],
+      },
+    ],
+  },
+  {
+    // A player, 2026-11-13: a month's skip on a local model was held on four failed orders, and each "Retry the failed
+    // events" took five minutes and carried out one. The retry was sent the whole-period wording ("between 1 and N
+    // events") under its list, and six rounds of lookups first. AI/jumpSegments.js buildSegmentInstruction (amend),
+    // AI/playerTurnFailures.js retryMadeProgress, AI/gameplay.js retryHeldPlayerEvents.
+    id: "2026-11-held-orders-retry",
+    kind: "minor",
+    date: "2026-11-13",
+    banners: [
+      {
+        title: "Retrying your failed orders finishes the job",
+        items: [
+          "\"Retry the failed events\" on a held turn now asks for exactly the orders that were left, and asks again by itself while each answer carries out more of them. A model that answered one order at a time used to send you back to the notice after each one.",
+          "That retry no longer looks anything up first: the period is already written, and on a local model the lookups were most of its five minutes.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",

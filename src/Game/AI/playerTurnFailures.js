@@ -72,6 +72,28 @@ export const acknowledgeFailures = (failures) => asArray(failures?.events)
 
 export const hasPlayerTurnFailures = (failures) => Boolean(asArray(failures?.events).length || asArray(failures?.orders).length);
 
+// How many times a retry asks again on its own for what its answer left out.
+// A model that answers one order per request (seen on a local model,
+// 2026-11-13) sent the player back to the notice after each one; the retry now
+// goes on by itself while each answer settles something, and stops here.
+export const MAX_RETRY_FOLLOW_UPS = 4;
+
+const failureCount = (failures) => asArray(failures?.events).length + asArray(failures?.orders).length;
+
+// Whether a retry that ended held again is worth asking once more without the
+// player: only when it settled something and something is left. A retry whose
+// own request failed is held with the list it was given, so it never counts.
+export const retryMadeProgress = (before, after, { followUps = 0 } = {}) => {
+    const left = failureCount(after);
+    return followUps < MAX_RETRY_FOLLOW_UPS && left > 0 && left < failureCount(before);
+};
+
+// Whether a skip that has just been held on the player's events asks again for
+// them before the player is shown the notice ("Retry my failed events once
+// before asking"): the setting on, something on the list, and no Cancel.
+export const retriesUnasked = ({ enabled = false, failures = null, cancelled = false } = {}) =>
+    Boolean(enabled) && !cancelled && failureCount(failures) > 0;
+
 // The held notice's message: what failed, in the player's words.
 // `retryError`: the retry's own request failed, and the turn is held as it was.
 export const describePlayerTurnFailures = (failures, { retryError = "" } = {}) => {
