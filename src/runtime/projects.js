@@ -133,25 +133,17 @@ export const deriveProjectFlags = (project, gameDate, round = 0) => {
 // last one was ticked off.
 export const MILESTONE_REPEATS = ["weekly", "monthly", "quarterly", "annual", "biennial"];
 
-// What a model actually writes when it means "every year". Same reasoning as the
-// project-op aliases: reject the synonym and the feature silently does nothing.
-const REPEAT_ALIASES = {
-  yearly: "annual", annually: "annual", year: "annual", "every year": "annual", "1y": "annual",
-  biannual: "biennial", "two-yearly": "biennial", "2y": "biennial",
-  quarter: "quarterly", "3m": "quarterly",
-  month: "monthly", "1m": "monthly",
-  week: "weekly", "1w": "weekly",
-  daily: "", day: "",
-};
-
 // Months to advance per occurrence; weekly is handled as days instead.
 const REPEAT_MONTHS = { monthly: 1, quarterly: 3, annual: 12, biennial: 24 };
 
+// The cadence exactly as one of MILESTONE_REPEATS (the schema's enum, and the
+// words the advisor is told), case and spacing aside; "" for any other word,
+// which is left out: the checkpoint then happens once. A table of English words
+// for them ("yearly" as annual) read the same answer one way in English and
+// another in every other language (the owner, 2026-11-13: no keywording).
 export const normalizeMilestoneRepeat = (value) => {
-  const raw = asText(value).toLowerCase();
-  if (!raw) return "";
-  if (MILESTONE_REPEATS.includes(raw)) return raw;
-  return REPEAT_ALIASES[raw] ?? "";
+  const raw = asText(value).toLowerCase().replace(/\s+/g, " ");
+  return MILESTONE_REPEATS.includes(raw) ? raw : "";
 };
 
 // Any game date, BC included (runtime/gameDates.js).

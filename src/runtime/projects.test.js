@@ -377,12 +377,14 @@ test("advanceRecurringDate refuses what it cannot compute", () => {
   assert.equal(advanceRecurringDate("2033-13-45", "annual"), "", "impossible date");
 });
 
-test("normalizeMilestoneRepeat accepts the synonyms a model reaches for", () => {
-  for (const [input, expected] of [
-    ["annual", "annual"], ["yearly", "annual"], ["Annually", "annual"], ["every year", "annual"],
-    ["quarter", "quarterly"], ["month", "monthly"], ["week", "weekly"], ["biannual", "biennial"],
-  ]) {
+test("normalizeMilestoneRepeat takes the five cadences exactly, and leaves out any other word in any language", () => {
+  for (const [input, expected] of [["annual", "annual"], [" Quarterly ", "quarterly"], ["MONTHLY", "monthly"], ["weekly", "weekly"], ["biennial", "biennial"]]) {
     assert.equal(normalizeMilestoneRepeat(input), expected, `"${input}"`);
+  }
+  // An English synonym is no more a cadence than its French twin.
+  for (const [english, french] of [["yearly", "annuel"], ["every year", "chaque année"], ["month", "mensuel"], ["biannual", "semestriel"]]) {
+    assert.equal(normalizeMilestoneRepeat(english), "", english);
+    assert.equal(normalizeMilestoneRepeat(french), "", french);
   }
   assert.equal(normalizeMilestoneRepeat("fortnightly"), "", "an unsupported cadence is not guessed at");
   assert.equal(normalizeMilestoneRepeat(""), "");

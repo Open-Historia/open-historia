@@ -1886,51 +1886,28 @@ const PROJECT_SECRECY_SET = new Set(["public", "restricted", "covert"]);
 // something the next time skip must answer.
 const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "slipped", "done", "missed"]);
 
-// The same problem PROJECT_STATUS_ALIASES solves, one level down. A model asked to
-// mark a checkpoint reached writes "completed" or "achieved" about as often as it
-// writes "done", and an unrecognised value fell through to the "pending" default —
-// which is not a no-op: mergeInto below assigns the status unconditionally, so a
-// checkpoint already marked done was pushed BACK to pending by the very op meant to
-// confirm it, while the op still counted as a change and the advisor's receipt card
-// reported "1 updated". The structured event path is fenced by the schema's enum;
-// the advisor's ```projects block has no schema at all, and that is the path every
-// button on the Projects panel drives.
-const PROJECT_MILESTONE_STATUS_ALIASES = {
-  complete: "done", completed: "done", finished: "done", achieved: "done",
-  reached: "done", met: "done", delivered: "done", passed: "done",
-  late: "slipped", overdue: "slipped", delayed: "slipped", behind: "slipped",
-  failed: "missed", unmet: "missed",
-  outstanding: "pending", planned: "pending", upcoming: "pending", scheduled: "pending",
+// The board's closed values (a checkpoint's status, a project's status, its
+// priority) are read exactly, case and spacing aside, and a word that is none of
+// them is LEFT OUT: the value it would have set stays as it was, and a new entry
+// takes its default. Never guessed. Tables of English words for them
+// ("completed" as done, "critical" as high) read an English reply one way and
+// the same reply in any other language another (the owner, 2026-11-13: "there
+// should be absolutely no keywording done in this game anywhere"). The schema's
+// enums fence the structured path; the advisor's ```projects block is told the
+// exact values (AI/main.jsx).
+const closedValue = (set) => (value) => {
+  const raw = normalizeOptionalString(value).toLowerCase().replace(/\s+/g, " ");
+  return set.has(raw) ? raw : "";
 };
 
-// "" when the op carried no status at all, so mergeInto can tell "leave it alone"
-// from "set it to pending" — a model re-dating a checkpoint must not un-complete it.
-const resolveMilestoneStatus = (value) => {
-  const raw = normalizeOptionalString(value).toLowerCase();
-  if (!raw) return "";
-  if (PROJECT_MILESTONE_STATUS_SET.has(raw)) return raw;
-  return PROJECT_MILESTONE_STATUS_ALIASES[raw] || "pending";
-};
+// "" when the op carried no status, or one that is none of the four, so
+// mergeInto can tell "leave it alone" from "set it": a model re-dating a
+// checkpoint, or naming its status in a word the board does not have, must not
+// un-complete it.
+const resolveMilestoneStatus = closedValue(PROJECT_MILESTONE_STATUS_SET);
 
-// Synonyms a model actually writes for these, mapped onto the closed vocabulary.
-// Observed in the field: a real backfill came back with "status":"completed" on
-// a finished operation, which fell through to the "active" default and put a
-// concluded op back on the running board. The op-name aliases above exist for
-// the same reason; the values need them just as much as the verbs do.
-const PROJECT_STATUS_ALIASES = {
-  completed: "complete", finished: "complete", done: "complete", delivered: "complete",
-  canceled: "cancelled", abandoned: "cancelled", dropped: "cancelled", shelved: "cancelled",
-  ongoing: "active", "in progress": "active", inprogress: "active", running: "active", underway: "active",
-  planned: "proposed", proposal: "proposed", pending: "proposed",
-  suspended: "paused", halted: "paused", onhold: "paused", "on hold": "paused",
-  blocked: "stalled", delayed: "stalled", stalling: "stalled",
-};
-
-const resolveProjectStatus = (value) => {
-  const raw = normalizeOptionalString(value).toLowerCase();
-  if (PROJECT_STATUS_SET.has(raw)) return raw;
-  return PROJECT_STATUS_ALIASES[raw] || "active";
-};
+// "" for a status that is none of PROJECT_STATUSES (see closedValue above).
+const resolveProjectStatus = closedValue(PROJECT_STATUS_SET);
 
 // How much attention the player wants a project to get. The ONE field on this
 // board the player authors themselves: events and the advisor own what a project
@@ -1942,23 +1919,9 @@ const resolveProjectStatus = (value) => {
 // running, a low-priority one is allowed to drift with a one-line note.
 export const PROJECT_PRIORITIES = ["high", "normal", "low"];
 const PROJECT_PRIORITY_SET = new Set(PROJECT_PRIORITIES);
-// Same alias treatment, and the same reason, as PROJECT_STATUS_ALIASES above: the
-// advisor writes "critical" or "routine" as readily as "high" or "low", and an
-// unrecognised value falling through to the "normal" default does not merely lose
-// a nuance — it silently discards an instruction the PLAYER gave.
-const PROJECT_PRIORITY_ALIASES = {
-  critical: "high", urgent: "high", top: "high", highest: "high", "top priority": "high",
-  priority: "high", important: "high", vital: "high", max: "high",
-  medium: "normal", standard: "normal", default: "normal", moderate: "normal", regular: "normal",
-  routine: "low", background: "low", minor: "low", lowest: "low", deferred: "low",
-  "back burner": "low", backburner: "low", idle: "low",
-};
-
-const resolveProjectPriority = (value) => {
-  const raw = normalizeOptionalString(value).toLowerCase();
-  if (PROJECT_PRIORITY_SET.has(raw)) return raw;
-  return PROJECT_PRIORITY_ALIASES[raw] || "normal";
-};
+// "" for a priority that is none of the three (see closedValue above). A word
+// the board does not have never overwrites the one the PLAYER set.
+const resolveProjectPriority = closedValue(PROJECT_PRIORITY_SET);
 
 // world.json is force-re-read every 5 seconds by TWO pollers (useWorldState and
 // unitsController), so everything riding inside it is on a bandwidth budget.
@@ -2129,11 +2092,11 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     // player's own name on every entry is how that field ends up wrong.
     ownerCode: toCountryName(normalizeOptionalString(entry.ownerCode || entry.owner || entry.code)),
     summary: normalizeTextLike(entry.summary || entry.description),
-    status: resolveProjectStatus(entry.status),
+    status: resolveProjectStatus(entry.status) || "active",
     // The player's dial, not the model's — see PROJECT_PRIORITIES. Defaults to
     // "normal", which is also what every project in a save written before this
     // field existed reads as, so no migration is needed.
-    priority: resolveProjectPriority(entry.priority),
+    priority: resolveProjectPriority(entry.priority) || "normal",
     progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : 0,
     tags: normalizeTagList(entry.tags),
     secrecy: PROJECT_SECRECY_SET.has(secrecy) ? secrecy : "public",
@@ -2255,10 +2218,14 @@ const PROJECT_FIELD_ALIASES = {
 
 // A plain ARRAY, not a Set: normalized ops are persisted inside events.json and
 // replayed by the staged reveal, so this has to survive a JSON round trip.
+// A status or priority that is none of the board's own words is not provided:
+// left out, so a restatement never overwrites the one the entry has.
+const CLOSED_PROJECT_FIELDS = { status: (value) => resolveProjectStatus(value), priority: (value) => resolveProjectPriority(value) };
+const providesField = (field, value) => value !== undefined && (!CLOSED_PROJECT_FIELDS[field] || Boolean(CLOSED_PROJECT_FIELDS[field](value)));
 const listProvidedFields = (source) => {
   if (!source || typeof source !== "object") return [];
   return Object.entries(PROJECT_FIELD_ALIASES)
-    .filter(([, aliases]) => aliases.some((alias) => source[alias] !== undefined))
+    .filter(([field, aliases]) => aliases.some((alias) => providesField(field, source[alias])))
     .map(([field]) => field);
 };
 
@@ -2303,9 +2270,10 @@ const normalizeProjectOp = (entry) => {
     // {"title":"Sea trials","date":"1936-11-01"} — would silently un-complete it.
     // Persisted on the op because events.json is replayed by the staged reveal, and
     // re-normalizing must not widen an absent status into a stated one.
+    // A status that is none of the board's four is not one it said: left out.
     const statusProvided = typeof entry.statusProvided === "boolean"
       ? entry.statusProvided
-      : normalizeOptionalString(source && typeof source === "object" ? source.status : "") !== "";
+      : resolveMilestoneStatus(source && typeof source === "object" ? source.status : "") !== "";
     return { op: "milestone", projectId, name, milestone, statusProvided };
   }
 
@@ -2327,12 +2295,13 @@ const normalizeProjectOp = (entry) => {
   if (op === "close") {
     if (!projectId && !name) return null;
     const status = resolveProjectStatus(entry.status);
+    // An ending that is none of the three is left out, and the project stays
+    // open: never promoted to a success (the one outcome that releases
+    // onComplete effects) and never guessed as anything else either.
+    if (status !== "complete" && status !== "failed" && status !== "cancelled") return null;
     return {
       op: "close",
-      // Anything that is not a recognised ending is treated as cancelled rather
-      // than silently promoted to a success — the one outcome that releases
-      // onComplete effects must never be reached by a fallback.
-      status: status === "complete" || status === "failed" ? status : "cancelled",
+      status,
       projectId,
       name,
       note: normalizeOptionalString(entry.note),
@@ -2652,9 +2621,10 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
         // Written under the CANONICAL key whichever alias carried it, so
         // normalizeProjectEntry below reads the new value rather than the one it
         // is replacing (its own `entry.summary || entry.description` fallback
-        // would otherwise keep the old summary and ignore the patch's).
+        // would otherwise keep the old summary and ignore the patch's). A status
+        // or priority that is none of the board's own words is left out.
         const alias = patchedAlias(patch, field);
-        if (alias) merged[field] = patch[alias];
+        if (alias && providesField(field, patch[alias])) merged[field] = patch[alias];
       }
       // tags follows the countryTags rule exactly: an ARRAY replaces the list
       // wholesale (so [] really does mean "this has no tags any more"), while an

@@ -18,6 +18,7 @@ import {
   findGroupKey,
   forceGroupDescription,
   forceGroupName,
+  groupOpKind,
   groupOwnerOf,
   groupsOnTerritory,
   normalizeGroupAreas,
@@ -58,14 +59,20 @@ test("an area row naming no group is dropped, and one region has one group", () 
   assert.deepEqual(normalizeGroupAreas({ r1: "cartel", r2: "Ghosts", r3: "Cartel" }, groups), { r1: "Cartel", r3: "Cartel" });
 });
 
-test("the model's verbs read as the five operations", () => {
-  assert.equal(normalizeGroupOp({ op: "erase", name: "X" }).op, "dissolve");
-  assert.equal(normalizeGroupOp({ op: "spread", name: "X", regions: ["a", "a", "b"] }).op, "take");
-  assert.deepEqual(normalizeGroupOp({ op: "spread", name: "X", regions: ["a", "a", "b"] }).regionIds, ["a", "b"]);
-  assert.equal(normalizeGroupOp({ op: "withdraw", group: "X", regionId: "a" }).op, "release");
-  assert.equal(normalizeGroupOp({ op: "found", name: "X" }).op, "create");
-  assert.equal(normalizeGroupOp({ op: "recolor", name: "X", color: "#123456" }).op, "update");
-  assert.equal(normalizeGroupOp({ op: "teleport", name: "X" }), null);
+test("an op is exactly one of the five operations, its case and spacing aside, and any other word is left out in every language", () => {
+  assert.equal(normalizeGroupOp({ op: " Dissolve ", name: "X" }).op, "dissolve");
+  assert.equal(normalizeGroupOp({ op: "take", name: "X", regions: ["a", "a", "b"] }).op, "take");
+  assert.deepEqual(normalizeGroupOp({ op: "take", name: "X", regions: ["a", "a", "b"] }).regionIds, ["a", "b"]);
+  assert.equal(normalizeGroupOp({ operation: "release", group: "X", regionId: "a" }).op, "release");
+  assert.equal(groupOpKind("CREATE"), "create");
+  // An English synonym is no more one of them than its French twin: "claim"
+  // once took a region for a group that only claimed it.
+  for (const [english, french] of [["claim", "revendiquer"], ["occupy", "occuper"], ["erase", "effacer"], ["spread", "étendre"], ["found", "fonder"], ["recolor", "recolorer"], ["teleport", "téléporter"]]) {
+    assert.equal(normalizeGroupOp({ op: english, name: "X", regionIds: ["a"] }), null, english);
+    assert.equal(normalizeGroupOp({ op: french, name: "X", regionIds: ["a"] }), null, french);
+    assert.equal(groupOpKind(english), "");
+  }
+  assert.deepEqual(applyGroupOps({}, [{ op: "claim", name: "Horde", regionIds: ["r1"] }]).groupAreas, {});
   assert.equal(normalizeGroupOp({ op: "create", name: "  " }), null);
 });
 
@@ -165,8 +172,8 @@ test("the world keeps its groups through every read, and an event's groupOps lan
   assert.deepEqual(read.groupAreas, { r1: "Cartel" });
   assert.deepEqual(normalizeWorldState({}).groups, {});
 
-  const event = normalizeEventEntry({ title: "Spread", description: "It spreads.", date: "2025-01-01", impacts: { groupOps: [{ op: "spread", name: "Horde", regions: ["r5"], note: "The outbreak crossed the border." }, { op: "??", name: "x" }] } });
-  assert.equal(event.impacts.groupOps.length, 1, "a saved event keeps its groupOps, and drops what no operation reads as");
+  const event = normalizeEventEntry({ title: "Spread", description: "It spreads.", date: "2025-01-01", impacts: { groupOps: [{ op: "take", name: "Horde", regions: ["r5"], note: "The outbreak crossed the border." }, { op: "spread", name: "Horde", regions: ["r6"] }, { op: "??", name: "x" }] } });
+  assert.equal(event.impacts.groupOps.length, 1, "a saved event keeps its groupOps, and drops an op that is none of the five");
 
   const { world } = applyEventImpactsToWorld({
     world: read,

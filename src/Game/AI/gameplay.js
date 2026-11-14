@@ -19,8 +19,8 @@ import {
   PREHISTORY_UPDATE_FAMILIES,
 } from "../../runtime/scenarioPrehistory.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
-import { describeBasisAction, sameRegionChange, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
-import { PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
+import { describeBasisAction, describeUnknownBasis, sameRegionChange, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
+import { GROUP_OP_KINDS, PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, groupOpKind, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { hostingSharedGame, humanCountriesOf } from "../../runtime/humanPolities.js";
 import { uiString } from "../../runtime/translator.js";
@@ -8010,6 +8010,13 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   for (const { impacts, path } of containers) {
     if (!impacts || typeof impacts !== "object") continue;
     const screened = screenTerritoryBasis(impacts);
+    // A basis that is none of the listed words is left out, never read as the
+    // nearest of them, and the model is told which word (it applies as one
+    // that gives no basis, as it always has).
+    for (const entry of screened.unknown) {
+      noteReceipt(receipt, "adjusted", describeUnknownBasis(entry, { eventTitle: titleAt(path) }));
+      console.info(`[ai] ${path}.${entry.family}: basis "${entry.basis}" on ${entry.region} is none of the listed words; left out.`);
+    }
     if (screened.actions.length === 0) continue;
     impacts.regionTransfers = screened.regionTransfers;
     impacts.regionControlOps = screened.regionControlOps;
@@ -8043,6 +8050,18 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       if (!count) continue;
       impacts.groupOps = [];
       console.info(`[ai] ${path}.groupOps: ${count} left out; groups are switched off for this game.`);
+    }
+  }
+  // A group operation whose op is none of the listed ones is left out, never
+  // read as the nearest of them, and the model is told (runtime/groups.js
+  // groupOpKind).
+  for (const { impacts, path } of containers) {
+    const ops = normalizeArray(impacts?.groupOps);
+    const unknown = ops.filter((op) => op && typeof op === "object" && !groupOpKind(op.op ?? op.operation));
+    if (!unknown.length) continue;
+    impacts.groupOps = ops.filter((op) => !unknown.includes(op));
+    for (const op of unknown) {
+      noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}the group operation "${normalizeString(op.op ?? op.operation)}" on ${normalizeString(op.name) || "a group"} was left out: op is exactly one of ${GROUP_OP_KINDS.join(", ")}.`);
     }
   }
   // Every project an op could legitimately address: what is already on the
