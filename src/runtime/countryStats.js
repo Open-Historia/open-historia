@@ -142,47 +142,36 @@ export const countryStatsTrackingMonthsElapsed = (fromDate, toDate) => {
   return Math.max(0, months);
 };
 
-const STAT_SCALES = Object.freeze({
-  trillion: 1e12, tn: 1e12, t: 1e12,
-  billion: 1e9, bn: 1e9, b: 1e9,
-  million: 1e6, mn: 1e6, m: 1e6,
-  thousand: 1e3, k: 1e3,
-});
-const STAT_SCALE_AFTER_NUMBER = /^\s*(trillion|tn|t|billion|bn|b|million|mn|m|thousand|k)(?![a-z])/;
+// A figure as the sheet keeps it: a number in base units (dollars, people,
+// percent), as every schema asks for it. Text is read only when it IS a plain
+// number ("48500000000", "-3.5", "1.2e12"): what an old save or a line of the
+// game's own format ("~" rows) holds. Never by English scale words, and never
+// by guessing what a comma means: "1.2 trillion" was read, "1,2 billion" was
+// read as 12 and so was "1,2 milliard", and "1,2 Billionen" not at all.
+// Anything else is no figure.
+const PLAIN_NUMBER = /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?$/i;
 
 export const parseStatNumber = (value) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string") return null;
-
-  const text = value.trim();
-  if (!text) return null;
-
-  const normalized = text
-    .replace(/\u00a0/g, " ")
-    .replace(/,/g, "")
-    .replace(/−/g, "-")
-    .toLowerCase();
-
-  // The first number and the scale word written right after it, read together:
-  // "48.5 billion", "$48.5B", "€3.1tn", "850mn", "1.2 trillion". Only that
-  // number's own suffix scales it, so "€520 billion (about $0.6 trillion)" is
-  // 520 billion, and a unit word that merely starts with a scale letter
-  // ("5 months", "3 tonnes") scales nothing.
-  const match = normalized.match(/[-+]?\d+(?:\.\d+)?/);
-  if (!match) return null;
-
-  const scale = normalized.slice(match.index + match[0].length).match(STAT_SCALE_AFTER_NUMBER);
-  const number = Number(match[0]) * (scale ? STAT_SCALES[scale[1]] : 1);
+  // (The minus sign as typeset, U+2212, is a minus.)
+  const text = value.trim().replace(/^−/, "-");
+  if (!PLAIN_NUMBER.test(text)) return null;
+  const number = Number(text);
   return Number.isFinite(number) ? number : null;
 };
 
+// A percent field may carry its own unit, the sign "%", which says nothing
+// in any language that the field does not.
+const percentText = (value) => (typeof value === "string" ? value.trim().replace(/\s*%$/, "") : value);
+
 const normalizePercent = (value) => {
-  const parsed = parseStatNumber(value);
+  const parsed = parseStatNumber(percentText(value));
   return parsed == null ? null : clamp(parsed, 0, 100);
 };
 
 const normalizeSignedPercent = (value) => {
-  const parsed = parseStatNumber(value);
+  const parsed = parseStatNumber(percentText(value));
   return parsed == null ? null : clamp(parsed, -1000, 1000);
 };
 

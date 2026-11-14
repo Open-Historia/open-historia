@@ -190,17 +190,21 @@ const statsUpdateSchema = {
       maxProperties: 60,
       additionalProperties: { type: "number" },
     },
+    // Numbers in base units, as the sheet keeps them (runtime/countryStats.js
+    // parseStatNumber): "1.2 trillion" or "1,2 billion" was read by English
+    // scale words and a comma taken for a thousands separator.
     economy: {
       type: "object",
+      description: "gdp, gdpPerCapita in 2026 US dollars; the rest in percent.",
       properties: {
-        gdp: textSchema("GDP estimate."),
-        gdpGrowth: textSchema("Annual GDP growth estimate."),
-        gdpPerCapita: textSchema("GDP per capita estimate."),
-        currency: textSchema("Currency."),
-        inflation: textSchema("Inflation estimate."),
-        unemployment: textSchema("Unemployment estimate."),
-        publicDebt: textSchema("Public debt estimate."),
-        budgetBalance: textSchema("Budget balance estimate."),
+        gdp: { type: "number" },
+        gdpGrowth: { type: "number" },
+        gdpPerCapita: { type: "number" },
+        currency: { type: "string" },
+        inflation: { type: "number" },
+        unemployment: { type: "number" },
+        publicDebt: { type: "number" },
+        budgetBalance: { type: "number" },
       },
       additionalProperties: false,
     },
@@ -3318,12 +3322,12 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
       type: "string",
       minLength: 1,
       description:
-        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. For an explicitly NON-TERRITORIAL basis, compatibility rows may use group~geography~population~gdpPerCapita when campaign canon supports a real distributed people/organization/economy; return the literal NONE when no defensible quantitative scope exists. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-USD accounting terms for inhabited buckets; a genuinely uninhabited bucket may use population=0 and gdpPerCapita=0. Never use PPP/international dollars.",
+        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. For an explicitly NON-TERRITORIAL basis, compatibility rows may use group~geography~population~gdpPerCapita when campaign canon supports a real distributed people/organization/economy; return the literal NONE when no defensible quantitative scope exists. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-USD accounting terms for inhabited buckets; a genuinely uninhabited bucket may use population=0 and gdpPerCapita=0. Never use PPP/international dollars. Write every number in plain digits (12500, never 12,500 or 12.5k).",
     },
     territorialComponentSplitText: {
       type: "string",
       description:
-        "Only when the prompt requires a PER-COMPONENT SPLIT: one row per listed component as componentId~sharePercent~group~gdpPerCapita, where sharePercent is the component's share of its own macro bucket's population (each bucket's rows sum to 100), and group/gdpPerCapita are that component's own. Omit it otherwise.",
+        "Only when the prompt requires a PER-COMPONENT SPLIT: one row per listed component as componentId~sharePercent~group~gdpPerCapita, where sharePercent is the component's share of its own macro bucket's population (each bucket's rows sum to 100), and group/gdpPerCapita are that component's own; numbers in plain digits (12500, never 12,500). Omit it otherwise.",
     },
     economy: {
       type: "object",

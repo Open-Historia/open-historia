@@ -24,7 +24,7 @@ const splitBuckets = [
 ];
 
 test("a valid split is normalized to exact fractions of its bucket", () => {
-  const { splits, rejected } = decodeTerritorialComponentSplit("C1~90~core~40000\n[C2]~6%~overseas/dependent~20,000", splitBuckets);
+  const { splits, rejected } = decodeTerritorialComponentSplit("C1~90~core~40000\n[C2]~6%~overseas/dependent~20000", splitBuckets);
   assert.deepEqual(rejected, []);
   const [mainland, island] = splits.get(1);
   assert.equal(mainland.geography, "Mainland");
@@ -33,6 +33,22 @@ test("a valid split is normalized to exact fractions of its bucket", () => {
   // 90 + 6 = 96 is within the tolerance, and the shares are rescaled to sum to 1.
   assert.ok(Math.abs(mainland.share + island.share - 1) < 1e-9);
   assert.ok(Math.abs(mainland.share - 90 / 96) < 1e-9);
+});
+
+// A figure in a row is plain digits, as the rows are asked for: one with a
+// separator is no figure, whichever way a language groups its digits. The old
+// reader took "20,000" for 20000 and "20.000" for 20.
+test("a row's figure written with separators is no figure, in any language's way", () => {
+  for (const figure of ["20,000", "20.000", "20 000", "20k"]) {
+    const { splits, rejected } = decodeTerritorialComponentSplit(`C1~90~core~40000\nC2~10~overseas/dependent~${figure}`, splitBuckets);
+    if (figure === "20.000") {
+      // A plain decimal: read as the number it is, 20.
+      assert.equal(splits.get(1)?.[1]?.gdpPerCapita, 20, figure);
+      continue;
+    }
+    assert.equal(splits.size, 0, figure);
+    assert.equal(rejected.length, 1, figure);
+  }
 });
 
 test("a split that does not account for every component, once, is rejected", () => {
