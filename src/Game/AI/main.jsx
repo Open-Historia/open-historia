@@ -118,6 +118,7 @@ import {
     lookupCallsFromAnthropic,
     lookupCallsFromGemini,
     lookupCallsFromOpenAI,
+    oneOutputCallOnly,
     lookupRoundCount,
     openAiMessagesFromHistory,
     withCachedHistory,
@@ -1534,6 +1535,8 @@ async function callOpenAIStyleChatCompletions({
                     // one tool is ever sent, so "required" (accepted by OpenAI and
                     // the compatible gateways alike) forces that same tool.
                     tool_choice: "required",
+                    // One call of it, on a local server with nothing else to call (toolTurns.js).
+                    ...(oneOutputCallOnly({ local: isLocalEndpoint(normalizeEndpoint(endpoint)), lookups: lookupDeclarations.length }) ? { parallel_tool_calls: false } : {}),
                 } : {}),
                 ...(structuredMode === "json_schema" ? {
                     response_format: { type: "json_schema", json_schema: {
@@ -1712,8 +1715,12 @@ async function callOpenAIStyleChatCompletions({
         // stream is safe: a gateway that quietly ignores it still lands here.
         const responseType = String(response.headers.get("content-type") || "");
         const data = responseType.includes("text/event-stream")
-            ? await readOpenAIStreamedResponse(response, onActivity, onToolStream, onReceived)
+            ? await readOpenAIStreamedResponse(response, onActivity, onToolStream, onReceived, {
+                // One answer wanted from the player's own server: stop reading where it is whole (streamAssembly.js wholeAnswerWatch).
+                stopAtWholeAnswer: Boolean(tool) && oneOutputCallOnly({ local: isLocalEndpoint(normalizeEndpoint(endpoint)), lookups: lookupDeclarations.length }),
+            })
             : await readJsonAnswer(response, providerLabel);
+        if (data?.stoppedAtWholeAnswer) console.warn(`[ai] ${providerLabel}: the answer was whole and the model went on writing; stopped reading there and closed the request.`);
         onUsage?.(data);
         // The answer names its server: a KoboldCpp is remembered for one.
         noteKoboldCpp(endpoint, data);

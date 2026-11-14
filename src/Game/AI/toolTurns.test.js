@@ -5,6 +5,7 @@
 // were first asked, and with only the rest of the round budget.
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import {
   answerLookupCalls,
@@ -18,6 +19,7 @@ import {
   lookupCallKey,
   repeatedLookupResponse,
   withCarriedRounds,
+  oneOutputCallOnly,
 } from "./toolTurns.js";
 
 const prompt = { role: "user", parts: [{ text: "Simulate the next month." }] };
@@ -191,4 +193,15 @@ test("a chat that repeats a lookup is told to answer, and a lookup that throws o
   assert.deepEqual(round.answered.map((entry) => entry.error), [true, false, false]);
   assert.equal(round.repeated, false);
   assert.deepEqual(await answerLookupCalls(null, { execute: async () => ({}) }), { results: [], answered: [], repeated: false });
+});
+
+test("a local server with only the output function declared is told to take one call", () => {
+  assert.equal(oneOutputCallOnly({ local: true, lookups: 0 }), true);
+  assert.equal(oneOutputCallOnly({ local: true }), true);
+  assert.equal(oneOutputCallOnly({ local: true, lookups: 3 }), false, "several lookups in one answer are wanted");
+  assert.equal(oneOutputCallOnly({ local: false, lookups: 0 }), false, "a hosted gateway is sent what it always was");
+  assert.equal(oneOutputCallOnly(), false);
+
+  const main = readFileSync(new URL("./main.jsx", import.meta.url), "utf8");
+  assert.match(main, /tool_choice: "required",\r?\n[^\n]*\r?\n\s*\.\.\.\(oneOutputCallOnly\(\{ local: isLocalEndpoint\(normalizeEndpoint\(endpoint\)\), lookups: lookupDeclarations\.length \}\) \? \{ parallel_tool_calls: false \} : \{\}\),/);
 });

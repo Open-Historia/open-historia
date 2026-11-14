@@ -73,6 +73,8 @@ async function readSSE(response, onFrame, onActivity, onChunkRead) {
     const decoder = new TextDecoder();
     let buffer = "";
     let done = false;
+    // A frame handler answered true: it has all it wants (see wholeAnswerWatch).
+    let stopped = false;
     const readLine = (line) => {
         if (!line.startsWith("data:")) return;
         const data = line.slice(5).trim();
@@ -83,7 +85,7 @@ async function readSSE(response, onFrame, onActivity, onChunkRead) {
         }
         let chunk;
         try { chunk = JSON.parse(data); } catch { return; }
-        onFrame(chunk);
+        if (onFrame(chunk) === true) stopped = true;
     };
     try {
         for (;;) {
@@ -97,17 +99,22 @@ async function readSSE(response, onFrame, onActivity, onChunkRead) {
             buffer = lines.pop() ?? "";
             lines.forEach(readLine);
             if (onChunkRead) onChunkRead();
+            if (stopped) {
+                // Closing the body is what tells a local server to stop writing.
+                try { await reader.cancel(); } catch { /* already closed */ }
+                break;
+            }
         }
         // A last line the server never ended with a newline. It used to be
         // dropped; it can be the frame that carries the finish reason, or the
         // [DONE] itself, and without it a whole answer would read as cut off.
         // Half a frame still fails to parse and is skipped, as before.
         buffer += decoder.decode();
-        if (buffer) readLine(buffer);
+        if (buffer && !stopped) readLine(buffer);
     } finally {
         try { reader.releaseLock(); } catch { /* stream already closed */ }
     }
-    return { done };
+    return { done, stopped };
 }
 
 // A stream that just stops is not one that finished. Every provider says when
@@ -175,6 +182,10 @@ export const createOpenAIStreamState = () => ({
     answerChars: 0,
     // The content so far ends inside a <think> block (see endsInsideThink).
     thinkingInline: false,
+    // Set by a reader asked to stop at a whole answer (wholeAnswerWatch).
+    stopAtWhole: false,
+    root: null,
+    overrun: false,
 });
 
 // Qwen and DeepSeek write their reasoning into the content, between <think>
@@ -193,6 +204,78 @@ const endsInsideThink = (state, added) => {
     return state.thinkingInline;
 };
 
+// wholeAnswerWatch: an answer that is whole and goes on being written.
+//
+// A local server holds a model to nothing once its answer is written outside
+// the function-call wrapper: llama.cpp (build b12128, 2026-11-13) streamed a
+// turn's answer as plain content, one whole JSON object of 12,205 characters,
+// and the model then wrote closing brackets for ten more minutes; in two
+// earlier turns it wrote the whole answer three times over (14,000 and 16,000
+// tokens where 500 were asked for). Nothing ends such a stream but the
+// window filling. So a reader asked to (`stopAtWhole`) stops the moment the
+// answer is whole and more is arriving: content that opens with `{`, has
+// closed that object and goes on with anything but white space, or a second
+// call of the function whose first call's arguments already parse. What came
+// after is dropped, the answer ends as "stop" (or "tool_calls"), and readSSE
+// closes the connection, which stops the server.
+
+// Where the object that opens `text` closes: the index after its last brace,
+// or -1 while it is open. `tracker` keeps the place between calls, so a long
+// answer is read once.
+export const advanceRootObject = (tracker, text) => {
+    if (tracker.end >= 0 || tracker.off) return tracker.end;
+    for (; tracker.pos < text.length; tracker.pos++) {
+        const ch = text[tracker.pos];
+        if (!tracker.started) {
+            if (ch === " " || ch === "\n" || ch === "\r" || ch === "\t") continue;
+            if (ch !== "{") { tracker.off = true; return -1; }
+            tracker.started = true;
+            tracker.depth = 1;
+            continue;
+        }
+        if (tracker.inString) {
+            if (tracker.escaped) tracker.escaped = false;
+            else if (ch === "\\") tracker.escaped = true;
+            else if (ch === "\"") tracker.inString = false;
+            continue;
+        }
+        if (ch === "\"") tracker.inString = true;
+        else if (ch === "{" || ch === "[") tracker.depth++;
+        else if (ch === "}" || ch === "]") {
+            tracker.depth--;
+            if (tracker.depth === 0) { tracker.end = tracker.pos + 1; tracker.pos++; return tracker.end; }
+        }
+    }
+    return -1;
+};
+
+export const createRootTracker = (from = 0) => ({ pos: from, started: false, depth: 0, inString: false, escaped: false, end: -1, off: false });
+
+const contentRanPastWholeAnswer = (state) => {
+    if (!state.root) {
+        // The answer starts after the model's inline reasoning, if it wrote any.
+        const closed = state.content.toLowerCase().lastIndexOf(THINK_CLOSE);
+        state.root = createRootTracker(closed === -1 ? 0 : closed + THINK_CLOSE.length);
+    }
+    const end = advanceRootObject(state.root, state.content);
+    if (end < 0 || !/\S/.test(state.content.slice(end))) return false;
+    state.answerChars -= state.content.length - end;
+    state.content = state.content.slice(0, end);
+    state.overrun = true;
+    if (!state.finishReason) state.finishReason = "stop";
+    return true;
+};
+
+const repeatsWholeCall = (state, call) => {
+    const first = state.toolCalls[0];
+    if (!first?.arguments || (call.function?.name && call.function.name !== first.name)) return false;
+    try { JSON.parse(first.arguments); } catch { return false; }
+    state.toolCalls.length = 1;
+    state.overrun = true;
+    if (!state.finishReason) state.finishReason = "tool_calls";
+    return true;
+};
+
 export function applyOpenAIFrame(state, chunk, onToolProgress) {
     // A gateway that ignored stream:true, or one that is overloaded, puts its
     // error in a frame on an otherwise fine 200. Keep it so the caller can tell
@@ -208,6 +291,7 @@ export function applyOpenAIFrame(state, chunk, onToolProgress) {
     const choice = chunk?.choices?.[0];
     if (!choice) return state;
     const delta = choice.delta ?? choice.message ?? {};
+    if (state.overrun) return state;
     if (typeof delta.content === "string") {
         state.content += delta.content;
         if (delta.content) {
@@ -215,7 +299,10 @@ export function applyOpenAIFrame(state, chunk, onToolProgress) {
             // content, not a tool call, so a watcher has to hear that too.
             observe(onToolProgress, { name: "", json: state.content });
             if (endsInsideThink(state, delta.content)) state.reasoningChars += delta.content.length;
-            else state.answerChars += delta.content.length;
+            else {
+                state.answerChars += delta.content.length;
+                if (state.stopAtWhole && contentRanPastWholeAnswer(state)) return state;
+            }
         }
     }
     // Thinking-mode models (Qwen3, DeepSeek-R1) stream their chain of thought in a
@@ -233,6 +320,7 @@ export function applyOpenAIFrame(state, chunk, onToolProgress) {
         const latest = state.toolCalls.length - 1;
         let position = Number.isInteger(call.index) ? call.index : latest;
         if (position < 0) position = 0;
+        if (state.stopAtWhole && position > 0 && position >= state.toolCalls.length && repeatsWholeCall(state, call)) return state;
         else if (!Number.isInteger(call.index) && call.id && state.toolCalls[position]?.id && state.toolCalls[position].id !== call.id) position = latest + 1;
         while (state.toolCalls.length <= position) state.toolCalls.push({ id: "", name: "", arguments: "" });
         const entry = state.toolCalls[position];
@@ -269,12 +357,16 @@ export function finishOpenAIStream(state) {
         ...(state.streamError ? { error: state.streamError } : {}),
         ...(state.usage ? { usage: state.usage } : {}),
         ...(streamEndedEarly(state, state.finishReason) ? { closedEarly: true } : {}),
+        ...(state.overrun ? { stoppedAtWholeAnswer: true } : {}),
     };
 }
 
-export async function readOpenAIStreamedResponse(response, onActivity, onToolProgress, onReceived) {
+// `stopAtWholeAnswer`: the caller wants one answer and the server is the
+// player's own (main.jsx, toolTurns.js oneOutputCallOnly). See wholeAnswerWatch.
+export async function readOpenAIStreamedResponse(response, onActivity, onToolProgress, onReceived, { stopAtWholeAnswer = false } = {}) {
     const state = createOpenAIStreamState();
-    const { done } = await readSSE(response, (chunk) => applyOpenAIFrame(state, chunk, onToolProgress), onActivity, receivedReporter(state, onReceived));
+    state.stopAtWhole = Boolean(stopAtWholeAnswer);
+    const { done } = await readSSE(response, (chunk) => applyOpenAIFrame(state, chunk, onToolProgress).overrun === true, onActivity, receivedReporter(state, onReceived));
     state.done = done;
     return finishOpenAIStream(state);
 }
