@@ -9,7 +9,7 @@ import { isLatinName, latinSlug, nameId } from "./nameId.js";
 const SLUGS = {
   // runtime/stableId.js, Game/AI/nativeDiplomaticDirector.js, runtime/institutionalAuthority.js
   standard: (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLocaleLowerCase().normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
+    .replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""),
   // runtime/spycraft.js
   agent: (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-"),
   // server/gameFeatures.js (a scripted beat's own id)

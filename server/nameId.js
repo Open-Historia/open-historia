@@ -25,7 +25,7 @@
 // under server/ and imports nothing.
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
-const MARKS = /[̀-ͯ]/g;
+const MARKS = /[\u0300-\u036f]/g;
 
 // The name as its id reads it: lower case, accents off, and no letter lost.
 // (Checked lowered once more, so a sign that comes apart into Latin capitals,
