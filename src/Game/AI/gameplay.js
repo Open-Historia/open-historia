@@ -360,7 +360,7 @@ import {
   seedHistoryDocumentText,
   yearSpanOf,
 } from "./historyConsolidation.js";
-import { eraWordCount, yearOfDate } from "../../runtime/historyTiers.js";
+import { eraCharCount, yearOfDate } from "../../runtime/historyTiers.js";
 import {
   expandBakedRegionsForRename,
   renamePolityInActions,
@@ -5374,7 +5374,7 @@ const prepareSkipHistoryFold = async (bundle, { campaignId = activeCampaignId() 
     baseRevision: world.historyDocument?.revision ?? 0,
     currentText: seedHistoryDocumentText(world),
     span: yearSpanOf(plan.eventsToConsolidate),
-    eraWords: eraWordCount(world.historyDocument),
+    eraChars: eraCharCount(world.historyDocument),
   };
 };
 
@@ -16554,7 +16554,7 @@ const foldedTurnReview = ({ context, merged, state }) => {
       due: true,
       resume: fold.resume,
       baseRevision: fold.baseRevision,
-      ...judgeSkipHistoryAnswer(state.foldedHistoryAnswer, { currentText: fold.currentText, span: fold.span, eraWords: fold.eraWords }),
+      ...judgeSkipHistoryAnswer(state.foldedHistoryAnswer, { currentText: fold.currentText, span: fold.span, eraChars: fold.eraChars }),
     };
   }
 

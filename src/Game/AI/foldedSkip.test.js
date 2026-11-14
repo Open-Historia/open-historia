@@ -394,7 +394,7 @@ test("the history a skip folds is planned before it and written from its own ans
   const review = functionBody("foldedTurnReview");
   assert.match(review, /\n {2}review\.history = \{ due: false \};/);
   assert.ok(review.indexOf("review.history = { due: false }") < review.indexOf("if (normalizeString(state.generation?.source) === \"fallback\") return review;"), "a canned turn folds nothing and asks for nothing");
-  assert.match(review, /\.\.\.judgeSkipHistoryAnswer\(state\.foldedHistoryAnswer, \{ currentText: fold\.currentText, span: fold\.span, eraWords: fold\.eraWords \}\),/);
+  assert.match(review, /\.\.\.judgeSkipHistoryAnswer\(state\.foldedHistoryAnswer, \{ currentText: fold\.currentText, span: fold\.span, eraChars: fold\.eraChars \}\),/);
 
   // Written from the skip's answer, and only from it: the event consolidator,
   // a request of its own after a skip, went on 2026-11-07.

@@ -206,8 +206,14 @@ test("the consolidator is told the history in tiers and the canon; a campaign fr
 
   const live = { historyDocument: { text: "Live text.", revision: 2 }, consolidatedHistory: legacy.consolidatedHistory };
   assert.equal(seedHistoryDocumentText(live), "Live text.", "the live document wins over the ledger");
+  // Measured in characters, as the prompt gives the eras their room: a text with
+  // no spaces between its words (Chinese) is as long as it looks.
   const longEras = { historyDocument: { text: "", eras: [{ from: 1900, to: 1930, text: Array.from({ length: 1300 }, () => "word").join(" ") }], revision: 3 } };
-  assert.match(buildHistoryDocumentDirective(longEras), /"eras": the earlier years below run to 1300 words, over the 1200 they are kept near/);
+  assert.match(buildHistoryDocumentDirective(longEras), /"eras": the earlier years below run to 6499 characters, over the 4500 they are kept within/);
+  const chineseEras = { historyDocument: { text: "", eras: [{ from: 1900, to: 1930, text: "战争与和平".repeat(1000) }], revision: 3 } };
+  assert.match(buildHistoryDocumentDirective(chineseEras), /"eras": the earlier years below run to 5000 characters/);
+  const shortEras = { historyDocument: { text: "", eras: [{ from: 1900, to: 1930, text: "战争与和平".repeat(100) }], revision: 3 } };
+  assert.doesNotMatch(buildHistoryDocumentDirective(shortEras), /"eras":/);
   const withCanon = { ...longEras, canonFacts: [{ date: "1919-06-28", kind: "treaty", text: "Treaty of Zenda." }] };
   assert.match(buildHistoryDocumentDirective(withCanon), /CANON \(standing facts[^\n]*\n- 1919-06-28 \(treaty\): Treaty of Zenda\./);
   assert.equal(countWords("  one two\nthree  "), 3);
