@@ -16,6 +16,8 @@
 import { containsWords, editDistance, foldRegionKey, matchRegionName, nearestRegionNames, spellingDistance } from "./regionMatch.js";
 import { readNameRef, regionNamer } from "./nameRefs.js";
 import { baseCountryOf, buildAreaIndex, findArea, splitTerritories } from "./namedAreas.js";
+import { eventPartyNames } from "./eventParties.js";
+import { readEventPlace } from "./eventPlaces.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../runtime/politicalKnowledge.js";
@@ -137,7 +139,7 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "recent_events",
     description:
       "The most recent timeline events (newest last): date, title, summary, and what each moved on the map. "
-      + "Optionally only events mentioning a power or place.",
+      + "Optionally only the events a power or a place is part of.",
     schema: object("How many, about what.", {
       limit: integer("How many events (default 12, max 40)."),
       about: text("Optional exact power name or region/city name to filter by."),
@@ -793,9 +795,53 @@ const stringsIn = (value, depth = 0, out = []) => {
   else if (typeof value === "object") for (const entry of Object.values(value)) stringsIn(entry, depth + 1, out);
   return out;
 };
-const mentions = (record, name) => {
-  const key = foldRegionKey(name);
-  return key && stringsIn(record).some((value) => foldRegionKey(value) === key);
+
+// Whether `names` hold the power `owner` (a label resolveOwner answers with),
+// each name exactly as the map spells it or as one of its codes and aliases.
+const namesPower = (context, names, owner) => array(names)
+  .some((name) => context.resolveOwner(typeof name === "string" ? name : name?.name || name?.code) === owner);
+
+// The names an event records, for recent_events' `about`: its parties
+// (eventParties.js: who decided it, who fought in it and on which war's sides,
+// the countries among its places, every polity or group its operations name),
+// the places it lists (as the map found them, or as written where it found
+// none), and the regions its operations move, by the map's name and aliases
+// and by the name the operation was written with. Never its title or
+// description: they were searched for the name as well, so "Kharkiv" found an
+// event about Kharkiv Oblast's neighbours, and an event told in another
+// language than the map's names was found by nothing it said.
+const REGION_KEYED_IMPACTS = ["regionTransfers", "regionControlOps", "regionClaims"];
+const eventRecordNames = (context, event) => {
+  const names = eventPartyNames(event, { wars: context.world?.wars });
+  const region = (id) => {
+    const row = context.byId.get(clean(id));
+    if (row) names.push(row.name, ...row.aliases);
+  };
+  for (const place of array(event?.places)) {
+    if (typeof place === "string") {
+      names.push(readEventPlace(place)?.name);
+    } else {
+      names.push(place?.name);
+      region(place?.regionId);
+    }
+  }
+  const impacts = event?.impacts ?? {};
+  for (const key of REGION_KEYED_IMPACTS) {
+    for (const op of array(impacts[key])) {
+      region(op?.regionId);
+      names.push(op?.regionName);
+    }
+  }
+  return names.map(clean).filter(Boolean);
+};
+
+// Whether an event records `about`: one of its names, spelled as the map
+// spells it (foldRegionKey: case, marks and spacing aside), or the same power
+// under another of its exact names (resolveOwner: a code, an alias).
+const eventIsAbout = (context, event, about) => {
+  const wanted = new Set([foldRegionKey(about), foldRegionKey(context.resolveOwner(about))].filter(Boolean));
+  return eventRecordNames(context, event)
+    .some((name) => wanted.has(foldRegionKey(name)) || wanted.has(foldRegionKey(context.resolveOwner(name))));
 };
 
 // `regionRef(record)`: what the region a record keys by id is called
@@ -821,7 +867,9 @@ const warSides = (war) => {
   const sideA = array(war?.sideA).map(clean).filter(Boolean);
   const sideB = array(war?.sideB).map(clean).filter(Boolean);
   if (sideA.length || sideB.length) return { sideA, sideB };
-  const named = stringsIn(war?.sides ?? war?.participants ?? war?.belligerents ?? war?.aggressors ?? war);
+  // A record from before the two sides: its own list of belligerents, never
+  // every string the record holds (its title, its cause).
+  const named = stringsIn(war?.sides ?? war?.participants ?? war?.belligerents ?? war?.aggressors ?? []);
   return { sideA: [...new Set(named)].slice(0, 12), sideB: [] };
 };
 const warBrief = (war) => {
@@ -1202,9 +1250,14 @@ export const executeLookup = (context, name, args = {}) => {
       const record = context.polities[owner] ?? Object.values(context.polities).find((entry) => clean(entry?.name) === owner) ?? {};
       const world = context.world ?? {};
       const held = context.ownerRows.get(owner) ?? [];
-      const wars = array(world.wars).filter((war) => mentions(war, owner)).map(warBrief);
+      // The wars it is a side of and the relations it is a party to, by those
+      // fields, never by a string of the record (its title, its summary).
+      const wars = array(world.wars).filter((war) => {
+        const { sideA, sideB } = warSides(war);
+        return namesPower(context, [...sideA, ...sideB], owner);
+      }).map(warBrief);
       const relations = array(world.relations)
-        .filter((relation) => mentions(relation, owner))
+        .filter((relation) => namesPower(context, [relation?.a, relation?.b], owner))
         .slice(0, 24)
         .map((relation) => ({ ...(relation && typeof relation === "object" ? relation : { value: relation }) }));
       const claimsBy = []; const claimsAgainst = [];
@@ -1233,8 +1286,7 @@ export const executeLookup = (context, name, args = {}) => {
     case "recent_events": {
       const limit = clampInt(a.limit, 1, 40, 12);
       const about = clean(a.about);
-      const filtered = about ? context.events.filter((event) => mentions({ t: event.title, d: event.description, i: event.impacts }, about)
-        || foldRegionKey(`${event.title} ${event.description}`).includes(foldRegionKey(about))) : context.events;
+      const filtered = about ? context.events.filter((event) => eventIsAbout(context, event, about)) : context.events;
       return { total: filtered.length, events: filtered.slice(-limit).map((event) => eventBrief(event, context.regionRef)) };
     }
     case "war_ledger": {
