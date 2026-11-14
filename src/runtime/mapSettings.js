@@ -50,6 +50,10 @@ export const MAP_SETTING_KEYS = {
     // triggers is a canned turn the player did not ask for; the beta leaves
     // that trade to the player, who opts in from Settings → AI.
     limitAiGeneration: "ai_limit_generation",
+    // The tasks that answer in a line or two are given a digest of the
+    // scenario's rules instead of the rules whole (AI/rulesDigest.js). OFF by
+    // default — read with getMapSetting.
+    rulesDigest: "ai_rules_digest",
     // Opt-in (ported from the abdulrahman-2005 fork): tasks nobody is waiting
     // on — today the event consolidator — ride the provider's batch endpoint
     // at about half the price, with the result applied later by a poller.
@@ -198,6 +202,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.disableIdleRotation]: "Disable idle globe rotation",
     [MAP_SETTING_KEYS.disableEventCamera]: "Disable camera movement during events",
     [MAP_SETTING_KEYS.limitAiGeneration]: "Limit AI generation",
+    [MAP_SETTING_KEYS.rulesDigest]: "Small tasks get the rules in short",
     [MAP_SETTING_KEYS.batchBackgroundTasks]: "Batch background AI tasks",
     [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
     [MAP_SETTING_KEYS.lookupFunctions]: "AI lookup functions",

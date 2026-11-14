@@ -54,6 +54,21 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player, 2026-11-13: 92,000 characters of scenario rules, some 30,000 tokens, read again by a local model for
+    // each task that answers in a line. AI/rulesDigest.js.
+    id: "2026-11-rules-digest",
+    kind: "minor",
+    date: "2026-11-13",
+    banners: [
+      {
+        title: "Small tasks can get a scenario's rules in short",
+        items: [
+          "Settings → AI has a new switch, \"Small tasks get the rules in short\", off by default. With it on, the tasks that answer in a line or two are sent a digest of the scenario's rules, written by the AI once and kept on this device, instead of the rules whole. Time skips, scenes and conversations are not changed.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",

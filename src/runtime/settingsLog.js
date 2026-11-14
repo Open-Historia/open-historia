@@ -172,6 +172,7 @@ registerSettingsSnapshot("AI", () => {
     items.push(
         ["Model reasoning", onOff(getReasoningEnabled())],
         ["Limit AI generation", onOff(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration))],
+        ["Small tasks get the rules in short", onOff(getMapSetting(MAP_SETTING_KEYS.rulesDigest))],
         ["Generate long time skips in segments", onOff(getMapSetting(MAP_SETTING_KEYS.chunkLongJumps))],
         ["AI lookup functions", lookupFunctionsState()],
         ["Show time skip events as they are written", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents))],
