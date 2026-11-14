@@ -45,22 +45,15 @@ export const scaleEventRange = (range, pacePercent = 100) => {
 
 // --- The world's share ---
 //
-// An event is the player's when the simulator says so (playerRelated) or when
-// its own words name the player's polity: a model that under-declares cannot
-// talk its way past the count. Whole words, case folded; a short name ("Ob") is
-// matched the same way and simply matches rarely. Words in any script: kept to
-// a-z and 0-9, a name written in Cyrillic or Arabic was never found.
-const fold = (value) => ` ${String(value ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim()} `;
-
-export const eventConcernsPlayer = (event, playerNames = []) => {
-    if (event?.playerRelated === true) return true;
-    const text = fold(`${asText(event?.title)} ${asText(event?.description)}`);
-    return asArray(playerNames).some((name) => {
-        const needle = fold(name);
-        // Three letters at least: " ob " is in half the paragraphs ever written.
-        return needle.trim().length >= 3 && text.includes(needle);
-    });
-};
+// An event is the player's when the simulator marks it playerRelated, and only
+// then: the directive below says what to mark. The player's names used to be
+// looked for in its words as well, so that a model that under-declared could not
+// talk its way past the count; but a name is found only where it is spelled as
+// the game spells it, between spaces, so a period told in Chinese, or in a
+// language that declines its names ("России"), counted differently from the
+// same period told in English, and a namesake (Georgia the US state) counted
+// as the player's.
+export const eventConcernsPlayer = (event) => event?.playerRelated === true;
 
 // Below this many events a share is not a meaningful thing to ask for.
 export const WORLD_SHARE_MIN_EVENTS = 3;
@@ -71,7 +64,7 @@ export const worldShareShortfall = (events, floorPercent, { playerNames = [] } =
     const floor = Number(floorPercent);
     if (!(floor > 0) || list.length < WORLD_SHARE_MIN_EVENTS) return null;
     const needed = Math.ceil((list.length * Math.min(100, floor)) / 100);
-    const world = list.filter((event) => !eventConcernsPlayer(event, playerNames)).length;
+    const world = list.filter((event) => !eventConcernsPlayer(event)).length;
     if (world >= needed) return null;
     const player = asText(asArray(playerNames)[0]) || "the player's polity";
     return {
@@ -386,7 +379,7 @@ export const buildWorldDirectionDirective = (direction, { playerPolity = "", spa
         parts.push(
             "[The World's Share — counted by the engine]\n"
             + `At least ${Math.round(share)}% of this period's events must be developments that do not involve ${player} at all: other powers acting on each other, in theatres ${player} is not in. `
-            + `An event that names ${player}, or that you mark playerRelated, counts as ${player}'s. The engine counts this on every answer and tells you when you fall short. `
+            + `An event counts as ${player}'s when you mark it playerRelated: mark every event ${player} takes part in, is the subject of, or that happens inside its territory. The engine counts these marks on every answer and tells you when you fall short. `
             + `This is a floor on how much of the world you show, NOT a ceiling on what the world does to ${player}: meet it by writing more elsewhere, never by leaving a rival's move against the player unwritten.`,
         );
     }

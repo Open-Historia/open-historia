@@ -68,11 +68,10 @@ import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nati
 import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nativeStructureDirector.js";
 import {
   buildPlayerFocusDirective,
-  citeNarratedOrders,
   collectPlayerMaterial,
   combinedShares,
-  createPlayerEventTest,
   createSpareTest,
+  isPlayerEvent,
   normalizePlayerFocus,
   playerFocusShortfall,
   settleOrders,
@@ -9165,16 +9164,26 @@ const applySimulationResult = async ({
   // prior matches, saturation) decide what those judgments may remove. The
   // default is KEEP, and any failure of the analysis keeps everything.
   // What the player has going on this period (playerFocus.js): the events that
-  // answer one of their orders or a Project date due now are spared by the
-  // filler gates below, because removing one leaves the order or the milestone
-  // with nothing on the timeline to show for it.
+  // answer one of their orders (actionIds) or move a Project with a date due now
+  // (their board ops) are spared by the filler gates below, because removing one
+  // leaves the order or the milestone with nothing on the timeline to show for
+  // it. A folded skip's board ops were lifted off its events before this
+  // (foldedTurnReview), into the review's board part, each naming its event by
+  // its place among the events the board was shown; they are read back by event.
   const applyFocus = await readPlayerFocusContext({ game: baseGame, world: baseWorld });
   const focusMaterial = playerMaterialFor(
     { actions: baseActions, chats: baseChats, events: baseEvents, world: baseWorld },
     applyFocus,
     { originDate: baseGame.gameDate, targetDate: normalizeString(result.stopDate) || baseGame.gameDate },
   );
-  const spareForPlayer = createSpareTest(focusMaterial);
+  const reviewedBoardOps = new Map();
+  for (const op of normalizeArray(review?.parts?.board?.projectOps)) {
+    const id = normalizeString(normalizeArray(review?.boardShownEvents)[Number(op?.eventIndex)]?.id);
+    if (id) reviewedBoardOps.set(id, [...(reviewedBoardOps.get(id) ?? []), op]);
+  }
+  const spareForPlayer = createSpareTest(focusMaterial, {
+    boardOpsOf: (event) => [...normalizeArray(event?.impacts?.projectOps), ...(reviewedBoardOps.get(normalizeString(event?.id)) ?? [])],
+  });
   // An event an order to a battlefield rests on is spared the same way: it
   // carries no operation of its own (the front engine works those out), and the
   // order would go with it if it went.
@@ -9182,15 +9191,10 @@ const applySimulationResult = async ({
     .flatMap((order) => normalizeArray(order?.eventIds).map(normalizeString))
     .filter(Boolean));
   const spareForFocus = (event) => spareForPlayer(event) || frontOrderedEventIds.has(normalizeString(event?.id));
-  // An order the jump carried out without citing it is cited here, before the
-  // filler gates, so the event is spared as an order's answer and settleOrders
-  // resolves the order instead of carrying it over to be retold next jump.
-  const citedEvents = citeNarratedOrders(baseActions, dedupedEvents, {
-    isPlayerEvent: applyFocus.isPlayerEvent,
-    playerNames: applyFocus.playerNames,
-  });
+  // An order is answered only by an event that cites its id (playerFocus.js
+  // settleOrders): one the skip told without its id is carried over as overdue.
   const mainCuration = await curateGeneratedEventsWithHidden({
-    events: citedEvents,
+    events: dedupedEvents,
     priorEvents,
     game: baseGame,
     world: baseWorld,
@@ -9202,7 +9206,7 @@ const applySimulationResult = async ({
   });
   let curatedEvents = mainCuration.events;
   for (const row of normalizeArray(mainCuration.dropped)) noteReceipt(receipt, "withheld", describeWithheldEvent(row), withheldEventNote(row));
-  filedEvents.push(...filedEventsFromRows(mainCuration.dropped, mainCuration.hidden, citedEvents));
+  filedEvents.push(...filedEventsFromRows(mainCuration.dropped, mainCuration.hidden, dedupedEvents));
   // Canonical events the curator (and the breadth repair's own screen and
   // curator) kept off the timeline. They still happened; the board pass reads
   // them alongside the segments' screened-out ones (result.hiddenEvents).
@@ -16327,31 +16331,12 @@ export const advanceActiveInteractive = async (choiceText) => {
 // data (playerFocus.js holds every rule; this is where the campaign's data is
 // gathered for them).
 //
-// The counter has to know the player's TERRITORY, not just their name: an
-// empire's internal events name a city or a province, or the country a province
-// used to be, and counting those as the wider world is how unrest in Lahore
-// became somebody else's news. Each region the player holds contributes its own
-// name and the country it belongs to on the map.
-const playerTerritoryNames = async (world, playerNames) => {
-  const keys = new Set(normalizeArray(playerNames).map((name) => normalizeString(name).toLowerCase()).filter(Boolean));
-  if (!keys.size) return [];
-  // Who holds a region, by the one rule the rest of the engine uses
-  // (lookupTools.js ownerOf): the campaign's override where there is one, then
-  // the region's own owner, then the country it belongs to on the stock map.
-  // Reading the overrides ALONE would find nothing for a player who has annexed
-  // nothing, which is most players — their home provinces were never transferred.
-  const overrides = normalizeWorldState(world).regionOwnershipOverrides ?? {};
-  const names = new Set();
-  for (const row of normalizeArray(await loadRegionCatalog().catch(() => []))) {
-    const owner = normalizeString(overrides[normalizeString(row?.id)] ?? row?.owner ?? row?.country);
-    if (!owner || !keys.has(owner.toLowerCase())) continue;
-    for (const value of [row?.name, row?.country]) {
-      const name = normalizeString(value);
-      if (name && !keys.has(name.toLowerCase())) names.add(name);
-    }
-  }
-  return [...names];
-};
+// An event counts as the player's when the simulator marks it playerRelated,
+// and only then (playerFocus.js isPlayerEvent): the directive tells it that the
+// player's territory is the player's, so unrest in Lahore is the British
+// Empire's news. The names of the regions the player held used to be looked for
+// in each event's words, which found them only as the map spells them, and
+// only in a language that puts spaces between its words.
 
 // The focus, the player's names and the test the counter uses, once per jump.
 const readPlayerFocusContext = async (bundle) => {
@@ -16361,14 +16346,12 @@ const readPlayerFocusContext = async (bundle) => {
   const playerNames = people.length > 1
     ? [...new Set(people.flatMap((name) => [name, toCountryName(name)]).map(normalizeString).filter(Boolean))]
     : [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))];
-  const territoryNames = await playerTerritoryNames(bundle?.world, playerNames);
   // The scenario's default under this game's own choice (gameFeatures.js).
   return {
     focus: normalizePlayerFocus(getActivePlayerFocus()),
     playerName,
     playerNames,
-    territoryNames,
-    isPlayerEvent: createPlayerEventTest({ playerNames, territoryNames }),
+    isPlayerEvent,
   };
 };
 
@@ -17065,12 +17048,10 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // when the two ask for more than the whole period, the world keeps what
           // is left. Both are counted the same way — never a rejection, said at
           // the top of the next turn.
+          // Counted by the events' playerRelated marks alone, the player's
+          // territory included (worldDirection.js eventConcernsPlayer).
           const shareShortfall = worldShareShortfall(candidate?.events, segmentShares.world, {
-            // The player's TERRITORY counts as the player here too. Without it an
-            // event inside the player's own empire satisfies the world's share,
-            // which is how unrest in a player-held province came to be filed as
-            // news from the wider world.
-            playerNames: [...focusContext.playerNames, ...focusContext.territoryNames],
+            playerNames: focusContext.playerNames,
           });
           if (shareShortfall) noteReceipt(draft, "short", shareShortfall.text, worldShareNote(shareShortfall));
           const focusShortfall = playerFocusShortfall(candidate?.events, {

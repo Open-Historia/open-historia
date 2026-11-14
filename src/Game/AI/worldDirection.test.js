@@ -54,43 +54,30 @@ test("a pace that is not a number is the built-in pace", () => {
 const PLAYER = ["Russian Federation", "Russia"];
 const event = (title, description = "", extra = {}) => ({ title, description, ...extra });
 
-test("an event is the player's when the simulator says so, or when its own words name the player", () => {
-    assert.equal(eventConcernsPlayer(event("Moscow raises tariffs", "", { playerRelated: true }), PLAYER), true);
-    assert.equal(eventConcernsPlayer(event("Poland protests to the Russian Federation"), PLAYER), true);
-    assert.equal(eventConcernsPlayer(event("Warsaw recalls its envoy", "The note is addressed to RUSSIA."), PLAYER), true);
-    assert.equal(eventConcernsPlayer(event("Brazil devalues the real", "Coffee exporters cheer."), PLAYER), false);
+// The player's names were looked for in the event's words as well: "России" was
+// not "Россия", a Chinese sentence had no breaks to find a name between, and
+// the same period counted differently in every language.
+test("an event is the player's when the simulator marks it playerRelated, and only then", () => {
+    assert.equal(eventConcernsPlayer(event("Moscow raises tariffs", "", { playerRelated: true })), true);
+    assert.equal(eventConcernsPlayer(event("Poland protests to the Russian Federation")), false, "named but not marked");
+    assert.equal(eventConcernsPlayer(event("Brazil devalues the real", "Coffee exporters cheer.")), false);
+    assert.equal(eventConcernsPlayer(event("x", "", { playerRelated: "true" })), false, "only the boolean mark");
+    assert.equal(eventConcernsPlayer(null), false);
 });
 
-test("the player's name is matched as whole words, never inside another", () => {
-    assert.equal(eventConcernsPlayer(event("Prussian reforms begin", "Belorussian exiles take note."), ["Russia"]), false);
-    assert.equal(eventConcernsPlayer(event("Romania mobilises"), ["Oman"]), false);
-    assert.equal(eventConcernsPlayer(event("Talks open in Oman"), ["Oman"]), true);
-    // A name too short to mean anything is not searched for at all.
-    assert.equal(eventConcernsPlayer(event("Ob river floods"), ["Ob"]), false);
-});
-
-// A name was looked for with everything but a-z and 0-9 taken out of it and of
-// the event, so one written in another script was never found.
-test("the player's name is found in any script, still as whole words", () => {
-    assert.equal(eventConcernsPlayer(event("Польша направила ноту России", "Нота адресована Российской Федерации."), ["Российская Федерация", "России"]), true);
-    assert.equal(eventConcernsPlayer(event("Белоруссия проводит учения"), ["Россия", "Руссия"]), false, "not inside another word");
-    assert.equal(eventConcernsPlayer(event("Бразилия девальвирует реал"), ["Россия"]), false);
-    assert.equal(eventConcernsPlayer(event("波兰向俄罗斯递交照会"), ["俄罗斯"]), false, "Chinese is not written in words: only the simulator's mark counts there");
-    assert.equal(eventConcernsPlayer(event("波兰向俄罗斯递交照会", "", { playerRelated: true }), ["俄罗斯"]), true);
-    assert.equal(eventConcernsPlayer(event("Η Πολωνία διαμαρτύρεται στη Ρωσία"), ["Ρωσία"]), true);
-});
-
-test("the player's name is found in any script, as whole words there too", () => {
-    // Folded to a-z0-9 a name in Cyrillic was no name, and no event ever named it.
-    assert.equal(eventConcernsPlayer(event("Польша направила ноту", "Российская Федерация отвечает зеркально."), ["Российская Федерация"]), true);
-    assert.equal(eventConcernsPlayer(event("Бразилия девальвирует реал", "Экспортёры кофе довольны."), ["Российская Федерация"]), false);
-    assert.equal(eventConcernsPlayer(event("Переговоры открылись", "Оман принимает делегации."), ["Оман"]), true);
-    assert.equal(eventConcernsPlayer(event("Романовы возвращаются"), ["Оман"]), false, "never inside another word");
-    // Chinese: found where punctuation sets the name apart. Still a whole word
-    // of three characters or more, and an unbroken sentence is one word.
-    assert.equal(eventConcernsPlayer(event("首尔消息：大韩民国，举行选举。"), ["大韩民国"]), true);
-    assert.equal(eventConcernsPlayer(event("大韩民国举行选举"), ["大韩民国"]), false);
-    assert.equal(eventConcernsPlayer(event("东京消息：日本，公布新预算。"), ["日本"]), false);
+test("the same event counts the same in every language", () => {
+    const twins = [
+        event("Poland protests to the Russian Federation", "The note is addressed to Russia."),
+        event("La Pologne proteste auprès de la Fédération de Russie", "La note est adressée à la Russie."),
+        event("Польша направила ноту России", "Нота адресована Российской Федерации."),
+        event("波兰向俄罗斯递交照会", "照会致俄罗斯联邦。"),
+    ];
+    assert.deepEqual(twins.map((entry) => eventConcernsPlayer({ ...entry, playerRelated: true })), [true, true, true, true]);
+    assert.deepEqual(twins.map((entry) => eventConcernsPlayer(entry)), [false, false, false, false]);
+    // Three tellings of it and one other event, against a floor of half the period.
+    const shares = (entry) => worldShareShortfall([entry, entry, entry, event("Brazil devalues the real")], 50, { playerNames: PLAYER });
+    assert.deepEqual(twins.map((entry) => shares({ ...entry, playerRelated: true })?.world), [1, 1, 1, 1]);
+    assert.deepEqual(twins.map((entry) => shares(entry)), [null, null, null, null]);
 });
 
 test("the floor is met when enough of the period belongs to the rest of the world", () => {
@@ -106,10 +93,10 @@ test("the floor is met when enough of the period belongs to the rest of the worl
 test("a shortfall says the count, the floor, and what to do about it", () => {
     const events = [
         event("Russian forces enter Kharkiv", "", { playerRelated: true }),
-        event("NATO condemns Russia"),
-        event("The Russian Federation recalls its envoy"),
+        event("NATO condemns Russia", "", { playerRelated: true }),
+        event("The Russian Federation recalls its envoy", "", { playerRelated: true }),
         event("Brazil devalues the real"),
-        event("Sanctions on Russia widen"),
+        event("Sanctions on Russia widen", "", { playerRelated: true }),
     ];
     const shortfall = worldShareShortfall(events, 40, { playerNames: PLAYER });
     assert.deepEqual([shortfall.world, shortfall.total, shortfall.needed], [1, 5, 2]);
@@ -131,7 +118,8 @@ test("the simulator is told the floor as a number, that the engine counts it, an
     const directive = buildWorldDirectionDirective({ eventPace: 100, worldShare: 35, priorityRules: "" }, { playerPolity: "Russian Federation" });
     assert.match(directive, /^\[The World's Share — counted by the engine\]/);
     assert.match(directive, /At least 35% of this period's events/);
-    assert.match(directive, /names Russian Federation, or that you mark playerRelated/);
+    assert.match(directive, /An event counts as Russian Federation's when you mark it playerRelated: mark every event Russian Federation takes part in, is the subject of, or that happens inside its territory\./);
+    assert.doesNotMatch(directive, /names Russian Federation/);
     assert.doesNotMatch(directive, /PRIORITY RULES/);
 });
 
