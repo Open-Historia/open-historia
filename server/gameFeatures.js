@@ -10,6 +10,7 @@
 // isFeatureEnabled (client: isActiveFeatureEnabled in src/runtime/gameFeatures.js).
 
 import { scriptedImpactFields } from "./scriptedImpacts.js";
+import { nameId } from "./nameId.js";
 
 export const FEATURE_DEFINITIONS = Object.freeze([
   Object.freeze({
@@ -285,18 +286,47 @@ const scriptedEventHash = (value) => {
   return (hash >>> 0).toString(36);
 };
 
+// A beat's id: the author's own where there is one, by the game's one rule for
+// an id made from a name (nameId.js): an id written in a-z and 0-9 is the id
+// it always was, and one written in another script is its own hash. Cut to
+// a-z and 0-9, "Событие 1" and "Глава 1" were both "1", so whichever beat came
+// to hold "1" was taken for one that had fired. A beat without an id of its
+// own gets one from its date, its text and its place.
 const scriptedEventId = (value, fallbackSeed) => {
-  const explicit = String(value ?? "").trim().toLowerCase()
+  const explicit = nameId(value, (id) => String(id ?? "").trim().toLowerCase()
     .replace(/[^a-z0-9._:-]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
+    .slice(0, 120));
   return explicit || `scripted-${scriptedEventHash(fallbackSeed)}`;
 };
 
-const scriptedEventTitle = (body) => {
+// A beat's first sentence, by Unicode's own sentence rules (Intl.Segmenter,
+// UAX #29), which no language owns: a sentence ends at a terminal in any
+// script, "。" and "？" with no space after them as well as ". " and "؟ ", but
+// not at the point of "3.5". Twelve characters at least before its full stop,
+// so "Mr." alone is no sentence. Read as ". ! ?" and a space, a beat written in
+// Chinese or Japanese was one sentence however many it had. Where the
+// segmenter is missing, a sentence terminal followed by a space.
+const SENTENCES = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
+  ? new Intl.Segmenter(undefined, { granularity: "sentence" })
+  : null;
+const firstSentence = (text) => {
+  if (!SENTENCES) return /^(.{12,}?\p{Sentence_Terminal})\s/u.exec(`${text} `)?.[1] ?? text;
+  let sentence = "";
+  for (const { segment } of SENTENCES.segment(text)) {
+    sentence += segment;
+    if (sentence.trim().length > 12) break;
+  }
+  return sentence.trim();
+};
+
+// A beat's title where its author gave none: its first sentence, or the whole
+// beat when that is longer than a title, at most 140 characters, without the
+// sentence's own full stop.
+export const scriptedEventTitle = (body) => {
   const text = String(body ?? "").replace(/\s+/g, " ").trim();
-  const sentence = /^(.{12,140}?[.!?])\s/.exec(`${text} `);
-  return (sentence ? sentence[1] : text).slice(0, 140).replace(/[.!?]$/, "");
+  const sentence = firstSentence(text);
+  return (sentence.length <= 141 ? sentence : text).slice(0, 140).replace(/\p{Sentence_Terminal}$/u, "");
 };
 
 const normalizeScriptedCondition = (value) => {
