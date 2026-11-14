@@ -31,6 +31,7 @@ const BETWEEN = 0.7;
 const LATELY_MS = 12000;
 const NONE = Object.freeze([]);
 const selectStrikes = (world) => (Array.isArray(world?.strikes) ? world.strikes : NONE);
+const selectGameRound = (game) => Number(game?.round) || 0;
 // How many kilometres a pixel of the map is, where it is being looked at.
 const kmPerPixelOf = (map) => {
   try {
@@ -66,6 +67,7 @@ const StrikeLayers = () => {
   const map = mapRef?.getMap?.() ?? mapRef ?? null;
   const raw = useRuntimeState("world", selectStrikes);
   const world = useRuntimeState("world");
+  const gameRound = useRuntimeState("game", selectGameRound);
   const strikes = useMemo(() => normalizeStrikes(raw), [raw]);
 
   // What is being played: [{ plan, begins (ms) }], and when each strike was last played.
@@ -76,6 +78,7 @@ const StrikeLayers = () => {
   const heldRef = useRef(null);
   const worldRef = useRef(world);
   const strikesRef = useRef(strikes);
+  const roundRef = useRef(gameRound);
   const layerRef = useRef(null);
   const soundsRef = useRef(null);
   if (!soundsRef.current) soundsRef.current = makeStrikeSounds();
@@ -88,7 +91,32 @@ const StrikeLayers = () => {
   useEffect(() => {
     worldRef.current = world;
     strikesRef.current = strikes;
+    roundRef.current = gameRound;
   });
+
+  const hasActiveCraters = () => {
+    const curRound = roundRef.current ?? 0;
+    return (strikesRef.current ?? []).some((s) => {
+      if (!s?.to || !Number.isFinite(s.to.lng)) return false;
+      const roundAge = curRound - (Number(s.round) || curRound);
+      return roundAge >= 0 && roundAge <= 1;
+    });
+  };
+
+  const startTick = () => {
+    if (!map || frameRef.current) return;
+    const tick = () => {
+      try {
+        map.triggerRepaint();
+      } catch { /* the map is gone */ }
+      if (playingRef.current.length > 0 || (!reduceMotionEnabled() && hasActiveCraters())) {
+        frameRef.current = requestAnimationFrame(tick);
+      } else {
+        frameRef.current = 0;
+      }
+    };
+    frameRef.current = requestAnimationFrame(tick);
+  };
 
   // The layer: one for the map's life, put back after a change of style.
   useEffect(() => {
@@ -106,7 +134,7 @@ const StrikeLayers = () => {
         for (const disc of seen.discs) items.discs.push({ ...disc, rim: ringOf(disc.centre, disc.km, 1) });
       }
       // Persistent smoldering fires & rising smoke plumes at impact craters from recent strikes:
-      const craters = craterItemsAt(strikesRef.current, worldRef.current?.round, now, { kmPerPixel });
+      const craters = craterItemsAt(strikesRef.current, roundRef.current, now, { kmPerPixel });
       items.ribbons.push(...craters.ribbons);
       items.points.push(...craters.points);
       for (const disc of craters.discs) items.discs.push({ ...disc, rim: ringOf(disc.centre, disc.km, 1) });
@@ -160,13 +188,6 @@ const StrikeLayers = () => {
     list.forEach((strike) => {
       const placed = strike.to && Number.isFinite(strike.to.lng) && strike.from && Number.isFinite(strike.from.lng);
       const ends = placed ? { from: [strike.from.lng, strike.from.lat], to: [strike.to.lng, strike.to.lat] } : strikeEnds(strike, known());
-      // Detect drone strikes either from weapon type or from the story event text
-      const event = (worldRef.current?.events ?? []).find((e) => e?.id === strike.eventId);
-      const eventText = `${event?.title ?? ""} ${event?.description ?? ""}`;
-      const isDroneStrike = strike.weapon === "drone strike" || /\b(?:drone|drones|droneaanval|drone-aanval|kamikaze|shahed|geran|fpv|uav)\b/i.test(eventText);
-      if (isDroneStrike && strike.weapon !== "drone strike") {
-        strike = { ...strike, weapon: "drone strike" };
-      }
       const plan = ends.from && ends.to ? planStrike(strike, { ...ends, flat, kmPerPixel }) : null;
       playedRef.current.set(strike.id, now);
       if (!plan) return;
@@ -178,17 +199,9 @@ const StrikeLayers = () => {
       started.push({ id: plan.id, weapon: plan.weapon, km: Math.round(plan.km), shown: plan.shown, down: plan.down, lasts: Math.round(plan.lasts * 10) / 10, from: plan.from, to: plan.to });
     });
     if (started.length === 0) return started;
-    cancelAnimationFrame(frameRef.current);
-    const hasCraters = () => (strikesRef.current ?? []).some((s) => s?.to && Number.isFinite(s.to.lng));
-    const tick = () => {
-      try {
-        map.triggerRepaint();
-      } catch { /* the map is gone */ }
-      if (playingRef.current.length > 0 || (!reduceMotionEnabled() && hasCraters())) {
-        frameRef.current = requestAnimationFrame(tick);
-      }
-    };
-    frameRef.current = requestAnimationFrame(tick);
+    if (frameRef.current) cancelAnimationFrame(frameRef.current);
+    frameRef.current = 0;
+    startTick();
     return started;
   };
   const playRef = useRef(play);
@@ -205,23 +218,20 @@ const StrikeLayers = () => {
     if (!before) {
       for (const strike of strikes) playedRef.current.set(strike.id, -Infinity);
       // Trigger animation loop for existing smoldering craters if any
-      if (!reduceMotionEnabled() && strikes.some((s) => s?.to && Number.isFinite(s.to.lng))) {
-        cancelAnimationFrame(frameRef.current);
-        const tick = () => {
-          try {
-            map?.triggerRepaint?.();
-          } catch { /* the map is gone */ }
-          if (playingRef.current.length > 0 || (!reduceMotionEnabled() && (strikesRef.current ?? []).some((s) => s?.to && Number.isFinite(s.to.lng)))) {
-            frameRef.current = requestAnimationFrame(tick);
-          }
-        };
-        frameRef.current = requestAnimationFrame(tick);
+      if (!reduceMotionEnabled() && hasActiveCraters()) {
+        if (frameRef.current) cancelAnimationFrame(frameRef.current);
+        frameRef.current = 0;
+        startTick();
       }
       return;
     }
     const fresh = strikes.filter((strike) => !before.has(strike.id));
-    if (fresh.length > 0) playRef.current(fresh);
-  }, [strikes, map]);
+    if (fresh.length > 0) {
+      playRef.current(fresh);
+    } else if (!reduceMotionEnabled() && hasActiveCraters() && !frameRef.current) {
+      startTick();
+    }
+  }, [strikes, map, gameRound]);
 
   // An event has come into view, or a card asks to see its strike again.
   useEffect(() => subscribeStrikeRequests(() => {

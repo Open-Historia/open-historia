@@ -65,6 +65,14 @@ export const droneShapeForOwner = (owner) => {
   }
   return 5;
 };
+
+export const droneShapeForStrike = (strike) => {
+  if (Number.isFinite(strike?.shape)) return Number(strike.shape);
+  const model = String(strike?.model ?? strike?.variant ?? strike?.droneType ?? "").trim().toLowerCase();
+  if (model.includes("shahed") || model.includes("delta") || model.includes("geran")) return 4;
+  if (model.includes("western") || model.includes("twin-boom") || model.includes("bayraktar")) return 5;
+  return droneShapeForOwner(strike?.owner);
+};
 // On a flat map a missile's way bows aside by this much of its arc's height.
 const BOW_OF_HEIGHT = 0.55;
 // (and never so far that it would be carried over a pole, where a flat map ends)
@@ -262,8 +270,8 @@ export const planStrike = (strike, { from, to, flat = false, kmPerPixel = 0 } = 
   const aircraft = fliesAsAircraft(strike.weapon);
   const nuclear = isNuclear(strike.weapon);
   const most = drone ? DRONES_SHOWN : aircraft ? AIRCRAFT_SHOWN_MOST : MISSILES_SHOWN_MOST;
-  const count = Math.max(1, Math.round(Number(strike.count) || (drone ? DRONES_SHOWN : 1)));
-  const shown = drone ? DRONES_SHOWN : Math.min(most, count);
+  const count = Math.max(1, Math.round(Number(strike.count) || 1));
+  const shown = Math.min(most, count);
   const wanted = Math.max(0, Math.min(count, Math.round(Number(strike.down) || 0)));
   // As many of those shown are lost as their share of the whole: all, when all were.
   const down = wanted >= count ? shown : wanted === 0 ? 0 : clamp(Math.round((wanted * shown) / count), 1, Math.max(1, shown - 1));
@@ -283,7 +291,7 @@ export const planStrike = (strike, { from, to, flat = false, kmPerPixel = 0 } = 
       : 0;
   // (How long an aircraft takes to fly as far as it keeps from the next.)
   const gapSeconds = (drone || aircraft) ? Math.max(0.2, (gap * flight) / km) : 0;
-  const droneShape = drone ? droneShapeForOwner(strike.owner) : 0;
+  const droneShape = drone ? droneShapeForStrike(strike) : 0;
   const units = [];
   for (let index = 0; index < shown; index += 1) {
     const lands = placeFrom(to, chance(strike.id, index, "bearing") * 360, spread * Math.sqrt(chance(strike.id, index, "off")) * (shown > 1 ? 1 : 0));

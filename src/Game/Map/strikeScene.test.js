@@ -590,6 +590,16 @@ test("drone strikes fly in a 7-drone arrowhead V-formation with correct Shahed o
   const westernPlan = planStrike(strike({ weapon: "drone strike", count: 12, owner: "Ukraine" }), { from: KYIV, to: [35, 50] });
   assert.equal(westernPlan.droneShape, 5, "Ukraine uses Western model (shape 5)");
 
+  // 3. Drone count respects launched quantity
+  const singleDrone = planStrike(strike({ weapon: "drone strike", count: 1, owner: "Ukraine" }), { from: KYIV, to: [35, 50] });
+  assert.equal(singleDrone.shown, 1, "single drone strike shows 1 drone");
+  const threeDrones = planStrike(strike({ weapon: "drone strike", count: 3, owner: "Ukraine" }), { from: KYIV, to: [35, 50] });
+  assert.equal(threeDrones.shown, 3, "3-drone strike shows 3 drones");
+
+  // 4. Structured model attribute
+  const structuredModel = planStrike(strike({ weapon: "drone strike", count: 2, model: "shahed" }), { from: KYIV, to: [35, 50] });
+  assert.equal(structuredModel.droneShape, 4, "structured model overrides default");
+
   // Mid-flight visual items check
   const midFlight = strikeItemsAt(shahedPlan, shahedPlan.units[0].flight * 0.5);
   const droneSprites = midFlight.points.filter((p) => p.shape === 4 && p.at[2] > 0);

@@ -371,11 +371,12 @@ export const createStrikeSounds = ({ makeContext, enabled = soundEffectsEnabled,
 
       // Schedule impact or intercept sound
       const flightTime = Number(unit.flight) || 3.0;
-      if (unit.down && unit.shotAt !== null && unit.shotAt !== undefined) {
+      const downFrac = unit.down !== null && unit.down !== undefined ? Number(unit.down) : (unit.shotAt !== null && unit.shotAt !== undefined ? Number(unit.shotAt) : null);
+      if (downFrac !== null && Number.isFinite(downFrac) && downFrac > 0) {
         // Intercepted mid-air
-        const interceptAt = launchAt + flightTime * unit.shotAt;
+        const interceptAt = launchAt + flightTime * downFrac;
         detonateImpact({ at: interceptAt, nuclear: false, duration: 1.2 });
-      } else if (!unit.down) {
+      } else {
         // Hits destination
         const landAt = launchAt + flightTime;
         detonateImpact({ at: landAt, nuclear: Boolean(plan.nuclear), duration: 2.2 });
@@ -384,6 +385,11 @@ export const createStrikeSounds = ({ makeContext, enabled = soundEffectsEnabled,
   };
 
   const dispose = () => {
+    try {
+      if (context && typeof context.close === "function" && context.state !== "closed") {
+        context.close().catch(() => {});
+      }
+    } catch { /* ignore close error */ }
     context = null;
     master = null;
     noise = null;
