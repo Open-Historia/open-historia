@@ -18,6 +18,7 @@ import { DEFENSIVE_AGREEMENT_TYPES, GUARANTEE_TYPE } from "../../runtime/allianc
 import {
   CONFLICT_STORYLINE_KINDS,
   NEUTRAL_STORYLINE_KIND,
+  STORYLINE_KINDS,
   STORYLINE_KIND_LIST_TEXT,
   storylineKindOf,
 } from "../../runtime/storylineKinds.js";
@@ -1573,16 +1574,21 @@ const clampNextReviewDate = ({ stopDate, pressure, momentum, status, requested, 
 const STORYLINE_RECORD_SEPARATOR = "~";
 const MAX_STORYLINE_UPDATES_PER_JUMP = 16;
 
-// A storyline state is a sentence; a kind, a title and a list of polity names
-// are not. The longest comma-separated stretch decides it: the longest official
-// polity name ("United Kingdom of Great Britain and Northern Ireland") is eight
-// words, so a list of names never reaches nine, and a stretch of six or more
-// words that ends like a sentence is prose. A list that happens to end "U.S."
-// stays a list, because none of its names is six words long.
-const looksLikeStorylineStateProse = (value) => {
-  const text = normalizeString(value);
-  const longest = Math.max(0, ...text.split(",").map((part) => part.trim().split(/\s+/).filter(Boolean).length));
-  return longest >= 9 || (longest >= 6 && /[.!?]$/.test(text));
+// A record short of separators whose state slot is empty: did the model leave
+// out empty positional fields, so that its last field is its state? Read from
+// the record's shape alone. Where every field between its startedDate and its
+// last one is empty, those were the empty kind, title or participants it
+// collapsed, and the last field is the state. A last field after a written kind
+// or title is that slot's own value (a list of names, a title), and the state
+// stays empty for the validator to report; and alone after the startedDate, an
+// exact storyline kind is the kind. A state was once told from a list by its
+// words, six or more ending in ".", "!" or "?", which no Chinese, Japanese or
+// Thai state ever passed ("there should be absolutely no keywording done in this
+// game anywhere", the owner, 2026-11-13).
+const stateInLastField = (fields, separators) => {
+  if (separators < 5 || separators > 7) return false;
+  if (fields.slice(5, separators).some((field) => normalizeString(field))) return false;
+  return separators > 5 || !STORYLINE_KINDS.includes(normalizeString(fields[separators]).toLowerCase());
 };
 
 const parseStorylineRecord = (line, index = 0) => {
@@ -1621,14 +1627,14 @@ const parseStorylineRecord = (line, index = 0) => {
   // turn came back as "id~active~20~75~2024-01-09~~~<state>", seven separators,
   // which put every state into participantsCSV and cost the whole jump to
   // "record 1 must describe the process state". The line's final field is where
-  // the model put the state; move it home when that is plainly what it is.
-  // Only kind, title and participants are recovered: a record short enough to
-  // put its state in startedDate or earlier is too broken to read positionally.
+  // the model put the state; move it home when the record's shape says so
+  // (stateInLastField). Only kind, title and participants are recovered: a
+  // record short enough to put its state in startedDate or earlier is too broken
+  // to read positionally.
   if (
-    separators >= 5 &&
-    separators <= 7 &&
     !normalizeString(fields[9]) &&
-    looksLikeStorylineStateProse(fields[separators])
+    normalizeString(fields[separators]) &&
+    stateInLastField(fields, separators)
   ) {
     fields[9] = fields[separators];
     fields[separators] = "";

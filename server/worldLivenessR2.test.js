@@ -440,6 +440,20 @@ test("a storyline record two or three empty fields short keeps its state", async
   assert.equal(title.title, "Armenia-Azerbaijan Border Friction After Ceasefire");
   assert.equal(title.state, "");
 
+  // By the record's shape, never its words: a state in any language, or a short
+  // one, is found where the empty fields were collapsed before it.
+  for (const state of ["情报网络在各地区据点持续扩展。", "情報網は各地の拠点で拡大を続けている", "Talks stall.", "Переговоры зашли в тупик"]) {
+    assert.equal(decode(`storyline-w~active~20~75~2024-01-09~~~${state}`).state, state, state);
+    assert.equal(decode(`storyline-w~active~20~75~2024-01-09~~${state}`).state, state, state);
+    assert.equal(decode(`storyline-w~active~20~75~2024-01-09~${state}`).state, state, state);
+  }
+  // Alone after the start date, a storyline kind is the kind, and the state stays empty.
+  const kindOnly = decode("storyline-k~active~20~75~2024-01-09~crisis");
+  assert.equal(kindOnly.kind, "crisis");
+  assert.equal(kindOnly.state, "");
+  // After a written kind, the last field is never moved, in any language.
+  assert.equal(decode("storyline-n~active~40~30~2020-01-01~crisis~边境摩擦~亚美尼亚, 阿塞拜疆").state, "");
+
   // The one-short shape and a complete record read exactly as before.
   const oneShort = decode("iran-cyber-sovereignty-2024~active~14~80~~~~~National cyber sovereignty infrastructure achieves advanced operational status.");
   assert.match(oneShort.state, /^National cyber sovereignty/);
