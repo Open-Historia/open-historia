@@ -186,15 +186,20 @@ test("an unknown power is answered with the closest exact names, else the alphab
   assert.match(ask("Russia").error, /not a power/);
 });
 
-test("find_region: exact, with an administrative suffix, a transliteration off, or ambiguous", () => {
+test("find_region: exact, wrapped in words of any language, a transliteration off, or ambiguous", () => {
   const exact = run("find_region", { name: "Kharkiv" });
   assert.equal(exact.bestMatch.name, "Kharkiv");
   assert.equal(exact.bestMatch.rule, "exact");
   assert.equal(exact.matches[0].confidence, 100);
 
-  const suffixed = run("find_region", { name: "Kharkiv Oblast" });
-  assert.equal(suffixed.bestMatch.name, "Kharkiv");
-  assert.equal(suffixed.bestMatch.rule, "affix");
+  // By the name's whole words, never a list of administrative words: the
+  // French wording is found exactly as the English one is.
+  for (const name of ["Kharkiv Oblast", "Oblast de Kharkiv"]) {
+    const wrapped = run("find_region", { name });
+    assert.equal(wrapped.bestMatch.name, "Kharkiv", name);
+    assert.equal(wrapped.bestMatch.rule, "words", name);
+    assert.equal(wrapped.matches[0].name, "Kharkiv", name);
+  }
 
   const spelled = run("find_region", { name: "Zaporizhzhya", owner: "Russian Federation" });
   assert.equal(spelled.owner, "Russian Federation");
@@ -261,6 +266,37 @@ test("recent_events: newest last, bounded, filterable by a name, with what moved
   assert.deepEqual(about.events.map((event) => event.id), ["e1"]);
   assert.deepEqual(about.events[0].mapChanges, ["Zaporizhzhia -> Russian Federation"]);
   assert.deepEqual(run("recent_events", { about: "Ukraine" }).events.map((event) => event.id), ["e1"]);
+});
+
+// `about` is matched against what an event records, never its words: a title
+// or a description that held the name found the event (and "Kharkiv" found one
+// about Kharkiv Oblast's neighbours), while one told in another language than
+// the map's names was found by nothing it said.
+test("recent_events finds an event by what it records, the same in every language, and never by its words", () => {
+  const decided = { principal: "Russian Federation", principalKind: "polity", sovereignPolity: "Russian Federation", authority: "autonomous", sovereignActors: [{ polity: "Russian Federation", authority: "autonomous" }] };
+  const atKharkiv = { impacts: {}, places: [{ kind: "city", name: "Kharkiv", lng: 36.25, lat: 49.99 }] };
+  const events = [
+    { ...atKharkiv, id: "en", date: "2014-03-07", title: "Shelling near Kharkiv", description: "The city is hit." },
+    { ...atKharkiv, id: "uk", date: "2014-03-07", title: "Обстріл поблизу Харкова", description: "Місто під ударом." },
+    { id: "words", date: "2014-03-08", title: "Kharkiv", description: "Kharkiv, Zaporizhzhia and the Russian Federation: all quiet.", impacts: {} },
+    { id: "decided", date: "2014-03-09", title: "Мобилизация", description: "Призыв резервистов.", agency: decided, impacts: {} },
+    { id: "region", date: "2014-03-10", title: "Бої", description: "", places: [{ kind: "region", name: "Kharkiv", regionId: "ukr-kharkiv" }], impacts: {} },
+    { id: "written", date: "2014-03-11", title: "Протести", description: "", places: ["city: Zaporizhzhia, country: Ukraine"], impacts: {} },
+  ];
+  const ctx = buildLookupContext({ regions: REGIONS, world: WORLD, events, player: "Ukraine" });
+  const ids = (about) => executeLookup(ctx, "recent_events", { about }).events.map((event) => event.id);
+  assert.deepEqual(ids("Kharkiv"), ["en", "uk", "region"]);
+  assert.deepEqual(ids("Russian Federation"), ["decided"]);
+  assert.deepEqual(ids("RUS"), ["decided"], "a power under its own code is the power");
+  assert.deepEqual(ids("Zaporizhzhia"), ["written"], "a place written but not yet found is still the place it names");
+  assert.deepEqual(ids("Ukraine"), ["written"], "the country a written place was said to be in");
+});
+
+test("power_info lists the wars a power is a side of, never one whose title names it", () => {
+  const world = { ...WORLD, wars: [...WORLD.wars, { id: "w2", status: "active", title: "Ukraine", cause: "Ukraine", sideA: ["Russian Federation"], sideB: ["Belarus"] }] };
+  const ctx = buildLookupContext({ regions: REGIONS, world, player: "Ukraine" });
+  assert.deepEqual(executeLookup(ctx, "power_info", { name: "Ukraine" }).wars.map((war) => war.id), ["w1"]);
+  assert.deepEqual(executeLookup(ctx, "power_info", { name: "Russian Federation" }).wars.map((war) => war.id), ["w1", "w2"]);
 });
 
 test("recent_events and list_projects name the regions their records key by id, never the id", () => {

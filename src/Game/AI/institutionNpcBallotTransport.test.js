@@ -25,7 +25,20 @@ test("raw Council vote aliases normalize before chat schema validation", () => {
   assert.deepEqual(normalizeInstitutionChatAction(normalized.actions[0]), normalized.actions[0]);
 });
 
-test("raw Council action arrays and speak/polity aliases normalize without inventing authority", () => {
+// The type word is never read for what it seems to mean: an action that has a speaker and words is a message by its
+// shape, whatever its type says, "speak" or its French twin "parler" alike; one that has neither is left for the schema.
+test("an action with a speaker and words is a message by its shape, in any language; another type word is not read", () => {
+  const read = (type) => normalizeGameplayPayload("chatActions", [{ type, polity: "Austria-Hungary", content: "Vienna supports the motion." }]).actions[0];
+  for (const type of ["speak", "parler", "say", "dire", "message", undefined]) {
+    assert.deepEqual(read(type), { type: "send_message", actorName: "Austria-Hungary", content: "Vienna supports the motion." }, String(type));
+  }
+  assert.equal(read("Send Message").type, "send_message", "the schema's own word, its spaces and case aside");
+  const silent = normalizeGameplayPayload("chatActions", [{ type: "applaudir", polity: "Austria-Hungary" }]).actions[0];
+  assert.equal(silent.type, "applaudir", "no words, no speaker's message: left as written");
+  assert.equal(validateGameplayPayload("chatActions", { actions: [silent] }).valid, false);
+});
+
+test("raw Council action arrays and the polity field name normalize without inventing authority", () => {
   const normalized = normalizeGameplayPayload("chatActions", [
     { type: "speak", polity: "Austria-Hungary", content: "Vienna supports the motion." },
     { type: "institution_vote", polity: "Austria-Hungary", institutionId: "wrong-id", proposalId, choice: "yes" },

@@ -4,7 +4,6 @@
 // an Event Editor reaction, and the advisor's own "send this to <country>".
 // Moved out of gameplay.js so node tests can drive it.
 
-import { echoesExistingMessage } from "../../runtime/chatEcho.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 
 const clean = (value) => String(value ?? "").trim();
@@ -106,18 +105,17 @@ const withCases = (chat, built, messages) => {
 // including a brand-new chat's own opener: the UI groups and sorts chats by
 // their messages' own `time`, so an unstamped opener left the whole chat
 // looking dateless.
-// `dropEchoes` discards a note that merely parrots something already in the
-// thread it would land in. Even when told not to, a model hands back the line it
-// was just shown, and posting it has the polity repeat the player to their face —
-// worse than saying nothing.
 //
-// `dropped` on the returned array counts the notes discarded this way, so a
-// caller that must know whether anything actually landed can tell without
-// diffing the result.
-export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "", dropEchoes = false } = {}) => {
+// (A note that "echoed" a line of its thread used to be dropped: its words
+// inside a line's, or a line's inside its, case and punctuation aside. That
+// dropped real notes that quoted what they answered, and its floor of twelve
+// characters, a few words in English, let most lines in Chinese or Japanese
+// through unread. What caused the echoes was a prompt that did not say who
+// wrote each line, and every line the model is shown now names its speaker:
+// runtime/idleConversationContext.js.)
+export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "" } = {}) => {
   let chats = [...storageChats];
   const created = [];
-  let dropped = 0;
   const stamp = (messages) => (stampTime
     ? messages.map((msg) => (msg.time ? msg : { ...msg, time: stampTime }))
     : messages);
@@ -158,12 +156,6 @@ export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampT
       && clean(chat.player).toLowerCase() === owner
       && chatParticipantKey(chat.countries) === key) : -1;
     if (existingIdx !== -1) {
-      if (dropEchoes && built.messages.some((msg) =>
-        echoesExistingMessage(msg.text, chats[existingIdx].messages))) {
-        logGeneratedChat(built, "dropped — it echoed a message already in the thread");
-        dropped += 1;
-        continue;
-      }
       logGeneratedChat(built, "appended to an existing thread");
       chats = chats.map((chat, index) => (index === existingIdx
         ? { ...chat, messages: appendMessages(chat.messages, stamp(built.messages)) }
@@ -183,8 +175,5 @@ export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampT
     created.push({ ...built, messages: appendMessages([], stamp(built.messages)) });
   }
 
-  const result = [...created, ...chats];
-  // Non-enumerable so this never rides along into a JSON write of the chats.
-  Object.defineProperty(result, "dropped", { value: dropped, enumerable: false });
-  return result;
+  return [...created, ...chats];
 };

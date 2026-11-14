@@ -128,7 +128,7 @@ test("a prompt already led by the block is not led twice", () => {
 
 test("the tasks that decide nothing for the player are told nothing of the difficulty", () => {
   assert.deepEqual([...TASKS_WITHOUT_DIFFICULTY].sort(), [
-    "demandCheck", "descriptionToAction", "eventConsolidator", "geographyResolver",
+    "demandCheck", "descriptionToAction", "eventConsolidator",
     "pregameHistory", "politicalWorldGeneration", "politicalWorldVerification", "timelineCurator", "translation",
     // Rostra's Search: what ordinary people in a place are posting.
     "placeFeed",

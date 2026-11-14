@@ -97,21 +97,35 @@ test("Phase009C diplomacy uses the speaking polity's bounded Political Decision 
 
 
 
-test("diplomacy supplies the current player proposal as compact Political World selection focus", () => {
-  const result = buildDiplomaticPoliticalContext({
+// The capsule's goals, fears and pressures used to be re-ranked by the words
+// they shared with the player's proposal, with English stopwords and suffixes
+// stripped: a proposal in another language moved nothing, and an English one
+// moved whatever shared a word. They keep the actor's own order now.
+test("the speaker's capsule keeps the actor's own order, whatever the player proposes and in whatever language", () => {
+  const capsule = buildDiplomaticPoliticalContext({
     world: makeWorld(),
     speakingAs: "Speaker Republic",
     playerCountry: "Player State",
-    decisionFocusText: "We propose reciprocal maritime inspections so shipping and port access can continue.",
   });
-
-  assert.ok(result);
-  assert.match(result.text, /Negotiate reciprocal maritime inspection rules/);
-  assert.match(result.text, /A shipping blockade could isolate major ports/);
-  assert.match(result.text, /Port operators demand predictable maritime inspection access/);
+  assert.ok(capsule);
+  assert.match(capsule.text, /Goals: Preserve alliance cohesion; Secure energy resilience/);
+  assert.match(capsule.text, /Fears: Domestic economic backlash/);
+  assert.match(capsule.text, /Domestic pressure: Industrial groups resist a prolonged sanctions shock/);
+  for (const proposal of [
+    "We propose reciprocal maritime inspections so shipping and port access can continue.",
+    "Nous proposons des inspections maritimes réciproques pour que le transport maritime et l'accès aux ports continuent.",
+  ]) {
+    const result = buildDiplomaticPoliticalContext({
+      world: makeWorld(),
+      speakingAs: "Speaker Republic",
+      playerCountry: "Player State",
+      decisionFocusText: proposal,
+    });
+    assert.equal(result.text, capsule.text, proposal);
+  }
 });
 
-test("confidence-building diplomacy surfaces later security strategy instead of name-matching noise", () => {
+test("a long list of goals is cut in the actor's own order", () => {
   const world = makeWorld();
   const actor = world.politicalActors.byPolity["Speaker Republic"];
   actor.goals = [
@@ -136,15 +150,13 @@ test("confidence-building diplomacy surfaces later security strategy instead of 
     world,
     speakingAs: "Speaker Republic",
     playerCountry: "Player State",
-    decisionFocusText: "Player State proposes a bilateral military confidence-building agreement with exercise notifications, observers, and unchanged alliance commitments.",
   });
 
   assert.ok(result);
-  assert.match(result.text, /Goals: Exploit political, military, institutional, and alliance ambiguity/);
-  assert.match(result.text, /Use military, covert, intelligence, economic, and diplomatic instruments/);
-  assert.match(result.text, /Fears: Prolonged conflict or military overreach/);
+  assert.match(result.text, /Goals: Consolidate a recent territorial gain; Preserve influence over nearby states/);
+  assert.doesNotMatch(result.text, /Exploit political, military, institutional, and alliance ambiguity/);
+  assert.match(result.text, /Fears: Loss of strategic initiative/);
   assert.match(result.text, /Domestic pressure: Economic vulnerabilities/);
-  assert.doesNotMatch(result.text, /Domestic pressure: Speaker Republic bureaucratic constraints/);
   assert.deepEqual(world.politicalActors.byPolity["Speaker Republic"], before);
 });
 
@@ -178,8 +190,7 @@ test("latest Beta leader prompt attaches the Phase009C political bridge without 
   assert.match(mainSource, /world: worldData/);
   assert.match(mainSource, /speakingAs: speaker/);
   assert.match(mainSource, /playerCountry: playerCountry \|\| gameData\?\.country/);
-  assert.match(mainSource, /decisionFocusText: focusText/);
-  assert.match(mainSource, /decisionFocusText: playerMessage/);
+  assert.doesNotMatch(mainSource, /decisionFocusText/);
   assert.match(mainSource, /\$\{rendered\}\$\{politicalSection\}\$\{espionage\}/);
   assert.doesNotMatch(mainSource, /institutionSection/);
 });

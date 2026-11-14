@@ -7,6 +7,7 @@
 
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { normalizeGroupOp } from "../../runtime/groups.js";
+import { markerOpKind } from "../../runtime/markerOps.js";
 
 // ---------------------------------------------------------------------------
 // The turn as it is being written
@@ -189,6 +190,12 @@ export const showEventOnTimeline = (eventId) => {
 // What a card is opened by, rather than which card it is. A streamed event's id
 // changes when the turn is written, so a card keyed by id would close at exactly
 // the moment the live panel must not. The headline survives that crossing.
+// Kept on purpose under the rule against text heuristics: a streamed card is
+// the model's raw answer, with no id of the engine's yet (those are given when
+// the turn is written: eventIdentity.js), so its headline is the one thing both
+// sides of the crossing have. It is the whole headline, equal but for case and
+// spacing, in any language, and it decides only which cards stay open and how
+// far the reveal carries, never what is recorded.
 export const eventDisclosureKey = (event) => {
     const title = String(event?.title ?? "").trim().toLowerCase().replace(/\s+/g, " ");
     return title || String(event?.id ?? "");
@@ -307,13 +314,16 @@ export const describeEventMapChanges = (event, { polityLookup = new Map(), regio
         }
         else if (op?.op === "remove") lines.push({ kind: "unit", text: `${unitName(op.unitId)} removed${note(op.note)}` });
     }
+    // The five ops the engine applies (runtime/markerOps.js), read as it reads
+    // them: a streamed card says only what will happen to the map.
     for (const op of listOf(impacts.markerOps)) {
-        if (op?.op === "build") lines.push({ kind: "structure", text: `${op.marker?.name || "A structure"} built${op.marker?.kind ? ` (${op.marker.kind})` : ""}${op.marker?.ownerCode ? ` by ${polity(op.marker.ownerCode)}` : ""}${note(op.marker?.note)}` });
-        else if (op?.op === "remove") lines.push({ kind: "structure", text: `${op.name || op.markerId || "A structure"} removed${note(op.note)}` });
-        else if (op?.op === "rename") lines.push({ kind: "structure", text: `${op.name || op.markerId} renamed ${op.newName}${note(op.note)}` });
-        else if (op?.op === "update" || op?.op === "modify" || op?.op === "destroy") {
+        const markerOp = markerOpKind(op?.op);
+        if (markerOp === "build") lines.push({ kind: "structure", text: `${op.marker?.name || "A structure"} built${op.marker?.kind ? ` (${op.marker.kind})` : ""}${op.marker?.ownerCode ? ` by ${polity(op.marker.ownerCode)}` : ""}${note(op.marker?.note)}` });
+        else if (markerOp === "remove") lines.push({ kind: "structure", text: `${op.name || op.markerId || "A structure"} removed${note(op.note)}` });
+        else if (markerOp === "rename") lines.push({ kind: "structure", text: `${op.name || op.markerId} renamed ${op.newName}${note(op.note)}` });
+        else if (markerOp === "update") {
             for (const text of describeMarkerUpdate(op, { polity, note })) lines.push({ kind: "structure", text });
-        } else if (op?.op === "population") {
+        } else if (markerOp === "population") {
             const count = Number(op.population ?? op.value);
             const population = Number.isFinite(count) ? Math.round(count).toLocaleString("en-US") : "";
             const name = op.name || op.markerId;
@@ -346,7 +356,7 @@ export const MAP_CHANGE_KIND_LABELS = {
 
 // A structure's lifecycle, one whole line per state it can be put in
 // (MARKER_STATUSES, runtime/gameState.js). Destruction is an update, not a
-// removal: normalizeMarkerOp turns a "destroy" into status "destroyed".
+// removal: an update to status "destroyed" (runtime/markerOps.js).
 // `more` is the note the first line of an update carries.
 const MARKER_STATUS_LINES = {
     planned: (name, more) => `${name}: now planned${more}`,
@@ -365,7 +375,7 @@ const MARKER_STATUS_LINES = {
 const describeMarkerUpdate = (op, { polity, note }) => {
     const name = op.name || op.markerId || op.id || "A structure";
     const source = op.changes && typeof op.changes === "object" && !Array.isArray(op.changes) ? op.changes : op;
-    const status = op.op === "destroy" ? "destroyed" : String(source.status ?? "").toLowerCase();
+    const status = String(source.status ?? "").toLowerCase();
     const coordinate = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
     const description = typeof source.note === "string" ? source.note.trim() : "";
     const writers = [];

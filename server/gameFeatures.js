@@ -10,6 +10,8 @@
 // isFeatureEnabled (client: isActiveFeatureEnabled in src/runtime/gameFeatures.js).
 
 import { scriptedImpactFields } from "./scriptedImpacts.js";
+import { nameId } from "./nameId.js";
+import { firstSentence, withoutFinalTerminal } from "./sentences.js";
 
 export const FEATURE_DEFINITIONS = Object.freeze([
   Object.freeze({
@@ -285,18 +287,28 @@ const scriptedEventHash = (value) => {
   return (hash >>> 0).toString(36);
 };
 
+// A beat's id: the author's own where there is one, by the game's one rule for
+// an id made from a name (nameId.js): an id written in a-z and 0-9 is the id
+// it always was, and one written in another script is its own hash. Cut to
+// a-z and 0-9, "Событие 1" and "Глава 1" were both "1", so whichever beat came
+// to hold "1" was taken for one that had fired. A beat without an id of its
+// own gets one from its date, its text and its place.
 const scriptedEventId = (value, fallbackSeed) => {
-  const explicit = String(value ?? "").trim().toLowerCase()
+  const explicit = nameId(value, (id) => String(id ?? "").trim().toLowerCase()
     .replace(/[^a-z0-9._:-]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
+    .slice(0, 120));
   return explicit || `scripted-${scriptedEventHash(fallbackSeed)}`;
 };
 
-const scriptedEventTitle = (body) => {
+// A beat's title where its author gave none: its first sentence, by the one
+// rule the game ends a sentence by in every script (server/sentences.js), or
+// the whole beat when that is longer than a title, at most 140 characters,
+// without the sentence's own full stop.
+export const scriptedEventTitle = (body) => {
   const text = String(body ?? "").replace(/\s+/g, " ").trim();
-  const sentence = /^(.{12,140}?[.!?])\s/.exec(`${text} `);
-  return (sentence ? sentence[1] : text).slice(0, 140).replace(/[.!?]$/, "");
+  const sentence = firstSentence(text, { min: 13 }) || text;
+  return withoutFinalTerminal((sentence.length <= 141 ? sentence : text).slice(0, 140));
 };
 
 const normalizeScriptedCondition = (value) => {

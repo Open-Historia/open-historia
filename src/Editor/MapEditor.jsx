@@ -1307,6 +1307,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         id: String(u.id || newId("unit")),
         name: String(u.name || "Unit"),
         type: String(u.type || "infantry"),
+        // One of the scenario's own unit types, by its id (runtime/unitTypes.js).
+        ...(String(u.unitType || "").trim() ? { unitType: String(u.unitType).trim() } : {}),
         ownerCode: String(u.ownerCode || ""),
         lng: Number(u.lng),
         lat: Number(u.lat),
@@ -1865,6 +1867,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       {openPanel === "units" && (
         <UnitsPanel
           units={d.units}
+          unitTypes={initialMap?.unitTypes ?? []}
           polityName={(key) => String(d.polities?.[key]?.name || key || "")}
           activeTool={d.activeTool}
           setActiveTool={d.setActiveTool}
@@ -1979,6 +1982,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           y={unitPopup.y}
           isNew={unitPopup.isNew}
           polities={polityChoices}
+          unitTypes={initialMap?.unitTypes ?? []}
           onChange={(patch) => d.setUnits((list) => list.map((u) => (u.id === unitPopup.id ? { ...u, ...patch } : u)))}
           onDelete={() => {
             d.setUnits((list) => list.filter((u) => u.id !== unitPopup.id));

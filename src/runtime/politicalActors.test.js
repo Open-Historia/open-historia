@@ -99,3 +99,20 @@ test("political actor normalization owns a fresh mutable copy", () => {
   assert.equal(source.byPolity.Ukraine.leader, "Petro Poroshenko");
   assert.equal(source.byPolity.Ukraine.government.headOfState, "Petro Poroshenko");
 });
+
+test("a party with no id of its own is named for its name in any script, as its English twin is", async () => {
+  // Cut to a-z and 0-9, a party named in another script with a number in its
+  // name was that number: "Партия 1" was "1", and so was every other "… 1".
+  const { normalizePoliticalParty } = await import("./politicalActors.js");
+  const idOf = (party) => normalizePoliticalParty(party).id;
+  assert.equal(idOf({ name: "United Russia", shortName: "UR" }), "ur", "as it always was");
+  assert.equal(idOf({ name: "Law and Justice" }), "law-and-justice", "as it always was");
+  for (const [first, second] of [["Party 1", "Union 1"], ["Партия 1", "Союз 1"], ["第一党", "第二党"]]) {
+    assert.notEqual(idOf({ name: first }), idOf({ name: second }), first);
+    assert.notEqual(idOf({ name: first }), "1", first);
+  }
+  // A name wholly in another script keeps the id it always had (a hash of it),
+  // and a Latin alias still names a party written in another script.
+  assert.match(idOf({ name: "Единая Россия" }), /^party-[0-9a-f]{8}$/);
+  assert.equal(idOf({ name: "Единая Россия", aliases: ["United Russia"] }), "united-russia");
+});

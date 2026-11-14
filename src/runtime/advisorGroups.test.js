@@ -85,12 +85,13 @@ test("round-robin meeting speakers keep distinct identities and resumed turns ne
     { role: "advisor", speakerId: "chief", text: "We need balance." },
   ];
   const list = advisorContacts(contacts());
-  const ordered = selectAdvisorGroupSpeakers(members, rows, rows[0].text, list, "Orlov");
+  const ordered = selectAdvisorGroupSpeakers(members, rows);
   assert.deepEqual(ordered, members.slice(1, 5));
-  const resumed = selectAdvisorGroupSpeakers(members, [...rows, { role: "advisor", speakerId: "advisor-marina-001", text: "Costs." }], rows[0].text, list, "Orlov");
+  const resumed = selectAdvisorGroupSpeakers(members, [...rows, { role: "advisor", speakerId: "advisor-marina-001", text: "Costs." }]);
   assert.ok(!resumed.includes("chief") && !resumed.includes("advisor-marina-001"));
-  const mentioning = selectAdvisorGroupSpeakers(members, [{ role: "user", text: "Viktor Gusev, please answer first" }], "Viktor Gusev, please answer first", list, "Orlov");
-  assert.equal(mentioning[0], "advisor-viktor-001");
+  // A name in the message moves nobody to the front: the order is the turn's rotation.
+  const mentioning = selectAdvisorGroupSpeakers(members, [{ role: "user", text: "Viktor Gusev, please answer first" }]);
+  assert.deepEqual(mentioning, members);
   const transcript = renderAdvisorGroupHistory(rows, list, "Dmitri Orlov");
   assert.match(transcript, /\[Dmitri Orlov\]: We need balance/);
   const formal = renderAdvisorGroupHistory([{

@@ -16,7 +16,6 @@ import { labStaffPolicy } from "../../runtime/fronts/mind/trained.js";
 import { enlarge, syntheticMap } from "../../runtime/fronts/syntheticMap.js";
 import { engineRegionsOf, runTurnFronts } from "./frontTurn.js";
 import { AWAY_KEYS, awayInputOf, fightAway, pageAnswersOf } from "./frontWorkerCore.js";
-import { eventNarratesHardCombat } from "./nativeWarLedger.js";
 
 const legend = { A: "Aland", B: "Borduria", "~": null };
 const cities = [
@@ -73,7 +72,6 @@ const turnArgs = (map, world) => {
       players: ["Borduria"],
       staffPolicy: labStaffPolicy(staffConfig),
       staffConfig,
-      narratesCombat: eventNarratesHardCombat,
       mechanics: { fatigue: true, weather: true, supply: true },
       climateSeed: "campaign",
     },
@@ -85,10 +83,12 @@ test("what is sent away is data the browser can send, and nothing of the page's 
   const { args } = turnArgs(map, worldOn(map));
   const away = awayInputOf(args);
   assert.doesNotThrow(() => structuredClone(away));
-  for (const key of ["createFrontRun", "readMap", "loadRegions", "pause", "tempoAllowance", "staffPolicy", "narratesCombat", "staffConfig"]) assert.equal(key in away, false, key);
+  for (const key of ["createFrontRun", "readMap", "loadRegions", "pause", "tempoAllowance", "staffPolicy", "staffConfig"]) assert.equal(key in away, false, key);
   for (const key of AWAY_KEYS) assert.equal(key in away, true, key);
   assert.deepEqual(away.staff, { outcomes: [], difficulty: "easy", players: ["Borduria"] });
-  assert.deepEqual([away.readsMap, away.readsRegions, away.narrates, away.tempo], [true, true, true, 0]);
+  assert.deepEqual([away.readsMap, away.readsRegions, away.tempo], [true, true, 0]);
+  // (Whether an event tells of fighting is its own fields', read in the run itself: nothing of the page's is asked for it.)
+  assert.equal("narrates" in away, false);
   assert.deepEqual(away.strikes, []);
   // No staff of the lab's: none made again there.
   assert.equal(awayInputOf({ ...args, staffPolicy: null }).staff, null);

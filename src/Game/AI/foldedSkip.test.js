@@ -247,13 +247,36 @@ test("a report goes to the agent whose key it carries, without the key", () => {
   ]);
 });
 
-test("a model that named the country instead is still understood", () => {
-  const assigned = assignAgentReports(JOBS, [report("the agent inside Russia", "grain"), report("People's Republic of China", "tariffs")]);
+test("a model that wrote its agent's country for the key is understood when the country is all it wrote", () => {
+  const assigned = assignAgentReports(JOBS, [report("Russia", "grain"), report("People's Republic of China", "tariffs")]);
   assert.deepEqual(assigned.map(({ job }) => job.key), ["agent_1", "agent_2"]);
-  const folded = assignAgentReports(JOBS, [report("Agent in RUSSIA", "grain")]);
-  assert.deepEqual(folded.map(({ job }) => job.key), ["agent_1"]);
+  assert.deepEqual(assignAgentReports(JOBS, [report("RUSSIA", "grain")]).map(({ job }) => job.key), ["agent_1"], "case aside");
   const custom = assignAgentReports(JOBS, [report("PRC", "tariffs")], { sameName: (left, right) => left === "PRC" && right === "People's Republic of China" });
   assert.deepEqual(custom.map(({ job }) => job.key), ["agent_2"], "the caller's own rule for what a name is");
+});
+
+test("a report goes to its agent the same way in every language, and nothing is cut out of the field", () => {
+  // The English words before a name ("the agent inside Russia") used to be cut
+  // off to find it, so the French twin "l'agent en Russie" lost its report.
+  // The key, or the agent's name whole, in every language; words around a
+  // name are no name in any.
+  for (const [name, words, subject] of [
+    ["Russia", "the agent inside Russia", "grain"],
+    ["Russie", "l'agent en Russie", "blé"],
+    ["Россия", "агент в России", "зерно"],
+    ["俄罗斯", "在俄罗斯的特工", "粮食"],
+  ]) {
+    const jobs = [{ key: "agent_1", name }];
+    assert.deepEqual(assignAgentReports(jobs, [report("agent_1", subject)]).map(({ job }) => job.key), ["agent_1"], `${name}: the key`);
+    assert.deepEqual(assignAgentReports(jobs, [report(name, subject)]).map(({ job }) => job.key), ["agent_1"], `${name}: the name`);
+    assert.deepEqual(assignAgentReports(jobs, [report(words, subject)]), [], `${name}: words around the name`);
+  }
+});
+
+test("the skip is asked for each agent's key, and its reports are filed by the key or the whole name", () => {
+  // No enum of the keys in the function: 49 characters it has no room for.
+  assert.match(functionBody("buildFoldedAgentReportsBlock"), /Each report gives \\`agent\\`, its agent's key copied exactly from this list \("\$\{list\[0\]\.key\}"\)/);
+  assert.match(functionBody("foldedTurnReview"), /assignAgentReports\(jobs, state\.foldedAgentAnswer, \{ sameName: \(left, right\) => regionKey\(left\) === regionKey\(right\) \}\)/);
 });
 
 test("a report for nobody listed is nobody's, and an agent gets only the first written for it", () => {
@@ -394,7 +417,7 @@ test("the history a skip folds is planned before it and written from its own ans
   const review = functionBody("foldedTurnReview");
   assert.match(review, /\n {2}review\.history = \{ due: false \};/);
   assert.ok(review.indexOf("review.history = { due: false }") < review.indexOf("if (normalizeString(state.generation?.source) === \"fallback\") return review;"), "a canned turn folds nothing and asks for nothing");
-  assert.match(review, /\.\.\.judgeSkipHistoryAnswer\(state\.foldedHistoryAnswer, \{ currentText: fold\.currentText, span: fold\.span, eraWords: fold\.eraWords \}\),/);
+  assert.match(review, /\.\.\.judgeSkipHistoryAnswer\(state\.foldedHistoryAnswer, \{ currentText: fold\.currentText, span: fold\.span, eraChars: fold\.eraChars \}\),/);
 
   // Written from the skip's answer, and only from it: the event consolidator,
   // a request of its own after a skip, went on 2026-11-07.
@@ -487,8 +510,10 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
   // There is no upkeep after a skip to keep a request for: the Stats refresh
   // and the event consolidator went on 2026-11-07.
   assert.equal(/skipUpkeepDue|upkeep\?\.|reserve\("(?:history|stats|review)"/.test(gameplaySource), false);
-  // The two that asked outside the list are told no before they build anything.
-  assert.match(gameplaySource, /const insideSkip = Boolean\(requests\?\.budget\) && !requests\.budget\.allows\("geography"\);/);
+  // The one that asked outside the list is told no before it builds anything.
+  // The other, the geography resolver, is gone from every mode: a place name
+  // the map does not have is left out and said in the receipt (2026-11-13).
+  assert.equal(/runJsonTask\("geographyResolver"|allows\("geography"\)/.test(gameplaySource), false);
   assert.match(functionBody("repairSkipStorylineMotion"), /const noRepairRequests = Boolean\(state\?\.requests\?\.budget\) && !state\.requests\.budget\.allows\("repair"\);/);
 });
 
@@ -516,12 +541,15 @@ test("the folded review takes the ops off the events before anything applies the
   assert.match(body, /if \(state\.foldedPrep\?\.board && state\.foldedBoardCarried\) \{/, "an empty board is not looked at, nor one the function had no room for");
 });
 
-test("every check a Scene's map check makes always runs: no switch is read anywhere in the turn", () => {
+test("a Scene's map check reads no switch: its map checks run on the Scene answer's own word that it changed the map", () => {
   assert.equal(/reviewSection\(/.test(gameplaySource), false);
   assert.equal(/requestSettings\b/.test(gameplaySource), false, "the settings module is no longer needed here at all");
   const review = functionBody("runSceneReview");
+  // Each of the map's three checks is built when the answer that ended the
+  // Scene said it changed the map (mapConsequences.js sceneChangedMap), and
+  // never otherwise: no setting, and no word of the Scene.
   for (const builder of ["buildUnitDirectorInput(", "buildTerritoryDirectorInput(", "buildStructureDirectorInput("]) {
-    assert.ok(review.includes(`= ${builder}`) || review.includes(`= await ${builder}`), `${builder} is called unconditionally`);
+    assert.ok(review.includes(`= mapChanged ? ${builder}`) || review.includes(`= mapChanged ? await ${builder}`), `${builder} is called on the Scene's word`);
   }
   // A time skip's own checks (the timeline, the agents, order attribution) are no part of it.
   assert.equal(/buildCuratorInput\(|spyIntercept|requests\.budget/.test(review), false);

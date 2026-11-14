@@ -5,78 +5,52 @@ import { GAME_MASTER_MODES, GM_AUTO_MODE,
   validateGameMasterModeSelection } from "./gameMasterAutoMode.js";
 import { decodeGameMasterTransportPayload } from "./gameplaySchemas.js";
 
-const auto = (selectedMode, request, countryStatPatches = []) => validateGameMasterModeSelection({
-  requestedMode: "auto", selectedMode, request, countryStatPatches,
+// Auto's Direct used to be refused unless the request held an English
+// correction phrase ("set ... GDP ... to 70"): a request in any other language
+// could never be routed to Direct, and an English one worded differently was
+// refused too. The model's choice stands; the administrator sees the
+// transaction in the preview and applies it or not.
+const auto = (selectedMode, countryStatPatches = []) => validateGameMasterModeSelection({
+  requestedMode: "auto", selectedMode, countryStatPatches,
 });
 
 test("Auto must resolve to a real native GM mode before preview; it cannot be applied as auto", () => {
   assert.equal(GM_AUTO_MODE, "auto");
   assert.deepEqual(GAME_MASTER_MODES, ["direct", "exact-event", "world-intervention"]);
   for (const mode of ["exact-event", "world-intervention"]) {
-    assert.equal(auto(mode, "Trigger a nationwide financial panic and record it as an ongoing crisis"), "");
+    assert.equal(auto(mode), "");
   }
   for (const mode of ["auto", "freeform", "", "DIRECTLY"]) {
-    assert.match(auto(mode, "Make Germany collapse financially"), /Auto must choose/);
+    assert.match(auto(mode), /Auto must choose/);
   }
 });
 
-test("Auto only routes to Direct when the request explicitly describes a canonical correction", () => {
-  for (const request of [
-    "Correct Germany's GDP baseline to €170 billion.",
-    "Set Germany's population to 70,000,000.",
-    "Change Germany's unemployment to 8%.",
-    "Update France's relation score to +40.",
-    "Administrative correction: set the leader to Nicholas II.",
-  ]) assert.equal(auto("direct", request), "", request);
-  for (const request of [
-    "On 31 March a commercial bank collapses; create an ongoing banking panic.",
-    "Make Germany suffer a 30% GDP collapse due to bank failures.",
-    "The Chancellor announces a naval expansion programme.",
-    "Cause a debt crisis and financial instability in Germany.",
-    "Set the banking system to collapse, causing GDP losses.",
-    "Set the banks to fail and German GDP to collapse.",
-    "Fix the banking system: GDP should fall after the panic.",
-    "Create a new country called the North Sea Federation.",
-  ]) assert.match(auto("direct", request), /cannot authorize Direct mode/, request);
+test("Auto may route to Direct, whatever the request says and in whatever language: the preview is the consent", () => {
+  assert.equal(auto("direct"), "");
+  assert.equal(auto("direct", [{ country: "Germany", patch: { gdp: 170000000000 } }]), "");
   assert.equal(validateGameMasterModeSelection({
     requestedMode: "direct", selectedMode: "direct",
-    request: "Trigger a German crisis",
   }), "", "a deliberate manual Direct selection retains existing authority");
   assert.match(validateGameMasterModeSelection({
     requestedMode: "exact-event", selectedMode: "world-intervention",
-    request: "A single treaty is signed",
   }), /must remain/, "manual mode is never silently overridden");
-});
-
-test("Auto permits explicit canonical intelligence and military rating corrections but not simulated military improvements", () => {
-  for (const request of [
-    "Set Latvia's intelligence service to 82.",
-    "Correct Russia's troop quality to 75.",
-    "Update France's military technology to 90.",
-    "Set Germany's naval capability to 85.",
-    "Set China's war resources to 100.",
-    "Change Ukraine's war weariness to 35.",
-    "Override Poland's manpower share to 2%.",
-  ]) assert.equal(auto("direct", request), "", request);
-  for (const request of [
-    "Set out to improve intelligence service readiness across the ministry.",
-    "Increase naval capability through a five-year procurement programme.",
-    "The war increases Ukraine's war weariness to 70.",
-    "Set the army to invade and take the capital.",
-  ]) assert.match(auto("direct", request), /cannot authorize Direct mode/, request);
+  // No request text is read at all, so a request and its translation are
+  // routed alike.
+  const source = readFileSync(new URL("./gameMasterAutoMode.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /authorizesAutoDirect/);
+  assert.match(source, /validateGameMasterModeSelection = \(\{ requestedMode, selectedMode, countryStatPatches \} = \{\}\)/);
 });
 
 test("Auto narrative routing cannot smuggle an administrative Stats rewrite", () => {
   const patches = [{ country: "Germany", patch: { gdp: 700000000000 } }];
-  assert.match(auto("world-intervention", "A Berlin bank fails and a prolonged recession begins", patches),
+  assert.match(auto("world-intervention", patches),
     /cannot include administrative Stats baseline patches/);
-  assert.match(auto("exact-event", "A bank fails in Berlin on 3 January", patches),
+  assert.match(auto("exact-event", patches),
     /cannot include administrative Stats baseline patches/);
-  assert.equal(auto("direct", "Correct Germany's GDP to 700000000000", patches), "");
+  assert.equal(auto("direct", patches), "");
   assert.equal(validateGameMasterModeSelection({
     requestedMode: "world-intervention",
     selectedMode: "world-intervention",
-    request: "A banking crisis begins",
     countryStatPatches: patches,
   }), "", "manual mode authority is not retroactively changed");
 });

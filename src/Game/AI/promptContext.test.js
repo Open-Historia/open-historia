@@ -47,7 +47,7 @@ test("a long units list keeps the player's and the turn's powers' units and coun
   ];
   const text = buildUnitsSummaryText({ units }, {
     player: "Ruritania",
-    actions: [{ title: "Warn Slavonia", text: "Warn Slavonia off the border.", status: "planned" }],
+    actions: [{ title: "Warn Slavonia", text: "Warn Slavonia off the border.", status: "planned", invitees: ["Slavonia"] }],
   });
   for (let index = 0; index < 5; index += 1) assert.ok(text.includes(`- Ruritania unit r${index} (`), `player unit r${index} is listed`);
   for (let index = 0; index < 3; index += 1) assert.ok(text.includes(`- Slavonia unit s${index} (`), `ordered-on unit s${index} is listed`);
@@ -77,36 +77,51 @@ test("two units of one name are told apart by their owner, and a region id is ne
   assert.equal(text.includes("4441"), false);
 });
 
-test("marker attention reads the queued orders, not the answered ones", async () => {
-  const markers = Array.from({ length: 60 }, (_, index) => ({
-    id: `m${index}`,
-    name: `Depot ${String.fromCharCode(65 + (index % 26))}${Math.floor(index / 26)}x`,
-    kind: "depot",
-    status: "active",
-    lat: 50,
-    lng: 10,
-  }));
-  markers.push({ id: "kiel", name: "Kiel Canal", kind: "canal", status: "active", lat: 54.3, lng: 10.1 });
-  // Ten answered orders, each naming another marker, after the one queued
-  // order that names the canal: a window of the last ten actions used to be
-  // all answered ones.
-  const actions = [
-    { id: "a-live", title: "Widen the Kiel Canal", text: "Widen the Kiel Canal for the new cruisers.", status: "planned" },
-    ...markers.slice(0, 10).map((marker, index) => ({
-      id: `a-old-${index}`,
-      title: `Inspect ${marker.name}`,
-      text: `Inspect ${marker.name}.`,
-      status: "resolved",
-    })),
-  ];
-  const context = await buildPromptContext({
-    game,
-    world: { markers, language: "English" },
-    events: [],
-    actions,
-    chats: [],
-  }, { requiredKeys: ["markersSummary"], taskKey: "advisor" });
-  assert.match(context.markersSummary, /Kiel Canal/);
+// A structure is brought forward by the records: an event that names it among
+// its places, an owner that is a party to what the turn is about. Its name was
+// looked for in the prose of orders, events and chats, which in a game written
+// in another language than the structure's name found nothing.
+const MARKER_SEA = () => Array.from({ length: 60 }, (_, index) => ({
+  id: `m${index}`,
+  name: `Depot ${String.fromCharCode(65 + (index % 26))}${Math.floor(index / 26)}x`,
+  kind: "depot",
+  status: "active",
+  ownerCode: "Ruritania",
+  lat: 50,
+  lng: 10,
+}));
+const KIEL = { id: "kiel", name: "Kiel Canal", kind: "canal", status: "active", ownerCode: "Germany", lat: 54.3, lng: 10.1 };
+const markersFor = async ({ events = [], actions = [] }) => (await buildPromptContext({
+  game,
+  world: { markers: [...MARKER_SEA(), KIEL], language: "English" },
+  events,
+  actions,
+  chats: [],
+}, { requiredKeys: ["markersSummary"], taskKey: "advisor" })).markersSummary;
+
+test("marker attention: an event that names a structure among its places brings it forward, in any language", async () => {
+  const place = [{ kind: "structure", name: "Kiel Canal", lng: 10.1, lat: 54.3 }];
+  for (const [title, description] of [
+    ["The canal is widened for the new cruisers", "Dredgers work through the winter."],
+    ["Канал расширяют для новых крейсеров", "Земснаряды работают всю зиму."],
+  ]) {
+    const text = await markersFor({ events: [{ id: `e-${title.length}`, date: "1914-01-01", title, description, places: place }] });
+    assert.match(text, /Kiel Canal/, title);
+  }
+});
+
+test("marker attention: its words alone bring nothing forward, and a queued order's parties do", async () => {
+  // Every sentence names the canal, and nothing in any record does.
+  const words = await markersFor({
+    events: [{ id: "e-words", date: "1914-01-01", title: "Widen the Kiel Canal", description: "The Kiel Canal is widened." }],
+    actions: [{ id: "a-words", title: "Widen the Kiel Canal", text: "Widen the Kiel Canal for the new cruisers.", status: "planned" }],
+  });
+  assert.doesNotMatch(words, /Kiel Canal/);
+  // A queued order with Germany as a party; an answered one is not read.
+  const party = await markersFor({ actions: [{ id: "a-live", title: "Talks", text: "Talks.", status: "planned", invitees: ["Germany"] }] });
+  assert.match(party, /Kiel Canal/);
+  const answered = await markersFor({ actions: [{ id: "a-old", title: "Talks", text: "Talks.", status: "resolved", invitees: ["Germany"] }] });
+  assert.doesNotMatch(answered, /Kiel Canal/);
 });
 
 // A hand-drawn world: twenty authored polities, the one the player is at war

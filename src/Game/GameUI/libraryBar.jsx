@@ -57,7 +57,9 @@ import PrehistoryPanel from "./PrehistoryPanel.jsx";
 import ScenarioFrontsPanel from "./ScenarioFrontsPanel.jsx";
 import ScenarioWarSettings from "./ScenarioWarSettings.jsx";
 import ScenarioMilitaryPanel from "./ScenarioMilitaryPanel.jsx";
+import ScenarioUnitTypes from "./ScenarioUnitTypes.jsx";
 import { compactWarSettings } from "./scenarioWarSettings.js";
+import { formUnitTypes, savedUnitTypes, withRenamedUnitTypeOwners } from "./scenarioUnitTypes.js";
 import { militaryDefaultsFor } from "../../Editor/militaryForm.js";
 import ScenarioMusicPanel, { ScenarioMusicCredits } from "./ScenarioMusicPanel.jsx";
 import { normalizeScenarioMusic } from "../../runtime/scenarioMusic.js";
@@ -619,6 +621,8 @@ const buildScenarioEditorState = (details) => {
     // How its wars are fought (the Fronts tab: ScenarioWarSettings.jsx), compact:
     // null for a scenario that sets nothing (scenarioWarSettings.js).
     warSettings: compactWarSettings(world.warSettings),
+    // Its own unit types (the Features tab, under Wars: ScenarioUnitTypes.jsx); [] for none.
+    unitTypes: formUnitTypes(world),
   };
 };
 
@@ -2502,7 +2506,8 @@ const EditorDrawer = ({
       )}
 
       {/* The Features tab. Under Wars, on a scenario, what was its War tab: how its wars are fought
-          (ScenarioWarSettings.jsx, part of the form, which Save below writes); every country's military
+          (ScenarioWarSettings.jsx, part of the form, which Save below writes); its own unit types
+          (ScenarioUnitTypes.jsx, part of the form too); every country's military
           figures, rated by the AI against the others twenty to a request (ScenarioMilitaryPanel.jsx, saved
           batch by batch); and the fronts it begins with (ScenarioFrontsPanel.jsx, with a Save of its own). */}
       {editorSection === "features" && (
@@ -2514,6 +2519,11 @@ const EditorDrawer = ({
                   value={formState.warSettings ?? null}
                   gameDate={formState.gameDate}
                   onChange={(next) => onChange("warSettings", next)}
+                />
+                <ScenarioUnitTypes
+                  value={formState.unitTypes ?? []}
+                  countries={countryOptions.map((option) => option.code)}
+                  onChange={(next) => onChange("unitTypes", next)}
                 />
                 <ScenarioMilitaryPanel
                   details={details}
@@ -3818,6 +3828,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             ...(editorState.warSettings || currentWorld.warSettings !== undefined
               ? { warSettings: compactWarSettings(editorState.warSettings) }
               : {}),
+            // Its own unit types (runtime/unitTypes.js): written only once it has had some.
+            ...(savedUnitTypes(editorState.unitTypes).length > 0 || currentWorld.unitTypes !== undefined
+              ? { unitTypes: savedUnitTypes(editorState.unitTypes) }
+              : {}),
           },
         });
         if (editorStatsFailed) {
@@ -4077,8 +4091,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // suggestion's map changes beside it (src/Editor/SuggestionReviewPanel.jsx).
   // `gameDate` and `warSettings` are the scenario's as its editor holds them,
   // saved or not (the world's settings where it holds none): what a country's
-  // military figures left empty stand for in the Workshop.
-  const openMapEditorFor = (scenario, world = {}, { review = null, gameDate = "", warSettings } = {}) => {
+  // military figures left empty stand for in the Workshop. `unitTypes` likewise:
+  // the unit types a unit placed there may be of.
+  const openMapEditorFor = (scenario, world = {}, { review = null, gameDate = "", warSettings, unitTypes } = {}) => {
     const isCurrent = mapEditorRequest.begin();
     setMapEditorScenario(scenario);
     setMapEditorSeed(null);
@@ -4159,6 +4174,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         customCities: Boolean(world.customCities),
         // The scenario's starting units, so the Units panel edits what the game starts with.
         units: Array.isArray(world.units) ? world.units : [],
+        // Its own unit types, which a unit placed there may be of (runtime/unitTypes.js).
+        unitTypes: savedUnitTypes(unitTypes === undefined ? world.unitTypes : unitTypes),
         // Its structures, edited as map features that are not cities.
         markers: Array.isArray(world.markers) ? world.markers : [],
         // Its puppet states, for the Countries panel.
@@ -4375,7 +4392,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     if (editorKind === "scenario" && editorDetails?.scenario?.id === scenarioId) {
       const drawerGame = editorDetails.data?.game ?? {};
       setEditorDetails(savedScenarioDetails);
-      setEditorState((current) => followSavedFields(current, drawerGame, savedScenarioDetails?.data?.game, ["country", "gameDate"]));
+      // (And the countries its unit types name follow the Workshop's renames, as the world's did.)
+      setEditorState((current) => {
+        const followed = followSavedFields(current, drawerGame, savedScenarioDetails?.data?.game, ["country", "gameDate"]);
+        return followed && Array.isArray(renames) && renames.length > 0 && Array.isArray(followed.unitTypes)
+          ? { ...followed, unitTypes: withRenamedUnitTypeOwners(followed.unitTypes, renames) }
+          : followed;
+      });
     }
 
     await uploadScenarioAsset(
@@ -5656,6 +5679,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         onOpenMapEditor={() => openMapEditorFor(editorDetails?.scenario || null, editorDetails?.data?.world ?? {}, {
           gameDate: editorState?.gameDate ?? editorDetails?.data?.game?.gameDate ?? "",
           warSettings: editorState?.warSettings,
+          unitTypes: editorState?.unitTypes,
         })}
         communityCard={drawerScenario ? (
           <ScenarioCommunityCard

@@ -208,7 +208,8 @@ test("past_talks reaches the chats kept on file once the model has loaded", asyn
 test("without a search the prompt still counts the chats kept on file and keeps their binding word", async () => {
   const variables = await buildPromptContext(bundle(), { requiredKeys: ["chatHistoryLong", "chatsToConsolidate"], taskKey: "jumpForward", openChatId: "" });
   assert.match(variables.chatHistoryLong, /2 older conversations kept on file/);
-  assert.match(variables.chatHistoryLong, /STANDING WORD FROM OLDER TALKS[^\n]*\n- With Austria \([^)]+\): Austria promised Italy free passage on the Danube until 1940\./);
+  // Each thread's memory as it last stood, whatever its words (chatArchive.js standingWord).
+  assert.match(variables.chatHistoryLong, /STANDING WORD FROM OLDER TALKS[^\n]*\n- With Portugal \([^)]+\): Pleasantries about wine\.\n- With Austria \([^)]+\): Austria promised Italy free passage on the Danube until 1940\./);
   assert.equal(variables.chatHistoryLong.includes("PAST DIPLOMACY"), false);
   assert.match(variables.chatsToConsolidate, /free passage on the Danube/, "a history fold still reads them all");
 

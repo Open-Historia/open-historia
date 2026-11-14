@@ -54,7 +54,6 @@ export const buildTargetLedgerLines = (world, target, {
             const identity = resolvePolityIdentity(raw, world, {
                 allowUnknown: false,
                 requireActive: false,
-                allowCoreMatch: true,
                 allowStockBase: true,
                 identityIndex,
             });

@@ -38,6 +38,8 @@ const cities = [
   { name: "Cetin", lng: 23.4, lat: 49.4, population: 500000 },
 ];
 const place = (name) => cities.find((city) => city.name === name);
+// An operation's focus at a city: where on the map it happens (projectSchema focus).
+const at = (name) => ({ lng: place(name).lng, lat: place(name).lat });
 const plain = () => syntheticMap({ layout: ["ABBBBB", "ABBBBB", "ABBBBB"], legend, west: 20, north: 51, step: 1, stepLat: 0.65, cities });
 const standing = (side, word, extra = {}) => ({ s: side, sector: "all", order: word, since: "2024-02-20", ...extra });
 const row = (lng, south, north, count, extra = {}) =>
@@ -55,7 +57,7 @@ const opened = (orders = []) => {
 };
 const operation = (extra = {}) => ({
   id: "project-kingfisher", name: "Operation Kingfisher", kind: "operation", ownerCode: "", status: "active",
-  summary: "Three corps drive east to take Brod before the thaw.", secrecy: "covert", targetDate: "2024-05-01", ...extra,
+  summary: "Three corps drive east to take Brod before the thaw.", secrecy: "covert", targetDate: "2024-05-01", focus: at("Brod"), ...extra,
 });
 const context = (projects = []) => ({ projects, cities, player: "Aland" });
 const endOf = (plan, way = 0) => plan.ways[way][plan.ways[way].length - 1];
@@ -101,29 +103,50 @@ test("an operation on the Board that sends troops at a place the other side hold
   const found = operationsOn({ record, side: 0, ...context([operation()]) });
   assert.deepEqual(found.map((entry) => [entry.project, entry.by, entry.own, entry.order, entry.place.name]), [["project-kingfisher", "Aland", true, "advance", "Brod"]]);
   // What it is not: a project that is no operation, one that has ended, one
-  // about a city of its owner's own, one that runs an agent, one of a country
-  // that is not fighting here; and a name inside another name is not that name.
+  // whose place is its owner's own ground, one that runs an agent, one of a
+  // country that is not fighting here, one that says no place.
   const not = [
     operation({ kind: "project" }),
     operation({ status: "complete" }),
-    operation({ summary: "Rebuild the bridges of Alba." }),
+    operation({ focus: at("Alba") }),
     operation({ linkedSpyIds: ["spy-1"] }),
     operation({ ownerCode: "Syldavia" }),
-    operation({ summary: "Take Brodnica and hold it." }),
+    operation({ focus: null }),
   ];
   for (const entry of not) assert.deepEqual(operationsOn({ record, side: 0, ...context([entry]) }), [], JSON.stringify(entry).slice(0, 120));
-  // The longest name wins, accents and capitals do not matter, and a point given is read by the city nearest it.
-  assert.equal(operationsOn({ record, side: 0, ...context([operation({ summary: "The armour goes for NOVA BROD." })]) })[0].place.name, "Nova Brod");
-  assert.equal(operationsOn({ record, side: 0, ...context([operation({ summary: "Seize the rail junction.", focus: { lng: 23.3, lat: 49.45 } })]) })[0].place.name, "Cetin");
-  assert.equal(operationsOn({ record, side: 0, ...context([operation({ summary: "Seize the junction.", focus: { lng: 20.5, lat: 50 } })]) }).length, 0, "a point on its own ground is no attack");
-  // The other side's operation, as the Board knows of it.
-  const theirs = operationsOn({ record, side: 1, ...context([operation({ ownerCode: "Borduria", summary: "Encircle Alba from the north and the south.", verification: "doubted" })]) });
+  // A point given is read by the city nearest it.
+  assert.equal(operationsOn({ record, side: 0, ...context([operation({ focus: { lng: 24.1, lat: 50.55 } })]) })[0].place.name, "Nova Brod");
+  assert.equal(operationsOn({ record, side: 0, ...context([operation({ focus: { lng: 23.3, lat: 49.45 } })]) })[0].place.name, "Cetin");
+  assert.equal(operationsOn({ record, side: 0, ...context([operation({ focus: { lng: 20.5, lat: 50 } })]) }).length, 0, "a point on its own ground is no attack");
+  // The other side's operation, as the Board knows of it, attacking as its approach says.
+  const theirs = operationsOn({ record, side: 1, ...context([operation({ ownerCode: "Borduria", approach: "encircle", focus: at("Alba"), verification: "doubted" })]) });
   assert.deepEqual(theirs.map((entry) => [entry.by, entry.own, entry.order, entry.place.name, entry.doubted]), [["Borduria", false, "encircle", "Alba", true]]);
 
   const [plan] = plansOf(record, 0, context([operation()]));
   assert.deepEqual([plan.kind, plan.name, plan.objective, plan.status, plan.live, plan.edited, plan.off], ["project", "Operation Kingfisher", "city: Brod", "active", true, false, false]);
   assert.ok(near(endOf(plan), place("Brod")));
   assert.equal(plansOf(record, 0, context([operation({ status: "proposed" })]))[0].live, false, "one not yet under way moves nothing");
+});
+
+// The place an operation attacks and how are its fields: `focus` and `approach`. Its name and summary are
+// never read for a city or a word, in English or in any other language (the owner, 2026-11-13: no keywording
+// anywhere): an English summary naming Brod with no focus is no plan, and its French twin is no plan either.
+test("an operation's place is its focus and its attack its approach, never words of its summary", () => {
+  const { record } = opened();
+  for (const summary of ["Encircle Brod from the north and the south.", "Encercler Brod par le nord et par le sud.", "Окружить Брод с севера и юга."]) {
+    assert.deepEqual(operationsOn({ record, side: 0, ...context([operation({ summary, focus: null })]) }), [], summary);
+    const [found] = operationsOn({ record, side: 0, ...context([operation({ summary })]) });
+    assert.deepEqual([found.place.name, found.order], ["Brod", "advance"], `${summary}: no approach is an advance`);
+    const [encircled] = operationsOn({ record, side: 0, ...context([operation({ summary, approach: "encircle" })]) });
+    assert.equal(encircled.order, "encircle", summary);
+  }
+  for (const approach of ["advance", "blitz", "spearhead", "flank", "encircle"]) {
+    assert.equal(operationsOn({ record, side: 0, ...context([operation({ approach })]) })[0].order, approach);
+  }
+  // Only the approaches the engine has: anything else is an advance.
+  for (const approach of ["pincer", "assault", "hold", "Encircle", ""]) {
+    assert.equal(operationsOn({ record, side: 0, ...context([operation({ approach })]) })[0].order, "advance", approach);
+  }
 });
 
 test("the arrow of an operation can be redrawn, put back, and told to move nothing", () => {
@@ -161,7 +184,7 @@ test("an operation under way sends its troops once, and takes them off again whe
   // Asked again, nothing more is written.
   assert.deepEqual(withOperationOrders(sent, { sides: [0], ...context(projects), since: "2024-03-02" }).orders, sent.orders);
   // The other side's Board entry is what is believed of it, and moves nothing.
-  const believed = withOperationOrders(record, { sides: [0], ...context([operation({ ownerCode: "Borduria", summary: "Take Alba." })]) });
+  const believed = withOperationOrders(record, { sides: [0], ...context([operation({ ownerCode: "Borduria", summary: "Take Alba.", focus: at("Alba") })]) });
   assert.equal(believed.orders.length, 0);
   // One not under way, or told to move nothing, sends nobody.
   assert.equal(withOperationOrders(record, { sides: [0], ...context([operation({ status: "paused" })]) }).orders.length, 0);
@@ -269,7 +292,7 @@ test("an agent sends its owner the other side's real plans; one that was turned 
 
   // Nobody inside: nothing is known but what the Board already holds.
   assert.deepEqual(ask(record, 0, []), { plans: [], sources: [] });
-  const board = ask(record, 0, [], [operation({ ownerCode: "Borduria", summary: "Take Alba by storm.", verification: "doubted" })]);
+  const board = ask(record, 0, [], [operation({ ownerCode: "Borduria", summary: "Take Alba by storm.", focus: at("Alba"), verification: "doubted" })]);
   assert.deepEqual(board.plans.map((plan) => [plan.kind, plan.name, plan.objective, plan.doubted]), [["project", "Operation Kingfisher", "city: Alba", true]]);
   // An agent of ours in a country that is not on the other side sends nothing of it.
   assert.deepEqual(ask(record, 0, [spy({ target: "Syldavia" })]).plans, []);
@@ -312,7 +335,7 @@ test("an agent sends its owner the other side's real plans; one that was turned 
 test("plans are told in words with names and kinds, never a number of the game's own", () => {
   const { record } = opened([standing(0, "spearhead", { objective: "city: Brod" })]);
   const drawn = withDiversion(record, 0, { way: [[20.9, 49.2], [23.35, 49.42]], troops: 40 });
-  const lines = describePlans(drawn, plansOf(drawn, 0, context([operation({ summary: "Encircle Nova Brod.", status: "proposed" })])), { cities });
+  const lines = describePlans(drawn, plansOf(drawn, 0, context([operation({ summary: "Encircle Nova Brod.", approach: "encircle", focus: at("Nova Brod"), status: "proposed" })])), { cities });
   assert.equal(lines.length, 3);
   assert.match(lines[0], /^a spearhead toward city: Brod, about \d+ formations$/);
   assert.match(lines[1], /^an encirclement toward city: Nova Brod, about \d+ formations \(operation "Operation Kingfisher"\)$/);

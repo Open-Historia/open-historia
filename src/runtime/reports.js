@@ -100,7 +100,10 @@ export const normalizeReports = (reports) => {
 };
 
 // One operation as the model writes it. A create with nothing to say is not a
-// report; a share of nothing widens nothing.
+// report; a share of nothing widens nothing. The op is the schema's create or
+// share (an op left unwritten beside a title or a body is a create by its
+// shape); "update" was once read as a share, in English only (the owner,
+// 2026-11-13: no keywording anywhere).
 export const normalizeReportOp = (entry) => {
     if (!entry || typeof entry !== "object") return null;
     const op = fold(entry.op || entry.operation || (entry.title || entry.body ? "create" : ""));
@@ -119,7 +122,7 @@ export const normalizeReportOp = (entry) => {
             dateline: asText(entry.dateline || entry.date),
         };
     }
-    if (op === "share" || op === "update") {
+    if (op === "share") {
         const reportId = asText(entry.reportId || entry.id);
         const visibleTo = nameList(entry.visibleTo ?? entry.addVisibleTo ?? entry.recipients ?? entry.holders);
         if (!reportId || !visibleTo.length) return null;

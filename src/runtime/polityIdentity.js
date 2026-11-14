@@ -9,45 +9,26 @@
  * a polityOverride key is treated as the stable campaign identity/lineage key.
  * a rename changes its display/current name and aliases, not every key in the
  * save. that lets old/new regime names resolve back to one established actor.
+ *
+ * Identity is an exact lookup, never a guess: a polity answers to its key, its
+ * code, its name, its aliases, its former names and its declared map
+ * references, and to nothing else. Names are compared through the game's one
+ * name fold (server/nameKey.js: case, accents and spacing, in every script), so
+ * "Россия" is found as surely as "Russia". No regime word is stripped:
+ * "Republic of China" is not "China", and "Greece" is not "Kingdom of Greece"
+ * unless the save says so (an alias, a former name, a map reference).
  */
 
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import OFFICIAL_COUNTRY_CODES_BY_NAME from "./generated/officialCountryAliases.js";
 import { toCountryName } from "./ownerNames.js";
 import { lookedUp } from "./worldLookups.js";
+import { nameKey } from "../../server/nameKey.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 
-// The same few hundred names are folded thousands of times in one time skip,
-// and a fold depends on nothing but the text, so each answer is kept. The
-// store is emptied when it passes MEMO_LIMIT names, so a long session cannot
-// fill memory with names it no longer uses.
-const MEMO_LIMIT = 20000;
-const memoizedFold = (fold) => {
-  const memo = new Map();
-  return (value) => {
-    const key = typeof value === "string" ? value : String(value ?? "");
-    let answer = memo.get(key);
-    if (answer === undefined) {
-      answer = fold(key);
-      if (memo.size >= MEMO_LIMIT) memo.clear();
-      memo.set(key, answer);
-    }
-    return answer;
-  };
-};
-
-const foldIdentityText = (value) =>
-  normalizeString(value)
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[’']/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const normalizeIdentityText = memoizedFold(foldIdentityText);
+// The key a name is looked up by ("" for no name). It remembers its answers.
+const normalizeIdentityText = nameKey;
 
 const STOCK_COUNTRY_NAMES = new Set(
   Object.values(COUNTRY_NAMES)
@@ -123,77 +104,6 @@ export const resolveStockCountryCode = (value) => {
   return codes.length === 1 ? codes[0] : null;
 };
 
-// strip regime wrappers only. do NOT try to turn "german" into "germany",
-// "ottoman" into "turkey", etc. that way lies a whole new pile of bullshit.
-const foldPolityCore = (value) => {
-  let text = normalizeIdentityText(value);
-  if (!text) return "";
-
-  text = text.replace(/^the\s+/, "");
-
-  const prefixes = [
-    "federal democratic republic of ",
-    "federal republic of ",
-    "peoples democratic republic of ",
-    "people s democratic republic of ",
-    "peoples republic of ",
-    "people s republic of ",
-    "democratic republic of ",
-    "socialist republic of ",
-    "united republic of ",
-    "grand duchy of ",
-    "kingdom of ",
-    "republic of ",
-    "empire of ",
-    "principality of ",
-    "duchy of ",
-    "sultanate of ",
-    "emirate of ",
-    "caliphate of ",
-    "commonwealth of ",
-    "federation of ",
-    "confederation of ",
-  ];
-
-  for (const prefix of prefixes) {
-    if (text.startsWith(prefix)) {
-      text = text.slice(prefix.length).trim();
-      break;
-    }
-  }
-
-  const suffixes = [
-    " federal republic",
-    " democratic republic",
-    " peoples republic",
-    " people s republic",
-    " socialist republic",
-    " grand duchy",
-    " kingdom",
-    " republic",
-    " empire",
-    " principality",
-    " duchy",
-    " sultanate",
-    " emirate",
-    " caliphate",
-    " commonwealth",
-    " federation",
-    " confederation",
-  ];
-
-  for (const suffix of suffixes) {
-    if (text.endsWith(suffix)) {
-      text = text.slice(0, -suffix.length).trim();
-      break;
-    }
-  }
-
-  return text;
-};
-
-const polityCore = memoizedFold(foldPolityCore);
-
 const normalizeAliases = (value) =>
   Array.isArray(value)
     ? value.map((entry) => normalizeString(entry)).filter(Boolean)
@@ -225,12 +135,20 @@ const buildDeclaredPolities = (world, ownershipCounts) => {
       const canonical = normalizeString(key);
       if (!canonical) return null;
 
-      const names = [
+      // A polity's own names (its key, code and name) come before the names it
+      // also answers to (aliases, former names): a former name that is now
+      // another polity's own name belongs to that polity, as in ownerNames.js
+      // buildOwnerAliasMap.
+      const ownNames = [
         canonical,
         normalizeString(value?.code),
         normalizeString(value?.name),
-        ...normalizeAliases(value?.aliases),
       ].filter(Boolean);
+      const otherNames = [
+        ...normalizeAliases(value?.aliases),
+        ...normalizeAliases(value?.formerNames),
+      ];
+      const keysOf = (list) => [...new Set(list.map(normalizeIdentityText).filter(Boolean))];
 
       const lifecycleStatus =
         normalizeString(value?.status).toLowerCase();
@@ -239,21 +157,9 @@ const buildDeclaredPolities = (world, ownershipCounts) => {
 
       return {
         canonical,
-        names: [...new Set(names)],
-        normalizedNames: [
-          ...new Set(
-            names
-              .map(normalizeIdentityText)
-              .filter(Boolean),
-          ),
-        ],
-        cores: [
-          ...new Set(
-            names
-              .map(polityCore)
-              .filter(Boolean),
-          ),
-        ],
+        names: [...new Set([...ownNames, ...otherNames])],
+        ownKeys: keysOf(ownNames),
+        normalizedNames: keysOf([...ownNames, ...otherNames]),
         mapRefs: normalizeMapRefs(value?.mapRefs),
         ownedRegions,
         lifecycleStatus,
@@ -314,7 +220,6 @@ export const resolvePolityIdentity = (
   {
     allowUnknown = true,
     requireActive = false,
-    allowCoreMatch = true,
     allowStockBase = true,
     allowMapRefs = true,
     identityIndex = null,
@@ -336,9 +241,6 @@ export const resolvePolityIdentity = (
   const normalizedInput =
     normalizeIdentityText(stockName);
 
-  const coreInput =
-    polityCore(stockName);
-
   // Hot-path callers that resolve many identities against the SAME immutable
   // world snapshot may build this once and reuse it. The default path remains
   // byte-for-byte semantic equivalent: one fresh authoritative index per call.
@@ -354,28 +256,28 @@ export const resolvePolityIdentity = (
         (!requireActive || candidate.active))
     : [];
 
+  // A name with no letters or digits names nobody.
+  const answersTo = (keys) => Boolean(normalizedInput) && keys.includes(normalizedInput);
+
   const declaredRelated = index.declared.filter(
     (candidate) =>
-      candidate.normalizedNames.includes(normalizedInput) ||
-      (coreInput && candidate.cores.includes(coreInput)) ||
+      answersTo(candidate.normalizedNames) ||
       (allowMapRefs && candidate.mapRefs.gadm0.some((code) => stockCodes.includes(code))),
   );
 
-  // 1. exact declared identity/current name/alias.
+  // 1. exact declared identity: a polity's own key, code or name first, then
+  // the names it also answers to (aliases, former names).
   // declared state beats raw ownership strings, because a poisoned save may
   // already contain one bogus owner called "Greece".
-  const exact = index.declared.filter(
-    (candidate) =>
-      candidate.normalizedNames.includes(
-        normalizedInput,
-      ) &&
-      (
-        !requireActive ||
-        candidate.active
-      ),
-  );
-
-  {
+  for (const field of ["ownKeys", "normalizedNames"]) {
+    const exact = index.declared.filter(
+      (candidate) =>
+        answersTo(candidate[field]) &&
+        (
+          !requireActive ||
+          candidate.active
+        ),
+    );
     const choice = chooseUnique(exact);
 
     if (choice.candidate) {
@@ -440,65 +342,11 @@ export const resolvePolityIdentity = (
     }
   }
 
-  // 3. conservative regime-wrapper match:
-  // "Greece" -> "Kingdom of Greece"
-  // "Bulgaria" -> "Kingdom of Bulgaria"
-  //
-  // this deliberately does NOT make "Germany" equal "German Empire". the old
-  // devtools resolver had stronger lineage/geography evidence for that; we will
-  // port that evidence later instead of pretending fuzzy spelling is state law.
-  const coreMatches =
-    allowCoreMatch && coreInput
-      ? index.declared.filter(
-          (candidate) =>
-            candidate.cores.includes(
-              coreInput,
-            ) &&
-            (
-              !requireActive ||
-              candidate.active
-            ),
-        )
-      : [];
-
-  {
-    const choice =
-      chooseUnique(coreMatches);
-
-    if (choice.candidate) {
-      return {
-        input: normalizeString(token),
-        normalizedInput,
-        resolved:
-          choice.candidate.canonical,
-        status: "core-match",
-        candidates:
-          coreMatches.map(
-            (candidate) =>
-              candidate.canonical,
-          ),
-      };
-    }
-
-    if (choice.ambiguous) {
-      return {
-        input: normalizeString(token),
-        normalizedInput,
-        resolved: "",
-        status: "ambiguous-core",
-        candidates:
-          coreMatches.map(
-            (candidate) =>
-              candidate.canonical,
-          ),
-      };
-    }
-  }
-
-  // 4. stock/base-map polity. this keeps an ordinary modern scenario working
+  // 3. stock/base-map polity. this keeps an ordinary modern scenario working
   // even when it has no polityOverride record yet. but if this save already
-  // declares a related historical/current identity, do NOT resurrect the base
-  // label as a second country just because GADM knows the name.
+  // declares a related historical/current identity (one answering to this very
+  // name, or one whose map references name its stock country), do NOT
+  // resurrect the base label as a second country just because GADM knows it.
   if (
     allowStockBase &&
     isStockPolityName(stockName) &&
@@ -513,7 +361,7 @@ export const resolvePolityIdentity = (
     };
   }
 
-  // 5. nothing in this save safely claims the name. unknown pass-through is for
+  // 4. nothing in this save safely claims the name. unknown pass-through is for
   // explicit lifecycle code only; ordinary world mutations should set it false.
   if (allowUnknown) {
     return {

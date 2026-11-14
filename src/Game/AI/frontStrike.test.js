@@ -81,17 +81,17 @@ const event = (id, date, extra = {}) => ({ id, date, title: `The ${id}`, descrip
 test("a strike is a line of its own: who, with what, from where, at what, how many shot down, how many", () => {
   const [bombers, silo, submarine, bomb, barrage, vague, unarmed, aimless] = decodeFrontOrders([
     "strike~Aland~bombing run~structure: Alba Air Base~4~city: Brod~3~24",
-    "Strike~Aland~ICBM~~2~city: Brod~~6",
-    "strike~Aland~submarine-launched missile~unit: 3rd Submarine Flotilla~2~city: Brod",
-    "strike~Aland~atomic bomb~~~city: Brod~0~1",
-    "strike~Aland~cruise missiles~~1,2~structure: Brod Refinery~40~120",
+    "Strike~Aland~Silo Missile~~2~city: Brod~~6",
+    "strike~Aland~submarine missile~unit: 3rd Submarine Flotilla~2~city: Brod",
+    "strike~Aland~nuclear bomber~~~city: Brod~0~1",
+    "strike~Aland~missile strike~~1,2~structure: Brod Refinery~40~120",
     "strike~Aland~death ray~~1~city: Brod",
     "strike~Aland~~~1~city: Brod",
     "strike~Aland~bombing run~~1~",
   ]);
   assert.deepEqual(bombers, { id: "front-0", battlefield: "", side: "Aland", order: "strike", sector: "all", eventIndexes: [3], eventIds: [], objective: "city: Brod", result: "", effort: "", weapon: "bombing run", from: "structure: Alba Air Base", count: 24, down: 3 });
   assert.equal(isStrikeOrder(bombers.order), true);
-  // The words a model reaches for mean the weapon they are.
+  // The weapons are the rules' own words, case aside.
   assert.deepEqual([silo.weapon, silo.count, silo.down, silo.from], ["silo missile", 6, 0, ""]);
   assert.deepEqual([submarine.weapon, submarine.count, submarine.from], ["submarine missile", 1, "unit: 3rd Submarine Flotilla"]);
   assert.deepEqual([bomb.weapon, bomb.count, bomb.eventIndexes], ["nuclear bomber", 1, []]);
@@ -100,9 +100,16 @@ test("a strike is a line of its own: who, with what, from where, at what, how ma
   assert.match(vague.problem, /"death ray" is not a weapon/);
   assert.match(unarmed.problem, /has to say what it is made with/);
   assert.match(aimless.problem, /has to say what it hits/);
-  // How many were shot down may be said in a word, by a model that will not count.
+  // A word for a weapon that is not the rules' own is no weapon, in English as in any language: the
+  // line is left out and said, so the next answer writes it right.
+  for (const word of ["ICBM", "cruise missiles", "atomic bomb", "submarine-launched missile", "missile de croisière", "Marschflugkörper", "крылатая ракета"]) {
+    assert.match(decodeFrontOrders([`strike~Aland~${word}~~1~city: Brod`])[0].problem, /is not a weapon/, word);
+  }
+  // How many were shot down may be said in one of the rules' words, by a model that will not count.
   const said = (word, count = 12) => decodeFrontOrders([`strike~Aland~missile strike~~1~city: Brod~${word}~${count}`])[0].down;
-  assert.deepEqual(["all", "All of them.", "intercepted", "most", "half", "some", "a few", "none", "", "7"].map((word) => said(word)), [12, 12, 12, 9, 6, 4, 2, 0, 0, 7]);
+  assert.deepEqual(["all", "All.", "most", "half", "some", "none", "", "7", "7 of them"].map((word) => said(word)), [12, 12, 9, 6, 4, 0, 0, 7, 7]);
+  // Any other word is no number and no share, whatever its language: none were shot down.
+  assert.deepEqual(["intercepted", "All of them", "a few", "tous", "la plupart", "все"].map((word) => said(word)), [0, 0, 0, 0, 0, 0]);
   // A share of a strike that was shot down at all is never none of it: one missile, "some" of it, is that one.
   assert.deepEqual([said("some", 1), said("most", 2), said("none", 1)], [1, 2, 0]);
   // No more shot down than there were, and no more than a strike is ever said to be of.
@@ -127,10 +134,12 @@ test("a strike rests on its event, orders nobody, and is drawn whoever's it is",
 
 test("a turn's strikes come back with their places found, in peace as in war, and a submarine's is fired from the sea", async () => {
   const map = sheet();
+  // Each structure's family and weight, as the skip said them when it built
+  // it (runtime/markerFamily.js): what a strike sets off from is read by them.
   const markers = [
-    { id: "m1", name: "Silo North", kind: "missile silo", ownerCode: "Aland", lng: 5, lat: 47 },
-    { id: "m2", name: "Alba Air Base", kind: "airbase", ownerCode: "Aland", lng: 7, lat: 45 },
-    { id: "m3", name: "Brod Refinery", kind: "refinery", ownerCode: "Borduria", lng: 53, lat: 43 },
+    { id: "m1", name: "Silo North", kind: "missile silo", family: "military", strategic: true, ownerCode: "Aland", lng: 5, lat: 47 },
+    { id: "m2", name: "Alba Air Base", kind: "airbase", family: "military", ownerCode: "Aland", lng: 7, lat: 45 },
+    { id: "m3", name: "Brod Refinery", kind: "refinery", family: "industry-science", ownerCode: "Borduria", lng: 53, lat: 43 },
   ];
   const world = worldOn(map, { markers });
   const events = [

@@ -6,10 +6,13 @@
 // the target wants believed. All of it is decided by two numbers — the owner's
 // intelligence service and the target's — so the stat is the whole game here.
 //
-// Pure and dependency-free so all of it is unit-tested without a browser: no
-// store reads, no React, no crypto (spySeal.js does that). Randomness is a
-// seeded draw, so the same world on the same round always resolves the same way
-// and a test can pin every branch.
+// Pure, so all of it is unit-tested without a browser: no store reads, no
+// React, no crypto (spySeal.js does that), and its one import
+// (server/nameId.js) imports nothing. Randomness is a seeded draw, so the same
+// world on the same round always resolves the same way and a test can pin
+// every branch.
+
+import { nameId } from "../../server/nameId.js";
 
 export const DEFAULT_INTELLIGENCE = 40;
 export const MAX_ACTIVE_SPIES = 3;   // per owner
@@ -162,10 +165,19 @@ export const activeSpies = (world, owner) =>
 export const foreignSpies = (world, target) =>
   normalizeSpies(world?.spies).filter((spy) => spy.target === target && (isLive(spy) || spy.status === "discovered"));
 
+// An agent's id: its owner, its target and a serial, never one another agent
+// holds (a recall, a turn or an exposure is applied to every agent with the
+// id). Each name by the game's one rule for an id made from a name
+// (server/nameId.js): a Latin name keeps the slug it always had, a name in
+// another script is its own hash. Cut to a-z and 0-9, two agents sent to two
+// countries named in another script had one id, and a recall recalled both.
 const mintId = (spies, owner, target) => {
-  const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-");
-  const serial = spies.filter((spy) => spy.owner === owner && spy.target === target).length + 1;
-  return `spy-${slug(owner || "x")}-${slug(target)}-${serial}`;
+  const slug = (s) => nameId(s, (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-"));
+  const taken = new Set(spies.map((spy) => spy.id));
+  const stem = `spy-${slug(owner || "x")}-${slug(target)}`;
+  let serial = spies.filter((spy) => spy.owner === owner && spy.target === target).length + 1;
+  while (taken.has(`${stem}-${serial}`)) serial += 1;
+  return `${stem}-${serial}`;
 };
 
 // Returns the next spies list, or throws with a message the UI can show verbatim.

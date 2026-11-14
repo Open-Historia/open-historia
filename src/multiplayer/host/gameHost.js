@@ -624,7 +624,7 @@ export const createGameHost = ({
         return clean(failure?.message || failure).slice(0, 300) || "The host could not do that.";
       }
     },
-    say: async (connection, { thread, to, text }, seat) => {
+    say: async (connection, { thread, to, text, fromDraft }, seat) => {
       const body = clean(text);
       if (!body) return "A message needs words.";
       const recipients = list(to).map(clean).filter(Boolean);
@@ -657,6 +657,9 @@ export const createGameHost = ({
         text: body,
         ...(gameDate ? { time: gameDate } : {}),
         createdAt: new Date(now()).toISOString(),
+        // The advisor's drafted letter it was sent from, as the player's own
+        // screen sends it (GameUI/advisorDrafts.js): that draft then says it went.
+        ...(clean(fromDraft) ? { fromDraft: clean(fromDraft) } : {}),
       };
       await store.updateChats((chats) => {
         const all = list(chats);

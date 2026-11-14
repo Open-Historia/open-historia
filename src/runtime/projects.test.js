@@ -377,12 +377,14 @@ test("advanceRecurringDate refuses what it cannot compute", () => {
   assert.equal(advanceRecurringDate("2033-13-45", "annual"), "", "impossible date");
 });
 
-test("normalizeMilestoneRepeat accepts the synonyms a model reaches for", () => {
-  for (const [input, expected] of [
-    ["annual", "annual"], ["yearly", "annual"], ["Annually", "annual"], ["every year", "annual"],
-    ["quarter", "quarterly"], ["month", "monthly"], ["week", "weekly"], ["biannual", "biennial"],
-  ]) {
+test("normalizeMilestoneRepeat takes the five cadences exactly, and leaves out any other word in any language", () => {
+  for (const [input, expected] of [["annual", "annual"], [" Quarterly ", "quarterly"], ["MONTHLY", "monthly"], ["weekly", "weekly"], ["biennial", "biennial"]]) {
     assert.equal(normalizeMilestoneRepeat(input), expected, `"${input}"`);
+  }
+  // An English synonym is no more a cadence than its French twin.
+  for (const [english, french] of [["yearly", "annuel"], ["every year", "chaque année"], ["month", "mensuel"], ["biannual", "semestriel"]]) {
+    assert.equal(normalizeMilestoneRepeat(english), "", english);
+    assert.equal(normalizeMilestoneRepeat(french), "", french);
   }
   assert.equal(normalizeMilestoneRepeat("fortnightly"), "", "an unsupported cadence is not guessed at");
   assert.equal(normalizeMilestoneRepeat(""), "");
@@ -459,6 +461,18 @@ test("owner identity ignores case, accents and punctuation", () => {
   assert.equal(isPlayerProject(own, "Côte d'Ivoire"), true);
   assert.equal(isPlayerProject(project({ ownerCode: "  SPAIN  " }), "Spain"), true);
   assert.equal(isPlayerProject(project({ ownerCode: "Ruritania" }), "Spain"), false);
+});
+
+// Under the old a-z fold every name in another script folded to nothing, and a
+// name that folded to nothing counted as blank: a programme owned by "中国"
+// landed on the player's own Board, with the player's levers on it. Blank is
+// the text itself, and a name in any script is that name.
+test("an owner named in another script is that owner, never the player", () => {
+  assert.equal(isPlayerProject(project({ ownerCode: "中国" }), "France"), false);
+  assert.equal(isForeignProject(project({ ownerCode: "Россия" }), "France"), true);
+  assert.equal(isPlayerProject(project({ ownerCode: "РОССИЯ" }), "Россия"), true, "the player's own, in another case");
+  assert.equal(isPlayerProject(project({ ownerCode: "中国" }), "中国"), true);
+  assert.equal(isPlayerProject(project({ ownerCode: "!!!" }), "France"), false, "a name with no letters is nobody's, not the player's");
 });
 
 // A blank owner has always meant the player: the model is not made to restate
@@ -749,121 +763,64 @@ test("a recalled agent closes its own operation, never the intelligence it repor
 
 // --- Which Board entries an event concerns ---------------------------------
 //
-// The engine's own answer, so a major event about a Board entry can pass the
-// world director's consequence check provisionally without the model tagging
-// anything. The board pass later proves or disproves it.
+// The open entries the event's own board ops address, by id or by the name the
+// Board gives them: what the event says it did to the Board, never what its
+// words resemble. Read by the world director's consequence check and by the
+// board pass's reasons.
 
-const concerned = (event, board, options) =>
-  boardEntriesConcernedByEvent(event, board, options).map((entry) => entry.id);
+const concerned = (event, board) =>
+  boardEntriesConcernedByEvent(event, board).map((entry) => entry.id);
+const moving = (title, ...ops) => ({ title, description: "", impacts: { projectOps: ops } });
 
-test("an event naming a Board entry exactly concerns it", () => {
+test("an event concerns the Board entries its own board ops address, by id or by the Board's name", () => {
+  const board = [
+    project({ id: "westbird", name: "Project Westbird", summary: "Agent recruitment drive." }),
+    project({ id: "kingfisher", name: "Operation Kingfisher", summary: "Covert missile trials." }),
+  ];
+  assert.deepEqual(concerned(moving("Recruiters busy", { op: "update", projectId: "westbird", progress: 40 }), board), ["westbird"]);
+  assert.deepEqual(concerned(moving("A test succeeds", { op: "milestone", name: "operation kingfisher", milestone: { title: "First flight", status: "done" } }), board), ["kingfisher"], "the Board's own name, case aside");
+  assert.deepEqual(concerned(moving("Both move", { op: "update", projectId: "kingfisher" }, { op: "update", projectId: "westbird" }), board), ["westbird", "kingfisher"], "in the Board's order");
+});
+
+test("an event's words never make it concern an entry, in any language", () => {
   const board = [project({ id: "westbird", name: "Project Westbird", summary: "Agent recruitment drive." })];
-  assert.deepEqual(
-    concerned({ title: "Project Westbird recruits its first cell", description: "" }, board),
-    ["westbird"],
-  );
+  // Named outright in its words, the entry is still not what the event did.
+  assert.deepEqual(concerned({ title: "Project Westbird recruits its first cell", description: "" }, board), []);
+  assert.deepEqual(concerned({ title: "Le projet Westbird recrute sa première cellule", description: "" }, board), []);
+  // And the French telling of the same op concerns it exactly as the English one.
+  const op = { op: "update", projectId: "westbird", progress: 45 };
+  assert.deepEqual(concerned(moving("Project Westbird recruits its first cell", op), board), ["westbird"]);
+  assert.deepEqual(concerned(moving("Le projet Westbird recrute sa première cellule", op), board), ["westbird"]);
 });
 
-test("the generic word in a Board entry's name is never what matches", () => {
-  const board = [project({ id: "kingfisher", name: "Operation Kingfisher", summary: "Covert missile trials." })];
-  assert.deepEqual(concerned({ title: "Kingfisher's first test succeeds", description: "" }, board), ["kingfisher"]);
-  assert.deepEqual(
-    concerned({ title: "A new operation begins in the north", description: "" }, board),
-    [],
-    "'operation' says what kind of thing it is, not which one",
-  );
-});
-
-test("a paraphrase matches through the owner and the summary's distinctive words", () => {
-  const board = [project({
-    id: "simurgh",
-    name: "Project Simurgh",
-    ownerCode: "Iran",
-    summary: "Offensive cyber capability against Gulf infrastructure.",
-  })];
-  assert.deepEqual(
-    concerned({ title: "Iranian offensive cyber units field new hardware", description: "" }, board),
-    ["simurgh"],
-  );
-});
-
-test("naming the owner alone is not enough", () => {
-  const board = [project({ id: "simurgh", name: "Project Simurgh", ownerCode: "Iran", summary: "Offensive cyber capability." })];
-  assert.deepEqual(concerned({ title: "Iran holds parliamentary elections", description: "" }, board), []);
-});
-
-test("the owner decides between Board entries the words cannot tell apart", () => {
+test("a Board kept in another script is addressed by its ids and names, whatever the event says", () => {
+  // Two entries from a player's log (2026-10-05, the game in Russian), and one in Chinese.
   const board = [
-    project({ id: "fr", name: "Naval Expansion Programme", ownerCode: "France", summary: "Capital ship construction." }),
-    project({ id: "de", name: "Naval Expansion Programme", ownerCode: "Germany", summary: "Capital ship construction." }),
+    project({ id: "leviathan", name: "Проект Левиафан", summary: "Ключевая военно-морская программа." }),
+    project({ id: "fortress", name: "Проект Береговая Крепость", summary: "Строительство оборонительных рубежей." }),
+    project({ id: "dragon", name: "蛟龙计划", summary: "深海载人潜水器研制。" }),
   ];
-  assert.deepEqual(
-    concerned({ title: "Germany lays down the second phase of its naval expansion", description: "" }, board),
-    ["de"],
-  );
-  assert.deepEqual(
-    concerned({ title: "Naval expansion strains shipyards", description: "" }, board).sort(),
-    ["de", "fr"],
-    "an event that names neither owner keeps both",
-  );
+  assert.deepEqual(concerned(moving("Установлен энергетический блок", { op: "update", projectId: "leviathan" }), board), ["leviathan"]);
+  assert.deepEqual(concerned(moving("Работы ускорены", { op: "update", name: "проект береговая крепость" }), board), ["fortress"]);
+  assert.deepEqual(concerned(moving("蛟龙计划完成首次下潜", { op: "milestone", name: "蛟龙计划", milestone: { title: "首次下潜", status: "done" } }), board), ["dragon"]);
+  assert.deepEqual(concerned({ title: "“蛟龙计划”完成首次下潜", description: "" }, board), [], "its name in the words alone is nothing");
 });
 
-test("an owner is named only at the start of a word", () => {
-  const board = [
-    project({ id: "oman", name: "Port Expansion", ownerCode: "Oman", summary: "Deep-water harbour works." }),
-    project({ id: "ro", name: "Port Expansion", ownerCode: "Romania", summary: "Deep-water harbour works." }),
-  ];
-  assert.deepEqual(
-    concerned({ title: "Romania's port expansion reaches the breakwater", description: "" }, board),
-    ["ro"],
-    "Romania must not read as naming Oman",
-  );
-});
-
-test("closed Board entries never match, and an empty Board matches nothing", () => {
-  const event = { title: "Project Westbird is wound up", description: "" };
+test("closed Board entries never match, an op naming nothing on the Board matches nothing, and an empty Board matches nothing", () => {
+  const event = moving("Project Westbird is wound up", { op: "cancel", projectId: "w" });
   for (const status of ["complete", "failed", "cancelled"]) {
     assert.deepEqual(concerned(event, [project({ id: "w", name: "Project Westbird", status })]), [], status);
   }
+  assert.deepEqual(concerned(moving("x", { op: "update", projectId: "elsewhere", name: "Project Elsewhere" }), [project({ id: "w", name: "Project Westbird" })]), []);
+  assert.deepEqual(concerned(moving("x", { op: "create", name: "Project Nova", summary: "A new programme." }), [project({ id: "w", name: "Project Westbird" })]), [], "a new entry is not one on the Board");
   assert.deepEqual(concerned(event, []), []);
   assert.deepEqual(concerned(event, undefined), []);
+  assert.deepEqual(concerned({ title: "No ops" }, [project({ id: "w" })]), []);
 });
 
-test("foreign Board entries match like the player's own", () => {
+test("foreign Board entries are addressed like the player's own", () => {
   const board = [project({ id: "rival", name: "Project Leviathan", ownerCode: "Germany" })];
-  assert.deepEqual(concerned({ title: "Leviathan hull launched at Kiel", description: "" }, board), ["rival"]);
-});
-
-test("accents are folded away, not turned into word breaks", () => {
-  const board = [project({ id: "qc", name: "Projet Québec", ownerCode: "Canada", summary: "Hydro-électricité du Nord." })];
-  assert.deepEqual(concerned({ title: "Quebec project advances", description: "" }, board), ["qc"]);
-});
-
-test("a Board kept in another script is matched by its own words", () => {
-  // Two entries from a player's log (2026-10-05, the game in Russian). Folded
-  // to a-z0-9, nothing on this Board had a word, so no event ever concerned an
-  // entry on it, and a miss here is a retried segment.
-  const board = [
-    project({ id: "leviathan", name: "Проект Левиафан", summary: "Ключевая военно-морская программа по созданию сверхмощного корабля, обеспечивающего доминирование в Черном море." }),
-    project({ id: "fortress", name: "Проект Береговая Крепость", summary: "Строительство и модернизация оборонительных рубежей на южном побережье (особенно вокруг Крыма)." }),
-  ];
-  assert.deepEqual(
-    concerned({ title: "Проект Левиафан: установлен энергетический блок", description: "Сборочные работы перешли на новый этап." }, board),
-    ["leviathan"],
-    "named exactly",
-  );
-  assert.deepEqual(
-    concerned({ title: "Строительство оборонительных рубежей на южном побережье ускорено", description: "" }, board),
-    ["fortress"],
-    "described by the summary's own words",
-  );
-  assert.deepEqual(concerned({ title: "Парламент принял бюджет", description: "" }, board), []);
-
-  // A name in Chinese is matched where quotation marks or punctuation set it
-  // apart; inside an unbroken sentence it is part of one long word.
-  const chinese = [project({ id: "dragon", name: "蛟龙计划", summary: "深海载人潜水器研制。" })];
-  assert.deepEqual(concerned({ title: "“蛟龙计划”完成首次下潜", description: "" }, chinese), ["dragon"]);
-  assert.deepEqual(concerned({ title: "蛟龙计划完成首次下潜", description: "" }, chinese), []);
+  assert.deepEqual(concerned(moving("Hull launched at Kiel", { op: "update", projectId: "rival", progress: 70 }), board), ["rival"]);
 });
 
 // --- Where the board pass's ops go ------------------------------------------

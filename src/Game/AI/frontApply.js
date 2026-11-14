@@ -57,7 +57,7 @@ import { buildScenarioFronts, scenarioFrontsPending } from "./frontScenario.js";
 import { airOn, frontsOn, frontsPace, naviesOn, strategyNetOn, transportMediaOn } from "./frontsGate.js";
 import { labStaffPolicy, trainedStaffPolicy } from "../../runtime/fronts/mind/trained.js";
 import { applyFrontUnitChanges, battlefieldRegionTest, engineRegionsOf, frontWorldReaders, runTurnFronts, stripFrontOps } from "./frontTurn.js";
-import { applyWarUpdates, eventNarratesHardCombat } from "./nativeWarLedger.js";
+import { applyWarUpdates } from "./nativeWarLedger.js";
 import { filterToRenderedRegions } from "./promptContext.js";
 import { territoryTempoAllowance } from "./worldDirection.js";
 import { fightOffPage, offPageAvailable } from "./frontWorkerClient.js";
@@ -435,7 +435,6 @@ export const applyTurnFronts = async ({
       fromDate,
       toDate,
       requestedDays,
-      narratesCombat: eventNarratesHardCombat,
       foretold: foretold === true,
       strikePlaces,
     }, signal);

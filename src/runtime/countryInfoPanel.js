@@ -3,6 +3,7 @@
 // out of React so node can test it: which polity a click means, which regions
 // it holds, which events are about it, and the Advisor Report it last paid for.
 import COUNTRY_NAMES from "./generated/countryNames.js";
+import { eventNamesPolity } from "./eventConcerns.js";
 import { gameDateDayNumber } from "./gameDates.js";
 import { buildOwnerAliasMap, createOwnerResolver, regionBaseOwner } from "./ownerNames.js";
 import { resolvePolityIdentity } from "./polityIdentity.js";
@@ -17,7 +18,6 @@ export const resolvePanelPolity = (country, world) => {
   const identity = resolvePolityIdentity(requested, world ?? {}, {
     allowUnknown: false,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
   });
   const stableKey = identity?.resolved || requested;
@@ -79,8 +79,8 @@ export const classifyPolityRegions = ({ catalog = [], world = {}, polityKey = ""
 };
 
 // Every polity name the world or the stock map knows: the save's keys, names
-// and aliases and every real country. The event matcher below uses them to
-// tell a polity's name from the same letters inside a longer one.
+// and aliases and every real country (the names a Rostra post may give as
+// its country or its mentions, socialFeed.js readSkipPosts).
 export const knownPolityNames = (world) => {
   const names = new Set(Object.values(COUNTRY_NAMES).map(clean).filter(Boolean));
   for (const [key, polity] of Object.entries(world?.polityOverrides ?? {})) {
@@ -90,27 +90,6 @@ export const knownPolityNames = (world) => {
     }
   }
   return [...names];
-};
-
-const WORD_CHAR = /[\p{L}\p{M}\p{N}]/u;
-const isWordChar = (char) => Boolean(char) && WORD_CHAR.test(char);
-
-// Where `needle` stands in `haystack` as a whole name, [start, end) pairs: the
-// characters either side, whole code points, are not letters, marks or digits.
-// Unicode-aware on purpose - a \b regex counts "ô" in "Côte" as a boundary.
-const wholeNameSpans = (haystack, needle) => {
-  const spans = [];
-  if (!needle) return spans;
-  let from = 0;
-  for (;;) {
-    const start = haystack.indexOf(needle, from);
-    if (start < 0) return spans;
-    const end = start + needle.length;
-    const before = Array.from(haystack.slice(Math.max(0, start - 2), start)).pop();
-    const after = String.fromCodePoint(haystack.codePointAt(end) ?? 32);
-    if (!isWordChar(before) && !isWordChar(after)) spans.push([start, end]);
-    from = start + 1;
-  }
 };
 
 const impactNames = (impacts) => {
@@ -131,30 +110,24 @@ const impactNames = (impacts) => {
   return names;
 };
 
-// A test for "is this event about the polity?". Impacts are read first and
-// match its key or current name exactly. Failing those, the title and
-// description are searched for either as a whole name, case aside, and a hit
-// inside a longer known name does not count: "Sudan" in "South Sudan", "Niger"
-// in "Nigeria", "Guinea" in "Papua New Guinea". The polity's own aliases never
-// hide it.
-export const createEventMatcher = ({ key = "", name = "", aliases = [], knownNames = [] } = {}) => {
+// A test for "is this event about the polity?", from the event's own
+// structured fields and never its words:
+//   - its impacts, which match the polity's key or current name exactly;
+//   - the polities it says it concerns, who fights in it and the countries
+//     among its places (runtime/eventConcerns.js), which match its key, its
+//     current name, a declared alias or a name it had before a rename, case
+//     and spacing aside.
+// An event written before it said what it concerns is listed by the rest.
+// Reading the title and description for the name listed "Allemagne" under
+// nothing and an event about the US state of Georgia under the country.
+export const createEventMatcher = ({ key = "", name = "", aliases = [], formerNames = [] } = {}) => {
   const own = [...new Set([clean(key), clean(name)].filter(Boolean))];
-  const ownLower = [...new Set(own.map((entry) => entry.toLowerCase()))];
-  const exclude = new Set([...ownLower, ...aliases.map((alias) => clean(alias).toLowerCase())]);
-  const covering = [...new Set(knownNames.map((entry) => clean(entry).toLowerCase()))]
-    .filter((entry) => entry && !exclude.has(entry) && ownLower.some((mine) => entry.length > mine.length && entry.includes(mine)));
+  const declared = [...own, ...[...aliases, ...formerNames].map(clean).filter(Boolean)];
 
   return (event) => {
     if (!own.length) return false;
     if (impactNames(event?.impacts).some((value) => own.includes(clean(value)))) return true;
-    const haystack = `${event?.title ?? ""} ${event?.description ?? ""}`.toLowerCase();
-    for (const mine of ownLower) {
-      const spans = wholeNameSpans(haystack, mine);
-      if (!spans.length) continue;
-      const covers = covering.flatMap((longer) => (longer.includes(mine) ? wholeNameSpans(haystack, longer) : []));
-      if (spans.some(([start, end]) => !covers.some(([from, to]) => from <= start && end <= to))) return true;
-    }
-    return false;
+    return eventNamesPolity(event, declared);
   };
 };
 

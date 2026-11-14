@@ -97,7 +97,7 @@ Scenario-defined National Stats sheet, when a [Scenario National Stats Sheet —
 Only include requested patch subfields. Either sheet may include "intelligence":82, "military":{"quality":75,"technology":90,"spending":80,"manpowerShare":2,"land":65,"sea":85,"air":80}, "warWeariness":0 or "warResources":100. Capability scores run 0..100; manpowerShare is a percent from 0.1..100. Use the live war ledger values for weariness/resources. These are Direct administrative corrections only. On the standard sheet the supported patch families are capital, continent, government, leader, stability, population.total, indices, economy and gdpBreakdown. On a custom sheet, numeric Stats MUST use customStats with the exact live machine keys; never invent a field inside economy or another standard family for a custom stat.
 
 storylineUpdatesJson element:
-{"id":"storyline-stable-id","status":"active|dormant|resolved","pressure":0,"momentum":0,"startedDate":"","kind":"crisis","title":"","participants":["Full Polity Name"],"eventIndexes":[0],"state":""}
+{"id":"storyline-stable-id","status":"active|dormant|resolved","pressure":0,"momentum":0,"startedDate":"","kind":"war|crisis|unrest|diplomacy|politics|economy|world","title":"","participants":["Full Polity Name"],"eventIndexes":[0],"state":""}
 
 warUpdatesJson element:
 {"id":"stable-war-id","op":"start|join-a|join-b|leave|ceasefire|resume|end","actors":[],"opponents":[],"eventIndexes":[0],"note":""}

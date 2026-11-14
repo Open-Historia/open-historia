@@ -9,9 +9,12 @@ import { normalizeBlockades } from "./naval/blockade.js";
 import { normalizeCallsToArms } from "./alliances.js";
 import { normalizePeaceOffers, normalizePeaceTreaties, normalizeReparations } from "./peaceTerms.js";
 import { normalizeWarWeariness } from "./warWeariness.js";
+import { MAX_WAR_SIDE_MEMBERS, normalizeWarRecord, normalizeWarRecords, referencedWarIds } from "./warRecord.js";
 import { normalizeWarResources } from "./warResources.js";
 import { normalizeAttrition } from "./attrition.js";
 import { eraSettingOf, normalizeWarSettings } from "./warSettings.js";
+import { UNIT_TYPES, findUnitType, mayFieldUnitType, normalizeUnitTypes, unitFigures, unitTypeRef, withUnitTypesApplied } from "./unitTypes.js";
+import { AIR_ROLES as UNIT_AIR_ROLES, OPERATION_APPROACHES } from "./fronts/constants.js";
 import { normalizeClimateZones, normalizeFortifications, normalizeFreezingRegions, normalizeTerrainAreas, normalizeZoneWeather } from "./warGeography.js";
 import { normalizeMilitaryShift, normalizeMilitaryStats, shiftedMilitary } from "./militaryStats.js";
 import { MAX_GROUPS, applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
@@ -24,8 +27,11 @@ import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normaliz
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
 import { normalizeEventPlaces } from "./eventPlaces.js";
+import { normalizeMarkerFamily } from "./markerFamily.js";
+import { normalizeEventConcerns } from "./eventConcerns.js";
 import { normalizeEventPresentation } from "./eventQuote.js";
 import { normalizeEventAgency } from "./eventAgency.js";
+import { storylineKindOf } from "./storylineKinds.js";
 import { buildOwnerAliasMap, createOwnerResolver, isRealCountryName, toCountryName } from "./ownerNames.js";
 import { foundPolityIfUnknown } from "./polityFounding.js";
 import { normalizeTerritoryBasis, screenTerritoryBasis } from "./territoryBasis.js";
@@ -47,6 +53,7 @@ import {
   removePolityFromInstitutions,
 } from "./institutions.js";
 import { normalizePowerStatus } from "./powerStatus.js";
+import { markerOpKind } from "./markerOps.js";
 import { normalizeInstitutionLifecycleImpactOp } from "./institutionLifecycleCore.js";
 import {
   buildPoliticalActorLegacyStatsProjection,
@@ -273,8 +280,9 @@ export const WORLD_DEFAULTS = {
   // too, for the usual reason.
   relations: [],
   agreements: [],
-  // Bumped once migrateLegacyDiplomaticState has seeded the two ledgers from a
-  // save's older treaty/alliance events, so that only ever happens once.
+  // Set when the pregame bootstrap has written the two ledgers for a fresh
+  // game. A save from before the ledgers keeps 0, and keeps what its records
+  // hold: nothing is seeded into them from its old events or chats.
   diplomaticLedgerVersion: 0,
   wars: [],
   // Where land wars are fought: two sides, the troops each has there, and the
@@ -311,6 +319,8 @@ export const WORLD_DEFAULTS = {
   attrition: [],
   // How the scenario's wars are fought (warSettings.js): null where it says nothing.
   warSettings: null,
+  // The scenario's own unit types (unitTypes.js): a dragon is an air unit that hits harder and lasts longer.
+  unitTypes: [],
   // What the scenario draws on its map for war (warGeography.js): ground harder
   // to cross, walls that must be broken through, its own climates, and the
   // water that freezes in winter.
@@ -349,7 +359,8 @@ export const WORLD_DEFAULTS = {
 
 // Military units that ride along inside world state (world.units[]). Stored here
 // so they share every existing read/write/poll/normalize path with no server change.
-export const UNIT_TYPES = ["infantry", "armor", "air", "naval", "artillery", "garrison"];
+// (The kinds of unit are unitTypes.js's, beside the unit types a scenario names of its own.)
+export { UNIT_TYPES };
 const UNIT_TYPE_SET = new Set(UNIT_TYPES);
 // "pending" = a player deployment awaiting AI resolution (rendered translucent).
 export const UNIT_STATUSES = ["idle", "moving", "engaged", "defeated", "pending"];
@@ -468,11 +479,9 @@ const normalizeOptionalString = (value) => {
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
 // Canonical ledger vocabularies (AI/nativeWarLedger.js, AI/nativeDiplomaticDirector.js).
-const WORLD_WAR_STATUS_SET = new Set(["active", "ceasefire", "ended"]);
 const WORLD_RELATION_STATUS_SET = new Set(["friendly", "cordial", "neutral", "cautious", "strained", "hostile", "rival"]);
 const WORLD_AGREEMENT_TYPE_SET = new Set(["alliance", "mutual_defense", "guarantee", "non_aggression", "friendship_consultation", "trade_economic", "military_cooperation", "military_access", "neutrality", "peace_settlement", "other"]);
 const WORLD_AGREEMENT_STATUS_SET = new Set(["active", "suspended", "ended", "expired"]);
-const MAX_WORLD_WARS = 64;
 const WORLD_STORYLINE_STATUS_SET = new Set(["active", "dormant", "resolved"]);
 const MAX_WORLD_STORYLINES = 96;
 const MAX_WORLD_RELATIONS = 256;
@@ -759,6 +768,9 @@ const normalizeChatMessage = (message, index = 0) => {
   // and the few words the panel shows for it.
   const catchUp = normalizeOptionalString(message.catchUp);
   const catchUpLabel = normalizeOptionalString(message.catchUpLabel);
+  // The advisor's drafted letter a player's message was sent from (the
+  // composer stamps its id: GameUI/advisorDrafts.js sentLetterDate).
+  const fromDraft = normalizeOptionalString(message.fromDraft).slice(0, 160);
 
   return {
     code: normalizeOptionalString(message.code),
@@ -774,6 +786,7 @@ const normalizeChatMessage = (message, index = 0) => {
     time: normalizeOptionalString(message.time || message.date),
     ...(eventId ? { eventId } : {}),
     ...(catchUp ? { catchUp, ...(catchUpLabel ? { catchUpLabel } : {}) } : {}),
+    ...(fromDraft ? { fromDraft } : {}),
   };
 };
 
@@ -1170,7 +1183,11 @@ const normalizeRegionClaim = (entry) => {
     entry.claimantCode || entry.claimant || entry.byCode || entry.ownerCode || entry.code,
   ));
 
-  const drop = entry.drop === true || entry.drop === "true" || entry.op === "drop" || entry.op === "renounce";
+  // Withdrawn when its `drop` says so (true, or the same written as text), or
+  // when the game's own word for it stands in the op's place. Never by another
+  // verb: "renounce" once withdrew a claim, in English only, and the same verb
+  // in any other language asserted it (the owner, 2026-11-13: no keywording).
+  const drop = entry.drop === true || entry.drop === "true" || entry.op === "drop";
   // Every claimant's claim on the region withdrawn at once (a settlement, a
   // country clearing all claims on its land): no claimant needs naming then.
   const allClaimants = drop && (entry.allClaimants === true || entry.allClaimants === "true");
@@ -1196,7 +1213,10 @@ const POLITY_STATUS_SET = new Set(["active", "dormant", "dissolved"]);
 
 // A de-facto control operation (contest / control / clear_contest): the
 // wartime layer that leaves legal sovereignty alone. Owners share the claimant
-// namespace, so a bare code is folded onto a country name here too.
+// namespace, so a bare code is folded onto a country name here too. The op is
+// one of the schema's three as it writes them, and every contender goes only
+// when clearAll says so: "control_flip", "clear" and a claimant named "all"
+// were once read as them, in English only (the owner, 2026-11-13).
 const normalizeRegionControlOp = (entry) => {
   if (!entry || typeof entry !== "object") return null;
 
@@ -1214,7 +1234,7 @@ const normalizeRegionControlOp = (entry) => {
     return { op, regionId, regionName, fromCode, actorCode, note };
   }
 
-  if (op === "control" || op === "control_flip") {
+  if (op === "control") {
     const toCode = toCountryName(normalizeOptionalString(entry.toCode || entry.controllerCode || entry.ownerCode));
     if (!fromCode || !toCode || fromCode.toLowerCase() === toCode.toLowerCase()) return null;
     const basis = normalizeTerritoryBasis(entry.basis);
@@ -1234,9 +1254,9 @@ const normalizeRegionControlOp = (entry) => {
     };
   }
 
-  if (op === "clear_contest" || op === "clear") {
+  if (op === "clear_contest") {
     const claimantCode = toCountryName(normalizeOptionalString(entry.claimantCode || entry.actorCode));
-    const clearAll = entry.clearAll === true || normalizeOptionalString(entry.claimantCode).toLowerCase() === "all";
+    const clearAll = entry.clearAll === true;
     if (!claimantCode && !clearAll) return null;
     return {
       op: "clear_contest",
@@ -1327,12 +1347,17 @@ export const normalizeUnitEntry = (entry, index = 0) => {
   const status = normalizeOptionalString(entry.status).toLowerCase();
   const source = normalizeOptionalString(entry.source).toLowerCase();
   const posture = normalizeOptionalString(entry.posture).toLowerCase();
+  const unitType = unitTypeRef(entry.unitType);
   const timestamp = new Date().toISOString();
 
   return {
     id: normalizeOptionalString(entry.id) || generateId(`unit-${index}`),
     name: normalizeOptionalString(entry.name) || "Unit",
     type: UNIT_TYPE_SET.has(type) ? type : "infantry",
+    // One of the scenario's own unit types (unitTypes.js), by its id: the world
+    // checks it against world.unitTypes (normalizeWorldState), where `type`
+    // becomes the type's base. Absent on every other unit.
+    ...(unitType ? { unitType } : {}),
     ownerCode,
     strength: clampUnitStrength(entry.strength ?? 100),
     lng,
@@ -1369,6 +1394,10 @@ export const normalizeUnitEntry = (entry, index = 0) => {
     // (AI/nativeUnitDirector.js pruneWarUnits) if no arrival removes it first.
     ...(entry.storyVessel === true ? { storyVessel: true } : {}),
     ...(Number.isInteger(entry.expiresRound) ? { expiresRound: entry.expiresRound } : {}),
+    // kw5-units: what an air unit flies, fighter, bomber or mixed, as the model or
+    // the scenario said (runtime/fronts/airStrike.js fightersShareOf). Absent on
+    // every other unit, and on an air unit that said none.
+    ...(UNIT_AIR_ROLES.includes(normalizeOptionalString(entry.airRole).toLowerCase()) ? { airRole: normalizeOptionalString(entry.airRole).toLowerCase() } : {}),
     source: UNIT_SOURCE_SET.has(source) ? source : "scenario",
     orderId: normalizeOptionalString(entry.orderId),
     createdAt: normalizeOptionalString(entry.createdAt) || timestamp,
@@ -1613,6 +1642,9 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
   const status = normalizeOptionalString(entry.status).toLowerCase();
   const foundedAt = normalizeOptionalString(entry.foundedAt || entry.date);
   const approximate = normalizeApproximateMark(entry.approximate);
+  // How the map draws it (runtime/markerFamily.js): its family and its
+  // strategic weight, as the skip, the Workshop or the Game Master said them.
+  const family = normalizeMarkerFamily(entry.family);
 
   return {
     id: normalizeOptionalString(entry.id) || generateId(`marker-${index}`),
@@ -1630,6 +1662,9 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
     updatedDate: normalizeOptionalString(entry.updatedDate || entry.lastUpdatedDate) || foundedAt,
     sourceEventIds: normalizeMarkerSourceEventIds(entry.sourceEventIds),
     ...(approximate ? { approximate } : {}),
+    // Only when said, so a structure without saves exactly as before.
+    ...(family ? { family } : {}),
+    ...(entry.strategic === true ? { strategic: true } : {}),
   };
 };
 
@@ -1659,6 +1694,13 @@ const normalizeMarkerPatch = (entry) => {
     const kind = normalizeOptionalString(entry.kind || entry.type).toLowerCase();
     if (kind) patch.kind = kind;
   }
+  // A new family or strategic weight, when an update says one; a kind changed
+  // without one keeps the family it had.
+  if (hasOwn(entry, "family")) {
+    const family = normalizeMarkerFamily(entry.family);
+    if (family) patch.family = family;
+  }
+  if (hasOwn(entry, "strategic") && typeof entry.strategic === "boolean") patch.strategic = entry.strategic;
   if (hasOwn(entry, "ownerCode") || hasOwn(entry, "owner") || hasOwn(entry, "code")) {
     patch.ownerCode = toCountryName(normalizeOptionalString(entry.ownerCode ?? entry.owner ?? entry.code));
   }
@@ -1690,23 +1732,25 @@ const normalizeMarkerPatch = (entry) => {
   return Object.keys(patch).length > 0 ? patch : null;
 };
 
-// One AI-authored mutation to persistent physical world features. Destruction is
-// lifecycle state, not deletion: legacy `destroy` becomes update/destroyed.
-// `remove` is reserved for true canonical cleanup or an administrative deletion.
+// One AI-authored mutation to persistent physical world features: one of the
+// five operations of runtime/markerOps.js, as the schema writes them; any other
+// word is no op and the entry is left out. Destruction is lifecycle state, not
+// deletion: an update to status "destroyed". `remove` is reserved for true
+// canonical cleanup or an administrative deletion.
 const normalizeMarkerOp = (entry) => {
   if (!entry || typeof entry !== "object") {
     return null;
   }
 
-  const op = normalizeOptionalString(entry.op).toLowerCase();
+  const op = markerOpKind(entry.op);
 
-  if (op === "build" || op === "found") {
+  if (op === "build") {
     const marker = normalizeMarkerEntry(entry.marker ?? entry, 0);
     if (!marker) return null;
     return { op: "build", marker };
   }
 
-  if (op === "update" || op === "modify" || op === "destroy") {
+  if (op === "update") {
     const markerId = normalizeOptionalString(entry.markerId || entry.id);
     const name = normalizeOptionalString(entry.name);
     if (!markerId && !name) return null;
@@ -1716,9 +1760,7 @@ const normalizeMarkerOp = (entry) => {
     const patchSource = entry.changes && typeof entry.changes === "object" && !Array.isArray(entry.changes)
       ? entry.changes
       : entry;
-    const changes = op === "destroy"
-      ? { ...(normalizeMarkerPatch(patchSource) || {}), status: "destroyed" }
-      : normalizeMarkerPatch(patchSource);
+    const changes = normalizeMarkerPatch(patchSource);
     if (!changes) return null;
     return { op: "update", markerId, name, changes };
   }
@@ -1877,51 +1919,28 @@ const PROJECT_SECRECY_SET = new Set(["public", "restricted", "covert"]);
 // something the next time skip must answer.
 const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "slipped", "done", "missed"]);
 
-// The same problem PROJECT_STATUS_ALIASES solves, one level down. A model asked to
-// mark a checkpoint reached writes "completed" or "achieved" about as often as it
-// writes "done", and an unrecognised value fell through to the "pending" default —
-// which is not a no-op: mergeInto below assigns the status unconditionally, so a
-// checkpoint already marked done was pushed BACK to pending by the very op meant to
-// confirm it, while the op still counted as a change and the advisor's receipt card
-// reported "1 updated". The structured event path is fenced by the schema's enum;
-// the advisor's ```projects block has no schema at all, and that is the path every
-// button on the Projects panel drives.
-const PROJECT_MILESTONE_STATUS_ALIASES = {
-  complete: "done", completed: "done", finished: "done", achieved: "done",
-  reached: "done", met: "done", delivered: "done", passed: "done",
-  late: "slipped", overdue: "slipped", delayed: "slipped", behind: "slipped",
-  failed: "missed", unmet: "missed",
-  outstanding: "pending", planned: "pending", upcoming: "pending", scheduled: "pending",
+// The board's closed values (a checkpoint's status, a project's status, its
+// priority) are read exactly, case and spacing aside, and a word that is none of
+// them is LEFT OUT: the value it would have set stays as it was, and a new entry
+// takes its default. Never guessed. Tables of English words for them
+// ("completed" as done, "critical" as high) read an English reply one way and
+// the same reply in any other language another (the owner, 2026-11-13: "there
+// should be absolutely no keywording done in this game anywhere"). The schema's
+// enums fence the structured path; the advisor's ```projects block is told the
+// exact values (AI/main.jsx).
+const closedValue = (set) => (value) => {
+  const raw = normalizeOptionalString(value).toLowerCase().replace(/\s+/g, " ");
+  return set.has(raw) ? raw : "";
 };
 
-// "" when the op carried no status at all, so mergeInto can tell "leave it alone"
-// from "set it to pending" — a model re-dating a checkpoint must not un-complete it.
-const resolveMilestoneStatus = (value) => {
-  const raw = normalizeOptionalString(value).toLowerCase();
-  if (!raw) return "";
-  if (PROJECT_MILESTONE_STATUS_SET.has(raw)) return raw;
-  return PROJECT_MILESTONE_STATUS_ALIASES[raw] || "pending";
-};
+// "" when the op carried no status, or one that is none of the four, so
+// mergeInto can tell "leave it alone" from "set it": a model re-dating a
+// checkpoint, or naming its status in a word the board does not have, must not
+// un-complete it.
+const resolveMilestoneStatus = closedValue(PROJECT_MILESTONE_STATUS_SET);
 
-// Synonyms a model actually writes for these, mapped onto the closed vocabulary.
-// Observed in the field: a real backfill came back with "status":"completed" on
-// a finished operation, which fell through to the "active" default and put a
-// concluded op back on the running board. The op-name aliases above exist for
-// the same reason; the values need them just as much as the verbs do.
-const PROJECT_STATUS_ALIASES = {
-  completed: "complete", finished: "complete", done: "complete", delivered: "complete",
-  canceled: "cancelled", abandoned: "cancelled", dropped: "cancelled", shelved: "cancelled",
-  ongoing: "active", "in progress": "active", inprogress: "active", running: "active", underway: "active",
-  planned: "proposed", proposal: "proposed", pending: "proposed",
-  suspended: "paused", halted: "paused", onhold: "paused", "on hold": "paused",
-  blocked: "stalled", delayed: "stalled", stalling: "stalled",
-};
-
-const resolveProjectStatus = (value) => {
-  const raw = normalizeOptionalString(value).toLowerCase();
-  if (PROJECT_STATUS_SET.has(raw)) return raw;
-  return PROJECT_STATUS_ALIASES[raw] || "active";
-};
+// "" for a status that is none of PROJECT_STATUSES (see closedValue above).
+const resolveProjectStatus = closedValue(PROJECT_STATUS_SET);
 
 // How much attention the player wants a project to get. The ONE field on this
 // board the player authors themselves: events and the advisor own what a project
@@ -1933,23 +1952,9 @@ const resolveProjectStatus = (value) => {
 // running, a low-priority one is allowed to drift with a one-line note.
 export const PROJECT_PRIORITIES = ["high", "normal", "low"];
 const PROJECT_PRIORITY_SET = new Set(PROJECT_PRIORITIES);
-// Same alias treatment, and the same reason, as PROJECT_STATUS_ALIASES above: the
-// advisor writes "critical" or "routine" as readily as "high" or "low", and an
-// unrecognised value falling through to the "normal" default does not merely lose
-// a nuance — it silently discards an instruction the PLAYER gave.
-const PROJECT_PRIORITY_ALIASES = {
-  critical: "high", urgent: "high", top: "high", highest: "high", "top priority": "high",
-  priority: "high", important: "high", vital: "high", max: "high",
-  medium: "normal", standard: "normal", default: "normal", moderate: "normal", regular: "normal",
-  routine: "low", background: "low", minor: "low", lowest: "low", deferred: "low",
-  "back burner": "low", backburner: "low", idle: "low",
-};
-
-const resolveProjectPriority = (value) => {
-  const raw = normalizeOptionalString(value).toLowerCase();
-  if (PROJECT_PRIORITY_SET.has(raw)) return raw;
-  return PROJECT_PRIORITY_ALIASES[raw] || "normal";
-};
+// "" for a priority that is none of the three (see closedValue above). A word
+// the board does not have never overwrites the one the PLAYER set.
+const resolveProjectPriority = closedValue(PROJECT_PRIORITY_SET);
 
 // world.json is force-re-read every 5 seconds by TWO pollers (useWorldState and
 // unitsController), so everything riding inside it is on a bandwidth budget.
@@ -2120,11 +2125,11 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     // player's own name on every entry is how that field ends up wrong.
     ownerCode: toCountryName(normalizeOptionalString(entry.ownerCode || entry.owner || entry.code)),
     summary: normalizeTextLike(entry.summary || entry.description),
-    status: resolveProjectStatus(entry.status),
+    status: resolveProjectStatus(entry.status) || "active",
     // The player's dial, not the model's — see PROJECT_PRIORITIES. Defaults to
     // "normal", which is also what every project in a save written before this
     // field existed reads as, so no migration is needed.
-    priority: resolveProjectPriority(entry.priority),
+    priority: resolveProjectPriority(entry.priority) || "normal",
     progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : 0,
     tags: normalizeTagList(entry.tags),
     secrecy: PROJECT_SECRECY_SET.has(secrecy) ? secrecy : "public",
@@ -2169,6 +2174,10 @@ export const normalizeProjectEntry = (entry, index = 0) => {
       ? normalizeOptionalString(entry.verification)
       : "",
     focus: normalizeProjectCoords(entry.focus),
+    // kw5-units: how an operation's troops attack its focus (runtime/fronts/plans.js
+    // operationsOn), one of OPERATION_APPROACHES; absent on every other entry, and
+    // an operation that says none is an advance.
+    ...(OPERATION_APPROACHES.includes(normalizeOptionalString(entry.approach).toLowerCase()) ? { approach: normalizeOptionalString(entry.approach).toLowerCase() } : {}),
     note: normalizeTextLike(entry.note),
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
     updatedAt: normalizeOptionalString(entry.updatedAt) || new Date().toISOString(),
@@ -2241,33 +2250,47 @@ const PROJECT_FIELD_ALIASES = {
   linkedSpyIds: ["linkedSpyIds"],
   verification: ["verification"],
   focus: ["focus"],
+  approach: ["approach"],
   note: ["note"],
 };
 
 // A plain ARRAY, not a Set: normalized ops are persisted inside events.json and
 // replayed by the staged reveal, so this has to survive a JSON round trip.
+// A status or priority that is none of the board's own words is not provided:
+// left out, so a restatement never overwrites the one the entry has.
+const CLOSED_PROJECT_FIELDS = { status: (value) => resolveProjectStatus(value), priority: (value) => resolveProjectPriority(value) };
+const providesField = (field, value) => value !== undefined && (!CLOSED_PROJECT_FIELDS[field] || Boolean(CLOSED_PROJECT_FIELDS[field](value)));
 const listProvidedFields = (source) => {
   if (!source || typeof source !== "object") return [];
   return Object.entries(PROJECT_FIELD_ALIASES)
-    .filter(([, aliases]) => aliases.some((alias) => source[alias] !== undefined))
+    .filter(([field, aliases]) => aliases.some((alias) => providesField(field, source[alias])))
     .map(([field]) => field);
 };
 
 // One AI-authored mutation to the projects board.
 //
-// The aliases are generous on purpose. markerOps learned this the hard way: a
-// model asked for "build" writes "found" about a third of the time and the op is
-// then dropped in silence. The vocabulary accepted here (start/launch,
-// cancel/abandon) is what a model actually reaches for when narrating a
-// programme, so take it rather than losing the update.
+// The op is one of the board's own: create, update, milestone, complete, cancel,
+// fail or remove (the schema's enum and the advisor's projects block alike), and
+// close, the form this function writes back. Nothing else is read as one of them:
+// English verbs a model reaches for (start, launch, finish, abandon, shelve)
+// were once taken as synonyms, and the same verbs in any other language never
+// were ("there should be absolutely no keywording done in this game anywhere",
+// the owner, 2026-11-13). An op outside the board's words is left out.
+// PROJECT_OPS and projectOpKind are the same words for the turn's validation
+// (gameplay.js validateGeneratedWorldChanges), so the two never disagree.
+export const PROJECT_OPS = Object.freeze(["create", "update", "milestone", "complete", "cancel", "fail", "remove", "close"]);
+export const projectOpKind = (entry) => {
+  const op = normalizeOptionalString(entry?.op || entry?.action).toLowerCase();
+  return PROJECT_OPS.includes(op) ? op : "";
+};
 const normalizeProjectOp = (entry) => {
   if (!entry || typeof entry !== "object") return null;
 
-  const op = normalizeOptionalString(entry.op || entry.action).toLowerCase();
+  const op = projectOpKind(entry);
   const projectId = normalizeOptionalString(entry.projectId || entry.id);
   const name = normalizeOptionalString(entry.name || entry.project || entry.title);
 
-  if (op === "create" || op === "start" || op === "launch" || op === "open" || op === "add") {
+  if (op === "create") {
     // The payload may be nested under `project` or inlined on the op itself —
     // both shapes turn up, and markerOps accepts both for the same reason.
     const source = entry.project ?? entry;
@@ -2279,7 +2302,7 @@ const normalizeProjectOp = (entry) => {
     return { op: "create", project, provided };
   }
 
-  if (op === "update" || op === "progress" || op === "edit") {
+  if (op === "update") {
     if (!projectId && !name) return null;
     return { op: "update", projectId, name, patch: entry.patch ?? entry.project ?? entry };
   }
@@ -2294,9 +2317,10 @@ const normalizeProjectOp = (entry) => {
     // {"title":"Sea trials","date":"1936-11-01"} — would silently un-complete it.
     // Persisted on the op because events.json is replayed by the staged reveal, and
     // re-normalizing must not widen an absent status into a stated one.
+    // A status that is none of the board's four is not one it said: left out.
     const statusProvided = typeof entry.statusProvided === "boolean"
       ? entry.statusProvided
-      : normalizeOptionalString(source && typeof source === "object" ? source.status : "") !== "";
+      : resolveMilestoneStatus(source && typeof source === "object" ? source.status : "") !== "";
     return { op: "milestone", projectId, name, milestone, statusProvided };
   }
 
@@ -2318,19 +2342,20 @@ const normalizeProjectOp = (entry) => {
   if (op === "close") {
     if (!projectId && !name) return null;
     const status = resolveProjectStatus(entry.status);
+    // An ending that is none of the three is left out, and the project stays
+    // open: never promoted to a success (the one outcome that releases
+    // onComplete effects) and never guessed as anything else either.
+    if (status !== "complete" && status !== "failed" && status !== "cancelled") return null;
     return {
       op: "close",
-      // Anything that is not a recognised ending is treated as cancelled rather
-      // than silently promoted to a success — the one outcome that releases
-      // onComplete effects must never be reached by a fallback.
-      status: status === "complete" || status === "failed" ? status : "cancelled",
+      status,
       projectId,
       name,
       note: normalizeOptionalString(entry.note),
     };
   }
 
-  if (op === "complete" || op === "finish" || op === "completed") {
+  if (op === "complete") {
     if (!projectId && !name) return null;
     return { op: "close", status: "complete", projectId, name, note: normalizeOptionalString(entry.note) };
   }
@@ -2339,18 +2364,18 @@ const normalizeProjectOp = (entry) => {
   // alias to remove, which DELETED the entry — so the most natural way for a
   // model to say "we gave up on this" quietly erased it, and the Closed view it
   // should have appeared in stayed empty.
-  if (op === "cancel" || op === "cancelled" || op === "abandon" || op === "shelve") {
+  if (op === "cancel") {
     if (!projectId && !name) return null;
     return { op: "close", status: "cancelled", projectId, name, note: normalizeOptionalString(entry.note) };
   }
 
-  if (op === "fail" || op === "failed") {
+  if (op === "fail") {
     if (!projectId && !name) return null;
     return { op: "close", status: "failed", projectId, name, note: normalizeOptionalString(entry.note) };
   }
 
   // The real erasure, for an entry that should never have been opened.
-  if (op === "remove" || op === "delete" || op === "drop") {
+  if (op === "remove") {
     if (!projectId && !name) return null;
     return { op: "remove", projectId, name, note: normalizeOptionalString(entry.note) };
   }
@@ -2368,7 +2393,7 @@ const normalizeProjectOp = (entry) => {
 // rename does.
 const PROJECT_PATCHABLE_FIELDS = [
   "kind", "ownerCode", "summary", "status", "priority", "progress", "secrecy", "ongoing",
-  "startedAt", "targetDate", "lastUpdate", "note", "focus",
+  "startedAt", "targetDate", "lastUpdate", "note", "focus", "approach",
   "linkedUnitIds", "linkedMarkerIds", "onComplete", "verification", "linkedSpyIds",
 ];
 
@@ -2643,9 +2668,10 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
         // Written under the CANONICAL key whichever alias carried it, so
         // normalizeProjectEntry below reads the new value rather than the one it
         // is replacing (its own `entry.summary || entry.description` fallback
-        // would otherwise keep the old summary and ignore the patch's).
+        // would otherwise keep the old summary and ignore the patch's). A status
+        // or priority that is none of the board's own words is left out.
         const alias = patchedAlias(patch, field);
-        if (alias) merged[field] = patch[alias];
+        if (alias && providesField(field, patch[alias])) merged[field] = patch[alias];
       }
       // tags follows the countryTags rule exactly: an ARRAY replaces the list
       // wholesale (so [] really does mean "this has no tags any more"), while an
@@ -3062,6 +3088,8 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
   let next = normalizeUnits(units);
   let nextOrders = normalizePendingUnitOrders(orders);
   const markers = normalizeArray(context.markers);
+  // The scenario's own unit types (unitTypes.js): what a spawn may name, and how fast each moves.
+  const unitTypes = normalizeUnitTypes(context.unitTypes);
   const stamp = () => new Date().toISOString();
   // Normalize defensively. Ops arriving from applyEventImpactsToWorld have been
   // through normalizeEventImpacts already (and normalizeUnitOp is idempotent),
@@ -3087,13 +3115,25 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
       // marked his oil and gas sites with units ("GSI Arzew", "Hub Sud"), and
       // each skip that told of them raised a twin beside or far from it.
       if (sameFormationOnMap(next, op.unit)) continue;
+      const unit = { ...op.unit };
+      // One of the scenario's own unit types (unitTypes.js), named by its name or its id: the unit is of that type's
+      // base kind, and a type its owner may not field is not raised at all. A type the scenario does not have is
+      // no type: the unit is an ordinary one of the kind it was given.
+      if (unit.unitType) {
+        const unitType = unit.storyVessel ? null : findUnitType(unitTypes, unit.unitType);
+        if (!unitType) delete unit.unitType;
+        else if (!mayFieldUnitType(unitType, unit.ownerCode)) continue;
+        else {
+          unit.unitType = unitType.id;
+          unit.type = unitType.base;
+        }
+      }
       // Nor of a kind the scenario fights without (the Wars feature): no air unit with air units off, no fleet
       // with navies off. (A story ship is no fleet: it is drawn, and guards nothing.)
       const wars = activeWars();
-      const spawnType = String(op.unit?.type ?? "").toLowerCase();
-      if ((!wars.air && spawnType === "air") || (!wars.navies && spawnType === "naval" && !op.unit?.storyVessel)) continue;
+      const spawnType = String(unit.type ?? "").toLowerCase();
+      if ((!wars.air && spawnType === "air") || (!wars.navies && spawnType === "naval" && !unit.storyVessel)) continue;
 
-      const unit = { ...op.unit };
       // A story ship is a ship whatever the model called it, unlisted because
       // nothing guards it, and kept for STORY_VESSEL_ROUNDS at most.
       if (unit.storyVessel) {
@@ -3110,7 +3150,11 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
         // would take rather than dropping the op, because a silently dropped op
         // leaves the event narrating a deployment the map never shows, which is
         // the failure describeUnitOpRejection exists to make visible.
-        if (unit.type === "garrison") unit.type = "infantry";
+        // (And a garrison of a type of the scenario's is no longer of that type.)
+        if (unit.type === "garrison") {
+          unit.type = "infantry";
+          delete unit.unitType;
+        }
         unit.covert = true;
         if (!unit.posture) unit.posture = "transit";
       }
@@ -3160,7 +3204,8 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
         }
 
         const posture = op.posture || unit.posture;
-        // A redeployment or an advance, each at its own pace (unitMotion.js).
+        // A redeployment or an advance, each at its own pace (unitMotion.js), and a unit of one of the scenario's
+        // own types at its type's speed (unitTypes.js: 1 for every other).
         const budget =
           elapsedDays === null || elapsedDays === undefined
             ? Infinity
@@ -3169,7 +3214,7 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
               era,
               seaShare: op.seaShare ?? null,
               remainingKm: kmOnMap(unit.lat, unit.lng, op.toLat, op.toLng),
-            });
+            }) * unitFigures(unitTypes, unit).speed;
         const step = stepToward(unit, { lng: op.toLng, lat: op.toLat }, budget);
 
         if (step.arrived) {
@@ -3300,6 +3345,7 @@ export const advanceStandingOrders = (
   const units = normalizeUnits(world?.units);
   const orders = normalizePendingUnitOrders(world?.pendingUnitOrders);
   if (orders.length === 0) return world;
+  const unitTypes = normalizeUnitTypes(world?.unitTypes);
 
   const elapsed = daysBetweenDates(fromDate, toDate) ?? 0;
   const ordersByUnit = new Map(orders.map((order) => [order.unitId, order]));
@@ -3343,12 +3389,13 @@ export const advanceStandingOrders = (
     const step = stepToward(
       unit,
       { lng: order.toLng, lat: order.toLat },
+      // (A unit of one of the scenario's own types at its type's speed: unitTypes.js.)
       maxTravelKm(unit.type, toDate || fromDate, unitElapsed, {
         posture: unit.posture,
         era: eraSettingOf(world),
         seaShare: order.seaShare ?? null,
         remainingKm: kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng),
-      }),
+      }) * unitFigures(unitTypes, unit).speed,
     );
     if (step.arrived && unit.posture === "patrol") stations.set(unit.id, { lng: step.lng, lat: step.lat, type: unit.type });
     return {
@@ -3818,6 +3865,9 @@ export const normalizeEventEntry = (entry, index = 0) => {
   // map (runtime/eventPlaces.js): what its card links to.
   const places = normalizeEventPlaces(entry.places);
   const digest = normalizeEventDigest(entry.digest);
+  // The polities the event says it is about (runtime/eventConcerns.js), read
+  // as its combatants are.
+  const concerns = normalizeEventConcerns(entry.concerns, { toName: (name) => toCountryName(name) });
 
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
@@ -3849,7 +3899,9 @@ export const normalizeEventEntry = (entry, index = 0) => {
       normalizeActionParticipants(entry.combatants)
         .map((name) => toCountryName(normalizeOptionalString(name)) || normalizeOptionalString(name))
         .filter(Boolean),
-    )].slice(0, 8),
+    )].slice(0, MAX_WAR_SIDE_MEMBERS),
+    // Only when present, so an event without saves exactly as before.
+    ...(concerns.length ? { concerns } : {}),
     source: normalizeOptionalString(entry.source) || "scenario",
     title,
   };
@@ -4018,7 +4070,9 @@ const normalizeWorldStoryline = (entry, index = 0) => {
 
   return {
     id,
-    kind: normalizeOptionalString(entry.kind) || "world",
+    // One of the fixed kinds (runtime/storylineKinds.js); a save's free text
+    // is the neutral kind, by its exact value only.
+    kind: storylineKindOf(entry.kind),
     title,
     participants: uniqueStrings(entry.participants, 12),
     status,
@@ -4071,83 +4125,13 @@ const normalizeWorldStorylines = (value) => {
     .slice(0, MAX_WORLD_STORYLINES);
 };
 
-const normalizeWorldWar = (entry, index = 0) => {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
-
-  const canonicalPolity = (value) => {
-    const raw = normalizeOptionalString(value);
-    return raw ? (toCountryName(raw) || raw) : "";
-  };
-  const uniquePolities = (value, limit = 12) => {
-    const seen = new Set();
-    const result = [];
-    for (const raw of normalizeArray(value)) {
-      const polity = canonicalPolity(raw);
-      const key = polity.toLocaleLowerCase();
-      if (!polity || seen.has(key)) continue;
-      seen.add(key);
-      result.push(polity);
-      if (result.length >= limit) break;
-    }
-    return result;
-  };
-
-  const id = normalizeOptionalString(entry.id) || `war-${index}`;
-  // A polity's name has a letter in it. A war kept as "United Kingdom, Ireland" against "1, 2" (a time skip wrote its
-  // event numbers where the opponents go, battle-of-europe-session-2, 2026-10-25) is its two parties against each other.
-  const named = (list) => uniquePolities(list).filter((name) => /\p{L}/u.test(name));
-  const read = named(entry.sideA);
-  const readKeys = new Set(read.map((name) => name.toLocaleLowerCase()));
-  const others = named(entry.sideB).filter((name) => !readKeys.has(name.toLocaleLowerCase()));
-  const [sideA, sideB] = others.length === 0 && read.length === 2 ? [[read[0]], [read[1]]] : [read, others];
-  if (!sideA.length || !sideB.length) return null;
-
-  const rawStatus = normalizeOptionalString(entry.status).toLowerCase();
-  const status = WORLD_WAR_STATUS_SET.has(rawStatus) ? rawStatus : "active";
-  const sourceEventIds = [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24);
-  const storylineIds = [...new Set(normalizeActionParticipants(entry.storylineIds))].slice(-12);
-  // A name saved with its cause run on after a "~" or "|" ("Franco-Italian
-  // War~Dispute over…"): a start's note was cut only at a ";" until 2026-10-28
-  // (nativeWarLedger.js splitWarStartNote). The name is what comes before it,
-  // and the rest is the cause where none was kept.
-  const [savedTitle, ...runOn] = normalizeOptionalString(entry.title).split(/\s*[~|]\s*/);
-  const title = savedTitle || `${sideA[0]}–${sideB[0]} War`;
-  const cause = normalizeTextLike(entry.cause) || runOn.join(" ").trim();
-
-  return {
-    id,
-    title,
-    status,
-    sideA,
-    sideB,
-    startedDate: canonicalizeDateString(entry.startedDate),
-    endedDate: status === "ended" ? canonicalizeDateString(entry.endedDate || entry.lastUpdatedDate) : "",
-    lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate || entry.startedDate),
-    cause,
-    note: normalizeTextLike(entry.note),
-    sourceEventIds,
-    storylineIds,
-    createdRound: Number.isFinite(Number(entry.createdRound)) && Number(entry.createdRound) > 0 ? Math.trunc(Number(entry.createdRound)) : 0,
-    updatedRound: Number.isFinite(Number(entry.updatedRound)) && Number(entry.updatedRound) > 0 ? Math.trunc(Number(entry.updatedRound)) : 0,
-  };
-};
-
-const normalizeWorldWars = (value) => {
-  const deduped = new Map();
-  normalizeArray(value).forEach((entry, index) => {
-    const normalized = normalizeWorldWar(entry, index);
-    if (!normalized) return;
-    deduped.set(normalized.id, normalized);
-  });
-  const statusRank = { active: 0, ceasefire: 1, ended: 2 };
-  return [...deduped.values()]
-    .sort((a, b) =>
-      (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
-      compareGameDates(b.lastUpdatedDate || b.startedDate || "", a.lastUpdatedDate || a.startedDate || "") ||
-      a.id.localeCompare(b.id),
-    )
-    .slice(0, MAX_WORLD_WARS);
-};
+// The world's wars: the canonical war record (warRecord.js), the one shape the
+// ledger, the fronts and the peace all read. This used to be a second copy of
+// the ledger's own normalizer, with its own caps (12 a side, 64 wars in all,
+// cut whoever still named them) and an id made of the record's position in the
+// list, which moved every time the list was sorted. An ended war that a peace
+// treaty, reparations, an offer or a battlefield still names is kept.
+const normalizeWorldWars = (value, world = null) => normalizeWarRecords(value, { keep: referencedWarIds(world) });
 
 // One identity index per identity world. normalizeWorldState makes that world
 // afresh for each pass and only reads it, so the index built for its first
@@ -4173,7 +4157,6 @@ const resolveWorldDiplomaticPolity = (token, identityWorld) => {
   const resolved = resolvePolityIdentity(raw, identityWorld, {
     allowUnknown: true,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
     identityIndex: diplomaticIdentityIndexOf(identityWorld),
   });
@@ -4511,7 +4494,11 @@ export const normalizeWorldState = (world) => {
       .filter(([code, sheet]) => code && sheet && typeof sheet === "object"),
   );
 
-  const units = withoutTwinsOfPlayerUnits(normalizeUnits(nextWorld.units));
+  // The scenario's own unit types (unitTypes.js), their owners folded like every
+  // other owner; a unit of one is of that type's base kind, and one naming a type
+  // the scenario does not have is an ordinary unit of its own kind.
+  const unitTypes = normalizeUnitTypes(nextWorld.unitTypes, { resolveOwner });
+  const units = withUnitTypesApplied(withoutTwinsOfPlayerUnits(normalizeUnits(nextWorld.units)), unitTypes);
 
   // The ledgers resolve their polity names against the overrides computed above,
   // not the raw input, so a renamed polity folds onto one identity.
@@ -4677,7 +4664,7 @@ export const normalizeWorldState = (world) => {
     diplomaticLedgerVersion: Number.isFinite(Number(nextWorld.diplomaticLedgerVersion))
       ? Math.max(0, Math.trunc(Number(nextWorld.diplomaticLedgerVersion)))
       : 0,
-    wars: normalizeWorldWars(nextWorld.wars),
+    wars: normalizeWorldWars(nextWorld.wars, nextWorld),
     // Shape and length only: the engine wrote every record, and this runs on
     // every read of the world.
     battlefields: normalizeBattlefields(nextWorld.battlefields),
@@ -4693,6 +4680,8 @@ export const normalizeWorldState = (world) => {
     attrition: normalizeAttrition(nextWorld.attrition),
     // How the scenario's wars are fought (warSettings.js): null where it says nothing.
     warSettings: normalizeWarSettings(nextWorld.warSettings),
+    // Its own unit types (unitTypes.js).
+    unitTypes,
     // What it draws on its map for war (warGeography.js).
     terrainAreas: normalizeTerrainAreas(nextWorld.terrainAreas),
     fortifications: normalizeFortifications(nextWorld.fortifications),
@@ -6218,6 +6207,8 @@ export const applyEventImpactsToWorld = ({
             : op)),
         {
           markers: nextWorld.markers,
+          // The scenario's own unit types a spawn may name (unitTypes.js).
+          unitTypes: nextWorld.unitTypes,
           gameDate: event.date || cursorDate,
           era: eraSettingOf(nextWorld),
           elapsedDays: motion ? daysBetweenDates(cursorDate, event.date) : null,

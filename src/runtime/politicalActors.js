@@ -4,6 +4,8 @@ import { resolveStockCountryCode } from "./polityIdentity.js";
 import { normalizePoliticalPressureState } from "./politicalPressure.js";
 import { PARTY_ROLES, findIdeology } from "./politics.js";
 import { lookedUp } from "./worldLookups.js";
+import { nameKey } from "../../server/nameKey.js";
+import { isLatinName } from "../../server/nameId.js";
 
 export const POLITICAL_ACTORS_SCHEMA_VERSION = 6;
 
@@ -31,6 +33,71 @@ export const POLITICAL_REGIME_CHARACTERS = Object.freeze([
     "other",
 ]);
 const POLITICAL_REGIME_CHARACTER_SET = new Set(POLITICAL_REGIME_CHARACTERS);
+
+// What kind of system a polity has: politicalSystem.type, as the generator and
+// the set-political-system op write it. The engine reads the system from this
+// value and from representation, both enums, and never from the words of
+// government.form, which the model writes in the player's language: "Monarchie
+// constitutionnelle" was "unspecified", "Constitutional monarchy" was not. A
+// saved type outside the list is kept as written (it names the system on the
+// Politics card) and counts as no type the engine knows.
+export const POLITICAL_SYSTEM_TYPES = Object.freeze([
+    "presidential_republic",
+    "parliamentary_republic",
+    "semi_presidential_republic",
+    "constitutional_monarchy",
+    "absolute_monarchy",
+    "one_party_state",
+    "dominant_party_state",
+    "military_regime",
+    "personalist_regime",
+    "theocracy",
+    "revolutionary_government",
+    "colonial_administration",
+    "other",
+]);
+const POLITICAL_SYSTEM_TYPE_SET = new Set(POLITICAL_SYSTEM_TYPES);
+export const politicalSystemTypeOf = (value) => {
+    const type = clean(typeof value === "string" ? value : value?.type).toLowerCase().replace(/[ -]+/g, "_");
+    return POLITICAL_SYSTEM_TYPE_SET.has(type) ? type : "";
+};
+
+// How power is represented where the type says so on its own; any other type
+// is represented by what the record holds (parties, power blocs, neither).
+const REPRESENTATION_OF_SYSTEM_TYPE = Object.freeze({
+    absolute_monarchy: POLITICAL_REPRESENTATIONS.COURT_FACTIONS,
+    one_party_state: POLITICAL_REPRESENTATIONS.PARTY_STATE,
+    military_regime: POLITICAL_REPRESENTATIONS.MILITARY_FACTIONS,
+    revolutionary_government: POLITICAL_REPRESENTATIONS.REVOLUTIONARY_FACTIONS,
+    personalist_regime: POLITICAL_REPRESENTATIONS.ELITE_FACTIONS,
+    theocracy: POLITICAL_REPRESENTATIONS.ELITE_FACTIONS,
+    colonial_administration: POLITICAL_REPRESENTATIONS.COLONIAL,
+});
+export const representationForSystem = ({ type = "", parties = [], powerBlocs = [] } = {}) => {
+    const byType = REPRESENTATION_OF_SYSTEM_TYPE[politicalSystemTypeOf(type)];
+    if (byType) return byType;
+    if (Array.isArray(parties) && parties.length) return POLITICAL_REPRESENTATIONS.ELECTORAL;
+    if (Array.isArray(powerBlocs) && powerBlocs.length) return POLITICAL_REPRESENTATIONS.ELITE_FACTIONS;
+    return POLITICAL_REPRESENTATIONS.NONE;
+};
+
+// The systems whose government answers to a parliament.
+export const PARLIAMENTARY_SYSTEM_TYPES = Object.freeze(["parliamentary_republic", "constitutional_monarchy"]);
+const PARLIAMENTARY_SYSTEM_TYPE_SET = new Set(PARLIAMENTARY_SYSTEM_TYPES);
+export const isParliamentarySystem = (politicalSystem) => PARLIAMENTARY_SYSTEM_TYPE_SET.has(politicalSystemTypeOf(politicalSystem));
+
+// The systems whose power sits in one place: a party, a ruler, an army, a clergy.
+const CENTRALIZED_SYSTEM_TYPES = new Set(["one_party_state", "personalist_regime", "military_regime", "absolute_monarchy", "theocracy"]);
+const CENTRALIZED_REPRESENTATIONS = new Set([POLITICAL_REPRESENTATIONS.PARTY_STATE, POLITICAL_REPRESENTATIONS.MILITARY_FACTIONS]);
+const CENTRALIZED_REGIME_CHARACTERS = new Set(["theocratic", "military"]);
+
+// The office a polity's leader holds: the head of state's, the head of
+// government's, or an office of their own (a supreme leader, a party's general
+// secretary). It is written with the leader (the generator's leader, a
+// replace-leader op) or is the office the leader was found holding; a leader
+// saved before it existed has none, and stands as written.
+export const POLITICAL_LEADER_OFFICES = Object.freeze(["headOfState", "headOfGovernment", "other"]);
+const POLITICAL_LEADER_OFFICE_SET = new Set(POLITICAL_LEADER_OFFICES);
 
 // Every string of every political record is cleaned on every world check, and
 // a time skip makes dozens of checks over the same records: the same strings,
@@ -266,23 +333,30 @@ const normalizeOfficeholder = (value) => {
     out.name = name;
     const title = clean(value.title || value.role);
     if (title) out.title = title;
+    const office = clean(value.office);
+    if (POLITICAL_LEADER_OFFICE_SET.has(office)) out.office = office;
     return out;
 };
 
-const partyTokenKey = (value) =>
-    clean(value)
-        .toLocaleLowerCase()
-        .normalize("NFKD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^\p{L}\p{N}]+/gu, "");
+// A party, bloc or officeholder is found by its name through the game's one name
+// fold (server/nameKey.js): case, accents and punctuation, in every script, with a
+// Devanagari or Thai vowel sign kept as part of its word.
+const partyTokenKey = nameKey;
 
-const asciiPartySlug = (value) =>
-    clean(value)
+// A party's or a bloc's id when it has none of its own: the slug of the first of
+// its names written wholly in a-z and 0-9, case and accents aside, else a hash
+// of its name (below). A name in another script, or one mixing another script
+// with Latin letters or digits, is never cut down to those, by the game's one
+// rule for an id made from a name (server/nameId.js): "\u041f\u0430\u0440\u0442\u0438\u044f 1" was "1", and
+// so was every other "\u2026 1".
+const asciiPartySlug = (value) => (isLatinName(value)
+    ? clean(value)
         .toLocaleLowerCase()
         .normalize("NFKD")
         .replace(/[\u0300-\u036f]/g, "")
         .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "");
+        .replace(/^-+|-+$/g, "")
+    : "");
 
 const stableTextHash = (value) => {
     let hash = 2166136261;
@@ -373,13 +447,14 @@ export const normalizePoliticalParty = (value, { index = 0 } = {}) => {
     // world and just make it an enhancement of that" (the owner, 2026-11-03).
     //   nameNative, shortNameNative   the name and abbreviation as its own speakers write them
     //   ideologyFamily                one of the ten ideologies (politics.js IDEOLOGIES), by id
-    //   subideology                   one listed under it, or the party's own word
+    //   subideology                   legacy taxonomy detail (retained for saved campaigns)
+    //   politicalPosition             freeform self-description, e.g. centre-right
     //   role                          governing, coalition, opposition, outside parliament,
     //                                 underground, in exile or banned (politics.js PARTY_ROLES);
     //                                 the government's ruling and coalition parties say the first two
     //   seats                         its seats in the legislature
     //   founded                       the year it was founded
-    for (const [key, ...aliases] of [["nameNative"], ["shortNameNative", "abbrNative"], ["subideology"], ["founded"]]) {
+    for (const [key, ...aliases] of [["nameNative"], ["shortNameNative", "abbrNative"], ["subideology"], ["politicalPosition"], ["founded"]]) {
       const text = clean([value[key], ...aliases.map((alias) => value[alias])].find((entry) => clean(entry)));
       if (text) out[key] = text;
       else delete out[key];
@@ -414,6 +489,10 @@ export const normalizePoliticalParty = (value, { index = 0 } = {}) => {
     else delete out.ruling;
     if (value.coalition === true) out.coalition = true;
     else delete out.coalition;
+    // The roster's catch-all row (minor parties and independents together), as
+    // the generator marks it: never told by its name.
+    if (value.residual === true) out.residual = true;
+    else delete out.residual;
 
     return out;
 };
@@ -489,49 +568,23 @@ export const resolvePoliticalPowerBloc = (actorOrWorld, polityOrToken, maybeToke
     ) || null;
 };
 
-const inferPoliticalSystemType = (governmentForm) => {
-    const form = clean(governmentForm).toLocaleLowerCase();
-    if (!form) return "unspecified";
-    if (/absolute monarchy|absolute monarch/.test(form)) return "absolute_monarchy";
-    if (/constitutional monarchy|constitutional monarch/.test(form)) return "constitutional_monarchy";
-    if (/semi[- ]presidential republic/.test(form)) return "semi_presidential_republic";
-    if (/parliamentary republic/.test(form)) return "parliamentary_republic";
-    if (/presidential republic/.test(form)) return "presidential_republic";
-    if (/one[- ]party|single[- ]party|party[- ]state/.test(form)) return "one_party_state";
-    if (/military junta|military regime/.test(form)) return "military_regime";
-    if (/personalist/.test(form)) return "personalist_regime";
-    if (/revolutionary/.test(form)) return "revolutionary_government";
-    if (/colonial|colony|protectorate|mandate/.test(form)) return "colonial_administration";
-    return "unspecified";
-};
-
-const inferPoliticalRepresentation = ({ type = "", governmentForm = "", parties = [], powerBlocs = [] } = {}) => {
-    const joined = `${clean(type)} ${clean(governmentForm)}`.toLocaleLowerCase();
-    if (/absolute_monarchy|absolute monarchy|emirate|sultanate/.test(joined)) return POLITICAL_REPRESENTATIONS.COURT_FACTIONS;
-    if (/one_party_state|one[- ]party|single[- ]party|party[- ]state/.test(joined)) return POLITICAL_REPRESENTATIONS.PARTY_STATE;
-    if (/military_regime|military junta|military regime/.test(joined)) return POLITICAL_REPRESENTATIONS.MILITARY_FACTIONS;
-    if (/revolutionary_government|revolutionary/.test(joined)) return POLITICAL_REPRESENTATIONS.REVOLUTIONARY_FACTIONS;
-    if (/personalist_regime|personalist/.test(joined)) return POLITICAL_REPRESENTATIONS.ELITE_FACTIONS;
-    if (/colonial_administration|colonial|colony|protectorate|mandate/.test(joined)) return POLITICAL_REPRESENTATIONS.COLONIAL;
-    if (Array.isArray(parties) && parties.length) return POLITICAL_REPRESENTATIONS.ELECTORAL;
-    if (Array.isArray(powerBlocs) && powerBlocs.length) return POLITICAL_REPRESENTATIONS.ELITE_FACTIONS;
-    return POLITICAL_REPRESENTATIONS.NONE;
-};
-
-export const normalizePoliticalSystem = (value, { government = {}, parties = [], powerBlocs = [] } = {}) => {
+// A polity's system as its record says it: the type and the representation
+// it was given (both enums). A record that gives no type has none
+// ("unspecified"); one that gives no representation takes the one its type
+// implies, else the one its roster shows. The words of government.form are
+// never read: they are written in the player's language.
+export const normalizePoliticalSystem = (value, { parties = [], powerBlocs = [] } = {}) => {
     const source = typeof value === "string"
         ? { type: value }
         : (value && typeof value === "object" && !Array.isArray(value) ? value : {});
     const out = cloneActorValue(source);
 
-    const explicitType = clean(source.type).toLocaleLowerCase().replace(/[ -]+/g, "_");
-    const type = explicitType || inferPoliticalSystemType(government?.form);
-    out.type = type || "unspecified";
+    out.type = clean(source.type).toLowerCase().replace(/[ -]+/g, "_") || "unspecified";
 
-    const explicitRepresentation = clean(source.representation).toLocaleLowerCase().replace(/[ -]+/g, "_");
+    const explicitRepresentation = clean(source.representation).toLowerCase().replace(/[ -]+/g, "_");
     out.representation = POLITICAL_REPRESENTATION_SET.has(explicitRepresentation)
         ? explicitRepresentation
-        : inferPoliticalRepresentation({ type: out.type, governmentForm: government?.form, parties, powerBlocs });
+        : representationForSystem({ type: out.type, parties, powerBlocs });
 
     const regimeCharacter = clean(source.regimeCharacter).toLocaleLowerCase().replace(/[ -]+/g, "_");
     if (POLITICAL_REGIME_CHARACTER_SET.has(regimeCharacter)) out.regimeCharacter = regimeCharacter;
@@ -685,12 +738,7 @@ export const normalizePoliticalGovernment = (value, parties = []) => {
 
 const officeholderIdentityKey = (value) => {
     const normalized = normalizeOfficeholder(value);
-    const name = typeof normalized === "string" ? normalized : normalized?.name;
-    return clean(name)
-        .toLocaleLowerCase()
-        .normalize("NFKD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^\p{L}\p{N}]+/gu, "");
+    return nameKey(typeof normalized === "string" ? normalized : normalized?.name);
 };
 
 const sameOfficeholder = (left, right) => {
@@ -699,53 +747,48 @@ const sameOfficeholder = (left, right) => {
     return Boolean(leftKey && rightKey && leftKey === rightKey);
 };
 
-// The office a leader's title names: a head of government's (a prime minister,
-// a chancellor) or a head of state's (a president, a monarch). A title naming
-// neither (a supreme leader, a general secretary, a party's chairman) is an
-// office of its own.
-const OFFICE_TITLE_WORDS = Object.freeze({
-    headOfGovernment: /\b(prime minister|premier|chancellor|first minister|chief minister|taoiseach|head of government|president of the government|president of the council of ministers)\b/i,
-    headOfState: /\b(president|king|queen|monarch|emperor|empress|sultan|emir|shah|tsar|czar|kaiser|grand duke|grand duchess|head of state)\b/i,
-});
 const titleOf = (officeholder) => (officeholder && typeof officeholder === "object" ? clean(officeholder.title) : "");
-const withTitle = (holder, title) => {
-    if (!title) return holder;
-    if (typeof holder === "string") return { name: holder, title };
-    return titleOf(holder) ? holder : { ...holder, title };
-};
-
-// A polity's leader as its offices have it. A leader who holds neither office
-// but carries the title of one is its former holder, left behind when a turn
-// gave the office to someone else and said nothing of the leader: "head of
-// state (prime minister) showing 3 different people" (a player's report,
-// 2026-11-03), the generated leader Prime Minister Anthony Albanese still
-// standing over the head of government a turn had made Peter Dutton, and
-// Rostra posting as him. The leader follows the office, the title kept where
-// its new holder has none. A leader of an office of their own stands.
-export const leaderOfOffices = (leader, government) => {
-    const title = titleOf(leader);
-    if (!title) return leader;
-    const holders = [
-        ["headOfGovernment", normalizeOfficeholder(government?.headOfGovernment)],
-        ["headOfState", normalizeOfficeholder(government?.headOfState)],
-    ].filter(([, holder]) => holder);
-    if (holders.some(([, holder]) => sameOfficeholder(holder, leader))) return leader;
-    for (const [office, holder] of holders) {
-        const theirs = titleOf(holder).toLocaleLowerCase() === title.toLocaleLowerCase() || OFFICE_TITLE_WORDS[office].test(title);
-        if (theirs) return withTitle(holder, title);
-    }
+const officeOf = (officeholder) => (officeholder && typeof officeholder === "object" ? clean(officeholder.office) : "");
+// An office's holder as the polity's leader: the title the leader had, where
+// the new holder has none, and the office the leader holds.
+const asLeaderOf = (holder, office, title) => {
+    const leader = typeof holder === "string" ? { name: holder } : { ...holder };
+    if (title && !titleOf(leader)) leader.title = title;
+    leader.office = office;
     return leader;
 };
 
-// The leader once an op has given an office to someone else (politicalActorOps.js):
-// whoever held it follows it, titled or not, with the title they had where the
-// new holder has none.
+// A polity's leader as its offices have it. A leader whose office (`office`:
+// the head of state's or the head of government's) has passed to someone else
+// was left behind when a turn gave the office away and said nothing of the
+// leader: "head of state (prime minister) showing 3 different people" (a
+// player's report, 2026-11-03), the generated leader Anthony Albanese still
+// standing over the head of government a turn had made Peter Dutton, and
+// Rostra posting as him. The leader follows the office, the title kept where
+// its new holder has none. A leader of an office of their own ("other"), or
+// one whose office was never written (a leader saved before leaders carried
+// one), stands: which office a leader holds is never read from the words of a
+// title, which the model writes in the player's language ("Premier ministre").
+export const leaderOfOffices = (leader, government) => {
+    const office = officeOf(leader);
+    if (office !== "headOfState" && office !== "headOfGovernment") return leader;
+    const holder = normalizeOfficeholder(government?.[office]);
+    if (!holder || sameOfficeholder(holder, leader)) return leader;
+    const other = normalizeOfficeholder(government?.[office === "headOfState" ? "headOfGovernment" : "headOfState"]);
+    if (other && sameOfficeholder(other, leader)) return leader;
+    return asLeaderOf(holder, office, titleOf(leader));
+};
+
+// The leader once an op or a newer reading has given an office to someone else
+// (politicalActorOps.js, politicalLandscapeFold.js): whoever held it follows it,
+// titled or not, with the title they had where the new holder has none, and
+// the office they now hold.
 export const leaderAfterOfficeChange = (leader, before, after) => {
     for (const office of ["headOfGovernment", "headOfState"]) {
         const was = normalizeOfficeholder(before?.[office]);
         const now = normalizeOfficeholder(after?.[office]);
         if (!was || !now || sameOfficeholder(was, now) || !sameOfficeholder(leader, was)) continue;
-        return withTitle(now, titleOf(leader));
+        return asLeaderOf(now, office, titleOf(leader));
     }
     return leader;
 };
@@ -767,19 +810,23 @@ export const derivePoliticalDecisionAuthority = (actorLike) => {
     const headOfState = normalizeOfficeholder(government.headOfState);
     const headOfGovernment = normalizeOfficeholder(government.headOfGovernment);
     const leader = normalizeOfficeholder(actor.leader);
-    const systemText = `${clean(actor?.politicalSystem?.type)} ${clean(actor?.politicalSystem?.representation)} ${clean(government.form)}`
-        .toLocaleLowerCase()
-        .replace(/[ -]+/g, "_");
+    // The system as its enums give it (politicalSystem.type, representation,
+    // regimeCharacter), never as government.form words it: those are written in
+    // the player's language.
+    const systemType = politicalSystemTypeOf(actor?.politicalSystem);
+    const representation = clean(actor?.politicalSystem?.representation).toLowerCase();
+    const regimeCharacter = clean(actor?.politicalSystem?.regimeCharacter).toLowerCase();
     const distinctLeader = Boolean(
         leader &&
         !sameOfficeholder(leader, headOfState) &&
         !sameOfficeholder(leader, headOfGovernment)
     );
-    const parliamentaryExecutive = /parliamentary|constitutional_monarchy/.test(systemText)
-        && !/absolute_monarchy/.test(systemText);
-    const semiPresidentialExecutive = /semi_presidential/.test(systemText);
-    const presidentialExecutive = /presidential/.test(systemText) && !semiPresidentialExecutive;
-    const centralizedExecutive = /one_party|party_state|personalist|military|absolute_monarchy|theocratic/.test(systemText);
+    const parliamentaryExecutive = PARLIAMENTARY_SYSTEM_TYPE_SET.has(systemType);
+    const semiPresidentialExecutive = systemType === "semi_presidential_republic";
+    const presidentialExecutive = systemType === "presidential_republic";
+    const centralizedExecutive = CENTRALIZED_SYSTEM_TYPES.has(systemType)
+        || CENTRALIZED_REPRESENTATIONS.has(representation)
+        || CENTRALIZED_REGIME_CHARACTERS.has(regimeCharacter);
 
     let primary = "";
     let role = "";
@@ -931,7 +978,6 @@ export const normalizePoliticalActorRecord = (value, fallbackPolityKey = "") => 
     out.parties = parties;
     out.powerBlocs = powerBlocs;
     out.politicalSystem = normalizePoliticalSystem(value.politicalSystem, {
-        government,
         parties,
         powerBlocs,
     });
@@ -1024,13 +1070,7 @@ function findPoliticalProfile(world, polityKey) {
     const byPolity = world?.politicalActors?.byPolity;
     if (!byPolity) return null;
 
-    const normalizeActorKey = (value) =>
-        String(value ?? "")
-            .trim()
-            .toLowerCase()
-            .normalize("NFKD")
-            .replace(/[\u0300-\u036f]/g, "")
-            .replace(/[^\p{L}\p{N}]+/gu, "");
+    const normalizeActorKey = nameKey;
 
     for (const candidate of candidatesForPolity(world, polityKey)) {
         if (byPolity[candidate]) return byPolity[candidate];

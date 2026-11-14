@@ -531,7 +531,8 @@ test("the old stand-ins keep clear of a battlefield's regions", async () => {
   assert.equal(battlefieldRegionTest({ battlefields: run.battlefields.map((record) => ({ ...record, status: "closed" })), rows, readers }), null);
 
   // The territory Director's marks on such a region are left out; the rest stand.
-  const events = [{ title: "Aland captures the border towns", description: "Aland's columns capture Borduria 6.0 and seize Neutralia 0.5 after heavy fighting.", impacts: {} }];
+  // A war event (its warId), which is what puts it before the Director.
+  const events = [{ title: "Aland captures the border towns", description: "Aland's columns capture Borduria 6.0 and seize Neutralia 0.5 after heavy fighting.", warId: "war-1", impacts: {} }];
   const orders = [{ eventIndex: 0, regionControlOps: [
     { op: "control", regionId: "Borduria 6.0", fromCode: "Borduria", toCode: "Aland" },
     { op: "contest", regionId: "r6-1", fromCode: "Borduria", actorCode: "Aland" },

@@ -15,6 +15,7 @@ import { dismissUnitPopup } from "./Units.jsx";
 import { isSameFeatureSelection, useCardScreenPos } from "./mapCards.js";
 import { useEventsById } from "./eventLookup.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
+import { markerFamilyOf } from "../../runtime/markerFamily.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -48,28 +49,20 @@ export const dismissFeaturePopup = () => {
   if (_currentSelection) _dismiss?.();
 };
 
-// DOM-side emoji per kind (the on-map glyphs are font-limited; the popup isn't).
-const KIND_EMOJI = [
-  [/city|town|settlement|metropolis|capital/, "🏙"],
-  [/military base|army base|fort|fortress|barracks|garrison|outpost|citadel|castle/, "🏰"],
-  [/bunker|shelter/, "🛡"],
-  [/missile|silo|launch/, "🚀"],
-  [/embassy|consulate/, "🏛"],
-  [/port|harbor|harbour|naval/, "⚓"],
-  [/airbase|airfield|airport|air base/, "✈"],
-  [/nuclear|reactor|plant|power/, "⚡"],
-  [/factory|industrial|refinery|mine/, "🏭"],
-  [/radar|listening|intelligence|spy/, "📡"],
-  [/monument|memorial|shrine|temple|cathedral|mosque/, "🗿"],
-];
+// DOM-side emoji per family (the on-map glyphs are font-limited; the popup
+// isn't): the structure's own family (runtime/markerFamily.js), never English
+// words in its kind.
+const FAMILY_EMOJI = Object.freeze({
+  settlement: "🏙",
+  military: "🏰",
+  resource: "⛏",
+  infrastructure: "🏗",
+  "industry-science": "🏭",
+  diplomatic: "🏛",
+  landmark: "📍",
+});
 
-const emojiForKind = (kind) => {
-  const normalized = String(kind || "").toLowerCase();
-  for (const [pattern, emoji] of KIND_EMOJI) {
-    if (pattern.test(normalized)) return emoji;
-  }
-  return "📍";
-};
+const emojiForStructure = (structure) => FAMILY_EMOJI[markerFamilyOf(structure)] || FAMILY_EMOJI.landmark;
 
 const titleCase = (value) =>
   String(value || "")
@@ -305,7 +298,7 @@ const FeaturePopup = () => {
       >
         <div style={{ display: "flex", alignItems: "center", gap: "9px", padding: "10px 12px 8px" }}>
           <span style={{ fontSize: "1.5rem", lineHeight: 1 }}>
-            {isCity ? (feature.capital === "primary" ? "⭐" : "🏙") : emojiForKind(feature.kind)}
+            {isCity ? (feature.capital === "primary" ? "⭐" : "🏙") : emojiForStructure(feature)}
           </span>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontWeight: 700, fontSize: "13px", wordBreak: "break-word" }}>{feature.name}</div>

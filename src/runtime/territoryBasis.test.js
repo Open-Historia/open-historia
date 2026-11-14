@@ -19,9 +19,11 @@ import {
   basisBecomesClaim,
   basisMovesTheMap,
   describeBasisAction,
+  describeUnknownBasis,
   normalizeTerritoryBasis,
   sameRegionChange,
   screenTerritoryBasis,
+  unknownTerritoryBasis,
 } from "./territoryBasis.js";
 
 test("the vocabulary is the two lists and nothing else", () => {
@@ -29,26 +31,49 @@ test("the vocabulary is the two lists and nothing else", () => {
   assert.equal(new Set(TERRITORY_BASIS_ENUM).size, TERRITORY_BASIS_ENUM.length);
 });
 
-test("a basis is folded to the vocabulary, and an unknown word is treated as absent", () => {
+test("a basis is one of the vocabulary's words, its case and spacing aside, and any other word is left out", () => {
   assert.equal(normalizeTerritoryBasis("Treaty"), "treaty");
   assert.equal(normalizeTerritoryBasis("  OCCUPATION "), "occupation");
-  assert.equal(normalizeTerritoryBasis("declaration"), "claim");
-  assert.equal(normalizeTerritoryBasis("ultimatum"), "threat");
-  assert.equal(normalizeTerritoryBasis("liberation"), "occupation");
   assert.equal(normalizeTerritoryBasis("vibes"), "");
   assert.equal(normalizeTerritoryBasis(""), "");
   assert.equal(normalizeTerritoryBasis(undefined), "");
+  // No word is read as the nearest of ours: an English word and its French twin
+  // are both left out, never "declaration" a claim while "déclaration" moves.
+  for (const [english, french] of [["declaration", "déclaration"], ["ultimatum", "ultimatum"], ["liberation", "libération"], ["ceded", "cédé"], ["annexed", "annexé"]]) {
+    assert.equal(normalizeTerritoryBasis(english), "", english);
+    assert.equal(normalizeTerritoryBasis(french), "", french);
+    assert.equal(unknownTerritoryBasis(english), english);
+    assert.equal(unknownTerritoryBasis(french), french);
+  }
+  assert.equal(unknownTerritoryBasis("Claim"), "");
+  assert.equal(unknownTerritoryBasis(""), "");
 });
 
-test("an entry with no basis moves the map, exactly as it did before the field existed", () => {
+test("an entry with no basis, or a word that is none of ours, moves the map, exactly as it did before the field existed", () => {
   assert.equal(basisMovesTheMap(""), true);
   assert.equal(basisMovesTheMap(undefined), true);
   assert.equal(basisMovesTheMap("vibes"), true);
+  assert.equal(basisMovesTheMap("declaration"), basisMovesTheMap("déclaration"));
   for (const basis of TERRITORY_BASIS_MOVES_MAP) assert.equal(basisMovesTheMap(basis), true, basis);
   for (const basis of TERRITORY_BASIS_NO_CONTROL) assert.equal(basisMovesTheMap(basis), false, basis);
   assert.equal(basisBecomesClaim("claim"), true);
-  assert.equal(basisBecomesClaim("proclamation"), true);
+  assert.equal(basisBecomesClaim("proclamation"), false);
   assert.equal(basisBecomesClaim("raid"), false);
+});
+
+test("a basis that is none of ours is reported, and the entry applies as one that gives none", () => {
+  const english = { regionId: "ETH.11_1", regionName: "Tigray", fromCode: "Ethiopia", toCode: "Italy", basis: "declaration" };
+  const french = { ...english, basis: "déclaration" };
+  const screenedEnglish = screenTerritoryBasis({ regionTransfers: [english], regionControlOps: [{ op: "control", regionId: "Kherson", fromCode: "Ukraine", toCode: "Russia", basis: "capture" }] });
+  const screenedFrench = screenTerritoryBasis({ regionTransfers: [french], regionControlOps: [{ op: "control", regionId: "Kherson", fromCode: "Ukraine", toCode: "Russia", basis: "prise" }] });
+  for (const [screened, written] of [[screenedEnglish, english], [screenedFrench, french]]) {
+    assert.deepEqual(screened.regionTransfers, [written]);
+    assert.equal(screened.actions.length, 0);
+    assert.deepEqual(screened.unknown.map((entry) => [entry.family, entry.region]), [["regionTransfers", "Tigray"], ["regionControlOps", "Kherson"]]);
+  }
+  assert.match(describeUnknownBasis(screenedFrench.unknown[0], { eventTitle: "Rome proclaims" }), /^Event "Rome proclaims": the transfer of Tigray to Italy carried basis "déclaration", which is not one of treaty, annexation, unification, independence, occupation, claim, threat, raid; it was left out/);
+  // A contest is never screened, so its basis is not reported either.
+  assert.deepEqual(screenTerritoryBasis({ regionControlOps: [{ op: "contest", regionId: "x", basis: "nope" }] }).unknown, []);
 });
 
 test("a transfer that admits it is only a claim becomes the receiver's claim", () => {

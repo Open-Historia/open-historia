@@ -18,7 +18,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { foldJumpTool, getGameplayTool, withEventAudience, withEventImpacts, withFrontOrders, withSocialPosts, withWarFigures, withoutGroupOps } from "./gameplaySchemas.js";
+import { foldJumpTool, getGameplayTool, withEventActors, withEventAudience, withEventImpacts, withFrontOrders, withSocialPosts, withWarFigures, withoutGroupOps } from "./gameplaySchemas.js";
 import { withSeatAdvice } from "./seatAdvice.js";
 import { toGeminiSchema } from "./geminiSchema.js";
 import { FOLDED_SKIP_SCHEMA_BUDGET, fitSkipRiders } from "./foldedSkip.js";
@@ -27,11 +27,12 @@ const chars = (tool) => JSON.stringify(toGeminiSchema(tool.schema)).length;
 
 // The lean contract as a game builds it (gameplay.js forActiveFeatures, then
 // the players' advice and the posts: taskToolFor): `host` is a shared game's
-// host, which sends the events' audience and the players' advice; `rostra`
-// the social posts with the poll answers; `fronts` the battlefields' orders
-// and war figures; `groups` the groups' ops.
+// host, which sends the events' audience and the players' advice, and every
+// other game who decided each event (actors); `rostra` the social posts with
+// the poll answers; `fronts` the battlefields' orders and war figures;
+// `groups` the groups' ops.
 const leanFor = ({ host = false, rostra = true, fronts = true, groups = true, task = "jumpForward" } = {}) => {
-  let tool = withEventImpacts(withEventAudience(getGameplayTool(task), host));
+  let tool = withEventImpacts(withEventAudience(withEventActors(getGameplayTool(task), !host), host));
   if (fronts) tool = withWarFigures(withFrontOrders(tool));
   if (!groups) tool = withoutGroupOps(tool);
   if (host) tool = withSeatAdvice(tool);

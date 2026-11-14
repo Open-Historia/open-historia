@@ -227,6 +227,12 @@ test("the board no longer costs the jump anything", () => {
   // says what it is, and the rules it repeated are in the prompt.
   // A civil war split in one entry (regionControlOps[].part, AI/countrySplit.js) raised it by about 160, on
   // purpose, the field pointing at the prompt that explains it: half a country was forty entries the model never wrote.
+  // Who decided an event (events[].actors, 166 chars) is not in the lean contract: a skip adds it where it
+  // fits (gameplaySchemas.js withEventActors), weighed by foldedSkipSent.test.js.
+  // The fields that replaced English word lists (2026-11-13) cost nothing net: an event's `concerns`, a post's
+  // `reach` and `mentions`, a structure's `family` and `strategic` (about 340 characters) were paid for by the
+  // stats patch's economy as numbers with one note for its units and its fields' repeated "only when it
+  // changes", and Rostra's two shorter notes (28,429 to 28,404; the folded skip's worst case 30,398 to 30,324).
   assert.ok(jumpChars < 28450, `the jump schema grew back to ${jumpChars} chars`);
 
   // ...and the game master, which has no second pass to hand the board to, keeps

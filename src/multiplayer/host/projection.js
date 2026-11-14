@@ -43,6 +43,7 @@ import { visiblePuppetsFor } from "../../runtime/puppets.js";
 import { buildPublicPoliticalView } from "../../runtime/politicalKnowledge.js";
 import { battlefieldsForViewer } from "../../runtime/fronts/view.js";
 import { polityMatches, spyAsSeenBy, viewerAudience } from "../../Game/AI/audience.js";
+import { eventNamesPolity } from "../../runtime/eventConcerns.js";
 import { formerNamesOf } from "./foundings.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -82,6 +83,8 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "attrition",
   // How the scenario's wars are fought (runtime/warSettings.js): the scenario's own rules.
   "warSettings",
+  // And its own unit types (runtime/unitTypes.js): what a dragon is, every player may know.
+  "unitTypes",
   // What the scenario draws on its map for war (runtime/warGeography.js): there for all to see.
   "terrainAreas",
   "fortifications",
@@ -300,12 +303,12 @@ export const projectWorld = (world, viewer, { host = "", hiddenEventIds = new Se
 // players' order ids, another power's march orders) stays with the host.
 const PUBLIC_IMPACT_KEYS = ["regionTransfers", "regionControlOps", "regionClaims", "polityChanges", "groupOps", "markerOps"];
 
-const mentions = (event, viewer) => {
-  const name = fold(viewer);
-  if (!name) return false;
-  const text = fold(`${event?.title ?? ""} ${event?.description ?? ""}`);
-  return text.includes(name) || list(event?.combatants).some((entry) => same(entry, viewer));
-};
+// Whether an event is about the viewer, by what it says it concerns, who
+// fights in it and its countries (runtime/eventConcerns.js): exact names, case
+// and spacing aside, for the seat and the names its government had before.
+// Never its words: "Oman" was found inside "Romania", and "la Roumanie" was
+// nobody's.
+const concernsViewer = (event, readers) => eventNamesPolity(event, readers);
 
 // What one government alone found out is marked for it (event.audience, set by
 // runtime/spycraft.js resolveEspionage when several people play): its own
@@ -346,8 +349,11 @@ export const projectEvents = (events, viewer, { ownOrderIds = new Set(), unitOwn
       ...(unitOps.length ? { unitOps } : {}),
       ...(createdChats.length ? { createdChats } : {}),
     },
-    // "Mine" is relative to the reader.
-    playerRelated: own.length > 0 || mentions(event, viewer),
+    // "Mine" is relative to the reader: its own orders, what the event says it
+    // is about, and for the host's own seat the skip's own mark too.
+    playerRelated: own.length > 0
+      || (same(host, viewer) && event.playerRelated === true)
+      || concernsViewer(event, readers),
   };
 });
 

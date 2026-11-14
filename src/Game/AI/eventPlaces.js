@@ -23,16 +23,17 @@ import { kindOfName, stripKindTags } from "./nameRefs.js";
 const asText = (value) => String(value ?? "").trim();
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const fold = (value) => asText(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ");
-const withoutArticle = (value) => asText(value).replace(/^(?:the|a|an)\s+/i, "");
 
 const PLACE_KINDS = new Set(["country", "region", "city", "structure", "unit", "sea"]);
 
 // One written entry: { kind, name, country }, or null for one with no kind (or
 // a kind that is no place). `country` is what a city or a region was said to
-// be in: the part tagged as a country, else the last part after a comma.
+// be in: the part tagged as a country, else the last part after a comma. Each
+// name is kept as it was written, an article and all: "the" is no more taken
+// off an English name than "la" off a French one (nameRefs.js).
 export const readEventPlace = (written) => {
     const { text, kinds } = stripKindTags(written);
-    const parts = text.split(",").map((part) => withoutArticle(part)).filter(Boolean);
+    const parts = text.split(",").map((part) => asText(part)).filter(Boolean);
     if (!parts.length) return null;
     const name = parts[0];
     const kind = kindOfName(kinds, name);

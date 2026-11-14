@@ -10,20 +10,17 @@ import {
   bindWarUpdatesToEvents,
   buildCanonicalWarContext,
   decodeWarUpdates,
-  eventNarratesHardCombat,
-  interpretWarLedger,
-  reconcileCombatWarState,
-  repairWarLedgerPayload,
+  settleWarLedger,
   splitWarStartNote,
-  validateCanonicalWarEvents,
   validatePregameWarBootstrap,
   validateWarLedgerPayload,
   warUpdateProseLines,
 } from "./nativeWarLedger.js";
 
-// A war exists only because a warUpdates record started it, and a battle can
-// only be narrated inside one that is active: the invariant the whole ledger
-// enforces, exercised end to end on the compact line transport the model emits.
+// A war exists only because a record started it (the model's warUpdates, or
+// the game's own rules), and it changes only by records: exercised end to end
+// on the compact line transport the model emits. What an event says is never
+// read to decide anything about a war.
 
 const world = { polityOverrides: {}, wars: [] };
 
@@ -35,6 +32,9 @@ const declaration = () => [{
   kind: "diplomacy",
   warId: "war-france-germany-1914",
 }];
+
+const PROSE_HEADING = "### Обновления войн:";
+const PROSE_NOTHING_CHANGED = "Нет изменений. В этом периоде ни одна война не началась, не закончилась и не изменилась — на карте нет активных конфликтов.";
 
 test("a declaration starts a canonical war bound to its event", () => {
   const events = declaration();
@@ -214,126 +214,6 @@ test("Round-Zero still fails closed on invalid war baselines", () => {
   assert.match(reversedDates.error, /predates an earlier transition/);
 });
 
-test("a declaration with no record is recorded from its war id and two combatants, and is narrative without them", () => {
-  // Its title reading like a declaration used to be refused outright; the
-  // event says who fights whom and under what id, which is the record.
-  const candidate = { events: [{ ...declaration()[0], combatants: ["Germany", "France"] }], warUpdates: "" };
-  interpretWarLedger(candidate, { world });
-  assert.deepEqual(decodeWarUpdates(candidate.warUpdates).map((update) => [update.id, update.op, update.actors, update.opponents]),
-    [["war-france-germany-1914", "start", ["Germany"], ["France"]]]);
-  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
-  // Without its sides the engine has nothing to record, and the title is narrative.
-  const bare = { events: [{ ...declaration()[0], warId: "" }], warUpdates: "" };
-  interpretWarLedger(bare, { world });
-  assert.deepEqual(decodeWarUpdates(bare.warUpdates), []);
-  assert.equal(validateWarLedgerPayload(bare, { world }), "");
-});
-
-test("hard combat without a canonical war is rejected", () => {
-  const candidate = {
-    events: [{
-      id: "e1",
-      date: "1914-08-20",
-      title: "Battle of the Frontiers",
-      description: "French and German armies clash along the whole border.",
-      kind: "military",
-      combatants: ["France", "Germany"],
-    }],
-    warUpdates: "",
-  };
-  assert.match(validateWarLedgerPayload(candidate, { world }), /has no event\.warId/);
-});
-
-// A long skip tagged its battles with the war they were in and named nobody fighting: every one lost its war
-// ("hard combat has fewer than two explicit combatants", a world war's 90 days, 2026-11-10). The war says who.
-test("fighting tagged with a war and naming no combatants is that war's, its sides fighting", () => {
-  const warWorld = {
-    ...world,
-    wars: [{ id: "war-france-germany-1914", status: "active", sideA: ["Germany", "Austria-Hungary"], sideB: ["France"], startedDate: "1914-08-03" }],
-  };
-  const candidate = {
-    events: [
-      { id: "e1", date: "1914-09-06", title: "Battle on the Marne", description: "French and German armies clash along the river in heavy fighting.", kind: "military", warId: "war-france-germany-1914" },
-      { id: "e2", date: "1914-09-08", title: "Fighting at the forts", description: "French and German armies clash at the forts in heavy fighting.", kind: "military", warId: "war-france-germany-1914", combatants: ["France"] },
-      { id: "e3", date: "1914-09-09", title: "Raid on a depot", description: "Heavy fighting breaks out at a depot.", kind: "military", warId: "war-elsewhere-1914" },
-    ],
-    warUpdates: "",
-  };
-  const repair = reconcileCombatWarState(candidate, { world: warWorld });
-  assert.deepEqual(candidate.events[0].combatants, ["Germany", "France"]);
-  assert.deepEqual(candidate.events[1].combatants, ["Germany", "France"], "the side it named, and the other side's first");
-  assert.equal(candidate.events[0].warId, "war-france-germany-1914");
-  assert.ok(!repair.unresolved.some((entry) => entry.index < 2), "neither is unbound");
-  // A war nobody holds is still nobody's to guess.
-  assert.equal(candidate.events[2].combatants, undefined);
-});
-
-test("reconciliation binds unlabelled combat to the one matching active war", () => {
-  const warWorld = {
-    ...world,
-    wars: [{ id: "war-france-germany-1914", status: "active", sideA: ["Germany"], sideB: ["France"], startedDate: "1914-08-03" }],
-  };
-  const candidate = {
-    events: [{
-      id: "e1",
-      date: "1914-08-20",
-      title: "Battle of the Frontiers",
-      description: "French and German armies clash along the whole border.",
-      kind: "military",
-      combatants: ["France", "Germany"],
-    }],
-    warUpdates: "",
-  };
-  const repair = reconcileCombatWarState(candidate, { world: warWorld });
-  assert.equal(repair.bound, 1);
-  assert.deepEqual(repair.unresolved, []);
-  assert.equal(candidate.events[0].warId, "war-france-germany-1914");
-  assert.equal(validateWarLedgerPayload(candidate, { world: warWorld }), "");
-});
-
-// The prompt tells the model to tag fighting with the war's id. Tagged with a
-// ceasefire war's id and no record of its own, the segment used to be rejected
-// ("ceasefire, not active") — a corrective request — where the same event
-// untagged resumed the war.
-test("fighting tagged with a ceasefire war's id resumes that war", () => {
-  const truce = {
-    ...world,
-    wars: [{ id: "war-france-germany-1914", status: "ceasefire", sideA: ["Germany"], sideB: ["France"], startedDate: "1914-08-03" }],
-  };
-  const battle = (warId) => ({
-    events: [{
-      id: "e1",
-      date: "1915-03-10",
-      title: "Battle of Neuve Chapelle",
-      description: "French and German armies clash again along the border after the truce breaks down.",
-      kind: "military",
-      combatants: ["France", "Germany"],
-      warId,
-    }],
-    warUpdates: "",
-  });
-
-  const tagged = battle("war-france-germany-1914");
-  const repair = reconcileCombatWarState(tagged, { world: truce });
-  assert.equal(repair.resumed, 1);
-  assert.deepEqual(repair.unresolved, []);
-  assert.deepEqual(decodeWarUpdates(tagged.warUpdates).map((update) => [update.id, update.op]), [["war-france-germany-1914", "resume"]]);
-  assert.equal(validateWarLedgerPayload(tagged, { world: truce }), "");
-
-  const untagged = battle(undefined);
-  reconcileCombatWarState(untagged, { world: truce });
-  assert.deepEqual(decodeWarUpdates(untagged.warUpdates), decodeWarUpdates(tagged.warUpdates), "tagged or not, the same resume");
-
-  // A record the model wrote for the war itself is left for the validator.
-  const withRecord = { ...battle("war-france-germany-1914"), warUpdates: "war-france-germany-1914~resume~~~1~The truce collapses" };
-  assert.equal(reconcileCombatWarState(withRecord, { world: truce }).resumed, 0);
-  assert.equal(decodeWarUpdates(withRecord.warUpdates).length, 1);
-});
-
-// A record that already crossed a segment or hidden-pass boundary carries
-// stable eventIds; its eventIndexes point into the answer it came from, not
-// the combined batch it is bound against now. Reading them again rebinds the
-// record to an unrelated event — the ground BugReport1's dropped wars grew in.
 test("binding keeps a record's existing event ids over its pass-local indexes", () => {
   const events = [
     { id: "turn-event-1", date: "1915-01-01", title: "Unrelated", description: "", kind: "politics" },
@@ -348,67 +228,6 @@ test("binding keeps a record's existing event ids over its pass-local indexes", 
   const many = Array.from({ length: 30 }, (_, index) => `event-${index}`);
   const [capped] = bindWarUpdatesToEvents([{ id: "w", op: "start", eventIds: [...many, many[0]] }], events);
   assert.deepEqual(capped.eventIds, many.slice(0, 24), "de-duplicated and capped at 24");
-});
-
-test("a readiness event naming two allies is not combat and creates no war", () => {
-  const candidate = {
-    events: [{
-      id: "e1",
-      date: "1914-07-30",
-      title: "Joint staff talks conclude",
-      description: "British and French staffs agree combat-readiness measures and a deployment plan.",
-      kind: "military",
-      combatants: ["France", "United Kingdom"],
-    }],
-    warUpdates: "",
-  };
-  const repair = reconcileCombatWarState(candidate, { world });
-  assert.equal(repair.started, 0);
-  assert.equal(repair.sanitized, 1);
-  assert.deepEqual(candidate.events[0].combatants, []);
-  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
-});
-
-// Transcribed from a player's debug report (Iran, round 55): the event the model
-// wrote for the player's own queued action. It was read as a launched military
-// offensive with no combatants, so the retry was spent on a phantom battle and
-// the final attempt dropped the event from the turn.
-test("a diplomatic offensive is not a battle; a military offensive still is", () => {
-  const diplomatic = {
-    id: "segment-1-event-2",
-    date: "2026-07-18",
-    kind: "diplomacy",
-    title: "Ministry of Foreign Affairs Launches European Diplomatic Offensive for Sanctions Relief",
-    description: "The Ministry of Foreign Affairs, in close coordination with Omani backchannel delegates, launches an active diplomatic offensive across European capitals, formally demanding the immediate lifting of unilateral Western sanctions against the sovereign Bahraini Republic and the unified government of Yemen.",
-  };
-  assert.equal(eventNarratesHardCombat(diplomatic), false);
-  const candidate = { events: [diplomatic], warUpdates: "" };
-  assert.deepEqual(reconcileCombatWarState(candidate, { world }).unresolved, []);
-  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
-
-  for (const phrase of ["charm offensive", "media counter-offensive", "peace offensive"]) {
-    assert.equal(
-      eventNarratesHardCombat({ kind: "diplomacy", title: `Tokyo launches a ${phrase} in Seoul`, description: "" }),
-      false,
-      phrase,
-    );
-  }
-
-  assert.equal(eventNarratesHardCombat({
-    kind: "military",
-    title: "Germany launches an offensive on the Marne",
-    description: "German armies open a counter-offensive against French positions.",
-  }), true, "a military offensive is still combat");
-  assert.equal(eventNarratesHardCombat({
-    kind: "diplomacy",
-    title: "Paris opens a diplomatic offensive as armies clash on the border",
-    description: "",
-  }), true, "real fighting in the same event is still combat");
-  assert.equal(eventNarratesHardCombat({
-    kind: "military",
-    title: "Moscow launches a cyber offensive against Kyiv's grid",
-    description: "",
-  }), true, "a cyber offensive is a hostile act, not a figure of speech");
 });
 
 test("ceasefire, resume and end move the status; a second start on a live war is refused", () => {
@@ -465,200 +284,6 @@ test("wars ended in the last two rounds are listed as ENDED, at most five", () =
   assert.equal(buildCanonicalWarContext(many, { round: 7 }).match(/\| ENDED /g).length, 5);
 });
 
-// Civil unrest can contain violence without being a canonical war. A riot or
-// demonstration card must not enter the war ledger merely because the prose
-// contains "clashes" or "killed".
-test("street clashes are not canonical-war combat by vocabulary alone", () => {
-  const riot = {
-    id: "e1",
-    date: "2014-05-02",
-    title: "Tragic Clashes and Fire in Odessa",
-    description: "Street clashes between rival demonstrators end with a building alight; dozens are killed.",
-    kind: "world",
-    combatants: [],
-  };
-  const candidate = { events: [riot], warUpdates: "" };
-  assert.equal(eventNarratesHardCombat(riot), false);
-  assert.deepEqual(reconcileCombatWarState(candidate, { world }).unresolved, []);
-  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
-});
-
-
-test("reported non-combat events do not trip canonical war detection", () => {
-  const cases = [
-    {
-      kind: "diplomacy",
-      title: "UN-Backed Syrian Peace Talks Open in Geneva Amid Procedural Disputes",
-      description: "Delegates open negotiations after months of fighting while mediators argue over the agenda.",
-      combatants: [],
-    },
-    {
-      kind: "world",
-      title: "UN Working Group Issues Opinion on Julian Assange's Detention",
-      description: "A UN working group issues a legal opinion after a long political and legal battle over detention.",
-      combatants: [],
-    },
-    {
-      kind: "world",
-      title: "UK Queen's Speech Outlines Brexit Legislative Agenda in Parliament",
-      description: "The government sets out its legislative programme as parliamentary battles over Brexit continue.",
-      combatants: ["United Kingdom"],
-    },
-    {
-      kind: "world",
-      title: "Venezuela Elects Controversial Constituent Assembly Amid Domestic Turmoil and Foreign Boycotts",
-      description: "The vote proceeds amid protests and street clashes, but the event itself is an election rather than battlefield combat.",
-      combatants: ["Venezuela"],
-    },
-    {
-      kind: "military",
-      title: "Unified Army Forms 1st and 2nd Mechanized Infantry Divisions with T-72B Tanks",
-      description: "The army completes formation of two mechanized divisions and raises combat readiness without entering battle.",
-      combatants: ["Sudan"],
-    },
-    {
-      kind: "military",
-      title: "Ansar Allah Engineering Units Complete Interlocking Tihama Coastal Defenses",
-      description: "Engineering units complete fortifications designed to resist a possible amphibious assault; no attack occurs.",
-      combatants: ["Yemen"],
-    },
-    {
-      kind: "military",
-      title: "Ansar Allah Initiates Comprehensive Operational Planning and Force Staging for Adan",
-      description: "Commanders stage units and complete an assault plan for a possible future operation.",
-      combatants: ["Yemen"],
-    },
-    {
-      kind: "military",
-      title: "Ansar Allah Fortifies Adan Northern Gateway and Establishes Kill Zones",
-      description: "Engineering and defensive units fortify approaches and prepare kill zones for a possible future assault; no fighting occurs.",
-      combatants: ["Yemen"],
-    },
-    {
-      kind: "world",
-      title: "Great March of Return Protests Begin Along Gaza Border",
-      description: "Large demonstrations begin along the border while security forces deploy behind the fence.",
-      combatants: [],
-    },
-    {
-      kind: "world",
-      title: "Clashes Persist Along Gaza Border Amid Great March of Return Demonstrations",
-      description: "Demonstrators and security forces clash along the border during protests.",
-      combatants: [],
-    },
-  ];
-
-  for (const candidate of cases) {
-    assert.equal(eventNarratesHardCombat(candidate), false, candidate.title);
-    assert.equal(validateWarLedgerPayload({ events: [candidate], warUpdates: "" }, { world }), "", candidate.title);
-  }
-});
-
-test("political and labour attack language is not battlefield combat", () => {
-  const cases = [
-    { kind: "world", title: "Opposition Launches Political Attack Against Government Budget", description: "Opposition leaders mount a sustained political attack against the cabinet's fiscal record." },
-    { kind: "world", title: "Workers Strike Against Austerity Measures", description: "Transport unions begin a nationwide strike against planned wage cuts." },
-    { kind: "world", title: "Rights Group Mounts Legal Assault on Detention Law", description: "Lawyers challenge the statute in court and describe the filing as a legal assault on the measure." },
-  ];
-  for (const event of cases) {
-    assert.equal(eventNarratesHardCombat(event), false, event.title);
-    assert.equal(validateWarLedgerPayload({ events: [event], warUpdates: "" }, { world }), "", event.title);
-  }
-});
-
-test("direct battlefield actions still require canonical war state", () => {
-  const cases = [
-    {
-      kind: "military",
-      title: "Ansar Allah Launches Amphibious Assault on Mayyun Island Across Bab-el-Mandeb",
-      description: "Amphibious forces assault the island's defended positions.",
-      combatants: ["Yemen", "Southern Transitional Council"],
-    },
-    {
-      kind: "world",
-      title: "Syrian Army Advances in Northern Aleppo",
-      description: "Syrian units launch concerted assaults on insurgent strongholds near Azaz.",
-      combatants: ["Syria", "Syrian Opposition"],
-    },
-    {
-      kind: "military",
-      title: "Battle of the Frontiers",
-      description: "French and German armies clash along the border.",
-      combatants: ["France", "Germany"],
-    },
-  ];
-
-  for (const candidate of cases) {
-    assert.equal(eventNarratesHardCombat(candidate), true, candidate.title);
-    assert.match(validateWarLedgerPayload({ events: [candidate], warUpdates: "" }, { world }), /no event\.warId/, candidate.title);
-  }
-});
-
-// A player's log (a small local model answering in Russian): a month's
-// warUpdates was a Markdown heading and a sentence saying nothing had changed,
-// with the model's reminder to itself on the end. Each line was read as a war
-// record with no operation: 'Unsupported warUpdates operation "" for ###
-// Обновления войн:.', which on a strict pass refuses the answer and has the
-// month asked for again. On the last attempt the salvage "dropped 2 war
-// record(s)" by those "ids", which is how the sentence came to be quoted in
-// the next prompt. Both lines are verbatim.
-const PROSE_HEADING = "### Обновления войн:";
-const PROSE_NOTHING_CHANGED = "Нет изменений. В этом периоде ни одна война не началась, не закончилась и не изменилась — на карте нет активных конфликтов. ### Конец обновлений. **ВАЖНО:** Отвечай ТОЛЬКО валидным JSON объектом без каких-либо объяснений, комментариев или предисловий. Не добавляй текст перед или после JSON.";
-
-test("a line with no separator is prose, not a war record", () => {
-  const warUpdates = `${PROSE_HEADING}\n${PROSE_NOTHING_CHANGED}`;
-  assert.deepEqual(decodeWarUpdates(warUpdates), []);
-  assert.deepEqual(decodeWarUpdates([PROSE_HEADING, PROSE_NOTHING_CHANGED]), [], "nor as members of a list");
-  assert.deepEqual(warUpdateProseLines(warUpdates), [PROSE_HEADING, PROSE_NOTHING_CHANGED], "what was ignored can still be said");
-
-  // The answer is not refused over them, so the month is not asked for twice.
-  const quiet = () => ({
-    events: [{ id: "e1", date: "2014-09-12", title: "Harvest comes in across the south", description: "Grain yields are above the five-year average.", kind: "economy" }],
-    warUpdates,
-  });
-  assert.equal(validateWarLedgerPayload(quiet(), { world }), "");
-
-  // The last attempt has nothing to drop, so nothing of them is quoted back.
-  const candidate = quiet();
-  const repair = repairWarLedgerPayload(candidate, { world });
-  assert.deepEqual(repair.droppedIds, []);
-  assert.equal(repair.residual, "");
-  assert.deepEqual(decodeWarUpdates(candidate.warUpdates), []);
-});
-
-test("prose around a real war record costs the record nothing", () => {
-  const record = "war-france-germany-1914~start~Germany~France~1~Declaration of war";
-  const candidate = { events: declaration(), warUpdates: `${PROSE_HEADING}\n${record}\n${PROSE_NOTHING_CHANGED}` };
-  assert.deepEqual(decodeWarUpdates(candidate.warUpdates).map((update) => [update.id, update.op]), [["war-france-germany-1914", "start"]]);
-  assert.deepEqual(warUpdateProseLines(candidate.warUpdates), [PROSE_HEADING, PROSE_NOTHING_CHANGED]);
-  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
-  // Read as records, no single removal made the batch valid and the salvage
-  // dropped every record of the segment, the declared war with them.
-  const repair = repairWarLedgerPayload(candidate, { world });
-  assert.deepEqual(repair.droppedIds, []);
-  const merge = applyWarUpdates({ world, updates: candidate.warUpdates, events: candidate.events, stopDate: "1914-08-31", round: 2 });
-  assert.deepEqual(merge.appliedIds, ["war-france-germany-1914"]);
-});
-
-test("a line with the separator and no real operation is still a record, and still refused", () => {
-  const refused = (warUpdates) => validateWarLedgerPayload({ events: declaration(), warUpdates }, { world });
-  assert.equal(refused("war-france-germany-1914~declare~Germany~France~1~Declaration of war"), 'Unsupported warUpdates operation "declare" for war-france-germany-1914.');
-  assert.equal(refused("war-france-germany-1914~"), 'Unsupported warUpdates operation "" for war-france-germany-1914.');
-  assert.deepEqual(warUpdateProseLines("war-france-germany-1914~\n\n   \nwar-a-b~end~~~1~peace"), [], "blank lines are not prose either");
-});
-
-// gameplay.js does not load under bare node, so its side is checked in its
-// source: the ignored lines are said once per answer, and the receipt the next
-// prompt opens with quotes dropped ids short (applicationReceipt.js).
-test("the time skip says which lines it ignored, and its receipt quotes war ids short", () => {
-  const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  const body = source.slice(source.indexOf("const validateSegmentLedgers = "), source.indexOf("const validateSegmentStorylines = "));
-  assert.ok(body.indexOf("warUpdateProseLines(candidate?.warUpdates)") > 0, "read from the answer as it arrived");
-  assert.ok(body.indexOf("warUpdateProseLines(candidate?.warUpdates)") < body.indexOf("reconcileCombatWarState(candidate"), "before the field is rewritten");
-  assert.match(body, /War ledger: \$\{repair\.droppedIds\.length\} war record\(s\) were dropped`\s*\+ `\$\{repair\.droppedIds\.length \? ` \(\$\{quoteReceiptIds\(repair\.droppedIds\)\}\)` : ""\}/);
-  assert.doesNotMatch(body, /noteReceipt\([^;]*droppedIds\.join/s, "never the ids as the model wrote them");
-});
-
 test("a war starts on its earliest linked event by the calendar, BC years included", () => {
   const events = [
     { id: "e2", date: "-0217-01-15", title: "Carthage marches on Rome", description: "Carthage answers the declaration.", kind: "diplomacy", warId: "war-rome-carthage" },
@@ -705,128 +330,6 @@ const quietly = (run) => {
   }
 };
 
-test("a war already under way is opened on a report of its fighting", () => {
-  const events = [RAMADI(), ALEPPO()];
-  // Neither is a battle by the ledger's own word lists, which is why each was
-  // refused: an event had to hold one of those words to open a war.
-  assert.equal(eventNarratesHardCombat(events[0]), false);
-  assert.equal(eventNarratesHardCombat(events[1]), false);
-  const candidate = { events, warUpdates: `${IRAQ_START}\n${SYRIA_START}` };
-  assert.equal(validateWarLedgerPayload(candidate, { world }), "", "both starts are accepted as written, with no second request");
-
-  const merge = applyWarUpdates({ world, updates: decodeWarUpdates(candidate.warUpdates), events, stopDate: "2016-02-29", round: 1 });
-  assert.deepEqual(merge.appliedIds, ["war-iraq-isis-2014", "war-syrian-civil-2011"]);
-  assert.deepEqual(merge.wars.map((war) => `${war.title}: ${war.status}`).sort(), ["Syrian Civil War: active", "War against the Islamic State: active"]);
-  assert.deepEqual(merge.wars.find((war) => war.id === "war-syrian-civil-2011").sideA, ["Syria", "Russia"]);
-});
-
-test("what the ledger calls hard combat can open the war it is told it needs", () => {
-  // A military event that "raids" must belong to an active war, and until now
-  // could not open one: whatever the model answered for it was refused.
-  const raid = ongoing("e1", "1998-05-12", "Border Raid at Badme", "Ethiopian troops raided Eritrean posts at Badme and held them overnight.", "war-eritrea-ethiopia-1998", ["Ethiopia", "Eritrea"]);
-  assert.equal(eventNarratesHardCombat(raid), true);
-  const candidate = { events: [raid], warUpdates: "war-eritrea-ethiopia-1998~start~Ethiopia~Eritrea~1~title: Eritrean–Ethiopian War; the dispute over Badme" };
-  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
-});
-
-test("a record opens its war whatever its event's words; an exercise is the one wording that does not", () => {
-  // The record the model wrote is what says the war began. Its event used to
-  // have to hold one of the English word lists, and since the skip writes in
-  // the player's own language (2026-10-30) no Italian or Russian world could
-  // open a war at all (a player's report, 2026-11-02).
-  const opened = (title, description, kind = "military") => validateWarLedgerPayload({
-    events: [ongoing("e1", "2016-03-01", title, description, "war-poland-belarus-2016", ["Poland", "Belarus"], kind)],
-    warUpdates: "war-poland-belarus-2016~start~Poland~Belarus~1~title: Polish–Belarusian War",
-  }, { world });
-  assert.equal(opened("Polish 18th Division Deploys to the Suwalki Gap", "Warsaw moves a mechanised division to the border and raises readiness."), "");
-  assert.equal(opened("La Polonia dichiara guerra alla Bielorussia", "Scaduto l'ultimatum dell'ONU, Varsavia apre le ostilità.", "diplomacy"), "");
-  assert.equal(opened("Польша объявляет войну Беларуси", "Ультиматум ООН истёк."), "");
-  assert.match(opened("Anakonda Exercise Simulates an Attack on the Suwalki Gap", "A training attack by two brigades; attack helicopters and main battle tanks take part in the drill."), /describes an exercise or drill/);
-  // The Game Master's records are the administrator's orders: no veto at all.
-  const gm = validateCanonicalWarEvents({
-    events: [ongoing("e1", "2016-03-01", "Anakonda Exercise Turns Into an Invasion Plan", "A drill on the border.", "war-poland-belarus-2016", [], "military")],
-    updates: decodeWarUpdates("war-poland-belarus-2016~start~Poland~Belarus~1~"),
-    world,
-    authority: "gm",
-  });
-  assert.equal(gm, "");
-});
-
-test("the engine still makes up no war of its own from the wider wording", () => {
-  // Two names and a report of ground retaken, and no record from the model:
-  // reconcileCombatWarState asks its own question before it invents a war, and
-  // the wider wording is not part of it.
-  const retaken = ongoing("e1", "2016-01-02", "Iraqi Forces Secure Central Ramadi and Clear Anbar Pockets", "Government units retake the city centre and clear the last pockets in Anbar.", "", ["Iraq", "Islamic State"]);
-  assert.equal(eventNarratesHardCombat(retaken), false);
-  const candidate = { events: [retaken], warUpdates: "" };
-  const outcome = quietly(() => reconcileCombatWarState(candidate, { world }));
-  assert.equal(outcome.started, 0);
-  assert.deepEqual(decodeWarUpdates(candidate.warUpdates), []);
-  // What the ledger itself calls hard combat between two named sides is the
-  // engine's to open: a raid by troops on the other's posts.
-  const raid = ongoing("e1", "1998-05-12", "Border Raid at Badme", "Ethiopian troops raided Eritrean posts at Badme and held them overnight.", "", ["Ethiopia", "Eritrea"]);
-  assert.equal(eventNarratesHardCombat(raid), true);
-  assert.equal(quietly(() => reconcileCombatWarState({ events: [raid], warUpdates: "" }, { world })).started, 1);
-});
-
-test("the last attempt's repair drops a war at a time: a refused start costs its own war only", () => {
-  // The Iraqi start sits on an event that narrates no fighting at all, and the
-  // Syrian one is sound. Every record of the turn used to go.
-  const budget = ongoing("e1", "2016-01-04", "Iraqi Army Holds a Training Exercise Outside Baghdad", "Brigades rehearse urban clearing in a drill.", "war-iraq-isis-2014", [], "military");
-  const candidate = { events: [budget, ALEPPO()], warUpdates: `${IRAQ_START}\n${SYRIA_START}` };
-  assert.match(validateWarLedgerPayload(candidate, { world }), /war-iraq-isis-2014 \(start\) is tied to .*exercise or drill/);
-  const repair = quietly(() => repairWarLedgerPayload(candidate, { world }));
-  assert.deepEqual(repair.droppedIds, ["war-iraq-isis-2014"]);
-  assert.deepEqual(decodeWarUpdates(candidate.warUpdates).map((update) => update.id), ["war-syrian-civil-2011"]);
-  assert.equal(repair.strippedEvents, 1);
-  assert.equal(candidate.events[0].warId, "", "the exercise is narrative");
-  assert.equal(candidate.events[1].warId, "war-syrian-civil-2011", "the advance is still the Syrian war's");
-  assert.equal(repair.residual, "");
-});
-
-test("the repair keeps a sound war beside an event the ledger cannot place", () => {
-  const strike = ongoing("e1", "2016-02-25", "Saudi Aircraft Bombard Houthi Positions Around Sanaa", "Coalition aircraft bombarded Houthi positions around Sanaa in the heaviest air strikes of the month.", "war-yemen-2015", ["Saudi Arabia", "Houthis"]);
-  const start = "war-yemen-2015~start~Saudi Arabia~Houthis~1~title: Yemeni Civil War; the coalition's air campaign";
-  // A riot is not a battle: "clashes" between demonstrators, with no force and
-  // no two sides named, ask for no war at all.
-  const riot = { id: "e2", date: "2016-02-27", title: "Tragic Clashes and Fire in Odessa", description: "Street clashes between rival demonstrators end with a building alight; dozens are killed.", kind: "world", warId: "", combatants: [] };
-  assert.equal(validateWarLedgerPayload({ events: [strike, riot], warUpdates: start }, { world }), "");
-  // Shelling nobody claims: fighting, and no war to put it in.
-  const shelling = ongoing("e2", "2016-02-27", "Artillery Shells Fall on Kilis", "Shelling from across the border hits the town; nobody claims it.", "", []);
-  const withShelling = { events: [strike, shelling], warUpdates: start };
-  assert.match(validateWarLedgerPayload(withShelling, { world }), /no event\.warId/);
-  const first = quietly(() => repairWarLedgerPayload(withShelling, { world }));
-  assert.deepEqual(first.droppedIds, []);
-  assert.equal(withShelling.events[0].warId, "war-yemen-2015");
-  assert.match(first.residual, /Artillery Shells Fall on Kilis/, "the shelling is still what the ledger remarks on, and it is only logged");
-
-  // A battle of the war that names one side only: the war's record applies,
-  // so the war is kept, and the remark is about the battle.
-  const oneSided = ongoing("e2", "2016-03-02", "Coalition Aircraft Bombard Taiz", "A second week of bombardment of the city.", "war-yemen-2015", ["Saudi Arabia"]);
-  const withOneSided = { events: [strike, oneSided], warUpdates: start };
-  assert.match(validateWarLedgerPayload(withOneSided, { world }), /at least the two opposing belligerent/);
-  const second = quietly(() => repairWarLedgerPayload(withOneSided, { world }));
-  assert.deepEqual(second.droppedIds, []);
-  assert.deepEqual(decodeWarUpdates(withOneSided.warUpdates).map((update) => update.id), ["war-yemen-2015"]);
-  assert.equal(withOneSided.events[1].warId, "war-yemen-2015");
-  assert.match(second.residual, /Coalition Aircraft Bombard Taiz/);
-});
-
-test("the repair drops a join that cannot be made and keeps the war it was joining", () => {
-  const strike = ongoing("e1", "2016-02-25", "Saudi Aircraft Bombard Houthi Positions Around Sanaa", "Coalition aircraft bombarded Houthi positions around Sanaa.", "war-yemen-2015", ["Saudi Arabia", "Houthis"]);
-  const entry = ongoing("e2", "2016-03-01", "Egypt Joins the War in Yemen", "Cairo enters the war beside Riyadh.", "war-yemen-2015", []);
-  const candidate = {
-    events: [strike, entry],
-    // The join names a polity that is already on the other side.
-    warUpdates: "war-yemen-2015~start~Saudi Arabia~Houthis~1~title: Yemeni Civil War\nwar-yemen-2015~join-b~Saudi Arabia~~2~",
-  };
-  assert.match(validateWarLedgerPayload(candidate, { world }), /already on the opposing side/);
-  const repair = quietly(() => repairWarLedgerPayload(candidate, { world }));
-  assert.deepEqual(decodeWarUpdates(candidate.warUpdates).map((update) => `${update.id}:${update.op}`), ["war-yemen-2015:start"]);
-  assert.deepEqual(repair.droppedIds, ["war-yemen-2015"]);
-  assert.equal(repair.strippedEvents, 0);
-});
-
 test("a join goes against the opponents it names, whatever its letter says (#892)", () => {
   const atWar = { polityOverrides: {}, wars: [{ id: "war-ukraine", status: "active", sideA: ["Russia"], sideB: ["Ukraine"], startedDate: "2022-02-24" }] };
   const join = (record) => applyWarUpdates({ world: atWar, updates: decodeWarUpdates(record), events: [], stopDate: "2026-02-01", round: 3 }).wars[0];
@@ -841,47 +344,6 @@ test("a join goes against the opponents it names, whatever its letter says (#892
   assert.deepEqual(join("war-ukraine~join-a~Belarus~Ukraine,Russia~~").sideA, ["Russia", "Belarus"]);
 });
 
-// The battle that ends a war is fought in it. A player's 1973 game had the
-// fall of Saigon carry the end of the Vietnam War; the battle was refused as
-// fighting in a war already ended, the repair dropped the end, and the war
-// and its battlefield ran on for years after the story had closed it.
-test("the battle that ends a war may carry its end, and fighting before the end stands", () => {
-  const vietnam = { polityOverrides: {}, wars: [{ id: "war-vietnam", status: "active", sideA: ["Democratic Republic of Vietnam"], sideB: ["Republic of Vietnam", "United States"], startedDate: "1965-03-08" }] };
-  const fall = {
-    id: "e1",
-    date: "1975-04-30",
-    title: "People's Army of Vietnam Overruns Saigon",
-    description: "Armored columns of the People's Army of Vietnam storm Saigon after a final assault and the Republic of Vietnam surrenders.",
-    kind: "military",
-    combatants: ["Democratic Republic of Vietnam", "Republic of Vietnam"],
-    warId: "war-vietnam",
-  };
-  const same = { events: [fall], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Saigon falls" };
-  assert.equal(validateWarLedgerPayload(same, { world: vietnam }), "", "the end rides on the battle that ends it");
-
-  // The end tied to a later event the answer lists first: the earlier battle is still the war's.
-  const recognition = { id: "e0", date: "1975-07-25", title: "Washington Recognizes Hanoi", description: "The United States recognizes the reunified government.", kind: "diplomacy" };
-  const listedFirst = { events: [recognition, fall], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Reunification" };
-  assert.equal(validateWarLedgerPayload(listedFirst, { world: vietnam }), "");
-
-  // One record tied to both events ends the war once.
-  const twice = { events: [fall, recognition], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1,2~Reunification" };
-  assert.equal(validateWarLedgerPayload(twice, { world: vietnam }), "");
-
-  // Fighting dated AFTER the end is still refused.
-  const later = { ...fall, id: "e2", date: "1975-08-10", title: "Fresh Assault on Hue", description: "Armies clash again in a new assault on Hue." };
-  const after = { events: [fall, later], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Saigon falls" };
-  assert.match(validateWarLedgerPayload(after, { world: vietnam }), /is ended, not active/);
-
-  // A war ended before this answer is still over for any battle in it.
-  const over = { polityOverrides: {}, wars: [{ ...vietnam.wars[0], status: "ended", endedDate: "1975-04-30" }] };
-  assert.match(validateWarLedgerPayload({ events: [{ ...fall, date: "1975-04-20" }], warUpdates: "" }, { world: over }), /is ended, not active/);
-  assert.match(validateWarLedgerPayload(same, { world: over }), /already ended/);
-});
-
-// The same game told the US pulling its last troops out of Vietnam, and
-// Khmer Rouge sieges of Phnom Penh after the game's Cambodian war had ended,
-// as history had them: no record, and the map never followed.
 test("the skip is told that a country pulled out of a war leaves it, and that history yields to the record", () => {
   const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
   assert.match(gameplay, /A country nobody plays that the story takes out of a war \(its forces pulled out under an accord, a separate peace, its last troops brought home\) leaves it in that event, with a leave record: without one it is still at war, and its troops stay on the battlefield and fight on\./);
@@ -894,63 +356,318 @@ test("the skip is told that a country pulled out of a war leaves it, and that hi
   assert.match(gameplay, /no campaign, siege, offensive or battle that real history had at this date is fought unless an account or the map puts fighting there, and a side whose capital or heartland its enemy holds is losing that war, whatever real history says of it\./);
 });
 
-// An end told by an event with no date: compareGameDates(date, "") is -1, so every later battle read as fought
-// before the end, and the whole of the fighting after it passed against the war as it was.
-test("an end told by an undated event does not let later fighting pass as fought before it", () => {
-  const vietnam = { polityOverrides: {}, wars: [{ id: "war-vietnam", status: "active", sideA: ["Democratic Republic of Vietnam"], sideB: ["Republic of Vietnam", "United States"], startedDate: "1965-03-08" }] };
-  const accord = { id: "e1", date: "", title: "The War Is Declared Over", description: "Hanoi and Saigon sign the final accord.", kind: "diplomacy", warId: "war-vietnam" };
-  const later = {
-    id: "e2",
-    date: "1975-08-10",
-    title: "People's Army of Vietnam Storms Hue",
-    description: "Armored columns of the People's Army of Vietnam storm Hue after a final assault.",
-    kind: "military",
-    combatants: ["Democratic Republic of Vietnam", "Republic of Vietnam"],
-    warId: "war-vietnam",
-  };
-  const payload = { events: [accord, later], warUpdates: "war-vietnam~end~Democratic Republic of Vietnam~Republic of Vietnam~1~Accord" };
-  assert.match(validateWarLedgerPayload(payload, { world: vietnam }), /is ended, not active/);
+
+// ---- the war foundations (the owner, 2026-11-13: "the entire war foundational
+// archetecture is pretty weak") ------------------------------------------------
+
+const settled = (candidate, warWorld = world) => quietly(() => settleWarLedger(candidate, { world: warWorld }));
+const merged = (candidate, warWorld = world, round = 2) => quietly(() => applyWarUpdates({
+  world: warWorld,
+  updates: candidate.warUpdates,
+  events: candidate.events,
+  stopDate: "2030-12-31",
+  round,
+}));
+const byId = (wars, id) => wars.find((war) => war.id === id);
+
+// Nothing judges an event by its words: an English word list misread plain
+// prose and could not read a game written in the player's language, and every
+// misreading was a second request for the same period.
+test("fighting told without a war is history, never a refusal, in any language", () => {
+  for (const title of [
+    "Army seizes the presidential palace in Niamey",
+    "Troops clash with protesters in Tbilisi",
+    "Police raid on cartel compound leaves twelve dead",
+    "L'esercito occupa il palazzo presidenziale",
+  ]) {
+    const candidate = { events: [{ id: "e1", date: "2027-05-10", title, description: "", kind: "military" }], warUpdates: "" };
+    assert.equal(validateWarLedgerPayload(candidate, { world }), "", title);
+    const outcome = settled(candidate);
+    assert.deepEqual(outcome.notes, [], title);
+    assert.deepEqual(decodeWarUpdates(candidate.warUpdates), [], `${title}: no war made up from its words`);
+  }
 });
 
-test("BETA-10: a residual hard-combat error must reject the segment instead of reaching the canonical save", () => {
-  // Reproduction from the Albanian campaign's Mojkovac offensive: no direct
-  // combatants, no resolvable war record, yet the old salvage kept the event.
-  const combat = {
-    id: "mojkovac-replay",
-    date: "2016-11-03",
-    title: "Montenegrin Security Forces Counter-Offensive Reclaims Mojkovac Administrative Center",
-    description: "Montenegrin troops launched a counter-offensive against the insurgents at Mojkovac.",
-    kind: "military",
-    warId: "",
-    combatants: [],
-  };
-  const candidate = { events: [combat], warUpdates: "" };
-  assert.equal(eventNarratesHardCombat(combat), true);
-  assert.match(validateWarLedgerPayload(candidate, { world }), /no event\.warId/);
-  const repaired = repairWarLedgerPayload(candidate, { world });
-  assert.match(repaired.residual, /no event\.warId/);
-  assert.equal(candidate.events.length, 1, "native repair does not silently invent a war or rewrite history");
-
-  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  const segment = gameplay.slice(gameplay.indexOf("const validateSegmentLedgers ="), gameplay.indexOf("// On the salvage pass a malformed ledger row"));
-  assert.match(segment, /warError = repair\.residual;/);
-  assert.match(segment, /if \(warError\) return warError;/);
-  assert.doesNotMatch(segment, /warError = "";/, "the final salvage must not erase the residual error");
-  assert.match(segment, /rejecting the still-invalid segment/);
+test("a war record opens its war whatever its event says, an exercise included", () => {
+  for (const title of ["Strait Thunder drills end as the PLA shells the Kinmen garrison", "Esercitazione: l'artiglieria colpisce Kinmen", "Exercise Anakonda simulates an attack"]) {
+    const candidate = {
+      events: [{ id: "e1", date: "2027-04-02", title, description: "", kind: "military", warId: "war-china-taiwan-2027", combatants: ["China", "Taiwan"] }],
+      warUpdates: "war-china-taiwan-2027~start~China~Taiwan~1~Title: Strait War",
+    };
+    assert.deepEqual(settled(candidate).notes, [], title);
+    const wars = merged(candidate).wars;
+    assert.equal(byId(wars, "war-china-taiwan-2027")?.status, "active", title);
+  }
 });
 
-test("BETA-10: a quiet non-war narrative still passes canonical validation", () => {
-  const narrative = {
-    id: "odessa-quiet",
-    date: "2016-11-03",
-    title: "Civilian Demonstrations Convene in Odessa",
-    description: "Residents held a public rally over housing costs.",
-    kind: "world",
-    warId: "",
-    combatants: [],
+test("an event tagged with a war no record opens: two combatants open it; else only the tag goes", () => {
+  const opened = {
+    events: [{ id: "e1", date: "2027-05-10", title: "Estonia and Russia trade fire at Narva", description: "", kind: "military", warId: "war-estonia-russia-2027", combatants: ["Estonia", "Russia"] }],
+    warUpdates: "",
   };
-  const candidate = { events: [narrative], warUpdates: "" };
-  assert.equal(eventNarratesHardCombat(narrative), false);
-  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
-  assert.equal(repairWarLedgerPayload(candidate, { world }).residual, "");
+  assert.deepEqual(settled(opened).notes, []);
+  const war = byId(merged(opened).wars, "war-estonia-russia-2027");
+  assert.deepEqual([war.sideA, war.sideB], [["Estonia"], ["Russia"]]);
+
+  const vague = {
+    events: [{ id: "e1", date: "2027-05-10", title: "Insurgents ambush a convoy", description: "", kind: "military", warId: "war-insurgency", combatants: ["Mali"] }],
+    warUpdates: "",
+  };
+  const outcome = settled(vague);
+  assert.equal(vague.events[0].warId, "", "the tag naming no war is removed");
+  assert.equal(vague.events[0].title, "Insurgents ambush a convoy", "and the event stays");
+  assert.deepEqual(outcome.unbound, ["Insurgents ambush a convoy"]);
+  assert.equal(outcome.notes[0].key, "warLinkRemoved");
+  assert.equal(merged(vague).wars.length, 0);
+});
+
+test("fighting tagged with a war keeps its tag, and names only that war's belligerents; nobody is put in", () => {
+  const atWar = { polityOverrides: {}, wars: [{ id: "w", status: "active", sideA: ["France", "Belgium"], sideB: ["Germany"], startedDate: "1914-08-03" }] };
+  const candidate = {
+    events: [
+      { id: "e1", date: "1914-08-20", title: "Battle of the Frontiers", description: "", kind: "military", warId: "w", combatants: [] },
+      { id: "e2", date: "1914-08-22", title: "Ardennes", description: "", kind: "military", warId: "w", combatants: ["France", "Germany", "Spain"] },
+    ],
+    warUpdates: "",
+  };
+  assert.deepEqual(settled(candidate, atWar).notes, []);
+  assert.equal(candidate.events[0].warId, "w");
+  assert.deepEqual(candidate.events[0].combatants, [], "no first member stands in for a side the event did not name");
+  assert.deepEqual(candidate.events[1].combatants, ["France", "Germany"], "a polity outside the war is not its combatant");
+});
+
+const FIRST_WAR = {
+  id: "war-a-b",
+  title: "First Aland War",
+  status: "ended",
+  sideA: ["Aland"],
+  sideB: ["Borduria"],
+  startedDate: "1900-01-01",
+  endedDate: "1901-06-01",
+  lastUpdatedDate: "1901-06-01",
+  sourceEventIds: ["e0"],
+  createdRound: 1,
+  updatedRound: 4,
+};
+
+test("a start under an ended war's id is a new war that renews it: the old war keeps its record", () => {
+  const ended = { polityOverrides: {}, wars: [FIRST_WAR], peaceTreaties: [{ id: "treaty:war-a-b:1901", warId: "war-a-b" }] };
+  const candidate = {
+    events: [{ id: "e1", date: "1910-03-01", title: "Cisland attacks Borduria", description: "", kind: "military", warId: "war-a-b", combatants: ["Cisland", "Borduria"] }],
+    warUpdates: "war-a-b~start~Cisland~Borduria~1~Title: Second Aland War; a border dispute",
+  };
+  assert.deepEqual(settled(candidate, ended).notes, []);
+  assert.equal(candidate.events[0].warId, "war-a-b-r2", "the answer's events of the old id are the new war's");
+  const wars = merged(candidate, ended, 9).wars;
+  const first = byId(wars, "war-a-b");
+  assert.deepEqual(
+    [first.title, first.status, first.sideA, first.startedDate, first.endedDate, first.sourceEventIds],
+    ["First Aland War", "ended", ["Aland"], "1900-01-01", "1901-06-01", ["e0"]],
+    "the first war is never written over",
+  );
+  const second = byId(wars, "war-a-b-r2");
+  assert.deepEqual([second.title, second.status, second.sideA, second.sideB, second.startedDate, second.renews], ["Second Aland War", "active", ["Cisland"], ["Borduria"], "1910-03-01", "war-a-b"]);
+
+  // The ledger's own merge does the same for a caller that interprets nothing.
+  const direct = quietly(() => applyWarUpdates({ world: ended, updates: "war-a-b~start~Cisland~Borduria~~again", events: [], stopDate: "1910-03-01", round: 9 }));
+  assert.deepEqual(direct.appliedIds, ["war-a-b-r2"]);
+  assert.equal(byId(direct.wars, "war-a-b").title, "First Aland War");
+});
+
+test("a record naming a war that was renewed means the renewal", () => {
+  const renewed = { polityOverrides: {}, wars: [FIRST_WAR, { ...FIRST_WAR, id: "war-a-b-r2", title: "Second Aland War", status: "active", sideA: ["Cisland"], endedDate: "", renews: "war-a-b", startedDate: "1910-03-01" }] };
+  const candidate = {
+    events: [{ id: "e1", date: "1910-06-01", title: "Dorland enters the war", description: "", kind: "diplomacy", warId: "war-a-b" }],
+    warUpdates: "war-a-b~join-a~Dorland~Borduria~1~Dorland joins Cisland",
+  };
+  assert.deepEqual(settled(candidate, renewed).notes, []);
+  assert.equal(candidate.events[0].warId, "war-a-b-r2");
+  const wars = merged(candidate, renewed, 10).wars;
+  assert.deepEqual(byId(wars, "war-a-b-r2").sideA, ["Cisland", "Dorland"]);
+  assert.deepEqual(byId(wars, "war-a-b").sideA, ["Aland"]);
+  assert.match(buildCanonicalWarContext({ wars }, { round: 10 }), /- war-a-b-r2 \| ACTIVE \| SIDE A: Cisland, Dorland \| SIDE B: Borduria/);
+});
+
+test("a war that is over flares again as its renewal; what is already so is no error", () => {
+  const ended = { polityOverrides: {}, wars: [FIRST_WAR] };
+  const events = [{ id: "e1", date: "1905-01-01", title: "The guns speak again", description: "", warId: "war-a-b" }];
+  const resumed = { events: events.map((event) => ({ ...event })), warUpdates: "war-a-b~resume~~~1~fighting resumes" };
+  assert.deepEqual(settled(resumed, ended).notes, []);
+  const wars = merged(resumed, ended, 7).wars;
+  assert.deepEqual([byId(wars, "war-a-b-r2").sideA, byId(wars, "war-a-b-r2").sideB, byId(wars, "war-a-b-r2").renews], [["Aland"], ["Borduria"], "war-a-b"]);
+  assert.equal(byId(wars, "war-a-b").status, "ended");
+
+  const joined = { events: events.map((event) => ({ ...event })), warUpdates: "war-a-b~join-a~Iran~Azerbaijan~1~Iran declares war on Azerbaijan" };
+  settled(joined, ended);
+  const flared = merged(joined, ended, 7).wars.find((war) => war.renews === "war-a-b");
+  assert.deepEqual([flared.sideA, flared.sideB], [["Iran"], ["Azerbaijan"]], "a join of a war that is over, against those it names, is that war flaring again");
+
+  for (const record of ["war-a-b~end~~~1~peace", "war-a-b~ceasefire~~~1~truce", "war-a-b~leave~Aland~~1~out"]) {
+    const candidate = { events: events.map((event) => ({ ...event })), warUpdates: record };
+    assert.deepEqual(settled(candidate, ended).notes, [], record);
+    assert.deepEqual(merged(candidate, ended, 7).wars.map((war) => [war.id, war.status]), [["war-a-b", "ended"]], record);
+  }
+});
+
+test("an id given to a war being fought, for a war between others, is a war of its own; so is an id started twice", () => {
+  const atWar = { polityOverrides: {}, wars: [{ id: "war-1", status: "active", sideA: ["Aland"], sideB: ["Borduria"], startedDate: "1910-01-01" }] };
+  const reused = {
+    events: [{ id: "e1", date: "1911-01-01", title: "Cisland invades Dorduria", description: "", kind: "military", warId: "war-1", combatants: ["Cisland", "Dorduria"] }],
+    warUpdates: "war-1~start~Cisland~Dorduria~1~Title: Northern War",
+  };
+  assert.deepEqual(settled(reused, atWar).notes, []);
+  const wars = merged(reused, atWar).wars;
+  assert.deepEqual(byId(wars, "war-1").sideA, ["Aland"], "the war being fought keeps its sides");
+  assert.deepEqual([byId(wars, "war-1-r2").sideA, byId(wars, "war-1-r2").sideB], [["Cisland"], ["Dorduria"]]);
+  assert.deepEqual(reused.events[0].combatants, ["Cisland", "Dorduria"], "its event keeps its own belligerents");
+
+  const twice = {
+    events: [
+      { id: "e1", date: "1911-01-01", title: "Aland declares war on Borduria", description: "", warId: "war-x" },
+      { id: "e2", date: "1911-01-02", title: "Cisland declares war on Dorduria", description: "", warId: "war-x" },
+    ],
+    warUpdates: "war-x~start~Aland~Borduria~1~one\nwar-x~start~Cisland~Dorduria~2~two",
+  };
+  assert.deepEqual(settled(twice).notes, []);
+  const pair = merged(twice).wars;
+  assert.deepEqual(pair.map((war) => [war.id, war.sideA[0], war.sideB[0]]).sort(), [["war-x", "Aland", "Borduria"], ["war-x-r2", "Cisland", "Dorduria"]]);
+  assert.deepEqual(twice.events.map((event) => event.warId), ["war-x", "war-x-r2"]);
+});
+
+test("wars between countries named in another script are told apart without an id, as their English twins are", () => {
+  // A war written without an id is named for its two leading members. Cut to
+  // a-z and 0-9, every country named in Cyrillic or Chinese was "belligerent":
+  // a second war started without an id took the first one's, and the end of
+  // the second ended the first.
+  for (const [a, b, c, d] of [["Russia", "Ukraine", "China", "Japan"], ["Россия", "Украина", "Китай", "Япония"], ["俄罗斯", "乌克兰", "中国", "日本"]]) {
+    const turn = (warWorld, updates, round) => {
+      const candidate = { events: [{ id: `e${round}`, date: `20${30 + round}-01-01`, title: "", description: "", kind: "military" }], warUpdates: updates };
+      settled(candidate, warWorld);
+      return merged(candidate, warWorld, round).world;
+    };
+    const one = turn(world, `~start~${a}~${b}~1~Title: The first war`, 1);
+    const two = turn(one, `~start~${c}~${d}~1~Title: The second war`, 2);
+    const wars = turn(two, `~end~${c}~${d}~1~Peace`, 3).wars;
+    const statusOf = (member) => wars.find((war) => war.sideA[0] === member)?.status;
+    assert.equal(wars.length, 2, `${a}: two wars`);
+    assert.equal(statusOf(a), "active", `${a}: the first war is still fought`);
+    assert.equal(statusOf(c), "ended", `${c}: the second is over`);
+  }
+});
+
+test("an end with a mis-copied id is the one war its event's combatants fight", () => {
+  const atWar = { polityOverrides: {}, wars: [{ id: "war-iraq-kuwait-1990", status: "active", sideA: ["Iraq"], sideB: ["Kuwait"], startedDate: "1990-08-02" }] };
+  const candidate = {
+    events: [{ id: "e1", date: "1991-03-03", title: "Iraq and Kuwait sign the Safwan accords", description: "", kind: "diplomacy", combatants: ["Iraq", "Kuwait"] }],
+    warUpdates: "war-iraq-kuwiat-1990~end~~~1~peace at Safwan",
+  };
+  assert.deepEqual(settled(candidate, atWar).notes, []);
+  assert.equal(byId(merged(candidate, atWar).wars, "war-iraq-kuwait-1990").status, "ended");
+});
+
+test("a war began no later than the earliest of its events the answer tells", () => {
+  const candidate = {
+    events: [
+      { id: "e1", date: "2020-01-05", title: "First shots on the border", description: "", kind: "military", warId: "war-x", combatants: ["Aland", "Borduria"] },
+      { id: "e2", date: "2020-01-10", title: "Aland declares war on Borduria", description: "", kind: "diplomacy", warId: "war-x" },
+    ],
+    warUpdates: "war-x~start~Aland~Borduria~2~Declaration",
+  };
+  settled(candidate);
+  assert.equal(byId(merged(candidate).wars, "war-x").startedDate, "2020-01-05");
+});
+
+test("a coalition joins whole, member by member; records past one answer's 64 are left out and said", () => {
+  const atWar = { polityOverrides: {}, wars: [{ id: "w", status: "active", sideA: ["Germany"], sideB: ["France"], startedDate: "1939-09-03" }] };
+  const members = Array.from({ length: 20 }, (_, index) => `Ally ${String.fromCharCode(65 + index)}`);
+  const candidate = {
+    events: [{ id: "e1", date: "1940-01-01", title: "The allies come in", description: "", warId: "w" }],
+    warUpdates: members.map((name) => `w~join-b~${name}~Germany~1~joins`).join("\n"),
+  };
+  assert.deepEqual(settled(candidate, atWar).notes, []);
+  assert.equal(byId(merged(candidate, atWar).wars, "w").sideB.length, 21, "a 13th joiner used to be cut without a word, a 17th record before it was read");
+
+  const flood = {
+    events: [{ id: "e1", date: "1940-01-01", title: "Everyone joins", description: "", warId: "w" }],
+    warUpdates: Array.from({ length: 70 }, (_, index) => `w~join-b~Member ${index}x~Germany~1~joins`).join("\n"),
+  };
+  const outcome = settled(flood, atWar);
+  assert.match(outcome.notes[0].text, /6 war record\(s\) past the 64/);
+  assert.equal(byId(merged(flood, atWar).wars, "w").sideB.length, 64, "a side holds at most 64 members");
+});
+
+test("an answer settled once is settled: run again, nothing changes and nothing is said", () => {
+  const ended = { polityOverrides: {}, wars: [FIRST_WAR, { id: "w", status: "active", sideA: ["Germany"], sideB: ["France"], startedDate: "1939-09-03" }] };
+  const candidate = {
+    events: [
+      { id: "e1", date: "1940-01-01", title: "Aland strikes again", description: "", warId: "war-a-b", combatants: ["Aland", "Borduria", "Spain"] },
+      { id: "e2", date: "1940-01-02", title: "Italy joins", description: "", warId: "w" },
+      { id: "e3", date: "1940-01-03", title: "A stray tag", description: "", warId: "war-nowhere" },
+    ],
+    warUpdates: "war-a-b~start~Aland~Borduria~1~again\nw~join-a~Italy~France~2~joins\nw~declare~X~Y~2~bad",
+  };
+  const first = settled(candidate, ended);
+  assert.equal(first.dropped.length, 1, "the bad record is left out");
+  assert.deepEqual(first.unbound, ["A stray tag"]);
+  const once = JSON.stringify(candidate);
+  const second = settled(candidate, ended);
+  assert.deepEqual(second.notes, []);
+  assert.equal(JSON.stringify(candidate), once);
+});
+
+test("the wars Modern Day opens from the fighting under way are kept, their non-state sides included", () => {
+  const candidate = { events: [RAMADI(), ALEPPO()], warUpdates: `${IRAQ_START}\n${SYRIA_START}` };
+  assert.deepEqual(settled(candidate).notes, []);
+  const wars = merged(candidate).wars;
+  assert.deepEqual(byId(wars, "war-iraq-isis-2014").sideB, ["Islamic State"]);
+  assert.deepEqual(byId(wars, "war-syrian-civil-2011").sideA, ["Syria", "Russia"]);
+});
+
+test("the time skip settles its wars in one pass, never a retry, with its records tied to their events before any sort", () => {
+  const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  const body = source.slice(source.indexOf("const validateSegmentLedgers = "), source.indexOf("const validateSegmentStorylines = "));
+  assert.ok(body.includes("settleWarLedger(candidate, { world, authority: \"skip\" })"));
+  for (const gone of ["reconcileCombatWarState", "repairWarLedgerPayload", "normalizeWorldWarEventLinks", "validateWarLedgerPayload", "eventNarratesHardCombat", "isolateUnsupportedWarReports"]) {
+    assert.ok(!source.includes(gone), `${gone} is gone`);
+  }
+  // Every ledger is tied there, wars with them (ledgerPins.test.js).
+  const pin = source.indexOf("pinSegmentLedgers(candidate, segmentIndex);");
+  assert.ok(pin > 0 && pin < source.indexOf("sortTimelineEventsChronologically(candidate);", pin), "pinned before the answer is put in date order");
+  assert.match(source, /and keep to it while that war lasts; a war that has ended keeps its id, and fighting between its sides that breaks out again is a new war, with a start record of its own\./);
+});
+test("a line with no separator is prose, not a war record, and costs the answer nothing", () => {
+  const warUpdates = `${PROSE_HEADING}
+${PROSE_NOTHING_CHANGED}`;
+  assert.deepEqual(decodeWarUpdates(warUpdates), []);
+  assert.deepEqual(decodeWarUpdates([PROSE_HEADING, PROSE_NOTHING_CHANGED]), [], "nor as members of a list");
+  assert.deepEqual(warUpdateProseLines(warUpdates), [PROSE_HEADING, PROSE_NOTHING_CHANGED], "what was ignored can still be said");
+  const quiet = { events: [{ id: "e1", date: "2014-09-12", title: "Harvest comes in across the south", description: "", kind: "economy" }], warUpdates };
+  assert.equal(validateWarLedgerPayload(quiet, { world }), "");
+  assert.deepEqual(settled(quiet).notes, []);
+});
+
+test("prose around a real war record costs the record nothing", () => {
+  const record = "war-france-germany-1914~start~Germany~France~1~Declaration of war";
+  const candidate = { events: declaration(), warUpdates: `${PROSE_HEADING}
+${record}
+${PROSE_NOTHING_CHANGED}` };
+  assert.deepEqual(decodeWarUpdates(candidate.warUpdates).map((update) => [update.id, update.op]), [["war-france-germany-1914", "start"]]);
+  assert.deepEqual(settled(candidate).notes, []);
+  assert.deepEqual(merged(candidate).wars.map((war) => war.id), ["war-france-germany-1914"]);
+});
+
+test("a line with the separator and no real operation is a record, left out and said", () => {
+  const leftOut = (warUpdates) => validateWarLedgerPayload({ events: declaration(), warUpdates }, { world });
+  assert.match(leftOut("war-france-germany-1914~declare~Germany~France~1~Declaration of war"), /Unsupported war operation "declare" for war-france-germany-1914\./);
+  assert.match(leftOut("war-france-germany-1914~"), /missing id\/op/);
+  assert.deepEqual(warUpdateProseLines("war-france-germany-1914~\n\n   \nwar-a-b~end~~~1~peace"), [], "blank lines are not prose either");
+});
+
+test("a record with no id is named for what it is, never for its place among the lines", () => {
+  const atWar = { polityOverrides: {}, wars: [{ id: "war-0", status: "active", sideA: ["Aland"], sideB: ["Borduria"], startedDate: "1900-01-01" }] };
+  const [update] = decodeWarUpdates("~end~~~1~peace");
+  assert.notEqual(update.id, "war-0", "an id-less end used to end whichever war was war-0");
+  const candidate = { events: [{ id: "e1", date: "1901-01-01", title: "Peace", description: "" }], warUpdates: "~end~~~1~peace" };
+  settled(candidate, atWar);
+  assert.equal(byId(merged(candidate, atWar).wars, "war-0").status, "active");
 });

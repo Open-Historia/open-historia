@@ -87,7 +87,11 @@ const PolitiesPanel = ({
   const [transferFrom, setTransferFrom] = useState("");
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [rosterPreview, setRosterPreview] = useState(null);
-  const [rosterMessage, setRosterMessage] = useState("");
+  // What the last roster or flag import said, and whether it went through: the
+  // kind is set with the words ("ok" or "error"), never read back out of them
+  // (a message starting "Imported ", "Added " or "Every " was green).
+  const [rosterMessage, setRosterMessageLine] = useState({ text: "", ok: true });
+  const setRosterMessage = (text, kind = "ok") => setRosterMessageLine({ text: String(text ?? ""), ok: kind !== "error" });
   const rosterInputRef = useRef(null);
 
   // A scan of ~3,500 lightweight feature properties is cheap and, unlike a memo
@@ -318,7 +322,7 @@ const PolitiesPanel = ({
         incomingFlags,
       });
     } catch (e) {
-      setRosterMessage(e?.message || String(e));
+      setRosterMessage(e?.message || String(e), "error");
     } finally {
       if (rosterInputRef.current) rosterInputRef.current.value = "";
     }
@@ -335,7 +339,7 @@ const PolitiesPanel = ({
 
     const summary = importPolityRoster(rosterPreview.rows);
     if (!summary?.count) {
-      setRosterMessage("The roster contained no usable polity records.");
+      setRosterMessage("The roster contained no usable polity records.", "error");
       return;
     }
 
@@ -347,6 +351,7 @@ const PolitiesPanel = ({
       `${summary.colors ? ` · ${summary.colors.toLocaleString()} colours` : ""}` +
       `${summary.tags ? ` · ${summary.tags.toLocaleString()} tag sets` : ""}` +
       `${summary.flags ? ` · ${summary.flags.toLocaleString()} flags` : ""}.`,
+      "ok",
     );
     setRosterPreview(null);
   };
@@ -396,6 +401,7 @@ const PolitiesPanel = ({
         unresolved
           ? `No missing standard flags could be resolved; ${unresolved.toLocaleString()} polities remain without a safe built-in match.`
           : "Every current polity already has a scenario flag.",
+        unresolved ? "error" : "ok",
       );
       return;
     }
@@ -413,6 +419,7 @@ const PolitiesPanel = ({
       (alreadyFlagged ? ` · ${alreadyFlagged.toLocaleString()} existing flags preserved` : "") +
       (unresolved ? ` · ${unresolved.toLocaleString()} unresolved/ambiguous polities skipped` : "") +
       ".",
+      "ok",
     );
   };
 
@@ -631,7 +638,7 @@ const PolitiesPanel = ({
                 }}
                 style={inputStyle}
               />
-              <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.42)", marginTop: 4 }}>Its troops are raised from these people, and its statistics begin from this figure. You can write 12,500,000 or 12.5 million.</div>
+              <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.42)", marginTop: 4 }}>Its troops are raised from these people, and its statistics begin from this figure, written in digits: 12500000 or 12,500,000.</div>
               {/* Its own military figures (MilitaryFields.jsx), kept with its record as `military`. */}
               <div style={{ marginTop: 8 }}>
                 <MilitaryFields
@@ -708,9 +715,9 @@ const PolitiesPanel = ({
           </div>
         )}
 
-        {rosterMessage && (
-          <div style={{ fontSize: 10.8, lineHeight: 1.45, color: (rosterMessage.startsWith("Imported ") || rosterMessage.startsWith("Added ") || rosterMessage.startsWith("Every ")) ? "#86efac" : "#fca5a5" }}>
-            {rosterMessage}
+        {rosterMessage.text && (
+          <div style={{ fontSize: 10.8, lineHeight: 1.45, color: rosterMessage.ok ? "#86efac" : "#fca5a5" }}>
+            {rosterMessage.text}
           </div>
         )}
       </div>

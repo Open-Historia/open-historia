@@ -148,31 +148,31 @@ test("pressure-60 active crisis now receives the tighter 21-day review cadence",
   assert.equal(storyline.nextReviewDate, "2019-09-04");
 });
 
-test("status-only military readiness cards are removed before curation", () => {
-  const screened = screenGeneratedWorldEvents({
-    events: [{
-      id: "event-ai-r0070-20190829-001",
-      date: "2019-08-29",
-      importance: "major",
-      title: "Military Readiness Remains Elevated on the Korean Peninsula",
-      description: "Forces remain on heightened alert and both sides maintain an elevated military posture while monitoring continues.",
-      impacts: {
-        actionIds: [],
-        createdChats: [],
-        markerOps: [],
-        polityChanges: [],
-        regionTransfers: [],
-        regionClaims: [],
-        unitOps: [],
-      },
-    }],
-    world: koreaWorld(),
-    game: { country: "Republic of Latvia" },
-  });
-
-  assert.equal(screened.events.length, 0);
-  assert.equal(screened.dropped.length, 1);
-  assert.equal(screened.dropped[0].route, "ROUTINE_MILITARY_PRECURATION");
+// The screen hid this card for its English words (ROUTINE_MILITARY_CUE_RE) and
+// kept its Korean twin: no word list reads an event for the war any more. The
+// skip is told to leave such a card out (FOLDED_SKIP_CONSEQUENCES).
+test("status-only military readiness cards are kept as written, in English or not", () => {
+  const impacts = {
+    actionIds: [],
+    createdChats: [],
+    markerOps: [],
+    polityChanges: [],
+    regionTransfers: [],
+    regionClaims: [],
+    unitOps: [],
+  };
+  for (const [title, description] of [
+    ["Military Readiness Remains Elevated on the Korean Peninsula", "Forces remain on heightened alert and both sides maintain an elevated military posture while monitoring continues."],
+    ["한반도 군사 대비 태세 격상 유지", "양측 군은 고도의 경계 태세를 유지하며 감시를 계속하고 있다."],
+  ]) {
+    const screened = screenGeneratedWorldEvents({
+      events: [{ id: "event-ai-r0070-20190829-001", date: "2019-08-29", importance: "major", title, description, impacts }],
+      world: koreaWorld(),
+      game: { country: "Republic of Latvia" },
+    });
+    assert.deepEqual(screened.events.map((event) => event.title), [title]);
+    assert.deepEqual(screened.dropped, []);
+  }
 });
 
 test("world exploration reserves two deterministic latent-active actor slots", () => {
@@ -369,9 +369,11 @@ test("deployment wording cannot veto either low- or high-pressure storyline upda
   });
   for (const pressure of [18, 65]) {
     const payload = candidate();
-    mod.normalizeWorldStorylineEventLinks(payload, { world: {} });
-    assert.deepEqual(payload.storylineUpdates[0].eventIndexes, [0],
-      "the deployment event still binds to the programme");
+    mod.normalizeWorldStorylineEventLinks(payload);
+    // Its record names no event, so it is tied to none: a storyline's events
+    // are the ones its record names, never the ones its words resemble.
+    assert.deepEqual(payload.storylineUpdates[0].eventIndexes, [],
+      "an event its record does not name is not bound to it");
     const storylines = [storyline(pressure)];
     assert.equal(mod.validateWorldStorylinePayload(payload, {
       existingStorylines: storylines,
@@ -437,6 +439,20 @@ test("a storyline record two or three empty fields short keeps its state", async
   const title = decode("storyline-t~active~40~30~2020-01-01~crisis~Armenia-Azerbaijan Border Friction After Ceasefire");
   assert.equal(title.title, "Armenia-Azerbaijan Border Friction After Ceasefire");
   assert.equal(title.state, "");
+
+  // By the record's shape, never its words: a state in any language, or a short
+  // one, is found where the empty fields were collapsed before it.
+  for (const state of ["情报网络在各地区据点持续扩展。", "情報網は各地の拠点で拡大を続けている", "Talks stall.", "Переговоры зашли в тупик"]) {
+    assert.equal(decode(`storyline-w~active~20~75~2024-01-09~~~${state}`).state, state, state);
+    assert.equal(decode(`storyline-w~active~20~75~2024-01-09~~${state}`).state, state, state);
+    assert.equal(decode(`storyline-w~active~20~75~2024-01-09~${state}`).state, state, state);
+  }
+  // Alone after the start date, a storyline kind is the kind, and the state stays empty.
+  const kindOnly = decode("storyline-k~active~20~75~2024-01-09~crisis");
+  assert.equal(kindOnly.kind, "crisis");
+  assert.equal(kindOnly.state, "");
+  // After a written kind, the last field is never moved, in any language.
+  assert.equal(decode("storyline-n~active~40~30~2020-01-01~crisis~边境摩擦~亚美尼亚, 阿塞拜疆").state, "");
 
   // The one-short shape and a complete record read exactly as before.
   const oneShort = decode("iran-cyber-sovereignty-2024~active~14~80~~~~~National cyber sovereignty infrastructure achieves advanced operational status.");

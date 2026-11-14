@@ -82,9 +82,10 @@ test("the game shows each task's contract without what is off, the background ba
   const gameplay = read("./gameplay.js");
   assert.match(gameplay, /const withoutFeaturesOff = \(tool\) => \{\n\s*const spied = isActiveFeatureEnabled\("espionage"\) \? tool : withoutEspionage\(tool\);\n\s*const posted = isActiveFeatureEnabled\("socialMedia"\) \? spied : withSocialPosts\(spied, false\);\n\s*return withWarParts\(posted, \{ air: airOn\(\), navies: naviesOn\(\) \}\);/);
   // The breadth repair asks with the skip's contract through forActiveFeatures alone: no posts there either.
-  assert.match(gameplay, /taskKey: "worldBreadthRepair",\n\s*tool: forActiveFeatures\(getGameplayTool\("jumpForward"\)\)/);
+  // (And the scenario's own unit types offered as they are offered every task: unitTypesAi.test.js.)
+  assert.match(gameplay, /taskKey: "worldBreadthRepair",\n\s*tool: withUnitTypeNames\(forActiveFeatures\(getGameplayTool\("jumpForward"\)\), unitTypeNamesOf\(bundle\?\.world\)\)/);
   assert.match(gameplay, /withEventAudience\(withoutFeaturesOff\(grouped\)/);
-  assert.match(gameplay, /schema: withoutFeaturesOff\(getGameplayTool\(job\.taskKey\)\)\?\.schema/);
+  assert.match(gameplay, /schema: withUnitTypeNames\(withoutFeaturesOff\(getGameplayTool\(job\.taskKey\)\), unitTypeNamesOf\(bundle\.world\)\)\?\.schema/);
 });
 
 test("espionage off: no intelligence rating is shown or explained, and the template speaks of reputation alone", () => {

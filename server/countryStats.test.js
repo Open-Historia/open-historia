@@ -27,26 +27,38 @@ const ledger = () => [
   { geography: "Island", group: "overseas/dependent", population: 100, gdpPerCapita: 20 },
 ];
 
-test("parseStatNumber accepts the number forms old saves and prompts produce", () => {
-  assert.equal(parseStatNumber("$48.5B"), 48.5e9);
-  assert.equal(parseStatNumber("1,200,000"), 1200000);
-  assert.equal(parseStatNumber("850 million"), 850e6);
-  assert.equal(parseStatNumber("1.2 trillion"), 1.2e12);
-  assert.equal(parseStatNumber("−3.5%"), -3.5);
+// A figure is a number in base units, as every schema asks for it; text only
+// when it IS a plain number. English scale words were read ("1.2 trillion"),
+// a comma always taken for thousands ("1,2 billion" was 12), and the same
+// figure written in another language was not read at all.
+test("parseStatNumber reads numbers, and text only when it is a plain number", () => {
+  assert.equal(parseStatNumber(48.5e9), 48.5e9);
+  assert.equal(parseStatNumber("48500000000"), 48.5e9);
+  assert.equal(parseStatNumber(" -3.5 "), -3.5);
+  assert.equal(parseStatNumber("−3.5"), -3.5, "the typeset minus is a minus");
+  assert.equal(parseStatNumber("1.2e12"), 1.2e12);
   assert.equal(parseStatNumber(""), null);
   assert.equal(parseStatNumber("abc"), null);
   assert.equal(parseStatNumber(Number.NaN), null);
 });
 
-test("parseStatNumber scales a number only by the word written right after it", () => {
-  assert.equal(parseStatNumber("€3.1tn"), 3.1e12);
-  assert.equal(parseStatNumber("48.5bn"), 48.5e9);
-  assert.equal(parseStatNumber("850mn"), 850e6);
-  assert.equal(parseStatNumber("12k"), 12e3);
-  assert.equal(parseStatNumber("2.5 thousand"), 2500);
-  assert.equal(parseStatNumber("€520 billion (about $0.6 trillion)"), 520e9);
-  assert.equal(parseStatNumber("12 months"), 12);
-  assert.equal(parseStatNumber("3 tonnes of grain, 2 million people"), 3);
+test("a time skip writes an event's economy figures as numbers in base units", () => {
+  const answer = (economy) => ({
+    events: [{ date: "2016-02-01", title: "Budget", description: "A budget passes.", impacts: { polityChanges: [{ operation: "update", code: "France", stats: { economy } }] } }],
+    stopDate: "2016-03-01",
+    summary: "A month.",
+  });
+  assert.equal(validateGameplayPayload("jumpForward", answer({ gdp: 2.44e12, gdpGrowth: 1.1, inflation: -0.2, publicDebt: 96, currency: "EUR" })).valid, true);
+  // A figure in words is no number, in any language.
+  for (const gdp of ["2.44 trillion", "2,44 billions"]) {
+    assert.equal(validateGameplayPayload("jumpForward", answer({ gdp })).valid, false, gdp);
+  }
+});
+
+test("parseStatNumber reads no scale word and guesses no separator, in any language", () => {
+  for (const text of ["$48.5B", "850 million", "1.2 trillion", "1,2 billion", "1,2 milliard", "1,2 Billionen", "1.200.000", "1,200,000", "12 months", "€3.1tn", "1,2 млрд"]) {
+    assert.equal(parseStatNumber(text), null, text);
+  }
 });
 
 test("an event's stats patch cannot rescale a GDP ledger by more than the limit", () => {
@@ -114,7 +126,7 @@ test("finalising a sheet makes the component ledger the arithmetic authority", (
     indices: { sovereignty: 101, foodAutonomy: "88%", bogus: 5 },
     gdpBreakdown: { agriculture: 20, industry: 40, services: 39 },
     population: { total: 5 },
-    economy: { gdp: "1 trillion", gdpGrowth: 2.5, currency: "EUR" },
+    economy: { gdp: 1e12, gdpGrowth: 2.5, currency: "EUR" },
     territorialComponents: ledger(),
   });
 
@@ -135,14 +147,19 @@ test("finalising a sheet makes the component ledger the arithmetic authority", (
 test("legacy sheets without a ledger stay readable with their declared totals", () => {
   const legacy = normalizeCountryStatSheet({
     stability: 50,
-    population: { total: "67 million" },
-    economy: { gdp: "$2.8 trillion", inflation: "1.9%" },
+    population: { total: "67000000" },
+    economy: { gdp: 2.8e12, inflation: "1.9%" },
   });
 
   assert.equal(legacy.population.total, 67e6);
   assert.equal(legacy.economy.gdp, 2.8e12);
-  assert.equal(legacy.economy.inflation, 1.9);
+  assert.equal(legacy.economy.inflation, 1.9, "a percent field's own sign is its unit");
   assert.equal(legacy.statsSchemaVersion, 0);
+  // A total written in words is no figure, in English as in French: it is left
+  // for the sheet's next writing, never guessed.
+  for (const total of ["67 million", "67 millions"]) {
+    assert.equal(normalizeCountryStatSheet({ stability: 50, population: { total } }).population, undefined, total);
+  }
   assert.equal(normalizeCountryStatSheet(null), null);
   assert.equal(normalizeCountryStatSheet("text"), null);
   assert.equal(finalizeCountryStatSheet({ population: { total: 5 } }).statsSchemaVersion, 0);

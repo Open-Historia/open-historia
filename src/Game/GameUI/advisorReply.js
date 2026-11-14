@@ -18,17 +18,11 @@ import { stripAdvisorActionHistoryAnnotations } from "../AI/advisorActionHistory
 // extractFencedJson and would print its JSON into the bubble.
 const UNCLOSED_CHART = /```chart[\s\S]*$/;
 
-// The model sometimes writes a formal "Action: ..." plan in prose but forgets
-// the structured actions fence. This is NOT a reviewable native Action; report
-// only recognizably complete formal plans, not ordinary mentions or questions.
-// Keep model autonomy to propose actions without an explicit player request.
-export const unreviewableFormalActionTitle = (text) => {
-  const heading = /^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:(?:Updated|Revised)\s+)?Action:\s*(.+?)(?:\*\*)?\s*$/im.exec(text);
-  if (!heading) return null;
-  const remaining = text.slice(heading.index + heading[0].length, heading.index + heading[0].length + 2200);
-  if (!/^\s*(?:\*\*)?Lead:(?:\*\*)?\s+\S/im.test(remaining) || !/^\s*(?:\*\*)?1\.\s+\S/m.test(remaining)) return null;
-  return heading[1].replace(/\*\*/g, "").trim().slice(0, 240) || null;
-};
+// (A plan written in prose under English "Action:" and "Lead:" headings used
+// to be taken for an Action the advisor forgot to submit, with a button to ask
+// for it. The same plan in any other language was not, and a plan written
+// that way in English was not always one. What the advisor submits is its
+// ```actions block, and nothing else is read as one.)
 
 // Why a whole block drew nothing, before any entry was looked at.
 const blockProblems = (json, reason) => {
@@ -95,8 +89,6 @@ export const parseAdvisorReply = (rawText, { allowedUnitTypes = null, streaming 
 
   return {
     text: stripAdvisorActionHistoryAnnotations(rest.trim()),
-    unreviewableActionTitle: (!actionsRaw?.length && actionBlockProblems.length === 0)
-      ? unreviewableFormalActionTitle(rest) : null,
     chartConfig: chart.config,
     chartProblem: chart.problem,
     actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null,

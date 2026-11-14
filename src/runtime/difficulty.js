@@ -340,7 +340,6 @@ export const difficultyPriorityBlock = (value) => {
 // nothing about how things go for the player. Every other task the game sends
 // (and any it gains later) opens with the priority block.
 //   translation                  puts finished text into another language
-//   geographyResolver            matches a place name to a region of the map
 //   eventConsolidator            folds finished history into the history document
 //   timelineCurator              takes repeats and filler off a finished timeline
 //   descriptionToAction          words the player's own order; its outcome is the skip's
@@ -355,7 +354,6 @@ export const difficultyPriorityBlock = (value) => {
 //   scenarioTranslation          a scenario's own text in other languages, in the Workshop
 export const TASKS_WITHOUT_DIFFICULTY = Object.freeze(new Set([
   "translation",
-  "geographyResolver",
   "eventConsolidator",
   "timelineCurator",
   "descriptionToAction",

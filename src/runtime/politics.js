@@ -289,6 +289,8 @@ const normalizeParty = (value) => {
   const nameNative = text(value.nameNative);
   if (!nameEn && !nameNative) return null;
   const ideology = findIdeology(value.ideology);
+  const ideologyText = text(value.ideologyText || (!ideology ? value.ideology : ""), 160);
+  const politicalPosition = text(value.politicalPosition, 120);
   const colour = /^#[0-9a-f]{6}$/i.test(text(value.colour)) ? text(value.colour).toLowerCase() : ideology?.colour ?? "#94a3b8";
   return {
     nameEn: nameEn || nameNative,
@@ -296,6 +298,8 @@ const normalizeParty = (value) => {
     abbrEn: text(value.abbrEn, 16),
     abbrNative: text(value.abbrNative, 16),
     ideology: ideology?.id ?? "",
+    ...(ideologyText ? { ideologyText } : {}),
+    ...(politicalPosition ? { politicalPosition } : {}),
     subideology: text(value.subideology, 80),
     leader: text(value.leader),
     colour,
@@ -312,6 +316,20 @@ const partyOrder = (a, b) =>
   || (b.seats ?? -1) - (a.seats ?? -1)
   || (b.support ?? -1) - (a.support ?? -1);
 
+// A head of state or government: { name, title } as the compiled reading gives
+// one (gameplaySchemas.js officeholderSchema), or the one text an older reading
+// wrote, kept whole: its title is never cut out of it by words, which the model
+// writes in the player's language. "" for nobody.
+const officeholder = (value) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const name = text(value.name);
+    if (!name) return "";
+    const title = text(value.title);
+    return title ? { name, title } : { name };
+  }
+  return text(value);
+};
+
 // One polity's entry, or null when it carries nothing to show.
 export const normalizePoliticalLandscape = (value) => {
   if (!value || typeof value !== "object") return null;
@@ -326,13 +344,16 @@ export const normalizePoliticalLandscape = (value) => {
   return {
     asOf: text(value.asOf, 40),
     government,
-    headOfState: text(value.headOfState),
-    headOfGovernment: text(value.headOfGovernment),
+    headOfState: officeholder(value.headOfState),
+    headOfGovernment: officeholder(value.headOfGovernment),
     legislature: text(value.legislature),
     legislatureSeats: seats || null,
     nextElection: text(value.nextElection, 80),
     kind: value.kind === "factions" ? "factions" : "parties",
     parties,
+    // The kind of system, an enum the Political World checks and reads
+    // (politicalLandscapeFold.js, politicalActors.js POLITICAL_SYSTEM_TYPES).
+    ...(text(value.systemType, 60) ? { systemType: text(value.systemType, 60) } : {}),
   };
 };
 

@@ -17,6 +17,7 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { EVENT_TAG_ENUM } from "../../runtime/eventTags.js";
 import {
   emptyScenarioPrehistory,
+  countPrehistoryUpdates,
   newPrehistoryEventId,
   normalizeScenarioPrehistory,
   PREHISTORY_IMPORTANCE,
@@ -28,6 +29,23 @@ import {
 } from "../../runtime/scenarioPrehistory.js";
 import { generateScenarioPrehistory } from "../AI/gameplayLazy.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
+import { collectScenarioPoliticalPolities } from "../../runtime/scenarioPolities.js";
+import {
+  AUTHORABLE_DAY_ONE_KINDS,
+  MAX_SEMANTIC_DAY_ONE_FACTS,
+  changeManualAccessReciprocal,
+  changeManualAgreementType,
+  dayOneEditorProblems,
+  insertManualDayOneFact,
+  updateDayOneFact,
+} from "../../runtime/scenarioPrehistoryDayOne.js";
+import DayOneFactEditor from "./DayOneFactEditor.jsx";
+import {
+  scenarioCanonicalAgreements, sameScenarioCanonicalAgreements,
+  editScenarioCanonicalAgreement, changeScenarioCanonicalAgreementType,
+  changeScenarioCanonicalAccessReciprocal, removeScenarioCanonicalAgreement,
+  validateScenarioCanonicalAgreementEdits,
+} from "../../runtime/scenarioCanonicalAgreements.js";
 
 const buttonStyle = {
   alignItems: "center",
@@ -218,6 +236,7 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
   const startDate = startDateOf(details);
   const saved = useMemo(() => recordOf(details), [details]);
   const [draft, setDraft] = useState(() => saved ?? emptyScenarioPrehistory());
+  const [canonicalDraft, setCanonicalDraft] = useState(() => scenarioCanonicalAgreements(details?.data?.world));
   const [prompt, setPrompt] = useState(() => saved?.prompt ?? "");
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -228,6 +247,7 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
   // Another scenario opened in the drawer: start from its record.
   useEffect(() => {
     setDraft(recordOf(details) ?? emptyScenarioPrehistory());
+    setCanonicalDraft(scenarioCanonicalAgreements(details?.data?.world));
     setPrompt(recordOf(details)?.prompt ?? "");
     setMessage("");
     setError("");
@@ -239,7 +259,6 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
   // A scenario with no record yet but a briefing may save an empty one on
   // purpose: its games then open with no backstory rather than asking for one.
   const changed = !sameRecord({ ...draft, prompt }, saved ?? emptyScenarioPrehistory());
-  const dirty = changed || (!saved && Boolean(briefing));
   const problems = useMemo(() => prehistoryProblems(draft, { startDate }), [draft, startDate]);
   const problemsById = useMemo(() => {
     const map = new Map();
@@ -247,6 +266,25 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
     return map;
   }, [problems]);
   const dayOne = useMemo(() => prehistoryUpdateRows(draft), [draft]);
+  const world = useMemo(() => details?.data?.world || {}, [details?.data?.world]);
+  const savedCanonical = useMemo(() => scenarioCanonicalAgreements(world), [world]);
+  const canonicalDirty = !sameScenarioCanonicalAgreements(canonicalDraft, savedCanonical);
+  const canonicalValidation = useMemo(() => validateScenarioCanonicalAgreementEdits({
+    original: savedCanonical, draft: canonicalDraft, world, prehistory: draft, startDate,
+  }), [savedCanonical, canonicalDraft, world, draft, startDate]);
+  const canonicalProblems = canonicalDirty ? canonicalValidation.errors : [];
+  const dirty = changed || canonicalDirty || (!saved && Boolean(briefing));
+  const polities = useMemo(() => collectScenarioPoliticalPolities(world)
+    .map((entry) => entry.polityKey), [world]);
+  const dayOneProblems = useMemo(() => dayOneEditorProblems(draft, { startDate }), [draft, startDate]);
+  const dayOneProblemsByKey = useMemo(() => {
+    const map = new Map();
+    for (const entry of dayOneProblems) {
+      const key = String(entry.family) + ":" + String(entry.index);
+      map.set(key, [...(map.get(key) || []), entry.problem]);
+    }
+    return map;
+  }, [dayOneProblems]);
   const eventCount = draft.events.length;
 
   const setEvents = (events) => setDraft((current) => ({ ...current, events }));
@@ -260,10 +298,50 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
     setEvents(events);
   };
   const removeEvent = (index) => setEvents(draft.events.filter((_, at) => at !== index));
+  const addDayOne = (kind) => {
+    try {
+      setDraft((current) => insertManualDayOneFact(current, kind));
+      setError("");
+      setMessage("");
+    } catch (nextError) {
+      setError(nextError?.message || String(nextError));
+    }
+  };
+  const editDayOne = (family, index, patch) => {
+    setDraft((current) => updateDayOneFact(current, family, index, patch));
+    setError("");
+    setMessage("");
+  };
+  const changeAgreementType = (index, type) => {
+    setDraft((current) => changeManualAgreementType(current, index, type));
+    setError("");
+  };
+  const changeAccessReciprocal = (index, reciprocal) => {
+    setDraft((current) => changeManualAccessReciprocal(current, index, reciprocal));
+    setError("");
+  };
+  const removeDayOne = (family, index) => {
+    setDraft((current) => withoutPrehistoryUpdate(current, family, index));
+    setError("");
+    setMessage("");
+  };
+  const applyCanonicalEdit = (edit) => {
+    try {
+      setCanonicalDraft(edit(canonicalDraft));
+      setError("");
+      setMessage("");
+    } catch (nextError) {
+      setError(nextError?.message || String(nextError));
+    }
+  };
+  const removeCanonical = (agreement) => {
+    if (!window.confirm("Remove this existing agreement from the scenario? Existing campaigns will not change.")) return;
+    applyCanonicalEdit((current) => removeScenarioCanonicalAgreement(current, agreement.id));
+  };
 
   const generate = async () => {
     if (!scenarioId || busy) return;
-    if (draft.events.length && !window.confirm("Replace the events below with a newly generated pre-history? You can still discard the result before saving.")) return;
+    if ((draft.events.length || countPrehistoryUpdates(draft)) && !window.confirm("Replace the events and Day-one facts below with a newly generated pre-history? You can still discard the result before saving.")) return;
     setError("");
     setMessage("");
     setBusy(true);
@@ -296,16 +374,27 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
   };
 
   const save = async () => {
-    if (!scenarioId || busy || problems.length) return;
+    if (!scenarioId || busy || problems.length || dayOneProblems.length || canonicalProblems.length) return;
+    const stagedWorld = canonicalDirty ? { ...world, agreements: canonicalValidation.agreements } : world;
+    const verified = dayOneEditorProblems(draft, { startDate, world: stagedWorld, verifyWorld: true });
+    if (verified.length) {
+      setError("Day-one facts could not be saved: " + verified.map((entry) => entry.problem).join(" "));
+      return;
+    }
     setBusy(true);
     setError("");
     setMessage("");
     try {
       const record = normalizeScenarioPrehistory({ ...draft, prompt });
-      const nextDetails = await saveScenario(scenarioId, { worldPatch: { prehistory: record } });
+      const worldPatch = {
+        ...(changed || (!saved && Boolean(briefing)) ? { prehistory: record } : {}),
+        ...(canonicalDirty ? { agreements: canonicalValidation.agreements } : {}),
+      };
+      const nextDetails = await saveScenario(scenarioId, { worldPatch });
       onDetailsChange?.(nextDetails);
       setDraft(normalizeScenarioPrehistory(record, { draft: true }));
-      setMessage("Pre-history saved. New games from this scenario start with it.");
+      setCanonicalDraft(scenarioCanonicalAgreements(nextDetails?.data?.world));
+      setMessage("Starting history saved. New games from this scenario use the updated agreements and Day-one facts.");
     } catch (nextError) {
       setError(nextError?.message || String(nextError));
     } finally {
@@ -314,6 +403,7 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
   };
   const discard = () => {
     setDraft(saved ?? emptyScenarioPrehistory());
+    setCanonicalDraft(savedCanonical);
     setPrompt(saved?.prompt ?? "");
     setMessage("");
     setError("");
@@ -385,22 +475,90 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
         />
       </section>
 
-      {dayOne.length ? (
-        <section style={sectionStyle}>
-          <div style={sectionTitleStyle}>Day-one facts</div>
-          <div style={{ ...hintStyle, marginBottom: "0.4rem" }}>Wars, relations and agreements already true on the start date, written by the generation. A new game starts with them in its records.</div>
-          {dayOne.map((row) => (
-            <DayOneRow key={`${row.family}-${row.index}`} onRemove={() => setDraft((current) => withoutPrehistoryUpdate(current, row.family, row.index))} row={row} touch={touch} />
-          ))}
-        </section>
-      ) : null}
-
+      <section style={sectionStyle}>
+        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: "space-between", marginBottom: "0.55rem" }}>
+          <div style={{ ...sectionTitleStyle, marginBottom: 0 }}>Day-one facts</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+            {AUTHORABLE_DAY_ONE_KINDS.map((kind) => (
+              <button className="oh-tap" disabled={busy || draft.updates.canonicalUpdates.length >= MAX_SEMANTIC_DAY_ONE_FACTS}
+                key={kind} onClick={() => addDayOne(kind)} style={touchFit(buttonStyle, touch)} type="button">
+                {kind === "relation" ? "+ Relationship" : kind === "agreement" ? "+ Agreement" : "+ Storyline"}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ ...hintStyle, marginBottom: "0.5rem" }}>
+          Add or edit the diplomatic relationships, treaties and ongoing processes that already exist on the start date.
+          They become canonical game records when a new campaign opens. Use the exact scenario country names.
+          Existing wars and subordinations remain removable; the native war and puppet authoring contracts are unchanged.
+        </div>
+        {polities.length ? <datalist id="oh-prehistory-polities">{polities.map((name) => <option key={name} value={name} />)}</datalist> : null}
+        {!dayOne.length && !canonicalDraft.length ? <div style={hintStyle}>No Day-one facts yet. You can add one without generating pre-history.</div> : null}
+        <div style={{ display: "grid", gap: "0.45rem" }}>
+          {dayOne.map((row) => {
+            const fact = draft.updates?.[row.family]?.[row.index];
+            const kind = row.family === "canonicalUpdates" ? fact?.kind :
+              ({ relationUpdates: "relation", agreementUpdates: "agreement", storylineUpdates: "storyline" }[row.family]);
+            const editable = AUTHORABLE_DAY_ONE_KINDS.includes(kind);
+            const key = row.family + ":" + (fact?.ref || fact?.id || row.index);
+            const problemText = dayOneProblemsByKey.get(row.family + ":" + row.index) || [];
+            return editable ? (
+              <DayOneFactEditor disabled={busy} fact={fact} key={key}
+                onChange={(patch) => editDayOne(row.family, row.index, patch)}
+                onChangeType={(type) => changeAgreementType(row.index, type)}
+                onReciprocalChange={(reciprocal) => changeAccessReciprocal(row.index, reciprocal)}
+                onRemove={() => removeDayOne(row.family, row.index)}
+                problems={problemText} row={row} />
+            ) : (
+              <DayOneRow key={key} onRemove={() => removeDayOne(row.family, row.index)} row={row} touch={touch} />
+            );
+          })}
+        </div>
+        {canonicalDraft.length ? (
+          <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", marginTop: "0.65rem", paddingTop: "0.65rem" }}>
+            <div style={sectionTitleStyle}>Existing scenario agreements</div>
+            <div style={{ ...hintStyle, marginBottom: "0.5rem" }}>
+              These are already in the scenario's formal agreements ledger (including Political World generated treaties), not generated Pre-history facts.
+              Edit or remove them here to change the starting state of NEW campaigns. Existing campaign saves are unaffected.
+            </div>
+            <div style={{ display: "grid", gap: "0.45rem" }}>
+              {canonicalDraft.map((agreement, index) => {
+                const id = String(agreement?.id ?? "").trim();
+                const validId = id && canonicalDraft.filter((row) => String(row?.id ?? "").trim() === id).length === 1;
+                const rowProblems = canonicalProblems.filter((problem) => problem.id === id).map((problem) => problem.problem);
+                return (
+                  <div key={index}>
+                    <DayOneFactEditor row={{ family: "worldAgreements" }} fact={agreement}
+                      disabled={busy || !validId}
+                      problems={rowProblems}
+                      onChange={(patch) => applyCanonicalEdit((current) => editScenarioCanonicalAgreement(current, id, patch))}
+                      onChangeType={(type) => applyCanonicalEdit((current) => changeScenarioCanonicalAgreementType(current, id, type))}
+                      onReciprocalChange={(reciprocal) => applyCanonicalEdit((current) => changeScenarioCanonicalAccessReciprocal(current, id, reciprocal))}
+                      onRemove={() => removeCanonical(agreement)} />
+                    {!validId ? <div style={{ ...hintStyle, color: "#fca5a5" }}>This older agreement has no unique canonical ID and cannot safely be edited here.</div> : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+        {dayOneProblemsByKey.get("canonicalUpdates:-1")?.map((problem, index) => (
+          <div key={index} style={{ color: "#fca5a5", fontSize: "0.69rem", marginTop: "0.45rem" }}>{problem}</div>
+        ))}
+      </section>
       {error ? <div style={{ color: "#fca5a5", fontSize: "0.72rem", lineHeight: 1.5, marginTop: "0.7rem", overflowWrap: "anywhere" }}>{error}</div> : null}
       {message ? <div style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.72rem", lineHeight: 1.5, marginTop: "0.7rem" }}>{message}</div> : null}
       {problems.length ? <div style={{ color: "#fca5a5", fontSize: "0.72rem", lineHeight: 1.5, marginTop: "0.7rem" }}>Fix the events marked above before saving.</div> : null}
+      {dayOneProblems.length ? <div style={{ color: "#fca5a5", fontSize: "0.72rem", marginTop: "0.35rem" }}>Fix the Day-one facts marked above before saving.</div> : null}
+      {canonicalProblems.length ? <div style={{ color: "#fca5a5", fontSize: "0.72rem", marginTop: "0.35rem" }}>
+        Fix the existing agreement problems before saving.
+        {canonicalProblems.filter((problem) => !canonicalDraft.some((entry) => entry?.id === problem.id)).map((problem, index) => (
+          <div key={index}>{problem.problem}</div>
+        ))}
+      </div> : null}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.75rem" }}>
-        <button className="oh-tap" disabled={busy || !dirty || problems.length > 0} onClick={save} style={touchFit({ ...primaryButtonStyle, opacity: busy || !dirty || problems.length ? 0.55 : 1 }, touch)} type="button">Save pre-history</button>
-        <button className="oh-tap" disabled={busy || !changed} onClick={discard} style={touchFit({ ...buttonStyle, opacity: busy || !changed ? 0.55 : 1 }, touch)} type="button">Discard changes</button>
+        <button className="oh-tap" disabled={busy || !dirty || problems.length > 0 || dayOneProblems.length > 0 || canonicalProblems.length > 0} onClick={save} style={touchFit({ ...primaryButtonStyle, opacity: busy || !dirty || problems.length || dayOneProblems.length || canonicalProblems.length ? 0.55 : 1 }, touch)} type="button">Save starting history</button>
+        <button className="oh-tap" disabled={busy || !dirty} onClick={discard} style={touchFit({ ...buttonStyle, opacity: busy || !dirty ? 0.55 : 1 }, touch)} type="button">Discard changes</button>
       </div>
     </div>
   );

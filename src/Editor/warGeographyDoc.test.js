@@ -150,11 +150,15 @@ test("a map with none of it saves none, and a scenario saved before it existed o
   assert.deepEqual(warGeographyWorldPatch(null), {});
 });
 
-test("frozen water is water on the map: by the type's Water switch or by its name", () => {
+test("frozen water is water on the map: by the type's Water switch alone, never by its name", () => {
   const doc = { ...workshopDocument(), freezingRegions: ["lake_1", "sea_1", "field_1"] };
-  assert.deepEqual(warGeographyForGame(doc, regions).freezingRegions, ["lake_1", "sea_1"]);
+  // "Sea" with its switch never set is land, as "Mer" would be.
+  assert.deepEqual(warGeographyForGame(doc, regions).freezingRegions, ["lake_1"]);
+  // Switched on, it is water.
+  const flooded = { ...doc, types: doc.types.map((type) => (type.id === "sea" ? { ...type, water: true } : type)) };
+  assert.deepEqual(warGeographyForGame(flooded, regions).freezingRegions, ["lake_1", "sea_1"]);
   // The lake's type switched to land is no longer water.
-  const dried = { ...doc, types: doc.types.map((type) => (type.id === "lake" ? { ...type, water: false } : type)) };
+  const dried = { ...flooded, types: flooded.types.map((type) => (type.id === "lake" ? { ...type, water: false } : type)) };
   assert.deepEqual(warGeographyForGame(dried, regions).freezingRegions, ["sea_1"]);
 });
 
@@ -179,6 +183,23 @@ test("a zone can take its seasons from one of the game's climates", () => {
   assert.equal(polar[0].effects.freezes, true, "a polar winter freezes the water");
   assert.equal(seasonsOfClimate("arid")[0].effects.freezes, undefined, "a desert winter does not");
   assert.deepEqual(seasonsOfClimate("nowhere"), seasonsOfClimate("continental"));
+});
+
+// How the game's map tints a season without a colour of its own is the world
+// season the designer says it is (its `kind`), never a word in its name.
+test("a season says which of the world's seasons it is, keeps it through a save, and the Workshop offers it", () => {
+  assert.deepEqual(seasonsOfClimate("continental").map((season) => season.kind), ["winter", "spring", "summer", "autumn"]);
+  const zone = newClimateZone("z1", [ring(0, 0, 1, 1)], []);
+  zone.seasons = [
+    { name: "Hiver profond", kind: "winter", start: "12-01", end: "02-28", weather: {}, effects: {} },
+    { name: "Mousson", kind: "monsoon", start: "06-01", end: "08-31", weather: { rain: 1 }, effects: {} },
+  ];
+  const [kept] = normalizeClimateZones([zone]);
+  assert.equal(kept.seasons[0].kind, "winter");
+  assert.equal("kind" in kept.seasons[1], false, "a kind the world does not have is none");
+  const panel = fs.readFileSync(new URL("./WarMapPanel.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(panel, /<Row label="Tinted as" title="[^"]+">\n\s*<select value=\{season\.kind \|\| ""\} onChange=\{\(e\) => onChange\(\{ kind: e\.target\.value \|\| undefined \}\)\}/);
+  assert.match(panel, /<option value="" style=\{\{ color: "#000" \}\}>By its weather<\/option>\n\s*\{SEASON_KINDS\.map\(/);
 });
 
 test("a season's day is a month and a day, February stopping at the 28th", () => {

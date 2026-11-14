@@ -56,6 +56,11 @@ test("speech that merely starts with the speaker's name and a dash is left whole
     // A spaced dash with no closing aside is still a label.
     assert.equal(stripRedundantChatSpeakerPrefix("France — we stand with our allies.", "France"), "we stand with our allies.");
     assert.equal(stripRedundantChatSpeakerPrefix("France:we stand with our allies.", "France"), "we stand with our allies.");
+    // The aside is looked for in the first sentence of any script: a dash in a LATER Chinese sentence once counted,
+    // as no Chinese sentence ended, and the label stayed where its English twin's went.
+    assert.equal(stripRedundantChatSpeakerPrefix("France — We stand with our allies. We — always — will.", "France"), "We stand with our allies. We — always — will.");
+    assert.equal(stripRedundantChatSpeakerPrefix("法国 — 我们支持盟友。我们 — 永远 — 支持。", "法国"), "我们支持盟友。我们 — 永远 — 支持。");
+    assert.equal(stripRedundantChatSpeakerPrefix("法国 — 一如既往 — 支持盟友。", "法国"), "法国 — 一如既往 — 支持盟友。", "an aside in the first sentence is speech");
 });
 
 test("an action is read from what the model writes, and refused when it is not one", () => {

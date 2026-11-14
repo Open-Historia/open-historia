@@ -58,6 +58,7 @@ import { hasDeploy, readDeploy } from "./deploy.js";
 import { marchKept, marchesFor, readMarch, sendInland } from "./march.js";
 import { authoredForms, authoredTroops } from "./scenarioFronts.js";
 import { SWARM_FORM, raiseSwarms, readSwarms, swarmsKept } from "./swarms.js";
+import { ORDINARY, unitFigures } from "../unitTypes.js";
 import { projectorOf } from "./frame.js";
 import { drawLine, measureLine } from "./line.js";
 import { nearestOwner } from "./supply.js";
@@ -610,6 +611,33 @@ export const raiseTroops = (battle, run, only = -1) => {
 const KIND_OF_TYPE = { infantry: KIND_INFANTRY, armor: KIND_ARMOUR, artillery: KIND_ARTILLERY };
 export const isLandFormation = (unit) => KIND_OF_TYPE[String(unit?.type ?? "")] !== undefined;
 
+// A named troop of one of the scenario's own unit types (runtime/unitTypes.js: a formation whose unitType is one of
+// input.unitTypes) hits, holds and goes by its type's figures: kept on the troop for every morning (dawn.js), and its
+// punch, guard and legs where no morning sets them (a run with none of the newer mechanics on). A troop of no such
+// type is left as it is.
+export const stampUnitType = (troop, figures) => {
+  if (!troop || !figures || figures === ORDINARY) return;
+  troop.typeAttack = figures.attack;
+  troop.typeToughness = figures.toughness;
+  troop.typeSpeed = figures.speed;
+  troop.punch = figures.attack;
+  troop.guard = figures.toughness;
+  troop.legs = figures.speed;
+};
+
+// The named troops of a battlefield read back from its record: each is its formation's, by the formation's id, and
+// fights by its type's figures again.
+const stampNamedTypes = (battle, run) => {
+  const types = run.input?.unitTypes;
+  if (!Array.isArray(types) || types.length === 0 || battle.named.length === 0) return;
+  const units = Array.isArray(run.input?.units) ? run.input.units : [];
+  for (const entry of battle.named) {
+    const troop = battle.troops[entry.s]?.[entry.i];
+    const unit = troop ? units.find((candidate) => String(candidate?.id ?? "").trim() === entry.unitId) : null;
+    if (unit) stampUnitType(troop, unitFigures(types, unit));
+  }
+};
+
 // Takes a formation of the world's into a battle as a named troop, at its own
 // place and strength. false when it does not belong here: not a land
 // formation, not a member's, off the frame, too far from the line, or no room.
@@ -635,7 +663,10 @@ export const absorbUnit = (battle, run, unit, { anyDistance = false } = {}) => {
   }
   const owner = battle.sides[side].findIndex((member) => fold(member) === fold(unit.ownerCode ?? unit.owner));
   const strength = Math.min(100, Math.max(1, Number(unit.strength) || 100));
-  battle.troops[side].push(createTroop({ x, y, strength, kind, owner, named: true }));
+  const troop = createTroop({ x, y, strength, kind, owner, named: true });
+  // (A formation of one of the scenario's own unit types fights by its type's figures.)
+  stampUnitType(troop, unitFigures(run.input?.unitTypes, unit));
+  battle.troops[side].push(troop);
   battle.named.push({ s: side, i: battle.troops[side].length - 1, name: String(unit.name ?? "").trim(), unitId });
   // The battle itself, not its name: a battlefield may still be named by its first order.
   run.unitChanges.push({ unitId, committedTo: battle });
@@ -773,6 +804,8 @@ export const loadBattle = (run, record, arena) => {
   const kept = dropTheDead(read, record.named);
   battle.troops = kept.troops;
   battle.named = kept.named;
+  // (A named troop of one of the scenario's own unit types fights by its type's figures again.)
+  stampNamedTypes(battle, run);
   battle.pool = record.pool.slice();
   battle.base = record.base.slice();
   battle.quality = record.quality.slice();

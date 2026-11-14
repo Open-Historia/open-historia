@@ -11,6 +11,7 @@
 import { normalizeWorldState } from "../../runtime/gameState.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { compareGameDates, parseGameDate } from "../../runtime/gameDates.js";
+import { MAX_WAR_SIDE_MEMBERS } from "../../runtime/warRecord.js";
 import {
   buildPregameWarBaselineRecord,
   mergePregameWarBaselineRecord,
@@ -38,6 +39,7 @@ import {
 import {
   buildPregameStorylineBaselineRecord,
   buildPregameWarStorylineMirrorRecord,
+  warMirrorParticipants,
   mergePregameStorylineBaselineRecord,
   mergePregameStorylineBaselines,
   pregameStorylineBaselineCompatibilityError,
@@ -48,7 +50,9 @@ export const PREGAME_BOOTSTRAP_CONTRACT_VERSION = 1;
 
 const MAX_FACTS = 32;
 const MAX_SOURCE_EVENT_REFS = 16;
-const MAX_POLITIES_PER_SIDE = 12;
+// A war's sides hold what any war's do (runtime/warRecord.js): a Round-Zero
+// coalition is no smaller than one the time skip may build.
+const MAX_POLITIES_PER_SIDE = MAX_WAR_SIDE_MEMBERS;
 const MAX_AGREEMENT_PARTIES = 12;
 const MAX_STORYLINE_PARTICIPANTS = 12;
 const FACT_KINDS = new Set(["war", "relation", "agreement", "storyline", "puppet"]);
@@ -174,9 +178,6 @@ export const validatePregameBootstrapCandidateShape = (candidate) => {
       if (unique(fact.sideA).length > MAX_POLITIES_PER_SIDE || unique(fact.sideB).length > MAX_POLITIES_PER_SIDE) {
         return factError(index, `war sides may contain at most ${MAX_POLITIES_PER_SIDE} distinct polities each.`);
       }
-      if (unique([...fact.sideA, ...fact.sideB]).length > MAX_STORYLINE_PARTICIPANTS) {
-        return factError(index, `war may contain at most ${MAX_STORYLINE_PARTICIPANTS} total belligerents because its canonical scheduler mirror must preserve every participant.`);
-      }
       if (!validDate(fact.startedDate)) return factError(index, "war startedDate must be a valid game date or blank.");
       if (fact.assessment !== undefined) {
         if (!fact.assessment || typeof fact.assessment !== "object" || Array.isArray(fact.assessment)) return factError(index, "war assessment must be an object.");
@@ -263,7 +264,6 @@ const resolvePolity = (token, world) => {
   const resolved = resolvePolityIdentity(raw, world, {
     allowUnknown: false,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
   });
   return clean(resolved?.resolved);
@@ -476,26 +476,44 @@ export const compilePregameBootstrapCandidate = ({
       .filter(Boolean),
   );
 
+  // A war fact that cannot be made is left out, said in receipt.omitted, and
+  // the rest of the baseline stands, on any attempt. It used to refuse the whole
+  // answer: every war, relation and agreement of the pre-game history, asked for
+  // again (a second request) and again at every open of the game (the owner,
+  // 2026-11-13: "Historical wars aren't always initialized properly").
+  const leaveOutWar = (raw, index, error) => receipt.omitted.push(omittedFact(raw, factError(index, error)));
+
   for (let index = 0; index < candidate.facts.length; index += 1) {
     const raw = candidate.facts[index];
     const kind = lower(raw.kind);
     const sources = resolveSourceEventIds(raw, eventIdsByRef);
-    if (sources.error) return reject(candidate, receipt, raw, factError(index, sources.error));
+    if (sources.error) {
+      if (kind === "war") {
+        leaveOutWar(raw, index, sources.error);
+        continue;
+      }
+      return reject(candidate, receipt, raw, factError(index, sources.error));
+    }
     const horizonError = baselineDateError(raw.startedDate, startDate, `$.facts[${index}].startedDate`);
-    if (horizonError) return reject(candidate, receipt, raw, factError(index, horizonError));
+    if (horizonError) {
+      if (kind === "war") {
+        leaveOutWar(raw, index, horizonError);
+        continue;
+      }
+      return reject(candidate, receipt, raw, factError(index, horizonError));
+    }
 
     if (kind === "war") {
       const sideA = resolvePolityList(raw.sideA, baseWorld);
       const sideB = resolvePolityList(raw.sideB, baseWorld);
       if (sideA.length !== unique(raw.sideA).length || sideB.length !== unique(raw.sideB).length) {
-        return reject(candidate, receipt, raw, factError(index, "war contains unresolved current polity identity."));
+        leaveOutWar(raw, index, "war contains unresolved current polity identity.");
+        continue;
       }
       const overlap = new Set(sideA.map(lower));
       if (sideB.some((name) => overlap.has(lower(name))) || !sideA.length || !sideB.length) {
-        return reject(candidate, receipt, raw, factError(index, "war requires two non-empty disjoint canonical sides."));
-      }
-      if (unique([...sideA, ...sideB]).length > MAX_STORYLINE_PARTICIPANTS) {
-        return reject(candidate, receipt, raw, factError(index, `war has more than ${MAX_STORYLINE_PARTICIPANTS} total belligerents; its canonical scheduler mirror would be lossy.`));
+        leaveOutWar(raw, index, "war requires two non-empty disjoint canonical sides.");
+        continue;
       }
       const semantic = {
         ...raw,
@@ -508,11 +526,8 @@ export const compilePregameBootstrapCandidate = ({
       const currentWars = overlayRecords(existingArray(baseWorld, "wars"), compiled.wars);
       const matched = resolvePregameWarBaselineMatch({ records: currentWars, candidate: semantic, claimedIds: claimedIdsOf("war") });
       if (matched.error) {
-        if (matched.ambiguous && leaveOutAmbiguous) {
-          receipt.omitted.push(omittedFact(raw, matched.error));
-          continue;
-        }
-        return reject(candidate, receipt, raw, factError(index, matched.error));
+        leaveOutWar(raw, index, matched.error);
+        continue;
       }
 
       let warRecord;
@@ -529,9 +544,15 @@ export const compilePregameBootstrapCandidate = ({
           sourceEventIds: sources.ids,
           round,
         });
-        if (incoming.error) return reject(candidate, receipt, raw, factError(index, incoming.error));
+        if (incoming.error) {
+          leaveOutWar(raw, index, incoming.error);
+          continue;
+        }
         const merged = mergePregameWarBaselineRecord({ existing: matched.match, incoming: incoming.record });
-        if (merged.error) return reject(candidate, receipt, raw, factError(index, merged.error));
+        if (merged.error) {
+          leaveOutWar(raw, index, merged.error);
+          continue;
+        }
         warRecord = merged.record;
         outcome = "merged";
       } else {
@@ -549,12 +570,18 @@ export const compilePregameBootstrapCandidate = ({
           sourceEventIds: sources.ids,
           round,
         });
-        if (built.error) return reject(candidate, receipt, raw, factError(index, built.error));
+        if (built.error) {
+          leaveOutWar(raw, index, built.error);
+          continue;
+        }
         warRecord = built.record;
         outcome = "applied";
       }
       const claimError = claimCanonicalId(canonicalClaims, "war", warRecord.id, raw.ref);
-      if (claimError) return reject(candidate, receipt, raw, factError(index, claimError));
+      if (claimError) {
+        leaveOutWar(raw, index, claimError);
+        continue;
+      }
       compiled.wars.push(warRecord);
       receipt.facts.push(receiptOutcome(raw, outcome, warRecord.id, matched.restated
         ? "Restated authoritative war baseline read under its canonical title and retained."
@@ -902,23 +929,35 @@ export const compilePregameBootstrapCandidate = ({
   // War scheduler mirrors are native-derived. Existing explicit war->storyline
   // linkage wins; otherwise only the exact native mirror id is eligible. Mere
   // participant similarity is never enough to adopt a legacy storyline.
+  //
+  // A mirror is the scheduler's view of a war, never the war: one that cannot
+  // be made or merged is left out (receipt.omitted), and the war stands without
+  // it. Each of these used to refuse the whole pre-game history.
+  const skipMirror = (warMeta, reason) => receipt.omitted.push({ ref: clean(warMeta.ref), kind: "war-storyline", title: clean(warMeta.war?.title), reason });
   for (const warMeta of warMetaByRef.values()) {
     const war = warMeta.war;
     const currentStorylines = overlayRecords(existingArray(baseWorld, "storylines"), compiled.storylines);
-    const warParticipants = participantKey([...(war?.sideA || []), ...(war?.sideB || [])]);
+    const warParticipants = participantKey(warMirrorParticipants(war));
     const linkedIds = unique(war?.storylineIds).filter(Boolean);
     const linkedMatches = linkedIds
       .map((id) => currentStorylines.find((entry) => clean(entry?.id) === id) || null)
       .filter(Boolean);
-    if (linkedIds.length > 1) return reject(candidate, receipt, null, `War ${war.id} links to multiple canonical storyline ids; Round-Zero mirror identity is ambiguous.`);
-    if (linkedIds.length && linkedMatches.length !== linkedIds.length) return reject(candidate, receipt, null, `War ${war.id} contains a dangling canonical storyline linkage; Round-Zero will not invent a replacement identity.`);
+    if (linkedIds.length > 1) {
+      skipMirror(warMeta, `War ${war.id} links to multiple canonical storyline ids; Round-Zero mirror identity is ambiguous.`);
+      continue;
+    }
+    if (linkedIds.length && linkedMatches.length !== linkedIds.length) {
+      skipMirror(warMeta, `War ${war.id} contains a dangling canonical storyline linkage; Round-Zero will not invent a replacement identity.`);
+      continue;
+    }
 
     const preferredId = `storyline-${clean(war?.id)}`;
     let exact = linkedMatches[0] || currentStorylines.find((entry) => clean(entry?.id) === preferredId) || null;
     let mirrorId = clean(exact?.id) || preferredId;
     if (exact) {
       if (lower(exact.kind) !== "war" || participantKey(exact.participants) !== warParticipants) {
-        return reject(candidate, receipt, null, `Derived war mirror ${mirrorId} conflicts with the canonical war linkage for ${war.id}.`);
+        skipMirror(warMeta, `Derived war mirror ${mirrorId} conflicts with the canonical war linkage for ${war.id}.`);
+        continue;
       }
       const assessment = {
         pressure: warMeta.assessment?.pressure ?? exact.pressure,
@@ -926,9 +965,15 @@ export const compilePregameBootstrapCandidate = ({
         state: warMeta.assessment?.state ?? exact.state,
       };
       const incoming = buildPregameWarStorylineMirrorRecord({ id: mirrorId, war, assessment, observedDate: startDate, round });
-      if (incoming.error) return reject(candidate, receipt, null, incoming.error);
+      if (incoming.error) {
+        skipMirror(warMeta, incoming.error);
+        continue;
+      }
       const merged = mergePregameStorylineBaselineRecord({ existing: exact, incoming: incoming.record });
-      if (merged.error) return reject(candidate, receipt, null, merged.error);
+      if (merged.error) {
+        skipMirror(warMeta, merged.error);
+        continue;
+      }
       compiled.storylines.push(merged.record);
       expectedDerived.set(`war-storyline|${warMeta.ref}`, merged.record);
       receipt.derived.push({ kind: "war-storyline", sourceFactRef: warMeta.ref, outcome: "merged", canonicalId: mirrorId });
@@ -937,11 +982,18 @@ export const compilePregameBootstrapCandidate = ({
         lower(entry?.kind) === "war" && participantKey(entry?.participants) === warParticipants
       );
       if (legacyPotential.length) {
-        return reject(candidate, receipt, null, `War ${war.id} has ${legacyPotential.length} participant-matched legacy war storyline(s) but no explicit or exact canonical linkage; automatic participant-based reconciliation is forbidden.`);
+        skipMirror(warMeta, `War ${war.id} has ${legacyPotential.length} participant-matched legacy war storyline(s) but no explicit or exact canonical linkage; the legacy storyline goes on following it.`);
+        continue;
       }
       const builtMirror = buildPregameWarStorylineMirrorRecord({ id: mirrorId, war, assessment: warMeta.assessment, observedDate: startDate, round });
-      if (builtMirror.error) return reject(candidate, receipt, null, builtMirror.error);
-      if (occupiedIds.has(builtMirror.record.id)) return reject(candidate, receipt, null, `Derived war mirror id ${builtMirror.record.id} collides with unrelated canonical state.`);
+      if (builtMirror.error) {
+        skipMirror(warMeta, builtMirror.error);
+        continue;
+      }
+      if (occupiedIds.has(builtMirror.record.id)) {
+        skipMirror(warMeta, `Derived war mirror id ${builtMirror.record.id} collides with unrelated canonical state.`);
+        continue;
+      }
       occupiedIds.add(builtMirror.record.id);
       compiled.storylines.push(builtMirror.record);
       expectedDerived.set(`war-storyline|${warMeta.ref}`, builtMirror.record);
@@ -1004,8 +1056,10 @@ export const compilePregameBootstrapCandidate = ({
     if (semanticError) return reject(candidate, receipt, null, `Round-Zero receipt changed derived ${derived.kind} ${derived.canonicalId}: ${semanticError}.`);
   }
   // Every fact is either in the baseline or named as left out; none goes missing.
-  if (receipt.facts.length + receipt.omitted.length !== candidate.facts.length) {
-    return reject(candidate, receipt, null, `Round-Zero receipt accounted for ${receipt.facts.length + receipt.omitted.length}/${candidate.facts.length} candidate facts.`);
+  // (A war's mirror left out is no fact of the answer's: it is listed beside them.)
+  const omittedFacts = receipt.omitted.filter((entry) => entry.kind !== "war-storyline").length;
+  if (receipt.facts.length + omittedFacts !== candidate.facts.length) {
+    return reject(candidate, receipt, null, `Round-Zero receipt accounted for ${receipt.facts.length + omittedFacts}/${candidate.facts.length} candidate facts.`);
   }
 
   return {

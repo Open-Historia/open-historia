@@ -228,7 +228,7 @@ test("one line per change, so the pill's count and the list never disagree", () 
       regionTransfers: [{ regionId: "FRA.1_1", fromCode: "Germany", toCode: "FRA" }],
       regionControlOps: [{ op: "contest", regionId: "FRA.1_1", actorCode: "Germany", fromCode: "FRA" }, { op: "unknown" }],
       regionClaims: [{ regionId: "FRA.1_1", claimantCode: "Germany" }],
-      groupOps: [{ op: "erase", name: "Black Hand" }],
+      groupOps: [{ op: "dissolve", name: "Black Hand" }],
       polityChanges: [{ operation: "rename", code: "FRA", name: "French Republic" }],
       unitOps: [{ op: "strength", unitId: "u1", strength: 60 }, { op: "strength", unitId: "u2", strength: 10 }],
       markerOps: [{ op: "build", marker: { name: "Fort Douaumont", kind: "fort" } }],
@@ -244,12 +244,17 @@ test("one line per change, so the pill's count and the list never disagree", () 
 });
 
 test("a destroyed structure reads as destroyed, not as updated", () => {
-  // The written op (normalizeMarkerOp turns "destroy" into this) and a
-  // streamed card's raw one read the same.
+  // A ruin is an update to status "destroyed" (runtime/markerOps.js): the
+  // written op and a streamed card's flat one read the same.
   const written = { impacts: { markerOps: [{ op: "update", name: "Stalingrad", changes: { status: "destroyed" } }] } };
-  const streamed = { impacts: { markerOps: [{ op: "destroy", name: "Stalingrad" }] } };
+  const streamed = { impacts: { markerOps: [{ op: "Update", name: "Stalingrad", status: "destroyed" }] } };
   assert.deepEqual(describeEventMapChanges(written, lookups).map((line) => line.text), ["Stalingrad destroyed"]);
   assert.deepEqual(describeEventMapChanges(streamed, lookups).map((line) => line.text), ["Stalingrad destroyed"]);
+  // A word that is none of the engine's five ops changes nothing on the map,
+  // so the card says nothing of it, in English or in French alike.
+  for (const op of ["destroy", "détruire", "modify", "found"]) {
+    assert.deepEqual(describeEventMapChanges({ impacts: { markerOps: [{ op, name: "Stalingrad", status: "destroyed" }] } }, lookups), [], op);
+  }
 });
 
 test("a structure update says what it changed, a line each, the description on the first", () => {

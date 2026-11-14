@@ -73,6 +73,105 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // "there should be absolutely no keywording done in this game anywhere its super unreliable ... and no whackamoleing issues. fix the core issue don't just patch it"
+    // (the owner, 2026-11-13): every word list, English synonym table and a-z fold that judged meaning, replaced by the AI's structured answers, the game's own records and exact names.
+    id: "2026-11-every-language-alike",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Every language plays alike",
+        items: [
+          "The game no longer looks for English words to decide what happens. It reads what the AI records and the names on your map, so a game in any language plays like one in English.",
+          "Land, armies and buildings move only by places written with their exact map names. A name the map doesn't have is left out and noted, never guessed, and never costs another AI request.",
+          "Peace terms, treaties and puppet states use the game's own record form, so a peace made in French or Chinese changes the map just as one made in English.",
+          "Countries, parties, leaders, wars and agents named in any alphabet are told apart, each country is drawn in a colour of its own, and renaming one written in Cyrillic or Chinese moves its regions with it.",
+          "History, storylines, scripted events, Rostra posts and the Advisor's letters and searches written in Chinese, Japanese or Thai now work like any other.",
+          "Scenario authors: a region type is water only when its Water switch is on, your own structure kinds and seasons are drawn as you pick them, and populations are typed in digits.",
+        ],
+      },
+    ],
+  },
+  {
+    // "add custom units types that have their own custom stats for scenarios so like a dragon troop that is an air troop and super strong and very tough"
+    // (the owner, 2026-11-13): a scenario's own unit types (runtime/unitTypes.js), set in the scenario editor under Wars.
+    id: "2026-11-custom-unit-types",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Unit types of your own",
+        items: [
+          "Scenario authors can create their own unit types under Wars in the scenario editor's Features tab, each with a name, an icon and a kind.",
+          "Set how hard each type hits, how much it can take and how fast it moves: a dragon can be an air unit five times as strong.",
+          "Units of these types fight by their own figures in the air, on land and at sea, and only the countries you choose can raise them.",
+        ],
+      },
+    ],
+  },
+  {
+    // The owner's three follow-ups to the war foundations (2026-11-13): "Battlefields that seat a whole coalition", "Pin every ledger to its events before sorting",
+    // "Remove the last word-list gates near the war system" (an annexation or capture told in words alone no longer moves the map).
+    id: "2026-11-whole-coalitions",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Whole coalitions, steadier records",
+        items: [
+          "Every member of a coalition now fights on its battlefields with troops of its own: a battlefield used to seat eight a side.",
+          "Treaties, puppet changes, battlefield orders and storylines stay on the event the AI wrote them for, even when it lists a period's events out of date order.",
+          "The map changes only by the region changes an event records, in every language: a capture or annexation told in words alone no longer moves it.",
+          "War news such as rationing, patrols and artillery fire is no longer hidden or thrown out over its English wording, and a country can ration in the same turn its war begins.",
+        ],
+      },
+    ],
+  },
+  {
+    // "the entire war foundational archetecture is pretty weak ... we need to redesign the foundations and do a canonical war system rework" (the owner, 2026-11-13):
+    // one war record for everything (runtime/warRecord.js), ids never reused, whole coalitions, nothing live cut, one settlement per skip and no retries.
+    id: "2026-11-sturdier-wars",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Sturdier wars",
+        items: [
+          "A war that ends and flares up again is now a new war, so the first keeps its history, treaty and reparations.",
+          "Every member of a coalition counts, however large it is: a front opens wherever any of them borders the enemy.",
+          "Ongoing wars, open peace offers, unanswered calls to arms and unpaid reparations are never dropped from the record.",
+          "A time skip no longer asks the AI again over a war record that does not fit: it is fixed or left out, and the next turn is told.",
+          "A pre-game history is no longer thrown away over one war, and a war already being fought is never set up twice.",
+        ],
+      },
+    ],
+  },
+  {
+    // Political World / Pre-history player-facing editor refresh. Keep the
+    // delivery date aligned with the eventual Beta build before publishing.
+    id: "2026-11-political-world-prehistory",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Political World and starting history",
+        items: [
+          "Small parties now stay individually visible in the Political World party list, even when the chart groups them together.",
+          "Parties now use freeform Ideology and Political position fields in the Scenario Editor and Country Editor.",
+          "Generated political parties can use more flexible ideology and political-position descriptions.",
+          "Create and edit starting relationships, agreements and ongoing storylines without generating pre-game history.",
+          "Set relationship scores, treaty signatories, guarantees and access rights, and storyline participants, pressure and status.",
+          "Existing treaties generated with Political World can now be edited or removed from your scenario's starting history.",
+        ],
+      },
+    ],
+  },
+  {
     // "make it not play the war music whenever the war room is availible, because if you have deployed troops but no conflicts there should be no war music" (the owner, 2026-11-13):
     // the war room open on troops built up in peace played the battle music.
     id: "2026-11-war-music-only-in-war",

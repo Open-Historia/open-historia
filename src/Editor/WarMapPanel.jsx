@@ -20,7 +20,7 @@ import Icon from "./Icon.jsx";
 import { Row, Toggle } from "./fields.jsx";
 import { ACCENT, inputStyle, labelDim, pillButton } from "./editorStyles.js";
 import { WEATHER_STATES } from "../runtime/fronts/weather.js";
-import { TERRAIN_LEVEL_MOST, WALL_LEVEL_LEAST, WALL_LEVEL_MOST } from "../runtime/warGeography.js";
+import { SEASON_KINDS, TERRAIN_LEVEL_MOST, WALL_LEVEL_LEAST, WALL_LEVEL_MOST } from "../runtime/warGeography.js";
 import { isGameDate, normalizeGameDate } from "../runtime/gameDates.js";
 import { CLIMATE_PRESETS, DAYS_IN_MONTH, monthDayOf, monthDayParts, newClimateEvent, newSeason, seasonsOfClimate } from "./warGeographyDoc.js";
 import { WORLD_CLIMATE_ZONES, WORLD_TERRAIN_AREAS } from "../runtime/worldGeographyDefaults.js";
@@ -64,6 +64,8 @@ const TERRAIN_LEVEL_LABELS = ["Flat", "Easy", "Uneven", "Rough", "Hard going", "
 const WALL_LEVEL_LABELS = { 3: "Weak", 4: "Light", 5: "Solid", 6: "Strong", 7: "Very strong", 8: "Formidable", 9: "Nearly unbreakable", 10: "Unbreakable" };
 
 const WEATHER_LABELS = { clear: "Clear skies", rain: "Rain", storm: "Storm", mud: "Mud", snow: "Snow", blizzard: "Blizzard", frost: "Frost", heat: "Heat", fog: "Fog" };
+// The world's seasons a designer's season can be tinted as (warGeography.js SEASON_KINDS).
+const SEASON_KIND_LABELS = { winter: "Winter", spring: "Spring", summer: "Summer", autumn: "Autumn" };
 const CLIMATE_LABELS = { polar: "Polar", continental: "Continental", arid: "Arid", tropical: "Tropical" };
 // The months by name, January first, in the page's own language: the browser knows them all.
 const monthNames = () => {
@@ -238,6 +240,18 @@ const SeasonCard = ({ season, zoneColor, open, onToggle, onChange, onRemove }) =
             )}
           </span>
         </Row>
+        {/* Which of the world's seasons this one is, for the map's tint where it
+            has no colour of its own (Game/Map/seasonTint.js): its name is never read. */}
+        {!season.color && (
+          <Row label="Tinted as" title="The season the game's map tints the zone as, without a colour of its own">
+            <select value={season.kind || ""} onChange={(e) => onChange({ kind: e.target.value || undefined })} style={{ ...smallInput, cursor: "pointer" }}>
+              <option value="" style={{ color: "#000" }}>By its weather</option>
+              {SEASON_KINDS.map((kind) => (
+                <option key={kind} value={kind} style={{ color: "#000" }}>{SEASON_KIND_LABELS[kind]}</option>
+              ))}
+            </select>
+          </Row>
+        )}
         <div style={labelDim}>Weather</div>
         <div style={hint}>How often each weather comes in this season.</div>
         <WeatherMix value={season.weather} onChange={(weather) => onChange({ weather })} />

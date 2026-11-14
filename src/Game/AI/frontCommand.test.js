@@ -106,11 +106,14 @@ test("a player's typed order reaches their troops through the function the skip'
   const read2 = (text) => readGivenOrders(text, { players: ["Aland"], fromDate: "2024-03-01", days: 10 });
   const { given, refused } = read2([
     "The Front~Aland~dig in~north~~",
-    "The Front~Aland~push~south~2024-03-04~city: Brod",
+    "The Front~Aland~Advance~south~2024-03-04~city: Brod",
     "The Front~Aland~withdraw~all~2025-01-01",
     "The Front~Borduria~advance~all~~",
     "strike~Aland~missile strike~~~city: Brod",
     "The Front~Aland~dance~all~~",
+    // The rules' order words only: "push" is no more an order than "pousser" is.
+    "The Front~Aland~push~south~~",
+    "The Front~Aland~pousser~south~~",
   ].join("\n"));
   assert.deepEqual(given.map((order) => [order.side, order.order, order.sector, order.objective, order.date, order.day, order.now]), [
     ["Aland", "dig in", "north", "", "2024-03-01", 0, true],
@@ -118,9 +121,11 @@ test("a player's typed order reaches their troops through the function the skip'
     // (A day outside the period is its first.)
     ["Aland", "withdraw", "all", "", "2024-03-01", 0, true],
   ]);
-  assert.equal(refused.length, 3);
+  assert.equal(refused.length, 5);
   assert.match(refused.join("\n"), /Borduria is not a country a person plays/);
   assert.match(refused.join("\n"), /a strike or a transporter goes in frontOrders/);
+  assert.match(refused.join("\n"), /"push" is not an order/);
+  assert.match(refused.join("\n"), /"pousser" is not an order/);
   assert.equal(read2(Array.from({ length: 20 }, () => "The Front~Aland~hold~all~~").join("\n")).given.length, GIVEN_ORDERS_MOST);
 
   // The function beside a task's others: it is answered once, and the rest still answer.

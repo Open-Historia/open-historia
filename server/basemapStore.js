@@ -18,6 +18,7 @@ import url from "url";
 import { resolveChildPath } from "./security.js";
 import { hashPayload } from "./basemapHash.js";
 import { hashFile, inspectTiledArchive } from "./tiledBasemaps.js";
+import { nameId } from "./nameId.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 import { DATA_DIR } from "./dataDir.js";
@@ -41,13 +42,16 @@ const writeJson = (target, value) => {
   fs.writeFileSync(target, JSON.stringify(value));
 };
 
+// A basemap's id, from its name by the game's one rule for an id made from a
+// name (nameId.js): a Latin name keeps its slug, a name in another script is its
+// own hash instead of "basemap".
 const normalizeId = (raw, fallback = "basemap") => {
-  const base = String(raw ?? "")
+  const base = nameId(raw, (name) => String(name ?? "")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
+    .slice(0, 48));
   return base || fallback;
 };
 

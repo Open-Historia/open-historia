@@ -116,6 +116,7 @@ const GENERATED_PARTY_FIELDS = new Set([
   "shortNameNative",
   "ideologyFamily",
   "subideology",
+  "politicalPosition",
   "role",
   "seats",
   "founded",
@@ -241,12 +242,10 @@ const representationEntities = (actor, representation) => {
   return Array.isArray(actor?.powerBlocs) ? actor.powerBlocs : [];
 };
 
-const residualRepresentationEntity = (entity) => {
-  const id = clean(entity?.id).toLocaleLowerCase();
-  const name = clean(entity?.name || entity?.shortName).toLocaleLowerCase();
-  return /^(?:other|others|other-parties|other_parties|independent|independents)$/.test(id)
-    || /^(?:other|others|other parties|independent|independents)$/.test(name);
-};
+// The catch-all row of a roster (minor parties and independents together) is
+// the one marked residual: true, never one found by an English name ("Other",
+// "Independents"), which a roster in another language does not use.
+const residualRepresentationEntity = (entity) => entity?.residual === true;
 
 const generatedLandscapeBasis = (entity, metric) => clean(entity?.[metric]?.basis).toLocaleLowerCase();
 
@@ -606,35 +605,6 @@ const validateCrossCollectionEntityIds = ({
       errors.push(`Political Actor entity id ${id} may not exist in both parties and powerBlocs`);
     }
   }
-};
-
-const hasExplicitPartyStateStructure = (patch) => {
-  const systemType = clean(patch?.politicalSystem?.type).toLocaleLowerCase().replace(/[_-]+/g, " ");
-  const governmentForm = clean(patch?.government?.form).toLocaleLowerCase().replace(/[_-]+/g, " ");
-  const joined = `${systemType} ${governmentForm}`.replace(/\s+/g, " ").trim();
-
-  // "Dominant-party" describes an incumbent advantage inside a broader political
-  // field; it is not evidence that the party and state are structurally fused.
-  // Reject both normal wording (dominant party) and the model's observed retry
-  // evasion (one party dominant ...) before checking true party-state markers.
-  if (/\bdominant party\b|\bparty dominant\b/.test(joined)) return false;
-
-  // This field is already restricted to politicalSystem.type / government.form,
-  // so once dominant-party wording has been excluded, an explicit one-party or
-  // single-party marker is itself sufficient structural evidence. Do not require
-  // the next noun to be exactly "state/system/regime/rule/government": real forms
-  // such as "one-party presidential republic", "one-party socialist republic",
-  // and "single-party communist state" are equally explicit party-state claims.
-  return /\b(?:one|single) party\b|\bvanguard party\b|\bparty state\b|\bparty led\b|\bparty rule\b|\bparty supremacy\b/.test(joined);
-};
-
-const validatePoliticalSystemSemantics = (patch, errors) => {
-  const representation = clean(patch?.politicalSystem?.representation).toLocaleLowerCase().replace(/[ -]+/g, "_");
-  if (representation !== POLITICAL_REPRESENTATIONS.PARTY_STATE) return;
-  if (hasExplicitPartyStateStructure(patch)) return;
-  errors.push(
-    "actorPatch.politicalSystem.representation=party_state requires explicit one-party/vanguard-party structural evidence in politicalSystem.type or government.form; dominant-party or generic republic systems must use electoral or an appropriate factional representation",
-  );
 };
 
 const validateReferenceList = (value, knownIds, path, errors) => {
@@ -1010,7 +980,6 @@ export const validatePoliticalGenerationProposal = (proposal, {
     existingPowerBlocIds,
     errors,
   });
-  validatePoliticalSystemSemantics(patch, errors);
   if (patch.traits !== undefined) {
     const traitValidation = validatePoliticalTraitPatch(patch.traits);
     if (traitValidation.error) errors.push(`actorPatch.traits ${traitValidation.error}`);

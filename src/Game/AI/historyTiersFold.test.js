@@ -88,7 +88,7 @@ test("canon facts persist across many folds through the save, and stay on the pa
       canon: fold === 3 ? [{ date: "1918-11-11", kind: "treaty", text: "Armistice of Zenda ends the Great War." }] : [],
       // A model that "condenses" the eras to nothing is refused.
       eras: fold === 20 ? [{ from: 1900, to: 1930, text: "Short." }] : undefined,
-    }, { span: [year, year], eraWords: 400 });
+    }, { span: [year, year], eraChars: 2400 });
     const update = applyHistoryDocumentUpdate(world, { summary: answer.summary, tiers: answer.tiers, span: [year, year], startYear: 1900, throughDate: `${year}-12-31` });
     world = normalizeWorldState(JSON.parse(JSON.stringify({ ...world, historyDocument: update.historyDocument, canonFacts: update.canonFacts })));
   }

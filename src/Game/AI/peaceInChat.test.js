@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import { normalizeChatEntry, normalizeWorldState } from "../../runtime/gameState.js";
 import { parseDiplomaticEnvelope } from "../../runtime/diplomaticEnvelope.js";
-import { TERRITORY_AS_HELD, termsOfLetter } from "../../runtime/peaceTerms.js";
+import { TERRITORY_AS_HELD, readPeaceVerdict, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { peaceOffersForThread, placePeaceOffers } from "../GameUI/peacePlacement.js";
 import { GAMEPLAY_TOOLS, normalizeGameplayPayload, validateGameplayPayload } from "./gameplaySchemas.js";
 import { mergeSegmentPayloads } from "./jumpSegments.js";
@@ -127,6 +127,35 @@ test("a leader at war with the player is told what is on the table, and how to s
   const chat = read("../GameUI/chat.jsx");
   assert.ok(chat.includes("const { reply, reaction, memorySummary, peace } = await sendDiplomaticMessage("));
   assert.ok(chat.includes("void answerPeaceInChat({ speaker: country.name, line: peace, chatId: chat.id, messageId: leaderMessage.id })"));
+});
+
+// "accepte" from a leader writing in French made no peace: the verdict was read
+// as an English word, with English inflections and synonyms. It is one of the
+// game's four words now, written so whatever language the reply is in, and its
+// terms are the game's records, whose conditions are the leader's own words.
+test("a French leader's acceptance makes the peace exactly as an English one does", () => {
+  const put = playerDiplomacy(world(), { op: "propose", ref: "war-1", terms: { territory: TERRITORY_AS_HELD }, country: "Aland", players: ["Aland"], date: "1915-01-10", round: 8 }).world;
+  const settle = (raw) => {
+    const { peace } = parseDiplomaticEnvelope(raw);
+    return answerPeaceProposal(put, { from: "Borduria", to: "Aland", verdict: readPeaceVerdict(peace, { from: "Borduria", to: "Aland" }), players: ["Aland"], date: "1915-01-12", round: 8 });
+  };
+  const french = settle("Nous acceptons vos conditions. La guerre est finie.\nPEACE:accept\nDIPLOMATIC_MEMORY:La Bordurie a accepté la paix d'Aland.");
+  const english = settle("We accept your terms. The war is over.\nPEACE:accept\nDIPLOMATIC_MEMORY:Borduria accepted Aland's peace.");
+  assert.deepEqual([french.outcome, french.world.wars[0].status], ["peace", "ended"]);
+  assert.deepEqual(french.world.regionOwnershipOverrides, english.world.regionOwnershipOverrides);
+  assert.deepEqual(french.world.peaceTreaties, english.world.peaceTreaties);
+
+  // A counter in French: the terms are records, the condition its own words.
+  const counter = settle("Nous proposons d'autres conditions.\nPEACE:counter as held; pay~Aland~1~3; condition~la frontière est démilitarisée");
+  const offer = counter.world.peaceOffers.find((entry) => entry.status === "open");
+  assert.equal(counter.outcome, "offered");
+  assert.deepEqual(offer.terms, { territory: TERRITORY_AS_HELD, reparations: { payer: "Aland", receiver: "Borduria", share: 0.01, years: 3 }, conditions: ["la frontière est démilitarisée"] });
+
+  // A word the game does not use, in any language, does nothing: the terms put stay open.
+  for (const word of ["accepte", "accepted", "refuse", "counter-offer as held"]) {
+    const none = settle(`...\nPEACE:${word}`);
+    assert.deepEqual([none.outcome, none.world.peaceOffers[0].status], ["", "open"], word);
+  }
 });
 
 test("a skip's answer with a peace offer lands as a chat message carrying its terms, and only when the skip says so", () => {

@@ -65,6 +65,8 @@ const workshopFields = (props) => {
     ...(text(props.createdAt) ? { createdAt: text(props.createdAt) } : {}),
     ...(text(props.markerId) ? { markerId: text(props.markerId) } : {}),
     ...(isRecord(props.markerExtra) ? { markerExtra: props.markerExtra } : {}),
+    // The family a kind of the author's own is drawn as (mapFeatures.js).
+    ...(text(props.family) ? { family: text(props.family) } : {}),
   };
 };
 

@@ -42,37 +42,20 @@ const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLowerCase().replace(/[.!]+$/, "");
 const asArray = (value) => (Array.isArray(value) ? value : []);
 
-// What a model is likely to write for each word. A word that is not here and
-// not the word itself is not an order: it is left out and said.
-const wordTable = (canonical, synonyms) => {
-  const table = new Map();
-  for (const word of canonical) table.set(word, word);
-  for (const [word, others] of Object.entries(synonyms)) {
-    for (const other of others) table.set(other, word);
-  }
-  return table;
-};
+// The words of each field are the engine's own, exactly as the rules list
+// them (frontPrompt.js, gameplay.js JUMP_LEVERS), case and spacing aside. A
+// word that is not one of them is no order, result, effort or weapon: the
+// line is left out and the receipt says why, so the next answer writes it
+// right. Nothing a model might write instead is read as one of them: a table
+// of English synonyms ("attack" for advance, "storm" for assault) took every
+// English near miss and no other language's (the owner, 2026-11-13: no
+// keywording anywhere).
+const wordTable = (canonical) => new Map(canonical.map((word) => [word, word]));
 // A transporter's words are orders too: they are written on the same lines
 // (frontTurn.js sets them apart from the orders a battlefield is given).
 export const isTransportOrder = (word) => Object.hasOwn(TRANSPORT_ORDERS, String(word ?? ""));
-const ORDER_WORDS = wordTable([...FRONT_ORDERS, REINFORCE_ORDER, ...Object.keys(TRANSPORT_ORDERS)], {
-  // More troops for a side of a battlefield (runtime/fronts/constants.js REINFORCE_ORDER): its objective is how many.
-  reinforce: ["reinforces", "reinforced", "reinforcement", "reinforcements", "send reinforcements", "draft", "drafts", "conscript", "conscription", "mobilise", "mobilize", "mobilisation", "mobilization", "call up", "call-up", "deploy", "deploys", "deployment", "raise troops", "more troops"],
-  ship: ["sail", "sealift", "sea lift", "by sea", "convoy", "troopship", "troopships", "ferry", "shipped", "ships", "send by sea"],
-  rail: ["train", "trains", "by rail", "by train", "railway", "entrain", "overland", "by road", "by land", "send by rail"],
-  airlift: ["air lift", "airdrop", "air drop", "paradrop", "airborne", "by air", "fly", "flown", "send by air"],
-  advance: ["attack", "attacks", "push", "offensive", "advances", "press", "pursue"],
-  flank: ["outflank", "flanking", "flanks", "outflanks", "turn the flank"],
-  assault: ["storm", "storms", "take", "takes", "seize", "seizes", "assaults", "assault on", "attack on", "strike at"],
-  blitz: ["blitzkrieg", "mass", "massed attack", "massed assault"],
-  spearhead: ["thrust", "drive", "armoured thrust", "armored thrust"],
-  encircle: ["envelop", "encirclement", "pincer", "pincers", "surround"],
-  hold: ["defend", "hold the line", "stand", "stand fast", "holds"],
-  "dig in": ["dig-in", "digin", "entrench", "fortify", "entrenched"],
-  "fall back": ["fall-back", "fallback", "retreat", "pull back"],
-  withdraw: ["withdrawal", "withdraws", "pull out", "pull out of", "evacuate", "evacuation", "go home", "leave"],
-  land: ["landing", "amphibious landing", "amphibious", "landings"],
-});
+// More troops for a side of a battlefield (runtime/fronts/constants.js REINFORCE_ORDER): its objective is how many.
+const ORDER_WORDS = wordTable([...FRONT_ORDERS, REINFORCE_ORDER, ...Object.keys(TRANSPORT_ORDERS)]);
 // How many formations an order for more troops brings: the first number in
 // what was written ("30", "30 divisions", "about 12"), held to what one order
 // may bring; nothing where no number is written, and the game then judges it.
@@ -86,47 +69,17 @@ const reinforceFields = (value) => {
 // begins with this word where an order's line has its battlefield.
 export const STRIKE_WORD = "strike";
 export const isStrikeOrder = (word) => String(word ?? "") === STRIKE_WORD;
-const WEAPON_WORDS = wordTable(STRIKE_WEAPONS, {
-  "silo missile": ["icbm", "missile", "nuclear missile", "ballistic missile", "silo", "silo-launched missile", "land-based missile", "nuclear strike"],
-  "submarine missile": ["slbm", "submarine", "submarine-launched missile", "sub-launched missile", "sub missile", "submarine launch"],
-  "missile strike": ["cruise missile", "cruise missiles", "missiles", "missile barrage", "missile attack", "rocket strike", "rockets", "conventional missile"],
-  "nuclear bomber": ["nuclear bomb", "atomic bomb", "atom bomb", "bomber", "air-dropped bomb", "gravity bomb", "nuclear bombing", "atomic bombing"],
-  "bombing run": ["bombing", "bombing raid", "air raid", "air strike", "airstrike", "air strikes", "airstrikes", "bombers", "strategic bombing", "raid", "carpet bombing"],
-  "drone strike": ["drone", "drones", "drone attack", "drone strike", "drone strikes", "drone swarm", "kamikaze drone", "kamikaze drones", "shahed", "shahed-136", "shaheds", "geran", "fpv", "fpv drone", "fpv drones", "loitering munition", "loitering munitions", "uav", "uav strike"],
-});
-const RESULT_WORDS = wordTable(FRONT_RESULTS, {
-  breakthrough: ["broke through", "break through", "breaks through"],
-  captured: ["capture", "taken", "takes", "fell", "falls", "seized"],
-  repulsed: ["repelled", "beaten back", "thrown back", "failed", "fails"],
-  stalemate: ["deadlock", "stalled", "stall"],
-  collapse: ["collapsed", "collapses", "rout", "routed"],
-  surrender: ["surrendered", "surrenders", "capitulation", "capitulated", "capitulates"],
-});
-const EFFORT_WORDS = wordTable(FRONT_EFFORTS, {
-  token: ["minimal", "probing", "probe"],
-  limited: ["partial", "modest"],
-  major: ["heavy", "large", "full"],
-  total: ["all-out", "all out", "maximum", "everything"],
-});
-// The sector words that mean a part of the line by the compass. Anything else
-// in the sector's field is a place, kept as written for the engine to find.
-const SECTOR_WORDS = wordTable(
-  ["all", "north", "south", "east", "west", "centre", "northeast", "northwest", "southeast", "southwest"],
-  {
-    all: ["whole", "entire", "everywhere", "whole line", "entire line", "the whole line", "all troops", ""],
-    centre: ["center", "central", "middle", "the centre", "the center"],
-    north: ["northern", "the north"],
-    south: ["southern", "the south"],
-    east: ["eastern", "the east"],
-    west: ["western", "the west"],
-    northeast: ["north-east", "north east", "northeastern"],
-    northwest: ["north-west", "north west", "northwestern"],
-    southeast: ["south-east", "south east", "southeastern"],
-    southwest: ["south-west", "south west", "southwestern"],
-  },
-);
+const WEAPON_WORDS = wordTable(STRIKE_WEAPONS);
+const RESULT_WORDS = wordTable(FRONT_RESULTS);
+const EFFORT_WORDS = wordTable(FRONT_EFFORTS);
+// The sector words that mean a part of the line by the compass, as a
+// battlefield's brief lists them (runtime/fronts/sectors.js). Anything else in
+// the sector's field is a place, kept as written for the engine to find; a
+// blank field is the whole line, as the engine reads it (sectors.js
+// resolveSector).
+const SECTOR_WORDS = wordTable(["all", "north", "south", "east", "west", "centre", "northeast", "northwest", "southeast", "southwest"]);
 
-export const normalizeFrontSector = (value) => SECTOR_WORDS.get(fold(value)) ?? clean(value);
+export const normalizeFrontSector = (value) => (clean(value) ? SECTOR_WORDS.get(fold(value)) ?? clean(value) : "all");
 
 const parseEventNumbers = (value) =>
   String(value ?? "")
@@ -160,15 +113,13 @@ const transportFields = ({ carrier, strength, speed }) => {
   return fields;
 };
 
-// How many of a strike were shot down, as it is written: a number, or a word
-// for a share of them (a model that will not count says "all" or "most"; one
-// that writes the fact in the field, "intercepted", means all of them). A
-// share of a strike that was shot down at all is never none of it.
-const DOWN_WORDS = new Map([
-  ["all", 1], ["all of them", 1], ["every", 1], ["everything", 1], ["yes", 1], ["intercepted", 1], ["shot down", 1], ["destroyed", 1],
-  ["most", 0.75], ["most of them", 0.75], ["half", 0.5], ["some", 0.3], ["some of them", 0.3], ["several", 0.3], ["few", 0.2], ["a few", 0.2],
-  ["none", 0], ["no", 0], ["nothing", 0],
-]);
+// How many of a strike were shot down, as it is written: a number, or one of
+// the shares the rules offer for a model that will not count (gameplay.js
+// JUMP_LEVERS: "a number or all | most | half | some | none"). Nothing else is
+// read as a share: "intercepted" or "a few" is no number and no share, and
+// counts as none. A share of a strike that was shot down at all is never none
+// of it.
+const DOWN_WORDS = new Map([["all", 1], ["most", 0.75], ["half", 0.5], ["some", 0.3], ["none", 0]]);
 const shotDown = (value, many) => {
   const share = DOWN_WORDS.get(fold(value));
   if (share === undefined) return Math.min(many, wholeNumber(value));

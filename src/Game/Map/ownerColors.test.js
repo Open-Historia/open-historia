@@ -37,6 +37,39 @@ test("folded names and registry aliases reach the same colour", () => {
   assert.deepEqual(resolve("Serenissima"), [10, 20, 30], "an alias with no registry colour falls to the palette");
 });
 
+// The fold kept a-z only, so a name in any other script had no folded key and
+// was found by its exact spelling alone: "РОССИЯ" was drawn in a hash colour
+// beside "Россия". It now folds as its English twin does.
+test("a name in another script folds as its English twin does", () => {
+  const resolve = createOwnerRgbResolver(
+    { Russia: [180, 30, 30], "Россия": [180, 30, 30], "中国": [220, 40, 40] },
+    { "Российская Федерация": { name: "Российская Федерация", aliases: ["РФ"], color: "#334455" }, "Russian Federation": { name: "Russian Federation", aliases: ["RF"], color: "#334455" } },
+  );
+  assert.deepEqual(resolve("RUSSIA"), [180, 30, 30]);
+  assert.deepEqual(resolve("РОССИЯ"), [180, 30, 30]);
+  assert.deepEqual(resolve("rf"), [51, 68, 85]);
+  assert.deepEqual(resolve("рф"), [51, 68, 85]);
+  assert.deepEqual(resolve("日本"), fallbackRgbFromOwner("日本"), "another name in the same script is another country");
+});
+
+// Every name with fewer than three Latin letters used to be the same grey, so a
+// map of countries named in Russian or Chinese drew them all alike.
+test("countries named in another script each get a colour of their own, the same every time", () => {
+  const grey = [96, 96, 96];
+  const names = ["Россия", "Украина", "Беларусь", "中国", "日本", "مصر", "ישראל"];
+  const colours = names.map((name) => fallbackRgbFromOwner(name));
+  for (const [index, colour] of colours.entries()) {
+    assert.notDeepEqual(colour, grey, names[index]);
+    assert.deepEqual(fallbackRgbFromOwner(names[index]), colour, `${names[index]} is drawn the same every time`);
+    assert.deepEqual(fallbackRgbFromOwner(names[index].toUpperCase()), colour, `${names[index]} in capitals is the same country`);
+    for (const channel of colour) assert.ok(channel >= 64 && channel <= 189, `${names[index]} stays in the palette's range`);
+  }
+  assert.equal(new Set(colours.map((colour) => colour.join())).size, names.length, "no two of them alike");
+  // A Latin name keeps the colour it always had.
+  assert.deepEqual(fallbackRgbFromOwner("Spain"), [64 + 18 * 5, 64 + 0 * 5, 64 + 15 * 5]);
+  assert.deepEqual(fallbackRgbFromOwner(""), grey, "no name at all is grey");
+});
+
 // The owner's website Modern Day, 2026-11-09: an older copy keyed "Kingdom of
 // Spain" read a palette keyed "Spain" (the seed's, after the countries took
 // their common names), and countries came out grey while Algeria kept its colour.

@@ -5,10 +5,22 @@
 // - formal agreements / alliances / guarantees (world.agreements)
 // - bounded diplomatic context for AI attention
 // - compact relation/agreement update transport
-// - one-time deterministic migration from explicit legacy treaty/alliance events
 //
 // Design rule: persistent world, bounded attention. The save may remember many
 // diplomatic facts; any one AI request sees only the relevant slice.
+//
+// A record is tied to its events by the numbers the model wrote, read once by
+// ledgerPins.js while they still mean what the model meant, and never by what
+// its words have in common with an event's: the game is written in the
+// player's language, and a match on words is a match only in English. A
+// record a skip tied to no event is still the skip's record: it is applied,
+// dated by the skip (applyRelationUpdates, applyAgreementUpdates,
+// applyPuppetUpdates).
+//
+// Nothing is read out of prose. A save from before the ledgers keeps the
+// relations and agreements its records hold (an empty ledger is a sparse one:
+// DIPLOMATIC_SLICE_RULES); its old treaty events and chats are history, not
+// records.
 
 import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { MAX_PUPPETS, PUPPET_COUP_LOYALTY, PUPPET_KINDS } from "../../runtime/puppets.js";
@@ -17,6 +29,7 @@ import { resolvePolityIdentity, buildPolityIdentityIndex } from "../../runtime/p
 import { compareGameDates, isGameDate } from "../../runtime/gameDates.js";
 import { receiptPlayerNote } from "../../runtime/receiptPlayerNotes.js";
 import { hasMalformedRelationSummary as relationSummaryHasReservedSeparator } from "../../runtime/relationSummary.js";
+import { latinSlug, nameId } from "../../../server/nameId.js";
 
 export const DIPLOMATIC_LEDGER_VERSION = 1;
 export const DIPLOMATIC_DIRECTOR_VERSION = "0.1.7-round-zero-baseline";
@@ -89,13 +102,13 @@ const parseIsoDate = (value) => {
   return isGameDate(text) ? text : "";
 };
 
-const slug = (value) => clean(value)
-  .toLocaleLowerCase()
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-+|-+$/g, "")
-  .slice(0, 80);
+// A polity as it stands in an id (a puppet's coup storyline, its revolt, its
+// row): the game's one rule for an id made from a name (server/nameId.js). A
+// Latin name keeps the slug it always had; a name in another script is its own
+// hash. Cut to a-z and 0-9, every puppet named in Cyrillic or Chinese had the
+// same coup storyline, "storyline-puppet-": after the first none was ever
+// opened, and settling one settled them all.
+const slug = (value) => nameId(value, (name) => latinSlug(name, 80));
 
 const stableHash = (value) => {
   let hash = 2166136261;
@@ -135,7 +148,6 @@ export const canonicalDiplomaticPolity = (token, world, { allowUnknown = false, 
   const resolved = resolvePolityIdentity(raw, world, {
     allowUnknown,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
     identityIndex,
   });
@@ -627,12 +639,18 @@ const decodeRelationLine = (line, index) => {
   };
 };
 
+// A figure a record left blank stays blank as an object too: Number(null) is 0,
+// so a record tied to its events (ledgerPins.js, which hands every record on as
+// an object) read a blank score as a relation at 0 and a blank loyalty as a
+// client state at 0, where the line read them as "derive it" and 50.
+const figureOrBlank = (value) => (value === null || value === undefined || (typeof value === "string" && !value.trim()) ? NaN : Number(value));
+
 export const decodeRelationUpdates = (value, { limit = MAX_RELATION_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
       if (typeof entry === "string") return isRecordLine(entry) ? decodeRelationLine(entry, index) : null;
       if (!entry || typeof entry !== "object") return null;
-      const score = Number(entry.score);
+      const score = figureOrBlank(entry.score);
       const normalizedScore = Number.isFinite(score) ? clamp(Math.round(score), -100, 100) : null;
       return {
         id: clean(entry.id) || `relation-update-${index}`,
@@ -658,8 +676,9 @@ const decodeAgreementLine = (line, index) => {
   const text = String(line ?? "");
   const rawParts = text.split(SEP);
 
-  // Accept both legacy seven-field records and the native-linked six-field form
-  // id~op~type~parties~title~terms where Javascript owns event binding.
+  // Accept both the seven-field record and the six-field form
+  // id~op~type~parties~title~terms, which names no event (applied all the same,
+  // dated by the skip: applyAgreementUpdates).
   const [id, op, type, parties, eventNumbers, title, terms] =
     rawParts.length === 6
       ? [rawParts[0], rawParts[1], rawParts[2], rawParts[3], "", rawParts[4], rawParts[5]]
@@ -749,145 +768,6 @@ const canonicalizeParties = (parties, world) => unique(
   12,
 );
 
-const SEARCH_STOPWORDS = new Set([
-  "about", "after", "again", "against", "among", "between", "during", "from",
-  "into", "over", "that", "their", "there", "these", "this", "through", "under",
-  "with", "without", "government", "empire", "kingdom", "republic", "state",
-  "states", "country", "countries", "event", "relation", "relations", "update",
-]);
-
-// The letters, marks and digits of any script. Kept to a-z and 0-9, a summary
-// and an event written in Russian or Arabic had no words in common however
-// alike they were, and a record with no event number of its own was never tied
-// to the event that caused it. English text reads as it always did.
-const diplomaticSearchText = (value) => String(value ?? "")
-  .toLocaleLowerCase()
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
-  .replace(/\s+/g, " ")
-  .trim();
-
-const diplomaticSearchTokens = (value) =>
-  [...new Set(diplomaticSearchText(value)
-    .split(" ")
-    .filter((token) => token.length >= 4 && !SEARCH_STOPWORDS.has(token)))];
-
-const politySearchAliases = (token, world) => {
-  const aliases = new Set();
-  const push = (value) => {
-    const normalized = diplomaticSearchText(value);
-    if (normalized) aliases.add(normalized);
-  };
-
-  const canonical = canonicalDiplomaticPolity(token, world, { allowUnknown: true });
-  push(token);
-  push(canonical);
-  push(diplomaticDisplayName(world, canonical));
-
-  for (const [key, record] of Object.entries(world?.polityOverrides || {})) {
-    const candidates = [key, record?.code, record?.name, ...array(record?.aliases)];
-    const belongs = candidates.some((candidate) =>
-      lower(canonicalDiplomaticPolity(candidate, world, { allowUnknown: true })) === lower(canonical));
-    if (!belongs) continue;
-    candidates.forEach(push);
-  }
-
-  // Generic political-form stripping catches common prose such as "British" from
-  // "British Empire" or "Denmark" from "Kingdom of Denmark" without hard-coding
-  // any country. These are only search aliases; canonical identity is unchanged.
-  for (const value of [...aliases]) {
-    push(value
-      .replace(/^(the )?(kingdom|republic|empire|federation|commonwealth|union|state) of /, "")
-      .replace(/ (kingdom|republic|empire|federation|commonwealth|union|state)$/, ""));
-  }
-
-  return [...aliases].filter((value) => value.length >= 3);
-};
-
-const eventDiplomaticSearchText = (event) => {
-  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-  const structuredActors = [
-    ...array(event?.combatants),
-    ...array(impacts?.polityChanges).flatMap((entry) => [entry?.code, entry?.name]),
-    ...array(impacts?.politicalActorOps).map((entry) => entry?.polityKey || entry?.polity || entry?.country),
-    ...array(impacts?.createdChats).flatMap((chat) => [chat?.speaker, ...array(chat?.countries)]),
-  ];
-  return diplomaticSearchText([
-    event?.id,
-    event?.title,
-    event?.description,
-    event?.summary,
-    event?.quote?.text,
-    event?.quote?.speaker,
-    ...structuredActors,
-  ].filter(Boolean).join(" "));
-};
-
-const textContainsAlias = (text, alias) =>
-  Boolean(alias && (` ${text} `).includes(` ${alias} `));
-
-const inferUniqueDiplomaticEventIndex = ({
-  events,
-  actorAliases = [],
-  subjectText = "",
-  minimumActorHits = 1,
-} = {}) => {
-  const normalizedEvents = normalizeEvents(events);
-  if (!normalizedEvents.length) return -1;
-
-  const subjectTokens = diplomaticSearchTokens(subjectText);
-  const scored = normalizedEvents.map((event, index) => {
-    const eventText = eventDiplomaticSearchText(event);
-    const actorHits = actorAliases.reduce(
-      (count, aliases) => count + (array(aliases).some((alias) => textContainsAlias(eventText, alias)) ? 1 : 0),
-      0,
-    );
-    const eventTokens = new Set(diplomaticSearchTokens(eventText));
-    const subjectOverlap = subjectTokens.filter((token) => eventTokens.has(token)).length;
-    const score = actorHits * 8 + Math.min(subjectOverlap, 8);
-    return { index, actorHits, subjectOverlap, score };
-  });
-
-  // With only one generated event, one concrete actor or subject overlap is enough
-  // to establish causality; there is no competing event to mis-bind to.
-  if (
-    scored.length === 1 &&
-    (
-      scored[0].actorHits >= minimumActorHits ||
-      scored[0].subjectOverlap >= 1
-    )
-  ) {
-    return 0;
-  }
-
-  const strong = scored.filter((row) =>
-    row.actorHits >= minimumActorHits &&
-    (
-      row.actorHits >= Math.min(2, actorAliases.length || 1) ||
-      row.subjectOverlap >= 2 ||
-      (actorAliases.length === 1 && row.subjectOverlap >= 1)
-    ));
-  const pool = strong.length
-    ? strong
-    : scored.filter((row) => row.subjectOverlap >= 4 && row.score >= 4);
-
-  if (!pool.length) return -1;
-  pool.sort((a, b) => b.score - a.score || b.actorHits - a.actorHits || b.subjectOverlap - a.subjectOverlap);
-  const best = pool[0];
-  const second = pool[1];
-
-  // Only repair when one event is clearly the best causal match. Ambiguous
-  // bookkeeping is safer to drop than to attach to the wrong canonical event.
-  if (second && second.score === best.score && second.actorHits === best.actorHits && second.subjectOverlap === best.subjectOverlap) {
-    return -1;
-  }
-  if (second && best.score - second.score < 2 && best.actorHits <= second.actorHits) {
-    return -1;
-  }
-  return best.index;
-};
-
 const encodeRelationUpdates = (updates) => array(updates).map((update) => [
   clean(update?.a).replaceAll(SEP, "—"),
   clean(update?.b).replaceAll(SEP, "—"),
@@ -907,292 +787,24 @@ const encodeAgreementUpdates = (updates) => array(updates).map((update) => [
   clean(update?.terms).replaceAll(SEP, "—"),
 ].join(SEP)).join("\n");
 
-const salvageUnboundRelationUpdates = (
-  updates,
-  events,
-  world,
-  { retainUnbound = false } = {},
-) => {
-  const normalizedEvents = normalizeEvents(events);
-  const kept = [];
-  let repaired = 0;
-  let dropped = 0;
-  let retainedUnbound = 0;
-
-  for (const update of bindRelationUpdatesToEvents(updates, normalizedEvents)) {
-    if (linkedEvents(update, normalizedEvents).length) {
-      kept.push(update);
-      continue;
-    }
-
-    const a = canonicalDiplomaticPolity(update?.a, world);
-    const b = canonicalDiplomaticPolity(update?.b, world);
-    const inferredIndex = inferUniqueDiplomaticEventIndex({
-      events: normalizedEvents,
-      actorAliases: [
-        politySearchAliases(a || update?.a, world),
-        politySearchAliases(b || update?.b, world),
-      ],
-      subjectText: update?.summary,
-      minimumActorHits: 1,
-    });
-
-    if (inferredIndex >= 0) {
-      const eventId = clean(normalizedEvents[inferredIndex]?.id);
-      kept.push({
-        ...update,
-        eventIndexes: [inferredIndex],
-        eventIds: eventId ? [eventId] : [],
-      });
-      repaired += 1;
-      console.warn(
-        `[OH diplomacy native binding] bound relation ${a || update?.a} ↔ ${b || update?.b} ` +
-        `to event${inferredIndex + 1} from native causal evidence.`,
-      );
-      continue;
-    }
-
-    if (retainUnbound) {
-      // Round Zero is an as-of baseline, not a claim that one event in the bounded
-      // pregame timeline "caused" the entire bilateral climate. Preserve the
-      // structurally valid relation as initial political memory when no unique
-      // event anchor exists. Ordinary turn-to-turn relation mutations still fail
-      // closed unless they can be tied to a causal event.
-      kept.push({
-        ...update,
-        eventIndexes: [],
-        eventIds: [],
-      });
-      retainedUnbound += 1;
-      console.info(
-        `[OH diplomacy baseline] retained initial relation ${a || update?.a} ↔ ${b || update?.b} ` +
-        "without forcing a false unique-event attribution.",
-      );
-      continue;
-    }
-
-    dropped += 1;
-    console.warn(
-      `[OH diplomacy native binding] dropped relation ${a || update?.a} ↔ ${b || update?.b}; ` +
-      "no unique causal event could be identified.",
-    );
-  }
-
-  return { updates: kept, repaired, dropped, retainedUnbound };
-};
-
-const salvageUnboundAgreementUpdates = (
-  updates,
-  events,
-  world,
-  { retainUnbound = false } = {},
-) => {
-  const normalizedEvents = normalizeEvents(events);
-  const kept = [];
-  let repaired = 0;
-  let dropped = 0;
-  let retainedUnbound = 0;
-  const existingAgreements = agreementMapFromWorld(world);
-
-  for (const update of bindAgreementUpdatesToEvents(updates, normalizedEvents)) {
-    if (linkedEvents(update, normalizedEvents).length) {
-      kept.push(update);
-      continue;
-    }
-
-    // Lifecycle updates may intentionally omit unchanged parties/title/terms. Reuse
-    // the existing canonical agreement as inference context rather than making the
-    // model restate redundant bookkeeping just so native code can find its event.
-    const prior = existingAgreements.get(clean(update?.id)) || null;
-    const canonicalParties = canonicalizeParties(
-      array(update?.parties).length ? update.parties : prior?.parties,
-      world,
-    );
-    const inferredIndex = inferUniqueDiplomaticEventIndex({
-      events: normalizedEvents,
-      actorAliases: canonicalParties.map((party) => politySearchAliases(party, world)),
-      subjectText: `${
-        update?.title || prior?.title || ""
-      } ${
-        update?.terms || prior?.terms || ""
-      } ${update?.op || ""}`,
-      minimumActorHits: canonicalParties.length >= 2 ? 2 : 1,
-    });
-
-    if (inferredIndex >= 0) {
-      const eventId = clean(normalizedEvents[inferredIndex]?.id);
-      kept.push({
-        ...update,
-        eventIndexes: [inferredIndex],
-        eventIds: eventId ? [eventId] : [],
-      });
-      repaired += 1;
-      console.warn(
-        `[OH diplomacy native binding] bound agreement ${update?.id || "<missing id>"} ${update?.op || ""} ` +
-        `to event${inferredIndex + 1} from native causal evidence.`,
-      );
-      continue;
-    }
-
-    if (retainUnbound) {
-      // A standing agreement that predates Round One is baseline state. The bounded
-      // timeline is not required to contain its original signing/ratification card.
-      // Preserve the valid instrument rather than deleting real Day-1 diplomacy.
-      kept.push({
-        ...update,
-        eventIndexes: [],
-        eventIds: [],
-      });
-      retainedUnbound += 1;
-      console.info(
-        `[OH diplomacy baseline] retained initial agreement ${update?.id || "<missing id>"} ${update?.op || ""} ` +
-        "without requiring its historical signing event to be present in the bounded pregame timeline.",
-      );
-      continue;
-    }
-
-    dropped += 1;
-    console.warn(
-      `[OH diplomacy native binding] dropped agreement ${update?.id || "<missing id>"} ${update?.op || ""}; ` +
-      "no unique causal event could be identified.",
-    );
-  }
-
-  return { updates: kept, repaired, dropped, retainedUnbound };
-};
-
-// A Puppet line the model forgot to tie to its event is thrown away at apply
-// (applyPuppetUpdates), so an accession the timeline narrated never happened on
-// the ledger. Repair it the way relations and agreements are repaired: only an
-// unbound line, only to the ONE event that names both parties, and never on the
-// GM preview. A line the model did tie keeps the event it named.
-//
-// A line left unbound loses the event numbers it came with: they count this
-// segment's events, and once the round's segments are joined the same number
-// can name another segment's event, which would bind the line to it at apply.
-const salvageUnboundPuppetUpdates = (updates, events, world) => {
-  const normalizedEvents = normalizeEvents(events);
-  let repaired = 0;
-  let unbound = 0;
-  const output = bindPuppetUpdatesToEvents(updates, normalizedEvents).map((update) => {
-    if (linkedEvents(update, normalizedEvents).length) return update;
-    const parties = [update?.overlord, update?.puppet].filter(Boolean);
-    const inferredIndex = inferUniqueDiplomaticEventIndex({
-      events: normalizedEvents,
-      actorAliases: parties.map((party) => politySearchAliases(party, world)),
-      subjectText: `${update?.op || ""} ${update?.kind || ""} ${update?.note || ""}`,
-      minimumActorHits: Math.max(1, parties.length),
-    });
-    if (inferredIndex < 0) {
-      unbound += 1;
-      return { ...update, eventIndexes: [], eventIds: [] };
-    }
-    const eventId = clean(normalizedEvents[inferredIndex]?.id);
-    repaired += 1;
-    console.warn(
-      `[OH diplomacy native binding] bound puppet ${update?.op || "?"} ${update?.overlord || "?"} -> ${update?.puppet || "?"} ` +
-      `to event${inferredIndex + 1} from native causal evidence.`,
-    );
-    return { ...update, eventIndexes: [inferredIndex], eventIds: eventId ? [eventId] : [] };
-  });
-  return { updates: output, repaired, unbound };
-};
-
-export const bindDiplomaticLedgerToCausalEvents = (
-  candidate,
-  {
-    world = {},
-    dropAmbiguous = true,
-    retainUnbound = false,
-  } = {},
-) => {
-  if (!candidate || typeof candidate !== "object") {
-    return {
-      relationUpdates: [],
-      agreementUpdates: [],
-      repairedRelations: 0,
-      droppedRelations: 0,
-      retainedUnboundRelations: 0,
-      repairedAgreements: 0,
-      droppedAgreements: 0,
-      retainedUnboundAgreements: 0,
-    };
-  }
-
-  const events = normalizeEvents(candidate?.events);
-
-  // AI-supplied indexes/ids are hints only on world-generation paths. Strip them
-  // before inference so a perfectly valid but WRONG number cannot silently bind a
-  // canonical relation/agreement to an unrelated event.
-  const relationInputs = decodeRelationUpdates(candidate?.relationUpdates)
-    .map((update) => ({ ...update, eventIndexes: [], eventIds: [] }));
-  const agreementInputs = decodeAgreementUpdates(candidate?.agreementUpdates)
-    .map((update) => ({ ...update, eventIndexes: [], eventIds: [] }));
-
-  const relationBinding = salvageUnboundRelationUpdates(
-    relationInputs,
-    events,
-    world,
-    { retainUnbound },
-  );
-  const agreementBinding = salvageUnboundAgreementUpdates(
-    agreementInputs,
-    events,
-    world,
-    { retainUnbound },
-  );
-
-  const relationUpdates = (dropAmbiguous || retainUnbound)
-    ? relationBinding.updates
-    : relationInputs;
-  const agreementUpdates = (dropAmbiguous || retainUnbound)
-    ? agreementBinding.updates
-    : agreementInputs;
-
-  candidate.relationUpdates = relationUpdates;
-  candidate.agreementUpdates = agreementUpdates;
-
-  const puppetBinding = salvageUnboundPuppetUpdates(candidate?.puppetUpdates, events, world);
-  if (puppetBinding.repaired || puppetBinding.unbound) candidate.puppetUpdates = puppetBinding.updates;
-
-  return {
-    relationUpdates,
-    agreementUpdates,
-    repairedRelations: relationBinding.repaired,
-    droppedRelations: relationBinding.dropped,
-    retainedUnboundRelations: relationBinding.retainedUnbound || 0,
-    repairedAgreements: agreementBinding.repaired,
-    droppedAgreements: agreementBinding.dropped,
-    retainedUnboundAgreements: agreementBinding.retainedUnbound || 0,
-    repairedPuppets: puppetBinding.repaired,
-  };
-};
-
 const sameCanonicalPartySet = (left, right, world) => {
   const a = canonicalizeParties(left, world).map(lower).sort();
   const b = canonicalizeParties(right, world).map(lower).sort();
   return a.length === b.length && a.every((value, index) => value === b[index]);
 };
 
-const agreementTitleLooksCompatible = (left, right) => {
-  const a = lower(left);
-  const b = lower(right);
-  if (!a || !b || a === b || a.includes(b) || b.includes(a)) return true;
-  // Words in any script: split on a-z and 0-9 alone, a title in Cyrillic or
-  // Greek had no words at all, and two wordings of one treaty never agreed.
-  const tokens = (value) => [...new Set(lower(value.normalize("NFKC")).split(/[^\p{L}\p{M}\p{N}]+/u).filter((token) => token.length >= 4))];
-  const aTokens = tokens(a);
-  const bTokens = new Set(tokens(b));
-  if (!aTokens.length || !bTokens.size) return false;
-  const overlap = aTokens.filter((token) => bTokens.has(token)).length;
-  return overlap / Math.min(aTokens.length, bTokens.size) >= 0.6;
-};
-
 // World-generation models occasionally re-emit `start` for an agreement that is
 // already canonical and active. That is a lifecycle bookkeeping mistake, not a
-// reason to erase an otherwise-valid month. Repair ONLY when the stable id,
-// parties, type and title are compatible with the existing instrument. A truly
-// conflicting reuse of an id remains fatal.
+// reason to erase an otherwise-valid month. Repair ONLY when the stable id, the
+// parties and the type are the existing instrument's. A truly conflicting reuse
+// of an id remains fatal.
+//
+// The title is not compared. A model restating a pact writes its title in the
+// game's language and in its own words, and an instrument is the same
+// instrument whatever it is called this time: the record keeps its own title
+// (applyAgreementUpdates). Titles were matched by the words they shared, and
+// two wordings of one treaty shared none in a language that is not written in
+// spaced words, or none at all once translated.
 const normalizeDuplicateAgreementStarts = (candidate, world) => {
   if (!candidate || typeof candidate !== "object") return { repaired: 0, dropped: 0 };
 
@@ -1212,11 +824,10 @@ const normalizeDuplicateAgreementStarts = (candidate, world) => {
     const partiesCompatible = !array(update?.parties).length ||
       sameCanonicalPartySet(update.parties, prior.parties, world);
     const typeCompatible = !clean(update?.type) || update.type === "other" || update.type === prior.type;
-    const titleCompatible = !clean(update?.title) || agreementTitleLooksCompatible(update.title, prior.title);
 
-    // Same id but different instrument details is not safe to infer. Leave it
+    // Same id but other parties or another type is not safe to infer. Leave it
     // untouched so normal validation rejects the collision.
-    if (!partiesCompatible || !typeCompatible || !titleCompatible) {
+    if (!partiesCompatible || !typeCompatible) {
       output.push(update);
       continue;
     }
@@ -1253,7 +864,7 @@ const normalizeDuplicateAgreementStarts = (candidate, world) => {
       continue;
     }
 
-    // Exact/near-exact re-announcement of an already-active pact carries no
+    // A re-announcement of an already-active pact with no new terms carries no
     // canonical lifecycle delta. Keep the event, drop only the redundant ledger row.
     dropped += 1;
     console.warn(
@@ -1461,19 +1072,29 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world, playerNotes =
   return notes;
 };
 
+// The relation and agreement records of an answer, checked before they are
+// applied. `authority` is who wrote them, as for the war ledger
+// (nativeWarLedger.js settleWarLedger):
+//   "skip"   a time skip's own pass. Redundant lifecycle verbs and a status
+//            that contradicts its score are repaired, and a record tied to no
+//            event is kept: it is the skip's, and is dated by the skip when it
+//            is applied. Its events are the ones ledgerPins.js tied it to.
+//   "gm"     the Game Master's preview, and the default: fail-closed. Every
+//            record names the event that causes it, so the administrator sees
+//            what the preview would write and why.
 export const validateDiplomaticLedgerPayload = (
   candidate,
   {
     world = {},
-    allowNativeBinding = false,
-    allowUnboundBaseline = false,
+    authority = "gm",
   } = {},
 ) => {
   const events = normalizeEvents(candidate?.events);
+  const skip = authority === "skip";
 
   // Ordinary world simulation is allowed to repair redundant lifecycle verbs
   // before structural validation. GM/admin preview remains fail-closed.
-  if (allowNativeBinding) {
+  if (skip) {
     const lifecycleRepair = normalizeDuplicateAgreementStarts(candidate, world);
     if (lifecycleRepair.repaired || lifecycleRepair.dropped) {
       console.info(
@@ -1481,8 +1102,8 @@ export const validateDiplomaticLedgerPayload = (
         `${lifecycleRepair.dropped} redundant start(s) dropped.`,
       );
     }
-    // The GM/admin preview (allowNativeBinding false) stays fail-closed: an
-    // administrator naming an agreement that does not exist should be told so.
+    // The GM/admin preview stays fail-closed: an administrator naming an
+    // agreement that does not exist should be told so.
     normalizeUnknownAgreementLifecycle(candidate, world);
   }
 
@@ -1500,7 +1121,7 @@ export const validateDiplomaticLedgerPayload = (
   const reconciled = reconcileRelationScoresWithStatus(candidate?.relationUpdates);
   if (reconciled.repaired.length) {
     const first = reconciled.repaired[0];
-    if (!allowNativeBinding) {
+    if (!skip) {
       return `Relation update ${first.a} ↔ ${first.b} declares status "${first.declared}" but its score ${first.from} means "${first.implied}". ` +
         "The score is the ABSOLUTE new value from -100 (worst) to 100 (best), not a change; make the score and status agree.";
     }
@@ -1511,12 +1132,11 @@ export const validateDiplomaticLedgerPayload = (
     candidate.relationUpdates = reconciled.records;
   }
 
-  let relations = bindRelationUpdatesToEvents(candidate?.relationUpdates, events);
-  let agreements = bindAgreementUpdatesToEvents(candidate?.agreementUpdates, events);
+  const relations = bindRelationUpdatesToEvents(candidate?.relationUpdates, events);
+  const agreements = bindAgreementUpdatesToEvents(candidate?.agreementUpdates, events);
 
-  // Structural/canonical errors remain fatal. Event linkage itself is native on
-  // ordinary world-generation passes, but a malformed polity/status/agreement
-  // operation is still a real state error and must not be papered over.
+  // Structural/canonical errors remain fatal: a malformed polity, status or
+  // agreement operation is a real state error and must not be papered over.
   for (const update of relations) {
     const a = canonicalDiplomaticPolity(update.a, world);
     const b = canonicalDiplomaticPolity(update.b, world);
@@ -1543,51 +1163,29 @@ export const validateDiplomaticLedgerPayload = (
     }
   }
 
-  if (allowNativeBinding) {
-    const binding = bindDiplomaticLedgerToCausalEvents(candidate, {
-      world,
-      dropAmbiguous: true,
-      retainUnbound: allowUnboundBaseline,
-    });
-
-    if (
-      binding.repairedRelations ||
-      binding.droppedRelations ||
-      binding.repairedAgreements ||
-      binding.droppedAgreements ||
-      binding.retainedUnboundRelations ||
-      binding.retainedUnboundAgreements
-    ) {
-      console.info(
-        `[OH diplomacy native binding] relations ${binding.repairedRelations} bound / ${binding.retainedUnboundRelations || 0} baseline-retained / ${binding.droppedRelations} dropped; ` +
-        `agreements ${binding.repairedAgreements} bound / ${binding.retainedUnboundAgreements || 0} baseline-retained / ${binding.droppedAgreements} dropped.`,
-      );
-    }
-
-    relations = bindRelationUpdatesToEvents(candidate?.relationUpdates, events);
-    agreements = bindAgreementUpdatesToEvents(candidate?.agreementUpdates, events);
-  }
+  // A skip's record stays tied to the events it named, and to none when it
+  // named none: it is applied all the same, dated by the skip. (Records were
+  // tied here by the words they shared with an event's title and description,
+  // which overrode the event the model had named, and one that matched none was
+  // dropped: in any language but English nearly every one, every skip.)
+  if (skip) return "";
 
   for (const update of relations) {
     const a = canonicalDiplomaticPolity(update.a, world);
     const b = canonicalDiplomaticPolity(update.b, world);
     if (!update.eventIds.length && !update.eventIndexes.length) {
-      if (allowUnboundBaseline) continue;
       return `Relation update ${a} ↔ ${b} must reference a causal event.`;
     }
     if (!linkedEvents(update, events).length) {
-      if (allowUnboundBaseline) continue;
       return `Relation update ${a} ↔ ${b} does not resolve to a valid causal event in this response.`;
     }
   }
 
   for (const update of agreements) {
     if (!update.eventIds.length && !update.eventIndexes.length) {
-      if (allowUnboundBaseline) continue;
       return `Agreement ${update.id} ${update.op} must reference a causal event.`;
     }
     if (!linkedEvents(update, events).length) {
-      if (allowUnboundBaseline) continue;
       return `Agreement ${update.id} ${update.op} does not resolve to a valid causal event in this response.`;
     }
   }
@@ -1595,7 +1193,15 @@ export const validateDiplomaticLedgerPayload = (
   return "";
 };
 
-export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "", round = 0, allowUnboundBaseline = false, limit } = {}) => {
+// The ids of the events a record is tied to that are among `events`: what it
+// cites as its source. A record tied to none cites none.
+const citedEventIds = (causalEvents) => unique(causalEvents.map((event) => clean(event?.id)).filter(Boolean), 24);
+
+// A record tied to no event of the answer is applied all the same, dated by
+// `stopDate` (the skip's, the GM's game date): the answer said it, and the
+// numbers it was written with are what was missing, not the change. It cites no
+// event. A record is never tied to an event by what its words share with one.
+export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "", round = 0, limit } = {}) => {
   const nextWorld = normalizeWorldState(world);
   const map = relationMapFromWorld(nextWorld);
   const decoded = bindRelationUpdatesToEvents(updates, events, { limit });
@@ -1603,14 +1209,6 @@ export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "
 
   for (const update of decoded) {
     const causalEvents = linkedEvents(update, events);
-    if (!causalEvents.length && !allowUnboundBaseline) {
-      console.warn(
-        `[OH diplomacy] dropped unbound relation update ${update?.a || "?"} ↔ ${update?.b || "?"}; ` +
-        "a relation change may not persist without a causal event.",
-      );
-      continue;
-    }
-
     const a = canonicalDiplomaticPolity(update.a, nextWorld);
     const b = canonicalDiplomaticPolity(update.b, nextWorld);
     const key = relationPairKey(a, b);
@@ -1622,7 +1220,7 @@ export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "
     const date = updateDate(update, events, stopDate);
     const eventIds = unique([
       ...array(prior?.sourceEventIds),
-      ...unique(update.eventIds, 24),
+      ...citedEventIds(causalEvents),
     ], 24);
     const ordered = [a, b].sort((x, y) => lower(x).localeCompare(lower(y)));
     const relation = {
@@ -1650,6 +1248,11 @@ export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "
   return { world: { ...nextWorld, relations }, relations, appliedIds: applied };
 };
 
+// As applyRelationUpdates: a record tied to no event is dated by `stopDate`.
+// `allowUnboundBaseline` is a Round-Zero baseline's: an instrument with no
+// signing event in the bounded timeline started at some date the game does not
+// know, so it is observed on `stopDate` and given no start date, rather than
+// claiming it began the day the campaign did.
 export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = "", round = 0, allowUnboundBaseline = false, limit } = {}) => {
   const nextWorld = normalizeWorldState(world);
   const map = agreementMapFromWorld(nextWorld);
@@ -1658,22 +1261,12 @@ export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = 
 
   for (const update of decoded) {
     const causalEvents = linkedEvents(update, events);
-    if (!causalEvents.length && !allowUnboundBaseline) {
-      console.warn(
-        `[OH diplomacy] dropped unbound agreement update ${update?.id || "?"} ${update?.op || ""}; ` +
-        "an agreement lifecycle change may not persist without a causal event.",
-      );
-      continue;
-    }
-
     const prior = map.get(update.id) || null;
-    // For a Round-Zero baseline with no signing event in the bounded timeline,
-    // do not falsely claim the agreement started on the campaign start date.
-    const date = causalEvents.length ? updateDate(update, events, stopDate) : "";
-    const observedDate = date || (allowUnboundBaseline ? parseIsoDate(stopDate) : "");
+    const date = causalEvents.length || !allowUnboundBaseline ? updateDate(update, events, stopDate) : "";
+    const observedDate = date || parseIsoDate(stopDate);
     const eventIds = unique([
       ...array(prior?.sourceEventIds),
-      ...unique(update.eventIds, 24),
+      ...citedEventIds(causalEvents),
     ], 24);
 
     if (update.op === "start") {
@@ -1962,7 +1555,7 @@ export const decodePuppetUpdates = (value, { limit = MAX_PUPPET_UPDATES_PER_PASS
     return value.map((entry, index) => {
       if (typeof entry === "string") return isRecordLine(entry) ? decodePuppetLine(entry, index) : null;
       if (!entry || typeof entry !== "object") return null;
-      const loyalty = Number(entry.loyalty);
+      const loyalty = figureOrBlank(entry.loyalty);
       return {
         id: clean(entry.id) || `puppet-update-${index}`,
         op: lower(entry.op),
@@ -2014,9 +1607,6 @@ const applyRevoltFallout = (world, overlord, puppet, causalEventIds, events, dat
     events,
     stopDate: date,
     round,
-    // The revolt's event is already bound; this keeps the merge from refusing
-    // the line when the caller is replaying a baseline turn.
-    allowUnboundBaseline: true,
   });
 
   const both = [lower(overlord), lower(puppet)];
@@ -2059,13 +1649,17 @@ export const landedPolityCheck = (world, regionCatalog) => {
   return (polity) => landed.has(lower(polity));
 };
 
+// A line tied to no event is applied as applyRelationUpdates applies one: dated
+// by `stopDate`, citing no event. (A skip's install with no event number was
+// tied to the one event whose words named both countries, and thrown away when
+// none or two did: an accession the timeline told three times never happened
+// on the ledger.)
 export const applyPuppetUpdates = ({
   world,
   updates,
   events = [],
   stopDate = "",
   round = 0,
-  allowUnboundBaseline = false,
   refusedDemands = [],
   regionCatalog = [],
   limit,
@@ -2088,12 +1682,6 @@ export const applyPuppetUpdates = ({
   for (const [index, update] of decoded.entries()) {
     if (!PUPPET_OP_SET.has(update.op)) {
       drop(index, update, `"${update.op || "(none)"}" is not a subordination change.`);
-      continue;
-    }
-
-    const causalEvents = linkedEvents(update, events);
-    if (!causalEvents.length && !allowUnboundBaseline) {
-      drop(index, update, `${update.op} ${update.overlord || "?"} -> ${update.puppet || "?"} is tied to no event; a subordination may not persist without one.`);
       continue;
     }
 
@@ -2125,7 +1713,7 @@ export const applyPuppetUpdates = ({
     }
 
     const date = updateDate(update, events, stopDate);
-    const eventIds = unique(update.eventIds, 24);
+    const eventIds = citedEventIds(linkedEvents(update, events));
     const existing = livePuppetRow(rows, overlord, puppet);
 
     if (update.op === "install") {
@@ -2385,6 +1973,8 @@ export const applyDiplomaticUpdates = ({
   events = [],
   stopDate = "",
   round = 0,
+  // A Round-Zero baseline: an agreement with no signing event has no known
+  // start (applyAgreementUpdates).
   allowUnboundBaseline = false,
   regionCatalog = [],
   // How many records of each kind to read. A single model answer is held to
@@ -2398,7 +1988,6 @@ export const applyDiplomaticUpdates = ({
     events,
     stopDate,
     round,
-    allowUnboundBaseline,
     limit,
   });
   const agreementMerge = applyAgreementUpdates({
@@ -2420,7 +2009,6 @@ export const applyDiplomaticUpdates = ({
     events,
     stopDate,
     round,
-    allowUnboundBaseline,
     limit,
   });
   return {
@@ -2607,587 +2195,4 @@ export const buildBoundedDiplomaticContext = (
   ].join("\n");
 
   return { actors, relations, agreements, puppets, text };
-};
-
-const migrationAliasesForPolity = (canonical, polity) => {
-  const values = new Set([
-    canonical,
-    clean(polity?.name),
-    clean(polity?.code),
-    ...array(polity?.aliases).map(clean),
-  ].filter(Boolean));
-
-  const seed = [...values];
-  const irregular = {
-    "german empire": ["germany", "german", "anglo-german", "franco-german"],
-    "british empire": ["britain", "british", "united kingdom", "anglo"],
-    "french republic": ["france", "french", "franco"],
-    "russian empire": ["russia", "russian"],
-    "austrian empire": ["austria", "austrian", "austro-hungarian", "austro"],
-    "kingdom of italy": ["italy", "italian"],
-    "kingdom of serbia": ["serbia", "serbian"],
-    "kingdom of bulgaria": ["bulgaria", "bulgarian"],
-    "kingdom of greece": ["greece", "greek", "greco"],
-    "ottoman empire": ["ottoman", "sublime porte"],
-    "kingdom of romania": ["romania", "romanian"],
-    "kingdom of montenegro": ["montenegro", "montenegrin"],
-  };
-  for (const item of seed) {
-    for (const alias of irregular[lower(item)] || []) values.add(alias);
-    const plain = lower(item)
-      .replace(/^the\s+/, "")
-      .replace(/^(kingdom|republic|empire|state|grand duchy|duchy|principality) of\s+/, "")
-      .replace(/\s+(kingdom|republic|empire|state)$/, "")
-      .trim();
-    if (plain.length >= 4) values.add(plain);
-  }
-  return [...values].filter(Boolean);
-};
-
-const buildMigrationRoster = (world) => {
-  const owned = new Set([
-    ...Object.values(world?.regionOwnershipOverrides || {}),
-    ...Object.values(world?.regionSovereigntyOverrides || {}),
-  ].map(lower).filter(Boolean));
-  return Object.entries(world?.polityOverrides || {})
-    .filter(([canonical, polity]) => {
-      const mapRefs = array(polity?.mapRefs?.gadm0).filter(Boolean);
-      return lower(polity?.status) === "active" || owned.has(lower(canonical)) || mapRefs.length > 0;
-    })
-    .map(([canonical, polity]) => ({
-      canonical: clean(canonical),
-      aliases: migrationAliasesForPolity(canonical, polity),
-    }))
-    .filter((entry) => entry.canonical);
-};
-
-const textMentionsAlias = (text, alias) => {
-  const haystack = lower(text);
-  const needle = lower(alias);
-  if (!needle || needle.length < 4) return false;
-  if (haystack.includes(needle)) return true;
-  return false;
-};
-
-const findMigrationPartiesInText = (text, world, roster) => {
-  const haystack = lower(text);
-  const matches = [];
-  for (const candidate of roster) {
-    for (const alias of candidate.aliases) {
-      const needle = lower(alias);
-      if (!needle || needle.length < 4) continue;
-      let from = 0;
-      while (from < haystack.length) {
-        const start = haystack.indexOf(needle, from);
-        if (start < 0) break;
-        matches.push({
-          canonical: candidate.canonical,
-          start,
-          end: start + needle.length,
-          length: needle.length,
-        });
-        from = start + Math.max(1, needle.length);
-      }
-    }
-  }
-
-  // Prefer the longest polity phrase at an overlapping occurrence. Without this,
-  // "Austria-Hungary" also falsely matches a separate "Kingdom of Hungary" just
-  // because the substring Hungary appears inside the compound name. A genuinely
-  // separate Hungary mention elsewhere still survives as its own occurrence.
-  const usable = matches.filter((match, index) => !matches.some((other, otherIndex) =>
-    otherIndex !== index &&
-    lower(other.canonical) !== lower(match.canonical) &&
-    other.length > match.length &&
-    other.start <= match.start &&
-    other.end >= match.end
-  ));
-
-  usable.sort((a, b) => a.start - b.start || b.length - a.length || lower(a.canonical).localeCompare(lower(b.canonical)));
-  return unique(usable.map((match) => match.canonical), 12);
-};
-
-const inferMigrationParties = (event, world, roster) => {
-  const title = clean(event?.title);
-  const description = clean(event?.description);
-  const titleParties = findMigrationPartiesInText(title, world, roster);
-  if (titleParties.length >= 2) return titleParties;
-
-  // Legacy prose often mentions treaty targets/opponents after the signatories.
-  // Prefer the grammatical signatory clause immediately before sign/conclude/etc.
-  // Example: "delegates from Serbia and Bulgaria formally sign ..." should not
-  // accidentally add the British chair or the Ottoman target later in the text.
-  const verbMatch = /\b(?:sign(?:s|ed)?|conclud(?:e|es|ed)|ratif(?:y|ies|ied)|finaliz(?:e|es|ed))\b/i.exec(description);
-  let scope = description;
-  if (verbMatch) {
-    const before = description.slice(0, verbMatch.index);
-    const subjectPattern = /\b(?:delegates? from|delegations? from|representatives? of|representatives? from|plenipotentiaries from|governments? of|leaders? of)\b/ig;
-    let subject = null;
-    for (const match of before.matchAll(subjectPattern)) subject = match;
-    if (subject) scope = before.slice(subject.index + subject[0].length);
-    else scope = before.slice(Math.max(0, before.length - 240));
-  } else {
-    scope = description.split(/[.!?]/)[0] || description;
-  }
-
-  const scoped = findMigrationPartiesInText(scope, world, roster);
-  if (scoped.length >= 2) return scoped;
-
-  const direct = unique(event?.combatants, 8)
-    .map((actor) => canonicalDiplomaticPolity(actor, world))
-    .filter(Boolean);
-  return unique([...titleParties, ...scoped, ...direct], 12);
-};
-
-const LEGACY_FORMAL_PAIR = /\b(?:sign(?:s|ed)?|conclud(?:e|es|ed)|ratif(?:y|ies|ied)|finaliz(?:e|es|ed))\b.{0,100}\b(?:treaty|alliance|mutual defense|defence pact|pact|accord|agreement|protocol|convention|guarantee|non[- ]aggression)\b|\b(?:treaty|alliance|mutual defense|defence pact|pact|accord|agreement|protocol|convention|guarantee|non[- ]aggression)\b.{0,100}\b(?:sign(?:s|ed)?|conclud(?:e|es|ed)|ratif(?:y|ies|ied)|finaliz(?:e|es|ed))\b/i;
-const LEGACY_NEGOTIATION_ONLY = /\b(?:talks?|negotiations?|proposal|draft|preliminary meeting|exploratory|considers?|discuss(?:es|ed|ion)|seeks?|calls? for)\b/i;
-const LEGACY_REJECTION = /\b(?:reject(?:s|ed|ion)?|declin(?:e|es|ed)|refus(?:e|es|ed)|collapse(?:s|d)?|breaks? down|fails?)\b/i;
-
-const isLegacyFormalAgreementEvent = (title, description) => {
-  const text = `${title} ${description}`;
-  if (LEGACY_REJECTION.test(text)) return false;
-  if (/\bnegotiations? to (?:finalize|conclude|sign|ratify)\b/i.test(text)) return false;
-  if (/\bpreliminary framework\b/i.test(text) && !/\b(?:officially|formally) sign|\bratif/i.test(text)) return false;
-  if (LEGACY_FORMAL_PAIR.test(title)) return true;
-  // Description must contain the formal act itself, not merely mention an older
-  // treaty whose provisions are now being implemented.
-  return LEGACY_FORMAL_PAIR.test(description);
-};
-
-const inferLegacyAgreementType = (textValue) => {
-  const text = lower(textValue);
-  // Settlement language wins before generic military/accord vocabulary. A border
-  // accord concluding a shooting crisis is not continuing military cooperation.
-  if (/\bpeace treaty\b|\bpeace settlement\b|\bformally concludes? .*war\b|\bborder accord\b|\barmistice\b|\bceasefire agreement\b|\btruce accord\b/.test(text)) return "peace_settlement";
-  if (/\bmutual defen[cs]e\b/.test(text)) return "mutual_defense";
-  if (/\balliance\b/.test(text)) return "alliance";
-  if (/\bguarantee\b/.test(text)) return "guarantee";
-  if (/\bnon[- ]aggression\b/.test(text)) return "non_aggression";
-  if (/\btrade\b|\bcommercial\b|\brailway\b|\bcustoms\b|\beconomic\b/.test(text)) return "trade_economic";
-  if (/\bnaval\b|\bmilitary\b|\bgeneral staffs?\b|\bstrategic protocol\b|\bmobilization\b/.test(text)) return "military_cooperation";
-  if (/\bfriendship\b|\bconsultation\b|\bconsultative\b/.test(text)) return "friendship_consultation";
-  return "other";
-};
-
-const legacyRelationSeedForType = (type) => {
-  switch (type) {
-    case "alliance": return { score: 72, status: "friendly" };
-    case "mutual_defense": return { score: 78, status: "friendly" };
-    case "guarantee": return { score: 50, status: "cordial" };
-    case "friendship_consultation": return { score: 48, status: "cordial" };
-    case "military_cooperation": return { score: 42, status: "cordial" };
-    case "trade_economic": return { score: 32, status: "cordial" };
-    case "non_aggression": return { score: 8, status: "neutral" };
-    case "peace_settlement": return { score: -5, status: "neutral" };
-    default: return { score: 18, status: "cordial" };
-  }
-};
-
-const legacyAgreementId = (event, type, parties) => {
-  const base = slug(clean(event?.title)) || slug(`${type}-${parties.join("-")}`) || "legacy-agreement";
-  return `agreement-${base}-${stableHash(clean(event?.id) || `${event?.date}|${event?.title}`)}`.slice(0, 120);
-};
-
-const writeLegacyRelation = (map, a, b, { score, status, summary, date, eventId } = {}) => {
-  const key = relationPairKey(a, b);
-  if (!key) return null;
-  const prior = map.get(key);
-  const ordered = [a, b].sort((x, y) => lower(x).localeCompare(lower(y)));
-  const nextScore = clamp(Math.round(Number(score) || 0), -100, 100);
-  const next = {
-    id: prior?.id || relationIdForPair(ordered[0], ordered[1]),
-    a: ordered[0],
-    b: ordered[1],
-    score: nextScore,
-    status: normalizeRelationStatus(status, nextScore),
-    summary: clean(summary) || clean(prior?.summary),
-    lastUpdatedDate: parseIsoDate(date) || clean(prior?.lastUpdatedDate),
-    sourceEventIds: unique([...(array(prior?.sourceEventIds)), clean(eventId)], 24),
-    createdRound: Number(prior?.createdRound) || 0,
-    updatedRound: Number(prior?.updatedRound) || 0,
-  };
-  map.set(key, next);
-  return next;
-};
-
-const seedRelationFromAgreement = (map, world, parties, type, event) => {
-  // Peace settlements are handled chronologically after hostility detection. For a
-  // multilateral peace, co-victors/signatories are NOT automatically reset to
-  // neutral merely because they signed the same conference treaty.
-  if (type === "peace_settlement") return;
-  const seed = legacyRelationSeedForType(type);
-  for (let i = 0; i < parties.length; i += 1) {
-    for (let j = i + 1; j < parties.length; j += 1) {
-      const a = parties[i];
-      const b = parties[j];
-      const key = relationPairKey(a, b);
-      if (!key) continue;
-      const prior = map.get(key);
-      const score = prior && Number(prior.score) >= 0 && seed.score >= 0
-        ? Math.max(Number(prior.score), seed.score)
-        : seed.score;
-      writeLegacyRelation(map, a, b, {
-        score,
-        status: seed.status,
-        summary: `Legacy migration: ${clean(event?.title)}`,
-        date: event?.date,
-        eventId: event?.id,
-      });
-    }
-  }
-};
-
-
-const inferLegacyDirectedHostilities = (event, world, roster) => {
-  const title = clean(event?.title);
-  const patterns = [
-    /\b(?:launch(?:es|ed)?|opens?|begins?)\b[^.]{0,70}\b(?:offensive|offensives|attack|attacks)\b[^.]{0,40}\bagainst\b/i,
-    /\bdeclares? war on\b/i,
-    /\binvades?\b/i,
-  ];
-  let pivot = -1;
-  let pivotLength = 0;
-  for (const rx of patterns) {
-    const match = rx.exec(title);
-    if (!match) continue;
-    if (/against/i.test(match[0])) {
-      const local = match[0].toLowerCase().lastIndexOf("against");
-      pivot = match.index + local;
-      pivotLength = "against".length;
-    } else if (/declares? war on/i.test(match[0])) {
-      const phrase = /declares? war on/i.exec(match[0]);
-      pivot = match.index + phrase.index;
-      pivotLength = phrase[0].length;
-    } else {
-      const phrase = /invades?/i.exec(match[0]);
-      pivot = match.index + phrase.index;
-      pivotLength = phrase[0].length;
-    }
-    break;
-  }
-  if (pivot < 0) return [];
-  const left = findMigrationPartiesInText(title.slice(0, pivot), world, roster);
-  const right = findMigrationPartiesInText(title.slice(pivot + pivotLength), world, roster);
-  const pairs = [];
-  for (const a of left) for (const b of right) {
-    if (lower(a) !== lower(b)) pairs.push([a, b]);
-  }
-  return pairs;
-};
-
-const closeActiveLegacyAllianceForPair = (agreementMap, a, b, event) => {
-  const date = parseIsoDate(event?.date);
-  let closed = false;
-  for (const agreement of agreementMap.values()) {
-    if (!['alliance', 'mutual_defense'].includes(agreement.type) || agreement.status !== 'active') continue;
-    const keys = new Set(array(agreement.parties).map(lower));
-    if (!keys.has(lower(a)) || !keys.has(lower(b))) continue;
-    const knownSince = parseIsoDate(agreement.startedDate || agreement.migratedEvidenceDate || agreement.lastUpdatedDate);
-    if (knownSince && date && date <= knownSince) continue;
-    agreement.status = 'ended';
-    agreement.endedDate = date || agreement.lastUpdatedDate || agreement.startedDate || '';
-    agreement.lastUpdatedDate = agreement.endedDate;
-    agreement.terms = `${clean(agreement.terms)} Legacy migration note: superseded by later direct hostilities between signatories (${clean(event?.title)}).`.trim().slice(0, 900);
-    agreement.sourceEventIds = unique([...array(agreement.sourceEventIds), clean(event?.id)], 24);
-    closed = true;
-  }
-  return closed;
-};
-
-const applyLegacyHostilityEvent = (agreementMap, relationMap, event, world, roster) => {
-  const pairs = inferLegacyDirectedHostilities(event, world, roster);
-  for (const [a, b] of pairs) {
-    const key = relationPairKey(a, b);
-    const prior = relationMap.get(key);
-    const eventDate = parseIsoDate(event?.date);
-    const priorDate = parseIsoDate(prior?.lastUpdatedDate);
-    const closedAlliance = closeActiveLegacyAllianceForPair(agreementMap, a, b, event);
-    // When re-checking history after a later standing-alliance chat seed, an older
-    // clash must not overwrite newer canonical evidence that the relationship had
-    // already recovered. Chronological first-pass processing is unaffected.
-    if (!closedAlliance && priorDate && eventDate && compareGameDates(eventDate, priorDate) < 0) continue;
-    // Legacy migration is intentionally sparse. Historical combat does not by
-    // itself create a permanent present-day relation row for every belligerent.
-    // Preserve it only when the pair was already tracked (for example by a treaty)
-    // or when the fighting is what broke a migrated alliance. Active wars are
-    // seeded separately from the canonical world.wars ledger below.
-    if (!closedAlliance && !relationMap.has(key)) continue;
-    writeLegacyRelation(relationMap, a, b, {
-      score: -70,
-      status: 'hostile',
-      summary: `Legacy migration: ${clean(event?.title)}`,
-      date: event?.date,
-      eventId: event?.id,
-    });
-  }
-};
-
-const applyLegacyPeaceAgreementRelation = (relationMap, agreement, event) => {
-  const parties = array(agreement?.parties);
-  const bilateral = parties.length === 2;
-  for (let i = 0; i < parties.length; i += 1) {
-    for (let j = i + 1; j < parties.length; j += 1) {
-      const a = parties[i];
-      const b = parties[j];
-      const key = relationPairKey(a, b);
-      if (!key) continue;
-      const prior = relationMap.get(key);
-      // A bilateral settlement establishes at least a tracked neutral post-war
-      // relationship. In a multilateral settlement, only repair an already-negative
-      // pair; do not invent neutral relations between co-signatories/co-victors.
-      if (!bilateral && !(Number(prior?.score) < 0)) continue;
-      writeLegacyRelation(relationMap, a, b, {
-        score: -5,
-        status: 'neutral',
-        summary: `Legacy migration: ${clean(event?.title)}`,
-        date: event?.date,
-        eventId: event?.id,
-      });
-    }
-  }
-};
-
-
-const LEGACY_CHAT_STANDING_ALLIANCE = /\b(?:under the\s+[A-Z][A-Za-z -]{1,45}\s+Alliance|our alliance\s+(?:remains|is|continues|stands|has)|our existing alliance|existing alliance between|mutual defen[cs]e\s+(?:treaty|alliance|pact))\b/i;
-
-const chatCountryToken = (entry) => clean(
-  entry && typeof entry === "object"
-    ? entry.polityKey || entry.name || entry.code
-    : entry,
-);
-
-const chatMessagePolity = (message, world) => canonicalDiplomaticPolity(
-  message?.polityKey || message?.speaker || message?.code,
-  world,
-  { allowUnknown: false },
-);
-
-const namedAllianceTitleFromText = (textValue) => {
-  const text = clean(textValue);
-  const match = /\b(?:under the\s+)?([A-Z][A-Za-z -]{1,45}\s+Alliance)\b/.exec(text);
-  return clean(match?.[1]);
-};
-
-const migrateLegacyStandingAlliancesFromChats = ({ agreementMap, relationMap, chats, game, world, roster }) => {
-  const player = canonicalDiplomaticPolity(game?.country, world, { allowUnknown: false });
-  if (!player) return 0;
-  const playerRoster = roster.find((entry) => lower(entry.canonical) === lower(player));
-  const playerAliases = unique([
-    player,
-    ...(array(playerRoster?.aliases)),
-    clean(world?.countryStats?.[player]?.capital),
-  ], 32);
-  let added = 0;
-
-  for (const chat of array(chats)) {
-    const foreign = unique(array(chat?.countries)
-      .map(chatCountryToken)
-      .map((token) => canonicalDiplomaticPolity(token, world, { allowUnknown: false }))
-      .filter((actor) => actor && lower(actor) !== lower(player)), 8);
-    if (!foreign.length) continue;
-
-    for (const message of array(chat?.messages)) {
-      if (lower(message?.role) === "user") continue;
-      const text = clean(message?.text);
-      if (!text || !LEGACY_CHAT_STANDING_ALLIANCE.test(text)) continue;
-      const speaker = chatMessagePolity(message, world);
-      if (!speaker || lower(speaker) === lower(player) || !foreign.some((actor) => lower(actor) === lower(speaker))) continue;
-
-      // Bilateral correspondence is unambiguous. In a group thread, require the
-      // message itself to point back to the player by name/alias/capital so "our
-      // alliance" cannot accidentally bind the speaker to every other participant.
-      if (foreign.length > 1 && !playerAliases.some((alias) => textMentionsAlias(text, alias))) continue;
-
-      const pairKey = relationPairKey(player, speaker);
-      if (!pairKey) continue;
-      const existingFormal = [...agreementMap.values()].some((agreement) =>
-        ["active", "suspended"].includes(lower(agreement?.status)) &&
-        ["alliance", "mutual_defense"].includes(lower(agreement?.type)) &&
-        array(agreement?.parties).some((party) => lower(party) === lower(player)) &&
-        array(agreement?.parties).some((party) => lower(party) === lower(speaker))
-      );
-      if (existingFormal) continue;
-
-      const evidenceDate = parseIsoDate(message?.time);
-      const type = /mutual defen[cs]e/i.test(text) ? "mutual_defense" : "alliance";
-      const named = namedAllianceTitleFromText(text);
-      const id = `agreement-legacy-standing-${stableHash(pairKey)}`;
-      agreementMap.set(id, {
-        id,
-        title: named || `Standing alliance: ${diplomaticDisplayName(world, player)}–${diplomaticDisplayName(world, speaker)}`,
-        type,
-        status: "active",
-        parties: [player, speaker],
-        startedDate: "",
-        endedDate: "",
-        lastUpdatedDate: evidenceDate,
-        terms: `Legacy migration from explicit standing-alliance language in diplomatic correspondence: ${text}`.slice(0, 800),
-        sourceEventIds: [],
-        createdRound: 0,
-        updatedRound: 0,
-        migratedLegacy: true,
-        // Internal migration-only lower bound; gameState normalization intentionally
-        // drops it after we have checked later event chronology.
-        migratedEvidenceDate: evidenceDate,
-      });
-      const seed = legacyRelationSeedForType(type);
-      const prior = relationMap.get(pairKey);
-      seedRelationFromAgreement(relationMap, world, [player, speaker], type, {
-        title: named || "Standing alliance explicitly referenced in diplomatic correspondence",
-        date: evidenceDate,
-        id: "",
-      });
-      // Do not let a generic chat seed weaken a stronger already-recorded positive
-      // relationship created by a formal event.
-      if (prior && Number(prior.score) > seed.score) relationMap.set(pairKey, prior);
-      added += 1;
-    }
-  }
-  return added;
-};
-
-const seedWarHostility = (relationMap, world) => {
-  for (const war of array(world?.wars)) {
-    if (!["active", "ceasefire"].includes(lower(war?.status))) continue;
-    const sideA = canonicalizeParties(war?.sideA, world);
-    const sideB = canonicalizeParties(war?.sideB, world);
-    for (const a of sideA) {
-      for (const b of sideB) {
-        const key = relationPairKey(a, b);
-        if (!key) continue;
-        const prior = relationMap.get(key);
-        const ordered = [a, b].sort((x, y) => lower(x).localeCompare(lower(y)));
-        relationMap.set(key, {
-          id: prior?.id || relationIdForPair(ordered[0], ordered[1]),
-          a: ordered[0],
-          b: ordered[1],
-          score: Math.min(Number(prior?.score ?? -80), -70),
-          status: "hostile",
-          summary: `Active belligerency in ${clean(war?.title) || clean(war?.id) || "a canonical war"}.`,
-          lastUpdatedDate: parseIsoDate(war?.lastUpdatedDate || war?.startedDate),
-          sourceEventIds: unique([...(array(prior?.sourceEventIds)), ...array(war?.sourceEventIds)], 24),
-          createdRound: Number(prior?.createdRound) || Number(war?.createdRound) || 0,
-          updatedRound: Number(war?.updatedRound) || 0,
-        });
-      }
-    }
-  }
-};
-
-export const migrateLegacyDiplomaticState = ({ world: worldLike, events = [], chats = [], game = {} } = {}) => {
-  const world = normalizeWorldState(worldLike);
-  if (Number(world.diplomaticLedgerVersion) >= DIPLOMATIC_LEDGER_VERSION) {
-    return { world, migrated: false, agreementsAdded: 0, relationsAdded: 0, scannedEvents: 0 };
-  }
-
-  const roster = buildMigrationRoster(world);
-  const relationMap = relationMapFromWorld(world);
-  const agreementMap = agreementMapFromWorld(world);
-  const beforeRelations = relationMap.size;
-  const beforeAgreements = agreementMap.size;
-  const normalizedEvents = normalizeEvents(events)
-    .slice()
-    .sort((a, b) => compareGameDates(a?.date || "", b?.date || ""));
-
-  for (const event of normalizedEvents) {
-    const title = clean(event?.title);
-    const description = clean(event?.description);
-    const text = `${title} ${description}`;
-
-    if (isLegacyFormalAgreementEvent(title, description) &&
-        !(LEGACY_NEGOTIATION_ONLY.test(title) && !LEGACY_FORMAL_PAIR.test(title))) {
-      const parties = inferMigrationParties(event, world, roster);
-      if (parties.length >= 2) {
-        const type = inferLegacyAgreementType(text);
-        const id = legacyAgreementId(event, type, parties);
-        let agreement = agreementMap.get(id);
-        if (!agreement) {
-          agreement = {
-            id,
-            title,
-            type,
-            status: "active",
-            parties,
-            startedDate: parseIsoDate(event?.date),
-            endedDate: "",
-            lastUpdatedDate: parseIsoDate(event?.date),
-            terms: description.slice(0, 600),
-            ...(type === "guarantee" && parties.length >= 2
-              ? { guarantor: parties[0], beneficiary: parties[1] }
-              : {}),
-            sourceEventIds: unique([clean(event?.id)], 24),
-            createdRound: 0,
-            updatedRound: 0,
-            migratedLegacy: true,
-          };
-          agreementMap.set(id, agreement);
-          seedRelationFromAgreement(relationMap, world, parties, type, event);
-        }
-        if (type === "peace_settlement") {
-          applyLegacyPeaceAgreementRelation(relationMap, agreement, event);
-        }
-      }
-    }
-
-    // Process explicit directed hostilities in the same chronological stream.
-    // This lets a later peace repair hostility while a still-later clash can make
-    // the pair hostile again; it also ends an obsolete alliance at the right date.
-    applyLegacyHostilityEvent(agreementMap, relationMap, event, world, roster);
-  }
-
-  // Some formal commitments predate the campaign start and therefore never had a
-  // treaty-signing event. Seed ONLY explicit standing-alliance language from
-  // diplomatic correspondence, conservatively bound to the speaker/player pair.
-  const chatAgreementsAdded = migrateLegacyStandingAlliancesFromChats({
-    agreementMap,
-    relationMap,
-    chats,
-    game,
-    world,
-    roster,
-  });
-
-  // Re-check only for hostilities later than those chat evidence dates. This can
-  // close a stale standing-alliance reference if the event ledger subsequently
-  // records direct war between the same parties. Older clashes cannot overwrite
-  // newer explicit standing-alliance evidence because applyLegacyHostilityEvent is
-  // date-aware.
-  if (chatAgreementsAdded > 0) {
-    for (const event of normalizedEvents) {
-      applyLegacyHostilityEvent(agreementMap, relationMap, event, world, roster);
-    }
-  }
-
-  // Existing active wars are stronger evidence than any old migrated settlement.
-  seedWarHostility(relationMap, world);
-
-  const statusRank = { active: 0, suspended: 1, ended: 2, expired: 3 };
-  const agreements = [...agreementMap.values()]
-    .sort((a, b) =>
-      (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
-      compareGameDates(b.lastUpdatedDate || b.startedDate || "", a.lastUpdatedDate || a.startedDate || "") ||
-      a.id.localeCompare(b.id)
-    )
-    .slice(0, MAX_AGREEMENTS);
-  const relations = [...relationMap.values()]
-    .sort((a, b) => Math.abs(Number(b.score) || 0) - Math.abs(Number(a.score) || 0) || a.id.localeCompare(b.id))
-    .slice(0, MAX_RELATIONS);
-
-  const nextWorld = normalizeWorldState({
-    ...world,
-    diplomaticLedgerVersion: DIPLOMATIC_LEDGER_VERSION,
-    relations,
-    agreements,
-  });
-
-  return {
-    world: nextWorld,
-    migrated: true,
-    agreementsAdded: Math.max(0, agreements.length - beforeAgreements),
-    relationsAdded: Math.max(0, relations.length - beforeRelations),
-    scannedEvents: normalizedEvents.length,
-    scannedChats: array(chats).length,
-    chatAgreementsAdded,
-    migratedAtDate: clean(game?.gameDate),
-  };
 };

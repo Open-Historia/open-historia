@@ -27,6 +27,31 @@ const referencedEventIds = (record, knownIds, found = new Set(), depth = 0) => {
   return found;
 };
 
+// War records are not their events' to lose. A war record is the war's state:
+// when the events it was tied to are dropped (the integrity screen, the
+// curator), it stays, tied to those of its events still kept, and dated by the
+// first dropped one where none is kept (baselineDate, which the ledger reads
+// for a record no event dates). It used to go with its event, and a war whose
+// opening event the curator took for a duplicate never began, while its joins
+// were refused and its battles kept a war id no war held.
+export const keepWarRecordsBeyondEvents = (updates, allEvents, keptEvents) => {
+  const allById = new Map(asArray(allEvents).map((event) => [clean(event?.id), event]).filter(([id]) => id));
+  const keptIds = new Set(asArray(keptEvents).map((event) => clean(event?.id)).filter(Boolean));
+  return asArray(updates).map((update) => {
+    if (!update || typeof update !== "object" || Array.isArray(update)) return update;
+    const ids = asArray(update.eventIds).map(clean).filter(Boolean);
+    if (!ids.length || ids.every((id) => keptIds.has(id))) return update;
+    const kept = ids.filter((id) => keptIds.has(id));
+    const date = kept.length ? "" : ids.map((id) => clean(allById.get(id)?.date)).find(Boolean) || "";
+    return {
+      ...update,
+      eventIds: kept,
+      eventIndexes: [],
+      ...(date && !clean(update.baselineDate) ? { baselineDate: date } : {}),
+    };
+  });
+};
+
 export const filterBoundLedgerUpdatesToKeptEvents = (updates, allEvents, keptEvents) => {
   const allIds = new Set(asArray(allEvents).map((event) => clean(event?.id)).filter(Boolean));
   const keptIds = new Set(asArray(keptEvents).map((event) => clean(event?.id)).filter(Boolean));

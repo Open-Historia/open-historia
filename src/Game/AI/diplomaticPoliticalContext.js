@@ -36,7 +36,6 @@ export const buildDiplomaticPoliticalContext = ({
   world = {},
   speakingAs = "",
   playerCountry = "",
-  decisionFocusText = "",
 } = {}) => {
   const actorPolity = clean(speakingAs);
   const counterpartPolity = clean(playerCountry);
@@ -44,7 +43,6 @@ export const buildDiplomaticPoliticalContext = ({
 
   const context = buildPoliticalDecisionContext(world, actorPolity, {
     counterpartPolity,
-    decisionFocusText,
     maxChars: DIPLOMATIC_POLITICAL_DECISION_MAX_CHARS,
     limits: DIPLOMATIC_POLITICAL_DECISION_LIMITS,
   });

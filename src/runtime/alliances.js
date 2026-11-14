@@ -37,6 +37,8 @@
 //
 // Pure, and loads in plain Node.
 
+import { MAX_WAR_SIDE_MEMBERS, keepOpenRows } from "./warRecord.js";
+
 export const DEFENSIVE_AGREEMENT_TYPES = Object.freeze(["alliance", "mutual_defense"]);
 export const GUARANTEE_TYPE = "guarantee";
 export const DEFENSIVE_INSTITUTION_KINDS = Object.freeze(["security_alliance", "defense_pact"]);
@@ -46,7 +48,7 @@ export const CALL_STANDS_ROUNDS = 2;
 // The most allies a war brings in on a side in one turn: the strongest first.
 export const ALLIES_CALLED_MOST = 6;
 // The most countries the war ledger keeps on a side (Game/AI/nativeWarLedger.js).
-export const WAR_SIDE_MOST = 12;
+export const WAR_SIDE_MOST = MAX_WAR_SIDE_MEMBERS;
 export const HONOUR_RELATION_LEAST = -30;
 export const HONOUR_WEARINESS_MOST = 70;
 export const CALLS_KEPT_MOST = 40;
@@ -140,7 +142,8 @@ export const normalizeCallsToArms = (value) => {
     const call = normalizeCallToArms(raw);
     if (call) kept.set(call.id, call);
   }
-  return [...kept.values()].slice(-CALLS_KEPT_MOST);
+  // (A call nobody has answered is never cut: runtime/warRecord.js keepOpenRows.)
+  return keepOpenRows([...kept.values()], CALLS_KEPT_MOST, (call) => call.status === "open");
 };
 
 // The calls that wait for one country's answer ("" for anybody's).

@@ -99,28 +99,32 @@ test("all retrieval paths respect diplomatic visibility, including thread IDs", 
   assert.ok(unknown.error);
 });
 
-test("without provider lookup functions the bounded briefing still supplies matching dated evidence", () => {
-  const text=renderAdvisorDiplomaticContext({
-    chats,world,game,question:"What was the Sirte treaty guarantee in 2026?",maxChars:6500,
-  });
-  assert.match(text,/Sirte treaty shall guarantee/);
-  assert.match(text,/2026-07-02/);
-  assert.ok(text.length <= 6500);
-});
-
-test("generic domestic questions do not receive irrelevant automatic diplomatic source matches", () => {
-  const text=renderAdvisorDiplomaticContext({chats,world,game,question:
-    "Please assess domestic administrative costs and factory labor audits."});
-  assert.doesNotMatch(text,/Relevant dated passages from saved diplomacy/);
+// The briefing chose up to three passages by the words they shared with the
+// player's question: asked in another language, or another way, it chose
+// nothing, and a stray shared word chose the wrong treaty. The briefing is the
+// same whatever is asked; the advisor finds old terms with its own search.
+test("the briefing picks no passage by the words of the player's question", () => {
+  const text=renderAdvisorDiplomaticContext({chats,world,game,maxChars:6500});
+  assert.doesNotMatch(text,/Relevant dated passages/);
+  assert.doesNotMatch(text,/Sirte treaty shall guarantee/,"an old passage is not pulled in by its words");
+  assert.match(text,/Standing commitments index/);
   assert.match(text,/Most recent unconsolidated diplomatic threads/);
+  assert.ok(text.length <= 6500);
+  for (const question of [
+    "What was the Sirte treaty guarantee in 2026?",
+    "Quelle garantie le traité de Syrte donnait-il en 2026 ?",
+    "Please assess domestic administrative costs and factory labor audits.",
+  ]) {
+    assert.equal(renderAdvisorDiplomaticContext({chats,world,game,question,maxChars:6500}),text,question);
+  }
 });
 
-test("long presidential turns retain the actual history question at the end", () => {
-  const text=renderAdvisorDiplomaticContext({chats,world,game,question:
+test("long presidential turns: the advisor's search keeps the actual history question at the end", () => {
+  const found=searchAdvisorDiplomaticMessages(chats,{query:
     ("The domestic labor inspection programme must be checked. ").repeat(300)
       +"Can you remind me of the 2026 Sirte treaty verification guarantees?"});
-  assert.match(text,/Relevant dated passages from saved diplomacy/);
-  assert.match(text,/Sirte treaty shall guarantee/);
+  assert.equal(found.matches[0]?.threadId,"talk-italy");
+  assert.match(found.matches[0].excerpt,/Sirte treaty shall guarantee/);
 });
 
 test("a long exact source message is recoverable across bounded pages, including its final treaty clause", () => {
@@ -164,16 +168,16 @@ test("source pagination fails closed for inaccessible threads and invalid messag
   }).error,"Message index is outside this thread.");
 });
 
-test("automatic historical evidence is based on source-match relevance, not an English keyword allowlist", () => {
+test("a question in Latvian and its English twin get the same briefing", () => {
   const source=transcript({id:"treaty-in-latvian",partner:"Latvia",
     messages:[["2026-11-18","Latvia","Daugava crossing permits require joint written clearance and a signed verification protocol."]]});
-  const question="Atgādini man par Daugava šķērsošanas nosacījumiem, lūdzu";
-  const rendered=renderAdvisorDiplomaticContext({chats:[source],world,game,question});
-  assert.match(rendered,/Relevant dated passages/);
-  assert.match(rendered,/joint written clearance/);
-  const another=renderAdvisorDiplomaticContext({chats:[source],world,game,
+  const latvian=renderAdvisorDiplomaticContext({chats:[source],world,game,
+    question:"Atgādini man par Daugava šķērsošanas nosacījumiem, lūdzu"});
+  const english=renderAdvisorDiplomaticContext({chats:[source],world,game,
     question:"Why did the Daugava delegation demand verification?"});
-  assert.match(another,/joint written clearance/);
+  assert.equal(latvian,english);
+  // The thread is there either way, by its source id, for the advisor to read.
+  assert.match(latvian,/Source thread treaty-in-latvian/);
 });
 
 test("all active standing diplomatic memories appear as compact source-backed index in a 40-thread campaign", () => {
@@ -202,9 +206,9 @@ test("targeted evidence for a long treaty favors the requested final clause, not
     ["2026-11-18","Latvia",text],
   ]});
   const query="Please remind me how the Daugava treaty final verification clause restricts military inspections.";
-  const brief=renderAdvisorDiplomaticContext({chats:[source],world,game,question:query});
-  assert.match(brief,/Final verification clause:/);
-  assert.match(brief,/no military installations may be inspected/);
+  const found=searchAdvisorDiplomaticMessages([source],{query});
+  assert.match(found.matches[0].excerpt,/Final verification clause:/);
+  assert.match(found.matches[0].excerpt,/no military installations may be inspected/);
 });
 
 test("search evidence IDs can be validated at read time and rejected when changed", async () => {
@@ -279,10 +283,62 @@ test("archived and consolidated sources remain retrievable by exact ID without b
   }).messages[0].excerpt,/neutral arbitration panel/);
 });
 
+// The search kept words of three letters or more that were not on an English
+// list of words to leave out. Every two-character Chinese word was dropped, so a
+// search asked in Chinese was refused for want of a query, while French "les"
+// and "pour" were kept to weigh as much as a treaty's name.
+test("the advisor's search works in every script: two-character Chinese words, and the same conversation found the same way in English, French and Chinese", () => {
+  const thread = (id, partner, texts) => transcript({ id, partner,
+    messages: texts.map((text, index) => [`2026-0${index + 1}-01`, partner, text]) });
+  const english = thread("talk-en", "Italian Republic", [
+    "Routine greetings were exchanged.",
+    "The Sirte treaty guarantees maritime access for both fleets.",
+    "Grain prices fell this winter.",
+  ]);
+  const french = thread("talk-fr", "République italienne", [
+    "Des salutations d'usage ont été échangées.",
+    "Le traité de Syrte garantit l'accès maritime aux deux flottes.",
+    "Le prix du blé a baissé cet hiver.",
+  ]);
+  const chinese = thread("talk-zh", "意大利共和国", [
+    "双方互致问候。",
+    "锡尔特条约保障两国舰队的海上通行。",
+    "今年冬天粮价下跌。",
+  ]);
+  const first = (chat, query) => searchAdvisorDiplomaticMessages([chat], { query }).matches[0];
+  assert.equal(first(english, "Sirte treaty maritime access")?.messageIndex, 1);
+  assert.equal(first(french, "traité de Syrte accès maritime")?.messageIndex, 1);
+  assert.equal(first(chinese, "锡尔特条约的海上通行")?.messageIndex, 1);
+  // Two-character words, spaced, were each dropped: the search was refused.
+  const spaced = searchAdvisorDiplomaticMessages([chinese], { query: "条约 海上" });
+  assert.equal(spaced.note, undefined);
+  assert.equal(spaced.matches[0]?.messageIndex, 1);
+  assert.match(spaced.matches[0].excerpt, /锡尔特条约/);
+  // Nothing to look for at all is still said.
+  assert.match(searchAdvisorDiplomaticMessages([english], { query: "?!" }).note, /A query or a partner is required/);
+  const source = readFileSync(new URL("./advisorDiplomaticContext.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /const STOP\b|\\p\{N\}\]\{3,\}/, "no list of words to leave out, no shortest length");
+});
+
+test("the partner narrows the search by a participant's exact name or code, never a word of one", () => {
+  const ids = (partner, query = "") => searchAdvisorDiplomaticMessages(chats, { query, partner }).matches.map((match) => match.threadId);
+  assert.deepEqual([...new Set(ids("Italian Republic"))], ["talk-italy"]);
+  assert.deepEqual([...new Set(ids("ita", "verification"))], ["talk-italy"], "its code, in any case");
+  // "Republic" was a word of two participants' names, and found both.
+  const word = searchAdvisorDiplomaticMessages(chats, { query: "verification", partner: "Republic" });
+  assert.deepEqual(word.matches, []);
+  assert.match(word.note, /No saved conversation has a participant called "Republic"\. The participants, as the threads name them: Federal Republic of Germany, Italian Republic, Ukraine\./);
+  // Only the threads the asker may see are named.
+  const hidden = searchAdvisorDiplomaticMessages(chats, { query: "briefing", partner: "Federal Republic of Germany", visibleTo: "Italian Republic" });
+  assert.deepEqual(hidden.matches, []);
+  assert.doesNotMatch(hidden.note, /Germany\./);
+});
+
 test("source integration is Advisor-only; leaders and Time Skip keep their existing builders", () => {
   const main=readFileSync(new URL("./main.jsx",import.meta.url),"utf8");
   assert.match(main,/renderAdvisorDiplomaticContext\(/);
-  assert.match(main,/question:\s*currentQuestion/);
+  const call=main.slice(main.indexOf("renderAdvisorDiplomaticContext({"),main.indexOf("}),",main.indexOf("renderAdvisorDiplomaticContext({")));
+  assert.doesNotMatch(call,/question/,"the briefing is not chosen by the question's words");
   assert.match(main,/exclude:\s*\["advisorMessages", "chatHistoryLong"\]/);
   assert.match(main,/advisorDiplomaticLookups\(/);
   assert.match(main,/buildAdvisorSystemPrompt\(\{ recipient: storedRecipient, currentQuestion: userMessage \}\)/);

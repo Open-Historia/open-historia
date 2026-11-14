@@ -383,45 +383,16 @@ export const INSTITUTION_CONSEQUENCE_KINDS = Object.freeze([
 ]);
 const INSTITUTION_CONSEQUENCE_KIND_SET = new Set(INSTITUTION_CONSEQUENCE_KINDS);
 
-const CONSEQUENCE_KIND_ALIASES = Object.freeze({
-  membership: "institution-membership",
-  "institution-membership": "institution-membership",
-  charter: "institution-charter",
-  "institution-charter": "institution-charter",
-  status: "institution-status",
-  "institution-status": "institution-status",
-  project: "shared-project",
-  "institution-project": "shared-project",
-  "shared-project": "shared-project",
-  deployment: "deployment-authorization",
-  deploy: "deployment-authorization",
-  unit: "deployment-authorization",
-  "military-deployment": "deployment-authorization",
-  "deployment-authorization": "deployment-authorization",
-  sanction: "sanctions-authorization",
-  sanctions: "sanctions-authorization",
-  "sanctions-authorization": "sanctions-authorization",
-  funding: "funding-authorization",
-  fund: "funding-authorization",
-  budget: "funding-authorization",
-  "funding-authorization": "funding-authorization",
-  policy: "policy-commitment",
-  commitment: "policy-commitment",
-  "policy-commitment": "policy-commitment",
-  institution: "subordinate-institution",
-  "create-institution": "subordinate-institution",
-  "subordinate-institution": "subordinate-institution",
-  declaration: "declaration",
-  resolution: "declaration",
-  position: "declaration",
-  agreement: "agreement",
-  custom: "custom",
-});
-
+// The kind exactly as one of INSTITUTION_CONSEQUENCE_KINDS, its case and
+// spacing aside ("Deployment authorization" is deployment-authorization). Any
+// other word is "custom": kept as an intent with no canonical owner, which the
+// implementation ledger reports and nothing executes, never read as the
+// nearest kind. A table of English words for them ("deploy", "budget",
+// "membership") made an English proposal executable where the same proposal in
+// any other language was not (the owner, 2026-11-13: no keywording).
 const consequenceKind = (value) => {
   const raw = lower(value).replace(/[\s_]+/g, "-");
-  const mapped = CONSEQUENCE_KIND_ALIASES[raw] || raw;
-  return INSTITUTION_CONSEQUENCE_KIND_SET.has(mapped) ? mapped : "custom";
+  return INSTITUTION_CONSEQUENCE_KIND_SET.has(raw) ? raw : "custom";
 };
 
 const CONSEQUENCE_PATCH_KEYS = new Set([
@@ -537,7 +508,6 @@ const canonicalPolity = (value, world, identityIndex = null) => {
   const identity = resolvePolityIdentity(token, world || {}, {
     allowUnknown: true,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
     identityIndex,
   });

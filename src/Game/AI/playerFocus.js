@@ -35,31 +35,20 @@ export const normalizePlayerFocus = (value) => {
 // --- Player events ---
 //
 // Anything involving the player's polity: what it does, what is done to it or
-// said about it (the simulator's playerRelated mark, or its name in the words),
-// and what happens inside its territory — the regions and cities it holds and
-// the polities it absorbed, so riots in Lahore are the British Empire's even
-// when the event never names it. Whole words, case and accents folded, in any
-// script: kept to a-z and 0-9, a name in Cyrillic or Arabic folded to nothing,
-// so a Project named in the player's language never spared its event from the
-// filler filter, and one owned by a polity so named read as the player's own.
+// said about it, and what happens inside its territory, so riots in Lahore are
+// the British Empire's even when the event never names it. The simulator says
+// which by marking the event playerRelated (the directive below tells it to),
+// and the mark is all that is counted. The player's names and the names of the
+// places it holds used to be looked for in the event's words too: a game told
+// in Chinese has no spaces to find a name between, a name in another case or
+// language ("Россия", "России") was another word, and "Georgia" the US state
+// read as the country. The same period counted differently in every language.
+export const isPlayerEvent = (event) => event?.playerRelated === true;
+
+// A name or a title, case, accents and spacing aside, for the exact comparisons
+// below (whose Project, whose war, which order was given already); never for
+// finding a name in prose.
 const fold = (value) => ` ${asText(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim()} `;
-
-// Shorter names match too much ("Ob", "Uri"); the polity's own names are
-// allowed down to three letters, as the world share counts them.
-const TERRITORY_NAME_MIN = 4;
-
-export const createPlayerEventTest = ({ playerNames = [], territoryNames = [] } = {}) => {
-  const needles = [
-    ...playerNames.map(fold).filter((needle) => needle.trim().length >= 3),
-    ...territoryNames.map(fold).filter((needle) => needle.trim().length >= TERRITORY_NAME_MIN),
-  ];
-  const unique = [...new Set(needles)];
-  return (event) => {
-    if (event?.playerRelated === true) return true;
-    const text = fold(`${asText(event?.title)} ${asText(event?.description)}`);
-    return unique.some((needle) => text.includes(needle));
-  };
-};
 
 // --- What the player has going on ---
 //
@@ -109,7 +98,7 @@ const isPlayersEntry = (project, playerKeys) => {
 
 export const collectPlayerMaterial = ({
   playerNames = [],
-  isPlayerEvent = () => false,
+  isPlayerEvent: playersEvent = isPlayerEvent,
   originDate = "",
   targetDate = "",
   actions = [],
@@ -186,7 +175,7 @@ export const collectPlayerMaterial = ({
   }
 
   const consequences = asArray(recentEvents)
-    .filter((event) => within(event?.date, recentFrom, origin) && isPlayerEvent(event))
+    .filter((event) => within(event?.date, recentFrom, origin) && playersEvent(event))
     .slice(-MAX_CONSEQUENCES);
   for (const event of consequences) {
     items.push({ kind: "consequence", id: asText(event.id), label: asText(event.title), date: asText(event.date), required: false });
@@ -208,19 +197,19 @@ export const PLAYER_FOCUS_MIN_EVENTS = 3;
 
 // null when the minimum is met or does not apply; otherwise what to tell the
 // simulator at the top of its next turn. Never a reason to ask again.
-export const playerFocusShortfall = (events, { focus, isPlayerEvent = () => false, material = [], playerName = "" } = {}) => {
+export const playerFocusShortfall = (events, { focus, isPlayerEvent: playersEvent = isPlayerEvent, material = [], playerName = "" } = {}) => {
   const list = asArray(events);
   if (list.length < PLAYER_FOCUS_MIN_EVENTS) return null;
   const level = levelOf(focus);
   const needed = Math.min(Math.ceil((list.length * level.share) / 100), asArray(material).length);
-  const have = list.filter((event) => isPlayerEvent(event)).length;
+  const have = list.filter((event) => playersEvent(event)).length;
   if (have >= needed) return null;
   const player = asText(playerName) || "the player's polity";
   return {
     needed,
     have,
-    text: `${have} of your ${list.length} events involved ${player}; the player's focus (${level.label}) asks for at least ${needed} while ${player} has this much going on. `
-      + `Give ${player}'s orders, Projects, wars, Storylines and recent events their consequences before reaching for distant news.`,
+    text: `${have} of your ${list.length} events ${have === 1 ? "was" : "were"} marked playerRelated; the player's focus (${level.label}) asks for at least ${needed} while ${player} has this much going on. `
+      + `Give ${player}'s orders, Projects, wars, Storylines and recent events their consequences before reaching for distant news, and mark each such event playerRelated.`,
   };
 };
 
@@ -233,61 +222,14 @@ export const playerFocusShortfall = (events, { focus, isPlayerEvent = () => fals
 // A queued entry no event could ever cite is settled by the engine instead: a
 // Deploy request, which the unit engine accepts, and a chat request, which is
 // answered by the conversation opening. Only an ordinary order needs an event.
-export const actionNeedsEvent = (action) => asText(action?.kind) !== "chat" && !action?.unitRevert;
-
-// An order the jump plainly carried out but forgot to cite. The model wrote
-// "British Crown Ratifies the Nigerian Imperial Accession Treaty" for the order
-// "Finalize and Ratify the Nigerian Imperial Accession Treaty" without its id;
-// the order stayed overdue, the next jump was told to answer it, and the treaty
-// was ratified five times over two months. A Player event that carries the
-// order's own subject — most of the distinctive words of its title — is taken
-// as the answer and cites it, so settleOrders resolves it the first time.
 //
-// Conservative on purpose: only a Player event that cites no order at all, only
-// when the title has at least three distinctive words and the event carries most
-// of them, and each order goes to the one event that matches it best.
-const ORDER_VERB_WORDS = new Set([
-  "enact", "authorize", "authorise", "establish", "launch", "finalize", "finalise",
-  "convene", "order", "begin", "initiate", "create", "formally", "officially",
-  "immediately", "approve", "direct", "start", "issue",
-]);
-const ORDER_STEM_LENGTH = 5;
-const ORDER_MIN_STEMS = 3;
-const ORDER_MIN_SHARE = 0.6;
-
-const stemsOf = (text, excluded) => new Set(
-  fold(text).trim().split(" ")
-    .filter((word) => word.length >= 4 && !ORDER_VERB_WORDS.has(word) && !excluded.has(word))
-    .map((word) => word.slice(0, ORDER_STEM_LENGTH)),
-);
-
-export const citeNarratedOrders = (actions, events, { isPlayerEvent = () => false, playerNames = [] } = {}) => {
-  const list = asArray(events);
-  const cited = new Set(list.flatMap((event) => asArray(event?.impacts?.actionIds)).map(asText).filter(Boolean));
-  // The player's own name is in every Player event; it says nothing about which order.
-  const excluded = new Set(playerNames.flatMap((name) => fold(name).trim().split(" ")).filter(Boolean));
-  const orders = asArray(actions).filter((action) =>
-    asText(action?.status) === "planned" && actionNeedsEvent(action) && asText(action?.id) && !cited.has(asText(action.id)));
-  const answers = new Map();
-  for (const order of orders) {
-    const wanted = stemsOf(order.title, excluded);
-    if (wanted.size < ORDER_MIN_STEMS) continue;
-    let best = null;
-    list.forEach((event, index) => {
-      if (asArray(event?.impacts?.actionIds).length || !isPlayerEvent(event)) return;
-      const have = stemsOf(`${asText(event?.title)} ${asText(event?.description)}`, excluded);
-      const shared = [...wanted].filter((stem) => have.has(stem)).length;
-      const share = shared / wanted.size;
-      if (shared < ORDER_MIN_STEMS || share < ORDER_MIN_SHARE) return;
-      if (!best || share > best.share) best = { index, share };
-    });
-    if (best) answers.set(best.index, [...(answers.get(best.index) || []), asText(order.id)]);
-  }
-  if (!answers.size) return list;
-  return list.map((event, index) => (answers.has(index)
-    ? { ...event, impacts: { ...(event?.impacts || {}), actionIds: answers.get(index) } }
-    : event));
-};
+// Never by an event's words. An event that shared most of an order's longer
+// words used to be given its id (citeNarratedOrders, gone 2026-11-13): in
+// English it closed whichever order shared the most words, the wrong one among
+// orders about the same treaty or the same fleet, and in Chinese, Japanese or
+// any inflected language it never matched at all. An order told without its id
+// is carried over as overdue, and the next skip is told to answer it by id.
+export const actionNeedsEvent = (action) => asText(action?.kind) !== "chat" && !action?.unitRevert;
 
 export const settleOrders = (actions, events, { round } = {}) => {
   const answered = new Set(asArray(events).flatMap((event) => asArray(event?.impacts?.actionIds)).map(asText).filter(Boolean));
@@ -312,6 +254,9 @@ export const settleOrders = (actions, events, { round } = {}) => {
 // out in the last two skips. The advisor re-queued orders word for word when the
 // player only asked how things stood; a second copy is not a second order. An
 // order settled before rounds were recorded cannot be dated, so it never blocks.
+// The whole title, compared exactly (case, accents and spacing aside), never a
+// share of its words: a new entry carries no id of the order it repeats (one
+// that names an existing id is an edit of that order, advisorBlocks.js).
 export const repeatedOrder = (actions, title, { round } = {}) => {
   const wanted = fold(title).replace(/\s+/g, " ").trim();
   if (!wanted) return null;
@@ -341,20 +286,27 @@ export const slipPassedMilestones = (projects, { date = "" } = {}) => {
 
 // --- The filler filter ---
 //
-// An event that answers one of the player's orders, or that names a Project
-// with a milestone or target due in the window, is exactly what the player
-// asked the jump for. The filler filter may not remove it, however routine it
-// reads; the rest of the player's events are judged as usual.
-export const createSpareTest = (material) => {
-  const dueProjects = [...new Set(asArray(material)
-    .filter((item) => item?.required && item.projectName)
-    .map((item) => fold(item.projectName))
-    .filter((needle) => needle.trim().length >= 3))];
+// An event that answers one of the player's orders (its actionIds), or that
+// moves a Project with a milestone or target due in the window (one of its
+// board ops addresses that Project, by its id or by the board's own name for
+// it, as the board's ops find an entry: projects.js opTargetsEntry), is exactly
+// what the player asked the jump for. The filler filter may not remove it,
+// however routine it reads; the rest of the player's events are judged as
+// usual. A Project's name found in the event's words used to spare it too,
+// which a telling in another language or another case of the name never did.
+// `boardOpsOf(event)`: the board ops an event carried. A folded skip has lifted
+// them off its events by the time the filter runs (gameplay.js
+// foldedTurnReview), so the caller looks them up; by default, the event's own.
+export const createSpareTest = (material, { boardOpsOf = (event) => asArray(event?.impacts?.projectOps) } = {}) => {
+  const due = asArray(material).filter((item) => item?.required && asText(item.projectId));
+  const dueIds = new Set(due.map((item) => asText(item.projectId)));
+  const dueNames = new Set(due.map((item) => asText(item.projectName).toLowerCase()).filter(Boolean));
+  const movesDueProject = (op) => dueIds.has(asText(op?.projectId || op?.id))
+    || dueNames.has(asText(op?.name).toLowerCase());
   return (event) => {
     if (asArray(event?.impacts?.actionIds).length) return true;
-    if (!dueProjects.length) return false;
-    const text = fold(`${asText(event?.title)} ${asText(event?.description)}`);
-    return dueProjects.some((needle) => text.includes(needle));
+    if (!dueIds.size) return false;
+    return asArray(boardOpsOf(event)).some(movesDueProject);
   };
 };
 
@@ -411,6 +363,7 @@ export const buildPlayerFocusDirective = ({ focus, worldShare = 0, material = []
   const lines = [
     heading,
     `At least ${playerShare}% of this period's events should be Player events — anything ${player} does, anything done to or said about ${player}, and anything that happens inside ${player}'s territory — but never more than the ${items.length} thing${items.length === 1 ? "" : "s"} listed below gives reason for. `
+      + `Mark every Player event playerRelated: that mark is what the engine counts. `
       + `The share is a minimum only as far as the items below allow, not a quota to fill: never invent business for ${player} to reach it, and when these run out the world fills the period within its usual number of events.`,
   ];
   if (orders.length) {
@@ -418,7 +371,7 @@ export const buildPlayerFocusDirective = ({ focus, worldShare = 0, material = []
     for (const order of orders) lines.push(`- [${order.id}]${ordersAbove ? "" : ` ${order.label}`}${order.overdue ? " (OVERDUE: carried over unanswered from the last period; answer it first)" : ""}`);
   }
   if (due.length) {
-    lines.push("", `DUE THIS PERIOD — each gets an outcome in an event that names the Project exactly: reached, slipped or missed. Never leave a date behind with nothing said.`);
+    lines.push("", `DUE THIS PERIOD — each gets an outcome in an event that names the Project exactly: reached, slipped or missed, with the board op that records it wherever you keep the board. Never leave a date behind with nothing said.`);
     for (const item of due) lines.push(`- ${item.label}`);
   }
   const grouped = new Map();

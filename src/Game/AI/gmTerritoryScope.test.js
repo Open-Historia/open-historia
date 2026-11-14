@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  detectExplicitBaseTerritoryScope,
-  requestDemandsExhaustiveTerritorialScope,
-  resolveGameMasterBaseGeographyScope,
-  scopeContainsRegion,
-} from "./gmTerritoryScope.js";
+import { readFileSync } from "node:fs";
+import { resolveGameMasterBaseGeographyScope } from "./gmTerritoryScope.js";
+
+// The GM's territorialScopes name base geographies; native code expands every
+// rendered region in them. The names are looked up exactly (code or name, case
+// and spacing aside), and the request's own words are never read.
 
 const catalog = [
   { id: "PRK.1", name: "Sinuiju", country: "North Korea", countryCode: "PRK" },
@@ -16,77 +16,39 @@ const catalog = [
   { id: "FRA.2", name: "Normandie", country: "France", countryCode: "FRA" },
 ];
 
-// A wider world for the qualifier cases: the countries a partial request names.
 const wider = [
   ...catalog,
   { id: "UKR.1", name: "Kharkiv", country: "Ukraine", countryCode: "UKR" },
   { id: "UKR.2", name: "Kyiv", country: "Ukraine", countryCode: "UKR" },
   { id: "UKR.3", name: "Lviv", country: "Ukraine", countryCode: "UKR" },
   { id: "POL.1", name: "Lubelskie", country: "Poland", countryCode: "POL" },
-  { id: "POL.2", name: "Mazowieckie", country: "Poland", countryCode: "POL" },
-  { id: "RUS.1", name: "Belgorod", country: "Russian Federation", countryCode: "RUS" },
-  { id: "USA.1", name: "Guam", country: "United States", countryCode: "USA" },
 ];
 
-test("detects all North Korean states as one base-geography footprint", () => {
-  const scope = detectExplicitBaseTerritoryScope(
-    "make the DPRK independent, in all north korean states. not just contested - legally as well.",
-    catalog,
-  );
-  assert.equal(scope?.countryCode, "PRK");
-  assert.deepEqual(scope?.regionIds, ["PRK.1", "PRK.2", "PRK.3"]);
-  assert.equal(scopeContainsRegion(scope, "PRK.2"), true);
-  assert.equal(scopeContainsRegion(scope, "KOR.1"), false);
-});
-
-test("detects an exhaustive France footprint without treating current ownership as the scope", () => {
-  const scope = detectExplicitBaseTerritoryScope("transfer all of France territories to Germany", catalog);
-  assert.equal(scope?.countryCode, "FRA");
-  assert.deepEqual(scope?.regionIds, ["FRA.1", "FRA.2"]);
-});
-
-test("does not expand a single-region request", () => {
-  assert.equal(detectExplicitBaseTerritoryScope("transfer Sinuiju to the DPRK", catalog), null);
-});
-
-test("fails closed when a broad request does not identify one rendered base geography", () => {
-  assert.equal(detectExplicitBaseTerritoryScope("transfer all occupied regions to Germany", catalog), null);
-});
-
-test("an unqualified whole-footprint phrase still expands, with filler and a hand-over after the noun", () => {
-  assert.equal(detectExplicitBaseTerritoryScope("give all Ukrainian regions to Russia", wider)?.countryCode, "UKR");
-  assert.equal(detectExplicitBaseTerritoryScope("grant independence to all the north korean states", wider)?.countryCode, "PRK");
-  assert.equal(detectExplicitBaseTerritoryScope("all United States territories go to Mexico", wider)?.countryCode, "USA");
-});
-
-test("a request that narrows the scope to part of a country never expands to the whole footprint", () => {
-  for (const request of [
-    "Poland cedes all its eastern provinces to the Soviet Union",
-    "transfer all Ukrainian regions east of the Dnieper to Novorossiya",
-    "Transfer all the Ukrainian regions on the left bank of the Dnieper to Novorossiya",
-    "Novorossiya takes control of every Ukrainian province it occupies",
-    "Ukraine loses all of its territory east of the Dnieper; the rest stays",
-    "All French overseas territories in the Caribbean go to the United States",
-    "Give Zmiiv to Russia and settle all the border areas quietly",
-  ]) {
-    assert.equal(detectExplicitBaseTerritoryScope(request, wider), null, request);
+test("a base geography is found by its exact name or code, case and spacing aside", () => {
+  for (const name of ["North Korea", "north  korea", "NORTH KOREA", "PRK", "prk"]) {
+    const scope = resolveGameMasterBaseGeographyScope([name], catalog);
+    assert.equal(scope.error, "", name);
+    assert.deepEqual(scope.regions.map((region) => region.id), ["PRK.1", "PRK.2", "PRK.3"], name);
   }
 });
 
-
-test("broad multi-geography GM requests require the native exhaustive-scope envelope", () => {
-  assert.equal(requestDemandsExhaustiveTerritorialScope("make the Baltic states independent in all Baltic territories"), true);
-  assert.equal(requestDemandsExhaustiveTerritorialScope("transfer every Ukrainian region to Novorossiya"), true);
-  assert.equal(requestDemandsExhaustiveTerritorialScope("transfer Harju to Estonia"), false);
+test("a part of a name, a stem or another wording is no base geography: it fails closed", () => {
+  // Stems once matched: "Korean" was North or South Korea, and "Korea" either.
+  for (const name of ["Korea", "Korean", "North Korean states", "the North Korea", "DPRK"]) {
+    const scope = resolveGameMasterBaseGeographyScope([name], catalog);
+    assert.match(scope.error, /did not match any rendered base geography/, name);
+    assert.deepEqual(scope.regions, [], name);
+  }
 });
 
-test("territorial preservation language does not manufacture an exhaustive mutation", () => {
-  assert.equal(
-    requestDemandsExhaustiveTerritorialScope("Make Lithuania an open satellite state of Latvia. Lithuania remains a separate sovereign country and keeps all of its territory."),
-    false,
-  );
-  assert.equal(requestDemandsExhaustiveTerritorialScope("Lithuania retains all of its territory after becoming a client state"), false);
-  assert.equal(requestDemandsExhaustiveTerritorialScope("all Lithuanian territory remains Lithuanian"), false);
+test("a map whose base geographies are named in Cyrillic resolves them the same way", () => {
+  const cyrillic = [
+    { id: "PRK.1", name: "Синыйджу", country: "Северная Корея", countryCode: "PRK" },
+    { id: "KOR.1", name: "Сеул", country: "Южная Корея", countryCode: "KOR" },
+  ];
+  assert.deepEqual(resolveGameMasterBaseGeographyScope(["Северная Корея"], cyrillic).regions.map((region) => region.id), ["PRK.1"]);
+  assert.deepEqual(resolveGameMasterBaseGeographyScope(["СЕВЕРНАЯ  КОРЕЯ"], cyrillic).regions.map((region) => region.id), ["PRK.1"]);
+  assert.match(resolveGameMasterBaseGeographyScope(["Корея"], cyrillic).error, /did not match/);
 });
 
 test("multi-geography GM scope expands every rendered region across all named base countries", () => {
@@ -109,4 +71,16 @@ test("multi-geography GM scope fails closed when the model names a geography the
   const result = resolveGameMasterBaseGeographyScope(["Ukraine", "Atlantis"], wider);
   assert.match(result.error, /Atlantis.*did not match any rendered base geography/);
   assert.deepEqual(result.regions, []);
+  assert.match(resolveGameMasterBaseGeographyScope([], wider).error, /requires at least one base country/);
+});
+
+// The engine read the administrator's request itself: an English phrase ("all
+// North Korean states") moved a whole footprint with no territorialScopes, and
+// an answer without them was refused for "all"/"every" in the request.
+// gameplay.js does not load under bare node, so this is read as source.
+test("the request's words are never read for a scope, and never refuse an answer", () => {
+  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.doesNotMatch(gameplay, /detectExplicitBaseTerritoryScope|requestDemandsExhaustiveTerritorialScope|explicitScopeText|explicitBaseScope/);
+  const expander = gameplay.slice(gameplay.indexOf("const expandGameMasterTerritorialScopes = async"));
+  assert.match(expander.slice(0, 900), /const scopes = normalizeArray\(candidate\?\.territorialScopes\);\s*if \(!scopes\.length\) return "";/);
 });

@@ -384,20 +384,31 @@ test("proposal consequence intents normalize to a bounded canonical contract wit
   assert.equal("worldPatch" in result.proposal.consequences[0].payload, false);
 });
 
-test("proposal consequence aliases become semantic authorization intents rather than executable unit/world patches", () => {
+test("proposal consequences become semantic authorization intents rather than executable unit/world patches", () => {
   const result = createInstitutionProposal({
     world: makeWorld(simpleRule), institutionId: "council",
     proposal: {
       id: "p1", title: "Forward Presence",
-      consequences: [{ kind: "deployment", summary: "Authorize a deployment", payload: { region: "North", unitOps: [{ op: "move" }], authorityRef: "fake" } }],
+      consequences: [{ kind: "Deployment authorization", summary: "Authorize a deployment", payload: { region: "North", unitOps: [{ op: "move" }], authorityRef: "fake" } }],
     },
   });
   const intent = result.proposal.consequences[0];
-  assert.equal(intent.kind, "deployment-authorization");
+  assert.equal(intent.kind, "deployment-authorization", "the kind, its case and spacing aside");
   assert.equal(intent.note, "Authorize a deployment");
   assert.equal(intent.payload.region, "North");
   assert.equal("unitOps" in intent.payload, false);
   assert.equal("authorityRef" in intent.payload, false);
+});
+
+test("a consequence kind is one of the listed kinds; an English shorthand is no more one than its French twin", () => {
+  for (const [english, french] of [["deployment", "déploiement"], ["budget", "budget-alloué"], ["membership", "adhésion"], ["resolution", "résolution"]]) {
+    const kinds = [english, french].map((kind) => createInstitutionProposal({
+      world: makeWorld(simpleRule), institutionId: "council",
+      proposal: { id: "p1", title: "Forward Presence", consequences: [{ kind, summary: "x" }] },
+    }).proposal.consequences[0]);
+    assert.deepEqual(kinds.map((intent) => intent.kind), ["custom", "custom"], english);
+    assert.deepEqual(kinds.map((intent) => intent.requestedKind), [english, french]);
+  }
 });
 
 test("unknown future consequence kinds remain bounded custom pending intent with their requested kind preserved", () => {
@@ -525,7 +536,7 @@ test("player-sponsored accession application is sufficient native consent for a 
 
 test("institution-owned implementation is idempotent", () => {
   let result = open(simpleRule, {
-    consequences: [{ id: "admit-d", kind: "membership", op: "join", polity: "D", status: "member" }],
+    consequences: [{ id: "admit-d", kind: "institution-membership", op: "join", polity: "D", status: "member" }],
   });
   result = vote(result.world, "A", "yes");
   result = vote(result.world, "B", "yes");
@@ -555,7 +566,7 @@ test("formal ballots are immutable once recorded", () => {
 
 test("the ballot that completes the vote finalizes, implements and emits one canonical institutional outcome event", () => {
   let result = open(simpleRule, {
-    consequences: [{ id: "admit-d", kind: "membership", op: "join", polity: "D", status: "member" }],
+    consequences: [{ id: "admit-d", kind: "institution-membership", op: "join", polity: "D", status: "member" }],
   });
   result = vote(result.world, "A", "yes");
   result = castInstitutionProposalVote({
@@ -591,6 +602,31 @@ test("the ballot that completes the vote finalizes, implements and emits one can
   assert.equal(resolved.events[0].source, "institutional-governance");
   assert.equal(resolved.events[0].agency.principalKind, "institution");
   assert.equal(resolved.events[0].agency.authority, "autonomous");
+});
+
+// A closed ballot's importance and tags were read from English words in the
+// proposal's title and summary ("defence", "troop", "sanction"): a defence vote
+// was a major military event in English and a minor one in French. They come
+// from the proposal's type alone now, the key its charter's rules go by.
+test("a closed ballot's importance and tags come from its proposal's type, never its words", () => {
+  const outcomeEvent = (extraProposal) => {
+    let result = open(simpleRule, extraProposal);
+    result = vote(result.world, "A", "yes");
+    result = vote(result.world, "B", "yes");
+    return applyInstitutionGovernanceCommand({
+      world: result.world, chats: [], events: [], institutionId: "council", playerCountry: "A", date: "2000-01-06",
+      command: { type: "vote", proposalId: "p1", polity: "C", choice: "yes", reason: "Agreed.", finalizeWhenComplete: true },
+    }).events[0];
+  };
+  for (const words of [
+    { title: "Joint Defence Force Deployment", summary: "Deploy troops under sanctions." },
+    { title: "Mission commune de défense", summary: "Envoyer des soldats aux frontières." },
+  ]) {
+    const resolution = outcomeEvent({ type: "resolution", ...words });
+    assert.equal(resolution.importance, "minor", words.title);
+    assert.deepEqual(resolution.tags, ["Diplomacy", "Politics"], words.title);
+  }
+  assert.equal(outcomeEvent({ type: "accession", title: "Adhésion de la Pologne" }).importance, "major");
 });
 
 test("an NPC ballot does not close or emit an outcome event while player ballot is still missing", () => {

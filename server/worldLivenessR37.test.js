@@ -61,15 +61,18 @@ test("R3.7 crisis lane can use high-trajectory evidence that ordinary top-10 ini
     score: 20,
     title: "Austrian Chamber Publishes Quarterly Industrial Export Outlook",
     detail: "A quarterly assessment reports steady machinery exports.",
-    trajectoryValue: 0,
+    trajectoryValue: 1,
     storylineIds: [],
   }];
+  // The polities its source event's fields name (nativeWorldDirector.js
+  // eventCandidate parties), by the alias the save writes: never its words.
   const crisisEvidence = [{
     id: "event:ethiopia",
     type: "recent-event",
     score: 8,
     title: "Tigray Leadership Rejects Ethiopian Prosperity Party Merger and Demands Regional Autonomy",
     detail: "The TPLF rejects the federal party merger, deepening a political schism over autonomy and competing legitimacy in Ethiopia.",
+    parties: ["Ethiopia"],
     trajectoryValue: 4,
     storylineIds: [],
   }];
@@ -87,7 +90,12 @@ test("R3.7 crisis lane can use high-trajectory evidence that ordinary top-10 ini
   assert.match(crisis.basis, /Tigray Leadership Rejects/i);
 });
 
-test("R3.7 suppresses clusters of low-trajectory institutional cards but preserves concrete capability outcomes", () => {
+// The screen kept at most two "low-trajectory institutional" cards a batch,
+// found by English words (LOW_TRAJECTORY_INSTITUTIONAL_RE), and hid the rest;
+// the same cards in another language all stood. The skip is told to write no
+// filler and that nothing takes it off the timeline afterwards: every card
+// stands, in every language.
+test("R3.7 a cluster of technical-talks cards stands as written, in English or not", () => {
   const priorEvents = Array.from({ length: 5 }, (_, index) => ({
     id: `prior-${index}`,
     title: `Technical Dialogue ${index + 1}`,
@@ -134,22 +142,26 @@ test("R3.7 suppresses clusters of low-trajectory institutional cards but preserv
     },
   ];
 
-  const screened = screenGeneratedWorldEvents({
-    events,
-    priorEvents,
-    world: {},
-    game: { country: "Republic of Latvia" },
-    analysis: { explorationSlate: [] },
-  });
+  const twins = [
+    { ...events[0], title: "Lettiske og svenske delegationer mødes til arbejdsmøder om grøn teknologi", description: "Embedsmænd holder bilaterale arbejdsmøder og tekniske drøftelser om forsyningskæder." },
+    { ...events[1], title: "Letland og Tyskland indleder teknisk dialog om finansiering af ren energi", description: "Embedsmænd indleder en teknisk dialog og en koordineringsramme." },
+    { ...events[2], title: "Lettiske og russiske grænsemyndigheder holder tekniske konsultationer", description: "Konsultationer på arbejdsniveau gennemgår toldeffektivitet og procedureharmonisering." },
+    events[3],
+    events[4],
+  ];
+  for (const batch of [events, twins]) {
+    const screened = screenGeneratedWorldEvents({
+      events: batch,
+      priorEvents,
+      world: {},
+      game: { country: "Republic of Latvia" },
+      analysis: { explorationSlate: [] },
+    });
 
-  assert.equal(screened.events.length, 3);
-  assert.equal(screened.events.filter((event) => event.id.startsWith("talk-")).length, 1);
-  assert.ok(screened.events.some((event) => event.id === "turkey-lab"));
-  assert.ok(screened.events.some((event) => event.id === "radar"));
-  assert.equal(
-    screened.dropped.filter((row) => row.route === "LOW_TRAJECTORY_FEED_SATURATION").length,
-    2,
-  );
+    assert.equal(screened.events.length, 5);
+    assert.deepEqual(screened.dropped, []);
+    assert.deepEqual(screened.hidden, []);
+  }
 });
 
 test("R3.7 linked visible events advance storyline visibility bookkeeping even without semantic update", () => {
@@ -192,24 +204,26 @@ test("R3.7 linked visible events advance storyline visibility bookkeeping even w
   assert.equal(korea.pressure, prior.pressure);
 });
 
-test("R3.7 Unit Director skips military-tech/readiness cards and runs only for operational unit motion", () => {
-  assert.equal(eventNeedsNativeUnitDirector({
-    title: "Turkish Aerospace Industries Opens Avionics Integration Laboratory",
-    description: "The facility supports military flight-control software and secure communications testing.",
-  }), false);
+// R3.7 kept military-tech and readiness cards from the Unit Director by English
+// word lists. What reaches it now is what an event carries: an industry card
+// tagged Economy does not, and a card the model tags Military does, for the
+// director to say that it changes no unit. Its words decide nothing, in English
+// or in Turkish (the owner, 2026-11-13: no keywording anywhere).
+test("R3.7 Unit Director is offered what an event carries, never its words", () => {
+  for (const [title, description] of [
+    ["Turkish Aerospace Industries Opens Avionics Integration Laboratory", "The facility supports military flight-control software and secure communications testing."],
+    ["Türk Havacılık ve Uzay Sanayii Aviyonik Entegrasyon Laboratuvarı Açtı", "Tesis, askeri uçuş kontrol yazılımını destekliyor."],
+  ]) {
+    assert.equal(eventNeedsNativeUnitDirector({ title, description, tags: ["Economy"] }), false, title);
+    assert.equal(eventNeedsNativeUnitDirector({ title, description }), false, title);
+  }
 
-  assert.equal(eventNeedsNativeUnitDirector({
-    title: "Allied Commands Reinforce Missile-Defense Readiness",
-    description: "Commands improve surveillance and radar data-sharing while maintaining heightened readiness.",
-  }), false);
-
-  assert.equal(eventNeedsNativeUnitDirector({
-    title: "Army Redeploys Two Brigades to the Border",
-    description: "Two brigades redeploy toward the frontier and establish forward positions.",
-  }), true);
-
-  assert.equal(eventNeedsNativeUnitDirector({
-    title: "Reserve Forces Mobilized After Border Clash",
-    description: "The government calls up reserves after a clash and deploys troops toward the frontier.",
-  }), true);
+  for (const [title, description] of [
+    ["Army Redeploys Two Brigades to the Border", "Two brigades redeploy toward the frontier and establish forward positions."],
+    ["Ordu İki Tugayı Sınıra Kaydırdı", "İki tugay sınıra doğru yeniden konuşlanıyor."],
+  ]) {
+    assert.equal(eventNeedsNativeUnitDirector({ title, description, tags: ["Military"] }), true, title);
+    assert.equal(eventNeedsNativeUnitDirector({ title, description, combatants: ["Turkey", "Syria"] }), true, title);
+    assert.equal(eventNeedsNativeUnitDirector({ title, description }), false, `${title}: carrying nothing military`);
+  }
 });
