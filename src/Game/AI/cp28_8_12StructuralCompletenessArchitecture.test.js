@@ -58,7 +58,9 @@ test("lifecycle invitation hearings are gated away from formal Council governanc
 
 test("GM exhaustive territory uses territorialScopes and native base-geography expansion", () => {
   assert.match(gameplay, /expandGameMasterTerritorialScopes/);
-  assert.match(gameplay, /requestDemandsExhaustiveTerritorialScope\(request\)/);
+  // The field alone: the request's words are never read for a scope, and an
+  // answer is never refused for words like "all" or "every" in it.
+  assert.doesNotMatch(gameplay, /requestDemandsExhaustiveTerritorialScope|detectExplicitBaseTerritoryScope|explicitScopeText/);
   assert.match(gameplay, /resolveGameMasterBaseGeographyScope\(scope\.baseCountries, catalog\)/);
   assert.match(prompts, /EXHAUSTIVE TERRITORY IS A SET CONTRACT/);
   assert.match(prompts, /ONLY WHEN TERRITORY ACTUALLY CHANGES/);

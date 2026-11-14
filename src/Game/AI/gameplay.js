@@ -80,12 +80,7 @@ import {
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
 import { landlessFoundings, successorTransfers } from "./polityTransitions.js";
 import { splitCountryOps } from "./countrySplit.js";
-import {
-  detectExplicitBaseTerritoryScope,
-  requestDemandsExhaustiveTerritorialScope,
-  resolveGameMasterBaseGeographyScope,
-  scopeContainsRegion,
-} from "./gmTerritoryScope.js";
+import { resolveGameMasterBaseGeographyScope } from "./gmTerritoryScope.js";
 import {
   gameMasterPolityKey,
   gameMasterStateFingerprint,
@@ -5979,7 +5974,6 @@ const createRenderedRegionsReader = () => {
 const resolveRegionTransfers = async (containers, world, {
   ownershipMode = "sovereignty",
   exactRegionIdsOnly = false,
-  explicitScopeText = "",
   renderedRegions = null,
 } = {}) => {
   // Nothing here names land, so there is nothing to resolve and no reason to
@@ -6437,25 +6431,6 @@ const resolveRegionTransfers = async (containers, world, {
     ? []
     : normalizeArray(areaNamed(written)?.regions).map((region) => region.id));
 
-  // GM-only exhaustive base-geography scope. "All North Korean states" means
-  // the rendered PRK footprint even when those regions are currently held by a
-  // larger alternate-history polity. It must NOT be interpreted as wholeCountry
-  // on that current owner (which could move the entire Soviet Union).
-  const explicitBaseScope = !exactRegionIdsOnly
-    ? detectExplicitBaseTerritoryScope(
-        explicitScopeText,
-        catalog.map((region) => ({
-          ...region,
-          // The rendered feature's `owner` may be the CURRENT scenario polity
-          // (e.g. Soviet Union), while countryCode remains the immutable base
-          // geography provenance (PRK). Exhaustive phrases such as "all North
-          // Korean states" must resolve against that base footprint, not the
-          // current political owner.
-          country: toCountryName(region?.countryCode) || region?.country,
-        })),
-      )
-    : null;
-
   // A town written where a region goes ("city: Warsaw", or the town's bare
   // name) is the region its point stands in, on maps that carry their own
   // towns and region shapes (custom and era scenarios). The town is found by
@@ -6892,36 +6867,6 @@ const resolveRegionTransfers = async (containers, world, {
 
       const regionId = deterministicResolve(transfer);
       if (regionId) {
-        // If the administrator explicitly requested an exhaustive rendered
-        // geographic footprint ("all North Korean states", "all French
-        // territories") and the model supplied at least one correctly grounded
-        // operation inside that footprint, native code completes the SAME
-        // structured operation across every rendered region in that base
-        // geography. This is scope completion, not semantic invention: the
-        // model still decides legal sovereignty vs de-facto control and the
-        // recipient; native code merely prevents a one-province partial apply.
-        if (explicitBaseScope && scopeContainsRegion(explicitBaseScope, regionId)) {
-          for (const scopedRegionId of explicitBaseScope.regionIds) {
-            const scopedRow = byId.get(scopedRegionId);
-            if (!scopedRow) continue;
-            const fromCode = ownerNameOf(scopedRegionId);
-            if (!fromCode || canonicalOwnerKey(fromCode) === canonicalOwnerKey(transfer?.toCode)) continue;
-            const expanded = {
-              ...transfer,
-              fromCode,
-              regionId: scopedRegionId,
-              regionName: scopedRow.name || scopedRegionId,
-              wholeCountry: undefined,
-            };
-            pushUniqueTransfer(resolved, expanded);
-          }
-          console.info(
-            `[gm territory] completed explicit base-geography scope ${explicitBaseScope.countryName || explicitBaseScope.countryCode}: ` +
-              `${explicitBaseScope.regionIds.length} rendered region(s) -> ${normalizeString(transfer?.toCode)}.`,
-          );
-          continue;
-        }
-
         const row = byId.get(regionId);
         const normalized = {
           ...transfer,
@@ -7119,7 +7064,7 @@ const resolveRegionTransfers = async (containers, world, {
 // legal transfers, but they are bounded by current DE-FACTO control instead of
 // sovereignty. Proxy them through the one resolver rather than maintain two
 // subtly different engines.
-const resolveRegionControlOps = async (containers, world, { exactRegionIdsOnly = false, explicitScopeText = "", renderedRegions = null } = {}) => {
+const resolveRegionControlOps = async (containers, world, { exactRegionIdsOnly = false, renderedRegions = null } = {}) => {
   const proxyContainers = containers.map((container) => {
     const proxies = normalizeArray(container?.impacts?.regionControlOps).map((op, index) => {
       const realToCode = normalizeString(op?.toCode);
@@ -7149,7 +7094,6 @@ const resolveRegionControlOps = async (containers, world, { exactRegionIdsOnly =
   const unresolved = await resolveRegionTransfers(proxyContainers, world, {
     ownershipMode: "control",
     exactRegionIdsOnly,
-    explicitScopeText,
     renderedRegions,
   });
 
@@ -7508,7 +7452,6 @@ const describeUnresolvedTerritory = (entry, family, eventTitle) => {
 export const validateGeneratedWorldChanges = async (candidate, world, {
   strictTransfers = false,
   resolvedRegionIdsOnly = false,
-  explicitScopeText = "",
   // Collects what salvage drops or changes (runtime/applicationReceipt.js), so
   // the next turn can be told. Null when the caller is not keeping a receipt.
   receipt = null,
@@ -7661,7 +7604,6 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   const unresolvedTransfers = await resolveRegionTransfers(containers, world, {
     ownershipMode: "sovereignty",
     exactRegionIdsOnly: resolvedRegionIdsOnly,
-    explicitScopeText,
     renderedRegions,
   });
   const refusedTransfers = unresolvedTransfers.filter((entry) => !entry?.unmatched);
@@ -7673,7 +7615,6 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   leaveOut(unresolvedTransfers, "regionTransfers");
   const unresolvedControlOps = await resolveRegionControlOps(containers, world, {
     exactRegionIdsOnly: resolvedRegionIdsOnly,
-    explicitScopeText,
     renderedRegions,
   });
   const refusedControlOps = unresolvedControlOps.filter((entry) => !entry?.unmatched);
@@ -18545,7 +18486,6 @@ const pushUniqueGameMasterTerritoryOp = (list, operation, identity) => {
 
 const expandGameMasterTerritorialScopes = async (candidate, {
   world,
-  request = "",
   resolvedRegionIdsOnly = false,
   baseGeographyCatalog = null,
 } = {}) => {
@@ -18553,10 +18493,9 @@ const expandGameMasterTerritorialScopes = async (candidate, {
   // provider scope envelope. Do not demand or re-expand semantic scopes there.
   if (resolvedRegionIdsOnly) return "";
 
+  // The model's territorialScopes alone say whether whole countries' land is
+  // asked for; the request's words are never read for it (gmTerritoryScope.js).
   const scopes = normalizeArray(candidate?.territorialScopes);
-  if (requestDemandsExhaustiveTerritorialScope(request) && scopes.length === 0) {
-    return "The administrator requested an exhaustive territorial set (all/every/entire/whole territory), but territorialScopes is empty. Do not sample representative provinces. Put the complete semantic footprint in territorialScopes using exact rendered base-geography names; native code will expand every region before preview.";
-  }
   if (!scopes.length) return "";
 
   const catalog = Array.isArray(baseGeographyCatalog) && baseGeographyCatalog.length
@@ -18728,7 +18667,6 @@ const validateGameMasterPreviewPayload = async (candidate, {
 
   const territorialScopeError = await expandGameMasterTerritorialScopes(candidate, {
     world,
-    request,
     resolvedRegionIdsOnly,
     baseGeographyCatalog,
   });
@@ -18747,7 +18685,6 @@ const validateGameMasterPreviewPayload = async (candidate, {
   const worldChangeError = await validateGeneratedWorldChanges(candidate, world, {
     strictTransfers: true,
     resolvedRegionIdsOnly,
-    explicitScopeText: resolvedRegionIdsOnly ? "" : request,
     playerCountry: game?.country || "",
     institutionLifecycleAuthority: "admin",
     territoryNotes,
@@ -19030,7 +18967,6 @@ export const previewGameMasterCommand = async (requestText, { mode = GM_AUTO_MOD
         const routingError = validateGameMasterModeSelection({
           requestedMode: selectedMode,
           selectedMode: effectiveMode,
-          request,
           countryStatPatches: candidate?.countryStatPatches,
         });
         if (routingError) return routingError;
@@ -19179,7 +19115,6 @@ Retain all unaffected operations and the original authored event. Output only yo
       const routingError = validateGameMasterModeSelection({
         requestedMode: prior?.requestedMode || mode,
         selectedMode: mode,
-        request: prior.request,
         countryStatPatches: candidate.countryStatPatches,
       });
       if (routingError) return `GM mode authorization failed: ${routingError}`;
@@ -19244,7 +19179,6 @@ export const applyGameMasterPreview = async (preview) => {
   const routingError = validateGameMasterModeSelection({
     requestedMode: preview?.requestedMode || mode,
     selectedMode: mode,
-    request,
     countryStatPatches: preview?.transaction?.countryStatPatches,
   });
   if (routingError) throw new Error(`GM mode authorization failed: ${routingError}`);
