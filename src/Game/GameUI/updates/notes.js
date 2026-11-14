@@ -54,6 +54,21 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player, 2026-11-13: a month on a local llama.cpp server with a 98,304-token window went from 59,000 tokens at
+    // the first request to 87,000 by the round that wrote the answer. AI/contextWindow.js, "A local server's window".
+    id: "2026-11-lookup-window-guard",
+    kind: "minor",
+    date: "2026-11-13",
+    banners: [
+      {
+        title: "Lookups that stop before a local model's window is full",
+        items: [
+          "Settings → AI → Advanced has a new switch, \"Stop lookups before a local window is full\", off by default. With it on, a llama.cpp server on your machine or network is asked for its context window, and once another round of lookups would not fit, the model writes its answer with what it has instead of being refused.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",

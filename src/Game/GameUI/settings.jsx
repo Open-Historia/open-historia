@@ -1519,6 +1519,7 @@ const RequestBudgetSection = () => {
     // under a fixed cap for the day.
     const [noLimit, setNoLimit] = useState(() => requestSettings.noRequestLimit());
     const lookupsOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
+    const windowGuardOn = useMapSetting(MAP_SETTING_KEYS.lookupWindowGuard);
     // Idle diplomacy has a switch of its own, outside that cap (2026-11-09).
     const idleDiplomacyOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy);
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
@@ -1699,6 +1700,14 @@ const RequestBudgetSection = () => {
                         {lookupsOn
                             ? `On (default): before it answers, the model can look up the exact power and region names, a region's neighbours, the war ledger or a chat, in up to ${noLimitRounds} extra requests a task. Needs a provider that supports function calling.`
                             : "Off: one request per task, with the region lists and ledgers written into the prompt instead. For a model that does not handle function calling well."}
+                    </div>
+                    <Toggle
+                    label="Stop lookups before a local window is full"
+                    enabled={windowGuardOn}
+                    onToggle={() => setMapSetting(MAP_SETTING_KEYS.lookupWindowGuard, !windowGuardOn)}
+                    />
+                    <div style={{ ...settingsHelper, marginBottom: 0 }}>
+                        Off (default): the model looks things up for as many rounds as it is allowed. On: a llama.cpp server on your machine or network is asked for the context window it loaded the model with, and once another round of lookups would not fit it, the model is asked for its answer with what it has. For a long prompt on a local model, where every round sends the whole prompt again.
                     </div>
                 </details>
             )}

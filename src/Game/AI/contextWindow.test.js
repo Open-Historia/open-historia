@@ -7,6 +7,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+    fitsWindow,
+    nextRoundTokens,
+    readServerWindow,
+    serverPropsUrl,
     CONTEXT_WINDOW_MARGIN,
     DEFAULT_ANSWER_RESERVE_TOKENS,
     LOCAL_OUTPUT_LIMIT_TOKENS,
@@ -172,6 +176,24 @@ test("a window learned from a server whose window is a setting is not held again
     memory.learn("seen", { limitTokens: null, requestTokens: 38000 });
     assert.notEqual(memory.refusal("seen", 38000), "");
     assert.equal(memory.refusal("seen", 38000, { trustLearned: false }), "");
+});
+
+test("a local server's stated window is read, and a lookup round that would not fit it is known before it is sent", () => {
+    assert.equal(serverPropsUrl("http://127.0.0.1:11434/v1"), "http://127.0.0.1:11434/props");
+    assert.equal(serverPropsUrl("localhost:8080/v1/chat/completions"), "http://localhost:8080/props");
+    assert.equal(serverPropsUrl(""), "");
+    assert.equal(readServerWindow({ default_generation_settings: { n_ctx: 98304 } }), 98304);
+    assert.equal(readServerWindow({ n_ctx: 32768 }), 32768);
+    assert.equal(readServerWindow({ model: "x" }), null, "a server that states none");
+    assert.equal(readServerWindow(null), null);
+    // The estimate's rate until the server has counted a round, then the server's own.
+    assert.equal(nextRoundTokens({ chars: 400000 }), 100000);
+    assert.equal(nextRoundTokens({ chars: 300000, lastChars: 204000, lastPromptTokens: 65630 }), 96515, "Cyrillic at 3.1 characters a token");
+    // The player's month: the fifth round fitted a 98,304 window, the sixth did not leave room for the answer.
+    assert.equal(fitsWindow({ windowTokens: 98304, requestTokens: 82000 }), true);
+    assert.equal(fitsWindow({ windowTokens: 98304, requestTokens: 87095 }), false);
+    assert.equal(fitsWindow({ windowTokens: 0, requestTokens: 500000 }), true, "an unknown window is the server's to refuse");
+    assert.equal(fitsWindow({ windowTokens: 32768, requestTokens: 20000, reserveTokens: 12000 }), false);
 });
 
 test("when nothing fits, the message names every entry and what to do", () => {

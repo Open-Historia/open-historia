@@ -281,3 +281,61 @@ export const nothingFitsMessage = (refused, requestTokens) => {
         + "A turn needs a model with a large context window (128K tokens or more is comfortable): pick one in Settings → AI, or shorten what the prompt carries. "
         + "If a model can now take more than it could, the game tries it again by itself once what it learned lapses: a week after a refusal, or a month after the model stated its window.";
 };
+
+// ---------------------------------------------------------------------------
+// A local server's window, asked for, and the lookup rounds that fit it
+// ---------------------------------------------------------------------------
+//
+// Nothing learned from a local server is held against it (the top of this
+// file), and a first request too big for it is refused at once and for free.
+// A lookup conversation is another matter: every round sends the whole prompt
+// again with the answers so far, so a skip that fitted when it started grows
+// with each round. A player's month on a llama.cpp server with a 98,304-token
+// window (2026-11-13): 59,000 tokens at the first request, 87,000 by the round
+// that wrote the answer, six rounds and four minutes of reading in; one more
+// round would have been refused, and the rounds before it wasted.
+//
+// With "Stop lookups before a local window is full" on (Settings, AI,
+// Advanced; off by default), such a server is asked for the window it loaded
+// the model with (llama.cpp answers GET /props), and a round that would no
+// longer fit it is not offered the lookups: the model writes its answer with
+// what it has, as it does when its rounds run out.
+//
+// The size of the next round is not guessed at four characters a token where
+// the server has said better: its count of the round before, over that round's
+// characters, is this conversation's own rate (Cyrillic runs near three).
+
+// The origin's /props, or "" for an endpoint that is no address.
+export const serverPropsUrl = (endpoint) => {
+    const value = textOf(endpoint).trim();
+    if (!value) return "";
+    try {
+        return `${new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `http://${value}`).origin}/props`;
+    } catch {
+        return "";
+    }
+};
+
+// The window a llama.cpp server states, or null (another server, an old build).
+export const readServerWindow = (props) => {
+    const stated = Number(props?.default_generation_settings?.n_ctx ?? props?.n_ctx);
+    return Number.isFinite(stated) && stated >= 1000 ? Math.round(stated) : null;
+};
+
+// How many tokens a request of `chars` is: at the rate the server counted the
+// last one (`lastPromptTokens` for `lastChars`), else at the estimate's.
+export const nextRoundTokens = ({ chars = 0, lastChars = 0, lastPromptTokens = 0 } = {}) => {
+    const size = Math.max(0, Number(chars) || 0);
+    const counted = Number(lastPromptTokens);
+    const sent = Number(lastChars);
+    if (counted > 0 && sent > 0) return Math.ceil(size * (counted / sent));
+    return estimateTokens(size);
+};
+
+// Does a request of `requestTokens` leave room for the answer in a window of
+// `windowTokens`? An unknown window fits everything: the server settles it.
+export const fitsWindow = ({ windowTokens = 0, requestTokens = 0, reserveTokens = DEFAULT_ANSWER_RESERVE_TOKENS } = {}) => {
+    const window = Number(windowTokens);
+    if (!(window > 0)) return true;
+    return Math.max(0, Number(requestTokens) || 0) + Math.max(0, Number(reserveTokens) || 0) <= window * CONTEXT_WINDOW_MARGIN;
+};
