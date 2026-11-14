@@ -290,6 +290,7 @@ import {
   shareRepeatedBlocks,
 } from "./turnReview.js";
 import { checksHeldError, checksHoldTurn, createTurnChecks } from "./turnChecks.js";
+import { buildOrderOutcomesInstruction, countriesElsewhere, foldOrderOutcomes, ordersForOutcomes, withOrderOutcomes } from "./orderOutcomes.js";
 import { acknowledgeFailures, buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, keepRetryBoundRecords, restrictToRetriedOrders } from "./playerTurnFailures.js";
 import {
   describeDoubtedForPrompt,
@@ -16910,7 +16911,24 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         ? Math.max(1, normalizeArray(context.amend.failures?.events).length, normalizeArray(context.amend.failures?.orders).length)
         : 0;
       const minEvents = context.amend ? 1 : Math.max(pacedMin, scriptedBeats.length);
+      // The period's count with no orders counted, for a contract that does not
+      // move with the turn's orders (orderOutcomes.js "THE CONTRACT NAMES NO ORDER").
+      const [steadyMin, steadyMax] = segmentEventRange(safeDays, 0, { pace: direction?.eventPace });
       const maxEvents = context.amend ? amendCount + 1 : Math.max(pacedMax, scriptedBeats.length + 1);
+      // "Orders answered with outcome and reactions" (orderOutcomes.js): the
+      // contract of a skip written in one request, or of a retry of the player's
+      // failed events, has an entry for each queued order and a count on its
+      // events. Not an auto-jump's, which stops where it must, nor a segment's
+      // of several, whose orders run across them all.
+      const shapeOutcomes = Boolean(context.orderOutcomes) && mode !== "auto" && (Boolean(context.amend) || segmentCount <= 1);
+      const outcomeOrders = shapeOutcomes
+        ? ordersForOutcomes(normalizeActions(bundle.actions), context.amend ? { only: context.amend.orderIds } : {})
+        : [];
+      // With orders to answer, the events list is the rest of the world's: each
+      // event there names a country that nobody plays.
+      const outcomeElsewhere = outcomeOrders.length && !context.amend
+        ? countriesElsewhere(bundle.world, humanCountriesOf(bundle.game).flatMap((country) => [country, toCountryName(country)]))
+        : [];
       // targetDate reaches only these two variables (promptContext.js), so the
       // expensive context — region catalog, city seed, territory index — is built
       // once for the whole jump and only the dates move per segment.
@@ -17084,6 +17102,15 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // left empty, and its answer is read only where there is one (the
         // history's below; foldedTurnReview for the board).
         ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, riders) } : {}),
+        ...(shapeOutcomes ? {
+          toolTransform: (tool) => withOrderOutcomes(folded ? foldJumpTool(tool, riders) : tool, {
+            orders: outcomeOrders,
+            minEvents: steadyMin,
+            maxEvents: Math.max(steadyMax, scriptedBeats.length + 1),
+            amend: Boolean(context.amend),
+            elsewhere: outcomeElsewhere,
+          }),
+        } : {}),
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
@@ -17101,6 +17128,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // (playerTurnFailures.js): the whole skip again, or only those events.
           normalizeString(context.retryDirective),
           context.amend ? buildPlayerEventRetryDirective(context.amend.failures, { originDate, targetDate }) : "",
+          shapeOutcomes ? buildOrderOutcomesInstruction(outcomeOrders, { amend: Boolean(context.amend), minEvents, maxEvents }) : "",
           buildSegmentInstruction({
           mode,
           segmentIndex,
@@ -17124,6 +17152,9 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // attempt 1 skips this validator entirely, which used to make attempt 2
           // look "first" and leak strict feedback out as the fallback reason).
           const strict = !finalAttempt;
+          // The orders' entries become the events they are, first, so every
+          // check below reads them (orderOutcomes.js); the field leaves the answer.
+          if (shapeOutcomes) foldOrderOutcomes(candidate, outcomeOrders, { fallbackDate: segmentTarget });
           // A retry's events are new events in a period whose first answer used
           // the same temporary ids (segment-1-event-1) and maybe the same ids of
           // the model's own: each gets a prefix of its own, before anything is
@@ -18473,6 +18504,9 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     // Settings, AI: "Stop when my events fail" (playerTurnFailures.js). Read
     // once, at the start, so a toggle mid-skip does not change the skip.
     stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
+    // Settings, AI: "Orders answered with outcome and reactions"
+    // (orderOutcomes.js). Read once, like the one above.
+    orderOutcomes: getMapSetting(MAP_SETTING_KEYS.orderOutcomes),
     // A whole skip run again from that notice: what failed the first time.
     retryDirective: normalizeString(retryDirective),
   };

@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player, 2026-11-13: a month on a local 27B model came back as two events, the player's orders said again and
+    // nobody reacting to them. The skip's contract asked nothing of an event but a date, a title and a description; the
+    // same model held to a contract that requires the outcome and the reactions. AI/orderOutcomes.js.
+    id: "2026-11-order-outcomes",
+    kind: "minor",
+    date: "2026-11-13",
+    banners: [
+      {
+        title: "A setting for models that say your orders back to you",
+        items: [
+          "Settings → AI has a new switch, \"Orders answered with outcome and reactions\", off by default. With it on, a time skip must answer each of your orders with what came of it and who reacted, instead of an event that says the order again, and must write the number of world events the period calls for.",
+          "It is meant for small and local models. A model that already writes full turns does not need it.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",
