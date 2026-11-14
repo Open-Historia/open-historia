@@ -14,7 +14,7 @@ import { normalizeWarResources } from "./warResources.js";
 import { normalizeAttrition } from "./attrition.js";
 import { eraSettingOf, normalizeWarSettings } from "./warSettings.js";
 import { UNIT_TYPES, findUnitType, mayFieldUnitType, normalizeUnitTypes, unitFigures, unitTypeRef, withUnitTypesApplied } from "./unitTypes.js";
-import { OPERATION_APPROACHES } from "./fronts/constants.js";
+import { AIR_ROLES as UNIT_AIR_ROLES, OPERATION_APPROACHES } from "./fronts/constants.js";
 import { normalizeClimateZones, normalizeFortifications, normalizeFreezingRegions, normalizeTerrainAreas, normalizeZoneWeather } from "./warGeography.js";
 import { normalizeMilitaryShift, normalizeMilitaryStats, shiftedMilitary } from "./militaryStats.js";
 import { MAX_GROUPS, applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
@@ -1380,6 +1380,10 @@ export const normalizeUnitEntry = (entry, index = 0) => {
     // (AI/nativeUnitDirector.js pruneWarUnits) if no arrival removes it first.
     ...(entry.storyVessel === true ? { storyVessel: true } : {}),
     ...(Number.isInteger(entry.expiresRound) ? { expiresRound: entry.expiresRound } : {}),
+    // kw5-units: what an air unit flies, fighter, bomber or mixed, as the model or
+    // the scenario said (runtime/fronts/airStrike.js fightersShareOf). Absent on
+    // every other unit, and on an air unit that said none.
+    ...(UNIT_AIR_ROLES.includes(normalizeOptionalString(entry.airRole).toLowerCase()) ? { airRole: normalizeOptionalString(entry.airRole).toLowerCase() } : {}),
     source: UNIT_SOURCE_SET.has(source) ? source : "scenario",
     orderId: normalizeOptionalString(entry.orderId),
     createdAt: normalizeOptionalString(entry.createdAt) || timestamp,

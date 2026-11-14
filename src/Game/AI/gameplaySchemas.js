@@ -12,7 +12,7 @@ import { INSTITUTION_LIFECYCLE_DECISIONS } from "../../runtime/institutions.js";
 import { INSTITUTION_CHAT_ACTION_KINDS } from "./institutionChatActions.js";
 import { extractJsonArray } from "./jsonSalvage.js";
 import { PLACE_FEED_MAX_TRENDS } from "../../runtime/placeFeed.js";
-import { OPERATION_APPROACHES, WAR_ROOM_ORDERS, WAR_ROOM_STANCES } from "../../runtime/fronts/constants.js";
+import { AIR_ROLES, OPERATION_APPROACHES, WAR_ROOM_ORDERS, WAR_ROOM_STANCES } from "../../runtime/fronts/constants.js";
 import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
 import { PARTY_ROLES } from "../../runtime/politics.js";
@@ -368,6 +368,12 @@ const unitSchema = {
       enum: ["holding", "massing", "patrol", "transit", "exercise", "blockade", "withdrawing", "assaulting"],
     },
     note: textSchema("One present-tense sentence on what it is doing and where; shown to the player."),
+    // kw5-units: what an air unit flies, which decides its share of fighters in an
+    // air battle (runtime/fronts/airStrike.js fightersShareOf), where the words of
+    // its composition and name were read for it. Optional and last; a time skip is
+    // not sent it (sentUnitOpsSchema: its function has no room), and a wing that
+    // says none flies a mixed share.
+    airRole: { type: "string", description: "air only: what it flies.", enum: [...AIR_ROLES] },
   },
   required: ["name", "type", "ownerCode", "strength", "composition"],
   additionalProperties: false,
@@ -1094,8 +1100,10 @@ const JUMP_COMPACT_IMPACT_DESCRIPTIONS = new Set([
 ]);
 
 // A time skip's unit operations as it is SENT them: a spawned unit without unitType, which only a scenario with unit
-// types of its own is offered (withUnitTypeNames), so every other is sent the contract it always was.
-const { unitType: _unitTypeNotSent, ...sentUnitProperties } = unitSchema.properties;
+// types of its own is offered (withUnitTypeNames), so every other is sent the contract it always was. And without
+// airRole, which the skip's function has no room for (foldedSkip.js FOLDED_SKIP_SCHEMA_BUDGET); an answer that
+// carries one is still read.
+const { unitType: _unitTypeNotSent, airRole: _airRoleNotSent, ...sentUnitProperties } = unitSchema.properties;
 const sentUnitOpsSchema = (schema) => ({
   ...schema,
   items: {

@@ -433,3 +433,20 @@ test("a missing combatant is raised at a place the event's places field names, n
   // The director is told which candidates are the player's own, where a story ship may sail.
   assert.match(gameplay, /A candidate marked playerRelated is the player's own story/);
 });
+
+// What an air unit flies decides its share of fighters in an air battle (runtime/fronts/airStrike.js), and is
+// its airRole, never words of its name or make-up. The director and the Game Master may give it; a time skip's
+// function has no room for it (foldedSkip.js FOLDED_SKIP_SCHEMA_BUDGET), so a skip's wings fly the mixed share.
+test("an air unit's role is kept as the model gives it, offered to the director and not sent in a skip", async () => {
+  const wing = (airRole) => normalizeUnitEntry({ name: "1st Wing", type: "air", ownerCode: "Aland", lng: 1, lat: 1, airRole });
+  assert.equal(wing("Fighter").airRole, "fighter");
+  assert.equal(wing("bomber").airRole, "bomber");
+  assert.equal(wing("chasseur").airRole, undefined, "only the game's own roles");
+  assert.equal(wing(undefined).airRole, undefined);
+  const { UNIT_DIRECTOR_SCHEMA, GAMEPLAY_TOOLS } = await import("./gameplaySchemas.js");
+  const spawnOf = (anyOf) => anyOf.find((branch) => branch.properties?.op?.enum?.[0] === "spawn").properties.unit.properties;
+  assert.deepEqual(spawnOf(UNIT_DIRECTOR_SCHEMA.properties.eventOrders.items.properties.unitOps.items.anyOf).airRole.enum, ["fighter", "bomber", "mixed"]);
+  const jumpUnit = spawnOf(GAMEPLAY_TOOLS.jumpForward.schema.properties.events.items.properties.impacts.properties.unitOps.items.anyOf);
+  assert.equal("airRole" in jumpUnit, false, "the skip's function has no room for it");
+  assert.equal(Object.keys(jumpUnit).at(-1), "note", "and is sent the unit it always was");
+});

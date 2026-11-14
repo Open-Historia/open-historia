@@ -46,16 +46,29 @@ const air = (id, ownerCode, extra = {}) => ({ id, name: id, type: "air", ownerCo
 const order = (extra = {}) => ({ id: "s1", unit: "bombers", owner: "Aland", kind: "city", lng: 23, lat: 51, target: "Brod", country: "Borduria", ...extra });
 const fly = (units, orders = [order()], extra = {}) => resolveAirStrikes({ orders, units, wars: [WAR], seed: "campaign|2|2024-03-01", era: 3, date: "2024-03-01", ...extra });
 
-test("an air unit's fighters: as its composition counts them, else as it or its name says, else half", () => {
-  assert.equal(fightersShareOf({ composition: "120 fighters, 40 bombers" }), 0.75);
-  assert.equal(fightersShareOf({ composition: "60 Spitfire fighters and 20 heavy bombers" }), 0.75);
-  assert.equal(fightersShareOf({ name: "1st Fighter Wing" }), 0.85);
-  assert.equal(fightersShareOf({ name: "Strategic Bomber Command" }), 0.15);
-  assert.equal(fightersShareOf({ name: "Air Group 7" }), 0.5);
+// What an air unit flies is its airRole, never the words of its composition or name: "120 chasseurs" gave half
+// where "120 fighters" gave all (the owner, 2026-11-13: no keywording anywhere). A unit that says none flies the
+// mixed share, whatever language it is described in.
+test("an air unit's fighters: as its airRole says, else half, and never by its words", () => {
+  assert.equal(fightersShareOf({ airRole: "fighter" }), 0.85);
+  assert.equal(fightersShareOf({ airRole: "Bomber" }), 0.15);
+  assert.equal(fightersShareOf({ airRole: "mixed" }), 0.5);
+  assert.equal(fightersShareOf({ airRole: "interceptor" }), 0.5, "not a role the game has");
+  for (const unit of [
+    { composition: "120 fighters, 40 bombers" },
+    { composition: "120 chasseurs, 40 bombardiers" },
+    { name: "1st Fighter Wing" },
+    { name: "1re escadre de chasse" },
+    { name: "Strategic Bomber Command" },
+    { name: "Air Group 7" },
+  ]) {
+    assert.equal(fightersShareOf(unit), 0.5, JSON.stringify(unit));
+  }
+  assert.equal(fightersShareOf({ name: "1re escadre de chasse", airRole: "fighter" }), fightersShareOf({ name: "1st Fighter Wing", airRole: "fighter" }));
 });
 
 test("a strike nobody rises against bombs unopposed, and loses only what the flak takes", () => {
-  const { strikes, moments, unitChanges } = fly([air("bombers", "Aland", { name: "1st Bomber Wing" })], undefined, { peopleOf: () => 5000000 });
+  const { strikes, moments, unitChanges } = fly([air("bombers", "Aland", { name: "1st Bomber Wing", airRole: "bomber" })], undefined, { peopleOf: () => 5000000 });
   assert.equal(strikes.length, 1);
   const [strike] = strikes;
   assert.equal(strike.outcome, "unopposed");
@@ -71,7 +84,7 @@ test("a strike nobody rises against bombs unopposed, and loses only what the fla
 });
 
 test("the same strikes give the same air battle, to the last figure; another turn's seed throws other dice", () => {
-  const units = [air("bombers", "Aland", { name: "Bomber Wing" }), air("guard", "Borduria", { name: "Fighter Wing", lng: 24 }), air("guard2", "Borduria", { name: "Fighter Wing 2", lng: 24.5 })];
+  const units = [air("bombers", "Aland", { name: "Bomber Wing", airRole: "bomber" }), air("guard", "Borduria", { name: "Fighter Wing", airRole: "fighter", lng: 24 }), air("guard2", "Borduria", { name: "Fighter Wing 2", airRole: "fighter", lng: 24.5 })];
   const once = fly(units);
   assert.deepEqual(fly(units), once);
   assert.deepEqual(fly(structuredClone(units)), once, "nothing kept between runs");
@@ -80,16 +93,16 @@ test("the same strikes give the same air battle, to the last figure; another tur
 });
 
 test("intercepted, the fighters fight it out: bombers alone against a strong guard turn back, an escorted raid on a weak one gets through", () => {
-  const guard = (count, strength = 100) => Array.from({ length: count }, (_, at) => air(`guard-${at}`, "Borduria", { name: `Fighter Wing ${at}`, lng: 23.5, strength }));
+  const guard = (count, strength = 100) => Array.from({ length: count }, (_, at) => air(`guard-${at}`, "Borduria", { name: `Fighter Wing ${at}`, airRole: "fighter", lng: 23.5, strength }));
   // A small raid of bombers alone under three wings of fighters.
-  const mauled = fly([air("bombers", "Aland", { name: "Bomber Wing", strength: 20 }), ...guard(3)]);
+  const mauled = fly([air("bombers", "Aland", { name: "Bomber Wing", airRole: "bomber", strength: 20 }), ...guard(3)]);
   assert.equal(mauled.strikes[0].outcome, "turned back");
   assert.equal(mauled.strikes[0].power, 0, "it drops nothing");
   assert.equal(mauled.moments.length, 0);
   assert.ok(mauled.strikes[0].intercepted.length >= 1);
   assert.equal(mauled.strikes[0].dead, undefined);
   // A strong escorted raid against one weak wing of fighters.
-  const escorted = fly([air("bombers", "Aland", { name: "Air Group", composition: "60 fighters, 40 bombers" }), ...guard(1, 25)]);
+  const escorted = fly([air("bombers", "Aland", { name: "Air Group", composition: "60 fighters, 40 bombers", airRole: "mixed" }), ...guard(1, 25)]);
   assert.ok(["through", "unopposed"].includes(escorted.strikes[0].outcome), escorted.strikes[0].outcome);
   // What the fighters fought costs both sides: the raid, and the guard that rose.
   const fought = fly([air("bombers", "Aland", { name: "Air Group", strength: 80 }), ...guard(2, 60)]);
@@ -103,9 +116,9 @@ test("intercepted, the fighters fight it out: bombers alone against a strong gua
   assert.equal(guarded.length, strike.intercepted.filter((entry) => entry.lost > 0).length);
   for (const change of guarded) assert.ok(change.strength < 60);
   // A guard out of reach, or not at war, does not rise.
-  const far = fly([air("bombers", "Aland", { name: "Bomber Wing" }), air("guard", "Borduria", { name: "Fighter Wing", lng: 60, lat: 30 })]);
+  const far = fly([air("bombers", "Aland", { name: "Bomber Wing", airRole: "bomber" }), air("guard", "Borduria", { name: "Fighter Wing", airRole: "fighter", lng: 60, lat: 30 })]);
   assert.equal(far.strikes[0].outcome, "unopposed");
-  const neutral = fly([air("bombers", "Aland", { name: "Bomber Wing" }), air("guard", "Cascadia", { name: "Fighter Wing", lng: 23.5 })]);
+  const neutral = fly([air("bombers", "Aland", { name: "Bomber Wing", airRole: "bomber" }), air("guard", "Cascadia", { name: "Fighter Wing", airRole: "fighter", lng: 23.5 })]);
   assert.equal(neutral.strikes[0].outcome, "unopposed");
 });
 
@@ -126,7 +139,7 @@ test("a structure struck is damaged, and destroyed by a second strike or a heavy
   assert.equal(structureAfter("damaged", 40), "destroyed");
   assert.equal(structureAfter("active", 80), "destroyed");
   const markers = [{ id: "m1", name: "Fort Brod", ownerCode: "Borduria", lng: 23, lat: 51, status: "active" }];
-  const units = [air("b1", "Aland", { name: "Bomber Wing", strength: 40 }), air("b2", "Aland", { name: "Bomber Wing 2", strength: 40 })];
+  const units = [air("b1", "Aland", { name: "Bomber Wing", airRole: "bomber", strength: 40 }), air("b2", "Aland", { name: "Bomber Wing 2", airRole: "bomber", strength: 40 })];
   const both = fly(units, [order({ id: "s1", unit: "b1", kind: "structure", marker: "m1", target: "Fort Brod" }), order({ id: "s2", unit: "b2", kind: "structure", marker: "m1", target: "Fort Brod" })], { markers });
   assert.deepEqual(both.strikes.map((strike) => strike.status), ["damaged", "destroyed"]);
 });
@@ -245,7 +258,7 @@ test("the story tells a strike narrow or wide only well off the usual circle", (
 });
 
 test("a smaller radius is deadlier to what is under it; a larger one reaches farther and hurts each thing less", () => {
-  const bombers = [air("bombers", "Aland", { name: "1st Bomber Wing" })];
+  const bombers = [air("bombers", "Aland", { name: "1st Bomber Wing", airRole: "bomber" })];
   const at = (radius, kind = "troops", extra = {}) => fly(bombers, [order({ kind, ...(radius ? { radius } : {}), ...extra })], { peopleOf: () => 5000000, ...extra });
   const plain = at(undefined);
   const tight = at(0.5);
@@ -294,7 +307,7 @@ test("what is kept: one strike a unit, the last given; the strikes of the last r
 });
 
 test("the story is told each strike by name, and the map plays it as a bombing run", () => {
-  const units = [air("bombers", "Aland", { name: "1st Bomber Wing" }), air("guard", "Borduria", { name: "Home Fighter Wing", lng: 23.2 })];
+  const units = [air("bombers", "Aland", { name: "1st Bomber Wing", airRole: "bomber" }), air("guard", "Borduria", { name: "Home Fighter Wing", lng: 23.2 })];
   const flown = withTroopHits(fly(units, [order({ kind: "troops", target: "city: Brod", battlefield: "The Brod Front", country: "Borduria" })]).strikes, [
     { kind: "airstrike", ref: "air:s1", battlefield: "The Brod Front", hits: [{ country: "Borduria", n: 3, lost: 40 }, { country: "Aland", n: 1, lost: 9, own: true }] },
   ]);
@@ -321,7 +334,7 @@ const world = () => {
   return {
     wars: [WAR],
     battlefields: result.battlefields,
-    units: [air("bombers", "Aland", { name: "1st Bomber Wing" }), air("theirs", "Borduria"), { id: "tanks", type: "armor", ownerCode: "Aland", strength: 90, lng: 21, lat: 51 }, air("new", "Aland", { status: "pending" })],
+    units: [air("bombers", "Aland", { name: "1st Bomber Wing", airRole: "bomber" }), air("theirs", "Borduria"), { id: "tanks", type: "armor", ownerCode: "Aland", strength: 90, lng: 21, lat: 51 }, air("new", "Aland", { status: "pending" })],
     markers: [{ id: "m1", name: "Fort Brod", ownerCode: "Borduria", lng: 25, lat: 51, status: "active" }, { id: "m2", name: "Old Keep", ownerCode: "Borduria", lng: 25, lat: 51, status: "destroyed" }, { id: "m3", name: "Our Fort", ownerCode: "Aland", lng: 21, lat: 51, status: "active" }],
   };
 };
