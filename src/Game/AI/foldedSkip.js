@@ -71,11 +71,11 @@ export const liftBoardOps = (shownEvents, opsFor) => asArray(shownEvents).flatMa
 // not offered as an enum in the skip's function: it cost 49 characters, and
 // a shared game's host with the board and the agents was 2 under the ceiling,
 // FOLDED_SKIP_SCHEMA_BUDGET.) A report that names nobody on the list is
-// nobody's, and is left out; that agent reports with the next skip, which
-// asks nothing more for it. So is a second report for an agent that has one,
-// since the first is the one written straight after the events. Each result
-// is { job, report }, the report without its `agent` field, in the order of
-// `jobs`.
+// nobody's, and is left out (an agent left without one reports with the next
+// skip, and nothing more is asked for it); so is a second report for an agent
+// that has one, since the first is the one written straight after the events.
+// Each result is { job, report }, the report without its `agent` field, in
+// the order of `jobs`.
 export const assignAgentReports = (jobs, reports, { sameName = (left, right) => asText(left).toLowerCase() === asText(right).toLowerCase() } = {}) => {
     const filed = asArray(reports).filter(isRecord);
     const taken = new Set();
