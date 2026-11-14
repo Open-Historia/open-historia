@@ -8657,8 +8657,9 @@ const applySimulationResult = async ({
   const curatorAnalyzeBatch = review
     // The review judged exactly these candidates (reviewCandidateEvents builds
     // the same list this function does). No part — none was asked for, or it came
-    // back unusable — is the curator's ordinary "no analyst": everything is kept,
-    // and a word-for-word repeat is still removed without one.
+    // back unusable — is the curator's ordinary "no analyst": everything is kept
+    // (a word-for-word repeat of the record is taken out before, by
+    // dedupeGeneratedEvents).
     ? async ({ candidates }) => ({
       payload: review.parts.timeline ?? curatorUnavailable(candidates),
       generation: { source: review.parts.timeline ? "ai" : "fallback" },
@@ -8683,9 +8684,10 @@ const applySimulationResult = async ({
 
   // The curator decides whether an event exists BEFORE impacts, chats, history
   // and persistence see it: the model judges each candidate against recent
-  // canon, and deterministic gates (hard mechanical consequences, retrieved
-  // prior matches, saturation) decide what those judgments may remove. The
-  // default is KEEP, and any failure of the analysis keeps everything.
+  // canon, and deterministic gates (hard mechanical consequences, cited prior
+  // events on the same storyline, saturation) decide what those judgments may
+  // remove. The default is KEEP, and any failure of the analysis keeps
+  // everything.
   // What the player has going on this period (playerFocus.js): the events that
   // answer one of their orders (actionIds) or move a Project with a date due now
   // (their board ops) are spared by the filler gates below, because removing one
