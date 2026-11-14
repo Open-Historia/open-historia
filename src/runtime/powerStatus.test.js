@@ -425,6 +425,45 @@ test("the per-turn refresh moves tiers through hysteresis, and leaves a world wi
   assert.equal(refreshPowerStatusForTurn(empty, { date: "2014-02-01", round: 2 }), empty);
 });
 
+// A country's tags are the model's words in the player's language (countryTags.js): never its power. "superpower"
+// once made a major power and "nuclear" was worth 8 points, where "superpuissance" and "nucléaire" were worth nothing.
+test("a country's tags never set its power: the English words and their French twins score as no tags at all", () => {
+  const worldWith = (tags) => ({
+    ...makePeerWorld(),
+    countryTags: { Testland: tags, Peera: tags },
+    politicalActors: { byPolity: { Testland: { tags }, Peera: { tags } } },
+    polityOverrides: { ...makePeerWorld().polityOverrides, Bare: { name: "Bare", status: "active" } },
+  });
+  const english = worldWith(["superpower", "great-power", "nuclear"]);
+  const french = worldWith(["superpuissance", "grande-puissance", "nucléaire"]);
+  const none = worldWith([]);
+  for (const polity of ["Testland", "Peera", "Bare"]) {
+    assert.deepEqual(estimateNativePowerScore(english, polity), estimateNativePowerScore(none, polity), polity);
+    assert.deepEqual(estimateNativePowerScore(french, polity), estimateNativePowerScore(none, polity), polity);
+  }
+  assert.ok(!estimateNativePowerScore(english, "Testland").reasons.some((reason) => /nuclear/i.test(reason)));
+
+  // A polity with no figures, no baseline and no record is the fallback floor in every language.
+  for (const world of [english, french, none]) {
+    const refreshed = refreshPowerStatus(world, { round: 1, immediate: true });
+    assert.equal(refreshed.powerStatus.byPolity.Bare.tier, "minor-power");
+    assert.equal(refreshed.powerStatus.byPolity.Bare.basis, "native-fallback");
+    assert.equal(refreshed.powerStatus.byPolity.Bare.score, null);
+    assert.equal(powerTierForPolity(world, "Bare"), "minor-power", "no record: the floor, whatever the tags say");
+  }
+  assert.deepEqual(refreshPowerStatus(english, { round: 1, immediate: true }).powerStatus, refreshPowerStatus(french, { round: 1, immediate: true }).powerStatus);
+});
+
+test("a record's tier is one of the game's three; another word for one is no tier", () => {
+  assert.equal(normalizePowerTier("major-power"), "major-power");
+  assert.equal(normalizePowerTier(" Regional_Power "), "regional-power", "case and the underscore spelling of the game's own word");
+  for (const word of ["great-power", "global-power", "middle-power", "superpower", "grande-puissance"]) {
+    assert.equal(normalizePowerTier(word), "", word);
+  }
+  const world = normalizePowerStatus({ byPolity: { Testland: { tier: "great-power", score: 80 } } }, makePeerWorld());
+  assert.equal(world.byPolity.Testland, undefined, "a record whose tier is no tier is not kept");
+});
+
 // A turn's refresh scores every polity against one identity index of the world (refreshPowerStatus); each score is
 // the one it would be with an index built afresh for it, names given as aliases and institutions included.
 test("a polity scored with the world's shared identity index scores as it does alone", async () => {
