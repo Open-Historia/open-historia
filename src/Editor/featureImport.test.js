@@ -67,6 +67,17 @@ test("the Workshop's popup offers a family for a kind of the author's own, and i
   assert.deepEqual(MAP_FEATURE_FAMILIES.map((entry) => entry.id).sort(), [...MARKER_FAMILIES].sort());
 });
 
+test("a feature with no id of its own is a marker named for its name in any script, as its English twin is", () => {
+  // Cut to a-z and 0-9, every one named in another script was "marker--": one
+  // marker, which the game looks up by id.
+  const markerId = (name) => buildMarkersForGame([{ ...newMapFeature({ id: "", coord: [30.5, 50.4] }), name, kind: "port" }])[0].id;
+  assert.equal(markerId("Port Arthur"), "marker-port-arthur", "as it always was");
+  for (const [first, second] of [["Port Arthur", "Port Said"], ["Порт-Артур", "Порт-Саид"], ["旅顺港", "塞得港"]]) {
+    assert.notEqual(markerId(first), markerId(second), first);
+    assert.equal(markerId(first), markerId(first), first);
+  }
+});
+
 test("a GeoJSON 'kind' is only a tag: a file of towns imports as cities", () => {
   const { features } = parseFeatureImport({
     type: "FeatureCollection",

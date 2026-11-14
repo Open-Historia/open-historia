@@ -88,6 +88,18 @@ const eventCiting = (id, authorityRef, date = "2000-02-01") => ({
   agency: { principal: "Continental Council", principalKind: "institution", authority: "canonical-process", authorityRef, sovereignActors: [] },
 });
 
+test("a mandate's reference is its own when its ids are written in another script, as its English twin's is", () => {
+  // Cut to a-z and 0-9, a proposal or consequence id written in Cyrillic or
+  // Chinese left no part (the mandate had no reference), or its digits only.
+  assert.equal(ref("deploy-north"), "institution-resolution:council:p1:deploy-north", "as it always was");
+  for (const [first, second] of [["deploy-1", "freeze-1"], ["Развёртывание 1", "Заморозка 1"], ["部署一", "冻结一"]]) {
+    assert.ok(ref(first), first);
+    assert.notEqual(ref(first), ref(second), first);
+    assert.equal(ref(first), ref(` ${first} `), first);
+  }
+  assert.equal(ref(""), "", "an id that is not there is no reference");
+});
+
 test("only operational mandates are listed as open", () => {
   const listed = listInstitutionResolutionAuthorities(mandateWorld());
   assert.deepEqual(listed.map((entry) => entry.consequenceKind).sort(), ["deployment-authorization", "sanctions-authorization"]);

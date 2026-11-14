@@ -25,6 +25,7 @@ import { editorBasemapById } from "./basemaps.js";
 import { normalizeEditorOwnBasemaps } from "./ownBasemaps.js";
 import { DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits } from "./projectionConvert.js";
 import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE } from "./exportPreset.js";
+import { nameId } from "../../server/nameId.js";
 
 export const STARTING_MAP_KEY = "start";
 export const STARTING_DRAWN_KEY = STARTING_DRAWN_PICK; // the same key in the game (runtime/basemapPick.js)
@@ -116,9 +117,11 @@ const patchOf = (state) => ({
 });
 const refused = (reason) => ({ refused: reason });
 
-// A fresh id for a map moved into ownBasemaps, from its name.
+// A fresh id for a map moved into ownBasemaps, from its name, by the game's one
+// rule for an id made from a name (server/nameId.js): a Latin name keeps its
+// slug, a name in another script is its own hash instead of "map".
 const freshId = (state, name) => {
-  const base = String(name || "map").toLowerCase().replace(/[^\w-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "map";
+  const base = nameId(name || "map", (text) => String(text).toLowerCase().replace(/[^\w-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32)) || "map";
   const taken = new Set(state.own.map((entry) => entry.id));
   if (!taken.has(base)) return base;
   for (let n = 2; ; n += 1) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;

@@ -8,6 +8,7 @@
  */
 
 import { normalizeInstitutions } from "./institutions.js";
+import { latinSlug, nameId } from "../../server/nameId.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -18,13 +19,14 @@ const clone = (value) => {
   return JSON.parse(JSON.stringify(value));
 };
 
-const slugPart = (value) => clean(value)
-  .toLocaleLowerCase()
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-+|-+$/g, "")
-  .slice(0, 96);
+// An id as it stands in an authority's reference, by the game's one rule for an
+// id made from a name (server/nameId.js): one in a-z and 0-9 as it always was,
+// one in another script its own hash. Cut to a-z and 0-9, a proposal or a
+// consequence the model had named in another script had no part at all (its
+// authority was dropped) or only its digits ("\u041f\u0440\u0435\u0434\u043b\u043e\u0436\u0435\u043d\u0438\u0435 1" and
+// "\u0420\u0435\u0437\u043e\u043b\u044e\u0446\u0438\u044f 1" were one authority), and an institution asked for by such an
+// id was every institution.
+const slugPart = (value) => nameId(value, (id) => latinSlug(id, 96));
 
 // Only consequences whose legal effect is an authorization for later execution
 // remain borrowable as canonical-process authority. Other consequence kinds have

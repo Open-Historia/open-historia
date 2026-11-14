@@ -1,4 +1,6 @@
 /*! Open Historia — scenario-defined national Stats sheet definitions © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+import { isLatinName } from "../../server/nameId.js";
+
 export const STAT_SHEET_VERSION = 2;
 export const MAX_STAT_INDICES = 12;
 export const MAX_STAT_SECTIONS = 12;
@@ -83,10 +85,17 @@ const labelDigest = (value) => {
 };
 
 // A stat's key, made from its label. Keys are ASCII (STAT_INDEX_KEY_PATTERN),
-// so a label with Latin letters or digits keeps the camelCase key it always
-// had, and a label written wholly in another script ("\u0421\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e\u0441\u0442\u044c", "\u519b\u529b")
-// gets a key from its digest: it was given none, and the stat was dropped.
+// so a label written wholly in a-z and 0-9, case and accents aside, keeps the
+// camelCase key it always had, and any other label gets a key from its digest,
+// by the game's one rule for an id made from a name (server/nameId.js). One
+// written wholly in another script ("\u0421\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e\u0441\u0442\u044c", "\u519b\u529b") was given no key,
+// and the stat was dropped; one mixing scripts was cut down to its Latin words
+// or digits, so "\u0421\u0438\u043b\u0430 2" and "\u041c\u043e\u0449\u044c 2" were both "stat2".
 export const toStatIndexKey = (value) => {
+  if (!isLatinName(value)) {
+    const digest = labelDigest(value);
+    return digest ? `stat${digest}` : "";
+  }
   const words = clean(value)
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")

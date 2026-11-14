@@ -19,6 +19,7 @@ const DIST_DIR = path.join(PROJECT_ROOT, "dist");
 const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
 import { DATA_DIR as SERVER_DATA_DIR } from "./dataDir.js";
 import { coarsenFeatureCollection } from "./coarseGeometry.js";
+import { nameId } from "./nameId.js";
 import {
   createTiledBasemap,
   findBasemapMetaByHash,
@@ -731,12 +732,15 @@ const invalidateCatalogs = (writtenPath = null) => {
   }
 };
 
+// A scenario's or a game's id, from what it was asked to be called, by the
+// game's one rule for an id made from a name (nameId.js): a Latin name keeps its
+// slug, a name in another script is its own hash instead of the hour it was made.
 const normalizeId = (rawValue, prefix) => {
-  const value = String(rawValue ?? "")
+  const value = nameId(rawValue, (name) => String(name ?? "")
   .trim()
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-+|-+$/g, "");
+  .replace(/^-+|-+$/g, ""));
 
   return value || `${prefix}-${Date.now().toString(36)}`;
 };

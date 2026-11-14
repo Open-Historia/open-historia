@@ -18,6 +18,7 @@
 
 import { isCityFeature } from "./cityMarkers.js";
 import { kindFamily, normalizeMarkerFamily } from "../runtime/markerFamily.js";
+import { nameId } from "../../server/nameId.js";
 
 // What the Map feature tool offers. The game draws each with its family's
 // glyph (runtime/markerFamily.js KIND_FAMILIES, Game/Map/vnext/presentationPolicy.js);
@@ -136,7 +137,10 @@ export const buildMarkersForGame = (features) => (Array.isArray(features) ? feat
     const family = mapFeatureFamily(feature);
     return {
       ...extra,
-      id: clean(feature.markerId) || `marker-${clean(feature.id) || name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      // (A feature with no id of its own is named for its name, by the game's
+      // one rule for an id made from a name, server/nameId.js: cut to a-z and
+      // 0-9, every one named in another script was "marker--", one marker.)
+      id: clean(feature.markerId) || `marker-${clean(feature.id) || nameId(name, (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-"))}`,
       name,
       kind: clean(feature.kind).toLowerCase() || "landmark",
       ownerCode: clean(feature.owner),

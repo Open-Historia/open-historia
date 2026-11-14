@@ -157,6 +157,17 @@ test("a stat labelled in another script stays in the sheet, as its English twin 
   assert.equal(toStatIndexKey("!!!"), "");
 });
 
+test("a label mixing another script with Latin letters or digits is never cut down to them", () => {
+  // "Сила 2" and "Мощь 2" were both "stat2", and "Армия (army)" was "army".
+  assert.equal(toStatIndexKey("Horse & cart capacity"), "horseCartCapacity", "as it always was");
+  assert.equal(toStatIndexKey("Strength 2"), "strength2", "as it always was");
+  assert.notEqual(toStatIndexKey("Сила 2"), toStatIndexKey("Мощь 2"));
+  assert.notEqual(toStatIndexKey("Армия (army)"), toStatIndexKey("army"));
+  for (const label of ["Сила 2", "军力 2", "Армия (army)"]) assert.match(toStatIndexKey(label), STAT_INDEX_KEY_PATTERN, label);
+  // A label wholly in another script keeps the key it was given.
+  assert.equal(toStatIndexKey("Стабильность"), toStatIndexKey("  СТАБИЛЬНОСТЬ "));
+});
+
 test("custom numeric values distinguish unavailable data from recorded zero", () => {
   const definition = { sections: [{ key: "finances", label: "Finances", stats: [
     { key: "treasury", label: "Treasury", kind: "currency", suffix: "silver marks", minimum: 0, decimals: 2 },

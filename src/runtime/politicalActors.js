@@ -5,6 +5,7 @@ import { normalizePoliticalPressureState } from "./politicalPressure.js";
 import { PARTY_ROLES, findIdeology } from "./politics.js";
 import { lookedUp } from "./worldLookups.js";
 import { nameKey } from "../../server/nameKey.js";
+import { isLatinName } from "../../server/nameId.js";
 
 export const POLITICAL_ACTORS_SCHEMA_VERSION = 6;
 
@@ -342,13 +343,20 @@ const normalizeOfficeholder = (value) => {
 // Devanagari or Thai vowel sign kept as part of its word.
 const partyTokenKey = nameKey;
 
-const asciiPartySlug = (value) =>
-    clean(value)
+// A party's or a bloc's id when it has none of its own: the slug of the first of
+// its names written wholly in a-z and 0-9, case and accents aside, else a hash
+// of its name (below). A name in another script, or one mixing another script
+// with Latin letters or digits, is never cut down to those, by the game's one
+// rule for an id made from a name (server/nameId.js): "\u041f\u0430\u0440\u0442\u0438\u044f 1" was "1", and
+// so was every other "\u2026 1".
+const asciiPartySlug = (value) => (isLatinName(value)
+    ? clean(value)
         .toLocaleLowerCase()
         .normalize("NFKD")
         .replace(/[\u0300-\u036f]/g, "")
         .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "");
+        .replace(/^-+|-+$/g, "")
+    : "");
 
 const stableTextHash = (value) => {
     let hash = 2166136261;
