@@ -290,7 +290,7 @@ import {
   shareRepeatedBlocks,
 } from "./turnReview.js";
 import { checksHeldError, checksHoldTurn, createTurnChecks } from "./turnChecks.js";
-import { acknowledgeFailures, buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, keepRetryBoundRecords, restrictToRetriedOrders } from "./playerTurnFailures.js";
+import { acknowledgeFailures, buildPlayerEventRetryDirective, collectPlayerTurnFailures, describePlayerTurnFailures, dropRetriedReceiptNotes, hasPlayerTurnFailures, keepRetryBoundRecords, restrictToRetriedOrders, retryMadeProgress } from "./playerTurnFailures.js";
 import {
   describeDoubtedForPrompt,
   doubtedAwaitingFreshSource,
@@ -16909,7 +16909,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       const amendCount = context.amend
         ? Math.max(1, normalizeArray(context.amend.failures?.events).length, normalizeArray(context.amend.failures?.orders).length)
         : 0;
-      const minEvents = context.amend ? 1 : Math.max(pacedMin, scriptedBeats.length);
+      const minEvents = context.amend ? amendCount : Math.max(pacedMin, scriptedBeats.length);
       const maxEvents = context.amend ? amendCount + 1 : Math.max(pacedMax, scriptedBeats.length + 1);
       // targetDate reaches only these two variables (promptContext.js), so the
       // expensive context — region catalog, city seed, territory index — is built
@@ -17067,6 +17067,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // And the function that gives a player's troops the orders their
         // actions give them, where there is a fought period to fight again.
         lookups: withFrontOrderFunction(buildTaskLookups(segmentBundle), frontOrderCall(context)),
+        // A retry of the player's failed events looks nothing up: the period is
+        // written and listed in its prompt, and each round of lookups is one more
+        // reading of the whole prompt (four minutes of a five-minute retry on a
+        // local model, 2026-11-13). The troops' order function stays.
+        ...(context.amend ? { lookups: withFrontOrderFunction(null, frontOrderCall(context)) } : {}),
         // The skip itself always runs; asking again is what the budget weighs.
         ...spend,
         // One request in every mode: a flaw is cut out or repaired in place,
@@ -17113,6 +17118,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           targetDate,
           segmentTargetDate: segmentTarget,
           priorEvents: state.generatedSoFar,
+          amend: amendCount,
         }), buildScriptedEventsInstruction(scriptedBeats, { language: scriptedLanguage }), buildScriptedImpactsInstruction(scriptedBeats), scriptedPoliticalInstruction, WRITING_REMINDER].filter(Boolean).join("\n\n"),
         validatePayload: withReceiptDraft(async (candidate, { attempt = 1, finalAttempt } = {}, draft) => {
           // Shape-of-story problems (event count, stray dates) are STRICT while a
@@ -17151,7 +17157,9 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // date validator below to report).
           sortTimelineEventsChronologically(candidate);
           const eventCount = normalizeArray(candidate?.events).length;
-          if (mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
+          // A retry's count is the list it was given, and what it leaves out
+          // is asked for again (retryHeldPlayerEvents): no note for the next turn.
+          if (mode !== "auto" && !context.amend && (eventCount < minEvents || eventCount > maxEvents)) {
             // Never sent back, on any attempt (the owner's call, 2026-09-26): asking
             // again is a whole second request, and a period with fewer or more events
             // than it asked for is still a period. The model is told, at the top of
@@ -18656,7 +18664,12 @@ const restoreHeldState = (state, snapshot) => {
 // a world that has moved on; holding the turn is what keeps this the same path
 // as a normal skip. Still failing, it is held again with what is left, and the
 // player decides again.
-export const retryHeldPlayerEvents = async ({ keep = false, onEvents, onProgress, signal } = {}) => {
+//
+// A retry that settled some of the failed orders and left others asks again by
+// itself for what is left (playerTurnFailures.js retryMadeProgress), up to
+// MAX_RETRY_FOLLOW_UPS times: the player is shown the notice again only when a
+// retry settled nothing more, or everything.
+export const retryHeldPlayerEvents = async ({ keep = false, onEvents, onProgress, signal, followUps = 0 } = {}) => {
   const held = getHeldTurn(HELD_TURN.events);
   if (!held) throw new Error("There is no turn waiting on your events.");
   const { context, state, failures } = held;
@@ -18703,29 +18716,46 @@ export const retryHeldPlayerEvents = async ({ keep = false, onEvents, onProgress
     state.receipt = dropRetriedReceiptNotes(state.receipt, titles);
     state.nextSegment = 0;
     state.segmentOrigin = context.originDate;
-    return await attemptHeldTurn(HELD_TURN.events, held, async () => {
-      try {
-        await runJumpSegments({ context: amendContext, onEvents, onProgress, signal, state });
-      } catch (error) {
-        if (signal?.aborted || error?.name === "AbortError") throw error;
-        // The retry's own request failed: the turn goes back to being held on
-        // its events, as it was, with all three choices still there — never
-        // the canned fallback, and never a segment notice whose Discard would
-        // throw the whole skip away.
-        restoreHeldState(state, before);
-        holdTurn(HELD_TURN.events, held);
-        logDebugEvent("turn", "Retrying the player's failed events failed; the turn is held as it was.", { reason: normalizeString(error?.message) });
-        throw playerEventsHeldError(failures, { retryError: normalizeString(error?.message) || "the AI returned no usable answer" });
-      }
-      return finishTimelineJump({ context, signal, state });
-    }, {
-      signal,
-      // A cancelled retry leaves the turn exactly as it was held.
-      onCancel: () => { restoreHeldState(state, before); },
-    });
+    try {
+      return await attemptHeldTurn(HELD_TURN.events, held, async () => {
+        try {
+          await runJumpSegments({ context: amendContext, onEvents, onProgress, signal, state });
+        } catch (error) {
+          if (signal?.aborted || error?.name === "AbortError") throw error;
+          // The retry's own request failed: the turn goes back to being held on
+          // its events, as it was, with all three choices still there — never
+          // the canned fallback, and never a segment notice whose Discard would
+          // throw the whole skip away.
+          restoreHeldState(state, before);
+          holdTurn(HELD_TURN.events, held);
+          logDebugEvent("turn", "Retrying the player's failed events failed; the turn is held as it was.", { reason: normalizeString(error?.message) });
+          throw playerEventsHeldError(failures, { retryError: normalizeString(error?.message) || "the AI returned no usable answer" });
+        }
+        return finishTimelineJump({ context, signal, state });
+      }, {
+        signal,
+        // A cancelled retry leaves the turn exactly as it was held.
+        onCancel: () => { restoreHeldState(state, before); },
+      });
+    } catch (error) {
+      // Held again with less left than it was asked for: the turn is waiting
+      // under HELD_TURN.events with the new list, and is asked again below.
+      const goOn = error?.heldKind === HELD_TURN.events && !signal?.aborted
+        && Boolean(getHeldTurn(HELD_TURN.events))
+        && retryMadeProgress(failures, error.playerFailures, { followUps });
+      if (!goOn) throw error;
+      logDebugEvent("turn", "A retry of the player's failed events settled some and left others; asking again for what is left.", {
+        before: normalizeArray(failures?.orders).length + normalizeArray(failures?.events).length,
+        left: normalizeArray(error.playerFailures?.orders).length + normalizeArray(error.playerFailures?.events).length,
+        followUp: followUps + 1,
+      });
+    }
   } finally {
     endSimulation();
   }
+  // Reached only from the catch above. The held turn keeps the game busy across
+  // the gap (simulationStatus.js isSimulationBusy), so nothing writes in it.
+  return retryHeldPlayerEvents({ onEvents, onProgress, signal, followUps: followUps + 1 });
 };
 
 // ---- GM Console: previewable, revalidated, audited transactions ------------

@@ -272,3 +272,14 @@ test("mergeSegmentPayloads carries every segment's ledger records through the me
   assert.equal(merged.agreementUpdates.length, 1);
   assert.equal(merged.events.length, 3);
 });
+
+// A retry of the player's failed events (playerTurnFailures.js) is not a period.
+test("a retry's instruction asks for the listed events and never for the whole period", () => {
+  const three = buildSegmentInstruction({ minEvents: 3, maxEvents: 4, durationLabel: "1 month", amend: 3 });
+  assert.match(three, /3 events, one for each entry of the list/);
+  assert.match(three, /Every entry of the list must be answered/);
+  assert.doesNotMatch(three, /Simulate everything|between 3 and 4|storyline/i);
+  assert.match(buildSegmentInstruction({ minEvents: 1, maxEvents: 2, amend: 1 }), /one event\./);
+  // And a skip's own wording is what it was.
+  assert.match(buildSegmentInstruction({ minEvents: 10, maxEvents: 15, durationLabel: "1 month" }), /^Simulate everything that happens in the world/);
+});
