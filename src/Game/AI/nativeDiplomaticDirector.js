@@ -29,6 +29,7 @@ import { resolvePolityIdentity, buildPolityIdentityIndex } from "../../runtime/p
 import { compareGameDates, isGameDate } from "../../runtime/gameDates.js";
 import { receiptPlayerNote } from "../../runtime/receiptPlayerNotes.js";
 import { hasMalformedRelationSummary as relationSummaryHasReservedSeparator } from "../../runtime/relationSummary.js";
+import { latinSlug, nameId } from "../../../server/nameId.js";
 
 export const DIPLOMATIC_LEDGER_VERSION = 1;
 export const DIPLOMATIC_DIRECTOR_VERSION = "0.1.7-round-zero-baseline";
@@ -101,13 +102,13 @@ const parseIsoDate = (value) => {
   return isGameDate(text) ? text : "";
 };
 
-const slug = (value) => clean(value)
-  .toLocaleLowerCase()
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-+|-+$/g, "")
-  .slice(0, 80);
+// A polity as it stands in an id (a puppet's coup storyline, its revolt, its
+// row): the game's one rule for an id made from a name (server/nameId.js). A
+// Latin name keeps the slug it always had; a name in another script is its own
+// hash. Cut to a-z and 0-9, every puppet named in Cyrillic or Chinese had the
+// same coup storyline, "storyline-puppet-": after the first none was ever
+// opened, and settling one settled them all.
+const slug = (value) => nameId(value, (name) => latinSlug(name, 80));
 
 const stableHash = (value) => {
   let hash = 2166136261;

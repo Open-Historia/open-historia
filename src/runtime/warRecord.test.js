@@ -59,6 +59,24 @@ test("an id is never an array position", () => {
   assert.equal(new Set(normalizeWarRecords([unnamed, { ...unnamed }]).map((entry) => entry.id)).size, 2);
 });
 
+test("a war named for countries in another script has an id of its own, as its English twin has", () => {
+  // Cut to a-z and 0-9, every country named in Cyrillic or Chinese was
+  // "belligerent", so every such war begun on one day had one id.
+  const day = "1904-02-08";
+  assert.equal(contentWarId({ sideA: ["Russia"], sideB: ["Japan"], startedDate: day }), "war-japan-russia-19040208", "as it always was");
+  for (const [first, second] of [
+    [["Russia", "Japan"], ["China", "Korea"]],
+    [["Россия", "Япония"], ["Китай", "Корея"]],
+    [["俄罗斯", "日本"], ["中国", "朝鲜"]],
+  ]) {
+    const one = contentWarId({ sideA: [first[0]], sideB: [first[1]], startedDate: day });
+    const two = contentWarId({ sideA: [second[0]], sideB: [second[1]], startedDate: day });
+    assert.notEqual(one, two, `${first[0]}: two wars, one id`);
+    assert.equal(contentWarId({ sideA: [first[1]], sideB: [first[0]], startedDate: day }), one, `${first[0]}: either side's writing gives the same`);
+    assert.doesNotMatch(one, /belligerent/);
+  }
+});
+
 test("a renewal's id is new, and its stem is the war it renews", () => {
   assert.equal(mintWarId("war-uk-ireland-2016", new Set()), "war-uk-ireland-2016");
   assert.equal(mintWarId("war-uk-ireland-2016", new Set(["war-uk-ireland-2016"])), "war-uk-ireland-2016-r2");

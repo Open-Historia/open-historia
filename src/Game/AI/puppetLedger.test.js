@@ -392,6 +392,42 @@ test("a suppressed rising settles it too", () => {
   assert.ok(merge.storylineSeeds.some((line) => line.startsWith("storyline-puppet-poland~resolved~")));
 });
 
+test("puppets named in another script each have a coup Storyline of their own, as their English twins do", () => {
+  // A coup Storyline's id is made from its puppet's name. Cut to a-z and 0-9,
+  // every puppet named in Cyrillic or Chinese had the one id
+  // "storyline-puppet-": after the first, none was ever opened, and a revolt
+  // settled every one of them.
+  const twin = (overlord, [first, second]) => ({
+    polityOverrides: Object.fromEntries([overlord, first, second].map((name) => [name, { code: name, name }])),
+    regionOwnershipOverrides: { r1: overlord, r2: first, r3: second },
+    relations: [],
+    agreements: [],
+    puppets: [
+      { id: "p1", overlord, puppet: first, kind: "satellite", loyalty: 12, secrecy: "open", status: "active" },
+      { id: "p2", overlord, puppet: second, kind: "satellite", loyalty: 10, secrecy: "open", status: "active" },
+    ],
+  });
+  const idOf = (line) => line.split("~")[0];
+  const statusOf = (line) => line.split("~")[1];
+  for (const [overlord, puppets] of [["USSR", ["Poland", "Hungary"]], ["СССР", ["Польша", "Венгрия"]], ["苏联", ["波兰", "匈牙利"]]]) {
+    const world = twin(overlord, puppets);
+    const storyline = (id, puppet) => ({
+      id, kind: "unrest", title: `Resentment in ${puppet}`, status: "active", pressure: 76, momentum: 35,
+      startedDate: "1945-06-28", state: `${puppet} chafes.`, participants: [puppet, overlord],
+    });
+    const ids = apply(world, `loyalty~${overlord}~${puppets[0]}~~12~~1~Grain requisitions bite`).storylineSeeds.map(idOf);
+    assert.equal(ids.length, 2, overlord);
+    assert.notEqual(ids[0], ids[1], `${overlord}: two puppets, one Storyline`);
+    // The first one's is open: the second's is opened all the same.
+    const next = apply({ ...world, storylines: [storyline(ids[0], puppets[0])] }, `loyalty~${overlord}~${puppets[0]}~~11~~1~Worse`);
+    assert.deepEqual(next.storylineSeeds.map(idOf), [ids[1]], `${overlord}: the second puppet's Storyline`);
+    // A revolt settles its own puppet's, and only that.
+    const both = { ...world, storylines: [storyline(ids[0], puppets[0]), storyline(ids[1], puppets[1])] };
+    const settled = apply(both, `revolt~${overlord}~${puppets[0]}~~~~1~The rising`).storylineSeeds.filter((line) => statusOf(line) === "resolved");
+    assert.deepEqual(settled.map(idOf), [ids[0]], `${overlord}: a revolt settles its own puppet's Storyline only`);
+  }
+});
+
 test("annexing a Puppet costs the Overlord standing, and costs more when it was open", () => {
   const seated = (secrecy) => ({
     ...baseWorld,

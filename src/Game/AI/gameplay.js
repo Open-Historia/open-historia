@@ -363,6 +363,7 @@ import {
   renamePolityInFlags,
   renamePolityInGame,
 } from "../../../server/polityRename.js";
+import { nameId } from "../../../server/nameId.js";
 import { renderTemplateCached, staticPrefixEndOf } from "./promptLayout.js";
 import { attachAttemptOutcome, attachSkipTiming, finishAiRecord, normalizeParsedSummary } from "./telemetry.js";
 import {
@@ -9818,7 +9819,10 @@ const applySimulationResult = async ({
   for (const chatLike of normalizeArray(result.outreach)) {
     const { peaceOffer, ...letter } = chatLike ?? {};
     const terms = peaceOffer && typeof peaceOffer === "object" ? termsOfLetter(peaceOffer) : null;
-    const offerMessageId = terms ? `msg-peace-${nextGame.round}-${regionKey(letter.speaker).replace(/[^a-z0-9]+/g, "-")}` : "";
+    // (The letter's id, from its sender's name by the game's one rule for an id made from a name, server/nameId.js:
+    // cut to a-z and 0-9, every sender named in another script wrote under one id, and accepting the peace one offered
+    // could answer another's.)
+    const offerMessageId = terms ? `msg-peace-${nextGame.round}-${nameId(letter.speaker, (name) => regionKey(name).replace(/[^a-z0-9]+/g, "-"))}` : "";
     const nextChat = await opening({ ...letter, source: "outreach", ...(offerMessageId ? { openingMessageId: offerMessageId } : {}) }, "", { revealWith: lastTurnEventId });
     if (nextChat) { nextChats.unshift(nextChat); generatedChats.unshift(nextChat); }
     if (!terms || !nextChat) continue;
@@ -9866,7 +9870,7 @@ const applySimulationResult = async ({
       : (treaty
         ? uiString("We have been attacked. Under {{treaty}}, we call on you to come to our defence.", { treaty })
         : uiString("We have been attacked. As our ally, we call on you to come to our defence."));
-    const messageId = `msg-call-${regionKey(call.id).replace(/[^a-z0-9]+/g, "-")}`;
+    const messageId = `msg-call-${nameId(call.id, (id) => regionKey(id).replace(/[^a-z0-9]+/g, "-"))}`;
     const nextChat = await opening({
       countries: [call.defender],
       to: call.ally,

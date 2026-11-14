@@ -32,6 +32,7 @@
 
 import { toCountryName } from "./ownerNames.js";
 import { compareGameDates, normalizeGameDate } from "./gameDates.js";
+import { nameId } from "../../server/nameId.js";
 
 export const WAR_STATUSES = Object.freeze(["active", "ceasefire", "ended"]);
 const STATUS_SET = new Set(WAR_STATUSES);
@@ -100,14 +101,20 @@ export const warDate = (value) => {
 // compact war record, so an id holding one could never be written back).
 export const cleanWarId = (value) => clean(value).replace(/[~|]+/g, "-");
 
-// A name as it stands in an id: ASCII letters and digits.
-export const warIdPart = (value) => warPolityName(value)
+// A name as it stands in an id: the game's one rule for an id made from a name
+// (server/nameId.js). A Latin name keeps the ASCII slug it always had; a name in
+// another script is its own hash. Cut to a-z and 0-9, every polity named in
+// Cyrillic or Chinese was "belligerent": a second war written without an id
+// was given the first one's id (and refused, or filed as its renewal), and an
+// id-less end of the second ended the first.
+const latinWarIdPart = (name) => name
   .normalize("NFKD")
   .replace(/[̀-ͯ]/g, "")
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, "-")
   .replace(/^-+|-+$/g, "")
-  .slice(0, 40) || "belligerent";
+  .slice(0, 40);
+export const warIdPart = (value) => nameId(warPolityName(value), latinWarIdPart) || "belligerent";
 
 // The id a war is given from what it is, when nothing gave it one: its two
 // leading members (in a fixed order, so either side's writing gives the same)
