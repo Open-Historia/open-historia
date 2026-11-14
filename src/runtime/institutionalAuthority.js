@@ -60,40 +60,6 @@ const implementationStillOpen = (proposal = {}) => {
   return !status || status === "pending" || status === "partial" || status === "blocked";
 };
 
-const flattenSemanticValue = (value, out, depth = 0) => {
-  if (depth > 3 || value == null) return;
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    const text = clean(value);
-    if (text) out.push(text);
-    return;
-  }
-  if (Array.isArray(value)) {
-    for (const entry of value.slice(0, 16)) flattenSemanticValue(entry, out, depth + 1);
-    return;
-  }
-  if (typeof value === "object") {
-    for (const [key, entry] of Object.entries(value).slice(0, 20)) {
-      if (["id", "sourceEventIds", "sourceProposalIds", "authorityRef"].includes(key)) continue;
-      flattenSemanticValue(entry, out, depth + 1);
-    }
-  }
-};
-
-const consequenceSemanticText = (institution = {}, proposal = {}, consequence = {}) => {
-  const parts = [
-    clean(institution.name),
-    clean(proposal.title),
-    clean(proposal.summary),
-    clean(proposal.note),
-    clean(consequence.note),
-  ];
-  for (const amendment of list(proposal.amendments)) {
-    if (lower(amendment?.status) === "accepted") parts.push(clean(amendment?.text));
-  }
-  flattenSemanticValue(consequence?.payload, parts);
-  return parts.filter(Boolean).join("\n").slice(0, 12000);
-};
-
 const proposalPendingConsequences = (proposal = {}) => {
   if (!implementationStillOpen(proposal)) return [];
   const appliedIds = new Set(list(proposal?.implementation?.applied).map((entry) => clean(entry?.id)).filter(Boolean));
@@ -133,7 +99,6 @@ export const listInstitutionResolutionAuthorities = (world = {}, { institutionId
           consequenceId,
           consequenceKind: normalizeKind(consequence.kind || consequence.type),
           consequenceNote: clean(consequence.note),
-          text: consequenceSemanticText(institution, proposal, consequence),
         });
       }
     }
@@ -250,7 +215,7 @@ export const consumeEventInstitutionMandates = (worldInput = {}, events = [], { 
   return { world, consumed, skipped };
 };
 
-export const buildInstitutionResolutionAuthorityContext = (world = {}, focusPolities = [], { maxMandates = 8 } = {}) => {
+export const buildInstitutionResolutionAuthorityContext = (world = {}, focusPolities = [], { maxMandates = 8, ids = true } = {}) => {
   const institutions = normalizeInstitutions(world?.institutions, world);
   const focus = new Set(list(focusPolities).map((value) => lower(value)).filter(Boolean));
   const rows = listInstitutionResolutionAuthorities(world)
@@ -263,19 +228,26 @@ export const buildInstitutionResolutionAuthorityContext = (world = {}, focusPoli
   if (!rows.length) return "";
   return rows.map((row) => {
     const note = clean(row.consequenceNote || row.proposalTitle).slice(0, 320);
-    return `- ${row.institutionName}: ${row.proposalTitle} [${row.consequenceKind}]${note ? ` — ${note}` : ""}`;
+    return `- ${row.institutionName}: ${row.proposalTitle} [${row.consequenceKind}]${note ? ` — ${note}` : ""}${ids ? ` (id ${row.id})` : ""}`;
   }).join("\n");
 };
 
 // The time skip's block of passed resolutions still waiting to be carried out,
-// or "" when there are none. Without it the skip learns of a mandate only when
-// an event happens to match one after the fact.
-export const buildOpenInstitutionalMandatesBlock = (world = {}, focusPolities = []) => {
-  const mandates = buildInstitutionResolutionAuthorityContext(world, focusPolities);
+// or "" when there are none. The event that carries one out lists its id among
+// the event's actors, which is how the engine knows it was carried out
+// (nativeWorldIntegrity.js citedMandate); it used to be found by the words the
+// event shared with the resolution, in English only. `cited`: the skip is sent
+// the events' actors (gameplaySchemas.js withEventActors). A skip that is not
+// (a shared game's host) is shown the mandates without their ids, and its
+// events carry none out: each stays open, listed here.
+export const buildOpenInstitutionalMandatesBlock = (world = {}, focusPolities = [], { cited = true } = {}) => {
+  const mandates = buildInstitutionResolutionAuthorityContext(world, focusPolities, { ids: cited });
   if (!mandates) return "";
   return [
     "[Open Institutional Mandates]",
-    "Resolutions an institution has passed that authorise a deployment, sanctions or funding not yet carried out. When the members act on one in this period, write it as the institution's doing, naming the institution and the resolution; each mandate is carried out once. None has to be acted on.",
+    cited
+      ? "Resolutions an institution has passed that authorise a deployment, sanctions or funding not yet carried out. When the members act on one in this period, write it as the institution's doing: the event lists the institution and the mandate's id in its actors. Each mandate is carried out once. None has to be acted on."
+      : "Resolutions an institution has passed that authorise a deployment, sanctions or funding not yet carried out. When the members act on one in this period, write it as the institution's doing. None has to be acted on.",
     mandates,
   ].join("\n");
 };

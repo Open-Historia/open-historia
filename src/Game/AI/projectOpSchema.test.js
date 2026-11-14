@@ -227,6 +227,8 @@ test("the board no longer costs the jump anything", () => {
   // says what it is, and the rules it repeated are in the prompt.
   // A civil war split in one entry (regionControlOps[].part, AI/countrySplit.js) raised it by about 160, on
   // purpose, the field pointing at the prompt that explains it: half a country was forty entries the model never wrote.
+  // Who decided an event (events[].actors, 166 chars) is not in the lean contract: a skip adds it where it
+  // fits (gameplaySchemas.js withEventActors), weighed by foldedSkipSent.test.js.
   assert.ok(jumpChars < 28450, `the jump schema grew back to ${jumpChars} chars`);
 
   // ...and the game master, which has no second pass to hand the board to, keeps

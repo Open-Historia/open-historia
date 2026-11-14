@@ -61,15 +61,18 @@ test("R3.7 crisis lane can use high-trajectory evidence that ordinary top-10 ini
     score: 20,
     title: "Austrian Chamber Publishes Quarterly Industrial Export Outlook",
     detail: "A quarterly assessment reports steady machinery exports.",
-    trajectoryValue: 0,
+    trajectoryValue: 1,
     storylineIds: [],
   }];
+  // The polities its source event's fields name (nativeWorldDirector.js
+  // eventCandidate parties), by the alias the save writes: never its words.
   const crisisEvidence = [{
     id: "event:ethiopia",
     type: "recent-event",
     score: 8,
     title: "Tigray Leadership Rejects Ethiopian Prosperity Party Merger and Demands Regional Autonomy",
     detail: "The TPLF rejects the federal party merger, deepening a political schism over autonomy and competing legitimacy in Ethiopia.",
+    parties: ["Ethiopia"],
     trajectoryValue: 4,
     storylineIds: [],
   }];
@@ -87,7 +90,12 @@ test("R3.7 crisis lane can use high-trajectory evidence that ordinary top-10 ini
   assert.match(crisis.basis, /Tigray Leadership Rejects/i);
 });
 
-test("R3.7 suppresses clusters of low-trajectory institutional cards but preserves concrete capability outcomes", () => {
+// The screen kept at most two "low-trajectory institutional" cards a batch,
+// found by English words (LOW_TRAJECTORY_INSTITUTIONAL_RE), and hid the rest;
+// the same cards in another language all stood. The skip is told to write no
+// filler and that nothing takes it off the timeline afterwards: every card
+// stands, in every language.
+test("R3.7 a cluster of technical-talks cards stands as written, in English or not", () => {
   const priorEvents = Array.from({ length: 5 }, (_, index) => ({
     id: `prior-${index}`,
     title: `Technical Dialogue ${index + 1}`,
@@ -134,22 +142,26 @@ test("R3.7 suppresses clusters of low-trajectory institutional cards but preserv
     },
   ];
 
-  const screened = screenGeneratedWorldEvents({
-    events,
-    priorEvents,
-    world: {},
-    game: { country: "Republic of Latvia" },
-    analysis: { explorationSlate: [] },
-  });
+  const twins = [
+    { ...events[0], title: "Lettiske og svenske delegationer mødes til arbejdsmøder om grøn teknologi", description: "Embedsmænd holder bilaterale arbejdsmøder og tekniske drøftelser om forsyningskæder." },
+    { ...events[1], title: "Letland og Tyskland indleder teknisk dialog om finansiering af ren energi", description: "Embedsmænd indleder en teknisk dialog og en koordineringsramme." },
+    { ...events[2], title: "Lettiske og russiske grænsemyndigheder holder tekniske konsultationer", description: "Konsultationer på arbejdsniveau gennemgår toldeffektivitet og procedureharmonisering." },
+    events[3],
+    events[4],
+  ];
+  for (const batch of [events, twins]) {
+    const screened = screenGeneratedWorldEvents({
+      events: batch,
+      priorEvents,
+      world: {},
+      game: { country: "Republic of Latvia" },
+      analysis: { explorationSlate: [] },
+    });
 
-  assert.equal(screened.events.length, 3);
-  assert.equal(screened.events.filter((event) => event.id.startsWith("talk-")).length, 1);
-  assert.ok(screened.events.some((event) => event.id === "turkey-lab"));
-  assert.ok(screened.events.some((event) => event.id === "radar"));
-  assert.equal(
-    screened.dropped.filter((row) => row.route === "LOW_TRAJECTORY_FEED_SATURATION").length,
-    2,
-  );
+    assert.equal(screened.events.length, 5);
+    assert.deepEqual(screened.dropped, []);
+    assert.deepEqual(screened.hidden, []);
+  }
 });
 
 test("R3.7 linked visible events advance storyline visibility bookkeeping even without semantic update", () => {

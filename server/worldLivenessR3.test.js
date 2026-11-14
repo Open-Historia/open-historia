@@ -84,23 +84,22 @@ test("major unresolved crisis passes when linked to canonical storyline", () => 
   );
 });
 
-test("routine administrative no-delta event is screened out", () => {
-  const screened = screenGeneratedWorldEvents({
-    events: [{
-      id: "event-admin-filler",
-      date: "2019-10-12",
-      importance: "minor",
-      title: "Canada Finalizes Streamlined Agricultural Inspection Standards",
-      description: "Officials finalize technical inspection standards and a compliance tracking protocol after a committee review.",
-      impacts: baseImpacts(),
-    }],
-    world: {},
-    game: { country: "Republic of Latvia" },
-  });
-
-  assert.equal(screened.events.length, 0);
-  assert.equal(screened.dropped.length, 1);
-  assert.equal(screened.dropped[0].route, "ROUTINE_ADMINISTRATIVE_PROCESS");
+// Screened out for English words (ROUTINE_ADMINISTRATIVE_CUE_RE), and kept in
+// any other language. The skip is told to write no filler; the screen keeps
+// what it writes, in every language alike.
+test("a routine administrative card is kept as written, in English or not", () => {
+  for (const [title, description] of [
+    ["Canada Finalizes Streamlined Agricultural Inspection Standards", "Officials finalize technical inspection standards and a compliance tracking protocol after a committee review."],
+    ["Kanada schließt vereinfachte landwirtschaftliche Prüfnormen ab", "Beamte schließen technische Prüfnormen und ein Protokoll zur Konformitätsverfolgung nach einer Ausschussprüfung ab."],
+  ]) {
+    const screened = screenGeneratedWorldEvents({
+      events: [{ id: "event-admin-filler", date: "2019-10-12", importance: "minor", title, description, impacts: baseImpacts() }],
+      world: {},
+      game: { country: "Republic of Latvia" },
+    });
+    assert.equal(screened.events.length, 1, title);
+    assert.deepEqual(screened.dropped, []);
+  }
 });
 
 // A pass "dominated by administrative cards" (by English words) was sent back

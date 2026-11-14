@@ -184,6 +184,14 @@ test("the skip is shown the open mandates, and nothing when there are none", () 
   assert.match(block, /Continental Council: Northern Stabilisation \[deployment-authorization\] — Deploy a stabilisation force/);
   assert.match(block, /\[sanctions-authorization\]/);
   assert.doesNotMatch(block, /declaration/);
+  // Each with the id the event that carries it out lists among its actors: the
+  // event is tied to its mandate by that id, never by the words they share.
+  assert.ok(block.includes(`(id ${ref("deploy-north")})`));
+  assert.match(block, /the event lists the institution and the mandate's id in its actors/);
+  // A skip not sent the events' actors (a shared game's host) is not asked for an id.
+  const uncited = buildOpenInstitutionalMandatesBlock(mandateWorld(), [], { cited: false });
+  assert.ok(!uncited.includes(ref("deploy-north")) && !uncited.includes("actors"));
+  assert.match(uncited, /Continental Council: Northern Stabilisation \[deployment-authorization\]/);
   assert.equal(buildOpenInstitutionalMandatesBlock(makeWorld()), "");
   const done = consumeEventInstitutionMandates(mandateWorld(), [eventCiting("e1", ref("deploy-north")), eventCiting("e2", ref("freeze-assets"))]);
   assert.equal(buildOpenInstitutionalMandatesBlock(done.world), "");

@@ -1334,15 +1334,30 @@ const eventSchema = {
       items: nonEmptyTextSchema("One canonical belligerent polity name."),
     },
     impacts: jumpAnswerImpactsSchema,
+    // Whose decision the event is (nativeWorldIntegrity.js): read by the screen
+    // in place of the event's words, which is all it had. Optional, and after
+    // warId, combatants and impacts, the fields the war and the map rest on: a
+    // field sent before combatants once had Gemini leave them empty
+    // (withEventAudience). The parties of an agreement or a war the event
+    // starts are read from those records as well. SENT only where it fits
+    // (withEventActors); the answer is read with it either way.
+    actors: {
+      type: "array",
+      description: "Who decided it: governments or institutions, never its targets; empty if nobody did.",
+      maxItems: 8,
+      items: { type: "string" },
+    },
   },
   required: ["date", "title", "description"],
   additionalProperties: false,
 };
 
-// The event of the lean contract: no board (see "The folded time skip" above).
+// The event of the lean contract: no board (see "The folded time skip" above),
+// and no actors, which withEventActors adds where the skip sends them.
+const { actors: _leanActors, ...leanEventProperties } = eventSchema.properties;
 const leanJumpEventSchema = {
   ...eventSchema,
-  properties: { ...eventSchema.properties, impacts: jumpImpactsSchema },
+  properties: { ...leanEventProperties, impacts: jumpImpactsSchema },
 };
 
 // ---- An event's scripted beat (kw2-orders, 2026-11-13) -------------------------
@@ -3772,6 +3787,29 @@ export const withScriptedBeat = (tool) => {
     schema: {
       ...tool.schema,
       properties: { ...tool.schema.properties, events: { ...events, items: withScriptedBeatProperty(events.items) } },
+    },
+  };
+};
+
+// Who decided each event (`actors`, nativeWorldIntegrity.js): sent with a time
+// skip's events, after their impacts, where `sent`. A shared game's host does
+// not send it: its skip's function is the largest a game sends, with no room
+// for it under FOLDED_SKIP_SCHEMA_BUDGET (foldedSkipSent.test.js), and its
+// guard of each person's country reads the answer's records (the parties of a
+// treaty an event starts, the side that starts or joins a war by it), as it
+// always has. Any other tool comes back as it was.
+export const withEventActors = (tool, sent = true) => {
+  const events = tool?.schema?.properties?.events;
+  const event = events?.items;
+  if (!sent || !tool?.schema?.properties?.stopDate || !event?.properties?.impacts || event.properties.actors) return tool;
+  return {
+    ...tool,
+    schema: {
+      ...tool.schema,
+      properties: {
+        ...tool.schema.properties,
+        events: { ...events, items: { ...event, properties: { ...event.properties, actors: eventSchema.properties.actors } } },
+      },
     },
   };
 };

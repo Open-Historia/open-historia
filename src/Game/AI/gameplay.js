@@ -124,7 +124,6 @@ import {
 import {
   createWorldEventScopeClassifier,
   deriveWorldExplorationAudit,
-  previewScreenedEvent,
   screenGeneratedWorldEvents,
   validateWorldExplorationAudit,
 } from "./nativeWorldIntegrity.js";
@@ -221,6 +220,7 @@ import {
   SOCIAL_POSTS_FIELD,
   normalizeGameplayPayload,
   validateGameplayPayload,
+  withEventActors,
   withEventAudience,
   withEventImpacts,
   withFrontOrders,
@@ -832,15 +832,16 @@ const describeWithheldEvent = (row) => {
 
 // The live preview of a skip, with each card the engine's own checks will keep
 // off the timeline marked as it arrives (runtime/filedEvents.js), instead of the
-// card vanishing when the turn lands. Only the checks that judge one event on
-// its own and need no request: the screen's single-event rules and a word-for-
-// word repeat of the record. The curator's verdicts come with the review, after
+// card vanishing when the turn lands. Only the check that judges one event on
+// its own and needs no request: a word-for-word repeat of the record. (The
+// integrity screen keeps no event off the timeline for its words any more,
+// nativeWorldIntegrity.js.) The curator's verdicts come with the review, after
 // the writing, and reach the panel as the turn's filed cards.
 //
 // One marked copy per streamed event, cached on the event: the panel keys its
 // cards on the objects it is handed, and a fresh copy on every arrival would
 // throw away every card's memo for the whole skip.
-const markStreamedEvents = (show, { world, game, priorEvents }) => {
+const markStreamedEvents = (show, { priorEvents }) => {
   const marked = new WeakMap();
   const prior = normalizeEvents(priorEvents);
   return (list) => show(normalizeArray(list).map((event) => {
@@ -850,7 +851,7 @@ const markStreamedEvents = (show, { world, game, priorEvents }) => {
       try {
         mark = dedupeGeneratedEvents(prior, [event]).length === 0
           ? previewFiledMark({ fate: "reject", route: "EXACT_DUPLICATE" })
-          : previewFiledMark(previewScreenedEvent(event, { world, game }));
+          : null;
       } catch {
         mark = null; // a preview never costs a turn
       }
@@ -1049,10 +1050,10 @@ const validateSegmentStorylines = (candidate, {
 };
 
 // Native integrity screening of an accepted segment BEFORE it joins the round:
-// an event that makes the player's sovereign choice with nothing of the
-// player's behind it, or an obvious no-delta restatement, never feeds the next
-// segment or the curator, and a ledger record bound only to a dropped event
-// goes with it (a war record stays). The exploration audit of what survived is kept
+// in a shared game, an event that makes a person's country choose with nothing
+// of that person's behind it (by its actors and records, never its words)
+// never feeds the next segment or the curator, and a ledger record bound only
+// to a dropped event goes with it (a war record stays). The exploration audit of what survived is kept
 // per segment for the post-curation breadth repair. The segment's temporary
 // event ids are already bound into its ledger records (validateSegmentLedgers),
 // so storyline ids are attached to the events in place, never by re-labelling.
@@ -1106,6 +1107,7 @@ const screenSegmentPayload = (payload, {
     analysis,
     agreementUpdates: payload?.agreementUpdates,
     warUpdates: payload?.warUpdates,
+    relationUpdates: payload?.relationUpdates,
   });
   if (screened.dropped?.length) {
     console.warn(
@@ -2901,7 +2903,11 @@ const withoutFeaturesOff = (tool) => {
   return withWarParts(posted, { air: airOn(), navies: naviesOn() });
 };
 const forActiveFeatures = (tool) => {
-  const grouped = isActiveFeatureEnabled("groups") ? tool : withoutGroupOps(tool);
+  // Who decided each event, read by the integrity screen in place of its words:
+  // sent wherever it fits (gameplaySchemas.js withEventActors), which is every
+  // game but a shared game's host.
+  const decided = withEventActors(tool, !hostingSharedGame());
+  const grouped = isActiveFeatureEnabled("groups") ? decided : withoutGroupOps(decided);
   const shown = withEventImpacts(withEventAudience(withoutFeaturesOff(grouped), hostingSharedGame()));
   return frontsOn() ? withWarFigures(withFrontOrders(shown)) : shown;
 };
@@ -3024,8 +3030,10 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
       : `[Diplomatic Memory]\n${WHAT_CHATS_BIND}\n${continuity}`);
   }
 
-  // Passed resolutions still to be carried out (runtime/institutionalAuthority.js).
-  const mandates = buildOpenInstitutionalMandatesBlock(world);
+  // Passed resolutions still to be carried out (runtime/institutionalAuthority.js),
+  // each with the id an event lists in its actors, where the skip is sent them
+  // (forActiveFeatures).
+  const mandates = buildOpenInstitutionalMandatesBlock(world, [], { cited: !hostingSharedGame() });
   if (mandates) blocks.push(mandates);
 
   // Rostra, the social network (runtime/socialFeed.js): what was posted, as
@@ -16572,7 +16580,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         ...(context.amend || segmentCount > 1 || scriptedPoliticalRequirements.length
           ? {}
           : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
-        ...(showEvents ? { onPartialEvents: markStreamedEvents(showEvents, { world: ledgerWorld, game: bundle.game, priorEvents: segmentBundle.events }) } : {}),
+        ...(showEvents ? { onPartialEvents: markStreamedEvents(showEvents, { priorEvents: segmentBundle.events }) } : {}),
         signal,
         // The jump IS the game, and its deadline is runJsonTask's for every task:
         // silence, not elapsed time, so a long segment is never mistaken for a

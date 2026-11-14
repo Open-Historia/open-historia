@@ -17,7 +17,7 @@ import { frontsOn, frontsPace } from "./frontsGate.js";
 import { journalTurn, truncateTurn } from "./intervene.js";
 import { mergeSegmentPayloads } from "./jumpSegments.js";
 import { bindFrontOrdersToEvents } from "./nativeFrontLedger.js";
-import { previewScreenedEvent, screenGeneratedWorldEvents } from "./nativeWorldIntegrity.js";
+import { screenGeneratedWorldEvents } from "./nativeWorldIntegrity.js";
 
 const read = (name) => fs.readFileSync(new URL(name, import.meta.url), "utf8");
 
@@ -114,7 +114,6 @@ test("an event an order rests on is not filed away as routine military news", ()
   };
   // Nor on its own: the screen once hid it for its English words, and kept it
   // in any other language. No word list reads an event for the war now.
-  assert.equal(previewScreenedEvent(event, { world, game }), null);
   const alone = screenGeneratedWorldEvents({ events: [event], world, game });
   assert.deepEqual(alone.events.map((kept) => kept.id), ["e1"]);
   assert.deepEqual(alone.hidden, []);
@@ -126,6 +125,9 @@ test("the curator spares it too, and the screen reads an order's raw line the wa
   const gameplay = read("./gameplay.js");
   assert.match(gameplay, /const spareForFocus = \(event\) => spareForPlayer\(event\) \|\| frontOrderedEventIds\.has\(normalizeString\(event\?\.id\)\);/);
   const integrity = read("./nativeWorldIntegrity.js");
-  const trigger = integrity.slice(integrity.indexOf("const eventHasLedgerTrigger"), integrity.indexOf("const newParticipantsMentionedInEvent"));
-  assert.match(trigger, /candidate\?\.frontOrders/);
+  // The ledgers an event rests on, the battlefields' orders among them, read
+  // as `~` lines or as the records they are pinned to (eventHasLedgerTrigger).
+  assert.match(integrity, /const EVENT_LEDGERS = Object\.freeze\(\[[^\]]*"frontOrders"[^\]]*\]\);/);
+  const trigger = integrity.slice(integrity.indexOf("const eventHasLedgerTrigger"), integrity.indexOf("const ledgerRecordPolities"));
+  assert.match(trigger, /EVENT_LEDGERS\.some/);
 });

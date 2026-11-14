@@ -120,24 +120,25 @@ test("an event with a consequence of its own is never provisional", () => {
   assert.deepEqual(boardProvisionalConsequenceIndexes(withStats, { board: [boardEntry()] }), []);
 });
 
-// --- The cleanup keeps routine events off the timeline, not out of the world ---
+// --- The screen keeps every event on the timeline that its words alone would have hidden ---
 
 const screenOne = (event, world = {}, game = { country: "Republic of Latvia" }) =>
   screenGeneratedWorldEvents({ events: [{ impacts: baseImpacts(), ...event }], world, game });
 
-test("a routine event the screen keeps off the timeline is handed on whole, as a Hidden event", () => {
-  const admin = {
-    id: "event-admin-whole",
-    date: "2019-10-12",
-    importance: "minor",
-    title: "Canada Finalizes Streamlined Agricultural Inspection Standards",
-    description: "Officials finalize technical inspection standards and a compliance tracking protocol after a committee review.",
-  };
-  const screened = screenOne(admin);
-  assert.equal(screened.events.length, 0, "the timeline rule itself is unchanged");
-  assert.equal(screened.hidden.length, 1);
-  assert.equal(screened.hidden[0].event.title, admin.title);
-  assert.equal(screened.hidden[0].event.description, admin.description);
+// The screen kept "routine administrative" cards off the timeline by English
+// words (ROUTINE_ADMINISTRATIVE_CUE_RE), and kept their twins in any other
+// language on it. Nothing in an event says "paperwork" in every language: the
+// skip is told to write no filler, and the screen keeps what it writes.
+test("an administrative card stays on the timeline, as its twin in another language does", () => {
+  for (const [title, description] of [
+    ["Canada Finalizes Streamlined Agricultural Inspection Standards", "Officials finalize technical inspection standards and a compliance tracking protocol after a committee review."],
+    ["Le Canada finalise des normes d'inspection agricole simplifiées", "Les fonctionnaires finalisent des normes techniques d'inspection et un protocole de suivi de conformité après un examen en comité."],
+  ]) {
+    const screened = screenOne({ id: "event-admin-whole", date: "2019-10-12", importance: "minor", title, description });
+    assert.deepEqual(screened.events.map((event) => event.title), [title]);
+    assert.deepEqual(screened.hidden, []);
+    assert.deepEqual(screened.dropped, []);
+  }
 });
 
 // No word list reads an event for the war any more (nativeWorldIntegrity.js):
@@ -153,17 +154,6 @@ test("a patrol is kept as written, in English or not: no word hides it", () => {
     assert.deepEqual(screened.events.map((event) => event.id), [patrol.id], patrol.title);
     assert.deepEqual(screened.hidden, []);
   }
-});
-
-test("a routine administrative event is a Hidden event too", () => {
-  const screened = screenOne({
-    id: "event-admin",
-    date: "2019-10-12",
-    importance: "minor",
-    title: "Canada Finalizes Streamlined Agricultural Inspection Standards",
-    description: "Officials finalize technical inspection standards and a compliance tracking protocol after a committee review.",
-  });
-  assert.deepEqual(screened.hidden.map((row) => row.route), ["ROUTINE_ADMINISTRATIVE_PROCESS"]);
 });
 
 test("a homefront under war conditions is kept as written, in English or not: the skip is told who lives under them", () => {

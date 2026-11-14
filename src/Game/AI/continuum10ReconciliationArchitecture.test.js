@@ -12,10 +12,11 @@ test("Continuum-10 keeps Beta host mechanics while layering Political World auth
   const integrity = read("src/Game/AI/nativeWorldIntegrity.js");
   const bindIndex = integrity.indexOf("bindWorldEventAuthorityRefs(eventWrapper");
   const agencyIndex = integrity.indexOf("eventAgencyAuthorityReason(event", bindIndex);
-  const screenIndex = integrity.indexOf("singleEventScreenVerdict(event", agencyIndex);
   assert.ok(bindIndex >= 0, "world events still bind exact authority references");
   assert.ok(agencyIndex > bindIndex, "player-agency validation runs after authority binding");
-  assert.ok(screenIndex > agencyIndex, "Beta timeline screening still runs after authority validation");
+  // No event is kept off the timeline for its words any more (2026-11-13): the
+  // screen's single-event "routine administrative" rule read English.
+  assert.ok(!integrity.includes("singleEventScreenVerdict"), "the screen has no visibility rule read from words");
 
   const gameState = read("src/runtime/gameState.js");
   assert.match(gameState, /publishJsonWriteBatch/);

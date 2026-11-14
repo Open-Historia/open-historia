@@ -5,10 +5,11 @@ import {
   buildNativeWorldExplorationSlate,
   deriveWorldTrajectoryValue,
   deferredStorylineReentryHasConcreteTrigger,
+  eventStructuredPartyNames,
+  hardImpactKeysForEvent,
   latestCanonicalWorldEventDate,
   worldIntegrityAgeDays,
   worldActorsEquivalent,
-  canonicalWorldActor,
   createWorldActorResolver,
 } from "./nativeWorldIntegrity.js";
 import { addGameDays, compareGameDates, gameDateDayNumber, gameDateYear } from "../../runtime/gameDates.js";
@@ -593,7 +594,17 @@ const countImpactSignals = (event) => {
   return signals;
 };
 
-const eventCandidate = (event, originDate, index) => {
+// What a candidate carries besides its line in the prompt, for the
+// exploration slate and the focus trim: who it concerns (`parties`, polities
+// as the resolver names them, from structured fields), whether the model said
+// it concerns the player, its categories (tags) and the families of what it
+// changed. Never read from its title or detail.
+const NO_CANDIDATE_CONTEXT = Object.freeze({
+  partiesOf: () => [],
+  storylinePressureOf: () => -1,
+});
+
+const eventCandidate = (event, originDate, index, { partiesOf, storylinePressureOf } = NO_CANDIDATE_CONTEXT) => {
   const title = normalizeString(event?.title);
   if (!title) return null;
 
@@ -609,6 +620,12 @@ const eventCandidate = (event, originDate, index) => {
   if (event?.notable) score += 2;
   if (kind === "military" || kind === "diplomacy") score += 1;
 
+  const storylineIds = [...new Set(
+    normalizeArray(event?.storylineIds)
+      .map(normalizeString)
+      .filter(Boolean),
+  )].slice(0, 6);
+
   // Player-related events are NOT boosted. Phase 6 explicitly avoids treating
   // the human polity as the center of gravity merely because it is human.
   return {
@@ -620,16 +637,20 @@ const eventCandidate = (event, originDate, index) => {
     title,
     detail: truncate(event?.description || event?.summary, 280),
     ageDays: days,
-    storylineIds: [...new Set(
-      normalizeArray(event?.storylineIds)
-        .map(normalizeString)
-        .filter(Boolean),
-    )].slice(0, 6),
-    trajectoryValue: deriveWorldTrajectoryValue(event),
+    storylineIds,
+    parties: partiesOf(eventStructuredPartyNames(event)),
+    playerRelated: event?.playerRelated === true,
+    tags: normalizeArray(event?.tags).map(normalizeString).filter(Boolean),
+    impactKeys: hardImpactKeysForEvent(event),
+    trajectoryValue: deriveWorldTrajectoryValue(event, { storylinePressure: storylinePressureOf(storylineIds) }),
   };
 };
 
-const chatCandidate = (chat, originDate, index) => {
+// A live thread opens as many futures as any ongoing process, whatever was
+// said in it (its memory's words used to be read for "talks collapse").
+const DIPLOMATIC_THREAD_TRAJECTORY = 2;
+
+const chatCandidate = (chat, originDate, index, { partiesOf } = NO_CANDIDATE_CONTEXT) => {
   if (!chat || normalizeString(chat.status).toLowerCase() === "closed") return null;
 
   const memory = latestMemorySummary(chat);
@@ -653,10 +674,11 @@ const chatCandidate = (chat, originDate, index) => {
       : "Active diplomatic thread",
     detail: truncate(memory, 320),
     ageDays: days,
-    trajectoryValue: deriveWorldTrajectoryValue({
-      title: participants.length ? `Active diplomacy: ${participants.join(", ")}` : "Active diplomatic thread",
-      detail: memory,
-    }),
+    parties: partiesOf(participants),
+    // The player's own correspondence: a thread no other person holds
+    // (a shared game names the person whose thread it is, chat.player).
+    playerRelated: !normalizeString(chat?.player),
+    trajectoryValue: DIPLOMATIC_THREAD_TRAJECTORY,
   };
 };
 
@@ -691,7 +713,7 @@ const actorSuppressedByDeferredSet = (
 const UNNAMED_REGION = "an unnamed region";
 const regionNameIn = (regionNames, regionId) => normalizeString(regionNames?.[regionId]) || UNNAMED_REGION;
 
-const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "", regionNames = {}) => {
+const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "", regionNames = {}, { partiesOf } = NO_CANDIDATE_CONTEXT) => {
   const claimants = world?.regionClaimants && typeof world.regionClaimants === "object"
     ? world.regionClaimants
     : {};
@@ -740,13 +762,14 @@ const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set
         contenderList.length ? `claimants/contenders ${contenderList.join(", ")}` : "",
       ].filter(Boolean).join("; "),
       ageDays: 0,
+      parties: partiesOf([controller, sovereign, ...contenderList]),
       trajectoryValue: 4,
     });
     added += 1;
   }
 };
 
-const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "", regionNames = {}) => {
+const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "", regionNames = {}, { partiesOf } = NO_CANDIDATE_CONTEXT) => {
   let added = 0;
   for (const unit of normalizeArray(world?.units)) {
     if (added >= ACTIVE_UNIT_SAMPLE_LIMIT) break;
@@ -772,6 +795,7 @@ const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(
         .filter(Boolean)
         .join("; "),
       ageDays: 0,
+      parties: partiesOf([owner]),
     });
     added += 1;
   }
@@ -2856,6 +2880,24 @@ export const buildWorldInitiativeContext = (
     return storylineAttention.aliasToCanonical?.get(id) || id;
   };
 
+  // What each candidate carries besides its line (NO_CANDIDATE_CONTEXT): the
+  // polities its record names, as the world names them, and the pressure of
+  // the busiest open storyline it advances.
+  const gameCountry = normalizeString(bundle?.game?.country);
+  const actorResolver = createWorldActorResolver(bundle?.world || {}, gameCountry);
+  const openStorylinePressure = new Map(storylineAttention.all
+    .filter((storyline) => storyline.status !== "resolved")
+    .map((storyline) => [normalizeString(storyline.id), clampPercent(storyline.pressure)]));
+  const candidateContext = {
+    partiesOf: (names) => [...new Set(normalizeArray(names)
+      .map((name) => actorResolver.knownCanonical(normalizeString(name)))
+      .filter(Boolean))],
+    storylinePressureOf: (ids) => normalizeArray(ids).reduce((most, id) => {
+      const pressure = openStorylinePressure.get(canonicalStorylineId(id));
+      return pressure === undefined ? most : Math.max(most, pressure);
+    }, -1),
+  };
+
   const recentEvents = normalizeArray(bundle?.events).slice(-RECENT_EVENT_WINDOW);
   // R3.7: crisis discovery gets a separate cheap evidence lane sourced from the
   // same bounded recent-history window. This prevents a trajectory-4/5 rupture
@@ -2875,7 +2917,7 @@ export const buildWorldInitiativeContext = (
     // Preserve only unresolved-looking, high-trajectory cards for crisis
     // discovery. Existing storyline-linked history is not eligible to bootstrap
     // a second parallel crisis. Age remains bounded by the same 180-day window.
-    const crisisCandidate = eventCandidate(event, originDate, index);
+    const crisisCandidate = eventCandidate(event, originDate, index, candidateContext);
     if (
       crisisCandidate &&
       crisisCandidate.ageDays <= RECENT_EVENT_CANDIDATE_MAX_AGE_DAYS &&
@@ -2914,13 +2956,13 @@ export const buildWorldInitiativeContext = (
       return;
     }
 
-    const candidate = eventCandidate(event, originDate, index);
+    const candidate = eventCandidate(event, originDate, index, candidateContext);
     if (candidate) candidates.push(candidate);
   });
 
   const recentChats = normalizeArray(bundle?.chats).slice(-RECENT_CHAT_WINDOW);
   recentChats.forEach((chat, index) => {
-    const candidate = chatCandidate(chat, originDate, index);
+    const candidate = chatCandidate(chat, originDate, index, candidateContext);
     if (candidate) candidates.push(candidate);
   });
 
@@ -2937,6 +2979,7 @@ export const buildWorldInitiativeContext = (
     suppressedDeferredParticipantKeys,
     normalizeString(bundle?.game?.country),
     regionNames,
+    candidateContext,
   );
   pushActiveUnitCandidates(
     candidates,
@@ -2944,6 +2987,7 @@ export const buildWorldInitiativeContext = (
     suppressedDeferredParticipantKeys,
     normalizeString(bundle?.game?.country),
     regionNames,
+    candidateContext,
   );
 
   const activeInteractive = bundle?.world?.activeInteractive;
@@ -2959,6 +3003,8 @@ export const buildWorldInitiativeContext = (
         title: title || "Active unresolved crisis",
         detail: truncate(premise, 320),
         ageDays: 0,
+        // The player is playing it out.
+        playerRelated: true,
         trajectoryValue: 5,
       });
     }
@@ -3013,13 +3059,14 @@ export const buildWorldInitiativeContext = (
   // The player's focus decides how much of the world's own attention this
   // context carries (AI/playerFocus.js): all of it at World first and Balanced,
   // less at Focused and Spotlight. The world loses its weakest ranked evidence
-  // first; anything naming the player stays, as does every player-sphere
-  // exploration lane and the protected crisis lane below.
-  const playerKey = normalizeString(bundle?.game?.country).toLowerCase();
+  // first; anything of the player's stays (a candidate the model said concerns
+  // the player, or whose record names the player's polity: never one whose text
+  // merely contains the name), as does every player-sphere exploration lane and
+  // the protected crisis lane below.
   const keptCandidates = trimWorldForFocus(bounded, {
     focus: playerFocus,
-    isPlayerItem: (candidate) => Boolean(playerKey)
-      && `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`.toLowerCase().includes(playerKey),
+    isPlayerItem: (candidate) => candidate?.playerRelated === true
+      || (Boolean(gameCountry) && normalizeArray(candidate?.parties).some((party) => actorResolver.equivalent(party, gameCountry))),
   });
   const lines = keptCandidates.map((candidate, index) => {
     const when = candidate.date ? ` (${candidate.date})` : "";
