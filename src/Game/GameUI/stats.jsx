@@ -63,6 +63,7 @@ import {
 } from "../../runtime/statsSheet.js";
 import { customGdpSourceCurrency, formatCustomStatValue } from "./customStatFormatting.js";
 import { onMemoryPressure } from "../../runtime/memoryPressure.js";
+import { nameInitials } from "../../../server/nameKey.js";
 
 // Sheets are regenerated when the game date moves; within a date they persist
 // across reloads so flipping between countries stays instant.
@@ -2294,7 +2295,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
         identityIndex: polityIndex?.identityIndex,
     };
     const flagUrl = (suppressDerivedFlag ? resolveChosenPolityFlag(flagArgs) : resolvePolityFlag(flagArgs)).imageUrl;
-    const initials = String(targetCountry).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??";
+    const initials = nameInitials(targetCountry);
 
     const breakdown = useMemo(() => {
         const raw = sheet?.gdpBreakdown ?? {};

@@ -17,6 +17,7 @@ import { bytesToBase64, restoreBundleFiles } from "./bundleFiles.js";
 import { fetchHubFile, fetchHubIndex, imageTypeOfBytes, releaseCopyOf } from "./hubFiles.js";
 import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 import { saveBlobToDisk } from "./saveFile.js";
+import { fileSafeName } from "../../server/nameKey.js";
 
 // UTF-8-safe base64 <-> string (the scenario bundle base64-encodes the
 // background.json file bytes; plain atob/btoa mangle non-Latin1 vector data).
@@ -352,8 +353,7 @@ export const installCommunityBasemap = async (post) => {
 // runtime/saveFile.js: a download in a browser, Downloads/Open Historia in the app.
 const downloadFile = (blob, fileName) => saveBlobToDisk(blob, fileName);
 
-const safeName = (name) =>
-  (name || "basemap").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "basemap";
+const safeName = (name) => fileSafeName(name, { fallback: "basemap", lower: true });
 
 // Publish: hand the author the real basemap file and open the prefilled issue form
 // to drag it into. The image doubles as the card cover, so there's no separate

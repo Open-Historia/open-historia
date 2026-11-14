@@ -17,10 +17,30 @@ import { nameKey } from "../../../server/nameKey.js";
 // accented or two-word name would collapse toward the same dark corner of the
 // space. Stripping gives "COTEDIVOIRE" and a colour that actually differs from its
 // neighbours'.
+//
+// A name with fewer than three of those letters (one in Cyrillic, Chinese,
+// Arabic or any other script, or a short code) was every one of it the same
+// grey: a map of countries named in Russian drew all of them alike. Such a name
+// is coloured by a hash of all of it (its case, marks and spacing folded,
+// server/nameKey.js), in the same range, so each is its own; a name of three
+// Latin letters or more keeps the colour it always had.
+const NAME_HASH_OFFSET = 2166136261;
+const NAME_HASH_PRIME = 16777619;
+const hashedRgb = (key) => {
+  let hash = NAME_HASH_OFFSET;
+  for (const character of key) hash = Math.imul(hash ^ character.codePointAt(0), NAME_HASH_PRIME);
+  hash >>>= 0;
+  const a = hash % 26;
+  const b = (hash >>> 8) % 26;
+  const c = (hash >>> 16) % 26;
+  return [64 + a * 5, 64 + c * 5, 64 + b * 5];
+};
+
 export const fallbackRgbFromOwner = (owner = "") => {
   const normalized = String(owner ?? "").toUpperCase().replace(/[^A-Z]/g, "");
   if (normalized.length < 3) {
-    return [96, 96, 96];
+    const key = nameKey(owner);
+    return key ? hashedRgb(key) : [96, 96, 96];
   }
 
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";

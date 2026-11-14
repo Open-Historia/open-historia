@@ -16,6 +16,7 @@ import { bytesToBase64, restoreBundleFiles } from "./bundleFiles.js";
 import { fetchHubFile, fetchHubIndex, imageTypeOfBytes, releaseCopyOf } from "./hubFiles.js";
 import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 import { saveBlobToDisk } from "./saveFile.js";
+import { fileSafeName } from "../../server/nameKey.js";
 
 // The "flag" label is a contract with .github/ISSUE_TEMPLATE/flag.yml. The label must
 // EXIST in the repo — GitHub silently drops a label an issue form tries to apply if
@@ -231,7 +232,7 @@ const dataUrlMime = (dataUrl) => /^data:([^;,]+)/.exec(String(dataUrl || ""))?.[
 // The file a shared flag is saved as: the flag's name, made file-safe, with the
 // extension of its image type.
 export const flagFileName = (name, dataUrl) => {
-  const safe = String(name || "").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "flag";
+  const safe = fileSafeName(name, { fallback: "flag", lower: true });
   return `${safe}.${FLAG_FILE_EXT[dataUrlMime(dataUrl)] || "png"}`;
 };
 

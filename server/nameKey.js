@@ -52,3 +52,28 @@ export const sameName = (left, right) => {
   const key = nameKey(left);
   return key !== "" && key === nameKey(right);
 };
+
+// A name's initials for a badge: its first `count` letters, of any script, in
+// capitals where the script has them, or "??" for a name with none. Taking
+// only A-Z made every name in Cyrillic, Chinese or Arabic "??".
+export const nameInitials = (value, count = 2) => {
+  const letters = String(value ?? "").normalize("NFC").match(/\p{L}/gu) ?? [];
+  return letters.slice(0, count).join("").toLocaleUpperCase() || "??";
+};
+
+// A name made into a file name: its letters, marks and digits in any script,
+// "-" for each run of anything else, or `fallback` for a name with none.
+// `keep` lists punctuation a caller keeps as it is ("._-"). Cut to a-z and
+// 0-9, a map, flag or scenario named in Russian or Chinese was saved as "-.json",
+// "flag.png" or "scenario-suggestion.zip", every one of them alike.
+export const fileSafeName = (value, { fallback = "file", lower = false, max = 80, keep = "" } = {}) => {
+  let text = String(value ?? "").normalize("NFC");
+  if (lower) text = text.toLocaleLowerCase();
+  const kept = keep.replace(/[\\\]^-]/g, "\\$&");
+  const name = text
+    .replace(new RegExp(`[^\\p{L}\\p{M}\\p{N}${kept}]+`, "gu"), "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, max)
+    .replace(/-+$/g, "");
+  return name || fallback;
+};

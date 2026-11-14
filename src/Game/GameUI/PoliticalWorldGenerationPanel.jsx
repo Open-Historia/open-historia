@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { downloadScenarioJsonAsset, loadScenarioDetails, saveScenario } from "../../runtime/library.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
+import { fileSafeName } from "../../../server/nameKey.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { normalizeGameDate } from "../../runtime/gameDates.js";
 import { activeReferencePackIds, normalizeCanonContext, readScenarioCanon } from "../../runtime/scenarioCanon.js";
@@ -255,10 +256,7 @@ const CheckpointCounts = ({ checkpoint, counts, ready, total, needsRetry, retryC
   );
 };
 
-const safeFileToken = (value) => clean(value)
-  .replace(/[^a-z0-9._-]+/gi, "-")
-  .replace(/^-+|-+$/g, "")
-  .slice(0, 80) || "scenario";
+const safeFileToken = (value) => fileSafeName(clean(value), { fallback: "scenario", keep: "._-" });
 
 // runtime/saveFile.js: a download in a browser, the share sheet in the app.
 // Callers do not wait on it, so a save that fails is logged, not thrown.

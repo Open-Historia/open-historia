@@ -108,3 +108,31 @@ test("a rename finds the polity by any spelling of its name, in any script, and 
   // "Китай" is another polity's own name: a rename cannot merge the two.
   assert.throws(() => renamePolityInWorld(world, "Россия", "КИТАЙ"), /already the name of another polity/);
 });
+
+// A badge's initials: the name's first letters in any script. Taking only A-Z
+// made every name in Cyrillic, Chinese or Arabic "??".
+test("a name's initials are its first two letters, in any script", async () => {
+  const { nameInitials } = await import("./nameKey.js");
+  assert.equal(nameInitials("United Kingdom"), "UN");
+  assert.equal(nameInitials("Россия"), "РО");
+  assert.equal(nameInitials("中华人民共和国"), "中华");
+  assert.equal(nameInitials("مصر"), "مص");
+  assert.equal(nameInitials("Côte d'Ivoire"), "CÔ");
+  assert.equal(nameInitials(""), "??");
+  assert.equal(nameInitials("123"), "??");
+});
+
+// A file named after a map, a flag or a scenario: cut to a-z and 0-9, every one
+// named in Russian or Chinese was saved as "-.json" or "flag.png", all alike.
+test("a file is named after its name in any script, as its English twin is", async () => {
+  const { fileSafeName } = await import("./nameKey.js");
+  assert.equal(fileSafeName("Holy Roman Empire flag", { lower: true }), "holy-roman-empire-flag");
+  assert.equal(fileSafeName("Великая Русь", { lower: true }), "великая-русь");
+  assert.equal(fileSafeName("中华民国 1912"), "中华民国-1912");
+  assert.notEqual(fileSafeName("Россия"), fileSafeName("Украина"));
+  assert.equal(fileSafeName("***", { fallback: "flag" }), "flag");
+  assert.equal(fileSafeName("Map v1.2_final", { keep: "._-" }), "Map-v1.2_final");
+  assert.equal(fileSafeName("Map v1.2_final"), "Map-v1-2-final");
+  // Nothing a file system refuses survives.
+  assert.doesNotMatch(fileSafeName("a<b>c:d\"e/f\\g|h?i*j"), /[<>:"/\\|?*]/);
+});
