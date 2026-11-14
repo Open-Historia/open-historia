@@ -11,9 +11,11 @@
 // (gameplay.js requestConflictSheets), so a war never goes without.
 //
 // The answer is a line a country, "Borduria | people 4200000 | economy 38 |
-// ...", read loosely: any order, any of the figures, a colon or a comma in
-// place of a bar, thousands written with commas. A figure the game keeps
-// already is never overwritten (gameplay.js keepWarFigures).
+// ...": the format's own labels, exactly, and its figures in plain digits, in
+// any order, any of the figures, a colon or a comma in place of a bar. No
+// synonym, number word or digit grouping is read, in any language: the model
+// is told so. A figure the game keeps already is never overwritten
+// (gameplay.js keepWarFigures).
 //
 // Pure, and loads in plain Node.
 
@@ -31,11 +33,30 @@ const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLowerCase();
 const list = (value) => (Array.isArray(value) ? value : []);
 
-const FORMAT = "Borduria | people 4200000 | economy 38 | budget -2.5 | debt 60 | quality 55 | technology 50 | land 55 | sea 20 | air 30 | spending 45 | manpower 12 | cavalry 0.2 | siege 0.1";
+// The line's labels, in the order the format shows them: each one's figure on
+// the game's sheets, and the example the format gives it. The format and the
+// reading below are both made from this, so they cannot drift apart.
+const LABELS = [
+  ["people", "population", "4200000"],
+  ["economy", "gdp", "38"],
+  ["budget", "budgetBalance", "-2.5"],
+  ["debt", "publicDebt", "60"],
+  ["quality", "quality", "55"],
+  ["technology", "technology", "50"],
+  ["land", "land", "55"],
+  ["sea", "sea", "20"],
+  ["air", "air", "30"],
+  ["spending", "spending", "45"],
+  ["manpower", "manpowerShare", "12"],
+  ["cavalry", "cavalryShare", "0.2"],
+  ["siege", "siegeShare", "0.1"],
+];
+const FORMAT = ["Borduria", ...LABELS.map(([label, , example]) => `${label} ${example}`)].join(" | ");
 
 const RULE = [
   `The game's own war arithmetic needs figures of every country that fights: armies are raised from its people and paid from its economy, and fight by how it makes war. Write them in ${WAR_FIGURES_FIELD}, a line for each country named under NONE YET below and for each country a line of warUpdates in this answer starts a war with or brings into one, unless the scale below shows it; "" when there is none. A line is the country's exact name, then its figures:`,
   FORMAT,
+  "The labels are the game's own: write each exactly as shown, never translated, and each figure in plain digits, with a point before any decimals and no separators, units or words (4200000, never 4,200,000 or 4.2 million).",
   "people: a plain count. economy: its economy in a year, in the unit of the scale below (choose one where none is shown). budget: its treasury's balance for the year, % of its economy (a deficit below 0). debt: what its treasury owes, % of its economy.",
   "quality, technology, land, sea, air, spending: 0 to 100 against every other country, 50 an ordinary army of its era and the world's strongest 85 to 95; quality is how well its soldiers fight, technology what they fight with, spending what its forces have for each soldier; land, sea or air 0 where it cannot fight there at all. manpower: the % of its people it could call up in a war (12 ordinary). cavalry, siege: the shares of its army that are horse (armour today) and siege engines (artillery), 0 to 1.",
   "Go by the era, the world and the country's place in it. These figures are the game's: tell none of them in an event.",
@@ -80,37 +101,31 @@ export const buildWarFiguresBlock = ({ wanted = [], known = [], rated = [] } = {
 
 // ---- reading the answer ------------------------------------------------------------------
 
-const FIELDS = new Map([
-  ["people", "population"], ["population", "population"], ["pop", "population"],
-  ["economy", "gdp"], ["gdp", "gdp"],
-  ["budget", "budgetBalance"], ["budgetbalance", "budgetBalance"], ["balance", "budgetBalance"],
-  ["debt", "publicDebt"], ["publicdebt", "publicDebt"],
-  ["quality", "quality"], ["technology", "technology"], ["tech", "technology"],
-  ["land", "land"], ["sea", "sea"], ["naval", "sea"], ["navy", "sea"], ["air", "air"],
-  ["spending", "spending"],
-  ["manpower", "manpowerShare"], ["manpowershare", "manpowerShare"],
-  ["cavalry", "cavalryShare"], ["cavalryshare", "cavalryShare"], ["armour", "cavalryShare"], ["armor", "cavalryShare"],
-  ["siege", "siegeShare"], ["siegeshare", "siegeShare"], ["artillery", "siegeShare"],
-]);
+// The format's own labels, read as the prompt writes them, case aside, and no
+// other word in any language. The reading took English synonyms too ("pop",
+// "tech", "navy", "armour", "artillery"…) and nothing in any other language,
+// so a model that wrote the labels in the game's language had no figure read;
+// a label not the format's is still none of them. What the skip leaves unread
+// is asked for after the turn, as what it leaves out always was
+// (gameplay.js requestConflictSheets).
+const FIELDS = new Map(LABELS.map(([label, field]) => [label, field]));
 const SHARES = new Set(["cavalryShare", "siegeShare"]);
-const SCALES = new Map([["k", 1e3], ["thousand", 1e3], ["m", 1e6], ["million", 1e6], ["mn", 1e6], ["bn", 1e9], ["b", 1e9], ["billion", 1e9]]);
 
-// "4,200,000", "4 200 000", "4.2 million", "-2.5%": a number, or NaN.
-const readNumber = (text, unit) => {
-  const digits = clean(text).replace(/(\d)[\s,](?=\d{3}(?!\d))/g, "$1");
-  const value = Number(digits);
-  if (!Number.isFinite(value)) return NaN;
-  return value * (SCALES.get(fold(unit)) ?? 1);
-};
+// A figure as the format writes it: digits, a sign below 0, a point before any
+// decimals, and a "%" the model may put after a percentage or a share. Nothing
+// else: "67,000,000", "67 000 000" and "4,2" each mean one thing in one
+// language and another in the next, and "million" is English; a figure written
+// so is not read, never misread.
+const FIGURE = /^([+-]?\d+(?:\.\d+)?)\s*(%?)$/;
 
 // One piece of a line, "people 4200000" or "budget: -2.5%": [field, value], or null.
 const readPiece = (piece) => {
-  const match = /^([a-z][a-z ]*?)\s*[:=]?\s*(-?\d[\d.,\s]*?)\s*(%|k|thousand|m|million|mn|bn|b|billion)?\.?$/i.exec(clean(piece));
-  if (!match) return null;
-  const field = FIELDS.get(fold(match[1]).replace(/\s+/g, ""));
-  if (!field) return null;
-  let value = readNumber(match[2], match[3] === "%" ? "" : match[3]);
-  if (Number.isNaN(value)) return null;
+  const match = /^(\p{L}[\p{L}\p{M}]*)\s*[:=]?\s*(.+?)\.?$/u.exec(clean(piece));
+  const field = match ? FIELDS.get(match[1].toLowerCase()) : undefined;
+  const figure = field ? FIGURE.exec(match[2]) : null;
+  if (!figure) return null;
+  let value = Number(figure[1]);
+  if (!Number.isFinite(value)) return null;
   // (A share written as a percent.)
   if (SHARES.has(field) && value > 1 && value <= 100) value /= 100;
   return [field, value];
