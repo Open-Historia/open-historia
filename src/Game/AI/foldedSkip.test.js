@@ -247,13 +247,36 @@ test("a report goes to the agent whose key it carries, without the key", () => {
   ]);
 });
 
-test("a model that named the country instead is still understood", () => {
-  const assigned = assignAgentReports(JOBS, [report("the agent inside Russia", "grain"), report("People's Republic of China", "tariffs")]);
+test("a model that wrote its agent's country for the key is understood when the country is all it wrote", () => {
+  const assigned = assignAgentReports(JOBS, [report("Russia", "grain"), report("People's Republic of China", "tariffs")]);
   assert.deepEqual(assigned.map(({ job }) => job.key), ["agent_1", "agent_2"]);
-  const folded = assignAgentReports(JOBS, [report("Agent in RUSSIA", "grain")]);
-  assert.deepEqual(folded.map(({ job }) => job.key), ["agent_1"]);
+  assert.deepEqual(assignAgentReports(JOBS, [report("RUSSIA", "grain")]).map(({ job }) => job.key), ["agent_1"], "case aside");
   const custom = assignAgentReports(JOBS, [report("PRC", "tariffs")], { sameName: (left, right) => left === "PRC" && right === "People's Republic of China" });
   assert.deepEqual(custom.map(({ job }) => job.key), ["agent_2"], "the caller's own rule for what a name is");
+});
+
+test("a report goes to its agent the same way in every language, and nothing is cut out of the field", () => {
+  // The English words before a name ("the agent inside Russia") used to be cut
+  // off to find it, so the French twin "l'agent en Russie" lost its report.
+  // The key, or the agent's name whole, in every language; words around a
+  // name are no name in any.
+  for (const [name, words, subject] of [
+    ["Russia", "the agent inside Russia", "grain"],
+    ["Russie", "l'agent en Russie", "blé"],
+    ["Россия", "агент в России", "зерно"],
+    ["俄罗斯", "在俄罗斯的特工", "粮食"],
+  ]) {
+    const jobs = [{ key: "agent_1", name }];
+    assert.deepEqual(assignAgentReports(jobs, [report("agent_1", subject)]).map(({ job }) => job.key), ["agent_1"], `${name}: the key`);
+    assert.deepEqual(assignAgentReports(jobs, [report(name, subject)]).map(({ job }) => job.key), ["agent_1"], `${name}: the name`);
+    assert.deepEqual(assignAgentReports(jobs, [report(words, subject)]), [], `${name}: words around the name`);
+  }
+});
+
+test("the skip is asked for each agent's key, and its reports are filed by the key or the whole name", () => {
+  // No enum of the keys in the function: 49 characters it has no room for.
+  assert.match(functionBody("buildFoldedAgentReportsBlock"), /Each report gives \\`agent\\`, its agent's key copied exactly from this list \("\$\{list\[0\]\.key\}"\)/);
+  assert.match(functionBody("foldedTurnReview"), /assignAgentReports\(jobs, state\.foldedAgentAnswer, \{ sameName: \(left, right\) => regionKey\(left\) === regionKey\(right\) \}\)/);
 });
 
 test("a report for nobody listed is nobody's, and an agent gets only the first written for it", () => {

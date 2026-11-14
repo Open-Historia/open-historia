@@ -62,22 +62,29 @@ export const liftBoardOps = (shownEvents, opsFor) => asArray(shownEvents).flatMa
 // Which agent each report in the answer is for.
 //
 // A report says so with `agent`, the key the prompt listed the agent under
-// ("agent_1"). A model that wrote the country instead ("Russia", "the agent
-// inside Russia") is still understood. A report that names nobody on the list
-// is nobody's, and is left out; so is a second report for an agent that has
-// one, since the first is the one written straight after the events. Each
-// result is { job, report }, the report without its `agent` field, in the
-// order of `jobs`.
+// ("agent_1"), compared whole (case and spacing aside). A model that wrote its
+// agent's country in place of the key is understood where the field is that
+// country's name and nothing else (`sameName`, the caller's rule for one
+// name). Nothing is cut out of the field to find a name in it: the English
+// words before one ("the agent inside Russia") used to be, so a report from
+// "l'agent en Russie" was lost while its English twin was kept. (The keys are
+// not offered as an enum in the skip's function: it cost 49 characters, and
+// a shared game's host with the board and the agents was 2 under the ceiling,
+// FOLDED_SKIP_SCHEMA_BUDGET.) A report that names nobody on the list is
+// nobody's, and is left out; that agent reports with the next skip, which
+// asks nothing more for it. So is a second report for an agent that has one,
+// since the first is the one written straight after the events. Each result
+// is { job, report }, the report without its `agent` field, in the order of
+// `jobs`.
 export const assignAgentReports = (jobs, reports, { sameName = (left, right) => asText(left).toLowerCase() === asText(right).toLowerCase() } = {}) => {
     const filed = asArray(reports).filter(isRecord);
     const taken = new Set();
-    const named = (report) => asText(report.agent).replace(/^.*\b(?:inside|in)\s+/i, "");
     const assigned = [];
     for (const job of asArray(jobs)) {
         const key = asText(job?.key).toLowerCase();
         if (!key) continue;
         let at = filed.findIndex((report, index) => !taken.has(index) && asText(report.agent).toLowerCase() === key);
-        if (at < 0) at = filed.findIndex((report, index) => !taken.has(index) && named(report) && sameName(named(report), job?.name));
+        if (at < 0) at = filed.findIndex((report, index) => !taken.has(index) && asText(report.agent) && sameName(report.agent, job?.name));
         if (at < 0) continue;
         taken.add(at);
         const { agent: _agent, ...report } = filed[at];

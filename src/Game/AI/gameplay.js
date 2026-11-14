@@ -1677,7 +1677,7 @@ const buildFoldedAgentReportsBlock = (jobs, playerName) => {
     `${player}'s service has agents in place whose reports are due. After the events, file one entry in ${AGENT_REPORTS_FIELD} for each agent listed here, and for no one else: `
       + "what that agent intercepted of its target's PRIVATE diplomatic traffic with OTHER polities during this period, consistent with the events you have just written. "
       + "Treat the records in this prompt as ground truth and write what the target actually said in private to its counterparts: intentions, terms, threats, promises, doubts, never public statements or press lines. "
-      + `Each report gives \`agent\`, copied exactly from this list, and 2 to 4 exchanges. Each exchange has a counterpart (never the target itself, never ${player}), a date within the period, `
+      + `Each report gives \`agent\`, its agent's key copied exactly from this list ("${list[0].key}"), and 2 to 4 exchanges. Each exchange has a counterpart (never the target itself, never ${player}), a date within the period, `
       + `a short subject, and 2 to 6 alternating messages, each with its speaker (the target or the counterpart) and its text in that leader's own voice. Where ${player} is discussed, show what the target really thinks of it. `
       + "A politicalAssessment, where the agent's brief allows one, has a summary of the target leadership's decision posture and 1 to 6 findings, each a short topic and its assessment, in prose: never raw numbers or field names.",
     ...list.map((job) => [
