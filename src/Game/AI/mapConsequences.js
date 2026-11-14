@@ -24,6 +24,7 @@
 import { directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { directGeneratedStructureOps } from "./nativeStructureDirector.js";
+import { SCENE_MAP_CHANGED_FIELD } from "./gameplaySchemas.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const text = (value) => String(value ?? "").trim();
@@ -47,11 +48,20 @@ export const markOrderedEvents = (events, actions) => {
         : event));
 };
 
-// A Scene's beats are the player's choices: its outcome is marked as an order
-// marks the event that answers it, because the model that sums the Scene up may
-// leave out the headquarters or the battalion. A Scene with no beat played has
-// no choice of the player's in it.
-export const markSceneOutcome = (outcome, beats) => (outcome && asArray(beats).some((beat) => text(beat?.choice))
+// Whether a finished Scene changed the map, as the answer that ended it says:
+// its record's `recordMapChanged` (interactiveExecutor) or the summary's
+// `mapChanged` (interactiveSummary). Only `true` counts; a Scene whose answer
+// leaves it out changed nothing on the map, and its map check is not asked
+// (gameplay.js runSceneReview): a request is the scarce thing, and no word of
+// the Scene is read to decide it, in any language.
+export const sceneChangedMap = (answer) => answer?.[SCENE_MAP_CHANGED_FIELD.record] === true
+    || answer?.[SCENE_MAP_CHANGED_FIELD.summary] === true;
+
+// A Scene that changed the map is the Directors' to read as an order's outcome
+// is, however it is summed up, because the model that sums the Scene up may
+// leave out the headquarters or the battalion. One that did not is left as it
+// is: `mapChanged` is sceneChangedMap's answer.
+export const markSceneOutcome = (outcome, mapChanged) => (outcome && mapChanged === true
     ? ordered(outcome)
     : outcome);
 

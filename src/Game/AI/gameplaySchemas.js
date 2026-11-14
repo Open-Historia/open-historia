@@ -2155,6 +2155,19 @@ export const EVENT_CONSOLIDATOR_SCHEMA = {
 
 export const INTERACTIVE_CREATION_SCHEMA = interactiveSchema;
 
+// Whether a finished Scene changed the map: one optional boolean in the answer
+// that ends the Scene, `recordMapChanged` beside the executor's record and
+// `mapChanged` in the summary. The Scene's map check (gameplay.js
+// runSceneReview, a request) is asked only when it is true; absent is no
+// (mapConsequences.js sceneChangedMap). The model says it in the answer it
+// gives anyway, so no word of the Scene is read to decide it, in any language.
+export const SCENE_MAP_CHANGED_FIELD = Object.freeze({ record: "recordMapChanged", summary: "mapChanged" });
+export const SCENE_MAP_CHANGED_WHEN = "raised, moved or lost forces, took, lost or fought over ground, or built or destroyed something";
+const SCENE_MAP_CHANGED_DESCRIPTION = Object.freeze({
+  record: `Only when resolved is true: true if the scene ${SCENE_MAP_CHANGED_WHEN}. Omit otherwise.`,
+  summary: `True if the scene ${SCENE_MAP_CHANGED_WHEN}. Omit otherwise.`,
+});
+
 export const INTERACTIVE_EXECUTOR_SCHEMA = {
   type: "object",
   description: "The next stage of an interactive event after applying the player's choice.",
@@ -2178,6 +2191,11 @@ export const INTERACTIVE_EXECUTOR_SCHEMA = {
     recordTitle: textSchema("Only when resolved is true: a concise headline for the whole finished interactive event as one campaign timeline event. Empty otherwise."),
     recordDescription: textSchema("Only when resolved is true: a complete but concise account of the whole interactive event's outcome, as one campaign timeline event. Empty otherwise."),
     recordImportance: textSchema("Only when resolved is true: the event's importance, normally major. Empty otherwise."),
+    // Whether the finished scene changed the map, said with its record: the
+    // Scene's map check (gameplay.js runSceneReview) is asked only when it is
+    // true (mapConsequences.js sceneChangedMap). Last and optional, so the
+    // fields above are filled first and a beat never fails over it.
+    [SCENE_MAP_CHANGED_FIELD.record]: { type: "boolean", description: SCENE_MAP_CHANGED_DESCRIPTION.record },
   },
   required: ["summary", "resolved", "nextChoices"],
   additionalProperties: false,
@@ -2199,6 +2217,8 @@ export const INTERACTIVE_SUMMARY_SCHEMA = {
       maxItems: 12,
       items: regionTransferSchema,
     },
+    // The same as the executor's recordMapChanged, for a scene condensed here.
+    [SCENE_MAP_CHANGED_FIELD.summary]: { type: "boolean", description: SCENE_MAP_CHANGED_DESCRIPTION.summary },
   },
   required: ["title", "description", "importance"],
   additionalProperties: false,

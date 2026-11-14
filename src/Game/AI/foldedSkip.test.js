@@ -518,12 +518,15 @@ test("the folded review takes the ops off the events before anything applies the
   assert.match(body, /if \(state\.foldedPrep\?\.board && state\.foldedBoardCarried\) \{/, "an empty board is not looked at, nor one the function had no room for");
 });
 
-test("every check a Scene's map check makes always runs: no switch is read anywhere in the turn", () => {
+test("a Scene's map check reads no switch: its map checks run on the Scene answer's own word that it changed the map", () => {
   assert.equal(/reviewSection\(/.test(gameplaySource), false);
   assert.equal(/requestSettings\b/.test(gameplaySource), false, "the settings module is no longer needed here at all");
   const review = functionBody("runSceneReview");
+  // Each of the map's three checks is built when the answer that ended the
+  // Scene said it changed the map (mapConsequences.js sceneChangedMap), and
+  // never otherwise: no setting, and no word of the Scene.
   for (const builder of ["buildUnitDirectorInput(", "buildTerritoryDirectorInput(", "buildStructureDirectorInput("]) {
-    assert.ok(review.includes(`= ${builder}`) || review.includes(`= await ${builder}`), `${builder} is called unconditionally`);
+    assert.ok(review.includes(`= mapChanged ? ${builder}`) || review.includes(`= mapChanged ? await ${builder}`), `${builder} is called on the Scene's word`);
   }
   // A time skip's own checks (the timeline, the agents, order attribution) are no part of it.
   assert.equal(/buildCuratorInput\(|spyIntercept|requests\.budget/.test(review), false);

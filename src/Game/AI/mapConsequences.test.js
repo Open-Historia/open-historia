@@ -10,18 +10,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { applyMapConsequences, markOrderedEvents, markSceneOutcome } from "./mapConsequences.js";
+import { applyMapConsequences, markOrderedEvents, markSceneOutcome, sceneChangedMap } from "./mapConsequences.js";
 import { eventNeedsNativeUnitDirector } from "./nativeUnitDirector.js";
 import { eventNeedsStructureDirector } from "./nativeStructureDirector.js";
+import { hasTerritorialContent } from "./nativeTerritoryDirector.js";
 
-// A Scene's outcome, marked as the player's own doing by the beats that led to it.
+// A Scene's outcome whose answer said it changed the map (sceneChangedMap).
 const headquarters = markSceneOutcome({
     title: "Establishment of Alliance of Sahel States Unified Military Command",
     description: "President Traore finalized the establishment of the Unified Military Command headquarters in Ouagadougou and raised a new joint rapid-reaction battalion to guard it.",
     date: "2026-01-08",
     kind: "interactive",
     impacts: {},
-}, [{ choice: "Order the command's headquarters built in Ouagadougou", summary: "Work begins." }]);
+}, true);
 const { ordered: _hint, ...headquartersAsWritten } = headquarters;
 const world = { units: [], markers: [], projects: [] };
 const answer = (payload) => async () => ({ payload });
@@ -126,21 +127,75 @@ test("an event citing no queued order is untouched, and so is one citing an id t
 
 // Seen in a live check (2026-09-29): a Scene whose beats built a headquarters
 // and raised a battalion was summed up as "Establishment of the Alliance of
-// Sahel States Unified Military Command", and no Director read it. A Scene's
-// beats are the player's choices, so they mark its outcome as an order does,
-// whatever the choices say and in whatever language.
-test("a Scene outcome is one the Directors read, however it and its choices are worded", () => {
-    const outcome = { title: "Establishment of the Alliance of Sahel States Unified Military Command", description: "The command is established.", impacts: {} };
-    assert.equal(eventNeedsNativeUnitDirector(outcome), false);
-    assert.equal(eventNeedsStructureDirector(outcome), false);
-    const english = markSceneOutcome(outcome, [{ choice: "Push for a shared mining fund", summary: "Ministers agree to study a fund." }]);
-    const french = markSceneOutcome(outcome, [{ choice: "Proposer un fonds minier commun", summary: "Les ministres acceptent d'étudier un fonds." }]);
-    assert.deepEqual(french, english);
-    assert.equal(eventNeedsNativeUnitDirector(english), true);
-    assert.equal(eventNeedsStructureDirector(english), true);
-    // A Scene with no beat played has no choice of the player's in it.
-    assert.deepEqual(markSceneOutcome(outcome, []), outcome);
-    assert.equal(markSceneOutcome(null, [{ choice: "x" }]), null);
+// Sahel States Unified Military Command", and no Director read it. Whether a
+// Scene changed the map is now the word of the answer that ends it: the
+// executor's recordMapChanged with its record, or the summary's mapChanged.
+// That answer is given anyway, so the map check costs a request only when the
+// Scene's own answer calls for one, and no word of the Scene decides it.
+const sceneAnswers = {
+    english: {
+        record: { summary: "The headquarters compound rises and a battalion is raised to guard it.", resolved: true, nextChoices: [], recordTitle: "AES Unified Command Established", recordDescription: "A headquarters is built in Ouagadougou and a guard battalion raised.", recordImportance: "major" },
+        summary: { title: "AES Unified Command Established", description: "A headquarters is built in Ouagadougou and a guard battalion raised.", importance: "major" },
+        outcome: { title: "AES Unified Command Established", description: "A headquarters is built in Ouagadougou and a guard battalion raised.", impacts: {} },
+    },
+    french: {
+        record: { summary: "Le quartier général sort de terre et un bataillon est levé pour le garder.", resolved: true, nextChoices: [], recordTitle: "Création du commandement unifié de l'AES", recordDescription: "Un quartier général est construit à Ouagadougou et un bataillon de garde levé.", recordImportance: "major" },
+        summary: { title: "Création du commandement unifié de l'AES", description: "Un quartier général est construit à Ouagadougou et un bataillon de garde levé.", importance: "major" },
+        outcome: { title: "Création du commandement unifié de l'AES", description: "Un quartier général est construit à Ouagadougou et un bataillon de garde levé.", impacts: {} },
+    },
+};
+
+test("an English and a French Scene whose answer says it changed the map both get the map check", () => {
+    for (const [language, { record, summary, outcome }] of Object.entries(sceneAnswers)) {
+        // Said by the executor with its record, or by the summary request.
+        assert.equal(sceneChangedMap({ ...record, recordMapChanged: true }), true, language);
+        assert.equal(sceneChangedMap({ ...summary, mapChanged: true }), true, language);
+        // And then the Directors read the outcome, however it is worded.
+        const marked = markSceneOutcome(outcome, sceneChangedMap({ ...summary, mapChanged: true }));
+        assert.deepEqual(marked.ordered, { forces: true, build: true }, language);
+        assert.equal(eventNeedsStructureDirector(marked), true, language);
+        assert.equal(hasTerritorialContent(marked), true, language);
+        assert.equal(eventNeedsNativeUnitDirector(marked), true, language);
+    }
+});
+
+test("an English and a French Scene whose answer does not say so get no map check, whatever their words", () => {
+    for (const [language, { record, summary, outcome }] of Object.entries(sceneAnswers)) {
+        // No field, a false one, or anything that is not the boolean true.
+        for (const answer of [record, summary, { ...record, recordMapChanged: false }, { ...summary, mapChanged: false }, { ...summary, mapChanged: "true" }, { ...summary, mapChanged: "oui" }, null]) {
+            assert.equal(sceneChangedMap(answer), false, `${language}: ${JSON.stringify(answer)?.slice(0, 60)}`);
+        }
+        const unmarked = markSceneOutcome(outcome, sceneChangedMap(summary));
+        assert.equal(unmarked, outcome, language);
+        assert.equal(eventNeedsStructureDirector(unmarked), false, language);
+        assert.equal(hasTerritorialContent(unmarked), false, language);
+    }
+    assert.equal(markSceneOutcome(null, true), null);
+});
+
+test("the Scene's map check is asked only on the answer's word: the wiring", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const gameplay = (await readFile(new URL("./gameplay.js", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+    const body = (name) => {
+        const start = gameplay.indexOf(`const ${name} = `);
+        assert.ok(start >= 0, name);
+        return gameplay.slice(start, gameplay.indexOf("\nconst ", start + 10));
+    };
+    // The field is read from the answer that ended the Scene, record or summary...
+    assert.match(body("sceneRecordFrom"), /\[SCENE_MAP_CHANGED_FIELD\.summary\]: sceneChangedMap\(payload\),/);
+    const resolve = body("resolveInteractiveScene");
+    assert.match(resolve, /const mapChanged = sceneChangedMap\(summaryPayload\);\n\s+const scene = outcome \? await sceneMapConsequences\(\{ bundle, outcome: markSceneOutcome\(outcome, mapChanged\), generation: summaryGeneration, mapChanged \}\) : null;/);
+    // ...the summary request is told when to set it...
+    assert.match(resolve, /`Set \$\{SCENE_MAP_CHANGED_FIELD\.summary\} true if the event \$\{SCENE_MAP_CHANGED_WHEN\}; leave it out otherwise\.`/);
+    // ...and so is the move that ends the Scene.
+    assert.match(gameplay, /`With them, set \$\{SCENE_MAP_CHANGED_FIELD\.record\} true if the event \$\{SCENE_MAP_CHANGED_WHEN\}\. `/);
+    // The map check passes it on, and asks the map's three checks only with it.
+    assert.match(body("sceneMapConsequences"), /agentKind: "interactive",\n\s+mapChanged,\n/);
+    const review = body("runSceneReview");
+    assert.match(review, /const runSceneReview = async \(\{ context, merged, signal, state, agentKind = "", mapChanged = false \}\) => \{/);
+    assert.match(review, /const unitInput = mapChanged \? buildUnitDirectorInput\(/);
+    assert.match(review, /const territoryInput = mapChanged \? await buildTerritoryDirectorInput\(/);
+    assert.match(review, /const structureInput = mapChanged \? buildStructureDirectorInput\(/);
 });
 
 test("a Director whose answer is unavailable (a failed review) changes nothing", async () => {

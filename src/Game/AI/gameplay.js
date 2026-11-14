@@ -63,7 +63,7 @@ import {
 } from "../../runtime/receiptPlayerNotes.js";
 import { normalizeFiledEvents, previewFiledMark, toFiledEvent } from "../../runtime/filedEvents.js";
 import { buildUnitDirectorInput, directGeneratedUnitOps, landHolders, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, pickCombatantPlace, pruneWarUnits, strengthGiven } from "./nativeUnitDirector.js";
-import { applyMapConsequences, markOrderedEvents, markSceneOutcome } from "./mapConsequences.js";
+import { applyMapConsequences, markOrderedEvents, markSceneOutcome, sceneChangedMap } from "./mapConsequences.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nativeStructureDirector.js";
 import {
@@ -218,6 +218,8 @@ import {
   HISTORY_FIELD,
   INTELLIGENCE_RATING_FIELD,
   NO_SKIP_HISTORY_JOB,
+  SCENE_MAP_CHANGED_FIELD,
+  SCENE_MAP_CHANGED_WHEN,
   SOCIAL_POSTS_FIELD,
   normalizeGameplayPayload,
   validateGameplayPayload,
@@ -15658,11 +15660,18 @@ const hasAuthoredSummaryGuidance = async () => {
   return Object.keys(prompts?.guidance?.tasks?.interactiveSummary ?? {}).length > 0;
 };
 
+// The record carries the answer's word on whether the scene changed the map
+// (recordMapChanged), read as a summary's mapChanged is.
 const sceneRecordFrom = (payload) => {
   const title = normalizeString(payload?.recordTitle);
   const description = normalizeString(payload?.recordDescription);
   if (!title || !description) return null;
-  return { title, description, importance: normalizeString(payload?.recordImportance) || "major" };
+  return {
+    title,
+    description,
+    importance: normalizeString(payload?.recordImportance) || "major",
+    [SCENE_MAP_CHANGED_FIELD.summary]: sceneChangedMap(payload),
+  };
 };
 
 const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interactive, history, record = null, recordGeneration = null }) => {
@@ -15680,7 +15689,8 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
     ({ generation: summaryGeneration, payload: summaryPayload } = await runJsonTask("interactiveSummary", {
       agentKind: "interactive",
       fallback: () => ({ description: "", importance: "major", title: "" }),
-      userMessage: "Summarize the finished interactive event into one campaign event as JSON only.",
+      userMessage: "Summarize the finished interactive event into one campaign event as JSON only. "
+        + `Set ${SCENE_MAP_CHANGED_FIELD.summary} true if the event ${SCENE_MAP_CHANGED_WHEN}; leave it out otherwise.`,
       variables: summaryVariables,
     }));
     const failed = sceneStepFailed(summaryGeneration, "The scene could not be written into the record");
@@ -15719,8 +15729,11 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
   // The Scene outcome reaches the map as a jump's events do (mapConsequences.js):
   // units, occupied land and Structures, and the Board. Seen in a live game
   // (2026-09-27): a Scene established a headquarters in Ouagadougou and nothing
-  // appeared, because a Scene outcome never reached a Director.
-  const scene = outcome ? await sceneMapConsequences({ bundle, outcome: markSceneOutcome(outcome, history), generation: summaryGeneration }) : null;
+  // appeared, because a Scene outcome never reached a Director. Whether it
+  // changed the map is the answer's own word (sceneChangedMap): the map's
+  // checks are asked only then.
+  const mapChanged = sceneChangedMap(summaryPayload);
+  const scene = outcome ? await sceneMapConsequences({ bundle, outcome: markSceneOutcome(outcome, mapChanged), generation: summaryGeneration, mapChanged }) : null;
   const sceneOutcome = scene?.events?.[0] ?? outcome;
 
   const applyScene = async (withBoard) => {
@@ -15769,8 +15782,11 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
 // Board — never the timeline, agent reports or order attribution. They are ONE
 // review request, whether requests are saved or not, and none when nothing in
 // the Scene qualifies. A review that fails leaves the Scene outcome as written.
+// `mapChanged`: the answer that ended the Scene said it changed the map
+// (mapConsequences.js sceneChangedMap); without it the map's three checks are
+// not asked.
 const SCENE_REVIEW_SECTIONS = Object.freeze(["units", "territory", "structures", "board"]);
-const sceneMapConsequences = async ({ bundle, outcome, generation }) => {
+const sceneMapConsequences = async ({ bundle, outcome, generation, mapChanged = false }) => {
   // Approximate placements are told to the model like a jump's. The last jump's
   // notes are carried over, because only the newest entry in the history keeps
   // its notes; the receipt is written only when this Scene added one.
@@ -15788,6 +15804,7 @@ const sceneMapConsequences = async ({ bundle, outcome, generation }) => {
       state: { generation, hiddenEvents: [] },
       // The scene's own map check: part of the interactive event the player plays.
       agentKind: "interactive",
+      mapChanged,
     });
   } catch (error) {
     logDebugEvent("turn", "Scene outcome: the map check failed; the Scene stands as written.", error, { problem: true });
@@ -15891,6 +15908,7 @@ export const advanceActiveInteractive = async (choiceText) => {
     userMessage: "Continue the interactive event as JSON only. "
       + "If this move brings the event to its conclusion (resolved true), also fill recordTitle, recordDescription and recordImportance: "
       + "the whole finished event condensed into one campaign timeline event, with a concise headline, a complete but concise account of its outcome, and its importance (normally major). "
+      + `With them, set ${SCENE_MAP_CHANGED_FIELD.record} true if the event ${SCENE_MAP_CHANGED_WHEN}. `
       + "Leave them empty while the event goes on.",
     variables,
   });
@@ -17433,8 +17451,13 @@ const BOARD_HIDDEN_NOTE = "\n\nEvents marked (kept off the timeline) happened, b
   + "Move the board from them exactly like any other event, and write lastUpdate so it stands on its own "
   + "without pointing at a timeline entry.";
 
-// One request when anything qualifies; none otherwise.
-const runSceneReview = async ({ context, merged, signal, state, agentKind = "" }) => {
+// One request when anything qualifies; none otherwise. The map's three checks
+// (units, territory, Structures) qualify only when the answer that ended the
+// Scene said it changed the map (`mapChanged`, mapConsequences.js
+// sceneChangedMap): with no word of it, none is asked, in any language, so the
+// map check is never a request the Scene's own answer did not call for. The
+// Board keeps its own reasons below.
+const runSceneReview = async ({ context, merged, signal, state, agentKind = "", mapChanged = false }) => {
   const { bundle } = context;
   // `failure` is the error when the request itself failed; `missing` names the
   // jobs asked of it that came back with no usable part.
@@ -17457,7 +17480,7 @@ const runSceneReview = async ({ context, merged, signal, state, agentKind = "" }
   };
 
   // --- units ---
-  const unitInput = buildUnitDirectorInput({ events: merged.events, world: bundle.world });
+  const unitInput = mapChanged ? buildUnitDirectorInput({ events: merged.events, world: bundle.world }) : null;
   // Read once for both directors, and only when one of them has a job.
   let typeRules = null;
   const typeRulesOnce = async () => (typeRules ??= await regionTypeRulesFor(bundle.world));
@@ -17468,7 +17491,7 @@ const runSceneReview = async ({ context, merged, signal, state, agentKind = "" }
   }
 
   // --- territory ---
-  const territoryInput = await buildTerritoryDirectorInput({ events: merged.events, world: bundle.world, findPlaces: placeReaderFor(bundle) });
+  const territoryInput = mapChanged ? await buildTerritoryDirectorInput({ events: merged.events, world: bundle.world, findPlaces: placeReaderFor(bundle) }) : null;
   if (territoryInput) {
     reasons.push(`${territoryInput.candidates.length} event(s) may change who holds land`);
     await addJob({ key: "territory", taskKey: "territoryDirector", title: "occupied and disputed land", instruction: TERRITORY_DIRECTOR_INSTRUCTION },
@@ -17476,7 +17499,7 @@ const runSceneReview = async ({ context, merged, signal, state, agentKind = "" }
   }
 
   // --- structures ---
-  const structureInput = buildStructureDirectorInput({ events: merged.events, world: bundle.world, playerCountry });
+  const structureInput = mapChanged ? buildStructureDirectorInput({ events: merged.events, world: bundle.world, playerCountry }) : null;
   if (structureInput) {
     reasons.push(`${structureInput.candidates.length} event(s) may have built something`);
     await addJob({ key: "structures", taskKey: "structureDirector", title: "new structures", instruction: STRUCTURE_DIRECTOR_INSTRUCTION },
