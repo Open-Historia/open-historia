@@ -2936,7 +2936,7 @@ const jumpLevers = () => {
   return airOn() ? grouped : grouped
     .replace("a missile launch or a bombing run the event tells of", "a missile launch the event tells of")
     .replace(" | nuclear bomber (these three are nuclear)", " (these two are nuclear)")
-    .replace(" | bombing run.", ".")
+    .replace(" | bombing run | drone strike. Use drone strike for kamikaze drones, drone swarms, Shaheds or UAV attacks.", ".")
     .replace("how many missiles or aircraft", "how many missiles");
 };
 let gameMasterPromptNoGroups = null;
