@@ -20991,13 +20991,10 @@ export const maybeSendIdleDiplomacy = async () => {
       // standing group) lands in that thread; only a genuinely new set of
       // participants opens a fresh chat. Matching 1:1 threads only meant a group
       // approach always opened a duplicate — the participant-set key handles both.
-      // dropEchoes discards a note that just repeats what is already in that
-      // thread; silence is what this whole path defaults to anyway.
       const nextChats = foldGeneratedChatsIntoStorage(chats, [built], {
         stampTime: normalizeString(bundle.game?.gameDate),
-        dropEchoes: true,
       });
-      if (nextChats.dropped || isSimulationBusy() || leftCampaign(campaign)) return null;
+      if (isSimulationBusy() || leftCampaign(campaign)) return null;
       outcome = "sent";
       return nextChats;
     });
