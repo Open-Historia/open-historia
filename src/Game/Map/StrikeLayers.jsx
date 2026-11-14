@@ -20,10 +20,9 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
 import { STRIKE_LAYER_ID, createStrikeLayer } from "./strikeCustomLayer.js";
 import { strikeEnds } from "./strikePlaces.js";
-import { planStrike, ringOf, strikeItemsAt, craterItemsAt } from "./strikeScene.js";
+import { planStrike, ringOf, strikeItemsAt } from "./strikeScene.js";
 import { getStrikeRequest, subscribeStrikeRequests } from "./strikeStore.js";
 import { getUnits } from "./unitsController.js";
-import { makeStrikeSounds } from "../../runtime/strikeSounds.js";
 
 // Strikes played together set off this far apart, in seconds.
 const BETWEEN = 0.7;
@@ -31,7 +30,6 @@ const BETWEEN = 0.7;
 const LATELY_MS = 12000;
 const NONE = Object.freeze([]);
 const selectStrikes = (world) => (Array.isArray(world?.strikes) ? world.strikes : NONE);
-const selectGameRound = (game) => Number(game?.round) || 0;
 // How many kilometres a pixel of the map is, where it is being looked at.
 const kmPerPixelOf = (map) => {
   try {
@@ -67,7 +65,6 @@ const StrikeLayers = () => {
   const map = mapRef?.getMap?.() ?? mapRef ?? null;
   const raw = useRuntimeState("world", selectStrikes);
   const world = useRuntimeState("world");
-  const gameRound = useRuntimeState("game", selectGameRound);
   const strikes = useMemo(() => normalizeStrikes(raw), [raw]);
 
   // What is being played: [{ plan, begins (ms) }], and when each strike was last played.
@@ -78,48 +75,11 @@ const StrikeLayers = () => {
   const heldRef = useRef(null);
   const worldRef = useRef(world);
   const strikesRef = useRef(strikes);
-  const roundRef = useRef(gameRound);
   const layerRef = useRef(null);
-  const soundsRef = useRef(null);
-  if (!soundsRef.current) soundsRef.current = makeStrikeSounds();
-
-  useEffect(() => () => {
-    soundsRef.current?.dispose?.();
-    soundsRef.current = null;
-  }, []);
-
   useEffect(() => {
     worldRef.current = world;
     strikesRef.current = strikes;
-    roundRef.current = gameRound;
   });
-
-  const hasActiveCraters = () => {
-    const curRound = roundRef.current ?? 0;
-    return (strikesRef.current ?? []).some((s) => {
-      if (!s?.to || !Number.isFinite(s.to.lng) || !Number.isFinite(s.to.lat)) return false;
-      const count = Number(s.count) || 0;
-      const down = Number(s.down) || 0;
-      if (count > 0 && down >= count) return false;
-      const roundAge = Math.max(0, curRound - (Number(s.round) || curRound));
-      return roundAge <= 2;
-    });
-  };
-
-  const startTick = () => {
-    if (!map || frameRef.current) return;
-    const tick = () => {
-      try {
-        map.triggerRepaint();
-      } catch { /* the map is gone */ }
-      if (playingRef.current.length > 0 || (!reduceMotionEnabled() && hasActiveCraters())) {
-        frameRef.current = requestAnimationFrame(tick);
-      } else {
-        frameRef.current = 0;
-      }
-    };
-    frameRef.current = requestAnimationFrame(tick);
-  };
 
   // The layer: one for the map's life, put back after a change of style.
   useEffect(() => {
@@ -128,21 +88,15 @@ const StrikeLayers = () => {
       const now = heldRef.current ?? performance.now();
       const live = playingRef.current.filter((entry) => (now - entry.begins) / 1000 <= entry.plan.lasts);
       playingRef.current = live;
-      const kmPerPixel = kmPerPixelOf(map);
+      if (live.length === 0) return null;
       const items = { ribbons: [], points: [], discs: [] };
+      const kmPerPixel = kmPerPixelOf(map);
       for (const entry of live) {
         const seen = strikeItemsAt(entry.plan, (now - entry.begins) / 1000, { kmPerPixel });
         items.ribbons.push(...seen.ribbons);
         items.points.push(...seen.points);
         for (const disc of seen.discs) items.discs.push({ ...disc, rim: ringOf(disc.centre, disc.km, 1) });
       }
-      // Persistent smoldering fires & rising smoke plumes at impact craters from recent strikes:
-      const craters = craterItemsAt(strikesRef.current, roundRef.current, now, { kmPerPixel });
-      items.ribbons.push(...craters.ribbons);
-      items.points.push(...craters.points);
-      for (const disc of craters.discs) items.discs.push({ ...disc, rim: ringOf(disc.centre, disc.km, 1) });
-
-      if (items.ribbons.length === 0 && items.points.length === 0 && items.discs.length === 0) return null;
       return items;
     };
     const layer = createStrikeLayer({ frame, onError: (error) => console.warn("[strikes] the strike layer could not draw:", error) });
@@ -196,15 +150,18 @@ const StrikeLayers = () => {
       if (!plan) return;
       // (One already being played starts afresh.)
       playingRef.current = playingRef.current.filter((entry) => entry.plan.id !== plan.id);
-      const delayMs = started.length * BETWEEN * 1000;
-      playingRef.current.push({ plan, begins: now + delayMs });
-      soundsRef.current?.playPlan?.(plan, { beginsDelayMs: delayMs });
+      playingRef.current.push({ plan, begins: now + started.length * BETWEEN * 1000 });
       started.push({ id: plan.id, weapon: plan.weapon, km: Math.round(plan.km), shown: plan.shown, down: plan.down, lasts: Math.round(plan.lasts * 10) / 10, from: plan.from, to: plan.to });
     });
     if (started.length === 0) return started;
-    if (frameRef.current) cancelAnimationFrame(frameRef.current);
-    frameRef.current = 0;
-    startTick();
+    cancelAnimationFrame(frameRef.current);
+    const tick = () => {
+      try {
+        map.triggerRepaint();
+      } catch { /* the map is gone */ }
+      if (playingRef.current.length > 0) frameRef.current = requestAnimationFrame(tick);
+    };
+    frameRef.current = requestAnimationFrame(tick);
     return started;
   };
   const playRef = useRef(play);
@@ -220,21 +177,11 @@ const StrikeLayers = () => {
     seenRef.current = new Set(strikes.map((strike) => strike.id));
     if (!before) {
       for (const strike of strikes) playedRef.current.set(strike.id, -Infinity);
-      // Trigger animation loop for existing smoldering craters if any
-      if (!reduceMotionEnabled() && hasActiveCraters()) {
-        if (frameRef.current) cancelAnimationFrame(frameRef.current);
-        frameRef.current = 0;
-        startTick();
-      }
       return;
     }
     const fresh = strikes.filter((strike) => !before.has(strike.id));
-    if (fresh.length > 0) {
-      playRef.current(fresh);
-    } else if (!reduceMotionEnabled() && hasActiveCraters() && !frameRef.current) {
-      startTick();
-    }
-  }, [strikes, map, gameRound]);
+    if (fresh.length > 0) playRef.current(fresh);
+  }, [strikes]);
 
   // An event has come into view, or a card asks to see its strike again.
   useEffect(() => subscribeStrikeRequests(() => {
