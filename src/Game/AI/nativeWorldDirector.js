@@ -13,6 +13,12 @@ import {
 } from "./nativeWorldIntegrity.js";
 import { addGameDays, compareGameDates, gameDateDayNumber, gameDateYear } from "../../runtime/gameDates.js";
 import { boardEntriesConcernedByEvent, isProjectOpen } from "../../runtime/projects.js";
+import {
+  CONFLICT_STORYLINE_KINDS,
+  NEUTRAL_STORYLINE_KIND,
+  STORYLINE_KIND_LIST_TEXT,
+  storylineKindOf,
+} from "../../runtime/storylineKinds.js";
 
 // Native World Director (ported from kernely's Continuum branch).
 //
@@ -193,7 +199,7 @@ export const deriveWorldConflictRiskPosture = ({
   let highMomentumProcesses = 0;
   for (const storyline of normalizeArray(world?.storylines)) {
     if (normalizeString(storyline?.status).toLowerCase() !== "active") continue;
-    if (!CRISIS_LIKE_STORYLINE_KIND_RE.test(normalizeString(storyline?.kind))) continue;
+    if (!CONFLICT_STORYLINE_KINDS.includes(storylineKindOf(storyline?.kind))) continue;
     const pressure = clampPercent(storyline?.pressure);
     const momentum = clampPercent(storyline?.momentum);
     crisisPressure += Math.max(0, pressure - 40) * 0.22;
@@ -811,7 +817,9 @@ const normalizeStorylineForDirector = (entry, index = 0) => {
     : "active";
   return {
     id: normalizeString(entry.id) || `storyline-${index}`,
-    kind: normalizeString(entry.kind) || "world",
+    // One of the fixed kinds (runtime/storylineKinds.js): free text, a save's
+    // included, is the neutral kind, by its exact value only.
+    kind: storylineKindOf(entry.kind),
     title,
     participants: [...new Set(normalizeArray(entry.participants).map(normalizeString).filter(Boolean))].slice(0, 12),
     status,
@@ -849,7 +857,8 @@ export const buildPregameStorylineBaselineRecord = ({
   round = 1,
 } = {}) => {
   const canonicalId = normalizeString(id);
-  const kind = normalizeString(processKind).toLowerCase();
+  // A kind outside the fixed list is the neutral kind (runtime/storylineKinds.js).
+  const kind = normalizeString(processKind) ? storylineKindOf(processKind) : "";
   const canonicalStatus = normalizeString(status).toLowerCase();
   const start = normalizeString(startedDate);
   const observed = normalizeString(observedDate);
@@ -1156,7 +1165,8 @@ const pregameStorylineSourceContains = (superset, required) => {
 // attempt instead of losing the whole Round-Zero answer.
 export const resolvePregameStorylineBaselineMatch = ({ records = [], candidate = null } = {}) => {
   if (!candidate) return { match: null, error: "Round-Zero storyline resolver requires a candidate." };
-  const kind = normalizeString(candidate.processKind || candidate.kind).toLowerCase();
+  // Read as the records are (normalizeStorylineForDirector): one of the fixed kinds.
+  const kind = storylineKindOf(candidate.processKind || candidate.kind);
   const participants = storylineParticipantsKey(candidate.participants);
   const title = pregameStorylineTitleKey(candidate.title);
   const date = normalizeString(candidate.startedDate);
@@ -2848,11 +2858,13 @@ export const applyWorldStorylineUpdates = ({
       normalizeString(prior?.title) ||
       normalizeString(related[0]?.title) ||
       id.replace(/^storyline[-_:]?/i, "").replaceAll("-", " ");
+    // One of the fixed kinds (runtime/storylineKinds.js): the record's, else the
+    // storyline's own. A word outside the list says nothing, like a blank one;
+    // an event's category (its kind) is another list and is not read for it.
     const kind =
-      normalizeString(raw?.kind) ||
-      normalizeString(prior?.kind) ||
-      normalizeString(related[0]?.kind) ||
-      "world";
+      storylineKindOf(raw?.kind, "") ||
+      storylineKindOf(prior?.kind, "") ||
+      NEUTRAL_STORYLINE_KIND;
     // Storyline participant lists are cumulative causal membership, not a
     // replacement projection of whichever actors happened to appear in the latest
     // event. Omission can never silently eject Japan/China/Russia/etc. from a
@@ -3480,7 +3492,7 @@ export const buildWorldInitiativeContext = (
     "[Storyline Records]",
     "storylineUpdates is ONE string: one record per line, at most 16, fields separated by ~ (never inside a field):",
     "id~status~pressure~momentum~startedDate~kind~title~participantsCSV~eventNumbersCSV~state",
-    "status is active, dormant or resolved. pressure (how much is at stake) and momentum (how fast it is changing) run 0-100. startedDate is YYYY-MM-DD for a new storyline; an existing one may leave kind, title and participants blank; eventNumbersCSV may be blank; state says what is true on the stop date. Open a new storyline when an event starts something that will run over several turns — a crisis, an insurgency, a standoff, a war — never for a one-off announcement, and never for an effort on the Projects board.",
+    `status is active, dormant or resolved. kind is one of ${STORYLINE_KIND_LIST_TEXT}. pressure (how much is at stake) and momentum (how fast it is changing) run 0-100. startedDate is YYYY-MM-DD for a new storyline; an existing one may leave kind, title and participants blank; eventNumbersCSV names the events that move it; state says what is true on the stop date. Open a new storyline when an event starts something that will run over several turns — a crisis, an insurgency, a standoff, a war — never for a one-off announcement, and never for an effort on the Projects board.`,
     `An active war or high-pressure storyline with no visible development for ${STAGNATION_BACKSTOP_DAYS} days may not stand still: it must ${describeAntiStasisObjectiveRule()}.`,
   ].join("\n");
 

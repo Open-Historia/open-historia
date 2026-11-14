@@ -1,6 +1,7 @@
 import { DEMAND_CHECK_OUTCOMES } from "../../runtime/demandCheck.js";
 import { STATS_BACKEND_FIELD, STATS_BACKEND_KEYS } from "../../runtime/statsBackend.js";
 import { EVENT_TAG_ENUM, MAX_EVENT_TAGS } from "../../runtime/eventTags.js";
+import { PROCESS_STORYLINE_KINDS, STORYLINE_KINDS } from "../../runtime/storylineKinds.js";
 import { normalizeEventPresentation } from "../../runtime/eventQuote.js";
 import {
   TERRITORY_BASIS_DESCRIPTION,
@@ -1643,7 +1644,8 @@ const storylineUpdateSchema = {
       description: "Current tendency to keep developing without a new external shove, 0-100.",
     },
     startedDate: textSchema("YYYY-MM-DD date when the process began, when known."),
-    kind: nonEmptyTextSchema("Short process category such as war, crisis, revolution, diplomacy, politics, or economy."),
+    // One of the fixed kinds (runtime/storylineKinds.js), never free text.
+    kind: { type: "string", enum: [...STORYLINE_KINDS], description: "What kind of process it is." },
     title: nonEmptyTextSchema("Concise persistent process title."),
     participants: {
       type: "array",
@@ -1761,7 +1763,7 @@ const pregameCanonicalFactSchema = {
     terms: textSchema("Substantive agreement terms."),
 
     // Non-war persistent process.
-    processKind: textSchema("Non-war process kind such as crisis, insurgency, diplomacy, politics or economy."),
+    processKind: { type: "string", enum: [...PROCESS_STORYLINE_KINDS], description: "Storyline: what kind of non-war process it is." },
     participants: { type: "array", maxItems: 12, items: nonEmptyTextSchema("Current canonical polity name.") },
     pressure: { type: "integer", minimum: 0, maximum: 100 },
     momentum: { type: "integer", minimum: 0, maximum: 100 },
@@ -2240,7 +2242,7 @@ const gmStorylineUpdateSchema = {
     pressure: { type: "integer", minimum: 0, maximum: 100 },
     momentum: { type: "integer", minimum: 0, maximum: 100 },
     startedDate: textSchema("YYYY-MM-DD date when the process began, when known."),
-    kind: nonEmptyTextSchema("Short process category such as crisis, politics, economy, war, revolution, or diplomacy."),
+    kind: { type: "string", enum: [...STORYLINE_KINDS], description: "What kind of process it is." },
     title: nonEmptyTextSchema("Concise persistent process title."),
     participants: stringArraySchema("Canonical polity participants. Cumulative on update: include new actors; omitted prior actors remain. Full polity names only."),
     eventIndexes: gmEventIndexesSchema,

@@ -28,6 +28,7 @@ import { normalizeEventTags } from "./eventTags.js";
 import { normalizeEventPlaces } from "./eventPlaces.js";
 import { normalizeEventPresentation } from "./eventQuote.js";
 import { normalizeEventAgency } from "./eventAgency.js";
+import { storylineKindOf } from "./storylineKinds.js";
 import { buildOwnerAliasMap, createOwnerResolver, isRealCountryName, toCountryName } from "./ownerNames.js";
 import { foundPolityIfUnknown } from "./polityFounding.js";
 import { normalizeTerritoryBasis, screenTerritoryBasis } from "./territoryBasis.js";
@@ -4018,7 +4019,9 @@ const normalizeWorldStoryline = (entry, index = 0) => {
 
   return {
     id,
-    kind: normalizeOptionalString(entry.kind) || "world",
+    // One of the fixed kinds (runtime/storylineKinds.js); a save's free text
+    // is the neutral kind, by its exact value only.
+    kind: storylineKindOf(entry.kind),
     title,
     participants: uniqueStrings(entry.participants, 12),
     status,

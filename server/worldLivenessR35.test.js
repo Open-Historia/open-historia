@@ -141,7 +141,8 @@ test("R3.5 modern era does not grant plot armor when current campaign state is g
     ],
     storylines: [
       { id: "c1", kind: "crisis", status: "active", pressure: 92, momentum: 82 },
-      { id: "c2", kind: "security crisis", status: "active", pressure: 86, momentum: 70 },
+      // A storyline kind is one word of a fixed list (runtime/storylineKinds.js).
+      { id: "c2", kind: "unrest", status: "active", pressure: 86, momentum: 70 },
     ],
     relations: [
       { polityA: "A", polityB: "E", status: "hostile" },
