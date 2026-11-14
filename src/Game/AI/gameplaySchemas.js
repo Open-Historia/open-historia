@@ -2598,9 +2598,9 @@ export const GAME_MASTER_SCHEMA = {
     },
     // What the administrator's request itself asks for, read by the model that
     // reads the request, in whatever language it was written. The request
-    // checks (gameMasterRequestCompleteness.js, gameplay.js) trust these and
-    // fall back to their English patterns only when an answer lacks them. Not
-    // in `required`: a preview saved before they existed must still validate.
+    // checks (gameMasterRequestCompleteness.js, gameplay.js) read these alone;
+    // an answer without them is held to none of them. Not in `required`: a
+    // preview saved before they existed must still validate.
     requestedSubordination: {
       type: "boolean",
       description: "True when the administrator's request asks for one country to become another's puppet, satellite, protectorate or client state; false otherwise, including a request to end or prevent one.",

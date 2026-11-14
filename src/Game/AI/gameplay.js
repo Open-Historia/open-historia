@@ -146,7 +146,7 @@ import {
   derivePregameBootstrapCoverageRequirements,
   validatePregameBootstrapCoverage,
 } from "./pregameBootstrapCoverage.js";
-import { validateGameMasterRequestedPuppetCompleteness, requestExplicitlyInstallsPuppet } from "./gameMasterRequestCompleteness.js";
+import { validateGameMasterRequestedPuppetCompleteness } from "./gameMasterRequestCompleteness.js";
 import { GAME_MASTER_MODES, GM_AUTO_MODE, validateGameMasterModeSelection } from "./gameMasterAutoMode.js";
 import { STATS_DEMOGRAPHIC_TAGS, STATS_ECONOMIC_TAGS, eventConcernsTarget, eventHasAnyTag } from "./statsEventEvidence.js";
 import { GAME_MASTER_EDIT_TOOL, applyGameMasterPreviewEdits, validateGameMasterEditResponse } from "./gameMasterPreviewEdit.js";
@@ -1395,38 +1395,37 @@ const buildGameMasterStorylineContext = (worldLike) => {
 const buildPlayerPolityIntelligenceText = (bundle) =>
   describeIntelligenceStanding(bundle.world && typeof bundle.world === "object" ? bundle.world : {}, normalizeString(bundle.game.country));
 
-const gameMasterPoliticalActorReferenceContext = (worldLike, request = "", playerPolity = "") => {
+// The Game Master's exact Political Actor ids. The player's polity is always
+// listed. With the lookup functions any other polity's ids come from the
+// political_actor lookup, by its exact name; without them the other polities
+// follow in the record's order while the section's room lasts. Polities used
+// to be picked by finding their names in the request's text, and the player's
+// added only when the request held an English political word ("government",
+// "election"): a request in another language, or naming a country another way,
+// was given no ids at all.
+const gameMasterPoliticalActorReferenceContext = (worldLike, playerPolity = "", { lookups = false } = {}) => {
   const world = normalizeWorldState(worldLike);
   const byPolity = world?.politicalActors?.byPolity && typeof world.politicalActors.byPolity === "object"
     ? world.politicalActors.byPolity
     : {};
-  const requestText = normalizeString(request).toLocaleLowerCase();
-  const simplify = (value) => normalizeString(value).toLocaleLowerCase().replace(/^the\s+/, "");
-  const isPoliticalRequest = /\b(?:government|cabinet|prime minister|president|monarch|election|party|parties|coalition|parliament|political|constitution|regime|leader)\b/i.test(requestText);
-
-  const selected = [];
-  const seen = new Set();
-  const add = (key) => {
-    const actualKey = getPoliticalProfileKey(world, key);
-    if (!actualKey || seen.has(actualKey) || !byPolity[actualKey]) return;
-    seen.add(actualKey);
-    selected.push([actualKey, byPolity[actualKey]]);
-  };
-
-  for (const key of Object.keys(byPolity)) {
-    const full = normalizeString(key).toLocaleLowerCase();
-    const short = simplify(key);
-    if ((full && requestText.includes(full)) || (short.length >= 4 && requestText.includes(short))) add(key);
-    if (selected.length >= 6) break;
-  }
-  if (!selected.length && isPoliticalRequest && playerPolity) add(playerPolity);
-  if (!selected.length) return "No Political Actor named by this request; do not invent party ids from this section.";
+  const playerKey = getPoliticalProfileKey(world, playerPolity);
+  const selected = [
+    ...(playerKey && byPolity[playerKey] ? [playerKey] : []),
+    ...(lookups ? [] : Object.keys(byPolity).filter((key) => key !== playerKey)),
+  ].map((key) => [key, byPolity[key]]);
 
   const lines = [
-    "Exact canonical Political Actor references for polities named by this GM request.",
+    "Exact canonical Political Actor references.",
     "IDs below are mutation identifiers, not suggestions. Reuse them exactly. create-party/create-power-bloc is only for a genuinely new entity established by the authored event.",
+    lookups
+      ? "Another polity's exact ids: the political_actor lookup, with the polity's exact name. Never invent an id."
+      : "Never invent an id for a polity this section does not list.",
   ];
+  if (!selected.length) lines.push("No Political Actor is recorded for the player's polity.");
+  // Whole polities only: the next one is left out once the section is full,
+  // never cut partway through an id.
   for (const [polityKey, actor] of selected) {
+    const before = lines.length;
     const government = actor?.government && typeof actor.government === "object" ? actor.government : {};
     lines.push(`POLITY: ${polityKey}`);
     lines.push(`Government rulingPartyIds=${JSON.stringify(normalizeArray(government.rulingPartyIds))}; coalitionPartyIds=${JSON.stringify(normalizeArray(government.coalitionPartyIds))}`);
@@ -1446,6 +1445,11 @@ const gameMasterPoliticalActorReferenceContext = (worldLike, request = "", playe
     if (blocs.length) {
       lines.push("Canonical power blocs:");
       for (const bloc of blocs) lines.push(`- id=${JSON.stringify(normalizeString(bloc?.id))} name=${JSON.stringify(normalizeString(bloc?.name))}`);
+    }
+    // The player's polity always stays, cut to the room if it must be.
+    if (before > 3 && lines.join("\n").length > 5000) {
+      lines.length = before;
+      break;
     }
   }
   return lines.join("\n").slice(0, 5000);
@@ -1549,8 +1553,8 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (taskKey === "gameMaster" && wants("gameMasterPoliticalActorContext")) {
     variables.gameMasterPoliticalActorContext = gameMasterPoliticalActorReferenceContext(
       bundle.world,
-      options?.gameMasterRequest,
       bundle?.game?.country,
+      { lookups },
     );
   }
   await pause?.();
@@ -18243,67 +18247,12 @@ const normalizeGameMasterStatPatches = (patches, world) => {
 
 const normalizeGameMasterIsoDate = (value) => normalizeGameDate(value);
 
-const GAME_MASTER_REQUEST_MONTHS = Object.freeze({
-  jan: 1, january: 1,
-  feb: 2, february: 2,
-  mar: 3, march: 3,
-  apr: 4, april: 4,
-  may: 5,
-  jun: 6, june: 6,
-  jul: 7, july: 7,
-  aug: 8, august: 8,
-  sep: 9, sept: 9, september: 9,
-  oct: 10, october: 10,
-  nov: 11, november: 11,
-  dec: 12, december: 12,
-});
-
-const gameMasterRequestDateFromParts = (yearValue, monthValue, dayValue) => {
-  const year = Number(yearValue);
-  const day = Number(dayValue);
-  const monthToken = normalizeString(monthValue).toLowerCase();
-  const month = Number.isFinite(Number(monthValue))
-    ? Number(monthValue)
-    : GAME_MASTER_REQUEST_MONTHS[monthToken];
-  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return "";
-  return normalizeGameMasterIsoDate(
-    `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
-  );
-};
-
-const extractExplicitGameMasterRequestDates = (requestText) => {
-  const request = normalizeString(requestText);
-  if (!request) return [];
-  const dates = new Set();
-  const add = (value) => {
-    const normalized = normalizeGameMasterIsoDate(value);
-    if (normalized) dates.add(normalized);
-  };
-
-  for (const match of request.matchAll(/(?<![\d-])(-?\d{1,6})-(\d{2})-(\d{2})\b/g)) {
-    add(`${match[1]}-${match[2]}-${match[3]}`);
-  }
-
-  const monthPattern = "January|February|March|April|May|June|July|August|September|Sept|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec";
-  const dayFirst = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthPattern})\\s*,?\\s+(\\d{4})\\b`, "gi");
-  for (const match of request.matchAll(dayFirst)) {
-    add(gameMasterRequestDateFromParts(match[3], match[2], match[1]));
-  }
-
-  const monthFirst = new RegExp(`\\b(${monthPattern})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*,?\\s+(\\d{4})\\b`, "gi");
-  for (const match of request.matchAll(monthFirst)) {
-    add(gameMasterRequestDateFromParts(match[3], match[1], match[2]));
-  }
-
-  return [...dates].sort();
-};
-
-// The date the request names: the answer's own requestedDate when it has the
-// field (read from the request in any language; blank means none), else the
-// English/ISO patterns above.
-const gameMasterRequestedDates = (candidate, request) => {
-  if (typeof candidate?.requestedDate !== "string") return extractExplicitGameMasterRequestDates(request);
-  const date = normalizeGameMasterIsoDate(candidate.requestedDate);
+// The date the request names: the answer's own requestedDate, which the model
+// reads from the request in any language (blank means none). An answer without
+// the field pins no date. The request text was read for one when the field was
+// missing, by English month names, which no request in another language had.
+const gameMasterRequestedDates = (candidate) => {
+  const date = typeof candidate?.requestedDate === "string" ? normalizeGameMasterIsoDate(candidate.requestedDate) : "";
   return date ? [date] : [];
 };
 
@@ -18652,7 +18601,7 @@ const validateGameMasterPreviewPayload = async (candidate, {
   }
 
   if (mode === "exact-event" && !approved) {
-    const requestedDates = gameMasterRequestedDates(candidate, request);
+    const requestedDates = gameMasterRequestedDates(candidate);
     if (requestedDates.length === 1 && normalizeGameMasterIsoDate(events[0]?.date) !== requestedDates[0]) {
       events[0].date = requestedDates[0];
     }
@@ -18737,7 +18686,7 @@ const validateGameMasterPreviewPayload = async (candidate, {
   // The model is asked again once; on its last answer the administrator is told
   // that the subordination is not in the preview.
   if (!approved) {
-    const puppetCompletenessError = validateGameMasterRequestedPuppetCompleteness(candidate, { request });
+    const puppetCompletenessError = validateGameMasterRequestedPuppetCompleteness(candidate);
     if (puppetCompletenessError && !finalAttempt) return `[canonical subordination-state] ${puppetCompletenessError}`;
     if (puppetCompletenessError) note(receiptPlayerNote("gmSubordinationMissing"));
   }

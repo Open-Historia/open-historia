@@ -79,7 +79,7 @@ test("a GM answer that changes no subordination still decodes as before", () => 
 test("GM preview validation enforces request-level puppet completeness before accepting prose-only subordination", async () => {
   const fs = await import("node:fs/promises");
   const source = await fs.readFile(new URL("./gameplay.js", import.meta.url), "utf8");
-  assert.match(source, /validateGameMasterRequestedPuppetCompleteness\(candidate,\s*\{\s*request\s*\}\)/);
+  assert.match(source, /validateGameMasterRequestedPuppetCompleteness\(candidate\)/);
   // No feature stands in front of that check: puppet states are part of every
   // game, so the Game Master has no "switched off for this game" to answer with.
   assert.doesNotMatch(source, /puppetStates/);
