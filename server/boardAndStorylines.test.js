@@ -46,11 +46,18 @@ const payloadWith = (event) => ({
   agreementUpdates: [],
 });
 
-const majorBoardEvent = () => payloadWith({
+// The Board entry an event moves is the one its own board op addresses
+// (runtime/projects.js boardEntriesConcernedByEvent): its words used to be
+// matched against the entry's name and summary, which a telling in another
+// language, or a paraphrase, never matched.
+const kingfisherOp = () => ({ projectOps: [{ op: "milestone", projectId: "kingfisher", milestone: { title: "First flight", status: "done" } }] });
+
+const majorBoardEvent = ({ op = true } = {}) => payloadWith({
   importance: "major",
   kind: "military",
   title: "Operation Kingfisher's prototype interceptor flies for the first time",
   description: "The covert interceptor completes its first full flight over the test range.",
+  impacts: { ...baseImpacts(), ...(op ? kingfisherOp() : {}) },
 });
 
 test("a major event whose only consequence is a Board entry passes provisionally", () => {
@@ -62,6 +69,11 @@ test("a major event whose only consequence is a Board entry passes provisionally
     boardProvisionalConsequenceIndexes(majorBoardEvent(), { board: [boardEntry()] }),
     [0],
     "the pass is provisional: the turn must know which event the board pass has to back",
+  );
+  // Naming the entry in its words, with no op on it, is no Board consequence.
+  assert.match(
+    validateWorldEventConsequencePayload(majorBoardEvent({ op: false }), { board: [boardEntry()], strict: true }),
+    /no canonical consequence/i,
   );
 });
 
@@ -88,12 +100,17 @@ test("a crisis's words decide nothing: a major event on an open Board entry pass
   for (const [title, description] of [
     ["Operation Kingfisher's exposure triggers a standoff over the test range", "Both governments move forces towards the range and neither backs down."],
     ["La révélation de l'opération Kingfisher déclenche une crise autour du champ d'essai", "Les deux gouvernements déplacent des forces vers le champ d'essai et aucun ne recule."],
+    ["Утечка об операции «Зимородок» вызывает противостояние у полигона", "Обе стороны стягивают силы к полигону."],
   ]) {
-    const crisis = payloadWith({ importance: "major", kind: "military", title, description });
+    const impacts = { ...baseImpacts(), ...kingfisherOp() };
+    const crisis = payloadWith({ importance: "major", kind: "military", title, description, impacts });
     assert.equal(validateWorldEventConsequencePayload(crisis, { board: [boardEntry()], strict: true }), "", title);
     assert.deepEqual(boardProvisionalConsequenceIndexes(crisis, { board: [boardEntry()] }), [0], title);
-    const told = payloadWith({ importance: "major", kind: "military", title, description, storylineIds: ["storyline-kingfisher"] });
+    const told = payloadWith({ importance: "major", kind: "military", title, description, impacts, storylineIds: ["storyline-kingfisher"] });
     assert.deepEqual(boardProvisionalConsequenceIndexes(told, { board: [boardEntry()] }), [], `${title}: tied to its storyline`);
+    // Without its op, every telling is judged alike: no Board consequence.
+    const unmoved = payloadWith({ importance: "major", kind: "military", title, description });
+    assert.deepEqual(boardProvisionalConsequenceIndexes(unmoved, { board: [boardEntry()] }), [], `${title}: no op`);
   }
 });
 
@@ -103,24 +120,25 @@ test("an event with a consequence of its own is never provisional", () => {
   assert.deepEqual(boardProvisionalConsequenceIndexes(withStats, { board: [boardEntry()] }), []);
 });
 
-// --- The cleanup keeps routine events off the timeline, not out of the world ---
+// --- The screen keeps every event on the timeline that its words alone would have hidden ---
 
 const screenOne = (event, world = {}, game = { country: "Republic of Latvia" }) =>
   screenGeneratedWorldEvents({ events: [{ impacts: baseImpacts(), ...event }], world, game });
 
-test("a routine event the screen keeps off the timeline is handed on whole, as a Hidden event", () => {
-  const admin = {
-    id: "event-admin-whole",
-    date: "2019-10-12",
-    importance: "minor",
-    title: "Canada Finalizes Streamlined Agricultural Inspection Standards",
-    description: "Officials finalize technical inspection standards and a compliance tracking protocol after a committee review.",
-  };
-  const screened = screenOne(admin);
-  assert.equal(screened.events.length, 0, "the timeline rule itself is unchanged");
-  assert.equal(screened.hidden.length, 1);
-  assert.equal(screened.hidden[0].event.title, admin.title);
-  assert.equal(screened.hidden[0].event.description, admin.description);
+// The screen kept "routine administrative" cards off the timeline by English
+// words (ROUTINE_ADMINISTRATIVE_CUE_RE), and kept their twins in any other
+// language on it. Nothing in an event says "paperwork" in every language: the
+// skip is told to write no filler, and the screen keeps what it writes.
+test("an administrative card stays on the timeline, as its twin in another language does", () => {
+  for (const [title, description] of [
+    ["Canada Finalizes Streamlined Agricultural Inspection Standards", "Officials finalize technical inspection standards and a compliance tracking protocol after a committee review."],
+    ["Le Canada finalise des normes d'inspection agricole simplifiées", "Les fonctionnaires finalisent des normes techniques d'inspection et un protocole de suivi de conformité après un examen en comité."],
+  ]) {
+    const screened = screenOne({ id: "event-admin-whole", date: "2019-10-12", importance: "minor", title, description });
+    assert.deepEqual(screened.events.map((event) => event.title), [title]);
+    assert.deepEqual(screened.hidden, []);
+    assert.deepEqual(screened.dropped, []);
+  }
 });
 
 // No word list reads an event for the war any more (nativeWorldIntegrity.js):
@@ -136,17 +154,6 @@ test("a patrol is kept as written, in English or not: no word hides it", () => {
     assert.deepEqual(screened.events.map((event) => event.id), [patrol.id], patrol.title);
     assert.deepEqual(screened.hidden, []);
   }
-});
-
-test("a routine administrative event is a Hidden event too", () => {
-  const screened = screenOne({
-    id: "event-admin",
-    date: "2019-10-12",
-    importance: "minor",
-    title: "Canada Finalizes Streamlined Agricultural Inspection Standards",
-    description: "Officials finalize technical inspection standards and a compliance tracking protocol after a committee review.",
-  });
-  assert.deepEqual(screened.hidden.map((row) => row.route), ["ROUTINE_ADMINISTRATIVE_PROCESS"]);
 });
 
 test("a homefront under war conditions is kept as written, in English or not: the skip is told who lives under them", () => {
@@ -168,6 +175,7 @@ const priorCanal = [{
   date: "1930-04-01",
   title: "Ruritania rejects the Bordurian canal proposal",
   description: "The cabinet formally rejects Borduria's proposal for a joint canal authority, citing sovereignty concerns.",
+  storylineIds: ["canal-dispute"],
 }];
 
 const curatorCandidates = [
@@ -176,13 +184,7 @@ const curatorCandidates = [
     date: "1930-04-20",
     title: "Ruritania again rejects the Bordurian canal proposal",
     description: "The cabinet formally rejects Borduria's proposal for a joint canal authority once more, citing the same sovereignty concerns.",
-    impacts: {},
-  },
-  {
-    id: "c1",
-    date: "1930-04-01",
-    title: "Ruritania rejects the Bordurian canal proposal",
-    description: "The cabinet formally rejects Borduria's proposal for a joint canal authority, citing sovereignty concerns.",
+    storylineIds: ["canal-dispute"],
     impacts: {},
   },
   {
@@ -202,7 +204,7 @@ const curatorJudgment = (index, overrides = {}) => ({
   matchedPriorIndexes: [],
   materiallyNewDimensions: ["something"],
   recurrenceMatters: false,
-  newTriggerAfterPriorPosture: "none",
+  newTriggerAfterPriorPosture: "",
   worthwhile: true,
   substantive: true,
   personalityTexture: false,
@@ -225,7 +227,7 @@ const curateWith = (firstJudgment) => curateGeneratedEventsWithHidden({
   mode: "jump",
   analyzeBatch: async () => ({
     payload: {
-      judgments: [firstJudgment, curatorJudgment(1), curatorJudgment(2)],
+      judgments: [firstJudgment, curatorJudgment(1)],
       recentHistoryMechanical: false,
       storylineSaturation: [],
       underrepresentedDomains: [],
@@ -233,7 +235,9 @@ const curateWith = (firstJudgment) => curateGeneratedEventsWithHidden({
   }),
 });
 
-test("an event the curator calls redundant is Hidden, and an exact duplicate is withheld", async () => {
+// A word-for-word repeat of the record never reaches the curator: the record's
+// own dedupe (runtime/eventDedup.js) takes it out first, and files it.
+test("an event the curator calls redundant is Hidden", async () => {
   const { events, hidden } = await curateWith(curatorJudgment(0, {
     verdict: "REDUNDANT",
     confidence: 0.95,
@@ -252,7 +256,7 @@ test("an unsupported reversal is rejected, never Hidden", async () => {
     verdict: "UNSUPPORTED_REVERSAL",
     confidence: 0.99,
     matchedPriorIndexes: [0],
-    newTriggerAfterPriorPosture: "none",
+    newTrigger: false,
   }));
   assert.deepEqual(events.map((event) => event.id), ["c2"]);
   assert.deepEqual(hidden, [], "a contradiction never happened, so the Board must never read it");

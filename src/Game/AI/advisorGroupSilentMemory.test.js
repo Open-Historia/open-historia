@@ -101,12 +101,12 @@ test("a failing late speaker does not erase the completed earlier speaker or rep
   conversation.push(first);
   assert.throws(() => parseAdvisorGroupIndividualReply(crownCouncilReply, ids[0], contacts[0].name),
     /cannot write private memory/);
-  assert.deepEqual(selectAdvisorGroupSpeakers(ids, conversation, question, contacts, "Chief"), [ids[0]]);
+  assert.deepEqual(selectAdvisorGroupSpeakers(ids, conversation), [ids[0]]);
   const recovered = parseAdvisorGroupIndividualReply(
     "I have a material objection.\nADVISOR_MEMORY:King Rufus IV remains sovereign.",
     ids[0], contacts[0].name,
   );
   conversation.push(recovered);
-  assert.deepEqual(selectAdvisorGroupSpeakers(ids, conversation, question, contacts, "Chief"), []);
+  assert.deepEqual(selectAdvisorGroupSpeakers(ids, conversation), []);
   assert.equal(conversation.filter((row) => row.speakerId === ids[1]).length, 1);
 });

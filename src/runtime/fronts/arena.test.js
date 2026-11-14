@@ -111,11 +111,12 @@ test("water is ground no troop enters, whatever else its type is set to", () => 
     const arena = rasterizeArena(world.frame(), world.regions, { regionTypes: types });
     return arena.regionSpeed[arena.indexOf.get("r2-0")];
   };
-  // Named for what it is, or switched: a wall. Left passable and fast by its maker, still a wall.
-  assert.equal(speedOf([{ id: "deep", name: "Deep Ocean" }]), 0);
-  assert.equal(speedOf([{ id: "deep", name: "Deep Ocean", passable: true, pathfindingSpeed: 3 }]), 0);
+  // Switched to water: a wall. Left passable and fast by its maker, still a wall.
   assert.equal(speedOf([{ id: "deep", name: "The Narrows", water: true }]), 0);
-  // Not water: ground like any other.
+  assert.equal(speedOf([{ id: "deep", name: "Deep Ocean", water: true, passable: true, pathfindingSpeed: 3 }]), 0);
+  // Not switched: ground like any other, whatever its name says, in any language.
+  assert.equal(speedOf([{ id: "deep", name: "Deep Ocean" }]), 1);
+  assert.equal(speedOf([{ id: "deep", name: "Océan profond" }]), 1);
   assert.equal(speedOf([{ id: "deep", name: "Deep Ocean", water: false }]), 1);
   assert.equal(speedOf([{ id: "deep", name: "Marsh" }]), 1);
   // A type switched to water, or back, is other ground: an arena is not kept across it.

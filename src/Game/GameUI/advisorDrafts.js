@@ -130,34 +130,29 @@ export const buildMessageDrafts = (draftsRaw, sourceText, problems = []) => {
         .filter(Boolean);
 };
 
-// When a drafted private letter has already gone to its recipient: the date of
-// the player's own message in a one-to-one chat with that country that says the
-// same thing, or "" when none does. The advisor drafted Winterfell's acceptance
-// of the Tyrell barley offer again a week after it was sent, and the player sent
-// it a second time. "The same thing" is word overlap (Dice) of 0.9 or more: the
-// repeats in that game scored 1.0, while distinct letters to the same house,
-// all opening "My lord Tyrell, Winterfell...", scored 0.77 at most.
-const SAME_LETTER = 0.9;
-const letterWords = (text) => new Set(String(text ?? "").toLowerCase()
-    .replace(/[^\p{L}\p{N} ]+/gu, " ").split(/\s+/).filter((word) => word.length > 2));
-const overlap = (left, right) => {
-    const a = letterWords(left);
-    const b = letterWords(right);
-    if (!a.size || !b.size) return 0;
-    let shared = 0;
-    a.forEach((word) => { if (b.has(word)) shared += 1; });
-    return (2 * shared) / (a.size + b.size);
+// A drafted letter's own id: the advisor reply it is in, and its place among
+// that reply's drafts. "" for a reply with no id (one saved before replies had
+// them), whose drafts are then never marked as sent.
+export const draftIdOf = (replyId, index) => {
+    const reply = String(replyId ?? "").trim();
+    return reply && Number.isInteger(index) && index >= 0 ? `${reply}#${index}` : "";
 };
+
+// When a drafted private letter has already gone to its recipient: the date of
+// the player's message sent from this very draft (the diplomacy composer stamps
+// the draft's id on it as `fromDraft`: chat.jsx), or "" when none was. "The
+// same letter" used to be a word overlap of 0.9 or more, which took text in a
+// script with no spaces between its words for a single word. A letter the
+// advisor drafts again in a later reply is a new draft: the advisor is shown the
+// player's correspondence and told not to draft a sent letter again
+// (ADVISOR_MESSAGE_DRAFT_DIRECTIVE in AI/main.jsx).
 export const sentLetterDate = (draft, chats) => {
     if (String(draft?.targetType || "private") !== "private") return "";
-    const recipient = String(draft?.country ?? "").trim().toLowerCase();
-    if (!recipient) return "";
+    const id = String(draft?.id ?? "").trim();
+    if (!id) return "";
     for (const chat of Array.isArray(chats) ? chats : []) {
-        const countries = Array.isArray(chat?.countries) ? chat.countries : [];
-        if (chat?.institutionId || countries.length !== 1) continue;
-        if (String(countries[0]?.name ?? "").trim().toLowerCase() !== recipient) continue;
         const sent = (Array.isArray(chat?.messages) ? chat.messages : [])
-            .filter((message) => message?.role === "user" && overlap(message.text, draft.text) >= SAME_LETTER);
+            .filter((message) => message?.role === "user" && String(message?.fromDraft ?? "").trim() === id);
         if (sent.length) return String(sent.at(-1).time ?? "").trim() || "earlier";
     }
     return "";

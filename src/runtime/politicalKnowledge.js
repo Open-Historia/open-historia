@@ -2,6 +2,7 @@
 
 import { getPoliticalProfile } from "./politicalActors.js";
 import { intelligenceOf, normalizeSpies, signalClarity } from "./spycraft.js";
+import { nameKey } from "../../server/nameKey.js";
 
 // Canonical political reality and player knowledge are deliberately different
 // things. The political-actor record is authoritative world truth; consumers get
@@ -139,6 +140,8 @@ const publicParty = (party) => {
     ...(Number.isFinite(Number(party.seats)) && party.seats !== null && party.seats !== "" ? { seats: Math.max(0, Math.round(Number(party.seats))) } : {}),
     ...(party.ruling === true ? { ruling: true } : {}),
     ...(party.coalition === true ? { coalition: true } : {}),
+    // The roster's catch-all row (minor parties and independents together).
+    ...(party.residual === true ? { residual: true } : {}),
   };
 };
 
@@ -334,7 +337,9 @@ export const buildPoliticalKnowledgeView = (
 };
 
 
-const knowledgeKey = (value) => clean(value).toLocaleLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "");
+// Whose an intercept is, by the game's one name fold (server/nameKey.js): case,
+// accents and punctuation, in every script. "" is no name and matches nothing.
+const knowledgeKey = nameKey;
 
 const interceptForActor = (world, polityKey, intercepts) => {
   const actor = getPoliticalProfile(world, polityKey);

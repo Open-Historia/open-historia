@@ -22,14 +22,17 @@ export const POST_REACH_KM = 50;
 
 const text = (value) => String(value ?? "").trim();
 
-// A structure's kind is free-form, so a military post is known by its words.
-const POST_WORDS = /\b(?:garrisons?|bases?|airbases?|air ?fields?|outposts?|forts?|fortress(?:es)?|camps?|barracks|cantonments?|fob|forward operating)\b/i;
-
-// Whether a new unit or structure is a military post: a garrison unit, or a
-// structure whose kind or name says base, fort, garrison and the like.
+// Whether a new unit or structure is a military post: a garrison unit (its
+// type), or a structure of the military family (the marker's `family` enum,
+// as the map draws it: Game/Map/vnext/presentationPolicy.js MARKER_FAMILY).
+// A structure's kind and name are free words in the story's language, and
+// were read here for "base", "fort" and "camp" in English only (the owner,
+// 2026-11-13: no keywording anywhere): a structure that says no family is
+// no post, and nothing is said of it.
+const MILITARY_FAMILY = "military";
 export const isMilitaryPost = (thing, family) => (family === "unit"
     ? text(thing?.type).toLowerCase() === "garrison"
-    : POST_WORDS.test(`${text(thing?.kind)} ${text(thing?.name)}`));
+    : text(thing?.family).toLowerCase() === MILITARY_FAMILY);
 
 // Whether a post at `point`, owned by `owner` on ground `groundOwner` holds,
 // stands with nothing to deploy it: on another power's ground with none of its

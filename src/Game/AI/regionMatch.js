@@ -1,15 +1,21 @@
-// Match a region name the model wrote against the regions a scenario actually
+// A region name the model wrote, against the regions a scenario actually
 // renders. Import-free so it runs in node tests and in the resolver alike.
 //
-// The model names regions from its own knowledge — "Kharkiv Oblast",
-// "Zaporizhzhya", "Crimea" — while a scenario names them however its author did:
-// a hand-drawn world names each region after its town ("Kharkiv", "Zaporizhzhia"),
-// GADM after the province with native spelling ("Kharkiv", "Zaporizhzhya"). Exact
-// matching alone dropped most of what the model meant, and every dropped
-// transfer is a narrated annexation that never moved the map. The rules below
-// widen the match one careful step at a time and accept a candidate only when
-// it is the single region left standing: an ambiguous name resolves to nothing
-// rather than to the wrong province.
+// What moves a border is only ever an exact name: the map's own name or
+// alias, written with its marks, case or spacing different (foldRegionKey),
+// and only when one region alone answers to it (regionNamedIn,
+// foldedRegionIndex). The model writes the map's names because it is given
+// them and told so; one it gets wrong is left out and said in the receipt with
+// the map's nearest names (nearestRegionNames), and the next answer writes it
+// right. "there should be absolutely no keywording done in this game
+// anywhere" (the owner, 2026-11-13): an English administrative word stripped
+// off ("Kharkiv Oblast" to Kharkiv), one name found inside another, or a
+// spelling one or two edits away, took the wrong province in English and never
+// fired for "Oblast de Kharkiv". Nothing here knows a word of any language.
+// matchRegionName and nearestRegionNames only search, by spelling alone (one
+// name's whole words inside the other's, a letter or two apart): what the
+// model's own lookup functions and its receipts offer it to choose from
+// (lookupTools.js); the resolver of transfers and control never asks them.
 
 // What a string folds to is remembered. One name is looked up against every
 // city and every region on the map, several times over (exact, affix,
@@ -51,21 +57,6 @@ export const foldRegionKey = memoized(foldText);
 // (worldCities.js). Through the memo they would empty it of the map's own
 // names on the way in and sit in it afterwards.
 export const foldRegionKeyOnce = (value) => foldText(String(value ?? ""));
-
-// Administrative words a model appends that a map rarely carries. The
-// autonomous-* forms come first so the longer suffix wins.
-const REGION_SUFFIX = /\s+(?:autonomous (?:republic|region|oblast|okrug)|federal district|special administrative region|oblast|krai|okrug|voivodeship|governorate|prefecture|province|region|district|county|state|territory|department|canton|municipality|division|emirate|zone|area|city)$/;
-const REGION_PREFIX = /^(?:(?:the|republic of|province of|state of|district of|region of|county of|city of|oblast of|governorate of|prefecture of)\s+)+/;
-
-export const stripRegionAffixes = memoized((key) => {
-  let next = key;
-  let previous;
-  do {
-    previous = next;
-    next = next.replace(REGION_PREFIX, "").replace(REGION_SUFFIX, "").trim();
-  } while (next !== previous && next.length > 0);
-  return next;
-});
 
 // Bounded Levenshtein: stops counting once the distance exceeds `max`, so a
 // pool of a few thousand names costs almost nothing.
@@ -125,19 +116,47 @@ export const regionsFoldedAs = (index, query) => {
   return key ? index?.get(key) ?? [] : [];
 };
 
+// The one region of `pool` (the regions a written name may mean: the losing
+// side's) whose name or alias is the name written, its marks, case and
+// spacing aside; null when none is, or more than one. Exact in every
+// language: "Kharkiv Oblast" and "Oblast de Kharkiv" are both not "Kharkiv".
+export const regionNamedIn = (query, pool) => {
+  const key = foldRegionKey(query);
+  if (!key || !Array.isArray(pool)) return null;
+  return unique(pool.filter((region) => region?.id && namesOf(region).includes(key)));
+};
+
+// One name's whole words inside the other's, in any language that spaces its
+// words: "kharkiv" stands inside "kharkiv oblast" and "oblast de kharkiv";
+// "zaporizhzhya" does NOT hold "pori" just because the letters sit inside it
+// (that mistake once resolved a Ukrainian oblast to a Finnish town).
+export const containsWords = (outer, inner) => outer === inner || outer.startsWith(`${inner} `) || outer.endsWith(` ${inner}`) || outer.includes(` ${inner} `);
+
+// How far apart two folded names are by spelling, bounded by `max`: the whole
+// names, or one against a single word of the other (five letters or more):
+// "basra" is one letter from the "basrah" of "al basrah", and "kharkov" one
+// from the "kharkiv" of "oblast de kharkiv". Spelling alone, never a word of
+// any language: the leading "al" was once set aside by a list of Arabic
+// articles, and "oblast" by a list of English administrative words.
+const SPELLED_WORD = 5;
+export const spellingDistance = (key, name, max = Infinity) => {
+  let best = editDistance(key, name, max);
+  for (const word of name.split(" ")) {
+    if (word.length >= SPELLED_WORD && word !== name) best = Math.min(best, editDistance(key, word, max));
+  }
+  for (const word of key.split(" ")) {
+    if (word.length >= SPELLED_WORD && word !== key) best = Math.min(best, editDistance(word, name, max));
+  }
+  return best;
+};
+
 // The map's own names nearest a name it does not know, for telling the model
-// what it may have meant (the receipt of a dropped transfer or capture): from
-// the regions it could have meant, the closest by folded spelling, a shared
-// start counting before edits. Names only, at most `limit`.
-// Only for suggesting: a leading Arabic article ("Al-Basrah", "An-Najaf") is
-// set aside when spellings are compared, never when a region is resolved.
-const ARTICLE = /^(?:al|el|an|ar|as|ash|at|ad|az) (?=\S{3})/;
+// what it may have meant (the receipt of a dropped transfer or capture, a
+// lookup that found no region): from the regions it could have meant, the
+// closest by spelling, a shared start counting before edits. Names only, at
+// most `limit`.
 export const nearestRegionNames = (query, pool, { limit = 3 } = {}) => {
-  const bareOf = (text) => {
-    const folded = foldRegionKey(text);
-    return (stripRegionAffixes(folded) || folded).replace(ARTICLE, "");
-  };
-  const key = bareOf(query);
+  const key = foldRegionKey(query);
   if (!key || !Array.isArray(pool) || pool.length === 0) return [];
   const scored = [];
   const seen = new Set();
@@ -145,11 +164,12 @@ export const nearestRegionNames = (query, pool, { limit = 3 } = {}) => {
     const name = String(region?.name ?? "").trim();
     if (!name || seen.has(name)) continue;
     seen.add(name);
-    const bare = bareOf(name);
+    const bare = foldRegionKey(name);
+    if (!bare) continue;
     let shared = 0;
     while (shared < key.length && shared < bare.length && key[shared] === bare[shared]) shared += 1;
     const words = containsWords(bare, key) || containsWords(key, bare);
-    const distance = editDistance(key, bare, Math.max(key.length, 3));
+    const distance = spellingDistance(key, bare, Math.max(key.length, 3));
     // A close spelling, a common start of three letters, or one name inside the other.
     if (distance > Math.max(2, Math.floor(key.length / 2)) && shared < 3 && !words) continue;
     scored.push({ name, score: (words ? 0 : distance) - Math.min(shared, 4) });
@@ -160,22 +180,19 @@ export const nearestRegionNames = (query, pool, { limit = 3 } = {}) => {
     .map((entry) => entry.name);
 };
 
-// Resolve `query` (a name or id the model wrote) inside `pool` (the regions it
-// could legitimately mean). Returns { region, rule } or null. Rules, in order:
-//   exact      folded name or alias equals the query
-//   affix      equal once administrative prefixes/suffixes are stripped from either
-//   substring  one name contains the other (four characters or more)
-//   fuzzy      one or two edits apart (short names allow one), stripped forms
+// A search, for what the model looks up (lookupTools.js find_region, and the
+// lookups that take a region by name): `query` (a name the model typed) inside
+// `pool`, widened step by step, by spelling alone. It offers the map's own
+// names for the model to choose from, and every answer gives the region's own
+// name; the resolver of transfers and control never asks it (regionNamedIn
+// above is the resolver's). Returns { region, rule } or null. Rules, in order:
+//   exact   folded name or alias equals the query
+//   words   one name's whole words stand inside the other's (four characters or more)
+//   fuzzy   one or two edits apart (short names allow one), as spellingDistance measures
 // Every rule requires a single surviving region.
-// One name contains the other as whole words: "kharkiv oblast" contains
-// "kharkiv"; "zaporizhzhya" does NOT contain "pori" just because the letters
-// sit inside it — that mistake resolved a Ukrainian oblast to a Finnish town.
-const containsWords = (outer, inner) => outer === inner || outer.startsWith(`${inner} `) || outer.endsWith(` ${inner}`) || outer.includes(` ${inner} `);
-
 export const matchRegionName = (query, pool, { allowFuzzy = true, minSubstring = 4, maxFuzzy = 2 } = {}) => {
   const key = foldRegionKey(query);
   if (!key || !Array.isArray(pool) || pool.length === 0) return null;
-  const stripped = stripRegionAffixes(key);
 
   const exact = pool.filter((region) => namesOf(region).includes(key));
   if (exact.length) {
@@ -183,46 +200,27 @@ export const matchRegionName = (query, pool, { allowFuzzy = true, minSubstring =
     return hit ? { region: hit, rule: "exact" } : null;
   }
 
-  if (stripped && stripped !== key) {
-    const affix = pool.filter((region) => namesOf(region).some((name) => name === stripped || stripRegionAffixes(name) === stripped));
-    if (affix.length) {
-      const hit = unique(affix);
-      return hit ? { region: hit, rule: "affix" } : null;
-    }
-  }
-  const affixOnName = pool.filter((region) => namesOf(region).some((name) => stripRegionAffixes(name) === key));
-  if (affixOnName.length) {
-    const hit = unique(affixOnName);
-    return hit ? { region: hit, rule: "affix" } : null;
-  }
-
-  const probe = stripped || key;
-  if (probe.length >= minSubstring) {
-    const contains = pool.filter((region) => namesOf(region).some((name) => {
-      const bare = stripRegionAffixes(name) || name;
-      return bare.length >= minSubstring && (containsWords(bare, probe) || containsWords(probe, bare));
-    }));
+  if (key.length >= minSubstring) {
+    const contains = pool.filter((region) => namesOf(region).some((name) => name.length >= minSubstring && (containsWords(name, key) || containsWords(key, name))));
     // Several hits mean the model wrote a word shared by neighbours ("Kremenchuk"
     // over Kremenchuk North and Kremenchuk South when no plain Kremenchuk
     // exists): stop here rather than let the fuzzy rule pick one of them.
     if (contains.length) {
       const hit = unique(contains);
-      return hit ? { region: hit, rule: "substring" } : null;
+      return hit ? { region: hit, rule: "words" } : null;
     }
   }
 
-  // maxFuzzy lets a caller with a wide pool (the whole map, when the model
-  // named no losing side) allow a single edit only; inside one power's
-  // regions two edits are safe.
-  if (allowFuzzy && probe.length >= 5 && maxFuzzy >= 1) {
-    const budget = Math.min(maxFuzzy, probe.length >= 8 ? 2 : 1);
+  // maxFuzzy lets a caller with a wide pool (the whole map) allow a single
+  // edit only; inside one power's regions two edits are safe.
+  if (allowFuzzy && key.length >= 5 && maxFuzzy >= 1) {
+    const budget = Math.min(maxFuzzy, key.length >= 8 ? 2 : 1);
     let best = [];
     let bestDistance = budget + 1;
     for (const region of pool) {
       for (const name of namesOf(region)) {
-        const bare = stripRegionAffixes(name) || name;
-        if (bare.length < 5) continue;
-        const distance = editDistance(probe, bare, budget);
+        if (name.length < 5) continue;
+        const distance = spellingDistance(key, name, budget);
         if (distance > budget) continue;
         if (distance < bestDistance) {
           bestDistance = distance;

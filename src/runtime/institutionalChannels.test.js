@@ -62,7 +62,7 @@ test("first materialization binds institution.channelId and creates one persiste
   assert.equal(result.channel.institutionId, "council");
   assert.deepEqual(result.channel.countries.map((row) => row.polityKey), ["B", "C"]);
   assert.equal(result.chats.length, 1);
-  assert.match(result.channel.messages[0].text, /institutional channel established/i);
+  assert.match(result.channel.messages[0].text, / council opened\.$/, "written as the thread shows it");
 });
 
 test("repeated materialization is idempotent and preserves history", () => {
@@ -76,7 +76,7 @@ test("repeated materialization is idempotent and preserves history", () => {
   assert.equal(second.channel.id, first.channel.id);
   assert.equal(second.chats.length, 1);
   assert.ok(second.channel.messages.some((row) => row.text === "A durable message."));
-  assert.equal(second.channel.messages.filter((row) => /institutional channel established/i.test(row.text)).length, 1);
+  assert.equal(second.channel.messages.filter((row) => row.role === "system").length, 1);
 });
 
 test("membership changes preserve channel identity and history", () => {

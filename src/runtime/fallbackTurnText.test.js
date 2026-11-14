@@ -49,3 +49,24 @@ test("with a pack the sentence is written in the player's language, names as the
     "Die Zeit vergeht ohne direkten Befehl von Frankreich, doch das System verschiebt sich weiter und baut Druck auf.",
   );
 });
+
+// An order the model could not structure (gameplay.js fallbackDescriptionToAction)
+// was sorted into talks or an action by stems of talk words in about twenty
+// languages, with invitees taken from country names found in it. It is queued
+// as an action now, in every language alike. gameplay.js does not load under
+// bare node, so its fallback is read as source.
+test("an order the model could not structure is an action, never a chat guessed from its words", () => {
+  const gameplay = fs.readFileSync(new URL("../Game/AI/gameplay.js", import.meta.url), "utf8");
+  const start = gameplay.indexOf("const fallbackDescriptionToAction = ");
+  const fallback = gameplay.slice(start, gameplay.indexOf("\n};\n", start));
+  assert.ok(start > 0, "the fallback is in gameplay.js");
+  assert.match(fallback, /kind: "action"/);
+  assert.match(fallback, /invitees: \[\]/);
+  assert.match(fallback, /fallbackTurnText\("actionOrderExpanded", \{ order: trimmed \}\)/);
+  assert.doesNotMatch(gameplay, /looksLikeChatRequest|inferInviteeNames|chatHints\.js/);
+  assert.equal(FALLBACK_TURN_TEXTS.chatOrderExpanded, undefined);
+  // "Open talks with China" and its French and Chinese twins: one text, the order's own words kept.
+  for (const order of ["Open talks with China", "Ouvrir des négociations avec la Chine", "与中国开启谈判"]) {
+    assert.equal(fallbackTurnText("actionOrderExpanded", { order }), `${order}. Define the instrument, timing, and expected political or military effect so the move can be executed cleanly.`);
+  }
+});

@@ -39,12 +39,14 @@ import { normalizeClimateZones, normalizeTerrainAreas } from "./warGeography.js"
 // The four seasons by the northern months, and by the southern.
 const NORTH = Object.freeze({ winter: ["12-01", "02-28"], spring: ["03-01", "05-31"], summer: ["06-01", "08-31"], autumn: ["09-01", "11-30"] });
 const SOUTH = Object.freeze({ winter: ["06-01", "08-31"], spring: ["09-01", "11-30"], summer: ["12-01", "02-28"], autumn: ["03-01", "05-31"] });
-const season = (name, [start, end], weather, effects = {}) => ({ name, start, end, weather, effects });
+// Each says which of the world's seasons it is (`kind`, warGeography.js
+// SEASON_KINDS): the map's tint for it, which its name never decides.
+const season = (name, kind, [start, end], weather, effects = {}) => ({ name, kind, start, end, weather, effects });
 const fourSeasons = (dates, winter, spring, summer, autumn) => [
-  season("Winter", dates.winter, ...winter),
-  season("Spring", dates.spring, ...spring),
-  season("Summer", dates.summer, ...summer),
-  season("Autumn", dates.autumn, ...autumn),
+  season("Winter", "winter", dates.winter, ...winter),
+  season("Spring", "spring", dates.spring, ...spring),
+  season("Summer", "summer", dates.summer, ...summer),
+  season("Autumn", "autumn", dates.autumn, ...autumn),
 ];
 
 // What a season does, beside its weather.
@@ -64,16 +66,16 @@ const zone = (id, name, color, rings, seasons, blendKm = 520) => ({ id, name, co
 
 const ZONES = [
   zone("world-arctic-north", "The Arctic North", "#a8c4dc", [[-168, 66.5], [-160, 71.5], [-140, 70.5], [-125, 70], [-110, 68.5], [-97, 67], [-90, 64], [-82, 61], [-78, 59.5], [-71, 59], [-63, 60], [-57, 63], [-48, 60], [-40, 63.5], [-22, 70], [-18, 78], [-30, 83.5], [-70, 83.5], [-100, 81], [-125, 78], [-150, 74], [-168, 71]], [
-    season("Polar winter", ["10-01", "04-30"], { clear: 5, frost: 3, snow: 3, blizzard: 1 }, DEEP_COLD),
-    season("Thaw", ["05-01", "06-15"], { clear: 5, frost: 2, fog: 2, snow: 1, mud: 1 }, { pace: 0.75, cold: 0.4, freezes: true }),
-    season("Polar summer", ["06-16", "08-31"], { clear: 6, fog: 2, rain: 2 }, { cold: 0.2 }),
-    season("Freeze-up", ["09-01", "09-30"], { clear: 4, frost: 3, snow: 2, fog: 1 }, COLD),
+    season("Polar winter", "winter", ["10-01", "04-30"], { clear: 5, frost: 3, snow: 3, blizzard: 1 }, DEEP_COLD),
+    season("Thaw", "", ["05-01", "06-15"], { clear: 5, frost: 2, fog: 2, snow: 1, mud: 1 }, { pace: 0.75, cold: 0.4, freezes: true }),
+    season("Polar summer", "summer", ["06-16", "08-31"], { clear: 6, fog: 2, rain: 2 }, { cold: 0.2 }),
+    season("Freeze-up", "", ["09-01", "09-30"], { clear: 4, frost: 3, snow: 2, fog: 1 }, COLD),
   ]),
   zone("world-northern-forests", "The Northern Forests", "#8fb0a2", [[-166, 61], [-158, 64.5], [-163.27702, 69.58905], [-146.37618, 70.82433], [-134.87453, 70.33052], [-130.93171, 70.19918], [-125, 70], [-116.19873, 69.13247], [-100.78498, 67.44667], [-85.90533, 62.50224], [-82, 61], [-78, 59.5], [-65.63537, 57.97676], [-64, 55], [-56, 52], [-60, 47.5], [-68, 46], [-78, 46.5], [-89, 48], [-100, 50], [-113, 52.5], [-121, 47], [-131, 57.5], [-140, 59], [-152, 59], [-160, 59]], [
-    season("Winter", ["11-01", "03-31"], { clear: 5, snow: 3, frost: 2, blizzard: 1 }, COLD),
-    season("Thaw", ["04-01", "05-31"], { clear: 5, mud: 2, rain: 2, frost: 1 }, THAW),
-    season("Summer", ["06-01", "08-31"], { clear: 7, rain: 2, storm: 1 }),
-    season("Autumn", ["09-01", "10-31"], { clear: 5, rain: 2, fog: 1, frost: 1, snow: 1 }, { cold: 0.2 }),
+    season("Winter", "winter", ["11-01", "03-31"], { clear: 5, snow: 3, frost: 2, blizzard: 1 }, COLD),
+    season("Thaw", "", ["04-01", "05-31"], { clear: 5, mud: 2, rain: 2, frost: 1 }, THAW),
+    season("Summer", "summer", ["06-01", "08-31"], { clear: 7, rain: 2, storm: 1 }),
+    season("Autumn", "autumn", ["09-01", "10-31"], { clear: 5, rain: 2, fog: 1, frost: 1, snow: 1 }, { cold: 0.2 }),
   ]),
   zone("world-pacific-north-west", "The Pacific North-West", "#86aab0", [[-140, 60], [-132, 58], [-128, 54], [-124, 50.5], [-121, 47], [-121, 42.5], [-123.5, 39], [-125, 40], [-125, 45], [-127, 50], [-132, 55], [-138, 59.5]], fourSeasons(NORTH,
     [{ clear: 4, rain: 4, fog: 1, storm: 1 }, WET],
@@ -100,20 +102,20 @@ const ZONES = [
     [{ clear: 7, rain: 2, storm: 1 }],
   )),
   zone("world-mexico-central-america", "Mexico & Central America", "#b9ad6e", [[-117.5, 32.5], [-114, 32.5], [-110, 31.5], [-104, 29.5], [-99.5, 27], [-97, 25], [-97, 21.5], [-91, 18.5], [-87, 21.5], [-80, 23.5], [-74, 21], [-64, 18.5], [-60, 14], [-62, 10.5], [-72, 11.5], [-77, 8.5], [-80, 7.5], [-84, 9], [-88, 13], [-94, 15.5], [-100, 16.5], [-105.5, 20], [-109, 23], [-112, 26.5], [-115, 29.5]], [
-    season("Wet season", ["05-15", "10-31"], { clear: 4, rain: 4, storm: 2 }, WET),
-    season("Dry season", ["11-01", "05-14"], { clear: 8, heat: 2 }, WARM),
+    season("Wet season", "", ["05-15", "10-31"], { clear: 4, rain: 4, storm: 2 }, WET),
+    season("Dry season", "", ["11-01", "05-14"], { clear: 8, heat: 2 }, WARM),
   ]),
   zone("world-amazon", "The Amazon", "#5f9a6a", [[-79.5, 1], [-76, 6], [-70, 7.5], [-62, 8.5], [-56, 6], [-51, 4], [-49, 0], [-46, -2.5], [-47, -7], [-52, -10.5], [-60, -13.5], [-66, -13], [-72, -11], [-76, -7.5], [-78.5, -3]], [
-    season("The rains", ["12-01", "05-31"], { clear: 3, rain: 5, storm: 2 }, MONSOON),
-    season("Drier months", ["06-01", "11-30"], { clear: 6, rain: 3, storm: 1 }, { pace: 0.85 }),
+    season("The rains", "", ["12-01", "05-31"], { clear: 3, rain: 5, storm: 2 }, MONSOON),
+    season("Drier months", "", ["06-01", "11-30"], { clear: 6, rain: 3, storm: 1 }, { pace: 0.85 }),
   ]),
   zone("world-brazilian-highlands", "The Brazilian Highlands", "#a3ad73", [[-49, 0], [-44, -2], [-38, -4], [-35, -7], [-35.5, -11], [-39, -16], [-41, -22], [-44.5, -23.5], [-48.5, -26], [-53, -23.5], [-57.5, -21], [-60, -16], [-60, -13.5], [-52, -10.5], [-47, -7], [-46, -2.5]], [
-    season("Wet season", ["10-15", "03-31"], { clear: 4, rain: 4, storm: 2 }, WET),
-    season("Dry season", ["04-01", "10-14"], { clear: 9, heat: 1 }),
+    season("Wet season", "", ["10-15", "03-31"], { clear: 4, rain: 4, storm: 2 }, WET),
+    season("Dry season", "", ["04-01", "10-14"], { clear: 9, heat: 1 }),
   ]),
   zone("world-andes", "The Andes", "#a7a9b1", [[-81, -4], [-78.5, -3], [-76, -7.5], [-72, -11], [-68.5, -14], [-66, -18], [-67, -21], [-69, -18], [-71, -17], [-75.5, -15], [-77.5, -12], [-79.5, -8]], [
-    season("Dry cold", ["05-01", "09-30"], { clear: 7, frost: 3 }, { cold: 0.6, pace: 0.8, freezes: true }),
-    season("Rainy season", ["12-01", "03-31"], { clear: 5, rain: 3, storm: 1, snow: 1 }, { pace: 0.85 }),
+    season("Dry cold", "", ["05-01", "09-30"], { clear: 7, frost: 3 }, { cold: 0.6, pace: 0.8, freezes: true }),
+    season("Rainy season", "", ["12-01", "03-31"], { clear: 5, rain: 3, storm: 1, snow: 1 }, { pace: 0.85 }),
   ], 300),
   zone("world-southern-cone", "The Southern Cone", "#9cb08a", [[-71, -17], [-69, -18], [-66, -21], [-62, -22], [-58, -24], [-53, -26], [-48.5, -28], [-52, -33], [-56, -35.5], [-58, -38.5], [-62.5, -41], [-65, -46], [-67.5, -51], [-68.5, -55], [-73, -54], [-75.5, -49], [-74.5, -42], [-73.5, -36], [-71.5, -30], [-70.5, -23], [-70.5, -18.5]], fourSeasons(SOUTH,
     [{ clear: 6, rain: 2, frost: 2 }, CHILL],
@@ -134,70 +136,70 @@ const ZONES = [
     [{ clear: 8, rain: 2 }],
   ), 380),
   zone("world-eastern-europe", "Central & Eastern Europe", "#9ab4c4", [[12, 54.2], [14, 55], [18, 55], [21, 56.5], [24, 58.5], [28, 59.5], [33, 59.5], [40, 59], [48, 58.5], [55, 59.5], [60, 57.5], [59, 53.5], [55, 51.5], [50, 50], [47, 47.5], [44, 46], [40, 46.5], [37.5, 46.8], [34.5, 45.5], [32, 46.4], [29.6, 45.2], [28, 43.8], [24.5, 43.6], [22, 44.5], [19, 45], [16.5, 46.3], [13.5, 46.5], [12.5, 48.5], [14.5, 51], [14, 53]], [
-    season("Winter", ["12-01", "02-28"], { clear: 5, snow: 2, frost: 2, blizzard: 1 }, COLD),
-    season("The thaw", ["03-01", "04-30"], { clear: 4, mud: 4, rain: 2 }, THAW),
-    season("Late spring", ["05-01", "05-31"], { clear: 7, rain: 2, storm: 1 }),
-    season("Summer", ["06-01", "08-31"], { clear: 7, heat: 1, storm: 1, rain: 1 }, WARM),
-    season("Early autumn", ["09-01", "09-20"], { clear: 8, rain: 1, fog: 1 }),
-    season("Autumn rains", ["09-21", "11-15"], { clear: 4, rain: 3, mud: 2, fog: 1 }, { pace: 0.75 }),
-    season("Early winter", ["11-16", "11-30"], { clear: 5, frost: 3, snow: 1, fog: 1 }, CHILL),
+    season("Winter", "winter", ["12-01", "02-28"], { clear: 5, snow: 2, frost: 2, blizzard: 1 }, COLD),
+    season("The thaw", "", ["03-01", "04-30"], { clear: 4, mud: 4, rain: 2 }, THAW),
+    season("Late spring", "spring", ["05-01", "05-31"], { clear: 7, rain: 2, storm: 1 }),
+    season("Summer", "summer", ["06-01", "08-31"], { clear: 7, heat: 1, storm: 1, rain: 1 }, WARM),
+    season("Early autumn", "autumn", ["09-01", "09-20"], { clear: 8, rain: 1, fog: 1 }),
+    season("Autumn rains", "autumn", ["09-21", "11-15"], { clear: 4, rain: 3, mud: 2, fog: 1 }, { pace: 0.75 }),
+    season("Early winter", "winter", ["11-16", "11-30"], { clear: 5, frost: 3, snow: 1, fog: 1 }, CHILL),
   ]),
   zone("world-scandinavia", "Scandinavia & the North", "#9fbfd2", [[4.5, 58], [5, 62], [9.5, 64.5], [14, 68.5], [19, 70.5], [26, 71.2], [33, 70], [42, 68.8], [52, 68.5], [62, 69.5], [66, 67], [62, 63], [60, 57.5], [55, 59.5], [48, 58.5], [40, 59], [33, 59.5], [28, 59.5], [24, 58.5], [21, 56.5], [18, 55.5], [14, 55.5], [11, 56], [8, 57.5]], [
-    season("Winter", ["11-01", "03-31"], { clear: 5, snow: 3, frost: 1, blizzard: 1 }, { pace: 0.65, cold: 0.8, air: 0.7, freezes: true }),
-    season("Spring", ["04-01", "05-31"], { clear: 6, frost: 2, mud: 1, rain: 1 }, { pace: 0.8, freezes: true }),
-    season("Summer", ["06-01", "08-31"], { clear: 7, rain: 2, fog: 1 }),
-    season("Autumn", ["09-01", "10-31"], { clear: 5, rain: 2, fog: 2, frost: 1 }, { cold: 0.2 }),
+    season("Winter", "winter", ["11-01", "03-31"], { clear: 5, snow: 3, frost: 1, blizzard: 1 }, { pace: 0.65, cold: 0.8, air: 0.7, freezes: true }),
+    season("Spring", "spring", ["04-01", "05-31"], { clear: 6, frost: 2, mud: 1, rain: 1 }, { pace: 0.8, freezes: true }),
+    season("Summer", "summer", ["06-01", "08-31"], { clear: 7, rain: 2, fog: 1 }),
+    season("Autumn", "autumn", ["09-01", "10-31"], { clear: 5, rain: 2, fog: 2, frost: 1 }, { cold: 0.2 }),
   ]),
   zone("world-siberia", "Siberia", "#b4cde4", [[60, 57.5], [62, 63], [66, 67], [68, 72.5], [78, 73.5], [90, 76], [104, 78], [120, 74], [135, 72], [150, 72], [165, 70.5], [179.5, 69], [179.5, 64], [172, 60], [163, 57], [160, 53], [155, 51], [143, 53.5], [140, 48.5], [134, 47.5], [128, 49.5], [120, 52.5], [113, 50], [104, 51], [96, 50.5], [88, 49.5], [82, 50.5], [76, 53.5], [70, 54.5], [62, 54]], [
-    season("Siberian winter", ["10-15", "04-15"], { clear: 4, frost: 3, snow: 2, blizzard: 1 }, { pace: 0.55, cold: 1.3, air: 0.5, freezes: true }),
-    season("Thaw", ["04-16", "05-31"], { clear: 4, mud: 4, frost: 2 }, { pace: 0.6, freezes: true }),
-    season("Short summer", ["06-01", "08-31"], { clear: 7, rain: 2, storm: 1 }),
-    season("Autumn", ["09-01", "10-14"], { clear: 5, frost: 2, snow: 2, rain: 1 }, { cold: 0.4 }),
+    season("Siberian winter", "winter", ["10-15", "04-15"], { clear: 4, frost: 3, snow: 2, blizzard: 1 }, { pace: 0.55, cold: 1.3, air: 0.5, freezes: true }),
+    season("Thaw", "", ["04-16", "05-31"], { clear: 4, mud: 4, frost: 2 }, { pace: 0.6, freezes: true }),
+    season("Short summer", "summer", ["06-01", "08-31"], { clear: 7, rain: 2, storm: 1 }),
+    season("Autumn", "autumn", ["09-01", "10-14"], { clear: 5, frost: 2, snow: 2, rain: 1 }, { cold: 0.4 }),
   ], 600),
   zone("world-steppe", "The Central Asian Steppe", "#c8bc8c", [[44, 46], [47, 47.5], [50, 50], [55, 51.5], [59, 53.5], [62, 54], [70, 54.5], [76, 53.5], [82, 50.5], [88, 49.5], [96, 50.5], [104, 51], [113, 50], [120, 52.5], [126, 48], [121, 43.5], [114, 42], [106, 41.5], [97, 40.5], [90, 39], [80, 39.5], [74, 38.5], [68, 37.3], [62, 36.5], [56, 37.8], [53, 40], [50, 44]], [
-    season("Winter", ["11-01", "03-15"], { clear: 6, frost: 2, snow: 2 }, { cold: 0.8, pace: 0.8, freezes: true }),
-    season("Spring", ["03-16", "05-31"], { clear: 7, rain: 2, mud: 1 }),
-    season("Summer", ["06-01", "08-31"], { clear: 7, heat: 3 }, HOT),
-    season("Autumn", ["09-01", "10-31"], { clear: 9, frost: 1 }),
+    season("Winter", "winter", ["11-01", "03-15"], { clear: 6, frost: 2, snow: 2 }, { cold: 0.8, pace: 0.8, freezes: true }),
+    season("Spring", "spring", ["03-16", "05-31"], { clear: 7, rain: 2, mud: 1 }),
+    season("Summer", "summer", ["06-01", "08-31"], { clear: 7, heat: 3 }, HOT),
+    season("Autumn", "autumn", ["09-01", "10-31"], { clear: 9, frost: 1 }),
   ], 560),
   zone("world-middle-east", "The Middle East & Arabia", "#d4b276", [[34.2, 31.4], [35.5, 33.5], [36.5, 36.5], [40, 37.3], [44, 37.5], [48, 38.6], [53, 37.5], [56, 37.8], [62, 36.5], [64, 32], [62, 25.5], [57, 24.5], [56.5, 21], [59, 22], [55, 17], [52, 15.5], [45, 12.7], [43, 13.5], [42, 16.5], [39, 21.5], [36.5, 25.5], [34.5, 28], [33, 30]], [
-    season("Winter", ["12-01", "02-28"], { clear: 8, rain: 2 }),
-    season("Spring", ["03-01", "04-30"], { clear: 8, heat: 2 }),
-    season("Summer", ["05-01", "09-30"], { clear: 6, heat: 4 }, HOT),
-    season("Autumn", ["10-01", "11-30"], { clear: 9, heat: 1 }),
+    season("Winter", "winter", ["12-01", "02-28"], { clear: 8, rain: 2 }),
+    season("Spring", "spring", ["03-01", "04-30"], { clear: 8, heat: 2 }),
+    season("Summer", "summer", ["05-01", "09-30"], { clear: 6, heat: 4 }, HOT),
+    season("Autumn", "autumn", ["10-01", "11-30"], { clear: 9, heat: 1 }),
   ]),
   zone("world-sahara", "The Sahara", "#dcbc7c", [[-17, 27.5], [-16.5, 21], [-16.5, 17.5], [-12, 16.5], [-5, 16], [3, 16], [12, 16.5], [20, 16], [27, 16.5], [33, 18.5], [37, 22], [35, 25.5], [33.5, 28.5], [31.5, 30.6], [25, 30.2], [19, 30.2], [14, 31.5], [10, 32.5], [5, 33.5], [0, 33.8], [-5, 32.5], [-9, 30.5], [-13.5, 28]], [
-    season("Cool season", ["11-01", "03-31"], { clear: 9, heat: 1 }),
-    season("Hot season", ["04-01", "10-31"], { clear: 6, heat: 4 }, { heat: 1, pace: 0.85, wear: 0.01 }),
+    season("Cool season", "", ["11-01", "03-31"], { clear: 9, heat: 1 }),
+    season("Hot season", "", ["04-01", "10-31"], { clear: 6, heat: 4 }, { heat: 1, pace: 0.85, wear: 0.01 }),
   ], 600),
   zone("world-sahel", "The Sahel & the Savanna", "#bdb36e", [[-17.5, 15], [-16, 12], [-12, 9], [-7, 7.5], [-2, 8.2], [4, 8.8], [10, 9.5], [16, 9], [22, 8.5], [27, 7], [32, 6], [36, 6.5], [40, 8.5], [44, 9.5], [51, 11.5], [48, 13], [43.5, 12.6], [41, 14], [38.5, 17], [36, 17.5], [33, 16.5], [27, 15.5], [20, 15.2], [12, 15.5], [3, 15], [-5, 15.2], [-12, 15.5]], [
-    season("The rains", ["06-01", "09-30"], { clear: 4, rain: 4, storm: 2 }, WET),
-    season("Dry season", ["10-01", "05-31"], { clear: 7, heat: 3 }, WARM),
+    season("The rains", "", ["06-01", "09-30"], { clear: 4, rain: 4, storm: 2 }, WET),
+    season("Dry season", "", ["10-01", "05-31"], { clear: 7, heat: 3 }, WARM),
   ]),
   zone("world-central-africa", "The Central African Forests", "#5f9467", [[-13, 9], [-8.5, 6.5], [-3, 5.2], [2, 6.4], [6, 4.4], [9.5, 3.5], [9, -1], [11.5, -5], [15, -6], [22, -6.5], [28, -5.5], [30.5, -2], [31, 2], [30, 4.5], [27, 5.5], [22, 5], [16, 4], [12, 5.5], [8, 7.2], [3, 7.5], [-3, 7.5], [-8, 8]], [
-    season("Rains", ["01-01", "12-31"], { clear: 4, rain: 4, storm: 2 }, { pace: 0.8, air: 0.8 }),
+    season("Rains", "", ["01-01", "12-31"], { clear: 4, rain: 4, storm: 2 }, { pace: 0.8, air: 0.8 }),
   ]),
   zone("world-east-africa", "The East African Highlands", "#9db57c", [[30.5, -2], [31, 2], [34, 4.5], [38, 5.5], [41.5, 4], [42, -1.5], [40.5, -6], [39.5, -10.5], [35, -11.5], [31, -9], [29.5, -5]], [
-    season("Long rains", ["03-15", "05-31"], { clear: 5, rain: 4, storm: 1 }, WET),
-    season("Cool and dry", ["06-01", "09-30"], { clear: 9, fog: 1 }),
-    season("Short rains", ["10-01", "12-15"], { clear: 6, rain: 3, storm: 1 }),
-    season("Hot and dry", ["12-16", "03-14"], { clear: 8, heat: 2 }, WARM),
+    season("Long rains", "", ["03-15", "05-31"], { clear: 5, rain: 4, storm: 1 }, WET),
+    season("Cool and dry", "", ["06-01", "09-30"], { clear: 9, fog: 1 }),
+    season("Short rains", "", ["10-01", "12-15"], { clear: 6, rain: 3, storm: 1 }),
+    season("Hot and dry", "", ["12-16", "03-14"], { clear: 8, heat: 2 }, WARM),
   ], 380),
   zone("world-southern-africa", "Southern Africa", "#b6b27e", [[11.5, -5], [15, -6], [22, -6.5], [28, -5.5], [29.5, -5], [31, -9], [35, -11.5], [39.5, -10.5], [40.5, -15.5], [35.5, -22], [33, -26], [32.5, -29], [28.5, -33], [24, -34.3], [19.5, -34.8], [18, -32], [16.5, -28.5], [14.5, -23], [12, -18], [11.8, -12], [12.3, -8]], [
-    season("Rains", ["11-01", "03-31"], { clear: 5, rain: 3, storm: 2 }, WET),
-    season("Autumn", ["04-01", "04-30"], { clear: 8, rain: 2 }),
-    season("Dry winter", ["05-01", "08-31"], { clear: 8, frost: 2 }, { cold: 0.2 }),
-    season("Hot and dry", ["09-01", "10-31"], { clear: 7, heat: 3 }, WARM),
+    season("Rains", "", ["11-01", "03-31"], { clear: 5, rain: 3, storm: 2 }, WET),
+    season("Autumn", "autumn", ["04-01", "04-30"], { clear: 8, rain: 2 }),
+    season("Dry winter", "winter", ["05-01", "08-31"], { clear: 8, frost: 2 }, { cold: 0.2 }),
+    season("Hot and dry", "", ["09-01", "10-31"], { clear: 7, heat: 3 }, WARM),
   ]),
   zone("world-india", "The Indian Subcontinent", "#c2a86a", [[62, 25.5], [64, 30], [67, 33], [71.5, 34.5], [75, 35.5], [78.5, 34], [81, 30.5], [85, 28.4], [89, 27.5], [92.5, 27.8], [96.5, 28], [97, 25.5], [94.5, 22], [92.5, 21], [90, 21.8], [87, 21.3], [85.5, 19.5], [82.5, 16.5], [80.3, 13.5], [80.2, 9.5], [79.5, 5.8], [77.5, 7.8], [76, 10], [74, 14.5], [72.6, 19], [72.5, 21], [70, 21], [67, 24]], [
-    season("Cool season", ["12-01", "02-28"], { clear: 8, fog: 2 }),
-    season("Hot season", ["03-01", "05-31"], { clear: 6, heat: 4 }, HOT),
-    season("Monsoon", ["06-01", "09-30"], { clear: 3, rain: 5, storm: 1, mud: 1 }, MONSOON),
-    season("After the monsoon", ["10-01", "11-30"], { clear: 7, rain: 2, storm: 1 }),
+    season("Cool season", "", ["12-01", "02-28"], { clear: 8, fog: 2 }),
+    season("Hot season", "", ["03-01", "05-31"], { clear: 6, heat: 4 }, HOT),
+    season("Monsoon", "", ["06-01", "09-30"], { clear: 3, rain: 5, storm: 1, mud: 1 }, MONSOON),
+    season("After the monsoon", "", ["10-01", "11-30"], { clear: 7, rain: 2, storm: 1 }),
   ]),
   zone("world-tibet", "Tibet & the High Mountains", "#c3cdd8", [[71.5, 34.5], [74, 37.5], [80, 39.5], [90, 39], [97, 40.5], [103, 36.5], [103, 31], [99, 28.5], [96.5, 28], [92.5, 27.8], [89, 27.5], [85, 28.4], [81, 30.5], [78.5, 34], [75, 35.5]], [
-    season("Winter", ["10-15", "04-15"], { clear: 5, frost: 2, snow: 2, blizzard: 1 }, { pace: 0.6, cold: 0.9, air: 0.6, freezes: true }),
-    season("Summer", ["04-16", "10-14"], { clear: 7, rain: 2, frost: 1 }, { cold: 0.3, pace: 0.8 }),
+    season("Winter", "winter", ["10-15", "04-15"], { clear: 5, frost: 2, snow: 2, blizzard: 1 }, { pace: 0.6, cold: 0.9, air: 0.6, freezes: true }),
+    season("Summer", "summer", ["04-16", "10-14"], { clear: 7, rain: 2, frost: 1 }, { cold: 0.3, pace: 0.8 }),
   ], 360),
   zone("world-east-asia", "East Asia", "#93ad86", [[103, 22.5], [108, 21.5], [112, 21.5], [116.5, 23], [120.5, 26.5], [122, 30.5], [121, 33], [120, 36.5], [122.5, 37.5], [125, 39.5], [129.5, 42.5], [131, 43], [134, 34], [139, 34.5], [141, 37.5], [141.5, 41.5], [145.5, 44], [142, 46], [139, 45], [135, 43.5], [131, 44], [134, 47.5], [128, 49.5], [121, 43.5], [114, 42], [106, 41.5], [103, 36.5], [103, 31], [100, 26]], fourSeasons(NORTH,
     [{ clear: 7, frost: 2, snow: 1 }, CHILL],
@@ -206,8 +208,8 @@ const ZONES = [
     [{ clear: 8, rain: 2 }],
   )),
   zone("world-south-east-asia", "South-East Asia", "#6aa37a", [[92.5, 21], [94.5, 22], [97, 25.5], [100, 26], [103, 22.5], [108, 21.5], [110, 18], [109.5, 12], [106.5, 8.5], [104, 1.5], [110, 1], [117, 7], [119.5, 5], [122, 12], [120, 18.5], [123, 18.5], [126.5, 12], [126.5, 6], [131, 1], [141, -1.5], [150, -5], [151, -10.5], [142, -10], [134, -8.5], [125, -10.5], [116, -9], [106, -7.5], [100, -3], [96, 4], [98, 8], [97.5, 16], [94, 18]], [
-    season("Wet season", ["05-01", "10-31"], { clear: 3, rain: 5, storm: 2 }, MONSOON),
-    season("Dry season", ["11-01", "04-30"], { clear: 7, heat: 2, rain: 1 }, WARM),
+    season("Wet season", "", ["05-01", "10-31"], { clear: 3, rain: 5, storm: 2 }, MONSOON),
+    season("Dry season", "", ["11-01", "04-30"], { clear: 7, heat: 2, rain: 1 }, WARM),
   ]),
   zone("world-australian-outback", "The Australian Outback", "#d2a86c", [[113.5, -21.5], [114, -26], [115, -31], [117, -34], [123, -33.8], [128, -31.8], [133, -32], [136, -34.5], [138.5, -33], [141, -31.5], [144, -30.5], [147.5, -27.5], [146, -22], [142, -18.5], [137, -18], [131, -16.5], [126, -17.5], [121, -19.5]], fourSeasons(SOUTH,
     [{ clear: 9, frost: 1 }],
@@ -216,8 +218,8 @@ const ZONES = [
     [{ clear: 8, heat: 2 }],
   )),
   zone("world-tropical-australia", "Tropical Australia", "#7fa874", [[121, -19.5], [123.5, -16.5], [126.5, -14], [129.5, -14.8], [131, -12], [136.5, -11.8], [136, -15.5], [140, -17.5], [141.5, -12.5], [142.5, -10.7], [145.5, -15], [146.5, -19], [149, -22], [146, -22], [142, -18.5], [137, -18], [131, -16.5], [126, -17.5]], [
-    season("Wet season", ["11-01", "04-30"], { clear: 4, rain: 3, storm: 3 }, MONSOON),
-    season("Dry season", ["05-01", "10-31"], { clear: 9, heat: 1 }),
+    season("Wet season", "", ["11-01", "04-30"], { clear: 4, rain: 3, storm: 3 }, MONSOON),
+    season("Dry season", "", ["05-01", "10-31"], { clear: 9, heat: 1 }),
   ], 400),
   zone("world-temperate-australia", "Temperate Australia", "#9db383", [[147.5, -27.5], [153.5, -26], [153, -31], [151, -34.5], [150, -37.5], [146.5, -39.2], [144, -38.5], [141, -38.2], [138, -35.8], [136, -34.5], [138.5, -33], [141, -31.5], [144, -30.5]], fourSeasons(SOUTH,
     [{ clear: 6, rain: 3, fog: 1 }],
@@ -232,7 +234,7 @@ const ZONES = [
     [{ clear: 6, rain: 3, fog: 1 }],
   ), 260),
   zone("world-antarctica", "Antarctica", "#c8d8e8", [[-179.5, -64], [-120, -70], [-60, -63], [0, -69], [60, -66], [120, -66], [179.5, -68], [179.5, -89.5], [-179.5, -89.5]], [
-    season("The polar year", ["01-01", "12-31"], { clear: 4, frost: 3, blizzard: 2, snow: 1 }, DEEP_COLD),
+    season("The polar year", "", ["01-01", "12-31"], { clear: 4, frost: 3, blizzard: 2, snow: 1 }, DEEP_COLD),
   ], 400),
 ];
 

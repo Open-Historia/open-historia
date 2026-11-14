@@ -534,6 +534,27 @@ test("an id given to a war being fought, for a war between others, is a war of i
   assert.deepEqual(twice.events.map((event) => event.warId), ["war-x", "war-x-r2"]);
 });
 
+test("wars between countries named in another script are told apart without an id, as their English twins are", () => {
+  // A war written without an id is named for its two leading members. Cut to
+  // a-z and 0-9, every country named in Cyrillic or Chinese was "belligerent":
+  // a second war started without an id took the first one's, and the end of
+  // the second ended the first.
+  for (const [a, b, c, d] of [["Russia", "Ukraine", "China", "Japan"], ["Россия", "Украина", "Китай", "Япония"], ["俄罗斯", "乌克兰", "中国", "日本"]]) {
+    const turn = (warWorld, updates, round) => {
+      const candidate = { events: [{ id: `e${round}`, date: `20${30 + round}-01-01`, title: "", description: "", kind: "military" }], warUpdates: updates };
+      settled(candidate, warWorld);
+      return merged(candidate, warWorld, round).world;
+    };
+    const one = turn(world, `~start~${a}~${b}~1~Title: The first war`, 1);
+    const two = turn(one, `~start~${c}~${d}~1~Title: The second war`, 2);
+    const wars = turn(two, `~end~${c}~${d}~1~Peace`, 3).wars;
+    const statusOf = (member) => wars.find((war) => war.sideA[0] === member)?.status;
+    assert.equal(wars.length, 2, `${a}: two wars`);
+    assert.equal(statusOf(a), "active", `${a}: the first war is still fought`);
+    assert.equal(statusOf(c), "ended", `${c}: the second is over`);
+  }
+});
+
 test("an end with a mis-copied id is the one war its event's combatants fight", () => {
   const atWar = { polityOverrides: {}, wars: [{ id: "war-iraq-kuwait-1990", status: "active", sideA: ["Iraq"], sideB: ["Kuwait"], startedDate: "1990-08-02" }] };
   const candidate = {

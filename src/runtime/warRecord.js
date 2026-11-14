@@ -32,6 +32,7 @@
 
 import { toCountryName } from "./ownerNames.js";
 import { compareGameDates, normalizeGameDate } from "./gameDates.js";
+import { nameId } from "../../server/nameId.js";
 
 export const WAR_STATUSES = Object.freeze(["active", "ceasefire", "ended"]);
 const STATUS_SET = new Set(WAR_STATUSES);
@@ -100,14 +101,20 @@ export const warDate = (value) => {
 // compact war record, so an id holding one could never be written back).
 export const cleanWarId = (value) => clean(value).replace(/[~|]+/g, "-");
 
-// A name as it stands in an id: ASCII letters and digits.
-export const warIdPart = (value) => warPolityName(value)
+// A name as it stands in an id: the game's one rule for an id made from a name
+// (server/nameId.js). A Latin name keeps the ASCII slug it always had; a name in
+// another script is its own hash. Cut to a-z and 0-9, every polity named in
+// Cyrillic or Chinese was "belligerent": a second war written without an id
+// was given the first one's id (and refused, or filed as its renewal), and an
+// id-less end of the second ended the first.
+const latinWarIdPart = (name) => name
   .normalize("NFKD")
   .replace(/[̀-ͯ]/g, "")
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, "-")
   .replace(/^-+|-+$/g, "")
-  .slice(0, 40) || "belligerent";
+  .slice(0, 40);
+export const warIdPart = (value) => nameId(warPolityName(value), latinWarIdPart) || "belligerent";
 
 // The id a war is given from what it is, when nothing gave it one: its two
 // leading members (in a fixed order, so either side's writing gives the same)
@@ -157,6 +164,14 @@ export const warSidesOf = (sideA, sideB) => {
   return b.length === 0 && a.length === 2 ? [[a[0]], [a[1]]] : [a, b];
 };
 
+// The note the engine itself wrote as the cause of a war it opened from a
+// battle's report, until 2026-11-13 (nativeWarLedger.js, its combat binder):
+// bookkeeping in the game's own words, never a cause a player can read. A save
+// from before keeps it, and it is cleared here, by the exact text the engine
+// wrote, so no screen and no prompt has to know it. Nothing writes it now.
+// i18n-ignore: the engine's own old bookkeeping, never shown.
+const ENGINE_OPENED_WAR_NOTE = "Native bootstrap from hard-combat event:";
+
 // The canonical war record, or null when what is given cannot be one (no two
 // opposing sides). `fallbackId` is used for a record that carries no id.
 export const normalizeWarRecord = (entry, { fallbackId = "" } = {}) => {
@@ -174,7 +189,8 @@ export const normalizeWarRecord = (entry, { fallbackId = "" } = {}) => {
   // cause where none was kept.
   const [savedTitle, ...runOn] = clean(entry.title).split(/\s*[~|]\s*/);
   const title = savedTitle || `${sideA[0]}–${sideB[0]} War`;
-  const cause = clean(entry.cause) || runOn.join(" ").trim();
+  const savedCause = clean(entry.cause) || runOn.join(" ").trim();
+  const cause = savedCause.startsWith(ENGINE_OPENED_WAR_NOTE) ? "" : savedCause;
 
   const war = {
     id,

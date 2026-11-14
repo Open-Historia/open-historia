@@ -222,10 +222,12 @@ export const peaceImpacts = (world, war, territory) => {
 
 // The regions a peace's own terms move, after the ground is settled: every
 // region of a country annexed, to the other of the two, and every region
-// ceded by name, from the other of the two to the one named. A region is found
-// on the map's catalog (`regions`, [{ id, name, countryCode, country }]) by its
-// exact name or id, among those the giver holds; a name the giver holds no
-// region of is left out ("Szohod and Dospad" is tried whole, then as two).
+// ceded by name, from the other of the two to the one named. A cession is one
+// region (peaceTerms.js readTermsLine: a cede~ part a region), found on the
+// map's catalog (`regions`, [{ id, name, countryCode, country }]) by its exact
+// name or id, among those the giver holds; a name the giver holds no region of
+// is left out. (A name was split at an English " and " when it was not found
+// whole: "Dospad and Wesk" was two regions, and a region named so was cut in two.)
 // Returns { impacts, ceded, missed }: the event's impacts, the regions ceded by
 // their names on the map, and those found nowhere ([{ region, to }]).
 export const termsImpacts = (world, terms, { from = "", to = "", regions = [], note = "" } = {}) => {
@@ -247,17 +249,13 @@ export const termsImpacts = (world, terms, { from = "", to = "", regions = [], n
   for (const entry of list(read.cessions)) {
     const giver = otherOf(entry.to);
     const gives = (region) => fold(regionOwnerNow(region, overrides)) === fold(giver) || fold(sovereignty[clean(region?.id)]) === fold(giver);
-    const find = (name) => catalog.find((region) => gives(region) && (fold(region?.name) === fold(name) || clean(region?.id) === clean(name)));
-    const whole = find(entry.region);
-    const parts = whole ? [whole] : entry.region.split(/\s+and\s+/i).map((name) => find(name));
-    if (parts.length === 0 || parts.some((region) => !region)) {
+    const region = catalog.find((candidate) => gives(candidate) && (fold(candidate?.name) === fold(entry.region) || clean(candidate?.id) === clean(entry.region)));
+    if (!region) {
       missed.push(entry);
       continue;
     }
-    for (const region of parts) {
-      move(region, entry.to);
-      ceded.push({ region: clean(region.name) || clean(region.id), to: entry.to });
-    }
+    move(region, entry.to);
+    ceded.push({ region: clean(region.name) || clean(region.id), to: entry.to });
   }
   if (read.annexed?.country && read.annexed.by) {
     const annexed = clean(read.annexed.country);

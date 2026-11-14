@@ -45,3 +45,21 @@ test("a range past the end is 416 with the total, and a malformed one is the who
 test("sha256Hex is the shared one, so it works without WebCrypto", async () => {
   assert.equal(await sha256Hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
 });
+
+test("a store's id from a name in another script is the name's own, as its English twin's is", async () => {
+  // Cut to a-z and 0-9, a map, a basemap, a scenario or a game named in
+  // Cyrillic or Chinese had an id of the hour it was made ("map-…"); one with
+  // a number in its name was that number.
+  const { normalizeId } = await import("./util.js");
+  const models = await import("./models.js");
+  assert.equal(normalizeId("Westeros Map", "map", 48), "westeros-map", "as it always was");
+  assert.equal(models.normalizeId("World War II 1939", "scenario"), "world-war-ii-1939", "as it always was");
+  for (const [first, second] of [["Карта 1", "Мир 1"], ["地图一", "世界一"]]) {
+    for (const id of [(name) => normalizeId(name, "map", 48), (name) => models.normalizeId(name, "scenario")]) {
+      assert.equal(id(first), id(first), first);
+      assert.notEqual(id(first), id(second), first);
+      assert.notEqual(id(first), "1", first);
+      assert.match(id(first), /^u-[a-z0-9]+$/, first);
+    }
+  }
+});

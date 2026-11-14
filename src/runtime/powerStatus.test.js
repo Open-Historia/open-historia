@@ -234,8 +234,11 @@ test("null/blank power scores never become zero-valued baseline evidence", () =>
   assert.equal(blankSeed.powerStatus, undefined);
 });
 
-test("pre-fix poisoned campaign fallback scores are migrated back to unresolved evidence", () => {
-  const world = {
+// Whether a score rested on a tier alone is the record's own flag
+// (baselineOnly), never a phrase among its reasons: the same record with its
+// reasons in another language, or none, is migrated exactly alike.
+test("campaign scores that rested on a tier alone are migrated back to unresolved evidence, by their flag", () => {
+  const worldWith = (reasons, flag = true) => ({
     polityOverrides: { Alpha: { status: "active" } },
     politicalActors: { byPolity: {} },
     countryStats: {},
@@ -252,17 +255,41 @@ test("pre-fix poisoned campaign fallback scores are migrated back to unresolved 
           score: 36.5,
           baselineScore: null,
           basis: "campaign-derived",
-          reasons: ["minor-power scenario/campaign baseline; insufficient relative material data"],
+          ...(flag ? { baselineOnly: true } : {}),
+          reasons,
         },
       },
     },
-  };
+  });
 
+  for (const reasons of [["minor-power scenario/campaign baseline; insufficient relative material data"], ["puissance mineure : données matérielles insuffisantes"], []]) {
+    const refreshed = refreshPowerStatus(worldWith(reasons), { date: "2014-03-22", round: 1, immediate: true });
+    const alpha = refreshed.powerStatus.byPolity.Alpha;
+    assert.equal(alpha.tier, "minor-power", JSON.stringify(reasons));
+    assert.equal(alpha.score, null);
+    assert.equal(alpha.baselineScore, null);
+    assert.equal(alpha.basis, "native-fallback");
+    assert.equal("baselineOnly" in alpha, false, "the migrated record no longer claims a score");
+  }
+  // Without the flag, an English phrase among the reasons decides nothing.
+  const unflagged = refreshPowerStatus(worldWith(["minor-power scenario/campaign baseline; insufficient relative material data"], false), { date: "2014-03-22", round: 1, immediate: true });
+  assert.equal(unflagged.powerStatus.byPolity.Alpha.score, 36.5);
+});
+
+test("a campaign score that rests on a tier alone carries the flag that says so", () => {
+  const world = {
+    polityOverrides: { Alpha: { status: "active" } },
+    politicalActors: { byPolity: {} },
+    countryStats: {},
+    countryTags: {},
+    institutions: { schemaVersion: 1, byId: {} },
+    agreements: [],
+    wars: [],
+    powerStatus: { schemaVersion: 1, byPolity: { Alpha: { polityKey: "Alpha", tier: "regional-power", basis: "authored", score: null } } },
+  };
   const refreshed = refreshPowerStatus(world, { date: "2014-03-22", round: 1, immediate: true });
-  assert.equal(refreshed.powerStatus.byPolity.Alpha.tier, "minor-power");
-  assert.equal(refreshed.powerStatus.byPolity.Alpha.score, null);
-  assert.equal(refreshed.powerStatus.byPolity.Alpha.baselineScore, null);
-  assert.equal(refreshed.powerStatus.byPolity.Alpha.basis, "native-fallback");
+  assert.equal(refreshed.powerStatus.byPolity.Alpha.baselineOnly, true);
+  assert.equal(normalizePowerStatus(refreshed.powerStatus, refreshed).byPolity.Alpha.baselineOnly, true, "kept across a save");
 });
 
 
@@ -396,6 +423,45 @@ test("the per-turn refresh moves tiers through hysteresis, and leaves a world wi
   assert.equal(refreshPowerStatusForTurn(bare, { date: "2014-02-01", round: 2 }), bare);
   const empty = { ...makePeerWorld(), powerStatus: { schemaVersion: 1, byPolity: {} } };
   assert.equal(refreshPowerStatusForTurn(empty, { date: "2014-02-01", round: 2 }), empty);
+});
+
+// A country's tags are the model's words in the player's language (countryTags.js): never its power. "superpower"
+// once made a major power and "nuclear" was worth 8 points, where "superpuissance" and "nucléaire" were worth nothing.
+test("a country's tags never set its power: the English words and their French twins score as no tags at all", () => {
+  const worldWith = (tags) => ({
+    ...makePeerWorld(),
+    countryTags: { Testland: tags, Peera: tags },
+    politicalActors: { byPolity: { Testland: { tags }, Peera: { tags } } },
+    polityOverrides: { ...makePeerWorld().polityOverrides, Bare: { name: "Bare", status: "active" } },
+  });
+  const english = worldWith(["superpower", "great-power", "nuclear"]);
+  const french = worldWith(["superpuissance", "grande-puissance", "nucléaire"]);
+  const none = worldWith([]);
+  for (const polity of ["Testland", "Peera", "Bare"]) {
+    assert.deepEqual(estimateNativePowerScore(english, polity), estimateNativePowerScore(none, polity), polity);
+    assert.deepEqual(estimateNativePowerScore(french, polity), estimateNativePowerScore(none, polity), polity);
+  }
+  assert.ok(!estimateNativePowerScore(english, "Testland").reasons.some((reason) => /nuclear/i.test(reason)));
+
+  // A polity with no figures, no baseline and no record is the fallback floor in every language.
+  for (const world of [english, french, none]) {
+    const refreshed = refreshPowerStatus(world, { round: 1, immediate: true });
+    assert.equal(refreshed.powerStatus.byPolity.Bare.tier, "minor-power");
+    assert.equal(refreshed.powerStatus.byPolity.Bare.basis, "native-fallback");
+    assert.equal(refreshed.powerStatus.byPolity.Bare.score, null);
+    assert.equal(powerTierForPolity(world, "Bare"), "minor-power", "no record: the floor, whatever the tags say");
+  }
+  assert.deepEqual(refreshPowerStatus(english, { round: 1, immediate: true }).powerStatus, refreshPowerStatus(french, { round: 1, immediate: true }).powerStatus);
+});
+
+test("a record's tier is one of the game's three; another word for one is no tier", () => {
+  assert.equal(normalizePowerTier("major-power"), "major-power");
+  assert.equal(normalizePowerTier(" Regional_Power "), "regional-power", "case and the underscore spelling of the game's own word");
+  for (const word of ["great-power", "global-power", "middle-power", "superpower", "grande-puissance"]) {
+    assert.equal(normalizePowerTier(word), "", word);
+  }
+  const world = normalizePowerStatus({ byPolity: { Testland: { tier: "great-power", score: 80 } } }, makePeerWorld());
+  assert.equal(world.byPolity.Testland, undefined, "a record whose tier is no tier is not kept");
 });
 
 // A turn's refresh scores every polity against one identity index of the world (refreshPowerStatus); each score is

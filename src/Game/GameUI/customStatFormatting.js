@@ -7,9 +7,12 @@ import {
     validEconomicDisplayCurrency,
 } from "../../runtime/economicDisplayCurrency.js";
 
-// Only explicit GDP/GDP-per-capita monetary metrics use the campaign display
-// currency. Scenario-defined currencies for treasuries, trade, historical
-// currencies, and metrics whose GDP key was repurposed remain author-controlled.
+// Only the GDP and GDP-per-capita monetary metrics (by their keys, `gdp` and
+// `gdpPerCapita`) use the campaign display currency. Scenario-defined
+// currencies for treasuries, trade and historical currencies remain
+// author-controlled. Its label is the author's words, in any language, and is
+// never read: a GDP labelled "PIB" or "ВВП" converts as one labelled "GDP"
+// does, and a stat under the gdp key is GDP whatever it is called.
 // An authored prefix supplies the legacy metric's source display currency;
 // the default $ GDP prefix follows OpenHistoria's 2026-USD convention.
 // Changing display never rewrites saved values. Bare ¥ is excluded because
@@ -24,11 +27,10 @@ const GDP_SOURCE_BY_PREFIX = Object.freeze({
     "CN¥": "CNY",
     "CNY ": "CNY",
 });
+const GDP_KEYS = new Set(["gdp", "gdpPerCapita"]);
 export const customGdpSourceCurrency = (stat) => {
     if (stat?.kind !== "currency" || String(stat?.suffix || "").trim()) return null;
-    const eligible = (stat.key === "gdp" && /^gdp$/i.test(String(stat.label || "").trim()))
-        || (stat.key === "gdpPerCapita" && /^gdp\s*(?:\/\s*capita|per\s+capita)$/i.test(String(stat.label || "").trim()));
-    return eligible ? GDP_SOURCE_BY_PREFIX[String(stat.prefix || "")] || null : null;
+    return GDP_KEYS.has(stat.key) ? GDP_SOURCE_BY_PREFIX[String(stat.prefix || "")] || null : null;
 };
 
 const formatCompactNumber = (value, { digits = 1, locale } = {}) => {

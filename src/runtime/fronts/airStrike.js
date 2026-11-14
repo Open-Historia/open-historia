@@ -90,7 +90,7 @@
 import { hashSeed } from "../unitMotion.js";
 import { ORDINARY, unitFigures } from "../unitTypes.js";
 import { AIR_REACH_KM } from "./air.js";
-import { DUG_IN_LOSS } from "./constants.js";
+import { AIR_ROLE_FIGHTER_SHARE, DUG_IN_LOSS } from "./constants.js";
 import { airWorth, readMilitary } from "./military.js";
 import { isLive } from "./troops.js";
 import { kmBetween, measureOptions } from "./worldGrid.js";
@@ -262,30 +262,11 @@ export const withTurnAirStrikes = (before, added, round) => {
 
 // ---- an air unit's fighters ------------------------------------------------------------------
 
-const COUNTED = /(\d[\d,]*)\s+(?:[a-z0-9-]+\s+){0,2}?(fighter|interceptor|escort|bomber|attack aircraft|strike aircraft|dive bomber|torpedo bomber)s?/gi;
-const FIGHTER_WORD = /fighter|interceptor|pursuit|escort|air superiority/i;
-const BOMBER_WORD = /bomb|strike|attack|ground support|close support|torpedo/i;
-
-// What share of an air unit is fighters, 0 to 1: as its composition counts them ("120 fighters, 40 bombers"),
-// else as its composition or its name says it is (fighters, bombers or both), else half.
-export const fightersShareOf = (unit) => {
-  const text = `${clean(unit?.composition, 400)}`;
-  let fighters = 0;
-  let bombers = 0;
-  for (const match of text.matchAll(COUNTED)) {
-    const count = Number(match[1].replace(/,/g, ""));
-    if (!(count > 0)) continue;
-    if (/fighter|interceptor|escort/i.test(match[2]) && !/bomber/i.test(match[2])) fighters += count;
-    else bombers += count;
-  }
-  if (fighters + bombers > 0) return fighters / (fighters + bombers);
-  const words = `${text} ${clean(unit?.name)}`;
-  const fights = FIGHTER_WORD.test(words);
-  const bombs = BOMBER_WORD.test(words);
-  if (fights && !bombs) return 0.85;
-  if (bombs && !fights) return 0.15;
-  return 0.5;
-};
+// What share of an air unit is fighters, 0 to 1, by what it flies: its `airRole` (fighter, bomber or mixed,
+// constants.js AIR_ROLES), as the model or the scenario said. A unit that says none flies the mixed share. Its
+// composition and name are never read for it: "120 fighters" counted where "120 chasseurs" did not, and a
+// "Strike Wing" of interceptors was taken for bombers (the owner, 2026-11-13: no keywording anywhere).
+export const fightersShareOf = (unit) => AIR_ROLE_FIGHTER_SHARE[clean(unit?.airRole).toLowerCase()] ?? AIR_ROLE_FIGHTER_SHARE.mixed;
 
 // ---- who is at war with whom ---------------------------------------------------------------
 

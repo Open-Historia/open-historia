@@ -17,7 +17,6 @@ test("mapRefs remain available to ordinary contextual identity resolution", () =
   const result = resolvePolityIdentity("PRK", collisionWorld, {
     allowUnknown: false,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
   });
   assert.equal(result.status, "map-ref");
@@ -28,7 +27,6 @@ test("political mutation identity can reject mapRefs and stock geography as line
   const result = resolvePolityIdentity("PRK", collisionWorld, {
     allowUnknown: false,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: false,
     allowMapRefs: false,
   });
@@ -52,7 +50,6 @@ test("political mutation identity still resolves an explicitly declared dormant 
   const result = resolvePolityIdentity("PRK", world, {
     allowUnknown: false,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: false,
     allowMapRefs: false,
   });
@@ -76,7 +73,6 @@ test("disabling mapRefs does not disable exact current names or explicit aliases
     const result = resolvePolityIdentity(token, world, {
       allowUnknown: false,
       requireActive: false,
-      allowCoreMatch: true,
       allowStockBase: false,
       allowMapRefs: false,
     });

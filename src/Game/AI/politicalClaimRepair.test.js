@@ -2,7 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { getPoliticalProfile, normalizePoliticalActors } from "../../runtime/politicalActors.js";
-import { politicalImpactCompletenessFailure, preparePoliticalClaimContext, validatePoliticalImpactCompleteness } from "./politicalImpactCompleteness.js";
+import {
+  bindScriptedPoliticalClaims,
+  politicalImpactCompletenessFailure,
+  preparePoliticalClaimContext,
+  scriptedPoliticalImpactRequirements,
+  validatePoliticalImpactCompleteness,
+} from "./politicalImpactCompleteness.js";
 import {
   applyPoliticalClaimRepairResponse,
   buildPoliticalClaimRepairRequest,
@@ -315,7 +321,9 @@ test("repair request targets only the event that actually failed Political World
     "Latvia Extends Caretaker Administration",
     "The existing caretaker administration continues under the same governing arrangement.",
   );
-  alreadyCanonical.impacts.politicalActorOps = [packed("set-government", "Latvia", { patch: { status: "caretaker", form: "Caretaker Government" } })];
+  // (A caretaker cabinet says it has no party in its own op, rulingPartyIds: [];
+  // the word "caretaker" in its form was what exempted it.)
+  alreadyCanonical.impacts.politicalActorOps = [packed("set-government", "Latvia", { patch: { status: "caretaker", form: "Caretaker Government", rulingPartyIds: [] } })];
   const missing = event(
     "Latvia Swears In Permanent Cabinet",
     "A permanent coalition cabinet takes office under Prime Minister Arvils Ašeradens.",
@@ -444,22 +452,30 @@ test("one bounded repair request can reconcile multiple remaining structured pol
   assert.equal(validatePoliticalImpactCompleteness(candidate, { world, claimContext }), "");
 });
 
-test("repair transaction preserves legacy/CSE fail-closed completeness on staged event clones", () => {
+// A scripted beat's authored claims are bound to the event that tells it, and
+// ride the repair's staged clones: a beat whose impacts give Latvia a new
+// leader keeps its event held to the matching ops while another event is
+// repaired. (They were a set of "legacy" events checked by English prose.)
+test("repair transaction keeps a scripted beat's authored claims on staged event clones", () => {
   const world = latviaWorld();
   const structured = event(
     "Latvia Swears In Permanent Cabinet",
     "A permanent cabinet takes office under Prime Minister Arvils Ašeradens.",
   );
-  const authoredLegacy = event(
-    "President Swears In Another New Cabinet",
-    "The president swears in a new cabinet which assumes office immediately.",
-  );
+  const scripted = {
+    ...event("Valsts prezidents ieceļ jaunu valdību", "Ministru prezidente atkāpjas."),
+    impacts: { politicalActorOps: [], polityChanges: [{ operation: "update", code: "Latvia", stats: { leader: "Kristaps Kalns" } }] },
+  };
+  const requirements = scriptedPoliticalImpactRequirements([{
+    id: "latvia-beat", date: "2026-07-06", title: scripted.title, text: scripted.description,
+    impacts: { polityChanges: [{ operation: "update", code: "Latvia", stats: { leader: "Kristaps Kalns" } }] },
+  }]);
   const candidate = {
-    events: [structured, authoredLegacy],
+    events: [structured, scripted],
     politicalClaims: "1~Latvia~government,leadership",
   };
   const claimContext = preparePoliticalClaimContext(candidate);
-  claimContext.legacyEvents.add(authoredLegacy);
+  assert.equal(bindScriptedPoliticalClaims([scripted], requirements), 1);
   const targets = collectPoliticalClaimRepairTargets(candidate, claimContext);
 
   const outcome = applyPoliticalClaimRepairResponse({
@@ -482,7 +498,7 @@ test("repair transaction preserves legacy/CSE fail-closed completeness on staged
   });
 
   assert.equal(outcome.applied, false);
-  assert.match(outcome.error, /remained incomplete.*another new cabinet/i);
+  assert.match(outcome.error, /remained incomplete.*Valsts prezidents ieceļ jaunu valdību/i);
   assert.deepEqual(structured.impacts.politicalActorOps, [], "failed staged validation must not partially commit the earlier repair");
 });
 

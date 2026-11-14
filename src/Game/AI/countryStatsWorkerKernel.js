@@ -10,6 +10,7 @@ import {
 } from "../../runtime/countryStats.js";
 import { gameDateDayNumber, parseGameDate } from "../../runtime/gameDates.js";
 import { regionOwnerName } from "./regionVocab.js";
+import { STATS_DEMOGRAPHIC_TAGS, STATS_ECONOMIC_TAGS, eventConcernsTarget, eventHasAnyTag } from "./statsEventEvidence.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -35,7 +36,6 @@ const canonicalStatsPolity = (token, world) => {
   const resolved = resolvePolityIdentity(text, world, {
     allowUnknown: true,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
     identityIndex: statsIdentityIndexOf(world),
   });
@@ -143,18 +143,14 @@ export const geometryCentroid = (geometry) => {
   return best ? { lng: best.lng, lat: best.lat } : null;
 };
 
-const statsRegionHeuristicWeight = ({ tags = [], type = "" } = {}) => {
-  const lowered = new Set(normalizeArray(tags).map((tag) => normalizeString(tag).toLowerCase()).filter(Boolean));
-  const typeKey = normalizeString(type).toLowerCase();
-  let weight = 1;
-  if ([...lowered].some((tag) => tag.includes("capital"))) weight *= 4;
-  else if ([...lowered].some((tag) => tag.includes("metro") || tag.includes("city") || tag.includes("urban"))) weight *= 2.5;
-  if ([...lowered].some((tag) => tag.includes("desert"))) weight *= 0.5;
-  if ([...lowered].some((tag) => tag.includes("mountain") || tag.includes("hill"))) weight *= 0.8;
-  if ([...lowered].some((tag) => tag.includes("jungle"))) weight *= 0.75;
-  if (typeKey.includes("island")) weight *= 0.8;
-  return Math.max(0.1, weight);
-};
+// Every region of the map weighs the same in the plan. A region's weight was
+// read from English words inside its imported tags and its author's type name
+// ("capital", "urban", "desert", "island"), which a map tagged or typed in any
+// other language never matched, and "capitalist" or "Desert Island Resort"
+// matched wrongly; the map carries no structured density to read in their place.
+// "there should be absolutely no keywording done in this game anywhere" (the
+// owner, 2026-11-13).
+const REGION_WEIGHT = 1;
 
 const buildStatsMacroPlan = (plannedRows = []) => {
   const rows = normalizeArray(plannedRows)
@@ -455,28 +451,12 @@ const statsPolityAliases = (world, canonicalName) => {
 const STATS_ECONOMIC_EVENT_SCAN_LIMIT = 64;
 const STATS_ECONOMIC_EVIDENCE_LIMIT = 12;
 const STATS_ACCOUNTED_EVENT_LIMIT = 64;
-const ECONOMIC_EVENT_PATTERN = /\b(?:tax|taxation|levy|budget|fiscal|deficit|surplus|debt|bond|loan|credit|bank|banking|currency|monetary|inflation|unemployment|recession|depression|boom|growth|trade|tariff|customs|sanction|blockade|shortage|harvest|famine|food|coal|oil|energy|industry|industrial|factory|rail|railway|infrastructure|subsid|spending|appropriation|finance|financial|wage|strike|mobiliz|war finance|occupation|annex|cession|reparat|investment|export|import)\b/i;
-const STATS_GENERIC_POLITY_WORDS = new Set([
-  "empire", "kingdom", "republic", "state", "states", "federation", "federal",
-  "union", "united", "people", "peoples", "grand", "duchy", "commonwealth",
-]);
-
-const statsTextMentionsTarget = (textValue, aliases) => {
-  const text = normalizeString(textValue).toLowerCase();
-  if (!text) return false;
-  for (const alias of aliases) {
-    const phrase = normalizeString(alias).toLowerCase();
-    if (phrase.length >= 4 && text.includes(phrase)) return true;
-    const tokens = phrase
-      .replace(/[^\p{L}\p{N}\s-]/gu, " ")
-      .split(/[\s-]+/)
-      .filter((token) => token.length >= 5 && !STATS_GENERIC_POLITY_WORDS.has(token));
-    for (const token of tokens) {
-      if (text.includes(token)) return true;
-      if (token.length >= 6 && text.includes(token.slice(0, 5))) return true;
-    }
-  }
-  return false;
+// Whether the country a Stats sheet is for is `token`: an exact identity check
+// on a name the records write, never a search of prose (statsEventEvidence.js).
+const statsTargetTest = (world, target) => {
+  const targetKey = normalizeString(target).toLowerCase();
+  return (token) => Boolean(normalizeString(token))
+    && normalizeString(canonicalStatsPolity(token, world)).toLowerCase() === targetKey;
 };
 
 // Any game date, BC included (runtime/gameDates.js).
@@ -539,36 +519,29 @@ const buildStatsPreviousMacroContextKernel = (previous, macroPlan = []) => {
 
 const buildTargetEconomicEvidenceKernel = ({ bundle, statCode, previous, world }) => {
   const target = canonicalStatsPolity(statCode, world) || normalizeString(statCode);
-  const targetKey = target.toLowerCase();
-  const aliases = statsPolityAliases(world, target);
   const accounted = new Set(
     normalizeArray(previous?.continuity?.accountedEventIds)
       .map(normalizeString)
       .filter(Boolean),
   );
-  const sameTarget = (token) => {
-    const resolved = canonicalStatsPolity(token, world);
-    return normalizeString(resolved).toLowerCase() === targetKey;
-  };
+  const sameTarget = statsTargetTest(world, target);
+  const playerIsTarget = sameTarget(bundle?.game?.country);
 
   const recent = normalizeArray(bundle?.events).slice(-STATS_ECONOMIC_EVENT_SCAN_LIMIT);
   const relevant = [];
   for (const event of recent) {
     const id = normalizeString(event?.id);
     if (!id) continue;
-    const prose = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
     const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
     const statImpact = normalizeArray(impacts.polityChanges).some((change) =>
       change?.stats && sameTarget(change?.code || change?.name));
     const legalTerritoryImpact = normalizeArray(impacts.regionTransfers).some((transfer) =>
       sameTarget(transfer?.fromCode) || sameTarget(transfer?.toCode));
-    const controlImpact = normalizeArray(impacts.regionControlOps).some((op) =>
-      sameTarget(op?.fromCode) || sameTarget(op?.toCode) ||
-      sameTarget(op?.actorCode) || sameTarget(op?.claimantCode));
-    const combatant = normalizeArray(event?.combatants).some(sameTarget);
-    const mentioned = statsTextMentionsTarget(prose, aliases);
-    const economicCue = ECONOMIC_EVENT_PATTERN.test(prose);
-    if (!(statImpact || legalTerritoryImpact || (economicCue && (mentioned || controlImpact || combatant)))) continue;
+    // An economic, disaster or war event the country is a party to, by the
+    // event's own tags and structure (statsEventEvidence.js).
+    const economicEvent = eventHasAnyTag(event, STATS_ECONOMIC_TAGS)
+      && eventConcernsTarget(event, sameTarget, { playerIsTarget });
+    if (!(statImpact || legalTerritoryImpact || economicEvent)) continue;
     relevant.push({
       id,
       date: normalizeString(event?.date),
@@ -609,7 +582,6 @@ const STATS_CALIBRATION_PREGAME_EVENT_LIMIT = 12;
 const STATS_CALIBRATION_CAMPAIGN_EVENT_LIMIT = 16;
 const STATS_CALIBRATION_HISTORY_LIMIT = 8;
 const STATS_CALIBRATION_CONSOLIDATED_LIMIT = 10;
-const STATS_DEMOGRAPHIC_CANON_PATTERN = /\b(?:war|battle|casualt|killed|deaths?|mortality|epidem|pandemic|disease|famine|starvation|refuge|migration|emigration|immigration|expulsion|deport|population|birth|annex|cession|partition|occupation|independence|secession|mobiliz|demobiliz|reconstruction|coloniz|settlement)\b/i;
 
 const compactStatsCalibrationEventKernel = (event) => {
   const date = normalizeString(event?.date) || "undated";
@@ -623,16 +595,12 @@ const compactStatsCalibrationEventKernel = (event) => {
 
 const buildStatsPopulationCalibrationCanonKernel = ({ bundle, statCode, world }) => {
   const target = canonicalStatsPolity(statCode, world) || normalizeString(statCode);
-  const targetKey = target.toLowerCase();
-  const aliases = statsPolityAliases(world, target);
   const startDate = normalizeString(bundle?.game?.startDate || bundle?.game?.gameDate);
   const currentDate = normalizeString(bundle?.game?.gameDate || startDate);
   const events = normalizeArray(bundle?.events);
 
-  const sameTarget = (token) => {
-    const resolved = canonicalStatsPolity(token, world);
-    return normalizeString(resolved).toLowerCase() === targetKey;
-  };
+  const sameTarget = statsTargetTest(world, target);
+  const playerIsTarget = sameTarget(bundle?.game?.country);
   const isBeforeStart = (event) => {
     if (normalizeString(event?.source).toLowerCase() === "pregame") return true;
     const eventDate = normalizeString(event?.date);
@@ -646,18 +614,17 @@ const buildStatsPopulationCalibrationCanonKernel = ({ bundle, statCode, world })
   const campaignRelevant = events
     .filter((event) => !isBeforeStart(event))
     .filter((event) => {
-      const prose = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
       const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
       const directStats = normalizeArray(impacts.polityChanges).some((change) =>
         change?.stats && sameTarget(change?.code || change?.name));
       const territory = normalizeArray(impacts.regionTransfers).some((transfer) =>
         sameTarget(transfer?.fromCode) || sameTarget(transfer?.toCode));
       const combatant = normalizeArray(event?.combatants).some(sameTarget);
-      const mentioned = statsTextMentionsTarget(prose, aliases);
-      return directStats || territory || combatant ||
-        (mentioned && STATS_DEMOGRAPHIC_CANON_PATTERN.test(prose)) ||
-        (STATS_DEMOGRAPHIC_CANON_PATTERN.test(prose) &&
-          /\b(?:pandemic|epidemic|global|worldwide)\b/i.test(prose));
+      // A war or a disaster the country is a party to, by the event's own tags
+      // and structure (statsEventEvidence.js).
+      const demographic = eventHasAnyTag(event, STATS_DEMOGRAPHIC_TAGS)
+        && eventConcernsTarget(event, sameTarget, { playerIsTarget });
+      return directStats || territory || combatant || demographic;
     })
     .slice(-STATS_CALIBRATION_CAMPAIGN_EVENT_LIMIT);
 
@@ -881,7 +848,7 @@ export const buildTargetStatsTerritorialBasisKernel = async ({
         baseOwner,
         lng: coordinateOrNull(region?.lng),
         lat: coordinateOrNull(region?.lat),
-        weight: statsRegionHeuristicWeight({ tags: region?.tags, type: region?.type }),
+        weight: REGION_WEIGHT,
         adjacencies: normalizeArray(region?.adjacencies).map(normalizeString).filter(Boolean),
       });
     }
@@ -920,7 +887,7 @@ export const buildTargetStatsTerritorialBasisKernel = async ({
         baseOwner,
         lng,
         lat,
-        weight: statsRegionHeuristicWeight({ tags: region?.tags, type: region?.type }),
+        weight: REGION_WEIGHT,
         adjacencies: normalizeArray(region?.adjacencies).map(normalizeString).filter(Boolean),
       };
     })
@@ -1074,7 +1041,7 @@ export const buildTargetStatsTerritorialBasisKernel = async ({
 
     const grantsControl = normalizeArray(event?.impacts?.regionControlOps)
       .some((operation) =>
-        ["control", "control_flip"].includes(normalizeString(operation?.op).toLowerCase()) &&
+        normalizeString(operation?.op).toLowerCase() === "control" &&
         sameTarget(operation?.toCode));
 
     const grantsSovereignty = normalizeArray(event?.impacts?.regionTransfers)

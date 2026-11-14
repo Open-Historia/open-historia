@@ -22,8 +22,8 @@
 // And a ledger line that names its events by something other than their
 // numbers (a date, an event's id, an order's id: three live answers in four did)
 // is given the numbers they stand for, where exactly one event is meant: a
-// record tied to no event cannot be told apart from bookkeeping, and the
-// ledgers drop it (nativeDiplomaticDirector.js "no unique causal event").
+// record tied to no event has no event to date it or to tell it (the
+// diplomatic ledgers date one by the skip, nativeDiplomaticDirector.js).
 // Nothing is invented and nothing is dropped here; what is still wrong after it
 // is the check's and the salvage's as before.
 //

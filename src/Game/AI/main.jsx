@@ -62,6 +62,7 @@ import {
     contextWindowMessage,
     couldNotBeReached,
     describeHtmlErrorPage,
+    errorParamOf,
     errorPayloadText,
     extractErrorMessage,
     isBrokenBodyError,
@@ -72,8 +73,8 @@ import {
     isStreamingRefusal,
     isStreamingRequired,
     isTemperatureRefusal,
+    isProseWithoutPayload,
     isUnreachableError,
-    looksLikeDeliberation,
     providerErrorReplyMessage,
     shouldRetryProviderFailure,
     stoppedAtOutputLimit,
@@ -1418,8 +1419,8 @@ async function callOpenAIStyleChatCompletions({
     // costs structured output, so the cheaper concession goes first.
     // Remembered, so the next call on this gateway starts buffered.
     let streamingDisabled = false;
-    // The model answered with its own planning monologue instead of calling the
-    // tool (see looksLikeDeliberation in providerErrors.js). One-shot, same
+    // The model answered in words, with no payload in them, instead of calling
+    // the tool (see isProseWithoutPayload in providerErrors.js). One-shot, same
     // discipline as the two above: it drives a retry that does not consume one of
     // runJsonTask's two output attempts, so it must only ever flip once.
     let insistedOnToolCall = false;
@@ -1577,7 +1578,7 @@ async function callOpenAIStyleChatCompletions({
 
             const sentOwnTemperature = Object.keys(ownTemperature).length > 0
                 && requestCustomParams.temperature === undefined;
-            if (!disableTemperature && sentOwnTemperature && isTemperatureRefusal(errorMessage)) {
+            if (!disableTemperature && sentOwnTemperature && isTemperatureRefusal(errorMessage, payload)) {
                 disableTemperature = true;
                 temperatureRefusals.learn(samplingKey);
                 console.warn(`[ai] ${providerLabel} refused the requested temperature; retrying at the model's own, and remembering.`);
@@ -1588,7 +1589,7 @@ async function callOpenAIStyleChatCompletions({
             // does tools, it just stops keeping the connection warm — whereas
             // dropping out of tool mode costs structured output, which is the
             // difference between a real turn and canned events.
-            if (streamThisRequest && isStreamingRefusal(errorMessage)) {
+            if (streamThisRequest && isStreamingRefusal(errorMessage, payload)) {
                 streamingDisabled = true;
                 streamingRefusals.add(streamingKey);
                 console.warn(`[ai] ${providerLabel} refused a streamed request; retrying buffered — long turns on this endpoint may time out.`);
@@ -1605,7 +1606,11 @@ async function callOpenAIStyleChatCompletions({
             }
 
             if (structuredMode === "tool") {
-                const reasoningConflict = /function tools.*reasoning_effort.*not supported|reasoning_effort.*not supported.*function tools/i.test(errorMessage);
+                // OpenAI names the refused parameter; a gateway relaying only
+                // its message ("Function tools with reasoning_effort are not
+                // supported ...") is read by those words.
+                const reasoningConflict = errorParamOf(payload) === "reasoning_effort"
+                    || /function tools.*reasoning_effort.*not supported|reasoning_effort.*not supported.*function tools/i.test(errorMessage);
 
                 if (!disableToolReasoning && reasoningConflict) {
                     disableToolReasoning = true;
@@ -1772,11 +1777,12 @@ async function callOpenAIStyleChatCompletions({
             }
 
             // The model talked itself out of answering: no tool call, and the text
-            // is a planning monologue rather than anything a salvage pass could
-            // parse. Left alone this returns unparseable prose, runJsonTask spends
-            // an attempt on it, the same thing happens again, and the player loses
+            // holds nothing a salvage pass could parse (isProseWithoutPayload: the
+            // reply's structure decides, never the language it is written in).
+            // Left alone this returns unparseable prose, runJsonTask spends an
+            // attempt on it, the same thing happens again, and the player loses
             // the turn to canned events — 3 of 4 turns in the field report behind
-            // looksLikeDeliberation.
+            // this step.
             //
             // The first version of this just re-asked for the tool call, more
             // firmly. That does not work, and the log says why: the model spent
@@ -1794,7 +1800,7 @@ async function callOpenAIStyleChatCompletions({
             // Reasoning that came back alone is judged here as it was before it
             // was read apart from the answer, so this step is taken when it
             // always was and not more often.
-            if (looksLikeDeliberation(text || reasoningText) && canRetryBeforeDeadline(deadline, 0)) {
+            if (isProseWithoutPayload(text || reasoningText) && canRetryBeforeDeadline(deadline, 0)) {
                 // The rung order lives in structuredMode.js, with the tests that
                 // pin it. Native OpenAI enforces tool_choice, so it never steps
                 // down out of tool mode - a deliberating model there is a
@@ -1802,7 +1808,7 @@ async function callOpenAIStyleChatCompletions({
                 const canStepDown = structuredMode !== "tool" || allowJsonSchemaFallback;
                 const nextMode = canStepDown ? nextStructuredMode(structuredMode) : null;
                 if (nextMode) {
-                    console.warn(`[ai] ${providerLabel} deliberated instead of calling ${tool.name}; dropping from ${structuredMode} to ${nextMode}`);
+                    console.warn(`[ai] ${providerLabel} answered in words instead of calling ${tool.name}; dropping from ${structuredMode} to ${nextMode}`);
                     structuredMode = nextMode;
                     liftedCapForReasoning = true;
                     insistedOnToolCall = true;
@@ -1811,7 +1817,7 @@ async function callOpenAIStyleChatCompletions({
                 if (!insistedOnToolCall) {
                     insistedOnToolCall = true;
                     liftedCapForReasoning = true;
-                    console.warn(`[ai] ${providerLabel} deliberated instead of calling ${tool.name}; retrying once, insisting on the tool call`);
+                    console.warn(`[ai] ${providerLabel} answered in words instead of calling ${tool.name}; retrying once, insisting on the tool call`);
                     continue;
                 }
             }
@@ -2226,7 +2232,7 @@ async function callAnthropic(systemPrompt, history, {
             // The model takes no temperature (or none beside thinking): ask at its
             // own, and remember, as the OpenAI-compatible path does.
             if (response.status === 400 && !temperatureRefused && body.temperature !== undefined && customParams.temperature === undefined
-                && isTemperatureRefusal(message) && attempt < retries) {
+                && isTemperatureRefusal(message, payload) && attempt < retries) {
                 temperatureRefused = true;
                 temperatureRefusals.learn(samplingKey);
                 console.warn(`[ai] Anthropic: ${model} refused the requested temperature; retrying at the model's own, and remembering.`);
@@ -2245,7 +2251,7 @@ async function callAnthropic(systemPrompt, history, {
             }
             // The reverse: an endpoint that will not stream at all. Give up the
             // keep-alive rather than the request.
-            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message) && attempt < retries) {
+            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message, payload) && attempt < retries) {
                 streamingDisabled = true;
                 streamingRefusals.add(streamingKey);
                 console.warn("[ai] Anthropic refused a streamed request; retrying buffered — long turns may time out.");
@@ -2535,7 +2541,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
                 continue;
             }
             if (response.status === 400 && !temperatureRefused && body.temperature !== undefined && customParams.temperature === undefined
-                && isTemperatureRefusal(message) && attempt < retries) {
+                && isTemperatureRefusal(message, payload) && attempt < retries) {
                 temperatureRefused = true;
                 temperatureRefusals.learn(samplingKey);
                 console.warn(`[ai] Anthropic-compatible: ${model} refused the requested temperature; retrying at the model's own, and remembering.`);
@@ -2554,7 +2560,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             }
             // The reverse: an endpoint that will not stream at all. Give up the
             // keep-alive rather than the request.
-            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message) && attempt < retries) {
+            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message, payload) && attempt < retries) {
                 streamingDisabled = true;
                 streamingRefusals.add(streamingKey);
                 console.warn("[ai] Anthropic-compatible refused a streamed request; retrying buffered — long turns may time out.");
@@ -2632,16 +2638,16 @@ async function callAnthropicCompatible(systemPrompt, history, {
             const anthropicText = extractAnthropicText(data);
             // Still refusing: say so, rather than hand back an empty "answer".
             if (!anthropicText && data?.error) throw toolStreamRefusalError("Anthropic Compatible", data.error, retriedAfterOverload);
-            // No tool call, and what came back is a planning monologue rather
-            // than anything a salvage pass could parse. The proxy accepted
+            // No tool call, and what came back holds nothing a salvage pass could
+            // parse (isProseWithoutPayload). The proxy accepted
             // tool_choice without enforcing it, so asking again more firmly
             // achieves nothing — change the channel instead. There is only one
             // step down on this API, but it is the step that matters.
             if (structuredMode === "tool" && !insistedOnToolCall && attempt < retries
-                && looksLikeDeliberation(anthropicText) && canRetryBeforeDeadline(deadline, 0)) {
+                && isProseWithoutPayload(anthropicText) && canRetryBeforeDeadline(deadline, 0)) {
                 insistedOnToolCall = true;
                 structuredMode = "text_json";
-                console.warn(`[ai] Anthropic Compatible deliberated instead of calling ${tool.name}; dropping from tool to text_json`);
+                console.warn(`[ai] Anthropic Compatible answered in words instead of calling ${tool.name}; dropping from tool to text_json`);
                 continue;
             }
             if (anthropicText) {
@@ -3507,8 +3513,8 @@ A project needs all three of: it takes months or years, it can be measured, and 
 
 To act, end your reply with a fenced \`\`\`projects block containing a JSON array (in ADDITION to your normal prose reply — always also say in plain text what you opened or changed; the array itself is stripped from what the player sees). Each entry:
 - Open one: {"op":"create","name":"Project Leviathan","summary":"...","kind":"project","tags":["military","naval"],"status":"active","progress":0,"targetDate":"YYYY-MM-DD","milestones":[{"title":"...","date":"YYYY-MM-DD"}]} — kind is "operation" for a military, intelligence or covert undertaking and "project" for a programme or build. Add "secrecy":"covert" for something deniable, and "ownerCode":"<full country name>" for a FOREIGN power's programme you have learned of (omit it entirely for the player's own).
-- Change one: {"op":"update","id":"<exact id from the list below>","name":"<its exact name>","progress":58,"status":"stalled","lastUpdate":"One sentence on what just changed."} — send only the fields that actually change.
-- Record a checkpoint: {"op":"milestone","id":"<exact id>","name":"<its exact name>","milestone":{"title":"Sea trials","date":"YYYY-MM-DD","status":"pending"}} — status is pending, done, or missed.
+- Change one: {"op":"update","id":"<exact id from the list below>","name":"<its exact name>","progress":58,"status":"stalled","lastUpdate":"One sentence on what just changed."} — send only the fields that actually change. status is exactly one of proposed, active, stalled, paused, complete, failed, cancelled, and priority one of high, normal, low; any other word is left out and changes nothing.
+- Record a checkpoint: {"op":"milestone","id":"<exact id>","name":"<its exact name>","milestone":{"title":"Sea trials","date":"YYYY-MM-DD","status":"pending"}} — status is exactly pending, done, slipped or missed.
 - End one: {"op":"complete"|"cancel"|"fail","id":"<exact id>","name":"<its exact name>","note":"How it ended."} — complete if it succeeded, cancel if it was called off, fail if it was defeated. All three keep it on the board, where the player can see it under Closed. Do NOT use "op":"remove" for any of these: remove erases the entry entirely and is only for something that should never have been opened.
 Both "id" and "name" must be copied EXACTLY from [Current Projects & Operations] below — never invented or guessed, or the change lands on nothing and is silently dropped. Omit the \`\`\`projects block entirely when nothing should change; most replies need none.
 
@@ -3738,7 +3744,6 @@ async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = fal
         // exact-message retrieval path across both active and archived chats.
         chatHistoryLong: renderAdvisorDiplomaticContext({
             chats: chatData, world: worldData, game: gameData, pastTalks,
-            question: currentQuestion,
         }),
         advisorMessages: CONVERSATION_IN_TURNS,
         plannedActions: PLANNED_ACTIONS_IN_ACTION_PLANNING,
@@ -3870,7 +3875,7 @@ export async function sendAdvisorGroupMessage({ threadId, messages, onSpeakerChu
         .filter((message) => message?.role === "user" || message?.role === "advisor" || message?.role === "error");
     const question = [...conversation].reverse().find((message) => message.role === "user")?.text || "";
     if (!String(question).trim()) throw new Error("A group chat needs a question from the player.");
-    const speakers = selectAdvisorGroupSpeakers(group.memberIds, conversation, question, contacts, chiefName);
+    const speakers = selectAdvisorGroupSpeakers(group.memberIds, conversation);
     if (!speakers.length) throw new Error("Every group member has already responded or explicitly declined this question.");
     const { effectiveBatchSize } = readAdvisorGroupSettings();
     const batches = groupSpeakerBatches(speakers, effectiveBatchSize);
@@ -3994,7 +3999,6 @@ Decide independently whether you need to speak as ${name}. Address a substantive
 // to appear there too, a second copy that changed with every message.
 export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "", {
     chatId = "",
-    decisionFocusText = "",
 } = {}) {
     await ensurePromptsLoaded();
     // The panel passes its country objects; `- ${country}` of one read
@@ -4098,7 +4102,6 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         world: worldData,
         speakingAs: speaker,
         playerCountry: playerCountry || gameData?.country || "",
-        decisionFocusText,
     });
     const politicalSection = politicalDecision?.text ? `\n\n${politicalDecision.text}` : "";
 
@@ -4357,11 +4360,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     const priorHistory = diplomaticHistory;
     const priorMemory = diplomaticMemorySummary;
     const priorMemoryTime = diplomaticMemoryThroughTime;
-    const focusText = withCatchUp(playerMessage, catchUp);
-    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, {
-        chatId,
-        decisionFocusText: focusText,
-    });
+    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, { chatId });
 
     const asked = { role: "user", parts: [{ text: withCatchUp(playerMessage, catchUp) }] };
     const history = compactConversationHistory([...priorHistory, asked]);
@@ -4429,10 +4428,7 @@ export async function buildDiplomaticEvaluationRequest({
     priorMessages = [],
     chatId = "",
 } = {}) {
-    const systemPrompt = await buildDiplomaticSystemPrompt(participantNames || [], playerCountry, speakingAs, {
-        chatId,
-        decisionFocusText: playerMessage,
-    });
+    const systemPrompt = await buildDiplomaticSystemPrompt(participantNames || [], playerCountry, speakingAs, { chatId });
 
     const priorMemory = latestSavedDiplomaticMemory(priorMessages);
     let history = priorMessages

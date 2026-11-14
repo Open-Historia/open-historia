@@ -26,14 +26,27 @@ test("existing custom GDP in authored euros converts visibly to campaign GBP wit
   assert.equal(rawGdp, 1_793_750_000_000, "custom GDP values must remain unchanged");
 });
 
-test("scenario-specific monetary fields, historical units and repurposed GDP keys are never converted", () => {
+// GDP is the stat with the gdp key, whatever its author called it: the label
+// is the author's words, in any language, and was once read in English only.
+test("a GDP stat converts by its key alone: labelled in any language, exactly as one labelled GDP", () => {
+  const gbp = { ...en, economicDisplayCurrency: "GBP" };
+  const english = formatCustomStatValue({ key: "gdp", label: "GDP", kind: "currency", prefix: "€", compact: true }, 1_793_750_000_000, gbp);
+  assert.equal(english, "£1.6T");
+  for (const label of ["PIB", "ВВП", "国内生产总值", "", "Harvest yield"]) {
+    assert.equal(formatCustomStatValue({ key: "gdp", label, kind: "currency", prefix: "€", compact: true }, 1_793_750_000_000, gbp), english, label);
+  }
+  assert.equal(formatCustomStatValue({ key: "gdpPerCapita", label: "PIB par habitant", kind: "currency", prefix: "€", compact: true }, 12_550, gbp), "£10.9K");
+});
+
+test("scenario-specific monetary fields and historical units are never converted", () => {
   const gbp = { ...en, economicDisplayCurrency: "GBP" };
   const notGdp = { key: "treasury", label: "Treasury", kind: "currency", prefix: "€", compact: true };
-  const repurposed = { key: "gdp", label: "Harvest yield", kind: "currency", prefix: "€", compact: true };
+  // A GDP-looking label on another key is the author's own metric.
+  const lookalike = { key: "harvest", label: "GDP", kind: "currency", prefix: "€", compact: true };
   const otherCurrency = { key: "gdp", label: "GDP", kind: "currency", prefix: "¥", compact: true };
   const historic = { key: "gdp", label: "GDP", kind: "currency", prefix: "ℳ", compact: true };
   assert.equal(formatCustomStatValue(notGdp, 7_500_000, gbp), "€7.5M");
-  assert.equal(formatCustomStatValue(repurposed, 1_000_000, gbp), "€1.0M");
+  assert.equal(formatCustomStatValue(lookalike, 1_000_000, gbp), "€1.0M");
   assert.equal(formatCustomStatValue(otherCurrency, 1_000_000, gbp), "¥1.0M", "ambiguous yen/yuan symbol must not be guessed");
   assert.equal(formatCustomStatValue(historic, 1_000_000, gbp), "ℳ1.0M");
   assert.equal(formatCustomStatValue({ key: "gdp", label: "GDP", kind: "number", prefix: "€" }, 100, gbp), "€100");

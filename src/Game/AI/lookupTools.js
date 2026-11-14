@@ -13,9 +13,11 @@
 // Import-light on purpose: the executor is a pure function of a context the
 // caller builds (lookupContext), so it runs in node tests and in the harness.
 
-import { foldRegionKey, matchRegionName, stripRegionAffixes, editDistance } from "./regionMatch.js";
+import { containsWords, editDistance, foldRegionKey, matchRegionName, nearestRegionNames, spellingDistance } from "./regionMatch.js";
 import { readNameRef, regionNamer } from "./nameRefs.js";
 import { baseCountryOf, buildAreaIndex, findArea, splitTerritories } from "./namedAreas.js";
+import { eventPartyNames } from "./eventParties.js";
+import { readEventPlace } from "./eventPlaces.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../runtime/politicalKnowledge.js";
@@ -137,7 +139,7 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "recent_events",
     description:
       "The most recent timeline events (newest last): date, title, summary, and what each moved on the map. "
-      + "Optionally only events mentioning a power or place.",
+      + "Optionally only the events a power or a place is part of.",
     schema: object("How many, about what.", {
       limit: integer("How many events (default 12, max 40)."),
       about: text("Optional exact power name or region/city name to filter by."),
@@ -597,86 +599,76 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
 };
 
 // ---------------------------------------------------------------------------
-// Places a text names — answered before anyone asks
+// The places events list, answered before anyone asks
 // ---------------------------------------------------------------------------
 //
 // A lookup function lets the model ask who holds Mariupol. But asking is a round
 // trip: the whole prompt goes out again, and on a free key requests are what run
 // out (requestBudget.js). For a task whose input is a handful of finished events,
-// the question can be answered beforehand — the events already name the places
-// they are about — so placesNamedIn reads the text the way a reader would and
-// hands over each named region and city with who controls it now, who lawfully
+// the question can be answered beforehand: each event lists the places it is
+// about in its own `places` field ("region: Crimea", "city: Mariupol, country:
+// Ukraine"; eventPlaces.js reads them), and its operations name their regions.
+// placesListed hands each of those over with who controls it now, who lawfully
 // owns it where that differs, and who claims it.
 //
-// Whole words only, accents and case folded, and a name of three letters or
-// fewer is skipped: a region called "Ob" or "Aa" is in half the words of any
-// paragraph. A city answers with the region it stands in. Longest names first,
-// so "South Ossetia" is not also reported as "Ossetia".
-
-// Words of any script: on a map whose regions and cities are named in
-// Cyrillic, Greek or Arabic, every name used to fold to nothing here and none
-// could be found in a text.
-const foldForSearch = (value) => String(value ?? "")
-  .normalize("NFD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .toLowerCase()
-  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
-  .trim();
-
-const MIN_PLACE_NAME_CHARS = 4;
+// `entries` are { kind, name, country } (eventPlaces.js readEventPlace). Each is
+// found by its exact name, the map's own or an alias, marks, case and spacing
+// aside, as the kind it was given and nothing else: a region by its name (or the
+// map's id for it), a city by its name, answering with the region it stands in.
+// Where several answer, the one held by the `country` written beside it, or none.
+// Never read out of an event's words: "there should be absolutely no keywording
+// done in this game anywhere" (the owner, 2026-11-13). Reading the words for
+// the map's names missed every name in a sentence written without spaces
+// (Chinese, Japanese, Thai), and found a region called Salmon in a salmon run.
 export const PLACES_NAMED_LIMIT = 40;
 
-export const placesNamedIn = (context, textValue, { limit = PLACES_NAMED_LIMIT } = {}) => {
-  const haystack = ` ${foldForSearch(textValue)} `;
-  if (haystack.length < MIN_PLACE_NAME_CHARS + 2 || !context) return [];
+const sameKey = (a, b) => Boolean(a) && a === b;
+const heldBy = (row, country) => Boolean(row) && (sameKey(foldRegionKey(row.owner), country) || sameKey(foldRegionKey(row.sovereign), country));
+const onlyOne = (named, held) => (held.length === 1 ? held[0] : named.length === 1 ? named[0] : null);
 
-  const candidates = [];
-  for (const row of array(context.rows)) {
-    for (const name of [row.name, ...array(row.aliases)]) {
-      const folded = foldForSearch(name);
-      if (folded.length >= MIN_PLACE_NAME_CHARS) candidates.push({ folded, label: clean(name), kind: "region", row });
-    }
-  }
-  for (const city of array(context.cityRows)) {
-    for (const name of [city.name, ...array(city.aliases)]) {
-      const folded = foldForSearch(name);
-      if (folded.length >= MIN_PLACE_NAME_CHARS) candidates.push({ folded, label: clean(name), kind: "city", city });
-    }
-  }
-  candidates.sort((a, b) => b.folded.length - a.folded.length || a.folded.localeCompare(b.folded));
-
-  // Text already accounted for by a longer name is blanked, so a shorter name
-  // inside it does not match a second time.
-  let remaining = haystack;
+export const placesListed = (context, entries, { limit = PLACES_NAMED_LIMIT } = {}) => {
+  if (!context) return [];
   const found = [];
   const seen = new Set();
-  for (const candidate of candidates) {
-    const needle = ` ${candidate.folded} `;
-    const at = remaining.indexOf(needle);
-    if (at < 0) continue;
-    remaining = remaining.split(needle).join(` ${"#".repeat(candidate.folded.length)} `);
-    const row = candidate.kind === "region" ? candidate.row : context.regionOfCity?.(candidate.city) ?? null;
-    const key = `${candidate.kind}|${candidate.label.toLowerCase()}|${row?.id ?? ""}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const claimants = row ? array(context.claimants?.[row.id]).map(clean).filter(Boolean) : [];
-    found.push({
-      at,
-      place: candidate.label,
-      kind: candidate.kind,
-      ...(row ? {
-        ...(candidate.kind === "city" || row.name !== candidate.label ? { region: row.name } : {}),
+  for (const entry of array(entries)) {
+    if (found.length >= Math.max(0, limit)) break;
+    const kind = clean(entry?.kind);
+    const name = clean(entry?.name);
+    if (!name || (kind !== "region" && kind !== "city")) continue;
+    const key = foldRegionKey(name);
+    const country = foldRegionKey(entry?.country);
+    let row = null;
+    let place = null;
+    if (kind === "region") {
+      const named = context.byId?.has(name)
+        ? [context.byId.get(name)]
+        : array(context.rows).filter((candidate) => foldRegionKey(candidate.name) === key || array(candidate.aliases).some((alias) => foldRegionKey(alias) === key));
+      row = onlyOne(named, country ? named.filter((candidate) => heldBy(candidate, country)) : []);
+      if (!row) continue;
+      place = { place: name, kind, ...(row.name !== name ? { region: row.name } : {}) };
+    } else {
+      const named = array(context.cityRows)
+        .filter((city) => foldRegionKey(city.name) === key || array(city.aliases).some((alias) => foldRegionKey(alias) === key))
+        .map((city) => ({ city, row: context.regionOfCity?.(city) ?? null }));
+      const pick = onlyOne(named, country ? named.filter((candidate) => heldBy(candidate.row, country)) : []);
+      if (!pick) continue;
+      row = pick.row;
+      place = { place: name, kind, region: row ? row.name : "not on this map" };
+    }
+    const seenKey = `${kind}|${key}|${row?.id ?? ""}`;
+    if (seen.has(seenKey)) continue;
+    seen.add(seenKey);
+    if (row) {
+      const claimants = array(context.claimants?.[row.id]).map(clean).filter(Boolean);
+      Object.assign(place, {
         controller: row.owner || "unowned",
         ...(row.sovereign && row.sovereign !== row.owner ? { lawfulOwner: row.sovereign } : {}),
         ...(claimants.length ? { claimants } : {}),
-      } : { region: "not on this map" }),
-    });
+      });
+    }
+    found.push(place);
   }
-  // In the order the text names them, which is the order a reader meets them in.
-  return found
-    .sort((a, b) => a.at - b.at)
-    .slice(0, Math.max(0, limit))
-    .map(({ at: _at, ...place }) => place);
+  return found;
 };
 
 // ---------------------------------------------------------------------------
@@ -707,9 +699,13 @@ const regionOfRef = (context, written, ownerHint = "") => {
     const holders = [...new Set(named.map((row) => row.owner || "nobody"))];
     return { error: `${named.length} regions are called "${ref.name}", held by ${holders.join(", ")}. Say which, as "${ref.name} (<owner>)".` };
   }
+  // The one region the search finds alone, by spelling (matchRegionName); every
+  // answer gives the region's own name, which the model then writes.
   const near = matchRegionName(ref.name, context.rows, { maxFuzzy: 1 });
   if (near?.region) return { row: near.region };
-  return { error: `No region is called "${ref.name}". Use find_region or list_regions for the names this map uses.` };
+  const nearest = nearestRegionNames(ref.name, context.rows);
+  const offer = nearest.length ? ` Nearest names: ${nearest.map((name) => `"${name}"`).join(", ")}.` : "";
+  return { error: `No region is called "${ref.name}".${offer} Use find_region or list_regions for the names this map uses.` };
 };
 
 // How many regions a group lists: list_groups gives every group in full, each
@@ -799,9 +795,53 @@ const stringsIn = (value, depth = 0, out = []) => {
   else if (typeof value === "object") for (const entry of Object.values(value)) stringsIn(entry, depth + 1, out);
   return out;
 };
-const mentions = (record, name) => {
-  const key = foldRegionKey(name);
-  return key && stringsIn(record).some((value) => foldRegionKey(value) === key);
+
+// Whether `names` hold the power `owner` (a label resolveOwner answers with),
+// each name exactly as the map spells it or as one of its codes and aliases.
+const namesPower = (context, names, owner) => array(names)
+  .some((name) => context.resolveOwner(typeof name === "string" ? name : name?.name || name?.code) === owner);
+
+// The names an event records, for recent_events' `about`: its parties
+// (eventParties.js: who decided it, who fought in it and on which war's sides,
+// the countries among its places, every polity or group its operations name),
+// the places it lists (as the map found them, or as written where it found
+// none), and the regions its operations move, by the map's name and aliases
+// and by the name the operation was written with. Never its title or
+// description: they were searched for the name as well, so "Kharkiv" found an
+// event about Kharkiv Oblast's neighbours, and an event told in another
+// language than the map's names was found by nothing it said.
+const REGION_KEYED_IMPACTS = ["regionTransfers", "regionControlOps", "regionClaims"];
+const eventRecordNames = (context, event) => {
+  const names = eventPartyNames(event, { wars: context.world?.wars });
+  const region = (id) => {
+    const row = context.byId.get(clean(id));
+    if (row) names.push(row.name, ...row.aliases);
+  };
+  for (const place of array(event?.places)) {
+    if (typeof place === "string") {
+      names.push(readEventPlace(place)?.name);
+    } else {
+      names.push(place?.name);
+      region(place?.regionId);
+    }
+  }
+  const impacts = event?.impacts ?? {};
+  for (const key of REGION_KEYED_IMPACTS) {
+    for (const op of array(impacts[key])) {
+      region(op?.regionId);
+      names.push(op?.regionName);
+    }
+  }
+  return names.map(clean).filter(Boolean);
+};
+
+// Whether an event records `about`: one of its names, spelled as the map
+// spells it (foldRegionKey: case, marks and spacing aside), or the same power
+// under another of its exact names (resolveOwner: a code, an alias).
+const eventIsAbout = (context, event, about) => {
+  const wanted = new Set([foldRegionKey(about), foldRegionKey(context.resolveOwner(about))].filter(Boolean));
+  return eventRecordNames(context, event)
+    .some((name) => wanted.has(foldRegionKey(name)) || wanted.has(foldRegionKey(context.resolveOwner(name))));
 };
 
 // `regionRef(record)`: what the region a record keys by id is called
@@ -827,7 +867,9 @@ const warSides = (war) => {
   const sideA = array(war?.sideA).map(clean).filter(Boolean);
   const sideB = array(war?.sideB).map(clean).filter(Boolean);
   if (sideA.length || sideB.length) return { sideA, sideB };
-  const named = stringsIn(war?.sides ?? war?.participants ?? war?.belligerents ?? war?.aggressors ?? war);
+  // A record from before the two sides: its own list of belligerents, never
+  // every string the record holds (its title, its cause).
+  const named = stringsIn(war?.sides ?? war?.participants ?? war?.belligerents ?? war?.aggressors ?? []);
   return { sideA: [...new Set(named)].slice(0, 12), sideB: [] };
 };
 const warBrief = (war) => {
@@ -1141,19 +1183,19 @@ export const executeLookup = (context, name, args = {}) => {
         if (!owner) return unknownPower(context, a.owner);
         pool = context.ownerRows.get(owner) ?? [];
       }
+      // By spelling alone (regionMatch.js): the same name, one name's whole
+      // words inside the other's ("Kharkiv" in "Kharkiv Oblast" and in
+      // "Oblast de Kharkiv"), or a letter or two apart.
       const key = foldRegionKey(query);
-      const stripped = stripRegionAffixes(key) || key;
       const scored = [];
       for (const row of pool) {
         const names = [row.name, ...row.aliases].map(foldRegionKey);
         let score = 0;
         for (const candidate of names) {
-          const bare = stripRegionAffixes(candidate) || candidate;
           if (candidate === key) score = Math.max(score, 100);
-          else if (bare === stripped) score = Math.max(score, 90);
-          else if (stripped.length >= 4 && (bare === stripped || `${bare} `.startsWith(`${stripped} `) || bare.startsWith(`${stripped} `) || stripped.startsWith(`${bare} `))) score = Math.max(score, 70);
-          else if (stripped.length >= 5 && bare.length >= 5) {
-            const distance = editDistance(stripped, bare, 2);
+          else if (key.length >= 4 && candidate.length >= 4 && (containsWords(candidate, key) || containsWords(key, candidate))) score = Math.max(score, 80);
+          else if (key.length >= 5 && candidate.length >= 5) {
+            const distance = spellingDistance(key, candidate, 2);
             if (distance <= 2) score = Math.max(score, 60 - distance * 10);
           }
         }
@@ -1184,8 +1226,9 @@ export const executeLookup = (context, name, args = {}) => {
     case "find_city": {
       const key = foldRegionKey(a.name);
       if (!key) return { error: "name is required" };
-      const stripped = stripRegionAffixes(key) || key;
-      const near = (folded) => folded === key || folded === stripped || (stripped.length >= 5 && editDistance(stripped, folded, 1) <= 1);
+      // The same name, or one a letter off (spellingDistance: whole names, or one
+      // word of either), by spelling alone.
+      const near = (folded) => folded === key || (key.length >= 5 && spellingDistance(key, folded, 1) <= 1);
       const hits = context.cityRows
         .filter((city) => near(foldRegionKey(city.name)) || city.aliases.some((alias) => near(foldRegionKey(alias))))
         .slice(0, 8)
@@ -1207,9 +1250,14 @@ export const executeLookup = (context, name, args = {}) => {
       const record = context.polities[owner] ?? Object.values(context.polities).find((entry) => clean(entry?.name) === owner) ?? {};
       const world = context.world ?? {};
       const held = context.ownerRows.get(owner) ?? [];
-      const wars = array(world.wars).filter((war) => mentions(war, owner)).map(warBrief);
+      // The wars it is a side of and the relations it is a party to, by those
+      // fields, never by a string of the record (its title, its summary).
+      const wars = array(world.wars).filter((war) => {
+        const { sideA, sideB } = warSides(war);
+        return namesPower(context, [...sideA, ...sideB], owner);
+      }).map(warBrief);
       const relations = array(world.relations)
-        .filter((relation) => mentions(relation, owner))
+        .filter((relation) => namesPower(context, [relation?.a, relation?.b], owner))
         .slice(0, 24)
         .map((relation) => ({ ...(relation && typeof relation === "object" ? relation : { value: relation }) }));
       const claimsBy = []; const claimsAgainst = [];
@@ -1238,8 +1286,7 @@ export const executeLookup = (context, name, args = {}) => {
     case "recent_events": {
       const limit = clampInt(a.limit, 1, 40, 12);
       const about = clean(a.about);
-      const filtered = about ? context.events.filter((event) => mentions({ t: event.title, d: event.description, i: event.impacts }, about)
-        || foldRegionKey(`${event.title} ${event.description}`).includes(foldRegionKey(about))) : context.events;
+      const filtered = about ? context.events.filter((event) => eventIsAbout(context, event, about)) : context.events;
       return { total: filtered.length, events: filtered.slice(-limit).map((event) => eventBrief(event, context.regionRef)) };
     }
     case "war_ledger": {

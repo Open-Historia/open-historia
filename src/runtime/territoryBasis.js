@@ -60,48 +60,23 @@ export const TERRITORY_BASIS_DESCRIPTION_SHORT = "Why control changes; same word
 const MOVES_MAP = new Set(TERRITORY_BASIS_MOVES_MAP);
 const NO_CONTROL = new Set(TERRITORY_BASIS_NO_CONTROL);
 
-// Words a model reaches for that mean one of ours. Anything else is "unknown",
-// which is treated as absent rather than guessed at.
-const BASIS_SYNONYMS = Object.freeze({
-  cession: "treaty",
-  ceded: "treaty",
-  purchase: "treaty",
-  sale: "treaty",
-  settlement: "treaty",
-  peace: "treaty",
-  annexed: "annexation",
-  annex: "annexation",
-  union: "unification",
-  accession: "unification",
-  succession: "unification",
-  secession: "independence",
-  liberation: "occupation",
-  capture: "occupation",
-  conquest: "occupation",
-  occupied: "occupation",
-  administration: "occupation",
-  handover: "occupation",
-  collapse: "occupation",
-  declaration: "claim",
-  declared: "claim",
-  proclamation: "claim",
-  decree: "claim",
-  claimed: "claim",
-  demand: "threat",
-  ultimatum: "threat",
-  bombardment: "raid",
-  incursion: "raid",
-});
-
 const clean = (value) => String(value ?? "").trim();
 
-// "" when the entry carries no basis, or one this vocabulary does not know.
+// The basis exactly as one of TERRITORY_BASIS_ENUM (the schema offers no
+// other), its case and spacing aside; "" when the entry carries none, or a
+// word that is not one of them. Such a word is left out, never read as the
+// nearest of ours: a table of English words for them ("declaration" a claim,
+// "ceded" a treaty) made "declaration" stop a border that "déclaration" moved
+// (the owner, 2026-11-13: "there should be absolutely no keywording done in
+// this game anywhere").
 export const normalizeTerritoryBasis = (value) => {
   const token = clean(value).toLowerCase().replace(/[\s-]+/g, "_");
-  if (!token) return "";
-  if (MOVES_MAP.has(token) || NO_CONTROL.has(token)) return token;
-  return BASIS_SYNONYMS[token] ?? "";
+  return MOVES_MAP.has(token) || NO_CONTROL.has(token) ? token : "";
 };
+
+// The basis as written when it is none of ours (so the receipt can say which
+// word was left out); "" when the entry has none or has one of ours.
+export const unknownTerritoryBasis = (value) => (clean(value) && !normalizeTerritoryBasis(value) ? clean(value) : "");
 
 // Absent is allowed (see the header), so only an explicit no-control basis stops
 // a border.
@@ -124,8 +99,11 @@ const labelOf = (entry) => clean(entry?.regionName) || clean(entry?.regionId) ||
 // raw model output and on normalized ops alike — both spell the fields the same.
 //
 //   actions[] = { family, outcome: "claimed" | "refused", basis, region, toCode, wholeCountry }
+//   unknown[] = { family, basis, region, toCode }: a basis that is none of
+//               ours, left out (the entry applies as one that gives none)
 export const screenTerritoryBasis = ({ regionTransfers = [], regionControlOps = [], regionClaims = [] } = {}) => {
   const actions = [];
+  const unknown = [];
   const claims = Array.isArray(regionClaims) ? [...regionClaims] : [];
 
   const hasClaim = (regionId, claimant) => claims.some((claim) =>
@@ -136,6 +114,8 @@ export const screenTerritoryBasis = ({ regionTransfers = [], regionControlOps = 
   const screen = (family, entries, isCandidate) => {
     const kept = [];
     for (const entry of Array.isArray(entries) ? entries : []) {
+      const written = entry && typeof entry === "object" && isCandidate(entry) ? unknownTerritoryBasis(entry.basis) : "";
+      if (written) unknown.push({ family, basis: written, region: labelOf(entry), toCode: clean(entry.toCode) });
       if (!entry || typeof entry !== "object" || !isCandidate(entry) || basisMovesTheMap(entry.basis)) {
         kept.push(entry);
         continue;
@@ -172,10 +152,20 @@ export const screenTerritoryBasis = ({ regionTransfers = [], regionControlOps = 
   const controlOps = screen(
     "regionControlOps",
     regionControlOps,
-    (entry) => ["control", "control_flip"].includes(clean(entry.op).toLowerCase()),
+    (entry) => clean(entry.op).toLowerCase() === "control",
   );
 
-  return { actions, regionClaims: claims, regionControlOps: controlOps, regionTransfers: transfers };
+  return { actions, unknown, regionClaims: claims, regionControlOps: controlOps, regionTransfers: transfers };
+};
+
+// One model-readable sentence for a basis that is none of ours.
+export const describeUnknownBasis = (entry, { eventTitle = "" } = {}) => {
+  const where = eventTitle ? `Event "${eventTitle}": ` : "";
+  const what = entry?.family === "regionControlOps" ? "control of" : "the transfer of";
+  const to = entry?.toCode ? ` to ${entry.toCode}` : "";
+  return `${where}${what} ${clean(entry?.region) || "an unnamed region"}${to} carried basis "${clean(entry?.basis)}", `
+    + `which is not one of ${TERRITORY_BASIS_ENUM.join(", ")}; it was left out, and the change applied as one that gives no basis. `
+    + "Write the basis exactly as one of those words.";
 };
 
 // One model-readable sentence per screened operation.

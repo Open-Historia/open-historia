@@ -5,14 +5,23 @@ import {
   buildNativeWorldExplorationSlate,
   deriveWorldTrajectoryValue,
   deferredStorylineReentryHasConcreteTrigger,
+  eventStructuredPartyNames,
+  hardImpactKeysForEvent,
   latestCanonicalWorldEventDate,
   worldIntegrityAgeDays,
   worldActorsEquivalent,
-  canonicalWorldActor,
   createWorldActorResolver,
 } from "./nativeWorldIntegrity.js";
 import { addGameDays, compareGameDates, gameDateDayNumber, gameDateYear } from "../../runtime/gameDates.js";
 import { boardEntriesConcernedByEvent, isProjectOpen } from "../../runtime/projects.js";
+import { DEFENSIVE_AGREEMENT_TYPES, GUARANTEE_TYPE } from "../../runtime/alliances.js";
+import {
+  CONFLICT_STORYLINE_KINDS,
+  NEUTRAL_STORYLINE_KIND,
+  STORYLINE_KINDS,
+  STORYLINE_KIND_LIST_TEXT,
+  storylineKindOf,
+} from "../../runtime/storylineKinds.js";
 
 // Native World Director (ported from kernely's Continuum branch).
 //
@@ -72,10 +81,14 @@ const CONSEQUENCE_MIN_VISIBLE_EVENTS = 8;
 // CRISIS_RESOLUTION_CUE_RE (which events were major, and which an unresolved
 // crisis owing a storyline), HUMAN_TEXTURE_RE (what spared an administrative
 // card) and SYSTEMIC_ESCALATION_CUE_RE (the conflict risk's escalation
-// signals). Each counted in an English game and nowhere else.
-
-const ROUTINE_ADMINISTRATIVE_PROCESS_RE =
-  /\b(?:technical review|committee review|working group|administrative implementation|implementation review|compliance review|compliance tracking|inspection protocol|inspection standards|regulatory harmonization|protocol refinement|procedural update|standards update|report(?:s|ed)? (?:on|its)|publishes? (?:a )?(?:review|assessment|report)|issues? (?:a )?(?:review|assessment|report)|streamlined (?:procedures|protocols|standards)|finaliz(?:e|es|ed) (?:technical|administrative|inspection|compliance|procedural|regulatory)|monitoring framework|coordination mechanism|advisory committee)\b/i;
+// signals). Each counted in an English game and nowhere else. Removed the same
+// day, for the same reason: ROUTINE_ADMINISTRATIVE_PROCESS_RE (a world pass
+// "dominated by administrative cards" sent back for another), the relation
+// summaries read for hostility (HOSTILE_RELATION_STATUS_RE), the agreement
+// titles and terms read for a defence pact (DEFENSE_COUPLING_RE), and a
+// storyline's free-text kind read for a crisis (CRISIS_LIKE_STORYLINE_KIND_RE).
+// A relation's status, an agreement's type and a storyline's kind are each one
+// word of a fixed list, and those words are read instead.
 
 const ESCALATION_LADDER = Object.freeze([
   {
@@ -135,15 +148,14 @@ export const worldStorylineEscalationPosture = (storyline = {}) => {
 };
 
 
-const HOSTILE_RELATION_STATUS_RE =
-  /\b(hostile|enemy|adversarial|rival|severe|confrontational|very tense|crisis)\b/i;
-const DEFENSE_COUPLING_RE =
-  /\b(alliance|defen[cs]e|mutual assistance|guarantee|security pact|collective security)\b/i;
+// The relation statuses that are hostility (nativeDiplomaticDirector.js
+// RELATION_STATUS_VALUES), and the agreement types that bind a party to fight
+// for another (runtime/alliances.js): fixed vocabularies, read exactly.
+const HOSTILE_RELATION_STATUSES = new Set(["hostile", "rival"]);
+const DEFENSIVE_COMMITMENT_TYPES = new Set([...DEFENSIVE_AGREEMENT_TYPES, GUARANTEE_TYPE]);
 // The postures a skip gives a build-up and a blockade (runtime/gameState.js
 // UNIT_POSTURES): escalation the map shows, in every language.
 const ESCALATION_POSTURES = new Set(["massing", "blockade"]);
-const CRISIS_LIKE_STORYLINE_KIND_RE =
-  /\b(war|crisis|revolution|uprising|insurgency|secession|standoff|security|constitutional|succession|financial|banking)\b/i;
 
 // R3.5 — campaign-state conflict propensity.
 //
@@ -193,7 +205,7 @@ export const deriveWorldConflictRiskPosture = ({
   let highMomentumProcesses = 0;
   for (const storyline of normalizeArray(world?.storylines)) {
     if (normalizeString(storyline?.status).toLowerCase() !== "active") continue;
-    if (!CRISIS_LIKE_STORYLINE_KIND_RE.test(normalizeString(storyline?.kind))) continue;
+    if (!CONFLICT_STORYLINE_KINDS.includes(storylineKindOf(storyline?.kind))) continue;
     const pressure = clampPercent(storyline?.pressure);
     const momentum = clampPercent(storyline?.momentum);
     crisisPressure += Math.max(0, pressure - 40) * 0.22;
@@ -201,17 +213,13 @@ export const deriveWorldConflictRiskPosture = ({
   }
 
   const hostileRelations = normalizeArray(world?.relations).filter((relation) =>
-    HOSTILE_RELATION_STATUS_RE.test(normalizeString(
-      relation?.status || relation?.state || relation?.summary,
-    ))
+    HOSTILE_RELATION_STATUSES.has(normalizeString(relation?.status).toLowerCase())
   ).length;
 
   const defenseCoupling = normalizeArray(world?.agreements).filter((agreement) => {
     const status = normalizeString(agreement?.status).toLowerCase();
     if (["ended", "expired", "terminated", "suspended"].includes(status)) return false;
-    return DEFENSE_COUPLING_RE.test(normalizeString(
-      `${agreement?.type || ""} ${agreement?.title || ""} ${agreement?.terms || ""}`,
-    ));
+    return DEFENSIVE_COMMITMENT_TYPES.has(normalizeString(agreement?.type).toLowerCase());
   }).length;
 
   const contestedRegions = Object.values(world?.regionClaimants || {})
@@ -331,20 +339,6 @@ const eventLooksStrategicallyMajor = (event) => {
   return normalizeString(event?.importance).toLowerCase() === "major" || event?.notable === true;
 };
 
-// Routine paperwork: an administrative card the model rated neither major nor
-// notable. (Its exemptions used to be English words too: anything strategic,
-// escalating or of human texture.)
-const eventLooksLikeRoutineAdministrativeCard = (event) => {
-  if (!event || typeof event !== "object") return false;
-  if (event?.playerRelated === true) return false;
-  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-  if (normalizeArray(impacts?.actionIds).length) return false;
-  if (eventLooksStrategicallyMajor(event)) return false;
-
-  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  return ROUTINE_ADMINISTRATIVE_PROCESS_RE.test(text);
-};
-
 // A major event whose only consequence is a Board entry. The Board is not a
 // channel the jump can write — the board pass records it after the segments —
 // so such an event passes the check PROVISIONALLY: the engine's own matcher says
@@ -366,10 +360,14 @@ export const boardProvisionalConsequenceIndexes = (candidate, { board = [], play
     .map((_, index) => index)
     .filter((index) => eventRestsOnBoardConsequence(candidate, index, board, playerCountry));
 
+// A strict pass's one consequence rule: an event the model rated major or
+// notable changes something on record. A pass "dominated by administrative
+// cards" was refused here too, by English words (ROUTINE_ADMINISTRATIVE_PROCESS_RE),
+// a second request for an English game only; the skip is told to write no
+// filler instead.
 export const validateWorldEventConsequencePayload = (
   candidate,
   {
-    selectedStorylines = [],
     strict = true,
     board = [],
     playerCountry = "",
@@ -389,26 +387,6 @@ export const validateWorldEventConsequencePayload = (
     ) {
       const boardOwner = normalizeArray(board).some(isProjectOpen) ? ", a Board entry named exactly as the Board names it" : "";
       return `Strategically major event ${index + 1} ("${normalizeString(event?.title)}") has no canonical consequence at all. Keep the event only if something materially changes in an existing owner (storyline, Stats, relations, agreements, units, war, territory/control, polity metadata, markers${boardOwner}, or a created diplomatic chat); otherwise downgrade/drop the card instead of narrating a consequence-free crisis.`;
-    }
-  }
-
-  if (events.length >= 4) {
-    const adminIndexes = events
-      .map((event, index) => ({ event, index }))
-      .filter(({ event, index }) =>
-        eventLooksLikeRoutineAdministrativeCard(event)
-        && eventCanonicalConsequenceChannels(candidate, index).length === 0
-      )
-      .map(({ index }) => index);
-
-    const adminThreshold = Math.max(3, Math.ceil(events.length * 0.6));
-    if (adminIndexes.length >= adminThreshold) {
-      const selectedHighPressure = normalizeArray(selectedStorylines)
-        .some((storyline) =>
-          normalizeString(storyline?.status).toLowerCase() === "active"
-          && clampPercent(storyline?.pressure) >= HIGH_PRESSURE_STAGNATION_THRESHOLD
-        );
-      return `World pass is dominated by ${adminIndexes.length}/${events.length} low-consequence administrative cards${selectedHighPressure ? " while a high-pressure process is active" : ""}. Re-search the same causal world for fewer, stronger outcomes (political decisions/failures, escalation or de-escalation, strikes/unrest, deployments/mobilization, market shocks, leadership change, diplomatic rupture/agreement, concrete capability changes, or human/public texture). Do not invent chaos; do not spend most visible slots on process paperwork.`;
     }
   }
 
@@ -617,7 +595,17 @@ const countImpactSignals = (event) => {
   return signals;
 };
 
-const eventCandidate = (event, originDate, index) => {
+// What a candidate carries besides its line in the prompt, for the
+// exploration slate and the focus trim: who it concerns (`parties`, polities
+// as the resolver names them, from structured fields), whether the model said
+// it concerns the player, its categories (tags) and the families of what it
+// changed. Never read from its title or detail.
+const NO_CANDIDATE_CONTEXT = Object.freeze({
+  partiesOf: () => [],
+  storylinePressureOf: () => -1,
+});
+
+const eventCandidate = (event, originDate, index, { partiesOf, storylinePressureOf } = NO_CANDIDATE_CONTEXT) => {
   const title = normalizeString(event?.title);
   if (!title) return null;
 
@@ -633,6 +621,12 @@ const eventCandidate = (event, originDate, index) => {
   if (event?.notable) score += 2;
   if (kind === "military" || kind === "diplomacy") score += 1;
 
+  const storylineIds = [...new Set(
+    normalizeArray(event?.storylineIds)
+      .map(normalizeString)
+      .filter(Boolean),
+  )].slice(0, 6);
+
   // Player-related events are NOT boosted. Phase 6 explicitly avoids treating
   // the human polity as the center of gravity merely because it is human.
   return {
@@ -644,16 +638,20 @@ const eventCandidate = (event, originDate, index) => {
     title,
     detail: truncate(event?.description || event?.summary, 280),
     ageDays: days,
-    storylineIds: [...new Set(
-      normalizeArray(event?.storylineIds)
-        .map(normalizeString)
-        .filter(Boolean),
-    )].slice(0, 6),
-    trajectoryValue: deriveWorldTrajectoryValue(event),
+    storylineIds,
+    parties: partiesOf(eventStructuredPartyNames(event)),
+    playerRelated: event?.playerRelated === true,
+    tags: normalizeArray(event?.tags).map(normalizeString).filter(Boolean),
+    impactKeys: hardImpactKeysForEvent(event),
+    trajectoryValue: deriveWorldTrajectoryValue(event, { storylinePressure: storylinePressureOf(storylineIds) }),
   };
 };
 
-const chatCandidate = (chat, originDate, index) => {
+// A live thread opens as many futures as any ongoing process, whatever was
+// said in it (its memory's words used to be read for "talks collapse").
+const DIPLOMATIC_THREAD_TRAJECTORY = 2;
+
+const chatCandidate = (chat, originDate, index, { partiesOf } = NO_CANDIDATE_CONTEXT) => {
   if (!chat || normalizeString(chat.status).toLowerCase() === "closed") return null;
 
   const memory = latestMemorySummary(chat);
@@ -677,10 +675,11 @@ const chatCandidate = (chat, originDate, index) => {
       : "Active diplomatic thread",
     detail: truncate(memory, 320),
     ageDays: days,
-    trajectoryValue: deriveWorldTrajectoryValue({
-      title: participants.length ? `Active diplomacy: ${participants.join(", ")}` : "Active diplomatic thread",
-      detail: memory,
-    }),
+    parties: partiesOf(participants),
+    // The player's own correspondence: a thread no other person holds
+    // (a shared game names the person whose thread it is, chat.player).
+    playerRelated: !normalizeString(chat?.player),
+    trajectoryValue: DIPLOMATIC_THREAD_TRAJECTORY,
   };
 };
 
@@ -715,7 +714,7 @@ const actorSuppressedByDeferredSet = (
 const UNNAMED_REGION = "an unnamed region";
 const regionNameIn = (regionNames, regionId) => normalizeString(regionNames?.[regionId]) || UNNAMED_REGION;
 
-const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "", regionNames = {}) => {
+const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "", regionNames = {}, { partiesOf } = NO_CANDIDATE_CONTEXT) => {
   const claimants = world?.regionClaimants && typeof world.regionClaimants === "object"
     ? world.regionClaimants
     : {};
@@ -764,13 +763,14 @@ const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set
         contenderList.length ? `claimants/contenders ${contenderList.join(", ")}` : "",
       ].filter(Boolean).join("; "),
       ageDays: 0,
+      parties: partiesOf([controller, sovereign, ...contenderList]),
       trajectoryValue: 4,
     });
     added += 1;
   }
 };
 
-const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "", regionNames = {}) => {
+const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(), gameCountry = "", regionNames = {}, { partiesOf } = NO_CANDIDATE_CONTEXT) => {
   let added = 0;
   for (const unit of normalizeArray(world?.units)) {
     if (added >= ACTIVE_UNIT_SAMPLE_LIMIT) break;
@@ -796,6 +796,7 @@ const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(
         .filter(Boolean)
         .join("; "),
       ageDays: 0,
+      parties: partiesOf([owner]),
     });
     added += 1;
   }
@@ -811,7 +812,9 @@ const normalizeStorylineForDirector = (entry, index = 0) => {
     : "active";
   return {
     id: normalizeString(entry.id) || `storyline-${index}`,
-    kind: normalizeString(entry.kind) || "world",
+    // One of the fixed kinds (runtime/storylineKinds.js): free text, a save's
+    // included, is the neutral kind, by its exact value only.
+    kind: storylineKindOf(entry.kind),
     title,
     participants: [...new Set(normalizeArray(entry.participants).map(normalizeString).filter(Boolean))].slice(0, 12),
     status,
@@ -849,7 +852,8 @@ export const buildPregameStorylineBaselineRecord = ({
   round = 1,
 } = {}) => {
   const canonicalId = normalizeString(id);
-  const kind = normalizeString(processKind).toLowerCase();
+  // A kind outside the fixed list is the neutral kind (runtime/storylineKinds.js).
+  const kind = normalizeString(processKind) ? storylineKindOf(processKind) : "";
   const canonicalStatus = normalizeString(status).toLowerCase();
   const start = normalizeString(startedDate);
   const observed = normalizeString(observedDate);
@@ -1156,7 +1160,8 @@ const pregameStorylineSourceContains = (superset, required) => {
 // attempt instead of losing the whole Round-Zero answer.
 export const resolvePregameStorylineBaselineMatch = ({ records = [], candidate = null } = {}) => {
   if (!candidate) return { match: null, error: "Round-Zero storyline resolver requires a candidate." };
-  const kind = normalizeString(candidate.processKind || candidate.kind).toLowerCase();
+  // Read as the records are (normalizeStorylineForDirector): one of the fixed kinds.
+  const kind = storylineKindOf(candidate.processKind || candidate.kind);
   const participants = storylineParticipantsKey(candidate.participants);
   const title = pregameStorylineTitleKey(candidate.title);
   const date = normalizeString(candidate.startedDate);
@@ -1569,16 +1574,21 @@ const clampNextReviewDate = ({ stopDate, pressure, momentum, status, requested, 
 const STORYLINE_RECORD_SEPARATOR = "~";
 const MAX_STORYLINE_UPDATES_PER_JUMP = 16;
 
-// A storyline state is a sentence; a kind, a title and a list of polity names
-// are not. The longest comma-separated stretch decides it: the longest official
-// polity name ("United Kingdom of Great Britain and Northern Ireland") is eight
-// words, so a list of names never reaches nine, and a stretch of six or more
-// words that ends like a sentence is prose. A list that happens to end "U.S."
-// stays a list, because none of its names is six words long.
-const looksLikeStorylineStateProse = (value) => {
-  const text = normalizeString(value);
-  const longest = Math.max(0, ...text.split(",").map((part) => part.trim().split(/\s+/).filter(Boolean).length));
-  return longest >= 9 || (longest >= 6 && /[.!?]$/.test(text));
+// A record short of separators whose state slot is empty: did the model leave
+// out empty positional fields, so that its last field is its state? Read from
+// the record's shape alone. Where every field between its startedDate and its
+// last one is empty, those were the empty kind, title or participants it
+// collapsed, and the last field is the state. A last field after a written kind
+// or title is that slot's own value (a list of names, a title), and the state
+// stays empty for the validator to report; and alone after the startedDate, an
+// exact storyline kind is the kind. A state was once told from a list by its
+// words, six or more ending in ".", "!" or "?", which no Chinese, Japanese or
+// Thai state ever passed ("there should be absolutely no keywording done in this
+// game anywhere", the owner, 2026-11-13).
+const stateInLastField = (fields, separators) => {
+  if (separators < 5 || separators > 7) return false;
+  if (fields.slice(5, separators).some((field) => normalizeString(field))) return false;
+  return separators > 5 || !STORYLINE_KINDS.includes(normalizeString(fields[separators]).toLowerCase());
 };
 
 const parseStorylineRecord = (line, index = 0) => {
@@ -1617,14 +1627,14 @@ const parseStorylineRecord = (line, index = 0) => {
   // turn came back as "id~active~20~75~2024-01-09~~~<state>", seven separators,
   // which put every state into participantsCSV and cost the whole jump to
   // "record 1 must describe the process state". The line's final field is where
-  // the model put the state; move it home when that is plainly what it is.
-  // Only kind, title and participants are recovered: a record short enough to
-  // put its state in startedDate or earlier is too broken to read positionally.
+  // the model put the state; move it home when the record's shape says so
+  // (stateInLastField). Only kind, title and participants are recovered: a
+  // record short enough to put its state in startedDate or earlier is too broken
+  // to read positionally.
   if (
-    separators >= 5 &&
-    separators <= 7 &&
     !normalizeString(fields[9]) &&
-    looksLikeStorylineStateProse(fields[separators])
+    normalizeString(fields[separators]) &&
+    stateInLastField(fields, separators)
   ) {
     fields[9] = fields[separators];
     fields[separators] = "";
@@ -1717,9 +1727,10 @@ export const decodeWorldStorylineUpdates = (value, { limit = MAX_STORYLINE_UPDAT
 // The records with the ids of the events their numbers name, as the other
 // ledgers' binders tie theirs: a skip's answer is tied this way before its
 // events are put in date order (ledgerPins.js), so its numbers still name the
-// events the model meant. A record that has ids keeps them.
-// normalizeWorldStorylineEventLinks reads them as the places those events then
-// stand in, and the record leaves it with places alone, as it always has.
+// events the model meant. A record that has ids keeps them. They are the
+// authority on which events the record names: normalizeWorldStorylineEventLinks
+// reads them as the places those events then stand in, and the record leaves
+// it with places alone, as it always has.
 export const bindWorldStorylineUpdatesToEvents = (value, events, { limit } = {}) => {
   const ids = normalizeArray(events).map((event) => normalizeString(event?.id));
   return decodeWorldStorylineUpdates(value, { limit }).map((update) => {
@@ -1733,364 +1744,31 @@ export const bindWorldStorylineUpdatesToEvents = (value, events, { limit } = {})
   });
 };
 
-const STORYLINE_LINK_STOPWORDS = new Set([
-  "about", "after", "again", "against", "among", "because", "between", "during",
-  "from", "into", "over", "that", "their", "there", "these", "this", "through",
-  "under", "with", "without", "storyline", "government", "empire", "kingdom",
-  "republic", "state", "states", "process", "current", "continues", "continued",
-]);
-
-// The letters, marks and digits of any script. Kept to a-z and 0-9, a
-// storyline and an event written in Russian or Arabic shared no words however
-// plainly one advanced the other, and only an actor the event named in a
-// structured field could link them. English text reads as it always did.
-const storylineLinkText = (value) =>
-  normalizeString(value)
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const storylineLinkTokens = (value) =>
-  [...new Set(
-    storylineLinkText(value)
-      .split(" ")
-      .filter((token) => token.length >= 4 && !STORYLINE_LINK_STOPWORDS.has(token))
-  )];
-
-const storylineParticipantAliases = (participant) => {
-  const raw = storylineLinkText(participant);
-  if (!raw) return [];
-  const variants = new Set([raw]);
-  const stripped = raw
-    .replace(/^(the )?(kingdom|republic|empire|federation|commonwealth|union|state) of /, "")
-    .replace(/ (kingdom|republic|empire|federation|commonwealth|union|state)$/, "")
-    .trim();
-  if (stripped) variants.add(stripped);
-  return [...variants].filter((value) => value.length >= 3);
-};
-
-const storylineEventStructuredActors = (event) => {
-  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-  return [
-    ...normalizeArray(event?.combatants),
-    ...normalizeArray(impacts?.polityChanges).flatMap((entry) => [entry?.code, entry?.name]),
-    ...normalizeArray(impacts?.politicalActorOps).map((entry) => entry?.polityKey || entry?.polity || entry?.country),
-    ...normalizeArray(impacts?.regionTransfers).flatMap((entry) => [entry?.fromCode, entry?.toCode]),
-    ...normalizeArray(impacts?.regionClaims).flatMap((entry) => [
-      entry?.claimantCode,
-      entry?.claimant,
-    ]),
-    ...normalizeArray(impacts?.regionControlOps).flatMap((entry) => [
-      entry?.fromCode,
-      entry?.toCode,
-      entry?.actorCode,
-      entry?.claimantCode,
-    ]),
-    ...normalizeArray(impacts?.createdChats).flatMap((chat) => [
-      chat?.speaker,
-      ...normalizeArray(chat?.countries),
-    ]),
-  ].map(normalizeString).filter(Boolean);
-};
-
-const scoreStorylineEventLink = (update, event, world, { ignoreActor = "" } = {}) => {
-  const eventText = storylineLinkText([
-    event?.id,
-    event?.title,
-    event?.description,
-    event?.warId,
-    JSON.stringify(event?.impacts ?? {}),
-  ].filter(Boolean).join(" "));
-  if (!eventText) return 0;
-
-  const structuredActors = storylineEventStructuredActors(event);
-  let score = 0;
-
-  // R3.8: an already-established native event->storyline binding is objective
-  // bookkeeping evidence. Give it overwhelming precedence so a subsequent
-  // normalization pass can propagate the same link back into update.eventIndexes
-  // before anti-stasis evaluation. This does not create a semantic link by itself;
-  // only callers such as bindSelectedStorylineEvents may establish event.storylineIds.
-  const updateId = normalizeString(update?.id);
-  if (
-    updateId &&
-    normalizeArray(event?.storylineIds).map(normalizeString).includes(updateId)
-  ) {
-    score += 40;
-  }
-
-  for (const participant of normalizeArray(update?.participants).map(normalizeString).filter(Boolean)) {
-    if (ignoreActor && worldActorsEquivalent(participant, ignoreActor, world || {}, "")) continue;
-    const structuredHit = structuredActors.some((actor) =>
-      worldActorsEquivalent(participant, actor, world || {}, "")
-    );
-    if (structuredHit) {
-      score += 10;
-      continue;
-    }
-
-    if (
-      storylineParticipantAliases(participant)
-        .some((alias) => (` ${eventText} `).includes(` ${alias} `))
-    ) {
-      score += 6;
-    }
-  }
-
-  const titleTokens = storylineLinkTokens(`${update?.id || ""} ${update?.title || ""}`);
-  const stateTokens = storylineLinkTokens(update?.state);
-  const eventTokens = new Set(storylineLinkTokens(eventText));
-  score += Math.min(8, titleTokens.filter((token) => eventTokens.has(token)).length * 2);
-  score += Math.min(4, stateTokens.filter((token) => eventTokens.has(token)).length);
-
-  const kind = normalizeString(update?.kind).toLowerCase();
-  const eventWarId = storylineLinkText(event?.warId);
-  if (kind === "war" && eventWarId) {
-    const warTokens = new Set(storylineLinkTokens(eventWarId));
-    const storylineWarTokens = storylineLinkTokens(`${update?.id || ""} ${update?.title || ""}`);
-    const warOverlap = storylineWarTokens.filter((token) => warTokens.has(token)).length;
-    if (warOverlap > 0) score += Math.min(8, 4 + warOverlap * 2);
-  }
-
-  return score;
-};
-
-const inferStorylineEventIndexes = (update, events, world) => {
-  const scored = normalizeArray(events)
-    .map((event, index) => ({
-      index,
-      score: scoreStorylineEventLink(update, event, world),
-    }))
-    .filter((row) => row.score >= 6)
-    .sort((a, b) => b.score - a.score || a.index - b.index);
-
-  if (!scored.length) return [];
-  const best = scored[0].score;
-
-  // Multiple events may legitimately advance the same persistent process in one
-  // pass. Keep only strong near-best matches, never a broad participant-only fanout.
-  return scored
-    .filter((row) => row.score >= Math.max(8, best - 2))
-    .slice(0, 4)
-    .map((row) => row.index);
-};
-
-
-// R3.1 — deterministic selected-storyline event salvage.
+// The events each storyline record names, where they stand now: the events it
+// was tied to by id before the answer was put in date order (ledgerPins.js),
+// the places it was written with when it has no ids (the Game Master's
+// records, the engine's own), and every event whose storylineIds name the
+// storyline. Ids and places only, exactly: a record whose number names no
+// event loses that number, and nothing is ever tied by what a record and an
+// event say.
 //
-// The model owns WHAT happened and the semantic storyline state. Native JS owns
-// obvious bookkeeping. If the main world pass generated an event that strongly
-// and uniquely matches one scheduler-selected persistent storyline, attach that
-// existing storyline id even when the model forgot storylineUpdates entirely.
-//
-// This is deliberately conservative:
-// - selected/current storylines only;
-// - strong score floor;
-// - ambiguous near-ties are left alone;
-// - existing explicit ids are preserved;
-// - no pressure/momentum/state is invented here.
-export const bindSelectedStorylineEvents = (
-  candidate,
-  {
-    selectedStorylines = [],
-    world = {},
-    // The player's polity. Once the player joins a storyline (a mediator, say),
-    // naming the player would otherwise be enough to bind: every event about the
-    // player's own programmes landed in a Gulf crisis because it said "British".
-    // The player's link to a storyline has to come from the storyline's own
-    // subject, not from the player being in it.
-    gameCountry = "",
-    minScore = 6,
-    ambiguityMargin = 4,
-  } = {},
-) => {
+// A text scorer used to decide instead (scoreStorylineEventLink: the words of
+// four letters or more that a record's title and state shared with an event,
+// and its participants' names in the event's prose, with an English
+// stoplist). It overrode the events a record was pinned to, took away a number
+// whose event shared too few words, and tied events to the selected
+// storylines (bindSelectedStorylineEvents) and new storylines to events
+// (bindNewStorylineEvents) by the same score. A storyline and its event in
+// another language shared few words, so its number was stripped and the
+// anti-stasis rule failed it; in English, generic shared words moved events
+// between storylines.
+export const normalizeWorldStorylineEventLinks = (candidate) => {
   if (!candidate || typeof candidate !== "object") {
-    return { bound: 0, bindings: [] };
-  }
-
-  const events = normalizeArray(candidate?.events);
-  const selected = normalizeArray(selectedStorylines)
-    .filter((storyline) => {
-      const id = normalizeString(storyline?.id);
-      const status = normalizeString(storyline?.status).toLowerCase();
-      return id && ["active", "dormant"].includes(status);
-    });
-
-  if (!events.length || !selected.length) {
-    return { bound: 0, bindings: [] };
-  }
-
-  let bound = 0;
-  const bindings = [];
-
-  candidate.events = events.map((event, eventIndex) => {
-    if (!event || typeof event !== "object") return event;
-
-    const currentIds = normalizeArray(event?.storylineIds)
-      .map(normalizeString)
-      .filter(Boolean);
-
-    const scored = selected
-      .map((storyline) => ({
-        storyline,
-        id: normalizeString(storyline?.id),
-        score: scoreStorylineEventLink(storyline, event, world, { ignoreActor: gameCountry }),
-      }))
-      .filter((row) => row.id && row.score >= minScore)
-      .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
-
-    if (!scored.length) {
-      return {
-        ...event,
-        storylineIds: [...new Set(currentIds)].slice(0, 6),
-      };
-    }
-
-    const best = scored[0];
-    const second = scored[1];
-    const unambiguous =
-      !second ||
-      best.score - second.score >= ambiguityMargin ||
-      best.score >= second.score + 2 * ambiguityMargin;
-
-    if (!unambiguous) {
-      return {
-        ...event,
-        storylineIds: [...new Set(currentIds)].slice(0, 6),
-      };
-    }
-
-    const alreadyLinked = currentIds.includes(best.id);
-    const storylineIds = [...new Set([...currentIds, best.id])].slice(0, 6);
-
-    if (!alreadyLinked) {
-      bound += 1;
-      bindings.push({
-        eventIndex,
-        eventId: normalizeString(event?.id),
-        storylineId: best.id,
-        score: best.score,
-      });
-    }
-
-    return {
-      ...event,
-      storylineIds,
-    };
-  });
-
-  return { bound, bindings };
-};
-
-// R3.8 — deterministic new-storyline <-> event seam repair.
-//
-// Crisis Discovery may correctly create a new persistent process but omit the
-// mechanical eventIndexes field. That must not discard an otherwise valuable
-// breadth pass. For NEW storylines only, bind the single strongest returned event
-// when the semantic match is strong and unambiguous. Ambiguous cases remain
-// invalid and are rejected by the normal validator.
-export const bindNewStorylineEvents = (
-  candidate,
-  {
-    existingStorylines = [],
-    world = {},
-    minScore = 12,
-    ambiguityMargin = 4,
-  } = {},
-) => {
-  if (!candidate || typeof candidate !== "object") {
-    return { bound: 0, bindings: [], ambiguous: [] };
+    return { updates: [], strippedInvalid: 0 };
   }
 
   const events = normalizeArray(candidate?.events);
   const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
-  if (!events.length || !updates.length) {
-    return { bound: 0, bindings: [], ambiguous: [] };
-  }
-
-  const existingIds = new Set(
-    normalizeArray(existingStorylines)
-      .map((entry) => normalizeString(entry?.id))
-      .filter(Boolean),
-  );
-
-  let bound = 0;
-  const bindings = [];
-  const ambiguous = [];
-
-  candidate.storylineUpdates = updates.map((update, updateIndex) => {
-    const id = normalizeString(update?.id);
-    if (!id || existingIds.has(id) || normalizeArray(update?.eventIndexes).length) {
-      return update;
-    }
-
-    const scored = events
-      .map((event, eventIndex) => ({
-        eventIndex,
-        score: scoreStorylineEventLink(update, event, world),
-      }))
-      .filter((row) => row.score >= minScore)
-      .sort((a, b) => b.score - a.score || a.eventIndex - b.eventIndex);
-
-    if (!scored.length) return update;
-
-    const best = scored[0];
-    const second = scored[1];
-    if (second && best.score - second.score < ambiguityMargin) {
-      ambiguous.push({
-        storylineId: id,
-        updateIndex,
-        bestEventIndex: best.eventIndex,
-        bestScore: best.score,
-        secondEventIndex: second.eventIndex,
-        secondScore: second.score,
-      });
-      return update;
-    }
-
-    const event = events[best.eventIndex];
-    events[best.eventIndex] = {
-      ...event,
-      storylineIds: [...new Set([
-        ...normalizeArray(event?.storylineIds).map(normalizeString).filter(Boolean),
-        id,
-      ])].slice(0, 6),
-    };
-
-    bound += 1;
-    bindings.push({
-      storylineId: id,
-      updateIndex,
-      eventIndex: best.eventIndex,
-      score: best.score,
-    });
-
-    return {
-      ...update,
-      eventIndexes: [best.eventIndex],
-    };
-  });
-
-  candidate.events = events;
-  return { bound, bindings, ambiguous };
-};
-
-export const normalizeWorldStorylineEventLinks = (
-  candidate,
-  {
-    world = {},
-  } = {},
-) => {
-  if (!candidate || typeof candidate !== "object") {
-    return { updates: [], rebound: 0, strippedInvalid: 0 };
-  }
-
-  const events = normalizeArray(candidate?.events);
-  const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
-  let rebound = 0;
   let strippedInvalid = 0;
   // A record tied to its events by id (bindWorldStorylineUpdatesToEvents) names
   // them where they stand now: its ids are the numbers it was written with.
@@ -2107,48 +1785,33 @@ export const normalizeWorldStorylineEventLinks = (
       : normalizeArray(update?.eventIndexes)
         .map(Number)
         .filter((index) => Number.isInteger(index));
-    const validSupplied = supplied.filter(
-      (index) => index >= 0 && index < events.length,
-    );
-    strippedInvalid += Math.max(0, supplied.length - validSupplied.length);
+    const valid = supplied.filter((index) => index >= 0 && index < events.length);
+    strippedInvalid += supplied.length - valid.length;
 
-    const inferred = inferStorylineEventIndexes(update, events, world);
-    let eventIndexes = inferred;
-
-    // If native semantic inference has no confident match, retain only supplied
-    // indexes that themselves look related. This treats model numbers as hints,
-    // never as authority.
-    if (!eventIndexes.length && validSupplied.length) {
-      eventIndexes = validSupplied.filter(
-        (index) => scoreStorylineEventLink(update, events[index], world) >= 6,
-      );
-    }
-
-    if (
-      eventIndexes.length &&
-      JSON.stringify(eventIndexes) !== JSON.stringify(validSupplied)
-    ) {
-      rebound += 1;
-    }
+    const id = normalizeString(update?.id);
+    const tagged = id
+      ? events.reduce((indexes, event, index) => {
+        if (normalizeArray(event?.storylineIds).map(normalizeString).includes(id)) indexes.push(index);
+        return indexes;
+      }, [])
+      : [];
 
     return {
       ...update,
-      eventIndexes: [...new Set(eventIndexes)].slice(0, 12),
+      eventIndexes: [...new Set([...valid, ...tagged])].slice(0, 12),
     };
   });
 
   candidate.storylineUpdates = normalized;
 
-  if (rebound || strippedInvalid) {
+  if (strippedInvalid) {
     console.info(
-      `[OH storyline native binding] ${rebound} storyline record(s) rebound from semantic event evidence; ` +
-      `${strippedInvalid} invalid event reference(s) stripped.`,
+      `[OH storyline links] ${strippedInvalid} event reference(s) that name no event of this answer stripped.`,
     );
   }
 
-  return { updates: normalized, rebound, strippedInvalid };
+  return { updates: normalized, strippedInvalid };
 };
-
 
 const storylineSemanticStateKey = (value) =>
   normalizeString(value)
@@ -2848,11 +2511,13 @@ export const applyWorldStorylineUpdates = ({
       normalizeString(prior?.title) ||
       normalizeString(related[0]?.title) ||
       id.replace(/^storyline[-_:]?/i, "").replaceAll("-", " ");
+    // One of the fixed kinds (runtime/storylineKinds.js): the record's, else the
+    // storyline's own. A word outside the list says nothing, like a blank one;
+    // an event's category (its kind) is another list and is not read for it.
     const kind =
-      normalizeString(raw?.kind) ||
-      normalizeString(prior?.kind) ||
-      normalizeString(related[0]?.kind) ||
-      "world";
+      storylineKindOf(raw?.kind, "") ||
+      storylineKindOf(prior?.kind, "") ||
+      NEUTRAL_STORYLINE_KIND;
     // Storyline participant lists are cumulative causal membership, not a
     // replacement projection of whichever actors happened to appear in the latest
     // event. Omission can never silently eject Japan/China/Russia/etc. from a
@@ -3221,6 +2886,24 @@ export const buildWorldInitiativeContext = (
     return storylineAttention.aliasToCanonical?.get(id) || id;
   };
 
+  // What each candidate carries besides its line (NO_CANDIDATE_CONTEXT): the
+  // polities its record names, as the world names them, and the pressure of
+  // the busiest open storyline it advances.
+  const gameCountry = normalizeString(bundle?.game?.country);
+  const actorResolver = createWorldActorResolver(bundle?.world || {}, gameCountry);
+  const openStorylinePressure = new Map(storylineAttention.all
+    .filter((storyline) => storyline.status !== "resolved")
+    .map((storyline) => [normalizeString(storyline.id), clampPercent(storyline.pressure)]));
+  const candidateContext = {
+    partiesOf: (names) => [...new Set(normalizeArray(names)
+      .map((name) => actorResolver.knownCanonical(normalizeString(name)))
+      .filter(Boolean))],
+    storylinePressureOf: (ids) => normalizeArray(ids).reduce((most, id) => {
+      const pressure = openStorylinePressure.get(canonicalStorylineId(id));
+      return pressure === undefined ? most : Math.max(most, pressure);
+    }, -1),
+  };
+
   const recentEvents = normalizeArray(bundle?.events).slice(-RECENT_EVENT_WINDOW);
   // R3.7: crisis discovery gets a separate cheap evidence lane sourced from the
   // same bounded recent-history window. This prevents a trajectory-4/5 rupture
@@ -3240,7 +2923,7 @@ export const buildWorldInitiativeContext = (
     // Preserve only unresolved-looking, high-trajectory cards for crisis
     // discovery. Existing storyline-linked history is not eligible to bootstrap
     // a second parallel crisis. Age remains bounded by the same 180-day window.
-    const crisisCandidate = eventCandidate(event, originDate, index);
+    const crisisCandidate = eventCandidate(event, originDate, index, candidateContext);
     if (
       crisisCandidate &&
       crisisCandidate.ageDays <= RECENT_EVENT_CANDIDATE_MAX_AGE_DAYS &&
@@ -3279,13 +2962,13 @@ export const buildWorldInitiativeContext = (
       return;
     }
 
-    const candidate = eventCandidate(event, originDate, index);
+    const candidate = eventCandidate(event, originDate, index, candidateContext);
     if (candidate) candidates.push(candidate);
   });
 
   const recentChats = normalizeArray(bundle?.chats).slice(-RECENT_CHAT_WINDOW);
   recentChats.forEach((chat, index) => {
-    const candidate = chatCandidate(chat, originDate, index);
+    const candidate = chatCandidate(chat, originDate, index, candidateContext);
     if (candidate) candidates.push(candidate);
   });
 
@@ -3302,6 +2985,7 @@ export const buildWorldInitiativeContext = (
     suppressedDeferredParticipantKeys,
     normalizeString(bundle?.game?.country),
     regionNames,
+    candidateContext,
   );
   pushActiveUnitCandidates(
     candidates,
@@ -3309,6 +2993,7 @@ export const buildWorldInitiativeContext = (
     suppressedDeferredParticipantKeys,
     normalizeString(bundle?.game?.country),
     regionNames,
+    candidateContext,
   );
 
   const activeInteractive = bundle?.world?.activeInteractive;
@@ -3324,6 +3009,8 @@ export const buildWorldInitiativeContext = (
         title: title || "Active unresolved crisis",
         detail: truncate(premise, 320),
         ageDays: 0,
+        // The player is playing it out.
+        playerRelated: true,
         trajectoryValue: 5,
       });
     }
@@ -3378,13 +3065,14 @@ export const buildWorldInitiativeContext = (
   // The player's focus decides how much of the world's own attention this
   // context carries (AI/playerFocus.js): all of it at World first and Balanced,
   // less at Focused and Spotlight. The world loses its weakest ranked evidence
-  // first; anything naming the player stays, as does every player-sphere
-  // exploration lane and the protected crisis lane below.
-  const playerKey = normalizeString(bundle?.game?.country).toLowerCase();
+  // first; anything of the player's stays (a candidate the model said concerns
+  // the player, or whose record names the player's polity: never one whose text
+  // merely contains the name), as does every player-sphere exploration lane and
+  // the protected crisis lane below.
   const keptCandidates = trimWorldForFocus(bounded, {
     focus: playerFocus,
-    isPlayerItem: (candidate) => Boolean(playerKey)
-      && `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`.toLowerCase().includes(playerKey),
+    isPlayerItem: (candidate) => candidate?.playerRelated === true
+      || (Boolean(gameCountry) && normalizeArray(candidate?.parties).some((party) => actorResolver.equivalent(party, gameCountry))),
   });
   const lines = keptCandidates.map((candidate, index) => {
     const when = candidate.date ? ` (${candidate.date})` : "";
@@ -3480,7 +3168,7 @@ export const buildWorldInitiativeContext = (
     "[Storyline Records]",
     "storylineUpdates is ONE string: one record per line, at most 16, fields separated by ~ (never inside a field):",
     "id~status~pressure~momentum~startedDate~kind~title~participantsCSV~eventNumbersCSV~state",
-    "status is active, dormant or resolved. pressure (how much is at stake) and momentum (how fast it is changing) run 0-100. startedDate is YYYY-MM-DD for a new storyline; an existing one may leave kind, title and participants blank; eventNumbersCSV may be blank; state says what is true on the stop date. Open a new storyline when an event starts something that will run over several turns — a crisis, an insurgency, a standoff, a war — never for a one-off announcement, and never for an effort on the Projects board.",
+    `status is active, dormant or resolved. kind is one of ${STORYLINE_KIND_LIST_TEXT}. pressure (how much is at stake) and momentum (how fast it is changing) run 0-100. startedDate is YYYY-MM-DD for a new storyline; an existing one may leave kind, title and participants blank; eventNumbersCSV names the events that move it; state says what is true on the stop date. Open a new storyline when an event starts something that will run over several turns — a crisis, an insurgency, a standoff, a war — never for a one-off announcement, and never for an effort on the Projects board.`,
     `An active war or high-pressure storyline with no visible development for ${STAGNATION_BACKSTOP_DAYS} days may not stand still: it must ${describeAntiStasisObjectiveRule()}.`,
   ].join("\n");
 

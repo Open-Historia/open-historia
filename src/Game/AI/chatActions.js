@@ -29,8 +29,11 @@
 // Actors are named by their exact display name — never an internal id, and
 // never the player: a model may not speak for a human.
 //
-// DELIBERATELY IMPORT-FREE: the rules on plain data. The caller hands in the
+// DELIBERATELY IMPORT-FREE but for where a sentence ends (server/sentences.js,
+// itself import-free): the rules on plain data. The caller hands in the
 // roster and applies the resulting events (runtime/chatThreads.js).
+
+import { firstSentence } from "../../../server/sentences.js";
 
 export const CHAT_ACTION_KINDS = Object.freeze([
     "send_message",
@@ -73,8 +76,9 @@ export const stripRedundantChatSpeakerPrefix = (content, actorName) => {
     const dashed = text.match(new RegExp(`^${name}\\s+([-–—])\\s+`, "iu"));
     if (!dashed) return text;
     const rest = text.slice(dashed[0].length);
-    const firstSentence = rest.split(/[.!?]/)[0];
-    if (new RegExp(`\\s${escapeRegex(dashed[1])}\\s`, "u").test(firstSentence)) return text;
+    // Its first sentence, in any script (server/sentences.js).
+    const opening = firstSentence(rest) || rest;
+    if (new RegExp(`\\s${escapeRegex(dashed[1])}\\s`, "u").test(opening)) return text;
     return rest.trim();
 };
 

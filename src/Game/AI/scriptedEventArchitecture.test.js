@@ -11,8 +11,10 @@ const serverFeatures = fs.readFileSync(new URL("../../../server/gameFeatures.js"
 test("time skips gate authored beats natively before prompting and persist accepted resolutions", () => {
   assert.ok(gameplay.includes("firstSkipIncludesScriptedOrigin("));
   assert.ok(gameplay.includes("includeOrigin: includeOriginScripted"));
-  assert.ok(gameplay.includes("scriptedBeatsNotAlreadyWritten("));
-  assert.ok(gameplay.includes("scriptedPlan.eligible,"));
+  // Every fired beat is the period's, the start day's too: the prehistory is
+  // not searched for a beat's words (they are matched by id: worldDirection.js).
+  assert.ok(gameplay.includes("const scriptedBeats = scriptedPlan.eligible;"));
+  assert.equal(gameplay.includes("scriptedBeatsNotAlreadyWritten"), false);
   assert.equal(gameplay.includes("simulationHistory).length === 0 && segmentIndex === 0"), false);
   assert.match(gameplay, /planScriptedEvents\(/);
   assert.match(gameplay, /scriptedPlan\.eligible/);
@@ -20,6 +22,26 @@ test("time skips gate authored beats natively before prompting and persist accep
   assert.match(gameplay, /commitScriptedEventPlan\(/);
   assert.match(gameplay, /scriptedEventState:\s*state\.scriptedEventState/);
   assert.match(gameplay, /scriptedEventState:\s*normalizeScriptedEventState\(/);
+});
+
+// The event that tells a beat names its id in scriptedBeat: accepted on every
+// skip's answer, sent to the games whose scenario has scripted events, after
+// the load-bearing warId, combatants and impacts, and never to the Game Master.
+test("an event's scriptedBeat is checked on every skip, sent where the scenario has scripted events, and placed last", async () => {
+  const { GAMEPLAY_SCHEMAS, SCRIPTED_BEAT_FIELD, getGameplayTool, withScriptedBeat } = await import("./gameplaySchemas.js");
+  assert.equal(SCRIPTED_BEAT_FIELD, "scriptedBeat");
+  assert.ok(GAMEPLAY_SCHEMAS.jumpForward.properties.events.items.properties.scriptedBeat);
+  const lean = getGameplayTool("jumpForward");
+  assert.equal("scriptedBeat" in lean.schema.properties.events.items.properties, false, "a game without scripted events pays nothing for it");
+  const sent = withScriptedBeat(lean);
+  const keys = Object.keys(sent.schema.properties.events.items.properties);
+  assert.equal(keys.at(-1), "scriptedBeat");
+  assert.ok(keys.indexOf("impacts") < keys.indexOf("scriptedBeat") && keys.indexOf("combatants") < keys.indexOf("scriptedBeat") && keys.indexOf("warId") < keys.indexOf("scriptedBeat"));
+  assert.deepEqual(sent.schema.properties.events.items.properties.scriptedBeat, { type: "string", description: "Only on the event that tells a scripted event: that entry's id." });
+  assert.equal(withScriptedBeat(sent), sent, "once is enough");
+  assert.equal(withScriptedBeat(getGameplayTool("gameMaster")), getGameplayTool("gameMaster"), "not a skip's tool");
+  assert.match(gameplay, /const beatTool = JUMP_TASK_KEYS\.has\(taskKey\) && normalizeArray\(getActiveWorldDirection\(\)\?\.scriptedEvents\)\.length \? withScriptedBeat\(featureTool\) : featureTool;/);
+  assert.match(gameplay, /withOccupationSettlements\(beatTool, variables\.occupationGroups\) : beatTool;/);
 });
 
 test("the Features editor delegates scripted event arrays to a dedicated world-aware list editor", () => {

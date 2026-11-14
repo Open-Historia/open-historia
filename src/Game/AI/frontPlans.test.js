@@ -30,9 +30,10 @@ const fresh = (orders = []) => {
   return { map, record };
 };
 const game = { country: "Aland", gameDate: "2024-03-01", round: 3 };
+// Where it happens is its focus (runtime/fronts/plans.js operationsOn), never a city its summary names.
 const operation = (extra = {}) => ({
   id: "project-kingfisher", name: "Operation Kingfisher", kind: "operation", ownerCode: "", status: "active",
-  summary: "Three corps drive east to take Brod before the thaw.", ...extra,
+  summary: "Three corps drive east to take Brod before the thaw.", focus: { lng: 22.6, lat: 50 }, ...extra,
 });
 const spy = (extra = {}) => ({ id: "spy-1", owner: "Borduria", target: "Aland", status: "active", ...extra });
 
@@ -137,7 +138,7 @@ test("the war room is shown what the player's agents and Board have of the other
   assert.equal(warRoomIntel({ world: world([spy({ status: "turned" })]), game, record, side: 0, cities }).double, true);
   assert.equal(warRoomIntel({ world: world([spy()]), game, record, side: 0, cities }).double, false);
   // The Board's entry on their operation is known without an agent.
-  const board = warRoomIntel({ world: world([], [operation({ ownerCode: "Borduria", summary: "Encircle Alba." })]), game, record, side: 0, cities });
+  const board = warRoomIntel({ world: world([], [operation({ ownerCode: "Borduria", summary: "Encircle Alba.", approach: "encircle", focus: { lng: 20.4, lat: 50 } })]), game, record, side: 0, cities });
   assert.deepEqual(board.plans.map((plan) => [plan.kind, plan.name, plan.order]), [["project", "Operation Kingfisher", "encircle"]]);
 
   // The player's own: his operation, by the Board's own entry with no owner written.

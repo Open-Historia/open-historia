@@ -26,19 +26,34 @@ test("live Baltic GM repair shorthand is rejected before it can masquerade as a 
   assert.match(government, /non-empty patch object/i);
 });
 
-test("replace-leader refuses caretaker administration placeholders", () => {
-  const operation = {
-    op: "replace-leader",
-    polityKey: "Latvia",
-    office: "headOfGovernment",
-    leader: { name: "Caretaker Administration" },
-  };
-  assert.match(validatePoliticalActorOperationShape(operation, { allowNativeDerived: false }), /placeholder, not an officeholder/i);
+// replace-leader refused a leader named "Caretaker Administration" by English
+// words alone: "Administration intérimaire" passed. No name is judged by its
+// words now; that a leader is a person in office, and a caretaker government
+// with no named holder is set-government, is the prompt's rule (GENERATED_OP_NOTES).
+test("replace-leader takes the name it is given, in any language, and the prompt says what a leader is", () => {
+  for (const name of ["Caretaker Administration", "Administration intérimaire", "Временное правительство"]) {
+    const operation = {
+      op: "replace-leader",
+      polityKey: "Latvia",
+      office: "headOfGovernment",
+      leader: { name },
+    };
+    assert.equal(validatePoliticalActorOperationShape(operation, { allowNativeDerived: false }), "", name);
+    const world = { politicalActors: normalizePoliticalActors({ byPolity: { Latvia: { polityKey: "Latvia", government: {} } } }) };
+    const result = applyPoliticalActorOperation(world, operation);
+    assert.equal(result.applied, true, name);
+    assert.equal(result.actor.government.headOfGovernment.name, name);
+  }
+  assert.match(POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE, /replace-leader argsJson=[^\n]*leader is the person now in office; a caretaker government with no named holder is set-government/);
+});
 
-  const world = { politicalActors: normalizePoliticalActors({ byPolity: { Latvia: { polityKey: "Latvia", government: {} } } }) };
-  const result = applyPoliticalActorOperation(world, operation);
-  assert.equal(result.applied, false);
-  assert.match(result.error, /placeholder, not an officeholder/i);
+// A head of state put in office by replace-leader is the record's leader and
+// holds that office, so a later change of head of state takes the leader along.
+test("a head of state named by replace-leader leads, holding that office", () => {
+  const world = { politicalActors: normalizePoliticalActors({ byPolity: { Latvia: { polityKey: "Latvia", government: { headOfGovernment: "Premier" } } } }) };
+  const named = applyPoliticalActorOperation(world, { op: "replace-leader", polityKey: "Latvia", office: "headOfState", leader: { name: "Andris Bērziņš", title: "Valsts prezidents" } });
+  assert.equal(named.applied, true);
+  assert.deepEqual(named.actor.leader, { name: "Andris Bērziņš", title: "Valsts prezidents", office: "headOfState" });
 });
 
 test("structured system/government patches are accepted", () => {

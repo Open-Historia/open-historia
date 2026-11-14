@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-import { previewScreenedEvent, screenGeneratedWorldEvents } from "./nativeWorldIntegrity.js";
+import { screenGeneratedWorldEvents } from "./nativeWorldIntegrity.js";
 
 const routinePatrol = (actionIds = []) => ({
   id: "routine-patrol",
@@ -15,7 +15,9 @@ const routinePatrol = (actionIds = []) => ({
 
 test("routine military screening cannot hide the retained event that explicitly answers a queued Action", () => {
   const event = routinePatrol(["order-frontier-patrol"]);
-  const screened = screenGeneratedWorldEvents({ events: [event] });
+  // The game hands the screen the turn's queued orders (every screen of a jump
+  // is given them, below): a citation stands while its order is queued.
+  const screened = screenGeneratedWorldEvents({ events: [event], actions: [{ id: "order-frontier-patrol", status: "planned" }] });
   assert.deepEqual(screened.events, [event]);
   assert.deepEqual(screened.hidden, []);
   assert.deepEqual(screened.dropped, []);
@@ -36,13 +38,12 @@ test("an ordinary patrol report is kept as written, as its twin in another langu
     const screened = screenGeneratedWorldEvents({ events: [event] });
     assert.deepEqual(screened.events, [event]);
     assert.deepEqual(screened.hidden, []);
-    assert.equal(previewScreenedEvent(event), null);
   }
 });
 
-// In a real world the screen can tell who acted from an event's title, and
-// then it keeps only the citations of orders still queued. It must be given
-// the turn's orders for that, or it takes every citation away.
+// The screen keeps only the citations of orders still queued, by their exact
+// ids. It must be given the turn's orders for that, or it takes every citation
+// away.
 const world = {
   polityOverrides: {
     Ukraine: { code: "Ukraine", name: "Ukraine", status: "active" },
@@ -179,26 +180,24 @@ test("civilian protest news cannot be hidden because security patrols appear in 
   assert.deepEqual(screened.hidden, []);
 });
 
-// The live preview marks a streamed card with the rule that will judge it when
-// the turn lands, and changes nothing about the event it looks at.
-test("the live preview gives a streamed card the screen's own verdict", () => {
-  const review = {
-    id: "inspection-review",
-    date: "2019-10-12",
-    title: "Ministry Finalizes Technical Inspection Standards",
-    description: "Officials finalize technical inspection standards after a committee review.",
-    impacts: {},
-  };
-  const before = structuredClone(review);
-  assert.deepEqual(previewScreenedEvent(review), {
-    fate: "hide",
-    route: "ROUTINE_ADMINISTRATIVE_PROCESS",
-    reason: "routine administrative/process card with no material native consequence",
-  });
-  assert.deepEqual(review, before);
-  assert.equal(previewScreenedEvent({ ...review, impacts: { actionIds: ["order-standards"] } }), null);
-  assert.equal(previewScreenedEvent(routinePatrol()), null, "a patrol is military news, kept");
-  assert.equal(previewScreenedEvent(null), null);
+// The screen hid an English administrative card (ROUTINE_ADMINISTRATIVE_CUE_RE)
+// and the live preview marked it as it streamed in; its twin in any other
+// language was kept. The skip is told to write no filler and that nothing takes
+// it off the timeline afterwards, so the screen keeps what it writes, and the
+// preview marks only a word-for-word repeat of the record.
+test("an administrative card is kept as written, as its twin in another language is", () => {
+  for (const [title, description] of [
+    ["Ministry Finalizes Technical Inspection Standards", "Officials finalize technical inspection standards after a committee review."],
+    ["Ministerstwo zatwierdza techniczne normy inspekcji", "Urzędnicy zatwierdzają techniczne normy inspekcji po przeglądzie komisji."],
+  ]) {
+    const review = { id: "inspection-review", date: "2019-10-12", title, description, impacts: {} };
+    const screened = screenGeneratedWorldEvents({ events: [review] });
+    assert.deepEqual(screened.events, [review]);
+    assert.deepEqual(screened.hidden, []);
+  }
+  const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  const preview = source.slice(source.indexOf("const markStreamedEvents = "), source.indexOf("const filedEventsFromRows = "));
+  assert.ok(preview.includes("EXACT_DUPLICATE") && !preview.includes("previewScreenedEvent"));
 });
 
 // A Game of Thrones skip hid "Rangers of the Night's Watch Burn Twenty-Two Wights

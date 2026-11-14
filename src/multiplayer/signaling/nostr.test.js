@@ -8,7 +8,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createNostrChannel, SIGNAL_KIND } from "./nostr.js";
+import { createNostrChannel, refusalPrefix, refusedForClock, SIGNAL_KIND } from "./nostr.js";
 import { createFakeRelayNetwork, settle } from "../testing/fakeRelays.js";
 import { randomBytes, toHex } from "../bytes.js";
 
@@ -234,6 +234,23 @@ test("a ban is respected for longer, and a relay is never the only one gone quie
   await settle();
   assert.equal(host.instance.publish({ t: "beacon", n: 5 }), 3);
   host.instance.close();
+});
+
+// Why a relay refused is its NIP-01 prefix, never the words after it: those are
+// the relay's own, in its own wording and language.
+test("a refusal is read by its machine-readable prefix, whatever words follow it", () => {
+  assert.equal(refusalPrefix("invalid: ephemeral event expired"), "invalid");
+  assert.equal(refusalPrefix("rate-limited: slow down"), "rate-limited");
+  assert.equal(refusalPrefix("  Blocked: you are banned"), "blocked");
+  assert.equal(refusalPrefix("too old"), "", "no prefix, no reason the game can read");
+  // The same clock refusal, worded by another relay or in another language: alike.
+  for (const said of ["invalid: ephemeral event expired", "invalid: created_at too late", "invalid: l'événement est trop ancien", "invalid: 时间戳无效"]) {
+    assert.equal(refusedForClock(said), true, said);
+  }
+  // Words alone are no prefix: an English phrase about time says nothing.
+  for (const said of ["event too old", "created_at in the future", "rate-limited: too many events", "blocked: expired subscription"]) {
+    assert.equal(refusedForClock(said), false, said);
+  }
 });
 
 test("a relay that refuses an event says why, and whether the time stamp was the reason", async () => {

@@ -13,17 +13,15 @@
 // chats, flags and the stock map's baked regions. Shared with the server, so no
 // src/ imports, like ownerMigration.js.
 import { renameInBattlefields, renameInTransports } from "./battlefieldNames.js";
+import { sameName } from "./nameKey.js";
 
 const str = (value) => String(value ?? "").trim();
-// The same identity as ownerNames.js ownerIdentityKey: case, diacritics and
-// punctuation do not make a different country.
-const identity = (value) => str(value).normalize("NFD").toLowerCase().replace(/[^a-z0-9]+/g, "");
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const unique = (list) => [...new Set(list.map(str).filter(Boolean))];
-export const samePolityName = (a, b) => {
-  const left = identity(a);
-  return Boolean(left) && left === identity(b);
-};
+// The game's one name fold (nameKey.js), as ownerNames.js ownerIdentityKey:
+// case, accents and punctuation do not make a different country, in any
+// script; a name with no letters or digits is no name.
+export const samePolityName = sameName;
 const mapName = (value, from, to) => (samePolityName(value, from) ? to : value);
 const mapList = (list, from, to) => (Array.isArray(list) ? unique(list.map((value) => mapName(value, from, to))) : list);
 // A map keyed by polity names, re-keyed: the country's own value — under its

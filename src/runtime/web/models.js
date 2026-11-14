@@ -19,6 +19,7 @@ import {
   pickHubProvenance,
 } from "../../../server/hubProvenance.js";
 import { scenarioMusicField } from "../../../server/scenarioMusic.js";
+import { nameId } from "../../../server/nameId.js";
 import { scenarioLanguagesField } from "../../../server/scenarioLanguages.js";
 import {
   BUILT_IN_SCENARIO_DEFAULT_DATE,
@@ -364,9 +365,10 @@ export const normalizeRuntimeWorld = (assetKey, data, scenarioCustomGeometry) =>
     : normalized;
 };
 
-// server normalizeId (:316) — no length cap for scenario/game ids.
+// server normalizeId (:316) — no length cap for scenario/game ids, and the game's
+// one rule for an id made from a name (server/nameId.js).
 export const normalizeId = (rawValue, prefix) => {
-  const value = String(rawValue ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const value = nameId(rawValue, (name) => String(name ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""));
   return value || `${prefix}-${Date.now().toString(36)}`;
 };
 

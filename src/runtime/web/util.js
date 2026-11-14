@@ -1,5 +1,6 @@
 /*! Open Historia — web-mode store utilities © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { sha256Hex } from "../sha256.js";
+import { nameId } from "../../../server/nameId.js";
 // Shared helpers for the web-mode store handlers. Mirrors the small utilities in
 // server/libraryStore.js / mapEditorStore.js / basemapStore.js so the browser
 // port produces byte-compatible ids, hashes and response envelopes.
@@ -21,13 +22,17 @@ export const nowIso = () => new Date().toISOString();
 // Matches normalizeId in server/libraryStore.js:316 (prefix form) and
 // mapEditorStore.js:38 (48-char slug). `maxLen` defaults to unlimited to match
 // the library store; pass 48 for the map editor.
+// By the game's one rule for an id made from a name (server/nameId.js), as
+// there: a Latin name keeps its slug, a name in another script is its own hash.
 export const normalizeId = (value, prefix = "item", maxLen = 0) => {
-  let slug = String(value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (maxLen > 0) slug = slug.slice(0, maxLen);
+  const slug = nameId(value, (name) => {
+    const latin = String(name ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return maxLen > 0 ? latin.slice(0, maxLen) : latin;
+  });
   if (!slug) return `${prefix}-${Date.now().toString(36)}`;
   return slug;
 };

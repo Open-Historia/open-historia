@@ -143,6 +143,12 @@ const weatherMixOf = (value) => {
   return out;
 };
 
+// Which of the world's seasons a designer's season is, where they said: how the
+// game's map tints it when it has no colour of its own (Game/Map/seasonTint.js).
+// Its name is never read for one.
+export const SEASON_KINDS = Object.freeze(["winter", "spring", "summer", "autumn"]);
+const seasonKindOf = (value) => (SEASON_KINDS.includes(String(value ?? "")) ? String(value) : "");
+
 export const normalizeClimateZones = (value) => (Array.isArray(value) ? value : []).map((zone, at) => {
   if (!isRecord(zone)) return null;
   const rings = ringsOf(zone.rings);
@@ -151,7 +157,8 @@ export const normalizeClimateZones = (value) => (Array.isArray(value) ? value : 
     const start = monthDayOf(season?.start);
     const end = monthDayOf(season?.end);
     if (!isRecord(season) || !start || !end) return null;
-    return { name: clean(season.name, 40) || "season", start, end, ...(colorOf(season.color) ? { color: colorOf(season.color) } : {}), weather: weatherMixOf(season.weather), effects: effectsOf(season.effects) };
+    const kind = seasonKindOf(season.kind);
+    return { name: clean(season.name, 40) || "season", start, end, ...(kind ? { kind } : {}), ...(colorOf(season.color) ? { color: colorOf(season.color) } : {}), weather: weatherMixOf(season.weather), effects: effectsOf(season.effects) };
   }).filter(Boolean).slice(0, 12);
   const events = (Array.isArray(zone.events) ? zone.events : []).map((event) => {
     const from = clean(event?.from, 40);

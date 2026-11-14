@@ -85,7 +85,7 @@ const runSegment = (candidate, { pin = true, beats = [] } = {}) => {
   else candidate.events.forEach((event, index) => { if (!event.id) event.id = `segment-1-event-${index + 1}`; });
   settleWarLedger(candidate, { world, authority: "skip" });
   salvageDiplomaticLedgerPayload(candidate, { world });
-  assert.equal(validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true }), "");
+  assert.equal(validateDiplomaticLedgerPayload(candidate, { world, authority: "skip" }), "");
   const { events } = candidate;
   candidate.warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(candidate.warUpdates), events);
   candidate.relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(candidate.relationUpdates), events);
@@ -138,11 +138,10 @@ test("read after the sort, the same numbers name other events", () => {
   assert.deepEqual(read.puppet, [[FLOOD]], "Serbia's revolt, told by a flood");
   assert.deepEqual(read.front, [[CONVENTION]]);
   assert.deepEqual(read.storyline, [[FLOOD]]);
-  // Relations and agreements are tied by what their words match on a skip,
-  // whatever their numbers say (nativeDiplomaticDirector.js
-  // bindDiplomaticLedgerToCausalEvents), so the sort never moved them.
-  assert.deepEqual(read.relation, NAMED.relation);
-  assert.deepEqual(read.agreement, NAMED.agreement);
+  // Relations and agreements are tied by their numbers too, and nothing else:
+  // their words no longer pull them onto the event they match.
+  assert.deepEqual(read.relation, [[INVASION]], "the naval convention's relation, told by the invasion");
+  assert.deepEqual(read.agreement, [[INVASION]]);
 });
 
 test("an event the engine writes in takes an id of its own, and the records keep theirs into the round's ids", () => {

@@ -57,7 +57,6 @@ export const RECEIPT_PLAYER_TEXTS = Object.freeze({
   agreementUntitled: "A new agreement was not recorded: it had no title.",
   staleOrderLinksOne: "1 link from an event to an order that is not in your queue was removed.",
   staleOrderLinksMany: "{{count}} links from events to orders that are not in your queue were removed.",
-  cityControlUnchanged: "The event says control of {{city}} changed, but nothing changed it, so the map still shows its previous controller.",
   transferWholeCountryUnknown: "The transfer of all of {{name}}'s land was not applied: no regions are held under that exact name.",
   controlWholeCountryUnknown: "The change of control over all of {{name}}'s land was not applied: no regions are held under that exact name.",
   transferUnknownOwner: "The transfer of {{region}} was not applied: {{owner}} is not a country on this map.",
@@ -188,9 +187,6 @@ export const interventionNote = ({ kept = [], dropped = [], closingDate = "" } =
 export const unresolvedTerritoryNote = (entry, family, eventTitle = "") => {
   const control = family === "regionControlOps";
   const region = clean(entry?.label);
-  if (entry?.kind === "narrated-city-coverage") {
-    return receiptPlayerNote("cityControlUnchanged", { city: clean(entry.cityName) || region || clean(entry.regionName) }, eventTitle);
-  }
   if (entry?.wholeCountry) {
     return receiptPlayerNote(control ? "controlWholeCountryUnknown" : "transferWholeCountryUnknown", { name: region }, eventTitle);
   }

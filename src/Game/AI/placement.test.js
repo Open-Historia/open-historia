@@ -56,16 +56,14 @@ const CITIES = [
 ];
 const UNITS = [{ id: "u-1", name: "1st Guards Army", point: [35, 51] }];
 
-const fold = (value) => String(value ?? "").trim().toLowerCase();
-// Loose the way the real gazetteer is loose: unless asked for an exact name, a
-// phrase that CONTAINS a name as a whole word finds it ("off Porthaven" would
-// find Porthaven), which is what the `exact` flag on the whole-phrase reading
-// exists to stop.
-const containsWord = (outer, inner) => outer === inner || outer.startsWith(`${inner} `) || outer.endsWith(` ${inner}`) || outer.includes(` ${inner} `);
+const fold = (value) => String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+// Exact, the way the real gazetteer is (gameplay.js buildPlacementGazetteer): a
+// name as the map spells it, case and spacing aside, or nothing. No phrase is
+// ever matched by a name inside it.
 const gazetteer = {
-    find: (name, { exact = false } = {}) => {
+    find: (name) => {
         const key = fold(name);
-        const matches = (candidate) => (exact ? fold(candidate) === key : containsWord(key, fold(candidate)));
+        const matches = (candidate) => fold(candidate) === key;
         const unit = UNITS.find((entry) => fold(entry.id) === key || matches(entry.name));
         if (unit) return { kind: "unit", name: unit.name, point: unit.point };
         const city = CITIES.find((entry) => matches(entry.name));
@@ -132,21 +130,17 @@ const modernDayRegionAt = (point) => MODERN_DAY_REGIONS.find((feature) => pointI
 const earthGazetteer = { ...gazetteer, seas: seasForMap({ regionAt: modernDayRegionAt }) };
 const placeOnEarth = (phrase) => resolvePlacement(phrase, earthGazetteer);
 
-test("a named sea is open water in that sea, whatever words come with it", () => {
+test("a named sea is open water in that sea, by its name or an alias, with the grammar's own words", () => {
     for (const [phrase, label] of [
         ["Black Sea", "Black Sea"],
-        ["the Black Sea", "Black Sea"],
+        ["sea: Black Sea", "Black Sea"],
         ["Ionian Sea, Eastern Mediterranean", "Ionian Sea"],
         ["Central Mediterranean, Mediterranean Sea", "Central Mediterranean"],
-        ["in the South Atlantic", "South Atlantic"],
-        // A part of a sea is that sea, but a sea named for its part stays itself.
+        ["the Med", "Mediterranean Sea"],
+        // A part of a sea, in the grammar's words, is that sea; a sea named for its part stays itself.
         ["western Black Sea", "Black Sea"],
-        ["the north-western Black Sea, off Odessa", "Black Sea"],
         ["eastern Mediterranean", "Eastern Mediterranean"],
         ["North Sea", "North Sea"],
-        ["the open Atlantic", "Atlantic Ocean"],
-        // A sea, then a place in it the map does not know: the sea.
-        ["western Black Sea off Atlantis", "Black Sea"],
     ]) {
         const spot = placeOnEarth(phrase);
         assert.equal(spot.error, undefined, phrase);
@@ -155,6 +149,16 @@ test("a named sea is open water in that sea, whatever words come with it", () =>
         assert.equal(gazetteer.regionAt([spot.lng, spot.lat]), null, `${phrase} is at sea`);
     }
     assert.ok(distanceKm([placeOnEarth("Black Sea").lng, placeOnEarth("Black Sea").lat], [34, 43.2]) < 1);
+});
+
+// Other wording is read as a name, and is no sea's name: in English as in French. The model is told to
+// write the directive's forms, and a fleet raised there goes to its owner's waters with a receipt.
+test("a sea said in other words is no sea, in English as in any language", () => {
+    for (const phrase of ["the Black Sea", "in the South Atlantic", "the open Atlantic", "western Black Sea off Atlantis", "la mer Noire", "dans l'Atlantique Sud", "Чёрное море"]) {
+        const spot = placeOnEarth(phrase);
+        assert.ok(spot.error, phrase);
+        assert.equal(spot.how, undefined, phrase);
+    }
 });
 
 test("Modern Day's own map is the real world and has the real seas", () => {
@@ -193,13 +197,14 @@ test("a map of its own places fleets in the seas its scenario declares", () => {
     });
     assert.deepEqual(seas.map((sea) => sea.name), ["Narrow Sea", "Sunset Sea"], "an entry without a name or a point is skipped");
     const own = { ...gazetteer, seas };
-    for (const phrase of ["Narrow Sea", "the Narrows", "into the Narrow Sea"]) {
+    for (const phrase of ["Narrow Sea", "the Narrows", "sea: Narrow Sea"]) {
         const spot = resolvePlacement(phrase, own);
         assert.equal(spot.how, "sea", phrase);
         assert.equal(spot.label, "Narrow Sea", phrase);
         assert.deepEqual([spot.lng, spot.lat], [36, 45], phrase);
     }
     assert.equal(resolvePlacement("Sunset Sea", own).how, "sea");
+    assert.ok(resolvePlacement("into the Narrow Sea", own).error, "\"into\" is no word of the grammar");
 
     // On the real-world map too, and a scenario's own sea wins a shared name.
     const earth = seasForMap({ regionAt: modernDayRegionAt, declared: [{ name: "Black Sea", point: [31, 44] }] });
@@ -398,16 +403,14 @@ test("an offset goes the way the compass says, and about as far", () => {
 
 // --- reading ---
 
-test("the whole phrase is always read as a name first — exactly, when it could also be grammar", () => {
+test("the whole phrase is always read as a name first", () => {
     for (const phrase of ["North Korea", "Gold Coast", "near Midburg", "east of Midburg"]) {
-        assert.deepEqual(readPlacement(phrase)[0], { kind: "place", name: phrase, exact: true });
+        assert.deepEqual(readPlacement(phrase)[0], { kind: "place", name: phrase });
     }
-    assert.deepEqual(readPlacement("Midburg"), [{ kind: "place", name: "Midburg" }], "a bare name may be matched loosely");
+    assert.deepEqual(readPlacement("Midburg"), [{ kind: "place", name: "Midburg" }], "a bare name is one reading");
 });
 
-test("a loose match on the whole phrase does not beat its grammar", () => {
-    // The gazetteer would find Porthaven in "off Porthaven" and Midburg in
-    // "near Midburg" if asked loosely; the whole-phrase reading must not ask.
+test("the whole phrase as a name does not beat its grammar, and a name the map spells so is the name", () => {
     assert.equal(place("off Porthaven").how, "offshore");
     assert.equal(place("near Midburg", "3rd Army").how, "near");
     assert.equal(place("east of Midburg").how, "direction");
@@ -417,22 +420,41 @@ test("a loose match on the whole phrase does not beat its grammar", () => {
     assert.equal(place("Gold Coast").how, "at");
 });
 
-test("each form of words is read as what it says", () => {
+test("each form of the directive's words is read as what it says", () => {
     const kinds = (phrase) => readPlacement(phrase).map((reading) => reading.kind);
     assert.ok(kinds("near Midburg").includes("near"));
-    assert.ok(kinds("just outside Midburg").includes("near"));
+    assert.ok(kinds("NEAR Midburg").includes("near"), "case aside");
     // An objective is a destination beside the place; the move's travel clamp does the rest.
     assert.ok(kinds("toward Midburg").includes("near"));
-    assert.ok(kinds("advancing on Midburg").includes("near"));
     assert.deepEqual(readPlacement("north-west of Midburg").find((r) => r.kind === "direction"), { kind: "direction", direction: "northwest", name: "Midburg" });
     assert.deepEqual(readPlacement("eastern Westmark").find((r) => r.kind === "part"), { kind: "part", direction: "east", name: "Westmark" });
     assert.deepEqual(readPlacement("Westmark South, north").find((r) => r.kind === "part"), { kind: "part", direction: "north", name: "Westmark South" });
-    assert.deepEqual(readPlacement("the north of Westmark South").find((r) => r.kind === "part"), { kind: "part", direction: "north", name: "Westmark South" });
     assert.deepEqual(readPlacement("coast of Eastland").find((r) => r.kind === "coast"), { kind: "coast", name: "Eastland" });
-    assert.deepEqual(readPlacement("off the coast of Eastland").find((r) => r.kind === "offshore"), { kind: "offshore", name: "Eastland" });
+    assert.deepEqual(readPlacement("off Eastland").find((r) => r.kind === "offshore"), { kind: "offshore", name: "Eastland" });
     assert.deepEqual(readPlacement("Westmark South facing Eastland").find((r) => r.kind === "facing"), { kind: "facing", name: "Westmark South", toward: "Eastland" });
-    assert.deepEqual(readPlacement("the border of Westmark with Eastland").find((r) => r.kind === "facing"), { kind: "facing", name: "Westmark", toward: "Eastland" });
     assert.deepEqual(readPlacement("between Midburg and Porthaven").find((r) => r.kind === "between"), { kind: "between", first: "Midburg", second: "Porthaven" });
+});
+
+// The directive's forms are the whole grammar. An English way of saying one of them is read no more than
+// a French or a Russian one: it is a name, and a name the map does not have places nothing (the owner,
+// 2026-11-13: no keywording anywhere). The model is told to write the forms word for word.
+test("other wording is a name, in English as in any language: never read for what it might mean", () => {
+    for (const phrase of [
+        "just outside Midburg", "advancing on Midburg", "the north of Westmark South",
+        "the border of Westmark with Eastland", "halfway between Midburg and Porthaven", "at Midburg", "the centre of Westmark",
+        "près de Midburg", "à l'est de Midburg", "vers Midburg", "у Мидбурга", "östlich von Midburg",
+    ]) {
+        assert.deepEqual(readPlacement(phrase), [{ kind: "place", name: phrase }], phrase);
+        assert.ok(place(phrase).error, phrase);
+    }
+    // A form of the grammar whose name is more words than the map's: the name is looked for as written.
+    assert.deepEqual(readPlacement("off the coast of Eastland").map((reading) => reading.name), ["off the coast of Eastland", "the coast of Eastland"]);
+    assert.ok(place("off the coast of Eastland").error);
+    // The English form and its French twin, side by side: the form places, the twin does not, and neither is guessed.
+    assert.equal(place("east of Midburg").how, "direction");
+    assert.ok(place("à l'est de Midburg").error);
+    // An article is part of a name: "the Midburg" is no place on this map.
+    assert.ok(place("near the Midburg").error);
 });
 
 test("coordinates are longitude then latitude, and nonsense is not a place", () => {
@@ -488,7 +510,7 @@ test("a part of a region is inside that part of it", () => {
 test("a part of a COUNTRY picks the region in that part of it", () => {
     assert.equal(place("southern Westmark").regionId, "wm-s");
     assert.equal(place("northern Westmark").regionId, "wm-n");
-    assert.equal(place("the north of Eastland").regionId, "el-n");
+    assert.equal(place("Eastland, north").regionId, "el-n");
 });
 
 test("facing puts a thing on the side of one place nearest another", () => {
@@ -496,7 +518,7 @@ test("facing puts a thing on the side of one place nearest another", () => {
     assert.equal(front.regionId, "wm-s");
     assert.ok(front.lng > 33, `should hug the 34 E border, was ${front.lng}`);
     // A country facing a country: its region nearest the other, then that side of it.
-    const border = place("the border of Eastland with Westmark");
+    const border = place("Eastland facing Westmark");
     assert.ok(["el-n", "el-s"].includes(border.regionId));
     assert.ok(border.lng < 35, String(border.lng));
 });
@@ -569,31 +591,35 @@ test("a gazetteer that throws on one odd region costs that reading, not the plac
 //
 // A player's diagnostics log (beta 0.0.50): Ecuador mobilised a brigade and the
 // model placed it at "northern frontier with Colombia", then, told that was not
-// a place, at "northern border with Colombia". Both named no first place, so
-// neither was read, and the brigade never appeared — twice.
+// a place, at "northern border with Colombia". The directive teaches one form
+// for it, "the border with Colombia", and that form alone is read; the new
+// brigade a phrase in any other words places nothing is raised in its owner's
+// own land instead (gameplay.js resolvePlacements), with a receipt.
 
-test("a border with no first place named is the unit's own side of it", () => {
-    for (const phrase of ["northern frontier with Eastland", "northern border with Eastland", "along the border with Eastland", "the Eastland border", "Eastland frontier"]) {
-        const spot = resolvePlacement(phrase, gazetteer, { seedText: "1st Brigade", owner: "Westmark" });
-        assert.equal(spot.error, undefined, phrase);
-        assert.ok(["wm-n", "wm-s"].includes(spot.regionId), `${phrase}: landed in ${spot.regionId}, not on Westmark's side`);
-        assert.ok(spot.lng > 33, `${phrase}: should hug the 34 E border, was ${spot.lng}`);
-    }
+test("the border with a country, with no first place named, is the unit's own side of it", () => {
+    const spot = resolvePlacement("the border with Eastland", gazetteer, { seedText: "1st Brigade", owner: "Westmark" });
+    assert.equal(spot.error, undefined);
+    assert.ok(["wm-n", "wm-s"].includes(spot.regionId), `landed in ${spot.regionId}, not on Westmark's side`);
+    assert.ok(spot.lng > 33, `should hug the 34 E border, was ${spot.lng}`);
     // Eastland's own unit at "the border with Westmark" is on Eastland's side.
     const theirs = resolvePlacement("the border with Westmark", gazetteer, { seedText: "2nd Brigade", owner: "Eastland" });
     assert.ok(["el-n", "el-s"].includes(theirs.regionId), String(theirs.regionId));
     assert.ok(theirs.lng < 35, String(theirs.lng));
     // Without an owner there is no side to put it on, so no such reading is offered.
-    assert.equal(readPlacement("northern frontier with Eastland").some((reading) => reading.kind === "facing"), false);
+    assert.equal(readPlacement("the border with Eastland").some((reading) => reading.kind === "facing"), false);
 });
 
-test("words for a kind of ground after a name are tried without them, after the phrase as written", () => {
-    const readings = readPlacement("near Putumayo jungle frontier");
-    assert.deepEqual(readings.find((reading) => reading.kind === "near" && reading.name === "Putumayo"), { kind: "near", name: "Putumayo" });
-    const asWritten = readings.findIndex((reading) => reading.kind === "near" && reading.name === "Putumayo jungle frontier");
-    const stripped = readings.findIndex((reading) => reading.kind === "near" && reading.name === "Putumayo");
-    assert.ok(asWritten >= 0 && asWritten < stripped, "the phrase as written is tried first");
-    assert.ok(readPlacement("Northern Region").some((reading) => reading.name === "Northern Region" && reading.kind === "place"), "a real name ending in one is still tried whole");
+test("a border said in other words is a name, in English as in any language", () => {
+    for (const phrase of ["northern frontier with Eastland", "northern border with Eastland", "along the border with Eastland", "the Eastland border", "Eastland frontier", "la frontière avec Eastland", "граница с Eastland"]) {
+        const spot = resolvePlacement(phrase, gazetteer, { seedText: "1st Brigade", owner: "Westmark" });
+        assert.ok(spot.error, phrase);
+        assert.equal(readPlacement(phrase, { owner: "Westmark" }).some((reading) => reading.kind === "facing"), false, phrase);
+    }
+});
+
+test("words for a kind of ground are part of the name, never taken off it", () => {
+    assert.deepEqual(readPlacement("near Putumayo jungle frontier").map((reading) => reading.name), ["near Putumayo jungle frontier", "Putumayo jungle frontier"]);
+    assert.ok(readPlacement("Northern Region").some((reading) => reading.name === "Northern Region" && reading.kind === "place"));
     assert.equal(readPlacement("Midburg").length, 1, "a bare name is one reading");
 });
 
@@ -653,21 +679,19 @@ test("when the map knows nothing after the comma, the spot is taken only at home
 
 // --- a side of a country, with no country named ---
 
-test("the northern border, with nobody named, is the north of whoever is placing the thing", () => {
-    const unit = resolvePlacement("northern border", gazetteer, { seedText: "Exercise Force", owner: "Westmark" });
-    assert.equal(unit.error, undefined);
+// "the northern border", "our southern provinces" said no place at all: in the
+// directive's grammar the side of a country is "northern Westmark". Read as
+// names they place nothing, and a new thing goes into its owner's land.
+test("a side of the owner's own land is said by its name, in the grammar's words", () => {
+    const unit = resolvePlacement("northern Westmark", gazetteer, { seedText: "Exercise Force", owner: "Westmark" });
     assert.equal(unit.regionId, "wm-n", "Westmark's northern region");
-    const depot = resolvePlacement("along the eastern frontier", gazetteer, { seedText: "Depot", home: "Westmark" });
-    assert.ok(["wm-n", "wm-s"].includes(depot.regionId) && depot.lng > 32, `${depot.regionId} ${depot.lng}: a structure's owner is its home`);
-    const south = resolvePlacement("our southern provinces", gazetteer, { owner: "Eastland" });
-    assert.equal(south.regionId, "el-s");
-    // Nobody's: there is no side to put it on, so it is not read that way at all.
-    assert.equal(readPlacement("northern border").some((reading) => reading.kind === "part" && reading.name !== "border"), false);
-    assert.match(resolvePlacement("northern border", gazetteer).error, /northern border/);
+    for (const phrase of ["northern border", "along the eastern frontier", "our southern provinces", "la frontière nord", "наши южные провинции"]) {
+        assert.ok(resolvePlacement(phrase, gazetteer, { owner: "Westmark" }).error, phrase);
+        assert.equal(readPlacement(phrase, { owner: "Westmark" }).some((reading) => reading.name === "Westmark"), false, `${phrase}: never read as the owner's own land`);
+    }
 });
 
 test("a named place still wins over the side of the owner's own land", () => {
-    // "Eastland North" is a region; its owner's north is only tried after it.
     const named = resolvePlacement("Eastland North", gazetteer, { owner: "Westmark" });
     assert.equal(named.regionId, "el-n");
     const border = resolvePlacement("the border with Eastland", gazetteer, { owner: "Westmark" });
@@ -678,7 +702,7 @@ test("an address after a word of grammar is still an address", () => {
     const near = place("near Fort Nowhere, Eastland South");
     assert.equal(near.error, undefined);
     assert.equal(near.regionId, "el-s");
-    const at = place("at Fort Nowhere, Midburg, Westmark");
+    const at = place("Fort Nowhere, Midburg, Westmark");
     assert.deepEqual([at.lng, at.lat], [32, 51]);
 });
 
@@ -694,21 +718,26 @@ test("an address asks the map for the same names several times over", () => {
     // Why the gazetteer answers each name once (the next test): one phrase the
     // map does not have is read several ways, and each way asks again.
     const asked = [];
-    const counting = { ...gazetteer, find: (name, options) => { asked.push(`${options?.exact ? "=" : "~"}${name}`); return gazetteer.find(name, options); } };
+    const counting = { ...gazetteer, find: (name, options) => { asked.push(`${name}|${options?.country ?? ""}`); return gazetteer.find(name, options); } };
     const result = resolvePlacement("near Fort Nowhere, Elsewhere", counting, { owner: "Westmark" });
     assert.match(result.error, /is called/);
-    assert.ok(asked.length > new Set(asked).size + 3, `${asked.length} lookups for ${new Set(asked).size} different questions`);
+    assert.ok(asked.length > new Set(asked).size + 2, `${asked.length} lookups for ${new Set(asked).size} different questions`);
 });
 
-test("the map's gazetteer works each name out once", () => {
+test("the map's gazetteer works each name out once, and every lookup in it is exact", () => {
     const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
     const body = source.slice(source.indexOf("const buildPlacementGazetteer = "), source.indexOf("const resolvePlacements = async"));
-    // The lookup itself, then the door in front of it: keyed by the name as it
-    // was written and by whether only the map's own spelling will do.
-    assert.ok(body.includes("const lookUp = (name, exactOnly) => {"));
+    // The door in front of the lookup: keyed by the name as it was written and what it was asked with.
     assert.ok(body.includes("const lookedUp = new Map();"));
-    assert.ok(body.includes("const memoKey = `${exactOnly ? \"=\" : \"~\"}${String(name ?? \"\")}`;"));
-    assert.ok(body.includes("if (!lookedUp.has(memoKey)) lookedUp.set(memoKey, lookUp(name, Boolean(exactOnly)));"));
+    assert.ok(body.includes("if (!lookedUp.has(askedKey)) lookedUp.set(askedKey, lookUpFor(name, country, prefer, kind));"));
+    // No near miss, no name inside another, no affix or article taken off, in any language
+    // (the owner, 2026-11-13: no keywording anywhere): a name or an alias, folded for case and spacing.
+    const code = body.replace(/\/\/[^\n]*/g, "");
+    // (Its `suggest` still offers the model names near what it wrote, in the receipt: it decides nothing.)
+    for (const guess of ["matchRegionName(", "editDistance(", "stripRegionAffixes(", "bareName", "sameBareName", "placesNamedIn", "/^the"]) {
+        assert.equal(code.includes(guess), false, guess);
+    }
+    assert.match(body, /const named = \(key\) => \(entry\) => fold\(entry\.name\) === key \|\| normalizeArray\(entry\.aliases\)\.some\(\(alias\) => fold\(alias\) === key\);/);
     // One gazetteer per placing pass, built from the world that pass reads, so
     // nothing it remembers outlives the units and structures it was read from.
     const pass = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
@@ -734,22 +763,15 @@ test("the placing pass tells the reader whose thing it is", () => {
 
 // Westmark's capital is Midburg; Eastland marks none.
 const CAPITALS = { westmark: { name: "Midburg", point: [32, 51] } };
-// Exact names only: the test map's loose matching would read "Nowhereville,
-// Westmark" as Westmark itself, which the real map does not.
 const mapped = {
     ...gazetteer,
-    find: (name, options = {}) => gazetteer.find(name, { ...options, exact: true }),
     capitalOf: (country) => CAPITALS[fold(country)] ?? null,
-    // The places an event's text names, in the order it names them, held by that
-    // country: the real gazetteer reads its regions and cities the same way.
-    placesNamedIn: (text, country) => [...REGIONS.map((region) => ({ name: region.name, region, owner: region.owner })),
-        ...CITIES.map((city) => ({ name: city.name, point: city.point, owner: gazetteer.regionAt(city.point)?.owner }))]
-        .map((place) => ({ ...place, at: fold(text).indexOf(fold(place.name)) }))
-        .filter((place) => place.at >= 0 && fold(place.owner) === fold(country))
-        .sort((a, b) => a.at - b.at),
 };
-const approx = (phrase, { owner = "", seedText = "Probe Base", context = "" } = {}) =>
-    resolvePlacement(phrase, mapped, { seedText, owner, approximate: true, context });
+// The event's own places, as the gazetteer finds them (gameplay.js resolvePlacements
+// hands them in): what its `places` field names, never what its words mention.
+const placesOf = (...names) => names.map((name) => gazetteer.find(name)).filter(Boolean);
+const approx = (phrase, { owner = "", seedText = "Probe Base", places = [] } = {}) =>
+    resolvePlacement(phrase, mapped, { seedText, owner, approximate: true, places });
 const inRegion = (spot, id) => pointInGeometry([spot.lng, spot.lat], REGIONS.find((region) => region.id === id).geometry);
 const inCountry = (spot, owner) => REGIONS.some((region) => region.owner === owner && pointInGeometry([spot.lng, spot.lat], region.geometry));
 
@@ -760,12 +782,19 @@ test("a place the map knows is placed exactly, never approximately", () => {
 });
 
 test("an unknown town in a named country goes near that country's capital", () => {
-    for (const phrase of ["Nowhereville, Westmark", "Nowhereville in Westmark", "Westmark's Nowhereville district"]) {
+    for (const phrase of ["Nowhereville, Westmark", "Nowhereville, country: Westmark"]) {
         const spot = approx(phrase, { owner: "Eastland" });
         assert.equal(spot.error, undefined, phrase);
         assert.equal(inCountry(spot, "Westmark"), true, `${phrase}: ${spot.lng},${spot.lat} is not in Westmark`);
         assert.ok(distanceKm([spot.lng, spot.lat], [32, 51]) <= 50, `${phrase}: too far from Midburg`);
-        assert.deepEqual(spot.approximate, { asked: phrase, country: "Westmark", near: "Midburg" }, phrase);
+        assert.deepEqual(spot.approximate, { asked: "Nowhereville, Westmark", country: "Westmark", near: "Midburg" }, phrase);
+    }
+    // The country is the address's last part: "in" and a possessive are English words, and are read no more than
+    // French ones. Such a phrase names no country, and the thing goes into its owner's own land.
+    for (const phrase of ["Nowhereville in Westmark", "Westmark's Nowhereville district", "Nowhereville en Westmark"]) {
+        const spot = approx(phrase, { owner: "Eastland" });
+        assert.equal(spot.approximate?.country, "Eastland", phrase);
+        assert.equal(inCountry(spot, "Eastland"), true, phrase);
     }
 });
 
@@ -786,16 +815,18 @@ test("a known city in the phrase is where the thing goes, near it and in its cou
 });
 
 // The same Game: the event named a province, and the phrase only the town and
-// its country. What the event itself names, in that country,
-// comes before the capital.
-test("a place the event names in that country comes before its capital", () => {
-    const spot = approx("Nowhereville, Westmark", { context: "The division completes its redeployment across Westmark South and arrives at Nowhereville." });
+// its country. What the event's places name, in that country, comes before the
+// capital. Its places, never its words: a province only its text mentions is no
+// anchor, in English or in French.
+test("a place the event's places name in that country comes before its capital", () => {
+    const spot = approx("Nowhereville, Westmark", { places: placesOf("Westmark South") });
     assert.equal(inRegion(spot, "wm-s"), true, `${spot.lng},${spot.lat} is not in Westmark South`);
     assert.equal(spot.approximate.near, "Westmark South");
+    assert.deepEqual(approx("Nowhereville, Westmark", { places: placesOf("Porthaven", "Westmark South") }).approximate.near, "Westmark South", "the first of them in that country");
 });
 
-test("a place the event names in another country is not used", () => {
-    const spot = approx("Nowhereville, Westmark", { context: "Troops leave Eastland North for Nowhereville." });
+test("a place the event's places name in another country is not used", () => {
+    const spot = approx("Nowhereville, Westmark", { places: placesOf("Eastland North") });
     assert.equal(spot.approximate.near, "Midburg");
     assert.equal(inCountry(spot, "Westmark"), true);
 });
@@ -835,7 +866,7 @@ test("two things placed approximately in one country land in different spots", (
 // operating base with no `at`, and its event named nowhere the map knows. It
 // goes into its owner's land like an unknown town, marked as given no place.
 test("a thing given no place at all goes into its owner's land, marked unnamed", () => {
-    const spot = approx("", { owner: "Westmark", context: "Engineers break ground on a base at Nowhereville." });
+    const spot = approx("", { owner: "Westmark" });
     assert.equal(inCountry(spot, "Westmark"), true);
     assert.deepEqual(spot.approximate, { asked: "", country: "Westmark", near: "Midburg", unnamed: true });
     assert.equal(
@@ -965,7 +996,7 @@ test("the world's list is asked only about a place the map does not have", () =>
     asked.length = 0;
     const onTheMap = [
         "Midburg", "near Midburg", "east of Midburg", "Midburg, Westmark", "Midburg, Westmark North", "near Midburg, Westmark",
-        "Westmark South", "northern Westmark", "northern border", "off Porthaven", "coast of Eastland", "between Midburg and Porthaven",
+        "Westmark South", "northern Westmark", "the border with Eastland", "off Porthaven", "coast of Eastland", "between Midburg and Porthaven",
         "Westmark South facing Eastland", "[35.5, 49.5]", "1st Guards Army", "North Korea",
     ];
     for (const phrase of onTheMap) assert.equal(placeWith(phrase, { owner: "Westmark" }).error, undefined, phrase);
@@ -977,12 +1008,10 @@ test("the world's list is asked only about a place the map does not have", () =>
     asked.length = 0;
     assert.ok(placeWith("Midburg facing Atlantis", { owner: "Eastland" }).error);
     assert.deepEqual(asked, ["Midburg facing Atlantis"], "the whole phrase is no name the map has; Midburg is");
-    // An address whose spot the map has, said with grammar, with a gazetteer that finds nothing loosely (the
-    // real one finds no "near Midburg"): the reading that takes the country off the name finds Midburg on
-    // the map, in Westmark, so it is beside the map's Midburg and the list is not asked.
+    // An address whose spot the map has, said with grammar: the reading that takes the country off the name
+    // finds Midburg on the map, in Westmark, so it is beside the map's Midburg and the list is not asked.
     asked.length = 0;
-    const exactOnly = { ...atlas, find: (name) => gazetteer.find(name, { exact: true }) };
-    const beside = resolvePlacement("near Midburg, Westmark", exactOnly, { owner: "Westmark" });
+    const beside = resolvePlacement("near Midburg, Westmark", atlas, { owner: "Westmark" });
     assert.deepEqual([beside.error, beside.how], [undefined, "near"]);
     assert.deepEqual(asked, []);
 });
@@ -1032,24 +1061,26 @@ test("the placing pass fetches the world's list only when a phrase has named a p
 test("a vector is read from its distance, its direction and the place it starts from", () => {
     const vector = (phrase) => readPlacement(phrase).find((reading) => reading.kind === "vector");
     assert.deepEqual(vector("120 km north-east of Midburg"), { kind: "vector", km: 120, bearing: 45, name: "Midburg" });
-    assert.deepEqual(vector("about 120 kilometres NE of Midburg"), { kind: "vector", km: 120, bearing: 45, name: "Midburg" });
-    assert.deepEqual(vector("60km due south of the 1st Guards Army"), { kind: "vector", km: 60, bearing: 180, name: "1st Guards Army" });
+    assert.deepEqual(vector("120km NE of Midburg"), { kind: "vector", km: 120, bearing: 45, name: "Midburg" });
+    assert.deepEqual(vector("60 km south of 1st Guards Army"), { kind: "vector", km: 60, bearing: 180, name: "1st Guards Army" });
     assert.deepEqual(vector("40 km west-north-west of Porthaven"), { kind: "vector", km: 40, bearing: 292.5, name: "Porthaven" });
-    assert.deepEqual(vector("40 km SSE from Porthaven"), { kind: "vector", km: 40, bearing: 157.5, name: "Porthaven" });
     assert.deepEqual(vector("1,200 km east of Midburg"), { kind: "vector", km: 1200, bearing: 90, name: "Midburg" });
     assert.deepEqual(vector("2,5 km north of Midburg"), { kind: "vector", km: 2.5, bearing: 0, name: "Midburg" });
-    // Miles and nautical miles are turned into kilometres.
-    assert.ok(Math.abs(vector("100 miles south of Midburg").km - 160.9344) < 1e-6);
-    assert.ok(Math.abs(vector("50 nm east of Porthaven").km - 92.6) < 1e-6);
-    // A bearing in degrees, said the ways it is said.
+    // A bearing in degrees, as the directive writes it.
     assert.deepEqual(vector("120 km on a bearing of 045 from Midburg"), { kind: "vector", km: 120, bearing: 45, name: "Midburg" });
-    assert.deepEqual(vector("120 km at 45° from Midburg"), { kind: "vector", km: 120, bearing: 45, name: "Midburg" });
-    assert.deepEqual(vector("bearing 270, 80 km from Midburg"), { kind: "vector", km: 80, bearing: 270, name: "Midburg" });
-    assert.deepEqual(vector("80 km heading 360 degrees from Midburg"), { kind: "vector", km: 80, bearing: 0, name: "Midburg" });
+    assert.deepEqual(vector("120 km on a bearing of 45° from Midburg"), { kind: "vector", km: 120, bearing: 45, name: "Midburg" });
     // Toward a second place.
     assert.deepEqual(vector("80 km from Midburg toward Porthaven"), { kind: "vector", km: 80, name: "Midburg", toward: "Porthaven" });
     // Not vectors: no distance, no direction, a bearing past the compass, a distance of nothing.
-    for (const phrase of ["east of Midburg", "120 km of Midburg", "120 km at 400 degrees from Midburg", "0 km east of Midburg", "near Midburg"]) {
+    for (const phrase of ["east of Midburg", "120 km of Midburg", "120 km on a bearing of 400 from Midburg", "0 km east of Midburg", "near Midburg"]) {
+        assert.equal(vector(phrase), undefined, phrase);
+    }
+    // Nor other ways of saying one: miles, "about", "due", "at 45°", "heading", in English as in French.
+    for (const phrase of [
+        "about 120 kilometres NE of Midburg", "60km due south of 1st Guards Army", "40 km SSE from Porthaven", "100 miles south of Midburg",
+        "50 nm east of Porthaven", "120 km at 45° from Midburg", "bearing 270, 80 km from Midburg", "80 km heading 360 degrees from Midburg",
+        "120 km au nord-est de Midburg", "à 120 km de Midburg vers Porthaven",
+    ]) {
         assert.equal(vector(phrase), undefined, phrase);
     }
     // The longest reach is capped.
@@ -1093,6 +1124,16 @@ test("the model is told it can place by a vector", () => {
     assert.match(PLACEMENT_DIRECTIVE, /120 km north-east of city: Kharkiv, country: Ukraine/);
     assert.match(PLACEMENT_DIRECTIVE, /bearing of 045/);
     assert.match(PLACEMENT_DIRECTIVE, /80 km from city: Kyiv, country: Ukraine toward city: Kharkiv, country: Ukraine/);
+});
+
+test("the model is told the forms are the engine's own words, whatever language the story is in", () => {
+    assert.match(PLACEMENT_DIRECTIVE, /Write the forms below word for word, in English whatever the story's language: any other wording is read as a place's name\./);
+    // Every example the directive gives reads as the form it teaches.
+    const examples = [...PLACEMENT_DIRECTIVE.matchAll(/"([^"]+)"/g)].map((match) => match[1]).filter((text) => !/^(?:region|country|city|sea|unit|structure)$/.test(text));
+    for (const example of ["near Kharkiv", "east of Kharkiv", "toward Kharkiv", "eastern Ukraine", "off Sevastopol", "coast of Crimea"]) {
+        assert.ok(readPlacement(example).length > 1, example);
+    }
+    assert.ok(examples.length > 10);
 });
 
 // A map whose oceans are regions of their own, with a coast along its southern

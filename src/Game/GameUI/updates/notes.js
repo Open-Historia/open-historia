@@ -54,6 +54,27 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "there should be absolutely no keywording done in this game anywhere its super unreliable ... and no whackamoleing issues. fix the core issue don't just patch it"
+    // (the owner, 2026-11-13): every word list, English synonym table and a-z fold that judged meaning, replaced by the AI's structured answers, the game's own records and exact names.
+    id: "2026-11-every-language-alike",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Every language plays alike",
+        items: [
+          "The game no longer looks for English words to decide what happens. It reads what the AI records and the names on your map, so a game in any language plays like one in English.",
+          "Land, armies and buildings move only by places written with their exact map names. A name the map doesn't have is left out and noted, never guessed, and never costs another AI request.",
+          "Peace terms, treaties and puppet states use the game's own record form, so a peace made in French or Chinese changes the map just as one made in English.",
+          "Countries, parties, leaders, wars and agents named in any alphabet are told apart, each country is drawn in a colour of its own, and renaming one written in Cyrillic or Chinese moves its regions with it.",
+          "History, storylines, scripted events, Rostra posts and the Advisor's letters and searches written in Chinese, Japanese or Thai now work like any other.",
+          "Scenario authors: a region type is water only when its Water switch is on, your own structure kinds and seasons are drawn as you pick them, and populations are typed in digits.",
+        ],
+      },
+    ],
+  },
+  {
     // "add custom units types that have their own custom stats for scenarios so like a dragon troop that is an air troop and super strong and very tough"
     // (the owner, 2026-11-13): a scenario's own unit types (runtime/unitTypes.js), set in the scenario editor under Wars.
     id: "2026-11-custom-unit-types",

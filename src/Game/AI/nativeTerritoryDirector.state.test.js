@@ -21,7 +21,7 @@ import {
   buildTerritoryDirectorInput,
   directGeneratedTerritoryOps,
   summarizeTerritorialState,
-  territoryCandidateText,
+  territoryCandidatePlaces,
 } from "./nativeTerritoryDirector.js";
 
 const handDrawnWorld = (regionCount) => {
@@ -89,7 +89,7 @@ test("the stores are copies, so the analyzer cannot reach back into the world", 
   assert.deepEqual(world.regionClaimants["1"], ["Poland"]);
 });
 
-test("when the cap bites, the front the events are about is what survives it", () => {
+test("when the cap bites, the front the events concern is what survives it, by their combatants and operations, in any language", () => {
   const world = handDrawnWorld(10);
   const total = TERRITORIAL_STATE_ROW_CAP + 50;
   // A long list of someone else's disputes first...
@@ -99,10 +99,19 @@ test("when the cap bites, the front the events are about is what survives it", (
   }
   // ...and the one this jump's events are actually about, last.
   world.regionOwnershipOverrides.donbas = "Russian Federation";
-  world.regionSovereigntyOverrides.donbas = "Ukraine";
-  const state = summarizeTerritorialState(world, [{ title: "Ukraine counter-attacks", description: "Ukrainian forces push east." }]);
-  assert.equal(Object.keys(state.regionClaimants).length + Object.keys(state.regionSovereigntyOverrides).length, TERRITORIAL_STATE_ROW_CAP);
-  assert.equal(state.regionSovereigntyOverrides.donbas, "Ukraine", "the named front must survive the cap");
+  world.regionClaimants.donbas = ["Ukraine"];
+  const survives = (candidates) => "donbas" in summarizeTerritorialState(world, candidates).regionClaimants;
+  // Who fights in an event says which front it concerns, whatever language it is told in.
+  const combatants = ["Ukraine", "Russian Federation"];
+  assert.equal(survives([{ title: "Ukraine counter-attacks", description: "Ukrainian forces push east.", combatants }]), true);
+  assert.equal(survives([{ title: "L'Ukraine contre-attaque", description: "Les forces ukrainiennes avancent vers l'est.", combatants }]), true);
+  // So do the sides of the operations it carries.
+  assert.equal(survives([{ title: "x", existingControlOps: [{ op: "contest", regionId: "Donbas", fromCode: "Russian Federation", actorCode: "Ukraine" }] }]), true);
+  // Its words never do: a name in the prose, in English or French, moves nothing up.
+  assert.equal(survives([{ title: "Ukraine counter-attacks", description: "Ukrainian forces push east." }]), false);
+  assert.equal(survives([{ title: "L'Ukraine contre-attaque", description: "Les forces ukrainiennes avancent." }]), false);
+  const state = summarizeTerritorialState(world, [{ title: "x", combatants }]);
+  assert.equal(Object.keys(state.regionClaimants).length, TERRITORIAL_STATE_ROW_CAP);
   assert.equal(state.omittedRegions, 51);
 });
 
@@ -133,15 +142,31 @@ const EVENTS = [
   },
 ];
 
-test("the text read for place names is the candidates' words and the places their operations point at", () => {
-  const text = territoryCandidateText([{
-    title: "Separatists capture Sloviansk",
-    description: "Militia columns seize the town hall.",
-    existingLegalTransfers: [{ regionId: "r-1", regionName: "Kramatorsk" }],
-    existingControlOps: [{ regionId: "Sloviansk" }],
-  }]);
-  for (const word of ["Separatists capture Sloviansk", "Militia columns", "Kramatorsk", "r-1"]) assert.ok(text.includes(word), word);
-  assert.equal(territoryCandidateText(null), "");
+// The places looked up for the director are the events' own `places` and the
+// regions their operations name, never their words: an English event and its
+// French twin, worded apart, hand over the same places.
+test("the places looked up are the candidates' places field and their operations' regions, never their words", () => {
+  const event = (title, description) => ({
+    title,
+    description,
+    places: ["city: Sloviansk, country: Ukraine", "region: Donetsk Oblast"],
+    impacts: {
+      regionTransfers: [{ regionId: "r-1", regionName: "Kramatorsk", fromCode: "Ukraine", toCode: "Donetsk People's Republic" }],
+      regionControlOps: [{ op: "control", regionId: "Sloviansk", fromCode: "Ukraine", toCode: "Donetsk People's Republic" }],
+    },
+  });
+  const english = territoryCandidatePlaces([event("Separatists capture Sloviansk and Lyman", "Militia columns seize the town hall.")]);
+  const french = territoryCandidatePlaces([event("Les séparatistes prennent Sloviansk et Lyman", "Des colonnes de miliciens prennent la mairie.")]);
+  assert.deepEqual(english, {
+    places: ["city: Sloviansk, country: Ukraine", "region: Donetsk Oblast"],
+    regions: ["Kramatorsk", "Sloviansk"],
+  });
+  assert.deepEqual(french, english);
+  // Lyman is only in the words, so it is not looked up.
+  assert.equal(JSON.stringify(english).includes("Lyman"), false);
+  // An event the director is not asked about hands over nothing.
+  assert.deepEqual(territoryCandidatePlaces([{ title: "Grain prices ease", places: ["city: Odessa"], impacts: {} }]), { places: [], regions: [] });
+  assert.deepEqual(territoryCandidatePlaces(null), { places: [], regions: [] });
 });
 
 test("no territorial event means nothing to ask, and the place reader is never run", async () => {
@@ -156,11 +181,11 @@ test("a territorial event is asked about under its own position, with the places
   const input = await buildTerritoryDirectorInput({
     events: EVENTS,
     world: handDrawnWorld(4),
-    findPlaces: async (text) => { seen.push(text); return [{ place: "Sloviansk", kind: "city", regionId: "r-donetsk", controller: "Ukraine" }]; },
+    findPlaces: async (fields) => { seen.push(fields); return [{ place: "Sloviansk", kind: "city", regionId: "r-donetsk", controller: "Ukraine" }]; },
   });
   assert.deepEqual(input.candidates.map((row) => row.eventIndex), [1]);
   assert.equal(input.candidates[0].existingControlOps.length, 1);
-  assert.ok(seen[0].includes("Sloviansk"));
+  assert.deepEqual(seen[0], { places: [], regions: ["Sloviansk"] });
   assert.equal(input.territorialState.placesTheseEventsName[0].controller, "Ukraine");
 });
 

@@ -33,7 +33,7 @@ test("the reasoning goes back beside an empty answer, under its own name", () =>
 
 test("reasoning with no answer still steps the structured mode down as it did", () => {
   // The step down read `text`, which used to hold the reasoning. It reads both now.
-  assert.match(main, /looksLikeDeliberation\(text \|\| reasoningText\)/);
+  assert.match(main, /isProseWithoutPayload\(text \|\| reasoningText\)/);
 });
 
 test("the task reads the object its contract asks for, not the first that parses", () => {

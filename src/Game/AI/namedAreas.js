@@ -61,9 +61,13 @@ export const buildAreaIndex = (catalog, { toName = asText, fold = plainFold } = 
 };
 
 // The area a written name means, or null: the name itself, or the country a
-// code written out of habit stands for.
+// code written out of habit stands for. The name is read as written, an article
+// and all: an English "the" was once taken off it, and no French "les" ever was,
+// so "the United States" was found and "les États-Unis" not, and "The Gambia"
+// was looked for as "Gambia" ("there should be absolutely no keywording done in
+// this game anywhere", the owner, 2026-11-13).
 export const findArea = (index, written, { toName = asText, fold = plainFold } = {}) => {
-    const raw = asText(written).replace(/^the\s+/i, "");
+    const raw = asText(written);
     if (!raw || !index?.size) return null;
     return index.get(fold(raw)) ?? index.get(fold(toName(raw))) ?? null;
 };

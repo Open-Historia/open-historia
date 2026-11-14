@@ -233,6 +233,13 @@ test("diplomacy: a thread belongs to whoever opened it, the AI answers, and no o
   assert.match(s.ack(s.guest, id(3)).error, /not in that conversation/);
   await s.request(s.guest, { t: "say", id: id(4), thread: null, to: [RUSSIA], text: "Hello me." });
   assert.match(s.ack(s.guest, id(4)).error, /does not write to itself/);
+  // A line sent from one of the guest's advisor's drafted letters keeps the
+  // draft's id, so the guest's advisor says that letter went.
+  await s.request(s.guest, { t: "say", id: id(5), thread: thread.id, to: [], text: "Moscow accepts.", fromDraft: "advisor-reply-9#1" });
+  assert.equal(s.ack(s.guest, id(5)).ok, true);
+  await s.clock.flush();
+  const line = s.shown(s.guest).chat.find((chat) => chat.id === thread.id).messages.find((message) => message.text === "Moscow accepts.");
+  assert.equal(line.fromDraft, "advisor-reply-9#1");
 });
 
 test("diplomacy between people: each writes their own lines, the model answers for neither, and each reads a thread with the other", async () => {

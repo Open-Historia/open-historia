@@ -1,17 +1,16 @@
 /*! Open Historia — Map vNext contextual cartographic naming © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
+import { nameKey } from "../../../../server/nameKey.js";
+
 const clean = (value) => String(value ?? "").trim();
 
 // The fold that decides whether two labels read the same, for a label as the
 // player reads it, which may be in any script (runtime/translator.js): folded
 // to a-z, every Chinese, Arabic or Cyrillic name was "" and "collided" with
-// every other, so each fell back to its English owner.
-export const labelFoldKey = (value) =>
-  String(value ?? "")
-    .normalize("NFD")
-    .replace(/\p{M}+/gu, "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "");
+// every other, so each fell back to its English owner. It is the game's one
+// name fold (server/nameKey.js), which keeps a vowel sign or a voicing mark as
+// part of its word: "भारत" and "भरत" are two labels.
+export const labelFoldKey = nameKey;
 
 // The name each polity's label shows, keyed by canonical owner — the namespace
 // the boundary worker keys its geometry by, so raw codes or aliases here would

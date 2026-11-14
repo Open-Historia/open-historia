@@ -177,10 +177,9 @@ const compactBloc = (bloc) => ({
   ...(officeholderName(bloc?.leader) ? { leader: officeholderName(bloc.leader) } : {}),
 });
 
-const actorRepairContext = (world, polityKey, eventText) => {
+const actorRepairContext = (world, polityKey) => {
   const actor = getPoliticalProfile(world, polityKey);
   const decision = buildPoliticalDecisionContext(world, polityKey, {
-    decisionFocusText: eventText,
     maxChars: 4400,
     limits: {
       traits: 8,
@@ -236,10 +235,9 @@ export const buildPoliticalClaimRepairRequest = ({ candidate, world, claimContex
 
   const contexts = new Map();
   for (const target of targets) {
-    const eventText = `${clean(target.event?.title)}\n${clean(target.event?.description)}`.trim();
     for (const polityKey of target.allowedPolities) {
       const key = lower(polityKey);
-      if (!contexts.has(key)) contexts.set(key, actorRepairContext(world, polityKey, eventText));
+      if (!contexts.has(key)) contexts.set(key, actorRepairContext(world, polityKey));
     }
   }
 
@@ -448,18 +446,11 @@ export const applyPoliticalClaimRepairResponse = ({ candidate, world, claimConte
     },
   }));
   const stagedCandidate = { ...candidate, events: stagedEvents };
-  // claimContext binds legacy/CSE exceptions by event identity. The staged
-  // transaction clones events, so mirror that membership onto the clones;
-  // otherwise the repair's final all-event validation could accidentally turn a
-  // legacy authored beat into a structured no-claim event and skip its fail-closed
-  // prose completeness check. Structured claim rows themselves survive shallow
-  // cloning through their enumerable symbol binding.
-  const stagedClaimContext = claimContext && typeof claimContext === "object"
-    ? {
-        ...claimContext,
-        legacyEvents: new Set(stagedEvents.filter((_, index) => claimContext?.legacyEvents?.has?.(sourceEvents[index]))),
-      }
-    : claimContext;
+  // Every claim an event is checked against (the answer's, and a scripted
+  // beat's authored ones) is bound to it by an enumerable symbol, which the
+  // staged shallow clones carry: the final all-event validation sees each
+  // clone's claims as its source event's.
+  const stagedClaimContext = claimContext;
 
   const scratch = clone(world || {});
   scratch.politicalActors = normalizePoliticalActors(scratch.politicalActors);

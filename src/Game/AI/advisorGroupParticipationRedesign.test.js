@@ -18,8 +18,8 @@ test("a named technical instruction and a direct question invite all ministers, 
     "Sergei, what would prevent a safe technical evaluation?",
   ];
   for (const question of names) {
-    assert.deepEqual(selectAdvisorGroupSpeakers(ids, rows(question), question, contacts, "Chief"),
-      [ids[2], ids[0], ids[1]]);
+    // Every minister is asked, in the turn's rotation; naming Sergei moves nobody.
+    assert.deepEqual(selectAdvisorGroupSpeakers(ids, rows(question)), ids);
   }
 });
 

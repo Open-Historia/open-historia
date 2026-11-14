@@ -49,13 +49,28 @@ export const extractErrorMessage = (payload, fallback) => {
 // Deliberately generous. A wrong guess here costs one extra request five seconds
 // later; a missed one costs the player their turn and tells them to go and debug
 // a model that was never the problem.
+//
+// What decides is what the provider's JSON says it is: the HTTP status, its
+// error code, type or status. The words of its message are read only after
+// those, for the providers that send nothing else (a third party's protocol
+// text, never the game's): the HTTP reason phrases ("Service Unavailable",
+// "Too Many Requests"), Anthropic's and Gemini's "Overloaded", a gateway's
+// "rate limit", and DeepSeek's mid-stream "Please try again later" refusal,
+// which carries no code at all.
 const BUSY_ERROR_CODES = new Set([
-    "429", "502", "503", "504",
+    "429", "502", "503", "504", "529",
     "service_unavailable", "unavailable", "overloaded", "overloaded_error",
     "rate_limit_error", "rate_limit_exceeded", "resource_exhausted", "capacity_exceeded",
 ]);
 
-const BUSY_ERROR_TEXT = /overload|capacity|too many requests|rate.?limit|temporarily unavailable|service unavailable|currently unavailable|try again later|server is busy|is busy/i;
+const BUSY_ERROR_TEXT = /overloaded|too many requests|rate.?limit|temporarily unavailable|service unavailable|currently unavailable|try again later|server is busy/i;
+
+// The parameter an OpenAI-shaped error names (`"param": "temperature"`), from
+// the parsed body or its `error` field; "" when it names none.
+export const errorParamOf = (payload) => {
+    const error = payload && typeof payload === "object" ? (payload.error && typeof payload.error === "object" ? payload.error : payload) : null;
+    return String(error?.param ?? "").trim().toLowerCase();
+};
 
 // Was this the provider being busy, rather than anything wrong with the request?
 // Checked against the code/type/status fields first (Anthropic's
@@ -94,10 +109,16 @@ export const isBusyErrorPayload = (error) => {
 // Default to RETRYABLE. A wrong guess here costs one wasted request; the
 // opposite costs a turn.
 
+// The codes that say the allowance or the balance is gone (OpenAI's).
+const QUOTA_SPENT_CODES = new Set(["insufficient_quota", "billing_hard_limit_reached", "billing_not_active"]);
+
 // Matched against the whole serialized error, because the decisive evidence is
 // often not in `message` at all but in Google's quota id
 // ("GenerateRequestsPerDayPerProjectPerModel-FreeTier"). No trailing \b: the ids
-// are camelCase, so "PerDay" has to match inside "PerDayPerProject".
+// are camelCase, so "PerDay" has to match inside "PerDayPerProject". The words
+// are read only where no quota id or code says it: Anthropic's "credit balance
+// is too low" (a 400 invalid_request_error with nothing else), and the per-day
+// or per-minute windows gateways name only in their message.
 const QUOTA_SPENT_TEXT =
     /per\s*-?\s*day|\bdaily\b|billing|payment|credit balance|insufficient[_ ]?quota|plan and billing/i;
 const RATE_LIMITED_TEXT =
@@ -135,6 +156,8 @@ export const isQuotaExhaustedPayload = (error) => {
     const quotaIds = quotaIdsOf(typeof error === "object" ? error : null);
     if (quotaIds.some((id) => /PerDay/i.test(id))) return true;
     if (quotaIds.length && quotaIds.every((id) => /PerMinute|PerSecond/i.test(id))) return false;
+    const node = error && typeof error === "object" ? (error.error && typeof error.error === "object" ? error.error : error) : null;
+    if (node && ["code", "type"].some((key) => QUOTA_SPENT_CODES.has(String(node[key] ?? "").toLowerCase()))) return true;
     // No quota id: judge the words, minus any URL (a help link to a "rate-limits"
     // page says nothing about which limit this was).
     const haystack = errorHaystack(error).replace(/https?:\/\/[^\s"\\]+/g, " ");
@@ -167,8 +190,8 @@ export const classifyProviderFailure = ({ status, payload } = {}) => {
     if (isContextWindowErrorPayload(error)) return { kind: "tooBig", reason: text };
     if (isQuotaExhaustedPayload(payload)) return { kind: "spent", reason: "used today's allowance" };
     if (code === 429) return { kind: "rateLimited", reason: "rate limited", waitMs: retryDelayMsFromPayload(payload) };
-    if (code === 401 || code === 403 || BAD_KEY_TEXT.test(text)) return { kind: "unusable", reason: `key rejected (${code || "no status"})` };
-    if (MODEL_NOT_FOUND_TEXT.test(text)) return { kind: "unusable", reason: `model not found (${code || "no status"})` };
+    if (code === 401 || code === 403 || saysBadKey(error) || BAD_KEY_TEXT.test(text)) return { kind: "unusable", reason: `key rejected (${code || "no status"})` };
+    if (saysModelNotFound(error) || MODEL_NOT_FOUND_TEXT.test(text)) return { kind: "unusable", reason: `model not found (${code || "no status"})` };
     if (code === 404) return { kind: "unusable", reason: "not found (404): check the endpoint address" };
     if (BUSY_HTTP_STATUSES.has(code) || isBusyErrorPayload(error)) return { kind: "busy", reason: "busy" };
     return { kind: "other", reason: text };
@@ -198,12 +221,35 @@ export const shouldRetryProviderFailure = ({ failure, attempt, retries, canFallB
 // 529 is Anthropic's own status for overloaded_error.
 const BUSY_HTTP_STATUSES = new Set([502, 503, 504, 529]);
 
-// Gemini says a bad key with a 400, so the status alone is not enough.
+// The codes each provider puts on a bad key: OpenAI's code, Anthropic's type,
+// and the reason in Google's ErrorInfo (Gemini says a bad key with a 400, so
+// the status alone is not enough).
+const BAD_KEY_CODES = new Set(["invalid_api_key", "authentication_error", "api_key_invalid", "api_key_expired"]);
+const errorNodeOf = (error) => (error && typeof error === "object" ? error : null);
+const googleReasonsOf = (error) => (Array.isArray(errorNodeOf(error)?.details) ? error.details : [])
+    .map((detail) => String(detail?.reason ?? "").toLowerCase())
+    .filter(Boolean);
+const saysBadKey = (error) => {
+    const node = errorNodeOf(error);
+    if (!node) return false;
+    return ["code", "type"].some((key) => BAD_KEY_CODES.has(String(node[key] ?? "").toLowerCase()))
+        || googleReasonsOf(node).some((reason) => BAD_KEY_CODES.has(reason));
+};
+// And a model that does not exist: OpenAI's code, Anthropic's type.
+const MODEL_NOT_FOUND_CODES = new Set(["model_not_found", "not_found_error"]);
+const saysModelNotFound = (error) => {
+    const node = errorNodeOf(error);
+    return Boolean(node) && ["code", "type"].some((key) => MODEL_NOT_FOUND_CODES.has(String(node[key] ?? "").toLowerCase()));
+};
+
+// The words, for a gateway that sends no code: Gemini's "API key not valid",
+// and OpenAI's and Anthropic's "Incorrect API key" / "invalid x-api-key" passed
+// on by proxies without their status.
 const BAD_KEY_TEXT = /api key not valid|invalid api key|incorrect api key|invalid x-api-key|invalid_api_key|api key expired/i;
 
-// Each provider's way of saying the model does not exist: Gemini's "is not
-// found for API version", OpenAI's "does not exist", Ollama's "model 'x' not
-// found".
+// The same for a model the server does not have, where no code says it:
+// Gemini's "is not found for API version", OpenAI-compatible servers' "does not
+// exist", Ollama's "model 'x' not found".
 // Model ids carry dots ("gemini-3.5-flash"), so the gap may too.
 const MODEL_NOT_FOUND_TEXT = /model_not_found|\bmodels?\b[^\n]{0,100}?\b(?:not found|does not exist|is not supported for generateContent)|no such model|unknown model/i;
 
@@ -224,7 +270,7 @@ export const retryDelayMsFromPayload = (error) => {
 };
 
 // ---------------------------------------------------------------------------
-// The model thought out loud instead of calling the tool
+// The model wrote words instead of calling the tool
 // ---------------------------------------------------------------------------
 //
 // main.jsx already recovers from "it spent its whole budget reasoning", but that
@@ -245,35 +291,28 @@ export const retryDelayMsFromPayload = (error) => {
 // (idleDiplomacy) succeeded every time, so the model is capable — it is the size
 // of the jump contract that tips it into deliberating.
 //
-// Note this only has to be judged in TOOL mode, where any text without a tool
-// call is ALREADY a failure. So the question is not "is this prose?" but "is
-// retrying worth one more request?", and the bar is correspondingly low.
-
-// First-person planning, in the register models actually use. Anchored at a
-// sentence start so a legitimate answer that happens to contain "we need" in
-// narration does not match.
-const DELIBERATION_TEXT =
-    /(^|[.!?]\s+|\n)\s*(we|i|let'?s|let me|okay|ok|alright|first|now|so)\b[^.!?\n]{0,60}\b(need|must|should|have to|want|will|can|could|'ll|going to|think|consider|plan|figure|decide|start|begin|produce|generate|write|include|make|use)\b/i;
-
-// A second, cheaper signal: models narrating a plan talk ABOUT the output shape
-// rather than producing it.
-const DELIBERATION_META = /\b(we|i)\s+(need|have|want|should|must)\s+to\s+(produce|generate|create|output|return|write|include|emit)\b/i;
+// This is judged only where the call asked for a structured answer and no tool
+// call came back, so any text is ALREADY a failure. What it is decided by is
+// the reply's structure, never its language: text with nothing in it that
+// could hold a JSON payload is no answer, whether it is a plan, an apology or a
+// story, and whatever language it is written in. It used to be decided by an
+// English planning register ("we need to", "let me"), so a model deliberating
+// in French or Chinese was never given the step down, and an English one
+// writing its events as prose was not either.
 
 /**
- * In tool mode, did the model deliberate instead of answering?
+ * Where a structured answer was asked for and no tool call came back: is the
+ * text words with no payload in them?
  *
- * `text` is the assistant's content when no tool call came back. Returns false
- * for anything that even looks like it might carry a payload — a fenced block or
- * a balanced brace — because that is the tolerant-parsing path's job
- * (jsonSalvage.js), not this one, and retrying would throw away a salvageable
- * answer.
+ * Returns false for empty text, and for anything that might carry a payload —
+ * a fenced block, a brace or a bracket, whole or cut off — because that is the
+ * tolerant-parsing path's job (jsonSalvage.js), not this one, and asking again
+ * would throw away an answer it could salvage.
  */
-export const looksLikeDeliberation = (text) => {
+export const isProseWithoutPayload = (text) => {
     const body = String(text ?? "").trim();
     if (!body) return false;
-    // Anything that might parse is not ours to judge.
-    if (body.includes("```") || body.includes("{") || body.includes("[")) return false;
-    return DELIBERATION_META.test(body) || DELIBERATION_TEXT.test(body);
+    return !(body.includes("```") || body.includes("{") || body.includes("["));
 };
 
 // What to add to the system prompt for the one retry. Deliberately blunt and
@@ -344,7 +383,10 @@ export const couldNotBeReached = () => ({ kind: "busy", reason: "could not be re
 
 // fetch() itself failing: the server could not be reached at all. Matched on
 // the browsers' own wording, so a TypeError from a bug in the game is never
-// mistaken for one. An error that already carries the mark is one too.
+// mistaken for one. An error that already carries the mark is one too. The
+// browser gives fetch's network TypeError no code, only these words, the same
+// in every locale (Chromium's "Failed to fetch", Firefox's "NetworkError when
+// attempting to fetch resource.", Safari's "Load failed", Node's "fetch failed").
 const UNREACHABLE_TEXT = /failed to fetch|fetch failed|networkerror|network error|load failed|network request failed|error in (?:input|body) stream/i;
 export const isUnreachableError = (error) => error?.providerFailure?.reason === "could not be reached"
     || (error instanceof TypeError && UNREACHABLE_TEXT.test(String(error.message)));
@@ -493,7 +535,12 @@ const STREAM_REFUSAL_PARAM =
 const STREAM_REFUSAL_VERB =
     /(?:cannot|can't|can not|does\s+not|doesn't|will\s+not|won't|unable\s+to)[^.]{0,40}\bstream/i;
 
-export const isStreamingRefusal = (message) => {
+// `payload`, when the caller has the parsed body: an OpenAI-shaped refusal names
+// the parameter it refused (`"param": "stream"`), which decides without the
+// words. The words are read for the gateways and self-hosted servers that send
+// only a message.
+export const isStreamingRefusal = (message, payload = null) => {
+    if (errorParamOf(payload) === "stream") return true;
     const text = errorPayloadText(message);
     if (!text || !/stream/i.test(text)) return false;
     return STREAM_REFUSAL_TEXT.test(text) || STREAM_REFUSAL_PARAM.test(text) || STREAM_REFUSAL_VERB.test(text);
@@ -504,7 +551,9 @@ export const isStreamingRefusal = (message) => {
 // generation, and the game sends max_tokens 64000 uncapped. That 400 arrives
 // before any tokens are generated, and the existing max_tokens recovery in
 // main.jsx only matches ceiling errors ("max_tokens: X > Y"), so without this the
-// whole turn fell through to canned events.
+// whole turn fell through to canned events. Anthropic says it only in words
+// ("Streaming is strongly recommended for operations that may take longer than
+// 10 minutes", a 400 invalid_request_error), so the words are read.
 const STREAM_REQUIRED_TEXT =
     /streaming\s+is\s+(?:strongly\s+)?(?:required|recommended)|(?:must|should)\s+(?:be\s+)?use\s+streaming|use\s+streaming|stream\w*\s*[:=]\s*true|long[- ]running[^.]{0,60}stream/i;
 
@@ -514,11 +563,16 @@ export const isStreamingRequired = (message) => {
     return STREAM_REQUIRED_TEXT.test(text);
 };
 
-// Did the provider reject the request because it carried a TEMPERATURE?
+// Did the provider reject the request because it carried a TEMPERATURE? OpenAI
+// names the parameter (`"param": "temperature"`); Anthropic says it only in its
+// message ("`temperature` may only be set to 1 when thinking is enabled",
+// "`temperature` is deprecated for this model"), which is read where no
+// parameter is named.
 const TEMPERATURE_REFUSAL =
     /temperature[^.]{0,80}(?:not\s+support|unsupported|deprecated|not\s+allowed|not\s+enabled|not\s+available|must\s+be|may\s+only|can\s+only|only\s+(?:be\s+set|(?:the\s+)?default)|cannot|can't|invalid)|(?:not\s+support|unsupported|unsupported\s+value|invalid|unknown|unrecognized)[^.]{0,80}\btemperature/i;
 
-export const isTemperatureRefusal = (message) => {
+export const isTemperatureRefusal = (message, payload = null) => {
+    if (errorParamOf(payload) === "temperature") return true;
     const text = errorPayloadText(message);
     if (!text || !/temperature/i.test(text)) return false;
     return TEMPERATURE_REFUSAL.test(text);
@@ -534,6 +588,10 @@ export const isTemperatureRefusal = (message) => {
 // player as "Response did not contain parseable JSON", which sent them hunting
 // for a parsing bug in a model that was never asked anything it could answer.
 // No retry can help: the retry carries the failed answer too, so it is longer.
+// The code decides where there is one (OpenAI's context_length_exceeded); the
+// words are read for those that send only them: Anthropic's "prompt is too
+// long" and Gemini's "input token count ... exceeds the maximum number of
+// tokens" (both a generic 400), and a gateway's 200 body.
 const CONTEXT_WINDOW_CODES = new Set([
     "context_length_exceeded", "context_window_exceeded", "max_tokens_exceeded",
     "prompt_too_long", "invalid_prompt_length", "input_too_long",

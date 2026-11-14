@@ -414,20 +414,21 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false, stream
 // with nothing salvageable, JSON too broken to repair, valid JSON whose every op
 // was rejected — all look identical to the player: a wall of JSON in the chat (or
 // a reply that just stops) and a board that never changes.
-// Kept in step with normalizeProjectOp's verb list BY HAND — the two live in
-// different modules (this one is deliberately import-free so its tests run in a
-// bare checkout) and nothing can check them against each other. A verb missing
-// here is not a dropped op; it is a SILENT one: the block fails to parse, this
-// says "not a projects block", and the player gets no "Board not fully updated"
-// warning at all. cancelled/shelve/fail/failed/drop were all missing.
+// The board's own ops, kept in step with normalizeProjectOp BY HAND — the two
+// live in different modules (this one is deliberately import-free so its tests
+// run in a bare checkout). A verb missing here is not a dropped op; it is a
+// SILENT one: the block fails to parse, this says "not a projects block", and
+// the player gets no "Board not fully updated" warning at all. Only the board's
+// words: the English synonyms once accepted (start, launch, finish, abandon)
+// went on 2026-11-13, as no other language's ever were.
 const PROJECT_OP_VERBS = [
-  "create", "start", "launch", "open", "add",
-  "update", "progress", "edit",
+  "create",
+  "update",
   "milestone",
-  "complete", "finish", "completed",
-  "cancel", "cancelled", "abandon", "shelve",
-  "fail", "failed",
-  "remove", "delete", "drop",
+  "complete",
+  "cancel",
+  "fail",
+  "remove",
 ].join("|");
 
 export const looksLikeProjectOps = (text) => {

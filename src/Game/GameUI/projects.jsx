@@ -70,6 +70,7 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { uiString } from "../../runtime/translator.js";
 import { TAG_SEARCH_FROM, searchTags, stepTagFocus, tickedFirst } from "./projectTagMenu.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
+import { nameInitials } from "../../../server/nameKey.js";
 
 // The seed the empty state and the per-card button hand to the advisor. Both
 // pre-fill the input and never send — the player edits and presses send, which is
@@ -277,8 +278,7 @@ const resolveOwnerFlagUrl = (owner, customFlags, polities) => {
   return customFlags?.[owner] || polities?.[owner]?.flag || flagImageUrlFromGid(owner) || "";
 };
 
-const ownerInitials = (owner) =>
-  String(owner).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??";
+const ownerInitials = (owner) => nameInitials(owner);
 
 // The board is half other people's work, and until this row existed the only clue
 // was a grey line of text that a player's own entries did not have at all — so

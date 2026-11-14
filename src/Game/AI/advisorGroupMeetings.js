@@ -38,82 +38,6 @@ export const advisorGroupSpeakerName = (id, contacts, chiefName = "Chief advisor
   id === "chief" ? clean(chiefName) || "Chief advisor"
     : clean((Array.isArray(contacts) ? contacts : []).find((row) => row.id === id)?.name) || "Former member";
 
-// Address recognition is a best-effort ordering hint, never a speech
-// requirement or authorization. Third-person references and possessives
-// must not force or promote unrelated participants. Unique first/last
-// names resolve to stable member IDs; ambiguous aliases do not.
-const escaped = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const addressOpeners = /^(?:(?:hey|hi|hello|dear|please|thanks|thank you|good morning|good afternoon|good evening)\b[\s,!:.-]+)*/iu;
-const addressDelimiter = /^\s*(?:[,;:!?]|[-\u2013\u2014]|$)/u;
-const addressJoiner = /^\s*(?:,\s*(?:and\s+)?|and\s+|&\s*|\/\s*)/iu;
-
-export const directlyAddressedAdvisorIds = (memberIds, question, contacts, chiefName) => {
-  const ids = Array.isArray(memberIds) ? memberIds : [];
-  const names = ids.map((id) => advisorGroupSpeakerName(id, contacts, chiefName));
-  const aliases = names.map((name) => {
-    const parts = clean(name).split(/\s+/);
-    return [parts[0], parts.length > 1 ? parts[parts.length - 1] : ""].filter((part) => part.length >= 3);
-  });
-  const counts = new Map();
-  for (const parts of aliases) for (const part of new Set(parts.map((v) => v.toLocaleLowerCase()))) {
-    counts.set(part, (counts.get(part) || 0) + 1);
-  }
-  const candidates = ids.flatMap((id, index) => [
-    names[index],
-    ...aliases[index].filter((part) => counts.get(part.toLocaleLowerCase()) === 1),
-  ].filter(Boolean).map((name) => {
-    const patternText = escaped(name).replace(/\s+/g, "\\s+");
-    return {
-      id,
-      length: name.length,
-      patternText,
-      pattern: new RegExp(`^${patternText}(?=$|[^\\p{L}\\p{N}])`, "iu"),
-    };
-  })).sort((a, b) => b.length - a.length);
-  const matchName = (part) => {
-    for (const candidate of candidates) {
-      const matched = candidate.pattern.exec(part);
-      if (matched && !/^['\u2019]s\b/iu.test(part.slice(matched[0].length))) {
-        return { id: candidate.id, length: matched[0].length };
-      }
-    }
-    return null;
-  };
-
-  const addressed = new Set();
-  const sentences = String(question || "").split(/(?:[.!?]\s+|\r?\n+)/u);
-  // Address lists must be complete: "Boris and Marina are working" is a
-  // third-person statement, not a request for either to speak.
-  for (const sentence of sentences) {
-    let part = sentence.trimStart().replace(addressOpeners, "").trimStart();
-    const pending = [];
-    for (let index = 0; index < ids.length; index++) {
-      const candidate = matchName(part);
-      if (!candidate) break;
-      pending.push(candidate.id);
-      const after = part.slice(candidate.length);
-      const join = addressJoiner.exec(after);
-      if (join) {
-        const next = after.slice(join[0].length).trimStart();
-        const nextName = matchName(next);
-        // "Marina, Boris is working" addresses Marina, not Boris.
-        if (nextName && (addressDelimiter.test(next.slice(nextName.length))
-            || addressJoiner.test(next.slice(nextName.length)))) {
-          part = next;
-          continue;
-        }
-      }
-      if (addressDelimiter.test(after)) for (const id of pending) addressed.add(id);
-      break;
-    }
-    // A trailing vocative is also direct: "What do you think, Boris?"
-    for (const candidate of candidates) {
-      if (new RegExp(`,\\s*${candidate.patternText}\\s*[.!?]*$`, "iu").test(sentence.trim())) addressed.add(candidate.id);
-    }
-  }
-  return ids.filter((id) => addressed.has(id));
-};
-
 // Only persisted group proposals and the canonical Actions inventory can
 // establish an unqueued draft. An old updated/cancelled receipt is historical,
 // not permission to resurrect work, and an existing Action ID is never a draft.
@@ -165,14 +89,17 @@ const unqueuedDraftContext = (drafts, contacts, chiefName, maxChars) => {
   return result.trimEnd().slice(0, maxChars);
 };
 
-export const selectAdvisorGroupSpeakers = (memberIds, messages, question, contacts, chiefName) => {
+// Who is asked, in what order: every invited member not yet answered this
+// turn, the order rotating by one each turn. A member the player addresses by
+// name used to be moved to the front, found by parsing the message for names
+// after English greetings ("hi", "please") and joined by "and": it moved nobody
+// for a "Привет, Ирина" or a declined name. Each member reads the question and
+// decides whether it is theirs to answer (OPTIONAL_GROUP_SPEECH_STANDARD).
+export const selectAdvisorGroupSpeakers = (memberIds, messages) => {
   const ids = Array.isArray(memberIds) ? memberIds : [];
   const turns = (Array.isArray(messages) ? messages : []).filter((row) => row?.role === "user").length;
   const offset = ids.length ? Math.max(0, turns - 1) % ids.length : 0;
-  const rotated = [...ids.slice(offset), ...ids.slice(0, offset)];
-  const namedIds = new Set(directlyAddressedAdvisorIds(ids, question, contacts, chiefName));
-  const named = rotated.filter((id) => namedIds.has(id));
-  const speakers = [...named, ...rotated.filter((id) => !named.includes(id))];
+  const speakers = [...ids.slice(offset), ...ids.slice(0, offset)];
   const lastUser = (Array.isArray(messages) ? messages : []).findLastIndex((row) => row?.role === "user");
   const answered = new Set((Array.isArray(messages) ? messages : []).slice(lastUser + 1)
     .filter((row) => row.role === "advisor" && ids.includes(row.speakerId)).map((row) => row.speakerId));

@@ -95,7 +95,7 @@ test("the provider sees a shallow contract while the decoded transaction is vali
   assert.equal(validateGameplayPayload("gameMaster", blankSummary).valid, false);
 });
 
-test("marker ops carry a lifecycle: update, destroy, rename with aliases, no duplicate builds", () => {
+test("marker ops carry a lifecycle: update, destruction as a status, rename with aliases, no duplicate builds", () => {
   const context = { eventId: "event-1", gameDate: "1900-01-01" };
   let markers = applyMarkerOps([], [
     { op: "build", marker: { name: "Fort Alpha", kind: "fortress", ownerCode: "Spain", lng: 10, lat: 20 } },
@@ -121,7 +121,12 @@ test("marker ops carry a lifecycle: update, destroy, rename with aliases, no dup
   assert.equal(markers[0].name, "Fort Beta");
   assert.deepEqual(markers[0].aliases, ["Fort Alpha"]);
 
-  markers = applyMarkerOps(markers, [{ op: "destroy", name: "Fort Alpha" }], context);
+  // An op is one of the five (runtime/markerOps.js): "destroy" is no op, in English as in French.
+  const unchanged = markers;
+  for (const op of ["destroy", "détruire", "modify", "found", "fonder"]) {
+    assert.deepEqual(applyMarkerOps(unchanged, [{ op, name: "Fort Alpha", status: "destroyed" }], context), unchanged, op);
+  }
+  markers = applyMarkerOps(markers, [{ op: "update", name: "Fort Alpha", status: "destroyed" }], context);
   assert.equal(markers[0].status, "destroyed", "the old name still reaches the feature through its alias");
   assert.equal(markers.length, 1, "destruction is lifecycle state, not deletion");
 

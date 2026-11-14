@@ -24,6 +24,8 @@
 //
 // Pure. Loads in plain Node.
 
+import { isStrategicMarker, markerFamilyOf } from "./markerFamily.js";
+
 export const STRIKE_WEAPONS = Object.freeze(["silo missile", "submarine missile", "missile strike", "nuclear bomber", "bombing run"]);
 // Which of them are nuclear, which fly as aircraft, and which as missiles.
 export const NUCLEAR_WEAPONS = Object.freeze(["silo missile", "submarine missile", "nuclear bomber"]);
@@ -150,16 +152,14 @@ export const findStrikePlace = (value, { places = [], cities = [], markers = [],
 };
 
 // Where a strike nobody gave a launching place sets off from, among what its
-// owner has: a silo for a missile from one, a formation at sea for one from a
-// submarine, an airfield for aircraft; failing that anything of its owner's,
-// the nearer the target the better. null when it has nothing on the map.
-const SITE_WORDS = {
-  "silo missile": /silo|missile|rocket|launch|strategic/i,
-  "missile strike": /missile|rocket|launch|battery|artillery/i,
-  "submarine missile": /submarine|\bsub\b|fleet|squadron|naval|flotilla/i,
-  "nuclear bomber": /air ?(field|base|port|wing|force)|bomber|aviation|squadron/i,
-  "bombing run": /air ?(field|base|port|wing|force)|bomber|aviation|squadron/i,
-};
+// owner has, by what each thing IS and never by the words in its name: a
+// formation by its type (naval, air), a structure by its family and its
+// strategic weight (runtime/markerFamily.js). A missile from a silo sets off
+// from a military site of strategic weight, else any military site; one fired
+// from a battery from a military site; a submarine's from a formation at sea
+// (with none, the battlefield turn puts it to sea: seaLaunchPlace); aircraft
+// from an air formation, else a military site. Of those, the nearer the
+// target the better. null when it has nothing on the map.
 export const pickStrikeOrigin = ({ weapon, owner, to = null, markers = [], units = [] } = {}) => {
   const mine = (entry) => fold(entry?.ownerCode) === fold(owner) && Number.isFinite(numberOf(entry?.lng)) && Number.isFinite(numberOf(entry?.lat));
   const far = (entry) => {
@@ -168,17 +168,18 @@ export const pickStrikeOrigin = ({ weapon, owner, to = null, markers = [], units
     const dy = Number(entry.lat) - to.lat;
     return dx * dx + dy * dy;
   };
-  const words = SITE_WORDS[weapon] ?? /./;
-  const text = (entry) => `${clean(entry?.kind)} ${clean(entry?.name)} ${clean(entry?.type)} ${clean(entry?.composition)}`;
-  // By sea first for a submarine's missile, from an air formation or a field for aircraft, from a structure for the rest.
   const fleets = list(units).filter((entry) => mine(entry) && entry.type === "naval");
   const wings = list(units).filter((entry) => mine(entry) && entry.type === "air");
-  const sites = list(markers).filter((entry) => mine(entry) && !["destroyed", "abandoned"].includes(clean(entry?.status)));
+  const military = list(markers).filter((entry) => mine(entry)
+    && !["destroyed", "abandoned"].includes(clean(entry?.status))
+    && markerFamilyOf(entry) === "military");
   const pools = weapon === "submarine missile"
-    ? [fleets.filter((entry) => words.test(text(entry))), fleets, sites.filter((entry) => /port|naval|harbou?r/i.test(text(entry)))]
+    ? [fleets]
     : fliesAsAircraft(weapon)
-      ? [sites.filter((entry) => words.test(text(entry))), wings, sites.filter((entry) => /base|hq/i.test(text(entry)))]
-      : [sites.filter((entry) => words.test(text(entry))), sites.filter((entry) => /base|hq|fortress/i.test(text(entry)))];
+      ? [wings, military]
+      : weapon === "silo missile"
+        ? [military.filter(isStrategicMarker), military]
+        : [military];
   for (const pool of pools) {
     if (pool.length === 0) continue;
     const [best] = pool.slice().sort((a, b) => far(a) - far(b) || clean(a.name).localeCompare(clean(b.name)));

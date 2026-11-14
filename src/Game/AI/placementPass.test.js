@@ -37,7 +37,9 @@ import { placementNote } from "../../runtime/receiptPlayerNotes.js";
 import { normalizeEvents } from "../../runtime/gameState.js";
 import { seaShareOf } from "../../runtime/unitMotion.js";
 import { findUnitByRef, readNameRef, stripKindTags } from "./nameRefs.js";
+import { findEventPlaces } from "./eventPlaces.js";
 import { findUnitType, normalizeUnitTypes } from "../../runtime/unitTypes.js";
+import { markerOpKind } from "../../runtime/markerOps.js";
 
 const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
 const start = source.indexOf("const LAND_UNIT_TYPES = new Set(");
@@ -53,13 +55,15 @@ const placementPass = (gazetteer) => new Function(
     "normalizeArray", "normalizeString", "lazyLookupContext", "buildPlacementGazetteer", "obstaclesOf", "spaceOut", "FOOTPRINT_KM",
     "resolvePlacement", "resolveRegionPlacement", "describeApproximatePlacement", "nearestSea", "homeWaters", "placementHash",
     "noteReceipt", "placementNote", "noteUndeployedPosts", "logDebugEvent", "findUnitByRef", "readNameRef", "seaShareOf",
-    "regionWithinContainer", "describeOtherKind", "stripKindTags", "normalizeUnitTypes", "findUnitType",
+    "regionWithinContainer", "describeOtherKind", "stripKindTags", "normalizeUnitTypes", "findUnitType", "findEventPlaces",
+    "markerOpKind",
     `${source.slice(start, end)}\nreturn resolvePlacements;`,
 )(
     asArray, asText, () => async () => ({}), () => gazetteer, obstaclesOf, spaceOut, FOOTPRINT_KM,
     resolvePlacement, resolveRegionPlacement, describeApproximatePlacement, nearestSea, homeWaters, hashText,
     noteReceipt, placementNote, () => {}, () => {}, findUnitByRef, readNameRef, seaShareOf,
-    regionWithinContainer, describeOtherKind, stripKindTags, normalizeUnitTypes, findUnitType,
+    regionWithinContainer, describeOtherKind, stripKindTags, normalizeUnitTypes, findUnitType, findEventPlaces,
+    markerOpKind,
 );
 
 // What gameplay.js's gazetteer offers the pass, over a list of regions.
@@ -83,7 +87,6 @@ const gazetteerOf = (regions, { capitals = {} } = {}) => {
         seas: [],
         holdsLand: (name) => ownedBy(name).length > 0,
         capitalOf: (name) => capitals[fold(name)] ?? null,
-        placesNamedIn: () => [],
         samePolity: (a, b) => Boolean(fold(a)) && fold(a) === fold(b),
         // No list of the world's towns here: nothing is asked of one, and none arrives.
         worldCities: () => [],
@@ -143,6 +146,46 @@ test("a new fleet whose place the map cannot read goes the same way", async () =
     assert.equal(op.unit.at, undefined, "the phrase is spent");
     assert.match(notes[0], /could not be placed at "центральная часть Чёрного моря".*It was placed near Midburg, in Longland instead/);
     assert.match(notes[1], /was put to sea off East, on Longland's own coast, instead/);
+});
+
+// Where a new thing goes when its own `at` says nowhere, or names a town the
+// map lacks, is read from its event's `places` field: never from the places its
+// title or text mention, which an English scan of the words found and no other
+// language's did (the owner, 2026-11-13: no keywording anywhere).
+test("a new army given no place goes to the first of its event's places in its owner's land, never one its words mention", async () => {
+  const gazetteer = continent(LONGLAND);
+  const army = () => spawn({ id: "", name: "2nd Army", type: "infantry" });
+  for (const event of [
+    { title: "The 2nd Army is raised in the East", description: "It musters at the eastern depots.", places: ["region: East, country: Longland"] },
+    { title: "La 2e armée est levée dans l'Est", description: "Elle se rassemble aux dépôts de l'est.", places: ["region: East, country: Longland"] },
+  ]) {
+    const op = army();
+    const { notes } = await place(gazetteer, [op], { event });
+    assert.equal(op.unit.regionId, "e", event.title);
+    assert.match(notes[0], /was given no place, so it was placed in East, where its event says it is/, event.title);
+  }
+  // Named only in its words, the region is not where it goes: its owner's own land, as for any new formation nothing places.
+  const op = army();
+  const { notes } = await place(gazetteer, [op], { event: { title: "The 2nd Army is raised in East", description: "It musters in East." } });
+  assert.equal(op.unit.regionId, "c", "Longland's heartland");
+  assert.match(notes[0], /came with no place and no coordinates\. It was raised in Centre/);
+  // A place of the event's in another power's land is not its owner's: the heartland again.
+  const abroad = army();
+  await place(gazetteer, [abroad], { event: { title: "x", places: ["region: West"] } });
+  assert.equal(abroad.unit.regionId, "c");
+});
+
+test("a new unit at a town the map lacks goes by its event's places before the capital, never by its words", async () => {
+  const gazetteer = continent(LONGLAND);
+  for (const [event, region] of [
+    [{ title: "A brigade forms at Nowhereville", description: "Nowhereville lies in the East.", places: ["region: East"] }, "e"],
+    [{ title: "Une brigade se forme à Nowhereville", description: "Nowhereville se trouve dans l'Est.", places: ["region: East"] }, "e"],
+    [{ title: "A brigade forms at Nowhereville", description: "Nowhereville lies in East." }, "c"],
+  ]) {
+    const op = spawn({ id: "", name: "3rd Brigade", type: "infantry", at: "Nowhereville, Longland" });
+    await place(gazetteer, [op], { event });
+    assert.equal(op.unit.regionId, region, event.title);
+  }
 });
 
 test("the fleet reaches the map: the normalizer keeps it, and has nothing to report", async (t) => {

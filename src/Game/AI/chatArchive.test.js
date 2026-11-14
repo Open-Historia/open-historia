@@ -7,6 +7,8 @@ import test from "node:test";
 import {
   ARCHIVE_MIN_SKIPS,
   BINDING_HEADER,
+  BINDING_LINE_CHARS,
+  BINDING_MAX_CHARS,
   CHAT_CHUNK_CHARS,
   CHAT_CHUNK_OVERLAP,
   PAST_DIPLOMACY_HEADER,
@@ -14,7 +16,6 @@ import {
   archiveExemption,
   archivedChunkRows,
   archivedCountLine,
-  bindingSentences,
   buildPastTalksQueries,
   chatArchiveContext,
   chatChunks,
@@ -26,8 +27,10 @@ import {
   partitionChats,
   pastTalksAnswer,
   renderArchivedChats,
+  renderBindingWord,
   renderPastDiplomacy,
   skipsSince,
+  standingWord,
   unfoldedChats,
 } from "./chatArchive.js";
 
@@ -194,6 +197,25 @@ test("a message longer than a chunk is cut at its sentences", () => {
   }
 });
 
+// A Chinese talk is cut at its sentences as its English twin is: its full stop has no space after it, and it was cut
+// only at the chunk's length, mid-sentence. Nothing is put between its sentences that the language does not have.
+test("a long message in any script is cut at its sentences, its text kept as written", () => {
+  const twins = [
+    ["The ambassador spoke at length of the old friendship between our peoples and the debts still owed.", " ", /owed\.$/],
+    ["大使详细谈到了我们两国人民之间的传统友谊，以及至今仍未偿还的债务，并且再三强调了双方在多瑙河航运问题上的长期共同利益和彼此之间应当承担的种种责任与义务。", "", /义务。$/],
+  ];
+  for (const [sentence, between, end] of twins) {
+    const text = Array.from({ length: 40 }, () => sentence).join(between);
+    const chunks = chatChunks({ id: "x", countries: [{ name: "Austria" }], messages: [{ role: "leader", speaker: "Austria", text, time: "1936-01-01" }] });
+    assert.ok(chunks.length >= 2, sentence.slice(0, 10));
+    for (const chunk of chunks) {
+      assert.ok(chunk.text.length <= CHAT_CHUNK_CHARS);
+      assert.match(chunk.text, end, "ends at a sentence");
+    }
+    if (!between) assert.ok(!chunks.some((chunk) => /。 /.test(chunk.text)), "no space put after a Chinese full stop");
+  }
+});
+
 test("each chunk is keyed chatId:chunk with the hash of what is embedded, who it was with leading", () => {
   const rows = archivedChunkRows([longThread("chat:7", "Austria", 12)], { player: "Italy" });
   assert.equal(rows[0].key, "chat:7:0");
@@ -240,13 +262,16 @@ test("PAST DIPLOMACY: within its budget, no chunk twice, neighbours as one passa
 test("a promise in an older chat stays visible when no excerpt is recalled, and is said once when it is", () => {
   const promise = longThread("p", "Austria", 6, { memory: "Austria promised Italy free passage on the Danube until 1940. The weather was discussed." });
   const idle = longThread("q", "Portugal", 4, { memory: "Pleasantries about wine." });
-  assert.equal(bindingSentences(promise), "Austria promised Italy free passage on the Danube until 1940.");
-  assert.equal(bindingSentences(idle), "");
+  // The memory as it last stood, whatever its words: it is the thread's record of what binds.
+  assert.equal(standingWord(promise), "Austria promised Italy free passage on the Danube until 1940. The weather was discussed.");
+  assert.equal(standingWord(idle), "Pleasantries about wine.");
+  assert.equal(standingWord(longThread("r", "Spain", 2)), "", "a thread with no memory has none to give");
 
   const without = renderArchivedChats([promise, idle], null, { player: "Italy" });
   assert.match(without, /^2 older conversations kept on file \(with Austria; Portugal\)\./);
   assert.ok(without.includes(BINDING_HEADER));
   assert.match(without, /- With Austria \([^)]+\): Austria promised Italy free passage on the Danube until 1940\./);
+  assert.match(without, /- With Portugal \([^)]+\): Pleasantries about wine\./);
   assert.equal(without.includes("PAST DIPLOMACY"), false);
 
   // Recalled with its memory: the promise is in the excerpt, not twice.
@@ -256,6 +281,30 @@ test("a promise in an older chat stays visible when no excerpt is recalled, and 
 
   assert.match(archivedCountLine([promise], { player: "Italy", lookups: true }), /ask past_talks, similar_events or chat_history/);
   assert.equal(renderArchivedChats([], [{ id: "p:0", score: 1 }]), "");
+});
+
+// The memory is written in the game's language. Its "binding" sentences were
+// picked by English words, so a French or a Chinese promise was never said
+// while its talks were kept on file: the player's ally forgot what it swore.
+test("the standing word is the same in every language: the memory as it last stood", () => {
+  const twins = [
+    ["Austria promised Italy free passage on the Danube until 1940. The weather was discussed.", "Austria"],
+    ["L'Autriche a promis à l'Italie le libre passage sur le Danube jusqu'en 1940. On a parlé du temps.", "Autriche"],
+    ["Австрия обещала Италии свободный проход по Дунаю до 1940 года. Говорили о погоде.", "Австрия"],
+    ["奥地利承诺在1940年前允许意大利自由通过多瑙河。双方还谈到了天气。", "奥地利"],
+  ];
+  for (const [memory, partner] of twins) {
+    const chat = longThread(`t-${partner}`, partner, 4, { memory });
+    assert.equal(standingWord(chat), memory, partner);
+    assert.ok(renderArchivedChats([chat], null, { player: "Italy" }).includes(`- With ${partner} (`), partner);
+  }
+
+  // Held to a line's room at its sentences, and to the block's room in all.
+  const long = longThread("l", "Austria", 4, { memory: Array.from({ length: 12 }, (_, at) => `Clause ${at + 1} binds Austria to a further duty on the Danube.`).join(" ") });
+  const said = standingWord(long);
+  assert.ok(said.length <= BINDING_LINE_CHARS && said.startsWith("Clause 1 binds") && said.endsWith("."), said);
+  const many = Array.from({ length: 12 }, (_, at) => longThread(`m${at}`, `Power ${at}`, 2, { memory: "x".repeat(200) }));
+  assert.ok(renderBindingWord(many, { player: "Italy" }).length <= BINDING_MAX_CHARS);
 });
 
 test("the query: orders, wars, what the open chats say, who is addressed, the powers in view", () => {

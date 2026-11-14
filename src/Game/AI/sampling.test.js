@@ -84,15 +84,15 @@ test("a task not in the table, or no task at all, sends no temperature", () => {
 });
 
 test("a task key is read trimmed", () => {
-  assert.equal(temperatureForTask("  geographyResolver "), TASK_TEMPERATURES.geographyResolver);
+  assert.equal(temperatureForTask("  demandCheck "), TASK_TEMPERATURES.demandCheck);
 });
 
 test("temperatureBody gives the field to merge, or nothing", () => {
-  assert.deepEqual(temperatureBody("geographyResolver"), { temperature: 0.1 });
+  assert.deepEqual(temperatureBody("demandCheck"), { temperature: 0.1 });
   assert.deepEqual(temperatureBody("turnReview", { field: "temp" }), { temp: 0.3 });
   assert.deepEqual(temperatureBody("jumpForward"), {});
   // enabled: false is a model that cannot take one.
-  assert.deepEqual(temperatureBody("geographyResolver", { enabled: false }), {});
+  assert.deepEqual(temperatureBody("demandCheck", { enabled: false }), {});
 });
 
 // ---------------------------------------------------------------------------

@@ -1,8 +1,12 @@
 /*! Open Historia — Map vNext presentation policy © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
+import { isStrategicMarker, markerFamilyOf } from "../../../runtime/markerFamily.js";
+
 // Map vNext keeps canonical world objects independent from their cartographic
 // representation. These categories are intentionally few: shape communicates
 // what an object is, while ownership/status remain separate visual channels.
+// The family is a structure's own field (runtime/markerFamily.js), never read
+// from the words of its kind or name.
 export const MARKER_FAMILY = Object.freeze({
   settlement: "settlement",
   military: "military",
@@ -91,52 +95,19 @@ export const politicalFillOpacityAtZoom = (zoom) => {
   return stops.at(-1)[1];
 };
 
-const FAMILY_RULES = [
-  {
-    family: MARKER_FAMILY.settlement,
-    pattern: /\b(capital|city|town|settlement|metropolis|municipality)\b/,
-    glyph: "●",
-    priority: 92,
-  },
-  {
-    family: MARKER_FAMILY.military,
-    pattern: /\b(military|army|naval|defen[cs]e|command|headquarters|hq|base|fort|fortress|bunker|silo|garrison|missile|radar|airfield|airbase|barracks|outpost|citadel|arsenal|testing range)\b/,
-    glyph: "▲",
-    priority: 84,
-  },
-  {
-    family: MARKER_FAMILY.resource,
-    // "<x>field" in one word or two: the Workshop's kind is "oil field", and
-    // normalizeText reads the AI's "oil_field" the same way.
-    pattern: /\b(lithium|resource|basin|mine|mining|deposit|oil ?field|gas ?field|coal ?field|ore ?field|quarry|well)\b/,
-    glyph: "◆",
-    priority: 70,
-  },
-  {
-    family: MARKER_FAMILY.infrastructure,
-    pattern: /\b(port|harbou?r|terminal|logistics|rail|railway|station|airport|bridge|canal|corridor|transit|pipeline|grid|storage|hub)\b/,
-    glyph: "■",
-    priority: 68,
-  },
-  {
-    family: MARKER_FAMILY.industryScience,
-    pattern: /\b(factory|plant|works|industrial|manufactur|laborator|laboratory|research|science|scientific|technology|institute|university|energy|power|reactor)\b/,
-    glyph: "✦",
-    priority: 64,
-  },
-  {
-    family: MARKER_FAMILY.diplomatic,
-    pattern: /\b(embassy|consulate|mission|secretariat|liaison|administration|diplomatic)\b/,
-    glyph: "◇",
-    priority: 58,
-  },
-];
-
-const DEFAULT_PRESENTATION = Object.freeze({
-  family: MARKER_FAMILY.landmark,
-  glyph: "•",
-  priority: 46,
+// Each family's glyph and how much it matters on the map before its status.
+const FAMILY_PRESENTATION = Object.freeze({
+  [MARKER_FAMILY.settlement]: Object.freeze({ glyph: "●", priority: 92 }),
+  [MARKER_FAMILY.military]: Object.freeze({ glyph: "▲", priority: 84 }),
+  [MARKER_FAMILY.resource]: Object.freeze({ glyph: "◆", priority: 70 }),
+  [MARKER_FAMILY.infrastructure]: Object.freeze({ glyph: "■", priority: 68 }),
+  [MARKER_FAMILY.industryScience]: Object.freeze({ glyph: "✦", priority: 64 }),
+  [MARKER_FAMILY.diplomatic]: Object.freeze({ glyph: "◇", priority: 58 }),
+  [MARKER_FAMILY.landmark]: Object.freeze({ glyph: "•", priority: 46 }),
 });
+
+// What a structure of strategic weight (its `strategic` flag) adds.
+const STRATEGIC_PRIORITY = 7;
 
 const STATUS_PRIORITY_DELTA = Object.freeze({
   planned: -10,
@@ -148,16 +119,6 @@ const STATUS_PRIORITY_DELTA = Object.freeze({
   destroyed: -24,
 });
 
-const STRATEGIC_LANGUAGE = /\b(national|central|strategic|international|major|supreme|joint|command|capital|nuclear)\b/;
-
-const normalizeText = (value) =>
-  String(value ?? "")
-    .normalize("NFD")
-    .toLowerCase()
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-
 const clampPriority = (value) => Math.max(0, Math.min(100, Math.round(value)));
 
 export const visibilityTierForPriority = (priority) => {
@@ -166,20 +127,20 @@ export const visibilityTierForPriority = (priority) => {
   return MARKER_VISIBILITY_TIER.local;
 };
 
+// How a structure is drawn: its family's glyph, and a priority from its family,
+// its strategic weight and its lifecycle status (an enum: gameState.js
+// MARKER_STATUSES), which sets its zoom tier and its place in a crowd.
 export const getMarkerPresentation = (marker = {}) => {
-  const kind = normalizeText(marker.kind || "landmark");
-  const name = normalizeText(marker.name);
-  const searchable = `${kind} ${name}`.trim();
-  const matched = FAMILY_RULES.find((rule) => rule.pattern.test(searchable)) ?? DEFAULT_PRESENTATION;
-  const status = normalizeText(marker.status || "active").replace(/\s+/g, "_");
-  const strategicBonus = STRATEGIC_LANGUAGE.test(searchable) ? 7 : 0;
+  const family = markerFamilyOf(marker);
+  const { glyph, priority: base } = FAMILY_PRESENTATION[family];
+  const status = String(marker.status || "active").trim().toLowerCase().replace(/[\s-]+/g, "_");
   const priority = clampPriority(
-    matched.priority + strategicBonus + (STATUS_PRIORITY_DELTA[status] ?? 0),
+    base + (isStrategicMarker(marker) ? STRATEGIC_PRIORITY : 0) + (STATUS_PRIORITY_DELTA[status] ?? 0),
   );
 
   return {
-    family: matched.family,
-    glyph: matched.glyph,
+    family,
+    glyph,
     priority,
     sortKey: -priority,
     visibilityTier: visibilityTierForPriority(priority),

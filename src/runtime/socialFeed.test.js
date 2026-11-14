@@ -56,12 +56,44 @@ test("a country the map does not have is left off the post, and a country is not
     { author: "Pedro Sánchez", role: "Prime Minister", country: "Spain", text: "Madrid will not be pressured." },
     { author: "Kingdom of Spain", text: "An official statement." },
     { author: "French Republic", text: "A country signing a post." },
-    { author: "Government of Italy", text: "Another." },
     { author: "", text: "Nobody." },
     { author: "Someone", text: "" },
   ], PERIOD);
   assert.equal(posts.length, 1);
   assert.equal(posts[0].country, "", "\"Spain\" is not the map's \"Kingdom of Spain\"");
+});
+
+// Who counts as a person is the prompt's to say, in every language; the game
+// knows only the polities' exact names. "Government of Italy" used to be
+// dropped by an English word list while "Gouvernement italien" was kept.
+test("an author is left out only for being a polity's exact name, the same in every language", () => {
+  const known = [...KNOWN, "Российская Федерация"];
+  const posts = readSkipPosts([
+    { author: "Government of Italy", text: "A statement from Rome." },
+    { author: "Gouvernement italien", text: "Une déclaration de Rome." },
+    { author: "Правительство России", text: "Заявление Москвы." },
+    { author: "российская  федерация", text: "A country signing in another case and spacing." },
+    { author: "KINGDOM OF SPAIN", text: "Another country, shouting." },
+  ], { ...PERIOD, knownNames: known });
+  assert.deepEqual(posts.map((entry) => entry.author), ["Government of Italy", "Gouvernement italien", "Правительство России"]);
+});
+
+test("a post's reach and mentions are what the skip said, each mention as the map spells it", () => {
+  const posts = readSkipPosts([
+    { author: "Olaf Scholz", role: "Chancellor", text: "Paris and Berlin agree.", reach: "leader", mentions: ["french republic", "Atlantis", "Federal Republic of Germany"] },
+    { author: "Marine Dubois", role: "Analyste", text: "La France hésite.", mentions: ["French Republic"] },
+    { author: "Ana Lima", text: "No reach given.", reach: "emperor-of-everything" },
+  ], PERIOD);
+  assert.equal(posts[0].reach, "leader");
+  assert.deepEqual(posts[0].mentions, ["French Republic", "Federal Republic of Germany"], "the map's exact names; one it does not have is left out");
+  assert.equal("reach" in posts[1], false, "an analyst is a voice with a following: no reach");
+  assert.deepEqual(posts[1].mentions, ["French Republic"]);
+  assert.equal("reach" in posts[2], false, "a reach that is none of them is no reach");
+  assert.equal("mentions" in posts[2], false, "a post that mentions nobody saves as it always did");
+  // Kept through the feed, and never on the player's own post.
+  assert.deepEqual(normalizeSocialFeed(withSkipPosts([], posts))[0].mentions, ["French Republic", "Federal Republic of Germany"]);
+  const mine = normalizeSocialFeed([post("p1", { kind: "player", reach: "leader", mentions: ["French Republic"] })])[0];
+  assert.equal("reach" in mine || "mentions" in mine, false);
 });
 
 test("a date outside the period is the period's last day; a missing one too", () => {
@@ -180,17 +212,30 @@ test("the tabs: everything, the player's country, what mentions them, and their 
     post("p1", { author: "Claire Martin", kind: "player", by: "French Republic", country: "French Republic", text: "Paris speaks." }),
     post("p2", { author: "Olaf Scholz", country: "Federal Republic of Germany", quote: "p1", text: "We hear Paris." }),
     post("p3", { author: "Jean Dupont", country: "French Republic", text: "Strikes in Lyon." }),
-    post("p4", { author: "Ana Lima", text: "Claire Martin should resign." }),
+    post("p4", { author: "Ana Lima", text: "Claire Martin should resign.", mentions: ["French Republic"] }),
     post("p5", { author: "Taylor Quinn", kind: "everyday", text: "Coffee." }),
+    // The twin of p4 in French: mentioned by what the skip said, as p4 is.
+    post("p6", { author: "Luc Bernard", text: "Claire Martin doit démissionner.", mentions: ["french republic"] }),
+    // The country's name in the words, and nothing said: not a mention.
+    post("p7", { author: "Ana Lima", text: "The French Republic and Claire Martin again." }),
   ];
-  const ids = (tab) => socialFeedView(feed, { tab, country: "French Republic", leader: "Claire Martin" }).map((entry) => entry.id).sort();
-  assert.deepEqual(ids("all"), ["p1", "p2", "p3", "p4", "p5"]);
+  const ids = (tab) => socialFeedView(feed, { tab, country: "French Republic" }).map((entry) => entry.id).sort();
+  assert.deepEqual(ids("all"), ["p1", "p2", "p3", "p4", "p5", "p6", "p7"]);
   assert.deepEqual(ids("country"), ["p1", "p3"]);
-  assert.deepEqual(ids("mentions"), ["p2", "p4"]);
+  assert.deepEqual(ids("mentions"), ["p2", "p4", "p6"]);
   assert.deepEqual(ids("mine"), ["p1"]);
   const quoting = socialFeedView(feed, { tab: "all" }).find((entry) => entry.id === "p2");
   assert.equal(quoting.quoted.id, "p1");
-  assert.equal(mentionsPlayer(feed[0], { feed, country: "French Republic", leader: "Claire Martin" }), false, "not their own post");
+  assert.equal(mentionsPlayer(feed[0], { feed, country: "French Republic" }), false, "not their own post");
+});
+
+test("a mention is a polity's exact name: Niger is not Nigeria, Oman is not Romania", () => {
+  const about = (mentions) => post("p9", { mentions });
+  assert.equal(mentionsPlayer(about(["Nigeria"]), { country: "Niger" }), false);
+  assert.equal(mentionsPlayer(about(["Romania"]), { country: "Oman" }), false);
+  assert.equal(mentionsPlayer(about(["Niger"]), { country: "Niger" }), true);
+  assert.equal(mentionsPlayer(about(["  niger "]), { country: "Niger" }), true, "case and spacing aside");
+  assert.equal(mentionsPlayer(post("p9", { text: "Niger, Niger, Niger." }), { country: "Niger" }), false, "never the words");
 });
 
 test("the player's post has no reactions until a time skip has passed over it", () => {
@@ -206,6 +251,21 @@ test("the player's post has no reactions until a time skip has passed over it", 
   assert.equal(compactCount(2500000), "2.5M");
 });
 
+test("how far a post carries is the reach the skip gave it, whatever language its role is in", () => {
+  const president = post("p3", { role: "President", reach: "leader", round: 7 });
+  const president_fr = post("p3", { role: "Président de la République", reach: "leader", round: 7 });
+  const minister = post("p3", { role: "Ministre des Affaires étrangères", reach: "official", round: 7 });
+  const unsaid = post("p3", { role: "President", round: 7 });
+  const likes = (entry) => postEngagement(entry, [entry], 8).likes;
+  assert.equal(likes(president_fr), likes(president), "the same reach carries the same in any language");
+  assert.ok(likes(president) > likes(minister));
+  // A post with no reach (a journalist's, or one written before the skip gave
+  // any) carries as a voice with a following, whatever its role says.
+  assert.equal(likes(unsaid), likes(post("p3", { role: "Columnist", round: 7 })));
+  assert.ok(likes(unsaid) < likes(minister));
+  assert.ok(likes(post("p3", { kind: "everyday", reach: "ordinary", round: 7 })) < likes(unsaid));
+});
+
 test("the player's post is in the next skip's [Social Media] block, as their own public words", () => {
   const made = withPlayerPost({ countryStats: { "French Republic": { leader: "Claire Martin" } }, socialFeed: [post("p1")] }, {
     by: "French Republic", text: "France will not recognise the annexation.", date: "2026-03-31", round: 6,
@@ -216,6 +276,10 @@ test("the player's post is in the next skip's [Social Media] block, as their own
   assert.match(block, /Posts by the leader of French Republic are the player's own words/);
   assert.match(block, /Write socialPosts:/);
   assert.match(block, /quote: that post's id/);
+  // How far each voice carries, and whom each post is about, are the skip's to say.
+  assert.match(block, /reach \(leader: a head of state or government; official: another office holder;/);
+  assert.match(block, /mentions \(the exact map names of the polities it speaks of or to, or empty\)/);
+  assert.match(rostraRefreshRules({ players: ["French Republic"] }), /reach \(leader: .*mentions \(the exact map names/);
   // Whose voice: the skip never writes the player's own posts.
   assert.match(block, /Never write a post as the leader of French Republic, or as anyone who speaks for its government/);
   // After the next skip it is still the player's, no longer new.
@@ -230,6 +294,18 @@ test("the block is bounded, and leads with the player's posts and the answers to
   const feed = [...filler, mine, answer];
   const chosen = promptPosts(feed, { round: 6 }).map((entry) => entry.id);
   assert.ok(chosen.includes("p81") && chosen.includes("p82"));
+  // A leader, by the reach the skip gave, comes next, whatever language the
+  // role is in; a role that only reads like a leader's does not.
+  const withLeaders = [
+    post("p2", { role: "Präsident", reach: "leader", round: 3 }),
+    post("p3", { role: "President", round: 3 }),
+    ...filler.slice(3),
+    mine,
+    answer,
+  ];
+  const ranked = promptPosts(withLeaders, { round: 6 }).map((entry) => entry.id);
+  assert.deepEqual(ranked.slice(0, 3), ["p81", "p82", "p2"]);
+  assert.equal(ranked.includes("p3"), false, "an old post with no reach is one of everyone else's");
   const block = socialFeedPromptBlock({ feed, players: ["French Republic"], round: 6 });
   assert.ok(block.length < SOCIAL_PROMPT_CHARS + 2600, `${block.length} chars`);
   assert.match(block, /p81 \|/);

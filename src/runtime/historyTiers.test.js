@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 
 import {
   HISTORY_TIERS,
-  eraWordCount,
+  eraCharCount,
   judgeHistoryTiers,
   mergeHistoryTiers,
   normalizeCanonFacts,
@@ -17,23 +17,42 @@ import {
 } from "./historyTiers.js";
 
 const paragraph = (label) => `${label} saw ministers fall, armies move to the frontier, two treaties signed and a winter of hunger in the north.`;
+// The same paragraph in Chinese, which puts no spaces between its words.
+const chineseParagraph = (label) => `${label}年，内阁倒台，军队开赴边境，签署了两项条约，北方经历了一个饥荒的冬天。`;
 
-test("a fold's tiers are taken entry by entry: thin, misplaced and undated entries are left out and said so", () => {
+test("a fold's tiers are taken entry by entry: empty, misplaced and undated entries are left out and said so", () => {
   const judged = judgeHistoryTiers({
-    years: [{ year: 1931, text: paragraph("1931") }, { year: 1931.5, text: "too short" }, { year: 1950, text: paragraph("1950") }],
+    years: [{ year: 1931, text: paragraph("1931") }, { year: 1930, text: "  " }, { text: paragraph("Some year") }, { year: 1950, text: paragraph("1950") }],
     canon: [{ date: "1931-04-02", kind: "treaty", text: "Treaty of Brod: Slavonia cedes the Vale to Ruritania." }, { kind: "death", text: "no date" }],
   }, { span: [1930, 1931] });
   assert.deepEqual(judged.years.map((entry) => entry.year), [1931]);
   assert.equal(judged.canon.length, 1);
-  assert.equal(judged.notes.length, 3);
+  assert.equal(judged.notes.length, 4);
   assert.equal(judged.any, true);
   assert.equal(judgeHistoryTiers({}).any, false);
 });
 
+// Counted in words split on spaces, a paragraph in Chinese was one word long:
+// every year a fold wrote in it was refused as too thin, and its eras as a stub.
+test("a year written in a language without spaces is taken exactly as its English twin is", () => {
+  const english = judgeHistoryTiers({ years: [{ year: 1931, text: paragraph("1931") }] }, { span: [1930, 1931] });
+  const chinese = judgeHistoryTiers({ years: [{ year: 1931, text: chineseParagraph("1931") }] }, { span: [1930, 1931] });
+  assert.deepEqual(english.years.map((entry) => entry.year), [1931]);
+  assert.deepEqual(chinese.years.map((entry) => entry.year), [1931]);
+  assert.deepEqual([english.notes, chinese.notes], [[], []]);
+  // And their eras are judged the same way against eras of their own language.
+  const stubEnglish = judgeHistoryTiers({ eras: [{ from: 1900, to: 1920, text: paragraph("The early years") }] }, { eraChars: eraCharCount({ eras: [{ from: 1900, to: 1920, text: paragraph("The early years").repeat(6) }] }) });
+  const stubChinese = judgeHistoryTiers({ eras: [{ from: 1900, to: 1920, text: chineseParagraph("1900") }] }, { eraChars: eraCharCount({ eras: [{ from: 1900, to: 1920, text: chineseParagraph("1900").repeat(6) }] }) });
+  assert.deepEqual([stubEnglish.eras, stubChinese.eras], [null, null], "a sixth of the eras is a stub in either language");
+  const keptChinese = judgeHistoryTiers({ eras: [{ from: 1900, to: 1920, text: chineseParagraph("1900").repeat(3) }] }, { eraChars: eraCharCount({ eras: [{ from: 1900, to: 1920, text: chineseParagraph("1900").repeat(6) }] }) });
+  assert.equal(keptChinese.eras.length, 1, "half of them is a condensation");
+});
+
 test("a revision of the eras that would throw most of them away is a stub, and is not taken", () => {
-  const judged = judgeHistoryTiers({ eras: [{ from: 1900, to: 1920, text: paragraph("The early years") }] }, { eraWords: 900 });
+  const judged = judgeHistoryTiers({ eras: [{ from: 1900, to: 1920, text: paragraph("The early years") }] }, { eraChars: 900 });
   assert.equal(judged.eras, null);
-  const kept = judgeHistoryTiers({ eras: [{ from: 1900, to: 1920, text: paragraph("The early years") }] }, { eraWords: 30 });
+  assert.match(judged.notes[0], /^the eras came back at 121 characters against the 900 the campaign has/);
+  const kept = judgeHistoryTiers({ eras: [{ from: 1900, to: 1920, text: paragraph("The early years") }] }, { eraChars: 300 });
   assert.equal(kept.eras.length, 1);
 });
 
@@ -114,8 +133,8 @@ test("each tier has its own budget, newest kept and the rest counted", () => {
 // of 1940–1941 in 50 words, and that era replaced the old text whole.
 test("a document from before the tiers is not replaced by a stub of eras, nor by eras that leave its years out", () => {
   const legacy = { text: paragraph("1939").repeat(20), revision: 3, throughDate: "1940-05-12" };
-  assert.ok(eraWordCount(legacy) > 300);
-  const stub = judgeHistoryTiers({ years: [{ year: 1940, text: paragraph("1940") }, { year: 1941, text: paragraph("1941") }], eras: [{ from: 1940, to: 1941, text: paragraph("1940 and 1941") }] }, { span: [1940, 1941], eraWords: eraWordCount(legacy) });
+  assert.ok(eraCharCount(legacy) > 2000);
+  const stub = judgeHistoryTiers({ years: [{ year: 1940, text: paragraph("1940") }, { year: 1941, text: paragraph("1941") }], eras: [{ from: 1940, to: 1941, text: paragraph("1940 and 1941") }] }, { span: [1940, 1941], eraChars: eraCharCount(legacy) });
   assert.equal(stub.eras, null);
   const merged = mergeHistoryTiers(legacy, stub, { startYear: 1939 });
   assert.deepEqual(merged.eras.map((era) => [era.from, era.to]), [[1939, 1939]]);

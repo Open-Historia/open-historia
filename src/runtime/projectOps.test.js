@@ -212,32 +212,33 @@ test("an update op is applied through the same field aliases create accepts", ()
 // default, which is not a no-op: the merge assigned it unconditionally, so the op
 // meant to confirm a checkpoint pushed it back to pending — while still counting as
 // a change, so the advisor's receipt card reported an update that never happened.
-test("milestone status synonyms mark a checkpoint reached", () => {
+test("a checkpoint's status is one of the board's four words, and any other word is left out in every language", () => {
   const before = open([{ ...standingWatch, milestones: [{ title: "Sea trials", date: "2034-06-01" }] }])[0];
+  const mark = (project, status) => applyProjectOps([project], [{
+    op: "milestone", name: project.name, milestone: { title: "Sea trials", status },
+  }], { date: "2034-06-03" })[0];
 
-  for (const status of ["done", "complete", "completed", "achieved", "reached"]) {
-    const after = applyProjectOps([before], [{
-      op: "milestone", name: before.name, milestone: { title: "Sea trials", status },
-    }], { date: "2034-06-03" })[0];
+  for (const status of ["done", " DONE "]) {
+    const after = mark(before, status);
     assert.equal(after.milestones[0].status, "done", `status "${status}" did not mark it done`);
     assert.equal(after.nextMilestone, null, `status "${status}" left it outstanding`);
   }
-
-  for (const status of ["missed", "unmet", "failed"]) {
-    const after = applyProjectOps([before], [{
-      op: "milestone", name: before.name, milestone: { title: "Sea trials", status },
-    }], { date: "2034-06-03" })[0];
-    assert.equal(after.milestones[0].status, "missed", `status "${status}" did not mark it missed`);
-  }
+  assert.equal(mark(before, "missed").milestones[0].status, "missed");
 
   // Late is not the same as never: a slipped checkpoint is still outstanding, so
   // it stays the next milestone and the next skip is asked to answer it.
-  for (const status of ["slipped", "late", "delayed", "overdue"]) {
-    const after = applyProjectOps([before], [{
-      op: "milestone", name: before.name, milestone: { title: "Sea trials", status },
-    }], { date: "2034-06-03" })[0];
-    assert.equal(after.milestones[0].status, "slipped", `status "${status}" did not mark it slipped`);
-    assert.equal(after.nextMilestone?.title, "Sea trials", `status "${status}" left nothing outstanding`);
+  const slipped = mark(before, "slipped");
+  assert.equal(slipped.milestones[0].status, "slipped");
+  assert.equal(slipped.nextMilestone?.title, "Sea trials");
+
+  // A word that is none of the four changes nothing, English synonym or French
+  // twin alike: a checkpoint already done stays done, a pending one pending.
+  const done = mark(before, "done");
+  for (const [english, french] of [["completed", "terminé"], ["achieved", "atteint"], ["late", "en retard"], ["unmet", "manqué"]]) {
+    for (const status of [english, french]) {
+      assert.equal(mark(before, status).milestones[0].status, "pending", `"${status}" left out of a pending checkpoint`);
+      assert.equal(mark(done, status).milestones[0].status, "done", `"${status}" did not un-complete a done checkpoint`);
+    }
   }
 });
 
@@ -608,14 +609,35 @@ test("the simulation closes what the advisor deferred, and the effects land then
 
 // --- priority: the one field on this board the player authors ---------------
 
-test("priority defaults to normal and accepts the synonyms a model writes", () => {
+test("priority defaults to normal, takes the board's three words, and leaves out any other in every language", () => {
   assert.equal(applyProjectOps([], [standingWatch])[0].priority, "normal");
 
-  const raised = applyProjectOps(open(), [{ op: "update", name: "Operation Standing Watch", priority: "critical" }]);
+  const raised = applyProjectOps(open(), [{ op: "update", name: "Operation Standing Watch", priority: "High" }]);
   assert.equal(raised[0].priority, "high");
+
+  // A word that is none of the three never overwrites the one the player set,
+  // an English synonym no more than its French twin.
+  for (const word of ["routine", "critical", "urgent", "faible", "prioritaire"]) {
+    assert.equal(applyProjectOps(raised, [{ op: "update", name: "Operation Standing Watch", priority: word }])[0].priority, "high", word);
+    assert.equal(applyProjectOps(raised, [{ op: "create", name: "Operation Standing Watch", summary: "The patrol continues.", priority: word }])[0].priority, "high", word);
+  }
+  // And a new entry with one takes the default.
+  assert.equal(applyProjectOps([], [{ ...standingWatch, priority: "critical" }])[0].priority, "normal");
 
   const dropped = applyProjectOps(raised, [{ op: "update", name: "Operation Standing Watch", priority: "low" }]);
   assert.equal(dropped[0].priority, "low");
+});
+
+test("a project's status is one of the board's words; any other is left out, and an unknown ending closes nothing", () => {
+  const stalled = applyProjectOps(open(), [{ op: "update", name: "Operation Standing Watch", status: "stalled" }]);
+  assert.equal(stalled[0].status, "stalled");
+  for (const [english, french] of [["completed", "terminé"], ["in progress", "en cours"], ["on hold", "en pause"]]) {
+    for (const word of [english, french]) {
+      assert.equal(applyProjectOps(stalled, [{ op: "update", name: "Operation Standing Watch", status: word }])[0].status, "stalled", word);
+      assert.equal(applyProjectOps(stalled, [{ op: "close", name: "Operation Standing Watch", status: word }])[0].status, "stalled", word);
+    }
+  }
+  assert.equal(applyProjectOps(stalled, [{ op: "close", name: "Operation Standing Watch", status: "Failed" }])[0].status, "failed");
 });
 
 // The player sets this; a jump that merely mentions the operation must not wipe it.

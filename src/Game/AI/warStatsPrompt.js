@@ -29,7 +29,7 @@
 import { describeBonds, normalizeCallsToArms } from "../../runtime/alliances.js";
 import { isOpenBattlefield, normalizeBattlefields } from "../../runtime/fronts/record.js";
 import { normalizeBlockades } from "../../runtime/naval/blockade.js";
-import { TERMS_LINE_EXAMPLE, TERRITORY_AS_HELD, TERRITORY_RESTORED, describeReparation, describeTerms, normalizePeaceOffers, normalizeReparations, openOfferBetween, standingOf, warBetween, wouldAccept } from "../../runtime/peaceTerms.js";
+import { TERMS_FORM, TERRITORY_AS_HELD, TERRITORY_RESTORED, describeReparation, describeTerms, normalizePeaceOffers, normalizeReparations, openOfferBetween, standingOf, warBetween, wouldAccept } from "../../runtime/peaceTerms.js";
 import { RESOURCES_SHORT_FROM, resourcesOf } from "../../runtime/warResources.js";
 import { wearinessOf, wearinessWord } from "../../runtime/warWeariness.js";
 import { airWarLine } from "../../runtime/fronts/airStrike.js";
@@ -210,7 +210,6 @@ export const PEACE_TALK_HEADING = "[Peace]";
 // and the field a group chat's answer carries (gameplaySchemas.js CHAT_ACTIONS_SCHEMA).
 export const PEACE_LINE = "PEACE";
 export const PEACE_ANSWERS_FIELD = "peaceAnswers";
-const TERMS_FORM = `terms as "as held; Borduria pays 2% for 5 years" (each side keeps the ground it holds) or "restored; none" (the old borders, nobody pays), any other term one more part, as in "${TERMS_LINE_EXAMPLE}" ("Borduria is annexed" gives all its land to the other)`;
 
 // What a leader nobody plays, at war with a person, is told of peace between
 // them in a chat: the terms the person put to it, or the offer it made, or
@@ -236,9 +235,9 @@ export const describePeaceTalk = ({ world = {}, speaker = "", player = "", form 
     lines.push(`${speaker} is at war with ${player}. It may offer ${player} peace in this answer if it wants to, on terms of its own; nothing obliges it to.`);
   }
   if (form === "field") {
-    lines.push(`Say what a government decides of peace with ${player} in ${PEACE_ANSWERS_FIELD}, a line each: country | accept, decline, counter <terms> or offer <terms>, the ${TERMS_FORM}. Write no line for a government that decides nothing of peace now. What it says and its line must agree: the game makes the peace, or puts its offer before ${player}, from the line alone.`);
+    lines.push(`Say what a government decides of peace with ${player} in ${PEACE_ANSWERS_FIELD}, a line each: country | accept, decline, counter <terms> or offer <terms>, the decision one of those four words written so whatever language you write in, and the terms ${TERMS_FORM}. Write no line for a government that decides nothing of peace now. What it says and its line must agree: the game makes the peace, or puts its offer before ${player}, from the line alone.`);
   } else {
-    lines.push(`When ${speaker} decides something of peace in this reply, end the reply with one more hidden line: ${PEACE_LINE}:accept, ${PEACE_LINE}:decline, ${PEACE_LINE}:counter <terms> or ${PEACE_LINE}:offer <terms>, the ${TERMS_FORM}. Leave the line out when it decides nothing of peace. What the reply says and the line must agree: the game makes the peace, or puts the offer before ${player}, from the line alone.`);
+    lines.push(`When ${speaker} decides something of peace in this reply, end the reply with one more hidden line: ${PEACE_LINE}:accept, ${PEACE_LINE}:decline, ${PEACE_LINE}:counter <terms> or ${PEACE_LINE}:offer <terms>, the word after the colon one of those four written so whatever language the reply is in, and the terms ${TERMS_FORM}. Leave the line out when it decides nothing of peace. What the reply says and the line must agree: the game makes the peace, or puts the offer before ${player}, from the line alone.`);
   }
   return [PEACE_TALK_HEADING, ...lines].join("\n");
 };

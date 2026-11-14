@@ -150,7 +150,6 @@ export const mergeStockAndDeclaredPolities = (
         ? resolvePolityIdentity(token, world, {
           allowUnknown: false,
           requireActive: false,
-          allowCoreMatch: true,
           allowStockBase: true,
         })?.resolved
         : "";

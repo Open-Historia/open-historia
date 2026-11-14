@@ -253,7 +253,6 @@ export const AI_TASK_ROUTING = [
     { key: "unitDirector", label: "Unit director", hint: "Mid-tier: unit movement", group: "Simulation" },
     { key: "territoryDirector", label: "Territory director", hint: "Mid-tier: front outcomes", group: "Simulation" },
     { key: "structureDirector", label: "Structure director", hint: "Mid-tier: new structures on the map", group: "Simulation" },
-    { key: "geographyResolver", label: "Geography resolver", hint: "Small model: place-name matching", group: "Simulation" },
     { key: "projects", label: "Projects & operations", hint: "Mid-tier model", group: "Simulation" },
     { key: "pregameHistory", label: "Pre-game history", hint: "Mid-tier model", group: "Simulation" },
     { key: "politicalWorldGeneration", label: "Political world generation", hint: "Mid/high-tier: bounded scenario political seeding", group: "Simulation" },

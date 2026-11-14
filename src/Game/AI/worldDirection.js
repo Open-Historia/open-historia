@@ -16,13 +16,13 @@
 // gameplay.js hands in the resolved settings.
 
 import { gameDateDayNumber } from "../../runtime/gameDates.js";
+import { firstSentence, withoutFinalTerminal } from "../../../server/sentences.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
 const scriptedTextMode = (value) => (asText(value).toLowerCase() === "exact" ? "exact" : "generated");
 // Whether the player reads the game in a language other than English, the one a scenario's beats are most often
-// written in: then a beat is told in that language, an exact one translated faithfully, and is found in the answer
-// by its names and its date (beatIsWritten).
+// written in: then a beat is told in that language, and an exact one is translated faithfully rather than copied.
 const translated = (language) => {
     const name = asText(language).toLowerCase();
     return Boolean(name) && name !== "english" && name !== "en";
@@ -46,22 +46,15 @@ export const scaleEventRange = (range, pacePercent = 100) => {
 
 // --- The world's share ---
 //
-// An event is the player's when the simulator says so (playerRelated) or when
-// its own words name the player's polity: a model that under-declares cannot
-// talk its way past the count. Whole words, case folded; a short name ("Ob") is
-// matched the same way and simply matches rarely. Words in any script: kept to
-// a-z and 0-9, a name written in Cyrillic or Arabic was never found.
-const fold = (value) => ` ${String(value ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim()} `;
-
-export const eventConcernsPlayer = (event, playerNames = []) => {
-    if (event?.playerRelated === true) return true;
-    const text = fold(`${asText(event?.title)} ${asText(event?.description)}`);
-    return asArray(playerNames).some((name) => {
-        const needle = fold(name);
-        // Three letters at least: " ob " is in half the paragraphs ever written.
-        return needle.trim().length >= 3 && text.includes(needle);
-    });
-};
+// An event is the player's when the simulator marks it playerRelated, and only
+// then: the directive below says what to mark. The player's names used to be
+// looked for in its words as well, so that a model that under-declared could not
+// talk its way past the count; but a name is found only where it is spelled as
+// the game spells it, between spaces, so a period told in Chinese, or in a
+// language that declines its names ("России"), counted differently from the
+// same period told in English, and a namesake (Georgia the US state) counted
+// as the player's.
+export const eventConcernsPlayer = (event) => event?.playerRelated === true;
 
 // Below this many events a share is not a meaningful thing to ask for.
 export const WORLD_SHARE_MIN_EVENTS = 3;
@@ -72,7 +65,7 @@ export const worldShareShortfall = (events, floorPercent, { playerNames = [] } =
     const floor = Number(floorPercent);
     if (!(floor > 0) || list.length < WORLD_SHARE_MIN_EVENTS) return null;
     const needed = Math.ceil((list.length * Math.min(100, floor)) / 100);
-    const world = list.filter((event) => !eventConcernsPlayer(event, playerNames)).length;
+    const world = list.filter((event) => !eventConcernsPlayer(event)).length;
     if (world >= needed) return null;
     const player = asText(asArray(playerNames)[0]) || "the player's polity";
     return {
@@ -115,9 +108,11 @@ const readScriptedLine = (rawLine) => {
     if (!match || dateKey(match[1]) === null) return { problem: "no-date" };
     const body = asText(match[2]);
     if (!body) return { problem: "no-text" };
-    // The title is the first sentence, or the whole beat when it is one.
-    const sentence = /^(.{12,140}?[.!?])\s/.exec(`${body} `);
-    return { beat: { date: match[1], title: (sentence ? sentence[1] : body).slice(0, 140).replace(/[.!?]$/, ""), text: body, textMode: "generated" } };
+    // The title is the first sentence of 13 to 141 characters (so "U.S." or
+    // "Dr." alone is none), or the whole beat when it is one: a sentence in any
+    // script, the author's language being any (server/sentences.js).
+    const sentence = firstSentence(body, { min: 13 });
+    return { beat: { date: match[1], title: withoutFinalTerminal((sentence && sentence.length <= 141 ? sentence : body).slice(0, 140)), text: body, textMode: "generated" } };
 };
 
 export const parseScriptedEvents = (text) => {
@@ -180,78 +175,28 @@ export const scriptedBeatsInSpan = (beats, { originDate, targetDate, includeOrig
     });
 };
 
-const STOP_WORDS = new Set(["that", "this", "with", "from", "into", "over", "after", "before", "their", "there", "which", "while", "where", "when", "have", "been", "were", "will", "would", "than", "then", "them", "they", "against", "between", "under", "about", "through", "during", "first", "second", "third", "held", "holds", "hold", "makes", "made", "make", "takes", "take", "taken", "signed", "signs", "sign", "declares", "declared", "declare", "wins", "won", "win", "dies", "died", "die", "begins", "begin", "began", "ends", "end", "ended", "falls", "fall", "fell", "opens", "open", "opened", "government", "president", "minister", "state", "states", "national", "forces", "troops", "army", "city", "region", "country", "people", "power", "powers", "war", "treaty", "election", "elections", "vote", "votes"]);
-const words = (text) => new Set(String(text ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().split(/[^\p{L}\p{M}\p{N}]+/u).filter((word) => word.length >= 4 && !STOP_WORDS.has(word)));
-
-// Did the answer write this beat? An event within a week of the beat's date
-// that shares enough of its particular words — names, places, the things that
-// make it THIS beat rather than any election or any battle. Words in any
-// script (`words` above): split on a-z and 0-9 alone, a beat its author wrote
-// in Russian or Greek had no words, was never found in the answer, and was
-// written a second time by the engine beside the model's own telling of it.
-export const SCRIPTED_MATCH_DAYS = 7;
-const sharesEnoughWords = (source, haystack) => {
-    const needles = [...words(source)];
-    if (!needles.length) return true;
-    const needed = Math.min(3, Math.max(1, Math.ceil(needles.length / 3)));
-    let shared = 0;
-    for (const needle of needles) if (haystack.has(needle)) shared += 1;
-    return shared >= needed;
-};
-
-// Any of the parent's words anchors the event, the ones its outcome repeats included: an outcome that names its own
-// places and sides ("the Syrian Arab Republic conquers…") already carries the parent's context, and leaving those words
-// out left only the parent's generic ones ("current", "conclusion", "offensives"). A faithful telling that used none of
-// them was taken for missing, and the engine wrote the author's instruction beside it.
-const sharesParentContextAnchor = (parentText, haystack) => {
-    const anchors = [...words(parentText)];
-    if (!anchors.length) return true;
-    return anchors.some((word) => haystack.has(word));
-};
-
-export const beatIsWritten = (beat, events, { language = "" } = {}) => {
-    const beatDay = dateKey(beat?.date);
-    const primaryText = `${beat?.title || ""} ${beat?.text || ""}`;
-    if (![...words(primaryText)].length || beatDay === null) return false;
-    const parentText = asText(beat?.parentText);
-    const generatedBranch = Boolean(parentText) && scriptedTextMode(beat?.textMode) !== "exact";
-    // Told in another language, a beat keeps its names and little else of its author's words: on its own date, one of
-    // them is enough.
-    const acrossLanguages = translated(language);
-    return asArray(events).some((event) => {
-        const eventDay = dateKey(event?.date);
-        if (eventDay === null || Math.abs(eventDay - beatDay) > SCRIPTED_MATCH_DAYS) return false;
-        const haystack = words(`${event?.title} ${event?.description}`);
-        const named = acrossLanguages && eventDay === beatDay && [...words(primaryText)].some((word) => haystack.has(word));
-        if (!named && !sharesEnoughWords(primaryText, haystack)) return false;
-        // A generated branch must still belong to its parent event. Without this
-        // guard a generic outcome such as "Outcome A is selected" can be rewritten
-        // around the player polity and accepted even when the author anchored the
-        // parent event somewhere else. Exact wording is exempt because its visible
-        // body is intentionally only the author's selected branch text.
-        return !generatedBranch || sharesParentContextAnchor(parentText, haystack);
-    });
-};
-
-// First-day prehistory may already contain a matching event. Only the exact
-// event date counts; one historical timeline card cannot discharge multiple
-// scripted beats with similar wording.
-export const scriptedBeatsNotAlreadyWritten = (beats, priorEvents, { language = "" } = {}) => {
-    const prior = asArray(priorEvents);
-    const used = new Set();
-    return asArray(beats).filter((beat) => {
-        const index = prior.findIndex((event, candidateIndex) => !used.has(candidateIndex)
-            && dateKey(event?.date) !== null
-            && dateKey(event?.date) === dateKey(beat?.date)
-            && beatIsWritten(beat, [event], { language }));
-        if (index < 0) return true;
-        used.add(index);
-        return false;
-    });
+// Did the answer write this beat? Only an event that says so: the period is
+// shown each beat with its id (buildScriptedEventsInstruction), and the event
+// that tells it carries that id in `scriptedBeat` (the skip's event schema,
+// gameplaySchemas.js). The id is the scenario's own (server/gameFeatures.js
+// normalizeScriptedEvents), compared exactly, case and spacing aside, and
+// without the square brackets the prompt shows it in. A beat with no id can
+// only be written by the engine.
+//
+// An event near the beat's date that shared enough of its words used to count
+// as its telling: a faithful telling in other words, or in the player's own
+// language, was taken for missing and the engine wrote the author's copy beside
+// it; a different event that shared a name or two was taken for the beat, had
+// the author's impacts put on it, and in exact wording had its text replaced.
+const beatKey = (value) => asText(value).replace(/^\[(.*)\]$/, "$1").toLowerCase().replace(/\s+/g, "");
+export const beatIsWritten = (beat, events) => {
+    const id = beatKey(beat?.id);
+    return Boolean(id) && asArray(events).some((event) => beatKey(event?.scriptedBeat) === id);
 };
 
 // The event the engine writes for a beat the answer left out: the author's own
-// words, on the author's date, marked as the world's and as worth stopping for.
+// words, on the author's date, marked as the world's and as worth stopping for,
+// and naming the beat it tells as the model's own telling would.
 // An instruction the AI was to write is the author's direction, so its square-bracketed asides to the simulator
 // ("[In terms of map changes: …]") stay out of the engine's copy; exact wording is kept whole.
 const withoutAsides = (value) => asText(value).replace(/\s*\[[^\]]*\]/g, "").replace(/[ \t]{2,}/g, " ").trim() || asText(value);
@@ -275,6 +220,7 @@ ${withoutAsides(beat?.text)}`
         notable: true,
         playerRelated: false,
         impacts: {},
+        ...(asText(beat?.id) ? { scriptedBeat: asText(beat.id) } : {}),
     };
 };
 
@@ -292,7 +238,7 @@ export const ensureScriptedEvents = (events, beats, { language = "" } = {}) => {
         // silently discharge a second same-day scripted event.
         let matchIndex = -1;
         for (let index = 0; index < generatedCount; index += 1) {
-            if (!consumed.has(index) && beatIsWritten(beat, [list[index]], { language })) {
+            if (!consumed.has(index) && beatIsWritten(beat, [list[index]])) {
                 matchIndex = index;
                 break;
             }
@@ -326,7 +272,8 @@ export const ensureScriptedEvents = (events, beats, { language = "" } = {}) => {
 };
 
 // What the period is told about its beats: in the user message, beside the
-// receipt, because they are this period's and not the whole game's.
+// receipt, because they are this period's and not the whole game's. Each with
+// its id, which the event that tells it carries in scriptedBeat (beatIsWritten).
 export const buildScriptedEventsInstruction = (beats, { language = "" } = {}) => {
     const list = asArray(beats);
     if (!list.length) return "";
@@ -335,15 +282,17 @@ export const buildScriptedEventsInstruction = (beats, { language = "" } = {}) =>
     const rows = list.map((beat) => {
         const exact = scriptedTextMode(beat?.textMode) === "exact";
         const parentText = asText(beat?.parentText);
-        if (!parentText) return `- ${beat.date} — ${exact ? "[EXACT WORDING] " : ""}${beat.text}`;
+        const id = asText(beat?.id) ? `[${asText(beat.id)}] ` : "";
+        if (!parentText) return `- ${id}${beat.date} — ${exact ? "[EXACT WORDING] " : ""}${beat.text}`;
         return [
-            `- ${beat.date} — Parent event: ${parentText}`,
+            `- ${id}${beat.date} — Parent event: ${parentText}`,
             `  Selected outcome: ${exact ? "[EXACT WORDING] " : ""}${beat.text}`,
             "  The selected outcome refines this parent event; it does not replace its people, places, actors or subject.",
         ].join("\n");
     });
     return "[Scripted events this period — set by this scenario's author, checked by the engine]\n"
         + "These happen in this period. Write each as its own event, dated as given, with the impacts it implies, and let the rest of the period feel its consequences. "
+        + "Set that event's scriptedBeat to the id in square brackets at the start of the entry's line: that id, and nothing in the event's wording, is how the engine knows the entry was written. "
         + "Ordinary entries are instructions: write their final event in your own words. For a branched event, the selected outcome refines the parent event rather than replacing its context. "
         + (hasExact
             ? (inLanguage
@@ -353,7 +302,7 @@ export const buildScriptedEventsInstruction = (beats, { language = "" } = {}) =>
         + (inLanguage
             ? `Write each of them in ${language}, on the date given, keeping the names of its people and places as the entry gives them. `
             : "")
-        + "They are history in this world: nothing you write may contradict or pre-empt them. One the answer leaves out is written by the engine in the author's words, with only the impacts its author attached.\n"
+        + "They are history in this world: nothing you write may contradict or pre-empt them. One that no event of the answer names in scriptedBeat is written by the engine in the author's words, with only the impacts its author attached.\n"
         + rows.join("\n");
 };
 
@@ -433,7 +382,7 @@ export const buildWorldDirectionDirective = (direction, { playerPolity = "", spa
         parts.push(
             "[The World's Share — counted by the engine]\n"
             + `At least ${Math.round(share)}% of this period's events must be developments that do not involve ${player} at all: other powers acting on each other, in theatres ${player} is not in. `
-            + `An event that names ${player}, or that you mark playerRelated, counts as ${player}'s. The engine counts this on every answer and tells you when you fall short. `
+            + `An event counts as ${player}'s when you mark it playerRelated: mark every event ${player} takes part in, is the subject of, or that happens inside its territory. The engine counts these marks on every answer and tells you when you fall short. `
             + `This is a floor on how much of the world you show, NOT a ceiling on what the world does to ${player}: meet it by writing more elsewhere, never by leaving a rival's move against the player unwritten.`,
         );
     }

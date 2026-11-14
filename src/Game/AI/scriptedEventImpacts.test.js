@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { compileImpactRows } from "../../../server/scriptedImpacts.js";
-import { applyEventImpactsToWorld } from "../../runtime/gameState.js";
+import { applyEventImpactsToWorld, normalizeEvents } from "../../runtime/gameState.js";
 import {
   buildScriptedImpactsInstruction,
   describeScriptedImpacts,
@@ -49,6 +49,7 @@ test("the author's impacts are merged into the event the answer wrote, replacing
         regionTransfers: [{ regionId: "region: Chisinau", regionName: "Chisinau", toCode: "Moldova" }, { regionId: "region: Bender", toCode: "Republic of Moldova" }],
         polityChanges: [{ operation: "create", code: "Republic of Moldova" }],
       },
+      scriptedBeat: "moldova",
     },
     { date: "1991-08-20", title: "Coup in Moscow", description: "Hardliners try to seize power.", impacts: {} },
   ];
@@ -71,6 +72,26 @@ test("a beat the answer left out is written by the engine with its impacts", () 
   assert.equal(written.title, beat.title);
   assert.deepEqual(written.impacts.regionTransfers.map((entry) => entry.regionName), ["Chişinău", "Ialoveni"]);
   assert.deepEqual(written.impacts.polityChanges, [{ operation: "create", code: "Republic of Moldova" }]);
+});
+
+// The author's impacts used to go to whichever event near the beat's date
+// shared enough of its words: a coup that named Chişinău would have taken
+// Moldova's independence, and a telling in Romanian none.
+test("the author's impacts go to the event that names the beat's id, in any language, and never to one that only shares its words", () => {
+  const tellings = [
+    { title: "Moldova declares independence", description: "In Chişinău the parliament votes." },
+    { title: "Moldova își proclamă independența", description: "La Chişinău, parlamentul votează." },
+    { title: "Молдавия провозглашает независимость", description: "В Кишинёве голосует парламент." },
+  ];
+  for (const told of tellings) {
+    const named = [{ date: "1991-08-27", ...told, impacts: {}, scriptedBeat: "moldova" }];
+    const result = ensureScriptedEventsWithImpacts(named, [beat]);
+    assert.deepEqual([result.inserted.length, result.attached.length, named[0].impacts.regionTransfers.length], [0, 1, 2], told.title);
+    const unnamed = [{ date: "1991-08-27", ...told, impacts: {} }];
+    const written = ensureScriptedEventsWithImpacts(unnamed, [beat]);
+    assert.equal(written.inserted.length, 1, told.title);
+    assert.deepEqual(unnamed[0].impacts, {}, `${told.title}: its own event keeps its impacts as it wrote them`);
+  }
 });
 
 test("the model is told what each scripted event carries, by name and never by id", () => {
@@ -150,6 +171,14 @@ test("the time skip merges the authored impacts before the answer's world change
   assert.match(gameplay, /buildScriptedEventsInstruction\(scriptedBeats, \{ language: scriptedLanguage \}\), buildScriptedImpactsInstruction\(scriptedBeats\)/);
 });
 
+// The id the event names it by rides in the skip's answer (gameplaySchemas.js
+// SCRIPTED_BEAT_FIELD) and never reaches a save: the saved event is the game's
+// own shape (runtime/gameState.js normalizeEventEntry).
+test("the beat's id an event names it by is not kept in the save", () => {
+  const [saved] = normalizeEvents([{ date: "1991-08-27", title: "Moldova declares independence", description: "x", scriptedBeat: "moldova" }]);
+  assert.equal("scriptedBeat" in saved, false);
+});
+
 // --- The map's tempo leaves a scripted event's changes be ---
 
 test("the map's tempo never withholds what a fired scripted event carries, the author's or the model's for it", () => {
@@ -162,6 +191,7 @@ test("the map's tempo never withholds what a fired scripted event carries, the a
       title: "Moldova declares independence",
       description: "In Chişinău the parliament declares Moldova's independence from the Soviet Union.",
       impacts: { regionTransfers: [{ regionId: "region: Bender", toCode: "Republic of Moldova" }] },
+      scriptedBeat: "moldova",
     },
     { date: "1991-08-30", title: "Another advance", description: "More troops advance.", impacts: { regionTransfers: [{ regionId: "r3", toCode: "X" }] } },
   ];
@@ -169,7 +199,8 @@ test("the map's tempo never withholds what a fired scripted event carries, the a
   assert.equal(scripted.inserted.length, 0);
   assert.equal(answer[1][SCRIPTED_EVENT], true, "the event that tells the beat is marked");
   assert.equal(answer[0][SCRIPTED_EVENT], undefined);
-  assert.equal(JSON.stringify(answer[1]).includes("scripted"), false, "the mark never reaches a save");
+  const { scriptedBeat: _id, ...rest } = answer[1];
+  assert.equal(JSON.stringify(rest).includes("scripted"), false, "the mark never reaches a save");
 
   const { events, withheld } = applyTerritoryTempo(answer, { ceilingPerMonth: 2, spanDays: 30 });
   assert.equal(withheld, 1, "only the model's own third region is held back");
@@ -240,7 +271,7 @@ test("a fallback's scripted event the resolver still refuses keeps its story wit
 
 test("the model is told a beat the engine wrote in carries its author's impacts, by name, and 'no impacts' only when it carries none", () => {
   const note = scriptedBeatWrittenNote(beat);
-  assert.match(note, /was not in your answer, so the engine wrote it in the author's words, with the impacts its author attached: Republic of Moldova is founded; Chişinău and Ialoveni pass to Republic of Moldova\.$/);
+  assert.match(note, /was not in your answer \(no event named it in scriptedBeat\), so the engine wrote it in the author's words, with the impacts its author attached: Republic of Moldova is founded; Chişinău and Ialoveni pass to Republic of Moldova\.$/);
   assert.doesNotMatch(note, /MDA\.|no impacts/);
   assert.match(scriptedBeatWrittenNote(dissolutionBeat, { fallback: true }), /was not in the fallback answer, .*with the impacts its author attached: Alpha is dissolved; all of Alpha passes to Beta\./);
   assert.match(scriptedBeatWrittenNote({ ...beat, impacts: undefined }), /in the author's words, with no impacts\.$/);

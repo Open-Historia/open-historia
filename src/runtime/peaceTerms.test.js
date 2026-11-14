@@ -141,25 +141,55 @@ test("an AI's offer to a person is checked: their war, the person's country play
   assert.deepEqual(withOffer([first], second).map((offer) => [offer.id, offer.status]), [[first.id, "lapsed"], [second.id, "open"]]);
 });
 
-test("the AI writes terms and answers in words, and the game reads them", () => {
+test("the AI writes terms and answers in the game's form, and the game reads them", () => {
   const parties = { from: "Borduria", to: "Aland" };
-  assert.deepEqual(readTermsLine("as held; Borduria pays 2% for 5 years", parties), { territory: TERRITORY_AS_HELD, reparations: { payer: "Borduria", receiver: "Aland", share: 0.02, years: 5 } });
-  assert.deepEqual(readTermsLine("restored; none", parties), { territory: TERRITORY_RESTORED, reparations: null });
-  assert.deepEqual(readTermsLine("each side keeps what it holds; Aland pays 1.5% of its economy a year for 3 years", parties).reparations, { payer: "Aland", receiver: "Borduria", share: 0.015, years: 3 });
-  assert.deepEqual(readTermsLine("the old borders", parties), { territory: TERRITORY_RESTORED, reparations: null });
+  assert.deepEqual(readTermsLine("as held; pay~Borduria~2~5", parties), { territory: TERRITORY_AS_HELD, reparations: { payer: "Borduria", receiver: "Aland", share: 0.02, years: 5 } });
+  assert.deepEqual(readTermsLine("restored", parties), { territory: TERRITORY_RESTORED, reparations: null });
+  assert.deepEqual(readTermsLine("ground~as held", parties).territory, TERRITORY_AS_HELD, "the ground as a record too");
+  assert.deepEqual(readTermsLine(" As  Held ; pay~Aland~1,5 %~3 ans", parties), { territory: TERRITORY_AS_HELD, reparations: { payer: "Aland", receiver: "Borduria", share: 0.015, years: 3 } }, "case and spacing fold; a figure is a figure");
+  assert.deepEqual(readTermsLine("", parties), { territory: TERRITORY_RESTORED, reparations: null }, "no ground written is the old borders");
   assert.deepEqual(readPeaceVerdict("accept", parties), { verdict: "accept" });
-  assert.deepEqual(readPeaceVerdict("Declined.", parties), { verdict: "decline" });
-  assert.deepEqual(readPeaceVerdict("refuse", parties), { verdict: "decline" });
-  assert.deepEqual(readPeaceVerdict("counter: restored; none", parties), { verdict: "counter", terms: { territory: TERRITORY_RESTORED, reparations: null } });
-  assert.deepEqual(readPeaceVerdict("offer as held; Borduria pays 1% for 4 years", parties).terms.reparations.years, 4);
+  assert.deepEqual(readPeaceVerdict("Decline.", parties), { verdict: "decline" });
+  assert.deepEqual(readPeaceVerdict("counter: restored", parties), { verdict: "counter", terms: { territory: TERRITORY_RESTORED, reparations: null } });
+  assert.deepEqual(readPeaceVerdict("offer as held; pay~Borduria~1~4", parties).terms.reparations.years, 4);
   assert.equal(readPeaceVerdict("we will think about it", parties), null, "nothing it can read is nothing done");
+  // The verdict is one of the game's four words, as it is written: no English
+  // word for it is read, and no other.
+  for (const off of ["accepted", "refuse", "reject", "counter-offer as held", "accepte", "acepta", "принять"]) {
+    assert.equal(readPeaceVerdict(off, parties), null, off);
+  }
   // The skip's peaceTreaties lines.
-  assert.deepEqual(readTreatyLines("Borduria | Aland | as held; Borduria pays 2% for 5 years\n- Eland | Fenland | restored\nnonsense"), [
+  assert.deepEqual(readTreatyLines("Borduria | Aland | as held; pay~Borduria~2~5\n- Eland | Fenland | restored\nnonsense"), [
     { from: "Borduria", to: "Aland", terms: { territory: TERRITORY_AS_HELD, reparations: { payer: "Borduria", receiver: "Aland", share: 0.02, years: 5 } } },
     { from: "Eland", to: "Fenland", terms: { territory: TERRITORY_RESTORED, reparations: null } },
   ]);
   assert.deepEqual(readTreatyLines(""), []);
   assert.deepEqual(readTreatyLines(undefined), []);
+});
+
+// The terms were read as English sentences: "Borduria cède Klow à Syldavia"
+// was a mere condition, its ground went back, and a French "accepte" made no
+// peace; in English, "Syldavia keeps its army" read as the ground as held.
+// What a term does is now what its record says, in every language alike, and
+// words in any language are a condition, which never moves the ground.
+test("terms written by a model playing in French are read exactly as their English twin", () => {
+  const two = { from: "Syldavia", to: "Borduria" };
+  const english = readTermsLine("as held; cede~Klow~Syldavia; cede~Szohod~Syldavia; puppet~Borduria~client; pay~Borduria~2~5; condition~the border forts are razed", two);
+  const french = readTermsLine("as held; cede~Klow~Syldavia; cede~Szohod~Syldavia; puppet~Borduria~client; pay~Borduria~2~5; condition~les forts frontaliers sont rasés", two);
+  const { conditions: frenchConditions, ...frenchTerms } = french;
+  const { conditions: englishConditions, ...englishTerms } = english;
+  assert.deepEqual(frenchTerms, englishTerms);
+  assert.deepEqual(frenchTerms.cessions, [{ region: "Klow", to: "Syldavia" }, { region: "Szohod", to: "Syldavia" }]);
+  assert.deepEqual([englishConditions, frenchConditions], [["the border forts are razed"], ["les forts frontaliers sont rasés"]]);
+  // A region named as the map names it, in its own script.
+  assert.deepEqual(readTermsLine("cede~Île-de-France~Syldavia; cede~region: Москва~Borduria", two).cessions, [{ region: "Île-de-France", to: "Syldavia" }, { region: "Москва", to: "Borduria" }]);
+  // Words are a condition, in any language: they never decide the ground.
+  for (const words of ["Borduria cède Klow à Syldavia", "Borduria cedes Klow to Syldavia", "Syldavia keeps its army", "each side keeps what it holds"]) {
+    assert.deepEqual(readTermsLine(words, two), { territory: TERRITORY_RESTORED, reparations: null, conditions: [words] }, words);
+  }
+  // A French acceptance is the game's word, as an English one is.
+  assert.deepEqual(readPeaceVerdict("accept", two), readPeaceVerdict("ACCEPT.", two));
+  assert.deepEqual(readPeaceVerdict("counter as held; condition~les ponts sont rendus", two).terms, { territory: TERRITORY_AS_HELD, reparations: null, conditions: ["les ponts sont rendus"] });
 });
 
 test("two countries nobody plays make peace only when the skip says so, and never in a war a person is in", () => {
@@ -200,7 +230,7 @@ test("reparations are paid a period at a time out of the payer's economy, until 
 test("terms beyond the ground and the money: read from a line, from a letter, held to the two, and weighed", async () => {
   const { describeTerms, offerFromAi, readTermsLine, termsOfLetter, termsWorth } = await import("./peaceTerms.js");
   const two = { from: "Syldavia", to: "Borduria" };
-  const read = readTermsLine("as held; Borduria cedes Klow, Szohod to Syldavia; Borduria becomes Syldavia's client state; Syldavia pays 1% for 3 years; no army on the river", two);
+  const read = readTermsLine("as held; cede~Klow~Syldavia; cede~Szohod~Syldavia; puppet~Borduria~client; pay~Syldavia~1~3; condition~no army on the river", two);
   assert.deepEqual(read, {
     territory: "as held",
     reparations: { payer: "Syldavia", receiver: "Borduria", share: 0.01, years: 3 },
@@ -209,18 +239,18 @@ test("terms beyond the ground and the money: read from a line, from a letter, he
     conditions: ["no army on the river"],
   });
   assert.equal(describeTerms(read), "each side keeps the ground it holds; Klow and Szohod pass to Syldavia; Borduria becomes Syldavia's client state; Syldavia pays Borduria reparations of 1% of its economy a year for 3 years; and: no army on the river");
-  assert.deepEqual(readTermsLine("annex Borduria", two).annexed, { country: "Borduria", by: "Syldavia" });
-  assert.deepEqual(readTermsLine("all of Syldavia passes to Borduria", two).annexed, { country: "Syldavia", by: "Borduria" });
-  assert.deepEqual(readTermsLine("make Borduria a protectorate", two).puppet ?? readTermsLine("protectorate of Borduria", two).puppet, { subject: "Borduria", overlord: "Syldavia", kind: "protectorate" });
-  // The old two forms read as they did.
-  assert.deepEqual(readTermsLine("restored; none", two), { territory: "restored", reparations: null });
-  assert.deepEqual(readTermsLine("Borduria cedes what it lost", two), { territory: "as held", reparations: null });
-  // A third country is never annexed, made a puppet or given regions: it is a condition for the story.
-  const third = readTermsLine("Ruritania is annexed; Klow passes to Ruritania", two);
-  assert.deepEqual([third.annexed, third.cessions, third.conditions], [undefined, undefined, ["Ruritania is annexed", "Klow passes to Ruritania"]]);
+  assert.deepEqual(readTermsLine("annex~Borduria", two).annexed, { country: "Borduria", by: "Syldavia" });
+  assert.deepEqual(readTermsLine("annex~Syldavia", two).annexed, { country: "Syldavia", by: "Borduria" });
+  assert.deepEqual(readTermsLine("puppet~Borduria~protectorate", two).puppet, { subject: "Borduria", overlord: "Syldavia", kind: "protectorate" });
+  assert.deepEqual(readTermsLine("puppet~Borduria", two).puppet, { subject: "Borduria", overlord: "Syldavia", kind: "satellite" }, "no kind written: a satellite");
+  // A record missing a field is no term, and no condition either.
+  assert.deepEqual(readTermsLine("cede~Klow; annex~; pay~Borduria", two), { territory: "restored", reparations: null });
+  // A country is one of the two by its own name: a third, or a name the game does not use for either, is no part of it.
+  const third = readTermsLine("annex~Ruritania; cede~Klow~Ruritania; puppet~the Kingdom of Borduria~client", two);
+  assert.deepEqual([third.annexed, third.cessions, third.puppet], [undefined, undefined, undefined]);
   // A letter's moreTerms, read between the two when the offer is made.
-  const letter = termsOfLetter({ territory: "as held", reparationsPayer: "", moreTerms: "Borduria is annexed" });
-  assert.equal(letter.more, "Borduria is annexed");
+  const letter = termsOfLetter({ territory: "as held", reparationsPayer: "", moreTerms: "annex~Borduria" });
+  assert.equal(letter.more, "annex~Borduria");
   const made = offerFromAi({ from: "Syldavia", to: "Borduria", terms: letter, wars: [{ id: "w", status: "active", sideA: ["Syldavia"], sideB: ["Borduria"] }], players: ["Borduria"], round: 3 });
   assert.deepEqual(made.offer.terms.annexed, { country: "Borduria", by: "Syldavia" });
   // Weighed: annexed is everything, a puppet much, a region a little.

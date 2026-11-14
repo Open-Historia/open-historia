@@ -7,7 +7,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { editDistance, foldRegionKey, foldRegionKeyOnce, matchRegionName, stripRegionAffixes } from "../src/Game/AI/regionMatch.js";
+import { readFileSync } from "node:fs";
+
+import { editDistance, foldRegionKey, foldRegionKeyOnce, matchRegionName, nearestRegionNames, spellingDistance } from "../src/Game/AI/regionMatch.js";
 
 // A slice of the hand-drawn Fault Lines world: Ukraine's regions are named after towns.
 const ukraine = [
@@ -30,7 +32,6 @@ test("folding: case, diacritics, apostrophes and hyphens do not matter", () => {
 test("folding is remembered, and remembering changes no answer", () => {
   // What is not text folds as it always did.
   assert.deepEqual([null, undefined, "", "   ", 12, 0].map(foldRegionKey), ["", "", "", "", "12", "0"]);
-  assert.deepEqual([null, undefined, ""].map(stripRegionAffixes), ["", "", ""]);
   // The same string, asked twice, is the same answer; a string that differs
   // only in what folding removes is a different question with the same answer.
   for (const name of ["Zaporízhzhya-Oblast", "ZAPORIZHZHYA OBLAST", " zaporizhzhya_oblast "]) {
@@ -42,7 +43,6 @@ test("folding is remembered, and remembering changes no answer", () => {
   for (let index = 0; index < 130_000; index += 1) foldRegionKey(`Made-Up Place ${index}`);
   assert.equal(foldRegionKey("Made-Up Place 7"), "made up place 7");
   assert.equal(foldRegionKey("Donets’k"), "donetsk");
-  assert.equal(stripRegionAffixes("the kharkiv region"), "kharkiv");
   assert.equal(matchRegionName("Kharkiv Oblast", ukraine)?.region.id, "2026");
 });
 
@@ -55,11 +55,31 @@ test("the fold that remembers nothing gives the same answers", () => {
   assert.equal(foldRegionKeyOnce("São José do Jacuípe"), "sao jose do jacuipe");
 });
 
-test("affixes: administrative words the model appends are stripped, repeatedly", () => {
-  assert.equal(stripRegionAffixes("kharkiv oblast"), "kharkiv");
-  assert.equal(stripRegionAffixes("the kharkiv region"), "kharkiv");
-  assert.equal(stripRegionAffixes("republic of crimea autonomous republic"), "crimea");
-  assert.equal(stripRegionAffixes("bayern"), "bayern");
+// "there should be absolutely no keywording done in this game anywhere" (the
+// owner, 2026-11-13). English administrative words ("oblast", "province of")
+// and Arabic articles were once stripped off by list, so a name wrapped in
+// another language's words was not found. The search knows no word of any
+// language now: a name's whole words, or its spelling, find it alike.
+test("a name wrapped in words of the model's own is found by its whole words, in any language", () => {
+  for (const written of ["Kharkiv Oblast", "Oblast de Kharkiv", "Obwód Kharkiv", "the Kharkiv region", "Kharkiv"]) {
+    const hit = matchRegionName(written, ukraine);
+    assert.equal(hit?.region.id, "2026", written);
+    assert.equal(hit.rule, written === "Kharkiv" ? "exact" : "words", written);
+  }
+  const source = readFileSync(new URL("../src/Game/AI/regionMatch.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /REGION_SUFFIX|REGION_PREFIX|stripRegionAffixes|ARTICLE|oblast\||governorate\|/);
+});
+
+test("spelling is measured on whole names or on one word of either, never on a list of words", () => {
+  assert.equal(spellingDistance("basra", "al basrah"), 1);
+  assert.equal(spellingDistance("basra", "el basrah"), 1);
+  assert.equal(spellingDistance("kharkov", "oblast de kharkiv"), 1);
+  assert.equal(spellingDistance("kharkov oblast", "kharkiv"), 1);
+  // Short words are not measured alone: "san" is not a near miss of "san marino".
+  assert.ok(spellingDistance("san", "san marino", 2) > 2);
+  const iraq = [{ id: "q1", name: "Al-Basrah" }, { id: "q2", name: "Baghdad" }, { id: "q3", name: "Babil" }];
+  assert.deepEqual(nearestRegionNames("Basra", iraq), ["Al-Basrah"]);
+  assert.deepEqual(nearestRegionNames("Bassorah", iraq).slice(0, 1), ["Al-Basrah"]);
 });
 
 test("edit distance is bounded", () => {
@@ -68,9 +88,9 @@ test("edit distance is bounded", () => {
   assert.equal(editDistance("kharkiv", "poltava", 2), 3, "stops counting past the bound");
 });
 
-test("exact and affixed names resolve to the one region they name", () => {
+test("exact and wrapped names find the one region they name", () => {
   assert.equal(matchRegionName("Kharkiv", ukraine).region.id, "2026");
-  assert.equal(matchRegionName("Kharkiv Oblast", ukraine).rule, "affix");
+  assert.equal(matchRegionName("Kharkiv Oblast", ukraine).rule, "words");
   assert.equal(matchRegionName("Kharkiv Oblast", ukraine).region.id, "2026");
   assert.equal(matchRegionName("the Donetsk region", ukraine).region.id, "2004");
   assert.equal(matchRegionName("Donets’k", ukraine).region.id, "2004");

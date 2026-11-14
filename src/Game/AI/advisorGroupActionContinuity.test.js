@@ -39,7 +39,7 @@ test("reconciliation uses the only actual unqueued create proposal's owner, not 
   // Three player turns rotate a three-member group to Nikolai first, not Anna.
   const rows = [...groupMessages, { role: "user", text: lastRequest }];
   assert.deepEqual(unqueuedGroupActionDrafts(rows, actions).map((draft) => draft.speakerId), [ids[1]]);
-  assert.deepEqual(new Set(selectAdvisorGroupSpeakers(ids, rows, lastRequest, people, "Chief")), new Set(ids));
+  assert.deepEqual(new Set(selectAdvisorGroupSpeakers(ids, rows)), new Set(ids));
 });
 
 test("group context exposes owner, exact scope and unqueued state from saved proposals without restoring the invalid edit block", () => {
@@ -58,7 +58,7 @@ test("group context exposes owner, exact scope and unqueued state from saved pro
 test("no owner inference for unrelated questions, ambiguous drafts, or unverified queue state", () => {
   const question = "What is the latest fiscal estimate?";
   const rows = [...groupMessages, { role: "user", text: lastRequest }];
-  assert.deepEqual(new Set(selectAdvisorGroupSpeakers(ids, rows, question, people, "Chief")), new Set(ids));
+  assert.deepEqual(new Set(selectAdvisorGroupSpeakers(ids, rows)), new Set(ids));
   const ambiguous = [...rows.slice(0, -1), { role: "advisor", speakerId: ids[0], id: "advisor-reply-fiscal-001",
     actionProposals: [{ id: "proposal-0", operation: "create", actionId: "action-advisor-reply-fiscal-001-0",
       title: "Fiscal review", text: "Review costs of the planned initiative." }] }, rows.at(-1)];

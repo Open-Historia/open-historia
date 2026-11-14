@@ -14,13 +14,16 @@
 
 import { placeFeedPlace } from "../../runtime/placeFeed.js";
 import { puppetKindLabel } from "../../runtime/puppets.js";
+import { endsSentence } from "../../../server/sentences.js";
 
 const clean = (value) => String(value ?? "").trim();
 const array = (value) => (Array.isArray(value) ? value : []);
 const listOf = (names, max) => (names.length > max ? `${names.slice(0, max).join(", ")} and ${names.length - max} more` : names.join(", "));
+// A text ended as a sentence: one that ends in a terminal of any script keeps
+// it (server/sentences.js), where "。" once had "." put after it.
 const sentence = (value) => {
   const text = clean(value).replace(/\s+/g, " ");
-  return text && !/[.!?…]$/.test(text) ? `${text}.` : text;
+  return text && !endsSentence(text) ? `${text}.` : text;
 };
 
 // How the place is named in a sentence: "Bayern, in Germany", "Bayern" where
