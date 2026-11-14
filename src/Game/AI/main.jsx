@@ -62,6 +62,7 @@ import {
     contextWindowMessage,
     couldNotBeReached,
     describeHtmlErrorPage,
+    errorParamOf,
     errorPayloadText,
     extractErrorMessage,
     isBrokenBodyError,
@@ -1577,7 +1578,7 @@ async function callOpenAIStyleChatCompletions({
 
             const sentOwnTemperature = Object.keys(ownTemperature).length > 0
                 && requestCustomParams.temperature === undefined;
-            if (!disableTemperature && sentOwnTemperature && isTemperatureRefusal(errorMessage)) {
+            if (!disableTemperature && sentOwnTemperature && isTemperatureRefusal(errorMessage, payload)) {
                 disableTemperature = true;
                 temperatureRefusals.learn(samplingKey);
                 console.warn(`[ai] ${providerLabel} refused the requested temperature; retrying at the model's own, and remembering.`);
@@ -1588,7 +1589,7 @@ async function callOpenAIStyleChatCompletions({
             // does tools, it just stops keeping the connection warm — whereas
             // dropping out of tool mode costs structured output, which is the
             // difference between a real turn and canned events.
-            if (streamThisRequest && isStreamingRefusal(errorMessage)) {
+            if (streamThisRequest && isStreamingRefusal(errorMessage, payload)) {
                 streamingDisabled = true;
                 streamingRefusals.add(streamingKey);
                 console.warn(`[ai] ${providerLabel} refused a streamed request; retrying buffered — long turns on this endpoint may time out.`);
@@ -1605,7 +1606,11 @@ async function callOpenAIStyleChatCompletions({
             }
 
             if (structuredMode === "tool") {
-                const reasoningConflict = /function tools.*reasoning_effort.*not supported|reasoning_effort.*not supported.*function tools/i.test(errorMessage);
+                // OpenAI names the refused parameter; a gateway relaying only
+                // its message ("Function tools with reasoning_effort are not
+                // supported ...") is read by those words.
+                const reasoningConflict = errorParamOf(payload) === "reasoning_effort"
+                    || /function tools.*reasoning_effort.*not supported|reasoning_effort.*not supported.*function tools/i.test(errorMessage);
 
                 if (!disableToolReasoning && reasoningConflict) {
                     disableToolReasoning = true;
@@ -2227,7 +2232,7 @@ async function callAnthropic(systemPrompt, history, {
             // The model takes no temperature (or none beside thinking): ask at its
             // own, and remember, as the OpenAI-compatible path does.
             if (response.status === 400 && !temperatureRefused && body.temperature !== undefined && customParams.temperature === undefined
-                && isTemperatureRefusal(message) && attempt < retries) {
+                && isTemperatureRefusal(message, payload) && attempt < retries) {
                 temperatureRefused = true;
                 temperatureRefusals.learn(samplingKey);
                 console.warn(`[ai] Anthropic: ${model} refused the requested temperature; retrying at the model's own, and remembering.`);
@@ -2246,7 +2251,7 @@ async function callAnthropic(systemPrompt, history, {
             }
             // The reverse: an endpoint that will not stream at all. Give up the
             // keep-alive rather than the request.
-            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message) && attempt < retries) {
+            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message, payload) && attempt < retries) {
                 streamingDisabled = true;
                 streamingRefusals.add(streamingKey);
                 console.warn("[ai] Anthropic refused a streamed request; retrying buffered — long turns may time out.");
@@ -2536,7 +2541,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
                 continue;
             }
             if (response.status === 400 && !temperatureRefused && body.temperature !== undefined && customParams.temperature === undefined
-                && isTemperatureRefusal(message) && attempt < retries) {
+                && isTemperatureRefusal(message, payload) && attempt < retries) {
                 temperatureRefused = true;
                 temperatureRefusals.learn(samplingKey);
                 console.warn(`[ai] Anthropic-compatible: ${model} refused the requested temperature; retrying at the model's own, and remembering.`);
@@ -2555,7 +2560,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             }
             // The reverse: an endpoint that will not stream at all. Give up the
             // keep-alive rather than the request.
-            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message) && attempt < retries) {
+            if (response.status === 400 && streamThisRequest && isStreamingRefusal(message, payload) && attempt < retries) {
                 streamingDisabled = true;
                 streamingRefusals.add(streamingKey);
                 console.warn("[ai] Anthropic-compatible refused a streamed request; retrying buffered — long turns may time out.");

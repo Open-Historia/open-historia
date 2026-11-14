@@ -18,6 +18,7 @@ import {
   toolStreamRefusalError,
   describeHtmlErrorPage,
   isTemperatureRefusal,
+  errorParamOf,
 } from "./providerErrors.js";
 
 test("Anthropic's refusal of a temperature beside thinking is a temperature refusal", () => {
@@ -600,4 +601,49 @@ test("an answer cut at the model's output limit is recognised in each provider's
   assert.equal(stoppedAtOutputLimit(null), false);
   assert.equal(stoppedAtOutputLimit("text"), false);
   assert.equal(OUTPUT_LIMIT_MESSAGE, "The model stopped at its output limit before it finished its answer.");
+});
+
+// ---------------------------------------------------------------------------
+// What the provider's JSON says decides before its words
+//
+// A provider's error is read by its HTTP status, its code, type or status, the
+// reason in Google's ErrorInfo and the parameter an OpenAI-shaped error names.
+// Its message's words are read only after those, for the providers that send
+// nothing else; the same error with its message in another language (a relay
+// that translates, a regional endpoint) is decided the same way.
+
+test("a bad key, a missing model and a spent balance are decided by their codes, whatever the message says", () => {
+  const geminiBadKey = {
+    error: {
+      code: 400, status: "INVALID_ARGUMENT", message: "Clé API non valide. Veuillez fournir une clé valide.",
+      details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "API_KEY_INVALID", domain: "googleapis.com" }],
+    },
+  };
+  assert.equal(classifyProviderFailure({ status: 400, payload: geminiBadKey }).kind, "unusable");
+  assert.equal(classifyProviderFailure({ status: 400, payload: { error: { code: "invalid_api_key", message: "Неверный ключ API" } } }).kind, "unusable");
+  const missing = classifyProviderFailure({ status: 400, payload: { error: { code: "model_not_found", message: "El modelo no existe" } } });
+  assert.deepEqual([missing.kind, missing.reason], ["unusable", "model not found (400)"]);
+  assert.equal(classifyProviderFailure({ status: 429, payload: { error: { code: "insufficient_quota", message: "您的余额不足" } } }).kind, "spent");
+  assert.equal(isQuotaExhaustedPayload({ error: { type: "insufficient_quota", message: "Guthaben aufgebraucht" } }), true);
+});
+
+test("load is decided by the code, type or status, in any language", () => {
+  assert.equal(isBusyErrorPayload({ type: "overloaded_error", message: "Surchargé" }), true);
+  assert.equal(isBusyErrorPayload({ code: 503, status: "UNAVAILABLE", message: "Модель перегружена." }), true);
+  assert.equal(isBusyErrorPayload({ code: 529, message: "过载" }), true, "Anthropic's own status for overloaded");
+  // A word alone that names no load is not read as load.
+  assert.equal(isBusyErrorPayload({ message: "Context capacity of this model is 8k tokens." }), false);
+});
+
+test("a refused temperature, stream or reasoning parameter is decided by the parameter the error names", () => {
+  const openai = (param, message) => ({ error: { message, type: "invalid_request_error", param, code: "unsupported_value" } });
+  assert.equal(errorParamOf(openai("temperature", "x")), "temperature");
+  assert.equal(errorParamOf({ param: "Stream" }), "stream");
+  assert.equal(errorParamOf(null), "");
+  assert.equal(isTemperatureRefusal("Valeur non prise en charge.", openai("temperature", "Valeur non prise en charge.")), true);
+  assert.equal(isTemperatureRefusal("Valeur non prise en charge.", openai("top_p", "Valeur non prise en charge.")), false);
+  assert.equal(isStreamingRefusal("Wert nicht unterstützt.", openai("stream", "Wert nicht unterstützt.")), true);
+  assert.equal(isStreamingRefusal("Wert nicht unterstützt.", null), false);
+  // Anthropic names no parameter: its words are still read.
+  assert.equal(isTemperatureRefusal("`temperature` is deprecated for this model."), true);
 });

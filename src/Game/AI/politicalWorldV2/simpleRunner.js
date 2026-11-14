@@ -1,6 +1,7 @@
 /*! Open Historia Continuum — deterministic Political World v2 runner */
 
 import { isFinitePowerScore } from "../../../runtime/powerStatus.js";
+import { isUnreachableError } from "../providerErrors.js";
 import { normalizePoliticalWorldV2Checkpoint, recordPoliticalWorldV2ModelCall, setCheckpointQuality } from "./checkpoint.js";
 import { createPoliticalWorldV2Executor } from "./executor.js";
 import { reopenPoliticalWorldV2OfficeholderCollisions } from "./officeholderCollisions.js";
@@ -22,15 +23,22 @@ const coverageSet = (checkpoint, key) => new Set(array(checkpoint?.coverage?.[ke
 
 const taskProviderCallCeiling = () => 1;
 
+// Why a provider call paused the run, by what the request path recorded on the
+// error (AI/providerErrors.js classifyProviderFailure, and the marks main.jsx
+// puts on a server it could not reach or a connection that closed), never by
+// the words of its message. The message was read for "quota", "rate limit",
+// "network" and the like, which a provider answering in another language, or
+// a relay rewording it, never said.
+const PAUSE_BY_FAILURE = Object.freeze({
+  spent: "provider-quota",
+  rateLimited: "provider-rate-limit",
+  busy: "provider-unavailable",
+  unusable: "provider-config",
+});
 const providerPauseReason = (error) => {
-  const message = clean(error?.message || error).toLocaleLowerCase();
-  if (/quota|balance.*exhaust|resource[_ -]?exhaust/.test(message)) return "provider-quota";
-  if (/rate limit|rate limiting|too many requests/.test(message)) return "provider-rate-limit";
-  // "connection closed" and "could not be reached" are how a server that dropped
-  // mid-answer or was never there now reads (AI/providerErrors.js); the first
-  // used to arrive as the browser's "network error", which the list had.
-  if (/temporarily unavailable|failed to fetch|network|econn|gateway|timed? out|timeout|connection closed|could not be reached/.test(message)) return "provider-unavailable";
-  if (/unauthori[sz]ed|forbidden|api key|authentication|permission/.test(message)) return "provider-config";
+  const byKind = PAUSE_BY_FAILURE[clean(error?.providerFailure?.kind)];
+  if (byKind) return byKind;
+  if (error?.connectionClosed === true || isUnreachableError(error)) return "provider-unavailable";
   return "task-error";
 };
 
