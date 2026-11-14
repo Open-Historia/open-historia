@@ -14,6 +14,7 @@ import {
 import { POLITICAL_TRAIT_KEYS, validatePoliticalTraitPatch } from "../../runtime/politicalTraitRegistry.js";
 import { compareGameDates, isCanonicalGameDate } from "../../runtime/gameDates.js";
 import { nameKey } from "../../../server/nameKey.js";
+import { POLITICAL_SYSTEM_TYPES, politicalSystemTypeOf, representationForSystem } from "../../runtime/politicalActors.js";
 
 export const POLITICAL_WORLD_GENERATOR_RESULT_VERSION = 1;
 export const POLITICAL_WORLD_GENERATOR_MAX_ATTEMPTS = 2;
@@ -223,61 +224,26 @@ const generatedToken = (value) => clean(value)
   .replace(/[^a-z0-9]+/g, "_")
   .replace(/^_+|_+$/g, "");
 
-const generatedSystemTypeSlug = (rawType) => {
+// The model's own system type, read as the enum it was asked for
+// (runtime/politicalActors.js POLITICAL_SYSTEM_TYPES). A type outside the list
+// is "other", its words kept as the system's label: they name it on the
+// Politics card, and the engine never reads them. Regime words were mapped onto
+// the enum here, in English only ("constitutional monarch" was a constitutional
+// monarchy, "monarchie constitutionnelle" nothing).
+const generatedSystemType = (rawType) => {
   const original = clean(rawType);
-  // System type and representation are independent canonical dimensions. Never
-  // let representation=party_state manufacture type=one_party_state (or any
-  // other regime type) when the provider actually supplied a different type.
-  const joined = original.toLocaleLowerCase();
-  // Preserve dominant-party semantics before constitutional-form normalization so
-  // the strict party_state evidence gate can still see a provider's attempted
-  // "one-party dominant" evasion after canonicalization.
-  if (/(?:dominant[ _-]*party|(?:one|single)[ _-]*party[ _-]*dominant)/.test(joined)) {
-    return /republic/.test(joined) ? "dominant_party_republic" : "dominant_party_system";
-  }
-  if (/absolute[ _-]*monarch|emirate|sultanate/.test(joined)) return "absolute_monarchy";
-  if (/constitutional[ _-]*monarch/.test(joined)) return "constitutional_monarchy";
-  if (/semi[ _-]*presidential/.test(joined)) return "semi_presidential_republic";
-  if (/parliamentary.*republic/.test(joined)) return "parliamentary_republic";
-  if (/presidential.*republic|federal.*presidential/.test(joined)) return "presidential_republic";
-  if (/one[ _-]*party|single[ _-]*party|party[ _-]*state/.test(joined)) return "one_party_state";
-  if (/military[ _-]*(junta|regime)/.test(joined)) return "military_regime";
-  if (/personalist/.test(joined)) return "personalist_regime";
-  if (/revolutionary/.test(joined)) return "revolutionary_government";
-  if (/colonial|colony|protectorate|mandate/.test(joined)) return "colonial_administration";
-  return original
-    .toLocaleLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 96) || "unspecified";
+  if (!original || generatedToken(original) === "unspecified") return { type: "unspecified", label: "" };
+  const type = politicalSystemTypeOf(original);
+  return type ? { type, label: "" } : { type: "other", label: original };
 };
 
-const inferGeneratedRepresentation = ({ rawRepresentation = "", rawType = "", governmentForm = "", parties = [], powerBlocs = [] } = {}) => {
-  const explicit = clean(rawRepresentation).toLocaleLowerCase().replace(/[ -]+/g, "_");
+// The representation the model gave, when it is one of the enum's values; else
+// the one its system type implies, else the one its roster shows. Never read
+// from the words of the type or of government.form.
+const inferGeneratedRepresentation = ({ rawRepresentation = "", rawType = "", parties = [], powerBlocs = [] } = {}) => {
+  const explicit = clean(rawRepresentation).toLowerCase().replace(/[ -]+/g, "_");
   if (GENERATED_REPRESENTATION_SET.has(explicit)) return explicit;
-  const joined = `${clean(rawRepresentation)} ${clean(rawType)} ${clean(governmentForm)}`.toLocaleLowerCase();
-  if (/single[- ]party|one[- ]party|party[- ]state|vanguard party|party bureaucracy|non[- ]competitive.*party/.test(joined)) {
-    return GENERATED_REPRESENTATIONS.PARTY_STATE;
-  }
-  if (/absolute monarch|royal autocracy|hereditary|emirate|sultanate|ruling families|federal national council/.test(joined)) {
-    return GENERATED_REPRESENTATIONS.COURT_FACTIONS;
-  }
-  if (/military[- ]backed|military junta|military regime|armed forces.*rule/.test(joined)) {
-    return GENERATED_REPRESENTATIONS.MILITARY_FACTIONS;
-  }
-  if (/revolutionary/.test(joined)) return GENERATED_REPRESENTATIONS.REVOLUTIONARY_FACTIONS;
-  if (/colonial|colony|protectorate|mandate/.test(joined)) return GENERATED_REPRESENTATIONS.COLONIAL;
-  if (/elite|executive[- ]dominated|authoritarian|clerical|theocrat|oligarch|personalist|state[- ]dominated|loyalist|conglomerate/.test(joined)) {
-    return GENERATED_REPRESENTATIONS.ELITE_FACTIONS;
-  }
-  if (!/non[- ]competitive/.test(joined) && /competitive|multi[- ]party|representative democracy|parliamentary democracy|congressional democracy|electoral democracy|bicameral.*democracy/.test(joined)) {
-    return GENERATED_REPRESENTATIONS.ELECTORAL;
-  }
-  if (Array.isArray(parties) && parties.length && !(Array.isArray(powerBlocs) && powerBlocs.length)) {
-    return GENERATED_REPRESENTATIONS.ELECTORAL;
-  }
-  if (Array.isArray(powerBlocs) && powerBlocs.length) return GENERATED_REPRESENTATIONS.ELITE_FACTIONS;
-  return GENERATED_REPRESENTATIONS.NONE;
+  return representationForSystem({ type: politicalSystemTypeOf(rawType), parties, powerBlocs });
 };
 
 const canonicalizeGeneratedPoliticalSystem = (value, actorPatch) => {
@@ -285,26 +251,23 @@ const canonicalizeGeneratedPoliticalSystem = (value, actorPatch) => {
   const representation = inferGeneratedRepresentation({
     rawRepresentation: source.representation,
     rawType: source.type,
-    governmentForm: actorPatch?.government?.form,
     parties: actorPatch?.parties,
     powerBlocs: actorPatch?.powerBlocs,
   });
-  const rawType = clean(source.type);
-  const rawTypeToken = generatedToken(rawType);
   // Representation enums describe HOW political competition/power is organized,
-  // not WHAT constitutional/regime system the polity has. If a live model puts a
-  // representation enum in politicalSystem.type, derive the system type from the
-  // human-readable government form instead of persisting a second misuse of the
-  // representation vocabulary (for example type=elite_factions).
-  const typeSource = GENERATED_REPRESENTATION_SET.has(rawTypeToken)
-    ? clean(actorPatch?.government?.form)
-    : (rawType || clean(actorPatch?.government?.form));
-  const out = {
+  // not WHAT constitutional/regime system the polity has. A representation value
+  // the model put in politicalSystem.type names no system type: the type is
+  // "other", labelled by the form the model wrote.
+  const rawTypeToken = generatedToken(source.type);
+  const { type, label } = GENERATED_REPRESENTATION_SET.has(rawTypeToken)
+    ? { type: "other", label: clean(actorPatch?.government?.form) }
+    : generatedSystemType(source.type);
+  return {
     ...source,
-    type: generatedSystemTypeSlug(typeSource),
+    type,
     representation,
+    ...(label && !clean(source.label) ? { label } : {}),
   };
-  return out;
 };
 
 const canonicalizeGovernmentAliases = (government, politicalSystem) => {
@@ -346,13 +309,16 @@ const appendUniqueGeneratedEntities = (existing, additions) => {
   return out;
 };
 
+// The entity values a top-level `representation` row may carry in its type or
+// role field to say it is a party: the field's own values (the ones this
+// canonicalizer reads for ruling/coalition below), never a word in its name.
+const PARTY_ENTITY_MARKERS = new Set(["party", "ruling_party", "ruling", "coalition_partner", "coalition"]);
+
 const topLevelRepresentationEntityCollection = (entity, representation) => {
   if (representation === GENERATED_REPRESENTATIONS.ELECTORAL) return "parties";
-  const hint = [entity?.type, entity?.role, entity?.kind, entity?.powerType, entity?.id, entity?.name]
-    .map((value) => clean(value).toLocaleLowerCase())
-    .join(" ");
-  if (representation === GENERATED_REPRESENTATIONS.PARTY_STATE) {
-    if (/party|vanguard|ruling[_ -]?party|communist/.test(hint)) return "parties";
+  if (representation === GENERATED_REPRESENTATIONS.PARTY_STATE
+    && [entity?.type, entity?.role, entity?.powerType].some((value) => PARTY_ENTITY_MARKERS.has(generatedToken(value)))) {
+    return "parties";
   }
   return "powerBlocs";
 };
@@ -363,7 +329,6 @@ const canonicalizeTopLevelRepresentationEntities = (actorPatch) => {
   const representation = inferGeneratedRepresentation({
     rawRepresentation: actorPatch?.politicalSystem?.representation,
     rawType: actorPatch?.politicalSystem?.type,
-    governmentForm: actorPatch?.government?.form,
     parties: actorPatch?.parties,
     powerBlocs: actorPatch?.powerBlocs,
   });
@@ -988,7 +953,7 @@ const politicalSystemRetryInstruction = (item, politicalSystemLocks) => {
     ? ` Only ${locked.join(" and ")} passed field-level validation and ${locked.length === 1 ? "is" : "are"} locked. ${unlocked.join(" and ")} ${unlocked.length === 1 ? "is" : "are"} NOT locked and must be corrected when named by the validation errors.`
     : ` These values already passed native political-system validation and MUST NOT change on this retry.`;
   const representationRepair = !GENERATED_REPRESENTATION_SET.has(clean(lock.representation).toLocaleLowerCase())
-    ? ` If party_state semantic validation failed, do NOT rewrite a valid dominant-party regime into one_party_state; keep the locked type and choose the accurate representation (usually electoral or an appropriate factional representation). REPRESENTATION REPAIR IS ATOMIC: in the same retry, reshape the representation roster to match the newly chosen representation exactly: electoral -> parties; party_state -> parties and/or powerBlocs; court_factions/elite_factions/military_factions/revolutionary_factions/colonial -> powerBlocs; none -> no roster required. Do not keep entities in the previous or wrong collection.`
+    ? ` Keep the locked type and choose the accurate representation. REPRESENTATION REPAIR IS ATOMIC: in the same retry, reshape the representation roster to match the newly chosen representation exactly: electoral -> parties; party_state -> parties and/or powerBlocs; court_factions/elite_factions/military_factions/revolutionary_factions/colonial -> powerBlocs; none -> no roster required. Do not keep entities in the previous or wrong collection.`
     : ` If representation_entities failed, keep the locked representation and repair the representation entity collection/shape: electoral -> parties; party_state -> parties and/or powerBlocs; court_factions/elite_factions/military_factions/revolutionary_factions/colonial -> powerBlocs; none -> no roster required.`;
   return `CORRECTIVE RETRY POLITICAL SYSTEM LOCK (FIELD LEVEL): ${locked.join("; ")}.${fieldRule}${representationRepair}`;
 };
@@ -1576,6 +1541,7 @@ export const buildPoliticalWorldGenerationPrompt = ({
     + `- Existing canonical political state is stronger authority than you. Fill gaps only.\n`
     + `- Return only requested missing needs. actorPatch MUST contain concrete canonical fields that satisfy every listed need; never return actorPatch={} while needs are listed. Native code discards harmless unrequested extras before validation, but those extras never become canon.\n`
     + `- politicalSystem should be an object with type and representation when known; government should use canonical form/headOfState/headOfGovernment/ideology fields rather than inventing alternate schema keys.\n`
+    + `- politicalSystem.type is exactly one of: ${POLITICAL_SYSTEM_TYPES.join(", ")}. Use other when none fits, and put the system's own name in politicalSystem.label.\n`
     + `- government.headOfState and government.headOfGovernment MUST name the FORMAL current officeholders on ${scenarioDate}, not merely the supreme leader, paramount party leader, de facto strongman, military patron, or other politically dominant figure. If a different person is the supreme/de facto political leader, put that person in top-level leader when relevant while keeping the formal officeholders correct.\n`
     + `- DECISION AUTHORITY: top-level leader and top-level traits describe the operative primary political decision-maker, not automatically the ceremonial head of state. In parliamentary republics and constitutional monarchies this is normally the head of government; in presidential systems it is normally the president; in semi-presidential systems identify the actually dominant/shared executive; in party-states, juntas, absolute monarchies and personalist systems use the supreme operative leader. Apply this structural rule even when enriching a legacy actor whose leader field merely duplicates a ceremonial head of state. Never use country-name hardcodes.\n`
     + `- QUANTITATIVE ROUND-ZERO LANDSCAPE: when quantitative_landscape is requested, provide approximate integer starting percentages so the campaign has a numeric political baseline. These are estimates, NOT claimed polling measurements. Native code marks them generated-estimate and repairs bad totals/missing values without retrying.\n`
@@ -1590,7 +1556,7 @@ export const buildPoliticalWorldGenerationPrompt = ({
     + `- politicalResponse.issues may be either a canonical issue-key map or an array of {issue, position, sensitivity, strainResponse}. EVERY issue profile must contain all three numeric metrics position, sensitivity, and strainResponse; never use numeric shorthand such as {security: 90}. Perceptions may be either a canonical target-key map or {entries:[{target, threat, opportunity, weakness, cohesionEstimate}]}. Native code canonicalizes the array forms before validation.\n`
     + `- Determine the political system before choosing its representation. Competitive elections are NOT the default. Use canonical representation values only: electoral, court_factions, party_state, elite_factions, military_factions, revolutionary_factions, colonial, or none. Native code normalizes common provider synonyms, but canonical values are preferred.\n`
     + `- politicalSystem.regimeCharacter is required whenever political_system is generated: democratic, hybrid, authoritarian, totalitarian, theocratic, military, colonial, or other. Classify actual political contestation and authority on the scenario date, not just constitutional wording. A presidential/parliamentary republic or electoral representation can still be authoritarian or hybrid.\n`
-    + `- party_state is reserved for genuine one-party/vanguard-party state structures. Do NOT use party_state merely as shorthand for an authoritarian or dominant-party republic that still has meaningful opposition parties; use electoral or the appropriate factional representation based on how power actually works. If you choose party_state, politicalSystem.type or government.form must explicitly describe a one-party, single-party, vanguard-party, party-led, or party-state structure; generic/dominant-party republic wording will be rejected. Wording such as dominant-party state, dominant party, or one-party dominant is NOT party-state evidence.\n`
+    + `- party_state is reserved for genuine one-party/vanguard-party state structures. Do NOT use party_state merely as shorthand for an authoritarian or dominant-party republic that still has meaningful opposition parties; use electoral or the appropriate factional representation based on how power actually works. A one-party state is politicalSystem.type=one_party_state; a dominant-party state with meaningful opposition is dominant_party_state with electoral or factional representation.\n`
     + `- On a corrective retry, if a POLITICAL SYSTEM LOCK is supplied for a polity, do not change the field(s) explicitly listed as locked. A field omitted from the lock is intentionally repairable and should be corrected when validation names it. A representation_entities failure with representation locked means repair parties/powerBlocs to match that representation; a party_state semantic failure with only type locked means change representation rather than rewriting the regime type. When representation is changed, the representation roster MUST be reshaped in the same response to the canonical collection for the new representation; representation and roster shape are one atomic repair.\n`
     + `- Non-electoral systems use power blocs/court/elite/military/revolutionary/colonial structures as appropriate. Their quantitative_landscape percentages mean estimated political influence/control, never electoral polling.\n`
     + `- COLLECTION SHAPE IS STRICT: actorPatch.parties and actorPatch.powerBlocs MUST ALWAYS be JSON arrays of entity objects, including on corrective retries. NEVER return a keyed object/map/dictionary such as {"democratic-party": {...}}. Every entity object carries its own stable id field.\n`
@@ -1598,7 +1564,7 @@ export const buildPoliticalWorldGenerationPrompt = ({
     + `- PARTY DETAIL: each party carries nameNative and shortNameNative (written as native speakers use them), ideology (a concise freeform description of its actual political beliefs), politicalPosition (a freely worded political-spectrum position such as centre-left, right-wing, non-aligned or an era/scenario-appropriate alternative), seats (where supported), founded and role. Do not force parties into a Kaiserreich ideology taxonomy or invent a spectrum position when the scenario lacks one. Legacy ideologyFamily/subideology values in existing records remain valid and must not be erased. Government retains legislature, legislatureSeats and nextElection as optional scenario-supported facts.\n`
     + `- For competitive electoral systems, political significance—not a fixed party count—controls roster breadth. ALWAYS materialize every ruling/governing/formal coalition or confidence-support force needed to explain the current government, even when small. Then include individually significant opposition forces and continue until the named modeled parties explain at least ${POLITICAL_GENERATED_ELECTORAL_NAMED_COVERAGE_MIN}% of estimated support. Only the genuinely diffuse remainder belongs in Other. Set government.rulingPartyIds/coalitionPartyIds to the stable ids you generated when those roles are known. When quantitative_landscape is requested, provide supportEstimate for EVERY represented party. When representation_entities is requested for an electoral roster, supportEstimate is also allowed and should accompany every returned/new party so native named-coverage validation can prove the repaired roster is broad enough instead of relying on fallback arithmetic.\n`
     + `- behavioralDisposition and politicalPressures are native runtime-derived state and MUST NEVER appear in actorPatch.\n`
-    + `- Structured leader traits belong in top-level actorPatch.traits, not nested under leader, and describe the operative primary political decision-maker defined above. If leader is an object, keep it to officeholder identity fields such as id/name/title. Traits use bounded 0-100 values and MUST use only the canonical registered keys: ${POLITICAL_TRAIT_KEYS.join(", ")}. Do not force every key; omit dimensions the evidence does not establish.\n`
+    + `- Structured leader traits belong in top-level actorPatch.traits, not nested under leader, and describe the operative primary political decision-maker defined above. If leader is an object, keep it to officeholder identity fields: name, title and office (headOfState or headOfGovernment when the leader holds that formal office, other when they hold an office of their own, such as a supreme leader or a party's general secretary). Traits use bounded 0-100 values and MUST use only the canonical registered keys: ${POLITICAL_TRAIT_KEYS.join(", ")}. Do not force every key; omit dimensions the evidence does not establish.\n`
     + `- Hidden politicalResponse profiles may use organization/credibility/inertia/resilience 0-100 and sparse issues. Issue position/strainResponse are -100..100; sensitivity is 0-100. Only encode issues that materially distinguish the entity.\n`
     + `- Structured perceptions should describe beliefs, not truth. Useful bounded keys include threat, opportunity, weakness, cohesionEstimate.\n`
     + `- Never create extra polities. Never generate events. Never simulate future campaign outcomes.\n\n`

@@ -98,15 +98,23 @@ test("the three largest parties always get a slice, however small", () => {
   assert.deepEqual(sliceNames(landscape), ["A", "B", "C", "Other"]);
 });
 
-test("an explicit Others party merges into the one Other slice", () => {
-  const landscape = buildPoliticalPartyLandscape({
-    parties: [party("A", 50), party("Others", 10), party("B", 30)],
-  });
-  assert.deepEqual(sliceNames(landscape), ["A", "B", "Other"]);
-  const other = landscape.slices.find((slice) => slice.isOther);
-  assert.equal(other.support, 20);
-  assert.equal(other.unlistedSupport, 10);
-  assert.deepEqual(other.members.map((member) => member.name), ["Others"]);
+// The roster's catch-all row was found by its English name ("Others",
+// "Independents"), so "Autres" or "Прочие" was charted as a party of its own.
+// It is the row marked residual, in every language alike.
+test("the roster's residual row merges into the one Other slice, whatever it is called", () => {
+  for (const name of ["Others", "Autres", "Прочие"]) {
+    const landscape = buildPoliticalPartyLandscape({
+      parties: [party("A", 50), party(name, 10, { residual: true }), party("B", 30)],
+    });
+    assert.deepEqual(sliceNames(landscape), ["A", "B", "Other"], name);
+    const other = landscape.slices.find((slice) => slice.isOther);
+    assert.equal(other.support, 20);
+    assert.equal(other.unlistedSupport, 10);
+    assert.deepEqual(other.members.map((member) => member.name), [name]);
+  }
+  // A party merely named "Others" is a party like any other.
+  const named = buildPoliticalPartyLandscape({ parties: [party("A", 50), party("Others", 10), party("B", 30)] });
+  assert.ok(sliceNames(named).includes("Others"));
 });
 
 test("support that adds up past 100 keeps its labels but draws as one whole pie", () => {
@@ -297,10 +305,10 @@ test("all named tiny opposition parties remain inspectable outside the compact c
   assert.equal(view.entries.find((p) => p.id === "tiny").support, 0);
   assert.equal(view.entries.at(-1).support, 5);
 });
-test("authored Others party remains inspectable separately from genuinely unlisted support", () => {
+test("authored residual party remains inspectable separately from genuinely unlisted support", () => {
   const view = buildPoliticalLandscapeViews({ parties: [
     party("Large", 75, { id: "large" }),
-    party("Others", 20, { id: "other-authored", publicDescription: "Recorded independents" }),
+    party("Others", 20, { id: "other-authored", publicDescription: "Recorded independents", residual: true }),
   ] }).parties;
   assert.deepEqual(view.entries.map((p) => p.name), ["Large", "Others", "Other political support"]);
   assert.equal(view.entries[1].publicDescription, "Recorded independents");

@@ -37,30 +37,29 @@
 //
 // Pure, and loads in plain Node.
 
-import { normalizePoliticalActorRecord, normalizePoliticalActors } from "./politicalActors.js";
+import { leaderAfterOfficeChange, normalizePoliticalActorRecord, normalizePoliticalActors, politicalSystemTypeOf } from "./politicalActors.js";
 import { normalizePoliticalLandscape, normalizePolitics } from "./politics.js";
+import { nameKey, sameName } from "../../server/nameKey.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
-const fold = (value) => clean(value).toLowerCase();
+// Names are compared by the game's one name fold (server/nameKey.js): case,
+// accents and spacing, in every script.
+const fold = nameKey;
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const officeName = (value) => (isRecord(value) ? clean(value.name) : clean(value));
 
-// A head as the tab wrote one, title and all: "Prime Minister Alistair Thorne"
-// or "Alistair Thorne, Prime Minister" is { name: "Alistair Thorne", title:
-// "Prime Minister" }, as the Political World keeps an officeholder.
-const LEADING_TITLE = /^(prime minister|president|premier|chancellor|first minister|chief minister|king|queen|emperor|empress|sultan|emir|shah|tsar|czar|kaiser|grand duke|grand duchess|crown prince|prince|princess|supreme leader|general secretary|chairman)\s+(?!of\b)(.+)$/i;
+// A head as the reading gives one: { name, title } (the tab's schema asks for
+// them apart, as the Political World keeps an officeholder), or the one text an
+// older reading wrote, kept whole. A title is never cut out of a text by its
+// words: "Premier ministre Jean Dupont" became the name "ministre Jean Dupont".
 const officeholderOf = (value) => {
-  const text = clean(value);
-  const after = /^([^,]+),\s*(.+)$/.exec(text);
-  if (after) return { name: after[1].trim(), title: after[2].trim() };
-  const before = LEADING_TITLE.exec(text);
-  return before ? { name: before[2].trim(), title: before[1] } : text;
+  if (!isRecord(value)) return clean(value);
+  const name = clean(value.name);
+  const title = clean(value.title);
+  return name && title ? { name, title } : name;
 };
-// Who an officeholder is, whatever title is written with the name.
-const personOf = (value) => {
-  const holder = officeholderOf(isRecord(value) ? value.name : value);
-  return fold(isRecord(holder) ? holder.name : holder).normalize("NFKD").replace(/[̀-ͯ]/g, "");
-};
+// Who an officeholder is: the name, folded.
+const personOf = (value) => fold(officeName(value));
 
 // Every name a Political World party goes by, folded.
 const namesOf = (party) => [party?.name, party?.shortName, party?.abbreviation, party?.nameNative, party?.shortNameNative, ...(Array.isArray(party?.aliases) ? party.aliases : [])]
@@ -120,13 +119,24 @@ export const foldLandscapeIntoActor = (actor, landscape, { polityKey = "", newer
     }
   }
 
-  const government = { ...(isRecord(base.government) ? base.government : {}) };
+  const before = isRecord(base.government) ? base.government : {};
+  const government = { ...before };
   if (read.government && (newer || !clean(government.form))) government.form = read.government;
   for (const office of ["headOfState", "headOfGovernment"]) {
     const holder = officeholderOf(read[office]);
     if (!officeName(holder)) continue;
     if (!officeName(government[office]) || (newer && personOf(government[office]) !== personOf(holder))) government[office] = holder;
   }
+  // The record's leader goes with an office the reading gives to someone else,
+  // as it does when a turn's op does (politicalActorOps.js).
+  const leader = base.leader ? leaderAfterOfficeChange(base.leader, before, government) : base.leader;
+  // The kind of system, where the reading names one (an enum, never read from
+  // the words of the form): the record's own stands unless this reading is the
+  // newer one.
+  const systemType = politicalSystemTypeOf(read.systemType);
+  const politicalSystem = systemType && (newer || !politicalSystemTypeOf(base.politicalSystem))
+    ? { ...(isRecord(base.politicalSystem) ? base.politicalSystem : {}), type: systemType }
+    : base.politicalSystem;
   if (read.legislature) government.legislature = read.legislature;
   if (read.legislatureSeats) government.legislatureSeats = read.legislatureSeats;
   if (read.nextElection) government.nextElection = read.nextElection;
@@ -138,7 +148,14 @@ export const foldLandscapeIntoActor = (actor, landscape, { polityKey = "", newer
     delete government.coalitionPartyIds;
     delete government.rulingParty;
   }
-  return { ...base, polityKey: clean(base.polityKey) || clean(polityKey), parties, government };
+  return {
+    ...base,
+    polityKey: clean(base.polityKey) || clean(polityKey),
+    parties,
+    government,
+    ...(leader ? { leader } : {}),
+    ...(politicalSystem ? { politicalSystem } : {}),
+  };
 };
 
 // A world's Political World with what an old save kept in world.politics folded
@@ -148,7 +165,7 @@ export const foldPoliticsIntoActors = (politicalActors, politics) => {
   const actors = normalizePoliticalActors(politicalActors);
   const byPolity = { ...actors.byPolity };
   for (const [polity, landscape] of Object.entries(normalizePolitics(politics))) {
-    const key = Object.keys(byPolity).find((entry) => fold(entry) === fold(polity)) ?? clean(polity);
+    const key = Object.keys(byPolity).find((entry) => sameName(entry, polity)) ?? clean(polity);
     const folded = normalizePoliticalActorRecord(foldLandscapeIntoActor(byPolity[key] ?? null, landscape, { polityKey: key, newer: true }), key);
     if (folded) byPolity[key] = folded;
   }

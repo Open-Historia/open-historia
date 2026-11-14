@@ -140,6 +140,8 @@ const publicParty = (party) => {
     ...(Number.isFinite(Number(party.seats)) && party.seats !== null && party.seats !== "" ? { seats: Math.max(0, Math.round(Number(party.seats))) } : {}),
     ...(party.ruling === true ? { ruling: true } : {}),
     ...(party.coalition === true ? { coalition: true } : {}),
+    // The roster's catch-all row (minor parties and independents together).
+    ...(party.residual === true ? { residual: true } : {}),
   };
 };
 

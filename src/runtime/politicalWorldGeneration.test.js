@@ -370,56 +370,19 @@ test("existing roster enrichment may identify an entity by stable id without rep
 });
 
 
-test("party_state representation requires explicit party-state structural evidence", () => {
-  const invalid = validatePoliticalGenerationProposal({
-    schemaVersion: 1,
-    polityKey: "Republic X",
-    scenarioDate: "2014-03-22",
-    depth: "standard",
-    provenance: { source: "generated", confidence: "high" },
-    actorPatch: {
-      politicalSystem: { type: "presidential_republic", representation: "party_state" },
-      government: { form: "Dominant-party presidential republic", headOfState: "Leader X", headOfGovernment: "Leader X" },
-      parties: [{ id: "ruling-party", name: "Ruling Party" }],
-    },
-  }, {
-    polityKey: "Republic X",
-    scenarioDate: "2014-03-22",
-    depth: "standard",
-  });
-  assert.equal(invalid.ok, false);
-  assert.ok(invalid.errors.some((error) => error.includes("representation=party_state requires explicit one-party/vanguard-party")));
-
-  for (const governmentForm of [
-    "Presidential republic (dominant-party state)",
-    "One-party dominant vanguard state led by the ruling coalition",
+// party_state was refused unless politicalSystem.type or government.form said
+// "one-party" in English: "Parti unique" failed, "dominant-party" failed, and
+// each refusal bought a retry. A representation is the model's structured
+// answer and is taken as written, whatever the form's words, in any language.
+test("a party_state representation is taken as written, whatever its form's words, in any language", () => {
+  for (const [polityKey, type, governmentForm] of [
+    ["Republic X", "presidential_republic", "Dominant-party presidential republic"],
+    ["Dominant Party X", "dominant_party_state", "Presidential republic (dominant-party state)"],
+    ["Party State X", "one_party_state", "One-party socialist republic"],
+    ["République X", "one_party_state", "République socialiste à parti unique"],
+    ["Республика X", "one_party_state", "Социалистическая республика с однопартийной системой"],
   ]) {
-    const dominantPartyEvasion = validatePoliticalGenerationProposal({
-      schemaVersion: 1,
-      polityKey: "Dominant Party X",
-      scenarioDate: "2014-03-22",
-      depth: "standard",
-      provenance: { source: "generated", confidence: "high" },
-      actorPatch: {
-        politicalSystem: { type: "dominant_party_republic", representation: "party_state" },
-        government: { form: governmentForm, headOfState: "Leader X", headOfGovernment: "Leader X" },
-        parties: [{ id: "ruling-party", name: "Ruling Party" }],
-      },
-    }, {
-      polityKey: "Dominant Party X",
-      scenarioDate: "2014-03-22",
-      depth: "standard",
-    });
-    assert.equal(dominantPartyEvasion.ok, false, governmentForm);
-    assert.ok(dominantPartyEvasion.errors.some((error) => error.includes("representation=party_state requires explicit one-party/vanguard-party")));
-  }
-
-  for (const [polityKey, governmentForm, type] of [
-    ["Republic of Cuba", "Single-party communist state", "communist_state"],
-    ["State of Eritrea", "One-party presidential republic", "presidential_republic"],
-    ["Sahrawi Arab Democratic Republic", "One-party semi-presidential republic", "semi_presidential_republic"],
-  ]) {
-    const explicitOneParty = validatePoliticalGenerationProposal({
+    const result = validatePoliticalGenerationProposal({
       schemaVersion: 1,
       polityKey,
       scenarioDate: "2014-03-22",
@@ -435,26 +398,9 @@ test("party_state representation requires explicit party-state structural eviden
       scenarioDate: "2014-03-22",
       depth: "standard",
     });
-    assert.equal(explicitOneParty.ok, true, `${polityKey}: ${explicitOneParty.errors?.join("\n")}`);
+    assert.equal(result.ok, true, `${polityKey}: ${result.errors?.join("\n")}`);
+    assert.equal(result.actor.politicalSystem.representation, "party_state", polityKey);
   }
-
-  const valid = validatePoliticalGenerationProposal({
-    schemaVersion: 1,
-    polityKey: "Party State X",
-    scenarioDate: "2014-03-22",
-    depth: "standard",
-    provenance: { source: "generated", confidence: "high" },
-    actorPatch: {
-      politicalSystem: { type: "one_party_state", representation: "party_state" },
-      government: { form: "One-party socialist republic", headOfState: "Leader X", headOfGovernment: "Premier X" },
-      parties: [{ id: "vanguard-party", name: "Vanguard Party" }],
-    },
-  }, {
-    polityKey: "Party State X",
-    scenarioDate: "2014-03-22",
-    depth: "standard",
-  });
-  assert.equal(valid.ok, true, valid.errors?.join("\n"));
 });
 
 test("Political Actor stable ids are unique across parties and powerBlocs", () => {

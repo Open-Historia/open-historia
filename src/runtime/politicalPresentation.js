@@ -62,6 +62,7 @@ const publicPartyRow = (party, index) => {
     leader: officeholderName(party.leader),
     ruling: party.ruling === true,
     coalition: party.coalition === true,
+    residual: party.residual === true,
     color: clean(party.color),
     // What the Politics tab kept apart, the Political World's now (politicalActors.js).
     nameNative: clean(party.nameNative),
@@ -166,7 +167,9 @@ export const buildPoliticalPartyLandscape = (
   const supported = rows.filter((party) => Number.isFinite(party.support) && party.support > 0);
   if (!supported.length) return { parties: rows, listEntries: rows, slices: [], totalKnownSupport: 0, isApproximate: false };
 
-  const explicitOther = supported.find((party) => /^(other|others|other parties|independent|independents)$/i.test(party.name));
+  // The roster's own catch-all row joins the residual slice: the one it marks
+  // residual, never one found by an English name ("Other", "Independents").
+  const explicitOther = supported.find((party) => party.residual === true);
   const namedCandidates = supported.filter((party) => party !== explicitOther);
   const keep = [];
   const grouped = [];

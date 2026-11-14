@@ -16,6 +16,7 @@ import { AIR_ROLES, OPERATION_APPROACHES, WAR_ROOM_ORDERS, WAR_ROOM_STANCES } fr
 import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
 import { PARTY_ROLES } from "../../runtime/politics.js";
+import { POLITICAL_SYSTEM_TYPES } from "../../runtime/politicalActors.js";
 import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
 import { OCCUPATION_SETTLEMENTS_FIELD, occupationOutcomesFor } from "../../runtime/occupationSettlements.js";
 import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
@@ -3596,6 +3597,19 @@ const INTELLIGENCE_ASSESSMENT_SCHEMA = {
   additionalProperties: false,
 };
 
+// An officeholder as the Political World keeps one: the person's name and the
+// title of their office, apart (runtime/politicalLandscapeFold.js).
+const officeholderSchema = (description, { named = false } = {}) => ({
+  type: "object",
+  description,
+  properties: {
+    name: (named ? nonEmptyTextSchema : textSchema)("The person's name alone, without the title."),
+    title: textSchema("The title of the office, as the answer's language writes it."),
+  },
+  required: ["name", "title"],
+  additionalProperties: false,
+});
+
 // A polity's government and its parties (or factions) for the Stats pane's
 // Politics tab; normalized and stored by runtime/politics.js.
 const POLITICAL_LANDSCAPE_SCHEMA = {
@@ -3603,8 +3617,11 @@ const POLITICAL_LANDSCAPE_SCHEMA = {
   description: "The government of one polity and its main political parties, or its factions where it has no parties, as they stand on the current date.",
   properties: {
     government: nonEmptyTextSchema("Form of government, e.g. Constitutional monarchy, One-party state, Military junta."),
-    headOfState: nonEmptyTextSchema("Head of state's name and title."),
-    headOfGovernment: textSchema("Head of government's name and title, blank where the head of state also governs."),
+    // An officeholder's name and title apart, as the Political World keeps
+    // them: read out of one text, "Premier ministre Jean Dupont" was the
+    // name "ministre Jean Dupont".
+    headOfState: officeholderSchema("The head of state.", { named: true }),
+    headOfGovernment: officeholderSchema("The head of government; a blank name where the head of state also governs."),
     legislature: textSchema("The legislature's name, blank where there is none."),
     legislatureSeats: { type: "integer", minimum: 0, description: "Total seats in the (lower) house; 0 where there is no legislature." },
     nextElection: textSchema("Date or year of the next national election, or why there is none (\"Suspended\", \"No elections\")."),
@@ -3635,6 +3652,10 @@ const POLITICAL_LANDSCAPE_SCHEMA = {
         additionalProperties: false,
       },
     },
+    // Optional, after the load-bearing fields: the kind of system, an enum the
+    // Political World reads (runtime/politicalActors.js), never the words of
+    // `government`, which are written in the player's language.
+    systemType: { type: "string", enum: POLITICAL_SYSTEM_TYPES, description: "The kind of system; other where none fits." },
   },
   required: ["government", "headOfState", "kind", "parties"],
   additionalProperties: false,

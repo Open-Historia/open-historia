@@ -172,24 +172,39 @@ test("government ideology, national strategy, leadership traits, and perceptions
   assert.equal("ideology" in actor, false);
 });
 
-test("absolute monarchies infer a court-faction representation without inventing fake parties", () => {
-  const actor = normalizePoliticalActors({
-    byPolity: {
-      Kingdom: {
-        government: { form: "Absolute monarchy", headOfState: "King A" },
-        powerBlocs: [
-          { id: "court", name: "Royal Court", influence: { label: "Dominant" } },
-          { id: "army", name: "Military establishment", influence: { percent: 28 } },
-        ],
+// The representation follows the system's type, an enum, and never the words
+// of government.form: "Absolute monarchy" was read as court factions and
+// "Monarchie absolue" as nothing at all.
+test("an absolute monarchy is represented by its court factions because its type says so, in every language", () => {
+  const blocs = () => [
+    { id: "court", name: "Royal Court", influence: { label: "Dominant" } },
+    { id: "army", name: "Military establishment", influence: { percent: 28 } },
+  ];
+  for (const form of ["Absolute monarchy", "Monarchie absolue", "Абсолютная монархия"]) {
+    const actor = normalizePoliticalActors({
+      byPolity: {
+        Kingdom: {
+          politicalSystem: { type: "absolute_monarchy" },
+          government: { form, headOfState: "King A" },
+          powerBlocs: blocs(),
+        },
       },
-    },
-  }).byPolity.Kingdom;
+    }).byPolity.Kingdom;
 
-  assert.equal(actor.politicalSystem.type, "absolute_monarchy");
-  assert.equal(actor.politicalSystem.representation, "court_factions");
-  assert.deepEqual(actor.parties, []);
-  assert.equal(actor.powerBlocs[0].influence.label, "Dominant");
-  assert.equal(actor.powerBlocs[1].influence.percent, 28);
+    assert.equal(actor.politicalSystem.type, "absolute_monarchy", form);
+    assert.equal(actor.politicalSystem.representation, "court_factions", form);
+    assert.deepEqual(actor.parties, []);
+    assert.equal(actor.powerBlocs[0].influence.label, "Dominant");
+    assert.equal(actor.powerBlocs[1].influence.percent, 28);
+  }
+
+  // The form's words alone name no system, in English as in any language: the
+  // roster says how power is represented.
+  for (const form of ["Absolute monarchy", "Monarchie absolue"]) {
+    const unnamed = normalizePoliticalActors({ byPolity: { Kingdom: { government: { form, headOfState: "King A" }, powerBlocs: blocs() } } }).byPolity.Kingdom;
+    assert.equal(unnamed.politicalSystem.type, "unspecified", form);
+    assert.equal(unnamed.politicalSystem.representation, "elite_factions", form);
+  }
 });
 
 test("power-bloc identity resolves stable ids, names, short names, and aliases without becoming party identity", () => {
