@@ -543,13 +543,10 @@ const agreementStatusTone = (status) => {
 
 const warStatusTone = (status) => (lowerText(status) === "active" ? "#f87171" : "#fbbf24");
 
-// A war the engine opened from a battle the model narrated records that fact as
-// its cause (nativeWarLedger.js reconcileCombatWarState), which is bookkeeping,
-// not a reason a player can read.
-const warCauseForDisplay = (cause) => {
-    const text = cleanText(cause);
-    return /^native bootstrap\b/i.test(text) ? "" : text;
-};
+// A war's cause as its record keeps it. The engine's own bookkeeping note,
+// which an old save may hold for a war it opened from a battle, is cleared
+// where the record is read (runtime/warRecord.js), so nothing here reads it.
+const warCauseForDisplay = (cause) => cleanText(cause);
 
 const RelationMeter = ({ score, tone }) => {
     const value = Math.max(-100, Math.min(100, Number(score) || 0));

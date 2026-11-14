@@ -931,11 +931,13 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
 };
 
 
+// A line the game itself wrote into an institution's thread, shown as it was
+// written (runtime/institutionalChannels.js writes the opening as "<name>
+// council opened."). Its words are never matched: the opening used to be found
+// by its English wording and reworded here.
 const InstitutionRecord = ({ msg }) => {
-    const raw = String(msg?.text ?? "").trim();
-    if (!raw) return null;
-    const established = /institutional channel established\.?$/i.test(raw);
-    const text = established ? raw.replace(/\s+institutional channel established\.?$/i, " council opened.") : raw;
+    const text = String(msg?.text ?? "").trim();
+    if (!text) return null;
     return (
         <div style={{ display: "flex", justifyContent: "center", padding: ".12rem .75rem" }}>
             <div style={{ maxWidth: "76%", display: "inline-flex", alignItems: "center", gap: ".45rem", border: "1px solid var(--oh-grey-border)", background: "rgba(255,255,255,.035)", borderRadius: 8, padding: ".34rem .58rem", color: "rgba(255,255,255,.58)", fontSize: ".6rem", lineHeight: 1.35 }}>

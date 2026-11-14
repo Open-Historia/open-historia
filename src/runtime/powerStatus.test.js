@@ -234,8 +234,11 @@ test("null/blank power scores never become zero-valued baseline evidence", () =>
   assert.equal(blankSeed.powerStatus, undefined);
 });
 
-test("pre-fix poisoned campaign fallback scores are migrated back to unresolved evidence", () => {
-  const world = {
+// Whether a score rested on a tier alone is the record's own flag
+// (baselineOnly), never a phrase among its reasons: the same record with its
+// reasons in another language, or none, is migrated exactly alike.
+test("campaign scores that rested on a tier alone are migrated back to unresolved evidence, by their flag", () => {
+  const worldWith = (reasons, flag = true) => ({
     polityOverrides: { Alpha: { status: "active" } },
     politicalActors: { byPolity: {} },
     countryStats: {},
@@ -252,17 +255,41 @@ test("pre-fix poisoned campaign fallback scores are migrated back to unresolved 
           score: 36.5,
           baselineScore: null,
           basis: "campaign-derived",
-          reasons: ["minor-power scenario/campaign baseline; insufficient relative material data"],
+          ...(flag ? { baselineOnly: true } : {}),
+          reasons,
         },
       },
     },
-  };
+  });
 
+  for (const reasons of [["minor-power scenario/campaign baseline; insufficient relative material data"], ["puissance mineure : données matérielles insuffisantes"], []]) {
+    const refreshed = refreshPowerStatus(worldWith(reasons), { date: "2014-03-22", round: 1, immediate: true });
+    const alpha = refreshed.powerStatus.byPolity.Alpha;
+    assert.equal(alpha.tier, "minor-power", JSON.stringify(reasons));
+    assert.equal(alpha.score, null);
+    assert.equal(alpha.baselineScore, null);
+    assert.equal(alpha.basis, "native-fallback");
+    assert.equal("baselineOnly" in alpha, false, "the migrated record no longer claims a score");
+  }
+  // Without the flag, an English phrase among the reasons decides nothing.
+  const unflagged = refreshPowerStatus(worldWith(["minor-power scenario/campaign baseline; insufficient relative material data"], false), { date: "2014-03-22", round: 1, immediate: true });
+  assert.equal(unflagged.powerStatus.byPolity.Alpha.score, 36.5);
+});
+
+test("a campaign score that rests on a tier alone carries the flag that says so", () => {
+  const world = {
+    polityOverrides: { Alpha: { status: "active" } },
+    politicalActors: { byPolity: {} },
+    countryStats: {},
+    countryTags: {},
+    institutions: { schemaVersion: 1, byId: {} },
+    agreements: [],
+    wars: [],
+    powerStatus: { schemaVersion: 1, byPolity: { Alpha: { polityKey: "Alpha", tier: "regional-power", basis: "authored", score: null } } },
+  };
   const refreshed = refreshPowerStatus(world, { date: "2014-03-22", round: 1, immediate: true });
-  assert.equal(refreshed.powerStatus.byPolity.Alpha.tier, "minor-power");
-  assert.equal(refreshed.powerStatus.byPolity.Alpha.score, null);
-  assert.equal(refreshed.powerStatus.byPolity.Alpha.baselineScore, null);
-  assert.equal(refreshed.powerStatus.byPolity.Alpha.basis, "native-fallback");
+  assert.equal(refreshed.powerStatus.byPolity.Alpha.baselineOnly, true);
+  assert.equal(normalizePowerStatus(refreshed.powerStatus, refreshed).byPolity.Alpha.baselineOnly, true, "kept across a save");
 });
 
 

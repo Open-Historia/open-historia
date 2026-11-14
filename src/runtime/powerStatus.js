@@ -93,6 +93,8 @@ const normalizePowerRecord = (value, polityKey = "") => {
     lastUpdatedRound: Math.max(0, Math.trunc(Number(source.lastUpdatedRound) || 0)),
     candidateTier: normalizePowerTier(source.candidateTier),
     candidateRounds: Math.max(0, Math.trunc(Number(source.candidateRounds) || 0)),
+    // Only when set, so a record without saves exactly as before.
+    ...(source.baselineOnly === true ? { baselineOnly: true } : {}),
     reasons: array(source.reasons).map(clean).filter(Boolean).slice(0, 12),
   };
 };
@@ -289,6 +291,10 @@ export const estimateNativePowerScore = (world, polityInput, referenceInput = nu
         sovereignCapabilityScore: sovereignScore,
         institutionalLeverageScore: round1(institutions.score),
         strategicActivityScore: round1(strategic.score),
+        // The score rests on the scenario's or the author's tier alone, with no
+        // material evidence: said as a flag, which refreshPowerStatus keeps on
+        // the record (its reason below is words for a person to read).
+        baselineOnly: true,
         reasons: [
           `${legacy} scenario/authored baseline; insufficient relative material data`,
           ...sovereignReasons,
@@ -321,13 +327,16 @@ export const estimateNativePowerScore = (world, polityInput, referenceInput = nu
   };
 };
 
+// A record whose score stood on no evidence of its own: a native fallback, or a
+// campaign score that rested on a tier alone (its `baselineOnly` flag, set by
+// estimateNativePowerScore). Never read from the words of its reasons: they
+// once decided this, by an English phrase the game wrote among them.
 const isUnresolvedFallbackRecord = (record) => {
   if (!record || typeof record !== "object" || Array.isArray(record)) return false;
   if (isFinitePowerScore(record.baselineScore ?? record.startingScore)) return false;
   const basis = lower(record.basis);
   if (basis === "native-fallback") return true;
-  return basis === "campaign-derived"
-    && array(record.reasons).some((reason) => /insufficient relative material data/i.test(clean(reason)));
+  return basis === "campaign-derived" && record.baselineOnly === true;
 };
 
 const tierForScore = (score) => {
@@ -420,14 +429,16 @@ export const refreshPowerStatus = (worldLike, { date = "", round = 0, immediate 
           reasons: native.reasons,
         };
       } else if (isUnresolvedFallbackRecord(prior)) {
-        // Migrate poisoned records created by the pre-fix fallback loop. Those
-        // records had a finite campaign-derived score but no baseline/material
-        // evidence, usually accompanied by "insufficient relative material
-        // data". Keeping that finite score would make old checkpoints continue
-        // to look complete even after the null-score bug was fixed. Preserve
-        // the visible fallback tier but make the missing evidence explicit.
+        // Migrate records whose finite campaign-derived score rested on a tier
+        // alone (baselineOnly). Keeping that finite score would make old
+        // checkpoints continue to look complete even after the null-score bug
+        // was fixed. Preserve the visible fallback tier but make the missing
+        // evidence explicit. (A save from before the flag, whose record says so
+        // only in the English words of its reasons, keeps its score until a
+        // refresh that finds the tier again writes the flag.)
+        const { baselineOnly: _scoreRestedOnTier, ...kept } = prior;
         powerStatus.byPolity[polity] = {
-          ...prior,
+          ...kept,
           score: null,
           strategicWeight: null,
           sovereignCapabilityScore: null,
@@ -490,6 +501,7 @@ export const refreshPowerStatus = (worldLike, { date = "", round = 0, immediate 
       lastUpdatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
       candidateTier,
       candidateRounds,
+      ...(native.baselineOnly === true ? { baselineOnly: true } : {}),
       reasons: native.reasons,
     };
   }

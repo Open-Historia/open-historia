@@ -157,6 +157,14 @@ export const warSidesOf = (sideA, sideB) => {
   return b.length === 0 && a.length === 2 ? [[a[0]], [a[1]]] : [a, b];
 };
 
+// The note the engine itself wrote as the cause of a war it opened from a
+// battle's report, until 2026-11-13 (nativeWarLedger.js, its combat binder):
+// bookkeeping in the game's own words, never a cause a player can read. A save
+// from before keeps it, and it is cleared here, by the exact text the engine
+// wrote, so no screen and no prompt has to know it. Nothing writes it now.
+// i18n-ignore: the engine's own old bookkeeping, never shown.
+const ENGINE_OPENED_WAR_NOTE = "Native bootstrap from hard-combat event:";
+
 // The canonical war record, or null when what is given cannot be one (no two
 // opposing sides). `fallbackId` is used for a record that carries no id.
 export const normalizeWarRecord = (entry, { fallbackId = "" } = {}) => {
@@ -174,7 +182,8 @@ export const normalizeWarRecord = (entry, { fallbackId = "" } = {}) => {
   // cause where none was kept.
   const [savedTitle, ...runOn] = clean(entry.title).split(/\s*[~|]\s*/);
   const title = savedTitle || `${sideA[0]}–${sideB[0]} War`;
-  const cause = clean(entry.cause) || runOn.join(" ").trim();
+  const savedCause = clean(entry.cause) || runOn.join(" ").trim();
+  const cause = savedCause.startsWith(ENGINE_OPENED_WAR_NOTE) ? "" : savedCause;
 
   const war = {
     id,
