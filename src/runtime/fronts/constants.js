@@ -122,6 +122,10 @@ export const WAR_ROOM_ORDERS = Object.freeze(["advance", "blitz", "spearhead", "
 // Where a general stands in a line he speaks: he takes the order he was just
 // given, he argues against it (and it is then no order yet), or neither.
 export const WAR_ROOM_STANCES = Object.freeze(["accepts", "objects", "speaks"]);
+// How a Board operation's troops attack its place (a project's `approach`,
+// runtime/fronts/plans.js operationsOn): the attacks of FRONT_ORDERS that go at
+// a place. An operation that says none is an advance.
+export const OPERATION_APPROACHES = Object.freeze(["advance", "blitz", "spearhead", "flank", "encircle"]);
 export const FRONT_RESULTS = Object.freeze(["breakthrough", "captured", "repulsed", "stalemate", "collapse", "surrender"]);
 export const FRONT_EFFORTS = Object.freeze(["token", "limited", "major", "total"]);
 export const DEFAULT_EFFORT = "major";

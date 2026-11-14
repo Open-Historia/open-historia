@@ -45,6 +45,7 @@ import {
   MAX_PLANS_PER_SIDE,
   MAX_TROOPS_PER_SIDE,
   MAX_WAY_POINTS,
+  OPERATION_APPROACHES,
   PLAN_PLACE_KM,
   PLAN_REACH_KM,
   PLAN_STANDOFF_KM,
@@ -60,13 +61,12 @@ import { holderAt } from "./record.js";
 
 const clean = (value, most = 200) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, most).trim();
 const fold = (value) => clean(value).toLowerCase();
-// A name as it is looked for in a sentence: small letters, no accents.
-const plain = (value) => clean(value, 4000).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 const isSide = (side) => side === HOLDER_SIDE_A || side === HOLDER_SIDE_B;
 const live = (troop) => troop.strength > 0;
 const carryOf = (record) => (record?.brief && typeof record.brief.carry === "object" && record.brief.carry ? record.brief.carry : {});
 
-export const ATTACK_WORDS = Object.freeze(["advance", "blitz", "spearhead", "flank", "encircle"]);
+// The orders that attack: an operation's approach is one of them (constants.js).
+export const ATTACK_WORDS = OPERATION_APPROACHES;
 const isAttack = (word) => ATTACK_WORDS.includes(word);
 export const PROJECT_MARK = "plan:";
 export const WATCH_MARK = "watch";
@@ -369,80 +369,42 @@ const orderPlans = (record, side, cities, decoded) => {
   return plans;
 };
 
-// What an operation's words say its troops are to do. The Board is written in
-// the language of the game, so a sentence in another language says nothing
-// here and the operation is an advance on its place: which it is.
-const ORDER_HINTS = Object.freeze([
-  ["encircle", /\b(encircl\w*|surround\w*|besieg\w*|envelop\w*|pincer\w*|cut(?:ting)? off)\b/],
-  ["flank", /\b(out)?flank\w*\b/],
-  ["blitz", /\b(blitz\w*|lightning (?:war|attack|offensive|advance))\b/],
-  ["spearhead", /\b(spearhead\w*|break ?through\w*|armou?red thrust|thrust\w*)\b/],
-]);
-const orderHint = (text) => {
-  for (const [word, pattern] of ORDER_HINTS) if (pattern.test(text)) return word;
-  return "advance";
-};
-
-const letter = /\p{L}/u;
-// Whether a name stands in a sentence as a word of its own.
-const namedIn = (text, name) => {
-  if (name.length < 3) return false;
-  let from = 0;
-  for (;;) {
-    const at = text.indexOf(name, from);
-    if (at < 0) return false;
-    const before = at > 0 ? text[at - 1] : " ";
-    const after = at + name.length < text.length ? text[at + name.length] : " ";
-    if (!letter.test(before) && !letter.test(after)) return true;
-    from = at + 1;
-  }
-};
-
 const OPEN_STATUSES = Object.freeze(["proposed", "active", "stalled", "paused"]);
 
 // The Board's operations that send a side's troops at a place on this
 // battlefield, each with the place:
 //   { project, name, by, status, due, order, place: { name, lng, lat }, doubted, secrecy }
 // An operation is one of these when it is open, belongs to a member of the
-// side (an entry with no owner is the player's own), runs no agent, and either
-// gives a point on ground the other side holds here or names a city of this
-// battlefield that the other side holds.
+// side (an entry with no owner is the player's own), runs no agent, and its
+// `focus` (where on the map it happens) is a point on ground the other side
+// holds here: the city of the battlefield nearest it, or the point itself.
+// How its troops attack is its `approach`, one of OPERATION_APPROACHES, and an
+// advance where it gives none.
+// Both are fields of the entry. Its name and summary are never read for a city
+// to attack or a word for how: they are written in the game's language, and
+// the English words and the city names a sentence was scanned for misread
+// "Mobile" and "Reading" and missed "Moscou" (the owner, 2026-11-13: no
+// keywording anywhere). An operation's focus is the place its own event says
+// it happens when its ops give none (AI/boardPassApply.js).
 // `people`: the countries and groups people play, where there is more than
 // the one `player`: an operation of any of them is somebody's own.
 export const operationsOn = ({ record, side, projects, cities, player = "", people = [] } = {}) => {
   if (!record || !isSide(side)) return [];
   const members = (record.sides?.[side] ?? []).map(fold);
   const own = new Set([fold(player), ...(Array.isArray(people) ? people : []).map(fold)].filter(Boolean));
-  const held = [];
-  for (const city of Array.isArray(cities) ? cities : []) {
-    const name = clean(city?.name);
-    if (!name || !pointInFrame(record.frame, Number(city.lng), Number(city.lat))) continue;
-    if (holderAt(record, Number(city.lng), Number(city.lat)) !== 1 - side) continue;
-    held.push({ city, key: plain(name) });
-  }
-  // The longest name first, so that "Nova Kakhovka" is not read as "Kakhovka".
-  held.sort((a, b) => b.key.length - a.key.length || a.key.localeCompare(b.key));
   const found = [];
   for (const entry of Array.isArray(projects) ? projects : []) {
     if (!entry || entry.kind !== "operation" || !OPEN_STATUSES.includes(entry.status)) continue;
     if (Array.isArray(entry.linkedSpyIds) && entry.linkedSpyIds.length > 0) continue;
     const owner = clean(entry.ownerCode) || clean(player);
     if (!owner || !members.includes(fold(owner))) continue;
-    let place = null;
     const lng = Number(entry.focus?.lng);
     const lat = Number(entry.focus?.lat);
-    if (entry.focus && Number.isFinite(lng) && Number.isFinite(lat) && pointInFrame(record.frame, lng, lat) && holderAt(record, lng, lat) === 1 - side) {
-      const near = cityNear(record, cities, lng, lat, PLAN_PLACE_KM);
-      place = near && holderAt(record, Number(near.lng), Number(near.lat)) === 1 - side
-        ? { name: clean(near.name), lng: Number(near.lng), lat: Number(near.lat) }
-        : { name: "", lng, lat };
-    }
-    const text = plain(`${entry.name ?? ""}. ${entry.summary ?? ""}. ${entry.nextMilestone?.title ?? ""}`);
-    if (!place) {
-      const hit = held.find(({ key }) => namedIn(text, key));
-      if (hit) place = { name: clean(hit.city.name), lng: Number(hit.city.lng), lat: Number(hit.city.lat) };
-    }
-    if (!place) continue;
+    if (!entry.focus || !Number.isFinite(lng) || !Number.isFinite(lat) || !pointInFrame(record.frame, lng, lat) || holderAt(record, lng, lat) !== 1 - side) continue;
+    const near = cityNear(record, cities, lng, lat, PLAN_PLACE_KM);
+    const place = near && holderAt(record, Number(near.lng), Number(near.lat)) === 1 - side
+      ? { name: clean(near.name), lng: Number(near.lng), lat: Number(near.lat) }
+      : { name: "", lng, lat };
     found.push({
       project: clean(entry.id, 160),
       name: clean(entry.name, 160),
@@ -450,7 +412,7 @@ export const operationsOn = ({ record, side, projects, cities, player = "", peop
       own: own.has(fold(owner)),
       status: entry.status,
       due: entry.ongoing ? "" : clean(entry.targetDate, 40),
-      order: orderHint(text),
+      order: OPERATION_APPROACHES.includes(entry.approach) ? entry.approach : "advance",
       place,
       doubted: entry.verification === "doubted",
       secrecy: clean(entry.secrecy, 20) || "restricted",

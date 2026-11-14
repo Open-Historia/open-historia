@@ -14,6 +14,7 @@ import { normalizeWarResources } from "./warResources.js";
 import { normalizeAttrition } from "./attrition.js";
 import { eraSettingOf, normalizeWarSettings } from "./warSettings.js";
 import { UNIT_TYPES, findUnitType, mayFieldUnitType, normalizeUnitTypes, unitFigures, unitTypeRef, withUnitTypesApplied } from "./unitTypes.js";
+import { OPERATION_APPROACHES } from "./fronts/constants.js";
 import { normalizeClimateZones, normalizeFortifications, normalizeFreezingRegions, normalizeTerrainAreas, normalizeZoneWeather } from "./warGeography.js";
 import { normalizeMilitaryShift, normalizeMilitaryStats, shiftedMilitary } from "./militaryStats.js";
 import { MAX_GROUPS, applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
@@ -2142,6 +2143,10 @@ export const normalizeProjectEntry = (entry, index = 0) => {
       ? normalizeOptionalString(entry.verification)
       : "",
     focus: normalizeProjectCoords(entry.focus),
+    // kw5-units: how an operation's troops attack its focus (runtime/fronts/plans.js
+    // operationsOn), one of OPERATION_APPROACHES; absent on every other entry, and
+    // an operation that says none is an advance.
+    ...(OPERATION_APPROACHES.includes(normalizeOptionalString(entry.approach).toLowerCase()) ? { approach: normalizeOptionalString(entry.approach).toLowerCase() } : {}),
     note: normalizeTextLike(entry.note),
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
     updatedAt: normalizeOptionalString(entry.updatedAt) || new Date().toISOString(),
@@ -2214,6 +2219,7 @@ const PROJECT_FIELD_ALIASES = {
   linkedSpyIds: ["linkedSpyIds"],
   verification: ["verification"],
   focus: ["focus"],
+  approach: ["approach"],
   note: ["note"],
 };
 
@@ -2347,7 +2353,7 @@ const normalizeProjectOp = (entry) => {
 // rename does.
 const PROJECT_PATCHABLE_FIELDS = [
   "kind", "ownerCode", "summary", "status", "priority", "progress", "secrecy", "ongoing",
-  "startedAt", "targetDate", "lastUpdate", "note", "focus",
+  "startedAt", "targetDate", "lastUpdate", "note", "focus", "approach",
   "linkedUnitIds", "linkedMarkerIds", "onComplete", "verification", "linkedSpyIds",
 ];
 

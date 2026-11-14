@@ -12,7 +12,7 @@ import { INSTITUTION_LIFECYCLE_DECISIONS } from "../../runtime/institutions.js";
 import { INSTITUTION_CHAT_ACTION_KINDS } from "./institutionChatActions.js";
 import { extractJsonArray } from "./jsonSalvage.js";
 import { PLACE_FEED_MAX_TRENDS } from "../../runtime/placeFeed.js";
-import { WAR_ROOM_ORDERS, WAR_ROOM_STANCES } from "../../runtime/fronts/constants.js";
+import { OPERATION_APPROACHES, WAR_ROOM_ORDERS, WAR_ROOM_STANCES } from "../../runtime/fronts/constants.js";
 import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
 import { PARTY_ROLES } from "../../runtime/politics.js";
@@ -746,6 +746,14 @@ const projectSchema = {
       required: ["lng", "lat"],
       additionalProperties: false,
     },
+    // kw5-units: how an operation's troops attack its focus on a battlefield
+    // (runtime/fronts/plans.js operationsOn), where its words were read for it.
+    // Optional; the time skip's board ops do not carry it (FOLDED_PROJECT_OP_OMITS).
+    approach: {
+      type: "string",
+      description: "operation only: how its troops attack the place at its focus.",
+      enum: [...OPERATION_APPROACHES],
+    },
     note: textSchema("Anything else worth keeping: estimated cost, blockers, who is running it."),
     onComplete: {
       type: "object",
@@ -851,6 +859,7 @@ const projectOpSchema = {
     linkedUnitIds: projectSchema.properties.linkedUnitIds,
     linkedMarkerIds: projectSchema.properties.linkedMarkerIds,
     focus: projectSchema.properties.focus,
+    approach: projectSchema.properties.approach,
     note: textSchema("Anything else worth keeping, or — when closing one — a sentence on how it ended."),
     onComplete: projectSchema.properties.onComplete,
     // The nested spelling of a create, kept permissive rather than re-embedding
@@ -1140,7 +1149,10 @@ const jumpImpactsSchema = {
 // the board pass's and the Game Master's to set; offered here they were the
 // same sub-schema twice over on every event, some 400 characters of a contract
 // held under the size Gemini takes (foldedSkipSent.test.js).
-const FOLDED_PROJECT_OP_OMITS = new Set(["priority", "startedAt", "linkedUnitIds", "linkedMarkerIds", "focus", "project", "onComplete"]);
+// (And an operation's `approach`, kw5-units: the skip's function has no room for
+// it, so a skip's operations attack as an advance until a board pass or the Game
+// Master says otherwise. Their place is the place their event happens: AI/boardPassApply.js.)
+const FOLDED_PROJECT_OP_OMITS = new Set(["priority", "startedAt", "linkedUnitIds", "linkedMarkerIds", "focus", "approach", "project", "onComplete"]);
 const FOLDED_MILESTONE_OMITS = new Set(["repeat", "note"]);
 const foldedMilestoneSchema = {
   ...projectMilestoneSchema,

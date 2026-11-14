@@ -112,3 +112,31 @@ test("a timeline event's ops are stamped into the entry's activity", () => {
   });
   assert.equal(pass.world.projects[0].eventIds.includes("event-1"), true);
 });
+
+// An operation's focus is the place its event happens (its places field, as found on the map), where its ops
+// give none: what the war room sends its troops at (runtime/fronts/plans.js operationsOn). Never a city its
+// name or summary mentions, in English or in any other language (the owner, 2026-11-13: no keywording anywhere).
+test("an operation opened with no focus takes the place of the event that opens it; a project does not", () => {
+  const world = normalizeWorldState({ projects: [] });
+  const opened = (event, ops) => applyBoardCarriers({ world, colors: {}, carriers: [{ ...completing(), ops }], visibleEvents: [event], date: "2024-03-01", round: 4 }).world.projects;
+  const op = (extra = {}) => ({ op: "create", name: "Operation Kingfisher", kind: "operation", summary: "Three corps drive east to take Brod.", status: "active", ...extra });
+  const brod = { id: "event-1", date: "2024-03-01", title: "Kingfisher begins", places: [{ kind: "city", name: "Brod", lng: 22.6, lat: 50 }] };
+  const brodFr = { ...brod, title: "Kingfisher commence", places: [{ kind: "region", name: "Lowmark", regionId: "r7" }, { kind: "city", name: "Brod", lng: 22.6, lat: 50 }] };
+  assert.deepEqual(opened(brod, [op()])[0].focus, { lng: 22.6, lat: 50 });
+  assert.deepEqual(opened(brodFr, [op({ summary: "Trois corps foncent vers l'est pour prendre Brod." })])[0].focus, { lng: 22.6, lat: 50 }, "the first of its places that is a point");
+  assert.deepEqual(opened(brod, [op({ focus: { lng: 23.4, lat: 49.4 } })])[0].focus, { lng: 23.4, lat: 49.4 }, "an op's own focus stands");
+  assert.deepEqual(opened(brod, [op({ project: undefined }), { op: "create", project: { name: "Operation Heron", kind: "operation", summary: "s" } }])[1].focus, { lng: 22.6, lat: 50 }, "a nested create too");
+  assert.equal(opened(brod, [op({ kind: "project" })])[0].focus, null, "a project is not sent anywhere");
+  assert.equal(opened({ ...brod, places: undefined, description: "The corps drive on Brod." }, [op()])[0].focus, null, "an event's words are no place");
+});
+
+test("an update gives an operation that has no focus its event's place, and leaves one that has its own", () => {
+  const world = normalizeWorldState({ projects: applyProjectOps([], [{ op: "create", name: "Operation Kingfisher", kind: "operation", summary: "s", status: "active" }, { op: "create", name: "Operation Heron", kind: "operation", summary: "s", status: "active", focus: { lng: 1, lat: 1 } }]) });
+  const event = { id: "event-2", date: "2024-03-05", title: "The operation moves on", places: [{ kind: "city", name: "Brod", lng: 22.6, lat: 50 }] };
+  const moved = applyBoardCarriers({ world, colors: {}, carriers: [{ ...completing(), ops: [{ op: "update", name: "Operation Kingfisher", progress: 20 }, { op: "update", name: "Operation Heron", progress: 20 }] }], visibleEvents: [event], date: "2024-03-05", round: 5 }).world.projects;
+  assert.deepEqual(moved.find((entry) => entry.name === "Operation Kingfisher").focus, { lng: 22.6, lat: 50 });
+  assert.deepEqual(moved.find((entry) => entry.name === "Operation Heron").focus, { lng: 1, lat: 1 });
+  // A fallback rides on an event it did not come from: that event's places are not the operation's.
+  const fallback = applyBoardCarriers({ world, colors: {}, carriers: [{ ...completing(), fallback: true, stampsActivity: false, ops: [{ op: "update", name: "Operation Kingfisher", progress: 20 }] }], visibleEvents: [event], date: "2024-03-05", round: 5 }).world.projects;
+  assert.equal(fallback.find((entry) => entry.name === "Operation Kingfisher").focus, null);
+});
