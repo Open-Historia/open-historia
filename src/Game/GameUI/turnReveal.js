@@ -189,6 +189,12 @@ export const showEventOnTimeline = (eventId) => {
 // What a card is opened by, rather than which card it is. A streamed event's id
 // changes when the turn is written, so a card keyed by id would close at exactly
 // the moment the live panel must not. The headline survives that crossing.
+// Kept on purpose under the rule against text heuristics: a streamed card is
+// the model's raw answer, with no id of the engine's yet (those are given when
+// the turn is written: eventIdentity.js), so its headline is the one thing both
+// sides of the crossing have. It is the whole headline, equal but for case and
+// spacing, in any language, and it decides only which cards stay open and how
+// far the reveal carries, never what is recorded.
 export const eventDisclosureKey = (event) => {
     const title = String(event?.title ?? "").trim().toLowerCase().replace(/\s+/g, " ");
     return title || String(event?.id ?? "");

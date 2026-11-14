@@ -17,6 +17,11 @@ const norm = (value) => String(value ?? "").trim();
 // A stable content key. Only an EXACT restatement (same date AND title AND
 // description) collides, so genuinely distinct events that merely share a date or a
 // title are always kept — this can never drop real history, only literal repeats.
+// Kept on purpose under the rule against text heuristics: a restatement has no
+// id that could know it (the model mints a fresh one, and the round's ids are
+// given after this runs: eventIdentity.js), and the key is whole texts equal
+// but for case and the spaces around them, never a likeness or a word list, so
+// it treats every language alike.
 export const eventContentKey = (event) =>
   `${norm(event?.date)}\u0000${norm(event?.title).toLowerCase()}\u0000${norm(event?.description).toLowerCase()}`;
 
