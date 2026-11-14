@@ -113,37 +113,20 @@ const buildRequestedPolityTransportResolver = (entries = []) => {
   };
 };
 
-// A clear sentinel result is allowed to carry harmless affirmative prose even
-// though the prompt asks for an empty issue. Gemini has repeatedly returned
-// values such as "None" or "All ... are verified and correct". Those are not
-// contradictions and must not manufacture an expensive adjudication. We still
-// fail closed on any non-trivial/ambiguous text so a sentence such as "clear,
-// but NPAD formed four days later" cannot be waved through.
-const benignTemporalClearIssue = (value) => {
-  const text = clean(value);
-  if (!text) return true;
-  const normalized = text
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase()
-    .replace(/[.!]+$/g, "")
-    .trim();
-  if (/^(?:none|n\/?a|not applicable|no issues?|no issue found|no issues found|clear|all clear)$/.test(normalized)) return true;
-
-  // `issue` is commentary for a structured `verdict=clear`; Gemini often fills it
-  // with affirmative prose instead of leaving it blank. Treat that prose as
-  // harmless when it contains no contradiction signal. The structured verdict,
-  // complete FACT attestation, and empty challengedFactIds remain authoritative.
-  // We still fail closed when the prose itself says a supplied identity is wrong
-  // or temporally displaced.
-  if (/\b(?:but|however|except|although|incorrect|wrong|mismatch|contradiction|challenge|challenged|anachron(?:ism|istic)?|future history|not yet|not active|not valid|invalid|did not exist|does not exist|was not|were not)\b/.test(normalized)) return false;
-  if (/\b(?:after|before) the scenario date\b/.test(normalized)) return false;
-  if (/\b(?:founded|formed|created|established|appointed|assumed office|took office|left office|resigned|dissolved|merged|renamed)\b.{0,80}\b(?:after|before)\b/.test(normalized)) return false;
-
-  if (/^(?:all|every)\b/.test(normalized)) return true;
-  if (/\b(?:verified|correct|accurate|accurately reflect|valid|temporally valid|match|matches|reflects?|consistent|incumbent|remains|serving|active on|holds? office|held office)\b/.test(normalized)) return true;
-  if (/\bis (?:currently )?(?:prime minister|president|king|queen|monarch|chancellor|chairman|chairwoman|head of state|head of government)\b/.test(normalized)) return true;
-  return false;
+// What kind of fault a verifier or the sentinel found, as it says itself
+// (`issueKind`, an enum on both tools), never read from the words of its
+// `issue`, which were classified by English terms ("spelling", "took office",
+// "after", a year) and so read nothing in any other language:
+//   temporal  a fact is wrong on the scenario date (not yet or no longer so);
+//   naming    spelling, translation, demonym or label only: nothing is wrong
+//             on the date, and the candidate stands as it is;
+//   other     any other fault the correction fixes.
+// A verdict without one is read as it always was: a correction is applied
+// once its scopes are valid, and a challenge is taken for a temporal fault.
+export const POLITICAL_WORLD_ISSUE_KINDS = Object.freeze(["temporal", "naming", "other"]);
+const issueKindOf = (value) => {
+  const kind = clean(value).toLowerCase();
+  return POLITICAL_WORLD_ISSUE_KINDS.includes(kind) ? kind : "";
 };
 
 
@@ -1206,6 +1189,13 @@ export const POLITICAL_WORLD_HISTORICAL_VERIFICATION_TOOL = Object.freeze({
               type: "string",
               description: "For corrected verdicts only: JSON object text containing ONLY the generated fields that require exact-date correction. May contain identity fields plus goals/fears/ambitions/domesticPressures/perceptions, government.ideology, or semantic fields on existing generated party/powerBloc ids. Never include runtime-derived C4/pressures. Empty string when confirmed.",
             },
+            // Optional, after the load-bearing fields: the kind of fault, which
+            // the engine reads instead of the words of `issue`.
+            issueKind: {
+              type: "string",
+              enum: POLITICAL_WORLD_ISSUE_KINDS,
+              description: "For corrected verdicts: temporal when a fact is wrong on the scenario date, naming when only spelling, translation or a label differs, other otherwise.",
+            },
           },
           required: ["polityKey", "verdict", "confidence", "issue", "correctionScopes", "replaceRepresentationEntities", "correctedIdentityJson"],
           additionalProperties: false,
@@ -1226,7 +1216,7 @@ export const POLITICAL_WORLD_TEMPORAL_SENTINEL_TOOL = Object.freeze({
     properties: {
       checksJson: {
         type: "string",
-        description: "JSON array text. One object per requested polity with polityKey, verdict (clear|challenge), confidence, issue, checkedFactIds[], and challengedFactIds[]. Do not use markdown fences.",
+        description: "JSON array text. One object per requested polity with polityKey, verdict (clear|challenge), confidence, issue, checkedFactIds[], challengedFactIds[], and for a challenge issueKind (temporal|naming|other). Do not use markdown fences.",
       },
     },
     required: ["checksJson"],
@@ -1312,26 +1302,6 @@ const officeholderDisplayText = (value) => {
   return "";
 };
 
-const looksLikeCompoundOfficeholder = (value) => {
-  const text = officeholderDisplayText(value);
-  if (!text) return false;
-  return /[()\/]|\b(?:and|co[- ]?(?:president|prince|head)|governor[- ]general|regent|acting|collective presidency|presidency of)\b/i.test(text);
-};
-
-const historicalCompoundOfficeholderChecks = (actorPatch) => {
-  if (!isPlainObject(actorPatch)) return [];
-  const checks = [];
-  for (const [path, value] of [
-    ["government.headOfState", actorPatch?.government?.headOfState],
-    ["government.headOfGovernment", actorPatch?.government?.headOfGovernment],
-    ["leader", actorPatch?.leader],
-  ]) {
-    if (!looksLikeCompoundOfficeholder(value)) continue;
-    checks.push(`${path}: ${officeholderDisplayText(value)}`);
-  }
-  return checks;
-};
-
 export const buildPoliticalWorldHistoricalVerificationPrompt = ({
   scenarioDate,
   historyAuthority = null,
@@ -1360,6 +1330,7 @@ export const buildPoliticalWorldHistoricalVerificationPrompt = ({
     + `- If FOCUSED REVIEW CONTEXT is supplied for a polity, treat it as mandatory additional verification context. If it describes a same-date cross-polity officeholder collision, resolve the collision by verifying the formal officeholders in every named polity. If it describes consensus disagreement, independently adjudicate the exact-date contradiction rather than choosing a prior pass by preference.\n`
     + `- If TEMPORAL CORRECTION OBLIGATION is supplied for a polity, a previous verifier attempt already established a concrete date contradiction. verdict=confirmed is forbidden for that polity until a valid scoped correction is returned. Do not rescind or forget the earlier finding because correctionScopes or correctedIdentityJson were malformed.\n`
     + `- If all generated temporal fields are admissible on the exact date, verdict=confirmed, correctionScopes=[], and correctedIdentityJson="".\n`
+    + `- With verdict=corrected, issueKind says what kind of fault it is: temporal when a generated fact is wrong on the exact date, naming when only spelling, translation, demonym or a label differs (that is no correction: confirm instead), other for any other correction.\n`
     + `- If any generated field is temporally wrong, verdict=corrected. correctionScopes must list only the concrete temporal categories being changed. correctedIdentityJson must contain ONLY the generated field(s) that require correction; do not rewrite unrelated generated state. Runtime-derived behavioralDisposition/politicalPressures are always forbidden.\n`
     + `- Scope meanings: officeholders = headOfState/headOfGovernment/leader; government_structure = government form/status/coalition identity; political_system = politicalSystem type/representation; representation_roster = date-sensitive party/faction membership, governing references, leaders, status, or kind; strategic_semantics = top-level goals/fears/ambitions; governing_semantics = government.ideology plus ideology/goals/priorities/foreign-policy/strategy semantics on already-generated party/powerBloc ids; perceptions = top-level perceptions; domestic_semantics = top-level domesticPressures. A display-only rename is not representation_roster correction.\n`
     + `- If correcting politicalSystem.representation, include political_system AND representation_roster in correctionScopes, include the accurate representation entities, and set replaceRepresentationEntities=true so stale generated parties/powerBlocs can be replaced. Otherwise keep replaceRepresentationEntities=false.\n`
@@ -1371,7 +1342,6 @@ export const buildPoliticalWorldHistoricalVerificationPrompt = ({
     const polityKey = entry?.item?.polityKey ?? entry?.proposal?.polityKey ?? "";
     const generatedPatch = entry?.proposal?.actorPatch ?? {};
     const finalActor = entry?.validation?.actor ?? generatedPatch;
-    const compoundOfficeholders = historicalCompoundOfficeholderChecks(finalActor);
     return [
       `=== ${index + 1} ===`,
       `POLITY: ${polityKey}`,
@@ -1380,10 +1350,6 @@ export const buildPoliticalWorldHistoricalVerificationPrompt = ({
       truncate(historicalVerificationIdentity(generatedPatch), 7000),
       `FINAL TEMPORAL CANDIDATE AFTER EXISTING CANON IS PRESERVED:`,
       truncate(historicalVerificationIdentity(finalActor), 7000),
-      `COMPOUND OFFICEHOLDER CHECKS:`,
-      compoundOfficeholders.length
-        ? compoundOfficeholders.map((value) => `- ${value} — verify every named person/role independently on ${scenarioDate}`).join("\n")
-        : "(none)",
       `POLITY-SPECIFIC SCENARIO CONTEXT:`,
       contextByPolity?.[polityKey] ? truncate(contextByPolity[polityKey], 2500) : "(none supplied)",
       `FOCUSED REVIEW CONTEXT:`,
@@ -1488,9 +1454,9 @@ export const buildPoliticalWorldTemporalSentinelPrompt = ({
     + `Do not challenge spelling, translation, romanization, taxonomy, subjective numeric estimates, or generic political wording unless there is a concrete temporal contradiction or post-boundary hindsight leak.\n`
     + `If you cannot establish exact-date validity for a supplied FACT with enough confidence to defend it, challenge that FACT for focused adjudication rather than guessing clear.\n`
     + `verdict=clear is allowed ONLY after you individually checked EVERY supplied FACT id and returned every id in checkedFactIds. If even one supplied fact was not checked, do not claim clear.\n`
-    + `verdict=challenge requires a short concrete exact-date issue and the implicated challengedFactIds. Do NOT provide a correction; the focused adjudicator will do that.\n`
+    + `verdict=challenge requires a short concrete exact-date issue, the implicated challengedFactIds, and issueKind: temporal when a fact is wrong on the date, naming when only spelling, translation or a label differs, other otherwise. Do NOT provide a correction; the focused adjudicator will do that.\n`
     + `TOOL TRANSPORT: checksJson is a JSON STRING containing the complete array of check objects. Do not return a nested checks array to the tool and do not use markdown fences.\n`
-    + `Each checksJson object must use ONLY polityKey, verdict, confidence, issue, checkedFactIds, and challengedFactIds. No comments, _comment fields, duplicate keys, or extra prose are allowed.\n`
+    + `Each checksJson object must use ONLY polityKey, verdict, confidence, issue, checkedFactIds, challengedFactIds, and issueKind. No comments, _comment fields, duplicate keys, or extra prose are allowed.\n`
     + `Return exactly one check for every requested polity using the supplied tool.`;
 
   const blocks = (Array.isArray(entries) ? entries : []).map((entry, index) => {
@@ -1542,6 +1508,7 @@ export const buildPoliticalWorldGenerationPrompt = ({
     + `- Return only requested missing needs. actorPatch MUST contain concrete canonical fields that satisfy every listed need; never return actorPatch={} while needs are listed. Native code discards harmless unrequested extras before validation, but those extras never become canon.\n`
     + `- politicalSystem should be an object with type and representation when known; government should use canonical form/headOfState/headOfGovernment/ideology fields rather than inventing alternate schema keys.\n`
     + `- politicalSystem.type is exactly one of: ${POLITICAL_SYSTEM_TYPES.join(", ")}. Use other when none fits, and put the system's own name in politicalSystem.label.\n`
+    + `- government.headOfState, government.headOfGovernment and leader are objects {name, title}: the person's name alone in name, the title of the office in title.\n`
     + `- government.headOfState and government.headOfGovernment MUST name the FORMAL current officeholders on ${scenarioDate}, not merely the supreme leader, paramount party leader, de facto strongman, military patron, or other politically dominant figure. If a different person is the supreme/de facto political leader, put that person in top-level leader when relevant while keeping the formal officeholders correct.\n`
     + `- DECISION AUTHORITY: top-level leader and top-level traits describe the operative primary political decision-maker, not automatically the ceremonial head of state. In parliamentary republics and constitutional monarchies this is normally the head of government; in presidential systems it is normally the president; in semi-presidential systems identify the actually dominant/shared executive; in party-states, juntas, absolute monarchies and personalist systems use the supreme operative leader. Apply this structural rule even when enriching a legacy actor whose leader field merely duplicates a ceremonial head of state. Never use country-name hardcodes.\n`
     + `- QUANTITATIVE ROUND-ZERO LANDSCAPE: when quantitative_landscape is requested, provide approximate integer starting percentages so the campaign has a numeric political baseline. These are estimates, NOT claimed polling measurements. Native code marks them generated-estimate and repairs bad totals/missing values without retrying.\n`
@@ -1965,20 +1932,6 @@ const historicalDisplayOnlyRosterCorrection = (scoped, originalPatch, { replaceR
   return changed;
 };
 
-const clearlyNonTemporalVerificationIssue = (value) => {
-  const issue = clean(value).toLocaleLowerCase();
-  if (!issue) return false;
-  const terminology = /\b(?:demonym|spelling|translation|transliteration|romanization|terminology|wording|capitalization|hyphenation|display name|preferred name|label)\b/.test(issue);
-  const temporal = /\b(?:before|after|later|until|since|postdate(?:s|d)?|on the scenario date|as of|took office|resigned|appointed|elected|sworn|effective|transition|coup|election|coined|adopted|introduced|hindsight|future|19\d{2}|20\d{2})\b/.test(issue);
-  return terminology && !temporal;
-};
-
-const clearlyTemporalVerificationIssue = (value) => {
-  const issue = clean(value).toLocaleLowerCase();
-  if (!issue || clearlyNonTemporalVerificationIssue(issue)) return false;
-  return /\b(?:before|after|later|until|since|postdate(?:s|d)?|on the scenario date|as of|took office|left office|resigned|appointed|elected|sworn|effective|transition|coup|election|formed|founded|created|established|dissolved|merged|renamed|coined|adopted|introduced|hindsight|future|did not exist|didn't exist|not yet|19\d{2}|20\d{2})\b/.test(issue);
-};
-
 const historicalEntityIdentityMatch = (left, right) => {
   const leftId = clean(left?.id).toLocaleLowerCase();
   const rightId = clean(right?.id).toLocaleLowerCase();
@@ -2100,6 +2053,7 @@ export const validateHistoricalVerificationPayload = ({ payload, entries, contex
       verdict: clean(raw?.verdict).toLocaleLowerCase(),
       confidence: normalizeConfidence(raw?.confidence),
       issue: clean(raw?.issue),
+      issueKind: issueKindOf(raw?.issueKind),
       correctionScopes: normalizeHistoricalCorrectionScopes(raw?.correctionScopes),
       replaceRepresentationEntities: raw?.replaceRepresentationEntities === true,
       correctedIdentity: null,
@@ -2137,7 +2091,7 @@ export const validateHistoricalVerificationPayload = ({ payload, entries, contex
       diagnostics.push(diagnostic);
       continue;
     }
-    if (clearlyNonTemporalVerificationIssue(diagnostic.issue)) {
+    if (diagnostic.issueKind === "naming") {
       diagnostic.verdict = "confirmed";
       diagnostic.correctionScopes = [];
       diagnostic.status = "confirmed";
@@ -2150,7 +2104,7 @@ export const validateHistoricalVerificationPayload = ({ payload, entries, contex
     // transport metadata is validated. This prevents a malformed correctionScopes
     // or correctedIdentityJson payload from letting a later retry rescind a real
     // temporal finding by simply returning CONFIRMED.
-    if (clearlyTemporalVerificationIssue(diagnostic.issue)) {
+    if (diagnostic.issueKind === "temporal") {
       diagnostic.temporalCorrectionEstablished = true;
     }
     if (!diagnostic.correctionScopes.length) {
@@ -2278,19 +2232,11 @@ export const validateHistoricalVerificationPayload = ({ payload, entries, contex
   return { confirmed, corrected, unresolved, warnings, diagnostics };
 };
 
-const normalizedOfficeholderCollisionKey = (value, role) => {
-  if (looksLikeCompoundOfficeholder(value)) return "";
-  let text = officeholderDisplayText(value);
-  if (!text) return "";
-  text = text.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
-  text = text.replace(/^(?:acting|caretaker|interim)\s+/i, "");
-  if (role === "headOfGovernment") {
-    text = text.replace(/^(?:prime minister|premier|chancellor|president|chairman|chief minister|first minister)\s+/i, "");
-  } else if (role === "headOfState") {
-    text = text.replace(/^(?:president|king|queen|emperor|sultan|emir|prince|grand duke|chairman)\s+/i, "");
-  }
-  return text.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-};
+// Who holds an office, for spotting one person given offices in two polities:
+// the officeholder's name under the game's one name fold (server/nameKey.js).
+// A head is { name, title }, its title kept apart; a title is never cut off a
+// name by its words ("Prime Minister", "President" were, in English only).
+const normalizedOfficeholderCollisionKey = (value) => nameKey(officeholderDisplayText(value));
 
 export const crossPolityOfficeholderCollisions = (entries = []) => {
   const byPerson = new Map();
@@ -2300,7 +2246,7 @@ export const crossPolityOfficeholderCollisions = (entries = []) => {
     const actor = entry?.validation?.actor ?? entry?.proposal?.actorPatch ?? {};
     for (const role of ["headOfState", "headOfGovernment"]) {
       const value = actor?.government?.[role];
-      const key = normalizedOfficeholderCollisionKey(value, role);
+      const key = normalizedOfficeholderCollisionKey(value);
       if (!key) continue;
       const record = {
         polityKey,
@@ -2552,6 +2498,7 @@ export const validateTemporalSentinelPayload = ({ payload, entries = [] } = {}) 
         verdict: corrected ? "challenge" : "clear",
         confidence: raw?.confidence,
         issue: corrected ? clean(raw?.issue) : "",
+        issueKind: corrected ? raw?.issueKind : "",
         checkedFactIds: factIds,
         challengedFactIds: corrected ? factIds : [],
       };
@@ -2603,6 +2550,7 @@ export const validateTemporalSentinelPayload = ({ payload, entries = [] } = {}) 
       verdict: clean(raw?.verdict).toLocaleLowerCase(),
       confidence: normalizeConfidence(raw?.confidence),
       issue: clean(raw?.issue),
+      issueKind: issueKindOf(raw?.issueKind),
       checkedFactIds,
       challengedFactIds,
       challengedFacts,
@@ -2624,7 +2572,6 @@ export const validateTemporalSentinelPayload = ({ payload, entries = [] } = {}) 
     }
 
     if (diagnostic.verdict === "clear") {
-      if (diagnostic.issue && !benignTemporalClearIssue(diagnostic.issue)) diagnostic.errors.push("Temporal sentinel returned a substantive/ambiguous issue for a clear verdict");
       if (challengedFactIds.length) diagnostic.errors.push("Temporal sentinel returned challenged FACT ids for a clear verdict");
       if (diagnostic.errors.length) {
         challenge(polityKey, diagnostic, `${diagnostic.errors.join("; ")} Focused exact-date adjudication is required.`);
@@ -2641,7 +2588,7 @@ export const validateTemporalSentinelPayload = ({ payload, entries = [] } = {}) 
       if (!diagnostic.issue) diagnostic.errors.push("Temporal sentinel challenged this polity without a concrete issue");
       if (!challengedFactIds.length) diagnostic.errors.push("Temporal sentinel challenged this polity without identifying challenged FACT ids");
       challenge(polityKey, diagnostic, diagnostic.issue || diagnostic.errors.join("; "), {
-        established: !clearlyNonTemporalVerificationIssue(diagnostic.issue),
+        established: diagnostic.issueKind !== "naming",
       });
       diagnostics.push(diagnostic);
       continue;

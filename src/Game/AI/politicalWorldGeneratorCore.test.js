@@ -2179,51 +2179,60 @@ test("Round-Zero verifier cannot rescind a previously identified correction by c
 });
 
 
-test("Round-Zero verifier ignores a clearly non-temporal terminology correction instead of poisoning retry state", async () => {
-  let verificationCalls = 0;
-  const result = await generatePoliticalWorldProposalsCore({
-    scenarioDate: "2014-03-22",
-    polities: ["Republic of Niger"],
-    politicalActors: { byPolity: {} },
-    generatedAt: fixedNow,
-    maxAttempts: 1,
-    verifyHistoricalIdentity: true,
-    callModel: async (_system, _history, opts) => {
-      if (opts.taskKey === "politicalWorldGeneration") {
-        return { toolInput: { proposals: [{
-          polityKey: "Republic of Niger",
-          actorPatchJson: JSON.stringify({
-            politicalSystem: { type: "semi_presidential_republic", representation: "electoral" },
-            government: { form: "Semi-presidential republic", headOfState: "Mahamadou Issoufou", headOfGovernment: "Brigi Rafini" },
-            parties: [{ id: "pnds", name: "Nigerian Party for Democracy and Socialism" }],
-          }),
-        }] } };
-      }
-      verificationCalls += 1;
-      if (opts.tool?.name === POLITICAL_WORLD_TEMPORAL_SENTINEL_TOOL.name) {
+// What kind of fault a correction fixes is the verifier's own issueKind, never
+// read from its words: the English "demonym" and "spelling" were, and a French
+// verifier's "Gentilé corrigé" was taken for a real correction.
+test("Round-Zero verifier ignores a naming-only correction instead of poisoning retry state, in any language", async () => {
+  for (const issue of [
+    "Corrected demonym from Nigerian to Nigerien for PNDS-Tarayya party name.",
+    "Gentilé corrigé : nigérien et non nigérian pour le nom du PNDS-Tarayya.",
+  ]) {
+    let verificationCalls = 0;
+    const result = await generatePoliticalWorldProposalsCore({
+      scenarioDate: "2014-03-22",
+      polities: ["Republic of Niger"],
+      politicalActors: { byPolity: {} },
+      generatedAt: fixedNow,
+      maxAttempts: 1,
+      verifyHistoricalIdentity: true,
+      callModel: async (_system, _history, opts) => {
+        if (opts.taskKey === "politicalWorldGeneration") {
+          return { toolInput: { proposals: [{
+            polityKey: "Republic of Niger",
+            actorPatchJson: JSON.stringify({
+              politicalSystem: { type: "semi_presidential_republic", representation: "electoral" },
+              government: { form: "Semi-presidential republic", headOfState: "Mahamadou Issoufou", headOfGovernment: "Brigi Rafini" },
+              parties: [{ id: "pnds", name: "Nigerian Party for Democracy and Socialism" }],
+            }),
+          }] } };
+        }
+        verificationCalls += 1;
+        if (opts.tool?.name === POLITICAL_WORLD_TEMPORAL_SENTINEL_TOOL.name) {
+          return { toolInput: { verifications: [{
+            polityKey: "Republic of Niger", verdict: "confirmed", confidence: "high", issue: "", correctionScopes: [], replaceRepresentationEntities: false, correctedIdentityJson: "",
+          }] } };
+        }
         return { toolInput: { verifications: [{
-          polityKey: "Republic of Niger", verdict: "confirmed", confidence: "high", issue: "", correctionScopes: [], replaceRepresentationEntities: false, correctedIdentityJson: "",
+          polityKey: "Republic of Niger",
+          verdict: "corrected",
+          confidence: "high",
+          issue,
+          correctionScopes: [],
+          replaceRepresentationEntities: false,
+          correctedIdentityJson: "{",
+          issueKind: "naming",
         }] } };
-      }
-      return { toolInput: { verifications: [{
-        polityKey: "Republic of Niger",
-        verdict: "corrected",
-        confidence: "high",
-        issue: "Corrected demonym from Nigerian to Nigerien for PNDS-Tarayya party name.",
-        correctionScopes: [],
-        replaceRepresentationEntities: false,
-        correctedIdentityJson: "{",
-      }] } };
-    },
-  });
+      },
+    });
 
-  assert.equal(verificationCalls, 2, JSON.stringify(result.historicalVerification));
-  assert.equal(result.generatedPolities, 1, JSON.stringify(result.failures));
-  assert.equal(result.failedPolities, 0, JSON.stringify(result.failures));
-  assert.equal(result.historicalVerification.confirmed, 1);
-  assert.equal(result.historicalVerification.corrected, 0);
-  assert.equal(result.proposals[0].proposal.actorPatch.parties[0].name, "Nigerian Party for Democracy and Socialism");
-  assert.ok(result.warnings.some((warning) => /non-temporal temporal-verifier correction/i.test(warning)));
+    assert.equal(verificationCalls, 2, JSON.stringify(result.historicalVerification));
+    assert.equal(result.generatedPolities, 1, JSON.stringify(result.failures));
+    assert.equal(result.failedPolities, 0, JSON.stringify(result.failures));
+    assert.equal(result.historicalVerification.confirmed, 1);
+    assert.equal(result.historicalVerification.corrected, 0);
+    assert.equal(result.proposals[0].proposal.actorPatch.parties[0].name, "Nigerian Party for Democracy and Socialism");
+    assert.ok(result.warnings.some((warning) => /non-temporal temporal-verifier correction/i.test(warning)));
+  }
 });
 
 test("Round-Zero verifier keeps a malformed real temporal correction sticky and fails closed if retry rescinds it", async () => {
@@ -2276,61 +2285,67 @@ test("Round-Zero verifier keeps a malformed real temporal correction sticky and 
   assert.ok(result.failures[0].errors.some((error) => /previous verification attempt identified a temporal correction/i.test(error)));
 });
 
-test("Round-Zero verifier makes a clear temporal finding sticky before correctionScopes validation", async () => {
-  let verificationCalls = 0;
-  let sawStickyRetryInstruction = false;
-  const result = await generatePoliticalWorldProposalsCore({
-    scenarioDate: "2014-03-22",
-    polities: ["Republic of Korea"],
-    politicalActors: { byPolity: {} },
-    generatedAt: fixedNow,
-    maxAttempts: 1,
-    verifyHistoricalIdentity: true,
-    callModel: async (system, history, opts) => {
-      if (opts.taskKey === "politicalWorldGeneration") {
-        return { toolInput: { proposals: [{
-          polityKey: "Republic of Korea",
-          actorPatchJson: JSON.stringify({
-            politicalSystem: { type: "presidential_republic", representation: "electoral" },
-            government: { form: "Presidential republic", headOfState: "Park Geun-hye", headOfGovernment: "Jung Hong-won" },
-            parties: [
-              { id: "saenuri-party", name: "Saenuri Party" },
-              { id: "new-politics-alliance-for-democracy", name: "New Politics Alliance for Democracy" },
-            ],
-          }),
-        }] } };
-      }
-      verificationCalls += 1;
-      if (verificationCalls === 1) {
+test("Round-Zero verifier makes a temporal finding sticky before correctionScopes validation, in any language", async () => {
+  for (const issue of [
+    "The New Politics Alliance for Democracy was founded on 26 March 2014, four days after the 22 March 2014 scenario date; the Democratic Party was the opposition party on the scenario date.",
+    "L'Alliance de la nouvelle politique pour la démocratie n'a été fondée que le 26 mars 2014 ; à la date du scénario, l'opposition était le Parti démocrate.",
+  ]) {
+    let verificationCalls = 0;
+    let sawStickyRetryInstruction = false;
+    const result = await generatePoliticalWorldProposalsCore({
+      scenarioDate: "2014-03-22",
+      polities: ["Republic of Korea"],
+      politicalActors: { byPolity: {} },
+      generatedAt: fixedNow,
+      maxAttempts: 1,
+      verifyHistoricalIdentity: true,
+      callModel: async (system, history, opts) => {
+        if (opts.taskKey === "politicalWorldGeneration") {
+          return { toolInput: { proposals: [{
+            polityKey: "Republic of Korea",
+            actorPatchJson: JSON.stringify({
+              politicalSystem: { type: "presidential_republic", representation: "electoral" },
+              government: { form: "Presidential republic", headOfState: "Park Geun-hye", headOfGovernment: "Jung Hong-won" },
+              parties: [
+                { id: "saenuri-party", name: "Saenuri Party" },
+                { id: "new-politics-alliance-for-democracy", name: "New Politics Alliance for Democracy" },
+              ],
+            }),
+          }] } };
+        }
+        verificationCalls += 1;
+        if (verificationCalls === 1) {
+          return { toolInput: { verifications: [{
+            polityKey: "Republic of Korea",
+            verdict: "corrected",
+            confidence: "high",
+            issue,
+            correctionScopes: [],
+            replaceRepresentationEntities: false,
+            correctedIdentityJson: "{",
+            issueKind: "temporal",
+          }] } };
+        }
+        sawStickyRetryInstruction = /TEMPORAL CORRECTION OBLIGATION:[\s\S]*ESTABLISHED[\s\S]*verdict=confirmed is forbidden/i.test(system)
+          || /TEMPORAL CORRECTION OBLIGATION:[\s\S]*ESTABLISHED[\s\S]*verdict=confirmed is forbidden/i.test(history?.[0]?.parts?.[0]?.text ?? "");
         return { toolInput: { verifications: [{
           polityKey: "Republic of Korea",
-          verdict: "corrected",
+          verdict: "confirmed",
           confidence: "high",
-          issue: "The New Politics Alliance for Democracy was founded on 26 March 2014, four days after the 22 March 2014 scenario date; the Democratic Party was the opposition party on the scenario date.",
+          issue: "",
           correctionScopes: [],
           replaceRepresentationEntities: false,
-          correctedIdentityJson: "{",
+          correctedIdentityJson: "",
         }] } };
-      }
-      sawStickyRetryInstruction = /TEMPORAL CORRECTION OBLIGATION:[\s\S]*ESTABLISHED[\s\S]*verdict=confirmed is forbidden/i.test(system)
-        || /TEMPORAL CORRECTION OBLIGATION:[\s\S]*ESTABLISHED[\s\S]*verdict=confirmed is forbidden/i.test(history?.[0]?.parts?.[0]?.text ?? "");
-      return { toolInput: { verifications: [{
-        polityKey: "Republic of Korea",
-        verdict: "confirmed",
-        confidence: "high",
-        issue: "",
-        correctionScopes: [],
-        replaceRepresentationEntities: false,
-        correctedIdentityJson: "",
-      }] } };
-    },
-  });
+      },
+    });
 
-  assert.equal(verificationCalls, 5);
-  assert.equal(sawStickyRetryInstruction, true);
-  assert.equal(result.generatedPolities, 0);
-  assert.equal(result.failedPolities, 1);
-  assert.ok(result.failures[0].errors.some((error) => /previous verification attempt identified a temporal correction/i.test(error)), JSON.stringify(result.failures));
+    assert.equal(verificationCalls, 5);
+    assert.equal(sawStickyRetryInstruction, true);
+    assert.equal(result.generatedPolities, 0);
+    assert.equal(result.failedPolities, 1);
+    assert.ok(result.failures[0].errors.some((error) => /previous verification attempt identified a temporal correction/i.test(error)), JSON.stringify(result.failures));
+  }
 });
 
 test("Round-Zero verifier can recover a missing-scope Korea correction on retry without regenerating", async () => {
@@ -2518,6 +2533,7 @@ test("Round-Zero consensus carries a malformed temporal finding from a failed in
           correctionScopes: [],
           replaceRepresentationEntities: false,
           correctedIdentityJson: "{",
+          issueKind: "temporal",
         }] } };
       }
       if (verificationCalls === 2 || verificationCalls === 3) {
@@ -2562,8 +2578,13 @@ test("Round-Zero consensus carries a malformed temporal finding from a failed in
   assert.equal(result.proposals[0].proposal.actorPatch.parties.some((party) => /new politics alliance/i.test(party.name)), false);
 });
 
-test("Round-Zero verifier explicitly spotlights compound officeholders and accepts a focused exact-date correction", async () => {
-  let sawCompoundInstruction = false;
+// Every named person in an officeholder field is the verifier's to check, by
+// the rule of its system prompt. The per-polity "COMPOUND OFFICEHOLDER CHECKS"
+// hint was chosen by English words ("Governor-General", "regent", "acting",
+// "and") and is gone; the rule stays for every field, in every language.
+test("Round-Zero verifier checks every named officeholder by its rule, and accepts a focused exact-date correction", async () => {
+  let sawOfficeholderRule = false;
+  let sawWordHint = true;
   let verificationCalls = 0;
   const result = await generatePoliticalWorldProposalsCore({
     scenarioDate: "2014-03-22",
@@ -2577,11 +2598,11 @@ test("Round-Zero verifier explicitly spotlights compound officeholders and accep
         return { toolInput: { proposals: [{
           polityKey: "Australia",
           actorPatchJson: JSON.stringify({
-            politicalSystem: { type: "parliamentary_democracy", representation: "electoral" },
+            politicalSystem: { type: "constitutional_monarchy", representation: "electoral" },
             government: {
               form: "Federal parliamentary constitutional monarchy",
               headOfState: "Queen Elizabeth II (Governor-General Peter Cosgrove)",
-              headOfGovernment: "Prime Minister Tony Abbott",
+              headOfGovernment: { name: "Tony Abbott", title: "Prime Minister" },
             },
             parties: [
               { id: "liberal-party", name: "Liberal Party of Australia" },
@@ -2597,8 +2618,8 @@ test("Round-Zero verifier explicitly spotlights compound officeholders and accep
         }] } };
       }
       const userMessage = history?.[0]?.parts?.[0]?.text ?? "";
-      sawCompoundInstruction = /COMPOUND OFFICEHOLDER CHECKS[\s\S]*Governor-General Peter Cosgrove[\s\S]*verify every named person\/role independently/i.test(userMessage)
-        && /EVERY named officeholder embedded/i.test(system);
+      sawOfficeholderRule = /EVERY named officeholder embedded/i.test(system);
+      sawWordHint = /COMPOUND OFFICEHOLDER CHECKS/i.test(userMessage);
       return { toolInput: { verifications: [{
         polityKey: "Australia",
         verdict: "corrected",
@@ -2609,12 +2630,14 @@ test("Round-Zero verifier explicitly spotlights compound officeholders and accep
         correctedIdentityJson: JSON.stringify({
           government: { headOfState: "Queen Elizabeth II (Governor-General Quentin Bryce)" },
         }),
+        issueKind: "temporal",
       }] } };
     },
   });
 
   assert.equal(verificationCalls, 2);
-  assert.equal(sawCompoundInstruction, true);
+  assert.equal(sawOfficeholderRule, true);
+  assert.equal(sawWordHint, false);
   assert.equal(result.generatedPolities, 1, JSON.stringify(result.failures));
   assert.equal(result.failedPolities, 0);
   assert.equal(result.historicalVerification.corrected, 1);
@@ -2967,46 +2990,53 @@ test("cross-polity head-of-government collision forces focused re-verification a
   assert.equal(madagascar.historicalVerification.verdict, "corrected");
 });
 
+// One person given the head of government's office in two polities is found by
+// the officeholder's name, its title kept apart: "Prime Minister Shared Person"
+// was matched to "Shared Person" by cutting off English titles, and "Premier
+// ministre Shared Person" never was.
 test("cross-polity head-of-government collision fails closed if the focused verifier confirms the contradiction unchanged", async () => {
-  const result = await generatePoliticalWorldProposalsCore({
-    scenarioDate: "2014-03-22",
-    polities: ["Republic A", "Republic B"],
-    politicalActors: { byPolity: {} },
-    maxBatchSize: 2,
-    generatedAt: fixedNow,
-    verifyHistoricalIdentity: true,
-    callModel: async (_system, _history, opts) => {
-      if (opts.taskKey === "politicalWorldGeneration") {
-        return { toolInput: { proposals: [
-          {
-            polityKey: "Republic A",
-            actorPatch: {
-              politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-              government: { form: "Parliamentary republic", headOfState: "President A", headOfGovernment: "Prime Minister Shared Person" },
-              parties: [{ id: "party-a", name: "Party A" }],
+  for (const [titleA, titleB] of [["Prime Minister", ""], ["Premier ministre", "Prime Minister"]]) {
+    const head = (title) => (title ? { name: "Shared Person", title } : "Shared Person");
+    const result = await generatePoliticalWorldProposalsCore({
+      scenarioDate: "2014-03-22",
+      polities: ["Republic A", "Republic B"],
+      politicalActors: { byPolity: {} },
+      maxBatchSize: 2,
+      generatedAt: fixedNow,
+      verifyHistoricalIdentity: true,
+      callModel: async (_system, _history, opts) => {
+        if (opts.taskKey === "politicalWorldGeneration") {
+          return { toolInput: { proposals: [
+            {
+              polityKey: "Republic A",
+              actorPatch: {
+                politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
+                government: { form: "Parliamentary republic", headOfState: "President A", headOfGovernment: head(titleA) },
+                parties: [{ id: "party-a", name: "Party A" }],
+              },
             },
-          },
-          {
-            polityKey: "Republic B",
-            actorPatch: {
-              politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-              government: { form: "Parliamentary republic", headOfState: "President B", headOfGovernment: "Shared Person" },
-              parties: [{ id: "party-b", name: "Party B" }],
+            {
+              polityKey: "Republic B",
+              actorPatch: {
+                politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
+                government: { form: "Parliamentary republic", headOfState: "President B", headOfGovernment: head(titleB) },
+                parties: [{ id: "party-b", name: "Party B" }],
+              },
             },
-          },
+          ] } };
+        }
+        return { toolInput: { verifications: [
+          { polityKey: "Republic A", verdict: "confirmed", confidence: "high", issue: "", correctionScopes: [], replaceRepresentationEntities: false, correctedIdentityJson: "" },
+          { polityKey: "Republic B", verdict: "confirmed", confidence: "high", issue: "", correctionScopes: [], replaceRepresentationEntities: false, correctedIdentityJson: "" },
         ] } };
-      }
-      return { toolInput: { verifications: [
-        { polityKey: "Republic A", verdict: "confirmed", confidence: "high", issue: "", correctionScopes: [], replaceRepresentationEntities: false, correctedIdentityJson: "" },
-        { polityKey: "Republic B", verdict: "confirmed", confidence: "high", issue: "", correctionScopes: [], replaceRepresentationEntities: false, correctedIdentityJson: "" },
-      ] } };
-    },
-  });
+      },
+    });
 
-  assert.equal(result.generatedPolities, 0);
-  assert.equal(result.failedPolities, 2);
-  assert.deepEqual(new Set(result.historicalVerification.collisionRechecks.failedPolities), new Set(["Republic A", "Republic B"]));
-  assert.ok(result.failures.every((failure) => failure.errors.some((error) => error.includes("collision remained"))));
+    assert.equal(result.generatedPolities, 0, titleA);
+    assert.equal(result.failedPolities, 2);
+    assert.deepEqual(new Set(result.historicalVerification.collisionRechecks.failedPolities), new Set(["Republic A", "Republic B"]));
+    assert.ok(result.failures.every((failure) => failure.errors.some((error) => error.includes("collision remained"))));
+  }
 });
 
 test("shared heads of state do not trigger the collision sentinel when heads of government differ", async () => {
@@ -3414,74 +3444,72 @@ test("history-only recheck does not turn an already-applied prior correction int
   assert.deepEqual(rechecked.historicalVerification.consensus.stickyAdjudicationPolities, []);
 });
 
-test("temporal sentinel still fails closed when a clear verdict carries a substantive temporal contradiction", async () => {
-  const polityKey = "Republic of Korea";
-  const proposalEntry = {
-    item: { polityKey, depth: "standard", needs: ["political_system", "governing_structure", "representation_entities"] },
-    proposal: {
-      schemaVersion: 1,
-      polityKey,
-      scenarioDate: "2014-03-22",
-      depth: "standard",
-      provenance: { source: "generated", confidence: "high", generatedAt: fixedNow },
-      actorPatch: {
-        politicalSystem: { type: "presidential_republic", representation: "electoral" },
-        government: { form: "Presidential republic", headOfState: "Park Geun-hye", headOfGovernment: "Jung Hong-won" },
-        parties: [
-          { id: "saenuri-party", name: "Saenuri Party" },
-          { id: "new-politics-alliance-for-democracy", name: "New Politics Alliance for Democracy" },
-        ],
+// A clear verdict is the sentinel's verdict and its empty challengedFactIds; its
+// prose is commentary and is not read. An English sentence judged "substantive"
+// by its words bought a focused adjudication request, and the same sentence in
+// French did not.
+test("a clear sentinel verdict is its verdict and its fact ids: its prose is never read, in any language", async () => {
+  for (const issue of [
+    "New Politics Alliance for Democracy was founded after the scenario date on March 26, 2014.",
+    "L'Alliance de la nouvelle politique pour la démocratie a été fondée après la date du scénario, le 26 mars 2014.",
+  ]) {
+    const polityKey = "Republic of Korea";
+    const proposalEntry = {
+      item: { polityKey, depth: "standard", needs: ["political_system", "governing_structure", "representation_entities"] },
+      proposal: {
+        schemaVersion: 1,
+        polityKey,
+        scenarioDate: "2014-03-22",
+        depth: "standard",
+        provenance: { source: "generated", confidence: "high", generatedAt: fixedNow },
+        actorPatch: {
+          politicalSystem: { type: "presidential_republic", representation: "electoral" },
+          government: { form: "Presidential republic", headOfState: "Park Geun-hye", headOfGovernment: "Jung Hong-won" },
+          parties: [
+            { id: "saenuri-party", name: "Saenuri Party" },
+            { id: "new-politics-alliance-for-democracy", name: "New Politics Alliance for Democracy" },
+          ],
+        },
       },
-    },
-    validation: { provenance: { confidence: "high" } },
-    historicalVerification: { verdict: "confirmed", confidence: "high", issue: "" },
-  };
-  const result = {
-    schemaVersion: 1,
-    scenarioDate: "2014-03-22",
-    generatedAt: fixedNow,
-    plan: { scenarioDate: "2014-03-22", items: [proposalEntry.item] },
-    proposals: [proposalEntry],
-    failures: [],
-    warnings: [],
-    batches: [],
-    diagnostics: [],
-    generatedPolities: 1,
-    failedPolities: 0,
-  };
-  const calls = [];
-  const rechecked = await reverifyPoliticalWorldProposalsCore({
-    result,
-    scenarioDate: "2014-03-22",
-    politicalActors: { byPolity: {} },
-    generatedAt: fixedNow,
-    callModel: async (_system, _history, opts) => {
-      calls.push(opts.tool?.name);
-      if (calls.length === 1) {
+      validation: { provenance: { confidence: "high" } },
+      historicalVerification: { verdict: "confirmed", confidence: "high", issue: "" },
+    };
+    const result = {
+      schemaVersion: 1,
+      scenarioDate: "2014-03-22",
+      generatedAt: fixedNow,
+      plan: { scenarioDate: "2014-03-22", items: [proposalEntry.item] },
+      proposals: [proposalEntry],
+      failures: [],
+      warnings: [],
+      batches: [],
+      diagnostics: [],
+      generatedPolities: 1,
+      failedPolities: 0,
+    };
+    const calls = [];
+    const rechecked = await reverifyPoliticalWorldProposalsCore({
+      result,
+      scenarioDate: "2014-03-22",
+      politicalActors: { byPolity: {} },
+      generatedAt: fixedNow,
+      callModel: async (_system, _history, opts) => {
+        calls.push(opts.tool?.name);
         return { toolInput: { checksJson: JSON.stringify([{
           polityKey,
           verdict: "clear",
           confidence: "high",
-          issue: "New Politics Alliance for Democracy was founded after the scenario date on March 26, 2014.",
+          issue,
           checkedFactIds: ["F1", "F2", "F3", "F4", "F5", "F6", "F7"],
           challengedFactIds: [],
         }]) } };
-      }
-      return { toolInput: { verifications: [{
-        polityKey,
-        verdict: "confirmed",
-        confidence: "high",
-        issue: "",
-        correctionScopes: [],
-        replaceRepresentationEntities: false,
-        correctedIdentityJson: "",
-      }] } };
-    },
-  });
+      },
+    });
 
-  assert.deepEqual(calls, [POLITICAL_WORLD_TEMPORAL_SENTINEL_TOOL.name, POLITICAL_WORLD_HISTORICAL_VERIFICATION_TOOL.name]);
-  assert.deepEqual(rechecked.historicalVerification.consensus.disputedPolities, [polityKey]);
-  assert.equal(rechecked.historicalVerification.failed, 0);
+    assert.deepEqual(calls, [POLITICAL_WORLD_TEMPORAL_SENTINEL_TOOL.name], "no adjudication request");
+    assert.deepEqual(rechecked.historicalVerification.consensus.disputedPolities, []);
+    assert.equal(rechecked.historicalVerification.failed, 0);
+  }
 });
 
 test("history-only re-check repairs a previously confirmed Korea NPAD leak with sentinel plus adjudication only", async () => {
