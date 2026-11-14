@@ -13,13 +13,9 @@ export const ADVISOR_DIPLOMACY_CONTEXT_MAX_CHARS = 16000;
 export const ADVISOR_DIPLOMACY_MESSAGE_MAX_CHARS = 900;
 const BRIEF_THREAD_LIMIT = 14;
 const MAX_SEARCH_RESULTS = 4;
-const STOP = new Set([
-  "the","and","or","but","for","from","with","what","when","where","which","whose",
-  "why","how","was","were","are","is","have","has","had","can","could","would","should",
-  "will","into","about","that","this","these","those","they","them","you","your",
-  "our","their","did","does","done","please","there","been","than","then",
-  "once","said","tell","more","less","show","explain","regarding",
-]);
+// The most words of a query a search looks for: the first six and the last
+// twelve, since a long presidential turn often puts its actual question last.
+const MAX_SEARCH_WORDS = 18;
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const safe = (value) => clean(value).replace(/`{3,}/g, "'");
 const clipped = (value, max) => {
@@ -29,13 +25,41 @@ const clipped = (value, max) => {
   return raw.length <= bound ? raw : raw.slice(0, Math.max(0, bound - 1)).trimEnd() + "…";
 };
 const list = (value) => Array.isArray(value) ? value : [];
-const tokensOf = (value) => {
-  const words = [...new Set(clean(value).toLowerCase()
-    .match(/[\p{L}\p{N}]{3,}/gu)?.filter((word) => !STOP.has(word)) || [])];
-  // Long presidential turns often put their actual question at the end.
-  return words.length <= 18 ? words : [...words.slice(0, 6), ...words.slice(-12)];
+
+// The words of a search, in any script: what Unicode's word boundaries take for
+// words (Intl.Segmenter, whose dictionaries split the scripts written without
+// spaces, Chinese, Japanese, Thai, into their words), each once, in lower case;
+// where the platform has no segmenter, runs of letters and digits. No list of
+// words to leave out and no shortest length. An English list ("the", "what",
+// "please") left French "les" and "pour" to weigh as much as a treaty's name,
+// and words of three letters or more dropped every two-character Chinese word,
+// so a search asked in Chinese was refused for want of a query. A common word
+// now counts alike in every language: it is in most messages, so it lifts none
+// above another.
+//
+// Not the embeddings the game keeps (chatArchive.js, relatedEvents.js): this
+// search returns the exact messages, by thread and index, of the active
+// threads as well as the archived ones, and only the archived ones are kept as
+// vectors, in chunks of several messages, by a model that is not loaded in
+// every session. What the archived chats say by meaning already reaches the
+// advisor in its briefing (pastTalks).
+const WORD_SEGMENTER = typeof Intl === "object" && typeof Intl.Segmenter === "function"
+  ? new Intl.Segmenter(undefined, { granularity: "word" })
+  : null;
+const searchWords = (value) => {
+  const text = clean(value).toLowerCase();
+  if (!text) return [];
+  const words = WORD_SEGMENTER
+    ? [...WORD_SEGMENTER.segment(text)].filter((part) => part.isWordLike).map((part) => part.segment)
+    : text.match(/[\p{L}\p{M}\p{N}]+/gu) ?? [];
+  const unique = [...new Set(words)];
+  return unique.length <= MAX_SEARCH_WORDS ? unique : [...unique.slice(0, 6), ...unique.slice(-(MAX_SEARCH_WORDS - 6))];
 };
 const partnersOf = (chat) => list(chat?.countries).map((c) => clean(c?.name || c?.code)).filter(Boolean);
+// Whether `wanted` (lower case) is one of a thread's participants, by its name
+// or its code, exactly: never a word of a name found in another.
+const hasPartner = (chat, wanted) => list(chat?.countries)
+  .some((c) => [typeof c === "string" ? c : c?.name, c?.code].some((value) => clean(value).toLowerCase() === wanted));
 const headingOf = (chat) => safe(chat?.title) || partnersOf(chat).join(", ") || "Unnamed diplomatic thread";
 const lastMemoryOf = (chat) => {
   for (const msg of [...list(chat?.messages)].reverse()) {
@@ -92,7 +116,10 @@ const excerptNear = (value, terms, max) => {
     + (end < raw.length ? "…" : "");
 };
 
-// Finds dated source passages across *both* active and archived chats.
+// Finds dated source passages across *both* active and archived chats: each
+// message ranked by how many of the query's words it holds (searchWords), the
+// thread's own heading and a year the query names counting too. `partner`
+// narrows it to the threads that participant is in, named exactly.
 // It deliberately never uses names or freeform text as a canonical mutation ID.
 // Callers may restrict visibility by polity; an inaccessible direct thread ID
 // is a hard failure in readAdvisorDiplomaticMessages.
@@ -100,17 +127,26 @@ export const searchAdvisorDiplomaticMessages = (chats, {
   query = "", partner = "", visibleTo = "", limit = MAX_SEARCH_RESULTS,
   maxExcerptChars = ADVISOR_DIPLOMACY_MESSAGE_MAX_CHARS,
 } = {}) => {
-  const terms = tokensOf(query);
-  const partnerTerms = tokensOf(partner);
+  const terms = searchWords(query);
+  const wantedPartner = clean(partner).toLowerCase();
   const limitBound = Math.min(MAX_SEARCH_RESULTS, Math.max(1, Math.trunc(Number(limit) || MAX_SEARCH_RESULTS)));
-  if (!terms.length && !partnerTerms.length) return { matches: [], note: "A meaningful query or partner is required." };
+  if (!terms.length && !wantedPartner) return { matches: [], note: "A query or a partner is required." };
+  const visible = visibleChats(chats, visibleTo);
+  const threads = wantedPartner ? visible.filter((chat) => hasPartner(chat, wantedPartner)) : visible;
+  if (wantedPartner && !threads.length) {
+    const known = [...new Set(visible.flatMap(partnersOf))].sort().slice(0, 40);
+    return {
+      matches: [],
+      note: `No saved conversation has a participant called "${clean(partner)}". `
+        + (known.length ? `The participants, as the threads name them: ${known.join(", ")}.` : "There is no saved conversation."),
+    };
+  }
   const matched = [];
-  for (const chat of visibleChats(chats, visibleTo)) {
+  for (const chat of threads) {
     const threadId = clean(chat?.id);
     if (!threadId) continue;
     const participants = partnersOf(chat).join(", ");
     const threadHeading = headingOf(chat);
-    if (partnerTerms.length && matchCount(participants + " " + threadHeading, partnerTerms) === 0) continue;
     const headingMatches = matchCount(participants + " " + threadHeading, terms);
     for (const [messageIndex, msg] of list(chat?.messages).entries()) {
       const text = clean(msg?.text);
@@ -118,7 +154,7 @@ export const searchAdvisorDiplomaticMessages = (chats, {
       const contentMatches = matchCount(text, terms);
       const dateMatches = terms.some((term) => /^\d{4}$/.test(term) && clean(msg?.time).startsWith(term));
       const score = contentMatches * 4 + (headingMatches && contentMatches ? headingMatches * 2 : 0)
-        + (dateMatches ? 3 : 0) + (partnerTerms.length ? 2 : 0);
+        + (dateMatches ? 3 : 0) + (wantedPartner ? 2 : 0);
       if (score <= 0) continue;
       matched.push({
         threadId, participant: participants, title: threadHeading,
@@ -301,8 +337,8 @@ export const ADVISOR_DIPLOMACY_LOOKUP_TOOLS = Object.freeze([
     name:"search_advisor_diplomacy",
     description:"Search exact dated messages in the player's saved diplomatic conversations, including old messages in ACTIVE threads and archived chats. Search before asserting exact old treaty terms. Returns threadId/messageIndex for a follow-up read.",
     schema:toolSchema("Search saved diplomatic messages.",{
-      query:{type:"string",description:"Distinctive treaty, participant, or subject terms to locate in historical conversation records."},
-      partner:{type:"string",description:"Optional participant name to narrow the search."},
+      query:{type:"string",description:"Words as the conversations write them, any language; a message ranks by how many it holds."},
+      partner:{type:"string",description:"Optional: one participant's exact name."},
       limit:{type:"integer",description:"Max matches (1-4)."},
     },["query"]),
   },
