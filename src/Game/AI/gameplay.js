@@ -19,7 +19,7 @@ import {
 } from "../../runtime/scenarioPrehistory.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
 import { describeBasisAction, describeUnknownBasis, sameRegionChange, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
-import { GROUP_OP_KINDS, PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, groupOpKind, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
+import { GROUP_OP_KINDS, PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, findGroupKey, groupOpKind, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { hostingSharedGame, humanCountriesOf } from "../../runtime/humanPolities.js";
 import { uiString } from "../../runtime/translator.js";
@@ -149,6 +149,7 @@ import {
 import { validateGameMasterRequestedPuppetCompleteness } from "./gameMasterRequestCompleteness.js";
 import { GAME_MASTER_MODES, GM_AUTO_MODE, validateGameMasterModeSelection } from "./gameMasterAutoMode.js";
 import { STATS_DEMOGRAPHIC_TAGS, STATS_ECONOMIC_TAGS, eventConcernsTarget, eventHasAnyTag } from "./statsEventEvidence.js";
+import { eventPartyNames } from "./eventParties.js";
 import { GAME_MASTER_EDIT_TOOL, applyGameMasterPreviewEdits, validateGameMasterEditResponse } from "./gameMasterPreviewEdit.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
 import {
@@ -1305,19 +1306,39 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
 };
 
 // Whether a group is one a time skip is about: it holds land in a power in view,
-// or the recent events, the orders still waiting, a war or a live storyline name
-// it. `world` is normalised.
+// or a record of the turn names it as a party, by its name or a former one
+// (runtime/groups.js findGroupKey): a side of a war not yet ended, a participant
+// of a live storyline, a party of one of the last twelve events (eventParties.js:
+// who decided or fought in it, the groups its operations act on) or a region of
+// its area among their places, or an invitee or participant of an order still
+// waiting. Never found in their words: a group's name was looked for in the
+// events' and the orders' text and in the wars and storylines written out
+// whole, so "IRA" was found in "Iran", and a group a story told in another
+// language never was. `world` is normalised.
 const groupInViewTest = (bundle, world, catalog, inView) => {
   const owners = new Map(catalog.map((region) => [region.id, normalizeString(region.country)]));
   const ownerOf = (id) => normalizeString(world.regionOwnershipOverrides?.[id]) || owners.get(id) || "";
-  const text = [
-    ...normalizeArray(bundle?.events).slice(-12).map((event) => `${event?.title ?? ""} ${event?.description ?? ""}`),
-    ...normalizeArray(bundle?.actions).filter(isPendingAction).map((action) => `${action?.title ?? ""} ${action?.description ?? ""} ${action?.rawInput ?? action?.text ?? ""}`),
-    ...normalizeArray(world.wars).filter((war) => normalizeString(war?.status).toLowerCase() !== "ended").map((war) => JSON.stringify(war)),
-    ...normalizeArray(world.storylines).filter((entry) => ["active", "dormant"].includes(normalizeString(entry?.status).toLowerCase() || "active")).map((entry) => JSON.stringify(entry)),
-  ].join("\n").toLowerCase();
-  return (name, regionIds) => regionIds.some((id) => inView.has(ownerOf(id).toLowerCase()))
-    || (normalizeString(name).length >= 3 && text.includes(normalizeString(name).toLowerCase()));
+  const named = new Set();
+  const name = (party) => {
+    const key = findGroupKey(world.groups, typeof party === "string" ? party : party?.name || party?.code);
+    if (key) named.add(key);
+  };
+  const placed = new Set();
+  for (const event of normalizeArray(bundle?.events).slice(-12)) {
+    eventPartyNames(event, { wars: world.wars }).forEach(name);
+    for (const place of normalizeArray(event?.places)) if (normalizeString(place?.regionId)) placed.add(normalizeString(place.regionId));
+  }
+  for (const action of normalizeArray(bundle?.actions).filter(isPendingAction)) {
+    [...normalizeArray(action?.invitees), ...normalizeArray(action?.participants)].forEach(name);
+  }
+  for (const war of normalizeArray(world.wars)) {
+    if (normalizeString(war?.status).toLowerCase() !== "ended") [...normalizeArray(war?.sideA), ...normalizeArray(war?.sideB)].forEach(name);
+  }
+  for (const entry of normalizeArray(world.storylines)) {
+    if (["active", "dormant"].includes(normalizeString(entry?.status).toLowerCase() || "active")) normalizeArray(entry?.participants).forEach(name);
+  }
+  return (groupName, regionIds) => named.has(groupName)
+    || regionIds.some((id) => placed.has(id) || inView.has(ownerOf(id).toLowerCase()));
 };
 
 // Groups (runtime/groups.js) as the model reads them: each exact name, what it
@@ -10656,19 +10677,21 @@ const repairGeneratedPoliticalClaims = async ({
 // process overdue for the next turn.
 const WORLD_MOTION_REPAIR_HISTORY_LIMIT = 8;
 
+// The events the repair reads: those that advance this storyline (storylineIds),
+// and those whose structure names one of its participants (eventParties.js),
+// matched exactly, a code read as its country. Never found in their words: a
+// participant's name was looked for in the titles and descriptions, so "Oman"
+// chose Romania's events, and in a story told in another language only the
+// storyline's own events were found.
 const compactStorylineRepairHistory = (bundle, storyline) => {
   const id = normalizeString(storyline?.id);
-  const participants = normalizeArray(storyline?.participants)
-    .map(normalizeString)
-    .filter(Boolean);
-  const participantKeys = participants.map((name) => name.toLowerCase());
+  const partyKey = (value) => normalizeString(toCountryName(normalizeString(value))).toLocaleLowerCase();
+  const participants = new Set(normalizeArray(storyline?.participants).map(partyKey).filter(Boolean));
+  const wars = normalizeArray(bundle?.world?.wars);
 
   return normalizeEvents(bundle?.events)
-    .filter((event) => {
-      if (normalizeArray(event?.storylineIds).map(normalizeString).includes(id)) return true;
-      const haystack = `${event?.title || ""} ${event?.description || ""} ${normalizeArray(event?.combatants).join(" ")}`.toLowerCase();
-      return participantKeys.some((key) => key.length >= 4 && haystack.includes(key));
-    })
+    .filter((event) => normalizeArray(event?.storylineIds).map(normalizeString).includes(id)
+      || eventPartyNames(event, { wars }).some((name) => participants.has(partyKey(name))))
     .slice(-WORLD_MOTION_REPAIR_HISTORY_LIMIT)
     .map((event) => {
       const desc = normalizeString(event?.description).slice(0, 520);
