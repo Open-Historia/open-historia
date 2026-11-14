@@ -138,10 +138,23 @@ test("parties with no support figures are listed but not charted", () => {
 });
 
 test("an estimated figure marks the landscape approximate", () => {
-  const landscape = buildPoliticalPartyLandscape({
-    parties: [party("A", 60), { name: "B", support: { percent: 30, basis: "generated estimate" } }],
-  });
-  assert.equal(landscape.isApproximate, true);
+  for (const basis of ["generated-estimate", "native-fallback-estimate"]) {
+    const landscape = buildPoliticalPartyLandscape({
+      parties: [party("A", 60), { name: "B", support: { percent: 30, basis } }],
+    });
+    assert.equal(landscape.isApproximate, true, basis);
+  }
+});
+
+// The badge reads the game's own two estimate bases exactly. A basis written in words ("approximate", "estimation",
+// "geschätzt") is none of them, in English as in any language, and a figure the campaign derived is exact.
+test("only the game's own estimate bases mark a figure approximate, never words in a basis", () => {
+  for (const basis of ["campaign-derived", "authored", "approximate", "estimate", "generated estimate", "estimation", "geschätzt", ""]) {
+    const landscape = buildPoliticalPartyLandscape({
+      parties: [party("A", 60), { name: "B", support: { percent: 30, basis } }],
+    });
+    assert.equal(landscape.isApproximate, false, basis || "(none)");
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -168,7 +181,7 @@ test("a party state with no power blocs charts its parties' influence", () => {
   const landscape = buildPoliticalLandscape({
     politicalSystem: { representation: "party_state" },
     parties: [
-      { name: "The Party", influence: { percent: 80, basis: "approximate" } },
+      { name: "The Party", influence: { percent: 80, basis: "generated-estimate" } },
       { name: "Allied bloc", influence: { percent: 12.5 } },
     ],
   });

@@ -24,7 +24,12 @@ const clampSupport = (value) => {
   return Math.max(0, Math.min(100, Math.round(number * 10) / 10));
 };
 
-const approximateBasis = (value) => /estimate|approximate/i.test(clean(value));
+// A figure is approximate when the game itself marked it an estimate: the
+// two bases it writes for a share it estimated (politicalWorldGeneratorCore.js
+// and politicalWorldGeneration.js: "generated-estimate", "native-fallback-estimate").
+// Compared exactly, never by the words in a basis.
+const APPROXIMATE_BASES = new Set(["generated-estimate", "native-fallback-estimate"]);
+const approximateBasis = (value) => APPROXIMATE_BASES.has(clean(value).toLocaleLowerCase());
 
 const partyKey = (party, index = 0) => clean(party?.id || party?.name) || `party-${index}`;
 

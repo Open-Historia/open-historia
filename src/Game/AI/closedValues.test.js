@@ -181,6 +181,36 @@ test("no sentence is split on a list of characters; each place reads server/sent
   }
 });
 
+// ---------------------------------------------------------------------------
+// What the screen shows: a message's colour is the kind it was set with, never its words
+
+test("a status's colour is the kind set with it, never read back out of its words", () => {
+  const read = (relative) => readFileSync(new URL(relative, import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const cheats = read("../GameUI/cheats.jsx");
+  assert.doesNotMatch(cheats, /startsWith\("Failed"\)/);
+  assert.match(cheats, /const setStatus = useCallback\(\(text, kind = "ok"\) => setStatusLine\(\{ text: String\(text \?\? ""\), failed: kind === "error" \}\), \[\]\);/);
+  assert.equal((cheats.match(/color: statusFailed \? "#fca5a5"/g) ?? []).length, 8, "every status line of the panel");
+  // Every failure the panel writes says so with its words.
+  const failures = cheats.match(/setStatus\((?:`Failed[^`]*`|"Failed[^"]*")[^\n]*\);/g) ?? [];
+  assert.ok(failures.length >= 12, `${failures.length} failures`);
+  for (const call of failures) assert.match(call, /, "error"\);$/, call);
+  assert.match(cheats, /setStatusLine\(\{ text: `Failed to load game data: \$\{error\.message\}`, failed: true \}\);/);
+  assert.equal((cheats.match(/ok \? "ok" : "error"\);/g) ?? []).length, 3, "a copy that failed");
+
+  const features = read("../../Editor/FeatureManager.jsx");
+  assert.doesNotMatch(features, /startsWith\("Import failed"\)/);
+  assert.match(features, /color: importNote\.failed \? "#f87171"/);
+  const polities = read("../../Editor/PolitiesPanel.jsx");
+  assert.doesNotMatch(polities, /startsWith\("(Imported|Added|Every) "\)/);
+  assert.match(polities, /color: rosterMessage\.ok \? "#86efac" : "#fca5a5"/);
+  const provinces = read("../../Editor/ProvinceImportPanel.jsx");
+  assert.doesNotMatch(provinces, /includes\("imported"\)/);
+  assert.match(provinces, /background: statusLine\.failed \? "rgba\(239,68,68,0\.08\)" : "rgba\(34,197,94,0\.08\)"/);
+  for (const source of [features, polities, provinces]) {
+    for (const call of source.match(/set(?:ImportNote|RosterMessage|Status)\(e\?\.message[^\n]*\);/g) ?? []) assert.match(call, /, "error"\);$/, call);
+  }
+});
+
 test("the task runner leaves out a structure op that is none of the five, says so, and asks nothing more for it", () => {
   const block = gameplay.slice(gameplay.indexOf("const markerOpsLeftOut = [];"), gameplay.indexOf("// 8B.2.18: the Stats tool"));
   assert.ok(block.length > 200, "the block is where it was");

@@ -1,5 +1,5 @@
 /*! Open Historia — cheats panel © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
@@ -373,7 +373,14 @@ const PolitySelect = ({ polities, value, onChange, placeholder = "Pick a country
 const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     const [tool, setTool] = useState(null);
     const [busy, setBusy] = useState(false);
-    const [status, setStatus] = useState("");
+    // What the last action said, and whether it failed: setStatus(text, "error")
+    // carries the kind with the words, so their colour is never read back out of
+    // them (a line starting "Failed" was red, and the same failure in any other
+    // words, or in a translated message, would not have been).
+    const [statusLine, setStatusLine] = useState({ text: "", failed: false });
+    const setStatus = useCallback((text, kind = "ok") => setStatusLine({ text: String(text ?? ""), failed: kind === "error" }), []);
+    const status = statusLine.text;
+    const statusFailed = statusLine.failed;
     const [polities, setPolities] = useState([]);
     const [game, setGame] = useState(null);
     // Click-capture mode: while set, the panel hides behind a floating toast
@@ -394,13 +401,13 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             setPolities(nextPolities);
             setGame(nextGame);
         } catch (error) {
-            setStatus(`Failed to load game data: ${error.message}`);
+            setStatusLine({ text: `Failed to load game data: ${error.message}`, failed: true });
         }
     };
 
     useEffect(() => {
         if (open) {
-            setStatus("");
+            setStatusLine({ text: "", failed: false });
             void refresh();
         } else {
             setTool(null);
@@ -447,7 +454,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             const message = await work();
             setStatus(message || doneMessage || "Done.");
         } catch (error) {
-            setStatus(`Failed: ${error.message}`);
+            setStatus(`Failed: ${error.message}`, "error");
         } finally {
             setBusy(false);
         }
@@ -586,6 +593,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             header={header}
             busy={busy}
             status={status}
+            statusFailed={statusFailed}
             game={game}
             polities={polities}
             refresh={refresh}
@@ -598,7 +606,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             />
         )}
         {status && !tool && (
-            <div style={{ color: "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>{status}</div>
+            <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>{status}</div>
         )}
         </div>
         </>
@@ -669,7 +677,7 @@ const debugPreStyle = {
     whiteSpace: "pre-wrap",
 };
 
-const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus }) => {
+const CountryEditorView = ({ meta, header, busy, status, statusFailed, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus }) => {
     const [target, setTarget] = useState("");
     const [loading, setLoading] = useState(false);
     const [form, setForm] = useState({});
@@ -778,7 +786,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                 setForm(loadedForm);
             })
             .catch((error) => {
-                if (!cancelled) setStatus(`Failed: ${error.message}`);
+                if (!cancelled) setStatus(`Failed: ${error.message}`, "error");
             })
             .finally(() => {
                 if (!cancelled) setLoading(false);
@@ -1147,7 +1155,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                             }
 
                             if (!match) {
-                                setStatus("Failed: that map area does not resolve to an editable country.");
+                                setStatus("Failed: that map area does not resolve to an editable country.", "error");
                                 endClickMode();
                                 return;
                             }
@@ -1431,15 +1439,15 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.42rem", marginTop: "0.55rem" }}>
                                 <button type="button" style={buttonStyle} onClick={async () => {
                                     const ok = await copyToClipboard(JSON.stringify(politicsDebug?.actor ?? null, null, 2));
-                                    setStatus(ok ? "Copied full Political World JSON." : "Failed to copy Political World JSON.");
+                                    setStatus(ok ? "Copied full Political World JSON." : "Failed to copy Political World JSON.", ok ? "ok" : "error");
                                 }}>Copy full Political World JSON</button>
                                 <button type="button" style={buttonStyle} onClick={async () => {
                                     const ok = await copyToClipboard(decisionContextText || "");
-                                    setStatus(ok ? "Copied Political Decision Context capsule." : "Failed to copy decision capsule.");
+                                    setStatus(ok ? "Copied Political Decision Context capsule." : "Failed to copy decision capsule.", ok ? "ok" : "error");
                                 }}>Copy decision capsule</button>
                                 <button type="button" style={buttonStyle} onClick={async () => {
                                     const ok = await copyToClipboard(JSON.stringify(politicsDebug ?? null, null, 2));
-                                    setStatus(ok ? "Copied political numeric/debug snapshot." : "Failed to copy political debug snapshot.");
+                                    setStatus(ok ? "Copied political numeric/debug snapshot." : "Failed to copy political debug snapshot.", ok ? "ok" : "error");
                                 }}>Copy numeric/debug snapshot</button>
                             </div>
                             <div style={{ marginTop: "0.65rem" }}>
@@ -1695,7 +1703,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                 </>
             )}
             {status && (
-                <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
+                <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
                     {status}
                 </div>
             )}
@@ -1789,7 +1797,7 @@ const eventFilterButtonStyle = (active) => ({
 // given to every AI in the game until they are withdrawn — and beneath them, the
 // changes made by hand this round, which is exactly what the next time skip
 // will be told. Nothing here costs a request.
-const RemindersView = ({ meta, header, busy, status, game, runBusy }) => {
+const RemindersView = ({ meta, header, busy, status, statusFailed, game, runBusy }) => {
     const [world, setWorld] = useState(null);
     const [draft, setDraft] = useState("");
     const [editingId, setEditingId] = useState(null);
@@ -1849,7 +1857,7 @@ const RemindersView = ({ meta, header, busy, status, game, runBusy }) => {
     const cardStyle = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "0.5rem 0.6rem" };
     const noteStyle = { color: "rgba(255,255,255,0.48)", fontSize: "0.68rem", lineHeight: 1.45 };
     const statusLine = status && (
-        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
+        <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
             {status}
         </div>
     );
@@ -1950,7 +1958,7 @@ const RemindersView = ({ meta, header, busy, status, game, runBusy }) => {
 // It writes the offer and nothing else. The scene itself costs what it always
 // costs (one request to open, one a move, one to end), and the cooldown is left
 // alone, so skips go on offering their own.
-const InteractiveEventView = ({ meta, header, busy, status, game, runBusy, closePanel }) => {
+const InteractiveEventView = ({ meta, header, busy, status, statusFailed, game, runBusy, closePanel }) => {
     // The shared store, like the panels that play the scene: an offer written
     // here reaches the buttons below without a re-read.
     const world = useRuntimeState("world");
@@ -1997,7 +2005,7 @@ const InteractiveEventView = ({ meta, header, busy, status, game, runBusy, close
     const noteStyle = { color: "rgba(255,255,255,0.48)", fontSize: "0.68rem", lineHeight: 1.45 };
     const warnStyle = { background: "rgba(250,204,21,0.08)", border: "1px solid rgba(250,204,21,0.32)", borderRadius: 8, color: "#fde68a", fontSize: "0.68rem", lineHeight: 1.45, padding: "0.5rem 0.6rem" };
     const statusLine = status && (
-        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
+        <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
             {status}
         </div>
     );
@@ -2080,7 +2088,7 @@ const InteractiveEventView = ({ meta, header, busy, status, game, runBusy, close
     );
 };
 
-const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
+const EventEditorView = ({ meta, header, busy, status, statusFailed, game, runBusy }) => {
     const [events, setEvents] = useState(null);
     const [search, setSearch] = useState("");
     const [filter, setFilter] = useState("all");
@@ -2477,7 +2485,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
     );
 
     const statusLine = status && (
-        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
+        <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
             {status}
         </div>
     );
@@ -2902,7 +2910,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
 // countries'. Every change is the groupOps an AI event carries, applied through
 // the same seam, so a hand edit lands as the simulation's would; the next time
 // skip is told (runtime/gmChanges.js).
-const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode, setStatus }) => {
+const GroupsView = ({ meta, header, busy, status, statusFailed, game, runBusy, beginClickMode, setStatus }) => {
     const [world, setWorld] = useState(null);
     const [selected, setSelected] = useState(null);
     const [form, setForm] = useState({ name: "", description: "", color: GROUP_PALETTE[0] });
@@ -3038,13 +3046,13 @@ const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode,
                 });
                 setStatus(`${label}: ${had ? `no longer ${name}'s` : `now controlled by ${name}`}. Keep clicking, or press Done.`);
             } catch (error) {
-                setStatus(`Failed: ${error.message}`);
+                setStatus(`Failed: ${error.message}`, "error");
             }
         });
     };
 
     const statusLine = status && (
-        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
+        <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
         {status}
         </div>
     );
@@ -3176,7 +3184,7 @@ const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode,
 // arrangement, then hands the land over through the Annex Country transfer.
 const PUPPET_FORM_DEFAULTS = { overlord: "", puppet: "", kind: "satellite", secrecy: "open", loyalty: 50 };
 
-const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy, setStatus }) => {
+const PuppetStatesView = ({ meta, header, busy, status, statusFailed, game, polities, runBusy, setStatus }) => {
     const [world, setWorld] = useState(null);
     // null: the list; "": a new arrangement; otherwise the row being edited.
     const [editing, setEditing] = useState(null);
@@ -3283,7 +3291,7 @@ const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy,
     });
 
     const statusLine = status && (
-        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
+        <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
         {status}
         </div>
     );
@@ -3421,7 +3429,7 @@ const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy,
     );
 };
 
-const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool, closePanel }) => {
+const ToolView = ({ tool, header, busy, status, statusFailed, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool, closePanel }) => {
     const meta = TOOLS.find((entry) => entry.id === tool);
     const [text, setText] = useState("");
     const [gmMode, setGmMode] = useState("auto");
@@ -3583,7 +3591,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
     }, [tool]);
 
     const statusLine = status && (
-        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
+        <div style={{ color: statusFailed ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
         {status}
         </div>
     );
@@ -3611,6 +3619,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 header={header}
                 busy={busy}
                 status={status}
+                statusFailed={statusFailed}
                 game={game}
                 runBusy={runBusy}
                 beginClickMode={beginClickMode}
@@ -3626,6 +3635,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 header={header}
                 busy={busy}
                 status={status}
+                statusFailed={statusFailed}
                 game={game}
                 polities={polities}
                 runBusy={runBusy}
@@ -3641,6 +3651,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 header={header}
                 busy={busy}
                 status={status}
+                statusFailed={statusFailed}
                 game={game}
                 runBusy={runBusy}
             />
@@ -3654,6 +3665,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 header={header}
                 busy={busy}
                 status={status}
+                statusFailed={statusFailed}
                 game={game}
                 runBusy={runBusy}
             />
@@ -3667,6 +3679,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 header={header}
                 busy={busy}
                 status={status}
+                statusFailed={statusFailed}
                 game={game}
                 runBusy={runBusy}
                 closePanel={closePanel}
@@ -3681,6 +3694,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 header={header}
                 busy={busy}
                 status={status}
+                statusFailed={statusFailed}
                 polities={polities}
                 refresh={refresh}
                 runBusy={runBusy}
@@ -4869,7 +4883,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 if (!source || source === owner) return;
                                 const count = await transferWholeCountry(source, owner, game);
                                 if (count === 0) {
-                                    setStatus(`Failed: no regions of ${nameOf(source)} were found on the map, so nothing was annexed.`);
+                                    setStatus(`Failed: no regions of ${nameOf(source)} were found on the map, so nothing was annexed.`, "error");
                                     return;
                                 }
                                 await noteGmChange("territory", `Annexed the whole of ${nameOf(source)} into ${nameOf(owner)} by hand (${count} regions).`);
@@ -4890,7 +4904,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 setStatus(`${label} → ${nameOf(owner)}. Keep clicking, or press Done.`);
                             }
                         } catch (error) {
-                            setStatus(`Failed: ${error.message}`);
+                            setStatus(`Failed: ${error.message}`, "error");
                         }
                     },
                 );
@@ -5129,7 +5143,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             setStatus("");
                             await readRegionState({ rawProps: props, fallback: {} });
                         } catch (error) {
-                            setStatus(`Failed: ${error.message}`);
+                            setStatus(`Failed: ${error.message}`, "error");
                         } finally {
                             endClickMode();
                         }
@@ -5756,7 +5770,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                         setStatus(`${marker.name} moved authoritatively.`);
                                                     } catch (error) {
                                                         endClickMode();
-                                                        setStatus(`Failed: ${error.message}`);
+                                                        setStatus(`Failed: ${error.message}`, "error");
                                                     }
                                                 });
                                             }}
@@ -5904,7 +5918,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                         setStatus(`${saved.name} moved on the scenario city layer.`);
                                                     } catch (error) {
                                                         endClickMode();
-                                                        setStatus(`Failed: ${error.message}`);
+                                                        setStatus(`Failed: ${error.message}`, "error");
                                                     }
                                                 });
                                             }}
@@ -5962,11 +5976,11 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const beginPlacement = () => {
             const name = String(fields.name ?? "").trim();
             if (!name) {
-                setStatus("Failed: Give the feature a name first.");
+                setStatus("Failed: Give the feature a name first.", "error");
                 return;
             }
             if (type === "other" && !customKind) {
-                setStatus("Failed: Give the custom feature type a name.");
+                setStatus("Failed: Give the custom feature type a name.", "error");
                 return;
             }
             const tier = Math.max(1, Math.min(4, Number(fields.tier) || 2));
@@ -6026,7 +6040,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     setStatus(`${name} added as a persistent world feature.`);
                 } catch (error) {
                     endClickMode();
-                    setStatus(`Failed: ${error.message}`);
+                    setStatus(`Failed: ${error.message}`, "error");
                 }
             });
         };
