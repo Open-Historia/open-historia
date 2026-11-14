@@ -18,7 +18,6 @@ export const resolvePanelPolity = (country, world) => {
   const identity = resolvePolityIdentity(requested, world ?? {}, {
     allowUnknown: false,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
   });
   const stableKey = identity?.resolved || requested;

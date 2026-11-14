@@ -19,6 +19,8 @@ import {
 } from "./markerFamily.js";
 import { applyMarkerOps, normalizeMarkerEntry } from "./gameState.js";
 import { MAP_FEATURE_KINDS } from "../Editor/mapFeatures.js";
+import { STRUCTURE_KINDS } from "../Game/AI/gameplaySchemas.js";
+import { STRUCTURE_KIND_FAMILIES, structureKindFamily } from "./markerFamily.js";
 import { GM_MAP_FEATURE_FAMILIES, GM_MAP_FEATURE_KINDS, gmFeatureFamily } from "../Game/GameUI/mapFeatureKinds.js";
 import { getGameplayTool, validateGameplayPayload } from "../Game/AI/gameplaySchemas.js";
 
@@ -34,6 +36,18 @@ test("the game's own kinds each have a family, and those are all the kinds it re
     assert.equal(kindFamily(kind.id), expected, kind.id);
   }
   assert.deepEqual(SAID_MARKER_FAMILIES, MARKER_FAMILIES.filter((family) => family !== NEUTRAL_MARKER_FAMILY));
+});
+
+// The structure director writes only kinds of its closed list, so each has a
+// family, said on what it builds; a structure saved with no family is never read
+// by that list, whatever words its kind is in.
+test("every kind the structure director may build has a family, said on the structure", () => {
+  assert.deepEqual(Object.keys(STRUCTURE_KIND_FAMILIES).sort(), [...STRUCTURE_KINDS].sort());
+  for (const family of Object.values(STRUCTURE_KIND_FAMILIES)) assert.ok(MARKER_FAMILIES.includes(family), family);
+  assert.equal(structureKindFamily("missile silo"), "military");
+  assert.equal(structureKindFamily("naval_base"), "military");
+  assert.equal(structureKindFamily("silo à missiles"), NEUTRAL_MARKER_FAMILY);
+  assert.equal(markerFamilyOf({ kind: "missile silo" }), NEUTRAL_MARKER_FAMILY, "a structure saved with no family is not read by the director's list");
 });
 
 test("a structure's family is the one it was given, else its kind's when the game offers that kind, else a landmark", () => {

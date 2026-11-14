@@ -29,6 +29,7 @@
 
 import { PROJECT_OPEN_STATUSES, normalizeMarkers } from "../../runtime/gameState.js";
 import { STRUCTURE_KINDS } from "./gameplaySchemas.js";
+import { structureKindFamily } from "../../runtime/markerFamily.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -176,6 +177,10 @@ export const sanitizeStructureOrders = ({ events, orders, world, playerCountry =
         id: makeId(),
         name,
         kind,
+        // How the map draws it: its kind is one of the director's closed list
+        // (STRUCTURE_KINDS), so its family is that kind's, by id
+        // (runtime/markerFamily.js structureKindFamily), said on the structure.
+        family: structureKindFamily(kind),
         ownerCode: owner,
         status: BUILD_STATUSES.has(status) ? status : "active",
         lng,

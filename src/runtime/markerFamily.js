@@ -69,6 +69,44 @@ export const kindFamily = (kind) => {
   return Object.hasOwn(KIND_FAMILIES, key) ? KIND_FAMILIES[key] : "";
 };
 
+// The family of each kind on the structure director's closed list
+// (Game/AI/gameplaySchemas.js STRUCTURE_KINDS, held equal to it by
+// markerFamily.test.js), said on what the director builds
+// (nativeStructureDirector.js). Only there: a structure saved with no family is
+// never read by these, since a kind an AI wrote freely may be the same English
+// words ("missile silo") that no other language's kind ever is.
+export const STRUCTURE_KIND_FAMILIES = Object.freeze({
+  "military hq": "military",
+  "military base": "military",
+  "naval base": "military",
+  airfield: "military",
+  fortress: "military",
+  "missile silo": "military",
+  "radar station": "military",
+  port: "infrastructure",
+  shipyard: "industry-science",
+  depot: "infrastructure",
+  "pipeline terminal": "infrastructure",
+  infrastructure: "infrastructure",
+  "launch site": "industry-science",
+  "ground station": "industry-science",
+  "industrial plant": "industry-science",
+  "power plant": "industry-science",
+  refinery: "industry-science",
+  mine: "resource",
+  "oil field": "resource",
+  "research facility": "industry-science",
+  "data centre": "industry-science",
+  embassy: "diplomatic",
+  landmark: "landmark",
+});
+
+// The family a structure the director builds is drawn as: its kind's, by id.
+export const structureKindFamily = (kind) => {
+  const key = kindKey(kind);
+  return Object.hasOwn(STRUCTURE_KIND_FAMILIES, key) ? STRUCTURE_KIND_FAMILIES[key] : NEUTRAL_MARKER_FAMILY;
+};
+
 // A structure's family: the one it was given, else its kind's when that is one
 // of the game's own, else the neutral one.
 export const markerFamilyOf = (marker) => normalizeMarkerFamily(marker?.family)
