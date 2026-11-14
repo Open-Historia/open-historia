@@ -152,7 +152,7 @@ export const screenTerritoryBasis = ({ regionTransfers = [], regionControlOps = 
   const controlOps = screen(
     "regionControlOps",
     regionControlOps,
-    (entry) => ["control", "control_flip"].includes(clean(entry.op).toLowerCase()),
+    (entry) => clean(entry.op).toLowerCase() === "control",
   );
 
   return { actions, unknown, regionClaims: claims, regionControlOps: controlOps, regionTransfers: transfers };

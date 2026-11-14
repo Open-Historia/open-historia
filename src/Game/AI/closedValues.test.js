@@ -83,6 +83,59 @@ test("a time skip's shape leaves an op word as written, and builds only by the w
   assert.equal(detruit.op, "détruire");
 });
 
+// ---------------------------------------------------------------------------
+// Claims and de-facto control: the schema's own fields and ops
+
+const claimEvent = (impacts) => ({ id: "e1", date: "2025-01-01", title: "t", description: "d", impacts });
+const disputed = () => ({ regionClaimants: { "UKR.4_1": ["Russia", "Belarus"] }, regionOwnershipOverrides: { "UKR.4_1": "Ukraine" } });
+const after = (impacts, world = disputed()) => applyEventImpactsToWorld({ events: [claimEvent(impacts)], world }).world;
+
+test("a claim is withdrawn by its drop, never by a verb: 'renounce' and 'renoncer' both assert it", () => {
+  assert.deepEqual(after({ regionClaims: [{ regionId: "UKR.4_1", claimantCode: "Russia", drop: true }] }).regionClaimants["UKR.4_1"], ["Belarus"]);
+  assert.deepEqual(after({ regionClaims: [{ regionId: "UKR.4_1", claimantCode: "Russia", op: "drop" }] }).regionClaimants["UKR.4_1"], ["Belarus"], "the game's own word in the op's place");
+  for (const op of ["renounce", "renoncer"]) {
+    const next = after({ regionClaims: [{ regionId: "UKR.4_1", claimantCode: "Russia", op }] });
+    assert.deepEqual(next.regionClaimants["UKR.4_1"], ["Russia", "Belarus"], op);
+  }
+});
+
+test("a control op is one of the schema's three, and every contender goes only by clearAll", () => {
+  // control_flip and its French twin are no op: the region stays with Ukraine.
+  for (const op of ["control_flip", "basculer"]) {
+    const next = after({ regionControlOps: [{ op, regionId: "UKR.4_1", fromCode: "Ukraine", toCode: "Russia" }] });
+    assert.equal(next.regionOwnershipOverrides["UKR.4_1"], "Ukraine", op);
+  }
+  const taken = after({ regionControlOps: [{ op: "control", regionId: "UKR.4_1", fromCode: "Ukraine", toCode: "Russia" }] });
+  assert.equal(taken.regionOwnershipOverrides["UKR.4_1"], "Russia");
+
+  // "clear" and a claimant named "all" (or "tous") clear nothing; clear_contest with clearAll clears every contender.
+  for (const op of [{ op: "clear", claimantCode: "Russia" }, { op: "clear_contest", claimantCode: "all" }, { op: "clear_contest", claimantCode: "tous" }]) {
+    const next = after({ regionControlOps: [{ regionId: "UKR.4_1", fromCode: "Ukraine", ...op }] });
+    assert.deepEqual(next.regionClaimants["UKR.4_1"], ["Russia", "Belarus"], JSON.stringify(op));
+  }
+  const one = after({ regionControlOps: [{ op: "clear_contest", regionId: "UKR.4_1", fromCode: "Ukraine", claimantCode: "Russia" }] });
+  assert.deepEqual(one.regionClaimants["UKR.4_1"], ["Belarus"], "one contender, named");
+  const cleared = after({ regionControlOps: [{ op: "clear_contest", regionId: "UKR.4_1", fromCode: "Ukraine", clearAll: true }] });
+  assert.equal("UKR.4_1" in cleared.regionClaimants, false, "clearAll clears every contender");
+});
+
+// ---------------------------------------------------------------------------
+// A strike's side: the game's own two tags for a country or a group
+
+test("a side tagged country: or group: is that name; any other word before a colon is part of it, in any language", async () => {
+  const { placeStrikes } = await import("./frontTurn.js");
+  const { decodeEventStrikes } = await import("./nativeFrontLedger.js");
+  const ownerOf = async (side) => {
+    const struck = decodeEventStrikes([`${side}~bombing run~~city: Brod~6~none`], "e1");
+    const [placed] = await placeStrikes(struck, { events: [{ id: "e1", date: "2024-03-04" }], cities: [{ name: "Brod", lng: 51, lat: 45 }], world: { markers: [], units: [] }, toDate: "2024-03-31" });
+    return placed?.owner;
+  };
+  assert.equal(await ownerOf("country: Aland"), "Aland");
+  assert.equal(await ownerOf("Group: Black Hand"), "Black Hand");
+  assert.equal(await ownerOf("polity: Aland"), "polity: Aland", "not a tag the game writes");
+  assert.equal(await ownerOf("pays: Aland"), "pays: Aland", "nor its French twin");
+});
+
 test("the task runner leaves out a structure op that is none of the five, says so, and asks nothing more for it", () => {
   const block = gameplay.slice(gameplay.indexOf("const markerOpsLeftOut = [];"), gameplay.indexOf("// 8B.2.18: the Stats tool"));
   assert.ok(block.length > 200, "the block is where it was");

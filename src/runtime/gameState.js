@@ -1183,7 +1183,11 @@ const normalizeRegionClaim = (entry) => {
     entry.claimantCode || entry.claimant || entry.byCode || entry.ownerCode || entry.code,
   ));
 
-  const drop = entry.drop === true || entry.drop === "true" || entry.op === "drop" || entry.op === "renounce";
+  // Withdrawn when its `drop` says so (true, or the same written as text), or
+  // when the game's own word for it stands in the op's place. Never by another
+  // verb: "renounce" once withdrew a claim, in English only, and the same verb
+  // in any other language asserted it (the owner, 2026-11-13: no keywording).
+  const drop = entry.drop === true || entry.drop === "true" || entry.op === "drop";
   // Every claimant's claim on the region withdrawn at once (a settlement, a
   // country clearing all claims on its land): no claimant needs naming then.
   const allClaimants = drop && (entry.allClaimants === true || entry.allClaimants === "true");
@@ -1209,7 +1213,10 @@ const POLITY_STATUS_SET = new Set(["active", "dormant", "dissolved"]);
 
 // A de-facto control operation (contest / control / clear_contest): the
 // wartime layer that leaves legal sovereignty alone. Owners share the claimant
-// namespace, so a bare code is folded onto a country name here too.
+// namespace, so a bare code is folded onto a country name here too. The op is
+// one of the schema's three as it writes them, and every contender goes only
+// when clearAll says so: "control_flip", "clear" and a claimant named "all"
+// were once read as them, in English only (the owner, 2026-11-13).
 const normalizeRegionControlOp = (entry) => {
   if (!entry || typeof entry !== "object") return null;
 
@@ -1227,7 +1234,7 @@ const normalizeRegionControlOp = (entry) => {
     return { op, regionId, regionName, fromCode, actorCode, note };
   }
 
-  if (op === "control" || op === "control_flip") {
+  if (op === "control") {
     const toCode = toCountryName(normalizeOptionalString(entry.toCode || entry.controllerCode || entry.ownerCode));
     if (!fromCode || !toCode || fromCode.toLowerCase() === toCode.toLowerCase()) return null;
     const basis = normalizeTerritoryBasis(entry.basis);
@@ -1247,9 +1254,9 @@ const normalizeRegionControlOp = (entry) => {
     };
   }
 
-  if (op === "clear_contest" || op === "clear") {
+  if (op === "clear_contest") {
     const claimantCode = toCountryName(normalizeOptionalString(entry.claimantCode || entry.actorCode));
-    const clearAll = entry.clearAll === true || normalizeOptionalString(entry.claimantCode).toLowerCase() === "all";
+    const clearAll = entry.clearAll === true;
     if (!claimantCode && !clearAll) return null;
     return {
       op: "clear_contest",

@@ -1041,7 +1041,7 @@ export const buildTargetStatsTerritorialBasisKernel = async ({
 
     const grantsControl = normalizeArray(event?.impacts?.regionControlOps)
       .some((operation) =>
-        ["control", "control_flip"].includes(normalizeString(operation?.op).toLowerCase()) &&
+        normalizeString(operation?.op).toLowerCase() === "control" &&
         sameTarget(operation?.toCode));
 
     const grantsSovereignty = normalizeArray(event?.impacts?.regionTransfers)
