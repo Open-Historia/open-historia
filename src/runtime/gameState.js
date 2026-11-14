@@ -28,6 +28,7 @@ import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
 import { normalizeEventPlaces } from "./eventPlaces.js";
 import { normalizeMarkerFamily } from "./markerFamily.js";
+import { normalizeEventConcerns } from "./eventConcerns.js";
 import { normalizeEventPresentation } from "./eventQuote.js";
 import { normalizeEventAgency } from "./eventAgency.js";
 import { storylineKindOf } from "./storylineKinds.js";
@@ -3845,6 +3846,9 @@ export const normalizeEventEntry = (entry, index = 0) => {
   // map (runtime/eventPlaces.js): what its card links to.
   const places = normalizeEventPlaces(entry.places);
   const digest = normalizeEventDigest(entry.digest);
+  // The polities the event says it is about (runtime/eventConcerns.js), read
+  // as its combatants are.
+  const concerns = normalizeEventConcerns(entry.concerns, { toName: (name) => toCountryName(name) });
 
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
@@ -3877,6 +3881,8 @@ export const normalizeEventEntry = (entry, index = 0) => {
         .map((name) => toCountryName(normalizeOptionalString(name)) || normalizeOptionalString(name))
         .filter(Boolean),
     )].slice(0, MAX_WAR_SIDE_MEMBERS),
+    // Only when present, so an event without saves exactly as before.
+    ...(concerns.length ? { concerns } : {}),
     source: normalizeOptionalString(entry.source) || "scenario",
     title,
   };

@@ -1415,6 +1415,11 @@ const eventSchema = {
       maxItems: 8,
       items: { type: "string" },
     },
+    // The polities it is about (runtime/eventConcerns.js): the country panel's
+    // list of a polity's events and each player's own events in a shared game,
+    // in place of reading its words for a name. After the fields the map moves
+    // by, and optional.
+    concerns: { type: "array", description: "Polities it is about, exact names.", items: { type: "string" } },
   },
   required: ["date", "title", "description"],
   additionalProperties: false,
