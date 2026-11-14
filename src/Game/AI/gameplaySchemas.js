@@ -21,6 +21,7 @@ import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
 import { OCCUPATION_SETTLEMENTS_FIELD, occupationOutcomesFor } from "../../runtime/occupationSettlements.js";
 import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
 import { CANON_KINDS } from "../../runtime/historyTiers.js";
+import { SOCIAL_POST_REACH } from "../../runtime/socialFeed.js";
 import { SAID_MARKER_FAMILIES } from "../../runtime/markerFamily.js";
 const textSchema = (description) => ({
   type: "string",
@@ -1267,7 +1268,7 @@ export const NO_SKIP_HISTORY_JOB = `No history job rides on this answer: leave t
 export const SOCIAL_POSTS_FIELD = "socialPosts";
 const SOCIAL_POSTS_SENT_SCHEMA = {
   type: "array",
-  description: "Social media posts of the period; rules under [Social Media].",
+  description: "Rules under [Social Media].",
   items: {
     type: "object",
     properties: {
@@ -1278,6 +1279,12 @@ const SOCIAL_POSTS_SENT_SCHEMA = {
       text: { type: "string" },
       quote: { type: "string" },
       offTopic: { type: "boolean" },
+      // How far the author's voice carries, and the polities the post is
+      // about, by their exact names (socialFeed.js): what the counts under a
+      // post and the Mentions tab read, in place of English words in a role
+      // or a country's name inside the text. Last, and optional.
+      reach: { type: "string", enum: [...SOCIAL_POST_REACH] },
+      mentions: { type: "array", items: { type: "string" } },
     },
     required: ["author", "text"],
     additionalProperties: false,
@@ -1291,7 +1298,7 @@ const SOCIAL_POSTS_SENT_SCHEMA = {
 export const POLL_RESULTS_FIELD = "pollResults";
 const POLL_RESULTS_SENT_SCHEMA = {
   type: "array",
-  description: "Votes on the player's open polls; rules under [Social Media]. Empty if none.",
+  description: "Rules under [Social Media].",
   items: {
     type: "object",
     properties: {

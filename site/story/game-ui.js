@@ -84,7 +84,7 @@
   // was made in, answered from the next.
   var POSTS = [
     { t: 0.2, id: "p1", author: "Margot Lefèvre", role: "Political editor, Le Quotidien", country: "France", date: "2016-01-01", text: "Happy new year from Paris. The unions promise a hard spring, the Élysée a quiet one. One of them is wrong.", reposts: 210, likes: 1900 },
-    { t: 0.5, id: "p2", author: "The Chancellor of Germany", country: "Germany", flag: ["#000000", "#dd0000", "#ffce00"], across: true, date: "2016-01-01", text: "A good start to 2016 with our friends in France. Europe is strongest when Paris and Berlin speak with one voice.", reposts: 9800, likes: 64000 },
+    { t: 0.5, id: "p2", author: "The Chancellor of Germany", country: "Germany", flag: ["#000000", "#dd0000", "#ffce00"], across: true, date: "2016-01-01", mentions: ["France"], text: "A good start to 2016 with our friends in France. Europe is strongest when Paris and Berlin speak with one voice.", reposts: 9800, likes: 64000 },
     { t: 0.75, id: "p3", author: "Luca Marino", role: "Actor", country: "Italy", flag: ["#009246", "#ffffff", "#ce2b37"], date: "2016-01-01", kind: "everyday", text: "Three hours in the queue at a bakery in Montmartre for one croissant. Worth every minute. I would do it again tomorrow.", reposts: 7400, likes: 88000 },
     { t: 1.2, id: "p4", author: "The President of Russia", country: "Russia", flag: ["#ffffff", "#0039a6", "#d52b1e"], across: true, date: "2016-08-09", text: "Ten missiles crossed the Arctic tonight. Russia will remember who fired them, and when.", reposts: 41000, likes: 230000 },
     { t: 1.95, id: "p5", author: "Margot Lefèvre", role: "Political editor, Le Quotidien", country: "France", date: "2016-08-09", text: "Seven caught, three through. Paris is very quiet tonight.", reposts: 520, likes: 4100 },
@@ -94,9 +94,9 @@
     { t: 5.2, id: "p9", author: "The President of the United States", country: "United States", flag: ["#3c3b6e", "#ffffff", "#b22234"], across: true, date: "2017-01-01", quote: "p8", text: "Washington accepts. Our Secretary of State will lead the delegation to Strasbourg.", reposts: 18000, likes: 150000 },
     { t: 5.25, id: "p10", author: "The President of China", country: "China", flag: ["#de2910", "#de2910", "#de2910"], date: "2017-01-01", quote: "p8", text: "China will bring its neighbour. The armistice line is the one held on the day of signing.", reposts: 9100, likes: 72000 },
     { t: 6.3, id: "p11", author: "The President of Russia", country: "Russia", flag: ["#ffffff", "#0039a6", "#d52b1e"], across: true, date: "2017-01-14", quote: "p8", text: "We will come to Strasbourg, as the injured party. Inspectors go to Montana as well as to Plesetsk.", reposts: 33000, likes: 210000 },
-    { t: 7.3, id: "p12", author: "Camille Rousseau", role: "Deputy, Assemblée nationale", country: "France", date: "2017-02-09", text: "341 to 156. France goes to Strasbourg with the Assemblée behind it.", reposts: 2100, likes: 19000 },
+    { t: 7.3, id: "p12", author: "Camille Rousseau", role: "Deputy, Assemblée nationale", country: "France", date: "2017-02-09", mentions: ["France"], text: "341 to 156. France goes to Strasbourg with the Assemblée behind it.", reposts: 2100, likes: 19000 },
     { t: 7.6, id: "p13", author: "Tunde Adeyemi", role: "Footballer", country: "Nigeria", flag: ["#008751", "#ffffff", "#008751"], date: "2017-02-09", kind: "everyday", text: "Hat-trick tonight and my mother still wants to know why I missed the fourth.", reposts: 15000, likes: 120000 },
-    { t: 8.3, id: "p14", author: "The Secretary-General of the United Nations", date: "2017-03-02", quote: "p8", text: "The Final Act of Strasbourg is signed: an armistice in Korea, and ten years without a launch. The world owes France a debt today.", reposts: 61000, likes: 420000 }
+    { t: 8.3, id: "p14", author: "The Secretary-General of the United Nations", date: "2017-03-02", quote: "p8", mentions: ["France"], text: "The Final Act of Strasbourg is signed: an armistice in Korea, and ten years without a launch. The world owes France a debt today.", reposts: 61000, likes: 420000 }
   ];
   // France's figures at the middle of each chapter; each takes what it does not set from the one before.
   var FIGURES = [
@@ -1288,10 +1288,12 @@
     return POSTS.filter(function (p) { return p.t <= upTo; }).concat(social.user).sort(function (a, b) { return b.t - a.t || (b.n || 0) - (a.n || 0); });
   }
   function findPost(feed, id) { for (var i = 0; i < feed.length; i += 1) if (feed[i].id === id) return feed[i]; return null; }
+  // As the game has it (runtime/socialFeed.js mentionsPlayer): a post that quotes France's, or that names France among
+  // the polities it mentions (each canned post says so, as a time skip does), never the words of the post.
   function isMention(p, feed) {
     if (p.kind === "player") return false;
     var quoted = p.quote && findPost(feed, p.quote);
-    return !!(quoted && quoted.kind === "player") || /\bFrance\b|President of France/.test(p.text);
+    return !!(quoted && quoted.kind === "player") || (p.mentions || []).indexOf("France") >= 0;
   }
   function inTab(p, tab, feed) {
     if (tab === "mentions") return isMention(p, feed);

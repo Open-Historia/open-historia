@@ -44,8 +44,12 @@ const body = (source, start) => {
 test("the skip is sent the posts' shape: a list of flat posts, no bounds a provider refuses", () => {
   const field = getGameplayTool("jumpForward").schema.properties[SOCIAL_POSTS_FIELD];
   assert.equal(field.type, "array");
-  assert.deepEqual(Object.keys(field.items.properties), ["author", "role", "country", "date", "text", "quote", "offTopic"]);
+  assert.deepEqual(Object.keys(field.items.properties), ["author", "role", "country", "date", "text", "quote", "offTopic", "reach", "mentions"]);
   assert.deepEqual(field.items.required, ["author", "text"]);
+  // How far a voice carries and whom a post mentions: an enum and a list of
+  // names, never read from the post's English words.
+  assert.deepEqual(field.items.properties.reach.enum, ["leader", "official", "famous", "ordinary"]);
+  assert.deepEqual(field.items.properties.mentions, { type: "array", items: { type: "string" } });
   // Gemini refuses minItems/maxItems on a list of objects (geminiSchema.js).
   const gemini = toGeminiSchema(field);
   assert.equal("minItems" in gemini || "maxItems" in gemini, false);
