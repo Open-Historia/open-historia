@@ -3,16 +3,26 @@
 // battle coherent with it, so an NPC army is not a decorative counter the turn
 // after it is created. It runs once per turn on the merged events: a narrow AI
 // call proposes unit operations for the military events, deterministic rules
-// below sanitize them, and the accepted ops ride the same application path as
+// below check them, and the accepted ops ride the same application path as
 // the simulator's own unitOps (a long move becomes a standing order of the unit
 // engine). This build resolves fighting through narrated strength changes and
 // postures, so there is no attack op here.
+//
+// Which events it reads, and which of its operations it keeps, is decided by
+// what each event CARRIES and never by its words: an event's prose is written
+// in the player's language, and the English word lists that used to stand here
+// ("raises a new battalion", "commissioned", "set sail", the formations a
+// strength change or a removal had to name) passed English events and no
+// others, so in any other language no unit ever changed (the owner,
+// 2026-11-13: no keywording anywhere). The director is the AI; what it says
+// an event did to a formation is taken as the operation it wrote.
 
 import { normalizePendingUnitOrders, normalizeUnitEntry, normalizeUnits } from "../../runtime/gameState.js";
-import { mentionCount, nameVariants } from "./regionFocus.js";
+import { normalizeEventTags } from "../../runtime/eventTags.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
+const sameName = (a, b) => Boolean(normalizeString(a)) && normalizeString(a).toLowerCase() === normalizeString(b).toLowerCase();
 
 const cloneValue = (value) => {
   if (value == null) return value;
@@ -20,93 +30,14 @@ const cloneValue = (value) => {
   return JSON.parse(JSON.stringify(value));
 };
 
-const MILITARY_EVENT_PATTERN =
-  /\b(battle|clash|combat|skirmish|firefight|shootout|gunfire|exchange(?:s|d)? of fire|opens? fire|comes? under fire|armed border incident|border incident|frontier incident|military incident|offensive|counteroffensive|attack|assault|advanc(?:e|es|ed|ing)|retreat|withdraw|withdrawal|mobiliz(?:e|es|ed|ation)|deploy|deployment|redeploy|redeployment|siege|invad(?:e|es|ed|ing|er|ers)|invasion|garrison(?:ed|ing)?|bombard|blockade|landing|breakthrough|encircle|engag(?:e|es|ed|ement)|make(?:s)? contact|made contact|surrender|capitulat|reinforc|maneuver|manoeuvre|march(?:es|ed|ing)?|cross(?:es|ed|ing) the|storm(?:s|ed|ing)|overrun(?:s|ning)?|overran)\b/i;
-
-// The older and stranger words for a force too: a khalasar, a horde, a levy, a
-// host or column (only as a noun: "Mance Rayder's host", not "hosts a summit").
-// A Game of Thrones campaign moved 25 counters for 98 events about moving
-// forces, because only a modern army's words were heard.
-const MILITARY_FORMATION_PATTERN =
-  /\b(army|armies|forces?|troops?|legions?|fleet|flotilla|division|corps|brigade|regiment|battalion|cavalry|infantry|artillery|garrison|war elephants?|navy|naval|air force|squadrons?|warships?|frigates?|destroyers?|submarines?|carriers?|khalasars?|hordes?|war ?bands?|levy|levies|knights|spearmen|galleys?|longships?)\b|(?:'s|\bthe) (?:[\w-]+ )?(?:host|column)\b/i;
-
-// R3.7: the expensive Unit Director is only useful when prose describes an
-// operational change that could actually move/spawn/fight/reinforce/remove a
-// persistent counter. Military industry, labs, doctrine, surveillance networks,
-// readiness coordination and procurement can remain military events without
-// paying an AI unit-state pass.
-const OPERATIONAL_UNIT_DELTA_PATTERN =
-  /\b(?:battle|clash|combat|skirmish|firefight|opens? fire|comes? under fire|offensive|counteroffensive|attack|assault|advanc(?:e|es|ed|ing)|retreat|withdraw(?:s|al|n|ing)?|mobiliz(?:e|es|ed|ation)|deploy(?:s|ed|ment|ing)?\s+(?:troops?|forces?|brigade|division|corps|army|battalion|regiment|units?)|redeploy(?:s|ed|ment|ing)?|siege|invad(?:e|es|ed|ing)|invasion|garrison(?:s|ed|ing)?|bombard(?:s|ed|ment|ing)?|blockade|landing|breakthrough|encircl(?:e|es|ed|ement)|engag(?:e|es|ed|ement)|surrender|capitulat|reinforcements? (?:arrive|deployed|sent)|reserve(?:s)? (?:activated|mobilized|called up)|march(?:es|ed|ing)?(?:\s+(?:toward|to|into|across))?|cross(?:es|ed|ing)|enter(?:s|ed|ing)?|reach(?:es|ed|ing)?|arriv(?:e|es|ed|ing)|embark(?:s|ed|ing)?|sail(?:s|ed|ing)?|maneuver(?:s|ed|ing)?|manoeuv(?:re|res|red|ring)|encamp(?:s|ed|ing)?|establish(?:es|ed|ing)?\s+(?:camp|encampment|winter quarters?|positions?)|relocat(?:e|es|ed|ing)|fall(?:s|ing)?\s+back|rid(?:e|es|ing)\s+(?:on|out|off|east|west|north|south|toward|towards|to|into|across|along|through)|rode\s+(?:on|out|off|east|west|north|south|toward|towards|to|into|across|along|through)|mov(?:e|es|ed|ing)\s+(?:on|out|off|east|west|north|south|toward|towards|to|into|across|along|its|their)|br(?:eaks?|oke)\s+camp|turns?\s+(?:its\s+|their\s+)?(?:[\w-]+\s+)?(?:east|west|north|south|back)|halts?|climbs?|clears?\s+(?:the\s+)?(?:[\w'-]+\s+){0,2}(?:harbou?r|quay|port)|puts?\s+(?:in|to\s+sea)|sets?\s+sail|launch(?:es|ed|ing)?\s+(?:the\s+|its\s+)?(?:[\w'-]+\s+){0,2}fleet|swell(?:s|ed|ing)?|grows?\s+to|ris(?:e|es|en|ing)\s+to\s+join|join(?:s|ed)?\s+(?:the|its|their)\s+(?:host|ranks|army|column|horde))\b/i;
-
-// A formation that comes into being by being built, delivered or stood up
-// rather than raised from reserves: a warship commissioned, a submarine
-// delivered, a squadron formed, a task group activated. The army wording below
-// (NEW_FORMATION_PATTERN) never matched a navy or an air force, so a power that
-// commissioned ships for years never gained a counter. The ship or squadron
-// must be NAMED as what was commissioned, delivered or formed: "commissions a
-// review" and "launches a campaign" stay paperwork.
-const SERVICE_FORMATION_NOUN =
-  "(?:aircraft carriers?|carriers?|frigates?|destroyers?|submarines?|boats?|warships?|cruisers?|corvettes?|patrol vessels?|vessels?|ships?|squadrons?|air wings?|flotillas?|task (?:forces?|groups?)|strike groups?)";
-const SERVICE_FORMATION_PATTERN = new RegExp(
-  "\\b(?:commission(?:s|ed|ing)?|deliver(?:s|ed|ing)?|delivery of|launch(?:es|ed|ing)?)\\b[^.!?]{0,60}\\b" + SERVICE_FORMATION_NOUN + "\\b"
-  + "|\\b" + SERVICE_FORMATION_NOUN + "\\b[^.!?]{0,40}\\b(?:(?:is|are|was|were|been) (?:formally )?(?:commissioned|formed|activated|stood up)|enters? (?:active |operational )?service|entered (?:active |operational )?service|joins? the fleet|joined the fleet)\\b"
-  + "|\\b(?:forms?|formed|stands? up|stood up|activates?|activated|establish(?:es|ed)?|creates?|created)\\b (?:an? |the |its )?(?:new )?(?:[\\w-]+ ){0,3}" + SERVICE_FORMATION_NOUN + "\\b"
-  + "|\\bjoins? the fleet\\b|\\bjoined the fleet\\b|\\benters? (?:active |operational )?service\\b",
-  "i",
-);
-
-const COMBAT_EVENT_PATTERN =
-  /\b(battle|clash|combat|offensive|counteroffensive|attack|assault|advance|breakthrough|siege|invasion|invade|engage|fighting|war|recapture|capture|seize|retake)\b/i;
-
-const DECISIVE_OUTCOME_PATTERN =
-  /\b(captures?|recaptures?|seizes?|retakes?|conquers?|defeats?|routs?|annihilates?|surrenders?|capitulates?|falls? to|holds? the field)\b/i;
-
-// A land formation of any size coming into being: "raises a new VDP
-// rapid-reaction battalion", "forms a mechanized company", "stands up a new joint
-// border force". Up to three describing words may sit between the cue and the
-// noun, but not a preposition or article, so "raises funds for the army" is money,
-// not a formation. Seen in a live game (2026-09-27): a battalion the director
-// raised correctly was thrown away because only armies down to regiments, with
-// nothing between "new" and the noun, counted.
-const FORMATION_NOUN =
-  "(?:army|armies|corps|divisions?|brigades?|regiments?|battalions?|compan(?:y|ies)|militias?|forces?|legions?|detachments?|contingents?|battle ?groups?|formations?|garrisons?)";
-const DESCRIBING_WORD = "(?:(?!(?:for|to|of|with|and|or|the|in|on|at|from|against|by)\\b)[\\w-]+ )";
-// A garrison is placed rather than raised: "place a garrison in Stranraer",
-// "establishes a permanent military garrison". Only a garrison takes these verbs
-// as a new formation; "stations its battalion at Dori" is still a move.
-const GARRISON_PLACED =
-  "\\b(?:places?|placed|placing|stations?|stationed|stationing|posts?|posted|posting|establish(?:es|ed|ing)?|sets? up|setting up)\\b"
-  + " (?:an? |its )?(?:new )?" + DESCRIBING_WORD + "{0,3}garrisons?\\b";
-const RAISED_FORMATION_PATTERN = new RegExp(
-  "\\bnew " + DESCRIBING_WORD + "{0,3}" + FORMATION_NOUN + "\\b"
-  + "|\\b(?:forms?|formed|forming|raises?|raised|raising|activates?|activated|stands? up|stood up|creates?|created|musters?|mustered)\\b"
-  + " (?:an? |its )?(?:new )?" + DESCRIBING_WORD + "{0,3}" + FORMATION_NOUN + "\\b"
-  + "|" + GARRISON_PLACED,
-  "i",
-);
-
-const NEW_FORMATION_PATTERN =
-  /\b(new (?:army|corps|division|brigade|regiment|formation)|forms? (?:an? )?(?:army|corps|division|brigade|regiment)|raises? (?:an? )?(?:army|corps|division|brigade|regiment)|mobiliz(?:e|es|ed|ation)|newly mobilized|reinforcements? arrive|reserve(?:s)? activated|conscription creates|expands? the army|new formation)\b/i;
-const isNewFormation = (text) => NEW_FORMATION_PATTERN.test(text) || RAISED_FORMATION_PATTERN.test(text);
-
 // A player's order that raises or sends forces (mapConsequences.js
-// markOrderedEvents): its outcome event is the unit director's to read, however
-// that event happens to be worded.
-const ORDER_RAISES_PATTERN = /\b(?:raise|raises|recruit|recruits|form|forms|mobili[sz]e|mobili[sz]es|muster|musters|stand up|create|creates|deploy|deploys|send|sends)\b/i;
-const FORMATION_NOUN_PATTERN = new RegExp("\\b" + FORMATION_NOUN + "\\b", "i");
-const GARRISON_PLACED_PATTERN = new RegExp(GARRISON_PLACED, "i");
-export const orderRaisesForces = (text) => {
-  const value = String(text ?? "");
-  return GARRISON_PLACED_PATTERN.test(value)
-    || (ORDER_RAISES_PATTERN.test(value) && (FORMATION_NOUN_PATTERN.test(value) || MILITARY_FORMATION_PATTERN.test(value)));
-};
-const orderedForces = (event) => event?.ordered?.forces === true;
-
-const NON_COMBAT_STRENGTH_PATTERN =
-  /\b(reinforc|replacement|attrition|disease|desertion|demobiliz|reorgan|refit|resupply|replenish|training loss|accident)\b/i;
-
-const eventText = (event) =>
-  `${normalizeString(event?.title)} ${normalizeString(event?.description)}`.trim();
+// markOrderedEvents) is read from the event that carries it out: an event that
+// cites a player's order (impacts.actionIds) is the director's to read,
+// whatever the order said. Its words are not read for whether it raised forces.
+// Kept, answering no, only while mapConsequences.js still imports it: the
+// event's citation is what the director reads now (eventNeedsNativeUnitDirector).
+export const orderRaisesForces = () => false;
+const citesPlayerOrder = (event) => normalizeArray(event?.impacts?.actionIds).some((id) => normalizeString(id));
 
 // What the director is shown of a unit. Posture, composition and cover are
 // there because a move op sets a posture, and choosing one blind to the
@@ -161,32 +92,24 @@ const opKey = (op) => {
   return `${kind}|${JSON.stringify(op)}`;
 };
 
-// A ship the player's story follows, sailing, landing or putting in: the hired
-// cog with the stolen egg is no warship, but the player wants to see it go. Only
-// the player's own events: every merchant afloat is not a counter.
-const STORY_VESSEL_PATTERN =
-  /\b(?:ship|cog|vessel|galley|barge|carrack|caravel|longship|boat)s?\b[^.!?]{0,80}\b(?:sail(?:s|ed|ing)?|set(?:s)? sail|clear(?:s|ed|ing)?|puts? (?:in|to sea)|put (?:in|to sea)|dock(?:s|ed)?|land(?:s|ed)?|arriv(?:e|es|ed)|reach(?:es|ed)?|unload(?:s|ed)?)\b/i;
-const storyShipSails = (event) => event?.playerRelated === true && STORY_VESSEL_PATTERN.test(eventText(event));
-
-const hasMilitaryContent = (event) => {
-  if (normalizeArray(event?.impacts?.unitOps).length > 0) return true;
-  if (storyShipSails(event)) return true;
-  const text = eventText(event);
-  const explicitlyMilitary =
-    normalizeString(event?.kind).toLowerCase() === "military"
-    || normalizeArray(event?.tags).some((tag) => normalizeString(tag).toLowerCase() === "military");
-  return MILITARY_EVENT_PATTERN.test(text)
-    || ((explicitlyMilitary || MILITARY_FORMATION_PATTERN.test(text))
-      && (OPERATIONAL_UNIT_DELTA_PATTERN.test(text) || SERVICE_FORMATION_PATTERN.test(text)))
-    || RAISED_FORMATION_PATTERN.test(text)
-    || orderedForces(event);
-};
-
+// Whether an event is the director's to read, by what it carries:
+//   - unit operations of its own: the simulator already raised, moved or wore
+//     down a formation in it;
+//   - the Military tag (runtime/eventTags.js), or the engine's own kind
+//     "military" (a battlefield's report, frontTurn.js);
+//   - a war it is bound to (warId), or the powers fighting in it (combatants);
+//   - a player's order it carries out (impacts.actionIds).
+// A Scene's outcome is tagged by the model that writes its record
+// (gameplay.js resolveInteractiveScene), as a skip's events are.
 export const eventNeedsNativeUnitDirector = (event) => {
   if (!event || typeof event !== "object") return false;
-  const text = eventText(event);
-  return OPERATIONAL_UNIT_DELTA_PATTERN.test(text) || SERVICE_FORMATION_PATTERN.test(text) || RAISED_FORMATION_PATTERN.test(text)
-    || orderedForces(event) || storyShipSails(event);
+  return normalizeArray(event?.impacts?.unitOps).length > 0
+    || normalizeEventTags(event?.tags).includes("Military")
+    || normalizeString(event?.kind).toLowerCase() === "military"
+    || Boolean(normalizeString(event?.warId))
+    || normalizeArray(event?.combatants).some((name) => normalizeString(name))
+    || citesPlayerOrder(event)
+    || event?.ordered?.forces === true;
 };
 
 // Whether a strength op says a strength: a refit gives only the formation's new make-up, and its strength, missing
@@ -223,6 +146,13 @@ const applyWorkingOp = (unitMap, op) => {
   }
 };
 
+// The director's operations, checked against the order of battle as each event
+// leaves it. What is checked is the operation's own structure: an event the
+// director was not asked about takes none; a spawn needs an owner and a name
+// and fits the turn's budget; any other op needs a unit that exists; an attack
+// is not this build's. An op's kind is trusted: a strength change or a
+// removal is what the director says the event did to that formation, in the
+// event's language, and is not held to English words for casualties.
 export const sanitizeDirectorOrders = ({ events, orders, units, game }) => {
   const unitMap = makeWorkingUnitMap(units);
   const diagnostics = [];
@@ -247,9 +177,14 @@ export const sanitizeDirectorOrders = ({ events, orders, units, game }) => {
     for (const op of existingOps) applyWorkingOp(unitMap, op);
 
     const proposedOps = ordersByEvent.get(eventIndex) || [];
-    if (proposedOps.length === 0 || !hasMilitaryContent(event)) continue;
+    if (proposedOps.length === 0) continue;
+    if (!eventNeedsNativeUnitDirector(event)) {
+      for (const raw of proposedOps) {
+        diagnostics.push({ eventIndex, op: normalizeString(raw?.op).toLowerCase() || "?", action: "DROP", reason: "the event carries no unit operations, Military tag, war, combatants or player's order" });
+      }
+      continue;
+    }
 
-    const text = eventText(event);
     const seen = new Set(existingOps.map(opKey));
     const accepted = [];
 
@@ -282,12 +217,9 @@ export const sanitizeDirectorOrders = ({ events, orders, units, game }) => {
           continue;
         }
 
-        const ownerUnits = [...unitMap.values()].filter((unit) => unit.ownerCode === owner);
-        if (ownerUnits.length > 0 && !isNewFormation(text) && !SERVICE_FORMATION_PATTERN.test(text) && !orderedForces(event)) {
-          reject("existing units already represent this polity; no explicit new-formation cue");
-          continue;
-        }
-
+        // A spawn is a new formation: the director was told to reuse a power's
+        // units for anything else, and a spawn named like one of them is that
+        // unit (gameState.js applyUnitOpBatch).
         spawnBudget -= 1;
         keep();
         continue;
@@ -323,21 +255,7 @@ export const sanitizeDirectorOrders = ({ events, orders, units, game }) => {
         continue;
       }
 
-      if (kind === "strength") {
-        const strengthText = `${text} ${normalizeString(op?.note)}`;
-        if (!NON_COMBAT_STRENGTH_PATTERN.test(strengthText) && !COMBAT_EVENT_PATTERN.test(strengthText)) {
-          reject("strength changes need the event to narrate casualties, attrition, reinforcement or demobilization");
-          continue;
-        }
-        keep();
-        continue;
-      }
-
-      if (kind === "remove") {
-        if (!/\b(destroy|annihilat|disband|demobiliz|surrender|captur(?:ed)? entire|ceases? to exist)\b/i.test(`${text} ${normalizeString(op?.note)}`)) {
-          reject("remove lacks an explicit destruction/disbandment cue");
-          continue;
-        }
+      if (kind === "strength" || kind === "remove") {
         keep();
         continue;
       }
@@ -373,7 +291,7 @@ const publishDirectorDiagnostics = ({ candidates = [], units = [], analysis = nu
 // ask, and ask it as one job among several, with exactly this input.
 const selectUnitDirectorCandidates = (events) => normalizeArray(events)
   .map((event, index) => ({ event, index }))
-  .filter(({ event }) => hasMilitaryContent(event) && eventNeedsNativeUnitDirector(event));
+  .filter(({ event }) => eventNeedsNativeUnitDirector(event));
 
 // How many units the director is shown. A big scenario map can field
 // hundreds, and every one rode the shared turn review uncapped.
@@ -390,31 +308,14 @@ export const UNIT_DIRECTOR_UNIT_LIMIT = 60;
 // event's own combatants, then the rest of each side: when only a few can be
 // given a counter, the principals of the war are the ones that should be.
 const isActiveWar = (war) => war && normalizeString(war.status).toLowerCase() !== "ended";
-// Whether an event's text names a power: its name, or its stem as an adjective
-// ("Russian forces", "Ukrainian brigades", "Syrian army"). Whole words only.
-const textNamesPower = (text, power) => {
-  const name = normalizeString(power);
-  if (name.length < 3) return false;
-  const stem = name.length > 5 ? name.slice(0, name.length - 2) : name;
-  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^\\p{L}])(${escape(name)}|${escape(stem)}\\p{L}*)`, "iu").test(text);
-};
-// The war an event is about: the one it is bound to, else — the model does not
-// always bind its combat to the war (a live check, 2026-10-02: a month of
-// fighting in Ukraine written as unbound "world" events, and no counter raised)
-// — the one active war whose two leading powers it names, else the one active
-// war whose leading power it names, when only one war fits.
+// The war an event is about: the active one it is bound to (warId). An event
+// that is bound to none is about none: a war is never guessed from the names
+// its text mentions, an English stem of which ("Russian" for Russia) found a
+// country only where its adjective is spelled like its name. An unbound event
+// of fighting still says who fought in its combatants, and those are counted.
 const warOfEvent = (event, wars) => {
-  const active = normalizeArray(wars).filter(isActiveWar);
-  const bound = active.find((war) => normalizeString(war?.id) && normalizeString(war?.id) === normalizeString(event?.warId));
-  if (bound) return bound;
-  if (normalizeString(event?.warId)) return null;
-  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  const principals = (war) => [normalizeArray(war.sideA)[0], normalizeArray(war.sideB)[0]].filter(Boolean);
-  const both = active.filter((war) => principals(war).length === 2 && principals(war).every((power) => textNamesPower(text, power)));
-  if (both.length === 1) return both[0];
-  const either = active.filter((war) => principals(war).some((power) => textNamesPower(text, power)));
-  return either.length === 1 ? either[0] : null;
+  const warId = normalizeString(event?.warId);
+  return warId ? normalizeArray(wars).filter(isActiveWar).find((war) => normalizeString(war?.id) === warId) ?? null : null;
 };
 const warSidesOf = (event, wars) => {
   const war = warOfEvent(event, wars);
@@ -441,12 +342,12 @@ const combatantsWithoutUnits = (event, units, wars = []) => {
 // "Russia has no unit" and moved the player's Falklands garrison to Kherson
 // instead. So the engine makes sure of it. For each power the director left
 // without a spawn, one formation is raised where the events naming it as a
-// combatant put the fighting: a place in them the power holds, else the part of
-// its own land nearest the first place they name (gameplay.js
-// raiseMissingCombatants). One per power per skip, and at most
+// combatant put the fighting: a place their `places` field names that the
+// power holds, else the part of its own land nearest the first of them
+// (gameplay.js raiseMissingCombatants). One per power per skip, and at most
 // MAX_RAISED_COMBATANTS a skip, the wars' leading powers first, so a war is shown
 // without filling the board with a counter for every ally. `events` lists the
-// events naming each, so the caller can try each in turn.
+// events naming each by their index, so the caller can try each in turn.
 export const MAX_RAISED_COMBATANTS = 2;
 export const missingCombatantSpawns = (input, payload) => {
   const spawned = new Set(normalizeArray(payload?.eventOrders)
@@ -460,13 +361,14 @@ export const missingCombatantSpawns = (input, payload) => {
       const key = normalizeString(power).toLowerCase();
       if (!key || spawned.has(key)) continue;
       if (!byPower.has(key)) byPower.set(key, { power: normalizeString(power), warId: normalizeString(candidate?.warId), events: [] });
-      byPower.get(key).events.push({ eventIndex: candidate.eventIndex, text: `${normalizeString(candidate.title)}. ${normalizeString(candidate.description)}` });
+      byPower.get(key).events.push({ eventIndex: candidate.eventIndex });
     }
   }
   return [...byPower.values()].slice(0, MAX_RAISED_COMBATANTS);
 };
 
-// Of the places an event names (lookupTools.js placesNamedIn), where the power's
+// Of the places an event's `places` field names, found on the map (gameplay.js
+// combatantPlacesOf: { place, regionId, controller }), where the power's
 // formation goes: one it holds. Never one another power holds — seen in a live
 // check (2026-10-02), "the first place named" put a Russian army in Kyiv, which
 // reads as Russia having taken it. When it holds none of them, the first place on
@@ -552,24 +454,23 @@ export const pruneWarUnits = ({ units = [], orders = [], wars = [], heldBefore =
   };
 };
 
-// The units the candidate events are about come first: an owner the events
-// name exactly, a formation they name, or a unit their own unitOps touch. The
-// rest follow in saved order, up to the limit; `omittedUnits` counts the cut.
+// The units the candidate events are about come first: a unit their own
+// unitOps touch, or one of a power they say is fighting (their combatants and
+// both sides of the war they are bound to), by its exact name. The rest follow
+// in saved order, up to the limit; `omittedUnits` counts the cut. Nothing is
+// read from the events' words for a power or a formation they mention.
 // The sanitizer still checks every op against the whole order of battle, and a
 // combatant is "without units" against the whole of it too, not the listed part.
 const unitDirectorAnalyzerInput = (candidates, units, pendingUnitOrders = [], wars = []) => {
-  const text = candidates.map(({ event }) => eventText(event)).join(" ");
   const touched = new Set(candidates.flatMap(({ event }) => normalizeArray(event?.impacts?.unitOps)
     .map((op) => normalizeString(op?.unitId))
     .filter(Boolean)));
-  const ownerNamed = new Map();
-  const isNamed = (unit) => {
-    const owner = normalizeString(unit?.ownerCode);
-    if (owner && !ownerNamed.has(owner)) ownerNamed.set(owner, mentionCount(text, nameVariants(owner)) > 0);
-    return touched.has(normalizeString(unit?.id))
-      || (owner && ownerNamed.get(owner))
-      || (normalizeString(unit?.name) && mentionCount(text, nameVariants(unit.name)) > 0);
-  };
+  const fighting = candidates.flatMap(({ event }) => {
+    const sides = warSidesOf(event, wars);
+    return [...sides.principals, ...normalizeArray(event?.combatants), ...sides.members];
+  });
+  const isNamed = (unit) => touched.has(normalizeString(unit?.id))
+    || fighting.some((power) => sameName(power, unit?.ownerCode));
   const ordered = units
     .map((unit, index) => ({ unit, index, tier: isNamed(unit) ? 0 : 1 }))
     .sort((a, b) => a.tier - b.tier || a.index - b.index)
@@ -587,7 +488,9 @@ const unitDirectorAnalyzerInput = (candidates, units, pendingUnitOrders = [], wa
         existingUnitOps: cloneValue(normalizeArray(event?.impacts?.unitOps)),
         ...(unrepresented.length ? { combatantsWithoutUnits: unrepresented } : {}),
         ...(war?.id ? { warId: normalizeString(war.id) } : {}),
-        ...(storyShipSails(event) ? { storyShip: true } : {}),
+        // The player's own event: where the player's story ship (a hired cog, a
+        // courier) may sail, which the director judges from the event itself.
+        ...(event?.playerRelated === true ? { playerRelated: true } : {}),
       };
     }),
     units: ordered.slice(0, UNIT_DIRECTOR_UNIT_LIMIT).map((unit) => summarizeUnit(unit, orderByUnit.get(unit.id) ?? null)),

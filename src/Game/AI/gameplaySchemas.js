@@ -2208,6 +2208,11 @@ export const INTERACTIVE_EXECUTOR_SCHEMA = {
     recordTitle: textSchema("Only when resolved is true: a concise headline for the whole finished interactive event as one campaign timeline event. Empty otherwise."),
     recordDescription: textSchema("Only when resolved is true: a complete but concise account of the whole interactive event's outcome, as one campaign timeline event. Empty otherwise."),
     recordImportance: textSchema("Only when resolved is true: the event's importance, normally major. Empty otherwise."),
+    // kw5-units: the record's category tags, as every skip event has them. What
+    // the Scene's map check reads to know a Scene was military (the unit
+    // Director's candidates, nativeUnitDirector.js), where its words used to be
+    // read. Optional, and last, like the record fields above it.
+    recordTags: { ...eventTagsSchema, description: "Only when resolved is true: the record's tags." },
     // Whether the finished scene changed the map, said with its record: the
     // Scene's map check (gameplay.js runSceneReview) is asked only when it is
     // true (mapConsequences.js sceneChangedMap). Last and optional, so the
@@ -2234,6 +2239,9 @@ export const INTERACTIVE_SUMMARY_SCHEMA = {
       maxItems: 12,
       items: regionTransferSchema,
     },
+    // kw5-units: the event's category tags, as on a skip's events: what the
+    // Scene's map check reads to know a Scene was military (nativeUnitDirector.js).
+    tags: { ...eventTagsSchema, description: "The event's tags." },
     // The same as the executor's recordMapChanged, for a scene condensed here.
     [SCENE_MAP_CHANGED_FIELD.summary]: { type: "boolean", description: SCENE_MAP_CHANGED_DESCRIPTION.summary },
   },
@@ -2998,7 +3006,7 @@ const directorUnitOpSchema = {
             ...unitSchema.properties,
             storyVessel: {
               type: "boolean",
-              description: "Only for a ship that is NOT a warship but carries something the player's story turns on (a cargo, a passenger, a prize), on a candidate marked storyShip. The engine keeps it unlisted and takes it off the map after ten rounds if no arrival removes it first.",
+              description: "Only for a ship that is NOT a warship but carries something the player's story turns on (a cargo, a passenger, a prize), on a candidate marked playerRelated. The engine keeps it unlisted and takes it off the map after ten rounds if no arrival removes it first.",
             },
           },
         },

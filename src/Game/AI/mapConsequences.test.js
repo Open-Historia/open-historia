@@ -21,6 +21,8 @@ const headquarters = markSceneOutcome({
     description: "President Traore finalized the establishment of the Unified Military Command headquarters in Ouagadougou and raised a new joint rapid-reaction battalion to guard it.",
     date: "2026-01-08",
     kind: "interactive",
+    // The Scene record's tags (gameplay.js resolveInteractiveScene): what the unit Director reads it by.
+    tags: ["Military"],
     impacts: {},
 }, true);
 const { ordered: _hint, ...headquartersAsWritten } = headquarters;
@@ -104,7 +106,9 @@ test("the territory changes are resolved against the map after the territory che
 // language marked nothing.
 test("an event that cites a queued order is one the Directors read, in any language", () => {
     const vague = { title: "Burkina Faso Expands Its Northern Presence", description: "Work continues in the north.", impacts: { actionIds: ["a-1"] } };
-    assert.equal(eventNeedsNativeUnitDirector(vague), false);
+    // The unit Director reads it by the order it cites, whatever the order or the event says (kw5-units).
+    assert.equal(eventNeedsNativeUnitDirector(vague), true);
+    assert.equal(eventNeedsNativeUnitDirector({ ...vague, title: "Le Burkina Faso étend sa présence au nord" }), true);
     assert.equal(eventNeedsStructureDirector(vague), false);
     const english = markOrderedEvents([vague], [{ id: "a-1", text: "Build a fortified forward operating base at Djibo and raise a battalion to hold it." }]);
     const french = markOrderedEvents([vague], [{ id: "a-1", text: "Construire une base avancée fortifiée à Djibo et lever un bataillon pour la tenir." }]);
@@ -157,6 +161,10 @@ test("an English and a French Scene whose answer says it changed the map both ge
         assert.equal(hasTerritorialContent(marked), true, language);
         assert.equal(eventNeedsNativeUnitDirector(marked), true, language);
     }
+    // A Scene's record carries its tags (kw5-units): one tagged Military is the
+    // unit Director's whatever its words, in any language.
+    assert.equal(eventNeedsNativeUnitDirector({ ...sceneAnswers.english.outcome, tags: ["Military"] }), true);
+    assert.equal(eventNeedsNativeUnitDirector({ ...sceneAnswers.french.outcome, tags: ["Military"] }), true);
 });
 
 test("an English and a French Scene whose answer does not say so get no map check, whatever their words", () => {

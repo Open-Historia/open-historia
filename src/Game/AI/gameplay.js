@@ -15627,8 +15627,10 @@ const hasAuthoredSummaryGuidance = async () => {
   return Object.keys(prompts?.guidance?.tasks?.interactiveSummary ?? {}).length > 0;
 };
 
-// The record carries the answer's word on whether the scene changed the map
-// (recordMapChanged), read as a summary's mapChanged is.
+// The record's tags ride with it, as the summary request's own `tags` do: the
+// Scene's map check reads them (nativeUnitDirector.js), where it used to read
+// the record's words. It also carries the answer's word on whether the scene
+// changed the map (recordMapChanged), read as a summary's mapChanged is.
 const sceneRecordFrom = (payload) => {
   const title = normalizeString(payload?.recordTitle);
   const description = normalizeString(payload?.recordDescription);
@@ -15637,6 +15639,7 @@ const sceneRecordFrom = (payload) => {
     title,
     description,
     importance: normalizeString(payload?.recordImportance) || "major",
+    tags: normalizeArray(payload?.recordTags),
     [SCENE_MAP_CHANGED_FIELD.summary]: sceneChangedMap(payload),
   };
 };
@@ -15680,6 +15683,8 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
     kind: "interactive",
     notable: true,
     playerRelated: true,
+    // Its category tags, as the model wrote them with the record (normalizeEvents keeps the enum's).
+    tags: normalizeArray(summaryPayload?.tags),
     title: normalizeString(summaryPayload?.title) || interactive.title || "Interactive event resolved",
     source: summaryGeneration.source,
   });
@@ -17166,7 +17171,7 @@ const UNIT_DIRECTOR_INSTRUCTION =
   // The army of the dead grew with every kill in a Game of Thrones save and its
   // counters never changed: a host growing was nobody's operation.
   + "A force that GROWS in an event (recruits arrive, a host swells, the slain rise to join it) gains strength: raise its unit with op strength, and when that unit is already at full strength spawn a second formation of the same power beside it. This holds even when the fighting itself is not part of any war. "
-  + "A candidate marked storyShip is the player's own story ship (a hired cog, a courier, a ship carrying a prize), not a warship: when it sets sail, spawn it with storyVessel true, type \"naval\", for the player, where it sails from; move it as later events carry it; remove it when it arrives and unloads. "
+  + "A candidate marked playerRelated is the player's own story: when it has a ship of the player's that is no warship (a hired cog, a courier, a ship carrying a prize) set sail, spawn it with storyVessel true, type \"naval\", for the player, where it sails from; move it as later events carry it; remove it when it arrives and unloads. "
   // A player asked for it (2026-09-29), and placement enforces it (militaryPosts.js).
   + "On the power's own land a garrison is placed directly. On another power's land it is placed too, and one of the power's formations holds it: when none stands there, move one there in the same event. "
   // Seen in a player's Game (2026-09-30): Russia invaded Ukraine and fought
@@ -17182,34 +17187,51 @@ const TIMELINE_CURATOR_INSTRUCTION =
 
 const unitDirectorUnavailable = () => ({ eventOrders: [], summary: "Unit director unavailable; existing simulator unitOps preserved." });
 
+// The places an event's own `places` field names, on the map (eventPlacesOnMap),
+// as pickCombatantPlace reads them: each by its name with its kind, the region
+// it is in, and who holds that region now. Never what its words mention.
+const combatantPlacesOf = (event, gazetteer, world) => eventPlacesOnMap(event, gazetteer, { impacts: event?.impacts, units: normalizeArray(world?.units) })
+  .map((place) => {
+    const region = place.region ?? gazetteer.regionAt(place.point);
+    return region ? { place: `${place.kind}: ${place.name}`, regionId: normalizeString(region.id), controller: normalizeString(region.owner) } : null;
+  })
+  .filter(Boolean);
+
 // A warring power the director left with no counter gets one from the engine
 // (nativeUnitDirector.js missingCombatantSpawns), placed like the director's own
 // spawns and kept by the same rules. In place, on the answer this skip uses.
-const raiseMissingCombatants = async (answer, input, bundle) => {
+// `events`: the events the director was given, which the candidates number.
+const raiseMissingCombatants = async (answer, input, bundle, events = []) => {
   if (!answer) return;
   // Less the powers a battlefield already fields: their troops are the front
   // engine's to raise (frontApply.js).
   const missing = withoutFrontPowers(missingCombatantSpawns(input, answer.payload), bundle?.world);
   if (!missing.length) return;
   const context = await lazyLookupContext(bundle)();
+  let gazetteer = null;
+  try {
+    gazetteer = buildPlacementGazetteer(context, bundle?.world);
+  } catch (error) {
+    console.warn("[unit director] the map could not be read; a missing combatant is raised in its own land.", error);
+  }
   const payload = answer.payload && typeof answer.payload === "object" ? answer.payload : (answer.payload = { eventOrders: [] });
   payload.eventOrders = normalizeArray(payload.eventOrders);
-  for (const { power, warId, events } of missing) {
+  for (const { power, warId, events: telling } of missing) {
     let chosen = null;
     let anchor = null;
-    for (const { eventIndex, text } of events) {
-      const pick = pickCombatantPlace(power, placesNamedIn(context, text));
+    for (const { eventIndex } of telling) {
+      const pick = gazetteer ? pickCombatantPlace(power, combatantPlacesOf(normalizeArray(events)[eventIndex], gazetteer, bundle?.world)) : null;
       if (pick?.at) { chosen = { eventIndex, at: pick.at }; break; }
       if (pick?.anchorRegionId && !anchor) anchor = { eventIndex, regionId: pick.anchorRegionId };
     }
-    // The events name only places another power holds: the power's own land
-    // nearest the first of them, its side of the front.
+    // The events' places are only ones another power holds: the power's own
+    // land nearest the first of them, its side of the front.
     if (!chosen && anchor) {
       const centre = normalizeArray(context?.rows).find((row) => row.id === anchor.regionId)?.centroid;
       const own = nearestOwnRegion({ power, anchor: centre, rows: context?.rows });
       if (own) chosen = { eventIndex: anchor.eventIndex, at: own };
     }
-    // No event names a place on the map (a live check, 2026-10-02: "off Odesa"
+    // No event's places are on the map (a live check, 2026-10-02: "off Odesa"
     // where the map says Odessa, and "the Black Sea"): the power's own land.
     // A power that holds none (fighting on in exile, its land all taken) has
     // nowhere to be raised: its name named no place, and the same formation was
@@ -17219,7 +17241,7 @@ const raiseMissingCombatants = async (answer, input, bundle) => {
       logDebugEvent("turn", `${power} is at war with no unit on the map and holds no land to raise one on.`, null, { verbose: true });
       continue;
     }
-    chosen ??= { eventIndex: events[0].eventIndex, at: power };
+    chosen ??= { eventIndex: telling[0].eventIndex, at: power };
     payload.eventOrders.push({ eventIndex: chosen.eventIndex, unitOps: [nativeCombatantSpawn(power, chosen.at, warId)] });
     logDebugEvent("turn", `${power} is at war with no unit on the map: one formation is raised at ${chosen.at}.`);
   }
@@ -17309,7 +17331,7 @@ const directorAnalyzers = ({ bundle, review, sections = null, receipt = null }) 
 
   const units = !runs("units") ? null : async (input, events) => {
     const answer = { payload: review.parts.units ?? unitDirectorUnavailable(), generation: { source: review.parts.units ? "ai" : "fallback" } };
-    await raiseMissingCombatants(answer, input, bundle);
+    await raiseMissingCombatants(answer, input, bundle, events);
     await placeDirectorOrders(answer.payload, bundle.world, events, receipt);
     return answer;
   };

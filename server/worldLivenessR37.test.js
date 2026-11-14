@@ -204,24 +204,26 @@ test("R3.7 linked visible events advance storyline visibility bookkeeping even w
   assert.equal(korea.pressure, prior.pressure);
 });
 
-test("R3.7 Unit Director skips military-tech/readiness cards and runs only for operational unit motion", () => {
-  assert.equal(eventNeedsNativeUnitDirector({
-    title: "Turkish Aerospace Industries Opens Avionics Integration Laboratory",
-    description: "The facility supports military flight-control software and secure communications testing.",
-  }), false);
+// R3.7 kept military-tech and readiness cards from the Unit Director by English
+// word lists. What reaches it now is what an event carries: an industry card
+// tagged Economy does not, and a card the model tags Military does, for the
+// director to say that it changes no unit. Its words decide nothing, in English
+// or in Turkish (the owner, 2026-11-13: no keywording anywhere).
+test("R3.7 Unit Director is offered what an event carries, never its words", () => {
+  for (const [title, description] of [
+    ["Turkish Aerospace Industries Opens Avionics Integration Laboratory", "The facility supports military flight-control software and secure communications testing."],
+    ["Türk Havacılık ve Uzay Sanayii Aviyonik Entegrasyon Laboratuvarı Açtı", "Tesis, askeri uçuş kontrol yazılımını destekliyor."],
+  ]) {
+    assert.equal(eventNeedsNativeUnitDirector({ title, description, tags: ["Economy"] }), false, title);
+    assert.equal(eventNeedsNativeUnitDirector({ title, description }), false, title);
+  }
 
-  assert.equal(eventNeedsNativeUnitDirector({
-    title: "Allied Commands Reinforce Missile-Defense Readiness",
-    description: "Commands improve surveillance and radar data-sharing while maintaining heightened readiness.",
-  }), false);
-
-  assert.equal(eventNeedsNativeUnitDirector({
-    title: "Army Redeploys Two Brigades to the Border",
-    description: "Two brigades redeploy toward the frontier and establish forward positions.",
-  }), true);
-
-  assert.equal(eventNeedsNativeUnitDirector({
-    title: "Reserve Forces Mobilized After Border Clash",
-    description: "The government calls up reserves after a clash and deploys troops toward the frontier.",
-  }), true);
+  for (const [title, description] of [
+    ["Army Redeploys Two Brigades to the Border", "Two brigades redeploy toward the frontier and establish forward positions."],
+    ["Ordu İki Tugayı Sınıra Kaydırdı", "İki tugay sınıra doğru yeniden konuşlanıyor."],
+  ]) {
+    assert.equal(eventNeedsNativeUnitDirector({ title, description, tags: ["Military"] }), true, title);
+    assert.equal(eventNeedsNativeUnitDirector({ title, description, combatants: ["Turkey", "Syria"] }), true, title);
+    assert.equal(eventNeedsNativeUnitDirector({ title, description }), false, `${title}: carrying nothing military`);
+  }
 });
