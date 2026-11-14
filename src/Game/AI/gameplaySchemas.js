@@ -1344,6 +1344,27 @@ const leanJumpEventSchema = {
   properties: { ...eventSchema.properties, impacts: jumpImpactsSchema },
 };
 
+// ---- An event's scripted beat (kw2-orders, 2026-11-13) -------------------------
+// The id of the scenario author's scripted event that an event tells, as the
+// period's [Scripted events this period] block gives it (worldDirection.js
+// buildScriptedEventsInstruction). A beat is matched to the event that tells it
+// by this id alone (worldDirection.js beatIsWritten), never by shared words;
+// one that no event names is written by the engine. Optional, and placed after
+// the load-bearing warId, combatants and impacts. Every skip's answer may carry
+// it (JUMP_FORWARD_SCHEMA); it is SENT only to a game whose scenario has
+// scripted events (withScriptedBeat), since every request pays for a field,
+// and the Game Master's events (gameMasterEventSchema) never have it.
+export const SCRIPTED_BEAT_FIELD = "scriptedBeat";
+const SCRIPTED_BEAT_SCHEMA = {
+  type: "string",
+  description: "Only on the event that tells a scripted event: that entry's id.",
+};
+const withScriptedBeatProperty = (event) => ({
+  ...event,
+  properties: { ...event.properties, [SCRIPTED_BEAT_FIELD]: SCRIPTED_BEAT_SCHEMA },
+});
+const jumpAnswerEventSchema = withScriptedBeatProperty(eventSchema);
+
 const interactiveSchema = {
   type: "object",
   description: "The opening of an interactive event the player is about to play.",
@@ -1400,7 +1421,7 @@ export const JUMP_FORWARD_SCHEMA = {
     events: {
       type: "array",
       description: "Events in this period.",
-      items: eventSchema,
+      items: jumpAnswerEventSchema,
     },
     stopDate: textSchema("Simulation stop date."),
     summary: textSchema("Concise period summary."),
@@ -3763,6 +3784,24 @@ export const withEventAudience = (tool, shared = false) => {
   };
   const schema = visit(tool?.schema);
   return changed ? { ...tool, schema } : tool;
+};
+
+// A time skip's tool with each event's scriptedBeat (see "An event's scripted
+// beat" above), last among the event's fields: for a game whose scenario has
+// scripted events. The same function on every skip of such a game, whether or
+// not a beat falls due, so a provider's cached prompt is kept. Any other tool,
+// and one that already has it, comes back as it was.
+export const withScriptedBeat = (tool) => {
+  const events = tool?.schema?.properties?.events;
+  const properties = events?.items?.properties;
+  if (!tool?.schema?.properties?.stopDate || !properties?.impacts || properties[SCRIPTED_BEAT_FIELD]) return tool;
+  return {
+    ...tool,
+    schema: {
+      ...tool.schema,
+      properties: { ...tool.schema.properties, events: { ...events, items: withScriptedBeatProperty(events.items) } },
+    },
+  };
 };
 
 export const INTELLIGENCE_RATING_FIELD = "intelligenceService";

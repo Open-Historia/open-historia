@@ -226,6 +226,7 @@ import {
   withEventImpacts,
   withFrontOrders,
   withOccupationSettlements,
+  withScriptedBeat,
   withWarFigures,
   withIntelligenceRating,
   withSocialPosts,
@@ -580,7 +581,6 @@ import {
   dateKey,
   firstSkipIncludesScriptedOrigin,
   scriptedBeatsInSpan,
-  scriptedBeatsNotAlreadyWritten,
   worldShareShortfall,
 } from "./worldDirection.js";
 import {
@@ -3268,8 +3268,11 @@ const taskToolFor = (taskKey, { customFullStatSheet, customStatRows, statIndexRo
   const featureTool = withUnitTypeNames(forActiveFeatures(customFullStatSheet
     ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
     : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices })), variables?.unitTypeNames);
+  // The scripted beat an event tells, by its id (worldDirection.js beatIsWritten): in a game whose scenario has
+  // scripted events, on every skip of it, so the function stays the same from turn to turn.
+  const beatTool = JUMP_TASK_KEYS.has(taskKey) && normalizeArray(getActiveWorldDirection()?.scriptedEvents).length ? withScriptedBeat(featureTool) : featureTool;
   // Occupations that outlived their war (issue #1000): settled in a field the answer must hold, when there are any.
-  const settlingTool = JUMP_TASK_KEYS.has(taskKey) && normalizeArray(variables?.occupationGroups).length ? withOccupationSettlements(featureTool, variables.occupationGroups) : featureTool;
+  const settlingTool = JUMP_TASK_KEYS.has(taskKey) && normalizeArray(variables?.occupationGroups).length ? withOccupationSettlements(beatTool, variables.occupationGroups) : beatTool;
   // The players' advice, asked of the time skip whose prompt asks for it.
   const advisedTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(settlingTool) : settlingTool;
   // And the social posts after all of it, or none where the game has no Rostra
@@ -16772,16 +16775,14 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       state.scriptedEventPending = scriptedPlan.pendingState;
       // The language the player reads the game in (promptContext.js "language"): the beats are told in it.
       const scriptedLanguage = readingLanguageName(normalizeString(bundle.world?.language || bundle.game?.language));
-      // Start-day events may already be part of the scenario prehistory. Mark
-      // every authored beat resolved, but do not narrate those already present
-      // in the initial canonical timeline a second time. Matching is one-to-one.
-      const scriptedBeats = includeOriginScripted
-        ? scriptedBeatsNotAlreadyWritten(
-          scriptedPlan.eligible,
-          normalizeArray(bundle.events).filter((entry) => dateKey(entry?.date) === dateKey(state.segmentOrigin)),
-          { language: scriptedLanguage },
-        )
-        : scriptedPlan.eligible;
+      // Every beat the plan fired is this period's to tell, the start day's
+      // included, each matched to the event that tells it by its id
+      // (worldDirection.js beatIsWritten). A start-day beat was once looked for
+      // in the scenario's prehistory by the words it shared with an event of
+      // that day, and left out when found: a telling in another language was
+      // never found, and a different event that shared a few names dropped the
+      // beat and its author's impacts with it.
+      const scriptedBeats = scriptedPlan.eligible;
       const scriptedPoliticalRequirements = scriptedPoliticalImpactRequirements(scriptedBeats, { world: ledgerWorld });
       const scriptedPoliticalInstruction = buildScriptedPoliticalImpactInstruction(scriptedPoliticalRequirements, { world: ledgerWorld });
       state.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements.length > 0;
@@ -17125,11 +17126,13 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             // structured Political World claim field of its own. Preserve its
             // existing fail-closed semantic protection even when this jump uses
             // politicalClaims for ordinary model-authored events.
+            // The events that tell a beat are the ones that name its id, the
+            // engine's own copies included (worldDirection.js beatIsWritten).
             if (politicalClaimContext.mode === "structured") {
               const duePoliticalRequirements = scriptedPoliticalImpactRequirements(due, { world: ledgerWorld });
               for (const requirement of duePoliticalRequirements) {
                 for (const event of normalizeArray(candidate.events)) {
-                  if (beatIsWritten(requirement.beat, [event], { language: scriptedLanguage })) politicalClaimContext.legacyEvents.add(event);
+                  if (beatIsWritten(requirement.beat, [event])) politicalClaimContext.legacyEvents.add(event);
                 }
               }
             }

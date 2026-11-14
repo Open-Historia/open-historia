@@ -21,7 +21,6 @@ import {
     ensureScriptedEvents,
     firstSkipIncludesScriptedOrigin,
     parseScriptedEvents,
-    scriptedBeatsNotAlreadyWritten,
     reviewScriptedEvents,
     scriptedBeatsInSpan,
     territoryTempoAllowance,
@@ -241,44 +240,69 @@ test("a beat no skip will reach is flagged; the first skip still covers the day 
     assert.equal(reviewScriptedEvents(text, { currentDate: "" }).count, 3);
 });
 
-test("a beat is written when an event near its date shares its particular words", () => {
-    const beat = parseScriptedEvents("2014-05-25 Ukraine holds a presidential election; Petro Poroshenko wins outright in the first round.")[0];
-    assert.equal(beatIsWritten(beat, [{ date: "2014-05-26", title: "Poroshenko elected", description: "Petro Poroshenko wins Ukraine's presidential election outright." }]), true);
-    assert.equal(beatIsWritten(beat, [{ date: "2014-05-25", title: "Fighting near Donetsk", description: "Separatists seize the airport." }]), false, "same day, different event");
-    assert.equal(beatIsWritten(beat, [{ date: "2014-07-25", title: "Poroshenko elected", description: "Petro Poroshenko wins Ukraine's presidential election outright." }]), false, "two months out is not this beat");
+// Beats as the scenario's own list gives them (server/gameFeatures.js
+// normalizeScriptedEvents), each with its id: the parsed lines with ids.
+const withIds = (beats, ids) => beats.map((beat, index) => ({ ...beat, id: ids[index] }));
+
+// An event near the beat's date that shared enough of its words was taken for
+// its telling: a faithful telling in other words, or in another language, was
+// taken for missing and written a second time by the engine; another event of
+// the same day that shared a few names was taken for the beat, and given the
+// author's impacts.
+test("a beat is written by the event that names its id, and by no other, whatever their words", () => {
+    const [beat] = withIds(parseScriptedEvents("2014-05-25 Ukraine holds a presidential election; Petro Poroshenko wins outright in the first round."), ["ua-election"]);
+    assert.equal(beatIsWritten(beat, [{ date: "2014-05-26", title: "A new president", description: "The count ends.", scriptedBeat: "ua-election" }]), true);
+    assert.equal(beatIsWritten(beat, [{ date: "2014-05-26", title: "A new president", description: "", scriptedBeat: " [UA-Election] " }]), true, "the id as the prompt shows it, case and spacing aside");
+    // Its words, word for word, are not its id.
+    assert.equal(beatIsWritten(beat, [{ date: "2014-05-25", title: "Poroshenko elected", description: "Petro Poroshenko wins Ukraine's presidential election outright in the first round." }]), false);
+    assert.equal(beatIsWritten(beat, [{ date: "2014-05-25", title: "Poroshenko elected", description: "", scriptedBeat: "ua-elections" }]), false, "another id is another beat");
+    // A beat with no id can only be written by the engine.
+    assert.equal(beatIsWritten({ ...beat, id: "" }, [{ scriptedBeat: "" }]), false);
 });
 
-test("a generated selected outcome must remain anchored to its parent event context", () => {
+test("a beat told in another language is found exactly as its English twin is", () => {
+    const [beat] = withIds(parseScriptedEvents("2014-05-25 Ukraine holds a presidential election; Petro Poroshenko wins outright."), ["ua-election"]);
+    const tellings = [
+        { date: "2014-05-26", title: "Poroshenko elected", description: "Petro Poroshenko wins the presidency outright." },
+        { date: "2014-05-26", title: "Porochenko élu", description: "Petro Porochenko remporte la présidence dès le premier tour." },
+        { date: "2014-05-26", title: "Порошенко избран президентом", description: "Пётр Порошенко побеждает уже в первом туре." },
+        { date: "2014-05-26", title: "波罗申科当选总统", description: "彼得·波罗申科在第一轮中胜出。" },
+    ];
+    assert.deepEqual(tellings.map((told) => beatIsWritten(beat, [{ ...told, scriptedBeat: "ua-election" }])), [true, true, true, true]);
+    assert.deepEqual(tellings.map((told) => beatIsWritten(beat, [told])), [false, false, false, false]);
+    for (const told of tellings) {
+        const kept = ensureScriptedEvents([{ ...told, scriptedBeat: "ua-election" }], [beat], { language: "French" });
+        assert.deepEqual([kept.events.length, kept.written.length, kept.inserted.length], [1, 1, 0], told.title);
+        const added = ensureScriptedEvents([told], [beat], { language: "French" });
+        assert.deepEqual([added.events.length, added.inserted.length], [2, 1], told.title);
+    }
+});
+
+test("a branched beat is written by the event that names it; left out, the engine's copy keeps its parent and its outcome", () => {
     const beat = {
+        id: "latvia-test",
         date: "2026-01-02",
         title: "Outcome A is selected",
         text: "Outcome A is selected.",
         parentText: "A major test event occurs in Latvia. This event exists only to test Conditional Scripted Events.",
         textMode: "generated",
     };
-    const wrongPolity = [{
-        date: "2026-01-02",
-        title: "Russian Federal Ministries Implement Outcome A Strategic Directives",
-        description: "Moscow ministries operationalize Outcome A and redirect Russian federal resources.",
-    }];
-    const anchored = [{
-        date: "2026-01-02",
-        title: "Latvia Selects Outcome A",
-        description: "Outcome A is selected in Latvia.",
-    }];
-    assert.equal(beatIsWritten(beat, wrongPolity), false, "matching the branch words alone cannot relocate the authored parent event to the player polity");
-    assert.equal(beatIsWritten(beat, anchored), true);
+    const told = [{ date: "2026-01-02", title: "Latvia Selects Outcome A", description: "Outcome A is selected in Latvia.", scriptedBeat: "latvia-test" }];
+    assert.equal(beatIsWritten(beat, told), true);
+    assert.equal(ensureScriptedEvents(told, [beat]).inserted.length, 0);
 
-    const repaired = ensureScriptedEvents(wrongPolity, [beat]);
-    assert.equal(repaired.inserted.length, 1, "the mis-anchored rewrite does not satisfy the scripted beat");
+    const repaired = ensureScriptedEvents([{ date: "2026-01-02", title: "Latvia Selects Outcome A", description: "Outcome A is selected in Latvia." }], [beat]);
+    assert.equal(repaired.inserted.length, 1, "told without its id, it is written by the engine");
     assert.equal(repaired.events.at(-1).description, `${beat.parentText}\n\n${beat.text}`, "the deterministic fallback keeps both parent context and selected outcome");
+    assert.equal(repaired.events.at(-1).scriptedBeat, "latvia-test", "and names the beat it tells");
 });
 
 // A player's branched Syria beat: the AI told it faithfully, but in none of the parent's words the outcome did not
 // repeat ("current", "conclusion", "offensives"), so it was taken for missing and the engine wrote the author's
 // instruction, bracketed map directions and all, as the event.
-test("a generated outcome that names its own sides is found in a faithful telling, and the engine's copy drops the author's asides", () => {
+test("a generated outcome told in the model's own words is found by its id, and the engine's copy drops the author's asides", () => {
     const beat = {
+        id: "syria-ne",
         date: "2026-01-30",
         title: "The Syrian Arab Republic conquers the Administration's regions",
         text: "Peace is achieved. The Syrian Arab Republic conquers all the regions held by Democratic Autonomous Administration of North and East Syria BESIDES Al-Hasaka and Kobani within 17 days of combat operations. [In terms of map changes: the Administration should ONLY hold Al-Hasaka and Kobani.]",
@@ -289,6 +313,7 @@ test("a generated outcome that names its own sides is found in a faithful tellin
         date: "2026-01-30",
         title: "Damascus and the SDF sign peace after a 17-day campaign",
         description: "The Syrian Arab Republic took every region of the Democratic Autonomous Administration of North and East Syria except Al-Hasaka and Kobani.",
+        scriptedBeat: "syria-ne",
     }];
     assert.equal(beatIsWritten(beat, told), true);
     assert.equal(ensureScriptedEvents(told, [beat]).inserted.length, 0, "no second copy beside the AI's own");
@@ -302,13 +327,14 @@ test("a generated outcome that names its own sides is found in a faithful tellin
 
 test("exact selected-outcome wording uses parent context for the prompt without adding it to visible prose", () => {
     const beat = {
+        id: "latvia-exact",
         date: "2026-01-02",
         title: "Outcome A is selected",
         text: "Outcome A is selected.",
         parentText: "A major test event occurs in Latvia.",
         textMode: "exact",
     };
-    assert.equal(beatIsWritten(beat, [{ date: beat.date, title: beat.title, description: beat.text }]), true, "exact visible wording need not repeat the parent context");
+    assert.equal(beatIsWritten(beat, [{ date: beat.date, title: beat.title, description: beat.text, scriptedBeat: "latvia-exact" }]), true);
     const { events } = ensureScriptedEvents([], [beat]);
     assert.equal(events[0].description, beat.text, "exact fallback remains exactly the selected authored wording");
 });
@@ -316,10 +342,10 @@ test("exact selected-outcome wording uses parent context for the prompt without 
 // A beat's words were split on a-z and 0-9 alone. One its author wrote in
 // Russian had none, so it was never found in the answer and the engine wrote it
 // again beside the model's own telling of it.
-test("a beat written in another script is found in an answer in that script", () => {
-    const beats = parseScriptedEvents("2014-05-02 Столкновения в Одессе: десятки погибших в Доме профсоюзов.\n2014-05-25 На Украине проходят президентские выборы; Пётр Порошенко побеждает в первом туре.");
+test("a beat its author wrote in Russian is found by its id, and is not written a second time", () => {
+    const beats = withIds(parseScriptedEvents("2014-05-02 Столкновения в Одессе: десятки погибших в Доме профсоюзов.\n2014-05-25 На Украине проходят президентские выборы; Пётр Порошенко побеждает в первом туре."), ["odesa", "election"]);
     const [odesa, election] = beats;
-    const answer = [{ date: "2014-05-26", title: "Порошенко избран президентом", description: "Пётр Порошенко побеждает на президентских выборах на Украине уже в первом туре." }];
+    const answer = [{ date: "2014-05-26", title: "Порошенко избран президентом", description: "Пётр Порошенко побеждает на президентских выборах на Украине уже в первом туре.", scriptedBeat: "election" }];
     assert.equal(beatIsWritten(election, answer), true);
     assert.equal(beatIsWritten(odesa, answer), false, "the other beat is not this event");
     const { written, inserted } = ensureScriptedEvents(answer, beats);
@@ -327,23 +353,9 @@ test("a beat written in another script is found in an answer in that script", ()
     assert.deepEqual(inserted.map((beat) => beat.date), ["2014-05-02"], "only the beat the answer left out is written by the engine");
 });
 
-test("a beat its author wrote in Russian is found written, and is not written a second time", () => {
-    // Split on a-z0-9 the beat had no words, so it was never found written: the
-    // engine added the author's event beside the model's own telling of it.
-    const beats = parseScriptedEvents("2014-05-25 На Украине проходят президентские выборы; Пётр Порошенко побеждает в первом туре.");
-    const told = [{ date: "2014-05-26", title: "Порошенко избран президентом", description: "Пётр Порошенко побеждает на президентских выборах уже в первом туре." }];
-    assert.equal(beatIsWritten(beats[0], told), true);
-    assert.equal(beatIsWritten(beats[0], [{ date: "2014-05-25", title: "Бои под Донецком", description: "Сепаратисты захватили аэропорт." }]), false, "same day, different event");
-    const kept = ensureScriptedEvents(told, beats);
-    assert.deepEqual([kept.events.length, kept.written.length, kept.inserted.length], [1, 1, 0]);
-    // Left out, it is still written by the engine.
-    const added = ensureScriptedEvents([{ date: "2014-05-25", title: "Бои под Донецком", description: "Сепаратисты захватили аэропорт." }], beats);
-    assert.deepEqual([added.events.length, added.inserted.length], [2, 1]);
-});
-
 test("a beat the answer left out is written by the engine, in the author's words, without impacts", () => {
-    const beats = parseScriptedEvents("2014-05-25 Ukraine holds a presidential election; Petro Poroshenko wins outright.\n2014-05-02 Clashes in Odesa leave dozens dead at the Trade Unions House.");
-    const answer = [{ date: "2014-05-26", title: "Poroshenko wins", description: "Petro Poroshenko wins the Ukraine presidential election outright." }];
+    const beats = withIds(parseScriptedEvents("2014-05-25 Ukraine holds a presidential election; Petro Poroshenko wins outright.\n2014-05-02 Clashes in Odesa leave dozens dead at the Trade Unions House."), ["odesa", "election"]);
+    const answer = [{ date: "2014-05-26", title: "Poroshenko wins", description: "Petro Poroshenko wins the Ukraine presidential election outright.", scriptedBeat: "election" }];
     const { events, written, inserted } = ensureScriptedEvents(answer, beats);
     assert.equal(written.length, 1);
     assert.equal(inserted.length, 1);
@@ -353,22 +365,28 @@ test("a beat the answer left out is written by the engine, in the author's words
     assert.equal(engineWrote.description, "Clashes in Odesa leave dozens dead at the Trade Unions House.");
     assert.equal(engineWrote.kind, "world");
     assert.equal(engineWrote.notable, true);
+    assert.equal(engineWrote.scriptedBeat, "odesa");
     assert.deepEqual(engineWrote.impacts, {});
     assert.equal(answer.length, 1, "the answer itself is not mutated");
 });
 
-test("the period is told its beats, dated, and what happens to one it leaves out", () => {
-    const beats = parseScriptedEvents("1914-06-28 Archduke Franz Ferdinand is assassinated in Sarajevo.");
+test("the period is told its beats, each with its id, what to put in scriptedBeat, and what happens to one it leaves out", () => {
+    const beats = withIds(parseScriptedEvents("1914-06-28 Archduke Franz Ferdinand is assassinated in Sarajevo."), ["sarajevo"]);
     const text = buildScriptedEventsInstruction(beats);
     assert.match(text, /^\[Scripted events this period/);
-    assert.match(text, /- 1914-06-28 — Archduke Franz Ferdinand is assassinated in Sarajevo\./);
-    assert.match(text, /written by the engine/);
+    assert.match(text, /- \[sarajevo\] 1914-06-28 — Archduke Franz Ferdinand is assassinated in Sarajevo\./);
+    assert.match(text, /Set that event's scriptedBeat to the id in square brackets at the start of the entry's line/);
+    assert.match(text, /One that no event of the answer names in scriptedBeat is written by the engine/);
+    // The same rule whatever the language the period is told in.
+    assert.match(buildScriptedEventsInstruction(beats, { language: "Japanese" }), /Set that event's scriptedBeat to the id in square brackets/);
+    assert.match(buildScriptedEventsInstruction([{ ...beats[0], parentText: "War looms." }]), /- \[sarajevo\] 1914-06-28 — Parent event: War looms\./);
     assert.equal(buildScriptedEventsInstruction([]), "");
 });
 
 
 test("exact scripted wording replaces AI presentation but preserves canonical impacts", () => {
     const beat = {
+        id: "author-exact",
         date: "2014-05-25",
         title: "Author headline",
         text: "These are the exact words the author wrote.",
@@ -380,6 +398,7 @@ test("exact scripted wording replaces AI presentation but preserves canonical im
         description: "The author wrote these exact words, but the AI padded them with extra prose.",
         quote: { text: "Extra AI quote", speaker: "Someone" },
         impacts: { politicalActorOps: [{ operation: "replace-leader", polityId: "X", leaderId: "Y" }] },
+        scriptedBeat: "author-exact",
     }];
     const { events, written, inserted } = ensureScriptedEvents(answer, [beat]);
     assert.equal(written.length, 1);
@@ -392,8 +411,8 @@ test("exact scripted wording replaces AI presentation but preserves canonical im
 });
 
 test("generated scripted wording keeps the simulator's presentation", () => {
-    const beat = { date: "2014-05-25", title: "Author instruction", text: "A named reform passes in parliament.", textMode: "generated" };
-    const answer = [{ date: "2014-05-25", title: "Parliament passes the reform", description: "Lawmakers approve the named reform after debate.", impacts: {} }];
+    const beat = { id: "reform", date: "2014-05-25", title: "Author instruction", text: "A named reform passes in parliament.", textMode: "generated" };
+    const answer = [{ date: "2014-05-25", title: "Parliament passes the reform", description: "Lawmakers approve the named reform after debate.", impacts: {}, scriptedBeat: "reform" }];
     const { events } = ensureScriptedEvents(answer, [beat]);
     assert.equal(events[0].title, answer[0].title);
     assert.equal(events[0].description, answer[0].description);
@@ -425,13 +444,15 @@ test("each same-day authored beat needs its own generated timeline event", () =>
         { id: "committee", date: "1991-08-19", title: "Committee announces emergency", text: "Committee announces emergency by radio." },
         { id: "curfew", date: "1991-08-19", title: "Committee orders curfew", text: "Committee announces emergency and orders curfew." },
     ];
+    // One event that tells both in its words names one of them.
     const oneAnswer = [{
         date: "1991-08-19",
         title: "Committee announces emergency and curfew",
         description: "Committee announces emergency by radio and orders curfew.",
+        scriptedBeat: "committee",
     }];
     assert.equal(beatIsWritten(beats[0], oneAnswer), true);
-    assert.equal(beatIsWritten(beats[1], oneAnswer), true);
+    assert.equal(beatIsWritten(beats[1], oneAnswer), false);
     const repaired = ensureScriptedEvents(oneAnswer, beats);
     assert.equal(repaired.written.length, 1, "one AI event can satisfy only one scripted beat");
     assert.equal(repaired.inserted.length, 1, "second authored beat must still be inserted");
@@ -440,22 +461,16 @@ test("each same-day authored beat needs its own generated timeline event", () =>
     const missingBoth = ensureScriptedEvents([], beats);
     assert.equal(missingBoth.inserted.length, 2, "an engine-inserted beat cannot silently satisfy another authored beat");
     assert.equal(missingBoth.events.length, 2);
+    // Two events naming the same beat: the first tells it, the second is an event of its own.
+    const twice = ensureScriptedEvents([{ ...oneAnswer[0] }, { ...oneAnswer[0], title: "Again" }], beats);
+    assert.deepEqual([twice.written.map((beat) => beat.id), twice.inserted.map((beat) => beat.id), twice.events.length], [["committee"], ["curfew"], 3]);
 });
 
-test("first-day prehistory covers only distinct matching beats and cannot consume two with one event", () => {
-    const beats = [
-        { id: "declaration", date: "1991-08-19", title: "Emergency declaration", text: "The emergency committee broadcasts a declaration." },
-        { id: "curfew", date: "1991-08-19", title: "Emergency curfew", text: "The emergency committee broadcasts a curfew." },
-        { id: "next", date: "1991-08-20", title: "New negotiations", text: "Negotiators meet about the emergency." },
-    ];
-    const prehistory = [{
-        date: "1991-08-19", title: "Emergency declaration and curfew",
-        description: "The emergency committee broadcasts a declaration and a curfew.",
-    }];
-    const remaining = scriptedBeatsNotAlreadyWritten(beats, prehistory);
-    assert.deepEqual(remaining.map((beat) => beat.id), ["curfew", "next"]);
-    assert.deepEqual(scriptedBeatsNotAlreadyWritten(beats, []), beats);
-    assert.deepEqual(scriptedBeatsNotAlreadyWritten([beats[0]], [{ ...prehistory[0], date: "1991-08-18" }]), [beats[0]], "older history may not consume a future authored beat");
+// A start-day beat was looked for in the scenario's prehistory by the words it
+// shared with an event of that day, and left out of the first skip when found.
+test("the first skip tells every start-day beat: the prehistory is not searched for a beat's words", async () => {
+    const source = await import("node:fs").then(({ readFileSync }) => readFileSync(new URL("./worldDirection.js", import.meta.url), "utf8"));
+    assert.doesNotMatch(source, /scriptedBeatsNotAlreadyWritten|sharesEnoughWords|STOP_WORDS|SCRIPTED_MATCH_DAYS/);
 });
 
 test("the period tells the simulator which scripted beats have exact wording", () => {
@@ -557,14 +572,15 @@ test("a player in another language is told the scenario's beats in it, an exact 
     assert.equal(buildScriptedEventsInstruction(beats), english, "no language is English, as before");
 });
 
-test("an exact beat told in another language keeps the model's translation, and a translated beat is found by its names on its date", () => {
-    const exact = { date: "1962-10-22", title: "Kennedy announces the quarantine", text: "Kennedy announces the quarantine of Cuba.", textMode: "exact" };
+test("an exact beat told in another language keeps the model's translation, and a translated beat is found by its id", () => {
+    const exact = { id: "quarantine", date: "1962-10-22", title: "Kennedy announces the quarantine", text: "Kennedy announces the quarantine of Cuba.", textMode: "exact" };
     const answer = [{
         date: "1962-10-22",
         title: "Kennedy annonce la quarantaine",
         description: "Kennedy annonce la quarantaine de Cuba.",
         quote: { text: "Ajout", speaker: "Quelqu'un" },
         impacts: { unitOps: [] },
+        scriptedBeat: "quarantine",
     }];
     const inFrench = ensureScriptedEvents(answer, [exact], { language: "French" });
     assert.deepEqual([inFrench.written.length, inFrench.inserted.length], [1, 0]);
@@ -576,13 +592,13 @@ test("an exact beat told in another language keeps the model's translation, and 
     const inEnglish = ensureScriptedEvents(answer, [exact], { language: "English" });
     assert.equal(inEnglish.events[0].description, exact.text);
 
-    // A beat whose translation shares only a name with it: found on its own date, not a day off, and not by a name alone in English.
-    const beat = { date: "1962-10-28", title: "Khrushchev agrees", text: "Khrushchev agrees to withdraw the missiles from Cuba.", textMode: "generated" };
-    const told = [{ date: "1962-10-28", title: "Khrouchtchev cède", description: "Moscou accepte de retirer ses fusées de Cuba." }];
-    assert.equal(beatIsWritten(beat, told, { language: "French" }), true);
-    assert.equal(beatIsWritten(beat, [{ ...told[0], date: "1962-10-29" }], { language: "French" }), false);
-    assert.equal(beatIsWritten(beat, told, { language: "English" }), false);
-    assert.equal(beatIsWritten(beat, [{ date: "1962-10-28", title: "Grève à Paris", description: "Les dockers cessent le travail." }], { language: "French" }), false);
-    const kept = ensureScriptedEvents(told, [beat], { language: "French" });
-    assert.deepEqual([kept.written.length, kept.inserted.length], [1, 0], "not written a second time in English");
+    // A beat whose translation shares only a name with it, or none: found by its id, in any language the game is read in.
+    const beat = { id: "withdrawal", date: "1962-10-28", title: "Khrushchev agrees", text: "Khrushchev agrees to withdraw the missiles from Cuba.", textMode: "generated" };
+    const told = [{ date: "1962-10-28", title: "Moscou cède", description: "L'URSS accepte de retirer ses fusées de Cuba.", scriptedBeat: "withdrawal" }];
+    for (const language of ["French", "English", ""]) {
+        assert.equal(beatIsWritten(beat, told, { language }), true, language);
+        assert.deepEqual([ensureScriptedEvents(told, [beat], { language }).written.length, ensureScriptedEvents(told, [beat], { language }).inserted.length], [1, 0], `not written a second time (${language || "no language"})`);
+    }
+    assert.equal(beatIsWritten(beat, [{ date: "1962-10-28", title: "Grève à Paris", description: "Les dockers cessent le travail." }]), false);
+    assert.equal(beatIsWritten(beat, [{ date: "1962-10-28", title: "Khrouchtchev cède", description: "Moscou accepte de retirer ses fusées de Cuba." }]), false, "its names are not its id");
 });

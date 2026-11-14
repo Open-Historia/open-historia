@@ -66,8 +66,9 @@ const markScripted = (event) => {
 };
 
 // ensureScriptedEvents (worldDirection.js), with each beat's authored impacts
-// on the event that tells it: an event of the answer (matched one-to-one in
-// the same order ensureScriptedEvents matches them) or the engine's own copy.
+// on the event that tells it: an event of the answer that names the beat's id
+// in scriptedBeat (matched one-to-one in the same order ensureScriptedEvents
+// matches them, never by its words) or the engine's own copy.
 // Every such event is marked (SCRIPTED_EVENT), with or without authored
 // impacts. The marker is a symbol: it rides the copies the engine makes of
 // the event (an exact-wording beat's) and never reaches a save.
@@ -79,7 +80,7 @@ export const ensureScriptedEventsWithImpacts = (eventsInput, beatsInput, options
   for (const beat of beats) {
     let matchIndex = -1;
     for (let index = 0; index < events.length; index += 1) {
-      if (!consumed.has(index) && beatIsWritten(beat, [events[index]], options)) {
+      if (!consumed.has(index) && beatIsWritten(beat, [events[index]])) {
         matchIndex = index;
         break;
       }
@@ -162,10 +163,12 @@ export const describeScriptedImpacts = (impactsInput) => {
 
 // What the model is told when the engine writes in a beat its answer left out
 // (the fallback's, when `fallback`): the impacts it carries are the author's,
-// by name, and only when it carries none does it say so.
+// by name, and only when it carries none does it say so. A beat counts as
+// written only by the event that names its id (worldDirection.js
+// beatIsWritten), so the model is told that is what was missing.
 export const scriptedBeatWrittenNote = (beat, { fallback = false } = {}) => {
   const carries = describeScriptedImpacts(scriptedImpactsOf(beat));
-  return `The scripted event of ${beat?.date} — "${beat?.title}" — was not in ${fallback ? "the fallback answer" : "your answer"}, so the engine wrote it in the author's words, `
+  return `The scripted event of ${beat?.date} — "${beat?.title}" — was not in ${fallback ? "the fallback answer" : "your answer (no event named it in scriptedBeat)"}, so the engine wrote it in the author's words, `
     + (carries ? `with the impacts its author attached: ${carries}.` : "with no impacts.");
 };
 
