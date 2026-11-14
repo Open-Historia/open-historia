@@ -85,6 +85,7 @@ uniform vec2 u_viewport;
 uniform float u_lift;
 uniform float u_world;
 out vec4 v_colour;
+out float v_side;
 void main() {
   vec2 copy = vec2(u_world, 0.0);
   vec4 here = projectTileWithElevation(a_pos + copy, a_height * u_lift);
@@ -97,14 +98,24 @@ void main() {
     here.xy += vec2(-way.y, way.x) * a_side * a_width / u_viewport * here.w;
   }
   v_colour = a_colour;
+  v_side = a_side;
   gl_Position = here;
 }`;
 const RIBBON_FRAGMENT = `#version 300 es
 precision mediump float;
 in vec4 v_colour;
+in float v_side;
 out vec4 colour;
 void main() {
-  colour = vec4(v_colour.rgb * v_colour.a, v_colour.a);
+  float edge = clamp(1.0 - abs(v_side), 0.0, 1.0);
+  // Volumetric Gaussian cross-section for realistic smoke & thrust:
+  float plume = pow(edge, 1.7);
+  // White-hot radiant core for motor thrust trails & fire:
+  float isFire = step(0.4, v_colour.r) * step(0.12, v_colour.g);
+  vec3 rgb = mix(v_colour.rgb, vec3(1.0, 0.98, 0.92), pow(edge, 4.0) * isFire * 0.85);
+  float alpha = plume * v_colour.a;
+  if (alpha < 0.003) discard;
+  colour = vec4(rgb * alpha, alpha);
 }`;
 const POINT_VERTEX = (data) => `#version 300 es
 precision highp float;
@@ -143,6 +154,8 @@ precision mediump float;
 in vec4 v_colour;
 in float v_shape;
 in vec2 v_way;
+uniform sampler2D u_drone_shahed;
+uniform sampler2D u_drone_western;
 out vec4 colour;
 float aircraft(vec2 q, float grow) {
   float side = abs(q.y);
@@ -158,17 +171,47 @@ void main() {
   vec3 tint = v_colour.rgb;
   float seen = 0.0;
   if (v_shape < 0.5) {
-    seen = smoothstep(1.0, 0.0, far);
-    seen *= seen;
+    // 0: Warhead glow / Missile head / Smoke plume / Flame ember
+    float core = pow(clamp(1.0 - far * 1.5, 0.0, 1.0), 2.8);
+    float halo = pow(clamp(1.0 - far, 0.0, 1.0), 1.6);
+    seen = mix(halo * 0.72, 1.0, core);
+    tint = mix(tint, vec3(1.0, 0.98, 0.92), core * step(0.3, v_colour.r));
   } else if (v_shape < 1.5) {
+    // 1: Aircraft silhouette
     vec2 q = vec2(dot(p, v_way), dot(p, vec2(-v_way.y, v_way.x)));
     float inner = aircraft(q, 0.0);
     seen = aircraft(q, 0.08);
     tint = mix(vec3(0.03, 0.05, 0.08), tint, inner);
   } else if (v_shape < 2.5) {
-    seen = smoothstep(1.0, 0.22, far);
+    // 2: Detonation flash / Supersonic lens flare
+    float ray = max(0.0, 1.0 - abs(p.x) * 4.5) * max(0.0, 1.0 - abs(p.y) * 1.25);
+    ray += max(0.0, 1.0 - abs(p.y) * 4.5) * max(0.0, 1.0 - abs(p.x) * 1.25);
+    float burst = smoothstep(1.0, 0.12, far);
+    seen = clamp(burst + ray * 0.75, 0.0, 1.0);
+    tint = mix(tint, vec3(1.0, 1.0, 0.96), smoothstep(0.4, 0.0, far));
+  } else if (v_shape < 3.5) {
+    // 3: Expanding shockwave ring / Water ring
+    float ringDist = abs(far - 0.84);
+    seen = smoothstep(0.16, 0.0, ringDist);
+    tint = mix(tint, vec3(1.0, 0.96, 0.88), seen * 0.4);
+  } else if (v_shape < 4.5) {
+    // 4: Shahed-136 delta wing kamikaze drone
+    vec2 q = vec2(dot(p, v_way), dot(p, vec2(-v_way.y, v_way.x)));
+    vec2 uv = vec2(q.y * 0.5 + 0.5, 0.5 - q.x * 0.5);
+    if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
+      vec4 tex = texture(u_drone_shahed, uv);
+      seen = tex.a;
+      tint = v_colour.r < 0.08 ? v_colour.rgb : tex.rgb;
+    }
   } else {
-    seen = smoothstep(0.6, 0.78, far) * smoothstep(1.0, 0.86, far);
+    // 5: Western / Ukrainian twin-boom kamikaze drone
+    vec2 q = vec2(dot(p, v_way), dot(p, vec2(-v_way.y, v_way.x)));
+    vec2 uv = vec2(q.y * 0.5 + 0.5, 0.5 - q.x * 0.5);
+    if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
+      vec4 tex = texture(u_drone_western, uv);
+      seen = tex.a;
+      tint = v_colour.r < 0.08 ? v_colour.rgb : tex.rgb;
+    }
   }
   float alpha = seen * v_colour.a;
   if (alpha < 0.004) discard;
@@ -251,20 +294,49 @@ export const createStrikeLayer = ({ id = STRIKE_LAYER_ID, frame, onError } = {})
   _variant: "",
   _failed: "",
   _buffer: null,
+  _droneShahed: null,
+  _droneWestern: null,
   _matrices: { main: new Float32Array(16), fallback: new Float32Array(16) },
   drawn: 0,
 
   onAdd(map, gl) {
     this._map = map;
     this._buffer = gl.createBuffer();
+    const loadTexture = (url) => {
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]));
+      if (typeof Image !== "undefined") {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            gl.bindTexture(gl.TEXTURE_2D, tex);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            map?.triggerRepaint?.();
+          } catch { /* context lost */ }
+        };
+        img.src = url;
+      }
+      return tex;
+    };
+    this._droneShahed = loadTexture("/assets/drones/shahed.png");
+    this._droneWestern = loadTexture("/assets/drones/western.png");
   },
   onRemove(map, gl) {
     try {
       for (const program of Object.values(this._programs ?? {})) gl.deleteProgram(program.handle);
       if (this._buffer) gl.deleteBuffer(this._buffer);
+      if (this._droneShahed) gl.deleteTexture(this._droneShahed);
+      if (this._droneWestern) gl.deleteTexture(this._droneWestern);
     } catch { /* the context is gone */ }
     this._programs = null;
     this._buffer = null;
+    this._droneShahed = null;
+    this._droneWestern = null;
     this._map = null;
   },
 
@@ -288,6 +360,8 @@ export const createStrikeLayer = ({ id = STRIKE_LAYER_ID, frame, onError } = {})
           lift: uniform("u_lift"),
           world: uniform("u_world"),
           ratio: uniform("u_ratio"),
+          droneShahed: uniform("u_drone_shahed"),
+          droneWestern: uniform("u_drone_western"),
         };
       }
       try {
@@ -344,6 +418,16 @@ export const createStrikeLayer = ({ id = STRIKE_LAYER_ID, frame, onError } = {})
         gl.uniform2f(program.viewport, width / ratio, height / ratio);
         gl.uniform1f(program.lift, lift);
         if (program.ratio) gl.uniform1f(program.ratio, ratio);
+        if (program.droneShahed && this._droneShahed) {
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, this._droneShahed);
+          gl.uniform1i(program.droneShahed, 0);
+        }
+        if (program.droneWestern && this._droneWestern) {
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, this._droneWestern);
+          gl.uniform1i(program.droneWestern, 1);
+        }
         gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
         for (const attribute of program.attributes) {
           gl.enableVertexAttribArray(attribute.at);

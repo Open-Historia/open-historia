@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Strike animations now play hyperrealistic rocket and drone swarm audio, volumetric exhaust trails, impact blasts,
+    // and lingering smoldering fire craters with rising smoke plumes for recent strikes (strikeScene.js, StrikeLayers.jsx).
+    id: "2026-11-strike-sounds",
+    kind: "minor",
+    date: "2026-11-13",
+    channel: "beta",
+    banners: [
+      {
+        title: "Rocket strikes, drone swarms and impact craters",
+        items: [
+          "Missile salvos and drone swarms on the map now play authentic launch roars, engine buzz and concussive impact detonations.",
+          "Kamikaze drone strikes now fly in a seven-drone arrowhead formation using authentic Shahed or Western tactical drone models.",
+          "Rockets now fly with volumetric exhaust plumes and luminous warhead cores, followed by billowing explosion clouds.",
+          "Recent strike targets remain scorched with smoldering fires and drifting smoke plumes for their first two turns.",
+        ],
+      },
+    ],
+  },
+  {
     // "there should be absolutely no keywording done in this game anywhere its super unreliable ... and no whackamoleing issues. fix the core issue don't just patch it"
     // (the owner, 2026-11-13): every word list, English synonym table and a-z fold that judged meaning, replaced by the AI's structured answers, the game's own records and exact names.
     id: "2026-11-every-language-alike",
