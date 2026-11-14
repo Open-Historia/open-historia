@@ -1521,14 +1521,13 @@ export const buildProjectsSummaryText = (world, game, { compact = false, closedL
   const player = toCountryName(normalizeString(game?.country));
   const OPEN = new Set(["proposed", "active", "stalled", "paused"]);
 
-  // Do not label it twice: half of these are already called "Operation X" or
-  // "Project Y", and 'Operation "Operation Kingfisher"' reads like a mistake.
-  const titleOf = (project) => {
-    const label = project.kind === "operation" ? "Operation" : "Project";
-    return project.name.toLowerCase().startsWith(`${label.toLowerCase()} `)
-      ? `"${project.name}"`
-      : `${label} "${project.name}"`;
-  };
+  // An entry is its name, in quotes, and its kind (the board's own field:
+  // project or operation) is said beside its owner and its status. The kind
+  // was a label in front of the name, left off when the name began with the
+  // English word ('Operation "Kingfisher"', but "Operation Kingfisher"), so a
+  // French "Opération Kingfisher" read 'Operation "Opération Kingfisher"'.
+  const titleOf = (project) => `"${project.name}"`;
+  const kindOf = (project) => (project.kind === "operation" ? "operation" : "project");
 
   // The board's own predicate, not a second comparison that agrees with it today.
   // It used to be an inline lowercase compare here and a different one in
@@ -1581,7 +1580,7 @@ export const buildProjectsSummaryText = (world, game, { compact = false, closedL
     const roundsSince = round > 0 && project.updatedRound > 0 ? round - project.updatedRound : 0;
     const warnings = warningsOf(project, flags);
     return [
-      `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}%${compact ? "" : " complete"}.`,
+      `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${kindOf(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}%${compact ? "" : " complete"}.`,
       project.summary,
       !compact && project.tags.length ? `Tags: ${project.tags.join(", ")}.` : "",
       timeline,
@@ -1600,7 +1599,7 @@ export const buildProjectsSummaryText = (world, game, { compact = false, closedL
     const next = flags.nextMilestone
       ? ` Next: ${flags.nextMilestone.title}${flags.nextMilestone.date ? ` (${flags.nextMilestone.date})` : ""}.`
       : "";
-    return `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}%.`
+    return `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${kindOf(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}%.`
       + `${next}${warnings.length ? ` [${warnings.join("; ")}]` : ""}`;
   };
 

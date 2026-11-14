@@ -81,3 +81,20 @@ test("a skip's board points at its rules in the cached opening instead of repeat
   const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
   assert.ok(source.includes("${JUMP_PROJECTS_RULES_HEADING}\\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) && variables?.foldedBoard !== false })}"), "the standing rules carry them, folded where the skip's function offers the board's ops");
 });
+
+// The kind was a label in front of the name ('Operation "Kingfisher"'), left
+// off when the name began with the English word, so a French "Opération
+// Kingfisher" read 'Operation "Opération Kingfisher"'. The name is never read:
+// it is shown as it is, and the kind is a field of its own.
+test("an entry is its name as it is, with its kind beside it, whatever language the name is in", async () => {
+  const lineOf = (name, kind) => buildProjectsSummaryText({ projects: [project(name, { id: "p1", kind })] }, { gameDate: "0299-02-10", round: 41 })
+    .split("\n")[0];
+  for (const name of ["Kingfisher", "Operation Kingfisher", "Opération Kingfisher", "Операция Зимородок", "翠鸟行动"]) {
+    assert.ok(lineOf(name, "operation").startsWith(`- "${name}" [id p1], operation, ours, active, 20%`), lineOf(name, "operation"));
+  }
+  assert.ok(lineOf("Project Westbird", "project").startsWith('- "Project Westbird" [id p1], project, ours,'));
+  // A model that copies the quoted name still names the entry (gameState.js findProjectIndexForOp).
+  const { applyProjectOps } = await import("../../runtime/gameState.js");
+  const [entry] = applyProjectOps([], [{ op: "create", name: "Opération Kingfisher", kind: "operation", summary: "s" }], {});
+  assert.equal(applyProjectOps([entry], [{ op: "update", name: '"Opération Kingfisher"', progress: 55 }], {})[0].progress, 55);
+});
