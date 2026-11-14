@@ -1,15 +1,19 @@
-// Match a region name the model wrote against the regions a scenario actually
+// A region name the model wrote, against the regions a scenario actually
 // renders. Import-free so it runs in node tests and in the resolver alike.
 //
-// The model names regions from its own knowledge — "Kharkiv Oblast",
-// "Zaporizhzhya", "Crimea" — while a scenario names them however its author did:
-// a hand-drawn world names each region after its town ("Kharkiv", "Zaporizhzhia"),
-// GADM after the province with native spelling ("Kharkiv", "Zaporizhzhya"). Exact
-// matching alone dropped most of what the model meant, and every dropped
-// transfer is a narrated annexation that never moved the map. The rules below
-// widen the match one careful step at a time and accept a candidate only when
-// it is the single region left standing: an ambiguous name resolves to nothing
-// rather than to the wrong province.
+// What moves a border is only ever an exact name: the map's own name or
+// alias, written with its marks, case or spacing different (foldRegionKey),
+// and only when one region alone answers to it (regionNamedIn,
+// foldedRegionIndex). The model writes the map's names because it is given
+// them and told so; one it gets wrong is left out and said in the receipt with
+// the map's nearest names (nearestRegionNames), and the next answer writes it
+// right. "there should be absolutely no keywording done in this game
+// anywhere" (the owner, 2026-11-13): an English administrative word stripped
+// off ("Kharkiv Oblast" to Kharkiv), one name found inside another, or a
+// spelling one or two edits away, took the wrong province in English and never
+// fired for "Oblast de Kharkiv". matchRegionName, which does all three, is a
+// search: what the model's own lookup functions offer it to choose from
+// (lookupTools.js); the resolver of transfers and control never asks it.
 
 // What a string folds to is remembered. One name is looked up against every
 // city and every region on the map, several times over (exact, affix,
@@ -125,6 +129,16 @@ export const regionsFoldedAs = (index, query) => {
   return key ? index?.get(key) ?? [] : [];
 };
 
+// The one region of `pool` (the regions a written name may mean: the losing
+// side's) whose name or alias is the name written, its marks, case and
+// spacing aside; null when none is, or more than one. Exact in every
+// language: "Kharkiv Oblast" and "Oblast de Kharkiv" are both not "Kharkiv".
+export const regionNamedIn = (query, pool) => {
+  const key = foldRegionKey(query);
+  if (!key || !Array.isArray(pool)) return null;
+  return unique(pool.filter((region) => region?.id && namesOf(region).includes(key)));
+};
+
 // The map's own names nearest a name it does not know, for telling the model
 // what it may have meant (the receipt of a dropped transfer or capture): from
 // the regions it could have meant, the closest by folded spelling, a shared
@@ -160,8 +174,11 @@ export const nearestRegionNames = (query, pool, { limit = 3 } = {}) => {
     .map((entry) => entry.name);
 };
 
-// Resolve `query` (a name or id the model wrote) inside `pool` (the regions it
-// could legitimately mean). Returns { region, rule } or null. Rules, in order:
+// A search, for what the model looks up (lookupTools.js find_region): `query`
+// (a name the model typed) inside `pool`, widened step by step. It offers the
+// map's own names for the model to choose from; the resolver of transfers and
+// control never asks it (regionNamedIn above is the resolver's). Returns
+// { region, rule } or null. Rules, in order:
 //   exact      folded name or alias equals the query
 //   affix      equal once administrative prefixes/suffixes are stripped from either
 //   substring  one name contains the other (four characters or more)

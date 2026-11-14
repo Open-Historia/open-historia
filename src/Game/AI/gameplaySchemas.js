@@ -1586,70 +1586,6 @@ const JUMP_FORWARD_LEAN_SCHEMA = (() => {
   };
 })();
 
-// The bounded semantic geography pass: place wording that exact matching could
-// not resolve, mapped onto the losing side's real regions, or UNRESOLVED.
-const geographyResolutionSchema = {
-  type: "object",
-  description:
-    "One conservative mapping from an unresolved human place/area label to the current map's real region ids. "
-    + "This is geography only: it never decides conquest, ownership, sovereignty, or whether the transfer should happen.",
-  properties: {
-    index: {
-      type: "integer",
-      minimum: 0,
-      description: "Index of the supplied unresolved geography item.",
-    },
-    status: {
-      type: "string",
-      enum: ["RESOLVED", "UNRESOLVED"],
-      description: "RESOLVED only when the supplied candidate region list supports a high-confidence geographic mapping.",
-    },
-    relation: {
-      type: "string",
-      enum: [
-        "REGION_ALIAS",
-        "CITY_CONTAINING_REGION",
-        "HISTORICAL_AREA",
-        "TRANSLATED_AREA",
-        "UNRESOLVED",
-      ],
-      description:
-        "Why the source label maps to the selected region ids. REGION_ALIAS and CITY_CONTAINING_REGION normally select one id; "
-        + "HISTORICAL_AREA or TRANSLATED_AREA may select several when the named area genuinely spans several supplied regions.",
-    },
-    regionIds: {
-      type: "array",
-      description:
-        "Exact region ids copied ONLY from the supplied candidateRegions list. Empty when status is UNRESOLVED.",
-      items: { type: "string" },
-    },
-    confidence: {
-      type: "number",
-      minimum: 0,
-      maximum: 1,
-      description: "Confidence that the source label and selected region ids refer to the same geography.",
-    },
-    reason: textSchema("Brief geography-only reason. Do not discuss who should own or control the territory."),
-  },
-  required: ["index", "status", "relation", "regionIds", "confidence", "reason"],
-  additionalProperties: false,
-};
-
-export const GEOGRAPHY_RESOLVER_SCHEMA = {
-  type: "object",
-  description:
-    "Conservative geography-only resolution for regionTransfers that failed exact map-name matching.",
-  properties: {
-    resolutions: {
-      type: "array",
-      description: "Exactly one resolution for each supplied unresolved item index.",
-      items: geographyResolutionSchema,
-    },
-  },
-  required: ["resolutions"],
-  additionalProperties: false,
-};
-
 // The native territory director's answer: de-facto control operations to attach
 // to the turn's events. It may never invent a legal transfer.
 export const TERRITORY_DIRECTOR_SCHEMA = {
@@ -4063,7 +3999,6 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   timelineCurator: TIMELINE_CURATOR_SCHEMA,
   worldMotionRepair: WORLD_MOTION_REPAIR_SCHEMA,
   territoryDirector: TERRITORY_DIRECTOR_SCHEMA,
-  geographyResolver: GEOGRAPHY_RESOLVER_SCHEMA,
   countryStatSheet: COUNTRY_STAT_SHEET_SCHEMA,
   idleDiplomacy: IDLE_DIPLOMACY_SCHEMA,
   pregameHistory: PREGAME_HISTORY_SCHEMA,
@@ -4257,12 +4192,6 @@ export const TERRITORY_DIRECTOR_TOOL = makeTool(
   TERRITORY_DIRECTOR_SCHEMA,
 );
 
-export const GEOGRAPHY_RESOLVER_TOOL = makeTool(
-  "submit_geography_resolution",
-  "Resolve unresolved human place or historical-area labels to exact supplied map region ids without deciding territorial outcomes.",
-  GEOGRAPHY_RESOLVER_SCHEMA,
-);
-
 export const COUNTRY_STAT_SHEET_TOOL = makeTool(
   "submit_country_stat_sheet",
   "Submit the bounded regional national-statistics payload. Native code expands regional macro estimates into the exact live-map territorial ledger and derives aggregate population/GDP fields before persistence.",
@@ -4349,7 +4278,6 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   timelineCurator: TIMELINE_CURATOR_TOOL,
   worldMotionRepair: WORLD_MOTION_REPAIR_TOOL,
   territoryDirector: TERRITORY_DIRECTOR_TOOL,
-  geographyResolver: GEOGRAPHY_RESOLVER_TOOL,
   countryStatSheet: COUNTRY_STAT_SHEET_TOOL,
   idleDiplomacy: IDLE_DIPLOMACY_TOOL,
   pregameHistory: PREGAME_HISTORY_TOOL,

@@ -487,8 +487,10 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
   // There is no upkeep after a skip to keep a request for: the Stats refresh
   // and the event consolidator went on 2026-11-07.
   assert.equal(/skipUpkeepDue|upkeep\?\.|reserve\("(?:history|stats|review)"/.test(gameplaySource), false);
-  // The two that asked outside the list are told no before they build anything.
-  assert.match(gameplaySource, /const insideSkip = Boolean\(requests\?\.budget\) && !requests\.budget\.allows\("geography"\);/);
+  // The one that asked outside the list is told no before it builds anything.
+  // The other, the geography resolver, is gone from every mode: a place name
+  // the map does not have is left out and said in the receipt (2026-11-13).
+  assert.equal(/runJsonTask\("geographyResolver"|allows\("geography"\)/.test(gameplaySource), false);
   assert.match(functionBody("repairSkipStorylineMotion"), /const noRepairRequests = Boolean\(state\?\.requests\?\.budget\) && !state\.requests\.budget\.allows\("repair"\);/);
 });
 
