@@ -1,5 +1,6 @@
 /*! Open Historia — portions (defensive date rendering) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
@@ -1487,6 +1488,66 @@ const HeldTurnNotice = ({ held, isRetrying, progressLabel, onRetry, onDiscard, o
     );
 };
 
+// The held turn's notice as a dialog of its own, in the middle of the screen,
+// over everything, until the player has chosen. It used to be the last thing
+// in the time skip panel, under the whole ladder of dates: on a small window
+// that is below the fold, and the panel a skip leaves open is the events one,
+// so a player whose turn was held saw an empty event list, the old date and
+// nothing to press (a report of 2026-11-13: eight minutes of generation on a
+// local model, three orders failed, and no notice anywhere they looked). A
+// held turn exists only in this page's memory, so a notice that can be missed
+// or closed is a turn that can be lost.
+//
+// There is deliberately no close button, and neither the backdrop nor Escape
+// does anything: every way out is one of the notice's own buttons, each of
+// which says what becomes of the turn. In the body, so no panel's stacking
+// or scrolling can hide it.
+const heldDialogBackdrop = {
+    alignItems: "center",
+    background: "rgba(2,6,23,0.62)",
+    display: "flex",
+    fontFamily: "sans-serif",
+    inset: 0,
+    justifyContent: "center",
+    padding: "1rem",
+    position: "fixed",
+    zIndex: 10050,
+};
+const heldDialogCard = {
+    backdropFilter: "var(--oh-hud-blur)",
+    background: "var(--oh-hud-bg-strong, rgba(15,23,42,0.96))",
+    border: "1px solid rgba(251,191,36,0.45)",
+    borderRadius: "18px",
+    boxShadow: "var(--oh-hud-shadow)",
+    color: "white",
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.7rem",
+    maxHeight: "calc(100vh - 2rem)",
+    maxWidth: "34rem",
+    overflowY: "auto",
+    padding: "1rem",
+    width: "100%",
+};
+
+const HeldTurnDialog = (props) => {
+    if (!props.held || !HELD_NOTICE[props.held.kind] || typeof document === "undefined") return null;
+    return createPortal(
+        <div style={heldDialogBackdrop} data-held-turn-dialog>
+        <div role="alertdialog" aria-modal="true" aria-labelledby="oh-held-turn-title" style={heldDialogCard}>
+            <div id="oh-held-turn-title" style={{ fontSize: "0.95rem", fontWeight: 700 }}>
+            This turn is waiting for your decision
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.76rem", lineHeight: "1.5" }}>
+            Nothing has been saved yet, and the game date has not moved. Choose one of the options below to go on.
+            </div>
+            <HeldTurnNotice {...props} />
+        </div>
+        </div>,
+        document.body,
+    );
+};
+
 // A value read from the turn's restore points: read now, again whenever `deps`
 // change, and again when a restore point is saved (gameplay.js
 // captureRollbackSnapshot). That last is what the round alone missed: the
@@ -1528,14 +1589,11 @@ const TimelineSkipPanel = ({
     onCancel,
     onClose,
     onDeclineModeSuggestion,
-    onDiscardHeld,
     isApplyingParked = false,
     onApplyParked,
     onDiscardParked,
     parkedHeld = false,
     onJump,
-    onRetryHeld,
-    onRetryWholeSkip,
     onUndo,
     progressLabel,
     progressStartedAt = 0,
@@ -1886,18 +1944,6 @@ const TimelineSkipPanel = ({
                 </button>
             </div>
             </div>
-        )}
-
-        {held && (
-            <HeldTurnNotice
-            held={held}
-            isRetrying={isRetryingHeld}
-            progressLabel={progressLabel}
-            onRetry={onRetryHeld}
-            onRetryWholeSkip={onRetryWholeSkip}
-            onDiscard={onDiscardHeld}
-            onCancel={onCancel}
-            />
         )}
 
         {/* The ladder has twice found the same lower method working for this
@@ -3865,6 +3911,16 @@ const DateWidget = ({
 
     return (
         <>
+        {/* Over every panel, and not closable: see HeldTurnDialog. */}
+        <HeldTurnDialog
+        held={held}
+        isRetrying={isRetryingHeld}
+        progressLabel={jumpProgress}
+        onRetry={retryHeld}
+        onRetryWholeSkip={retryWholeSkip}
+        onDiscard={discardHeld}
+        onCancel={cancelJump}
+        />
         <TimelineSkipPanel
         canUndo={undoCount > 0}
         currentDate={currentDate}
@@ -3879,14 +3935,11 @@ const DateWidget = ({
         onCancel={cancelJump}
         onClose={() => setPanel(null)}
         onDeclineModeSuggestion={declineModeSuggestion}
-        onDiscardHeld={discardHeld}
         isApplyingParked={isApplyingParked}
         onApplyParked={applyHeldParked}
         onDiscardParked={discardHeldParked}
         parkedHeld={parkedHeld}
         onJump={(days) => runJump(days, "jump")}
-        onRetryHeld={retryHeld}
-        onRetryWholeSkip={retryWholeSkip}
         onUndo={runUndo}
         offeredInteractive={skipInFlight ? null : shownOffer}
         progressLabel={jumpProgress}
