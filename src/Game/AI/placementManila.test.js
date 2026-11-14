@@ -42,6 +42,7 @@ import { placementNote } from "../../runtime/receiptPlayerNotes.js";
 import { normalizeEvents } from "../../runtime/gameState.js";
 import { seaShareOf } from "../../runtime/unitMotion.js";
 import { findUnitByRef, readNameRef, stripKindTags } from "./nameRefs.js";
+import { findEventPlaces } from "./eventPlaces.js";
 import { findUnitType, normalizeUnitTypes } from "../../runtime/unitTypes.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
@@ -118,13 +119,13 @@ const placementPass = (gazetteer) => new Function(
     "normalizeArray", "normalizeString", "lazyLookupContext", "buildPlacementGazetteer", "obstaclesOf", "spaceOut", "FOOTPRINT_KM",
     "resolvePlacement", "resolveRegionPlacement", "describeApproximatePlacement", "nearestSea", "homeWaters", "placementHash",
     "noteReceipt", "placementNote", "noteUndeployedPosts", "logDebugEvent", "findUnitByRef", "readNameRef", "seaShareOf",
-    "regionWithinContainer", "describeOtherKind", "stripKindTags", "normalizeUnitTypes", "findUnitType",
+    "regionWithinContainer", "describeOtherKind", "stripKindTags", "normalizeUnitTypes", "findUnitType", "findEventPlaces",
     `${source.slice(start, end)}\nreturn resolvePlacements;`,
 )(
     asArray, asText, () => async () => ({}), () => gazetteer, obstaclesOf, spaceOut, FOOTPRINT_KM,
     resolvePlacement, resolveRegionPlacement, describeApproximatePlacement, nearestSea, homeWaters, hashText,
     noteReceipt, placementNote, () => {}, () => {}, findUnitByRef, readNameRef, seaShareOf,
-    regionWithinContainer, describeOtherKind, stripKindTags, normalizeUnitTypes, findUnitType,
+    regionWithinContainer, describeOtherKind, stripKindTags, normalizeUnitTypes, findUnitType, findEventPlaces,
 );
 
 const EVENT = { title: "The Philippines Responds", description: "Forces deploy after the attack of January 1." };
@@ -181,13 +182,23 @@ test("a region this map does not have, called after a town it does: by the town,
     assert.match(got.notes[0], /^adjusted: .*could not be placed at "region: Metro Manila, country: Philippines" — this map has no place called "Metro Manila"\. It was placed near Manila, in Philippines instead\./);
 });
 
-test("a bay the map does not name is the water by the town it is called after, whoever owns the fleet", async () => {
+// A bay is placed by the country its address names, whoever owns the fleet. Its name is not taken apart
+// for the town it might be called after: "Manila Bay" was Manila by an English list of words for a bay, and
+// "baie de Manille" was nothing (the owner, 2026-11-13: no keywording anywhere).
+test("a bay the map does not name is placed by the country its address names, whoever owns the fleet", async () => {
     for (const owner of ["Philippines", "United States"]) {
-        const got = await raise("naval", "sea: Manila Bay", owner);
-        assert.ok(got.placed, owner);
-        assert.equal(got.region, null, `${owner}: at sea`);
-        assert.ok(got.kmFromManila < 120, `${owner}: ${got.kmFromManila} km from Manila`);
-        assert.match(got.notes[0], /could not be placed at "sea: Manila Bay".* It was placed near Manila, in Philippines instead\./, owner);
+        for (const at of ["sea: Manila Bay, country: Philippines", "sea: baie de Manille, country: Philippines"]) {
+            const got = await raise("naval", at, owner);
+            assert.ok(got.placed, `${owner} ${at}`);
+            assert.equal(got.region, null, `${owner} ${at}: at sea`);
+            assert.ok(got.kmFromManila < 120, `${owner} ${at}: ${got.kmFromManila} km from Manila`);
+            assert.match(got.notes[0], /It was placed near Manila, in Philippines instead\./, `${owner} ${at}`);
+        }
+    }
+    // With no country said, a name the map lacks is its owner's own land, the English bay as the French one.
+    for (const at of ["sea: Manila Bay", "sea: baie de Manille"]) {
+        const got = await raise("naval", at, "Philippines");
+        assert.match(got.notes[0], /It was placed near Manila, in Philippines instead\./, at);
     }
 });
 

@@ -259,7 +259,7 @@ import { readWarRoomAnswer, warRoomRequest, warRoomStanding, warRoomVariables } 
 import { bindFrontOrdersToEvents, decodeEventStrikes, describeDroppedFrontOrders, screenFrontOrders } from "./nativeFrontLedger.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
-import { editDistance, foldRegionKey, foldedRegionIndex, matchRegionName, nearestRegionNames, regionNamedIn, regionsFoldedAs, stripRegionAffixes } from "./regionMatch.js";
+import { foldRegionKey, foldedRegionIndex, nearestRegionNames, regionNamedIn, regionsFoldedAs } from "./regionMatch.js";
 import { marchStoryCapturers } from "./storyMarch.js";
 import { countryClaimWithdrawals } from "./claimsByCountry.js";
 import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
@@ -2027,7 +2027,7 @@ const buildPlacementGazetteer = (context, world) => {
   // map's region ids start with, so "US", "USA" and "United States" all land on
   // USA.27_1 whoever holds it now.
   const countryOf = (token) => {
-    const raw = normalizeString(token).replace(/^the\s+/i, "");
+    const raw = normalizeString(token);
     if (!raw) return null;
     const label = context.resolveOwner(raw) || context.resolveOwner(toCountryName(raw));
     // Its official name, its ISO3, or its ISO2, written any way a model writes it.
@@ -2060,34 +2060,30 @@ const buildPlacementGazetteer = (context, world) => {
       || normalizeString(countryGidFromIdentity(row.owner)).toUpperCase() === want.iso3
       || baseIso3(row) === want.iso3 ? 1 : 0;
   };
-  // A name said to be a city, without the article the map writes it with or
-  // with one the map leaves off: "Raqqa" for the map's "Ar-Raqqa". Only for a
-  // name given its kind, and only when what is left is a name of its own.
-  const bareName = (key) => {
-    const bare = key.replace(/^(?:al|ar|as|ash|ad|an|at|az|el) /, "");
-    return bare.length >= 4 ? bare : key;
-  };
-  const sameBareName = (name, key) => bareName(fold(name)) === bareName(key);
-  const oneOf = (list) => (list.length === 1 ? list[0] : null);
+  // Every lookup here is EXACT: a name as the map spells it, or one of its
+  // aliases, folded only for case, accents, spacing and punctuation
+  // (regionMatch.js foldRegionKey). Nothing is found by a near miss, a word
+  // inside a longer name, an administrative word taken off ("Kharkiv Oblast"
+  // for "Kharkiv") or an article taken off ("Raqqa" for "Ar-Raqqa"): each of
+  // those guessed which place a name meant, by rules written for English and
+  // a few transliterations, and a wrong guess put a unit in the wrong country
+  // (the owner, 2026-11-13: no keywording anywhere). A name the map does not
+  // have places nothing, and the placing pass falls back as it always has: a
+  // new unit or structure goes into its owner's land approximately, a move is
+  // not made, and the receipt tells the model what the map does have.
+  const named = (key) => (entry) => fold(entry.name) === key || normalizeArray(entry.aliases).some((alias) => fold(alias) === key);
   // The place of that name inside one country: its city first, as everywhere else.
-  // `exactOnly` is the whole-phrase attempt and stays strict here too, or "off
-  // Okinawa, Japan" would match the region Okinawa and put the fleet ashore.
   // `kind`: "region" or "city" when the phrase said which the name is (nameRefs.js).
-  const findInCountry = (name, key, want, exactOnly, kind = "") => {
+  const findInCountry = (key, want, kind = "") => {
     const best = (list, rank) => list
       .map((entry) => ({ entry, rank: rank(entry) }))
       .filter((hit) => hit.rank > 0)
       .sort((a, b) => b.rank - a.rank)[0]?.entry ?? null;
-    const named = (entry) => fold(entry.name) === key || normalizeArray(entry.aliases).some((alias) => fold(alias) === key);
-    const city = kind === "region" ? null : best(context.cityRows.filter(named), (entry) => countryRank(context.regionOfCity(entry), want))
-      ?? (kind === "city" ? best(context.cityRows.filter((entry) => sameBareName(entry.name, key)), (entry) => countryRank(context.regionOfCity(entry), want)) : null);
+    const city = kind === "region" ? null : best(context.cityRows.filter(named(key)), (entry) => countryRank(context.regionOfCity(entry), want));
     if (city) return { kind: "city", name: city.name, point: city.coordinates };
     if (kind === "city") return null;
-    const pool = withGeometry.filter((row) => countryRank(row, want) > 0);
-    const matched = pool.length
-      ? matchRegionName(name, pool, exactOnly ? { allowFuzzy: false, minSubstring: Infinity } : { maxFuzzy: 1 })
-      : null;
-    return matched?.region ? { kind: "region", name: matched.region.name, region: asRegion(matched.region) } : null;
+    const region = best(withGeometry.filter(named(key)), (row) => countryRank(row, want));
+    return region ? { kind: "region", name: region.name, region: asRegion(region) } : null;
   };
   // Every country holding a place of this name, for telling the model to say which.
   // Cached: one payload asks for the same handful of names several times over.
@@ -2096,8 +2092,7 @@ const buildPlacementGazetteer = (context, world) => {
     const key = fold(name);
     if (!key) return [];
     if (sharedNames.has(key)) return sharedNames.get(key);
-    const named = (entry) => fold(entry.name) === key || normalizeArray(entry.aliases).some((alias) => fold(alias) === key);
-    const owners = [...context.cityRows.filter(named).map((city) => context.regionOfCity(city)), ...withGeometry.filter(named)]
+    const owners = [...context.cityRows.filter(named(key)).map((city) => context.regionOfCity(city)), ...withGeometry.filter(named(key))]
       .map((row) => normalizeString(row?.owner))
       .filter(Boolean);
     const found = [...new Set(owners)];
@@ -2105,9 +2100,6 @@ const buildPlacementGazetteer = (context, world) => {
     return found;
   };
 
-  // `exact`: the name as the map spells it (or an alias, or "Kharkiv" for
-  // "Kharkiv Oblast") and nothing looser — the whole-phrase attempt, where a
-  // substring match would read "off Sevastopol" as the region Sevastopol.
   // `country`: the one the phrase named after a comma ("Montana, United States").
   // `prefer`: the polity doing the placing, which decides a bare shared name.
   // `kind`: what the phrase said the name is — "country", "region", "city",
@@ -2115,10 +2107,6 @@ const buildPlacementGazetteer = (context, world) => {
   // is looked up as that and nothing else. Georgia said as a region is never the
   // country, and said with a country the map knows it is in that country or
   // nowhere: a kind is the model saying it knows which of two things it means.
-  // A name asked for with none of the three is `lookUp`, the lookup `find` remembers.
-  const lookUp = (name, exactOnly) => {
-    return lookUpFor(name, exactOnly, "", "");
-  };
   // A territory or dependency, which is no polity and no region of the map but
   // the regions that belong to it by geography (namedAreas.js): Greenland,
   // whoever holds it. Placed in like a country.
@@ -2127,7 +2115,7 @@ const buildPlacementGazetteer = (context, world) => {
     const regions = normalizeArray(area?.rows).filter((row) => row.geometry);
     return regions.length ? { kind: "polity", name: area.name, regions: regions.map(asRegion) } : null;
   };
-  const lookUpFor = (name, exactOnly, country, prefer, kind = "") => {
+  const lookUpFor = (name, country, prefer, kind = "") => {
     const key = fold(name);
     if (!key) return null;
     // A sea is not in the gazetteer's own names: placement.js reads it from the map's seas.
@@ -2148,7 +2136,7 @@ const buildPlacementGazetteer = (context, world) => {
     // a wrong qualifier must not make a real place vanish. Said with its kind,
     // the name is held to the country it was given.
     const wanted = countryOf(country);
-    const qualified = wanted ? findInCountry(name, key, wanted, exactOnly, kind) : null;
+    const qualified = wanted ? findInCountry(key, wanted, kind) : null;
     if (qualified) return qualified;
     if (kind && wanted && (wanted.label ? (context.ownerRows.get(wanted.label) ?? []).length > 0 : Boolean(wanted.iso3 || wanted.area))) return null;
     // A country before a region: "Ukraine" is the country even where a region shares the name.
@@ -2158,50 +2146,31 @@ const buildPlacementGazetteer = (context, world) => {
     // first. A country keeps its own name against any preference.
     const preferred = !wanted && !owner ? countryOf(prefer) : null;
     if (preferred && sharedName(name).length > 1) {
-      const mine = findInCountry(name, key, preferred, exactOnly, kind);
+      const mine = findInCountry(key, preferred, kind);
       if (mine) return mine;
     }
-    const city = kind === "region" ? null : context.cityRows.find((entry) => fold(entry.name) === key || entry.aliases.some((alias) => fold(alias) === key))
-      ?? (kind === "city" ? oneOf(context.cityRows.filter((entry) => sameBareName(entry.name, key))) : null);
+    const city = kind === "region" ? null : context.cityRows.find(named(key));
     if (city) return { kind: "city", name: city.name, point: city.coordinates };
+    if (kind === "city") return null;
     const owned = owner ? (context.ownerRows.get(owner) ?? []).filter((row) => row.geometry) : [];
-    const exact = kind === "city" ? null : withGeometry.find((row) => fold(row.name) === key || row.aliases.some((alias) => fold(alias) === key));
+    const exact = withGeometry.find(named(key));
     if (owned.length && !(exact && owned.length === 1)) return { kind: "polity", name: owner, regions: owned.map(asRegion) };
     if (exact) return { kind: "region", name: exact.name, region: asRegion(exact) };
-    // A territory by its own name, before any looser reading of it: "Greenland"
-    // is the eighteen regions of Greenland, and not the one region whose name
-    // has the word in it.
-    // Said to be a region, a name that is also a country stays unfound: Georgia
-    // the region is never Georgia the country.
-    const area = kind === "city" || (kind && context.resolveOwner(name)) ? null : areaOf(name);
-    if (area) return area;
-    const matched = kind === "city" ? null : exactOnly
-      ? matchRegionName(name, withGeometry, { allowFuzzy: false, minSubstring: Infinity })
-      : matchRegionName(name, withGeometry, { maxFuzzy: 1 });
-    if (matched?.region) return { kind: "region", name: matched.region.name, region: asRegion(matched.region) };
-    if (exactOnly || kind === "region") return null;
-    // A city one letter out ("Kharkov" for "Kharkiv"), last: a near miss must not beat a real region.
-    const stripped = stripRegionAffixes(key) || key;
-    const close = stripped.length >= 5 && context.cityRows.find((entry) => editDistance(stripped, fold(entry.name), 1) <= 1);
-    return close ? { kind: "city", name: close.name, point: close.coordinates } : null;
+    // A territory by its own name: "Greenland" is the eighteen regions of
+    // Greenland. Said to be a region, a name that is also a country stays
+    // unfound: Georgia the region is never Georgia the country.
+    return kind && context.resolveOwner(name) ? null : areaOf(name);
   };
   // Reading one phrase asks for the same names again and again: an address asks
-  // for each of its parts, as the map spells it and then loosely, once for
-  // every way the phrase can be read, and a failed lookup walks every city and
-  // region on the map. Nothing a lookup reads changes while this gazetteer
-  // lives, so each name is worked out once. What comes back is only ever read.
+  // for each of its parts once for every way the phrase can be read, and a
+  // failed lookup walks every city and region on the map. Nothing a lookup
+  // reads changes while this gazetteer lives, so each name is worked out once.
+  // What comes back is only ever read.
   const lookedUp = new Map();
-  const find = (name, { exact: exactOnly = false, country = "", prefer = "", kind = "" } = {}) => {
-    const memoKey = `${exactOnly ? "=" : "~"}${String(name ?? "")}`;
-    // Asked within a country, by the polity placing the thing, or as one kind
-    // of thing: an answer of its own.
-    if (country || prefer || kind) {
-      const askedKey = `${memoKey}\n${String(country ?? "")}\n${String(prefer ?? "")}\n${String(kind ?? "")}`;
-      if (!lookedUp.has(askedKey)) lookedUp.set(askedKey, lookUpFor(name, Boolean(exactOnly), country, prefer, kind));
-      return lookedUp.get(askedKey);
-    }
-    if (!lookedUp.has(memoKey)) lookedUp.set(memoKey, lookUp(name, Boolean(exactOnly)));
-    return lookedUp.get(memoKey);
+  const find = (name, { country = "", prefer = "", kind = "" } = {}) => {
+    const askedKey = `${String(name ?? "")}\n${String(country ?? "")}\n${String(prefer ?? "")}\n${String(kind ?? "")}`;
+    if (!lookedUp.has(askedKey)) lookedUp.set(askedKey, lookUpFor(name, country, prefer, kind));
+    return lookedUp.get(askedKey);
   };
 
   // A region by the map's own key for it, for a saved operation that carries
@@ -2274,25 +2243,6 @@ const buildPlacementGazetteer = (context, world) => {
     const city = byPopulation(held.filter((entry) => fold(entry.capital) === "primary"))[0] ?? byPopulation(held)[0];
     return city ? { name: city.name, point: city.coordinates } : null;
   };
-  // The provinces and cities a text names that `country` holds, in the order it
-  // names them, as anchors for approximate placement (AI/placement.js). Whole
-  // words only, and names of four letters or more, so "Ure" is not found in
-  // "secure".
-  const placesNamedIn = (text, country) => {
-    const owner = fold(context.resolveOwner(country) || country);
-    const haystack = ` ${fold(text).replace(/[^\p{L}\p{N}]+/gu, " ")} `;
-    if (!owner || haystack.trim().length === 0) return [];
-    const at = (name) => {
-      const key = fold(name).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-      return key.length >= 4 ? haystack.indexOf(` ${key} `) : -1;
-    };
-    const found = [
-      ...withGeometry.filter((row) => fold(row.owner) === owner).map((row) => ({ kind: "region", name: row.name, region: asRegion(row), at: at(row.name) })),
-      ...context.cityRows.filter((city) => fold(context.regionOfCity(city)?.owner) === owner)
-        .map((city) => ({ kind: "city", name: city.name, point: city.coordinates, at: at(city.name) })),
-    ];
-    return found.filter((place) => place.at >= 0).sort((a, b) => a.at - b.at);
-  };
   // Whether two names are one polity as the map knows them (an alias, a code).
   const samePolity = (a, b) => {
     const key = (name) => fold(context.resolveOwner(name) || name);
@@ -2301,10 +2251,11 @@ const buildPlacementGazetteer = (context, world) => {
   // The named seas this map has: the real ones on the real-world map, and any
   // the scenario declares (placement.js seasForMap).
   const seas = seasForMap({ regionAt, declared: world?.seas });
-  // A sea by its name, for an event that says it happens there (eventPlaces.js).
+  // A sea by its name or an alias, exactly, for an event that says it happens
+  // there (eventPlaces.js).
   const seaPoint = (name) => {
-    const key = fold(normalizeString(name).replace(/^the +/i, ""));
-    const sea = key ? seas.find((entry) => [entry.name, ...normalizeArray(entry.aliases)].some((alias) => fold(normalizeString(alias).replace(/^the +/i, "")) === key)) : null;
+    const key = fold(name);
+    const sea = key ? seas.find((entry) => [entry.name, ...normalizeArray(entry.aliases)].some((alias) => fold(alias) === key)) : null;
     return sea ? { name: sea.name, point: sea.point } : null;
   };
 
@@ -2330,10 +2281,28 @@ const buildPlacementGazetteer = (context, world) => {
     unanswered = false;
     return true;
   };
-  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, seas, seaPoint, holdsLand, capitalOf, placesNamedIn, samePolity, worldCities: worldCitiesNamed, worldCitiesArrived };
+  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, seas, seaPoint, holdsLand, capitalOf, samePolity, worldCities: worldCitiesNamed, worldCitiesArrived };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
+
+// An event's own places (its `places` field, eventPlaces.js), found on the map
+// by `gazetteer` as the placing pass reads them: a city, a structure or a unit
+// as its point, a region as its shape, each with its kind and name. What an
+// event happens at, for placing what it raised or built when the operation
+// itself says nowhere or names a place the map does not have. Never read from
+// its title or text: a story told in another language names the places the
+// map has by other names, and an English one names places only in passing.
+const eventPlacesOnMap = (event, gazetteer, { impacts = null, units = [] } = {}) => findEventPlaces(event?.places, gazetteer, { impacts, units })
+  .map((found) => {
+    if (found.kind === "region") {
+      const region = gazetteer.findRegionId(found.regionId);
+      return region ? { kind: "region", name: found.name, region } : null;
+    }
+    if (found.kind === "country" || found.kind === "sea") return null;
+    return Number.isFinite(found.lng) && Number.isFinite(found.lat) ? { kind: found.kind, name: found.name, point: [found.lng, found.lat] } : null;
+  })
+  .filter(Boolean);
 
 // A unit or a structure is written by its NAME (nameRefs.js). The save keys
 // each by an id the model is not shown, so before anything looks one up, what
@@ -2417,21 +2386,22 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
   for (const { event, impacts, path } of normalizeArray(containers)) {
     if (!impacts || typeof impacts !== "object") continue;
     const title = normalizeString(event?.title);
-    // What the event itself says, for a place the map does not know: a province
-    // the event names puts a garrison the model sited at an unknown town in that
-    // province rather than by the capital.
-    const context = [title, normalizeString(event?.description)].filter(Boolean).join(". ");
+    // What the event says of where it happens, for a place the map does not
+    // know: a province its `places` name puts a garrison the model sited at an
+    // unknown town in that province rather than by the capital. Its places, read
+    // once the map is (eventPlacesOnMap), and never its words.
+    const source = { event, impacts, places: null };
     for (const op of normalizeArray(impacts.unitOps)) {
       const kind = normalizeString(op?.op).toLowerCase();
       if (kind === "spawn") {
         const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
-        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(kindOf(unit)), atSea: kindOf(unit) === "naval", title, context, path, spawn: true, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
+        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(kindOf(unit)), atSea: kindOf(unit) === "naval", title, source, path, spawn: true, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
       } else if (kind === "move") {
         const mover = normalizeArray(world?.units).find((unit) => normalizeString(unit?.id) === normalizeString(op.unitId));
         // A land formation's march ends on land, as its raising does: seen in a
         // player's Game (2026-09-29), an armoured division sent to a coastal
         // town stood in the sea, the model's guess a kilometre offshore.
-        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(mover?.name) || normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(mover?.type).toLowerCase()), atSea: normalizeString(mover?.type).toLowerCase() === "naval", title, context, path, owner: normalizeString(mover?.ownerCode), from: mover && Number.isFinite(mover.lng) && Number.isFinite(mover.lat) ? { lng: mover.lng, lat: mover.lat } : null });
+        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(mover?.name) || normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(mover?.type).toLowerCase()), atSea: normalizeString(mover?.type).toLowerCase() === "naval", title, source, path, owner: normalizeString(mover?.ownerCode), from: mover && Number.isFinite(mover.lng) && Number.isFinite(mover.lat) ? { lng: mover.lng, lat: mover.lat } : null });
       }
     }
     for (const op of normalizeArray(impacts.markerOps)) {
@@ -2445,7 +2415,7 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
       // `home`: whose structure it is, for an address the map cannot check
       // (placement.js addressSpot) and a town it does not carry
       // (resolveWorldTown).
-      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, context, path, owner: normalizeString(marker.ownerCode ?? op.ownerCode), home: normalizeString(marker.ownerCode ?? op.ownerCode), markerOwner: normalizeString(marker.ownerCode), build: kind === "build" || kind === "found" });
+      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, source, path, owner: normalizeString(marker.ownerCode ?? op.ownerCode), home: normalizeString(marker.ownerCode ?? op.ownerCode), markerOwner: normalizeString(marker.ownerCode), build: kind === "build" || kind === "found" });
     }
   }
   if (!placing.length) return { placed: 0, spaced: 0 };
@@ -2460,18 +2430,31 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
 
   // What already stands, plus each thing placed by this payload as it lands.
   const standing = obstaclesOf(world);
+  // An event's own places on the map, read once for all it raises and builds.
+  const placesOf = (source) => {
+    if (!source.places) {
+      try {
+        source.places = eventPlacesOnMap(source.event, gazetteer, { impacts: source.impacts, units: world?.units });
+      } catch {
+        source.places = []; // one odd polygon must not cost the turn its placements
+      }
+    }
+    return source.places;
+  };
   let placed = 0; let spaced = 0;
   for (const entry of placing) {
     const { target, lngKey, latKey } = entry;
     // A new unit or structure given no place at all is put where its own event
-    // says it is, in its owner's land. Seen in a replayed turn (2026-09-29): the
-    // structure director built a forward operating base with no `at` while its
-    // event named where it was, and it was dropped.
+    // says it happens, in its owner's land: the first of the event's places
+    // there. Seen in a replayed turn (2026-09-29): the structure director built
+    // a forward operating base with no `at` while its event said where it was,
+    // and it was dropped.
     if (!entry.phrase && !entry.regionId && (entry.spawn || entry.build)
       && !(Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey])))) {
-      const named = entry.context && entry.owner ? normalizeArray(gazetteer.placesNamedIn(entry.context, entry.owner))[0] : null;
+      const holder = (place) => normalizeString(place.region ? place.region.owner : gazetteer.regionAt(place.point)?.owner);
+      const named = entry.owner ? placesOf(entry.source).find((place) => gazetteer.samePolity(holder(place), entry.owner)) : null;
       if (named) {
-        entry.phrase = named.name;
+        entry.phrase = `${named.kind}: ${named.name}`;
         noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a new thing"} was given no place, so it was placed in ${named.name}, where its event says it is. Give every new unit and structure \`at\`.`);
       }
     }
@@ -2522,7 +2505,7 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
       // A structure whose region field names nothing is placed by that name.
       const asked = entry.phrase || (entry.build ? entry.regionId : "");
       if ((resolved && !containerOnly) || hasCoordinates || !(entry.spawn || entry.build) || !(asked || entry.build)) return null;
-      const attempt = resolvePlacement(asked, gazetteer, { seedText: entry.name, owner: entry.owner, approximate: true, context: entry.context });
+      const attempt = resolvePlacement(asked, gazetteer, { seedText: entry.name, owner: entry.owner, approximate: true, places: placesOf(entry.source) });
       return attempt?.approximate && !attempt.error ? attempt : null;
     })();
     // A new unit or structure nothing has placed goes into its owner's land.
