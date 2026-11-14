@@ -28,7 +28,7 @@ const GROUPED_DIGITS = /^\d{1,3}([,.'’_ ])\d{3}(?:\1\d{3})*$/u;
 // read as 125 (the owner, 2026-11-13: no keywording anywhere).
 export const readPopulationFigure = (value) => {
   if (typeof value === "number") return Number.isFinite(value) && value >= 1 ? Math.min(POPULATION_FIGURE_MOST, Math.round(value)) : 0;
-  const text = String(value ?? "").trim().replace(/[   ]/g, " ");
+  const text = String(value ?? "").trim().replace(/[\u00a0\u202f\u2009]/g, " ");
   if (!/^\d+$/.test(text) && !GROUPED_DIGITS.test(text)) return 0;
   const people = Number(text.replace(/\D/g, ""));
   return Number.isFinite(people) && people >= 1 ? Math.min(POPULATION_FIGURE_MOST, people) : 0;
