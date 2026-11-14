@@ -11,6 +11,7 @@
 
 import { scriptedImpactFields } from "./scriptedImpacts.js";
 import { nameId } from "./nameId.js";
+import { firstSentence, withoutFinalTerminal } from "./sentences.js";
 
 export const FEATURE_DEFINITIONS = Object.freeze([
   Object.freeze({
@@ -300,33 +301,14 @@ const scriptedEventId = (value, fallbackSeed) => {
   return explicit || `scripted-${scriptedEventHash(fallbackSeed)}`;
 };
 
-// A beat's first sentence, by Unicode's own sentence rules (Intl.Segmenter,
-// UAX #29), which no language owns: a sentence ends at a terminal in any
-// script, "。" and "？" with no space after them as well as ". " and "؟ ", but
-// not at the point of "3.5". Twelve characters at least before its full stop,
-// so "Mr." alone is no sentence. Read as ". ! ?" and a space, a beat written in
-// Chinese or Japanese was one sentence however many it had. Where the
-// segmenter is missing, a sentence terminal followed by a space.
-const SENTENCES = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
-  ? new Intl.Segmenter(undefined, { granularity: "sentence" })
-  : null;
-const firstSentence = (text) => {
-  if (!SENTENCES) return /^(.{12,}?\p{Sentence_Terminal})\s/u.exec(`${text} `)?.[1] ?? text;
-  let sentence = "";
-  for (const { segment } of SENTENCES.segment(text)) {
-    sentence += segment;
-    if (sentence.trim().length > 12) break;
-  }
-  return sentence.trim();
-};
-
-// A beat's title where its author gave none: its first sentence, or the whole
-// beat when that is longer than a title, at most 140 characters, without the
-// sentence's own full stop.
+// A beat's title where its author gave none: its first sentence, by the one
+// rule the game ends a sentence by in every script (server/sentences.js), or
+// the whole beat when that is longer than a title, at most 140 characters,
+// without the sentence's own full stop.
 export const scriptedEventTitle = (body) => {
   const text = String(body ?? "").replace(/\s+/g, " ").trim();
-  const sentence = firstSentence(text);
-  return (sentence.length <= 141 ? sentence : text).slice(0, 140).replace(/\p{Sentence_Terminal}$/u, "");
+  const sentence = firstSentence(text, { min: 13 }) || text;
+  return withoutFinalTerminal((sentence.length <= 141 ? sentence : text).slice(0, 140));
 };
 
 const normalizeScriptedCondition = (value) => {
