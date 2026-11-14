@@ -429,6 +429,7 @@ import {
 import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "../../runtime/politicalBackground.js";
 import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
 import { MARKER_OPS, markerOpKind } from "../../runtime/markerOps.js";
+import { withSaidFamily } from "../../runtime/markerFamily.js";
 import { firstSentence, withoutFinalTerminal } from "../../../server/sentences.js";
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
 import { validateQueuedActionIds } from "./actionOutcomeAssociations.js";
@@ -4378,7 +4379,9 @@ const runJsonTask = async (taskKey, {
       // cuts: the engine would read it as no op, and asking again for it would be
       // a second request. "found" and "destroy" were once rewritten to build and
       // remove (and the engine read "destroy" as a ruin instead), in English only
-      // (the owner, 2026-11-13: no keywording anywhere).
+      // (the owner, 2026-11-13: no keywording anywhere). A structure built here
+      // is drawn as the family the answer said, or as a landmark
+      // (runtime/markerFamily.js withSaidFamily), never by its kind's words.
       const markerOpsLeftOut = [];
       for (const [eventIndex, event] of (Array.isArray(parsed?.events) ? parsed.events : []).entries()) {
         const ops = event?.impacts?.markerOps;
@@ -4403,12 +4406,12 @@ const runJsonTask = async (taskKey, {
             continue;
           }
           if (kind !== "build" || op.marker) {
-            kept.push({ ...op, op: kind });
+            kept.push(kind === "build" ? { ...op, op: kind, marker: withSaidFamily(op.marker) } : { ...op, op: kind });
             continue;
           }
           // Flat build: lift the structure's own fields under `marker`.
           const { op: _op, note, ...marker } = op;
-          kept.push({ op: "build", marker, ...(note == null ? {} : { note }) });
+          kept.push({ op: "build", marker: withSaidFamily(marker), ...(note == null ? {} : { note }) });
         }
         event.impacts.markerOps = kept;
       }

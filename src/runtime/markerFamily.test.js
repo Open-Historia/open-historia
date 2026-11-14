@@ -117,3 +117,23 @@ test("the Game Master draws a type of the player's own as the family picked for 
   assert.match(card, /FAMILY_EMOJI\[markerFamilyOf\(structure\)\]/);
   assert.doesNotMatch(card, /KIND_EMOJI|emojiForKind/);
 });
+
+// A structure an AI answer builds is drawn as the family it said, or as a
+// landmark: its kind is free words, which in English may be one of the game's
+// own kinds and in no other language ever are.
+test("a structure an answer builds is drawn as the family it said, the same in every language", async () => {
+  const { withSaidFamily } = await import("./markerFamily.js");
+  const english = withSaidFamily({ name: "Fort Hood", kind: "military base" });
+  const french = withSaidFamily({ name: "Fort Hood", kind: "base militaire" });
+  assert.equal(english.family, NEUTRAL_MARKER_FAMILY);
+  assert.equal(markerFamilyOf(english), markerFamilyOf(french));
+  for (const kind of ["military base", "base militaire", "военная база"]) {
+    assert.equal(markerFamilyOf(withSaidFamily({ kind, family: "military" })), "military", kind);
+  }
+  assert.equal(withSaidFamily({ kind: "x", family: "castle" }).family, NEUTRAL_MARKER_FAMILY, "a family the game does not have is none");
+  assert.equal(withSaidFamily(null), null);
+  // The answer's builds go through it, written or flat.
+  const gameplay = fs.readFileSync(new URL("../Game/AI/gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.ok(gameplay.includes('kept.push(kind === "build" ? { ...op, op: kind, marker: withSaidFamily(op.marker) } : { ...op, op: kind });'));
+  assert.ok(gameplay.includes('kept.push({ op: "build", marker: withSaidFamily(marker), ...(note == null ? {} : { note }) });'));
+});

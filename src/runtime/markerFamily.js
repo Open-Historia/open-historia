@@ -113,5 +113,14 @@ export const markerFamilyOf = (marker) => normalizeMarkerFamily(marker?.family)
   || kindFamily(marker?.kind)
   || NEUTRAL_MARKER_FAMILY;
 
+// A structure an AI answer builds, as the map will keep it: drawn as the family
+// the answer said, or as a landmark when it said none, written on it so that its
+// kind is never consulted. That kind is free words: in English they may be one
+// of the game's own kinds ("military base") and draw as one, in no other
+// language ever (the owner, 2026-11-13: no keywording anywhere).
+export const withSaidFamily = (marker) => (marker && typeof marker === "object" && !Array.isArray(marker)
+  ? { ...marker, family: normalizeMarkerFamily(marker.family) || NEUTRAL_MARKER_FAMILY }
+  : marker);
+
 // Whether a structure is of strategic weight: only when it was said to be.
 export const isStrategicMarker = (marker) => marker?.strategic === true;
