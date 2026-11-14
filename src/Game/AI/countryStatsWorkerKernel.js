@@ -36,7 +36,6 @@ const canonicalStatsPolity = (token, world) => {
   const resolved = resolvePolityIdentity(text, world, {
     allowUnknown: true,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
     identityIndex: statsIdentityIndexOf(world),
   });

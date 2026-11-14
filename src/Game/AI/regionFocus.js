@@ -49,22 +49,6 @@ export const nameVariants = (label, { displayName = "", aliases = [], stockName 
   return { exact };
 };
 
-const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-// How many times a power's exact names occur in `text` as whole words. Zero for
-// empty text. Nothing here reads prose with it any more; it is kept only for
-// nativeUnitDirector.js, whose own batch is taking its use out. Delete it then.
-export const mentionCount = (text, variants) => {
-  const haystack = ` ${foldName(text)} `;
-  if (haystack.trim().length === 0) return 0;
-  let count = 0;
-  for (const form of variants.exact) {
-    const matches = haystack.match(new RegExp(`(?<= )${escapeRegExp(form)}(?= )`, "g"));
-    if (matches) count += matches.length;
-  }
-  return count;
-};
-
 // The polities on a war's sides: sideA and sideB as the war ledger writes them
 // (runtime/warRecord.js), or the lists of a `sides` object. Never its title or
 // its note.

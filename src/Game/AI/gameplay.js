@@ -680,7 +680,6 @@ const canonicalCampaignPolity = (value, world, identityIndex = null) => {
   const resolved = resolvePolityIdentity(raw, world && typeof world === "object" ? world : {}, {
     allowUnknown: true,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
     identityIndex,
   });
@@ -10327,7 +10326,6 @@ const canonicalStatsPolity = (token, world) => {
   const resolved = resolvePolityIdentity(text, world, {
     allowUnknown: true,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
   });
   return normalizeString(resolved?.resolved) || toCountryName(text) || text;
@@ -16772,7 +16770,6 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         const authored = await resolveFallbackScriptedImpacts(payload, bundle.world, {
           validate: validateGeneratedWorldChanges,
           receipt: state.receipt,
-          requests: state.requests,
           actions: bundle.actions,
           playerCountry: bundle.game.country,
         });
@@ -18164,7 +18161,6 @@ const validateGameMasterStatPatches = (patches, world, events) => {
     const resolution = resolvePolityIdentity(requested, normalizedWorld, {
       allowUnknown: false,
       requireActive: false,
-      allowCoreMatch: true,
       allowStockBase: true,
       allowMapRefs: false,
     });
@@ -18237,7 +18233,6 @@ const normalizeGameMasterStatPatches = (patches, world) => {
     const resolution = resolvePolityIdentity(entry?.country, normalizedWorld, {
       allowUnknown: false,
       requireActive: false,
-      allowCoreMatch: true,
       allowStockBase: true,
       allowMapRefs: false,
     });
@@ -18323,7 +18318,6 @@ const validateGameMasterStorylineUpdates = async (candidate, { mode, world, game
       const resolution = resolvePolityIdentity(raw, normalizedWorld, {
         allowUnknown: false,
         requireActive: false,
-        allowCoreMatch: true,
         allowStockBase: true,
         allowMapRefs: false,
       });
@@ -20193,7 +20187,6 @@ const validatePregamePolityVocabulary = (candidate, { world = {}, canonicalPolit
     const resolved = resolvePolityIdentity(raw, world, {
       allowUnknown: false,
       requireActive: false,
-      allowCoreMatch: true,
       allowStockBase: true,
     });
     const canonical = normalizeString(resolved?.resolved);

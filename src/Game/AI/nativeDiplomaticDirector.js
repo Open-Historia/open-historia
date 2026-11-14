@@ -147,7 +147,6 @@ export const canonicalDiplomaticPolity = (token, world, { allowUnknown = false, 
   const resolved = resolvePolityIdentity(raw, world, {
     allowUnknown,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
     identityIndex,
   });

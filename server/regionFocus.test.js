@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isPendingAction, mentionCount, nameVariants, selectFocusPowers } from "../src/Game/AI/regionFocus.js";
+import { foldName, isPendingAction, nameVariants, selectFocusPowers } from "../src/Game/AI/regionFocus.js";
 
 const owners = [
   { key: "united states of america", label: "United States of America", regions: 285 },
@@ -22,18 +22,16 @@ const owners = [
   { key: "republic of india", label: "Republic of India", regions: 40 },
 ];
 
-test("a power is recognised only under the names the map declares for it", () => {
-  const russia = nameVariants("Russian Federation");
-  assert.equal(mentionCount("The Russian Federation annexes Kharkiv", russia), 1);
-  assert.equal(mentionCount("Russia annexes Kharkiv; Russian troops mass", russia), 0, "\"Russia\" is not a name this map has");
-  const withAlias = nameVariants("Russian Federation", { aliases: ["Russia"] });
-  assert.equal(mentionCount("Russia annexes Kharkiv", withAlias), 1, "a declared alias counts");
-  const germany = nameVariants("Federal Republic of Germany", { displayName: "Germany" });
-  assert.equal(mentionCount("Germany hosts the summit", germany), 1, "the declared display name counts");
-  assert.equal(mentionCount("the Germans reinforce the Baltic", germany), 0, "no stems, no guessing");
-  const iran = nameVariants("Islamic Republic of Iran", { stockName: "Iran" });
-  assert.equal(mentionCount("Iran enriches uranium", iran), 1, "the stock name counts when the record declares its code");
-  assert.equal(mentionCount("Ireland votes", iran), 0);
+test("a power is known only under the names the map declares for it", () => {
+  // Its own name, a declared alias or display name, and the stock name only when
+  // its record declares the code: exact names, never a stem or a shorter form.
+  assert.deepEqual([...nameVariants("Russian Federation").exact], ["russian federation"]);
+  assert.ok(nameVariants("Russian Federation", { aliases: ["Russia"] }).exact.has("russia"));
+  assert.ok(nameVariants("Federal Republic of Germany", { displayName: "Germany" }).exact.has("germany"));
+  assert.equal(nameVariants("Federal Republic of Germany", { displayName: "Germany" }).exact.has("germans"), false);
+  assert.ok(nameVariants("Islamic Republic of Iran", { stockName: "Iran" }).exact.has("iran"));
+  // In any script.
+  assert.ok(nameVariants("Российская Федерация", { aliases: ["Россия"] }).exact.has("россия"));
 });
 
 test("without any signal, the player leads and size breaks ties", () => {
@@ -130,19 +128,14 @@ const cyrillicOwners = [
   { key: "республика панама", label: "Республика Панама", regions: 12 },
 ];
 
-test("a power named in Cyrillic or Chinese is recognised under the names the map declares, and only those", () => {
+test("a power named in Cyrillic or Chinese is known under the names the map declares, and only those", () => {
   const russia = nameVariants("Российская Федерация");
-  assert.equal(mentionCount("Польша направила ноту: Российская Федерация отвечает.", russia), 1);
-  assert.equal(mentionCount("Россия отвечает; российские войска на границе", russia), 0, "\"Россия\" is not a name this map has");
-  assert.equal(mentionCount("РОССИЙСКАЯ ФЕДЕРАЦИЯ, Российская Федерация", russia), 2, "case folds in any script");
+  assert.deepEqual([...russia.exact], [foldName("РОССИЙСКАЯ ФЕДЕРАЦИЯ")], "case folds in any script");
+  assert.equal(russia.exact.has(foldName("Россия")), false, "\"Россия\" is not a name this map has");
   const belarus = nameVariants("Республика Беларусь", { displayName: "Беларусь" });
-  assert.equal(mentionCount("Беларусь принимает саммит", belarus), 1);
-  // Chinese: where punctuation sets the name apart. An unbroken sentence is one
-  // word here; nothing cuts Chinese into words.
+  assert.ok(belarus.exact.has(foldName("Беларусь")));
   const china = nameVariants("中华人民共和国", { aliases: ["中国"] });
-  assert.equal(mentionCount("声明称：中国，将公布新的五年计划。", china), 1);
-  assert.equal(mentionCount("东京消息：日本，举行选举。", china), 0);
-  assert.equal(mentionCount("中国宣布新的五年计划", china), 0);
+  assert.deepEqual([...china.exact].sort(), ["中华人民共和国", "中国"].sort());
 });
 
 test("the turn's powers lead on a map named in Cyrillic, as on any other", () => {

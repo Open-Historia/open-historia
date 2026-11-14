@@ -30,13 +30,10 @@ const cloneValue = (value) => {
   return JSON.parse(JSON.stringify(value));
 };
 
-// A player's order that raises or sends forces (mapConsequences.js
-// markOrderedEvents) is read from the event that carries it out: an event that
-// cites a player's order (impacts.actionIds) is the director's to read,
-// whatever the order said. Its words are not read for whether it raised forces.
-// Kept, answering no, only while mapConsequences.js still imports it: the
-// event's citation is what the director reads now (eventNeedsNativeUnitDirector).
-export const orderRaisesForces = () => false;
+// A player's order that raises or sends forces is read from the event that
+// carries it out: an event that cites a player's order (impacts.actionIds) is
+// the director's to read, whatever the order said; its words are never read for
+// whether it raised forces.
 const citesPlayerOrder = (event) => normalizeArray(event?.impacts?.actionIds).some((id) => normalizeString(id));
 
 // What the director is shown of a unit. Posture, composition and cover are

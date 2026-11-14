@@ -1,7 +1,7 @@
 /*! Open Historia — native unit director tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MAX_RAISED_COMBATANTS, buildUnitDirectorInput, eventNeedsNativeUnitDirector, landHolders, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, orderRaisesForces, pickCombatantPlace, pruneWarUnits, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
+import { MAX_RAISED_COMBATANTS, buildUnitDirectorInput, eventNeedsNativeUnitDirector, landHolders, missingCombatantSpawns, nativeCombatantSpawn, nearestOwnRegion, pickCombatantPlace, pruneWarUnits, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
 import { normalizeUnitEntry } from "../../runtime/gameState.js";
 
 // Seen in a live game (2026-09-21): the jump moved the Falklands garrison to
@@ -121,9 +121,6 @@ test("the events the director is asked about are those carrying unit ops, the Mi
 // carries out a player's order is the director's to read whatever the order or
 // the event says: by the order it cites, and never by the order's words.
 test("an event carrying out a player's order reaches the director by its citation, never by the order's words", () => {
-  for (const text of ["Place a garrison in Stranraer", "Station a garrison at Ayr", "Installer une garnison à Stranraer", "Place sanctions on Russia"]) {
-    assert.equal(orderRaisesForces(text), false, text);
-  }
   for (const title of ["British Army Deploys New Strategic Garrison to Stranraer", "L'armée britannique installe une garnison à Stranraer"]) {
     assert.equal(eventNeedsNativeUnitDirector({ title, kind: "player", impacts: { actionIds: ["order-1"] } }), true, title);
     assert.equal(eventNeedsNativeUnitDirector({ title, kind: "player", impacts: {} }), false, title);
