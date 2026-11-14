@@ -128,6 +128,7 @@ import {
   validateWorldExplorationAudit,
 } from "./nativeWorldIntegrity.js";
 import {
+  bindScriptedPoliticalClaims,
   buildScriptedPoliticalImpactInstruction,
   clearPoliticalClaimBindings,
   politicalImpactCompletenessFailure,
@@ -135,7 +136,6 @@ import {
   preparePoliticalClaimContext,
   scriptedPoliticalImpactRequirements,
   validatePoliticalImpactCompleteness,
-  validatePolityImpactCompleteness,
 } from "./politicalImpactCompleteness.js";
 import {
   POLITICAL_CLAIM_REPAIR_TOOL,
@@ -573,7 +573,6 @@ import {
 import { describeReportsForPrompt, normalizeReportOp } from "../../runtime/reports.js";
 import {
   applyTerritoryTempo,
-  beatIsWritten,
   buildPriorityRulesBlock,
   buildScriptedEventsInstruction,
   buildWorldDirectionDirective,
@@ -592,6 +591,7 @@ import {
   ensureScriptedEventsWithImpacts,
   resolveFallbackScriptedImpacts,
   scriptedBeatWrittenNote,
+  scriptedEventsCarryingImpacts,
 } from "./scriptedEventImpacts.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
@@ -7537,7 +7537,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // attempt and strip them on salvage, but never require full coverage here.
   actions = null,
   // Transient, pre-sort binding of jump politicalClaims to their event objects.
-  // Null outside timeline jumps keeps the legacy prose detector for CSE/GM paths.
+  // Null outside timeline jumps: their events are held to what their own ops
+  // and a scripted beat's impacts change, as every event is (no prose is read).
   politicalClaimContext = null,
   // Final-attempt-only bounded AI bridge supplied by the timeline jump. It may
   // complete a structured political decision with canonical operations, but the
@@ -7828,10 +7829,10 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // political systems; if an event establishes one of those facts, require the
   // matching politicalActorOps before the event can enter the timeline. This is
   // deliberately semantic/completeness validation, not a second political engine.
-  // Timeline jumps carry explicit transient claims; legacy callers (including
-  // authored CSE preflight) retain prose classification until they gain an
-  // equivalent structured contract. politicalActorOps remain the canonical state
-  // authority in both paths.
+  // What an event changes is structure only: a jump's transient claims, the
+  // event's own ops, a scripted beat's authored impacts. No event's words are
+  // read (politicalImpactCompleteness.js). politicalActorOps remain the canonical
+  // state authority.
   let politicalFailure = politicalImpactCompletenessFailure(candidate, { world, claimContext: politicalClaimContext });
   let politicalCompletenessError = politicalFailure?.issue?.message || "";
   if (politicalCompletenessError && typeof politicalClaimRepair === "function") {
@@ -7866,13 +7867,6 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       receiptPlayerNote("politicalNotRecorded", {}, issue.title),
     );
   }
-
-  // Country/polity identity is canonical world state too. A completed rename
-  // in prose cannot leave the map, flags, Stats, chats and Political World on
-  // the old key. Keep this separate from Political Actor completeness because
-  // a polity rename is carried by impacts.polityChanges, not politicalActorOps.
-  const polityCompletenessError = validatePolityImpactCompleteness(candidate);
-  if (polityCompletenessError) return polityCompletenessError;
 
   // A normal timeline pass cannot independently pronounce an existing native
   // institution proposal adopted/rejected/etc. Institution governance owns that
@@ -16378,7 +16372,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // never found, and a different event that shared a few names dropped the
       // beat and its author's impacts with it.
       const scriptedBeats = scriptedPlan.eligible;
-      const scriptedPoliticalRequirements = scriptedPoliticalImpactRequirements(scriptedBeats, { world: ledgerWorld });
+      const scriptedPoliticalRequirements = scriptedPoliticalImpactRequirements(scriptedBeats);
       const scriptedPoliticalInstruction = buildScriptedPoliticalImpactInstruction(scriptedPoliticalRequirements, { world: ledgerWorld });
       state.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements.length > 0;
       const [pacedMin, pacedMax] = segmentCount > 1
@@ -16622,7 +16616,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             noteReceipt(
               draft,
               "dropped",
-              `${politicalClaimContext.discardedReason} The transient claim ledger was ignored and legacy prose completeness validation was used for this answer.`,
+              `${politicalClaimContext.discardedReason} The transient claim ledger was ignored; the answer's Political World operations were checked on their own.`,
             );
           }
           // Every ledger of the answer (wars, relations, agreements, puppets,
@@ -16715,20 +16709,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
                   receiptPlayerNote("scriptedBeatWritten", { title: beat.title, date: readableReceiptDate(beat.date) }));
               }
             }
-            // CSE author text is known before generation and currently has no
-            // structured Political World claim field of its own. Preserve its
-            // existing fail-closed semantic protection even when this jump uses
-            // politicalClaims for ordinary model-authored events.
-            // The events that tell a beat are the ones that name its id, the
-            // engine's own copies included (worldDirection.js beatIsWritten).
-            if (politicalClaimContext.mode === "structured") {
-              const duePoliticalRequirements = scriptedPoliticalImpactRequirements(due, { world: ledgerWorld });
-              for (const requirement of duePoliticalRequirements) {
-                for (const event of normalizeArray(candidate.events)) {
-                  if (beatIsWritten(requirement.beat, [event])) politicalClaimContext.legacyEvents.add(event);
-                }
-              }
-            }
+            // A beat whose authored impacts give a polity a new leader or
+            // government claims that change through the event that tells it: that
+            // event must carry the matching Political World ops. Read from the
+            // impacts the engine attached, never from the beat's words.
+            bindScriptedPoliticalClaims(scriptedEventsCarryingImpacts(candidate.events), scriptedPoliticalImpactRequirements(due));
           }
           // The map's tempo, an author's ceiling on how many regions change hands
           // in a period (worldDirection.js): counted in event order, before the
