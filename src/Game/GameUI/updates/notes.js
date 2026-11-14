@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player of a scenario with bloc colours, 2026-11-12: at the world view the fill is 0.46 over a physical basemap and
+    // the colours its author chose could not be told apart. Map/vnext/presentationPolicy.js politicalFillOpacityStops,
+    // read once at load; mapSettings.js solidPoliticalFill, off by default.
+    id: "2026-11-solid-political-colours",
+    kind: "minor",
+    date: "2026-11-12",
+    banners: [
+      {
+        title: "A flat political map, if you want one",
+        items: [
+          "A new setting, Solid political colours, paints countries almost solid at every zoom instead of tinting them over the terrain.",
+          "A scenario's colours then show as its author picked them, also from the world view.",
+          "It is off unless you turn it on in the Map settings, and takes effect the next time the game opens.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",
