@@ -228,7 +228,7 @@ test("one line per change, so the pill's count and the list never disagree", () 
       regionTransfers: [{ regionId: "FRA.1_1", fromCode: "Germany", toCode: "FRA" }],
       regionControlOps: [{ op: "contest", regionId: "FRA.1_1", actorCode: "Germany", fromCode: "FRA" }, { op: "unknown" }],
       regionClaims: [{ regionId: "FRA.1_1", claimantCode: "Germany" }],
-      groupOps: [{ op: "erase", name: "Black Hand" }],
+      groupOps: [{ op: "dissolve", name: "Black Hand" }],
       polityChanges: [{ operation: "rename", code: "FRA", name: "French Republic" }],
       unitOps: [{ op: "strength", unitId: "u1", strength: 60 }, { op: "strength", unitId: "u2", strength: 10 }],
       markerOps: [{ op: "build", marker: { name: "Fort Douaumont", kind: "fort" } }],

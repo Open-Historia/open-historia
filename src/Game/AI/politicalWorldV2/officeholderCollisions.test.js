@@ -16,11 +16,13 @@ const checkpointWith = (governments, verified) => {
   return checkpoint;
 };
 
+// An officeholder is { name, title }, and a collision is two polities' heads
+// with the same name: a title is never read out of the words.
 test("a head of government shared by two verified polities re-opens both as challenges, once", () => {
   const checkpoint = checkpointWith({
-    A: { headOfGovernment: "Prime Minister Jane Doe" },
-    B: { headOfGovernment: "Jane Doe" },
-    C: { headOfGovernment: "John Roe" },
+    A: { headOfGovernment: { name: "Jane Doe", title: "Prime Minister" } },
+    B: { headOfGovernment: { name: "Jane Doe", title: "Premier" } },
+    C: { headOfGovernment: { name: "John Roe", title: "Prime Minister" } },
   }, ["A", "B", "C"]);
   reopenPoliticalWorldV2OfficeholderCollisions(checkpoint);
   assert.deepEqual(checkpoint.coverage["historical-verification"], ["C"]);
@@ -47,6 +49,28 @@ test("a collision waits until every polity in it has been verified, and a shared
   const realms = checkpointWith({ A: { headOfState: "King Charles III" }, B: { headOfState: "Charles III" } }, ["A", "B"]);
   reopenPoliticalWorldV2OfficeholderCollisions(realms);
   assert.deepEqual(realms.coverage["historical-verification"], ["A", "B"]);
+});
+
+test("the same name collides in any language; a title is never stripped out of an old one-text head", () => {
+  const french = checkpointWith({
+    A: { headOfGovernment: { name: "Jeanne Dupont", title: "Première ministre" } },
+    B: { headOfGovernment: { name: "Jeanne Dupont", title: "Cheffe du gouvernement" } },
+  }, ["A", "B"]);
+  reopenPoliticalWorldV2OfficeholderCollisions(french);
+  assert.deepEqual(french.coverage["historical-verification"], []);
+  const chinese = checkpointWith({
+    A: { headOfGovernment: { name: "王伟", title: "总理" } },
+    B: { headOfGovernment: { name: "王伟", title: "首相" } },
+  }, ["A", "B"]);
+  reopenPoliticalWorldV2OfficeholderCollisions(chinese);
+  assert.deepEqual(chinese.coverage["historical-verification"], []);
+  // A head saved as one text is compared whole: "Prime Minister Jane Doe" is no
+  // more cut to Jane Doe than "Première ministre Jeanne Dupont" to Jeanne Dupont.
+  for (const [titled, bare] of [["Prime Minister Jane Doe", "Jane Doe"], ["Première ministre Jeanne Dupont", "Jeanne Dupont"]]) {
+    const legacy = checkpointWith({ A: { headOfGovernment: titled }, B: { headOfGovernment: bare } }, ["A", "B"]);
+    reopenPoliticalWorldV2OfficeholderCollisions(legacy);
+    assert.deepEqual(legacy.coverage["historical-verification"], ["A", "B"], titled);
+  }
 });
 
 test("worlds without exact-date verification are left alone", () => {

@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+// Read as LF whatever the checkout's line endings: a function is cut out of it
+// by the closing brace on a line of its own.
+const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const prompts = fs.readFileSync(new URL("./gameplayPrompts.js", import.meta.url), "utf8");
 
 test("generated Political Actor operations are dry-run against scratch canonical state before acceptance", () => {
