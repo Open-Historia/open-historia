@@ -186,15 +186,20 @@ test("an unknown power is answered with the closest exact names, else the alphab
   assert.match(ask("Russia").error, /not a power/);
 });
 
-test("find_region: exact, with an administrative suffix, a transliteration off, or ambiguous", () => {
+test("find_region: exact, wrapped in words of any language, a transliteration off, or ambiguous", () => {
   const exact = run("find_region", { name: "Kharkiv" });
   assert.equal(exact.bestMatch.name, "Kharkiv");
   assert.equal(exact.bestMatch.rule, "exact");
   assert.equal(exact.matches[0].confidence, 100);
 
-  const suffixed = run("find_region", { name: "Kharkiv Oblast" });
-  assert.equal(suffixed.bestMatch.name, "Kharkiv");
-  assert.equal(suffixed.bestMatch.rule, "affix");
+  // By the name's whole words, never a list of administrative words: the
+  // French wording is found exactly as the English one is.
+  for (const name of ["Kharkiv Oblast", "Oblast de Kharkiv"]) {
+    const wrapped = run("find_region", { name });
+    assert.equal(wrapped.bestMatch.name, "Kharkiv", name);
+    assert.equal(wrapped.bestMatch.rule, "words", name);
+    assert.equal(wrapped.matches[0].name, "Kharkiv", name);
+  }
 
   const spelled = run("find_region", { name: "Zaporizhzhya", owner: "Russian Federation" });
   assert.equal(spelled.owner, "Russian Federation");

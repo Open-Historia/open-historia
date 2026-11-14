@@ -13,7 +13,7 @@
 // Import-light on purpose: the executor is a pure function of a context the
 // caller builds (lookupContext), so it runs in node tests and in the harness.
 
-import { foldRegionKey, matchRegionName, stripRegionAffixes, editDistance } from "./regionMatch.js";
+import { containsWords, editDistance, foldRegionKey, matchRegionName, nearestRegionNames, spellingDistance } from "./regionMatch.js";
 import { readNameRef, regionNamer } from "./nameRefs.js";
 import { baseCountryOf, buildAreaIndex, findArea, splitTerritories } from "./namedAreas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
@@ -707,9 +707,13 @@ const regionOfRef = (context, written, ownerHint = "") => {
     const holders = [...new Set(named.map((row) => row.owner || "nobody"))];
     return { error: `${named.length} regions are called "${ref.name}", held by ${holders.join(", ")}. Say which, as "${ref.name} (<owner>)".` };
   }
+  // The one region the search finds alone, by spelling (matchRegionName); every
+  // answer gives the region's own name, which the model then writes.
   const near = matchRegionName(ref.name, context.rows, { maxFuzzy: 1 });
   if (near?.region) return { row: near.region };
-  return { error: `No region is called "${ref.name}". Use find_region or list_regions for the names this map uses.` };
+  const nearest = nearestRegionNames(ref.name, context.rows);
+  const offer = nearest.length ? ` Nearest names: ${nearest.map((name) => `"${name}"`).join(", ")}.` : "";
+  return { error: `No region is called "${ref.name}".${offer} Use find_region or list_regions for the names this map uses.` };
 };
 
 // How many regions a group lists: list_groups gives every group in full, each
@@ -1141,19 +1145,19 @@ export const executeLookup = (context, name, args = {}) => {
         if (!owner) return unknownPower(context, a.owner);
         pool = context.ownerRows.get(owner) ?? [];
       }
+      // By spelling alone (regionMatch.js): the same name, one name's whole
+      // words inside the other's ("Kharkiv" in "Kharkiv Oblast" and in
+      // "Oblast de Kharkiv"), or a letter or two apart.
       const key = foldRegionKey(query);
-      const stripped = stripRegionAffixes(key) || key;
       const scored = [];
       for (const row of pool) {
         const names = [row.name, ...row.aliases].map(foldRegionKey);
         let score = 0;
         for (const candidate of names) {
-          const bare = stripRegionAffixes(candidate) || candidate;
           if (candidate === key) score = Math.max(score, 100);
-          else if (bare === stripped) score = Math.max(score, 90);
-          else if (stripped.length >= 4 && (bare === stripped || `${bare} `.startsWith(`${stripped} `) || bare.startsWith(`${stripped} `) || stripped.startsWith(`${bare} `))) score = Math.max(score, 70);
-          else if (stripped.length >= 5 && bare.length >= 5) {
-            const distance = editDistance(stripped, bare, 2);
+          else if (key.length >= 4 && candidate.length >= 4 && (containsWords(candidate, key) || containsWords(key, candidate))) score = Math.max(score, 80);
+          else if (key.length >= 5 && candidate.length >= 5) {
+            const distance = spellingDistance(key, candidate, 2);
             if (distance <= 2) score = Math.max(score, 60 - distance * 10);
           }
         }
@@ -1184,8 +1188,9 @@ export const executeLookup = (context, name, args = {}) => {
     case "find_city": {
       const key = foldRegionKey(a.name);
       if (!key) return { error: "name is required" };
-      const stripped = stripRegionAffixes(key) || key;
-      const near = (folded) => folded === key || folded === stripped || (stripped.length >= 5 && editDistance(stripped, folded, 1) <= 1);
+      // The same name, or one a letter off (spellingDistance: whole names, or one
+      // word of either), by spelling alone.
+      const near = (folded) => folded === key || (key.length >= 5 && spellingDistance(key, folded, 1) <= 1);
       const hits = context.cityRows
         .filter((city) => near(foldRegionKey(city.name)) || city.aliases.some((alias) => near(foldRegionKey(alias))))
         .slice(0, 8)
