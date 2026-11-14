@@ -16634,6 +16634,8 @@
  "{{handed}} are now played by the AI.",
  "{{handed}} is now played by the AI.",
  "{{have}} of your {{listCount}} events involved {{player}}; the player's focus ({{label}}) asks for at least {{needed}} while {{player2}} has this much going on. Give {{player3}}'s orders, Projects, wars, Storylines and recent events their consequences before reaching for distant news.",
+ "{{have}} of your {{listCount}} events was marked playerRelated; the player's focus ({{label}}) asks for at least {{needed}} while {{player}} has this much going on. Give {{player2}}'s orders, Projects, wars, Storylines and recent events their consequences before reaching for distant news, and mark each such event playerRelated.",
+ "{{have}} of your {{listCount}} events were marked playerRelated; the player's focus ({{label}}) asks for at least {{needed}} while {{player}} has this much going on. Give {{player2}}'s orders, Projects, wars, Storylines and recent events their consequences before reaching for distant news, and mark each such event playerRelated.",
  "{{hours}} h ago",
  "{{id}} · unowned",
  "{{initiator}} is not an active participant in {{name}}.",
