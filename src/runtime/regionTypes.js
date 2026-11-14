@@ -51,17 +51,15 @@ const rgb = (value) => (Array.isArray(value) && value.length >= 3 && value.slice
 const flag = (value, fallback) => (typeof value === "boolean" ? value : fallback);
 
 // A type whose regions are water: a sea, an ocean, a lake. The Workshop's
-// Water switch says so. A type nobody has set it on (every type made before
-// there was one) is water when its name says it is: "Sea", "Deep Ocean",
-// "Open Water", "Lakes". A map whose sea is drawn as regions (a pirate's
-// world, with every stretch of water a region somebody can hold) is then
-// sailed like any other, and its armies do not walk across it.
-const WATER_NAME = /(?:^|[^\p{L}])(?:oceans?|seas?|waters?|lakes?)(?:$|[^\p{L}])/iu;
-export const isWaterType = (type) => {
-  if (!type || typeof type !== "object") return false;
-  if (typeof type.water === "boolean") return type.water;
-  return WATER_NAME.test(text(type.name));
-};
+// Water switch says so, and only the switch: a map whose sea is drawn as
+// regions (a pirate's world, with every stretch of water a region somebody can
+// hold) is then sailed like any other, and its armies do not walk across it.
+// A type nobody has switched on is land. Its name used to decide it when the
+// switch was never set, by English words ("Sea", "Ocean", "Lake"), so a type
+// named "Mer" or "Meer" was walked across where "Sea" was sailed (the owner,
+// 2026-11-13: "there should be absolutely no keywording done in this game
+// anywhere").
+export const isWaterType = (type) => Boolean(type) && typeof type === "object" && type.water === true;
 // The ids of the types that are water.
 export const waterTypeIds = (types) => new Set((Array.isArray(types) ? types : []).filter(isWaterType).map((type) => text(type?.id)).filter(Boolean));
 

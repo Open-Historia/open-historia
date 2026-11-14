@@ -150,11 +150,15 @@ test("a map with none of it saves none, and a scenario saved before it existed o
   assert.deepEqual(warGeographyWorldPatch(null), {});
 });
 
-test("frozen water is water on the map: by the type's Water switch or by its name", () => {
+test("frozen water is water on the map: by the type's Water switch alone, never by its name", () => {
   const doc = { ...workshopDocument(), freezingRegions: ["lake_1", "sea_1", "field_1"] };
-  assert.deepEqual(warGeographyForGame(doc, regions).freezingRegions, ["lake_1", "sea_1"]);
+  // "Sea" with its switch never set is land, as "Mer" would be.
+  assert.deepEqual(warGeographyForGame(doc, regions).freezingRegions, ["lake_1"]);
+  // Switched on, it is water.
+  const flooded = { ...doc, types: doc.types.map((type) => (type.id === "sea" ? { ...type, water: true } : type)) };
+  assert.deepEqual(warGeographyForGame(flooded, regions).freezingRegions, ["lake_1", "sea_1"]);
   // The lake's type switched to land is no longer water.
-  const dried = { ...doc, types: doc.types.map((type) => (type.id === "lake" ? { ...type, water: false } : type)) };
+  const dried = { ...flooded, types: flooded.types.map((type) => (type.id === "lake" ? { ...type, water: false } : type)) };
   assert.deepEqual(warGeographyForGame(dried, regions).freezingRegions, ["sea_1"]);
 });
 
