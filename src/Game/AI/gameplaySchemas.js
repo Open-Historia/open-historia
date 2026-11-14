@@ -2999,6 +2999,20 @@ export const UNIT_DIRECTOR_SCHEMA = {
   additionalProperties: false,
 };
 
+// What a structure the director puts on the map is: a closed list of things
+// that stand in one place (nativeStructureDirector.js reads it). A satellite,
+// a programme or a ship is none of them, so the director cannot write one; the
+// engine used to tell them apart by English words in a free-text kind. The
+// Workshop's own kinds (Editor/mapFeatures.js) are among them, spelled alike.
+export const STRUCTURE_KINDS = Object.freeze([
+  "military hq", "military base", "naval base", "airfield", "fortress", "missile silo", "radar station",
+  "port", "shipyard", "depot", "pipeline terminal", "infrastructure",
+  "launch site", "ground station",
+  "industrial plant", "power plant", "refinery", "mine", "oil field",
+  "research facility", "data centre",
+  "embassy", "landmark",
+]);
+
 // The structure director's answer: new structures the supplied events built,
 // keyed by event index (nativeStructureDirector.js). Builds only, and native
 // code decides which of them reach the map.
@@ -3021,7 +3035,7 @@ export const STRUCTURE_DIRECTOR_SCHEMA = {
               type: "object",
               properties: {
                 name: nonEmptyTextSchema("Its specific name."),
-                kind: nonEmptyTextSchema("What it is, as a short lowercase noun phrase: data centre, ground station, shipyard."),
+                kind: { type: "string", enum: [...STRUCTURE_KINDS], description: "What it is, the nearest of these." },
                 ownerCode: nonEmptyTextSchema("The owning polity's FULL name, never a code."),
                 status: {
                   type: "string",

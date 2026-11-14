@@ -89,7 +89,7 @@ test("the stores are copies, so the analyzer cannot reach back into the world", 
   assert.deepEqual(world.regionClaimants["1"], ["Poland"]);
 });
 
-test("when the cap bites, the front the events are about is what survives it", () => {
+test("when the cap bites, the front the events concern is what survives it, by their combatants and operations, in any language", () => {
   const world = handDrawnWorld(10);
   const total = TERRITORIAL_STATE_ROW_CAP + 50;
   // A long list of someone else's disputes first...
@@ -99,10 +99,19 @@ test("when the cap bites, the front the events are about is what survives it", (
   }
   // ...and the one this jump's events are actually about, last.
   world.regionOwnershipOverrides.donbas = "Russian Federation";
-  world.regionSovereigntyOverrides.donbas = "Ukraine";
-  const state = summarizeTerritorialState(world, [{ title: "Ukraine counter-attacks", description: "Ukrainian forces push east." }]);
-  assert.equal(Object.keys(state.regionClaimants).length + Object.keys(state.regionSovereigntyOverrides).length, TERRITORIAL_STATE_ROW_CAP);
-  assert.equal(state.regionSovereigntyOverrides.donbas, "Ukraine", "the named front must survive the cap");
+  world.regionClaimants.donbas = ["Ukraine"];
+  const survives = (candidates) => "donbas" in summarizeTerritorialState(world, candidates).regionClaimants;
+  // Who fights in an event says which front it concerns, whatever language it is told in.
+  const combatants = ["Ukraine", "Russian Federation"];
+  assert.equal(survives([{ title: "Ukraine counter-attacks", description: "Ukrainian forces push east.", combatants }]), true);
+  assert.equal(survives([{ title: "L'Ukraine contre-attaque", description: "Les forces ukrainiennes avancent vers l'est.", combatants }]), true);
+  // So do the sides of the operations it carries.
+  assert.equal(survives([{ title: "x", existingControlOps: [{ op: "contest", regionId: "Donbas", fromCode: "Russian Federation", actorCode: "Ukraine" }] }]), true);
+  // Its words never do: a name in the prose, in English or French, moves nothing up.
+  assert.equal(survives([{ title: "Ukraine counter-attacks", description: "Ukrainian forces push east." }]), false);
+  assert.equal(survives([{ title: "L'Ukraine contre-attaque", description: "Les forces ukrainiennes avancent." }]), false);
+  const state = summarizeTerritorialState(world, [{ title: "x", combatants }]);
+  assert.equal(Object.keys(state.regionClaimants).length, TERRITORIAL_STATE_ROW_CAP);
   assert.equal(state.omittedRegions, 51);
 });
 

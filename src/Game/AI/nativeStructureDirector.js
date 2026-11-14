@@ -7,18 +7,28 @@
 // with not one of them on the map.
 //
 // This pass is the backstop, the same shape as the unit director beside it: the
-// events that describe something physical being built or opened are shown to a
-// narrow AI call with the structures already standing and the board's entries;
-// it names the structures those events brought into being, native rules below
-// keep only real, placeable, new ones, and the accepted builds ride the event's
-// own markerOps like any other. A build that belongs to a Project is linked to
-// it once the turn is written (gameState.js linkStructuresToProjects).
+// events that answer an order of the player's, or a Scene's outcome, are shown
+// to a narrow AI call with the structures already standing and the board's
+// entries; it names the structures those events brought into being, native
+// rules below keep only real, placeable, new ones, and the accepted builds ride
+// the event's own markerOps like any other. A build that belongs to a Project
+// is linked to it once the turn is written (gameState.js
+// linkStructuresToProjects).
 //
-// What counts: anything physical and fixed in one place. Not what orbits — a
-// satellite or a constellation never gets a marker, the ground station serving
-// it does — and not what moves, which is a unit.
+// What counts: anything physical and fixed in one place, which is what the
+// kinds the director may write are (gameplaySchemas.js STRUCTURE_KINDS). Not
+// what orbits (a satellite or a constellation never gets a marker, the ground
+// station serving it does), and not what moves, which is a unit: neither is a
+// kind it can write.
+//
+// "there should be absolutely no keywording done in this game anywhere" (the
+// owner, 2026-11-13). Which events the director read, which builds it kept,
+// and what was in orbit or no place at all used to be English words in the
+// event and in a free-text kind: an event in any other language was never
+// read, and "satellite ground station" stood or fell on a word list.
 
 import { PROJECT_OPEN_STATUSES, normalizeMarkers } from "../../runtime/gameState.js";
+import { STRUCTURE_KINDS } from "./gameplaySchemas.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -29,44 +39,24 @@ export const STRUCTURE_BUILDS_PER_TURN = 5;
 
 const BUILD_STATUSES = new Set(["planned", "under_construction", "active"]);
 
-// A thing that stands somewhere. Qualified nouns first ("radar station",
-// "research centre"), then the ones that are a place on their own.
-const FACILITY_PATTERN =
-  /\b(?:(?:air|naval|navy|military|missile|army|submarine|drone|space|research|data|command|logistics|supply|training|test(?:ing)?|launch|listening|radar|tracking|ground|relay|monitoring|intelligence|signals|cyber|operations|control|fusion|nuclear|power|manufacturing|production|assembly|computing)[ -](?:bases?|stations?|centres?|centers?|facilit(?:y|ies)|complex(?:es)?|sites?|hubs?|campus(?:es)?|headquarters|plants?|yards?|ranges?|arrays?))\b|\b(?:shipyards?|dockyards?|dry ?docks?|naval yards?|air ?bases?|airfields?|airstrips?|airports?|spaceports?|cosmodromes?|launch (?:pads?|complex(?:es)?)|ports?|harbou?rs?|silos?|bunkers?|depots?|arsenals?|factor(?:y|ies)|gigafactor(?:y|ies)|foundr(?:y|ies)|refiner(?:y|ies)|reactors?|power (?:plants?|stations?)|laborator(?:y|ies)|data ?cent(?:re|er)s?|server (?:farms?|halls?)|supercomputers?|observator(?:y|ies)|fortress(?:es)?|fortifications?|forts?|barracks|academ(?:y|ies)|pipelines?|terminals?|dams?|bridges?|tunnels?|canals?|embass(?:y|ies)|consulates?|cable landing stations?|mines?|facilit(?:y|ies)|installations?|campus(?:es)?|headquarters|plants?|bases?|stations?|centres?|centers?)\b/i;
+const nameKey = (value) => normalizeString(value).toLowerCase().replace(/\s+/g, " ");
 
-// The event says it came into being, not that someone discussed it.
-const CONSTRUCTION_CUE_PATTERN =
-  /\b(?:build(?:s|ing)?|built|construct(?:s|ed|ing|ion)?|open(?:s|ed|ing)?|inaugurat(?:e|es|ed|ing|ion)|commission(?:s|ed|ing)?|complet(?:e|es|ed|ing|ion)|breaks? ground|broke ground|ground-?breaking|establish(?:es|ed|ing|ment)?|sets? up|erect(?:s|ed|ing)?|install(?:s|ed|ing|ation)?|activat(?:e|es|ed|ing|ion)|(?:goes|go|went|gone|comes?|came|brought|brings?) (?:online|live|operational|into (?:service|operation))|enters? service|entered service|begins? operations?|began operations?|expand(?:s|ed|ing)?|expansion|upgrad(?:e|es|ed|ing)|found(?:s|ed|ing)?|lays? the foundation|laid the foundation)\b/i;
+// The kind exactly as one of STRUCTURE_KINDS, case and spacing aside; "" for
+// anything else, which is no structure.
+const STRUCTURE_KIND_SET = new Set(STRUCTURE_KINDS);
+export const structureKind = (value) => {
+  const kind = nameKey(value);
+  return STRUCTURE_KIND_SET.has(kind) ? kind : "";
+};
 
-// In orbit: never a marker...
-const ORBITAL_PATTERN = /\b(?:satellites?|constellations?|orbit(?:s|al|er|ers|ing)?|space stations?|spacecraft|space probes?)\b/i;
-// ...unless it is the part on the ground.
-const GROUND_SEGMENT_PATTERN =
-  /\b(?:ground (?:stations?|segments?|control|terminals?|receiving)|earth stations?|teleports?|tracking (?:stations?|sites?)|mission control|control cent(?:re|er)s?|launch (?:sites?|pads?|complex(?:es)?|facilit(?:y|ies))|spaceports?|cosmodromes?|downlink)\b/i;
-
-// A kind that is not a place: an effort, an organisation, or something that moves.
-const NOT_A_PLACE_PATTERN =
-  /\b(?:programmes?|programs?|projects?|initiatives?|networks?|agenc(?:y|ies)|doctrines?|polic(?:y|ies)|treat(?:y|ies)|alliances?|campaigns?|operations?|task (?:forces?|groups?)|fleets?|squadrons?|flotillas?|ships?|vessels?|submarines?|aircraft|units?|divisions?|brigades?)$/i;
-
-const eventText = (event) =>
-  `${normalizeString(event?.title)} ${normalizeString(event?.description)}`.trim();
-
+// An event the director reads: one that answers an order of the player's, or a
+// Scene's outcome (mapConsequences.js marks both `ordered`). Building is what
+// the player orders; whatever an event built on its own is the simulator's to
+// write as a markerOps build in the event itself.
 export const eventNeedsStructureDirector = (event) => {
   if (!event || typeof event !== "object") return false;
-  return event.ordered?.build === true || orderBuildsStructure(eventText(event));
+  return event.ordered?.build === true;
 };
-
-// Text that builds or establishes something that stands in one place: an event's,
-// or a player's order's (mapConsequences.js markOrderedEvents), whose outcome
-// event is then the structure Director's to read however it is worded.
-export const orderBuildsStructure = (text) => {
-  const value = String(text ?? "");
-  return FACILITY_PATTERN.test(value) && CONSTRUCTION_CUE_PATTERN.test(value);
-};
-
-const isOrbital = (text) => ORBITAL_PATTERN.test(text) && !GROUND_SEGMENT_PATTERN.test(text);
-
-const nameKey = (value) => normalizeString(value).toLowerCase().replace(/\s+/g, " ");
 
 const makeStructureId = () =>
   `structure-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
@@ -154,12 +144,11 @@ export const sanitizeStructureOrders = ({ events, orders, world, playerCountry =
       const name = normalizeString(raw?.name);
       const reject = (reason) => diagnostics.push({ eventIndex, name: name || "?", action: "DROP", reason });
       if (!event) { reject("eventIndex does not identify a supplied event"); continue; }
-      if (!eventNeedsStructureDirector(event)) { reject("the event does not say anything was built or opened"); continue; }
-      const kind = normalizeString(raw?.kind).toLowerCase();
+      if (!eventNeedsStructureDirector(event)) { reject("the event answers no order of the player's and is no Scene's outcome"); continue; }
       const ownerCode = normalizeString(raw?.ownerCode);
-      if (!name || !kind || !ownerCode) { reject("a structure needs a name, a kind and an owner"); continue; }
-      if (isOrbital(`${name} ${kind}`)) { reject("in orbit: satellites get no marker, only their ground station does"); continue; }
-      if (NOT_A_PLACE_PATTERN.test(kind)) { reject(`"${kind}" is not a fixed place`); continue; }
+      if (!name || !normalizeString(raw?.kind) || !ownerCode) { reject("a structure needs a name, a kind and an owner"); continue; }
+      const kind = structureKind(raw?.kind);
+      if (!kind) { reject(`"${normalizeString(raw?.kind)}" is not one of the structure kinds`); continue; }
       if (taken.has(nameKey(name))) { reject("already on the map"); continue; }
       const lng = Number(raw?.lng);
       const lat = Number(raw?.lat);

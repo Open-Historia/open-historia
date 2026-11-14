@@ -12,14 +12,17 @@ import { linkStructuresToProjects } from "../src/runtime/gameState.js";
 
 // The director names the structures events built; these rules decide which of
 // them reach the map. Placement has already turned `at` into coordinates by the
-// time the rules run, so the fixtures carry coordinates.
+// time the rules run, so the fixtures carry coordinates. The events it reads
+// answer an order of the player's or are a Scene's outcome (mapConsequences.js
+// marks both `ordered`); its words decide nothing.
 
-const event = (id, title, description = "", impacts = {}) => ({ id, date: "2016-05-01", title, description, impacts: { markerOps: [], ...impacts } });
+const ordered = { forces: true, build: true };
+const event = (id, title, description = "", impacts = {}, extra = {}) => ({ id, date: "2016-05-01", title, description, impacts: { markerOps: [], ...impacts }, ...extra });
 
 const events = [
   event("e0", "Cabinet reviews the defence budget", "Ministers met to discuss spending."),
-  event("e1", "GCHQ opens a quantum data centre in Ottawa", "The new data centre went online this week as part of Project Turing."),
-  event("e2", "Second batch of Project Argus satellites launched", "Six satellites reached orbit and the new ground station at Ascension began operations."),
+  event("e1", "GCHQ opens a quantum data centre in Ottawa", "The new data centre went online this week as part of Project Turing.", {}, { ordered }),
+  event("e2", "Second batch of Project Argus satellites launched", "Six satellites reached orbit and the new ground station at Ascension began operations.", {}, { ordered }),
 ];
 
 const world = {
@@ -42,10 +45,13 @@ const run = (orders, extra = {}) => directGeneratedStructureOps({
   ...extra,
 });
 
-test("only an event that says something was built or opened asks the director", () => {
+test("only an event that answers an order or a Scene asks the director, whatever its words", () => {
   assert.equal(eventNeedsStructureDirector(events[0]), false);
   assert.equal(eventNeedsStructureDirector(events[1]), true);
   assert.equal(eventNeedsStructureDirector(events[2]), true);
+  // The same opening told in French, with no order behind it, is read exactly as the English one with none.
+  assert.equal(eventNeedsStructureDirector(event("e9", "Le GCHQ ouvre un centre de données à Ottawa", "Le nouveau centre de données est entré en service.")), false);
+  assert.equal(eventNeedsStructureDirector(event("e9", "GCHQ opens a quantum data centre in Ottawa", "The new data centre went online.")), false);
   const input = buildStructureDirectorInput({ events, world, playerCountry: "British Empire" });
   assert.deepEqual(input.candidates.map((candidate) => candidate.eventIndex), [1, 2]);
   assert.equal(input.budget, STRUCTURE_BUILDS_PER_TURN);
@@ -63,13 +69,14 @@ test("a structure the event built lands on that event, linked to its Project", a
   assert.equal(next[0], events[0], "events the director did not build on are untouched");
 });
 
-test("a satellite gets no marker, but its ground station does", async () => {
+test("a satellite gets no marker, but its ground station does: what it is comes from the listed kinds", async () => {
   const { events: next } = await run([{
     eventIndex: 2,
     structures: [
       structure({ name: "Argus-7 Satellite", kind: "reconnaissance satellite" }),
       structure({ name: "Argus Constellation", kind: "satellite constellation" }),
-      structure({ name: "Ascension Island Ground Station", kind: "satellite ground station", lng: -14.4, lat: -7.9 }),
+      structure({ name: "Satellite Argus-8", kind: "satellite de reconnaissance" }),
+      structure({ name: "Ascension Island Ground Station", kind: "ground station", lng: -14.4, lat: -7.9 }),
     ],
   }]);
   assert.deepEqual(next[2].impacts.markerOps.map((op) => op.marker.name), ["Ascension Island Ground Station"]);

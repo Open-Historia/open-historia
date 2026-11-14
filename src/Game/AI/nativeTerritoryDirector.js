@@ -18,33 +18,8 @@ const cloneValue = (value) => {
   return JSON.parse(JSON.stringify(value));
 };
 
-const eventText = (event) =>
-  `${normalizeString(event?.title)} ${normalizeString(event?.description)}`.trim();
-
-const TERRITORIAL_EVENT_PATTERN =
-  /\b(captur\w*|seiz\w*|occup(?:y|ies|ied|ation)|retak\w*|retaken|recaptur\w*|liberat\w*|overr[au]n|breakthrough|front(?:line)?|battle|clash|combat|skirmish|offensive|invasion|invad\w*|withdraw\w*|retreat\w*|evacuat\w*|ceasefire|armistice|peace|treaty|cession|cedes?|ceded|annex\w*|sovereignty|control (?:of|over)|de[- ]facto (?:military )?control|holds? the field|falls? to)\b/i;
-
-// this is intentionally about a CHANGE of control, not merely the word "control".
-// otherwise "serbia retains control" or "neither side gains control" would be
-// enough to flip the map, which would be spectacularly stupid.
-const WARTIME_CONTROL_PATTERN =
-  /\b(captur\w*|seiz\w*|conquer\w*|occup(?:y|ies|ied|ation)|retak\w*|retaken|recaptur\w*|liberat\w*|overr[au]n|breakthrough|falls? to|holds? the field|surrend\w*|capitulat\w*|(?:takes?|took|taken|taking|assumes?|assumed|assuming|gains?|gained|gaining|secures?|secured|securing|establish(?:es|ed|ing)?|asserts?|asserted|asserting|wrests?|wrested|wresting|imposes?|imposed|imposing)\s+(?:(?:de[- ]facto|effective|military|administrative|territorial)\s+){0,3}control|(?:comes?|came|falls?|fell|passes?|passed)\s+under\s+(?:(?:de[- ]facto|effective|military|administrative|territorial)\s+){0,3}control)\b/i;
-
-const NEGATED_CONTROL_CHANGE_PATTERN =
-  /\b(?:does not|did not|doesn't|didn't|fails? to|failed to|without|neither side|no side)\b[^.!?]{0,90}\b(?:take|gain|secure|establish|assume|assert|wrest|impose|capture|seize|occupy)\w*\b[^.!?]{0,50}\bcontrol\b/i;
-
-const CONTEST_PATTERN =
-  /\b(battl\w*|clash\w*|combat|skirmish\w*|firefight\w*|fight\w*|contested?|disputed?|offensive|counteroffensive|attack\w*|assault\w*|siege|front(?:line)?|bridgehead|beachhead|foothold|incursion|insurrect\w*|uprising|rebellion|revolt\w*|engag\w*|seiz\w*|cross(?:es|ed|ing)? the border|cross(?:es|ed|ing)? the frontier)\b/i;
-
-const CLEAR_CONTEST_PATTERN =
-  /\b(ceasefire|armistice|peace|withdraw\w*|retreat\w*|evacuat\w*|pulls? back|pulled back|disengag\w*|demilitariz\w*|front dissolves|fighting ends|hostilities end|stand(?:s)? down)\b/i;
-
-
-const CLEAR_ALL_PATTERN =
-  /\b(final settlement|territorial settlement|dispute settled|renounces? (?:all )?claims|withdraws? (?:all )?claims|all claims withdrawn|treaty settles|recognized border|recognised border)\b/i;
-
-const LEGAL_SOVEREIGNTY_PATTERN =
-  /\b(treaty|peace settlement|peace agreement|final settlement|cession|cedes?|ceded|ceding|annex\w*|incorporat\w*|sovereignty|recognized|recognised|formal(?:ly)? transfer|legal(?:ly)? transfer|purchase|sale|sold|union|unification|plebiscite|referendum|arbitration award|partition agreement)\b/i;
+// Names compared as the map and the ledgers write them: case and spacing aside.
+const nameKey = (value) => normalizeString(value).toLocaleLowerCase().replace(/\s+/g, " ");
 
 const opKey = (op) => {
   const kind = normalizeString(op?.op).toLowerCase();
@@ -61,87 +36,47 @@ const opKey = (op) => {
   return `${kind}|${region}|${JSON.stringify(op)}`;
 };
 
+// Whether the director reads an event: by what the event IS, never by its
+// words. Land may have changed hands or been fought over when the event
+//   - carries territorial operations of its own (regionTransfers, regionControlOps);
+//   - belongs to a war (warId) or names the powers fighting in it (combatants);
+//   - answers an order of the player's, or is a Scene's outcome (`ordered`,
+//     mapConsequences.js).
+// English capture, fight and ceasefire words used to decide it, and an event
+// written in any other language was never read: the same war took ground in
+// English and none in French (the owner, 2026-11-13: "there should be
+// absolutely no keywording done in this game anywhere").
 export const hasTerritorialContent = (event) => {
   const impacts = event?.impacts || {};
   return (
     normalizeArray(impacts.regionTransfers).length > 0 ||
     normalizeArray(impacts.regionControlOps).length > 0 ||
-    TERRITORIAL_EVENT_PATTERN.test(eventText(event))
+    Boolean(normalizeString(event?.warId)) ||
+    normalizeArray(event?.combatants).some((name) => normalizeString(name)) ||
+    Boolean(event?.ordered)
   );
 };
 
-// Whether sanitizeDirectorOrders could keep ANY op the director wrote for this
-// event. Each kind it accepts needs its own wording in the event: a control flip
-// a capture (not negated), a contest a fight or dispute, a clear_contest a
-// ceasefire, withdrawal or peace. A territorial event with none of those — a
-// treaty that cedes a province, a speech about sovereignty — is already fully
-// described by its own regionTransfers, and asking about it could only come
-// back with ops the rules drop: a request (or review tokens) for nothing.
-const couldAcceptDirectorOps = (event) => {
-  const text = eventText(event);
-  return (
-    (WARTIME_CONTROL_PATTERN.test(text) && !NEGATED_CONTROL_CHANGE_PATTERN.test(text)) ||
-    CONTEST_PATTERN.test(text) ||
-    CLEAR_CONTEST_PATTERN.test(text)
-  );
+const isTerritoryCandidate = (event) => hasTerritorialContent(event);
+
+// Whether the event's own regionTransfers already move this region: by the
+// map's id or name as either side wrote it, case and spacing aside.
+const transfersRegion = (impacts, op) => {
+  const names = new Set([op?.regionId, op?.regionName].map(nameKey).filter(Boolean));
+  return normalizeArray(impacts?.regionTransfers)
+    .some((transfer) => [transfer?.regionId, transfer?.regionName].map(nameKey).some((name) => name && names.has(name)));
 };
 
-const isTerritoryCandidate = (event) => hasTerritorialContent(event) && couldAcceptDirectorOps(event);
-
-// Old prompts treated every wartime capture as a sovereign transfer. Salvage that
-// output here before it reaches world state: a battlefield occupation is control;
-// a treaty/cession/annexation is sovereignty. One regex gate is not international
-// law, but it is much better than making every trench advance legally permanent.
-const convertLegacyWartimeTransfers = (events) => {
-  const diagnostics = [];
-
-  const nextEvents = normalizeArray(events).map((event, eventIndex) => {
-    const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-    const transfers = normalizeArray(impacts.regionTransfers);
-    if (transfers.length === 0) return event;
-
-    const text = eventText(event);
-    if (!WARTIME_CONTROL_PATTERN.test(text) || LEGAL_SOVEREIGNTY_PATTERN.test(text)) {
-      return event;
-    }
-
-    const converted = transfers.map((transfer) => ({
-      op: "control",
-      regionId: normalizeString(transfer?.regionId),
-      regionName: normalizeString(transfer?.regionName),
-      fromCode: normalizeString(transfer?.fromCode),
-      toCode: normalizeString(transfer?.toCode),
-      note:
-        normalizeString(transfer?.note) ||
-        "Converted from legacy wartime regionTransfer to de-facto control.",
-      ...(transfer?.wholeCountry === true ? { wholeCountry: true } : {}),
-    })).filter((op) => op.regionId && op.toCode);
-
-    if (converted.length === 0) return event;
-
-    diagnostics.push({
-      eventIndex,
-      op: "regionTransfers",
-      action: "CONVERT",
-      reason: `${converted.length} wartime transfer(s) converted to de-facto control`,
-    });
-
-    return {
-      ...event,
-      impacts: {
-        ...impacts,
-        regionTransfers: [],
-        regionControlOps: [
-          ...normalizeArray(impacts.regionControlOps),
-          ...converted,
-        ],
-      },
-    };
-  });
-
-  return { events: nextEvents, diagnostics };
-};
-
+// The director's operations, kept or dropped by what each op IS: its kind and
+// the fields that kind needs, never the event's words. A legal transfer is what
+// its op says it is too: regionTransfers move sovereignty, regionControlOps
+// occupation. English readers used to keep a control flip only beside capture
+// words that were not denied, a contest only beside fight words, a clear only
+// beside ceasefire words and clearAll only beside settlement words, and turned
+// a transfer into occupation when the words told of a capture and not a
+// treaty. In any other language every op was dropped and every transfer stayed
+// as it was.
+//
 // `onBattlefield(regionRef)`: whether a region, by its id or its name, lies on
 // a battlefield (frontApply.js frontRegionTest). Who holds such a region, and
 // whether it is fought over, is the front engine's to work out from the orders
@@ -165,7 +100,6 @@ export const sanitizeDirectorOrders = ({ events, orders, onBattlefield = null })
     const proposed = ordersByEvent.get(eventIndex) || [];
     if (proposed.length === 0 || !hasTerritorialContent(event)) continue;
 
-    const text = eventText(event);
     const impacts = event?.impacts || {};
     const existing = normalizeArray(impacts.regionControlOps);
     const seen = new Set(existing.map(opKey));
@@ -205,10 +139,6 @@ export const sanitizeDirectorOrders = ({ events, orders, onBattlefield = null })
           reject("contest needs different nonblank fromCode and actorCode values");
           continue;
         }
-        if (!CONTEST_PATTERN.test(text)) {
-          reject("event does not actually describe an active territorial/front contest");
-          continue;
-        }
         keep();
         continue;
       }
@@ -220,12 +150,8 @@ export const sanitizeDirectorOrders = ({ events, orders, onBattlefield = null })
           reject("control flip needs different nonblank fromCode and toCode values");
           continue;
         }
-        if (!WARTIME_CONTROL_PATTERN.test(text) || NEGATED_CONTROL_CHANGE_PATTERN.test(text)) {
-          reject("event does not explicitly say de-facto control/capture/occupation changed hands");
-          continue;
-        }
-        if (LEGAL_SOVEREIGNTY_PATTERN.test(text) && normalizeArray(impacts.regionTransfers).length > 0) {
-          reject("legal settlement is already represented by regionTransfers; no extra control flip needed");
+        if (transfersRegion(impacts, op)) {
+          reject("the event's own regionTransfers already move this region; no extra control flip needed");
           continue;
         }
         keep();
@@ -236,14 +162,6 @@ export const sanitizeDirectorOrders = ({ events, orders, onBattlefield = null })
         const claimantCode = normalizeString(op?.claimantCode);
         if (!claimantCode && op?.clearAll !== true) {
           reject("clear_contest needs claimantCode or clearAll=true");
-          continue;
-        }
-        if (!CLEAR_CONTEST_PATTERN.test(text)) {
-          reject("event has no ceasefire/withdrawal/peace cue that clears an active contest");
-          continue;
-        }
-        if (op?.clearAll === true && !CLEAR_ALL_PATTERN.test(text)) {
-          reject("clearAll is reserved for an explicit final territorial-claims settlement");
           continue;
         }
         keep();
@@ -303,9 +221,21 @@ publishDiagnostics();
 // (`placesNamed`, from lookupTools.js placesNamedIn), so nothing has to be asked.
 //
 // Bounded all the same: a world war on a large map can dispute hundreds of
-// regions. Rows that involve a power the candidate events name come first, so the
-// cap never hides the front being reconciled, and what it leaves out is counted.
+// regions. Rows that involve a power the candidate events concern come first
+// (their combatants, and the sides of the operations they already carry), so
+// the cap never hides the front being reconciled, and what it leaves out is
+// counted. Which powers those are is read from those fields, never from the
+// events' words, where a name is spelled in the player's language.
 export const TERRITORIAL_STATE_ROW_CAP = 400;
+
+// The powers the candidates concern, by name: whoever fights in them, and every
+// side of the territorial operations and units they carry.
+const powersConcerned = (candidates) => new Set(normalizeArray(candidates).flatMap((candidate) => [
+  ...normalizeArray(candidate?.combatants),
+  ...normalizeArray(candidate?.existingLegalTransfers).flatMap((op) => [op?.fromCode, op?.toCode]),
+  ...normalizeArray(candidate?.existingControlOps).flatMap((op) => [op?.fromCode, op?.toCode, op?.actorCode, op?.claimantCode]),
+  ...normalizeArray(candidate?.unitOps).map((op) => op?.unit?.ownerCode),
+]).map(nameKey).filter(Boolean));
 
 // The text a caller reads for place names: the candidates' own words, and the
 // places their existing operations already point at.
@@ -323,17 +253,9 @@ export const summarizeTerritorialState = (world, candidates = [], { placesNamed 
   const sovereignty = world?.regionSovereigntyOverrides && typeof world.regionSovereigntyOverrides === "object" ? world.regionSovereigntyOverrides : {};
   const claimants = world?.regionClaimants && typeof world.regionClaimants === "object" ? world.regionClaimants : {};
 
-  const text = normalizeArray(candidates)
-    .map((candidate) => `${normalizeString(candidate?.title)} ${normalizeString(candidate?.description)} ${JSON.stringify(candidate?.existingLegalTransfers ?? [])} ${JSON.stringify(candidate?.existingControlOps ?? [])}`)
-    .join(" ")
-    .toLowerCase();
-  const namedInCandidates = (regionId) => {
-    const powers = [control[regionId], sovereignty[regionId], ...normalizeArray(claimants[regionId])];
-    return powers.some((power) => {
-      const name = normalizeString(power).toLowerCase();
-      return name.length > 2 && text.includes(name);
-    });
-  };
+  const concerned = powersConcerned(candidates);
+  const namedInCandidates = (regionId) => [control[regionId], sovereignty[regionId], ...normalizeArray(claimants[regionId])]
+    .some((power) => concerned.has(nameKey(power)));
 
   const regionIds = [...new Set([...Object.keys(sovereignty), ...Object.keys(claimants)])];
   // Stable within each group, so the same world produces the same prompt.
@@ -368,15 +290,20 @@ const territoryCandidates = (sourceEvents) => sourceEvents
   .filter(({ event }) => isTerritoryCandidate(event));
 
 const territoryCandidateRows = (sourceEvents) => territoryCandidates(sourceEvents)
-  .map(({ event, index }) => ({
-    eventIndex: index,
-    date: normalizeString(event?.date),
-    title: normalizeString(event?.title),
-    description: normalizeString(event?.description),
-    existingLegalTransfers: cloneValue(normalizeArray(event?.impacts?.regionTransfers)),
-    existingControlOps: cloneValue(normalizeArray(event?.impacts?.regionControlOps)),
-    unitOps: cloneValue(normalizeArray(event?.impacts?.unitOps)),
-  }));
+  .map(({ event, index }) => {
+    const combatants = normalizeArray(event?.combatants).map(normalizeString).filter(Boolean);
+    return {
+      eventIndex: index,
+      date: normalizeString(event?.date),
+      title: normalizeString(event?.title),
+      description: normalizeString(event?.description),
+      // Who fights in it, when the event says (its own field, not its words).
+      ...(combatants.length ? { combatants } : {}),
+      existingLegalTransfers: cloneValue(normalizeArray(event?.impacts?.regionTransfers)),
+      existingControlOps: cloneValue(normalizeArray(event?.impacts?.regionControlOps)),
+      unitOps: cloneValue(normalizeArray(event?.impacts?.unitOps)),
+    };
+  });
 
 const territoryAnalyzerInput = async (candidateRows, world, findPlaces) => {
   let placesNamed = null;
@@ -394,7 +321,7 @@ const territoryAnalyzerInput = async (candidateRows, world, findPlaces) => {
 };
 
 export const buildTerritoryDirectorInput = async ({ events = [], world = {}, findPlaces = null } = {}) => {
-  const candidateRows = territoryCandidateRows(convertLegacyWartimeTransfers(events).events);
+  const candidateRows = territoryCandidateRows(normalizeArray(events));
   return candidateRows.length ? territoryAnalyzerInput(candidateRows, world, findPlaces) : null;
 };
 
@@ -408,23 +335,21 @@ export const directGeneratedTerritoryOps = async ({
   signal = null,
   battlefieldRegions = null,
 } = {}) => {
-  const converted = convertLegacyWartimeTransfers(events);
-  const sourceEvents = converted.events;
+  const sourceEvents = normalizeArray(events);
 
   const candidates = territoryCandidates(sourceEvents);
 
   if (candidates.length === 0 || typeof analyzeBatch !== "function") {
     const skippedReason = candidates.length === 0
-      ? "no event describes a capture, a fight or a ceasefire the director could act on"
+      ? "no event carries territorial operations, a war, combatants or an order of the player's"
       : "no analyzer supplied";
     publishDiagnostics({
       candidates,
-      diagnostics: converted.diagnostics,
+      diagnostics: [],
       skippedReason,
     });
     console.groupCollapsed(`[OH Native Territory Director v${VERSION}] ${candidates.length} territorial candidate(s)`);
     console.info(skippedReason);
-    if (converted.diagnostics.length > 0) console.table(converted.diagnostics);
     console.groupEnd();
     return sourceEvents;
   }
@@ -471,7 +396,7 @@ export const directGeneratedTerritoryOps = async ({
     };
   });
 
-  const diagnostics = [...converted.diagnostics, ...sanitized.diagnostics];
+  const diagnostics = sanitized.diagnostics;
   publishDiagnostics({
     candidates,
     analysis,
