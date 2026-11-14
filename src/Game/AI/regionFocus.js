@@ -9,15 +9,17 @@
 // model therefore had to guess. Guessed names failed to resolve and the
 // annexation never reached the map.
 //
-// This ranks the powers by what the turn is actually about: the player, whoever
-// the player's pending actions name, the belligerents of active wars, the
-// player's chat partners, the powers the recent events moved or mentioned, the
-// claimants of contested regions, and only then size. Import-free.
+// This ranks the powers by what the turn is actually about: the player, the
+// parties to the player's pending actions, the belligerents of live wars, the
+// player's chat partners, the powers the recent events moved or name in their
+// structure (combatants, country places), the claimants of contested regions,
+// and only then size. Import-free.
 //
-// Every match here is on a name the map declares, spelled out in full. Prose
-// that says "Russia" on a world whose power is the "Russian Federation" (and
-// nothing called "Russia") names nobody; the two are different countries
-// wherever both exist. Ranking is never allowed to blur that line.
+// Every match here is on a name a record writes, against a name the map
+// declares, spelled out in full. Nothing is read from prose: a power's name was
+// counted in the orders' and the events' words, which in a game written in
+// another language than the map's names counted nothing, and in any language
+// counted "the Russian Federation's neighbours" as about it.
 //
 // A name is its letters, marks and digits in any script. Folded to a-z0-9, a
 // power the map names in Cyrillic, Arabic or Chinese had no form to be
@@ -50,7 +52,8 @@ export const nameVariants = (label, { displayName = "", aliases = [], stockName 
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // How many times a power's exact names occur in `text` as whole words. Zero for
-// empty text.
+// empty text. Nothing here reads prose with it any more; it is kept only for
+// nativeUnitDirector.js, whose own batch is taking its use out. Delete it then.
 export const mentionCount = (text, variants) => {
   const haystack = ` ${foldName(text)} `;
   if (haystack.trim().length === 0) return 0;
@@ -62,19 +65,27 @@ export const mentionCount = (text, variants) => {
   return count;
 };
 
-// Every string reachable inside a record, for wars and other ledgers whose
-// shape differs between branches; keys are not trusted, values are matched.
-const stringsIn = (value, depth = 0, out = []) => {
-  if (depth > 4 || value == null) return out;
-  if (typeof value === "string") {
-    out.push(value);
-  } else if (Array.isArray(value)) {
-    for (const entry of value) stringsIn(entry, depth + 1, out);
-  } else if (typeof value === "object") {
-    for (const entry of Object.values(value)) stringsIn(entry, depth + 1, out);
-  }
-  return out;
+// The polities on a war's sides: sideA and sideB as the war ledger writes them
+// (runtime/warRecord.js), or the lists of a `sides` object. Never its title or
+// its note.
+const warSides = (war) => {
+  const lists = [war?.sideA, war?.sideB];
+  if (war?.sides && typeof war.sides === "object") lists.push(...(Array.isArray(war.sides) ? war.sides : Object.values(war.sides)));
+  return lists.flatMap((list) => (Array.isArray(list) ? list : [])).filter((name) => typeof name === "string");
 };
+
+// A war that is over (runtime/warRecord.js WAR_STATUSES: active, ceasefire,
+// ended), matched exactly.
+const warIsOver = (war) => String(war?.status ?? "").trim().toLowerCase() === "ended";
+
+// The polities an event names in its structure besides its operations: its
+// combatants and the countries among its places.
+const eventParties = (event) => [
+  ...(Array.isArray(event?.combatants) ? event.combatants : []),
+  ...(Array.isArray(event?.places) ? event.places : [])
+    .filter((place) => String(place?.kind ?? "").trim().toLowerCase() === "country")
+    .map((place) => place?.name),
+].filter((name) => typeof name === "string" && name.trim());
 
 const impactOwners = (impacts) => {
   const names = [];
@@ -103,7 +114,6 @@ export const FOCUS_WEIGHTS = Object.freeze({
   chat: 70,
   eventImpact: 45,
   eventMention: 20,
-  eventMentionCap: 80,
   claimOnPlayer: 60,
   claimant: 12,
   sizeCap: 15,
@@ -126,10 +136,13 @@ export const FOCUS_WEIGHTS = Object.freeze({
  *   owners   [{ key, label, regions, displayName?, aliases? }] — one per current
  *            owner, `regions` being how many it holds.
  *   player   the player's polity name.
- *   actions  the save's actions (planned ones weigh; resolved ones are ignored).
+ *   actions  the save's actions: a planned one weighs its invitees and
+ *            participants; resolved ones are ignored.
  *   chats    the save's chats ({ countries: [{ name }] }).
- *   events   recent events, newest last; the last `recentEvents` count.
- *   wars     the world's war ledger, any shape.
+ *   events   recent events, newest last; the last `recentEvents` count, by the
+ *            polities their operations move, their combatants and their
+ *            country places.
+ *   wars     the world's war ledger: sideA/sideB, or a `sides` object of lists.
  *   claimants{ [regionId]: [claimant names] }; ownerOfRegion(regionId) -> owner label.
  *
  * Returns owner labels in descending relevance, the player first.
@@ -143,7 +156,6 @@ export const selectFocusPowers = ({
   wars = [],
   claimants = {},
   ownerOfRegion = () => "",
-  regions = [],
   recentEvents = 12,
   // Names (any case) of the player's neighbours, its relevant countries, the
   // powers changed since the last skip and those in a live storyline. Each is
@@ -175,39 +187,30 @@ export const selectFocusPowers = ({
     entry.score += points;
     if (!entry.reasons.includes(reason)) entry.reasons.push(reason);
   };
-  const creditMentions = (text, points, reason, cap = Infinity) => {
-    for (const entry of entries) {
-      const count = mentionCount(text, entry.variants);
-      if (count > 0) credit(entry, Math.min(cap, count * points), reason);
+  // Each power named among `names` credited once.
+  const creditEach = (names, points, reason) => {
+    const seen = new Set();
+    for (const name of names) {
+      const entry = findExact(name);
+      if (entry && !seen.has(entry)) { seen.add(entry); credit(entry, points, reason); }
     }
   };
 
   const playerEntry = findExact(player);
   credit(playerEntry, weights.player, "player");
 
-  const actionTexts = [];
+  // A pending order's parties: those it invites or involves (normalizeActionEntry).
   for (const action of Array.isArray(actions) ? actions : []) {
     if (!isPendingAction(action)) continue;
-    const text = [action.title, action.description, action.rawInput, action.text].filter(Boolean).join(" ");
-    creditMentions(text, weights.action, "player action", weights.action);
-    const folded = foldName(text);
-    if (folded) actionTexts.push(` ${folded} `);
-  }
-  if (actionTexts.length) {
-    for (const region of Array.isArray(regions) ? regions : []) {
-      const name = foldName(region?.name);
-      if (name.length < 4 || !actionTexts.some((text) => text.includes(` ${name} `))) continue;
-      credit(findExact(ownerOfRegion(region?.id)), weights.action, "holds land the player's actions name");
-    }
+    creditEach([
+      ...(Array.isArray(action.invitees) ? action.invitees : []),
+      ...(Array.isArray(action.participants) ? action.participants : []),
+    ].map((name) => (typeof name === "string" ? name : name?.name || name?.code)), weights.action, "player action");
   }
 
   for (const war of Array.isArray(wars) ? wars : []) {
-    if (war && typeof war === "object" && /ended|concluded|closed/i.test(String(war.status ?? ""))) continue;
-    const seen = new Set();
-    for (const name of stringsIn(war)) {
-      const entry = findExact(name);
-      if (entry && !seen.has(entry)) { seen.add(entry); credit(entry, weights.war, "at war"); }
-    }
+    if (!war || typeof war !== "object" || warIsOver(war)) continue;
+    creditEach(warSides(war), weights.war, "at war");
   }
 
   for (const chat of Array.isArray(chats) ? chats : []) {
@@ -218,12 +221,8 @@ export const selectFocusPowers = ({
 
   const recent = (Array.isArray(events) ? events : []).slice(-recentEvents);
   for (const event of recent) {
-    const seen = new Set();
-    for (const name of impactOwners(event?.impacts)) {
-      const entry = findExact(name);
-      if (entry && !seen.has(entry)) { seen.add(entry); credit(entry, weights.eventImpact, "moved by recent events"); }
-    }
-    creditMentions(`${event?.title ?? ""} ${event?.description ?? ""}`, weights.eventMention, "named in recent events", weights.eventMentionCap);
+    creditEach(impactOwners(event?.impacts), weights.eventImpact, "moved by recent events");
+    creditEach(eventParties(event), weights.eventMention, "named in recent events");
   }
 
   for (const [regionId, names] of Object.entries(claimants && typeof claimants === "object" ? claimants : {})) {

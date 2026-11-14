@@ -32,7 +32,7 @@ import { AIR_STRIKES_MAX_CHARS, airStrikesBlock } from "../../runtime/fronts/air
 const game = { country: "Ruritania", gameDate: "1930-05-12", round: 4, startDate: "1930-01-01" };
 
 // Ruritania (the player) and Borduria fight Slavonia and Carpathia; the orders
-// name Syldavia; sixty filler states hold eight to eleven regions each, more
+// invite Syldavia; sixty filler states hold eight to eleven regions each, more
 // than the region names a skip lists (buildRegionOwnershipText focusTotalCap).
 const bigWorld = () => {
   const fillers = Array.from({ length: 60 }, (_, index) => `Filler State ${index + 1}`);
@@ -59,7 +59,7 @@ const bigWorld = () => {
       wars: [{ id: "w1", status: "active", sideA: ["Ruritania", "Borduria"], sideB: ["Slavonia", "Carpathia"] }],
       language: "English",
     },
-    actions: [{ id: "a1", status: "planned", title: "Envoy", text: "Send an envoy to Syldavia." }],
+    actions: [{ id: "a1", status: "planned", title: "Envoy", text: "Send an envoy to Syldavia.", invitees: ["Syldavia"] }],
   };
 };
 
@@ -117,6 +117,33 @@ test("a power out of view is its count, leader, alliances, agreements, peace and
   assert.equal(buildOneLineDetail(world, regions)("Filler State 33"), "", "nothing on record: the name and count alone");
   assert.match(text, /A region named nowhere in this description is held by the power it belongs to on the scenario's map: every region that changed hands is among the territorial changes above\./);
   assert.doesNotMatch(text, /ghost-17/, "a region the map does not have is never named by its id");
+});
+
+// The one-line entry reads the ledgers' enum fields by their exact values: an
+// alliance is an agreement of type alliance, mutual_defense or
+// military_cooperation, never one whose type or title has a word like
+// "military" or "Alliance" in it; a status is "active" or "ended", never "in force".
+test("a power's one-line entry reads agreement types and statuses by their exact values", () => {
+  const { regions, world } = bigWorld();
+  const far = "Filler State 9";
+  const detail = buildOneLineDetail({
+    ...world,
+    agreements: [
+      { id: "b1", title: "Transit Rights", type: "military_access", status: "active", parties: [far, "Filler State 58"] },
+      { id: "b2", title: "Grand Alliance of Trade", type: "trade_economic", status: "active", parties: [far, "Filler State 57"] },
+      { id: "b3", title: "Союзный договор", type: "military_cooperation", status: "active", parties: [far, "Filler State 56"] },
+      { id: "b4", title: "Lapsed Pact", type: "alliance", status: "in force", parties: [far, "Filler State 55"] },
+    ],
+    wars: [
+      { id: "w1", status: "ceasefire", sideA: [far], sideB: ["Filler State 54"] },
+      { id: "w2", status: "ended", sideA: [far], sideB: ["Filler State 53"] },
+    ],
+  }, regions)(far);
+  assert.match(detail, /at war with Filler State 54;/);
+  assert.doesNotMatch(detail, /Filler State 53/);
+  assert.match(detail, /allied with Filler State 56;/);
+  assert.match(detail, /agreements: Transit Rights with Filler State 58, Grand Alliance of Trade with Filler State 57/);
+  assert.doesNotMatch(detail, /Filler State 55/);
 });
 
 test("with the lookup functions, the powers out of view are one line", async () => {

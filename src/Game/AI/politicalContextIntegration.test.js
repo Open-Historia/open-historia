@@ -25,9 +25,9 @@ test("main time skip keeps player political pressure as evidence, never sovereig
 
 test("one-request group diplomacy receives compartmentalized actor-private PWv2 capsules", () => {
   assert.match(gameplay, /actorPolities:\s*aiParticipants/);
-  assert.match(gameplay, /decisionFocusText:\s*politicalDecisionFocusText/);
-  assert.match(gameplay, /normalizeString\(playerMessage\)/);
-  assert.match(gameplay, /normalizeString\(focusProposal\?\.summary\)/);
+  // The capsules keep each actor's own order; nothing re-ranks them by the
+  // words they share with the player's message (politicalDecisionContext.js).
+  assert.doesNotMatch(gameplay, /decisionFocusText|politicalDecisionFocusText/);
   assert.match(gameplay, /PRIVATE POLITICAL DECISION CONTEXT - ENGINE DATA/);
   assert.match(gameplay, /Do not reveal one participant's private politics to another/);
 });

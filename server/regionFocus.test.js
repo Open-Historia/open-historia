@@ -2,6 +2,10 @@
 //
 // The jump prompt lists a few powers' regions by name. They must be the powers
 // the turn is about, not whichever owners the save happened to store first.
+// What the turn is about is read from the records' structure: an order's
+// parties, a war's sides, a chat's members, the polities an event's operations
+// move, its combatants and its country places. Never from the words of orders
+// or events.
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -39,19 +43,30 @@ test("without any signal, the player leads and size breaks ties", () => {
   assert.equal(ranked.at(-1).label, "Republic of Panama");
 });
 
-test("a pending action names the powers that matter most", () => {
+test("a pending action's parties are the powers that matter most", () => {
   const ranked = selectFocusPowers({
     owners,
     player: "United States of America",
     actions: [
-      { title: "Arm Ukraine", description: "Ship Javelins to Kyiv and warn the Russian Federation against further annexation.", status: "planned" },
-      { title: "Old business", description: "Trade talks with the Republic of Panama", status: "resolved" },
-      { title: "Loose talk", description: "Warn Russia too." },
+      { title: "Arm Ukraine", description: "Ship Javelins to Kyiv.", status: "planned", participants: ["Ukraine", "Russian Federation"] },
+      { title: "Old business", description: "Trade talks", status: "resolved", invitees: ["Republic of Panama"] },
+      { title: "Loose talk", description: "Warn Russia too.", invitees: ["Russia"] },
     ],
   });
   assert.deepEqual(ranked.slice(0, 3).map((entry) => entry.label), ["United States of America", "Russian Federation", "Ukraine"]);
   assert.ok(ranked.find((entry) => entry.label === "Republic of Panama").reasons.length === 0, "a resolved action carries no weight");
-  assert.equal(ranked.find((entry) => entry.label === "Russian Federation").score, 120 + 15, "\"Russia\" in prose did not count a second time: it is not a name on this map");
+  assert.equal(ranked.find((entry) => entry.label === "Russian Federation").score, 120 + 15, "\"Russia\" is not a name on this map");
+});
+
+test("an order's words name nobody: only its parties do, in any language", () => {
+  for (const description of [
+    "Warn the Russian Federation and arm Ukraine.",
+    "Предупредить Российскую Федерацию и вооружить Украину.",
+  ]) {
+    const ranked = selectFocusPowers({ owners, player: "United States of America", actions: [{ title: "Order", description, status: "planned" }] });
+    assert.equal(ranked.find((entry) => entry.label === "Russian Federation").reasons.length, 0, description);
+    assert.equal(ranked.find((entry) => entry.label === "Ukraine").reasons.length, 0, description);
+  }
 });
 
 test("an order the last jump answered no longer earns focus", () => {
@@ -78,8 +93,8 @@ test("belligerents, chat partners, event movers and claimants all outrank the re
     wars: [{ id: "war-1", status: "active", sides: { aggressors: ["Russian Federation"], defenders: ["Ukraine"] } }],
     chats: [{ countries: [{ name: "Islamic Republic of Iran" }] }],
     events: [
-      { title: "Berlin summit", description: "The Federal Republic of Germany hosts talks.", impacts: {} },
-      { title: "Panama Canal reopened", description: "The Republic of Panama restores traffic.", impacts: { regionTransfers: [{ fromCode: "Republic of Panama", toCode: "Republic of India" }] } },
+      { title: "Berlin summit", description: "The hosts open the talks.", places: [{ kind: "country", name: "Federal Republic of Germany" }], impacts: {} },
+      { title: "Panama Canal reopened", description: "Traffic resumes.", combatants: ["Republic of Panama"], impacts: { regionTransfers: [{ fromCode: "Republic of Panama", toCode: "Republic of India" }] } },
     ],
     claimants: { "690": ["People's Republic of China"] },
     ownerOfRegion: (id) => (id === "690" ? "United States of America" : ""),
@@ -134,33 +149,33 @@ test("the turn's powers lead on a map named in Cyrillic, as on any other", () =>
   const ranked = selectFocusPowers({
     owners: cyrillicOwners,
     player: "Российская Федерация",
-    actions: [{ title: "Давление на Украина", description: "Предупредить: Республика Панама не должна вмешиваться.", resolved: false }],
+    actions: [{ title: "Давление на Украину", description: "Предупредить соседей.", resolved: false, participants: ["Украина"], invitees: ["Республика Панама"] }],
     wars: [{ id: "war-1", status: "active", sides: { aggressors: ["Российская Федерация"], defenders: ["Украина"] } }],
-    events: [{ title: "Саммит в Минске", description: "Беларусь принимает переговоры.", impacts: {} }],
+    events: [{ title: "Саммит в Минске", description: "Переговоры начались.", places: [{ kind: "country", name: "Беларусь" }], impacts: {} }],
   });
   assert.deepEqual(ranked.slice(0, 2).map((entry) => entry.label), ["Российская Федерация", "Украина"]);
   const labels = ranked.map((entry) => entry.label);
-  assert.ok(labels.indexOf("Республика Панама") < labels.indexOf("Китайская Народная Республика"), "twelve regions named in an order outrank two hundred nobody mentioned");
+  assert.ok(labels.indexOf("Республика Панама") < labels.indexOf("Китайская Народная Республика"), "twelve regions an order involves outrank two hundred nobody involved");
   assert.ok(ranked.find((entry) => entry.label === "Республика Беларусь").reasons.includes("named in recent events"));
   assert.equal(ranked.find((entry) => entry.label === "Китайская Народная Республика").reasons.length, 0);
 });
 
-test("a pending action that names a region lifts the power holding it", () => {
-  const regions = [
-    { id: "r1", name: "Kharkiv" },
-    { id: "r2", name: "Gilan" },
-    { id: "r3", name: "Ost" },
-  ];
-  const holders = { r1: "Ukraine", r2: "Islamic Republic of Iran", r3: "Republic of India" };
+test("a war is read by its status and its sides, exactly", () => {
   const ranked = selectFocusPowers({
     owners,
     player: "United States of America",
-    actions: [{ title: "Annex Gilan", description: "Send the marines into Gilan and the Ost.", status: "planned" }],
-    regions,
-    ownerOfRegion: (id) => holders[id] ?? "",
+    wars: [
+      { id: "w-a", status: "ceasefire", sideA: ["Ukraine"], sideB: ["Russian Federation"] },
+      // A title or a note is no side, and only "ended" is over.
+      { id: "w-b", status: "concluded", title: "Republic of India", sideA: ["Republic of Panama"], sideB: [] },
+      { id: "w-c", status: "ended", sideA: ["People's Republic of China"], sideB: ["Islamic Republic of Iran"] },
+    ],
   });
-  assert.equal(ranked[1].label, "Islamic Republic of Iran");
-  assert.deepEqual(ranked[1].reasons, ["holds land the player's actions name"]);
-  assert.equal(ranked.find((entry) => entry.label === "Ukraine").reasons.length, 0, "a region the actions do not name lifts nobody");
-  assert.equal(ranked.find((entry) => entry.label === "Republic of India").reasons.length, 0, "a name under four letters is too loose to count");
+  const reasons = Object.fromEntries(ranked.map((entry) => [entry.label, entry.reasons]));
+  assert.deepEqual(reasons.Ukraine, ["at war"]);
+  assert.deepEqual(reasons["Russian Federation"], ["at war"]);
+  assert.deepEqual(reasons["Republic of Panama"], ["at war"]);
+  assert.deepEqual(reasons["Republic of India"], []);
+  assert.deepEqual(reasons["People's Republic of China"], []);
+  assert.deepEqual(reasons["Islamic Republic of Iran"], []);
 });

@@ -3739,7 +3739,6 @@ async function buildAdvisorSystemPrompt({ recipient = null, discussionOnly = fal
         // exact-message retrieval path across both active and archived chats.
         chatHistoryLong: renderAdvisorDiplomaticContext({
             chats: chatData, world: worldData, game: gameData, pastTalks,
-            question: currentQuestion,
         }),
         advisorMessages: CONVERSATION_IN_TURNS,
         plannedActions: PLANNED_ACTIONS_IN_ACTION_PLANNING,
@@ -3871,7 +3870,7 @@ export async function sendAdvisorGroupMessage({ threadId, messages, onSpeakerChu
         .filter((message) => message?.role === "user" || message?.role === "advisor" || message?.role === "error");
     const question = [...conversation].reverse().find((message) => message.role === "user")?.text || "";
     if (!String(question).trim()) throw new Error("A group chat needs a question from the player.");
-    const speakers = selectAdvisorGroupSpeakers(group.memberIds, conversation, question, contacts, chiefName);
+    const speakers = selectAdvisorGroupSpeakers(group.memberIds, conversation);
     if (!speakers.length) throw new Error("Every group member has already responded or explicitly declined this question.");
     const { effectiveBatchSize } = readAdvisorGroupSettings();
     const batches = groupSpeakerBatches(speakers, effectiveBatchSize);
@@ -3995,7 +3994,6 @@ Decide independently whether you need to speak as ${name}. Address a substantive
 // to appear there too, a second copy that changed with every message.
 export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "", {
     chatId = "",
-    decisionFocusText = "",
 } = {}) {
     await ensurePromptsLoaded();
     // The panel passes its country objects; `- ${country}` of one read
@@ -4099,7 +4097,6 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         world: worldData,
         speakingAs: speaker,
         playerCountry: playerCountry || gameData?.country || "",
-        decisionFocusText,
     });
     const politicalSection = politicalDecision?.text ? `\n\n${politicalDecision.text}` : "";
 
@@ -4358,11 +4355,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     const priorHistory = diplomaticHistory;
     const priorMemory = diplomaticMemorySummary;
     const priorMemoryTime = diplomaticMemoryThroughTime;
-    const focusText = withCatchUp(playerMessage, catchUp);
-    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, {
-        chatId,
-        decisionFocusText: focusText,
-    });
+    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, { chatId });
 
     const asked = { role: "user", parts: [{ text: withCatchUp(playerMessage, catchUp) }] };
     const history = compactConversationHistory([...priorHistory, asked]);
@@ -4430,10 +4423,7 @@ export async function buildDiplomaticEvaluationRequest({
     priorMessages = [],
     chatId = "",
 } = {}) {
-    const systemPrompt = await buildDiplomaticSystemPrompt(participantNames || [], playerCountry, speakingAs, {
-        chatId,
-        decisionFocusText: playerMessage,
-    });
+    const systemPrompt = await buildDiplomaticSystemPrompt(participantNames || [], playerCountry, speakingAs, { chatId });
 
     const priorMemory = latestSavedDiplomaticMemory(priorMessages);
     let history = priorMessages

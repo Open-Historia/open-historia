@@ -14927,14 +14927,6 @@ export const runChatActionBatch = async ({
   const focusProposal = normalizeString(institutionProposalId)
     ? Object.values(focusInstitution?.proposals || {}).find((proposal) => regionKey(proposal?.id) === regionKey(institutionProposalId)) || null
     : null;
-  const politicalDecisionFocusText = [
-    normalizeString(playerMessage),
-    normalizeString(catchUp),
-    normalizeString(focusProposal?.title),
-    normalizeString(focusProposal?.summary),
-    normalizeString(autonomousBallotWork?.proposalTitle),
-    lifecycleResponseRequested ? normalizeString(institutionLifecyclePrompt) : "",
-  ].filter(Boolean).join("\n");
   const politicalContextOptions = {
     // Keep the normal one-request group-diplomacy projection byte-for-byte on
     // the established participant order.
@@ -14943,7 +14935,6 @@ export const runChatActionBatch = async ({
     maxActors: formalBusinessRequested ? 32 : 6,
     perActorMaxChars: formalBusinessRequested ? 900 : 1800,
     maxTotalChars: formalBusinessRequested ? 26000 : 9000,
-    decisionFocusText: politicalDecisionFocusText,
     limits: {
       traits: 5, goals: 4, fears: 3, ambitions: 3, domesticPressures: 3,
       pressureIssues: 3, governingEntities: 3, oppositionEntities: 1,
@@ -15224,7 +15215,6 @@ export const runPostTurnInstitutionBallots = async ({
         maxActors: 32,
         perActorMaxChars: 900,
         maxTotalChars: 26000,
-        decisionFocusText: work.map((item) => [item.proposalTitle, item.proposalSummary].filter(Boolean).join("\n")).join("\n"),
         limits: {
           traits: 5, goals: 4, fears: 3, ambitions: 3, domesticPressures: 3,
           pressureIssues: 3, governingEntities: 3, oppositionEntities: 1,

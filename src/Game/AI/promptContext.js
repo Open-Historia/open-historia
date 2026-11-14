@@ -1264,26 +1264,21 @@ const unitsSummaryBody = (world, {
 // Phase 10.1: persistent physical world, bounded object attention. The save keeps
 // every marker; an individual AI task sees only a compact, deterministic subset that
 // is causally/recently relevant plus a rotating background sample. No extra AI call.
+//
+// Relevant by the records alone: a structure a recent event built or changed
+// (its sourceEventIds), one a recent event names among its places, one whose
+// owner is a party to a live war, a running storyline, a queued order or the
+// chat at hand. Its name and its owner's were looked for in the prose of all
+// those, and their words compared with an English stoplist: a structure named
+// in another language than the story was never brought forward, and an
+// English word in common brought forward the wrong one.
 const MARKER_ATTENTION_OPEN_STATUSES = new Set(["planned", "under_construction", "damaged"]);
-const MARKER_ATTENTION_STOP_WORDS = new Set([
-  "about", "after", "again", "against", "along", "another", "because", "before", "being",
-  "between", "current", "during", "event", "forces", "from", "government", "have", "into",
-  "major", "marker", "military", "more", "over", "polity", "should", "state", "their",
-  "there", "these", "they", "this", "through", "under", "with", "world",
-]);
 
+// A name as the records write it, with case and spacing folded and nothing else.
 const markerAttentionKey = (value) => normalizeString(value)
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .toLowerCase();
-
-// Words of any script: a structure the model named in Russian or Chinese used
-// to have no words here, and nothing the story said could bring it forward.
-const markerAttentionTokens = (value) => new Set(
-  markerAttentionKey(value)
-    .split(/[^\p{L}\p{M}\p{N}]+/u)
-    .filter((token) => token.length >= 4 && !MARKER_ATTENTION_STOP_WORDS.has(token)),
-);
+  .normalize("NFKC")
+  .toLowerCase()
+  .replace(/\s+/g, " ");
 
 const markerStableHash = (value) => {
   let hash = 2166136261;
@@ -1316,60 +1311,46 @@ const buildMarkerAttentionEvidence = (bundle, { chat = null } = {}) => {
   const world = bundle.world && typeof bundle.world === "object" ? bundle.world : {};
   const recentEvents = normalizeEvents(bundle.events).slice(-12);
   const recentEventIds = new Set(recentEvents.map((event) => normalizeString(event.id)).filter(Boolean));
-  const pieces = [];
-
+  // The structures recent events name among their places (AI/eventPlaces.js).
+  const namedStructures = new Set();
   for (const event of recentEvents) {
-    pieces.push(normalizeString(event.title), compactMarkerNote(event.description, 420));
+    for (const place of normalizeArray(event.places)) {
+      if (normalizeString(place?.kind).toLowerCase() === "structure") namedStructures.add(markerAttentionKey(place?.name));
+    }
   }
+  // The powers this turn is about, as the records name them.
+  const focusOwners = new Set();
+  const addOwners = (names) => {
+    for (const name of normalizeArray(names)) focusOwners.add(markerAttentionKey(name));
+  };
   for (const storyline of normalizeArray(world.storylines).filter((entry) =>
     ["active", "dormant"].includes(normalizeString(entry?.status).toLowerCase())).slice(0, 20)) {
-    pieces.push(
-      normalizeString(storyline.title),
-      compactMarkerNote(storyline.state || storyline.summary || storyline.note, 260),
-      ...normalizeArray(storyline.participants).slice(0, 8).map(normalizeString),
-    );
+    addOwners(normalizeArray(storyline.participants).slice(0, 8));
   }
   for (const war of normalizeArray(world.wars).filter((entry) =>
     ["active", "ceasefire"].includes(normalizeString(entry?.status).toLowerCase())).slice(0, 12)) {
-    pieces.push(
-      normalizeString(war.title || war.name || war.id),
-      compactMarkerNote(war.note || war.summary, 220),
-      ...normalizeArray(war.sideA).slice(0, 8).map(normalizeString),
-      ...normalizeArray(war.sideB).slice(0, 8).map(normalizeString),
-    );
+    addOwners([...normalizeArray(war.sideA).slice(0, 8), ...normalizeArray(war.sideB).slice(0, 8)]);
   }
-  // Queued orders only: an answered one is status "resolved", and ten of those
-  // would otherwise fill the window ahead of the fortress still being built.
+  // Queued orders only: an answered one is status "resolved".
   for (const action of normalizeActions(bundle.actions).filter(isPendingAction).slice(-10)) {
-    pieces.push(
-      normalizeString(action.title),
-      compactMarkerNote(action.description || action.rawInput || action.text, 320),
-    );
+    addOwners([...normalizeArray(action.invitees), ...normalizeArray(action.participants)]);
   }
-
   const normalizedChat = chat && typeof chat === "object" ? normalizeChats([chat])[0] : null;
   if (normalizedChat) {
-    pieces.push(...normalizeArray(normalizedChat.countries).slice(0, 8)
-      .map((country) => normalizeString(country?.name || country?.polityKey || country?.code)));
-    for (const message of normalizeArray(normalizedChat.messages).slice(-6)) {
-      pieces.push(normalizeString(message?.speaker), compactMarkerNote(message?.message || message?.text, 320));
-    }
+    addOwners(normalizeArray(normalizedChat.countries).slice(0, 8)
+      .map((country) => country?.name || country?.polityKey || country?.code));
   }
-
-  const focusText = pieces.filter(Boolean).join("\n");
-  return {
-    focusKey: markerAttentionKey(focusText),
-    focusTokens: markerAttentionTokens(focusText),
-    recentEventIds,
-  };
+  namedStructures.delete("");
+  focusOwners.delete("");
+  return { recentEventIds, namedStructures, focusOwners };
 };
 
 export const MARKERS_TABLE_HEADER = "Each: name: kind, owner[, status when not active]; lat, lng[; dates][ — what it is]";
 export const buildMarkersSummaryText = (
   worldLike,
   {
-    focusKey = "",
-    focusTokens = new Set(),
+    namedStructures = new Set(),
+    focusOwners = new Set(),
     limit = 16,
     recentEventIds = new Set(),
     seed = "",
@@ -1381,24 +1362,13 @@ export const buildMarkersSummaryText = (
 
   const boundedLimit = Math.max(1, Math.min(60, Math.trunc(Number(limit) || 16)));
   const scored = markers.map((marker, index) => {
-    const names = [marker.name, ...normalizeArray(marker.aliases)].map(normalizeString).filter(Boolean);
-    const nameKeys = names.map(markerAttentionKey).filter(Boolean);
-    const blob = [marker.name, ...normalizeArray(marker.aliases), marker.kind, marker.ownerCode, marker.note]
-      .map(normalizeString).filter(Boolean).join(" ");
-    const markerTokens = markerAttentionTokens(blob);
+    const nameKeys = [marker.name, ...normalizeArray(marker.aliases)].map(markerAttentionKey).filter(Boolean);
     let score = 0;
 
     if (MARKER_ATTENTION_OPEN_STATUSES.has(normalizeString(marker.status).toLowerCase())) score += 260;
     if (normalizeArray(marker.sourceEventIds).some((eventId) => recentEventIds.has(normalizeString(eventId)))) score += 300;
-    if (focusKey && nameKeys.some((nameKey) => nameKey.length >= 4 && focusKey.includes(nameKey))) score += 520;
-    if (focusKey && normalizeString(marker.ownerCode) && focusKey.includes(markerAttentionKey(marker.ownerCode))) score += 55;
-
-    let overlaps = 0;
-    for (const token of markerTokens) {
-      if (focusTokens.has(token)) overlaps += 1;
-      if (overlaps >= 6) break;
-    }
-    score += overlaps * 34;
+    if (nameKeys.some((nameKey) => namedStructures.has(nameKey))) score += 520;
+    if (normalizeString(marker.ownerCode) && focusOwners.has(markerAttentionKey(marker.ownerCode))) score += 55;
 
     // This changes with the simulation round/task seed, creating a tiny rotating
     // awareness lane for stable objects that are not currently in the foreground.
@@ -1889,7 +1859,6 @@ const rankFocusEntries = (regions, world, bundle, { playerName, actorNames = [],
     wars: normalizeArray(world.wars),
     claimants: world.regionClaimants ?? {},
     ownerOfRegion: (regionId) => ownerById.get(String(regionId)) ?? "",
-    regions,
     ...signals,
   });
   const entries = ranked.map((entry) => ({ ...entry, regions: groups.get(entry.label.toLowerCase())?.regions ?? 0 }));
@@ -2164,7 +2133,12 @@ const TIERED_TERRITORY_REGIONS = 120;
 // and count, as before. `regions`: the rendered catalog, whose `country` is a
 // region's owner on the scenario's map.
 const ONE_LINE_NAMES = 3;
-const ALLIANCE_TYPES = /alliance|defen[cs]e|military|security|mutual/i;
+// Exact values of the ledgers' enums (nativeDiplomaticDirector.js
+// AGREEMENT_TYPE_VALUES and AGREEMENT_STATUS_VALUES, runtime/warRecord.js
+// WAR_STATUSES), never words found in them. An alliance is what the map's
+// stance colours call one (runtime/diplomaticStance.js).
+const ALLIANCE_AGREEMENT_TYPES = new Set(["alliance", "mutual_defense", "military_cooperation"]);
+const enumValue = (value) => normalizeString(value).toLowerCase();
 export const buildOneLineDetail = (world, regions, { polityNames = {}, bakedAliases = buildOwnerAliasMap(world?.polityOverrides) } = {}) => {
   const fold = (value) => normalizeString(value).toLowerCase();
   const overrides = world?.regionOwnershipOverrides ?? {};
@@ -2202,8 +2176,8 @@ export const buildOneLineDetail = (world, regions, { polityNames = {}, bakedAlia
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 2)
     .map(([other, count]) => say(count, other));
-  const activeWars = normalizeArray(world?.wars).filter((war) => !/ended|concluded|closed/i.test(String(war?.status ?? "")));
-  const agreements = normalizeArray(world?.agreements).filter((entry) => !normalizeString(entry?.status) || /active|in force/i.test(entry.status));
+  const activeWars = normalizeArray(world?.wars).filter((war) => enumValue(war?.status) !== "ended");
+  const agreements = normalizeArray(world?.agreements).filter((entry) => !enumValue(entry?.status) || enumValue(entry.status) === "active");
   const treaties = normalizeArray(world?.peaceTreaties);
   return (label) => {
     const names = namesOf(label);
@@ -2225,7 +2199,7 @@ export const buildOneLineDetail = (world, regions, { polityNames = {}, bakedAlia
       const parties = normalizeArray(entry?.parties).map(normalizeString);
       if (!parties.some(is)) continue;
       const others = parties.filter((name) => name && !is(name));
-      if (ALLIANCE_TYPES.test(`${entry?.type ?? ""}`)) for (const name of others) { if (!allies.includes(name)) allies.push(name); }
+      if (ALLIANCE_AGREEMENT_TYPES.has(enumValue(entry?.type))) for (const name of others) { if (!allies.includes(name)) allies.push(name); }
       else if (normalizeString(entry?.title)) pacts.push(`${normalizeString(entry.title)}${others.length ? ` with ${listed(others)}` : ""}`);
     }
     if (allies.length) parts.push(`allied with ${listed(allies)}`);

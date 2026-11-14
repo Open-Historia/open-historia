@@ -240,10 +240,11 @@ const renderStandingIndex = (active, maxChars) => {
 
 // A fair cross-thread overview. Do NOT use the normal chatHistoryLong renderer
 // here: its last ten messages in each of eight threads can exceed 100k chars.
-// The archive/tier sources remain unchanged, and current-question evidence
-// can recover detail from an ACTIVE old thread, not just an archived one.
+// The archive/tier sources remain unchanged, and the advisor's own search
+// (ADVISOR_DIPLOMACY_LOOKUP_TOOLS) recovers detail from an ACTIVE old thread,
+// not just an archived one.
 export const renderAdvisorDiplomaticContext = ({
-  chats = [], world = {}, game = {}, question = "", pastTalks = null,
+  chats = [], world = {}, game = {}, pastTalks = null,
   visibleTo = "", maxChars = ADVISOR_DIPLOMACY_CONTEXT_MAX_CHARS,
 } = {}) => {
   const ceiling = Math.max(1000, Math.trunc(Number(maxChars) || ADVISOR_DIPLOMACY_CONTEXT_MAX_CHARS));
@@ -258,30 +259,12 @@ export const renderAdvisorDiplomaticContext = ({
     + "If exact older terms matter, use the diplomatic history lookup when available; "
     + "otherwise distinguish summaries from verified quotations.\n";
   let output = head;
-  // Evidence selection is based on actual source-token overlap, not a fixed
-  // English topic keyword list. An indirect or non-English question can still
-  // retrieve an exact treaty/place term appearing in an older source.
-  const terms = tokensOf(question);
-  const namedTerms = new Set(
-    [...String(question).matchAll(/(?<![\p{L}\p{N}])(\p{Lu}[\p{L}\p{N}]{4,})/gu)]
-      .filter((match) => match.index > 0).map((match) => match[1].toLowerCase()),
-  );
-  const findings = searchAdvisorDiplomaticMessages(visible,{
-    query:question,limit:3,maxExcerptChars:650,
-  }).matches.filter((row) => {
-    const contentHits = matchCount(row.excerpt,terms);
-    // Require two independently matched details, or a named subject from
-    // the player's question. A single generic word such as "administrative"
-    // must not summon irrelevant diplomatic evidence into a domestic query.
-    return contentHits >= 2 || [...namedTerms].some((word) => row.excerpt.toLowerCase().includes(word));
-  });
-  if (findings.length) {
-    let section = "Relevant dated passages from saved diplomacy (matched to the current question):\n";
-    for (const row of findings) {
-      section += `- [${row.date}] ${clipped(row.participant,80)} / ${clipped(row.speaker,65)}: ${clipped(row.excerpt,650)}\n`;
-    }
-    if (output.length + section.length <= ceiling-650) output += section;
-  }
+  // No passage is chosen here by the words of the player's question: the
+  // shared words between a question and a treaty decided what the advisor was
+  // shown, which in another language, or asked another way, was nothing. The
+  // advisor asks for what it needs (search_advisor_diplomacy, then
+  // read_advisor_diplomacy); the archived chats come by their embeddings
+  // (pastTalks).
   // Preserve broad continuity even when a question is unrelated to diplomacy
   // and provider lookup functions are disabled. A short index is cheap enough
   // to include every current relationship in an ordinary long campaign.

@@ -177,10 +177,9 @@ const compactBloc = (bloc) => ({
   ...(officeholderName(bloc?.leader) ? { leader: officeholderName(bloc.leader) } : {}),
 });
 
-const actorRepairContext = (world, polityKey, eventText) => {
+const actorRepairContext = (world, polityKey) => {
   const actor = getPoliticalProfile(world, polityKey);
   const decision = buildPoliticalDecisionContext(world, polityKey, {
-    decisionFocusText: eventText,
     maxChars: 4400,
     limits: {
       traits: 8,
@@ -236,10 +235,9 @@ export const buildPoliticalClaimRepairRequest = ({ candidate, world, claimContex
 
   const contexts = new Map();
   for (const target of targets) {
-    const eventText = `${clean(target.event?.title)}\n${clean(target.event?.description)}`.trim();
     for (const polityKey of target.allowedPolities) {
       const key = lower(polityKey);
-      if (!contexts.has(key)) contexts.set(key, actorRepairContext(world, polityKey, eventText));
+      if (!contexts.has(key)) contexts.set(key, actorRepairContext(world, polityKey));
     }
   }
 
