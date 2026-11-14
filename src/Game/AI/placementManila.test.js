@@ -104,7 +104,6 @@ const mapOf = () => {
         seas: [],
         holdsLand: (name) => REGIONS.some((row) => fold(row.owner) === fold(name)),
         capitalOf: (name) => CAPITALS[fold(name)] ?? null,
-        placesNamedIn: () => [],
         samePolity: (a, b) => Boolean(fold(a)) && fold(a) === fold(b),
         worldCities: () => [],
         worldCitiesArrived: async () => false,

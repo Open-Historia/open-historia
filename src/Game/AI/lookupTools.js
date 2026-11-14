@@ -597,86 +597,76 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
 };
 
 // ---------------------------------------------------------------------------
-// Places a text names — answered before anyone asks
+// The places events list, answered before anyone asks
 // ---------------------------------------------------------------------------
 //
 // A lookup function lets the model ask who holds Mariupol. But asking is a round
 // trip: the whole prompt goes out again, and on a free key requests are what run
 // out (requestBudget.js). For a task whose input is a handful of finished events,
-// the question can be answered beforehand — the events already name the places
-// they are about — so placesNamedIn reads the text the way a reader would and
-// hands over each named region and city with who controls it now, who lawfully
+// the question can be answered beforehand: each event lists the places it is
+// about in its own `places` field ("region: Crimea", "city: Mariupol, country:
+// Ukraine"; eventPlaces.js reads them), and its operations name their regions.
+// placesListed hands each of those over with who controls it now, who lawfully
 // owns it where that differs, and who claims it.
 //
-// Whole words only, accents and case folded, and a name of three letters or
-// fewer is skipped: a region called "Ob" or "Aa" is in half the words of any
-// paragraph. A city answers with the region it stands in. Longest names first,
-// so "South Ossetia" is not also reported as "Ossetia".
-
-// Words of any script: on a map whose regions and cities are named in
-// Cyrillic, Greek or Arabic, every name used to fold to nothing here and none
-// could be found in a text.
-const foldForSearch = (value) => String(value ?? "")
-  .normalize("NFD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .toLowerCase()
-  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
-  .trim();
-
-const MIN_PLACE_NAME_CHARS = 4;
+// `entries` are { kind, name, country } (eventPlaces.js readEventPlace). Each is
+// found by its exact name, the map's own or an alias, marks, case and spacing
+// aside, as the kind it was given and nothing else: a region by its name (or the
+// map's id for it), a city by its name, answering with the region it stands in.
+// Where several answer, the one held by the `country` written beside it, or none.
+// Never read out of an event's words: "there should be absolutely no keywording
+// done in this game anywhere" (the owner, 2026-11-13). Reading the words for
+// the map's names missed every name in a sentence written without spaces
+// (Chinese, Japanese, Thai), and found a region called Salmon in a salmon run.
 export const PLACES_NAMED_LIMIT = 40;
 
-export const placesNamedIn = (context, textValue, { limit = PLACES_NAMED_LIMIT } = {}) => {
-  const haystack = ` ${foldForSearch(textValue)} `;
-  if (haystack.length < MIN_PLACE_NAME_CHARS + 2 || !context) return [];
+const sameKey = (a, b) => Boolean(a) && a === b;
+const heldBy = (row, country) => Boolean(row) && (sameKey(foldRegionKey(row.owner), country) || sameKey(foldRegionKey(row.sovereign), country));
+const onlyOne = (named, held) => (held.length === 1 ? held[0] : named.length === 1 ? named[0] : null);
 
-  const candidates = [];
-  for (const row of array(context.rows)) {
-    for (const name of [row.name, ...array(row.aliases)]) {
-      const folded = foldForSearch(name);
-      if (folded.length >= MIN_PLACE_NAME_CHARS) candidates.push({ folded, label: clean(name), kind: "region", row });
-    }
-  }
-  for (const city of array(context.cityRows)) {
-    for (const name of [city.name, ...array(city.aliases)]) {
-      const folded = foldForSearch(name);
-      if (folded.length >= MIN_PLACE_NAME_CHARS) candidates.push({ folded, label: clean(name), kind: "city", city });
-    }
-  }
-  candidates.sort((a, b) => b.folded.length - a.folded.length || a.folded.localeCompare(b.folded));
-
-  // Text already accounted for by a longer name is blanked, so a shorter name
-  // inside it does not match a second time.
-  let remaining = haystack;
+export const placesListed = (context, entries, { limit = PLACES_NAMED_LIMIT } = {}) => {
+  if (!context) return [];
   const found = [];
   const seen = new Set();
-  for (const candidate of candidates) {
-    const needle = ` ${candidate.folded} `;
-    const at = remaining.indexOf(needle);
-    if (at < 0) continue;
-    remaining = remaining.split(needle).join(` ${"#".repeat(candidate.folded.length)} `);
-    const row = candidate.kind === "region" ? candidate.row : context.regionOfCity?.(candidate.city) ?? null;
-    const key = `${candidate.kind}|${candidate.label.toLowerCase()}|${row?.id ?? ""}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const claimants = row ? array(context.claimants?.[row.id]).map(clean).filter(Boolean) : [];
-    found.push({
-      at,
-      place: candidate.label,
-      kind: candidate.kind,
-      ...(row ? {
-        ...(candidate.kind === "city" || row.name !== candidate.label ? { region: row.name } : {}),
+  for (const entry of array(entries)) {
+    if (found.length >= Math.max(0, limit)) break;
+    const kind = clean(entry?.kind);
+    const name = clean(entry?.name);
+    if (!name || (kind !== "region" && kind !== "city")) continue;
+    const key = foldRegionKey(name);
+    const country = foldRegionKey(entry?.country);
+    let row = null;
+    let place = null;
+    if (kind === "region") {
+      const named = context.byId?.has(name)
+        ? [context.byId.get(name)]
+        : array(context.rows).filter((candidate) => foldRegionKey(candidate.name) === key || array(candidate.aliases).some((alias) => foldRegionKey(alias) === key));
+      row = onlyOne(named, country ? named.filter((candidate) => heldBy(candidate, country)) : []);
+      if (!row) continue;
+      place = { place: name, kind, ...(row.name !== name ? { region: row.name } : {}) };
+    } else {
+      const named = array(context.cityRows)
+        .filter((city) => foldRegionKey(city.name) === key || array(city.aliases).some((alias) => foldRegionKey(alias) === key))
+        .map((city) => ({ city, row: context.regionOfCity?.(city) ?? null }));
+      const pick = onlyOne(named, country ? named.filter((candidate) => heldBy(candidate.row, country)) : []);
+      if (!pick) continue;
+      row = pick.row;
+      place = { place: name, kind, region: row ? row.name : "not on this map" };
+    }
+    const seenKey = `${kind}|${key}|${row?.id ?? ""}`;
+    if (seen.has(seenKey)) continue;
+    seen.add(seenKey);
+    if (row) {
+      const claimants = array(context.claimants?.[row.id]).map(clean).filter(Boolean);
+      Object.assign(place, {
         controller: row.owner || "unowned",
         ...(row.sovereign && row.sovereign !== row.owner ? { lawfulOwner: row.sovereign } : {}),
         ...(claimants.length ? { claimants } : {}),
-      } : { region: "not on this map" }),
-    });
+      });
+    }
+    found.push(place);
   }
-  // In the order the text names them, which is the order a reader meets them in.
-  return found
-    .sort((a, b) => a.at - b.at)
-    .slice(0, Math.max(0, limit))
-    .map(({ at: _at, ...place }) => place);
+  return found;
 };
 
 // ---------------------------------------------------------------------------

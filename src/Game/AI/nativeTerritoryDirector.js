@@ -216,9 +216,10 @@ publishDiagnostics();
 // what it writes into fromCode. This used to be left to a lookup ("find its
 // controller with find_region"), which saved characters and cost a request — the
 // wrong way round on a free key, where a lookup round re-sends the whole prompt
-// and requests are what run out (requestBudget.js). The caller now reads the
-// events for place names and hands each one over with its controller
-// (`placesNamed`, from lookupTools.js placesNamedIn), so nothing has to be asked.
+// and requests are what run out (requestBudget.js). The caller now looks up the
+// places the events list (territoryCandidatePlaces) and hands each one over with
+// its controller (`placesNamed`, from lookupTools.js placesListed), so nothing
+// has to be asked.
 //
 // Bounded all the same: a world war on a large map can dispute hundreds of
 // regions. Rows that involve a power the candidate events concern come first
@@ -237,16 +238,24 @@ const powersConcerned = (candidates) => new Set(normalizeArray(candidates).flatM
   ...normalizeArray(candidate?.unitOps).map((op) => op?.unit?.ownerCode),
 ]).map(nameKey).filter(Boolean));
 
-// The text a caller reads for place names: the candidates' own words, and the
-// places their existing operations already point at.
-export const territoryCandidateText = (candidates = []) => normalizeArray(candidates)
-  .map((candidate) => [
-    normalizeString(candidate?.title),
-    normalizeString(candidate?.description),
-    ...normalizeArray(candidate?.existingLegalTransfers).flatMap((op) => [op?.regionId, op?.regionName]),
-    ...normalizeArray(candidate?.existingControlOps).flatMap((op) => [op?.regionId, op?.regionName]),
-  ].map(normalizeString).filter(Boolean).join(". "))
-  .join("\n");
+// What the caller's place reader is handed (gameplay.js placeReaderFor): each
+// candidate event's own `places` entries as written ("region: Crimea", "city:
+// Mariupol, country: Ukraine"), and the regions its existing operations already
+// name. Those fields only, never the events' words: reading the words for the
+// map's names missed every name in a sentence written without spaces, and
+// found the map's "Salmon" in any text about the salmon run.
+export const territoryCandidatePlaces = (sourceEvents = []) => {
+  const places = [];
+  const regions = [];
+  for (const { event } of territoryCandidates(normalizeArray(sourceEvents))) {
+    places.push(...normalizeArray(event?.places).map(normalizeString).filter(Boolean));
+    for (const op of [...normalizeArray(event?.impacts?.regionTransfers), ...normalizeArray(event?.impacts?.regionControlOps)]) {
+      const written = normalizeString(op?.regionName) || normalizeString(op?.regionId);
+      if (written) regions.push(written);
+    }
+  }
+  return { places: [...new Set(places)], regions: [...new Set(regions)] };
+};
 
 export const summarizeTerritorialState = (world, candidates = [], { placesNamed = null } = {}) => {
   const control = world?.regionOwnershipOverrides && typeof world.regionOwnershipOverrides === "object" ? world.regionOwnershipOverrides : {};
@@ -283,7 +292,8 @@ export const summarizeTerritorialState = (world, candidates = [], { placesNamed 
 // them, or null when none is territorial. Its own function so the turn review
 // (gameplay.js runTurnReview) can tell beforehand whether there is anything to
 // ask, and ask it as one job among several, with exactly this input.
-// `findPlaces(text)` is the caller's place-name reader; without one the state
+// `findPlaces({ places, regions })` is the caller's place reader
+// (territoryCandidatePlaces); without one the state
 // goes out as it always did.
 const territoryCandidates = (sourceEvents) => sourceEvents
   .map((event, index) => ({ event, index }))
@@ -305,11 +315,11 @@ const territoryCandidateRows = (sourceEvents) => territoryCandidates(sourceEvent
     };
   });
 
-const territoryAnalyzerInput = async (candidateRows, world, findPlaces) => {
+const territoryAnalyzerInput = async (candidateRows, world, findPlaces, placeFields) => {
   let placesNamed = null;
   if (typeof findPlaces === "function") {
     try {
-      placesNamed = await findPlaces(territoryCandidateText(candidateRows));
+      placesNamed = await findPlaces(placeFields);
     } catch (error) {
       console.warn("[territory director] the events' place names could not be read; sending the state without them.", error);
     }
@@ -321,8 +331,9 @@ const territoryAnalyzerInput = async (candidateRows, world, findPlaces) => {
 };
 
 export const buildTerritoryDirectorInput = async ({ events = [], world = {}, findPlaces = null } = {}) => {
-  const candidateRows = territoryCandidateRows(normalizeArray(events));
-  return candidateRows.length ? territoryAnalyzerInput(candidateRows, world, findPlaces) : null;
+  const sourceEvents = normalizeArray(events);
+  const candidateRows = territoryCandidateRows(sourceEvents);
+  return candidateRows.length ? territoryAnalyzerInput(candidateRows, world, findPlaces, territoryCandidatePlaces(sourceEvents)) : null;
 };
 
 // `battlefieldRegions`: async () => the test sanitizeDirectorOrders takes as
@@ -356,7 +367,7 @@ export const directGeneratedTerritoryOps = async ({
 
   let analysis = null;
   try {
-    analysis = await analyzeBatch(await territoryAnalyzerInput(territoryCandidateRows(sourceEvents), world, findPlaces));
+    analysis = await analyzeBatch(await territoryAnalyzerInput(territoryCandidateRows(sourceEvents), world, findPlaces, territoryCandidatePlaces(sourceEvents)));
   } catch (error) {
     // The player's Cancel is not a failed analysis: it must reach the skip, or
     // the cancelled turn goes on to be written.

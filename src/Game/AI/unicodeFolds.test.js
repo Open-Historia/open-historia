@@ -68,7 +68,6 @@ const FOLDS = [
     // to its events by their ids, an institution is found by its exact name,
     // case and spacing aside, and the curator reads the analyst's own fields.)
     ["src/Game/AI/pregameBootstrapCompiler.js", "titleKey", { lower: lowered }, true],
-    ["src/Game/AI/lookupTools.js", "foldForSearch", {}, true],
     ["src/Game/AI/playerFocus.js", "fold", { asText: trimmed }, true],
     // (worldDirection.js `fold` and `words`, and projects.js `foldWords`, are
     // gone: the player's share counts the playerRelated mark, scripted beats are

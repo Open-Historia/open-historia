@@ -267,7 +267,7 @@ import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, describeOtherKind, d
 import { loadWorldCities } from "./worldCities.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { restorePointsWithin } from "../../runtime/restorePointBudget.js";
-import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupDirective, lookupToolsFor, placesNamedIn, withPastTalks, withSimilarEvents } from "./lookupTools.js";
+import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupDirective, lookupToolsFor, placesListed, withPastTalks, withSimilarEvents } from "./lookupTools.js";
 import { findPastTalks, findRelatedForSkip, installRelatedEventsIndexer, pastTalksSearch, similarEventsSearch } from "./relatedEventsSearch.js";
 import { FRONT_ORDER_FUNCTION, withFrontOrderFunction } from "./frontOrderFunction.js";
 import { carriedRoundCount, createLookupCarry } from "./toolTurns.js";
@@ -1799,7 +1799,7 @@ const buildTaskLookups = (bundle, { maxRounds, audience = SIMULATION_AUDIENCE, m
 
 // The map and the campaign indexed for answering questions (lookupTools.js
 // buildLookupContext), built on first use. The lookup functions answer from it
-// when the model asks; placesNamedIn answers from it before anyone has to — which
+// when the model asks; placesListed answers from it before anyone has to — which
 // is the only way it is used while requests are being saved. `renderedRegions`
 // reads the rendered regions a caller's pass has already read
 // (createRenderedRegionsReader). `mapSource`: a map that is not the active
@@ -1874,11 +1874,17 @@ function lazyLookupContext(bundle, { audience = SIMULATION_AUDIENCE, renderedReg
   };
 }
 
-// The places a text names, with who controls each — for the territory director,
-// which writes that controller into fromCode (nativeTerritoryDirector.js).
+// The places the events list, with who controls each — for the territory
+// director, which writes that controller into fromCode (nativeTerritoryDirector.js
+// territoryCandidatePlaces). An event's own places are read as their kind says
+// (eventPlaces.js), and one with no kind is not looked up; an operation's region
+// name is a region unless it says otherwise ("city: Warsaw").
 const placeReaderFor = (bundle) => {
   const context = lazyLookupContext(bundle);
-  return async (text) => placesNamedIn(await context(), text);
+  return async ({ places = [], regions = [] } = {}) => placesListed(await context(), [
+    ...normalizeArray(places).map(readEventPlace).filter(Boolean),
+    ...normalizeArray(regions).map((written) => readEventPlace(written) ?? { kind: "region", name: normalizeString(written), country: "" }),
+  ]);
 };
 
 const STAT_INDEX_CONTEXT_TASKS = new Set(["jumpForward", "autoJumpForward", "gameMaster", "countryStatSheet"]);

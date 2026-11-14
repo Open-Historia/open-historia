@@ -84,7 +84,6 @@ const gazetteerOf = (regions, { capitals = {} } = {}) => {
         seas: [],
         holdsLand: (name) => ownedBy(name).length > 0,
         capitalOf: (name) => capitals[fold(name)] ?? null,
-        placesNamedIn: () => [],
         samePolity: (a, b) => Boolean(fold(a)) && fold(a) === fold(b),
         // No list of the world's towns here: nothing is asked of one, and none arrives.
         worldCities: () => [],
