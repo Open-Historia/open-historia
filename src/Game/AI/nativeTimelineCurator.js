@@ -1114,6 +1114,8 @@ export const curateGeneratedEventsWithHidden = async ({
   const dropped = evaluations
     .filter((entry) => entry.wouldAction === "DROP")
     .map((entry) => ({
+      // By its id: the turn files its card by it (gameplay.js filedEventsFromRows).
+      id: normalizeString(entry.event?.id),
       title: normalizeString(entry.event?.title),
       route: entry.route,
       reason: entry.enforcementReason,

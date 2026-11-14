@@ -855,30 +855,25 @@ const markStreamedEvents = (show, { priorEvents }) => {
 // The cards for a screen's or curator's removals. A row names its route; a
 // Hidden row carries the whole event, and a withheld one only its id and title,
 // so it is found again in the events the pass was given.
+// Each removed event is found by its id, which every row carries (the screen's
+// and the curator's alike). Never by its headline: two events with one title
+// were filed as one, the first's card twice.
 const filedEventsFromRows = (droppedRows, hiddenRows, sourceEvents) => {
   const hiddenById = new Map();
-  const hiddenByTitle = new Map();
   for (const row of normalizeArray(hiddenRows)) {
     const id = normalizeString(row?.event?.id);
-    const title = normalizeString(row?.event?.title).toLowerCase();
     if (id) hiddenById.set(id, row.event);
-    if (title) hiddenByTitle.set(title, row.event);
   }
   const sourceById = new Map();
-  const sourceByTitle = new Map();
   for (const event of normalizeArray(sourceEvents)) {
     const id = normalizeString(event?.id);
-    const title = normalizeString(event?.title).toLowerCase();
     if (id && !sourceById.has(id)) sourceById.set(id, event);
-    if (title && !sourceByTitle.has(title)) sourceByTitle.set(title, event);
   }
   return normalizeArray(droppedRows)
     .map((row) => {
       const id = normalizeString(row?.id);
-      const title = normalizeString(row?.title).toLowerCase();
       const event = row?.event
         || (id && (hiddenById.get(id) || sourceById.get(id)))
-        || (title && (hiddenByTitle.get(title) || sourceByTitle.get(title)))
         || null;
       return toFiledEvent(row, event);
     })
