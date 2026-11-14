@@ -210,11 +210,17 @@ const generatorNow = generatorReaders(statementOf(GENERATOR, "slug"));
 const generatorThen = generatorReaders(SLUG_AS_IT_WAS);
 
 test("the generator's id is the one it made for ASCII, and the catalog's for every name", () => {
-    // Any name the old slug made an id from keeps that id, which is the rule
-    // stableAsciiId keeps for the catalog: "Договор 1997 года" is still "1997".
-    for (const text of [...ASCII, ...fuzz, "Traité de Paris", "Śląsk Agreement", "Договор 1997 года"]) {
+    // A Latin name keeps the id the old slug made of it, which is the rule
+    // stableAsciiId keeps for the catalog (server/nameId.js).
+    for (const text of [...ASCII, ...fuzz, "Traité de Paris", "Śląsk Agreement"]) {
         assert.equal(generatorNow.slug(text), generatorThen.slug(text), JSON.stringify(text));
     }
+    // A name that mixes scripts was cut down to its ASCII: "Договор 1997 года"
+    // was "1997", and so was every other treaty of that year. It has its own
+    // id now, the one the catalog gives it.
+    assert.equal(generatorThen.slug("Договор 1997 года"), "1997", "the test is not showing the fault");
+    assert.notEqual(generatorNow.slug("Договор 1997 года"), generatorNow.slug("Соглашение 1997 года"));
+    assert.equal(generatorNow.slug("Договор 1997 года"), canonicalInstitutionIdentity({ name: "Договор 1997 года" }).id);
     for (const [script, [first, second]] of Object.entries(TITLES)) {
         assert.equal(generatorThen.slug(first), "", `${script}: the old slug made an id; the test is not showing the fault`);
         assert.match(generatorNow.slug(first), /^u-[a-z0-9]+$/, script);
