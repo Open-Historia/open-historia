@@ -82,7 +82,7 @@ test("a game in another language reads the same figures as its English twin, the
   // asks for them as shown, never translated.
   assert.deepEqual(readWarFigures("Россия | население 146000000 | качество 60"), []);
   const block = buildWarFiguresBlock({ wanted: ["Россия"] });
-  assert.match(block, /write each exactly as shown, never translated, and each figure in plain digits/);
+  assert.match(block, /Write the labels exactly as shown, never translated, and the figures in plain digits/);
   assert.match(block, /NONE YET \(at war, and the game has no figures of them\): Россия$/m);
 });
 
