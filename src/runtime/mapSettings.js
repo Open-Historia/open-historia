@@ -79,6 +79,10 @@ export const MAP_SETTING_KEYS = {
     // (AI/streamedEvents.js). ON by default; off leaves the skip behind the
     // Timeline panel's spinner.
     liveSkipEvents: "ai_live_skip_events",
+    // How many times a request is tried before the game gives up on it
+    // (AI/requestAttempts.js): a number as text, read with getMapSettingValue.
+    // Empty or absent is the default, 3. Settings → AI.
+    requestAttempts: "ai_request_attempts",
     // Countries writing to the player between time skips (AI/gameplay.js
     // maybeSendIdleDiplomacy). ON by default — read with
     // getMapSettingDefaultOn. Off, none is scheduled or sent. The scenario's
@@ -242,6 +246,7 @@ const VALUE_SETTING_LABELS = {
     [MAP_SETTING_KEYS.defaultBasemap]: "Default basemap",
     [MAP_SETTING_KEYS.labelFont]: "Label font",
     [MAP_SETTING_KEYS.musicVolume]: "Music volume",
+    [MAP_SETTING_KEYS.requestAttempts]: "Attempts per request",
     [MAP_SETTING_KEYS.scenarioTerrain]: "Scenario terrain",
 };
 

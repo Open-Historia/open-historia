@@ -38,7 +38,7 @@ export const STILL_WORKING_AFTER_MS = 60000;
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const count = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Math.round(Number(value)) : 0);
 
-// { open({ label }) → { sent(), received({ reasoningChars, answerChars }), close() },
+// { open({ label, attempts }) → { sent(), received({ reasoningChars, answerChars }), close() },
 //   current() → snapshot or null, subscribe(listener) → unsubscribe }
 //
 // Listeners hear a request open, go out, change what it is doing, and close —
@@ -59,6 +59,10 @@ export const createRequestActivity = ({ now = () => Date.now() } = {}) => {
         return {
             label: request.label,
             state: request.state,
+            // Which try of the request this is, of how many it may make
+            // (requestAttempts.js); 0 attempts when the caller named no count.
+            attempt: Math.max(1, request.sends),
+            attempts: request.attempts,
             openMs,
             chunks: request.chunks,
             reasoningChars: request.reasoningChars,
@@ -70,10 +74,14 @@ export const createRequestActivity = ({ now = () => Date.now() } = {}) => {
     return {
         // A request is about to be made. The handle is how the request path
         // reports on it; every method is safe to call after close().
-        open({ label = "" } = {}) {
+        open({ label = "", attempts = 0 } = {}) {
             const request = {
                 id: (lastId += 1),
                 label: clean(label),
+                attempts: count(attempts),
+                // How often the request went out: sent() is said for the first
+                // try and for every one after it.
+                sends: 0,
                 sentAt: now(),
                 receivedAt: null,
                 state: REQUEST_WAITING,
@@ -90,6 +98,7 @@ export const createRequestActivity = ({ now = () => Date.now() } = {}) => {
                 // first try received is not what this one has.
                 sent() {
                     if (!open.has(request.id)) return;
+                    request.sends += 1;
                     request.sentAt = now();
                     request.receivedAt = null;
                     request.state = REQUEST_WAITING;

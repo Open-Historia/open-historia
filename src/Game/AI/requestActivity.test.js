@@ -45,6 +45,8 @@ test("a request waits, thinks, then writes, by what its chunks carry", () => {
   assert.deepEqual(activity.current(), {
     label: 'task "jumpForward" → the model',
     state: REQUEST_WAITING,
+    attempt: 1,
+    attempts: 0,
     openMs: 4000,
     chunks: 0,
     reasoningChars: 0,

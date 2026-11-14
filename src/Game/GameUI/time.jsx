@@ -1287,6 +1287,14 @@ const SkipProgressRow = ({ label, onCancel, startedAt = 0 }) => {
         {activity && (
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.72rem", lineHeight: 1.45, textAlign: "center" }}>
             <span>{activity}</span>
+            {/* A request the provider did not answer is asked again
+                (AI/requestAttempts.js): say so, or the clock just runs on. */}
+            {progress.request.attempt > 1 && progress.request.attempts >= progress.request.attempt && (
+                <> <span>Attempt {progress.request.attempt} of {progress.request.attempts}.</span></>
+            )}
+            {progress.request.attempt > 1 && progress.request.attempts < progress.request.attempt && (
+                <> <span>Attempt {progress.request.attempt}.</span></>
+            )}
             {progress.request.stillWorking && <> <span>{REQUEST_STILL_OPEN_TEXT}</span></>}
             {progress.request.state === REQUEST_AGENT && (
                 <div style={{ marginTop: "0.35rem" }}>
