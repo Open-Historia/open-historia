@@ -16,6 +16,7 @@
 // gameplay.js hands in the resolved settings.
 
 import { gameDateDayNumber } from "../../runtime/gameDates.js";
+import { firstSentence, withoutFinalTerminal } from "../../../server/sentences.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
@@ -107,9 +108,11 @@ const readScriptedLine = (rawLine) => {
     if (!match || dateKey(match[1]) === null) return { problem: "no-date" };
     const body = asText(match[2]);
     if (!body) return { problem: "no-text" };
-    // The title is the first sentence, or the whole beat when it is one.
-    const sentence = /^(.{12,140}?[.!?])\s/.exec(`${body} `);
-    return { beat: { date: match[1], title: (sentence ? sentence[1] : body).slice(0, 140).replace(/[.!?]$/, ""), text: body, textMode: "generated" } };
+    // The title is the first sentence of 13 to 141 characters (so "U.S." or
+    // "Dr." alone is none), or the whole beat when it is one: a sentence in any
+    // script, the author's language being any (server/sentences.js).
+    const sentence = firstSentence(body, { min: 13 });
+    return { beat: { date: match[1], title: withoutFinalTerminal((sentence && sentence.length <= 141 ? sentence : body).slice(0, 140)), text: body, textMode: "generated" } };
 };
 
 export const parseScriptedEvents = (text) => {

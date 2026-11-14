@@ -429,6 +429,7 @@ import {
 import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "../../runtime/politicalBackground.js";
 import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
 import { MARKER_OPS, markerOpKind } from "../../runtime/markerOps.js";
+import { firstSentence, withoutFinalTerminal } from "../../../server/sentences.js";
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
 import { validateQueuedActionIds } from "./actionOutcomeAssociations.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
@@ -5897,7 +5898,8 @@ const fallbackActionSuggestions = async (bundle) => {
 // not list.
 const fallbackDescriptionToAction = async (rawInput) => {
   const trimmed = normalizeString(rawInput);
-  const title = sentenceCase(trimmed.split(/[.!?]/)[0] || trimmed);
+  // Its first sentence, in the player's script (server/sentences.js).
+  const title = sentenceCase(withoutFinalTerminal(firstSentence(trimmed)) || trimmed);
   const expandedText = fallbackTurnText("actionOrderExpanded", { order: trimmed });
 
   return {
@@ -18593,9 +18595,11 @@ const linkGameMasterLedgerRows = (candidate) => {
   }
 };
 
-// The first sentence of a description, for an event the model left untitled.
+// The first sentence of a description, for an event the model left untitled:
+// in any script (server/sentences.js), a Chinese one whose full stop has no
+// space after it included.
 const gameMasterTitleFrom = (description) => {
-  const sentence = normalizeString(description).split(/(?<=[.!?。！？])\s/u)[0] || "";
+  const sentence = firstSentence(description) || normalizeString(description);
   return sentence.length > 90 ? `${sentence.slice(0, 87).trimEnd()}…` : sentence;
 };
 

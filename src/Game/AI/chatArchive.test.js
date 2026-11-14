@@ -197,6 +197,25 @@ test("a message longer than a chunk is cut at its sentences", () => {
   }
 });
 
+// A Chinese talk is cut at its sentences as its English twin is: its full stop has no space after it, and it was cut
+// only at the chunk's length, mid-sentence. Nothing is put between its sentences that the language does not have.
+test("a long message in any script is cut at its sentences, its text kept as written", () => {
+  const twins = [
+    ["The ambassador spoke at length of the old friendship between our peoples and the debts still owed.", " ", /owed\.$/],
+    ["大使详细谈到了我们两国人民之间的传统友谊，以及至今仍未偿还的债务，并且再三强调了双方在多瑙河航运问题上的长期共同利益和彼此之间应当承担的种种责任与义务。", "", /义务。$/],
+  ];
+  for (const [sentence, between, end] of twins) {
+    const text = Array.from({ length: 40 }, () => sentence).join(between);
+    const chunks = chatChunks({ id: "x", countries: [{ name: "Austria" }], messages: [{ role: "leader", speaker: "Austria", text, time: "1936-01-01" }] });
+    assert.ok(chunks.length >= 2, sentence.slice(0, 10));
+    for (const chunk of chunks) {
+      assert.ok(chunk.text.length <= CHAT_CHUNK_CHARS);
+      assert.match(chunk.text, end, "ends at a sentence");
+    }
+    if (!between) assert.ok(!chunks.some((chunk) => /。 /.test(chunk.text)), "no space put after a Chinese full stop");
+  }
+});
+
 test("each chunk is keyed chatId:chunk with the hash of what is embedded, who it was with leading", () => {
   const rows = archivedChunkRows([longThread("chat:7", "Austria", 12)], { player: "Italy" });
   assert.equal(rows[0].key, "chat:7:0");

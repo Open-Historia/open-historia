@@ -20,6 +20,7 @@
 
 import { normalizeMilitaryStats } from "./militaryStats.js";
 import { populationFigureOf } from "./populationFigure.js";
+import { firstSentence } from "../../server/sentences.js";
 
 export const GROUP_NAME_MAX = 80;
 export const GROUP_DESCRIPTION_MAX = 1200;
@@ -270,10 +271,11 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
 // area, which an op on it needs, and its description is cut to its first
 // sentence; the groups in view come first.
 export const GROUP_BRIEF_DESCRIPTION = 160;
+// Its first sentence of 21 characters or more, in any script (server/sentences.js).
 export const briefDescription = (text, max = GROUP_BRIEF_DESCRIPTION) => {
   const flat = String(text ?? "").replace(/\s+/g, " ").trim();
   if (flat.length <= max) return flat;
-  const sentence = /^(.{20,}?[.!?])\s/.exec(flat)?.[1] ?? "";
+  const sentence = firstSentence(flat, { min: 21 });
   if (sentence && sentence.length <= max) return sentence;
   return `${flat.slice(0, max - 1).replace(/\s+\S*$/, "")}…`;
 };

@@ -32,6 +32,7 @@
 
 import { addGameMonths, compareGameDates, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
 import { contentHash } from "../../runtime/embeddingModels.js";
+import { sentenceSlices } from "../../../server/sentences.js";
 
 export const ARCHIVE_MIN_SKIPS = 4;
 export const ARCHIVE_MIN_MONTHS = 12;
@@ -203,35 +204,39 @@ const latestMemory = (chat) => {
   return null;
 };
 
-const SENTENCE_END = /(?<=[.!?…])\s+(?=\S)/u;
-
 // A text longer than `max`, in pieces at its sentences, and a sentence longer
-// than that at its words.
+// than that at its words. A sentence ends as it does in any script
+// (server/sentences.js): a Chinese or Japanese talk, whose full stop has no
+// space after it, was cut only at `max`. The pieces keep the text as written
+// between its sentences, so no space is put where the language has none.
 const splitLong = (text, max) => {
   if (text.length <= max) return [text];
   const pieces = [];
   let current = "";
-  const push = (piece) => {
-    if (piece.length <= max) {
-      if (current && current.length + 1 + piece.length > max) {
-        pieces.push(current);
-        current = piece;
-      } else current = current ? `${current} ${piece}` : piece;
-      return;
-    }
-    if (current) pieces.push(current);
+  const flush = () => {
+    const piece = current.trim();
+    if (piece) pieces.push(piece);
     current = "";
-    let rest = piece;
+  };
+  for (const slice of sentenceSlices(text)) {
+    const sentence = slice.trim();
+    if (!sentence) continue;
+    if (sentence.length <= max) {
+      if (current.trim() && `${current}${slice}`.trim().length > max) flush();
+      current += slice;
+      continue;
+    }
+    flush();
+    let rest = sentence;
     while (rest.length > max) {
       const at = rest.lastIndexOf(" ", max);
       const end = at > max / 2 ? at : max;
       pieces.push(rest.slice(0, end).trim());
       rest = rest.slice(end).trim();
     }
-    current = rest;
-  };
-  for (const sentence of text.split(SENTENCE_END)) push(sentence.trim());
-  if (current) pieces.push(current);
+    current = `${rest}${slice.slice(slice.trimEnd().length)}`;
+  }
+  flush();
   return pieces;
 };
 
@@ -477,14 +482,14 @@ export const BINDING_HEADER = "STANDING WORD FROM OLDER TALKS (the memory each c
 export const standingWord = (chat, { maxChars = BINDING_LINE_CHARS } = {}) => {
   const memory = latestMemory(chat);
   if (!memory) return "";
-  const kept = [];
-  let length = 0;
-  for (const sentence of memory.summary.split(SENTENCE_END).map((part) => part.trim()).filter(Boolean)) {
-    if (length && length + 1 + sentence.length > maxChars) break;
-    kept.push(cut(sentence, maxChars));
-    length += sentence.length + 1;
+  // Whole sentences from the first, as written (server/sentences.js), while
+  // they fit; the first is cut to fit when it is longer than that alone.
+  let said = "";
+  for (const slice of sentenceSlices(memory.summary)) {
+    if (said.trim() && `${said}${slice}`.trim().length > maxChars) break;
+    said += slice;
   }
-  return kept.join(" ");
+  return cut(said.trim(), maxChars);
 };
 
 export const renderBindingWord = (archived, { player = "", skip = new Set(), maxChars = BINDING_MAX_CHARS } = {}) => {

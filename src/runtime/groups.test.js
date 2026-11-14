@@ -13,6 +13,7 @@ import {
   GROUP_PALETTE,
   MAX_GROUPS,
   applyGroupOps,
+  briefDescription,
   defaultGroupColor,
   describeGroupsForPrompt,
   findGroupKey,
@@ -142,6 +143,16 @@ test("the model is taken at its word where the intent is plain, and nowhere else
   assert.equal(findGroupKey(full.groups, "Latecomers"), "", "a take that would found a group past the cap founds nothing");
   assert.deepEqual(full.groupAreas, {});
   assert.deepEqual(full.changes, [{ op: "refused", name: "Latecomers", reason: "limit" }]);
+});
+
+// A group out of view keeps its description's first sentence: a Chinese one, whose full stop has no space after it,
+// was never cut there and lost its sentence to the word-cut instead.
+test("a group's brief description is its first sentence in any script", () => {
+  const english = `A militia of former soldiers that runs the checkpoints of the eastern hills. ${"It taxes the trucks that pass. ".repeat(6)}`;
+  const chinese = `一支由退伍军人组成的民兵组织，控制着东部山区的检查站。${"它向过往的卡车征税。".repeat(20)}`;
+  assert.equal(briefDescription(english), "A militia of former soldiers that runs the checkpoints of the eastern hills.");
+  assert.equal(briefDescription(chinese), "一支由退伍军人组成的民兵组织，控制着东部山区的检查站。");
+  assert.equal(briefDescription("Short."), "Short.", "a description that fits is kept whole");
 });
 
 test("the prompt names each group exactly, says what it is, and where it controls", () => {

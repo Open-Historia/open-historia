@@ -18,6 +18,7 @@ import { fetchHubFile, fetchHubIndex, imageTypeOfBytes, releaseCopyOf } from "./
 import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 import { saveBlobToDisk } from "./saveFile.js";
 import { fileSafeName } from "../../server/nameKey.js";
+import { endsSentence } from "../../server/sentences.js";
 
 // UTF-8-safe base64 <-> string (the scenario bundle base64-encodes the
 // background.json file bytes; plain atob/btoa mangle non-Latin1 vector data).
@@ -523,7 +524,8 @@ export const fetchReferencedBasemap = async (asset) => {
 // sentence translates it.
 export const basemapFailureReason = (error) => {
   const reason = String(error?.message || "").trim() || "The download failed.";
-  return /[.!?]$/.test(reason) ? reason : `${reason}.`;
+  // Ended by a terminal of any script, a message in another language included (server/sentences.js).
+  return endsSentence(reason) ? reason : `${reason}.`;
 };
 
 // Why a bundle's community basemap is still only a reference after

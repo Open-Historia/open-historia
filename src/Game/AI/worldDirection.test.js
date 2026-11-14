@@ -159,6 +159,21 @@ test("a beat is a dated line in the author's words; the rest of the text is igno
     assert.deepEqual(parseScriptedEvents(null), []);
 });
 
+// A beat's title is its first sentence in the author's script: a Chinese or Japanese beat, whose full stop has no
+// space after it, was titled with the whole beat.
+test("a beat's title is its first sentence in any script, as its English twin's is", () => {
+    const [english, chinese, japanese, abbreviated] = parseScriptedEvents([
+        "1939-09-01 Germany invades Poland and the war in Europe begins. Britain and France declare war two days later.",
+        "1939-09-02 德国入侵波兰，欧洲战争由此爆发。两天后英国和法国对德宣战。",
+        "1939-09-03 ドイツがポーランドに侵攻し、欧州で戦争が始まった。二日後、英仏が宣戦布告した。",
+        "1939-09-04 U.S. troops stay home as Europe goes to war. Congress debates neutrality.",
+    ].join("\n"));
+    assert.equal(english.title, "Germany invades Poland and the war in Europe begins");
+    assert.equal(chinese.title, "德国入侵波兰，欧洲战争由此爆发");
+    assert.equal(japanese.title, "ドイツがポーランドに侵攻し、欧州で戦争が始まった");
+    assert.equal(abbreviated.title, "U.S. troops stay home as Europe goes to war", "an abbreviation ends no sentence");
+});
+
 test("dates sort as numbers, years before AD 1 included", () => {
     assert.ok(dateKey("-0218-08-02") < dateKey("0001-01-01"));
     assert.ok(dateKey("1914-07-28") < dateKey("1914-08-01"));

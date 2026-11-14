@@ -160,6 +160,27 @@ test("a side tagged country: or group: is that name; any other word before a col
   assert.equal(await ownerOf("pays: Aland"), "pays: Aland", "nor its French twin");
 });
 
+// ---------------------------------------------------------------------------
+// Where a sentence ends: one rule, Unicode's, in every place that splits one
+
+test("no sentence is split on a list of characters; each place reads server/sentences.js", () => {
+  const read = (relative) => readFileSync(new URL(relative, import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const sites = {
+    "./gameplay.js": /sentenceCase\(withoutFinalTerminal\(firstSentence\(trimmed\)\) \|\| trimmed\)[\s\S]*const sentence = firstSentence\(description\) \|\| normalizeString\(description\);/,
+    "./worldDirection.js": /firstSentence\(body, \{ min: 13 \}\)/,
+    "./chatActions.js": /firstSentence\(rest\) \|\| rest/,
+    "./chatArchive.js": /sentenceSlices\(text\)[\s\S]*sentenceSlices\(memory\.summary\)/,
+    "./placeFeedContext.js": /!endsSentence\(text\)/,
+    "../../runtime/groups.js": /firstSentence\(flat, \{ min: 21 \}\)/,
+    "../../runtime/communityBasemaps.js": /endsSentence\(reason\)/,
+  };
+  for (const [file, uses] of Object.entries(sites)) {
+    const source = read(file);
+    assert.match(source, uses, file);
+    assert.doesNotMatch(source.replace(/\/\/[^\n]*/g, ""), /\[\.!\?|\[!\?\.|\(\?<=\[\.!\?/, `${file} splits on a list of characters`);
+  }
+});
+
 test("the task runner leaves out a structure op that is none of the five, says so, and asks nothing more for it", () => {
   const block = gameplay.slice(gameplay.indexOf("const markerOpsLeftOut = [];"), gameplay.indexOf("// 8B.2.18: the Stats tool"));
   assert.ok(block.length > 200, "the block is where it was");
