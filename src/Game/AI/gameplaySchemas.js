@@ -2639,7 +2639,8 @@ export const GAME_MASTER_SCHEMA = {
 // test (2026-10-28) had the GM start a war with a unit's posture "offensive",
 // which no posture is, and the preview was refused for it: the one enum a GM
 // event most often gets wrong is named on the field itself.
-const GM_EVENTS_POSTURE_NOTE = `A unit's posture (impacts.unitOps) is one of: ${unitSchema.properties.posture.enum.join(", ")}.`;
+// (And an air unit's airRole, kw5-units: what it flies, which the transport would not otherwise say.)
+const GM_EVENTS_POSTURE_NOTE = `A unit's posture (impacts.unitOps) is one of: ${unitSchema.properties.posture.enum.join(", ")}. An air unit's airRole is one of: ${AIR_ROLES.join(", ")}.`;
 export const GAME_MASTER_TRANSPORT_SCHEMA = {
   type: "object",
   description: "Compact provider transport for a previewable native GM transaction.",
