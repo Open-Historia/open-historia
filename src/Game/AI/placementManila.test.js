@@ -44,6 +44,7 @@ import { seaShareOf } from "../../runtime/unitMotion.js";
 import { findUnitByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { findEventPlaces } from "./eventPlaces.js";
 import { findUnitType, normalizeUnitTypes } from "../../runtime/unitTypes.js";
+import { markerOpKind } from "../../runtime/markerOps.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
@@ -119,12 +120,14 @@ const placementPass = (gazetteer) => new Function(
     "resolvePlacement", "resolveRegionPlacement", "describeApproximatePlacement", "nearestSea", "homeWaters", "placementHash",
     "noteReceipt", "placementNote", "noteUndeployedPosts", "logDebugEvent", "findUnitByRef", "readNameRef", "seaShareOf",
     "regionWithinContainer", "describeOtherKind", "stripKindTags", "normalizeUnitTypes", "findUnitType", "findEventPlaces",
+    "markerOpKind",
     `${source.slice(start, end)}\nreturn resolvePlacements;`,
 )(
     asArray, asText, () => async () => ({}), () => gazetteer, obstaclesOf, spaceOut, FOOTPRINT_KM,
     resolvePlacement, resolveRegionPlacement, describeApproximatePlacement, nearestSea, homeWaters, hashText,
     noteReceipt, placementNote, () => {}, () => {}, findUnitByRef, readNameRef, seaShareOf,
     regionWithinContainer, describeOtherKind, stripKindTags, normalizeUnitTypes, findUnitType, findEventPlaces,
+    markerOpKind,
 );
 
 const EVENT = { title: "The Philippines Responds", description: "Forces deploy after the attack of January 1." };

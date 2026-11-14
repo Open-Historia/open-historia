@@ -23,6 +23,7 @@ import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
 import { CANON_KINDS } from "../../runtime/historyTiers.js";
 import { SOCIAL_POST_REACH } from "../../runtime/socialFeed.js";
 import { SAID_MARKER_FAMILIES } from "../../runtime/markerFamily.js";
+import { markerOpKind } from "../../runtime/markerOps.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -2808,8 +2809,8 @@ const parseGameMasterTransportArray = (value, field) => {
 
 // The transport shows the GM no schema for a chat, so its countries arrive as
 // names or as {name} objects; the schema it is validated against takes names.
-// Nor for a unit's posture: a posture said in other words ("offensive") reads
-// as the one it means, as on a time skip (normalizeUnitOperationShape).
+// A unit's posture is one of the schema's own, as its events field says; any
+// other word is left out, as on a time skip (normalizeUnitOperationShape).
 const normalizeGameMasterChats = (payload) => {
   if (!isPlainRecord(payload)) return payload;
   const next = { ...payload };
@@ -4858,14 +4859,16 @@ const coordinateNumber = (value) => {
   return Number.isFinite(parsed) ? parsed : value;
 };
 
+// A structure's op is one of the five (runtime/markerOps.js), as the schema
+// writes them; an entry with no op word at all but a structure under `marker`
+// is a build by its shape. Any other word is left as written, and the task
+// runner leaves that op out before the schema sees it (gameplay.js runJsonTask):
+// "found", "destroy", "create" and "delete" were once read as build and remove,
+// in English only (the owner, 2026-11-13: no keywording anywhere).
 const normalizeMarkerOperationShape = (entry) => {
   if (!isPlainRecord(entry)) return entry;
   const rawOp = String(entry.op ?? entry.action ?? "").trim().toLowerCase();
-  const op = rawOp === "found" || rawOp === "create" || rawOp === "add"
-    ? "build"
-    : rawOp === "destroy" || rawOp === "delete"
-      ? "remove"
-      : rawOp;
+  const op = markerOpKind(rawOp) || rawOp;
 
   if (op === "build" || (!op && isPlainRecord(entry.marker))) {
     const source = isPlainRecord(entry.marker) ? entry.marker : entry;
@@ -4929,36 +4932,34 @@ const normalizeMarkerOperationShape = (entry) => {
 const UNIT_STATUSES = new Set(unitSchema.properties.status.enum);
 const UNIT_POSTURES = new Set(unitSchema.properties.posture.enum);
 
-// A posture said in other words reads as the posture it means. The GM, whose
-// events are JSON text and never see the enum, started a war with "offensive"
-// (2026-10-28) and the whole preview was refused for that one word. A word that
-// is none of these is left for the schema to name.
-const UNIT_POSTURE_SYNONYMS = new Map([
-  ...["offensive", "offense", "attack", "attacking", "assault", "advance", "advancing", "counteroffensive", "counter-offensive"].map((word) => [word, "assaulting"]),
-  ...["defensive", "defense", "defence", "defending", "defend", "hold", "holding position", "dug in", "entrenched"].map((word) => [word, "holding"]),
-  ...["mass", "massed", "staging", "concentrating", "mobilizing", "mobilising"].map((word) => [word, "massing"]),
-  ...["patrolling", "patrols", "on patrol"].map((word) => [word, "patrol"]),
-  ...["moving", "in transit", "en route", "redeploying", "deploying"].map((word) => [word, "transit"]),
-  ...["exercises", "on exercise", "drill", "drills", "training"].map((word) => [word, "exercise"]),
-  ...["blockading"].map((word) => [word, "blockade"]),
-  ...["withdraw", "withdrawal", "retreat", "retreating", "falling back"].map((word) => [word, "withdrawing"]),
-]);
-const canonicalPosture = (value) => {
-  if (typeof value !== "string") return value;
-  const word = value.trim().toLowerCase();
-  if (UNIT_POSTURES.has(word)) return word;
-  return UNIT_POSTURE_SYNONYMS.get(word) ?? value;
+// A posture is one of the eight the schema lists, as the schema spells them
+// (case and spaces aside); the Game Master, whose events are JSON text, has
+// them named on its events field (GM_EVENTS_POSTURE_NOTE). Any other word is no
+// posture and is left out: the field is optional, a move that gives none keeps
+// the unit's own, and one word the engine cannot read must neither fail the
+// whole answer nor cost a second request. Other words were once read as the
+// posture they seemed to mean ("offensive" as assaulting, "dug in" as holding),
+// in English only, while the same words in any other language failed the turn
+// (the owner, 2026-11-13: no keywording anywhere).
+const unitPosture = (value) => {
+  const word = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return UNIT_POSTURES.has(word) ? word : "";
+};
+const withReadablePosture = (record) => {
+  if (record.posture === undefined) return record;
+  const posture = unitPosture(record.posture);
+  if (posture && posture === record.posture) return record;
+  const { posture: _unread, ...rest } = record;
+  return posture ? { ...rest, posture } : rest;
 };
 
 const normalizeUnitOperationShape = (entry) => {
   if (!isPlainRecord(entry)) return entry;
-  let next = entry;
   // A move carries its posture beside the unit's name; a spawn inside the unit.
-  if (next.posture !== undefined && canonicalPosture(next.posture) !== next.posture) next = { ...next, posture: canonicalPosture(next.posture) };
+  let next = withReadablePosture(entry);
   if (!isPlainRecord(next.unit)) return next;
-  if (next.unit.posture !== undefined && canonicalPosture(next.unit.posture) !== next.unit.posture) {
-    next = { ...next, unit: { ...next.unit, posture: canonicalPosture(next.unit.posture) } };
-  }
+  const unitWithPosture = withReadablePosture(next.unit);
+  if (unitWithPosture !== next.unit) next = { ...next, unit: unitWithPosture };
   if (next.unit.status === undefined) return next;
   const status = String(next.unit.status ?? "").trim().toLowerCase();
   if (UNIT_STATUSES.has(status)) return { ...next, unit: { ...next.unit, status } };

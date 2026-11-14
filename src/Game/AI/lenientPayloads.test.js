@@ -103,6 +103,26 @@ test("an unknown status that is not a posture either is dropped, not guessed at"
   assert.equal("posture" in unitOf(normalized), false);
 });
 
+// A posture is one of the schema's eight. Any other word is left out, in English as in French: once "offensive" read
+// as assaulting and "offensif" failed the month; now both are no posture, and neither fails the answer.
+test("a posture outside the schema's eight is left out, in any language, and the month stands", () => {
+  const move = (posture) => ({ op: "move", unitId: "Адмирал Кузнецов", at: "city: Sevastopol, country: Ukraine", posture });
+  const read = (posture) => {
+    const normalized = normalizeGameplayPayload("jumpForward", jumpWith([spawnedCarrier({ posture }), move(posture)]));
+    assert.equal(validateGameplayPayload("jumpForward", normalized).valid, true, posture);
+    return normalized.events[0].impacts.unitOps;
+  };
+  for (const posture of ["offensive", "offensif", "dug in", "retranché", "", "Assaulting!"]) {
+    const [spawned, moved] = read(posture);
+    assert.equal("posture" in spawned.unit, false, posture);
+    assert.equal("posture" in moved, false, posture);
+  }
+  assert.deepEqual(read("offensive"), read("offensif"));
+  const [spawned, moved] = read(" Blockade ");
+  assert.equal(spawned.unit.posture, "blockade", "the schema's own word, case and spaces aside");
+  assert.equal(moved.posture, "blockade");
+});
+
 test("a real status survives, only its case is tidied", () => {
   const normalized = normalizeGameplayPayload("jumpForward", jumpWith([spawnedCarrier({ status: "Engaged" })]));
   assert.equal(unitOf(normalized).status, "engaged");

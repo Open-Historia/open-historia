@@ -53,6 +53,7 @@ import {
   removePolityFromInstitutions,
 } from "./institutions.js";
 import { normalizePowerStatus } from "./powerStatus.js";
+import { markerOpKind } from "./markerOps.js";
 import { normalizeInstitutionLifecycleImpactOp } from "./institutionLifecycleCore.js";
 import {
   buildPoliticalActorLegacyStatsProjection,
@@ -1724,23 +1725,25 @@ const normalizeMarkerPatch = (entry) => {
   return Object.keys(patch).length > 0 ? patch : null;
 };
 
-// One AI-authored mutation to persistent physical world features. Destruction is
-// lifecycle state, not deletion: legacy `destroy` becomes update/destroyed.
-// `remove` is reserved for true canonical cleanup or an administrative deletion.
+// One AI-authored mutation to persistent physical world features: one of the
+// five operations of runtime/markerOps.js, as the schema writes them; any other
+// word is no op and the entry is left out. Destruction is lifecycle state, not
+// deletion: an update to status "destroyed". `remove` is reserved for true
+// canonical cleanup or an administrative deletion.
 const normalizeMarkerOp = (entry) => {
   if (!entry || typeof entry !== "object") {
     return null;
   }
 
-  const op = normalizeOptionalString(entry.op).toLowerCase();
+  const op = markerOpKind(entry.op);
 
-  if (op === "build" || op === "found") {
+  if (op === "build") {
     const marker = normalizeMarkerEntry(entry.marker ?? entry, 0);
     if (!marker) return null;
     return { op: "build", marker };
   }
 
-  if (op === "update" || op === "modify" || op === "destroy") {
+  if (op === "update") {
     const markerId = normalizeOptionalString(entry.markerId || entry.id);
     const name = normalizeOptionalString(entry.name);
     if (!markerId && !name) return null;
@@ -1750,9 +1753,7 @@ const normalizeMarkerOp = (entry) => {
     const patchSource = entry.changes && typeof entry.changes === "object" && !Array.isArray(entry.changes)
       ? entry.changes
       : entry;
-    const changes = op === "destroy"
-      ? { ...(normalizeMarkerPatch(patchSource) || {}), status: "destroyed" }
-      : normalizeMarkerPatch(patchSource);
+    const changes = normalizeMarkerPatch(patchSource);
     if (!changes) return null;
     return { op: "update", markerId, name, changes };
   }

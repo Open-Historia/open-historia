@@ -426,6 +426,7 @@ import {
 } from "../../runtime/gameState.js";
 import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "../../runtime/politicalBackground.js";
 import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
+import { MARKER_OPS, markerOpKind } from "../../runtime/markerOps.js";
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
 import { validateQueuedActionIds } from "./actionOutcomeAssociations.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
@@ -2357,8 +2358,7 @@ const canonicalizeNamedThings = (containers, world) => {
     }
     for (const op of normalizeArray(impacts.markerOps)) {
       if (!op || typeof op !== "object") continue;
-      const kind = normalizeString(op.op).toLowerCase();
-      if (kind === "build" || kind === "found") continue;
+      if (markerOpKind(op.op) === "build") continue;
       const writtenId = normalizeString(op.markerId);
       if (writtenId && markerIds.has(writtenId)) continue;
       const ref = readNameRef(writtenId || op.name);
@@ -2423,8 +2423,8 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
       }
     }
     for (const op of normalizeArray(impacts.markerOps)) {
-      const kind = normalizeString(op?.op).toLowerCase();
-      if (kind !== "build" && kind !== "found" && kind !== "update") continue;
+      const kind = markerOpKind(op?.op);
+      if (kind !== "build" && kind !== "update") continue;
       const marker = op.marker && typeof op.marker === "object" ? op.marker : op;
       const phrase = normalizeString(marker.at ?? op.at);
       // An update that names no new place is not a placement.
@@ -2433,7 +2433,7 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
       // `home`: whose structure it is, for an address the map cannot check
       // (placement.js addressSpot) and a town it does not carry
       // (resolveWorldTown).
-      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, source, path, owner: normalizeString(marker.ownerCode ?? op.ownerCode), home: normalizeString(marker.ownerCode ?? op.ownerCode), markerOwner: normalizeString(marker.ownerCode), build: kind === "build" || kind === "found" });
+      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, source, path, owner: normalizeString(marker.ownerCode ?? op.ownerCode), home: normalizeString(marker.ownerCode ?? op.ownerCode), markerOwner: normalizeString(marker.ownerCode), build: kind === "build" });
     }
   }
   if (!placing.length) return { placed: 0, spaced: 0 };
@@ -4365,23 +4365,52 @@ const runJsonTask = async (taskKey, {
           preserved: Object.keys(pregamePreservedTransportSections),
         }, { verbose: true });
       }
-      // Same idea for markerOps. The engine has always accepted `found`/`destroy`
-      // as aliases and a build written flat, but the schema only ever allowed the
-      // canonical spelling — and a single rejected op fails the WHOLE payload, so
-      // one flattened building cost the player the entire turn. Rewrite to the
-      // canonical shape here, before validation, so the turn survives.
-      for (const event of Array.isArray(parsed?.events) ? parsed.events : []) {
+      // Same idea for markerOps, for every task whose answer has events. A single
+      // rejected op fails the WHOLE payload, so one flattened building once cost
+      // the player the entire turn: a build written flat has the structure's own
+      // fields lifted under `marker`, and one with no op word but a `marker` is a
+      // build by its shape. The op itself is one of the five the schema and the
+      // engine share (runtime/markerOps.js), case and spaces aside. Any other word
+      // is left out here, and said in the receipt as schema salvage says what it
+      // cuts: the engine would read it as no op, and asking again for it would be
+      // a second request. "found" and "destroy" were once rewritten to build and
+      // remove (and the engine read "destroy" as a ruin instead), in English only
+      // (the owner, 2026-11-13: no keywording anywhere).
+      const markerOpsLeftOut = [];
+      for (const [eventIndex, event] of (Array.isArray(parsed?.events) ? parsed.events : []).entries()) {
         const ops = event?.impacts?.markerOps;
         if (!Array.isArray(ops)) continue;
-        event.impacts.markerOps = ops.map((op) => {
-          if (!op || typeof op !== "object") return op;
-          const kind = String(op.op ?? "").trim().toLowerCase();
-          const canonical = kind === "found" ? "build" : kind === "destroy" ? "remove" : kind;
-          if (canonical !== "build" || op.marker) return { ...op, op: canonical };
+        const kept = [];
+        for (const [opIndex, op] of ops.entries()) {
+          if (!op || typeof op !== "object") {
+            kept.push(op);
+            continue;
+          }
+          const written = normalizeString(op.op);
+          const kind = markerOpKind(written) || (!written && op.marker && typeof op.marker === "object" ? "build" : "");
+          if (!kind) {
+            const path = `$.events[${eventIndex}].impacts.markerOps[${opIndex}]`;
+            const title = normalizeString(event?.title);
+            markerOpsLeftOut.push({
+              kind: "item",
+              path,
+              error: `${path}.op must be one of ${MARKER_OPS.map((entry) => JSON.stringify(entry)).join(", ")}; ${JSON.stringify(written)} is none of them.`,
+              ...(title ? { label: `"${title}"` } : {}),
+            });
+            continue;
+          }
+          if (kind !== "build" || op.marker) {
+            kept.push({ ...op, op: kind });
+            continue;
+          }
           // Flat build: lift the structure's own fields under `marker`.
           const { op: _op, note, ...marker } = op;
-          return { op: "build", marker, ...(note == null ? {} : { note }) };
-        });
+          kept.push({ op: "build", marker, ...(note == null ? {} : { note }) });
+        }
+        event.impacts.markerOps = kept;
+      }
+      if (markerOpsLeftOut.length) {
+        logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt}: ${markerOpsLeftOut.length} structure operation(s) named no operation the engine has and were left out.`, markerOpsLeftOut, { verbose: true });
       }
       // 8B.2.18: the Stats tool now estimates only a bounded set of native
       // demographic macro buckets. Native code expands those estimates back into
@@ -4609,7 +4638,8 @@ const runJsonTask = async (taskKey, {
       // a retry remains and requests are not being saved, the model is told and
       // fixes its own answer, as it always has. The GM's transaction is left
       // alone: half a transaction is not a smaller transaction.
-      let removedThisAttempt = [];
+      // (The structure operations left out above are this attempt's first.)
+      let removedThisAttempt = [...markerOpsLeftOut];
       if (!validation.valid && parsed && lastChance && taskKey !== "gameMaster" && !transportDecodeError) {
         // On a copy: an answer that cannot be saved goes back to the model as it
         // wrote it, not half taken apart.
@@ -4626,7 +4656,7 @@ const runJsonTask = async (taskKey, {
         });
         if (salvaged.valid && salvaged.removed.length) {
           parsed = salvaged.value;
-          removedThisAttempt = salvaged.removed;
+          removedThisAttempt = [...markerOpsLeftOut, ...salvaged.removed];
           validation = { valid: true };
           logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt}: ${salvaged.removed.length} malformed part(s) left out instead of asking again.`, salvaged.removed, { verbose: true });
         }
@@ -7947,8 +7977,9 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     for (let index = 0; index < normalizeArray(impacts?.markerOps).length; index += 1) {
       const operation = impacts.markerOps[index];
       const operationPath = `${path}.markerOps[${index}]`;
-      const op = normalizeString(operation?.op).toLowerCase();
-      if (op === "build" || op === "found") {
+      // One of the five (runtime/markerOps.js); runJsonTask has left out any other word.
+      const op = markerOpKind(operation?.op);
+      if (op === "build") {
         const marker = operation.marker ?? operation;
         if (!normalizeString(marker?.name)) {
           if (strict) return `${operationPath}.marker.name must not be blank.`;
@@ -7960,7 +7991,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
           drop(path, `"${normalizeString(marker?.name)}" was not built — the build operation carried no numeric lng and lat.`, "structureNowhere", { name: normalizeString(marker?.name) });
           continue;
         }
-      } else if (op === "remove" || op === "destroy") {
+      } else if (op === "remove") {
         if (!normalizeString(operation?.name) && !normalizeString(operation?.markerId)) {
           if (strict) return `${operationPath} must carry the name of the structure to remove.`;
           drop(path, "a structure removal was dropped — it named nothing to remove.", "structureRemovalUnnamed");
@@ -18926,7 +18957,7 @@ export const previewGameMasterCommand = async (requestText, { mode = GM_AUTO_MOD
       gameMasterBaseGeographyCatalog: renderGameMasterBaseGeographyCatalog(baseGeographyCatalog),
     };
 
-    const { generation, payload } = await runJsonTask("gameMaster", {
+    const { generation, payload, removed } = await runJsonTask("gameMaster", {
       agentKind: "gameMaster",
       lookups: buildTaskLookups(bundle),
       userMessage: `Generate a ${selectedMode} GM transaction preview for the administrator request. Do not apply anything.`,
@@ -18954,6 +18985,13 @@ export const previewGameMasterCommand = async (requestText, { mode = GM_AUTO_MOD
       },
       variables,
     });
+    // What the answer carried that the engine has no operation for (a structure
+    // op that is none of the five: runJsonTask) is left out of the preview, and
+    // the administrator is told, beside its other notes.
+    for (const removal of normalizeArray(removed)) {
+      const note = schemaRemovalNote(removal)?.text;
+      if (note && !notes.includes(note)) notes.push(note);
+    }
 
     const effectiveMode = selectedMode === GM_AUTO_MODE
       ? normalizeString(payload?.mode).toLowerCase()

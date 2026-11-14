@@ -39,6 +39,7 @@ import { seaShareOf } from "../../runtime/unitMotion.js";
 import { findUnitByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { findEventPlaces } from "./eventPlaces.js";
 import { findUnitType, normalizeUnitTypes } from "../../runtime/unitTypes.js";
+import { markerOpKind } from "../../runtime/markerOps.js";
 
 const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
 const start = source.indexOf("const LAND_UNIT_TYPES = new Set(");
@@ -55,12 +56,14 @@ const placementPass = (gazetteer) => new Function(
     "resolvePlacement", "resolveRegionPlacement", "describeApproximatePlacement", "nearestSea", "homeWaters", "placementHash",
     "noteReceipt", "placementNote", "noteUndeployedPosts", "logDebugEvent", "findUnitByRef", "readNameRef", "seaShareOf",
     "regionWithinContainer", "describeOtherKind", "stripKindTags", "normalizeUnitTypes", "findUnitType", "findEventPlaces",
+    "markerOpKind",
     `${source.slice(start, end)}\nreturn resolvePlacements;`,
 )(
     asArray, asText, () => async () => ({}), () => gazetteer, obstaclesOf, spaceOut, FOOTPRINT_KM,
     resolvePlacement, resolveRegionPlacement, describeApproximatePlacement, nearestSea, homeWaters, hashText,
     noteReceipt, placementNote, () => {}, () => {}, findUnitByRef, readNameRef, seaShareOf,
     regionWithinContainer, describeOtherKind, stripKindTags, normalizeUnitTypes, findUnitType, findEventPlaces,
+    markerOpKind,
 );
 
 // What gameplay.js's gazetteer offers the pass, over a list of regions.
