@@ -30,6 +30,7 @@
 import { PROJECT_OPEN_STATUSES, normalizeMarkers } from "../../runtime/gameState.js";
 import { STRUCTURE_KINDS } from "./gameplaySchemas.js";
 import { structureKindFamily } from "../../runtime/markerFamily.js";
+import { markerOpKind } from "../../runtime/markerOps.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -63,7 +64,7 @@ const makeStructureId = () =>
   `structure-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 
 const eventBuilds = (event) => normalizeArray(event?.impacts?.markerOps)
-  .filter((op) => ["build", "found"].includes(normalizeString(op?.op).toLowerCase()));
+  .filter((op) => markerOpKind(op?.op) === "build");
 
 // Which events the director would be asked about. Its own function so the turn
 // review (gameplay.js runTurnReview) can tell beforehand whether to ask.
