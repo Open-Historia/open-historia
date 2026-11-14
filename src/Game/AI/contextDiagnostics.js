@@ -300,6 +300,8 @@ export const GAME_SECTION_HEADINGS = Object.freeze([
   "The World's Share", "Agents' Reports", "Region types", "Lookup Functions", "Player Goal", "Front Orders",
   "How Wars Are Recorded", "How Relations and Agreements Are Recorded", "Reading the Diplomatic Ledger", "Also This Period",
   "Language", "Elections Due", "Institutional Mandates", "Reports", "Peace", "Real History", "Advisor",
+  // The scenario's rules moved to the top of a prompt (promptLayout.js hoistSharedRules).
+  "Scenario Rules",
 ]);
 
 const sectionLabel = (name, template) => {

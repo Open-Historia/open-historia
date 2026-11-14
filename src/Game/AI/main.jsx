@@ -33,7 +33,7 @@ import {
 } from "./contextWindow.js";
 import { endpointIsLocal, isLocalHostname } from "./localEndpoint.js";
 import { createKoboldCppMemory, endpointOriginOf, isKoboldCppModelName, saysKoboldCpp } from "./koboldCpp.js";
-import { MIN_CACHEABLE_PREFIX_CHARS, renderTemplateCached, splitSystemPromptForCache } from "./promptLayout.js";
+import { MIN_CACHEABLE_PREFIX_CHARS, hoistSharedRules, renderTemplateCached, splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { RELAY_CUT_OFF_MESSAGE, isRelayRefusal, isRelayUnreachable, relayUnreachableReason, withRelayCutoffHint } from "./relayResponse.js";
 import { attachLookupRound, attachCallMetrics, attachRequestOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
@@ -2032,8 +2032,12 @@ const conversationPrefixEnd = (systemPrompt) => {
     return best;
 };
 // A conversation's template rendered with its cacheable opening remembered.
+// The scenario's rules lead it, as they lead every task's prompt
+// (promptLayout.js hoistSharedRules), so a conversation after a time skip
+// opens with text the provider or a local server has already read.
 const renderConversationTemplate = (template, values) => {
-    const rendered = renderTemplateCached(template, values);
+    const hoisted = hoistSharedRules(template, values);
+    const rendered = renderTemplateCached(hoisted.template, { ...values, ...hoisted.values });
     rememberConversationPrefix(rendered.text.slice(0, rendered.staticPrefixEnd));
     return rendered.text;
 };
