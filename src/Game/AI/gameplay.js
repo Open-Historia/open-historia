@@ -423,6 +423,8 @@ import {
   mutateWorldState,
   runInCanonicalWriteQueue,
   writeCanonicalTurnState,
+  PROJECT_OPS,
+  projectOpKind,
 } from "../../runtime/gameState.js";
 import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "../../runtime/politicalBackground.js";
 import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
@@ -8044,9 +8046,20 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     for (let index = 0; index < normalizeArray(impacts?.projectOps).length; index += 1) {
       const operation = impacts.projectOps[index];
       const operationPath = `${path}.projectOps[${index}]`;
-      const op = normalizeString(operation?.op).toLowerCase();
+      // Exactly the ops the board applies (gameState.js normalizeProjectOp). Any
+      // other word is no op there, so it is left out here and said, on every
+      // attempt: sending the answer back over a word would be a second request.
+      // "start", "launch", "open" and "add" once passed here as a create, in
+      // English only, and the board then dropped them without a word (the owner,
+      // 2026-11-13: no keywording anywhere).
+      const op = projectOpKind(operation);
+      if (!op) {
+        const written = normalizeString(operation?.op || operation?.action);
+        drop(path, `the project operation "${written}" was dropped — it is none of the board's operations (${PROJECT_OPS.filter((entry) => entry !== "close").join(", ")}).`, "malformedOne");
+        continue;
+      }
 
-      if (["create", "start", "launch", "open", "add"].includes(op)) {
+      if (op === "create") {
         const project = operation.project ?? operation;
         if (!normalizeString(project?.name)) {
           if (strict) return `${operationPath} must name the project it is opening.`;

@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 
 import { MARKER_OPS, markerOpKind } from "../../runtime/markerOps.js";
 import { JUMP_FORWARD_SCHEMA, GAME_MASTER_SCHEMA, normalizeGameplayPayload } from "./gameplaySchemas.js";
-import { applyEventImpactsToWorld, applyMarkerOps } from "../../runtime/gameState.js";
+import { PROJECT_OPS, applyEventImpactsToWorld, applyMarkerOps, applyProjectOps, projectOpKind } from "../../runtime/gameState.js";
 
 const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
@@ -81,6 +81,30 @@ test("a time skip's shape leaves an op word as written, and builds only by the w
   const [destroyed, detruit] = jump([{ op: "destroy", name: "Fort Alpha" }, { op: "détruire", name: "Fort Alpha" }]);
   assert.equal(destroyed.op, "destroy", "nor destroy as remove");
   assert.equal(detruit.op, "détruire");
+});
+
+// ---------------------------------------------------------------------------
+// The projects board: the turn's validation takes exactly the ops the board applies
+
+test("the board's ops are the schema's seven and its own close; a verb in any language is none of them", () => {
+  assert.deepEqual([...PROJECT_OPS], ["create", "update", "milestone", "complete", "cancel", "fail", "remove", "close"]);
+  assert.equal(projectOpKind({ op: " Create " }), "create");
+  assert.equal(projectOpKind({ action: "milestone" }), "milestone", "the field the board has always also read");
+  for (const op of ["start", "lancer", "launch", "open", "ouvrir", "add", "finish", "terminer", ""]) {
+    assert.equal(projectOpKind({ op }), "", op);
+  }
+  const board = applyProjectOps([], [{ op: "start", name: "Project Leviathan", summary: "A carrier." }, { op: "lancer", name: "Projet Léviathan", summary: "Un porte-avions." }]);
+  assert.deepEqual(board, [], "neither verb opens a project");
+  assert.equal(applyProjectOps([], [{ op: "create", name: "Project Leviathan", summary: "A carrier." }]).length, 1);
+});
+
+test("the turn's validation leaves out a project op the board would not apply, says so, and never asks again for it", () => {
+  const start = gameplay.indexOf("const keptProjectOps = [];");
+  const block = gameplay.slice(start, gameplay.indexOf("impacts.projectOps = keptProjectOps;", start));
+  assert.ok(block.length > 200, "the block is where it was");
+  assert.match(block, /const op = projectOpKind\(operation\);\n\s*if \(!op\) \{\n\s*const written = [^\n]+\n\s*drop\(path, [^\n]+"malformedOne"\);\n\s*continue;\n\s*\}/);
+  assert.doesNotMatch(block.replace(/\/\/[^\n]*/g, ""), /"start"|"launch"|"open"|"add"/, "no English verb passes as a create");
+  assert.match(block, /if \(op === "create"\) \{/);
 });
 
 // ---------------------------------------------------------------------------

@@ -2276,10 +2276,17 @@ const listProvidedFields = (source) => {
 // were once taken as synonyms, and the same verbs in any other language never
 // were ("there should be absolutely no keywording done in this game anywhere",
 // the owner, 2026-11-13). An op outside the board's words is left out.
+// PROJECT_OPS and projectOpKind are the same words for the turn's validation
+// (gameplay.js validateGeneratedWorldChanges), so the two never disagree.
+export const PROJECT_OPS = Object.freeze(["create", "update", "milestone", "complete", "cancel", "fail", "remove", "close"]);
+export const projectOpKind = (entry) => {
+  const op = normalizeOptionalString(entry?.op || entry?.action).toLowerCase();
+  return PROJECT_OPS.includes(op) ? op : "";
+};
 const normalizeProjectOp = (entry) => {
   if (!entry || typeof entry !== "object") return null;
 
-  const op = normalizeOptionalString(entry.op || entry.action).toLowerCase();
+  const op = projectOpKind(entry);
   const projectId = normalizeOptionalString(entry.projectId || entry.id);
   const name = normalizeOptionalString(entry.name || entry.project || entry.title);
 
