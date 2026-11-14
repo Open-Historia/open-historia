@@ -68,6 +68,11 @@ export const MAP_SETTING_KEYS = {
     // one; a player whose provider drops long requests turns them on from
     // Settings → AI.
     chunkLongJumps: "ai_chunk_long_jumps",
+    // The opening of the last skip sent to a local server is sent again on its
+    // own when the game is entered and after another task, so the server has
+    // it read before the next skip (AI/skipWarmUp.js). OFF by default — read
+    // with getMapSetting.
+    skipWarmUp: "ai_skip_warm_up",
     // The lookup functions (AI/lookupTools.js): the structured tasks declare
     // them beside their output function so the model can ask for exact names,
     // ids and ledgers before answering. ON by default — read with
@@ -200,6 +205,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.limitAiGeneration]: "Limit AI generation",
     [MAP_SETTING_KEYS.batchBackgroundTasks]: "Batch background AI tasks",
     [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
+    [MAP_SETTING_KEYS.skipWarmUp]: "Read a skip's opening ahead on a local server",
     [MAP_SETTING_KEYS.lookupFunctions]: "AI lookup functions",
     [MAP_SETTING_KEYS.liveSkipEvents]: "Show time skip events as they are written",
     [MAP_SETTING_KEYS.idleDiplomacy]: "Countries write to me between time skips",

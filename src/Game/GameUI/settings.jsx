@@ -3155,6 +3155,10 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     Off (default): the whole skip is generated in a single request. On: skips of more than a few months are generated in several shorter requests and merged into one round — slower and costlier in tokens, but far less likely to time out on a hosted provider.
                     </div>
+                    <Toggle label="Read a skip's opening ahead on a local server" enabled={mapSettings.skipWarmUp} onToggle={() => updateMapSetting("skipWarmUp", MAP_SETTING_KEYS.skipWarmUp, !mapSettings.skipWarmUp)} />
+                    <div style={settingsHelper}>
+                    Off (default): a model on your machine or network reads a time skip's whole request when you ask for the skip. On: the part of the last skip's request that no turn changes is sent to that server again on its own when you enter the game and after another task has used it, so it is already read when you skip. Only for a local server, which costs nothing to ask; it is busy for that minute or two, and stops the moment you ask for anything else.
+                    </div>
                     <Toggle label="Show time skip events as they are written" enabled={mapSettings.liveSkipEvents} onToggle={() => updateMapSetting("liveSkipEvents", MAP_SETTING_KEYS.liveSkipEvents, !mapSettings.liveSkipEvents)} />
                     <div style={settingsHelper}>
                     On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (My key has no request limit on) still arrives all at once.
@@ -3387,6 +3391,8 @@ const SettingsMenu = ({
         limitAiGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
         // Off by default too.
         chunkLongJumps: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
+        // Off by default too (AI/skipWarmUp.js).
+        skipWarmUp: getMapSetting(MAP_SETTING_KEYS.skipWarmUp),
         // Ships ON: an absent key reads as on (see mapSettings.js).
         liveSkipEvents: getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents),
         stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),

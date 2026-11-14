@@ -14,7 +14,7 @@ import {
     loadRollbackSnapshotIndex,
 } from "../../runtime/assets.js";
 import { undoableTurns } from "../../runtime/turnCommit.js";
-import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, discardKeptTurn, heldSkipToRerun, interveneAfterEvent, loadParkedTurn, maybeGeneratePregameHistory, maybeOpenScenarioFronts, retryHeldPlayerEvents, retryPendingJumpSegment, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, discardKeptTurn, heldSkipToRerun, interveneAfterEvent, loadParkedTurn, maybeGeneratePregameHistory, maybeOpenScenarioFronts, retryHeldPlayerEvents, retryPendingJumpSegment, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump, warmUpNextSkip } from "../AI/gameplayLazy.js";
 import { HELD_TURN, PARKED_TURN_STALE_NOTE, discardHeldTurn, discardParkedTurn, getHeldTurn, getParkedTurn, isResponseBodyNote } from "../AI/simulationStatus.js";
 import { checksHeldError } from "../AI/turnChecks.js";
 import { describePlayerTurnFailures } from "../AI/playerTurnFailures.js";
@@ -2685,6 +2685,13 @@ const DateWidget = ({
     // because nothing else re-renders this when the player finally enters the
     // game.
     const mainMenuOpen = useMainMenuOpen();
+    // A local server reads the next skip's opening while the player looks
+    // around (AI/skipWarmUp.js): asked for once the game is entered, and it
+    // does nothing with the setting off or no skip sent from this browser yet.
+    const gameEntered = Boolean(gameData) && !mainMenuOpen;
+    useEffect(() => {
+        if (gameEntered) warmUpNextSkip().catch(() => {});
+    }, [gameEntered]);
     const pregameAttemptedRef = React.useRef(false);
     useEffect(() => {
         if (pregameAttemptedRef.current || !gameData || !worldState) {
