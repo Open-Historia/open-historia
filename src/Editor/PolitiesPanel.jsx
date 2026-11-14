@@ -631,7 +631,7 @@ const PolitiesPanel = ({
                 }}
                 style={inputStyle}
               />
-              <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.42)", marginTop: 4 }}>Its troops are raised from these people, and its statistics begin from this figure. You can write 12,500,000 or 12.5 million.</div>
+              <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.42)", marginTop: 4 }}>Its troops are raised from these people, and its statistics begin from this figure, written in digits: 12500000 or 12,500,000.</div>
               {/* Its own military figures (MilitaryFields.jsx), kept with its record as `military`. */}
               <div style={{ marginTop: 8 }}>
                 <MilitaryFields

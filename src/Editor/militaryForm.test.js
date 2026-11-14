@@ -47,7 +47,10 @@ test("every figure the game keeps has a field, and what an author types becomes 
   assert.deepEqual(withMilitaryField(null, "siegeShare", "12.5%").military, { siegeShare: 0.125 });
   assert.deepEqual(withMilitaryField(null, "manpowerShare", "60").military, { manpowerShare: 60 });
   assert.deepEqual(withMilitaryField(null, "manpowerShare", "12,5").military, { manpowerShare: 12.5 });
-  assert.deepEqual(withMilitaryField(null, "menPerCounter", "2k").military, { menPerCounter: 2000 });
+  assert.deepEqual(withMilitaryField(null, "menPerCounter", "2000").military, { menPerCounter: 2000 });
+  // Digits, in any language's grouping; never a word or a letter for a thousand.
+  assert.deepEqual(withMilitaryField(null, "menPerCounter", "12.000").military, { menPerCounter: 12000 });
+  assert.equal(withMilitaryField(null, "menPerCounter", "2k").ok, false);
   assert.deepEqual(withMilitaryField(null, "menPerCounter", "12,000").military, { menPerCounter: 12000 });
   // What is no figure changes nothing.
   assert.deepEqual(withMilitaryField({ quality: 40 }, "quality", "many"), { military: { quality: 40 }, ok: false });
