@@ -47,10 +47,17 @@ export const HISTORY_CONSOLIDATION = Object.freeze({
   // the next skip, however many events pile up: the request of its own it was
   // once asked as went on 2026-11-07 (gameplay.js applySkipHistoryFold).
   // What a skip's answer has to give for its fold to be taken at all
-  // (judgeSkipHistoryAnswer): a document of at least this many words, or
-  // failing that a summary of this many, which is then appended.
-  minDocumentWords: 80,
-  minSummaryWords: 40,
+  // (judgeSkipHistoryAnswer): a document of at least this many characters,
+  // and at least half of what the campaign has (up to half the budget's
+  // characters), or failing that a summary of this many, which is then
+  // appended. Counted in characters, the prompt's measure, in every script:
+  // words split on spaces made a whole Chinese or Japanese document one word,
+  // and every fold of such a campaign was refused (runtime/historyTiers.js went
+  // the same way). The floors are set where a summary in a script that says
+  // much in few characters still passes.
+  documentCharBudget: 9000,
+  minDocumentChars: 240,
+  minSummaryChars: 120,
 });
 
 export const countWords = (text) => {
@@ -313,18 +320,18 @@ export const judgeSkipHistoryAnswer = (answer, { currentText = "", span = null, 
   }
   // Canon with a document or a summary: the canon is kept with whichever is.
   const canonOnly = judged.canon.length ? { tiers: { years: [], eras: null, canon: judged.canon } } : {};
-  const { documentWordBudget, minDocumentWords, minSummaryWords } = HISTORY_CONSOLIDATION;
+  const { documentCharBudget, minDocumentChars, minSummaryChars } = HISTORY_CONSOLIDATION;
   const document = normalizeString(source?.document);
-  const before = countWords(currentText);
-  const written = countWords(document);
+  const before = normalizeString(currentText).length;
+  const written = document.length;
   // Half of what the campaign has, or of the budget when it has more than that:
   // a document condensed to its budget is still a document.
-  const floor = Math.max(minDocumentWords, Math.min(before, documentWordBudget) * 0.5);
+  const floor = Math.max(minDocumentChars, Math.min(before, documentCharBudget) * 0.5);
   if (document && written >= floor) return { ok: true, summary, document, reason: "", ...canonOnly };
   const why = document
-    ? `its document came back at ${written} word${written === 1 ? "" : "s"} against the ${before} the campaign has`
+    ? `its document came back at ${written} character${written === 1 ? "" : "s"} against the ${before} the campaign has`
     : "it gave no document";
-  if (countWords(summary) < minSummaryWords) {
+  if (summary.length < minSummaryChars) {
     return { ok: false, summary: "", document: "", reason: `${why}, and its summary is too short to stand for what it would replace` };
   }
   return { ok: true, summary, document: "", reason: `${why}; its summary is appended instead`, ...canonOnly };
