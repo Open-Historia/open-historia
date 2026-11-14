@@ -86,6 +86,18 @@ test("idle Political World context prioritizes the player's own overlord", () =>
 
 // ---- relevance, one list, background on demand (the owner, 2026-11-01) ----------------
 
+// Who decided an event, as a skip records it (runtime/eventAgency.js), and a
+// country among its places as the engine keeps a found one (runtime/eventPlaces.js).
+const decidedBy = (polity) => ({
+  principal: polity,
+  principalKind: "polity",
+  sovereignPolity: polity,
+  authority: "autonomous",
+  authorityRef: "",
+  sovereignActors: [{ polity, authority: "autonomous", authorityRef: "" }],
+});
+const inCountry = (...names) => names.map((name) => ({ kind: "country", name }));
+
 // A world of invented countries, not the real one: who matters is what has happened.
 const fantasy = (names, extra = {}) => ({
   politicalActors: { schemaVersion: 6, byPolity: Object.fromEntries(names.map((name) => [name, actor(name)])) },
@@ -106,19 +118,19 @@ test("the governments are ranked by the latest thing that involved them, events 
     }),
     chats: [{ countries: [{ name: "Aquilonia" }], messages: [{ text: "Greetings.", time: "1201-02-01" }] }],
     events: [
-      { id: "e1", date: "1201-04-01", title: "Borduria fortifies its passes", description: "", impacts: {} },
+      { id: "e1", date: "1201-04-01", title: "Borduria fortifies its passes", description: "", agency: decidedBy("Borduria"), impacts: {} },
       { id: "e2", date: "1201-01-01", title: "A comet is seen", description: "", impacts: {} },
     ],
   };
   assert.deepEqual(rankRelevantPolities(bundle).map((entry) => entry.name), ["Drakmor", "Borduria", "Carpathia", "Aquilonia"]);
 });
 
-test("names are matched whole and exactly: Niger is not read inside Nigeria", () => {
+test("names are matched whole and exactly: Niger is not Nigeria", () => {
   const bundle = {
     game: { country: "Chad" },
     world: fantasy(["Chad", "Niger", "Nigeria"]),
     chats: [],
-    events: [{ id: "e1", date: "2016-01-02", title: "Nigeria closes its northern border", description: "Lagos cites smuggling.", impacts: {} }],
+    events: [{ id: "e1", date: "2016-01-02", title: "Nigeria closes its northern border", description: "Lagos cites smuggling.", agency: decidedBy("Nigeria"), impacts: {} }],
   };
   assert.deepEqual(rankRelevantPolities(bundle).map((entry) => entry.name), ["Nigeria"]);
   // Candidates count only where the world has no political profiles.
@@ -130,7 +142,7 @@ test("a world without political profiles ranks the candidates it is given, and n
     game: { country: "Chad" },
     world: {},
     chats: [],
-    events: [{ id: "e1", date: "2016-01-02", title: "Nigeria closes its northern border", description: "Lagos cites smuggling.", impacts: {} }],
+    events: [{ id: "e1", date: "2016-01-02", title: "Nigeria closes its northern border", description: "Lagos cites smuggling.", places: inCountry("Nigeria"), impacts: {} }],
   };
   assert.deepEqual(rankRelevantPolities(bundle).map((entry) => entry.name), []);
   assert.deepEqual(rankRelevantPolities(bundle, { candidates: ["Chad", "Niger", "Nigeria"] }).map((entry) => entry.name), ["Nigeria"]);
@@ -143,8 +155,37 @@ test("a reaction's own event comes first", () => {
     chats: [],
     events: [],
   };
-  const event = { id: "e9", date: "1200-01-01", title: "Borduria recalls its envoy", impacts: {} };
+  const event = { id: "e9", date: "1200-01-01", title: "Borduria recalls its envoy", agency: decidedBy("Borduria"), impacts: {} };
   assert.deepEqual(rankRelevantPolities(bundle, { event }).map((entry) => entry.name), ["Borduria", "Aquilonia"]);
+});
+
+// Who an event involves is what it records. Its title and description were
+// searched for the governments' names: "Allemagne" was never Germany, a
+// Chinese name written against the next character was never found, and a game
+// told in another language gave background to other governments than an
+// English one with the same history.
+test("an event involves the polities its structure names, the same in every language, and never those its words name", () => {
+  const world = fantasy(["Eldoria", "Germany", "Poland", "Iran", "Oman", "Romania"]);
+  const ranked = (event) => rankRelevantPolities({ game: { country: "Eldoria" }, world, chats: [], events: [event] }).map((entry) => entry.name);
+  const structure = { date: "1939-08-31", agency: decidedBy("Germany"), places: inCountry("Poland"), impacts: {} };
+  const english = ranked({ ...structure, id: "en", title: "Germany closes its border with Poland", description: "Berlin cites unrest." });
+  const french = ranked({ ...structure, id: "fr", title: "L'Allemagne ferme sa frontière avec la Pologne", description: "Berlin invoque des troubles." });
+  const chinese = ranked({ ...structure, id: "zh", title: "德国关闭与波兰的边境", description: "柏林称局势动荡。" });
+  assert.deepEqual(new Set(english), new Set(["Germany", "Poland"]));
+  assert.deepEqual(french, english);
+  assert.deepEqual(chinese, english);
+  // Named in its words, recorded nowhere: it involves nobody.
+  assert.deepEqual(ranked({ id: "words", date: "1939-09-01", title: "Iran and Oman watch Romania", description: "Germany and Poland are silent.", impacts: {} }), []);
+});
+
+test("an event's war, its operations and a place not yet found name their parties too", () => {
+  const world = fantasy(["Eldoria", "Aquilonia", "Borduria", "Carpathia", "Drakmor", "Zembla"], {
+    wars: [{ id: "war-7", status: "active", sideA: ["Aquilonia"], sideB: ["Borduria"] }],
+  });
+  const ranked = (event) => rankRelevantPolities({ game: { country: "Eldoria" }, world, chats: [], events: [event] }).map((entry) => entry.name);
+  assert.deepEqual(new Set(ranked({ id: "w", date: "1201-01-01", title: "Skirmish", warId: "war-7", impacts: {} })), new Set(["Aquilonia", "Borduria"]));
+  assert.deepEqual(ranked({ id: "t", date: "1201-01-01", title: "A province changes hands", impacts: { regionTransfers: [{ regionId: "r1", fromCode: "Carpathia", toCode: "Drakmor" }] } }).sort(), ["Carpathia", "Drakmor"]);
+  assert.deepEqual(ranked({ id: "p", date: "1201-01-01", title: "Riots", places: ["city: Zemblagrad, country: Zembla"], impacts: {} }), ["Zembla"]);
 });
 
 test("at most twenty carry their background: the twenty latest to have had something happen", () => {
@@ -154,7 +195,7 @@ test("at most twenty carry their background: the twenty latest to have had somet
     world: fantasy(["Eldoria", ...names]),
     chats: [],
     // Realm 00 the earliest, Realm 24 the latest; Realms 25-29 untouched.
-    events: names.slice(0, 25).map((name, index) => ({ id: `e${index}`, date: `1200-01-${String(index + 1).padStart(2, "0")}`, title: `${name} holds a festival`, impacts: {} })),
+    events: names.slice(0, 25).map((name, index) => ({ id: `e${index}`, date: `1200-01-${String(index + 1).padStart(2, "0")}`, title: `${name} holds a festival`, places: inCountry(name), impacts: {} })),
   };
   const set = buildIdleDiplomacyPoliticalDecisionSet(bundle);
   assert.equal(IDLE_BACKGROUND_LIMIT, 20);
@@ -232,7 +273,7 @@ test("every country in any chat with the player is relevant: a group chat with n
   const bundle = {
     game: { country: "Eldoria" },
     world: fantasy(["Eldoria", "Aquilonia", "Borduria", "Carpathia", "Drakmor", "Elbonia", "Zembla"]),
-    events: [{ id: "e1", date: "1201-06-01", title: "Drakmor crowns a king", impacts: {} }],
+    events: [{ id: "e1", date: "1201-06-01", title: "Drakmor crowns a king", agency: decidedBy("Drakmor"), impacts: {} }],
     chats: [
       { id: "g1", countries: [{ name: "Eldoria" }, { name: "Aquilonia" }, { name: "Borduria" }], messages: [{ text: "Welcome." }] },
       { id: "c1", status: "closed", countries: [{ name: "Carpathia" }], messages: [{ text: "Farewell.", time: "1201-02-01" }] },

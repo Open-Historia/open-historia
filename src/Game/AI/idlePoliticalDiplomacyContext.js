@@ -3,6 +3,7 @@ import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import { livePuppetsFor } from "../../runtime/puppets.js";
 import { compareGameDatesNewestFirst } from "../../runtime/gameDates.js";
 import { buildBoundedPoliticalDecisionContextSet, buildPoliticalDecisionContext } from "./politicalDecisionContext.js";
+import { eventPartyNames } from "./eventParties.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => Array.isArray(value) ? value : [];
@@ -61,58 +62,19 @@ const exactNamer = (world, names) => {
   return (value) => byName.get(lower(value?.name || value?.code || value?.polity || value)) || "";
 };
 
-// Where an exact name stands in a text as a whole name, longest names first so
-// that "Niger" is not read inside "Nigeria" nor "Congo" inside "Republic of the Congo".
-const namesInText = (textValue, names) => {
-  const textOf = String(textValue ?? "");
-  if (!textOf) return [];
-  const taken = [];
-  const found = [];
-  const isWordChar = (char) => Boolean(char) && /[\p{L}\p{N}]/u.test(char);
-  for (const name of names) {
-    let from = 0;
-    for (;;) {
-      const at = textOf.indexOf(name, from);
-      if (at < 0) break;
-      const end = at + name.length;
-      from = at + 1;
-      if (isWordChar(textOf[at - 1]) || isWordChar(textOf[end])) continue;
-      if (taken.some(([start, stop]) => at < stop && end > start)) continue;
-      taken.push([at, end]);
-      if (!found.includes(name)) found.push(name);
-    }
-  }
-  return found;
-};
-
-// The polities one event involves, by its structured fields, and its title and
-// description where they name a polity exactly.
-const polityNamesInEvent = (event, world, nameOf, byLength) => {
+// The polities one event involves, by what it records (eventParties.js: who
+// decided it, who fought in it and on which war's sides, the countries among
+// its places, every polity its operations name), each by the one name the list
+// gives it. Never its title or description: a polity's name was looked for in
+// them, so "Allemagne" was never Germany and a Chinese name written against
+// the next character was never found, and the governments a game played in
+// another language had background for were not the ones its events involved.
+const polityNamesInEvent = (event, world, nameOf) => {
   const out = [];
-  const add = (value) => {
-    const name = nameOf(value);
+  for (const party of eventPartyNames(event, { wars: world?.wars })) {
+    const name = nameOf(party);
     if (name && !out.includes(name)) out.push(name);
-  };
-  const impacts = event?.impacts || {};
-  list(event?.combatants).forEach(add);
-  list(event?.countries).forEach(add);
-  list(event?.participants).forEach(add);
-  if (typeof event?.agency === "string") add(event.agency);
-  else list(event?.agency).forEach(add);
-  const war = clean(event?.warId) ? list(world?.wars).find((entry) => clean(entry?.id) === clean(event.warId)) : null;
-  if (war) [...list(war.sideA), ...list(war.sideB)].forEach(add);
-  for (const place of list(event?.places)) {
-    const match = String(place ?? "").match(/country:\s*([^,]+)/i);
-    if (match) add(match[1]);
   }
-  for (const change of list(impacts.polityChanges)) { add(change?.name); add(change?.code); }
-  for (const op of list(impacts.politicalActorOps)) { add(op?.polityKey); add(op?.polity); add(op?.country); }
-  for (const transfer of list(impacts.regionTransfers)) { add(transfer?.fromCode); add(transfer?.toCode); }
-  for (const op of list(impacts.regionControlOps)) { add(op?.fromCode); add(op?.toCode); add(op?.actorCode); add(op?.claimantCode); }
-  for (const op of list(impacts.institutionLifecycleOps)) { add(op?.actorPolity); add(op?.targetPolity); }
-  for (const chat of list(impacts.createdChats)) { add(chat?.speaker); list(chat?.countries).forEach(add); }
-  for (const op of list(impacts.unitOps)) { add(op?.owner); add(op?.ownerCode); }
-  for (const name of namesInText(`${event?.title ?? ""}\n${event?.description ?? ""}`, byLength)) add(name);
   return out;
 };
 
@@ -131,7 +93,6 @@ export const rankRelevantPolities = (bundle, { event = null, candidates = null }
     ? profiled
     : [...new Set(candidates.map(clean))].filter((name) => name && lower(name) !== lower(player));
   const nameOf = exactNamer(world, names);
-  const byLength = [...names].sort((a, b) => b.length - a.length);
   // Each polity's latest: { date, round }. A date first; with none, the round;
   // with neither it still counts, after every dated one.
   const latest = new Map();
@@ -147,14 +108,14 @@ export const rankRelevantPolities = (bundle, { event = null, candidates = null }
   const isPlayer = (value) => lower(value?.name || value?.code || value) === lower(player);
 
   // The event a reaction answers comes before everything else.
-  const first = event ? polityNamesInEvent(event, world, nameOf, byLength) : [];
+  const first = event ? polityNamesInEvent(event, world, nameOf) : [];
 
   // What happened: the event feed, newest first.
   const events = list(bundle?.events)
     .map((entry, index) => ({ entry, index }))
     .sort((a, b) => compareGameDatesNewestFirst(clean(a.entry?.date), clean(b.entry?.date)) || b.index - a.index)
     .slice(0, EVENTS_READ);
-  for (const { entry } of events) for (const name of polityNamesInEvent(entry, world, nameOf, byLength)) note(name, entry?.date);
+  for (const { entry } of events) for (const name of polityNamesInEvent(entry, world, nameOf)) note(name, entry?.date);
 
   // What passed between them and the player.
   // Every chat with the player is a dealing: one-on-one or group, open or

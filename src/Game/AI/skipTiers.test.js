@@ -156,17 +156,18 @@ test("with the lookup functions, the powers out of view are one line", async () 
 });
 
 // Idle diplomacy's relevant countries (idlePoliticalDiplomacyContext.js
-// rankRelevantPolities): here, a filler state the latest event names, and one
-// the player has a chat with. Each is shown as a neighbour is: its regions in
-// full, its units in the table.
+// rankRelevantPolities): here, a filler state the latest event records as the
+// one that decided it, and one the player has a chat with. Each is shown as a
+// neighbour is: its regions in full, its units in the table.
 test("the relevant countries idle diplomacy keeps are in view, as a neighbour is", async () => {
   const { regions, world, actions } = bigWorld();
   const politicalActors = { byPolity: Object.fromEntries(Object.keys(world.polityOverrides).map((name) => [name, { government: {} }])) };
   const related = { ...world, politicalActors };
+  const decided = { principal: "Filler State 41", principalKind: "polity", sovereignPolity: "Filler State 41", authority: "autonomous", sovereignActors: [{ polity: "Filler State 41", authority: "autonomous" }] };
   const bundle = {
     game,
     world: related,
-    events: [{ id: "e1", date: "1930-05-01", title: "Filler State 41 recalls its ambassador", description: "Filler State 41 recalls its ambassador from Ruritania.", countries: ["Filler State 41"] }],
+    events: [{ id: "e1", date: "1930-05-01", title: "Filler State 41 recalls its ambassador", description: "Filler State 41 recalls its ambassador from Ruritania.", agency: decided }],
     actions,
     chats: [{ id: "c1", countries: [{ name: "Filler State 52" }], messages: [{ time: "1930-04-20", text: "Greetings." }] }],
   };
