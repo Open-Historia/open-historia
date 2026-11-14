@@ -1727,9 +1727,10 @@ export const decodeWorldStorylineUpdates = (value, { limit = MAX_STORYLINE_UPDAT
 // The records with the ids of the events their numbers name, as the other
 // ledgers' binders tie theirs: a skip's answer is tied this way before its
 // events are put in date order (ledgerPins.js), so its numbers still name the
-// events the model meant. A record that has ids keeps them.
-// normalizeWorldStorylineEventLinks reads them as the places those events then
-// stand in, and the record leaves it with places alone, as it always has.
+// events the model meant. A record that has ids keeps them. They are the
+// authority on which events the record names: normalizeWorldStorylineEventLinks
+// reads them as the places those events then stand in, and the record leaves
+// it with places alone, as it always has.
 export const bindWorldStorylineUpdatesToEvents = (value, events, { limit } = {}) => {
   const ids = normalizeArray(events).map((event) => normalizeString(event?.id));
   return decodeWorldStorylineUpdates(value, { limit }).map((update) => {
@@ -1743,364 +1744,31 @@ export const bindWorldStorylineUpdatesToEvents = (value, events, { limit } = {})
   });
 };
 
-const STORYLINE_LINK_STOPWORDS = new Set([
-  "about", "after", "again", "against", "among", "because", "between", "during",
-  "from", "into", "over", "that", "their", "there", "these", "this", "through",
-  "under", "with", "without", "storyline", "government", "empire", "kingdom",
-  "republic", "state", "states", "process", "current", "continues", "continued",
-]);
-
-// The letters, marks and digits of any script. Kept to a-z and 0-9, a
-// storyline and an event written in Russian or Arabic shared no words however
-// plainly one advanced the other, and only an actor the event named in a
-// structured field could link them. English text reads as it always did.
-const storylineLinkText = (value) =>
-  normalizeString(value)
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const storylineLinkTokens = (value) =>
-  [...new Set(
-    storylineLinkText(value)
-      .split(" ")
-      .filter((token) => token.length >= 4 && !STORYLINE_LINK_STOPWORDS.has(token))
-  )];
-
-const storylineParticipantAliases = (participant) => {
-  const raw = storylineLinkText(participant);
-  if (!raw) return [];
-  const variants = new Set([raw]);
-  const stripped = raw
-    .replace(/^(the )?(kingdom|republic|empire|federation|commonwealth|union|state) of /, "")
-    .replace(/ (kingdom|republic|empire|federation|commonwealth|union|state)$/, "")
-    .trim();
-  if (stripped) variants.add(stripped);
-  return [...variants].filter((value) => value.length >= 3);
-};
-
-const storylineEventStructuredActors = (event) => {
-  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-  return [
-    ...normalizeArray(event?.combatants),
-    ...normalizeArray(impacts?.polityChanges).flatMap((entry) => [entry?.code, entry?.name]),
-    ...normalizeArray(impacts?.politicalActorOps).map((entry) => entry?.polityKey || entry?.polity || entry?.country),
-    ...normalizeArray(impacts?.regionTransfers).flatMap((entry) => [entry?.fromCode, entry?.toCode]),
-    ...normalizeArray(impacts?.regionClaims).flatMap((entry) => [
-      entry?.claimantCode,
-      entry?.claimant,
-    ]),
-    ...normalizeArray(impacts?.regionControlOps).flatMap((entry) => [
-      entry?.fromCode,
-      entry?.toCode,
-      entry?.actorCode,
-      entry?.claimantCode,
-    ]),
-    ...normalizeArray(impacts?.createdChats).flatMap((chat) => [
-      chat?.speaker,
-      ...normalizeArray(chat?.countries),
-    ]),
-  ].map(normalizeString).filter(Boolean);
-};
-
-const scoreStorylineEventLink = (update, event, world, { ignoreActor = "" } = {}) => {
-  const eventText = storylineLinkText([
-    event?.id,
-    event?.title,
-    event?.description,
-    event?.warId,
-    JSON.stringify(event?.impacts ?? {}),
-  ].filter(Boolean).join(" "));
-  if (!eventText) return 0;
-
-  const structuredActors = storylineEventStructuredActors(event);
-  let score = 0;
-
-  // R3.8: an already-established native event->storyline binding is objective
-  // bookkeeping evidence. Give it overwhelming precedence so a subsequent
-  // normalization pass can propagate the same link back into update.eventIndexes
-  // before anti-stasis evaluation. This does not create a semantic link by itself;
-  // only callers such as bindSelectedStorylineEvents may establish event.storylineIds.
-  const updateId = normalizeString(update?.id);
-  if (
-    updateId &&
-    normalizeArray(event?.storylineIds).map(normalizeString).includes(updateId)
-  ) {
-    score += 40;
-  }
-
-  for (const participant of normalizeArray(update?.participants).map(normalizeString).filter(Boolean)) {
-    if (ignoreActor && worldActorsEquivalent(participant, ignoreActor, world || {}, "")) continue;
-    const structuredHit = structuredActors.some((actor) =>
-      worldActorsEquivalent(participant, actor, world || {}, "")
-    );
-    if (structuredHit) {
-      score += 10;
-      continue;
-    }
-
-    if (
-      storylineParticipantAliases(participant)
-        .some((alias) => (` ${eventText} `).includes(` ${alias} `))
-    ) {
-      score += 6;
-    }
-  }
-
-  const titleTokens = storylineLinkTokens(`${update?.id || ""} ${update?.title || ""}`);
-  const stateTokens = storylineLinkTokens(update?.state);
-  const eventTokens = new Set(storylineLinkTokens(eventText));
-  score += Math.min(8, titleTokens.filter((token) => eventTokens.has(token)).length * 2);
-  score += Math.min(4, stateTokens.filter((token) => eventTokens.has(token)).length);
-
-  const kind = normalizeString(update?.kind).toLowerCase();
-  const eventWarId = storylineLinkText(event?.warId);
-  if (kind === "war" && eventWarId) {
-    const warTokens = new Set(storylineLinkTokens(eventWarId));
-    const storylineWarTokens = storylineLinkTokens(`${update?.id || ""} ${update?.title || ""}`);
-    const warOverlap = storylineWarTokens.filter((token) => warTokens.has(token)).length;
-    if (warOverlap > 0) score += Math.min(8, 4 + warOverlap * 2);
-  }
-
-  return score;
-};
-
-const inferStorylineEventIndexes = (update, events, world) => {
-  const scored = normalizeArray(events)
-    .map((event, index) => ({
-      index,
-      score: scoreStorylineEventLink(update, event, world),
-    }))
-    .filter((row) => row.score >= 6)
-    .sort((a, b) => b.score - a.score || a.index - b.index);
-
-  if (!scored.length) return [];
-  const best = scored[0].score;
-
-  // Multiple events may legitimately advance the same persistent process in one
-  // pass. Keep only strong near-best matches, never a broad participant-only fanout.
-  return scored
-    .filter((row) => row.score >= Math.max(8, best - 2))
-    .slice(0, 4)
-    .map((row) => row.index);
-};
-
-
-// R3.1 — deterministic selected-storyline event salvage.
+// The events each storyline record names, where they stand now: the events it
+// was tied to by id before the answer was put in date order (ledgerPins.js),
+// the places it was written with when it has no ids (the Game Master's
+// records, the engine's own), and every event whose storylineIds name the
+// storyline. Ids and places only, exactly: a record whose number names no
+// event loses that number, and nothing is ever tied by what a record and an
+// event say.
 //
-// The model owns WHAT happened and the semantic storyline state. Native JS owns
-// obvious bookkeeping. If the main world pass generated an event that strongly
-// and uniquely matches one scheduler-selected persistent storyline, attach that
-// existing storyline id even when the model forgot storylineUpdates entirely.
-//
-// This is deliberately conservative:
-// - selected/current storylines only;
-// - strong score floor;
-// - ambiguous near-ties are left alone;
-// - existing explicit ids are preserved;
-// - no pressure/momentum/state is invented here.
-export const bindSelectedStorylineEvents = (
-  candidate,
-  {
-    selectedStorylines = [],
-    world = {},
-    // The player's polity. Once the player joins a storyline (a mediator, say),
-    // naming the player would otherwise be enough to bind: every event about the
-    // player's own programmes landed in a Gulf crisis because it said "British".
-    // The player's link to a storyline has to come from the storyline's own
-    // subject, not from the player being in it.
-    gameCountry = "",
-    minScore = 6,
-    ambiguityMargin = 4,
-  } = {},
-) => {
+// A text scorer used to decide instead (scoreStorylineEventLink: the words of
+// four letters or more that a record's title and state shared with an event,
+// and its participants' names in the event's prose, with an English
+// stoplist). It overrode the events a record was pinned to, took away a number
+// whose event shared too few words, and tied events to the selected
+// storylines (bindSelectedStorylineEvents) and new storylines to events
+// (bindNewStorylineEvents) by the same score. A storyline and its event in
+// another language shared few words, so its number was stripped and the
+// anti-stasis rule failed it; in English, generic shared words moved events
+// between storylines.
+export const normalizeWorldStorylineEventLinks = (candidate) => {
   if (!candidate || typeof candidate !== "object") {
-    return { bound: 0, bindings: [] };
-  }
-
-  const events = normalizeArray(candidate?.events);
-  const selected = normalizeArray(selectedStorylines)
-    .filter((storyline) => {
-      const id = normalizeString(storyline?.id);
-      const status = normalizeString(storyline?.status).toLowerCase();
-      return id && ["active", "dormant"].includes(status);
-    });
-
-  if (!events.length || !selected.length) {
-    return { bound: 0, bindings: [] };
-  }
-
-  let bound = 0;
-  const bindings = [];
-
-  candidate.events = events.map((event, eventIndex) => {
-    if (!event || typeof event !== "object") return event;
-
-    const currentIds = normalizeArray(event?.storylineIds)
-      .map(normalizeString)
-      .filter(Boolean);
-
-    const scored = selected
-      .map((storyline) => ({
-        storyline,
-        id: normalizeString(storyline?.id),
-        score: scoreStorylineEventLink(storyline, event, world, { ignoreActor: gameCountry }),
-      }))
-      .filter((row) => row.id && row.score >= minScore)
-      .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
-
-    if (!scored.length) {
-      return {
-        ...event,
-        storylineIds: [...new Set(currentIds)].slice(0, 6),
-      };
-    }
-
-    const best = scored[0];
-    const second = scored[1];
-    const unambiguous =
-      !second ||
-      best.score - second.score >= ambiguityMargin ||
-      best.score >= second.score + 2 * ambiguityMargin;
-
-    if (!unambiguous) {
-      return {
-        ...event,
-        storylineIds: [...new Set(currentIds)].slice(0, 6),
-      };
-    }
-
-    const alreadyLinked = currentIds.includes(best.id);
-    const storylineIds = [...new Set([...currentIds, best.id])].slice(0, 6);
-
-    if (!alreadyLinked) {
-      bound += 1;
-      bindings.push({
-        eventIndex,
-        eventId: normalizeString(event?.id),
-        storylineId: best.id,
-        score: best.score,
-      });
-    }
-
-    return {
-      ...event,
-      storylineIds,
-    };
-  });
-
-  return { bound, bindings };
-};
-
-// R3.8 — deterministic new-storyline <-> event seam repair.
-//
-// Crisis Discovery may correctly create a new persistent process but omit the
-// mechanical eventIndexes field. That must not discard an otherwise valuable
-// breadth pass. For NEW storylines only, bind the single strongest returned event
-// when the semantic match is strong and unambiguous. Ambiguous cases remain
-// invalid and are rejected by the normal validator.
-export const bindNewStorylineEvents = (
-  candidate,
-  {
-    existingStorylines = [],
-    world = {},
-    minScore = 12,
-    ambiguityMargin = 4,
-  } = {},
-) => {
-  if (!candidate || typeof candidate !== "object") {
-    return { bound: 0, bindings: [], ambiguous: [] };
+    return { updates: [], strippedInvalid: 0 };
   }
 
   const events = normalizeArray(candidate?.events);
   const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
-  if (!events.length || !updates.length) {
-    return { bound: 0, bindings: [], ambiguous: [] };
-  }
-
-  const existingIds = new Set(
-    normalizeArray(existingStorylines)
-      .map((entry) => normalizeString(entry?.id))
-      .filter(Boolean),
-  );
-
-  let bound = 0;
-  const bindings = [];
-  const ambiguous = [];
-
-  candidate.storylineUpdates = updates.map((update, updateIndex) => {
-    const id = normalizeString(update?.id);
-    if (!id || existingIds.has(id) || normalizeArray(update?.eventIndexes).length) {
-      return update;
-    }
-
-    const scored = events
-      .map((event, eventIndex) => ({
-        eventIndex,
-        score: scoreStorylineEventLink(update, event, world),
-      }))
-      .filter((row) => row.score >= minScore)
-      .sort((a, b) => b.score - a.score || a.eventIndex - b.eventIndex);
-
-    if (!scored.length) return update;
-
-    const best = scored[0];
-    const second = scored[1];
-    if (second && best.score - second.score < ambiguityMargin) {
-      ambiguous.push({
-        storylineId: id,
-        updateIndex,
-        bestEventIndex: best.eventIndex,
-        bestScore: best.score,
-        secondEventIndex: second.eventIndex,
-        secondScore: second.score,
-      });
-      return update;
-    }
-
-    const event = events[best.eventIndex];
-    events[best.eventIndex] = {
-      ...event,
-      storylineIds: [...new Set([
-        ...normalizeArray(event?.storylineIds).map(normalizeString).filter(Boolean),
-        id,
-      ])].slice(0, 6),
-    };
-
-    bound += 1;
-    bindings.push({
-      storylineId: id,
-      updateIndex,
-      eventIndex: best.eventIndex,
-      score: best.score,
-    });
-
-    return {
-      ...update,
-      eventIndexes: [best.eventIndex],
-    };
-  });
-
-  candidate.events = events;
-  return { bound, bindings, ambiguous };
-};
-
-export const normalizeWorldStorylineEventLinks = (
-  candidate,
-  {
-    world = {},
-  } = {},
-) => {
-  if (!candidate || typeof candidate !== "object") {
-    return { updates: [], rebound: 0, strippedInvalid: 0 };
-  }
-
-  const events = normalizeArray(candidate?.events);
-  const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
-  let rebound = 0;
   let strippedInvalid = 0;
   // A record tied to its events by id (bindWorldStorylineUpdatesToEvents) names
   // them where they stand now: its ids are the numbers it was written with.
@@ -2117,48 +1785,33 @@ export const normalizeWorldStorylineEventLinks = (
       : normalizeArray(update?.eventIndexes)
         .map(Number)
         .filter((index) => Number.isInteger(index));
-    const validSupplied = supplied.filter(
-      (index) => index >= 0 && index < events.length,
-    );
-    strippedInvalid += Math.max(0, supplied.length - validSupplied.length);
+    const valid = supplied.filter((index) => index >= 0 && index < events.length);
+    strippedInvalid += supplied.length - valid.length;
 
-    const inferred = inferStorylineEventIndexes(update, events, world);
-    let eventIndexes = inferred;
-
-    // If native semantic inference has no confident match, retain only supplied
-    // indexes that themselves look related. This treats model numbers as hints,
-    // never as authority.
-    if (!eventIndexes.length && validSupplied.length) {
-      eventIndexes = validSupplied.filter(
-        (index) => scoreStorylineEventLink(update, events[index], world) >= 6,
-      );
-    }
-
-    if (
-      eventIndexes.length &&
-      JSON.stringify(eventIndexes) !== JSON.stringify(validSupplied)
-    ) {
-      rebound += 1;
-    }
+    const id = normalizeString(update?.id);
+    const tagged = id
+      ? events.reduce((indexes, event, index) => {
+        if (normalizeArray(event?.storylineIds).map(normalizeString).includes(id)) indexes.push(index);
+        return indexes;
+      }, [])
+      : [];
 
     return {
       ...update,
-      eventIndexes: [...new Set(eventIndexes)].slice(0, 12),
+      eventIndexes: [...new Set([...valid, ...tagged])].slice(0, 12),
     };
   });
 
   candidate.storylineUpdates = normalized;
 
-  if (rebound || strippedInvalid) {
+  if (strippedInvalid) {
     console.info(
-      `[OH storyline native binding] ${rebound} storyline record(s) rebound from semantic event evidence; ` +
-      `${strippedInvalid} invalid event reference(s) stripped.`,
+      `[OH storyline links] ${strippedInvalid} event reference(s) that name no event of this answer stripped.`,
     );
   }
 
-  return { updates: normalized, rebound, strippedInvalid };
+  return { updates: normalized, strippedInvalid };
 };
-
 
 const storylineSemanticStateKey = (value) =>
   normalizeString(value)

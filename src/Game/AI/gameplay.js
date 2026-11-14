@@ -104,8 +104,6 @@ import {
   applyWorldStorylineUpdates,
   boardProvisionalConsequenceIndexes,
   assessRecentWorldConsequenceLiveness,
-  bindNewStorylineEvents,
-  bindSelectedStorylineEvents,
   buildWorldInitiativeContext,
   createMotionRepairBudget,
   DIPLOMATIC_STATE_HEADING,
@@ -991,11 +989,13 @@ const screenSegmentFrontOrders = (candidate, { game, actions, receipt = null } =
   candidate.frontOrders = kept;
 };
 
-// One segment's storyline records, after its ledgers. The director's semantic
-// binder attaches a strong unique match to its selected storyline, quiet echoes
-// of deferred storylines are stripped, serious visible history must bite into a
-// canonical owner, and the records are checked against the storyline ledger as
-// the earlier segments left it. A stale selected storyline, or one whose update
+// One segment's storyline records, after its ledgers. Each record names its
+// events by the numbers it was written with, pinned to the events themselves
+// before the sort (ledgerPins.js): those are its links, and nothing ties an
+// event to a storyline by what their words share. Quiet echoes of deferred
+// storylines are stripped, serious visible history must bite into a canonical
+// owner, and the records are checked against the storyline ledger as the
+// earlier segments left it. A stale selected storyline, or one whose update
 // was omitted, is repaired LOCALLY once the whole skip is in hand
 // (repairSkipStorylineMotion) so one overdue process never discards a segment's
 // other events.
@@ -1009,20 +1009,7 @@ const validateSegmentStorylines = (candidate, {
   gameCountry,
   board = [],
 }) => {
-  normalizeWorldStorylineEventLinks(candidate, { world });
-  const selectedBinding = bindSelectedStorylineEvents(candidate, {
-    selectedStorylines: analysis?.attentionStorylines,
-    world,
-    gameCountry,
-  });
-  if (selectedBinding.bound) {
-    console.info(
-      `[OH world director] attached ${selectedBinding.bound} event(s) to their uniquely matching selected storyline(s).`,
-    );
-    // The binding is objective history; propagate it into the records before
-    // anything judges a storyline by its visibility dates.
-    normalizeWorldStorylineEventLinks(candidate, { world });
-  }
+  normalizeWorldStorylineEventLinks(candidate);
   const deferredSalvage = stripQuietDeferredStorylineUpdates(candidate, analysis?.deferredStorylines);
   if (deferredSalvage.strippedIds.length) {
     console.warn(
@@ -11513,35 +11500,24 @@ const runWorldBreadthRepair = async ({
       throw new Error("breadth repair attempted to mutate war/relation/agreement ledgers");
     }
 
-    // R3.8: Crisis Discovery may correctly create a new process but forget the
-    // mechanical eventIndexes seam. Bind only a strong, unambiguous NEW-storyline
-    // match; ambiguity still fails closed below. No extra AI call is involved.
-    const newStorylineBinding = bindNewStorylineEvents(parsed, {
-      existingStorylines: bundle?.world?.storylines,
-      world: bundle?.world,
-    });
-    if (newStorylineBinding.bound) {
-      console.info(
-        `[OH World Breadth Crisis Binding R3.8] attached ${newStorylineBinding.bound} new storyline(s) to ` +
-        `their uniquely matching returned event(s).`,
-      );
-    }
-
-    const decodedStorylines = decodeWorldStorylineUpdates(parsed.storylineUpdates);
     const existingStorylineIds = new Set(
       normalizeArray(bundle?.world?.storylines)
         .map((storyline) => normalizeString(storyline?.id))
         .filter(Boolean),
     );
-    for (const update of decodedStorylines) {
+    for (const update of decodeWorldStorylineUpdates(parsed.storylineUpdates)) {
       const id = normalizeString(update?.id);
       if (existingStorylineIds.has(id)) {
         throw new Error(`breadth repair attempted to update existing storyline ${id}`);
       }
-      if (!normalizeArray(update?.eventIndexes).length) {
-        throw new Error(`new breadth storyline ${id || "<missing id>"} must link to a returned event`);
-      }
     }
+    // A new storyline here must name the event that opens it, by its number:
+    // one that names none is left out, and the events stand. It used to be
+    // tied to whichever event its words matched best (bindNewStorylineEvents),
+    // in English only, and the whole search was thrown away when none did.
+    const decodedStorylines = decodeWorldStorylineUpdates(parsed.storylineUpdates)
+      .filter((update) => normalizeArray(update?.eventIndexes).length > 0);
+    parsed.storylineUpdates = decodedStorylines;
 
     if (!repairEvents.length) {
       if (decodedStorylines.length) {
@@ -18460,10 +18436,11 @@ const gameMasterRequestedDates = (candidate, request) => {
 };
 
 const validateGameMasterStorylineUpdates = async (candidate, { mode, world, game, finalAttempt = false, approved = false, notes = [] } = {}) => {
-  // Native semantic binding owns the causal event links; model-supplied indexes are
-  // hints. This mutates only the preview candidate and therefore remains visible
-  // before Apply can ever persist it.
-  normalizeWorldStorylineEventLinks(candidate, { world });
+  // A record's links are the event indexes it gives (and the events that name it
+  // in storylineIds): one that names no event is dropped, and nothing is linked
+  // by what the words share. This mutates only the preview candidate and
+  // therefore remains visible before Apply can ever persist it.
+  normalizeWorldStorylineEventLinks(candidate);
 
   const normalizedWorld = normalizeWorldState(world);
   const currentDate = normalizeString(game?.gameDate || game?.startDate);

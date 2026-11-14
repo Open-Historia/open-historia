@@ -22,8 +22,12 @@ test("Continuum-10 keeps Beta host mechanics while layering Political World auth
   assert.match(gameState, /withMapClaims/);
   assert.match(gameState, /normalizeFiledEvents/);
 
+  // A storyline's events are the ones its record names, by id or number: the
+  // director ties none by the words they share (the selected-storyline binder
+  // and its ignoreActor rule are gone with the scorer).
   const worldDirector = read("src/Game/AI/nativeWorldDirector.js");
-  assert.match(worldDirector, /ignoreActor:\s*gameCountry/);
+  assert.doesNotMatch(worldDirector, /const scoreStorylineEventLink|export const bindSelectedStorylineEvents|export const bindNewStorylineEvents/);
+  assert.match(worldDirector, /export const normalizeWorldStorylineEventLinks = \(candidate\) =>/);
 });
 
 test("Continuum-10 Advisor keeps streaming safety and institution draft actions together", () => {

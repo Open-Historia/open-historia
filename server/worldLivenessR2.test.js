@@ -369,9 +369,11 @@ test("deployment wording cannot veto either low- or high-pressure storyline upda
   });
   for (const pressure of [18, 65]) {
     const payload = candidate();
-    mod.normalizeWorldStorylineEventLinks(payload, { world: {} });
-    assert.deepEqual(payload.storylineUpdates[0].eventIndexes, [0],
-      "the deployment event still binds to the programme");
+    mod.normalizeWorldStorylineEventLinks(payload);
+    // Its record names no event, so it is tied to none: a storyline's events
+    // are the ones its record names, never the ones its words resemble.
+    assert.deepEqual(payload.storylineUpdates[0].eventIndexes, [],
+      "an event its record does not name is not bound to it");
     const storylines = [storyline(pressure)];
     assert.equal(mod.validateWorldStorylinePayload(payload, {
       existingStorylines: storylines,

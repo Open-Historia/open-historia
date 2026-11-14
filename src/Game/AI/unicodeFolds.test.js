@@ -62,9 +62,11 @@ const FOLDS = [
     ["src/Game/AI/nativeDiplomaticDirector.js", "pregameTitleKey", { clean: cleaned }, true],
     ["src/Game/AI/nativeWarLedger.js", "pregameWarTitleKey", { normalizeString: trimmed }, true],
     ["src/Game/AI/nativeWorldDirector.js", "pregameStorylineTitleKey", { normalizeString: trimmed }, true],
-    ["src/Game/AI/nativeWorldDirector.js", "storylineLinkText", { normalizeString: trimmed }, true],
+    // (nativeWorldDirector.js storylineLinkText and nativeWorldIntegrity.js
+    // normalizeInstitutionAuthorityPhrase went on 2026-11-13 with what they
+    // fed: a storyline is tied to its events by their ids, and an institution
+    // is found by its exact name, case and spacing aside.)
     ["src/Game/AI/nativeTimelineCurator.js", "normalizeText", { normalizeString: trimmed }, true],
-    ["src/Game/AI/nativeWorldIntegrity.js", "normalizeInstitutionAuthorityPhrase", { normalizeString: trimmed }, true],
     ["src/Game/AI/pregameBootstrapCompiler.js", "titleKey", { lower: lowered }, true],
     ["src/Game/AI/lookupTools.js", "foldForSearch", {}, true],
     ["src/Game/AI/playerFocus.js", "fold", { asText: trimmed }, true],
