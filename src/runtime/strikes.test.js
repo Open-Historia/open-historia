@@ -117,14 +117,18 @@ test("a strike's places are found among what its event placed, the cities, the s
 
 test("a strike nobody gave a launching place sets off from what its owner has for it, the nearer the target the better", () => {
   const to = { lng: 30.5, lat: 51.5 };
+  // What each structure IS is its family and its weight (runtime/markerFamily.js), never its words.
   const markers = [
-    { name: "Silo North", kind: "missile silo", ownerCode: "Aland", lng: 21.5, lat: 53.5 },
-    { name: "Silo East", kind: "missile silo", ownerCode: "Aland", lng: 23.5, lat: 51.5 },
-    { name: "Old Silo", kind: "missile silo", ownerCode: "Aland", lng: 24, lat: 51.5, status: "destroyed" },
-    { name: "Their Silo", kind: "missile silo", ownerCode: "Borduria", lng: 30, lat: 51 },
-    { name: "Alba Air Base", kind: "airbase", ownerCode: "Aland", lng: 22.5, lat: 52 },
+    { name: "Silo North", kind: "missile silo", family: "military", strategic: true, ownerCode: "Aland", lng: 21.5, lat: 53.5 },
+    { name: "Silo East", kind: "missile silo", family: "military", strategic: true, ownerCode: "Aland", lng: 23.5, lat: 51.5 },
+    { name: "Old Silo", kind: "missile silo", family: "military", strategic: true, ownerCode: "Aland", lng: 24, lat: 51.5, status: "destroyed" },
+    { name: "Their Silo", kind: "missile silo", family: "military", strategic: true, ownerCode: "Borduria", lng: 30, lat: 51 },
+    { name: "Alba Air Base", kind: "airbase", family: "military", ownerCode: "Aland", lng: 22.5, lat: 52 },
+    // One of the game's own kinds: its family by that id.
     { name: "Fort Alba", kind: "fortress", ownerCode: "Aland", lng: 22, lat: 51 },
-    { name: "Port Alba", kind: "naval port", ownerCode: "Aland", lng: 23.9, lat: 52.5 },
+    { name: "Port Alba", kind: "naval port", family: "infrastructure", ownerCode: "Aland", lng: 23.9, lat: 52.5 },
+    // An old structure the AI built and gave no family: a landmark, whatever its words say.
+    { name: "Silo West", kind: "missile silo", ownerCode: "Aland", lng: 29.9, lat: 51.5 },
   ];
   const units = [
     { name: "3rd Submarine Flotilla", type: "naval", ownerCode: "Aland", lng: 26, lat: 53 },
@@ -133,18 +137,23 @@ test("a strike nobody gave a launching place sets off from what its owner has fo
     { name: "Enemy Fleet", type: "naval", ownerCode: "Borduria", lng: 29, lat: 51.5 },
   ];
   const pick = (weapon, extra = {}) => pickStrikeOrigin({ weapon, owner: "Aland", to, markers, units, ...extra })?.name;
-  // A missile from its silo: the one nearest what it is fired at, and never one that is rubble or another's.
+  // A missile from its silo: the one of strategic weight nearest what it is fired at, never one that is rubble or another's.
   assert.equal(pick("silo missile"), "Silo East");
   assert.deepEqual(pickStrikeOrigin({ weapon: "silo missile", owner: "aland", to, markers, units }), { name: "Silo East", lng: 23.5, lat: 51.5 });
-  // A submarine's from a formation at sea: its submarines before any other fleet, a port only when it has neither.
+  // Its twin in Russian, said to be the same thing: the same choice.
+  const russian = markers.map((marker) => (marker.name === "Silo East" ? { ...marker, name: "Шахта Восток", kind: "шахтная пусковая установка" } : marker));
+  assert.equal(pickStrikeOrigin({ weapon: "silo missile", owner: "Aland", to, markers: russian, units })?.name, "Шахта Восток");
+  // A submarine's from a formation at sea, the nearest; with none, from no structure (the turn puts it to sea).
   assert.equal(pick("submarine missile"), "3rd Submarine Flotilla");
-  assert.equal(pick("submarine missile", { units: units.filter((unit) => !/Submarine/.test(unit.name)) }), "Home Fleet");
-  assert.equal(pick("submarine missile", { units: [] }), "Port Alba");
-  // Aircraft from an airfield, then from an air formation.
-  assert.equal(pick("bombing run"), "Alba Air Base");
-  assert.equal(pick("nuclear bomber", { markers: markers.filter((marker) => marker.kind !== "airbase") }), "1st Bomber Wing");
-  // With no silo, a missile sets off from a base; with nothing of its owner's, from nowhere the turn knows.
-  assert.equal(pick("silo missile", { markers: markers.filter((marker) => marker.kind !== "missile silo") }), "Alba Air Base");
+  assert.equal(pick("submarine missile", { units: units.filter((unit) => unit.name !== "3rd Submarine Flotilla") }), "Home Fleet");
+  assert.equal(pick("submarine missile", { units: [] }), undefined);
+  // Aircraft from an air formation, then from the nearest military site.
+  assert.equal(pick("bombing run"), "1st Bomber Wing");
+  assert.equal(pick("nuclear bomber", { units: [] }), "Silo East");
+  assert.equal(pick("nuclear bomber", { units: [], markers: markers.filter((marker) => !marker.strategic) }), "Alba Air Base");
+  // With no strategic site, a missile sets off from any military one; with nothing of its owner's, from nowhere the turn knows.
+  assert.equal(pick("silo missile", { markers: markers.filter((marker) => !marker.strategic) }), "Alba Air Base");
+  assert.equal(pick("missile strike"), "Silo East");
   assert.equal(pickStrikeOrigin({ weapon: "silo missile", owner: "Carpathia", to, markers, units }), null);
   assert.equal(pickStrikeOrigin({ weapon: "submarine missile", owner: "Aland", to, markers: [], units: [] }), null);
 });

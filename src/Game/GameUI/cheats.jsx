@@ -80,7 +80,7 @@ import {
 } from "../../runtime/countryCapabilities.js";
 import { collectImpactOps, countImpactOps, otherImpactFamilies } from "./gmPreviewOps.js";
 // The feature types, with the glyph the map draws for each (mapFeatureKinds.js).
-import { GM_MAP_FEATURE_KINDS as MAP_FEATURE_KINDS } from "./mapFeatureKinds.js";
+import { GM_MAP_FEATURE_FAMILIES, GM_MAP_FEATURE_KINDS as MAP_FEATURE_KINDS, gmFeatureFamily } from "./mapFeatureKinds.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld, politicalEditorComposition } from "./countryEditorPolitical.js";
 import { PARTY_ROLE_LABELS } from "../../runtime/politics.js";
 import {
@@ -5468,11 +5468,19 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             .filter(({ feature }) => !q || [feature?.properties?.city, feature?.properties?.name].some((value) => String(value ?? "").toLowerCase().includes(q)))
             .slice(0, 80);
 
+        // How the map draws it: its type's family, or the one picked for a type
+        // of the player's own (mapFeatureKinds.js), never a family left over
+        // from before its type changed.
+        const formFamily = (marker) => gmFeatureFamily(
+            fields.kind ?? (MAP_FEATURE_KINDS.some((entry) => entry.id === marker.kind) ? marker.kind : "other"),
+            fields.family ?? marker.family,
+        ) || undefined;
         const markerFromForm = (marker, coords = null) => ({
             ...marker,
             id: marker.id,
             name: String(fields.name ?? marker.name ?? "").trim(),
             kind: (fields.kind === "other" ? String(fields.customKind ?? "").trim() : String(fields.kind ?? marker.kind ?? "landmark").trim()) || "landmark",
+            family: formFamily(marker),
             ownerCode: String(fields.ownerCode ?? marker.ownerCode ?? "").trim(),
             lng: Number(coords?.lng ?? fields.lng ?? marker.lng),
             lat: Number(coords?.lat ?? fields.lat ?? marker.lat),
@@ -5514,6 +5522,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 lat: nextMarker.lat,
                 note: nextMarker.note,
                 foundedAt: nextMarker.foundedAt,
+                // Said every time, so a type changed to one with no family of its own is a landmark again.
+                family: nextMarker.family || "landmark",
             });
             const refreshed = await applyAdminMarkerOps(markerOps);
             return (refreshed?.markers ?? []).find((entry) => entry.id === marker.id) || nextMarker;
@@ -5646,6 +5656,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                 name: marker.name || "",
                                                 kind: knownKind,
                                                 customKind: knownKind === "other" ? marker.kind || "" : "",
+                                                family: knownKind === "other" ? marker.family || "" : "",
                                                 ownerCode: marker.ownerCode || "",
                                                 status: marker.status || "active",
                                                 note: marker.note || "",
@@ -5695,6 +5706,16 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     </div>
                                     {fields.kind === "other" && (
                                         <input style={{ ...inputStyle, marginTop: "0.38rem" }} value={fields.customKind ?? ""} onChange={(event) => setFields({ ...fields, customKind: event.target.value })} placeholder="Custom type, e.g. observatory" />
+                                    )}
+                                    {fields.kind === "other" && (
+                                        <>
+                                        <label style={labelStyle}>Drawn as</label>
+                                        <select value={fields.family || "landmark"} onChange={(event) => setFields({ ...fields, family: event.target.value })} style={inputStyle}>
+                                            {GM_MAP_FEATURE_FAMILIES.map((family) => (
+                                                <option key={family.id} value={family.id}>{family.icon} {family.label}</option>
+                                            ))}
+                                        </select>
+                                        </>
                                     )}
 
                                     <label style={labelStyle}>Associated country (optional)</label>
@@ -5925,6 +5946,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const type = fields.addType || "landmark";
         const isCity = type === "city";
         const customKind = type === "other" ? String(fields.customKind ?? "").trim() : type;
+        // How the map draws it (mapFeatureKinds.js gmFeatureFamily).
+        const family = isCity ? "" : gmFeatureFamily(type, fields.family);
         const choiceStyle = (active) => ({
             ...buttonStyle,
             background: active ? "rgba(0,0,0,0.48)" : "rgba(255,255,255,0.05)",
@@ -5989,6 +6012,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         marker: {
                             name,
                             kind: isCity ? "city" : customKind,
+                            ...(family ? { family } : {}),
                             ownerCode,
                             status: markerStatus,
                             lng,
@@ -6035,6 +6059,16 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 </div>
                 {type === "other" && (
                     <input style={{ ...inputStyle, marginTop: "0.38rem" }} value={fields.customKind ?? ""} onChange={(event) => setFields({ ...fields, customKind: event.target.value })} placeholder="Custom type, e.g. observatory" />
+                )}
+                {type === "other" && (
+                    <>
+                    <label style={labelStyle}>Drawn as</label>
+                    <select value={fields.family || "landmark"} onChange={(event) => setFields({ ...fields, family: event.target.value })} style={inputStyle}>
+                        {GM_MAP_FEATURE_FAMILIES.map((entry) => (
+                            <option key={entry.id} value={entry.id}>{entry.icon} {entry.label}</option>
+                        ))}
+                    </select>
+                    </>
                 )}
 
                 <label style={labelStyle}>Name</label>

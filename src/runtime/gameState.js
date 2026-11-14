@@ -27,6 +27,7 @@ import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normaliz
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
 import { normalizeEventPlaces } from "./eventPlaces.js";
+import { normalizeMarkerFamily } from "./markerFamily.js";
 import { normalizeEventPresentation } from "./eventQuote.js";
 import { normalizeEventAgency } from "./eventAgency.js";
 import { storylineKindOf } from "./storylineKinds.js";
@@ -1628,6 +1629,9 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
   const status = normalizeOptionalString(entry.status).toLowerCase();
   const foundedAt = normalizeOptionalString(entry.foundedAt || entry.date);
   const approximate = normalizeApproximateMark(entry.approximate);
+  // How the map draws it (runtime/markerFamily.js): its family and its
+  // strategic weight, as the skip, the Workshop or the Game Master said them.
+  const family = normalizeMarkerFamily(entry.family);
 
   return {
     id: normalizeOptionalString(entry.id) || generateId(`marker-${index}`),
@@ -1645,6 +1649,9 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
     updatedDate: normalizeOptionalString(entry.updatedDate || entry.lastUpdatedDate) || foundedAt,
     sourceEventIds: normalizeMarkerSourceEventIds(entry.sourceEventIds),
     ...(approximate ? { approximate } : {}),
+    // Only when said, so a structure without saves exactly as before.
+    ...(family ? { family } : {}),
+    ...(entry.strategic === true ? { strategic: true } : {}),
   };
 };
 
@@ -1674,6 +1681,13 @@ const normalizeMarkerPatch = (entry) => {
     const kind = normalizeOptionalString(entry.kind || entry.type).toLowerCase();
     if (kind) patch.kind = kind;
   }
+  // A new family or strategic weight, when an update says one; a kind changed
+  // without one keeps the family it had.
+  if (hasOwn(entry, "family")) {
+    const family = normalizeMarkerFamily(entry.family);
+    if (family) patch.family = family;
+  }
+  if (hasOwn(entry, "strategic") && typeof entry.strategic === "boolean") patch.strategic = entry.strategic;
   if (hasOwn(entry, "ownerCode") || hasOwn(entry, "owner") || hasOwn(entry, "code")) {
     patch.ownerCode = toCountryName(normalizeOptionalString(entry.ownerCode ?? entry.owner ?? entry.code));
   }

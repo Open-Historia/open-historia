@@ -134,10 +134,12 @@ test("a strike rests on its event, orders nobody, and is drawn whoever's it is",
 
 test("a turn's strikes come back with their places found, in peace as in war, and a submarine's is fired from the sea", async () => {
   const map = sheet();
+  // Each structure's family and weight, as the skip said them when it built
+  // it (runtime/markerFamily.js): what a strike sets off from is read by them.
   const markers = [
-    { id: "m1", name: "Silo North", kind: "missile silo", ownerCode: "Aland", lng: 5, lat: 47 },
-    { id: "m2", name: "Alba Air Base", kind: "airbase", ownerCode: "Aland", lng: 7, lat: 45 },
-    { id: "m3", name: "Brod Refinery", kind: "refinery", ownerCode: "Borduria", lng: 53, lat: 43 },
+    { id: "m1", name: "Silo North", kind: "missile silo", family: "military", strategic: true, ownerCode: "Aland", lng: 5, lat: 47 },
+    { id: "m2", name: "Alba Air Base", kind: "airbase", family: "military", ownerCode: "Aland", lng: 7, lat: 45 },
+    { id: "m3", name: "Brod Refinery", kind: "refinery", family: "industry-science", ownerCode: "Borduria", lng: 53, lat: 43 },
   ];
   const world = worldOn(map, { markers });
   const events = [

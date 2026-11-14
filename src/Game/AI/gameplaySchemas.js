@@ -21,6 +21,7 @@ import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
 import { OCCUPATION_SETTLEMENTS_FIELD, occupationOutcomesFor } from "../../runtime/occupationSettlements.js";
 import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
 import { CANON_KINDS } from "../../runtime/historyTiers.js";
+import { SAID_MARKER_FAMILIES } from "../../runtime/markerFamily.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -163,16 +164,19 @@ const regionClaimSchema = {
 const statPct = (description) => ({ type: "integer", minimum: 0, maximum: 100, description });
 const statsUpdateSchema = {
   type: "object",
+  // (Each field's "only when it changes" is said once, here: the room it took
+  // pays for the fields that replaced English words, a structure's family, a
+  // post's reach and mentions and an event's concerns, foldedSkipSent.test.js.)
   description: "Only the fields that changed, as absolute values.",
   properties: {
-    capital: textSchema("Capital, only when it changes."),
-    continent: textSchema("Continent / broad region, only when it changes."),
-    government: textSchema("Government system and ideology, only when it changes."),
-    leader: textSchema("Head of state or government, only when it changes."),
+    capital: textSchema("Capital."),
+    continent: textSchema("Continent / broad region."),
+    government: textSchema("Government system and ideology."),
+    leader: textSchema("Head of state or government."),
     stability: statPct("National stability 0-100."),
     indices: {
       type: "object",
-      description: "The standard sheet's strategic indices that changed.",
+      description: "Strategic indices that changed.",
       properties: {
         sovereignty: statPct("Practical political sovereignty."),
         foodAutonomy: statPct("Domestic food autonomy."),
@@ -210,7 +214,7 @@ const statsUpdateSchema = {
     },
     gdpBreakdown: {
       type: "object",
-      description: "Agriculture/industry/services shares — send all three together so they still sum to ~100.",
+      description: "Send all three together; they sum to ~100.",
       properties: {
         agriculture: statPct("Agriculture share of GDP."),
         industry: statPct("Industry share of GDP."),
@@ -473,10 +477,22 @@ const markerSchema = {
     lat: { type: "number", description: "Only with no `at`.", minimum: -90, maximum: 90 },
     note: textSchema("Brief description, shown when inspected."),
     foundedAt: textSchema("In-game date it was built or founded."),
+    // How the map draws it (runtime/markerFamily.js), in place of English
+    // words in its kind and name: its family (none is a landmark) and whether
+    // it is of strategic weight. Last, and optional.
+    family: { type: "string", enum: [...SAID_MARKER_FAMILIES], description: "How the map draws it; none for a landmark." },
+    strategic: { type: "boolean", description: "Of national strategic weight." },
   },
   required: ["name", "kind"],
   additionalProperties: false,
 };
+
+// The same fields on the other ops that can carry them: a build written flat,
+// and an update. The contract a skip is SENT puts them on the nested marker
+// only (it is held to a size: foldedSkipSent.test.js); an answer is checked
+// with them on these too, so one written there is read and never costs a turn
+// (gameState.js normalizeMarkerOp reads both shapes).
+const MARKER_DRAWING_PROPERTIES = { family: markerSchema.properties.family, strategic: markerSchema.properties.strategic };
 
 // The player's espionage orders, executed by the event that carries them: an
 // agent deployed to a country or recalled from it. Only the player's own
@@ -1200,9 +1216,29 @@ const foldedProjectOpsSchema = compactJumpImpactSchema({
 // impacts, and the board's op whole, so a folded answer and a habit both pass.
 // (And the unit operations whole: a unit raised of one of the scenario's own
 // unit types names it, though the contract only offers it where there are some.)
+// (And a structure's family and weight written beside a flat build's op or on
+// an update, where the contract puts them on the nested marker only:
+// MARKER_DRAWING_PROPERTIES.)
+const withMarkerDrawingEverywhere = (schema) => ({
+  ...schema,
+  items: {
+    ...schema.items,
+    anyOf: schema.items.anyOf.map((branch) => {
+      const op = branch.properties?.op?.enum?.[0];
+      return (op === "build" && !branch.properties.marker) || op === "update"
+        ? { ...branch, properties: { ...branch.properties, ...MARKER_DRAWING_PROPERTIES } }
+        : branch;
+    }),
+  },
+});
 const jumpAnswerImpactsSchema = {
   ...jumpImpactsSchema,
-  properties: { ...jumpImpactsSchema.properties, projectOps: impactsSchema.properties.projectOps, unitOps: impactsSchema.properties.unitOps },
+  properties: {
+    ...jumpImpactsSchema.properties,
+    projectOps: impactsSchema.properties.projectOps,
+    unitOps: impactsSchema.properties.unitOps,
+    markerOps: withMarkerDrawingEverywhere(jumpImpactsSchema.properties.markerOps),
+  },
 };
 
 // The field a folded skip's agents' reports come back in (gameplay.js).

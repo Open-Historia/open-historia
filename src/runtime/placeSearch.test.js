@@ -69,7 +69,8 @@ test("between equally good matches the more prominent place comes first", () => 
 test("a place listed twice close together is shown once, and far apart twice", () => {
   const entries = buildLocalPlaceEntries({
     cities: [city("Brest", -4.49, 48.39), city("Brest", 23.7, 52.1)],
-    markers: [{ id: "m1", name: "Brest", kind: "naval base", lng: -4.5, lat: 48.4 }],
+    // Its family as the skip gave it (runtime/markerFamily.js): what makes it prominent.
+    markers: [{ id: "m1", name: "Brest", kind: "naval base", family: "military", lng: -4.5, lat: 48.4 }],
   });
   const brests = searchLocalPlaces(entries, "brest", 5);
   assert.equal(brests.length, 2, "the structure in Brittany folds into the city, the one in Belarus stays");

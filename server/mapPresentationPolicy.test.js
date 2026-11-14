@@ -7,16 +7,22 @@ import {
   getMarkerPresentation,
 } from "../src/Game/Map/vnext/presentationPolicy.js";
 
+// A structure's family is its own field (runtime/markerFamily.js), as the time
+// skip gives it: the same basin in Latvian is drawn exactly alike.
 test("Map vNext classifies resource areas independently from cities", () => {
   const presentation = getMarkerPresentation({
     name: "Dobele Lithium Basin",
     kind: "resource basin",
+    family: "resource",
     status: "active",
   });
 
   assert.equal(presentation.family, MARKER_FAMILY.resource);
   assert.equal(presentation.glyph, "◆");
   assert.equal(presentation.visibilityTier, MARKER_VISIBILITY_TIER.regional);
+  assert.deepEqual(getMarkerPresentation({ name: "Dobeles litija baseins", kind: "resursu baseins", family: "resource", status: "active" }), presentation);
+  // Its words alone say nothing.
+  assert.equal(getMarkerPresentation({ name: "Dobele Lithium Basin", kind: "resource basin", status: "active" }).family, MARKER_FAMILY.landmark);
 });
 
 test("Map vNext gives military sites a distinct strategic marker family", () => {
