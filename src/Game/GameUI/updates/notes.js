@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player on a slow local model, 2026-11-12: nothing on the map said whether the game was waiting on the model or
+    // idle, nor how many calls a turn had made. GameUI/AiActivityBadge.jsx, AI/requestTally.js, fed by main.jsx callAI;
+    // mapSettings.js aiActivityBadge, off by default.
+    id: "2026-11-ai-activity-badge",
+    kind: "minor",
+    date: "2026-11-12",
+    banners: [
+      {
+        title: "See when the AI is working",
+        items: [
+          "A new setting, Show AI activity on the map, puts a badge at the top of the map that says whether the AI is working or idle.",
+          "While it works, the badge names the task and counts the time, also for background tasks that show no spinner.",
+          "It also counts the AI calls made this turn and how many came back with no answer.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",

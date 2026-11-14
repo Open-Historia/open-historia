@@ -3159,6 +3159,10 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (My key has no request limit on) still arrives all at once.
                     </div>
+                    <Toggle label="Show AI activity on the map" enabled={mapSettings.aiActivityBadge} onToggle={() => updateMapSetting("aiActivityBadge", MAP_SETTING_KEYS.aiActivityBadge, !mapSettings.aiActivityBadge)} />
+                    <div style={settingsHelper}>
+                    Off (default). On: a badge at the top of the map says whether the game has an AI call open right now, which task it is and for how long, and how many calls this turn has made, the background ones included.
+                    </div>
                     <Toggle label="Stop when my events fail" enabled={mapSettings.stopOnPlayerFailures} onToggle={() => updateMapSetting("stopOnPlayerFailures", MAP_SETTING_KEYS.stopOnPlayerFailures, !mapSettings.stopOnPlayerFailures)} />
                     <div style={settingsHelper}>
                     Off (default): an event about your country that the game refuses is left out, and an order of yours that got no outcome carries over to the next skip as overdue. On: the skip stops before anything is saved and lists what failed. Retry the failed events (one more request, for the same dates), retry the whole skip, or keep it and move on.
@@ -3389,6 +3393,8 @@ const SettingsMenu = ({
         chunkLongJumps: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
         // Ships ON: an absent key reads as on (see mapSettings.js).
         liveSkipEvents: getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents),
+        // Off by default.
+        aiActivityBadge: getMapSetting(MAP_SETTING_KEYS.aiActivityBadge),
         stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
         batchBackgroundTasks: getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks),
         // Ships ON as well: Discord's "Playing Open Historia" (General → Privacy).

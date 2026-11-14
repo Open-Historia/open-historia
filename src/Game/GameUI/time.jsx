@@ -63,6 +63,7 @@ import { foreseenFronts, onForeseenFronts } from "../AI/foreseenFronts.js";
 import { strikeBounds, strikesOfEvent } from "../../runtime/strikes.js";
 import { replayStrikes, showStrikesOfEvent } from "../Map/strikeStore.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import AiActivityBadge from "./AiActivityBadge.jsx";
 import { primeRuntimeValue } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting, useMapSettingValue, useMotionSetting } from "../../runtime/mapSettings.js";
@@ -3865,6 +3866,8 @@ const DateWidget = ({
 
     return (
         <>
+        {/* Off unless Settings → AI → Show AI activity on the map is on. */}
+        <AiActivityBadge gameDate={gameData?.gameDate || ""} />
         <TimelineSkipPanel
         canUndo={undoCount > 0}
         currentDate={currentDate}
