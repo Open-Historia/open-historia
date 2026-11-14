@@ -144,18 +144,14 @@ export const geometryCentroid = (geometry) => {
   return best ? { lng: best.lng, lat: best.lat } : null;
 };
 
-const statsRegionHeuristicWeight = ({ tags = [], type = "" } = {}) => {
-  const lowered = new Set(normalizeArray(tags).map((tag) => normalizeString(tag).toLowerCase()).filter(Boolean));
-  const typeKey = normalizeString(type).toLowerCase();
-  let weight = 1;
-  if ([...lowered].some((tag) => tag.includes("capital"))) weight *= 4;
-  else if ([...lowered].some((tag) => tag.includes("metro") || tag.includes("city") || tag.includes("urban"))) weight *= 2.5;
-  if ([...lowered].some((tag) => tag.includes("desert"))) weight *= 0.5;
-  if ([...lowered].some((tag) => tag.includes("mountain") || tag.includes("hill"))) weight *= 0.8;
-  if ([...lowered].some((tag) => tag.includes("jungle"))) weight *= 0.75;
-  if (typeKey.includes("island")) weight *= 0.8;
-  return Math.max(0.1, weight);
-};
+// Every region of the map weighs the same in the plan. A region's weight was
+// read from English words inside its imported tags and its author's type name
+// ("capital", "urban", "desert", "island"), which a map tagged or typed in any
+// other language never matched, and "capitalist" or "Desert Island Resort"
+// matched wrongly; the map carries no structured density to read in their place.
+// "there should be absolutely no keywording done in this game anywhere" (the
+// owner, 2026-11-13).
+const REGION_WEIGHT = 1;
 
 const buildStatsMacroPlan = (plannedRows = []) => {
   const rows = normalizeArray(plannedRows)
@@ -853,7 +849,7 @@ export const buildTargetStatsTerritorialBasisKernel = async ({
         baseOwner,
         lng: coordinateOrNull(region?.lng),
         lat: coordinateOrNull(region?.lat),
-        weight: statsRegionHeuristicWeight({ tags: region?.tags, type: region?.type }),
+        weight: REGION_WEIGHT,
         adjacencies: normalizeArray(region?.adjacencies).map(normalizeString).filter(Boolean),
       });
     }
@@ -892,7 +888,7 @@ export const buildTargetStatsTerritorialBasisKernel = async ({
         baseOwner,
         lng,
         lat,
-        weight: statsRegionHeuristicWeight({ tags: region?.tags, type: region?.type }),
+        weight: REGION_WEIGHT,
         adjacencies: normalizeArray(region?.adjacencies).map(normalizeString).filter(Boolean),
       };
     })
