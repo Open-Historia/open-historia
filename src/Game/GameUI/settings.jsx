@@ -1521,6 +1521,8 @@ const RequestBudgetSection = () => {
     const lookupsOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
     // Idle diplomacy has a switch of its own, outside that cap (2026-11-09).
     const idleDiplomacyOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy);
+    // So has the reading a country gets when its pane is opened.
+    const assessOnOpenOn = useMapSettingDefaultOn(MAP_SETTING_KEYS.assessOnOpen);
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
 
     useEffect(() => {
@@ -1682,9 +1684,17 @@ const RequestBudgetSection = () => {
             enabled={idleDiplomacyOn}
             onToggle={() => setMapSetting(MAP_SETTING_KEYS.idleDiplomacy, !idleDiplomacyOn)}
             />
+            <div style={settingsHelper}>
+                Off: between time skips, no country writes to you unless you write first.
+            </div>
+            <Toggle
+            label="Assess a country when I open it"
+            enabled={assessOnOpenOn}
+            onToggle={() => setMapSetting(MAP_SETTING_KEYS.assessOnOpen, !assessOnOpenOn)}
+            />
             {/* The section ends on this line when there is nothing under Advanced. */}
             <div style={{ ...settingsHelper, ...(noLimit ? null : { marginBottom: 0 }) }}>
-                Off: between time skips, no country writes to you unless you write first.
+                On (default): the first time you open a country, the AI writes its stat sheet and rates its intelligence service in the background, one request or two a country. Off: looking at a country asks nothing. Its numbers are still written when you open the tab that shows them, and when the game needs them: a conflict with you, or espionage.
             </div>
 
             {noLimit && (

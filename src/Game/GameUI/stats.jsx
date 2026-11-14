@@ -23,6 +23,7 @@ import { intelligenceOf } from "../../runtime/spycraft.js";
 import { bundledFlagUrl } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
+import { MAP_SETTING_KEYS, useMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import { assessPoliticalLandscape, ensureCountryAssessed, ensureIntelligenceRated, ensureMilitaryFigures, generateCountryStatSheet, pendingCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
 import { wantsRating } from "../AI/militaryRating.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
@@ -2122,6 +2123,17 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
     // the day's fixed cap (requestBudget.js), and asked once per polity however
     // often the map is clicked. They used to generate directly on every tab, so
     // browsing Politics on a free-tier key spent a request per country clicked.
+    //
+    // Once a polity is still once for each of them, and a map has a hundred or
+    // two: a player who looks around the neighbours has spent a request or two
+    // on every country clicked without asking for anything, and on a local
+    // model each of those holds the one slot a time skip is waiting for. So
+    // the background reading has a switch (Settings → AI → Assess a country
+    // when I open it). Off, Politics and Diplomacy show what is known and ask
+    // nothing; Economy still writes the sheet it shows, because opening it is
+    // asking, and the game still reads a country it needs to (a conflict,
+    // espionage).
+    const assessOnOpen = useMapSettingDefaultOn(MAP_SETTING_KEYS.assessOnOpen);
     useEffect(() => {
         if (!active || !targetCountry || !statSheetDefinitionReady) return undefined;
         let cancelled = false;
@@ -2134,12 +2146,12 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             void loadSheet({ generate: false });
         } else {
             loadSheet({ generate: false }).finally(() => {
-                if (cancelled || generatingRef.current?.code === targetCountry) return;
+                if (cancelled || !assessOnOpen || generatingRef.current?.code === targetCountry) return;
                 void ensureCountryAssessed(targetCountry, { reason: "stats pane" });
             });
         }
         return () => { cancelled = true; };
-    }, [active, targetCountry, loadSheet, statSheetDefinitionReady, statsView]);
+    }, [active, targetCountry, loadSheet, statSheetDefinitionReady, statsView, assessOnOpen]);
 
     useEffect(() => {
         if (!active || typeof window === "undefined") return undefined;

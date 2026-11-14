@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player, 2026-11-12: "everything had loaded, then I click any neighbouring country and it sends a request again,
+    // though I ordered nothing." GameUI/stats.jsx asks for a first reading of every country opened; the day's 41
+    // requests on a free key had 11 of them. mapSettings.js assessOnOpen, on by default.
+    id: "2026-11-assess-on-open",
+    kind: "minor",
+    date: "2026-11-12",
+    banners: [
+      {
+        title: "Looking at a country no longer has to cost a request",
+        items: [
+          "A new setting, Assess a country when I open it, decides whether the AI writes a country's numbers the first time you open it. It stays on unless you turn it off.",
+          "Off, looking around the map asks nothing. A country's numbers are still written when you open the tab that shows them, and when the game needs them.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",
