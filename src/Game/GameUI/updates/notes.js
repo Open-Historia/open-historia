@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player on llama.cpp with a 27B thinking model, 2026-11-12: a one-month skip stayed open 1,144 seconds with 37,717
+    // characters of reasoning and no answer. Model reasoning OFF sent a local server nothing, and the model's template
+    // reasons when told nothing. AI/localReasoning.js, main.jsx callOpenAiCompatible.
+    id: "2026-11-local-reasoning-off",
+    kind: "minor",
+    date: "2026-11-13",
+    banners: [
+      {
+        title: "Model reasoning switched off now reaches a local model",
+        items: [
+          "With Model reasoning off, a local server (llama.cpp, LM Studio, Ollama and the like) is now told not to reason. Before, it was told nothing, and a thinking model reasoned anyway.",
+          "On a home graphics card that reasoning could hold a time skip for many minutes before the first word of the answer.",
+          "Nothing changes while the setting is on, or for a hosted provider.",
+        ],
+      },
+    ],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",
