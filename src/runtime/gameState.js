@@ -2242,11 +2242,13 @@ const listProvidedFields = (source) => {
 
 // One AI-authored mutation to the projects board.
 //
-// The aliases are generous on purpose. markerOps learned this the hard way: a
-// model asked for "build" writes "found" about a third of the time and the op is
-// then dropped in silence. The vocabulary accepted here (start/launch,
-// cancel/abandon) is what a model actually reaches for when narrating a
-// programme, so take it rather than losing the update.
+// The op is one of the board's own: create, update, milestone, complete, cancel,
+// fail or remove (the schema's enum and the advisor's projects block alike), and
+// close, the form this function writes back. Nothing else is read as one of them:
+// English verbs a model reaches for (start, launch, finish, abandon, shelve)
+// were once taken as synonyms, and the same verbs in any other language never
+// were ("there should be absolutely no keywording done in this game anywhere",
+// the owner, 2026-11-13). An op outside the board's words is left out.
 const normalizeProjectOp = (entry) => {
   if (!entry || typeof entry !== "object") return null;
 
@@ -2254,7 +2256,7 @@ const normalizeProjectOp = (entry) => {
   const projectId = normalizeOptionalString(entry.projectId || entry.id);
   const name = normalizeOptionalString(entry.name || entry.project || entry.title);
 
-  if (op === "create" || op === "start" || op === "launch" || op === "open" || op === "add") {
+  if (op === "create") {
     // The payload may be nested under `project` or inlined on the op itself —
     // both shapes turn up, and markerOps accepts both for the same reason.
     const source = entry.project ?? entry;
@@ -2266,7 +2268,7 @@ const normalizeProjectOp = (entry) => {
     return { op: "create", project, provided };
   }
 
-  if (op === "update" || op === "progress" || op === "edit") {
+  if (op === "update") {
     if (!projectId && !name) return null;
     return { op: "update", projectId, name, patch: entry.patch ?? entry.project ?? entry };
   }
@@ -2319,7 +2321,7 @@ const normalizeProjectOp = (entry) => {
     };
   }
 
-  if (op === "complete" || op === "finish" || op === "completed") {
+  if (op === "complete") {
     if (!projectId && !name) return null;
     return { op: "close", status: "complete", projectId, name, note: normalizeOptionalString(entry.note) };
   }
@@ -2328,18 +2330,18 @@ const normalizeProjectOp = (entry) => {
   // alias to remove, which DELETED the entry — so the most natural way for a
   // model to say "we gave up on this" quietly erased it, and the Closed view it
   // should have appeared in stayed empty.
-  if (op === "cancel" || op === "cancelled" || op === "abandon" || op === "shelve") {
+  if (op === "cancel") {
     if (!projectId && !name) return null;
     return { op: "close", status: "cancelled", projectId, name, note: normalizeOptionalString(entry.note) };
   }
 
-  if (op === "fail" || op === "failed") {
+  if (op === "fail") {
     if (!projectId && !name) return null;
     return { op: "close", status: "failed", projectId, name, note: normalizeOptionalString(entry.note) };
   }
 
   // The real erasure, for an entry that should never have been opened.
-  if (op === "remove" || op === "delete" || op === "drop") {
+  if (op === "remove") {
     if (!projectId && !name) return null;
     return { op: "remove", projectId, name, note: normalizeOptionalString(entry.note) };
   }
