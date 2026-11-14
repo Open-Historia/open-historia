@@ -14,11 +14,13 @@
 //                     turn of the seasons at the equator is never a line.
 //   a climate zone    a scenario's own (runtime/warGeography.js climateZones,
 //                     fronts/climate.js): each of its seasons tints in its own
-//                     colour where the designer gave one, else by its name
-//                     ("Winter", "Late Autumn"), else by the weather it brings
+//                     colour where the designer gave one, else as the world's
+//                     season the designer said it is (its `kind`: winter,
+//                     spring, summer, autumn), else by the weather it brings
 //                     (snow white, rain blue, heat orange...), else in the
 //                     zone's colour. In a gap between its seasons it is the
-//                     world's own.
+//                     world's own. Its name is never read: "Deep Winter" used
+//                     to tint as winter and "Hiver" as its weather.
 //
 // Nothing changes at a line or on a day. Over time a zone's seasons fade into
 // each other over its transitionDays (climate.js seasonMixOn, the very mix
@@ -94,21 +96,14 @@ const hexRgb = (value) => {
   return [(number >> 16) & 255, (number >> 8) & 255, number & 255];
 };
 
-// The world season a name says, "" for none: "Winter", "deep winter", "The Fall".
-const SEASON_WORDS = Object.freeze({ winter: "winter", spring: "spring", summer: "summer", autumn: "autumn", fall: "autumn" });
-export const seasonWordOf = (name) => {
-  for (const word of String(name ?? "").toLowerCase().split(/[^a-z]+/)) if (Object.hasOwn(SEASON_WORDS, word)) return SEASON_WORDS[word];
-  return "";
-};
-
 // The colour a season of a designer's zone tints in, or null where nothing
-// says: its own colour, else its name's, else its weather's.
+// says: its own colour, else its kind's (the world season the designer said it
+// is: warGeography.js SEASON_KINDS), else its weather's.
 export const seasonTintOf = (season) => {
   if (!season || typeof season !== "object") return null;
   const own = hexRgb(season.color);
   if (own) return own;
-  const word = seasonWordOf(season.name);
-  if (word) return [...SEASON_TINTS[word]];
+  if (Object.hasOwn(SEASON_TINTS, String(season.kind ?? ""))) return [...SEASON_TINTS[season.kind]];
   let total = 0;
   const sum = [0, 0, 0];
   for (const [state, weight] of Object.entries(season.weather ?? {})) {
