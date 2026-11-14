@@ -81,6 +81,9 @@ export const normalizeStrike = (entry) => {
     from: readPlace(entry.from),
     to,
     ...(Number(entry.spreadKm) > 0 ? { spreadKm: Math.min(200, Math.round(Number(entry.spreadKm) * 10) / 10) } : {}),
+    ...(clean(entry.model, 40) ? { model: clean(entry.model, 40) } : {}),
+    ...(clean(entry.variant, 40) ? { variant: clean(entry.variant, 40) } : {}),
+    ...(Number.isFinite(entry.shape) ? { shape: Math.round(Number(entry.shape)) } : {}),
   };
 };
 

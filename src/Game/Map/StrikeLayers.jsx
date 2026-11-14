@@ -97,9 +97,12 @@ const StrikeLayers = () => {
   const hasActiveCraters = () => {
     const curRound = roundRef.current ?? 0;
     return (strikesRef.current ?? []).some((s) => {
-      if (!s?.to || !Number.isFinite(s.to.lng)) return false;
-      const roundAge = curRound - (Number(s.round) || curRound);
-      return roundAge >= 0 && roundAge <= 1;
+      if (!s?.to || !Number.isFinite(s.to.lng) || !Number.isFinite(s.to.lat)) return false;
+      const count = Number(s.count) || 0;
+      const down = Number(s.down) || 0;
+      if (count > 0 && down >= count) return false;
+      const roundAge = Math.max(0, curRound - (Number(s.round) || curRound));
+      return roundAge <= 2;
     });
   };
 

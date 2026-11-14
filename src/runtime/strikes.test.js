@@ -34,11 +34,11 @@ import {
 const strike = (extra = {}) => ({ id: "strike:2024-03-01:0", eventId: "e1", date: "2024-02-20", owner: "Aland", weapon: "silo missile", count: 3, down: 1, from: { name: "structure: Silo North", lng: 21.5, lat: 51.25 }, to: { name: "city: Brod", lng: 30.5, lat: 51.5 }, ...extra });
 
 test("the weapons a strike is made with: three are nuclear, two fly as aircraft", () => {
-  assert.deepEqual([...STRIKE_WEAPONS], ["silo missile", "submarine missile", "missile strike", "nuclear bomber", "bombing run"]);
+  assert.deepEqual([...STRIKE_WEAPONS], ["silo missile", "submarine missile", "missile strike", "nuclear bomber", "bombing run", "drone strike"]);
   assert.deepEqual(STRIKE_WEAPONS.filter(isNuclear), [...NUCLEAR_WEAPONS]);
   assert.deepEqual([...NUCLEAR_WEAPONS], ["silo missile", "submarine missile", "nuclear bomber"]);
   assert.deepEqual(STRIKE_WEAPONS.filter(fliesAsAircraft), [...AIRCRAFT_WEAPONS]);
-  assert.deepEqual([...AIRCRAFT_WEAPONS], ["nuclear bomber", "bombing run"]);
+  assert.deepEqual([...AIRCRAFT_WEAPONS], ["nuclear bomber", "bombing run", "drone strike"]);
 });
 
 test("a strike is kept as what it is: who, with what, how many, how many shot down, and its two places", () => {
@@ -63,6 +63,11 @@ test("a strike is kept as what it is: who, with what, how many, how many shot do
   assert.equal(normalizeStrike(strike({ count: 4, down: 9 })).down, 4);
   assert.equal(normalizeStrike(strike({ count: 0 })).count, 1);
   assert.equal(normalizeStrike(strike({ count: 100000 })).count, STRIKE_COUNT_MOST);
+  // Preserves structured model, variant, and shape
+  const structured = normalizeStrike(strike({ weapon: "drone strike", model: "shahed", variant: "136", shape: 4 }));
+  assert.equal(structured.model, "shahed");
+  assert.equal(structured.variant, "136");
+  assert.equal(structured.shape, 4);
   // What is not a strike is nothing.
   for (const bad of [null, "strike", strike({ id: "" }), strike({ weapon: "trebuchet" }), strike({ owner: "" }), strike({ to: null }), strike({ to: { name: "" } })]) assert.equal(normalizeStrike(bad), null);
   // One of an id, and the newest when there are more than are kept.

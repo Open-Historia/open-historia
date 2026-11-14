@@ -17,6 +17,7 @@ import { STRIKE_LAYER_ID, WORLD_COPIES_MOST, buildStrikeVertices, worldCopies } 
 import { findPlaceEntry, strikeEnds } from "./strikePlaces.js";
 import { AIRCRAFT_HEIGHT_KM, AIRCRAFT_SHOWN_MOST, APOGEE_SHARE, INTERCEPTOR_HEAD_PX, MISSILES_SHOWN_MOST, craterItemsAt, placeFrom, planStrike, rangeKm, ringOf, strikeItemsAt, strikeLasts } from "./strikeScene.js";
 import { forgetStrikeRequests, getStrikeRequest, replayStrikes, showStrikesOfEvent, subscribeStrikeRequests } from "./strikeStore.js";
+import { normalizeStrike } from "../../runtime/strikes.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const read = (relative) => fs.readFileSync(path.join(here, relative), "utf8").replace(/\r\n/g, "\n");
@@ -596,9 +597,12 @@ test("drone strikes fly in a 7-drone arrowhead V-formation with correct Shahed o
   const threeDrones = planStrike(strike({ weapon: "drone strike", count: 3, owner: "Ukraine" }), { from: KYIV, to: [35, 50] });
   assert.equal(threeDrones.shown, 3, "3-drone strike shows 3 drones");
 
-  // 4. Structured model attribute
-  const structuredModel = planStrike(strike({ weapon: "drone strike", count: 2, model: "shahed" }), { from: KYIV, to: [35, 50] });
-  assert.equal(structuredModel.droneShape, 4, "structured model overrides default");
+  // 4. Structured model attribute preserved through normalization
+  const normalizedStrikeWithModel = normalizeStrike(strike({ weapon: "drone strike", count: 2, model: "shahed", owner: "Neutral", to: { name: "KYIV", lng: KYIV[0], lat: KYIV[1] } }));
+  assert.ok(normalizedStrikeWithModel, "strike successfully normalized");
+  assert.equal(normalizedStrikeWithModel.model, "shahed");
+  const structuredModel = planStrike(normalizedStrikeWithModel, { from: KYIV, to: [35, 50] });
+  assert.equal(structuredModel.droneShape, 4, "structured model preserved through normalizeStrike overrides default");
 
   // Mid-flight visual items check
   const midFlight = strikeItemsAt(shahedPlan, shahedPlan.units[0].flight * 0.5);
