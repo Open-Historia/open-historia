@@ -155,7 +155,6 @@ import {
 import { validateGameMasterRequestedPuppetCompleteness, requestExplicitlyInstallsPuppet } from "./gameMasterRequestCompleteness.js";
 import { GAME_MASTER_MODES, GM_AUTO_MODE, validateGameMasterModeSelection } from "./gameMasterAutoMode.js";
 import { GAME_MASTER_EDIT_TOOL, applyGameMasterPreviewEdits, validateGameMasterEditResponse } from "./gameMasterPreviewEdit.js";
-import { generatedInstitutionOutcomeIntegrityIssue } from "./institutionOutcomeIntegrity.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
 import {
   applyPoliticalActorOperation,
@@ -7867,12 +7866,6 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       receiptPlayerNote("politicalNotRecorded", {}, issue.title),
     );
   }
-
-  // A normal timeline pass cannot independently pronounce an existing native
-  // institution proposal adopted/rejected/etc. Institution governance owns that
-  // terminal fact and emits its own canonical outcome event when the ballot closes.
-  const institutionOutcomeError = generatedInstitutionOutcomeIntegrityIssue(candidate, world);
-  if (institutionOutcomeError) return institutionOutcomeError;
 
   const unitIds = new Set(normalizeWorldState(world).units.map((unit) => normalizeString(unit.id)).filter(Boolean));
   // The scenario's own unit types (runtime/unitTypes.js) a spawn may name, and who may field each.

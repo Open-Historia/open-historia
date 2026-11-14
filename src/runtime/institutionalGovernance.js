@@ -822,6 +822,9 @@ const outcomeEventDescription = (status, { name, title, yes, no, abstain, veto, 
   return `${name} formally rejected ${title}. Recorded ballot: ${yes} yes, ${no} no, ${abstain} abstain${veto ? `, ${veto} veto` : ""}; ${participating}/${eligible} eligible members participated.${rest ? ` ${rest}` : ""}`;
 };
 
+// The proposal types whose ballot is a major event.
+const MAJOR_PROPOSAL_TYPES = new Set(["charter-amendment", "accession", "agreement", "treaty"]);
+
 const proposalOutcomeEvent = ({ institution, proposal, outcome, date = "", playerCountry = "" } = {}) => {
   if (!institution || !proposal || !outcome) return null;
   const status = lower(outcome.status || proposal.status);
@@ -849,17 +852,20 @@ const proposalOutcomeEvent = ({ institution, proposal, outcome, date = "", playe
     eligible: Number(outcome.eligible) || 0,
     rest: `${summary}${publicPositions}`.trim(),
   });
-  const typeText = `${proposal.type} ${proposal.title} ${proposal.summary}`.toLocaleLowerCase();
-  const military = /military|defen[cs]e|deploy|war|security|force|troop|weapon|sanction/.test(typeText);
+  // How much a closed ballot matters, and what it is about, is its proposal's
+  // type (the key its charter's rules go by), never the words of its title or
+  // summary: an English word list ("defence", "troop", "sanction") made a vote
+  // military and major, and the same vote written in French was neither.
+  const major = MAJOR_PROPOSAL_TYPES.has(lower(proposal.type));
   const playerBallot = Object.values(proposal?.voting?.ballots || {}).some((ballot) => lower(ballot?.polity) === lower(playerCountry));
   return {
     id: proposalOutcomeEventId(institution, proposal),
     date: clean(date || proposal?.voting?.closedDate),
     title: title.slice(0, 240),
     description: description.trim().slice(0, 2400),
-    importance: military || ["charter-amendment", "accession", "agreement", "treaty"].includes(lower(proposal.type)) ? "major" : "minor",
+    importance: major ? "major" : "minor",
     kind: "diplomacy",
-    tags: military ? ["Diplomacy", "Politics", "Military"] : ["Diplomacy", "Politics"],
+    tags: ["Diplomacy", "Politics"],
     notable: status === "passed" || status === "vetoed",
     playerRelated: playerBallot,
     source: "institutional-governance",

@@ -604,6 +604,31 @@ test("the ballot that completes the vote finalizes, implements and emits one can
   assert.equal(resolved.events[0].agency.authority, "autonomous");
 });
 
+// A closed ballot's importance and tags were read from English words in the
+// proposal's title and summary ("defence", "troop", "sanction"): a defence vote
+// was a major military event in English and a minor one in French. They come
+// from the proposal's type alone now, the key its charter's rules go by.
+test("a closed ballot's importance and tags come from its proposal's type, never its words", () => {
+  const outcomeEvent = (extraProposal) => {
+    let result = open(simpleRule, extraProposal);
+    result = vote(result.world, "A", "yes");
+    result = vote(result.world, "B", "yes");
+    return applyInstitutionGovernanceCommand({
+      world: result.world, chats: [], events: [], institutionId: "council", playerCountry: "A", date: "2000-01-06",
+      command: { type: "vote", proposalId: "p1", polity: "C", choice: "yes", reason: "Agreed.", finalizeWhenComplete: true },
+    }).events[0];
+  };
+  for (const words of [
+    { title: "Joint Defence Force Deployment", summary: "Deploy troops under sanctions." },
+    { title: "Mission commune de défense", summary: "Envoyer des soldats aux frontières." },
+  ]) {
+    const resolution = outcomeEvent({ type: "resolution", ...words });
+    assert.equal(resolution.importance, "minor", words.title);
+    assert.deepEqual(resolution.tags, ["Diplomacy", "Politics"], words.title);
+  }
+  assert.equal(outcomeEvent({ type: "accession", title: "Adhésion de la Pologne" }).importance, "major");
+});
+
 test("an NPC ballot does not close or emit an outcome event while player ballot is still missing", () => {
   const result = applyInstitutionGovernanceCommand({
     world: open().world,
