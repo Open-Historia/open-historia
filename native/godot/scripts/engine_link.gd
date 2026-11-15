@@ -14,21 +14,26 @@ class PendingCall extends RefCounted:
 
 class StallWatch extends Node:
 	const LIMIT_MS := 700
+	const LONG_MS := 2500
+	const QUIET_MS := 10000
 	var link: EngineLink
 	var _last := 0
 	var _away := false
 	var _back_at := 0
+	var _slow := 0
+	var _slow_ms := 0
+	var _noted_at := 0
 
 	func _init(owner_link: EngineLink) -> void:
 		link = owner_link
 		name = "StallWatch"
 		process_mode = Node.PROCESS_MODE_ALWAYS
 
-	func _ready() -> void:
-		_last = Time.get_ticks_msec()
-
 	func _process(_delta: float) -> void:
 		var now := Time.get_ticks_msec()
+		if _last == 0:
+			_last = now
+			return
 		if _away:
 			_away = false
 			if _back_at > 0 and now - _back_at >= LIMIT_MS:
@@ -37,8 +42,16 @@ class StallWatch extends Node:
 			return
 		var gap := now - _last
 		_last = now
-		if gap >= LIMIT_MS:
-			link.note_stall(gap, "the screen froze for")
+		if gap < LIMIT_MS:
+			return
+		if gap >= LONG_MS or now - _noted_at >= QUIET_MS:
+			link.note_stall(gap, "the screen froze for", _slow, _slow_ms)
+			_slow = 0
+			_slow_ms = 0
+			_noted_at = now
+		else:
+			_slow += 1
+			_slow_ms += gap
 
 	func _notification(what: int) -> void:
 		if what == NOTIFICATION_APPLICATION_PAUSED:
@@ -361,24 +374,44 @@ func _deliver(line: String, parsed: Variant) -> void:
 	pending.done.emit(message)
 
 
-func note_stall(gap: int, what: String) -> void:
+func note_stall(gap: int, what: String, slow := 0, slow_ms := 0) -> void:
 	var waiting: PackedStringArray = []
 	for pending: PendingCall in _pending.values():
 		if not waiting.has(pending.method):
 			waiting.append(pending.method)
 	var calls: String = ("; waiting on %s" % ", ".join(waiting)) if not waiting.is_empty() else ""
-	_on_diagnostic("[stall] %s %d ms%s; %s" % [what, gap, calls, memory_text()])
+	var before: String = ("; %d slow frames (%.1f s) before it" % [slow, slow_ms / 1000.0]) if slow > 0 else ""
+	_on_diagnostic("[stall] %s %d ms%s%s; %s" % [what, gap, calls, before, memory_text()])
 
 
 func memory_text() -> String:
-	var info := OS.get_memory_info()
 	var mb := 1048576.0
+	var pictures := int(Performance.get_monitor(Performance.RENDER_TEXTURE_MEM_USED) / mb)
+	if OS.get_name() == "Android":
+		return "pictures %d MB, app %d MB, free %d of %d MB" % [
+			pictures,
+			_proc_kb("/proc/self/status", "VmRSS:") / 1024,
+			_proc_kb("/proc/meminfo", "MemAvailable:") / 1024,
+			_proc_kb("/proc/meminfo", "MemTotal:") / 1024,
+		]
+	var info := OS.get_memory_info()
 	return "pictures %d MB, app %d MB, free %d of %d MB" % [
-		int(Performance.get_monitor(Performance.RENDER_TEXTURE_MEM_USED) / mb),
+		pictures,
 		int(OS.get_static_memory_usage() / mb),
 		int(float(info.get("available", -1)) / mb),
 		int(float(info.get("physical", -1)) / mb),
 	]
+
+
+static func _proc_kb(path: String, key: String) -> int:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return -1
+	while not file.eof_reached():
+		var line := file.get_line()
+		if line.begins_with(key):
+			return line.substr(key.length()).strip_edges().get_slice(" ", 0).to_int()
+	return -1
 
 
 func app_log() -> String:
