@@ -2883,6 +2883,23 @@ func _short_name(name: String) -> String:
 	return text.substr(0, 27) + "…" if text.length() > 28 else text
 
 
+func _log_text() -> Variant:
+	if OS.get_name() != "Android" or engine == null:
+		var reply: Variant = await _req("settings.log.text")
+		return str((reply as Dictionary).get("text", "")) if typeof(reply) == TYPE_DICTIONARY else null
+	var box := {"done": false, "reply": null}
+	var ask := func() -> void:
+		box["reply"] = await _req("settings.log.text")
+		box["done"] = true
+	ask.call()
+	var asked_at := Time.get_ticks_msec()
+	while not bool(box["done"]) and Time.get_ticks_msec() - asked_at < 6000:
+		await get_tree().process_frame
+	var reply: Variant = box["reply"]
+	var game := str((reply as Dictionary).get("text", "")) if typeof(reply) == TYPE_DICTIONARY else "(The game engine did not answer.)"
+	return "%s\n\n— This app —\n%s" % [game, engine.app_log()]
+
+
 func _diagnostics_panel(body: VBoxContainer) -> void:
 	var enabled := bool(_diag.get("enabled", true))
 	var verbose := bool(_diag.get("verbose", false))
@@ -2903,9 +2920,9 @@ func _diagnostics_panel(body: VBoxContainer) -> void:
 	var copy := _button(copy_text, func() -> void:
 		_copy_state = "copying"
 		_rerender()
-		var reply: Variant = await _req("settings.log.text")
-		if typeof(reply) == TYPE_DICTIONARY:
-			DisplayServer.clipboard_set(str((reply as Dictionary).get("text", "")))
+		var text: Variant = await _log_text()
+		if text != null:
+			DisplayServer.clipboard_set(str(text))
 			_copy_state = "copied"
 		else:
 			_copy_state = "failed"
@@ -2921,9 +2938,9 @@ func _diagnostics_panel(body: VBoxContainer) -> void:
 		if typeof(reply) == TYPE_DICTIONARY:
 			_reveal(str((reply as Dictionary).get("path", "")))
 		else:
-			var text: Variant = await _req("settings.log.text")
-			if typeof(text) == TYPE_DICTIONARY:
-				DisplayServer.clipboard_set(str((text as Dictionary).get("text", "")))
+			var text: Variant = await _log_text()
+			if text != null:
+				DisplayServer.clipboard_set(str(text))
 				_copy_state = "copied"
 				_rerender()
 				await get_tree().create_timer(2.5).timeout

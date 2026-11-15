@@ -9,6 +9,48 @@ signal unpacking(fraction: float)
 class PendingCall extends RefCounted:
 	signal done(reply: Dictionary)
 	var size := 0
+	var method := ""
+
+
+class StallWatch extends Node:
+	const LIMIT_MS := 700
+	var link: EngineLink
+	var _last := 0
+	var _away := false
+	var _back_at := 0
+
+	func _init(owner_link: EngineLink) -> void:
+		link = owner_link
+		name = "StallWatch"
+		process_mode = Node.PROCESS_MODE_ALWAYS
+
+	func _ready() -> void:
+		_last = Time.get_ticks_msec()
+
+	func _process(_delta: float) -> void:
+		var now := Time.get_ticks_msec()
+		if _away:
+			_away = false
+			if _back_at > 0 and now - _back_at >= LIMIT_MS:
+				link.note_stall(now - _back_at, "the first picture after returning to the app took")
+			_last = now
+			return
+		var gap := now - _last
+		_last = now
+		if gap >= LIMIT_MS:
+			link.note_stall(gap, "the screen froze for")
+
+	func _notification(what: int) -> void:
+		if what == NOTIFICATION_APPLICATION_PAUSED:
+			_away = true
+			_back_at = 0
+			link._on_diagnostic("[android] the app went to the background")
+		elif what == NOTIFICATION_APPLICATION_RESUMED:
+			_away = true
+			_back_at = Time.get_ticks_msec()
+			link._on_diagnostic("[android] the app came back to the front")
+		elif what == NOTIFICATION_OS_MEMORY_WARNING:
+			link._on_diagnostic("[android] Android warned that memory is low (%s)" % link.memory_text())
 
 var devtools: Object
 var _sidecar: Sidecar
@@ -42,6 +84,8 @@ func _ready() -> void:
 	_sidecar.message.connect(_on_message)
 	_sidecar.diagnostic.connect(_on_diagnostic)
 	_sidecar.exited.connect(_on_exited)
+	if OS.get_name() == "Android":
+		add_child(StallWatch.new(self))
 
 
 func start() -> bool:
@@ -207,6 +251,7 @@ func _send(method: String, args: Dictionary) -> Dictionary:
 	_next_id += 1
 	var id := _next_id
 	var pending := PendingCall.new()
+	pending.method = method
 	_pending[id] = pending
 	var line := JSON.stringify({"id": id, "method": method, "args": args})
 	var watcher: Object = devtools if devtools != null and not method.begins_with("devtools.") else null
@@ -316,9 +361,41 @@ func _deliver(line: String, parsed: Variant) -> void:
 	pending.done.emit(message)
 
 
+func note_stall(gap: int, what: String) -> void:
+	var waiting: PackedStringArray = []
+	for pending: PendingCall in _pending.values():
+		if not waiting.has(pending.method):
+			waiting.append(pending.method)
+	var calls: String = ("; waiting on %s" % ", ".join(waiting)) if not waiting.is_empty() else ""
+	_on_diagnostic("[stall] %s %d ms%s; %s" % [what, gap, calls, memory_text()])
+
+
+func memory_text() -> String:
+	var info := OS.get_memory_info()
+	var mb := 1048576.0
+	return "pictures %d MB, app %d MB, free %d of %d MB" % [
+		int(Performance.get_monitor(Performance.RENDER_TEXTURE_MEM_USED) / mb),
+		int(OS.get_static_memory_usage() / mb),
+		int(float(info.get("available", -1)) / mb),
+		int(float(info.get("physical", -1)) / mb),
+	]
+
+
+func app_log() -> String:
+	var lines: PackedStringArray = []
+	lines.append("App: Open Historia Native %s" % str(ProjectSettings.get_setting("application/config/version", "")))
+	lines.append("Device: %s, %s %s, %d processors, screen %s" % [OS.get_model_name(), OS.get_name(), OS.get_version(), OS.get_processor_count(), str(DisplayServer.screen_get_size())])
+	lines.append("Graphics: %s (%s)" % [RenderingServer.get_video_adapter_name(), RenderingServer.get_video_adapter_vendor()])
+	lines.append("Memory now: %s" % memory_text())
+	lines.append("")
+	lines.append_array(_diagnostics)
+	return "\n".join(lines)
+
+
 func _on_diagnostic(line: String) -> void:
 	if OS.get_name() == "Android":
 		print("[engine] ", line)
+		line = "%s %s" % [Time.get_time_string_from_system(), line]
 	_diagnostics.append(line)
 	if _diagnostics.size() > 400:
 		_diagnostics = _diagnostics.slice(_diagnostics.size() - 200)
