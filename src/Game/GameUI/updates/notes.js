@@ -54,6 +54,89 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "lets rework projects entirely… right now they dont actually effect the world actively and dont progress normally. it seems like
+    // they just sit doing nothing" (the owner, 2026-11-15): the projects engine (runtime/projectEngine.js) runs every project's clock;
+    // a project costs money a month, changes the world when done, can be started from the Projects tab, and other countries run their own.
+    // Alpha only for now (the coordinator, 2026-11-15).
+    id: "2026-11-projects-that-build",
+    kind: "major",
+    date: "2026-11-15",
+    channel: "alpha",
+    banners: [
+      {
+        theme: "projects",
+        scene: "works",
+        title: "Projects That Build",
+        subtitle: "The work goes on while you play",
+        lead: "Projects no longer wait for the story to remember them. Every day your budget pays for them, the work moves forward, and when one is finished it changes your country.",
+        sections: [
+          {
+            heading: "Real progress",
+            icon: "gear",
+            items: [
+              "Every project now advances day by day, at the pace its plan, its funding and your country's economy and stability allow.",
+              "Checkpoints are reached on real dates, and the Projects tab shows when each project should be done.",
+              "Each time skip is told what your projects will reach in it, so the story tells it as it happens.",
+            ],
+          },
+          {
+            heading: "Money matters",
+            icon: "star",
+            items: [
+              "Each project costs a sum every month from your country's project budget, a share of its economy.",
+              "Fund each one Off, Low, Normal or High: more money buys more speed. When the budget runs short, the best funded are paid first.",
+              "A project left without money for a month stalls, and starts again by itself once there is money for it.",
+            ],
+          },
+          {
+            heading: "It changes the world",
+            icon: "map",
+            items: [
+              "A finished project changes your country: its figures, its relations, new structures on the map, new unit types, even territory.",
+              "Every effect has a limit, so no single project transforms a country overnight.",
+              "Programmes that run on, like a standing patrol, give something back every month they are paid for.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "projects",
+        scene: "plans",
+        title: "Plan Your Own",
+        subtitle: "Name it, plan it, start it",
+        lead: "You can start projects yourself now, from the Projects tab in the Actions panel.",
+        sections: [
+          {
+            heading: "New project",
+            icon: "book",
+            items: [
+              "Write a name and what it is for, then press Plan it: one AI request drafts how long it takes, what it costs, its checkpoints and what it will do.",
+              "Read the plan, then start it or discard it.",
+              "Your advisor can still open projects for you once you decide on one.",
+            ],
+          },
+          {
+            heading: "Other countries",
+            icon: "eye",
+            items: [
+              "Countries the AI plays now run projects of their own on the same rules, and the world's events tell how they go.",
+              "Known projects abroad lists the ones your services know of; secret ones stay hidden until an agent finds them.",
+            ],
+          },
+          {
+            heading: "Setbacks and breakthroughs",
+            icon: "swords",
+            items: [
+              "Strikes, sabotage, fires and windfalls can set a project back or bring it on, always for a reason an event tells.",
+              "Projects from older saves carry on from where they stood, at no cost.",
+            ],
+          },
+        ],
+        button: "To the drafting table",
+      },
+    ],
+  },
+  {
     // "build C and D, and the host can choose, but no sending api keys" (the owner, 2026-11-15): who answers a player's message to a
     // country the AI plays is the host's choice (multiplayer/host/settings.js `replies`): the host's AI, or each player's own device.
     id: "2026-11-shared-game-replies",
