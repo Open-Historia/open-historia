@@ -59,3 +59,17 @@ test("a turn's log becomes the thread's, with who is in it and what was said rea
     [ESTONIA, "Tallinn hears Moscow."],
   ]);
 });
+
+test("what a turn said is added to the thread as it stands when it is written: a line written meanwhile is kept", () => {
+  const stored = thread();
+  const read = eventsFromLegacyChat(stored);
+  const reply = { id: "e-reply", kind: "message", time: "2014-04-01", by: ESTONIA, role: "leader", code: ESTONIA, text: "Tallinn hears Moscow." };
+  // While the model answered, Moscow wrote again: the thread holds one more line.
+  const meanwhile = normalizeChats([{ ...stored, messages: [...stored.messages, { id: "m2", role: "user", speaker: RUSSIA, code: RUSSIA, text: "And Narva?", time: "2014-04-01" }] }])[0];
+  const next = threadAfterTurn(meanwhile, { events: [...read, reply], newEvents: [reply] });
+  const saved = normalizeChats([next])[0];
+  assert.deepEqual(saved.messages.map((message) => message.text), ["Moscow to Tallinn.", "And Narva?", "Tallinn hears Moscow."]);
+  // Written twice (a retried write), it is still said once.
+  const again = normalizeChats([threadAfterTurn(saved, { events: [...read, reply], newEvents: [reply] })])[0];
+  assert.equal(again.messages.filter((message) => message.text === "Tallinn hears Moscow.").length, 1);
+});

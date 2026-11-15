@@ -608,6 +608,7 @@ import {
   discardPendingProjectsJump,
   discardParkedTurn,
   endSimulation,
+  enterSimulation,
   PARKED_TURN_STALE_NOTE,
   getHeldTurn,
   getParkedTurn,
@@ -13298,10 +13299,17 @@ const waitForSimulationIdle = async ({ signal, timeoutMs = 10 * 60 * 1000 } = {}
 // nobody, since the world endpoint follows the open campaign. Returns holding
 // the lock; the caller ends it once the write is done.
 const beginStatsWrite = async (campaign, signal) => {
-  await waitForSimulationIdle({ signal });
-  throwIfAborted(signal);
-  assertCampaignUnchanged(campaign, activeCampaignId(), "stat sheet");
-  beginSimulation();
+  // Waited for and taken in one step (simulationStatus.js enterSimulation): a
+  // turn, or a shared game's round, that began meanwhile is waited out, and
+  // two sheets do not both find the world free at once.
+  await enterSimulation({ signal });
+  try {
+    throwIfAborted(signal);
+    assertCampaignUnchanged(campaign, activeCampaignId(), "stat sheet");
+  } catch (error) {
+    endSimulation();
+    throw error;
+  }
 };
 
 // One in-flight promise per (campaign, kind, polity), so the pane re-opening
@@ -14785,6 +14793,13 @@ export const runChatActionBatch = async ({
   // messages come back, for the host to take or refuse.
   governments = null,
   wordsOnly = false,
+  // How what the governments decided is written: a peace one accepted, an
+  // institution's ballots and business. Given a function that writes it, and
+  // resolving with what that returns. In single player that is now; a shared
+  // game's host writes it as one entry in its queue (multiplayer/host/
+  // worldQueue.js), so the model's minute holds nobody up and its writing
+  // never meets a round half-way.
+  commit = (write) => write(),
 } = {}) => {
   const campaign = normalizeString(expectedGameId) || activeCampaignId();
   // Player-facing conversation normally reasons from what has been revealed. A
@@ -15126,6 +15141,8 @@ export const runChatActionBatch = async ({
     const lastMessage = [...outcome.events].reverse().find((event) => event.kind === "message");
     if (lastMessage) lastMessage.memorySummary = memorySummary;
   }
+  // Everything the governments decided, written in one step (`commit`).
+  const writeDecisions = async () => {
   // What each government decided of peace with the player, a line each
   // ("country | accept"), carried out by the game for a participant that was
   // told it may (peaceTalks), never for anyone else. Its offer is shown on its
@@ -15194,6 +15211,9 @@ export const runChatActionBatch = async ({
     });
     lifecycleRejected = committedLifecycle.rejected || [];
   }
+  return { committedInstitution, committedLifecycle, formalRejected, lifecycleRejected };
+  };
+  const { committedInstitution, committedLifecycle, formalRejected, lifecycleRejected } = await commit(writeDecisions);
 
   const combinedRejected = [...outcome.rejected, ...formalRejected, ...lifecycleRejected];
   const feedbackOutcome = { ...outcome, rejected: combinedRejected };
@@ -16575,7 +16595,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
-        ...(context.amend || segmentCount > 1 || scriptedPoliticalRequirements.length
+        ...(context.amend || segmentCount > 1 || scriptedPoliticalRequirements.length || context.cannedTurn === false
           ? {}
           : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
         ...(showEvents ? { onPartialEvents: markStreamedEvents(showEvents, { priorEvents: segmentBundle.events }) } : {}),
@@ -17027,7 +17047,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
     // is no other segment to keep and nothing to retry piecemeal: it falls back
     // for the whole period exactly as it always did.
     if (segmentCount <= 1) {
-      if (state.structuralScriptedFallbackBlocked) throw error;
+      if (state.structuralScriptedFallbackBlocked || context.cannedTurn === false) throw error;
       console.warn(`[ai] the jump failed (${reason}) — falling back for the whole period.`);
       logDebugEvent("warn", "[turn] The jump failed; it falls back.", { reason });
       state.segmentPayloads.length = 0;
@@ -17868,7 +17888,12 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   }
 };
 
-export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onProgress, signal, retryDirective = "" } = {}) => {
+// `cannedTurn`: whether a skip the AI could not write may land as the game's
+// canned turn (fallbackJumpSimulation), as single player's always has. A
+// shared game's host passes false (the owner, 2026-11-15: "never a canned
+// turn"): its round fails instead, says why on every screen, and is tried
+// again (multiplayer/host/round.js).
+export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onProgress, signal, retryDirective = "", cannedTurn = true } = {}) => {
   // Starting a fresh turn abandons any jump still held on a failed segment. Its
   // state was captured against a world snapshot this one is about to re-read, so
   // applying it later would write a turn built on stale ground.
@@ -17986,6 +18011,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     bundle,
     // Stamped here, at the read, not at the write minutes later.
     campaignId: activeCampaignId(),
+    cannedTurn: cannedTurn !== false,
     dateStep,
     mode,
     originDate,

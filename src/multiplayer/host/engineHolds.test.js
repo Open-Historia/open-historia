@@ -54,14 +54,29 @@ test("a shared round never stops on the host's own \"Stop when my events fail\""
 
 test("a skip that fails in the host's engine leaves no turn held, and the round still hears of the failure", () => {
   const resolve = engine.slice(engine.indexOf("resolveRound: async"));
-  const jump = resolve.indexOf("await simulateTimelineJump({ days: daysPerRound });");
+  const jump = resolve.indexOf("await simulateTimelineJump({ days: daysPerRound, signal, cannedTurn: false });");
   const discard = resolve.indexOf("discardHeldTurns();");
   const rethrown = resolve.indexOf("throw error;", discard);
   const boardsHome = resolve.indexOf("returnBoards(");
   assert.ok(jump > -1 && discard > jump, "a held turn is let go when the skip fails");
   assert.ok(rethrown > discard, "and the round is told it failed, so it is planned again");
   assert.ok(boardsHome > rethrown, "the players' boards go home either way");
-  assert.match(engine, /import \{ discardHeldTurns \} from "\.\.\/\.\.\/Game\/AI\/simulationStatus\.js";/);
+  assert.match(engine, /import \{ discardHeldTurns, endSimulation, enterSimulation \} from "\.\.\/\.\.\/Game\/AI\/simulationStatus\.js";/);
+});
+
+// The owner, 2026-11-15: "never a canned turn". A shared round the AI could not
+// write fails and says why; the game's own canned turn is single player's.
+test("a shared round never lands as a canned turn, and takes the game's lock in turn for its whole run", () => {
+  const resolve = engine.slice(engine.indexOf("resolveRound: async"), engine.indexOf("readCountry: async"));
+  assert.match(resolve, /cannedTurn: false/);
+  const entered = resolve.indexOf("await enterSimulation({ signal });");
+  const lent = resolve.indexOf("lendBoards(");
+  const ended = resolve.lastIndexOf("endSimulation();");
+  assert.ok(entered > -1 && lent > entered, "the lock is taken before the world is read");
+  assert.ok(ended > resolve.lastIndexOf("returnBoards("), "and given back after the boards are home");
+  // The skip itself: no fallback offered, and the whole-period canned turn refused.
+  assert.match(gameplay, /scriptedPoliticalRequirements\.length \|\| context\.cannedTurn === false\n\s*\? \{\}\n\s*: \{ fallback: \(\) => fallbackJumpSimulation/);
+  assert.match(gameplay, /if \(state\.structuralScriptedFallbackBlocked \|\| context\.cannedTurn === false\) throw error;/);
 });
 
 test("the engine names every country a person plays to the round's espionage, with each one's own candidates", () => {

@@ -96,7 +96,8 @@ test("structural scripted political beats block prose-only deterministic fallbac
   assert.match(gameplay, /scriptedPoliticalImpactRequirements\(scriptedBeats/);
   assert.match(gameplay, /buildScriptedPoliticalImpactInstruction\(scriptedPoliticalRequirements,\s*\{\s*world:\s*ledgerWorld\s*\}\)/);
   assert.match(gameplay, /state\.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements\.length > 0/);
-  assert.match(gameplay, /if \(state\.structuralScriptedFallbackBlocked\) throw error/);
+  // (A shared game's skip refuses the canned turn too: `|| context.cannedTurn === false`.)
+  assert.match(gameplay, /if \(state\.structuralScriptedFallbackBlocked(?: \|\| context\.cannedTurn === false)?\) throw error/);
   // The events that tell such a beat are held to its authored impacts, never
   // found by matching the beat's words.
   assert.match(gameplay, /bindScriptedPoliticalClaims\(scriptedEventsCarryingImpacts\(candidate\.events\), scriptedPoliticalImpactRequirements\(due\)\)/);

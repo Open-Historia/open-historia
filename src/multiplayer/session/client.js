@@ -173,11 +173,20 @@ export const createClientSession = ({
     return undefined;
   };
 
+  // One message at a time to the host, as the host sends to each player
+  // (session/host.js sendTo): a large request goes out whole before the next.
+  const outboxes = new WeakMap();
   const sendNow = (message) => {
-    if (!attempt?.peer) return false;
+    const peer = attempt?.peer;
+    if (!peer) return false;
     const frames = encodeMessage(message);
-    if (frames.length === 1) return attempt.peer.send(frames[0]);
-    attempt.peer.sendAll(frames);
+    const busy = outboxes.get(peer);
+    if (!busy && frames.length === 1) return peer.send(frames[0]);
+    const next = (busy ?? Promise.resolve()).then(() => peer.sendAll(frames)).catch(() => false);
+    outboxes.set(peer, next);
+    void next.then(() => {
+      if (outboxes.get(peer) === next) outboxes.delete(peer);
+    });
     return true;
   };
 

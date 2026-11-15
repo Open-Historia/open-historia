@@ -64,10 +64,10 @@ test("the lobby, the round and notices are kept; views go to the page; the count
   client.receive({ t: "lobby", started: false, seats: [], countries: [], scenario: { id: "s", name: "S", hash: "h" }, settings: {} });
   client.receive({ t: "round", phase: "planning", round: 1, remainingMs: 60_000, paused: false, ready: [], counted: 2, needed: 2 });
   client.receive({ t: "notice", level: "info", text: "Russia is now played by the AI." });
-  client.receive({ t: "view", rev: 3, docs: { game: { country: "X" } } });
+  client.receive({ t: "view", epoch: "e1", rev: 3, base: 2, docs: { game: { country: "X" } }, sums: { world: "a" } });
   assert.equal(client.state.round.phase, "planning");
   assert.equal(client.state.notices[0].text, "Russia is now played by the AI.");
-  assert.deepEqual(views, [{ rev: 3, docs: { game: { country: "X" } } }]);
+  assert.deepEqual(views, [{ epoch: "e1", rev: 3, base: 2, docs: { game: { country: "X" } }, sums: { world: "a" } }]);
   t += 15_000;
   assert.equal(client.remainingMs(), 45_000);
   assert.equal(changes.length, 3);
@@ -118,4 +118,18 @@ test("a closed loopback end goes quiet: a late status or parting word is dropped
   });
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.deepEqual(statuses, []);
+});
+
+test("a request not yet answered goes again with its own id after a reconnect, and is settled by one answer", async () => {
+  const sent = [];
+  const client = createGameClient({ send: (message) => sent.push(message), timers: globalThis });
+  const asked = client.request("order", { text: "Hold the line at Narva" });
+  assert.equal(sent.length, 1);
+  assert.equal(client.resend(), 1);
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[1], sent[0], "the same request, the same id");
+  client.receive({ t: "ack", id: sent[0].id, ok: true, error: null });
+  assert.deepEqual(await asked, { ok: true, error: "" });
+  assert.equal(client.resend(), 0, "nothing left to send");
+  client.close();
 });

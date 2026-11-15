@@ -17,6 +17,12 @@
 //
 // Only human players who are here count. A seat played by the AI, or whose
 // player is away, is left out of the share, so leavers never block a round.
+// With nobody here at all, no round is resolved: the clock waits for someone.
+//
+// A round that cannot be resolved stays visibly so (the owner, 2026-11-15:
+// "the round waits, visibly, with Retry"): the round is planned again with its
+// orders, every screen shows why it failed until a round lands, and the host
+// can end it again at once.
 //
 // Pure, with an injected clock and timers, so the tests step time exactly.
 
@@ -60,6 +66,8 @@ export const createRoundMachine = ({
   let planningStarted = 0;
   let revealEnds = 0;
   let paused = null; // { remaining: { planning, countdown, reveal } } while paused
+  // The last round that could not be resolved and why, until one is.
+  let failure = null; // { round, reason }
   let timer = null;
   const present = new Set();
   const ready = new Set();
@@ -91,6 +99,7 @@ export const createRoundMachine = ({
     ready: counted().filter(isReady),
     counted: counted(),
     needed: readyNeeded(counted().length, settings.readyThreshold),
+    failure: failure ? { ...failure } : null,
     settings: { ...settings },
   });
 
@@ -125,14 +134,16 @@ export const createRoundMachine = ({
       .then(() => onResolve({ round }))
       .then(
         () => {
+          failure = null;
           phase = "revealing";
           revealEnds = now() + settings.revealSeconds * 1000;
           emit();
           evaluate();
         },
-        () => {
+        (error) => {
           // A round that could not be resolved goes back to planning, with the
-          // orders still queued, rather than skipping ahead.
+          // orders still queued, rather than skipping ahead, and says why.
+          failure = { round, reason: String(error?.message || error || "").replace(/\s+/g, " ").trim().slice(0, 280) };
           startPlanning({ sameRound: true });
         },
       );
@@ -159,6 +170,8 @@ export const createRoundMachine = ({
     }
     if (phase !== "planning" && phase !== "countdown") return;
     const total = counted().length;
+    // Nobody here: nothing is resolved until someone is (setPlayers looks again).
+    if (total === 0) return undefined;
     const readyNow = readyCount();
     const needed = readyNeeded(total, settings.readyThreshold);
     const planningOver = t >= planningEnds;
@@ -208,9 +221,10 @@ export const createRoundMachine = ({
     touch(seat) {
       if (present.has(seat)) lastActive.set(seat, now());
     },
-    // A player's client finished showing the round's events.
-    revealedBy(seat) {
-      if (!["resolving", "revealing"].includes(phase) || !present.has(seat)) return;
+    // A player's client finished showing a round's events: counted for the
+    // round it names only, never for one still being resolved.
+    revealedBy(seat, number = round) {
+      if (Number(number) !== round || !["resolving", "revealing"].includes(phase) || !present.has(seat)) return;
       revealed.add(seat);
       if (phase === "revealing") evaluate();
     },
@@ -218,9 +232,13 @@ export const createRoundMachine = ({
       if (phase !== "lobby") return;
       startPlanning();
     },
-    // The host ends planning now (a host control, and the lone-player case).
+    // The host ends planning now (a host control, and the lone-player case),
+    // paused or not: ended while paused, the round used to land into a reveal
+    // that never ended, with no button left to end it.
     resolveNow() {
-      if (phase === "planning" || phase === "countdown") resolve();
+      if (phase !== "planning" && phase !== "countdown") return;
+      paused = null;
+      resolve();
     },
     // A new round length, for the rounds to come and for this one's deadline,
     // counted from when its planning began and never under a minute from now.

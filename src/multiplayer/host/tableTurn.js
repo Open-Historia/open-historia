@@ -5,7 +5,7 @@
 // questions that saving asks, kept apart from the engine window so they can be
 // tested without one.
 
-import { projectChatThread } from "../../runtime/chatThreads.js";
+import { eventsFromLegacyChat, normalizeChatEvents, projectChatThread } from "../../runtime/chatThreads.js";
 
 // Whether a turn's outcome is the thread's new log. Not when the game's own
 // institution functions have already written it (`committed`), and not when
@@ -19,14 +19,24 @@ export const turnWritesThread = (outcome) => Boolean(outcome)
   && Array.isArray(outcome.events)
   && outcome.events.length > 0;
 
-// A stored thread with a turn's log as its own; what is read from the log
-// (who is in it, its title, its votes and demands) is kept beside it, as the
-// panel keeps it.
+// A stored thread with what a turn said added to its log as it stands now; what
+// is read from the log (who is in it, its title, its votes and demands) is kept
+// beside it, as the panel keeps it. Added, not replaced: the turn read the
+// thread before the model answered, and a line written meanwhile (another
+// player's, another answer's) was lost when the turn wrote back its own copy.
+// `outcome.newEvents`: what this turn said and did; an outcome that carries
+// only its whole log (an older caller) is taken as before.
 export const threadAfterTurn = (entry, outcome) => {
-  const projected = projectChatThread(outcome.events);
+  const now = normalizeChatEvents(Array.isArray(entry?.events) && entry.events.length ? entry.events : eventsFromLegacyChat(entry));
+  const added = Array.isArray(outcome?.newEvents) ? outcome.newEvents : null;
+  const known = new Set(now.map((event) => String(event?.id ?? "")));
+  const events = added
+    ? normalizeChatEvents([...now, ...added.filter((event) => !known.has(String(event?.id ?? "")))])
+    : outcome.events;
+  const projected = projectChatThread(events);
   return {
     ...entry,
-    events: outcome.events,
+    events,
     countries: projected.countries ?? entry.countries,
     title: projected.title || entry.title,
     polls: projected.polls ?? entry.polls,

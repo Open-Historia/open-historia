@@ -216,6 +216,13 @@ const RoundBar = ({ shared, me }) => {
       ) : null}
       <button type="button" style={showPlayers ? primary : button} aria-expanded={showPlayers} onClick={() => setShowPlayers((open) => !open)}>Players</button>
       <button type="button" style={button} onClick={leave}>{role === "host" ? "Stop" : "Leave"}</button>
+      {round?.failed ? (
+        // A round that could not be resolved, said until one lands (round.js).
+        <span style={{ ...small, ...problemText, alignItems: "center", display: "flex", flexBasis: "100%", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center" }}>
+          <span style={isolate}>{`Round ${round.failed} could not be resolved: ${round.failure || "the host's AI did not answer."}`}</span>
+          {role === "host" && ["planning", "countdown"].includes(round?.phase) ? <button type="button" style={button} onClick={() => hostControl("resolveNow")}>Try again now</button> : null}
+        </span>
+      ) : null}
       {recent ? <span style={{ ...small, flexBasis: "100%", textAlign: "center" }}>{recent.text}</span> : null}
       {showPlayers ? (
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", flexBasis: "100%", maxHeight: "40vh", overflowY: "auto", paddingTop: "0.3rem" }}>

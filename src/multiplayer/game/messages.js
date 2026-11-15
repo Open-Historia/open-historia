@@ -42,7 +42,21 @@ import { SAY_FROM_DRAFT_MAX } from "../client/sharedThreads.js";
 // host's choice (settings.replies). With "own" the writer's device writes the
 // governments' words on its own AI key and sends them (the "reply" request);
 // no key is sent anywhere.
-export const SHARED_GAME_VERSION = "10";
+// 11: views are checked, not trusted to arrive. Each names its connection
+// (`epoch`), its number, the number it follows (`base`, 0 for a whole
+// view) and the digest of every document as the player is to hold it after it
+// (`sums`, protocol/digest.js). The page applies a view only if it follows
+// the one it holds and adds up, says so (the "viewed" message), and asks for
+// the whole of it again when it does not. A reconnect is a whole view.
+export const SHARED_GAME_VERSION = "11";
+
+// The documents a player's view holds: the game itself first (a screen that
+// asks for one before the first view arrives waits for it), then the three a
+// page may fall back to its own copy of until the host sends them.
+export const VIEW_KEYS = Object.freeze(["world", "game", "events", "chat", "actions", "intercepts", "colors", "flags"]);
+// A view's connection, as the host names it.
+const EPOCH = str(24, { min: 1, pattern: /^[0-9a-z]+$/ });
+const REV = int(0, 2 ** 40);
 
 // A government's reply written on a player's device (the "reply" request): how
 // long one government's words may be, and how many lines one reply may hold.
@@ -159,6 +173,10 @@ export const PLAYER_REQUESTS = Object.freeze({
     t: literal("reply"), id: REQUEST_ID, thread: str(120, { min: 1 }), line: str(160, { min: 1 }),
     lines: list(obj({ speaker: COUNTRY, text: str(REPLY_MAX_CHARS, { min: 1 }) }), REPLY_MAX_LINES),
   }),
+  // What the page did with a view (client/sharedGame.js): applied it (`ok`), or
+  // found it did not follow the one it holds or did not add up, and wants the
+  // whole view again. Not a request: it has no id and is not answered.
+  viewed: obj({ t: literal("viewed"), epoch: EPOCH, rev: REV, ok: bool() }),
 });
 
 const SEAT = obj({
@@ -186,14 +204,23 @@ export const HOST_MESSAGES = Object.freeze({
     ready: list(COUNTRY, 64),
     counted: int(0, 64),
     needed: int(0, 64),
+    // The last round that could not be resolved, and why ("" for none), until a
+    // round lands.
+    failed: int(0, 1_000_000),
+    failure: str(300),
   }),
   // `result`: what the host made for the request, by id (an institution, a
   // proposal, a thread), which the asker's screen goes on to show.
   ack: obj({ t: literal("ack"), id: REQUEST_ID, ok: bool(), error: str(300, { nullable: true }), result: json(3) }, ["result"]),
   notice: obj({ t: literal("notice"), level: str(8, { enum: ["info", "warn"] }), text: str(500) }),
   // The player's own view of the game's documents; only the ones that changed
-  // since the last, whole. `rev` only goes up.
-  view: obj({ t: literal("view"), rev: int(0, 2 ** 40), docs: json(64) }),
+  // since the view numbered `base`, whole (every one, when `base` is 0). `rev`
+  // only goes up within an `epoch`, and `sums` is the digest of every document
+  // as the player is to hold it after this view.
+  view: obj({
+    t: literal("view"), epoch: EPOCH, rev: REV, base: REV, docs: json(64),
+    sums: obj(Object.fromEntries(VIEW_KEYS.map((key) => [key, str(16, { min: 1 })]))),
+  }),
 });
 
 // Everything either side may send, for the session's message schema.

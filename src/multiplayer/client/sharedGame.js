@@ -149,11 +149,27 @@ const ownWrite = ({ key, wanted, held }) => {
   return asThePageSavesIt(key, owner.runtime.held(key));
 };
 
+// What the page did with a view, said to the host (game/messages.js "viewed"):
+// one it applied need not be sent again; one it could not apply is answered
+// with the whole view. A repeat of a view already shown needs no word.
+const reportView = (owner, view, verdict) => {
+  if (verdict.reason === "repeat" || verdict.reason === "ended") return;
+  if (!verdict.ok) logDebugEvent("shared game", `a view from the host could not be shown (${verdict.reason}${verdict.key ? `: ${verdict.key}` : ""}); asked for the whole view again`, undefined, { problem: true });
+  owner.client?.notify({ t: "viewed", epoch: String(view?.epoch || "0"), rev: Number(view?.rev) || 0, ok: Boolean(verdict.ok) });
+};
+
 // A view reaches the page's documents, and its game document the library's
 // entry for the game it is shown in (library.js setSharedGameEntry): the menu
 // bar and the loading screen name the player's country and the host's date.
+// Nothing of it is acted on before it is known to be shown: a view that does
+// not follow the one held, or does not add up, changes nothing here.
 const applyToRuntime = (view) => {
   const owner = current;
+  const verdict = owner.runtime.check(view);
+  if (!verdict.ok) {
+    reportView(owner, view, verdict);
+    return false;
+  }
   const game = view?.docs?.game;
   const world = view?.docs?.world;
   const arriving = Boolean(world && typeof world === "object");
@@ -186,7 +202,9 @@ const applyToRuntime = (view) => {
     }
     owner.turnKey = turn?.key ?? owner.turnKey ?? "";
   }
-  const applied = owner.runtime.apply(view);
+  const outcome = owner.runtime.apply(view);
+  reportView(owner, view, outcome);
+  const applied = outcome.ok;
   if (applied && owner.gameId && game && typeof game === "object") {
     setSharedGameEntry({ gameId: owner.gameId, country: game.country, currentDate: game.gameDate });
   }
@@ -412,7 +430,14 @@ export const joinSharedGame = async ({ token, name } = {}) => {
     log: (text) => logDebugEvent("shared game", text),
     onState: (connection, detail = {}) => {
       if (current !== joining) return;
+      const back = connection === "connected" && state.connection === "reconnecting";
       set({ connection, detail: { heard: Boolean(detail.heard), failures: Number(detail.failures) || 0, clock: Boolean(detail.clock) } });
+      // Back after a drop: what was asked and not yet answered goes again, with
+      // its own id, and the host answers it once.
+      if (back) {
+        const again = current.client?.resend() ?? 0;
+        if (again) logDebugEvent("shared game", `reconnected: ${again} request(s) not yet answered were sent again`);
+      }
       if (!["rejected", "lost", "invalid"].includes(connection)) return;
       logDebugEvent("shared game", `joining ended: ${connection} (${detail.reason || detail.message || "no reason given"})`, undefined, { problem: true });
       set({ mode: "ended", error: joinFailure({ connection, reason: detail.reason, message: detail.message, network: state.network }) });

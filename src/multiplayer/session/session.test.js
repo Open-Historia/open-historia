@@ -59,9 +59,9 @@ test.afterEach(() => {
   }
 });
 
-const world = ({ seats = 4, hostLimits = {}, hostNow, relayOptions = {} } = {}) => {
+const world = ({ seats = 4, hostLimits = {}, hostNow, relayOptions = {}, backlog = false } = {}) => {
   const relays = createFakeRelayNetwork(relayOptions);
-  const rtc = createFakeRtcNetwork();
+  const rtc = createFakeRtcNetwork({ backlog });
   const channelFactory = (options) => createNostrChannel({ ...options, relays: RELAYS, WebSocketImpl: relays.WebSocket });
   const peerFactory = (options) => createPeer({ ...options, RTCPeerConnectionImpl: rtc.RTCPeerConnection });
   const hostKey = createIdentity();
@@ -417,5 +417,29 @@ test("a host whose clock is an hour behind is told nobody can find its lobby", a
   const setup = world({ relayOptions: { ephemeralMaxAgeSeconds: 60 }, hostNow: () => Date.now() - 3_600_000 });
   setup.host.start();
   assert.ok(await until(() => setup.events.status?.clockRefused === true), JSON.stringify(setup.events.status));
+  setup.host.stop();
+});
+
+// A view of the world is megabytes, sent as many frames, paused whenever the
+// channel's buffer is full. A small message sent meanwhile went out between its
+// frames and arrived first; the page then dropped the large one as older, and
+// never had the world. Each end now sends one message at a time.
+test("a small message never overtakes a large one on its way, either way", async () => {
+  const setup = world({ backlog: true });
+  setup.host.start();
+  const player = setup.join("Ana");
+  assert.ok(await until(() => player.client.state === "connected"));
+  // Under the test schema's 3 MB, and well over the 1 MiB that pauses a send.
+  const data = "map ".repeat(700_000);
+  setup.host.send(player.client.player, { t: "blob", data });
+  setup.host.send(player.client.player, { t: "blob", data: "small" });
+  assert.ok(await until(() => player.log.messages.length === 2, 20_000));
+  assert.deepEqual(player.log.messages.map((message) => message.data.length), [data.length, 5], "the large one first, whole");
+  // And from a player to the host.
+  const order = "orders ".repeat(40_000);
+  player.client.send({ t: "blob", data: order });
+  player.client.send({ t: "blob", data: "small" });
+  assert.ok(await until(() => setup.events.messages.length === 2, 20_000));
+  assert.deepEqual(setup.events.messages.map((entry) => entry.message.data.length), [order.length, 5]);
   setup.host.stop();
 });

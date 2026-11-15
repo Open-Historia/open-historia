@@ -25,9 +25,13 @@
 // router (runtime/web/router.js) so it sees each request first. It does nothing
 // until a shared game begins, and single player never notices it.
 
-// Documents that come from the host. The first five are the game itself: a
-// screen that asks for one before the first view arrives waits for it.
-export const VIEW_KEYS = Object.freeze(["world", "game", "events", "chat", "actions", "intercepts", "colors", "flags"]);
+import { VIEW_KEYS } from "../game/messages.js";
+import { EMPTY_DIGEST, digestDoc } from "../protocol/digest.js";
+
+// Documents that come from the host (game/messages.js). The first five are the
+// game itself: a screen that asks for one before the first view arrives waits
+// for it.
+export { VIEW_KEYS };
 const REQUIRED_KEYS = new Set(["world", "game", "events", "chat", "actions"]);
 const VIEW_KEY_SET = new Set(VIEW_KEYS);
 // The rollback archive is the host's; a player has none.
@@ -177,23 +181,60 @@ export const installRemoteRuntime = ({ target = globalThis, waitMs = 20_000 } = 
 // document's current URL (JSON_URLS[key]); both are passed in so this module
 // stays free of the page's runtime and testable on its own.
 export const startRemoteRuntime = ({ publish, urlFor, onWrite } = {}) => {
-  const session = { docs: new Map(), patches: new Map(), saves: new Map(), rev: -1, waiters: new Set(), publish, urlFor, onWrite };
+  // `epoch` and `rev`: the view held now, by the host's name and number for
+  // it; `sums`: what each held document adds up to (protocol/digest.js).
+  const session = { docs: new Map(), patches: new Map(), saves: new Map(), epoch: "", rev: 0, sums: new Map(), waiters: new Set(), publish, urlFor, onWrite };
   current = session;
+  const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+  // Whether a view may be shown: { ok: true, sums } with each document's
+  // digest as the page would hold it, or { ok: false, reason }:
+  //   "repeat"  a view already shown (nothing to do);
+  //   "gap"     it follows a view this page never had (another connection's,
+  //             or one lost on the way);
+  //   "digest"  what the page would hold does not add up to the host's;
+  //   "ended"   the shared game is over.
+  const check = (view) => {
+    if (current !== session) return { ok: false, reason: "ended" };
+    const docs = view?.docs;
+    if (!docs || typeof docs !== "object" || !view.sums || typeof view.sums !== "object") return { ok: false, reason: "gap" };
+    const whole = view.base === 0;
+    if (view.epoch === session.epoch && view.rev <= session.rev) return { ok: false, reason: "repeat" };
+    if (!whole && (view.epoch !== session.epoch || view.base !== session.rev)) return { ok: false, reason: "gap" };
+    const sums = new Map();
+    for (const key of VIEW_KEYS) {
+      const sum = has(docs, key) ? digestDoc(docs[key]) : whole ? EMPTY_DIGEST : session.sums.get(key) ?? EMPTY_DIGEST;
+      if (sum !== view.sums[key]) return { ok: false, reason: "digest", key };
+      sums.set(key, sum);
+    }
+    return { ok: true, sums };
+  };
   return {
-    // A view from the host: only the documents that changed, whole. An older
-    // view than the one already shown is ignored.
-    apply({ rev, docs }) {
-      if (current !== session || !(rev > session.rev) || !docs || typeof docs !== "object") return false;
-      session.rev = rev;
+    check: (view) => {
+      const verdict = check(view);
+      return verdict.ok ? { ok: true } : verdict;
+    },
+    // A view from the host: the documents that changed since the view it
+    // follows, whole, or every one. Shown only if it passes `check`; returns
+    // the verdict. A document the view sends as null is one the player does
+    // not hold (an optional one falls back to this device's own again).
+    apply(view) {
+      const verdict = check(view);
+      if (!verdict.ok) return verdict;
+      const { docs } = view;
       const arrived = [];
-      for (const key of Object.keys(docs)) {
-        if (!VIEW_KEY_SET.has(key)) continue;
-        session.docs.set(key, docs[key]);
+      for (const key of VIEW_KEYS) {
+        if (!has(docs, key) && view.base !== 0) continue;
+        const value = has(docs, key) ? docs[key] : null;
+        if (value === null) session.docs.delete(key);
+        else session.docs.set(key, value);
         arrived.push(key);
       }
+      session.epoch = view.epoch;
+      session.rev = view.rev;
+      session.sums = verdict.sums;
       publishHeld(session, arrived);
-      for (const check of [...session.waiters]) if (check()) session.waiters.delete(check);
-      return true;
+      for (const waiter of [...session.waiters]) if (waiter()) session.waiters.delete(waiter);
+      return { ok: true };
     },
     // This device's own fields of a document, laid over every view of it from
     // here on: `fields` are merged in, and one given as undefined is taken out
@@ -215,6 +256,9 @@ export const startRemoteRuntime = ({ publish, urlFor, onWrite } = {}) => {
     has: (key) => current === session && session.docs.has(key),
     get rev() {
       return current === session ? session.rev : -1;
+    },
+    get epoch() {
+      return current === session ? session.epoch : "";
     },
   };
 };

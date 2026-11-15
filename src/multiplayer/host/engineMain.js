@@ -26,7 +26,7 @@ import {
   readGameStateBundle,
 } from "../../runtime/gameState.js";
 import { setHostingSharedGame } from "../../runtime/humanPolities.js";
-import { discardHeldTurns } from "../../Game/AI/simulationStatus.js";
+import { discardHeldTurns, endSimulation, enterSimulation } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
 import { generateCountryStatSheet, readCountryForPlayer, runChatActionBatch, simulateTimelineJump, warRoomChart } from "../../Game/AI/gameplay.js";
@@ -153,19 +153,29 @@ const rotateInvite = (campaign, identity) => {
   return invite;
 };
 
-// The AI governments of a thread answer a person's message, as the chat panel's
-// own turn does, with that person as the player; the thread is then saved the
-// way the panel saves it.
+// Every change the engine makes to the shared game is an entry in the host's
+// one queue (host/worldQueue.js), the round's skip among them. Set while a game
+// is shared; written at once otherwise.
+let writeInOrder = (label, write) => write();
+
 // One turn of a table for a seat: the AI governments at it answer (or a
 // Council or a hearing does its business, with the flags the chat panel's own
-// turn passes), and the thread is saved the way the panel saves it.
+// turn passes). The model is asked outside the queue; what the governments
+// decided and what they said are written in it, the said added to the thread
+// as it stands then (host/tableTurn.js).
 const tableTurn = async ({ chat, seat, ...flags }) => {
   const chatId = clean(chat?.id);
-  const outcome = await runChatActionBatch({ chat, playerCountry: seat, useCanonicalState: true, ...flags });
+  const outcome = await runChatActionBatch({
+    chat,
+    playerCountry: seat,
+    useCanonicalState: true,
+    commit: (write) => writeInOrder("what a table decided", write),
+    ...flags,
+  });
   if (!turnWritesThread(outcome)) return outcome;
-  await mutateChatsState((current) => list(current).map((entry) => (clean(entry?.id) === clean(chatId)
+  await writeInOrder("what a table said", () => mutateChatsState((current) => list(current).map((entry) => (clean(entry?.id) === clean(chatId)
     ? threadAfterTurn(entry, outcome)
-    : entry)));
+    : entry))));
   return outcome;
 };
 
@@ -290,34 +300,44 @@ const boot = async () => {
       scenario: { id: clean(entry?.scenarioId).slice(0, 120), name: clean(scenario?.name || entry?.name || "Open Historia").slice(0, 120), hash: "" },
       countries: choosableCountries(docs.world, docs.game),
       store,
-      resolveRound: async ({ daysPerRound, humanCountries }) => {
-        // Every other player's own open projects stand on the game's board for
-        // the skip, so the world moves them forward as it moves the host's,
-        // and go home afterwards as it left them (host/seatBoards.js).
-        const people = { host, humans: list(humanCountries) };
-        let hostHad = new Set();
-        await mutateWorldState((world) => {
-          hostHad = new Set(list(world?.projects).map((row) => clean(row?.id)).filter(Boolean));
-          const lent = lendBoards(world, people);
-          // What a player's own board holds is not the host's, even if an
-          // earlier skip left it out here.
-          for (const board of Object.values(lent?.seatBoards ?? {})) for (const row of list(board)) hostHad.delete(clean(row?.id));
-          return lent === world ? null : lent;
-        });
+      resolveRound: async ({ daysPerRound, humanCountries, signal }) => {
+        // The game's own lock, waited for and taken in one step: a stat sheet
+        // being written is waited out, and none is written until the round has
+        // landed (it is an entry in the queue already, so nothing else is).
+        await enterSimulation({ signal });
         try {
-          await simulateTimelineJump({ days: daysPerRound });
-        } catch (error) {
-          // A skip that failed part-way may have held its turn for a Retry (a
-          // segment that did not come back, the Projects board). Nobody can
-          // press it here: the turn is let go, so the game is not left busy,
-          // and the round goes back to planning with its orders (host/round.js).
-          discardHeldTurns();
-          throw error;
-        } finally {
+          // Every other player's own open projects stand on the game's board for
+          // the skip, so the world moves them forward as it moves the host's,
+          // and go home afterwards as it left them (host/seatBoards.js).
+          const people = { host, humans: list(humanCountries) };
+          let hostHad = new Set();
           await mutateWorldState((world) => {
-            const home = returnBoards(world, { ...people, hostHad });
-            return home === world ? null : home;
+            hostHad = new Set(list(world?.projects).map((row) => clean(row?.id)).filter(Boolean));
+            const lent = lendBoards(world, people);
+            // What a player's own board holds is not the host's, even if an
+            // earlier skip left it out here.
+            for (const board of Object.values(lent?.seatBoards ?? {})) for (const row of list(board)) hostHad.delete(clean(row?.id));
+            return lent === world ? null : lent;
           });
+          try {
+            // Never a canned turn in a shared game: a skip the AI could not
+            // write fails, and the round says why (host/round.js).
+            await simulateTimelineJump({ days: daysPerRound, signal, cannedTurn: false });
+          } catch (error) {
+            // A skip that failed part-way may have held its turn for a Retry (a
+            // segment that did not come back, the Projects board). Nobody can
+            // press it here: the turn is let go, so the game is not left busy,
+            // and the round goes back to planning with its orders (host/round.js).
+            discardHeldTurns();
+            throw error;
+          } finally {
+            await mutateWorldState((world) => {
+              const home = returnBoards(world, { ...people, hostHad });
+              return home === world ? null : home;
+            });
+          }
+        } finally {
+          endSimulation();
         }
       },
       // A country's stat sheet for a player whose Stats pane has none: only
@@ -332,23 +352,25 @@ const boot = async () => {
       // The map as this game's own engine reads it, for the war room's lines and fleets.
       readChart: () => warRoomChart(),
       replyTo,
-      // A player's institution business, run here for their country.
+      // A player's institution business, run here for their country. Each
+      // thing it writes is an entry in the queue; a Council's or a hearing's
+      // turn asks the AI outside it (tableTurn).
       institution: createInstitutionDesk({
         host: () => host,
         game: {
-          lifecycle: (args) => commitInstitutionLifecycleCommand(args),
-          negotiation: (args) => ensureInstitutionLifecycleNegotiationChat(args),
-          channel: (args) => ensureInstitutionalChannel(args),
-          proposal: (args) => commitInstitutionalPlayerProposal(args),
-          voteRequest: (args) => commitWithVotingRuleBackfill(
+          lifecycle: (args) => writeInOrder("an institution's business", () => commitInstitutionLifecycleCommand(args)),
+          negotiation: (args) => writeInOrder("an institution's business", () => ensureInstitutionLifecycleNegotiationChat(args)),
+          channel: (args) => writeInOrder("an institution's business", () => ensureInstitutionalChannel(args)),
+          proposal: (args) => writeInOrder("an institution's business", () => commitInstitutionalPlayerProposal(args)),
+          voteRequest: (args) => writeInOrder("an institution's business", () => commitWithVotingRuleBackfill(
             () => commitInstitutionalPlayerVoteRequest(args),
             { institutionId: args.institutionId, proposalId: args.proposalId },
-          ),
-          governance: (args) => commitInstitutionGovernanceCommand(args),
-          message: (args) => commitInstitutionalPlayerMessage(args),
+          )),
+          governance: (args) => writeInOrder("an institution's business", () => commitInstitutionGovernanceCommand(args)),
+          message: (args) => writeInOrder("an institution's business", () => commitInstitutionalPlayerMessage(args)),
           chatTurn: (args) => tableTurn(args),
           readChats: () => readChatsState({ force: true }),
-          updateChats: (fn) => mutateChatsState(fn),
+          updateChats: (fn) => writeInOrder("an institution's business", () => mutateChatsState(fn)),
         },
       }),
       onStatus: (status) => {
@@ -396,6 +418,9 @@ const boot = async () => {
     // From here this window is the game's host: the engine reads who people
     // play from the game (runtime/humanPolities.js), and nowhere else does.
     setHostingSharedGame(true, { host });
+    // And every change it makes is applied in the host's one order.
+    const hosting = gameHost;
+    writeInOrder = (label, write) => hosting.write(label, write);
     gameHost.start();
     session.start();
     failure = "";
@@ -438,6 +463,7 @@ const boot = async () => {
         session?.stop();
         session = null;
         await stopping.stop();
+        writeInOrder = (label, write) => write();
         setHostingSharedGame(false);
         report();
         loopback.close();

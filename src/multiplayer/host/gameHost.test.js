@@ -10,13 +10,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createGameHost, MAX_ORDERS_PER_ROUND, MAX_SHEETS_PER_ROUND } from "./gameHost.js";
+import { createGameHost, MAX_ORDERS_PER_ROUND, MAX_SHEETS_PER_ROUND, VIEW_ACK_MS } from "./gameHost.js";
+import { digestText } from "../protocol/digest.js";
+import { startRemoteRuntime, stopRemoteRuntime } from "../client/remoteRuntime.js";
 import { normalizeSettings } from "./settings.js";
 import { chosenOrdersOf, generalsOf, talkOf } from "../../runtime/fronts/command.js";
 import { keptPlansOf } from "../../runtime/fronts/plans.js";
 import { syntheticMap } from "../../runtime/fronts/syntheticMap.js";
 import { battlefieldOn } from "../../runtime/fronts/testKit.js";
-import { HOST_MESSAGES, PLAYER_REQUESTS, REPLY_MAX_CHARS, REPLY_MAX_LINES } from "../game/messages.js";
+import { HOST_MESSAGES, PLAYER_REQUESTS, REPLY_MAX_CHARS, REPLY_MAX_LINES, VIEW_KEYS } from "../game/messages.js";
 import { validate } from "../protocol/validate.js";
 import { setActiveFeatures } from "../../runtime/gameFeatures.js";
 import { SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
@@ -845,11 +847,18 @@ test("the war room's fortified lines and fleets are the seat's own, held to the 
   assert.match(s.ack(s.guest, id(14)).error, /Nothing was asked/);
 });
 
-test("orders given while a round's events are read are the next round's; while it is resolved, the player is told why not", async () => {
+test("an order given while a round is resolved waits behind it and is the next round's; one given as its events are read is taken at once", async () => {
   // A player gave three orders as the round's events came in, was refused
   // ("Orders are taken while a round is being planned"), and gave them again.
+  // Then one given while the round was resolved was refused too; and before
+  // that, one already being applied when the round began was overwritten by
+  // the round, after an "ok". Now each waits its turn in the one queue.
   let release;
-  const s = setup({ holdResolve: new Promise((resolve) => { release = resolve; }) });
+  const atTheRound = [];
+  const s = setup({
+    holdResolve: new Promise((resolve) => { release = resolve; }),
+    roundWrites: (docs) => atTheRound.push(docs.actions.map((action) => action.text)),
+  });
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
   await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
@@ -857,13 +866,16 @@ test("orders given while a round's events are read are the next round's; while i
   await s.request(s.hostPlayer, { t: "ready", id: id(2), value: true });
   await s.request(s.guest, { t: "ready", id: id(3), value: true });
   assert.equal(s.to(s.guest, "round").at(-1).phase, "resolving");
-  await s.request(s.guest, { t: "order", id: id(4), text: "Send missiles to Abkhazia" });
-  assert.match(s.ack(s.guest, id(4)).error, /being resolved/);
-  release();
+  const waiting = s.host.receive(s.guest, { t: "order", id: id(4), text: "Send missiles to Abkhazia" });
   await s.clock.flush();
+  assert.equal(s.ack(s.guest, id(4)), undefined, "answered once it is applied, not refused");
+  assert.equal(s.store.docs.actions.some((action) => action.text === "Send missiles to Abkhazia"), false);
+  release();
+  await waiting;
+  await s.clock.flush();
+  assert.equal(s.ack(s.guest, id(4)).ok, true);
+  assert.deepEqual(atTheRound, [["Open talks with Estonia"]], "the round's skip did not have it: it is the next round's");
   assert.equal(s.to(s.guest, "round").at(-1).phase, "revealing");
-  await s.request(s.guest, { t: "order", id: id(5), text: "Send missiles to Abkhazia" });
-  assert.equal(s.ack(s.guest, id(5)).ok, true);
   const queued = s.store.docs.actions.find((action) => action.text === "Send missiles to Abkhazia");
   assert.equal(queued.ownerCode, RUSSIA);
   assert.equal(queued.status, "planned");
@@ -872,9 +884,33 @@ test("orders given while a round's events are read are the next round's; while i
   assert.equal(s.ack(s.guest, id(6)).ok, true);
 });
 
-test("while a round is resolved, letters to the AI's governments and goals wait; people still write to each other, every line dated by the game", async () => {
+test("a request sent again after a reconnect is applied once, and answered as the first time", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "order", id: id(2), text: "Hold the line at Narva" });
+  const first = s.ack(s.guest, id(2));
+  // The page did not hear the answer, reconnected, and sent the same request again.
+  s.host.leave(s.guest);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "order", id: id(2), text: "Hold the line at Narva" });
+  const answers = s.to(s.guest, "ack").filter((ack) => ack.id === id(2));
+  assert.equal(answers.length, 2);
+  assert.deepEqual(answers[1], first);
+  assert.equal(s.store.docs.actions.filter((action) => action.text === "Hold the line at Narva").length, 1, "applied once");
+});
+
+test("what is written while a round is resolved waits behind it, in the order it was sent, dated by the round it lands in", async () => {
+  // A letter between people written during a round could be lost to the
+  // round's own saving of the conversations; letters to the AI and goals were
+  // refused. Now each waits its turn and lands after the round.
   let release;
-  const s = setup({ holdResolve: new Promise((resolve) => { release = resolve; }) });
+  const s = setup({
+    holdResolve: new Promise((resolve) => { release = resolve; }),
+    roundWrites: (docs) => { docs.game.gameDate = "2014-05-01"; },
+  });
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
   await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
@@ -882,22 +918,24 @@ test("while a round is resolved, letters to the AI's governments and goals wait;
   await s.request(s.hostPlayer, { t: "ready", id: id(2), value: true });
   await s.request(s.guest, { t: "ready", id: id(3), value: true });
   assert.equal(s.to(s.guest, "round").at(-1).phase, "resolving");
-  // Estonia is the AI's: a new thread, and the AI's thread the host owns.
-  await s.request(s.guest, { t: "say", id: id(4), thread: null, to: [ESTONIA], text: "Moscow to Tallinn." });
-  assert.match(s.ack(s.guest, id(4)).error, /being resolved/);
-  await s.request(s.hostPlayer, { t: "say", id: id(5), thread: "chat-lv-est", to: [], text: "Riga again." });
-  assert.match(s.ack(s.hostPlayer, id(5)).error, /being resolved/);
-  await s.request(s.guest, { t: "goal", id: id(6), text: "Take Narva" });
-  assert.match(s.ack(s.guest, id(6)).error, /being resolved/);
-  // Latvia is the host's: people write to each other at any time.
-  await s.request(s.guest, { t: "say", id: id(7), thread: null, to: [LATVIA], text: "Moscow to Riga." });
-  assert.equal(s.ack(s.guest, id(7)).ok, true);
-  const thread = s.store.docs.chat.find((chat) => chat.player === RUSSIA);
-  assert.equal(thread.messages[0].time, "2014-04-01");
-  release();
+  const sent = [
+    s.host.receive(s.guest, { t: "say", id: id(4), thread: null, to: [ESTONIA], text: "Moscow to Tallinn." }),
+    s.host.receive(s.hostPlayer, { t: "say", id: id(5), thread: "chat-lv-est", to: [], text: "Riga again." }),
+    s.host.receive(s.guest, { t: "goal", id: id(6), text: "Take Narva" }),
+    s.host.receive(s.guest, { t: "say", id: id(7), thread: null, to: [LATVIA], text: "Moscow to Riga." }),
+  ];
   await s.clock.flush();
-  await s.request(s.guest, { t: "say", id: id(8), thread: null, to: [ESTONIA], text: "Moscow to Tallinn." });
-  assert.equal(s.ack(s.guest, id(8)).ok, true);
+  for (const n of [4, 6, 7]) assert.equal(s.ack(s.guest, id(n)), undefined);
+  assert.equal(s.store.docs.chat.length, 1, "nothing written while the round is resolved");
+  release();
+  await Promise.all(sent);
+  await s.clock.flush();
+  for (const n of [4, 6, 7]) assert.equal(s.ack(s.guest, id(n)).ok, true);
+  assert.equal(s.ack(s.hostPlayer, id(5)).ok, true);
+  const lines = s.store.docs.chat.flatMap((chat) => chat.messages ?? []).filter((message) => /Moscow|Riga again/.test(message.text));
+  assert.deepEqual(lines.map((message) => message.text).sort(), ["Moscow to Riga.", "Moscow to Tallinn.", "Riga again."]);
+  assert.ok(lines.every((message) => message.time === "2014-05-01"), "dated by the round they landed in");
+  assert.ok(s.replies.some((reply) => reply.seat === RUSSIA), "Estonia answers once the letter has landed");
 });
 
 test("an institution's business goes to the host's desk for the asker's seat, and what it made comes back with the ack", async () => {
@@ -970,7 +1008,7 @@ test("a post request is held to its shape: words within the limit, a post id or 
   assert.equal(ask({ text: "Hi", country: RUSSIA }).ok, false);
 });
 
-test("while a round is resolved, or where the game has no social media, nobody posts", async () => {
+test("a post written while a round is resolved lands after it; where the game has no social media, nobody posts", async () => {
   let release;
   const s = setup({ holdResolve: new Promise((resolve) => { release = resolve; }) });
   s.host.join(s.hostPlayer);
@@ -979,10 +1017,14 @@ test("while a round is resolved, or where the game has no social media, nobody p
   await s.host.control.start();
   await s.request(s.hostPlayer, { t: "ready", id: id(2), value: true });
   await s.request(s.guest, { t: "ready", id: id(3), value: true });
-  await s.request(s.guest, { t: "post", id: id(4), text: "Now?", quote: "" });
-  assert.match(s.ack(s.guest, id(4)).error, /being resolved/);
-  release();
+  const waiting = s.host.receive(s.guest, { t: "post", id: id(4), text: "Now?", quote: "" });
   await s.clock.flush();
+  assert.equal((s.store.docs.world.socialFeed ?? []).length, 0);
+  release();
+  await waiting;
+  await s.clock.flush();
+  assert.equal(s.ack(s.guest, id(4)).ok, true);
+  assert.equal((s.store.docs.world.socialFeed ?? []).length, 1);
   setActiveFeatures({ socialMedia: false }, null);
   try {
     await s.request(s.guest, { t: "post", id: id(5), text: "Now?", quote: "" });
@@ -990,7 +1032,36 @@ test("while a round is resolved, or where the game has no social media, nobody p
   } finally {
     setActiveFeatures(null, null);
   }
-  assert.equal((s.store.docs.world.socialFeed ?? []).length, 0);
+  assert.equal((s.store.docs.world.socialFeed ?? []).length, 1);
+});
+
+test("a round that cannot be resolved says why on every screen until one is, and its orders stay queued", async () => {
+  let fail = true;
+  const s = setup({ roundWrites: () => { if (fail) throw new Error("The model's quota is used up."); } });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "order", id: id(2), text: "Hold the line at Narva" });
+  await s.request(s.hostPlayer, { t: "ready", id: id(3), value: true });
+  await s.request(s.guest, { t: "ready", id: id(4), value: true });
+  await s.clock.flush();
+  const after = s.to(s.guest, "round").at(-1);
+  assert.equal(after.phase, "planning");
+  assert.equal(after.round, 1, "the same round, planned again");
+  assert.equal(after.failed, 1);
+  assert.match(after.failure, /quota is used up/);
+  assert.match(s.to(s.guest, "notice").at(-1).text, /Round 1 could not be resolved: The model's quota is used up/);
+  assert.equal(validate(HOST_MESSAGES.round, after).ok, true);
+  assert.ok(s.store.docs.actions.some((action) => action.text === "Hold the line at Narva" && action.status === "planned"));
+  // The host tries again, and it lands: the failure is no longer said.
+  fail = false;
+  s.host.control.resolveNow();
+  await s.clock.flush();
+  const landed = s.to(s.guest, "round").at(-1);
+  assert.equal(landed.phase, "revealing");
+  assert.equal(landed.failed, 0);
+  assert.equal(landed.failure, "");
 });
 
 // --- WHO ANSWERS FOR THE AI'S GOVERNMENTS ---------------------------------------------
@@ -1203,4 +1274,127 @@ test("the host can change who answers while the game runs, and a line already le
   assert.equal(s.ack(s.guest, id(4)).result, undefined);
   await s.clock.flush();
   assert.deepEqual(s.replies, [{ chatId: left.chatId, seat: RUSSIA }]);
+});
+
+// --- VIEWS THE PAGE CHECKS -------------------------------------------------------------
+// A view names its connection, the view it follows and what every document adds
+// up to; a page shows only what follows what it holds and adds up, and says
+// what it did. Before, the host counted views blind and a reconnect froze the
+// guest's world (the page ignored every view numbered below the last it had).
+
+// What a page holds after every view it was sent, in order.
+const heldAfter = (views) => Object.assign({}, ...views.map((view) => view.docs));
+
+test("each view names its connection, follows the last, and says what every document adds up to", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "order", id: id(2), text: "Reinforce the garrison in Pskov." });
+  await s.clock.flush();
+  const views = s.to(s.guest, "view");
+  assert.ok(views.length >= 2);
+  assert.equal(views[0].base, 0, "the first is whole");
+  assert.deepEqual(Object.keys(views[0].docs).sort(), [...VIEW_KEYS].sort(), "with every document");
+  for (let n = 1; n < views.length; n += 1) {
+    assert.equal(views[n].epoch, views[0].epoch);
+    assert.equal(views[n].base, views[n - 1].rev, "each follows the one before");
+  }
+  const held = heldAfter(views);
+  for (const key of VIEW_KEYS) assert.equal(views.at(-1).sums[key], digestText(JSON.stringify(held[key] ?? null)), key);
+  for (const view of views) assert.equal(validate(HOST_MESSAGES.view, view).ok, true);
+});
+
+test("a reconnect is a new connection, and its first view is whole", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  for (let n = 0; n < 5; n += 1) await s.request(s.guest, { t: "order", id: id(10 + n), text: `Order ${n}` });
+  await s.clock.flush();
+  const before = s.to(s.guest, "view");
+  const last = before.at(-1);
+  // The connection drops and the same device comes back.
+  s.host.leave(s.guest);
+  s.host.join(s.guest);
+  await s.clock.flush();
+  const after = s.to(s.guest, "view").slice(before.length);
+  assert.ok(after.length >= 1);
+  assert.notEqual(after[0].epoch, last.epoch, "a new name for the new connection's views");
+  assert.equal(after[0].base, 0);
+  assert.deepEqual(Object.keys(after[0].docs).sort(), [...VIEW_KEYS].sort());
+});
+
+test("a page that could not apply a view gets the whole view again, and a page that never says anything does too", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.clock.flush();
+  const count = () => s.to(s.guest, "view").length;
+  const latest = () => s.to(s.guest, "view").at(-1);
+  // Applied: nothing more is sent.
+  await s.request(s.guest, { t: "viewed", epoch: latest().epoch, rev: latest().rev, ok: true });
+  const settled = count();
+  // Could not: the whole view, at once, and not again within two seconds.
+  await s.request(s.guest, { t: "viewed", epoch: latest().epoch, rev: latest().rev, ok: false });
+  await s.clock.flush();
+  assert.equal(count(), settled + 1);
+  assert.equal(latest().base, 0);
+  await s.request(s.guest, { t: "viewed", epoch: latest().epoch, rev: latest().rev, ok: false });
+  await s.clock.flush();
+  assert.equal(count(), settled + 1, "a page asking again at once is not sent the world twice");
+  // Word of an earlier connection's views is not about this one's.
+  await s.clock.advance(3_000);
+  await s.request(s.guest, { t: "viewed", epoch: "old", rev: 1, ok: false });
+  await s.clock.flush();
+  assert.equal(count(), settled + 1);
+  // Nothing heard of the last view for a minute: sent again, whole.
+  await s.clock.advance(VIEW_ACK_MS + 15_000);
+  assert.equal(count(), settled + 2);
+  assert.equal(latest().base, 0);
+  // Said applied: the waiting stops.
+  await s.request(s.guest, { t: "viewed", epoch: latest().epoch, rev: latest().rev, ok: true });
+  await s.clock.advance(VIEW_ACK_MS * 2);
+  assert.equal(count(), settled + 2);
+});
+
+test("a page that loses a view on the way ends up holding exactly what the host holds for it", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.clock.flush();
+  const page = startRemoteRuntime({ publish: () => {}, urlFor: (key) => `/api/runtime/json/${key}` });
+  try {
+    let fed = 0;
+    // The page's side (client/sharedGame.js): apply each view in order, and say what it did.
+    const deliver = async ({ drop = -1 } = {}) => {
+      const views = s.to(s.guest, "view");
+      for (; fed < views.length; fed += 1) {
+        if (fed === drop) continue;
+        const outcome = page.apply(views[fed]);
+        if (outcome.reason === "repeat") continue;
+        await s.request(s.guest, { t: "viewed", epoch: views[fed].epoch, rev: views[fed].rev, ok: outcome.ok });
+      }
+    };
+    await deliver();
+    for (let n = 0; n < 3; n += 1) await s.request(s.guest, { t: "order", id: id(20 + n), text: `Order ${n}` });
+    await s.request(s.guest, { t: "say", id: id(30), thread: null, to: [ESTONIA], text: "Moscow to Tallinn." });
+    await s.clock.flush();
+    // The second of these views never arrives.
+    await deliver({ drop: fed + 1 });
+    await s.clock.advance(3_000);
+    await deliver();
+    await deliver();
+    const host = heldAfter(s.to(s.guest, "view"));
+    for (const key of VIEW_KEYS) assert.deepEqual(page.held(key) ?? null, host[key] ?? null, key);
+    assert.ok(page.held("chat").some((chat) => (chat.messages ?? []).some((message) => message.text === "Moscow to Tallinn.")), "the thread opened after the lost view is there");
+  } finally {
+    stopRemoteRuntime();
+  }
 });

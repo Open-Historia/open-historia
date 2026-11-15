@@ -150,10 +150,21 @@ export const createHostSession = ({
     return true;
   };
 
+  // One message at a time to each player: a large one (a view of the world is
+  // megabytes, many frames) goes out whole before the next one's first frame.
+  // A small message sent while a large one drained used to go out between its
+  // parts, arrive first, and the view it had overtaken was then dropped as
+  // older: the player never had the world, and the host thought it had.
+  const outboxes = new WeakMap();
   const sendTo = (peer, message) => {
     const frames = encodeMessage(message);
-    if (frames.length === 1) return peer.send(frames[0]);
-    peer.sendAll(frames);
+    const busy = outboxes.get(peer);
+    if (!busy && frames.length === 1) return peer.send(frames[0]);
+    const next = (busy ?? Promise.resolve()).then(() => peer.sendAll(frames)).catch(() => false);
+    outboxes.set(peer, next);
+    void next.then(() => {
+      if (outboxes.get(peer) === next) outboxes.delete(peer);
+    });
     return true;
   };
 

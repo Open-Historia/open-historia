@@ -277,3 +277,81 @@ test("settings are clamped to sane bounds", () => {
   assert.equal(settings.readyThreshold, 0.5);
   assert.equal(settings.countdownSeconds, 3600);
 });
+
+test("a round ended while paused lands in a reveal that ends: Pause, then End round now, no longer sticks", async () => {
+  const { clock, round } = machine();
+  round.setPlayers(["a", "b"]);
+  round.start();
+  round.pause();
+  assert.equal(round.status().paused, true);
+  round.resolveNow();
+  await clock.flush();
+  assert.equal(round.status().phase, "revealing");
+  assert.equal(round.status().paused, false, "ending the round ends the pause");
+  await clock.advance(60_000);
+  assert.equal(round.status().phase, "planning");
+  assert.equal(round.status().round, 2);
+});
+
+test("reading a round through counts for the round it names, never for the next one being resolved", async () => {
+  let release;
+  const world = machine({}, { during: () => new Promise((resolve) => { release = resolve; }) });
+  world.round.setPlayers(["a", "b"]);
+  world.round.start();
+  world.round.setReady("a", true);
+  world.round.setReady("b", true);
+  await world.clock.flush();
+  release();
+  await world.clock.flush();
+  assert.equal(world.round.status().phase, "revealing");
+  world.round.revealedBy("a", 1);
+  world.round.revealedBy("b", 1);
+  assert.equal(world.round.status().round, 2);
+  // Round 2 is resolved; both have finished reading round 1 late.
+  world.round.setReady("a", true);
+  world.round.setReady("b", true);
+  await world.clock.flush();
+  assert.equal(world.round.status().phase, "resolving");
+  world.round.revealedBy("a", 1);
+  world.round.revealedBy("b", 1);
+  release();
+  await world.clock.flush();
+  assert.equal(world.round.status().phase, "revealing", "round 2's reveal is not ended by round 1's reading");
+  world.round.revealedBy("a", 2);
+  world.round.revealedBy("b", 2);
+  assert.equal(world.round.status().phase, "planning");
+});
+
+test("with nobody here, no round is resolved: the clock waits for someone", async () => {
+  const { clock, round, resolved } = machine();
+  round.setPlayers(["a"]);
+  round.start();
+  round.setPlayers([]);
+  await clock.advance(11 * 60_000);
+  assert.deepEqual(resolved, []);
+  assert.equal(round.status().phase, "planning");
+  round.setPlayers(["a"]);
+  await clock.flush();
+  assert.deepEqual(resolved, [1], "resolved once someone is here and the round's time is up");
+});
+
+test("a round that fails says why until one lands", async () => {
+  let fail = true;
+  const clock = createClock();
+  const round = createRoundMachine({
+    settings: { roundMinutes: 10, countdownSeconds: 30, revealSeconds: 60 },
+    now: clock.now,
+    timers: clock.timers,
+    onResolve: async () => { if (fail) throw new Error("The model's quota is used up."); },
+  });
+  round.setPlayers(["a"]);
+  round.start();
+  round.setReady("a", true);
+  await clock.flush();
+  assert.deepEqual(round.status().failure, { round: 1, reason: "The model's quota is used up." });
+  fail = false;
+  round.resolveNow();
+  await clock.flush();
+  assert.equal(round.status().phase, "revealing");
+  assert.equal(round.status().failure, null);
+});
