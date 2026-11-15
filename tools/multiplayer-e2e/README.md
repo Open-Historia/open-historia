@@ -43,6 +43,12 @@ node e2e.mjs
   and the guest's screen. The guest is on its own origin, with its own library
   and storage.
 
+- **A first opening that is behind both screens:** the first-time setup is
+  done, the question about counting visits is answered with a no, and the
+  newest update's notice has been seen. The run opens the vault door by its
+  wheel, as a player does. The game's own buttons answer under all of these,
+  so the checks never needed them out of the way, but the screenshots did.
+
 The real desktop app's hidden engine window is not part of this run.
 
 ## What it checks
@@ -91,6 +97,17 @@ The real desktop app's hidden engine window is not part of this run.
   - The host's AI debug console and diagnostics log cover the calls its engine
     made.
   - No save was turned away with an error on either screen.
+- **Whose AI answers for the AI's governments** (the host's choice,
+  `host/settings.js` `replies`): until here the host's AI answered. Then:
+  - The host changes it under Players, and the guest is told that its own AI
+    answers from now on.
+  - The guest, given a key of its own only now, writes to a government the AI
+    plays. The reply is written on the guest's own page with the guest's own
+    key, the host's engine is asked nothing, and the host keeps the words: the
+    model there tried to rename the conversation too, and only what it said is
+    kept.
+  - The guest's AI is out for its next line: the thread says so, and Retry
+    answers the same line without saying it twice.
 - **Stopping:** when the host stops, the guest is told.
 
 The map's stock tiles are not in the fresh data folders, so a screen's loading

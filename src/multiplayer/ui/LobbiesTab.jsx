@@ -176,6 +176,15 @@ const HostPanel = ({ onClose, onEnterGame }) => {
             <Field title="Countdown (seconds)"><input type="number" style={input} min={0} max={3600} value={settings.countdownSeconds} onChange={update("countdownSeconds")} /></Field>
             <Field title="Game time per round (days)"><input type="number" style={input} min={1} max={3650} value={settings.daysPerRound} onChange={update("daysPerRound")} /></Field>
             <Field title="A leaver's country waits (minutes)" hint="Then the AI plays it until they come back."><input type="number" style={input} min={0} max={1440} value={settings.leaverGraceMinutes} onChange={update("leaverGraceMinutes")} /></Field>
+            {/* Who answers a player's message to a country the AI plays
+                (host/settings.js `replies`). No key is ever sent: with "own"
+                each player's device writes the answer itself. */}
+            <Field title="Countries the AI plays answer with" hint={settings.replies === "own" ? "Every player needs an AI set up on their own device." : undefined}>
+              <select style={input} value={settings.replies} onChange={update("replies")}>
+                <option value="host">Your AI key</option>
+                <option value="own">Each player&apos;s own AI key</option>
+              </select>
+            </Field>
           </div>
           <label style={{ alignItems: "center", color: "rgba(255,255,255,0.8)", display: "flex", fontSize: "0.85rem", gap: "0.5rem", marginTop: "0.9rem" }}>
             <input type="checkbox" checked={settings.allowMidGameJoin} onChange={update("allowMidGameJoin")} />

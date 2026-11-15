@@ -16,10 +16,12 @@ import { chosenOrdersOf, generalsOf, talkOf } from "../../runtime/fronts/command
 import { keptPlansOf } from "../../runtime/fronts/plans.js";
 import { syntheticMap } from "../../runtime/fronts/syntheticMap.js";
 import { battlefieldOn } from "../../runtime/fronts/testKit.js";
-import { PLAYER_REQUESTS } from "../game/messages.js";
+import { HOST_MESSAGES, PLAYER_REQUESTS, REPLY_MAX_CHARS, REPLY_MAX_LINES } from "../game/messages.js";
 import { validate } from "../protocol/validate.js";
 import { setActiveFeatures } from "../../runtime/gameFeatures.js";
 import { SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
+import { ownReplyAsked } from "../client/ownReplies.js";
+import { pendingSharedThread } from "../client/sharedThreads.js";
 
 const LATVIA = "Republic of Latvia";
 const RUSSIA = "Russian Federation";
@@ -123,8 +125,9 @@ const setup = (options = {}) => {
     },
     replyTo: async (info) => {
       replies.push(info);
-      // What the AI governments at the table said, written into the game.
-      await options.replyTo?.(info, store);
+      // What the AI governments at the table said, written into the game; and
+      // what the engine says of the answer ({ unreachable }).
+      return options.replyTo?.(info, store);
     },
     readCountry: async (info) => {
       sheets.push(info);
@@ -988,4 +991,216 @@ test("while a round is resolved, or where the game has no social media, nobody p
     setActiveFeatures(null, null);
   }
   assert.equal((s.store.docs.world.socialFeed ?? []).length, 0);
+});
+
+// --- WHO ANSWERS FOR THE AI'S GOVERNMENTS ---------------------------------------------
+// The host's choice (settings.js `replies`): its own computer on its own AI key
+// ("host"), or the writer's own device on the writer's own key ("own"). The
+// owner, 2026-11-15: "build C and D, and the host can choose, but no sending
+// api keys".
+
+test("the host's AI answers one line at a time at each table, and someone who writes again while their answer waits is answered once", async () => {
+  let running = 0;
+  let most = 0;
+  const gates = [];
+  const s = setup({
+    replyTo: async () => {
+      running += 1;
+      most = Math.max(most, running);
+      await new Promise((resolve) => { gates.push(resolve); });
+      running -= 1;
+    },
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [ESTONIA], text: "First." });
+  const thread = s.store.docs.chat.find((chat) => chat.player === RUSSIA);
+  await s.clock.flush();
+  assert.equal(s.replies.length, 1, "the first line is being answered");
+  // Two more lines while it is: one more answer waits, for both of them.
+  await s.request(s.guest, { t: "say", id: id(3), thread: thread.id, to: [], text: "Second." });
+  await s.request(s.guest, { t: "say", id: id(4), thread: thread.id, to: [], text: "Third." });
+  await s.clock.flush();
+  assert.equal(s.replies.length, 1, "nothing else is asked while the first answer is out");
+  // Another table is answered beside it.
+  await s.request(s.hostPlayer, { t: "say", id: id(5), thread: "chat-lv-est", to: [], text: "Riga again." });
+  await s.clock.flush();
+  assert.deepEqual(s.replies.map((reply) => reply.chatId), [thread.id, "chat-lv-est"]);
+  assert.equal(most, 2, "two tables, one answer each");
+
+  gates.shift()();
+  await s.clock.flush();
+  assert.deepEqual(s.replies.map((reply) => reply.chatId), [thread.id, "chat-lv-est", thread.id], "then one answer for what was written meanwhile");
+  gates.shift()();
+  gates.shift()();
+  await s.clock.flush();
+  assert.equal(s.replies.length, 3, "and no fourth: the third line was answered with the second");
+  assert.equal(gates.length, 0);
+
+  // Once the table is quiet, the next line is answered as the first was.
+  await s.request(s.guest, { t: "say", id: id(6), thread: thread.id, to: [], text: "Fourth." });
+  await s.clock.flush();
+  assert.equal(s.replies.length, 4);
+  gates.shift()();
+  await s.clock.flush();
+});
+
+test("when the host's AI cannot be reached, whoever wrote is told, and nobody else", async () => {
+  const s = setup({ replyTo: async () => ({ unreachable: true }) });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const before = s.to(s.hostPlayer, "notice").length;
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [ESTONIA], text: "Moscow to Tallinn." });
+  await s.clock.flush();
+  const told = s.to(s.guest, "notice").at(-1);
+  assert.equal(told.level, "warn");
+  assert.match(told.text, /The host's AI could not be reached: Republic of Estonia did not answer/);
+  assert.equal(s.to(s.hostPlayer, "notice").length, before, "the host did not write that line");
+  assert.equal(validate(HOST_MESSAGES.notice, told).ok, true);
+});
+
+test("with each player's own AI, the host leaves the answer to the writer's device and takes its words once, for the AI's governments alone", async () => {
+  const s = setup({ settings: { replies: "own" } });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const lobby = s.to(s.guest, "lobby").at(-1);
+  assert.equal(lobby.settings.replies, "own", "every screen is told whose AI answers");
+  assert.equal(validate(HOST_MESSAGES.lobby, lobby).ok, true);
+
+  // The guest writes to a government the AI plays: the host takes the line and
+  // says "answer it yourself", with the line and the governments that answer.
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [ESTONIA], text: "Moscow to Tallinn." });
+  const answer = s.ack(s.guest, id(2));
+  assert.equal(answer.ok, true);
+  assert.equal(validate(HOST_MESSAGES.ack, answer).ok, true);
+  const thread = () => s.store.docs.chat.find((chat) => chat.player === RUSSIA);
+  const line = thread().messages[0].id;
+  assert.deepEqual(answer.result, { chatId: thread().id, answer: "own", line, governments: [ESTONIA] });
+  assert.deepEqual(ownReplyAsked(pendingSharedThread([{ name: ESTONIA }]), answer), { thread: thread().id, line, governments: [ESTONIA] });
+  await s.clock.flush();
+  assert.deepEqual(s.replies, [], "the host's own AI is asked nothing");
+
+  const reply = (fields) => ({ t: "reply", thread: thread().id, line, ...fields });
+  // Not for someone else's line.
+  await s.request(s.hostPlayer, reply({ id: id(3), lines: [{ speaker: ESTONIA, text: "Tallinn to Riga." }] }));
+  assert.match(s.ack(s.hostPlayer, id(3)).error, /not waiting for an answer from your device/);
+  // Not for a line the host never left to a device.
+  await s.request(s.guest, reply({ id: id(4), line: "message-made-up", lines: [{ speaker: ESTONIA, text: "Anything." }] }));
+  assert.match(s.ack(s.guest, id(4)).error, /not waiting/);
+  // Never for a country a person plays, the writer's own included.
+  await s.request(s.guest, reply({ id: id(5), lines: [{ speaker: LATVIA, text: "Riga agrees to everything." }, { speaker: RUSSIA, text: "So do I." }] }));
+  assert.match(s.ack(s.guest, id(5)).error, /None of those governments/);
+  assert.equal(thread().messages.length, 1, "nothing was written");
+
+  // The governments' words, as the device wrote them: dated and given their
+  // ids by the host, a person's country among them left out.
+  const words = "Tallinn hears Moscow.\n\nIt will answer within the week.";
+  await s.request(s.guest, reply({ id: id(6), lines: [{ speaker: "republic of estonia", text: words }, { speaker: LATVIA, text: "Riga too." }] }));
+  assert.equal(s.ack(s.guest, id(6)).ok, true);
+  assert.deepEqual(thread().messages.map((message) => [message.role, message.speaker, message.text, message.time]), [
+    ["user", RUSSIA, "Moscow to Tallinn.", "2014-04-01"],
+    ["leader", ESTONIA, words, "2014-04-01"],
+  ]);
+  assert.match(thread().messages[1].id, /^message-/);
+  const seen = s.shown(s.guest).chat.find((chat) => chat.id === thread().id);
+  assert.deepEqual(seen.messages.map((message) => [message.role, message.speaker]), [["user", RUSSIA], ["leader", ESTONIA]]);
+  assert.equal((s.shown(s.hostPlayer).chat ?? []).some((chat) => chat.id === thread().id), false, "the host is not at that table");
+  // Once.
+  await s.request(s.guest, reply({ id: id(7), lines: [{ speaker: ESTONIA, text: "And again." }] }));
+  assert.match(s.ack(s.guest, id(7)).error, /not waiting/);
+  assert.equal(thread().messages.length, 2);
+
+  // A line in the same thread is left to the device as the first was, by its id alone.
+  await s.request(s.guest, { t: "say", id: id(8), thread: thread().id, to: [], text: "And Narva?" });
+  const second = s.ack(s.guest, id(8)).result;
+  assert.deepEqual(second, { answer: "own", line: thread().messages[2].id, governments: [ESTONIA] });
+  assert.deepEqual(ownReplyAsked(seen, s.ack(s.guest, id(8))), { thread: thread().id, line: second.line, governments: [ESTONIA] });
+
+  // People answer for themselves: no model, and no device.
+  await s.request(s.guest, { t: "say", id: id(9), thread: null, to: [LATVIA], text: "Moscow to Riga." });
+  assert.equal(s.ack(s.guest, id(9)).result.answer, undefined);
+  assert.equal(ownReplyAsked(pendingSharedThread([{ name: LATVIA }]), s.ack(s.guest, id(9))), null);
+
+  // An institution's table votes and decides in its answer: the host's own AI
+  // answers it, whatever the setting.
+  s.store.docs.chat.push({ id: "council-1", institutionId: "inst-1", countries: [{ code: RUSSIA, name: RUSSIA }, { code: ESTONIA, name: ESTONIA }], messages: [] });
+  await s.request(s.guest, { t: "say", id: id(10), thread: "council-1", to: [], text: "Moscow addresses the council." });
+  assert.equal(s.ack(s.guest, id(10)).ok, true);
+  assert.equal(s.ack(s.guest, id(10)).result, undefined);
+  await s.clock.flush();
+  assert.deepEqual(s.replies, [{ chatId: "council-1", seat: RUSSIA }]);
+
+  // So does a government at war with the writer: its answer may make peace,
+  // or accept the writer's terms, which only the host's own game can carry out.
+  s.store.docs.world.wars = [{ id: "war-1", title: "The Narva War", status: "active", sideA: [RUSSIA], sideB: [ESTONIA] }];
+  await s.request(s.guest, { t: "say", id: id(11), thread: thread().id, to: [], text: "Moscow proposes a ceasefire." });
+  assert.equal(s.ack(s.guest, id(11)).ok, true);
+  assert.equal(s.ack(s.guest, id(11)).result, undefined, "nothing is left to the device");
+  await s.clock.flush();
+  assert.deepEqual(s.replies.at(-1), { chatId: thread().id, seat: RUSSIA });
+  assert.equal(s.replies.length, 2);
+  // Another's war is not the writer's: Latvia's with Estonia leaves the guest's line to its device.
+  s.store.docs.world.wars = [{ id: "war-2", title: "The Baltic War", status: "active", sideA: [LATVIA], sideB: [ESTONIA] }];
+  await s.request(s.guest, { t: "say", id: id(12), thread: thread().id, to: [], text: "Moscow watches." });
+  assert.equal(s.ack(s.guest, id(12)).result.answer, "own");
+  // And once the writer's own war is settled, the device answers again.
+  s.store.docs.world.wars = [{ id: "war-1", title: "The Narva War", status: "ended", sideA: [RUSSIA], sideB: [ESTONIA] }];
+  await s.request(s.guest, { t: "say", id: id(13), thread: thread().id, to: [], text: "Moscow thanks Tallinn." });
+  assert.equal(s.ack(s.guest, id(13)).result.answer, "own");
+  await s.clock.flush();
+  assert.equal(s.replies.length, 2);
+  assert.equal(s.store.docs.game.humanCountries.length, 2);
+});
+
+test("a reply is held to its shape: a line, a thread, and a few governments' words", () => {
+  const ask = (fields) => validate(PLAYER_REQUESTS.reply, { t: "reply", id: id(1), thread: "thread-1", line: "message-1", lines: [{ speaker: ESTONIA, text: "Tallinn hears Moscow." }], ...fields });
+  assert.equal(ask({}).ok, true);
+  assert.equal(ask({ lines: Array.from({ length: REPLY_MAX_LINES }, () => ({ speaker: ESTONIA, text: "A line." })) }).ok, true);
+  assert.equal(ask({ lines: Array.from({ length: REPLY_MAX_LINES + 1 }, () => ({ speaker: ESTONIA, text: "A line." })) }).ok, false, "no more lines than a table says at once");
+  assert.equal(ask({ lines: [{ speaker: ESTONIA, text: "x".repeat(REPLY_MAX_CHARS + 1) }] }).ok, false);
+  assert.equal(ask({ lines: [{ speaker: ESTONIA, text: "" }] }).ok, false, "an answer needs words");
+  assert.equal(ask({ line: "" }).ok, false);
+  assert.equal(ask({ thread: "" }).ok, false);
+  assert.equal(ask({ lines: [{ speaker: ESTONIA, text: "Words.", key: "sk-anything" }] }).ok, false, "nothing but a name and its words: a key has nowhere to go");
+  assert.equal(ask({ key: "sk-anything" }).ok, false);
+  assert.equal(ask({ lines: [{ speaker: ESTONIA, text: "Words.", role: "user" }] }).ok, false, "whose line it is, is the host's to say");
+});
+
+test("the host can change who answers while the game runs, and a line already left to a device is still answered from it", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  assert.equal(s.to(s.guest, "lobby").at(-1).settings.replies, "host");
+
+  assert.equal(s.host.control.setReplies("own"), true);
+  assert.equal(s.host.control.setReplies("own"), false, "already so");
+  assert.equal(s.host.control.setReplies("everyone"), false, "not a way to answer");
+  assert.equal(s.to(s.guest, "lobby").at(-1).settings.replies, "own");
+  assert.equal(s.host.status().lobby.settings.replies, "own");
+  for (const player of [s.guest, s.hostPlayer]) assert.match(s.to(player, "notice").at(-1).text, /each player's own AI answers/);
+
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [ESTONIA], text: "Moscow to Tallinn." });
+  const left = s.ack(s.guest, id(2)).result;
+  assert.equal(left.answer, "own");
+
+  // Back to the host's AI: the line the device was left with is still its own.
+  assert.equal(s.host.control.setReplies("host"), true);
+  assert.match(s.to(s.guest, "notice").at(-1).text, /the host's AI answers/);
+  await s.request(s.guest, { t: "reply", id: id(3), thread: left.chatId, line: left.line, lines: [{ speaker: ESTONIA, text: "Tallinn hears Moscow." }] });
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  assert.deepEqual(s.replies, []);
+  // And the next line is the host's AI's to answer.
+  await s.request(s.guest, { t: "say", id: id(4), thread: left.chatId, to: [], text: "And Narva?" });
+  assert.equal(s.ack(s.guest, id(4)).result, undefined);
+  await s.clock.flush();
+  assert.deepEqual(s.replies, [{ chatId: left.chatId, seat: RUSSIA }]);
 });

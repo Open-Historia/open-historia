@@ -111,6 +111,14 @@ export const setAsideActiveInteractive = hostOnly(async (...args) => (await game
 // --- Chat and diplomacy -----------------------------------------------------
 // One request acts for every AI participant in a thread (AI/chatActions.js).
 export const runChatActionBatch = hostOnly(async (...args) => (await gameplay()).runChatActionBatch(...args));
+// A shared game whose host has each player's own device answer for the
+// governments the AI plays (multiplayer/host/settings.js `replies: "own"`):
+// what they say to the player's line, asked with the player's own key from
+// what the player's own screen holds. It writes nothing and carries nothing
+// out: the words go to the host, which is where a shared game's rules apply
+// (host/gameHost.js "reply"). So it runs on a page playing a shared game,
+// which is the only place it is asked.
+export const writeTableReply = async (...args) => (await gameplay()).writeTableReply(...args);
 export const checkDemandReply = hostQuietly(async (...args) => (await gameplay()).checkDemandReply(...args));
 export const ensureCountryAssessed = hostQuietly(async (...args) => (await gameplay()).ensureCountryAssessed(...args));
 export const processPendingEventOutreach = hostOnly(async (...args) => (await gameplay()).processPendingEventOutreach(...args));

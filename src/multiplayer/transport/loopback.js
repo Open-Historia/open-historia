@@ -22,7 +22,7 @@ import { HOST_MESSAGES, PLAYER_REQUESTS } from "../game/messages.js";
 import { bool, json, list, literal, obj, str, union, validate } from "../protocol/validate.js";
 
 export const LOOPBACK_CHANNEL = "oh-mp-host";
-export const HOST_CONTROLS = Object.freeze(["open", "start", "pause", "resume", "resolveNow", "kick", "rotate", "stop"]);
+export const HOST_CONTROLS = Object.freeze(["open", "start", "pause", "resume", "resolveNow", "replies", "kick", "rotate", "stop"]);
 
 const REQUEST = union("t", PLAYER_REQUESTS);
 const HOST_MESSAGE = union("t", HOST_MESSAGES);

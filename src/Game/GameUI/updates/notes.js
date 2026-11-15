@@ -54,6 +54,26 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "build C and D, and the host can choose, but no sending api keys" (the owner, 2026-11-15): who answers a player's message to a
+    // country the AI plays is the host's choice (multiplayer/host/settings.js `replies`): the host's AI, or each player's own device.
+    id: "2026-11-shared-game-replies",
+    kind: "minor",
+    date: "2026-11-15",
+    channel: "beta",
+    banners: [
+      {
+        title: "Whose AI answers in shared games",
+        items: [
+          "The host of a shared game now chooses whose AI answers the messages players write to countries the AI plays: the host's, as before, or each player's own. It is set when the lobby is opened, and the host can change it during the game under Players.",
+          "With each player's own AI, the reply to your message is written on your device with your own AI key, so the host no longer pays for everyone's conversations. No key is ever sent to the host or to anyone else, and you need an AI set up on your own device.",
+          "A reply written on a player's device is words only: a country cannot make peace, sign a treaty or call a vote in it. So a country at war with you, and an institution's council, are still answered by the host's AI, which can. Everything said is read when the round is played, like any conversation.",
+          "With the host's AI, a conversation is answered one message at a time, so two messages sent quickly no longer lose each other's replies, and you are told when the host's AI could not be reached instead of being left without an answer.",
+          "A conversation no longer disappears when you write in it after the player who started it has left the game.",
+        ],
+      },
+    ],
+  },
+  {
     // "there should be absolutely no keywording done in this game anywhere its super unreliable ... and no whackamoleing issues. fix the core issue don't just patch it"
     // (the owner, 2026-11-13): every word list, English synonym table and a-z fold that judged meaning, replaced by the AI's structured answers, the game's own records and exact names.
     id: "2026-11-every-language-alike",

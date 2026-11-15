@@ -25,7 +25,6 @@ import {
   readChatsState,
   readGameStateBundle,
 } from "../../runtime/gameState.js";
-import { projectChatThread } from "../../runtime/chatThreads.js";
 import { setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { discardHeldTurns } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
@@ -42,6 +41,7 @@ import { relayChannelFactory, usesCustomRelays } from "../signaling/relays.js";
 import { describeClock, offsetClock, readSignalingClock } from "../client/clock.js";
 import { createGameHost } from "./gameHost.js";
 import { createInstitutionDesk } from "./institutions.js";
+import { threadAfterTurn, turnWritesThread } from "./tableTurn.js";
 import { commitInstitutionLifecycleCommand, ensureInstitutionLifecycleNegotiationChat } from "../../runtime/institutionLifecycle.js";
 import { ensureInstitutionalChannel } from "../../runtime/institutionalChannels.js";
 import {
@@ -162,27 +162,23 @@ const rotateInvite = (campaign, identity) => {
 const tableTurn = async ({ chat, seat, ...flags }) => {
   const chatId = clean(chat?.id);
   const outcome = await runChatActionBatch({ chat, playerCountry: seat, useCanonicalState: true, ...flags });
-  if (!outcome || outcome.committed || !Array.isArray(outcome.events)) return outcome;
-  const projected = projectChatThread(outcome.events);
+  if (!turnWritesThread(outcome)) return outcome;
   await mutateChatsState((current) => list(current).map((entry) => (clean(entry?.id) === clean(chatId)
-    ? {
-      ...entry,
-      events: outcome.events,
-      countries: projected.countries ?? entry.countries,
-      title: projected.title || entry.title,
-      polls: projected.polls ?? entry.polls,
-      demands: projected.demands ?? entry.demands,
-    }
+    ? threadAfterTurn(entry, outcome)
     : entry)));
   return outcome;
 };
 
+// The AI governments at a table answer the line a seat has just written
+// (settings.replies "host"). `unreachable`: the model could not be reached, so
+// nobody answered, which the host tells the writer (host/gameHost.js).
 const replyTo = async ({ chatId, seat }) => {
   const chats = await readChatsState({ force: true });
   const chat = list(chats).find((entry) => clean(entry?.id) === clean(chatId));
-  if (!chat) return;
+  if (!chat) return null;
   const lastLine = [...list(chat.messages)].reverse().find((message) => clean(message?.speaker || message?.code) === clean(seat));
-  await tableTurn({ chat, seat, playerMessage: clean(lastLine?.text) });
+  const outcome = await tableTurn({ chat, seat, playerMessage: clean(lastLine?.text) });
+  return { unreachable: outcome?.generation?.source === "fallback" };
 };
 
 const boot = async () => {
@@ -419,6 +415,8 @@ const boot = async () => {
       case "pause": return gameHost.control.pause();
       case "resume": return gameHost.control.resume();
       case "resolveNow": return gameHost.control.resolveNow();
+      // Who answers for the AI's governments from here on (host/settings.js `replies`).
+      case "replies": return gameHost.control.setReplies(clean(args?.mode));
       case "kick": {
         const device = gameHost.control.kick(clean(args?.country));
         const player = session?.players().find((entry) => entry.device === device);

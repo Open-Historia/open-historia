@@ -65,6 +65,8 @@ import { commitInstitutionLifecycleCommand, institutionLifecycleCasesForPolity, 
 import { buildLifecycleReplyRevealPlan } from "./institutionLifecyclePresentation.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { afterSharedSay, followSharedThread, pendingSharedThread, sayRequestFor, sharedFollowStep } from "../../multiplayer/client/sharedThreads.js";
+import { ownReplyAsked } from "../../multiplayer/client/ownReplies.js";
+import { answerOnThisDevice, dismissOwnReply, retryOwnReply, useOwnReply } from "./ownTableReplies.js";
 import { askHostForInstitution } from "../../runtime/sharedInstitutions.js";
 import { setOpenConversation } from "../../runtime/openConversation.js";
 
@@ -975,6 +977,19 @@ const GroupThinkingBubble = ({ count = 0 }) => (
     </div>
 );
 
+// Why a reply this device was writing in a shared game stopped
+// (multiplayer/client/ownReplies.js): the words the thread shows for it.
+const ownReplyProblem = (job) => {
+    // With why, when the device's own AI gave one: on a device with no AI set
+    // up that reason ("no API key … Fix it in Settings → AI") is what the
+    // player needs to read. A paragraph of its own, so each is found in a pack.
+    if (job?.why === "unreachable") return ["The AI could not be reached, so nobody at the table answered.", job.error].filter(Boolean).join("\n\n");
+    if (job?.why === "silent") return "Nobody at the table chose to answer.";
+    if (job?.why === "refused") return job.error || "The host did not take the reply.";
+    if (job?.why === "late") return "Your message has not come back from the host yet, so nobody has answered it.";
+    return job?.error || "The reply could not be written.";
+};
+
 const LifecycleThinkingBubble = ({ count = 0 }) => (
     <div data-lifecycle-group-thinking="true" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
     <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.42)", marginBottom: "0.25rem" }}>
@@ -1245,6 +1260,20 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     const unseen = useUnseenEventIds();
     const [visibleMessageLimit, setVisibleMessageLimit] = useState(CHAT_INITIAL_RENDER_WINDOW);
     const [isLoading, setIsLoading]             = useState(false);
+    // A shared game whose host has each player's own device answer for the
+    // AI's governments (ownTableReplies.js): the reply this device is writing
+    // for this thread, or what stopped it. Not `isLoading`: the thread goes on
+    // taking the host's view meanwhile, the player's own line first of all.
+    const ownReply = useOwnReply(chat.id);
+    const writingOwnReply = ownReply?.status === "writing";
+    // Like any Retry, this one is for the thread's last line: once the thread
+    // has moved past it, what stopped that answer is dropped. (A line the view
+    // never brought is not in the thread to move past.)
+    useEffect(() => {
+        if (ownReply?.status !== "stopped" || ownReply.why === "late") return;
+        const last = messages.at(-1);
+        if (last?.id && String(last.id) !== ownReply.line) dismissOwnReply(chat.id);
+    }, [ownReply, messages, chat.id]);
     const [playerInput, setPlayerInput]         = useState("");
     const draftFromRef = useRef("");
     const [pollComposerOpen, setPollComposerOpen] = useState(false);
@@ -1540,6 +1569,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (!scroller) return;
             scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
         }, [presentedMessageCount, isLoading, typingNext]);
+        // The same when this device starts writing a reply in a shared game, or
+        // stops with something to say about it (ownTableReplies.js): the bubble
+        // is under the last line.
+        useEffect(() => {
+            const scroller = messagesScrollRef.current;
+            if (!scroller || !ownReply) return;
+            scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+        }, [ownReply]);
 
         const pushMessages = (updated) => {
             messagesRef.current = updated;
@@ -1768,6 +1805,11 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     answer = { ok: false, error: error?.message || "" };
                 }
                 const outcome = afterSharedSay(target, answer);
+                // The host left the answer to this device (the lobby's
+                // "Countries the AI plays answer with" setting): it is written
+                // here, on this player's own AI, and the host is sent the words.
+                const own = ownReplyAsked(target, answer);
+                if (own) void answerOnThisDevice({ ...own, text, playerCountry });
                 if (outcome.kind === "refused") {
                     pushMessages([...baseMessages, { role: "error", speaker: "System", text: outcome.error || "The host did not take the message.", time: gameDate }]);
                 } else if (outcome.kind === "follow" && onSharedThreadOpened) {
@@ -2100,7 +2142,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
 
         const handlePlayerSubmit = async () => {
             const text = playerInput.trim();
-            if (!text || isLoading) return;
+            if (!text || isLoading || writingOwnReply) return;
             const fromDraft = draftFromRef.current;
             draftFromRef.current = "";
             setPlayerInput("");
@@ -2134,7 +2176,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // player's terms of peace, kept with the war, name it).
         // `fromDraft`: the id of the advisor's drafted letter the line was sent from.
         const submitPlayerText = async (text, { onSent = null, id = "", fromDraft = "" } = {}) => {
-            if (!text || isLoading) return;
+            if (!text || isLoading || writingOwnReply) return;
             // Speaking while the table is still talking cuts it off.
             cutIn();
             // In a shared game the host keeps every thread and answers for the AI
@@ -2473,6 +2515,16 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     : isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
             {!isLoading && typingNext && (
                 <TypingBubble speaker={typingNext.speaker} code={typingNext.code} label="Typing" hint="Send a message now to cut in: what is still to come will not be said." />
+            )}
+            {/* A shared game where this device answers for the AI's governments:
+                the reply being written here, or why it stopped, with Retry (the
+                same line again: no second copy of it is said). */}
+            {writingOwnReply && !isLoading && (ownReply.governments.length > 1
+                ? <GroupThinkingBubble count={ownReply.governments.length} />
+                : <TypingBubble speaker={ownReply.governments[0]} code={countries.find((country) => country.name === ownReply.governments[0])?.code} />)}
+            {ownReply?.status === "stopped" && (
+                <MessageBubble msg={{ role: "error", speaker: "System", text: ownReplyProblem(ownReply), time: gameDate }} showTime={false}
+                    onRetry={() => { void retryOwnReply(chat.id); }} />
             )}
             <div ref={messagesEndRef} />
             </div>

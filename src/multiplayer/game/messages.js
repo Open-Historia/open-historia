@@ -38,7 +38,16 @@ import { SAY_FROM_DRAFT_MAX } from "../client/sharedThreads.js";
 // from before would refuse.
 // 9: a line may say which of the advisor's drafted letters it was sent from
 // (the "say" request's `fromDraft`), which a host from before would refuse.
-export const SHARED_GAME_VERSION = "9";
+// 10: who answers a player's message to a government the AI plays is the
+// host's choice (settings.replies). With "own" the writer's device writes the
+// governments' words on its own AI key and sends them (the "reply" request);
+// no key is sent anywhere.
+export const SHARED_GAME_VERSION = "10";
+
+// A government's reply written on a player's device (the "reply" request): how
+// long one government's words may be, and how many lines one reply may hold.
+export const REPLY_MAX_CHARS = 6000;
+export const REPLY_MAX_LINES = 8;
 
 // What of the institutions a player's screen may ask the host for: the game's
 // own institution functions, run on the host for the asker's country
@@ -140,6 +149,16 @@ export const PLAYER_REQUESTS = Object.freeze({
     to: list(COUNTRY, 8), text: str(SAY_MAX_CHARS, { min: 1 }),
     fromDraft: str(SAY_FROM_DRAFT_MAX),
   }, ["fromDraft"]),
+  // With settings.replies "own": what the governments the AI plays answered a
+  // line of the asker's, written on the asker's own device and AI key
+  // (GameUI/ownTableReplies.js). Words only: each entry is one government's
+  // message, and nothing a government "agrees" in it is carried out. `line` is
+  // the asker's own line it answers (the id the "say" ack gave), and the host
+  // takes one reply per line, from governments at that table nobody plays.
+  reply: obj({
+    t: literal("reply"), id: REQUEST_ID, thread: str(120, { min: 1 }), line: str(160, { min: 1 }),
+    lines: list(obj({ speaker: COUNTRY, text: str(REPLY_MAX_CHARS, { min: 1 }) }), REPLY_MAX_LINES),
+  }),
 });
 
 const SEAT = obj({

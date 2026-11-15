@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_SETTINGS, SEATS_AVAILABLE_NOW, normalizeSettings, roundSettingsOf } from "./settings.js";
+import { DEFAULT_SETTINGS, REPLY_MODES, SEATS_AVAILABLE_NOW, normalizeSettings, roundSettingsOf } from "./settings.js";
 
 test("the defaults are the user's: 8 seats, a 2/3 share, cheats off, the host pays", () => {
   const { ok, settings } = normalizeSettings({});
@@ -25,6 +25,14 @@ test("what the host sets is kept; nonsense and unknown keys are not", () => {
   assert.match(normalizeSettings({ cheats: "always" }).error, /cheats/);
   assert.match(normalizeSettings({ payment: "cycle" }).error, /payment/);
   assert.match(normalizeSettings({ name: "bad\nname" }).error, /name/);
+});
+
+test("who answers for the AI's governments is the host's choice: its own AI unless it says each player's own", () => {
+  assert.deepEqual(REPLY_MODES, ["host", "own"]);
+  assert.equal(normalizeSettings({}).settings.replies, "host", "as it was before there was a choice");
+  assert.equal(normalizeSettings({ replies: "own" }).settings.replies, "own");
+  assert.match(normalizeSettings({ replies: "lend" }).error, /replies/, "a key is never lent: there is no such way to answer");
+  assert.match(normalizeSettings({ replies: "" }).error, /replies/);
 });
 
 test("the slider runs to 64, but above 8 is coming later", () => {

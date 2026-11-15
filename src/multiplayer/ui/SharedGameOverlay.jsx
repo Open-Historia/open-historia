@@ -73,6 +73,28 @@ const SeatList = ({ seats, ready = [] }) => (seats ?? []).map((seat) => (
   </div>
 ));
 
+// Who answers a player's message to a country the AI plays (host/settings.js
+// `replies`). The host sets it, here too while the game runs; everyone else is
+// told when it is their own AI that answers, since they need one set up.
+const RepliesSetting = ({ shared }) => {
+  if (!shared.lobby) return null;
+  const mode = shared.lobby.settings?.replies === "own" ? "own" : "host";
+  if (shared.role !== "host") {
+    return mode === "own" ? <div style={{ ...small, marginTop: "0.5rem", textAlign: "end" }}>Countries the AI plays answer your messages with your own AI key.</div> : null;
+  }
+  // At the end of its row: during a game the Events panel lies over the start
+  // of the round bar's lower rows, and covered the start of this one.
+  return (
+    <label style={{ ...small, alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "flex-end", marginTop: "0.5rem" }}>
+      Countries the AI plays answer with
+      <select value={mode} onChange={(event) => hostControl("replies", { mode: event.target.value })} style={{ ...button, justifyContent: "flex-start" }}>
+        <option value="host">Your AI key</option>
+        <option value="own">Each player&apos;s own AI key</option>
+      </select>
+    </label>
+  );
+};
+
 const Lobby = ({ shared, me }) => {
   const { lobby, role, token, engine, error } = shared;
   const taken = useMemo(() => new Set((lobby?.seats ?? []).map((seat) => seat.country)), [lobby]);
@@ -129,6 +151,7 @@ const Lobby = ({ shared, me }) => {
       <div style={{ marginTop: "1rem" }}>
         <div style={{ ...small, marginBottom: "0.35rem", textTransform: "uppercase" }}>Players</div>
         <SeatList seats={lobby?.seats} />
+        <RepliesSetting shared={shared} />
       </div>
 
       {!me && lobby && role !== "host" && shared.standIn !== "ready" && !error ? (
@@ -197,6 +220,7 @@ const RoundBar = ({ shared, me }) => {
       {showPlayers ? (
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", flexBasis: "100%", maxHeight: "40vh", overflowY: "auto", paddingTop: "0.3rem" }}>
           <SeatList seats={shared.lobby?.seats} ready={round?.ready ?? []} />
+          <RepliesSetting shared={shared} />
         </div>
       ) : null}
     </div>

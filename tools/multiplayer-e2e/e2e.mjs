@@ -222,12 +222,28 @@ const HELPERS = `
   };
   true;`;
 const withHelpers = (tab) => tab.eval(HELPERS);
+// The vault door stands over the menu on every page load until its wheel is
+// clicked (GameUI/VaultDoor.jsx). The game's own buttons answer under it, so
+// the checks never needed it open, but every screenshot was of the door.
+const openVaultDoor = async (tab) => {
+  if (!(await until(tab, "Boolean(document.querySelector('.oh-vault-knob:not([disabled])'))", 20000))) return false;
+  await tab.eval("document.querySelector('.oh-vault-knob').click(); true");
+  return until(tab, "!document.querySelector('.oh-vault-knob')", 20000);
+};
 
 let answeredJumps = 0;
 let engineTab = null;
 const sentTools = [];
 // The host's AI settings: a Gemini key only the stand-in model ever sees.
 const AI_SETTING = `localStorage.setItem("api_provider", "gemini"); localStorage.setItem("gemini_api_key", "e2e-dummy-key"); localStorage.setItem("ai_limit_generation", "1");`;
+// A device's first opening is behind it: the first-time setup is done
+// (runtime/firstSetupDue.js), the question about counting visits is answered,
+// with a no (public/consent.js), and the newest update's notice has been seen
+// (GameUI/updates/updateNotices.js), so none is shown behind the vault door.
+// Each of the three sat over every screenshot (the door itself is opened by
+// its wheel, openVaultDoor below).
+const { NOTICE_UPDATES } = await import(pathToFileURL(path.join(REPO, "src", "Game", "GameUI", "updates", "notes.js")).href);
+const FIRST_OPENING_DONE = `localStorage.setItem("oh-first-setup", "1"); localStorage.setItem("oh:analytics-consent", JSON.stringify({ choice: "no", at: new Date().toISOString() })); localStorage.setItem("oh-update-note-seen", ${JSON.stringify(String(NOTICE_UPDATES[0]?.id ?? ""))});`;
 try {
   const TARGET = jumpTargetDate(ORIGIN, 30);
   const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
@@ -238,13 +254,16 @@ try {
   const chatBodies = [];
   const LINE_FROM_AI = "Paris will host the conference, if both powers attend.";
   const SUGGESTED_TOPIC = "Steady the budget before the summer";
-  // Each order's id, as the prompt lists it under its owner: "[id] (Country) text".
+  // Each order's id, as the prompt lists it under its owner: "[id] (action, Country) title"
+  // (promptContext.js buildActionHistoryText).
   const orderIdIn = (body, country) => {
     const escaped = country.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`\\[([^\\]\\s]+)\\] \\(${escaped}\\) `).exec(body)?.[1] ?? "";
+    return new RegExp(`\\[([^\\]\\s]+)\\] \\(action, ${escaped}\\) `).exec(body)?.[1] ?? "";
   };
-  // The round the stand-in model writes, titled the way a model titles events:
-  // the guard reads who is choosing from the country a title opens with.
+  // The round the stand-in model writes. Whose decision an event is, the guard
+  // reads from what the answer carries and never from its words: the war the
+  // guest's country "declares" is its own choice by the answer's war record
+  // (nativeWarLedger.js: id~op~actors~opponents~event numbers~note).
   const STAGED_TITLES = ["Oil prices slide further", "declares war on Ukraine", "snap drills near the Estonian border", "Storms batter the North Sea coast", "arrives in Hanoi", "central bank raises rates"];
   const jumpAnswer = (body) => {
     const guestOrder = orderIdIn(body, GUEST_COUNTRY);
@@ -252,6 +271,7 @@ try {
     return {
       stopDate: TARGET,
       summary: "Tension in the east; markets wobble.",
+      warUpdates: `war-e2e-ukraine~start~${GUEST_COUNTRY}~Ukraine~2~Title: The Ukraine War`,
       events: [
         { date: addDays(ORIGIN, 3), title: "Oil prices slide further as the supply glut persists", description: "Brent falls again as producers keep pumping.", importance: "moderate", kind: "world", playerRelated: false },
         { date: addDays(ORIGIN, 7), title: `${GUEST_COUNTRY} declares war on Ukraine`, description: `The government of ${GUEST_COUNTRY} declares war on Ukraine.`, importance: "critical", kind: "world", playerRelated: true },
@@ -299,6 +319,8 @@ try {
       // no body
     }
     sentTools.push(tool);
+    // Which page asked: the engine (the host's key) or a player's own screen.
+    (page.asked ??= []).push(tool);
     // A round for the time skip, a line for an AI government at a table, a
     // list for the suggestions button; anything else is refused.
     let args = null;
@@ -308,7 +330,15 @@ try {
       args = jumpAnswer(text);
     } else if (tool === "submit_chat_actions") {
       chatBodies.push(text);
-      args = { actions: [{ type: "send_message", actorName: AI_COUNTRY, content: LINE_FROM_AI }] };
+      (page.chatBodies ??= []).push(text);
+      // A page's own model may be out (`aiDown`), and says its own line (`aiLine`).
+      // More than words is tried too, so a reply written on a player's device
+      // is seen to keep the words alone.
+      args = page.aiDown ? null : {
+        actions: page.aiLine
+          ? [{ type: "rename_chat", actorName: AI_COUNTRY, title: "A table the model renamed" }, { type: "send_message", actorName: AI_COUNTRY, content: page.aiLine }]
+          : [{ type: "send_message", actorName: AI_COUNTRY, content: LINE_FROM_AI }],
+      };
     } else if (tool === "submit_actions") {
       args = { topics: [{ title: SUGGESTED_TOPIC, description: "Shore up the position at home.", actions: [{ title: "Convene the cabinet", text: "Convene the cabinet on the budget." }] }] };
     }
@@ -340,7 +370,7 @@ try {
   engineTab = engine;
   await until(engine, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
   await standInModel(engine);
-  await engine.eval(`${RELAY_SETTING} ${AI_SETTING} true`);
+  await engine.eval(`${RELAY_SETTING} ${AI_SETTING} ${FIRST_OPENING_DONE} true`);
   const host = await openTab(`${HOST}/`);
   await standInModel(host);
   await until(host, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
@@ -353,6 +383,7 @@ try {
   await until(host, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
   await withHelpers(host);
   check("the host's game loads with the Lobbies tab", await until(host, "(window.__e2e || false) && window.__e2e.buttons('Lobbies').length > 0", 60000));
+  await openVaultDoor(host);
   await host.eval("window.__e2e.click('Lobbies')");
   await until(host, "window.__e2e.buttons('Host a lobby').length > 0", 15000);
   await host.eval("window.__e2e.click('Host a lobby')");
@@ -395,11 +426,19 @@ try {
   twin.close();
 
   // The guest.
-  const guest = await openTab(`${GUEST}/`);
+  // Opened on a plain page of its own origin first, so its storage says its
+  // first opening is behind it before the game itself starts.
+  const guest = await openTab(`${GUEST}/api/library`);
   await until(guest, `location.origin === ${JSON.stringify(GUEST)} && document.readyState === 'complete'`, 30000);
+  await guest.eval(`${FIRST_OPENING_DONE} true`);
+  await guest.send("Page.enable");
+  await guest.send("Page.navigate", { url: `${GUEST}/` });
+  await sleep(500);
+  await until(guest, `location.origin === ${JSON.stringify(GUEST)} && location.pathname === '/' && document.readyState === 'complete'`, 30000);
   await guest.eval(`${RELAY_SETTING} true`);
   await withHelpers(guest);
   await until(guest, "window.__e2e.buttons('Lobbies').length > 0", 60000);
+  await openVaultDoor(guest);
   await guest.eval("window.__e2e.click('Lobbies')");
   await until(guest, "Boolean(document.querySelector('input[placeholder=\"oh1-…\"]'))", 15000);
   // The invite code heads the tab, above the public list under "Coming soon".
@@ -628,7 +667,8 @@ try {
 
   // Each queues an order through the game's own Actions panel.
   const queueOrder = async (tab, text) => {
-    await tab.eval("(() => { const launcher = document.querySelector('[title=\"Actions\"]'); if (launcher) launcher.click(); return Boolean(launcher); })()");
+    // The launcher is "Actions and Projects" since Projects became a tab of Actions.
+    await tab.eval("(() => { const launcher = document.querySelector('[title^=\"Actions\"]'); if (launcher) launcher.click(); return Boolean(launcher); })()");
     await until(tab, "Boolean(document.querySelector('textarea[placeholder^=\"Enter your action\"]'))", 15000);
     await tab.eval(`(() => { window.__e2e.type(document.querySelector('textarea[placeholder^="Enter your action"]'), ${JSON.stringify(text)}); return true; })()`);
     await sleep(300);
@@ -648,7 +688,7 @@ try {
     JSON.stringify({ guest: guestActions.map((a) => `${a.ownerCode}: ${a.text}`), host: hostActions.map((a) => `${a.ownerCode}: ${a.text}`) }));
   // The suggestions button: asked with the asker's own key, shown on its own
   // screen and kept on that device. (Only the host has a key in this run.)
-  const suggestionsAsked = await host.eval("(() => { const button = [...document.querySelectorAll('button')].find((b) => /Get AI suggestions/.test(b.textContent)); if (button) button.click(); return Boolean(button); })()");
+  const suggestionsAsked = await host.eval("(() => { const button = [...document.querySelectorAll('button')].find((b) => /AI Suggestions/.test(b.textContent)); if (button) button.click(); return Boolean(button); })()");
   const suggested = await until(host, `window.__e2e.view('world').then((world) => (world.actionSuggestions || []).some((topic) => topic.title === ${JSON.stringify(SUGGESTED_TOPIC)}))`, 45000);
   const suggestionShown = await until(host, `document.body.textContent.includes(${JSON.stringify(SUGGESTED_TOPIC)})`, 10000);
   const guestSuggestions = ((await guest.eval("window.__e2e.view('world')")).actionSuggestions || []).length;
@@ -813,6 +853,109 @@ try {
   const complaints = (tab) => tab.logs.filter((line) => /HTTP 409|Failed to save|SharedGameRefusal|not fully updated/i.test(line));
   check("no save was turned away with an error on either screen", complaints(host).length === 0 && complaints(guest).length === 0,
     JSON.stringify({ host: complaints(host).slice(0, 3), guest: complaints(guest).slice(0, 3) }));
+
+  // Whose AI answers a message to a country the AI plays is the host's choice
+  // (host/settings.js `replies`): "build C and D, and the host can choose, but
+  // no sending api keys". Until here the host's AI answered (C). The host now
+  // changes it from Players, and the guest, with a key of its own from here
+  // on, writes to a government the AI plays: the reply is written on the
+  // guest's own page with the guest's own key (D), the host's engine is asked
+  // nothing, and what reaches the host is the words alone.
+  const LINE_TO_AI = "Moscow asks for a meeting in the spring.";
+  const LINE_FROM_GUESTS_AI = "A meeting in the spring suits us.";
+  const SECOND_LINE_TO_AI = "And where shall it be held?";
+  await standInModel(guest);
+  guest.aiLine = LINE_FROM_GUESTS_AI;
+  // The guest's model list was made when its page started, with no key
+  // (providerConfig.js reads the provider's own settings once, to make it): its
+  // Gemini connection is given one here, as Settings → AI would.
+  await guest.eval(`(() => {
+    ${AI_SETTING}
+    const connections = JSON.parse(localStorage.getItem("ai_connections") || "[]");
+    localStorage.setItem("ai_connections", JSON.stringify(connections.map((connection) => (connection.provider === "gemini" ? { ...connection, apiKey: "e2e-dummy-key" } : connection))));
+    localStorage.removeItem("ai_fallback_states");
+    return true;
+  })()`);
+  const repliesSelect = `[...document.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'own'))`;
+  await host.eval("window.__e2e.click('Players')");
+  await until(host, `Boolean(${repliesSelect})`, 10000);
+  await host.eval(`(() => { window.__e2e.choose(${repliesSelect}, 'own'); return true; })()`);
+  await guest.eval("window.__e2e.click('Players')");
+  const guestTold = await until(guest, "document.body.textContent.includes('Countries the AI plays answer your messages with your own AI key.')", 15000);
+  const hostShows = await until(host, `(() => { const select = ${repliesSelect}; return Boolean(select) && select.value === 'own'; })()`, 10000);
+  await shoot(host, "3-host-whose-ai-answers");
+  await host.eval("window.__e2e.click('Players')");
+  await guest.eval("window.__e2e.click('Players')");
+  check("the host changes whose AI answers while the game runs, and the guest is told it is now its own", guestTold && hostShows, JSON.stringify({ guestTold, hostShows }));
+
+  const engineAskedBefore = (engine.asked ?? []).length;
+  const guestAskedBefore = (guest.asked ?? []).length;
+  const chatsOf = async () => (await fetch(`${HOST}/api/runtime/json/chat?v=e2e`)).json();
+  const tableWith = (chats, line) => chats.find((chat) => (chat.messages ?? []).some((message) => message.text === line));
+  await toggleChats(guest);
+  await sleep(500);
+  await backToList(guest);
+  await clickButton(guest, "(text) => text.startsWith('Contacts')");
+  await until(guest, "window.__e2e.buttons('Start New Chat').length > 0", 15000);
+  await guest.eval("window.__e2e.click('Start New Chat')");
+  await until(guest, `Boolean(document.querySelector('input[placeholder="Search countries..."]'))`, 15000);
+  await pickCountry(guest, AI_COUNTRY);
+  await guest.eval("window.__e2e.click('Chat with 1 country')");
+  await sayInOpenThread(guest, LINE_TO_AI);
+  const ownReplyShown = await until(guest, `document.body.textContent.includes(${JSON.stringify(LINE_FROM_GUESTS_AI)})`, 60000);
+  const ownTable = tableWith(await chatsOf(), LINE_TO_AI);
+  const ownLines = (ownTable?.messages ?? []).map((message) => [message.role, message.speaker, message.text, Boolean(message.time)]);
+  const guestBody = (guest.chatBodies ?? []).at(-1) ?? "";
+  const guestRoster = rosterOf(guestBody);
+  const hostScreenHolds = await host.eval(holds(LINE_FROM_GUESTS_AI));
+  check("with each player's own AI, the guest's own page writes the AI government's reply with its own key: the host's engine is asked nothing, and keeps the words",
+    ownReplyShown
+      && (guest.asked ?? []).slice(guestAskedBefore).filter((tool) => tool === "submit_chat_actions").length === 1
+      && (engine.asked ?? []).length === engineAskedBefore
+      && JSON.stringify(ownLines) === JSON.stringify([["user", GUEST_COUNTRY, LINE_TO_AI, true], ["leader", AI_COUNTRY, LINE_FROM_GUESTS_AI, true]])
+      && ownTable?.player === GUEST_COUNTRY && !ownTable?.title
+      && !hostScreenHolds
+      && guestBody.includes("[What this reply is]") && guestBody.includes(`${GUEST_COUNTRY} has just said: ${LINE_TO_AI}`)
+      && guestRoster.some((line) => line.startsWith(`- ${AI_COUNTRY} — AI-controlled`))
+      && guestRoster.some((line) => line.startsWith(`- ${GUEST_COUNTRY} — HUMAN-controlled (the player)`)),
+    JSON.stringify({
+      shown: ownReplyShown, guestAsked: (guest.asked ?? []).slice(guestAskedBefore), engineAsked: (engine.asked ?? []).slice(engineAskedBefore), lines: ownLines, title: ownTable?.title ?? "", onTheHostsScreen: hostScreenHolds, roster: guestRoster, toldItIsWordsAlone: guestBody.includes("[What this reply is]"),
+      // What the guest's screen and its log say, when the reply never came.
+      ...(ownReplyShown ? {} : {
+        guestSays: await guest.eval(`document.body.innerText.split("\\n").map((line) => line.trim()).filter((line) => /could not|did not|not waiting|Error|Retry|Thinking|Considering/i.test(line)).slice(0, 8)`),
+        guestLog: await guest.eval(`(() => { try { return (JSON.parse(localStorage.getItem('oh_debug_log_v1') || '{}').entries || []).filter((entry) => /reply|device|chatActions|Chat #/i.test(String(entry.message))).slice(-8).map((entry) => String(entry.category) + ": " + String(entry.message).slice(0, 200)); } catch (error) { return [String(error)]; } })()`),
+        guestConsole: guest.logs.slice(-8),
+      }),
+    }));
+  await shoot(guest, "3-guest-own-ai-reply");
+
+  // The guest's own AI is out for its next line: the thread says so, and Retry
+  // asks again for the same line, which is not said a second time.
+  const RETRY_CHECK = "when a player's own AI cannot be reached the thread says so, and Retry answers the same line without saying it twice";
+  if (!ownReplyShown) check(RETRY_CHECK, false, "not tried: the first reply never came");
+  else {
+  guest.aiDown = true;
+  await sayInOpenThread(guest, SECOND_LINE_TO_AI);
+  const toldUnreachable = await until(guest, "document.body.textContent.includes('The AI could not be reached, so nobody at the table answered.') && window.__e2e.buttons('Retry').length > 0", 90000);
+  await shoot(guest, "3-guest-own-ai-unreachable");
+  const beforeRetry = tableWith(await chatsOf(), LINE_TO_AI);
+  guest.aiDown = false;
+  await guest.eval("window.__e2e.click('Retry')");
+  let afterRetry = beforeRetry;
+  for (const deadline = Date.now() + 60000 * PATIENCE; Date.now() < deadline;) {
+    afterRetry = tableWith(await chatsOf(), LINE_TO_AI);
+    if ((afterRetry?.messages ?? []).length >= 4) break;
+    await sleep(300);
+  }
+  const retried = (afterRetry?.messages ?? []).map((message) => `${message.speaker}: ${message.text}`);
+  const bubbleGone = await until(guest, "!document.body.textContent.includes('The AI could not be reached, so nobody at the table answered.')", 15000);
+  check(RETRY_CHECK,
+    toldUnreachable && (beforeRetry?.messages ?? []).length === 3 && bubbleGone
+      && JSON.stringify(retried) === JSON.stringify([`${GUEST_COUNTRY}: ${LINE_TO_AI}`, `${AI_COUNTRY}: ${LINE_FROM_GUESTS_AI}`, `${GUEST_COUNTRY}: ${SECOND_LINE_TO_AI}`, `${AI_COUNTRY}: ${LINE_FROM_GUESTS_AI}`])
+      && (engine.asked ?? []).length === engineAskedBefore,
+    JSON.stringify({ toldUnreachable, before: (beforeRetry?.messages ?? []).length, bubbleGone, lines: retried, engineAsked: (engine.asked ?? []).slice(engineAskedBefore) }));
+  }
+  await toggleChats(guest);
 
   await host.eval("window.__e2e.click('Stop')");
   const ended = await until(guest, "document.body.textContent.includes('The shared game ended')", 30000);

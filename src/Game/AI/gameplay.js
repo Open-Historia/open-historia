@@ -503,7 +503,7 @@ import { HELD_TURN_STALE_NOTE, heldTurnOutdated, mergeActionsAtCommit, restorePo
 import { getLibraryState, readGameParkedTurn, removeGameParkedTurn, writeGameParkedTurn } from "../../runtime/library.js";
 import { getActivePlayerFocus, getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
-import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
+import { applyChatActionBatch, describeChatActionFeedback, normalizeChatAction } from "./chatActions.js";
 import { partitionInstitutionChatActions } from "./institutionChatActions.js";
 import { parseInstitutionLifecycleResponsesJson, partitionInstitutionLifecycleChatActions } from "./institutionLifecycleChatActions.js";
 import { commitInstitutionalChatGovernanceBatch, commitInstitutionalDiplomaticReply, commitInstitutionBallotSettlement, commitInstitutionGovernanceCommand } from "../../runtime/institutionalGovernance.js";
@@ -14776,6 +14776,15 @@ export const runChatActionBatch = async ({
   // was answering. Read here, before the model call, when not given: game.json
   // carries no id, so the bundle cannot say which campaign it came from.
   expectedGameId = "",
+  // A shared game whose host has each player's own device answer for the
+  // governments the AI plays (multiplayer/host/settings.js `replies: "own"`;
+  // writeTableReply below). `governments`: the ones the host said answer this
+  // line; everyone else at the table is a person, whatever this device's own
+  // game says. `wordsOnly`: the turn is what they say and nothing more. Nothing
+  // is written here, no peace is answered and no vote opened, and only their
+  // messages come back, for the host to take or refuse.
+  governments = null,
+  wordsOnly = false,
 } = {}) => {
   const campaign = normalizeString(expectedGameId) || activeCampaignId();
   // Player-facing conversation normally reasons from what has been revealed. A
@@ -14790,6 +14799,8 @@ export const runChatActionBatch = async ({
   const player = normalizeString(playerCountry) || normalizeString(bundle.game?.country);
   const stored = normalizeChats([chat])[0];
   if (!stored) return { events: [], applied: [], rejected: [], actions: [] };
+  // An institution's table votes and decides in its answer: never words alone.
+  if (wordsOnly && (stored.institutionId || stored.lifecycleInstitutionId)) return { events: [], applied: [], rejected: [], actions: [] };
   // An accepted invitation hearing may carry institutionId so it can be tied to
   // the institution ledger, but it remains a lifecycle negotiation thread until
   // the case is closed. Never let that dual identity masquerade as the permanent
@@ -14836,16 +14847,24 @@ export const runChatActionBatch = async ({
   // thread between people alone asks it nothing.
   const savedGame = bundle.savedGame || bundle.game;
   const peopleKeys = new Set(humanCountriesOf(savedGame).map(regionKey));
-  const threadOwner = peopleKeys.size > 1
+  // On a player's own device (`governments`) the thread is already that
+  // player's view of it: its owner is listed among the members, and the host
+  // has said which of them the AI plays.
+  const statedGovernments = Array.isArray(governments)
+    ? new Set(governments.map(regionKey).filter(Boolean))
+    : null;
+  const threadOwner = !statedGovernments && peopleKeys.size > 1
     ? normalizeString(stored.player) || normalizeString(savedGame?.country)
     : "";
   const memberNames = projected.countries
     .map((country) => normalizeString(country?.name))
     .filter((name) => name && regionKey(name) !== regionKey(player));
-  const otherPeople = [
-    ...(threadOwner && regionKey(threadOwner) !== regionKey(player) ? [threadOwner] : []),
-    ...memberNames.filter((name) => peopleKeys.has(regionKey(name))),
-  ].filter((name, index, rows) => rows.findIndex((other) => regionKey(other) === regionKey(name)) === index);
+  const otherPeople = (statedGovernments
+    ? memberNames.filter((name) => !statedGovernments.has(regionKey(name)))
+    : [
+      ...(threadOwner && regionKey(threadOwner) !== regionKey(player) ? [threadOwner] : []),
+      ...memberNames.filter((name) => peopleKeys.has(regionKey(name))),
+    ]).filter((name, index, rows) => rows.findIndex((other) => regionKey(other) === regionKey(name)) === index);
   const answering = memberNames
     .filter((name) => !otherPeople.some((person) => regionKey(person) === regionKey(name)))
     .filter((name) => !(lifecycleResponseRequested && institutionLifecyclePrompt) || lifecycleResponseActors.has(regionKey(name)))
@@ -14991,7 +15010,8 @@ export const runChatActionBatch = async ({
 
   // Peace between the player and each AI participant at war with it (warStatsPrompt.js
   // describePeaceTalk), not in an institution's own business.
-  const peaceTalks = stored.institutionId || stored.lifecycleInstitutionId || formalBusinessRequested
+  // Nor where the turn is words alone: no peace is answered from there.
+  const peaceTalks = stored.institutionId || stored.lifecycleInstitutionId || formalBusinessRequested || wordsOnly
     ? []
     : aiParticipants.map((speaker) => describePeaceTalk({ world: bundle.world, speaker, player, form: "field" })).filter(Boolean);
   const variables = {
@@ -15020,6 +15040,14 @@ export const runChatActionBatch = async ({
         `${player} is the human player: the lines marked ${player} in the conversation are what it said to you. Answer them as the polity you write for, never as ${player}.`,
         `A message is that polity's own words (its own "we" and "our"), addressed to ${[player, ...otherPeople].join(" and ")} or the others here: never ${player}'s words, and never addressed to the speaker's own government, capital or leader.`,
       ].join("\n"),
+      // What a turn of words alone can and cannot do.
+      wordsOnly
+        ? [
+          "[What this reply is]",
+          "Words alone. Each government that answers uses send_message and nothing else.",
+          "Saying a thing here does not do it: this reply opens no vote, brings no one into or out of the conversation, signs nothing, ends no war and moves no territory. A government may still say what it wants, offers, refuses or would accept.",
+        ].join("\n")
+        : "",
       normalizeString(catchUp),
       playerMessage
         ? `${player} has just said: ${playerMessage}`
@@ -15064,7 +15092,9 @@ export const runChatActionBatch = async ({
   });
 
   const known = mergePolityCatalog(await loadCountryNames(), bundle.world).map((entry) => entry.name).filter(Boolean);
-  const rawActions = normalizeArray(payload?.actions);
+  // A turn of words alone keeps what was said and drops everything else.
+  const rawActions = normalizeArray(payload?.actions)
+    .filter((action) => !wordsOnly || normalizeChatAction(action)?.type === "send_message");
   const lifecyclePartition = partitionInstitutionLifecycleChatActions(rawActions);
   const compactLifecycleResponses = parseInstitutionLifecycleResponsesJson(payload?.lifecycleResponsesJson);
   const lifecycleActions = [...lifecyclePartition.lifecycle];
@@ -15089,7 +15119,9 @@ export const runChatActionBatch = async ({
     takenIds: events.map((event) => event?.id),
   });
 
-  const memorySummary = normalizeString(payload?.memorySummary);
+  // A government's memory of the talks is kept with the thread, which a turn
+  // of words alone does not write.
+  const memorySummary = wordsOnly ? "" : normalizeString(payload?.memorySummary);
   if (memorySummary) {
     const lastMessage = [...outcome.events].reverse().find((event) => event.kind === "message");
     if (lastMessage) lastMessage.memorySummary = memorySummary;
@@ -15193,6 +15225,37 @@ export const runChatActionBatch = async ({
     ...(committedChannel ? { channel: committedChannel } : {}),
     ...(committedInstitution ? { institution: committedInstitution.institution } : {}),
     ...(committedLifecycle ? { lifecycle: committedLifecycle.applied } : {}),
+  };
+};
+
+// A shared game whose host has each player's own device answer for the
+// governments the AI plays (multiplayer/host/settings.js `replies: "own"`):
+// what those governments say to the line this player has just written, asked
+// of this device's own model from what this device's own screen holds. One
+// request, as any table's turn is. Nothing is written and nothing is carried
+// out: the words go to the host as a "reply" (GameUI/ownTableReplies.js), and
+// no key goes anywhere.
+//   lines: [{ speaker, text }], the governments' messages in the order said;
+//   unreachable: the model could not be reached (reason: why, for the log);
+//   refused: how many of the model's actions were refused.
+export const writeTableReply = async ({ chat, playerCountry = "", playerMessage = "", governments = [], signal = null } = {}) => {
+  const outcome = await runChatActionBatch({
+    agentKind: "diplomacy",
+    chat,
+    playerCountry,
+    playerMessage,
+    governments: normalizeArray(governments),
+    wordsOnly: true,
+    signal,
+  });
+  return {
+    lines: normalizeArray(outcome?.newEvents)
+      .filter((event) => event?.kind === "message")
+      .map((event) => ({ speaker: normalizeString(event.by), text: normalizeString(event.text) }))
+      .filter((line) => line.speaker && line.text),
+    unreachable: outcome?.generation?.source === "fallback",
+    reason: outcome?.generation?.source === "fallback" ? normalizeString(outcome.generation.fallbackReason) : "",
+    refused: normalizeArray(outcome?.rejected).length,
   };
 };
 

@@ -6,7 +6,13 @@
 //   - the round: its length, the share of ready players that starts the
 //     countdown (2/3 by default), and the countdown's length;
 //   - cheats "not allowed by default" (off, the host alone, or put to a vote);
-//   - who pays: the host, for now; the rotating payer comes with Phase 2.
+//   - who pays: the host, for now; the rotating payer comes with Phase 2;
+//   - who answers a player's message to a government the AI plays (`replies`):
+//     the host's computer on the host's key ("host"), or the writer's own
+//     device on the writer's own key ("own"). The owner, 2026-11-15: "build C
+//     and D, and the host can choose, but no sending api keys". A key never
+//     leaves the device it is on: with "own" the device writes the governments'
+//     words itself and sends the words (the "reply" request).
 // The schema is shared with the players' screens, which show these settings,
 // and is closed like every other message.
 
@@ -15,6 +21,9 @@ import { bool, int, literal, num, obj, str, validate } from "../protocol/validat
 export const MAX_SEATS = 64;
 // What the seat slider can be set to today; the rest of it is "coming later".
 export const SEATS_AVAILABLE_NOW = 8;
+
+// Who writes an AI government's reply to a player's message.
+export const REPLY_MODES = Object.freeze(["host", "own"]);
 
 export const DEFAULT_SETTINGS = Object.freeze({
   v: 1,
@@ -30,6 +39,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   allowMidGameJoin: true,
   cheats: "off",
   payment: "host",
+  replies: "host",
 });
 
 export const SETTINGS_SCHEMA = obj({
@@ -46,6 +56,7 @@ export const SETTINGS_SCHEMA = obj({
   allowMidGameJoin: bool(),
   cheats: str(8, { enum: ["off", "host", "vote"] }),
   payment: str(8, { enum: ["host"] }),
+  replies: str(8, { enum: REPLY_MODES }),
 });
 
 // Settings the host typed, made whole and safe: unknown keys are dropped,
