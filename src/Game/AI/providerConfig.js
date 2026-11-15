@@ -267,6 +267,7 @@ export const AI_TASK_ROUTING = [
     { key: "countryStatSheet", label: "Stat sheet", hint: "Mid-tier model", group: "Player" },
     { key: "countryBriefing", label: "Advisor Report", hint: "Mid-tier: a short briefing on one country", group: "Player" },
     { key: "rostraFeed", label: "Rostra Refresh", hint: "Small/mid-tier: short posts by public figures", group: "Player" },
+    { key: "projectPlan", label: "Project plans", hint: "Mid-tier: the plan for a project the player names", group: "Player" },
     { key: "placeFeed", label: "Rostra Search", hint: "Small/mid-tier: short posts in everyday voices", group: "Player" },
     { key: "warRoom", label: "War room", hint: "Mid-tier: the generals' answers and the orders they take", group: "Player" },
     { key: "politicalLandscape", label: "Political parties", hint: "Mid-tier model", group: "Player" },

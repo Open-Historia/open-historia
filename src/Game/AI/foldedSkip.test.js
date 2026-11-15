@@ -356,7 +356,7 @@ test("an answer written to either contract passes the skip's validation", () => 
   const lean = { ...base, events: [event({ unitOps: [{ op: "move", unitId: "u-1", at: "Kharkiv" }] })] };
   const folded = {
     ...base,
-    events: [event({ projectOps: [{ op: "update", projectId: "p-1", name: "Northern Rail Corridor", progress: 50, lastUpdate: "Section two is laid." }] })],
+    events: [event({ projectOps: [{ op: "setback", name: "Northern Rail Corridor", days: 20, lastUpdate: "A bridge washed out." }, { op: "create", name: "Vistula Canal", ownerCode: "Poland", summary: "A canal.", plan: { durationDays: 700, monthlyCost: 5e7, milestones: [{ title: "Locks", atProgress: 40 }], effects: [{ type: "stat", stat: "economy.gdp", change: 1 }] } }] })],
     [AGENT_REPORTS_FIELD]: [{ agent: "agent_1", exchanges: [{ counterpart: "France", date: "2026-01-09", subject: "Grain", messages: [{ speaker: "Russia", text: "We can hold the price." }, { speaker: "France", text: "Put it in writing." }] }] }],
   };
   for (const [label, payload] of [["lean", lean], ["folded", folded]]) {
