@@ -576,9 +576,10 @@ const ProjectCard = memo(({ project, eventTitles, expanded, busy, playerCountry,
         </div>
       )}
 
-      {project.plan && (
+      {project.plan && (open || Number(project.spent) > 0) && (
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.45rem", fontSize: "0.7rem", color: "rgba(255,255,255,0.65)" }}>
-          <span>{uiString("{{amount}} a month", { amount: formatMoney(dailyCostOf(project) * DAYS_PER_MONTH) })}</span>
+          {/* What it costs now, at its funding; a closed one costs nothing more. */}
+          {open && <span>{uiString("{{amount}} a month", { amount: formatMoney(dailyCostOf(project) * DAYS_PER_MONTH) })}</span>}
           {Number(project.spent) > 0 && <span>{uiString("{{amount}} spent", { amount: formatMoney(project.spent) })}</span>}
           {flags.underfunded && (
             <Pill color="#fbbf24" bg="rgba(245,158,11,0.14)" title={uiString("The budget paid {{share}}% of what it was due last period", { share: Math.round(Number(project.paidShare) * 100) })}>
