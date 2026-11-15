@@ -110,6 +110,8 @@ export const JSON_URLS = {
   ownBasemapsData: "",
   world: "",
   intercepts: "",
+  // A shared game's session, the host's engine window's (multiplayer/host/sessionRecord.js).
+  shared: "",
 };
 
 // ESRI / ArcGIS Online basemaps — all public and token-free. `service` is the
@@ -344,6 +346,7 @@ const isMutableRuntimeJsonUrl = (url) =>
   url === JSON_URLS.events ||
   url === JSON_URLS.game ||
   url === JSON_URLS.intercepts ||
+  url === JSON_URLS.shared ||
   url === JSON_URLS.prompts ||
   url === JSON_URLS.snapshots ||
   url === JSON_URLS.snapshotsIndex ||
@@ -666,6 +669,7 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   JSON_URLS.ownBasemapsData = withRuntimeToken("/api/runtime/json/ownBasemapsData");
   JSON_URLS.world = withRuntimeToken("/api/runtime/json/world");
   JSON_URLS.intercepts = withRuntimeToken("/api/runtime/json/intercepts");
+  JSON_URLS.shared = withRuntimeToken("/api/runtime/json/shared");
 
   PMTILES_ARCHIVES.cities = buildAbsoluteUrl("/api/runtime/pmtiles/cities");
   PMTILES_ARCHIVES.countries = buildAbsoluteUrl("/api/runtime/pmtiles/countries");

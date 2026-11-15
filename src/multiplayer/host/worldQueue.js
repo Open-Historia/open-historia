@@ -20,6 +20,8 @@
 //
 // Runtime-free, so the host's tests drive it as the engine does.
 
+// `label`: an identifier for what an entry is ("round", "who-plays-what", a
+// request's type), for the host's log; never words a player reads.
 export const createWorldQueue = ({ onSettled = () => {} } = {}) => {
   let tail = Promise.resolve();
   let running = "";

@@ -24,6 +24,7 @@ import { setActiveFeatures } from "../../runtime/gameFeatures.js";
 import { SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
 import { ownReplyAsked } from "../client/ownReplies.js";
 import { pendingSharedThread } from "../client/sharedThreads.js";
+import { sessionFromRecord } from "./sessionRecord.js";
 
 const LATVIA = "Republic of Latvia";
 const RUSSIA = "Russian Federation";
@@ -85,8 +86,14 @@ const createStore = () => {
     const next = await fn(structuredClone(docs[key]));
     if (next !== null && next !== undefined) docs[key] = next;
   };
+  // The shared game's session, as the host saved it (host/sessionRecord.js).
+  const shared = [];
   return {
     docs,
+    shared,
+    writeShared: async (record) => {
+      shared.push(structuredClone(record));
+    },
     read: async () => structuredClone(docs),
     updateActions: update("actions"),
     updateChats: update("chat"),
@@ -105,6 +112,7 @@ const createStore = () => {
 const setup = (options = {}) => {
   const clock = createClock();
   const store = createStore();
+  if (options.world) store.docs.world = structuredClone(options.world);
   const sent = [];
   const resolved = [];
   const replies = [];
@@ -139,6 +147,9 @@ const setup = (options = {}) => {
     ...(options.readChart ? { readChart: options.readChart } : {}),
     ...(options.institution ? { institution: options.institution } : {}),
     ...(options.onSeatsMoved ? { onSeatsMoved: options.onSeatsMoved } : {}),
+    ...(options.countriesOf ? { countriesOf: options.countriesOf } : {}),
+    campaign: options.campaign ?? "",
+    restored: options.restored ?? null,
     now: clock.now,
     timers: clock.timers,
   });
@@ -1397,4 +1408,190 @@ test("a page that loses a view on the way ends up holding exactly what the host 
   } finally {
     stopRemoteRuntime();
   }
+});
+
+// The game's countries as the engine counts them (engineMain.js gameCountries):
+// its own, every one that holds land, every one whose record says it lives.
+const gameCountries = (docs) => [...new Set([
+  docs.game.country,
+  ...Object.values(docs.world.regionOwnershipOverrides ?? {}),
+  ...Object.entries(docs.world.polityOverrides ?? {}).filter(([, entry]) => entry?.status !== "dissolved").map(([key, entry]) => entry?.name || key),
+])];
+// A map whose countries have no records of their own, as most maps' do: each
+// is the game's by the land it holds.
+const mapWorld = () => ({ regionOwnershipOverrides: { "reg-lv": LATVIA, "reg-ru": RUSSIA, "reg-ee": ESTONIA } });
+const playRound = async (s, players) => {
+  for (const [index, player] of players.entries()) await s.request(player, { t: "ready", id: id(900 + s.resolved.length * 10 + index), value: true });
+  await s.clock.flush();
+};
+
+test("a round over a map whose countries have no records of their own leaves every seat where it was", async () => {
+  const s = setup({ world: mapWorld(), countriesOf: gameCountries });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await playRound(s, [s.hostPlayer, s.guest]);
+  assert.equal(s.resolved.length, 1);
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, RUSSIA]);
+  assert.ok(!s.to(s.guest, "notice").some((entry) => /is gone/.test(entry.text)));
+});
+
+test("a country annexed whole is gone: its player watches it, and may take any free country where newcomers may not join", async () => {
+  const s = setup({
+    world: mapWorld(),
+    countriesOf: gameCountries,
+    settings: { allowMidGameJoin: false },
+    roundWrites: (docs) => {
+      docs.world.regionOwnershipOverrides["reg-ee"] = RUSSIA;
+    },
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: ESTONIA });
+  await s.host.control.start();
+  await playRound(s, [s.hostPlayer, s.guest]);
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA]);
+  assert.match(s.to(s.guest, "notice").at(-1).text, /Republic of Estonia is gone/);
+  const lobby = s.to(s.guest, "lobby").at(-1);
+  assert.deepEqual(lobby.seats.map((seat) => [seat.country, seat.status, seat.you]), [[LATVIA, "human", false], [ESTONIA, "watching", true]]);
+  assert.ok(!lobby.countries.includes(ESTONIA), "a country that is gone cannot be taken");
+  assert.equal(s.shown(s.guest).game.country, ESTONIA, "what its government knew is still theirs to read");
+  // A newcomer may not join now; the player whose country is gone may take a free one.
+  const newcomer = { id: "p-new", device: "device-new", name: "New" };
+  s.host.join(newcomer);
+  await s.request(newcomer, { t: "pick", id: id(4), country: RUSSIA });
+  assert.equal(s.ack(newcomer, id(4)).error, "game-started");
+  await s.request(s.guest, { t: "pick", id: id(5), country: RUSSIA });
+  assert.equal(s.ack(s.guest, id(5)).ok, true);
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, RUSSIA]);
+  assert.ok(!s.to(s.guest, "lobby").at(-1).seats.some((seat) => seat.status === "watching"));
+});
+
+test("a country renamed while its player is away keeps their seat, and they come back to it under its new name", async () => {
+  const EMPIRE = "Russian Empire";
+  const s = setup({
+    countriesOf: gameCountries,
+    roundWrites: (docs) => {
+      // The game's own rename (server/polityRename.js): re-keyed, the old name kept.
+      const { [RUSSIA]: old, ...rest } = docs.world.polityOverrides;
+      docs.world.polityOverrides = { ...rest, [EMPIRE]: { ...old, code: EMPIRE, name: EMPIRE, formerNames: [RUSSIA] } };
+    },
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  s.host.leave(s.guest);
+  // Past the grace: the AI minds Russia when the round lands.
+  await s.clock.advance(90_000);
+  await playRound(s, [s.hostPlayer]);
+  assert.equal(s.resolved.length, 1);
+  assert.deepEqual(s.resolved[0].humanCountries, [LATVIA]);
+  const again = { ...s.guest, id: "p-guest-2" };
+  s.host.join(again);
+  await s.clock.flush();
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, EMPIRE]);
+  assert.equal(s.shown(again).game.country, EMPIRE);
+  assert.deepEqual(s.store.docs.game.seatFoundings, [{ from: RUSSIA, to: EMPIRE }]);
+});
+
+test("once the game is under way a player changes country only with the host's yes", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "unpick", id: id(2) });
+  assert.equal(s.ack(s.guest, id(2)).error, "Ask the host to change your country.");
+  await s.request(s.guest, { t: "pick", id: id(3), country: ESTONIA });
+  assert.deepEqual(s.ack(s.guest, id(3)).result, { asked: ESTONIA });
+  assert.deepEqual(s.to(s.hostPlayer, "lobby").at(-1).changes, [{ from: RUSSIA, to: ESTONIA, name: "Guest" }]);
+  assert.deepEqual(s.to(s.guest, "lobby").at(-1).changes, [], "only the host is shown who asks");
+  assert.match(s.to(s.hostPlayer, "notice").at(-1).text, /asks to play Republic of Estonia/);
+  // Refused: nothing changes.
+  assert.equal(await s.host.control.seat({ op: "refuse", from: RUSSIA }), true);
+  assert.match(s.to(s.guest, "notice").at(-1).text, /keeps you as Russian Federation/);
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, RUSSIA]);
+  // Allowed: the player plays the country asked for, and the old one is anyone's.
+  await s.request(s.guest, { t: "pick", id: id(4), country: ESTONIA });
+  assert.equal(await s.host.control.seat({ op: "allow", from: RUSSIA }), true);
+  await s.clock.flush();
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, ESTONIA]);
+  assert.equal(s.shown(s.guest).game.country, ESTONIA);
+  assert.deepEqual(s.to(s.hostPlayer, "lobby").at(-1).changes, []);
+  const other = { id: "p-other", device: "device-other", name: "Other" };
+  s.host.join(other);
+  await s.request(other, { t: "pick", id: id(5), country: RUSSIA });
+  assert.equal(s.ack(other, id(5)).ok, true);
+});
+
+test("the session is saved with the game and taken up again: every seat its device's, the round, a change asked and a ban", async () => {
+  const campaign = "game-baltic";
+  const s = setup({ campaign });
+  const other = { id: "p-other", device: "device-other", name: "Other" };
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  s.host.join(other);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.request(other, { t: "pick", id: id(2), country: ESTONIA });
+  await s.host.control.start();
+  await playRound(s, [s.hostPlayer, s.guest, other]);
+  assert.equal(s.to(s.guest, "round").at(-1).phase, "revealing");
+  // Estonia's player is banned; Russia's asks to change, and the host closes the game.
+  s.host.control.kick(ESTONIA, { ban: true });
+  await s.request(s.guest, { t: "pick", id: id(3), country: ESTONIA });
+  await s.host.stop();
+  const record = s.store.shared.at(-1);
+  assert.equal(record.campaign, campaign);
+  assert.equal(record.round, 2, "the round read when the game closed is done: the next is planned");
+  assert.deepEqual(record.banned, ["device-other"]);
+  assert.deepEqual(record.changes.map((entry) => [entry.from, entry.to]), [[RUSSIA, ESTONIA]]);
+  assert.equal(sessionFromRecord(record, { campaign: "another-game", hostDevice: "device-host" }), null, "never another campaign's");
+  assert.equal(sessionFromRecord(record, { campaign, hostDevice: "another-host" }), null, "never another host's");
+
+  // Shared again another day.
+  const t = setup({ campaign, restored: sessionFromRecord(record, { campaign, hostDevice: "device-host" }) });
+  t.host.join(t.hostPlayer);
+  await t.clock.flush();
+  assert.deepEqual(t.to(t.hostPlayer, "lobby").at(-1).seats.map((seat) => [seat.country, seat.status]), [[RUSSIA, "away"], [ESTONIA, "ai"], [LATVIA, "human"]]);
+  assert.deepEqual(t.to(t.hostPlayer, "lobby").at(-1).changes, [{ from: RUSSIA, to: ESTONIA, name: "Guest" }]);
+  assert.equal(t.to(t.hostPlayer, "round").at(-1).round, 2);
+  assert.equal(t.to(t.hostPlayer, "round").at(-1).phase, "planning");
+  assert.equal(t.to(t.hostPlayer, "round").at(-1).paused, true, "paused until the host resumes it, when its players are back");
+  // Russia is its player's device's: nobody else takes it, and its player comes back to it.
+  const stranger = { id: "p-stranger", device: "device-stranger", name: "Stranger" };
+  t.host.join(stranger);
+  await t.request(stranger, { t: "pick", id: id(4), country: RUSSIA });
+  assert.equal(t.ack(stranger, id(4)).error, "taken");
+  t.host.join(t.guest);
+  await t.clock.flush();
+  assert.deepEqual(t.store.docs.game.humanCountries, [RUSSIA, LATVIA]);
+  assert.equal(t.shown(t.guest).game.country, RUSSIA);
+  // The banned device is kept out.
+  assert.equal(t.host.isBanned("device-other"), true);
+  t.host.join(other);
+  await t.clock.flush();
+  assert.equal(t.to(other, "lobby").length, 0);
+});
+
+test("a player who holds a seat is let back in however many newcomers came meanwhile; a newcomer only while there is a seat", async () => {
+  const s = setup({ settings: { seats: 2 } });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  s.host.leave(s.guest);
+  await s.clock.advance(90_000);
+  // Both seats are held (the guest's is the AI's to mind, and still the guest's).
+  assert.equal(s.host.roomFor("device-new"), false);
+  assert.equal(s.host.openSeats(), 0);
+  assert.equal(s.host.roomFor("device-guest"), true);
+  // Released by the host: a seat is free, and the guest is a newcomer again.
+  s.host.control.kick(RUSSIA);
+  assert.equal(s.host.roomFor("device-new"), true);
+  assert.equal(s.host.openSeats(), 1);
+  s.host.join({ id: "p-new", device: "device-new", name: "New" });
+  assert.equal(s.host.roomFor("device-guest"), false, "the one already in without a seat has it");
+  assert.equal(s.host.roomFor("device-new"), true);
 });

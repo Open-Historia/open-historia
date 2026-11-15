@@ -24,10 +24,12 @@
 import { createRoundMachine } from "./round.js";
 import { createWorldQueue } from "./worldQueue.js";
 import { SEAT_STATUS, createSeatBook } from "./seats.js";
-import { seatFoundings, withSeatMoved } from "./foundings.js";
+import { seatFoundings, seatSuccessions, withSeatMoved } from "./foundings.js";
+import { sessionRecordOf } from "./sessionRecord.js";
 import { REPLY_MODES, roundSettingsOf } from "./settings.js";
 import { projectForViewer } from "./projection.js";
-import { ORDER_MAX_CHARS, VIEW_KEYS } from "../game/messages.js";
+import { COUNTRY_MAX_CHARS, HOST_MESSAGES, ORDER_MAX_CHARS, VIEW_KEYS } from "../game/messages.js";
+import { validate } from "../protocol/validate.js";
 import { digestText } from "../protocol/digest.js";
 import { withPlayerGoal } from "../../runtime/playerGoal.js";
 import { withPlayerPost } from "../../runtime/socialFeed.js";
@@ -72,6 +74,9 @@ export const VIEW_ACK_MS = 60_000;
 const RESYNC_GAP_MS = 2_000;
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+// A word for a player's screen, as long as a notice may be (game/messages.js):
+// one naming two long countries was longer, and would not be sent at all.
+const notice = (level, text) => ({ t: "notice", level, text: clean(text).slice(0, 500) });
 const same = (left, right) => Boolean(clean(left)) && clean(left).toLocaleLowerCase() === clean(right).toLocaleLowerCase();
 const list = (value) => (Array.isArray(value) ? value : []);
 const fold = (value) => clean(value).toLocaleLowerCase();
@@ -119,6 +124,17 @@ export const createGameHost = ({
   hostSeat = { device: "", name: "", country: "" },
   scenario = { id: "", name: "", hash: "" },
   countries = [],
+  // The game's countries as the world has them now, every one (a country
+  // founded mid-game is among them, one dissolved or annexed whole is not):
+  // what may be taken, and what tells a seat's country is gone; `countries`
+  // until then.
+  countriesOf = null,
+  // The campaign shared, and the session the game saved for it
+  // (host/sessionRecord.js sessionFromRecord), taken up again: null for a new one.
+  campaign = "",
+  restored = null,
+  // `store` reads and writes the game's documents (read, update*), and the
+  // session's own record (writeShared).
   store,
   // The round's time skip, for everyone at once. `signal` ends it when the
   // shared game is stopped meanwhile.
@@ -154,7 +170,21 @@ export const createGameHost = ({
   // The host's own country: the campaign's (game.country), until the host's
   // people found one of their own.
   let hostCountry = clean(hostSeat.country);
+  // A session taken up again: every seat its device's, and every player whose
+  // country is gone watching it, before anyone joins.
+  if (restored) seats.restore(restored.seats ?? [], { hostDevice: hostSeat.device, watching: restored.watching ?? [] });
   if (hostCountry && hostSeat.device) seats.claim(hostCountry, { device: hostSeat.device, name: hostSeat.name });
+  if (restored?.started) seats.start();
+  // The countries that may be taken now.
+  let countriesNow = countries.map(clean).filter(Boolean);
+  // Players who asked to change country, waiting for the host's word (the
+  // owner's decision 12): device → { device, name, from, to }. One saved for a
+  // seat its player no longer holds is let go.
+  const changes = new Map((restored?.changes ?? [])
+    .filter((entry) => same(seats.seatOf(entry.device)?.country, entry.from))
+    .map((entry) => [entry.device, { ...entry }]));
+  // Devices the host has banned from this game.
+  const banned = new Set(restored?.banned ?? []);
   // playerId → { id, device, name, epoch, rev, sent: Map(key → json),
   // sums: Map(key → digest), acked, lastAckAt, resyncAt }
   const connections = new Map();
@@ -170,7 +200,7 @@ export const createGameHost = ({
   // { thread, seat }. A "reply" is taken for one of these, once, and for
   // nothing else. In memory: one still waiting when the host closes is written
   // to again.
-  const ownLines = new Map();
+  const ownLines = new Map((restored?.ownLines ?? []).map((entry) => [entry.line, { thread: entry.thread, seat: entry.seat }]));
   // "host": the tables the host's AI is answering: thread id → { tail, waiting }.
   const tables = new Map();
   let expiryTimer = null;
@@ -192,25 +222,72 @@ export const createGameHost = ({
   };
   const queue = createWorldQueue({ onSettled: () => { void schedulePush(); } });
 
+  // The session as it stands, saved with the game (host/sessionRecord.js) in
+  // the queue's order, once for however many changes asked meanwhile. The
+  // engine can be closed at any moment and the game shared again later.
+  let sessionWanted = false;
+  // The round a game taken up again plans: one that has landed (being read)
+  // is done, and the next is planned; one being planned or resolved had not
+  // landed, and is planned again with its orders.
+  const roundToPlan = (status) => (status.phase === "revealing" ? status.round + 1 : status.round);
+  const sessionNow = () => sessionRecordOf({
+    campaign,
+    started: seats.started,
+    round: roundToPlan(round.status()),
+    hostDevice: hostSeat.device,
+    seats: seats.list(),
+    watching: seats.watching(),
+    changes: [...changes.values()],
+    ownLines: [...ownLines].map(([line, entry]) => ({ line, ...entry })),
+    banned: [...banned],
+  });
+  const sessionChanged = () => {
+    if (sessionWanted || stopped || !campaign || typeof store.writeShared !== "function") return;
+    sessionWanted = true;
+    void queue.run("session", async () => {
+      sessionWanted = false;
+      await store.writeShared(sessionNow());
+    }).catch((error) => log("warn", "the shared game's session was not saved", { error: String(error?.message || error) }));
+  };
+
   const isHost = (connection) => Boolean(hostSeat.device) && connection.device === hostSeat.device;
   const seatOf = (connection) => {
     const seat = seats.seatOf(connection.device);
     return seat && seat.status !== SEAT_STATUS.AI ? seat : null;
   };
+  // Whose view a connection is sent: its seat's country, or for a player
+  // whose country is gone, that country's (the public world, and what its
+  // government knew).
+  const viewerOf = (connection) => seatOf(connection)?.country || seats.watcherOf(connection.device)?.was || "";
   const present = () => seats.list().filter((seat) => seat.status === SEAT_STATUS.HUMAN).map((seat) => seat.country);
 
   const lobbyFor = (connection) => ({
     t: "lobby",
     settings: { ...settings, replies },
     scenario,
-    countries: countries.slice(0, 600),
-    seats: seats.list().map((seat) => ({
-      country: seat.country,
-      name: clean(seat.name).slice(0, 40),
-      status: seat.status,
-      you: Boolean(connection) && seat.device === connection.device,
-    })),
+    // The countries that may be taken now, and every seat's own.
+    countries: countriesNow.filter(fits).slice(0, 600),
+    seats: [
+      ...seats.list().map((seat) => ({
+        country: seat.country,
+        name: clean(seat.name).slice(0, 40),
+        status: seat.status,
+        held: Boolean(seat.device),
+        you: Boolean(connection) && seat.device === connection.device,
+      })),
+      ...seats.watching().map((entry) => ({
+        country: entry.was,
+        name: clean(entry.name).slice(0, 40),
+        status: "watching",
+        held: true,
+        you: Boolean(connection) && entry.device === connection.device,
+      })),
+    ].filter((seat) => fits(seat.country)).slice(0, 64),
     started: seats.started,
+    // Players asking to change country: the host's to allow.
+    changes: (!connection || isHost(connection) ? [...changes.values()] : [])
+      .map((entry) => ({ from: entry.from, to: entry.to, name: clean(entry.name).slice(0, 40) }))
+      .filter((entry) => fits(entry.from) && fits(entry.to)).slice(0, 64),
   });
 
   const roundMessage = (status) => ({
@@ -219,20 +296,33 @@ export const createGameHost = ({
     round: status.round,
     remainingMs: Math.max(0, Math.round(status.remainingMs)),
     paused: status.paused,
-    ready: status.ready,
+    ready: status.ready.filter(fits).slice(0, 64),
     counted: status.counted.length,
     needed: status.needed,
     failed: status.failure?.round ?? 0,
     failure: clean(status.failure?.reason).slice(0, 300),
   });
 
+  // What the host sends is held to the same schemas the players read it by
+  // (game/messages.js): one they would drop is not sent, and is said here.
+  // Before, it went out and every page threw it away without a word. A view's
+  // documents are plain JSON the game's own normalizers check, so a view is
+  // not walked through again here.
   const send = (connection, message) => {
+    if (message?.t !== "view") {
+      const checked = validate(HOST_MESSAGES[message?.t] ?? { type: "literal", value: null }, message);
+      if (!checked.ok) {
+        log("warn", "a message the players could not read was not sent", { t: message?.t, error: checked.error });
+        return;
+      }
+    }
     try {
       transport.send(connection.id, message);
     } catch (error) {
       log("warn", "send failed", { player: connection.id, error: String(error?.message || error) });
     }
   };
+  const fits = (name) => clean(name).length > 0 && clean(name).length <= COUNTRY_MAX_CHARS;
   const broadcastLobby = () => {
     for (const connection of connections.values()) send(connection, lobbyFor(connection));
     onStatus({ lobby: lobbyFor(null), round: round.status() });
@@ -240,7 +330,7 @@ export const createGameHost = ({
   // A word for whoever plays `country`, on every screen of theirs.
   const tell = (country, level, text) => {
     for (const connection of connections.values()) {
-      if (same(seatOf(connection)?.country, country)) send(connection, { t: "notice", level, text });
+      if (same(seatOf(connection)?.country, country)) send(connection, notice(level, text));
     }
   };
 
@@ -252,13 +342,13 @@ export const createGameHost = ({
   const pushViews = () => {
     pushing = pushing.then(async () => {
       if (stopped) return;
-      const seated = [...connections.values()].filter((connection) => seatOf(connection));
+      const seated = [...connections.values()].filter((connection) => viewerOf(connection));
       if (!seated.length) return;
       const docs = await store.read();
       for (const connection of seated) {
-        const seat = seatOf(connection);
-        if (!seat) continue;
-        const view = projectForViewer(docs, seat.country);
+        const viewer = viewerOf(connection);
+        if (!viewer) continue;
+        const view = projectForViewer(docs, viewer);
         const whole = connection.sent.size === 0;
         const changed = {};
         for (const key of VIEW_KEYS) {
@@ -300,7 +390,7 @@ export const createGameHost = ({
     for (const connection of connections.values()) {
       if (connection.acked < connection.rev && now() - connection.lastAckAt >= VIEW_ACK_MS) {
         connection.lastAckAt = now();
-        resend(connection, "no word of the last view");
+        resend(connection, "no-ack");
       }
     }
   };
@@ -317,6 +407,8 @@ export const createGameHost = ({
     return rest;
   });
 
+  // The round last saved with the game.
+  let savedRound = -1;
   const round = createRoundMachine({
     settings: roundSettingsOf(settings),
     now,
@@ -325,10 +417,15 @@ export const createGameHost = ({
       const message = roundMessage(status);
       for (const connection of connections.values()) send(connection, message);
       onStatus({ lobby: lobbyFor(null), round: status });
+      // Where the rounds are is saved with the game, to be taken up there again.
+      if (roundToPlan(status) !== savedRound) {
+        savedRound = roundToPlan(status);
+        sessionChanged();
+      }
     },
     // The round is one entry in the queue: it starts once whatever was being
     // applied is done, and nothing else is applied until it has landed.
-    onResolve: ({ round: number }) => queue.run("the round", async () => {
+    onResolve: ({ round: number }) => queue.run("round", async () => {
       await recordHumans();
       const start = await store.read();
       const before = { eventIds: new Set(list(start.events).map((event) => clean(event?.id))), areas: { ...(start.world?.groupAreas ?? {}) } };
@@ -342,33 +439,54 @@ export const createGameHost = ({
           const why = clean(error?.message || error).slice(0, 280) || "the host's AI did not answer.";
           log("warn", "the round could not be resolved", { round: number, error: why });
           for (const connection of connections.values()) {
-            send(connection, { t: "notice", level: "warn", text: `Round ${number} could not be resolved: ${why} Its orders are still queued, and the host can end the round again.`.slice(0, 500) });
+            send(connection, notice("warn", `Round ${number} could not be resolved: ${why} Its orders are still queued, and the host can end the round again.`));
           }
         }
         throw error;
       } finally {
         roundAbort = null;
       }
-      await followFoundings(before).catch((error) => log("warn", "a founded country's seat did not follow", { error: String(error?.message || error) }));
+      await followSeats(before).catch((error) => log("warn", "a seat did not follow its country", { error: String(error?.message || error) }));
     }),
   });
 
-  // A player's people founded a country this round and gave it their land:
-  // the seat goes with them (host/foundings.js), and with it their queued
-  // orders, their board, their agents and their threads; the game remembers
-  // the old name (game.seatFoundings), so what that government knew is still
-  // theirs to read (host/projection.js). `before`: the event ids and the
-  // groups' areas the round started with.
-  const followFoundings = async (before) => {
+  // What became of the countries people play this round, read from the game's
+  // own records (host/foundings.js), and the seats moved in one place for all
+  // of it: a seat whose people founded a country and gave it their land, or
+  // whose country was renamed, follows it, with its queued orders, its board,
+  // its agents and its threads, and the game remembers the old name
+  // (game.seatFoundings), so what that government knew is still theirs to
+  // read (host/projection.js). Before, a rename moved the country's army and
+  // records to the new name and left its player's seat on the old one: the AI
+  // took the country, and the player played nothing. A seat whose country is
+  // gone (dissolved or annexed) is let go, and its player stays to watch or
+  // takes any free country (the owner's decision 11). Every seat is looked at,
+  // whoever minds it this round: a player who is away, or whose country the AI
+  // minds, holds their seat still. Run when a round lands (`before`: the event
+  // ids and the groups' areas it started with), and when a saved session is
+  // taken up again (no `before`: whatever became of its countries meanwhile,
+  // the game played alone, is read from the world as it is).
+  const followSeats = async (before = null) => {
     const docs = await store.read();
-    const moves = seatFoundings({
-      events: list(docs.events).filter((event) => !before.eventIds.has(clean(event?.id))),
-      actions: docs.actions,
-      seated: seats.humanCountries(),
-      host: hostCountry,
-      areas: before.areas,
-    }).filter((move) => seats.move(move.from, move.to));
-    if (!moves.length) return;
+    const held = seats.list();
+    const founded = before
+      ? seatFoundings({
+        events: list(docs.events).filter((event) => !before.eventIds.has(clean(event?.id))),
+        actions: docs.actions,
+        seated: held.filter((seat) => seat.device).map((seat) => seat.country),
+        host: hostCountry,
+        areas: before.areas,
+      }).map((move) => ({ ...move, why: "founded" }))
+      : [];
+    const moving = new Set(founded.map((move) => fold(move.from)));
+    const after = countriesOf ? countriesOf(docs).map(clean).filter(Boolean) : null;
+    const successions = seatSuccessions({
+      world: docs.world,
+      seated: held.map((seat) => seat.country).filter((country) => !moving.has(fold(country))),
+      countries: after,
+    });
+    const moves = [...founded, ...successions.renamed.map((move) => ({ ...move, why: "renamed" }))]
+      .filter((move) => seats.move(move.from, move.to));
     for (const move of moves) {
       move.host = same(move.from, hostCountry);
       if (move.host) hostCountry = move.to;
@@ -380,15 +498,38 @@ export const createGameHost = ({
       await store.updateActions((actions) => withSeatMoved({ actions }, move).actions);
       await store.updateWorld((world) => withSeatMoved({ world }, move).world);
       await store.updateChats((chats) => withSeatMoved({ chats }, move).chats);
-      log("info", "a seat followed its people to the country they founded", { from: move.from, to: move.to });
+      log("info", move.why === "founded" ? "a seat followed its people to the country they founded" : "a seat followed its country to its new name", { from: move.from, to: move.to });
       // Told to the player whose seat moved; everyone sees the lobby change.
       const device = seats.list().find((seat) => same(seat.country, move.to))?.device;
+      const text = move.why === "founded"
+        ? `${move.from} has founded ${move.to}: you now play ${move.to}.`
+        : `${move.from} is now called ${move.to}: you play it as before.`;
       for (const connection of connections.values()) {
-        if (device && connection.device === device) send(connection, { t: "notice", level: "info", text: `${move.from} has founded ${move.to}: you now play ${move.to}.` });
+        if (device && connection.device === device) send(connection, notice("info", text));
       }
     }
-    onSeatsMoved(moves.map(({ from, to, host }) => ({ from, to, host })));
-    await seatsChanged({ inEntry: true });
+    for (const country of successions.gone) {
+      if (same(country, hostCountry)) {
+        // The host's own country: the host keeps the game, and is told.
+        for (const connection of connections.values()) {
+          if (isHost(connection)) send(connection, notice("warn", `${country} is gone. As the host you keep the game; you can stop sharing it, or go on watching.`));
+        }
+        continue;
+      }
+      // The book keeps its player in the game, watching it (host/seats.js).
+      const seat = seats.vanish(country);
+      if (!seat?.device) continue;
+      log("info", "a seat's country is gone; its player watches", { country });
+      for (const connection of connections.values()) {
+        if (connection.device === seat.device) send(connection, notice("warn", `${country} is gone. You can take any free country under Players, or stay to watch.`));
+      }
+    }
+    if (after) {
+      countriesNow = after;
+      seats.setCountries(countriesNow);
+    }
+    if (moves.length) onSeatsMoved(moves.map(({ from, to, host }) => ({ from, to, host })));
+    if (moves.length || successions.gone.length || after) await seatsChanged({ inEntry: true });
   };
 
   // Who plays what changed: the round counts its players again, everyone is
@@ -399,8 +540,9 @@ export const createGameHost = ({
     if (stopped) return;
     round.setPlayers(present());
     broadcastLobby();
+    sessionChanged();
     if (inEntry) await recordHumans();
-    else await queue.run("who plays what", recordHumans);
+    else await queue.run("who-plays-what", recordHumans);
   };
 
   // --- Requests ------------------------------------------------------------------
@@ -448,16 +590,33 @@ export const createGameHost = ({
   };
 
   const handlers = {
+    // A country taken. Once the game is under way a seated player's change of
+    // country is asked of the host (the owner's decision 12): it waits in the
+    // host's Players list; a player whose country is gone takes any free one.
     pick: async (connection, { country }) => {
       if (isHost(connection)) return "The host plays its own game's country.";
-      const result = seats.claim(country, { device: connection.device, name: connection.name });
+      const wanted = clean(country);
+      const mine = seats.seatOf(connection.device);
+      if (seats.started && mine && !same(mine.country, wanted)) {
+        if (!countriesNow.some((known) => same(known, wanted))) return "not-a-country";
+        changes.set(connection.device, { device: connection.device, name: connection.name, from: mine.country, to: wanted });
+        broadcastLobby();
+        sessionChanged();
+        for (const other of connections.values()) {
+          if (isHost(other)) send(other, notice("info", `${mine.country}'s player asks to play ${wanted}. Allow it or refuse it under Players.`));
+        }
+        return { error: "", result: { asked: wanted.slice(0, 160) } };
+      }
+      const result = seats.claim(wanted, { device: connection.device, name: connection.name });
       if (!result.ok) return result.reason;
+      changes.delete(connection.device);
       connection.sent.clear();
       await seatsChanged({ inEntry: true });
       return "";
     },
     unpick: async (connection) => {
       if (isHost(connection)) return "The host plays its own game's country.";
+      if (seats.started) return "Ask the host to change your country.";
       if (!seats.unclaim(connection.device)) return "You have no country to give back.";
       connection.sent.clear();
       await seatsChanged({ inEntry: true });
@@ -659,7 +818,7 @@ export const createGameHost = ({
         const result = agentOrderFor(world, board, seat.country, request, {
           host: hostCountry,
           date: clean(game?.gameDate),
-          known: (name) => countries.some((country) => same(country, name))
+          known: (name) => countriesNow.some((country) => same(country, name))
             || Object.entries(isRecord(world?.polityOverrides) ? world.polityOverrides : {}).some(([polity, entry]) => same(polity, name) || same(entry?.name, name)),
         });
         if (result.error) {
@@ -785,7 +944,7 @@ export const createGameHost = ({
     viewed: async (connection, { epoch, rev, ok }) => {
       if (epoch !== connection.epoch) return "";
       if (!ok) {
-        resend(connection, "the page could not apply a view");
+        resend(connection, "not-applied");
         return "";
       }
       if (rev > connection.acked) {
@@ -800,7 +959,7 @@ export const createGameHost = ({
       const recipients = list(to).map(clean).filter(Boolean);
       if (!thread && !recipients.length) return "Say it to someone.";
       if (recipients.some((country) => same(country, seat.country))) return "A government does not write to itself.";
-      if (recipients.some((country) => !countries.some((known) => same(known, country)))) return "Unknown country.";
+      if (recipients.some((country) => !countriesNow.some((known) => same(known, country)))) return "Unknown country.";
       // A letter written while a round is being resolved waits in the queue
       // behind it, and is the next round's.
       const people = seats.humanCountries();
@@ -947,6 +1106,10 @@ export const createGameHost = ({
     },
   };
 
+  // People in without a seat (there to take one), other than `device`.
+  const waitingFor = (device) => new Set([...connections.values()].map((entry) => entry.device)
+    .filter((other) => other && other !== device && !seats.seatOf(other) && !seats.watcherOf(other))).size;
+
   // An answer for a device, on whichever connection it has now: a request
   // waiting behind a round may be answered after its player reconnected.
   const answerDevice = (device, message) => {
@@ -986,9 +1149,9 @@ export const createGameHost = ({
         const apply = () => handler(connection, message, seat);
         const outcome = await (AT_ONCE.has(message.t) || THINKING.has(message.t) ? apply() : queue.run(message.t, apply));
         if (outcome && typeof outcome === "object") {
-          error = clean(outcome.error);
+          error = clean(outcome.error).slice(0, 300);
           result = outcome.result && Object.keys(outcome.result).length ? outcome.result : null;
-        } else error = outcome;
+        } else error = clean(outcome).slice(0, 300);
       } catch (failure) {
         log("warn", "request failed", { t: message.t, error: String(failure?.message || failure) });
         error = "The host could not do that.";
@@ -999,13 +1162,15 @@ export const createGameHost = ({
       mine.set(id, ack);
       answerDevice(connection.device, ack);
     }
+    // What changed of the session (a line left to a device, one answered).
+    if (!error && ["say", "reply"].includes(message.t)) sessionChanged();
     if (!error && !AT_ONCE.has(message.t)) await schedulePush();
   };
 
   return {
     // A player's connection (session/host.js onJoin, or the host's own screen).
     join(player) {
-      if (stopped) return;
+      if (stopped || banned.has(player.device)) return;
       // A new connection, a new name for its views: the page starts again from a
       // whole view, whatever it held before.
       connections.set(player.id, {
@@ -1035,7 +1200,7 @@ export const createGameHost = ({
       async start() {
         if (seats.started) return;
         seats.start();
-        await queue.run("the start", recordHumans);
+        await queue.run("start", recordHumans);
         round.start();
         broadcastLobby();
       },
@@ -1053,24 +1218,77 @@ export const createGameHost = ({
         const text = mode === "own"
           ? "From now on each player's own AI answers the messages they write to countries the AI plays."
           : "From now on the host's AI answers the messages written to countries the AI plays.";
-        for (const connection of connections.values()) send(connection, { t: "notice", level: "info", text });
+        for (const connection of connections.values()) send(connection, notice("info", text));
         return true;
       },
-      kick(country) {
-        const seat = seats.list().find((entry) => same(entry.country, country));
-        if (!seat || same(seat.country, hostCountry)) return null;
-        seats.release(seat.country);
+      // The host takes a country back from its player, or lets go of a player
+      // who watches a country that is gone; with `ban` that device is kept out
+      // of this game for good (saved with it). Returns the device.
+      kick(country, { ban = false } = {}) {
+        const named = seats.list().find((entry) => same(entry.country, country))?.country
+          ?? seats.watching().find((entry) => same(entry.was, country))?.was;
+        if (!named || same(named, hostCountry)) return null;
+        const device = seats.release(named);
+        if (device) {
+          changes.delete(device);
+          if (ban) banned.add(device);
+        }
         void seatsChanged();
-        return seat.device;
+        return device;
+      },
+      // A player's change of country, as the host decides it (the owner's
+      // decision 12): `allow` gives them the country they asked for and frees
+      // their old one; `refuse` keeps them where they are. `from`: the
+      // country the asking player plays now.
+      async seat({ op, from }) {
+        const change = [...changes.values()].find((entry) => same(entry.from, from));
+        if (!change) return false;
+        changes.delete(change.device);
+        const tellPlayer = (text) => {
+          for (const connection of connections.values()) if (connection.device === change.device) send(connection, notice("info", text));
+        };
+        if (op !== "allow") {
+          tellPlayer(`The host keeps you as ${change.from}.`);
+          broadcastLobby();
+          sessionChanged();
+          return true;
+        }
+        const done = await queue.run("change-of-country", async () => {
+          const result = seats.claim(change.to, { device: change.device, name: change.name, approved: true });
+          if (!result.ok) return result.reason;
+          for (const connection of connections.values()) if (connection.device === change.device) connection.sent.clear();
+          await seatsChanged({ inEntry: true });
+          return "";
+        });
+        if (done) {
+          tellPlayer(done === "taken" ? `You could not be moved to ${change.to}: another player holds it.` : `You could not be moved to ${change.to}.`);
+          broadcastLobby();
+          sessionChanged();
+          return false;
+        }
+        tellPlayer(`The host let you play ${change.to}.`);
+        return true;
       },
     },
     start() {
+      // A game taken up again: its seats checked against the world as it is
+      // now, and its rounds go on from the one it was at.
+      if (restored) {
+        void queue.run("session-taken-up", () => followSeats())
+          .catch((error) => log("warn", "a saved seat did not follow its country", { error: String(error?.message || error) }));
+      }
+      if (restored?.started) {
+        round.resumeAt(restored.round);
+        // Paused until the host resumes it: its players come back one by one,
+        // and a round left to run meanwhile would end on the host alone.
+        round.pause();
+      }
       expiryTimer = timers.setInterval(() => {
         checkAcks();
         const handed = seats.expire();
         if (!handed.length) return;
         for (const connection of connections.values()) {
-          send(connection, { t: "notice", level: "info", text: `${handed.join(", ")} ${handed.length === 1 ? "is" : "are"} now played by the AI.` });
+          send(connection, notice("info", `${handed.join(", ")} ${handed.length === 1 ? "is" : "are"} now played by the AI.`));
         }
         void seatsChanged();
       }, 15_000);
@@ -1084,9 +1302,18 @@ export const createGameHost = ({
       round.stop();
       roundAbort?.abort(new Error("The shared game was stopped."));
       await pushing.catch(() => {});
-      await queue.run("the end", forgetHumans).catch((error) => log("warn", "the shared game's players were not cleared", { error: String(error?.message || error) }));
+      await queue.run("end", forgetHumans).catch((error) => log("warn", "the shared game's players were not cleared", { error: String(error?.message || error) }));
     },
     pushViews,
+    // Whether a device is banned from this game (session/host.js isBanned).
+    isBanned: (device) => banned.has(device),
+    // Whether a device may come in (session/host.js roomFor): a player in the
+    // game always may, however many have come meanwhile; anyone else while
+    // the game has a seat for them beside those in it and those already in
+    // without one (host/seats.js hasRoom).
+    roomFor: (device) => !stopped && !banned.has(device) && seats.hasRoom(device, { waiting: waitingFor(device) }),
+    // Seats a newcomer could take, for the lobby's beacon.
+    openSeats: () => seats.open({ waiting: waitingFor("") }),
     // A change made outside a request (an AI government's answer being
     // written, an institution's business): applied in the queue's order, and
     // every view follows.

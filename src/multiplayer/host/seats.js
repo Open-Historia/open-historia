@@ -11,6 +11,22 @@
 // Players are known by their device key (session/host.js): that is who they
 // are across reconnects, whatever their player id on a given connection.
 //
+// A seat is its player's device's until the host releases it (the owner,
+// 2026-11-15: a shared game is a lasting thing, seats "bound to each player's
+// device, resumable another day"): taken by someone else while its player was
+// away, it handed that player's threads, orders and stolen papers to them.
+// The book is saved with the game (host/sessionRecord.js) and restored when
+// the game is shared again. Once the game is under way a player changes
+// country only with the host's yes (the owner's decision 12).
+//
+// The book also says who is in the game: everyone whose device holds a seat,
+// here or not, and everyone who watches a country of theirs that is gone (the
+// owner's decision 11). They are let in whenever they come back; anyone else
+// only while they are fewer than the seats (hasRoom). Before, the session
+// counted the connections open at that moment, so newcomers could fill the
+// room while a player was away, and that player could not get back to the
+// seat that is theirs.
+//
 // Pure: time comes in through `now`.
 
 export const SEAT_STATUS = Object.freeze({ HUMAN: "human", AWAY: "away", AI: "ai" });
@@ -24,41 +40,51 @@ export const createSeatBook = ({
 } = {}) => {
   const choosable = new Set(countries.map(String));
   const seats = new Map(); // country → { country, device, name, status, since }
+  // Players whose country is gone, who watch it: device → { device, name, was }.
+  const watchers = new Map();
   let started = false;
 
   const byDevice = (device) => [...seats.values()].find((seat) => seat.device === device) ?? null;
   const people = () => [...seats.values()].filter((seat) => seat.status === SEAT_STATUS.HUMAN || seat.status === SEAT_STATUS.AWAY);
+  // Everyone in the game, by device: whoever holds a seat, and whoever watches.
+  const members = () => new Set([...[...seats.values()].map((seat) => seat.device).filter(Boolean), ...watchers.keys()]);
 
   const refusal = (reason) => ({ ok: false, reason });
 
   return {
     // A person takes a country. In the lobby any free country; once the game
-    // has started, only if the host allows joining mid-game, and then only a
-    // country the AI is playing (or one no one has taken).
-    claim(country, { device, name }) {
+    // has started, a newcomer only if the host allows joining mid-game, and a
+    // seated player only with the host's yes (`approved`). A country whose
+    // seat is another device's is theirs until the host releases it, whoever
+    // minds it meanwhile. A player whose country is gone takes any free
+    // country, whatever the host allows newcomers (the owner's decision 11).
+    claim(country, { device, name, approved = false }) {
       const key = String(country ?? "");
       if (!choosable.has(key)) return refusal("not-a-country");
-      if (started && !allowMidGameJoin) return refusal("game-started");
       const current = seats.get(key);
       const mine = byDevice(device);
-      if (current && current.device !== device && current.status !== SEAT_STATUS.AI) return refusal("taken");
-      if (!mine && people().length >= maxPlayers) return refusal("full");
+      const watching = watchers.has(device);
+      if (current && current.device && current.device !== device) return refusal("taken");
+      if (started && !mine && !watching && !approved && !allowMidGameJoin) return refusal("game-started");
+      if (started && mine && mine.country !== key && !approved) return refusal("ask-host");
+      if (!mine && !watching && members().size >= maxPlayers) return refusal("full");
       if (mine && mine.country !== key) {
         // Changing country in the lobby frees the old one; mid-game the old one
         // goes to the AI.
         if (started) seats.set(mine.country, { ...mine, status: SEAT_STATUS.AI, device: null, since: now() });
         else seats.delete(mine.country);
       }
+      watchers.delete(device);
       seats.set(key, { country: key, device, name: String(name ?? ""), status: SEAT_STATUS.HUMAN, since: now() });
       return { ok: true, country: key };
     },
 
-    // Back to the lobby list, before the game starts.
+    // Back to the lobby list, before the game starts. Once it has, giving a
+    // country up is changing it, which is the host's to allow.
     unclaim(device) {
       const mine = byDevice(device);
-      if (!mine) return false;
-      if (started) seats.set(mine.country, { ...mine, status: SEAT_STATUS.AI, device: null, since: now() });
-      else seats.delete(mine.country);
+      if (!mine || started) return false;
+      seats.delete(mine.country);
       return true;
     },
 
@@ -100,27 +126,78 @@ export const createSeatBook = ({
       return handed;
     },
 
-    // The host takes a country back from a player (a kick), or hands the AI's.
+    // The host takes a country back from a player (a kick), or hands the AI's;
+    // or lets go of a player who watches a country that is gone. Returns the
+    // device that held it, or null.
     release(country) {
       const seat = seats.get(String(country));
-      if (!seat) return false;
+      if (!seat) {
+        const watcher = [...watchers.values()].find((entry) => entry.was === String(country));
+        if (!watcher) return null;
+        watchers.delete(watcher.device);
+        return watcher.device;
+      }
       if (started) seats.set(seat.country, { ...seat, status: SEAT_STATUS.AI, device: null, since: now() });
       else seats.delete(seat.country);
-      return true;
+      return seat.device ?? null;
     },
 
-    // A person's people founded a country of their own (host/foundings.js): the
-    // seat follows them to it, with its player and where they are. The new
-    // country was not on the list when the game opened, and is from now on.
+    // A seat's country is gone (dissolved, or annexed): the seat is no more,
+    // and its player watches it, or takes a free country.
+    vanish(country) {
+      const seat = seats.get(String(country));
+      if (!seat) return null;
+      seats.delete(seat.country);
+      if (seat.device) watchers.set(seat.device, { device: seat.device, name: seat.name, was: seat.country });
+      return { ...seat };
+    },
+
+    // The countries that may be taken, as the world has them now: a country
+    // founded mid-game can be, one dissolved cannot. A seat's own country
+    // stays its seat's either way.
+    setCountries(list) {
+      choosable.clear();
+      for (const name of list) choosable.add(String(name));
+      for (const country of seats.keys()) choosable.add(country);
+    },
+
+    // The book as the game saved it (host/sessionRecord.js), before anyone has
+    // joined: every seat its device's again. Its players are away until they
+    // reconnect; one the AI was already minding stays so. The host's own seat
+    // is claimed afresh after, from the game's own country.
+    restore(saved, { hostDevice = "", watching = [] } = {}) {
+      for (const entry of watching) {
+        if (entry?.device && entry.device !== hostDevice) watchers.set(entry.device, { device: entry.device, name: String(entry.name ?? ""), was: String(entry.was ?? "") });
+      }
+      for (const seat of saved) {
+        const country = String(seat?.country ?? "");
+        if (!country || seat?.device === hostDevice) continue;
+        choosable.add(country);
+        seats.set(country, {
+          country,
+          device: seat.device || null,
+          name: String(seat.name ?? ""),
+          status: seat.device && seat.status !== SEAT_STATUS.AI ? SEAT_STATUS.AWAY : SEAT_STATUS.AI,
+          since: now(),
+        });
+      }
+    },
+
+    // A person's people founded a country of their own (host/foundings.js), or
+    // their country was renamed: the seat follows, with its player, whoever
+    // minds it meanwhile: a player away, or one whose country the AI minds,
+    // holds it still, and comes back to it under its new name. Never onto a
+    // country another device holds. The new name was not on the list when the
+    // game opened, and is from now on.
     move(from, to) {
       const seat = seats.get(String(from));
       const key = String(to ?? "");
-      if (!seat || !key || seat.status === SEAT_STATUS.AI) return false;
+      if (!seat || !key || key === seat.country) return false;
       const there = seats.get(key);
-      if (there && there.status !== SEAT_STATUS.AI) return false;
+      if (there?.device && there.device !== seat.device) return false;
       choosable.add(key);
       seats.delete(seat.country);
-      seats.set(key, { ...seat, country: key, since: now() });
+      seats.set(key, { ...seat, country: key });
       return true;
     },
 
@@ -129,6 +206,15 @@ export const createSeatBook = ({
     },
 
     seatOf: (device) => byDevice(device),
+    // The player whose country is gone, who watches it.
+    watcherOf: (device) => (watchers.has(device) ? { ...watchers.get(device) } : null),
+    watching: () => [...watchers.values()].map((entry) => ({ ...entry })),
+    // Whether a device may come in: one in the game always may; anyone else
+    // while those in the game and `waiting` (people in without a seat, there
+    // to take one) are fewer than the seats.
+    hasRoom: (device, { waiting = 0 } = {}) => members().has(device) || members().size + waiting < maxPlayers,
+    // Seats a newcomer could still take.
+    open: ({ waiting = 0 } = {}) => Math.max(0, maxPlayers - members().size - waiting),
     // Countries people play (here or away): the ones the world may not decide for.
     humanCountries: () => people().map((seat) => seat.country),
     // Devices whose players are here: the ones a round waits for.

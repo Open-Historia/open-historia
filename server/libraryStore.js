@@ -452,6 +452,11 @@ const RUNTIME_ONLY_JSON_ASSET_FILES = {
   // file on purpose: it is refreshed AFTER a jump's world write lands, and a
   // second writer on world.json would race it.
   intercepts: "storage/intercepts.json",
+  // A shared game's session (src/multiplayer/host/sessionRecord.js): who plays
+  // which country, on which device, and the round, so the game can be shared
+  // again another day. Written by the host's engine window only; never part of
+  // an export, and a copy of the game is a new campaign it does not apply to.
+  shared: "storage/shared.json",
 };
 const RESTORE_POINT_DIR = "storage/snapshots";
 
@@ -528,6 +533,7 @@ const JSON_ASSET_DEFAULTS = {
   snapshots: [],
   snapshotsIndex: { entries: [] },
   intercepts: {},
+  shared: {},
 };
 
 // The world keys a fresh game inherits from its scenario. MIRRORED in

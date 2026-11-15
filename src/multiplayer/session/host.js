@@ -66,6 +66,13 @@ export const createHostSession = ({
   peerFactory = (options) => createPeer(options),
   peerOptions = {},
   isBanned = () => false,
+  // Whether a device may come in, and how many seats a newcomer could still
+  // take, as the game counts its players (host/gameHost.js roomFor,
+  // openSeats): a player whose device holds a seat is let back in whoever has
+  // come meanwhile, and after the game is shared again, when this session has
+  // never seen them. Without them, the connections open now are counted.
+  roomFor = null,
+  openSeats = null,
   onJoin = () => {},
   onLeave = () => {},
   onMessage = () => {},
@@ -96,6 +103,8 @@ export const createHostSession = ({
   const deviceOffers = new Map();
 
   const seated = () => [...players.values()].filter((player) => player.status === "connected").length;
+  const hasRoom = (device) => (typeof roomFor === "function" ? Boolean(roomFor(device)) : seated() < roomInfo.seats);
+  const openNow = () => (typeof openSeats === "function" ? Math.max(0, Math.trunc(Number(openSeats()) || 0)) : Math.max(0, roomInfo.seats - seated()));
   const publicPlayer = (player) => ({ id: player.id, name: player.name, device: player.device, status: player.status, rttMs: player.rttMs ?? null });
 
   // Joiners the host answered whose connection never opened: device → { name,
@@ -130,7 +139,7 @@ export const createHostSession = ({
     if (!running) return;
     channel?.publish(signPayload("beacon", {
       t: "beacon", v: PROTOCOL_VERSION, name: roomInfo.name,
-      open: Math.max(0, roomInfo.seats - seated()), seats: roomInfo.seats, version: roomInfo.version, ts: now(),
+      open: openNow(), seats: roomInfo.seats, version: roomInfo.version, ts: now(),
     }));
   };
 
@@ -248,7 +257,7 @@ export const createHostSession = ({
 
     const knownId = byDevice.get(hello.device);
     const known = knownId ? players.get(knownId) : null;
-    if (!known && seated() >= roomInfo.seats) return reject("full");
+    if (!known && !hasRoom(hello.device)) return reject("full");
 
     timers.clearTimeout(entry.timer);
     pending.delete(entry.session);
@@ -325,7 +334,7 @@ export const createHostSession = ({
     // The seats are who is IN. Connections still opening are held to a limit
     // of their own: the hello decides who gets a seat (handleHello), so a
     // joiner who cannot be reached costs nobody theirs.
-    if (!byDevice.has(offer.device) && seated() >= roomInfo.seats) return deny(offer.session, "full");
+    if (!byDevice.has(offer.device) && !hasRoom(offer.device)) return deny(offer.session, "full");
     if (pending.size >= roomInfo.seats + limits.pendingBeyondSeats) return deny(offer.session, "busy");
 
     // The connection opening again for a device already being opened is the

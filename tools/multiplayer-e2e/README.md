@@ -27,7 +27,9 @@ node e2e.mjs
   the public STUN servers too.
 - Chrome must be installed. Set `CHROME=<path>` if it is not in a usual place.
 - Ports 3811 and 3812 (the host's and the guest's app servers) and 9461
-  (Chrome's DevTools) must be free.
+  (Chrome's DevTools) must be free. When another run holds them,
+  `E2E_PORT_BASE=10 node e2e.mjs` moves all three (to 3821, 3822 and 9471):
+  on a port someone else's Chrome holds, the run would drive that browser.
 - A run takes about five minutes. On a machine busy with something else,
   `PATIENCE=4 node e2e.mjs` waits four times as long for every step.
   It exits 0 when every check passes, and
@@ -108,7 +110,17 @@ The real desktop app's hidden engine window is not part of this run.
     kept.
   - The guest's AI is out for its next line: the thread says so, and Retry
     answers the same line without saying it twice.
+- **A change of country, mid-game:** the guest asks under Players to play
+  another country. The host's Players button says someone is asking, and the
+  host is shown who asks, with Allow and Refuse, and Release and Ban on the
+  guest's seat. The host refuses, and the guest is told it keeps its country.
 - **Stopping:** when the host stops, the guest is told.
+- **The session kept with the game** (`host/sessionRecord.js`): it is in the
+  campaign (`/api/runtime/json/shared`), the guest's seat bound to its device,
+  with the round to plan next. The host shares the game again in a new engine
+  window: it goes on at the round it was at, paused, with the same invite code
+  under Players. The guest joins again with that code and plays its own country
+  without choosing it, and the host resumes.
 
 The map's stock tiles are not in the fresh data folders, so a screen's loading
 cover may wait out its 60-second ceiling. The game's checks do not depend on it.

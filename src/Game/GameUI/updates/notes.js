@@ -56,6 +56,8 @@ const NEW_UPDATES = [
   {
     // "build C and D, and the host can choose, but no sending api keys" (the owner, 2026-11-15): who answers a player's message to a
     // country the AI plays is the host's choice (multiplayer/host/settings.js `replies`): the host's AI, or each player's own device.
+    // "any issues should not be roughly patched or whackamoled, the core of the issue should be fixed archetecturally" (the owner,
+    // 2026-11-15): the shared game's middle rebuilt: checked views, one order for every change, and the session saved with the game.
     id: "2026-11-shared-game-replies",
     kind: "minor",
     date: "2026-11-15",
@@ -69,6 +71,17 @@ const NEW_UPDATES = [
           "A reply written on a player's device is words only: a country cannot make peace, sign a treaty or call a vote in it. So a country at war with you, and an institution's council, are still answered by the host's AI, which can. Everything said is read when the round is played, like any conversation.",
           "With the host's AI, a conversation is answered one message at a time, so two messages sent quickly no longer lose each other's replies, and you are told when the host's AI could not be reached instead of being left without an answer.",
           "A conversation no longer disappears when you write in it after the player who started it has left the game.",
+        ],
+      },
+      {
+        title: "Shared games you can come back to",
+        items: [
+          "A shared game now remembers who plays which country. Stop sharing it, share it again even days later, and every player gets their own country back. It opens paused, and the host resumes it when everyone is in.",
+          "A country stays its player's while they are away: the AI plays it, and nobody else can take it until the host releases it. Under Players the host can release a country, or ban a player from the game.",
+          "Once the game has started, a player changes country only if the host agrees: ask under Players, and the host allows or refuses it. A player whose country is annexed or dissolved goes on watching, and can take any free country.",
+          "A country that is renamed keeps its player, even one who was away at the time, and a country with a very long name no longer keeps everyone out of the lobby.",
+          "Orders and messages sent while a round is being played are no longer refused: they wait, and count for the next round. When the host's AI cannot play a round, everyone is told why, the orders stay queued, and the host can try again at once.",
+          "A player who reconnects, or misses part of an update, is sent the whole game again, so the map no longer freezes or shows half a round.",
         ],
       },
     ],

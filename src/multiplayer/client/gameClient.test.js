@@ -89,13 +89,19 @@ test("the loopback carries the screen's requests and controls to the engine, and
   screen.request({ t: "ready", id: "0123456789abcdef", value: true, isHost: true }); // not a request
   screen.control("start");
   screen.control("becomeGod");
+  // The last word each way is a valid one: once it has arrived, everything sent
+  // before it on that side has too, so what was dropped was dropped (a fixed
+  // wait was too short on a busy machine).
+  screen.control("pause");
   engine.send({ t: "notice", level: "info", text: "Round 2 begins." });
   engine.send({ t: "notice", level: "loud", text: "not a message" });
   engine.status({ token: "oh1-abc", players: 2 });
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  for (let waited = 0; waited < 10_000 && !(seen.controls.some(([action]) => action === "pause") && seen.statuses.length); waited += 10) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   assert.deepEqual(seen.hello, { device: "device-host", name: "Host" });
   assert.deepEqual(seen.requests, [{ t: "ready", id: "0123456789abcdef", value: true }]);
-  assert.deepEqual(seen.controls, [["start", null]]);
+  assert.deepEqual(seen.controls, [["start", null], ["pause", null]]);
   assert.deepEqual(seen.messages, [{ t: "notice", level: "info", text: "Round 2 begins." }]);
   assert.deepEqual(seen.statuses, [{ token: "oh1-abc", players: 2 }]);
   engine.close();

@@ -25,6 +25,7 @@
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const same = (left, right) => Boolean(clean(left)) && clean(left).toLocaleLowerCase() === clean(right).toLocaleLowerCase();
 const list = (value) => (Array.isArray(value) ? value : []);
+const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 // `events`: the events the round just added. `actions`: the order queue.
 // `seated`: the countries people play. `host`: the host's own country.
@@ -76,6 +77,38 @@ export const withSeatMoved = ({ actions, world, chats }, { from, to, host = fals
     : world,
   chats: list(chats).map((chat) => (same(chat?.player, from) ? { ...chat, player: to } : chat)),
 });
+
+// What became of the countries people play, as the world now has them, read
+// from the game's own records and never from words (server/polityRename.js,
+// runtime/gameState.js, runtime/groups.js):
+//   renamed  no polity or group lives under its name any more, and exactly one
+//            that does lists it among its former names (a rename in play keeps
+//            the old name there): [{ from, to }];
+//   gone     its own record says it is dissolved (annexed or broken up); or it
+//            has no record, nothing was renamed from it, and the game no longer
+//            counts it among its countries (`countries`, the game's whole list
+//            as it is now): a country of the map, annexed whole.
+// A country with a living record of its own (a polity, or a group) is as it
+// was. Most countries of a map have no record at all, so having none is never
+// taken to mean gone by itself, and without the game's list nothing is.
+export const seatSuccessions = ({ world, seated = [], countries = null } = {}) => {
+  const polities = Object.entries(isRecord(world?.polityOverrides) ? world.polityOverrides : {})
+    .map(([key, entry]) => ({ key, name: clean(entry?.name) || key, live: clean(entry?.status || "active").toLowerCase() !== "dissolved", formerNames: list(entry?.formerNames) }));
+  // A group that is dissolved is taken out of the world (runtime/groups.js).
+  const groups = Object.entries(isRecord(world?.groups) ? world.groups : {})
+    .map(([key, entry]) => ({ key, name: clean(entry?.name) || key, live: true, formerNames: list(entry?.formerNames) }));
+  const records = [...polities, ...groups];
+  const renamed = [];
+  const gone = [];
+  for (const country of seated.map(clean).filter(Boolean)) {
+    const own = records.filter((entry) => same(entry.key, country) || same(entry.name, country));
+    if (own.some((entry) => entry.live)) continue;
+    const heirs = records.filter((entry) => entry.live && entry.formerNames.some((name) => same(name, country)));
+    if (heirs.length === 1) renamed.push({ from: country, to: heirs[0].name });
+    else if (own.length || (Array.isArray(countries) && !countries.some((name) => same(name, country)))) gone.push(country);
+  }
+  return { renamed, gone };
+};
 
 // The names a seat's government has had, newest first (game.seatFoundings,
 // written by the host as each seat moves): what only its government knew

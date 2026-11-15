@@ -5266,6 +5266,14 @@ const RUNTIME_DOCUMENTS = {
     read: () => readInterceptsState({ force: true }),
     write: (value, options) => writeInterceptsState(value, options),
   },
+  // A shared game's session (multiplayer/host/sessionRecord.js): who plays
+  // which country, kept with the campaign. Written by the host's engine window
+  // alone, in the host's own order; here so it is never written into a campaign
+  // that is no longer the open one.
+  shared: {
+    read: () => readJson(JSON_URLS.shared, { defaultValue: {}, force: true }),
+    write: (value, options) => writeJson(JSON_URLS.shared, value && typeof value === "object" && !Array.isArray(value) ? value : {}, options),
+  },
   // The advisor's conversation: written by its panel, by document notices and
   // by a rollback, so all three meet here too.
   advisor: {
@@ -5308,6 +5316,7 @@ export const mutateActionsState = (mutator, options) => mutateRuntimeDocument("a
 export const mutateGameData = (mutator, options) => mutateRuntimeDocument("game", mutator, options);
 export const mutateInterceptsState = (mutator, options) => mutateRuntimeDocument("intercepts", mutator, options);
 export const mutateAdvisorState = (mutator, options) => mutateRuntimeDocument("advisor", mutator, options);
+export const mutateSharedSessionState = (mutator, options) => mutateRuntimeDocument("shared", mutator, options);
 
 // A write another thread performs, run while this page's write queue is held.
 // The country-stats worker reads world.json, merges one sheet in and PUTs the

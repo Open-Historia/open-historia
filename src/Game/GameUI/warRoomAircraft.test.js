@@ -174,8 +174,12 @@ test("the seam: the host in a shared game, the write queue otherwise, never whil
   assert.match(writes, /const apply = \(world, given, context\) => applyAirStrikeOp\(world, given, \{ \.\.\.context, air: activeWars\(\)\.air \}\);/);
   assert.match(writes, /await sendHeldToMap\(sent, \{ request: "airstrike", apply, needsChart: sent\.op === "airstrike" && sent\.kind === "city" \}, \{ turnRunning, readChart \}\);/);
   assert.equal(writes.split("if (turnRunning()) throw new Error(TURN_RUNNING_REFUSAL);").length - 1, 3, "the strike goes the fleets' way: no seam of its own");
-  // The host: the seat's own country, its own map, not while a round is resolved, and not in a scenario without air units.
-  assert.match(host, /airstrike: async \(connection, \{ op \}, seat\) => \{\s*if \(round\.status\(\)\.phase === "resolving"\)/);
+  // The host: the seat's own country, its own map, and not in a scenario without
+  // air units; in the host's one order, so a strike given while a round is
+  // resolved waits behind it and is the next round's (host/worldQueue.js).
+  assert.match(host, /airstrike: async \(connection, \{ op \}, seat\) => \{\s*const sent = cleanAirStrikeOp\(op\);/);
+  assert.doesNotMatch(host, /const (?:AT_ONCE|THINKING) = new Set\(\[[^\]]*"airstrike"/, "applied in the queue, as every change to the world is");
+  assert.match(host, /queue\.run\(message\.t, apply\)/);
   assert.match(host, /applyAirStrikeOp\(world, sent, \{ player: seat\.country, date: clean\(game\?\.gameDate\), round: game\?\.round, chart, air: activeWars\(\)\.air \}\)/);
 });
 

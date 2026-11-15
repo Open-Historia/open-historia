@@ -59,7 +59,7 @@ test.afterEach(() => {
   }
 });
 
-const world = ({ seats = 4, hostLimits = {}, hostNow, relayOptions = {}, backlog = false } = {}) => {
+const world = ({ seats = 4, hostLimits = {}, hostNow, relayOptions = {}, backlog = false, hostOptions = {} } = {}) => {
   const relays = createFakeRelayNetwork(relayOptions);
   const rtc = createFakeRtcNetwork({ backlog });
   const channelFactory = (options) => createNostrChannel({ ...options, relays: RELAYS, WebSocketImpl: relays.WebSocket });
@@ -76,6 +76,7 @@ const world = ({ seats = 4, hostLimits = {}, hostNow, relayOptions = {}, backlog
     onStatus: (status) => { events.status = status; },
     ...(hostNow ? { now: hostNow } : {}),
     limits: { beaconIntervalMs: 200, pingIntervalMs: 100_000, ...hostLimits },
+    ...hostOptions,
   }));
   const join = (name, { token = invite.token, device = createIdentity(), version = VERSION, ...extra } = {}) => {
     const log = { states: [], messages: [], room: null };
@@ -120,6 +121,20 @@ test("the seats are a limit: the next player is told the game is full", async ()
   const third = setup.join("Cleo");
   assert.ok(await until(() => third.client.state === "rejected"));
   assert.equal(third.log.states.at(-1).reason, "full");
+  setup.host.stop();
+});
+
+test("the game says who has room: a player whose device holds a seat comes in when a newcomer is told the game is full", async () => {
+  // As the game counts its players (host/gameHost.js roomFor): Ana's device
+  // holds a seat, and every seat is held.
+  const ana = createIdentity();
+  const setup = world({ seats: 1, hostOptions: { roomFor: (device) => device === ana.id, openSeats: () => 0 } });
+  setup.host.start();
+  const stranger = setup.join("Ben");
+  assert.ok(await until(() => stranger.client.state === "rejected"));
+  assert.equal(stranger.log.states.at(-1).reason, "full");
+  const back = setup.join("Ana", { device: ana });
+  assert.ok(await until(() => back.client.state === "connected"));
   setup.host.stop();
 });
 

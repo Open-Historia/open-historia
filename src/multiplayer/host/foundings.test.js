@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formerNamesOf, seatFoundings, withSeatMoved } from "./foundings.js";
+import { formerNamesOf, seatFoundings, seatSuccessions, withSeatMoved } from "./foundings.js";
 
 const BURGHERS = "The Free Townsmen of Gullhaven";
 const HILL = "Hill folk";
@@ -95,4 +95,31 @@ test("a seat reads under every name its government had", () => {
   assert.deepEqual(formerNamesOf(game, "C"), ["C", "B", "A"]);
   assert.deepEqual(formerNamesOf(game, "Z"), ["Z"]);
   assert.deepEqual(formerNamesOf({ seatFoundings: [{ from: "A", to: "B" }, { from: "B", to: "A" }] }, "A"), ["A", "B"]);
+});
+
+test("what became of the countries people play is read from the world's own records and its list of countries: renamed, gone, or as it was", () => {
+  const world = {
+    polityOverrides: {
+      // Renamed in play: the old name is kept among its former names (server/polityRename.js).
+      "Russian Empire": { name: "Russian Empire", status: "active", formerNames: ["Russian Federation"] },
+      // Dissolved: annexed or broken up (runtime/gameState.js).
+      Latvia: { name: "Latvia", status: "dissolved" },
+      France: { name: "France", status: "active" },
+      // Two that both claim an old name settle nothing.
+      "Eastern Ukraine": { name: "Eastern Ukraine", status: "active", formerNames: ["Ukraine"] },
+      "Western Ukraine": { name: "Western Ukraine", status: "active", formerNames: ["Ukraine"] },
+    },
+    // A group renamed keeps its old name too, and a group is played as it stands (runtime/groups.js).
+    groups: { "Northern Resistance": { name: "Northern Resistance", formerNames: ["Righteous Armies"] }, [HILL]: { name: HILL } },
+  };
+  // The game's countries now. Kestrelmark and Burgundy are countries of the
+  // map with no record of their own, as most are: Kestrelmark still holds its
+  // land, Burgundy was annexed whole.
+  const countries = ["Russian Empire", "France", "Eastern Ukraine", "Western Ukraine", "Kestrelmark"];
+  const seated = ["Russian Federation", "Latvia", "France", "Ukraine", "Righteous Armies", HILL, "Kestrelmark", "Burgundy"];
+  const found = seatSuccessions({ world, seated, countries });
+  assert.deepEqual(found.renamed, [{ from: "Russian Federation", to: "Russian Empire" }, { from: "Righteous Armies", to: "Northern Resistance" }]);
+  assert.deepEqual(found.gone, ["Latvia", "Ukraine", "Burgundy"]);
+  // Without the game's list, a country with no record of its own is never taken for gone.
+  assert.deepEqual(seatSuccessions({ world: {}, seated: ["Kestrelmark", "Burgundy"] }), { renamed: [], gone: [] });
 });

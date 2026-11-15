@@ -32,9 +32,13 @@ const CHROME = process.env.CHROME || [
 ].find((candidate) => fs.existsSync(candidate));
 if (!CHROME) throw new Error("No Chrome found: set CHROME to its path.");
 if (!fs.existsSync(path.join(REPO, "dist", "engine.html"))) throw new Error("No build: run `npm run build` at the repo root first.");
-const DEBUG_PORT = 9461;
-const HOST_PORT = 3811;
-const GUEST_PORT = 3812;
+// Another run on this machine (another checkout's, another session's) may hold
+// the usual ports, and its browser would be driven instead of this one's:
+// E2E_PORT_BASE=10 moves all three together.
+const PORT_BASE = Math.max(0, Math.trunc(Number(process.env.E2E_PORT_BASE) || 0));
+const DEBUG_PORT = 9461 + PORT_BASE;
+const HOST_PORT = 3811 + PORT_BASE;
+const GUEST_PORT = 3812 + PORT_BASE;
 const HOST = `http://localhost:${HOST_PORT}`;
 const GUEST = `http://localhost:${GUEST_PORT}`;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -957,10 +961,97 @@ try {
   }
   await toggleChats(guest);
 
+  // Once the game is under way a player changes country only with the host's
+  // yes (the owner's decision 12): the guest asks under Players, the host is
+  // shown who asks, with its hand on the guest's seat beside it (Release, Ban),
+  // and refuses.
+  await guest.eval("window.__e2e.click('Players')");
+  const askPicker = `[...document.querySelectorAll('select')].find((s) => s.options[0] && s.options[0].textContent.startsWith('Ask to play another country'))`;
+  const canAsk = await until(guest, `Boolean(${askPicker})`, 10000);
+  if (canAsk) {
+    await guest.eval(`(() => { window.__e2e.choose(${askPicker}, ${JSON.stringify(AI_COUNTRY)}); return true; })()`);
+    await sleep(300);
+    await guest.eval("window.__e2e.click('Ask the host')");
+  }
+  const guestAsked = await until(guest, `document.body.textContent.includes(${JSON.stringify(`You asked the host to let you play ${AI_COUNTRY}.`)})`, 20000);
+  const hostAsked = await until(host, "window.__e2e.buttons('Players (1 asking)').length > 0", 20000);
+  await host.eval("window.__e2e.click('Players (1 asking)')");
+  const askShown = await until(host, `document.body.textContent.includes(${JSON.stringify(`(${GUEST_COUNTRY}) asks to play ${AI_COUNTRY}.`)}) && window.__e2e.buttons('Allow').length > 0 && window.__e2e.buttons('Refuse').length > 0`, 10000);
+  const handOnSeat = await host.eval("window.__e2e.buttons('Release').length > 0 && window.__e2e.buttons('Ban').length > 0");
+  await shoot(host, "4-host-change-request");
+  await shoot(guest, "4-guest-asks-to-change");
+  await host.eval("window.__e2e.click('Refuse')");
+  const keptAs = await until(guest, `document.body.textContent.includes(${JSON.stringify(`The host keeps you as ${GUEST_COUNTRY}.`)})`, 20000);
+  const stillPlays = (await guest.eval("window.__e2e.view('game')"))?.country === GUEST_COUNTRY;
+  const askGone = await until(host, "window.__e2e.buttons('Allow').length === 0", 10000);
+  await host.eval("window.__e2e.click('Players')");
+  await guest.eval("window.__e2e.click('Players')");
+  check("once the game is under way the guest asks the host to change country, and the host, shown who asks beside Release and Ban, refuses",
+    canAsk && guestAsked && hostAsked && askShown && handOnSeat && keptAs && stillPlays && askGone,
+    JSON.stringify({ canAsk, guestAsked, hostAsked, askShown, handOnSeat, keptAs, stillPlays, askGone }));
+
+  // Where the rounds are when the host stops sharing: the round read through
+  // is done, so the one being planned is the one a game shared again plans.
+  const roundAtStop = Number(await host.eval("(document.body.textContent.match(/Round (\\d+) ·/) || [])[1] || 0"));
   await host.eval("window.__e2e.click('Stop')");
   const ended = await until(guest, "document.body.textContent.includes('The shared game ended')", 30000);
   check("when the host stops, the guest is told", ended);
   check("and told why: the host closed the game", await until(guest, "document.body.textContent.includes('The host closed the game')", 5000));
+
+  // The session is part of the game (host/sessionRecord.js): it is in the
+  // campaign, with the guest's seat bound to its device.
+  const saved = await (await fetch(`${HOST}/api/runtime/json/shared?v=e2e`)).json();
+  const savedSeat = (saved?.seats ?? []).find((seat) => seat.country === GUEST_COUNTRY);
+  check("the shared game's session is saved with the game: the guest's seat is its device's, and the round to plan next",
+    saved?.started === true && Boolean(savedSeat?.device) && saved?.round === roundAtStop,
+    JSON.stringify({ started: saved?.started, seat: savedSeat, round: saved?.round, roundAtStop }));
+
+  // Shared again another day, in a new engine window, as the desktop app opens
+  // one: every player has their own country back, without choosing, at the
+  // round the game was at, which waits paused for the host.
+  await engine.send("Page.reload");
+  await sleep(500);
+  await until(engine, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
+  await until(host, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
+  await sleep(1000);
+  await withHelpers(host);
+  await until(host, "(window.__e2e || false) && window.__e2e.buttons('Lobbies').length > 0", 60000);
+  await openVaultDoor(host);
+  await host.eval("window.__e2e.click('Lobbies')");
+  await until(host, "window.__e2e.buttons('Host a lobby').length > 0", 15000);
+  await host.eval("window.__e2e.click('Host a lobby')");
+  await until(host, "window.__e2e.buttons('Open the lobby').length > 0", 15000);
+  await host.eval("window.__e2e.click('Open the lobby')");
+  const resumedPaused = await until(host, `document.body.textContent.includes(${JSON.stringify(`Round ${roundAtStop} · `)}) && window.__e2e.buttons('Resume').length > 0`, 45000);
+  const codeAgain = await until(host, "Boolean(document.querySelector('code') && document.querySelector('code').textContent === " + JSON.stringify(token) + ")", 15000);
+  check("shared again, the game goes on at the round it was at, paused for the host, with the same invite code under Players",
+    resumedPaused && codeAgain, JSON.stringify({ resumedPaused, codeAgain, roundAtStop }));
+  await shoot(host, "5-host-shared-again-paused");
+
+  await guest.eval("window.__e2e.click('Back to my games')");
+  await sleep(1000);
+  await until(guest, `location.origin === ${JSON.stringify(GUEST)} && document.readyState === 'complete'`, 30000);
+  await withHelpers(guest);
+  await until(guest, "window.__e2e.buttons('Lobbies').length > 0", 60000);
+  await openVaultDoor(guest);
+  await guest.eval("window.__e2e.click('Lobbies')");
+  await until(guest, "Boolean(document.querySelector('input[placeholder=\"oh1-…\"]'))", 15000);
+  await guest.eval(`(() => { const e = window.__e2e; e.type(document.querySelector('input[placeholder="oh1-…"]'), ${JSON.stringify(token)}); const name = [...document.querySelectorAll('input[placeholder="Player"]')][0]; if (name) e.type(name, "Guest"); return true; })()`);
+  await sleep(300);
+  await guest.eval("window.__e2e.click('Join')");
+  const backInBar = await until(guest, `document.body.textContent.includes(${JSON.stringify(`Round ${roundAtStop} · `)}) && window.__e2e.buttons('Players').length > 0`, 120000);
+  await until(guest, `window.__e2e.view('game').then((game) => game.country === ${JSON.stringify(GUEST_COUNTRY)})`, 30000);
+  const backAs = (await guest.eval("window.__e2e.view('game')"))?.country;
+  const neverChose = !(await guest.eval("[...document.querySelectorAll('select')].some((s) => s.options[0] && s.options[0].textContent.startsWith('Choose your country'))"));
+  check("the guest joins again with the same code and plays its own country again without choosing it",
+    backInBar && backAs === GUEST_COUNTRY && neverChose, JSON.stringify({ backInBar, backAs, neverChose }));
+  await shoot(guest, "5-guest-back-in-its-country");
+  await host.eval("window.__e2e.click('Resume')");
+  const resumed = await until(host, "window.__e2e.buttons('Pause').length > 0", 15000);
+  check("the host resumes the game once its players are back", resumed);
+
+  await host.eval("window.__e2e.click('Stop')");
+  await until(guest, "document.body.textContent.includes('The shared game ended')", 30000);
 } catch (error) {
   check("the run itself", false, String(error?.stack || error));
 } finally {

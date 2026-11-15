@@ -21,6 +21,7 @@ import {
   mutateCanonicalTurnState,
   mutateChatsState,
   mutateGameData,
+  mutateSharedSessionState,
   mutateWorldState,
   readChatsState,
   readGameStateBundle,
@@ -52,6 +53,7 @@ import {
 } from "../../runtime/institutionalGovernance.js";
 import { commitWithVotingRuleBackfill } from "../../Game/AI/institutionGovernanceRetry.js";
 import { normalizeSettings } from "./settings.js";
+import { sessionFromRecord } from "./sessionRecord.js";
 
 const SCREEN = "host-screen";
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -116,16 +118,25 @@ const store = {
   // and the order that tells the skip of it): one commit, as a turn's own is.
   // `fn({ world, actions, game })` returns the documents it changed, or null.
   updateForces: (fn) => mutateCanonicalTurnState(({ world, actions, game }) => fn({ world, actions, game }) || null),
+  // The shared game's session, kept with the campaign (host/sessionRecord.js).
+  // Only this window writes it, in the host's one order, through the game's
+  // own write queue.
+  readShared: () => readJson(JSON_URLS.shared, { defaultValue: {}, force: true }),
+  writeShared: (record) => mutateSharedSessionState(() => record),
 };
 
-// The polities a player may take: every one that holds land on the map.
-const choosableCountries = (world, game) => {
+// The game's countries: the game's own, every polity that holds land on the
+// map, and every one whose record says it is active. All of them: a seat whose
+// country is not here is gone (host/foundings.js seatSuccessions), so a list
+// cut short would take countries from their players. The lobby sends the first
+// 600 (host/gameHost.js).
+const gameCountries = (world, game) => {
   const owners = new Set([clean(game?.country)]);
   for (const owner of Object.values(world?.regionOwnershipOverrides ?? {})) if (clean(owner)) owners.add(clean(owner));
   for (const [key, entry] of Object.entries(world?.polityOverrides ?? {})) {
     if (clean(entry?.status || "active").toLowerCase() === "active") owners.add(clean(entry?.name || entry?.code || key));
   }
-  return [...owners].filter(Boolean).sort((a, b) => a.localeCompare(b)).slice(0, 600);
+  return [...owners].filter(Boolean).sort((a, b) => a.localeCompare(b));
 };
 
 // One invite token per campaign, kept until the host rotates it, so a host that
@@ -169,11 +180,11 @@ const tableTurn = async ({ chat, seat, ...flags }) => {
     chat,
     playerCountry: seat,
     useCanonicalState: true,
-    commit: (write) => writeInOrder("what a table decided", write),
+    commit: (write) => writeInOrder("table-decided", write),
     ...flags,
   });
   if (!turnWritesThread(outcome)) return outcome;
-  await writeInOrder("what a table said", () => mutateChatsState((current) => list(current).map((entry) => (clean(entry?.id) === clean(chatId)
+  await writeInOrder("table-said", () => mutateChatsState((current) => list(current).map((entry) => (clean(entry?.id) === clean(chatId)
     ? threadAfterTurn(entry, outcome)
     : entry))));
   return outcome;
@@ -291,6 +302,12 @@ const boot = async () => {
     campaign = clean(library.activeGameId) || clean(host);
     const invite = loadInvite(campaign, identity);
     token = invite.token;
+    // The session this game saved when it was last shared, taken up again: its
+    // seats are their devices' (host/sessionRecord.js). A record that does not
+    // read, or is another campaign's or another host's, is not used.
+    const saved = await store.readShared().catch(() => null);
+    const restored = sessionFromRecord(saved, { campaign, hostDevice: identity.id });
+    if (restored) logDebugEvent("shared game", `taking up the session saved with this game: round ${restored.round}, ${restored.seats.length} seat(s)`);
     gameHost = createGameHost({
       transport: {
         send: (playerId, message) => (playerId === SCREEN ? loopback.send(message) : session?.send(playerId, message)),
@@ -298,7 +315,10 @@ const boot = async () => {
       settings,
       hostSeat: { device: identity.id, name: clean(name) || "Host", country: host },
       scenario: { id: clean(entry?.scenarioId).slice(0, 120), name: clean(scenario?.name || entry?.name || "Open Historia").slice(0, 120), hash: "" },
-      countries: choosableCountries(docs.world, docs.game),
+      countries: gameCountries(docs.world, docs.game),
+      countriesOf: (now) => gameCountries(now.world, now.game),
+      campaign,
+      restored,
       store,
       resolveRound: async ({ daysPerRound, humanCountries, signal }) => {
         // The game's own lock, waited for and taken in one step: a stat sheet
@@ -344,7 +364,7 @@ const boot = async () => {
       // for a polity of this game, and the game's own reading writes it.
       readCountry: async ({ country, fresh }) => {
         const now = await store.read();
-        const name = choosableCountries(now.world, now.game).find((known) => clean(known).toLocaleLowerCase() === clean(country).toLocaleLowerCase());
+        const name = gameCountries(now.world, now.game).find((known) => clean(known).toLocaleLowerCase() === clean(country).toLocaleLowerCase());
         if (!name) throw new Error("That is not a country of this game.");
         if (fresh) await generateCountryStatSheet({ code: name, name, forceReassess: true });
         else await readCountryForPlayer(name);
@@ -358,19 +378,19 @@ const boot = async () => {
       institution: createInstitutionDesk({
         host: () => host,
         game: {
-          lifecycle: (args) => writeInOrder("an institution's business", () => commitInstitutionLifecycleCommand(args)),
-          negotiation: (args) => writeInOrder("an institution's business", () => ensureInstitutionLifecycleNegotiationChat(args)),
-          channel: (args) => writeInOrder("an institution's business", () => ensureInstitutionalChannel(args)),
-          proposal: (args) => writeInOrder("an institution's business", () => commitInstitutionalPlayerProposal(args)),
-          voteRequest: (args) => writeInOrder("an institution's business", () => commitWithVotingRuleBackfill(
+          lifecycle: (args) => writeInOrder("institution-business", () => commitInstitutionLifecycleCommand(args)),
+          negotiation: (args) => writeInOrder("institution-business", () => ensureInstitutionLifecycleNegotiationChat(args)),
+          channel: (args) => writeInOrder("institution-business", () => ensureInstitutionalChannel(args)),
+          proposal: (args) => writeInOrder("institution-business", () => commitInstitutionalPlayerProposal(args)),
+          voteRequest: (args) => writeInOrder("institution-business", () => commitWithVotingRuleBackfill(
             () => commitInstitutionalPlayerVoteRequest(args),
             { institutionId: args.institutionId, proposalId: args.proposalId },
           )),
-          governance: (args) => writeInOrder("an institution's business", () => commitInstitutionGovernanceCommand(args)),
-          message: (args) => writeInOrder("an institution's business", () => commitInstitutionalPlayerMessage(args)),
+          governance: (args) => writeInOrder("institution-business", () => commitInstitutionGovernanceCommand(args)),
+          message: (args) => writeInOrder("institution-business", () => commitInstitutionalPlayerMessage(args)),
           chatTurn: (args) => tableTurn(args),
           readChats: () => readChatsState({ force: true }),
-          updateChats: (fn) => writeInOrder("an institution's business", () => mutateChatsState(fn)),
+          updateChats: (fn) => writeInOrder("institution-business", () => mutateChatsState(fn)),
         },
       }),
       onStatus: (status) => {
@@ -397,6 +417,13 @@ const boot = async () => {
       now: offsetClock(clock.offsetMs),
       room: { name: settings.name, seats: settings.seats, version: SHARED_GAME_VERSION },
       appMessages: PLAYER_REQUESTS,
+      // A device the host banned from this game, saved with it, is turned away
+      // before it connects.
+      isBanned: (device) => gameHost?.isBanned(device) ?? false,
+      // Who may come in is the game's to say: a player whose device holds a
+      // seat always may (host/seats.js hasRoom).
+      roomFor: (device) => gameHost?.roomFor(device) ?? false,
+      openSeats: () => gameHost?.openSeats() ?? 0,
       // A connection closing after "stop" still reports its leaving.
       onJoin: (player) => gameHost?.join(player),
       onLeave: (player) => gameHost?.leave(player),
@@ -443,11 +470,16 @@ const boot = async () => {
       // Who answers for the AI's governments from here on (host/settings.js `replies`).
       case "replies": return gameHost.control.setReplies(clean(args?.mode));
       case "kick": {
-        const device = gameHost.control.kick(clean(args?.country));
+        // The country is taken back; with `ban` its player's device is kept
+        // out of this game for good (saved with it), and sent away now.
+        const ban = args?.ban === true;
+        const device = gameHost.control.kick(clean(args?.country), { ban });
         const player = session?.players().find((entry) => entry.device === device);
-        if (player && args?.ban) session.kick(player.id, { ban: true });
+        if (player && ban) session.kick(player.id, { ban: true });
         return undefined;
       }
+      // A player's change of country, allowed or refused (the owner's decision 12).
+      case "seat": return gameHost.control.seat({ op: clean(args?.op), from: clean(args?.from) });
       case "rotate": {
         const next = rotateInvite(campaign, identity);
         token = next.token;

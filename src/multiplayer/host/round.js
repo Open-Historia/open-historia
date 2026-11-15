@@ -232,6 +232,14 @@ export const createRoundMachine = ({
       if (phase !== "lobby") return;
       startPlanning();
     },
+    // A shared game taken up again (host/sessionRecord.js): planning the round
+    // it was at. A round being resolved when the game was stopped had not
+    // landed, and is planned again with its orders.
+    resumeAt(number) {
+      if (phase !== "lobby") return;
+      round = Math.max(1, Math.trunc(Number(number) || 1));
+      startPlanning({ sameRound: true });
+    },
     // The host ends planning now (a host control, and the lone-player case),
     // paused or not: ended while paused, the round used to land into a reveal
     // that never ended, with no button left to end it.

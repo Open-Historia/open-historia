@@ -48,7 +48,11 @@ import { SAY_FROM_DRAFT_MAX } from "../client/sharedThreads.js";
 // (`sums`, protocol/digest.js). The page applies a view only if it follows
 // the one it holds and adds up, says so (the "viewed" message), and asks for
 // the whole of it again when it does not. A reconnect is a whole view.
-export const SHARED_GAME_VERSION = "11";
+// 12: the session is saved with the game: a seat is its device's until the
+// host releases it, a seated player's change of country is asked of the host
+// (the lobby's `changes`), and a player whose country is gone watches it
+// (a seat's status "watching"). The round says the last one that failed.
+export const SHARED_GAME_VERSION = "12";
 
 // The documents a player's view holds: the game itself first (a screen that
 // asks for one before the first view arrives waits for it), then the three a
@@ -72,7 +76,11 @@ export const INSTITUTION_CALLS = Object.freeze(["lifecycle", "governance", "prop
 // Orders are free text in single player; in a shared game one is held to this.
 export const ORDER_MAX_CHARS = 1500;
 export const SAY_MAX_CHARS = 2000;
-const COUNTRY = NAME(80);
+// A country's name, as long as the game lets one be: the AI founds countries
+// like "Provisional Government of the Northern Territories", and one name over
+// a shorter limit made every lobby message unreadable, for every player.
+export const COUNTRY_MAX_CHARS = 200;
+const COUNTRY = NAME(COUNTRY_MAX_CHARS);
 const REQUEST_ID = HEX_ID(8);
 
 export const PLAYER_REQUESTS = Object.freeze({
@@ -182,7 +190,11 @@ export const PLAYER_REQUESTS = Object.freeze({
 const SEAT = obj({
   country: COUNTRY,
   name: str(40),
-  status: str(8, { enum: ["human", "away", "ai"] }),
+  // "watching": a player whose country (`country`) is gone.
+  status: str(8, { enum: ["human", "away", "ai", "watching"] }),
+  // A player's device holds it, whoever minds it now: nobody else may take
+  // it until the host releases it. False for a country the AI plays for good.
+  held: bool(),
   you: bool(),
 });
 
@@ -194,7 +206,9 @@ export const HOST_MESSAGES = Object.freeze({
     countries: list(COUNTRY, 600),
     seats: list(SEAT, 64),
     started: bool(),
-  }),
+    // Players asking to change country, for the host to allow (sent to the host only).
+    changes: list(obj({ from: COUNTRY, to: COUNTRY, name: str(40) }), 64),
+  }, ["changes"]),
   round: obj({
     t: literal("round"),
     phase: str(12, { enum: ["lobby", "planning", "countdown", "resolving", "revealing"] }),
