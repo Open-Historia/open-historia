@@ -54,6 +54,20 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-native-android-lighter-community",
+    kind: "minor",
+    date: "2026-11-15",
+    banners: [
+      {
+        title: "A lighter Community tab on Android",
+        items: [
+          "On Android, the Community tab loads a scenario's picture only as it scrolls into view, and at the size the screen shows it, so it takes far less of the phone's memory.",
+          "On Android, Copy log in Settings → Advanced → Diagnostics also copies the app's own record: the phone, its memory, and any moment the screen froze.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-native-android",
     kind: "minor",
     date: "2026-11-12",
