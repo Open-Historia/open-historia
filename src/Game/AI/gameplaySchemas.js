@@ -18,7 +18,8 @@ import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
 import { PARTY_ROLES } from "../../runtime/politics.js";
 import { POLITICAL_SYSTEM_TYPES } from "../../runtime/politicalActors.js";
 import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
-import { OCCUPATION_SETTLEMENTS_FIELD, occupationOutcomesFor } from "../../runtime/occupationSettlements.js";
+import { OCCUPATION_OUTCOMES, OCCUPATION_SETTLEMENTS_FIELD } from "../../runtime/occupationSettlements.js";
+import { WAR_ENDINGS_FIELD, warOutcomeChoices } from "../../runtime/warEndings.js";
 import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
 import { CANON_KINDS } from "../../runtime/historyTiers.js";
 import { SOCIAL_POST_REACH } from "../../runtime/socialFeed.js";
@@ -1579,6 +1580,13 @@ export const JUMP_FORWARD_SCHEMA = {
     // Who each occupation outliving its war goes to (runtime/occupationSettlements.js), a line a region, for the
     // regions listed under [Occupations Outliving Their War]. SENT, required, only when there are some
     // (withOccupationSettlements); read either way.
+    // How each war ended without an outcome on record (runtime/warEndings.js): SENT only when one did, in full
+    // (withWarEndings); read either way.
+    [WAR_ENDINGS_FIELD]: {
+      type: "object",
+      description: "For each war key in the prompt, how it ended.",
+      additionalProperties: { type: "object" },
+    },
     [OCCUPATION_SETTLEMENTS_FIELD]: {
       type: "object",
       description: "For each occupation key in the prompt, the polity that holds that land now.",
@@ -1661,6 +1669,7 @@ const JUMP_FORWARD_LEAN_SCHEMA = (() => {
     [FRONT_ORDERS_FIELD]: _frontOrders,
     [WAR_FIGURES_FIELD]: _warFigures,
     [OCCUPATION_SETTLEMENTS_FIELD]: _occupationSettlements,
+    [WAR_ENDINGS_FIELD]: _warEndings,
     [SEAT_ADVICE_FIELD]: _seatAdvice,
     [SOCIAL_POSTS_FIELD]: _socialPosts,
     [POLL_RESULTS_FIELD]: _pollResults,
@@ -4077,10 +4086,9 @@ export const withWarFigures = (tool) => {
 // #1000). Told in words alone, a live skip settled none of them; a field the answer must hold is what a small model
 // fills.
 // One key a group (standingContext.js occupationGroups: { key, controller, sovereign, count }), each required: a
-// required free string came back "" in a live skip with the regions listed above it. Each key answers how it ended,
-// "returned" or "kept", not a polity: asked who holds the land, two live skips on issue #1000's save named the German
-// Reich, the holder, though the prompt said it had surrendered. Where the war is on the ledger, the key asks who lost
-// it (runtime/occupationSettlements.js occupationOutcomesFor).
+// required free string came back "" in a live skip with the regions listed above it. Each key answers "returned" or
+// "kept", not a polity: asked who holds the land, live skips on issue #1000's save named the occupier, the holder.
+// An occupation whose war's outcome settles it is never asked here (withWarEndings below).
 export const withOccupationSettlements = (tool, groups = []) => {
   const properties = tool?.schema?.properties;
   const list = (Array.isArray(groups) ? groups : []).filter((group) => group?.key);
@@ -4090,10 +4098,8 @@ export const withOccupationSettlements = (tool, groups = []) => {
     description: "For each key, how its occupation ended.",
     properties: Object.fromEntries(list.map((group) => [group.key, {
       type: "string",
-      enum: occupationOutcomesFor(group),
-      description: group.war
-        ? `${group.controller}'s ${group.count === 1 ? "occupied region" : `${group.count} occupied regions`} of ${group.sovereign}. Their war${group.war.title ? `, ${group.war.title}` : ""}, ended${group.war.ended ? ` ${group.war.ended}` : ""}${group.war.note ? ` (${group.war.note})` : ""}: which side had surrendered or been defeated when it ended, whatever happened earlier in it?`
-        : `${group.controller}'s ${group.count === 1 ? "occupied region" : `${group.count} occupied regions`} of ${group.sovereign}. returned: ${group.controller} withdrew or was driven out, and ${group.sovereign} holds the land again. kept: a treaty or annexation made it ${group.controller}'s.`,
+      enum: OCCUPATION_OUTCOMES,
+      description: `${group.controller}'s ${group.count === 1 ? "occupied region" : `${group.count} occupied regions`} of ${group.sovereign}. returned: ${group.controller} withdrew or was driven out, and ${group.sovereign} holds the land again. kept: a treaty or annexation made it ${group.controller}'s.`,
     }])),
     required: list.map((group) => group.key),
   };
@@ -4103,6 +4109,46 @@ export const withOccupationSettlements = (tool, groups = []) => {
       ...tool.schema,
       properties: { ...properties, [OCCUPATION_SETTLEMENTS_FIELD]: field },
       required: [...new Set([...(Array.isArray(tool.schema.required) ? tool.schema.required : []), OCCUPATION_SETTLEMENTS_FIELD])],
+    },
+  };
+};
+
+// A time skip's tool with warEndings in it, required: only when ended wars have no outcome on record
+// (runtime/warEndings.js warsAwaitingOutcome). One required key a war, each an object: `outcome`, from the war's
+// closed set of choices (warOutcomeChoices: which side had lost when it ended, and whether a defeated state's
+// government was dissolved), and `landTo`, the powers that took a dissolved state's land. Issue #1000's save: the
+// German Reich's surrender and dissolution told in prose, and no structured change written for either.
+export const withWarEndings = (tool, entries = []) => {
+  const properties = tool?.schema?.properties;
+  const list = (Array.isArray(entries) ? entries : []).filter((entry) => entry?.key);
+  if (!properties?.events || !properties?.stopDate || !list.length) return tool;
+  const field = {
+    type: "object",
+    description: "For each key, how that war ended.",
+    properties: Object.fromEntries(list.map((entry) => [entry.key, {
+      type: "object",
+      description: `${entry.title || "The war"}, ended${entry.ended ? ` ${entry.ended}` : ""}${entry.note ? ` (${entry.note})` : ""}.`,
+      properties: {
+        outcome: {
+          type: "string",
+          enum: warOutcomeChoices(entry),
+          description: "Which side had surrendered or been defeated when the war ended, whatever happened earlier in it, and whether its government was dissolved.",
+        },
+        landTo: {
+          type: "string",
+          description: "Only for a dissolved government: the full names of the powers that took over its land, comma-separated. Empty otherwise.",
+        },
+      },
+      required: ["outcome", "landTo"],
+    }])),
+    required: list.map((entry) => entry.key),
+  };
+  return {
+    ...tool,
+    schema: {
+      ...tool.schema,
+      properties: { ...properties, [WAR_ENDINGS_FIELD]: field },
+      required: [...new Set([...(Array.isArray(tool.schema.required) ? tool.schema.required : []), WAR_ENDINGS_FIELD])],
     },
   };
 };

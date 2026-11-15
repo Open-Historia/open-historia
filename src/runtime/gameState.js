@@ -5598,7 +5598,10 @@ export const dissolutionHeir = ({ code, polityChanges = [], regionTransfers = []
 // rows go to a new controller (its lawful sovereign, or the heir), `title`
 // rows are its sovereignty over land another holds (to the heir, or nobody's
 // once it is gone), `refused` counts land it holds outright with no heir.
-export const dissolvedPolityLand = (world, code, { heir = "" } = {}) => {
+// `heirOf(regionId)`, where given, names the heir of each region it holds
+// outright (a state dissolved in defeat, its land divided among the powers that
+// took it: runtime/warEndings.js); `heir` stands for any it names none for.
+export const dissolvedPolityLand = (world, code, { heir = "", heirOf = null } = {}) => {
   const owners = world?.regionOwnershipOverrides ?? {};
   const sovereigns = world?.regionSovereigntyOverrides ?? {};
   const control = [];
@@ -5607,8 +5610,9 @@ export const dissolvedPolityLand = (world, code, { heir = "" } = {}) => {
   for (const [regionId, controller] of Object.entries(owners)) {
     if (!samePolity(controller, code)) continue;
     const sovereign = normalizeOptionalString(sovereigns[regionId]);
+    const to = (typeof heirOf === "function" ? normalizeOptionalString(heirOf(regionId)) : "") || heir;
     if (sovereign && !samePolity(sovereign, code)) control.push({ regionId, to: sovereign, sovereign });
-    else if (heir) control.push({ regionId, to: heir, sovereign: heir });
+    else if (to) control.push({ regionId, to, sovereign: to });
     else refused += 1;
   }
   for (const [regionId, sovereign] of Object.entries(sovereigns)) {
@@ -5963,74 +5967,90 @@ const applyPolityAndTerritoryImpacts = ({
     // its title to land another holds, to the one heir this event names. It is
     // refused only when it still holds land outright and the event names no
     // heir: then nobody can be said to take it.
-    const settlement = dissolvedPolityLand(world, code, { heir: dissolutionHeir({ code, polityChanges, regionTransfers, regionControlOps, resolveOwner }) });
-    if (settlement.refused) {
-      console.warn(`[polity lifecycle] refusing to dissolve "${code}": it still holds ${settlement.refused} mapped region(s) outright and the event gives them to nobody; transfer that territory in the same event first.`);
-      continue;
-    }
-    applyDissolvedPolityLand(world, code, settlement);
-    world.polityOverrides[code] = {
-      ...(world.polityOverrides[code] ?? { aliases: [], code, color: "", name: "", note: "" }),
-      status: "dissolved",
-    };
-    for (const field of POLITY_LIFECYCLE_STORES) {
-      if (world[field] && typeof world[field] === "object" && !Array.isArray(world[field])) delete world[field][code];
-    }
-    const endedDate = canonicalizeDateString(eventDate);
-    world.agreements = normalizeArray(world.agreements).map((agreement) => {
-      if (!agreement || typeof agreement !== "object") return agreement;
-      if (!["active", "suspended"].includes(normalizeOptionalString(agreement.status).toLowerCase())) return agreement;
-      if (!normalizeArray(agreement.parties).some((party) => samePolity(party, code))) return agreement;
-      return {
-        ...agreement,
-        status: "ended",
-        endedDate: endedDate || canonicalizeDateString(agreement.lastUpdatedDate),
-        lastUpdatedDate: endedDate || canonicalizeDateString(agreement.lastUpdatedDate),
-      };
+    dissolvePolity(world, code, {
+      heir: dissolutionHeir({ code, polityChanges, regionTransfers, regionControlOps, resolveOwner }),
+      date: eventDate, eventId, regionTransfers, resolveOwner, colors,
     });
-    world.wars = normalizeArray(world.wars).map((war) => {
-      if (!war || typeof war !== "object" || war.status === "ended") return war;
-      const sideA = normalizeArray(war.sideA).filter((party) => !samePolity(party, code));
-      const sideB = normalizeArray(war.sideB).filter((party) => !samePolity(party, code));
-      if (sideA.length === normalizeArray(war.sideA).length && sideB.length === normalizeArray(war.sideB).length) return war;
-      const lastUpdatedDate = endedDate || war.lastUpdatedDate;
-      if (!sideA.length || !sideB.length) {
-        return { ...war, status: "ended", endedDate: endedDate || war.lastUpdatedDate, lastUpdatedDate };
-      }
-      return { ...war, sideA, sideB, lastUpdatedDate };
-    });
-    world.units = normalizeArray(world.units).filter((unit) => !samePolity(unit?.ownerCode, code));
-    const unitIds = new Set(world.units.map((unit) => unit?.id));
-    world.pendingUnitOrders = normalizeArray(world.pendingUnitOrders).filter((order) => unitIds.has(order?.unitId));
-    // It leaves its institutions (seats, open ballots, open cases), and every
-    // subordination it was party to ends: released when it was the Overlord,
-    // annexed when it was the Puppet and this event handed its land to the
-    // Overlord, released otherwise.
-    if (world.institutions && typeof world.institutions === "object") {
-      world.institutions = removePolityFromInstitutions(world.institutions, code, world, endedDate);
-    }
-    if (Array.isArray(world.puppets)) {
-      world.puppets = world.puppets.map((row) => {
-        if (!row || typeof row !== "object" || normalizeOptionalString(row.status || "active").toLowerCase() !== "active") return row;
-        const isOverlord = samePolity(row.overlord, code);
-        if (!isOverlord && !samePolity(row.puppet, code)) return row;
-        const annexed = !isOverlord && regionTransfers.some((transfer) => (
-          samePolity(resolveOwner(transfer.fromCode) || transfer.fromCode, code)
-          && samePolity(resolveOwner(transfer.toCode) || transfer.toCode, row.overlord)
-        ));
-        return {
-          ...row,
-          status: annexed ? "annexed" : "released",
-          endedDate: endedDate || canonicalizeDateString(row.lastUpdatedDate),
-          lastUpdatedDate: endedDate || canonicalizeDateString(row.lastUpdatedDate),
-          ...(eventId ? { sourceEventIds: [...new Set([...normalizeArray(row.sourceEventIds), eventId])].slice(-24) } : {}),
-        };
-      });
-    }
-    delete colors[code];
-    console.info(`[polity lifecycle] dissolved "${code}".`);
   }
   return renamed;
+};
+
+// A polity ends: the one door for it (an event's dissolve, a state dissolved in
+// defeat: runtime/warEndings.js). Its land is settled first (dissolvedPolityLand:
+// ground it only occupies goes back to its lawful sovereign, the rest to
+// `heirOf(regionId)` or `heir`), and it is refused, changing nothing, when it
+// still holds land outright that goes to nobody. Then it leaves the present
+// as the comment above the event loop says. Changes `world` (and `colors`)
+// in place; true when it was dissolved.
+export const dissolvePolity = (world, code, { heir = "", heirOf = null, date = "", eventId = "", regionTransfers = [], resolveOwner = (name) => name, colors = null } = {}) => {
+  const eventDate = date;
+  const settlement = dissolvedPolityLand(world, code, { heir, heirOf });
+  if (settlement.refused) {
+    console.warn(`[polity lifecycle] refusing to dissolve "${code}": it still holds ${settlement.refused} mapped region(s) outright and nobody is given them; transfer that territory first.`);
+    return false;
+  }
+  applyDissolvedPolityLand(world, code, settlement);
+  world.polityOverrides[code] = {
+    ...(world.polityOverrides[code] ?? { aliases: [], code, color: "", name: "", note: "" }),
+    status: "dissolved",
+  };
+  for (const field of POLITY_LIFECYCLE_STORES) {
+    if (world[field] && typeof world[field] === "object" && !Array.isArray(world[field])) delete world[field][code];
+  }
+  const endedDate = canonicalizeDateString(eventDate);
+  world.agreements = normalizeArray(world.agreements).map((agreement) => {
+    if (!agreement || typeof agreement !== "object") return agreement;
+    if (!["active", "suspended"].includes(normalizeOptionalString(agreement.status).toLowerCase())) return agreement;
+    if (!normalizeArray(agreement.parties).some((party) => samePolity(party, code))) return agreement;
+    return {
+      ...agreement,
+      status: "ended",
+      endedDate: endedDate || canonicalizeDateString(agreement.lastUpdatedDate),
+      lastUpdatedDate: endedDate || canonicalizeDateString(agreement.lastUpdatedDate),
+    };
+  });
+  world.wars = normalizeArray(world.wars).map((war) => {
+    if (!war || typeof war !== "object" || war.status === "ended") return war;
+    const sideA = normalizeArray(war.sideA).filter((party) => !samePolity(party, code));
+    const sideB = normalizeArray(war.sideB).filter((party) => !samePolity(party, code));
+    if (sideA.length === normalizeArray(war.sideA).length && sideB.length === normalizeArray(war.sideB).length) return war;
+    const lastUpdatedDate = endedDate || war.lastUpdatedDate;
+    if (!sideA.length || !sideB.length) {
+      return { ...war, status: "ended", endedDate: endedDate || war.lastUpdatedDate, lastUpdatedDate };
+    }
+    return { ...war, sideA, sideB, lastUpdatedDate };
+  });
+  world.units = normalizeArray(world.units).filter((unit) => !samePolity(unit?.ownerCode, code));
+  const unitIds = new Set(world.units.map((unit) => unit?.id));
+  world.pendingUnitOrders = normalizeArray(world.pendingUnitOrders).filter((order) => unitIds.has(order?.unitId));
+  // It leaves its institutions (seats, open ballots, open cases), and every
+  // subordination it was party to ends: released when it was the Overlord,
+  // annexed when it was the Puppet and this event handed its land to the
+  // Overlord, released otherwise.
+  if (world.institutions && typeof world.institutions === "object") {
+    world.institutions = removePolityFromInstitutions(world.institutions, code, world, endedDate);
+  }
+  if (Array.isArray(world.puppets)) {
+    world.puppets = world.puppets.map((row) => {
+      if (!row || typeof row !== "object" || normalizeOptionalString(row.status || "active").toLowerCase() !== "active") return row;
+      const isOverlord = samePolity(row.overlord, code);
+      if (!isOverlord && !samePolity(row.puppet, code)) return row;
+      const annexed = !isOverlord && regionTransfers.some((transfer) => (
+        samePolity(resolveOwner(transfer.fromCode) || transfer.fromCode, code)
+        && samePolity(resolveOwner(transfer.toCode) || transfer.toCode, row.overlord)
+      ));
+      return {
+        ...row,
+        status: annexed ? "annexed" : "released",
+        endedDate: endedDate || canonicalizeDateString(row.lastUpdatedDate),
+        lastUpdatedDate: endedDate || canonicalizeDateString(row.lastUpdatedDate),
+        ...(eventId ? { sourceEventIds: [...new Set([...normalizeArray(row.sourceEventIds), eventId])].slice(-24) } : {}),
+      };
+    });
+  }
+  if (colors && typeof colors === "object") delete colors[code];
+  console.info(`[polity lifecycle] dissolved "${code}".`);
+  return true;
 };
 
 // `boardOnlyEventIds` names events that are not on the timeline — carriers for a

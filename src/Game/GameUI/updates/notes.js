@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Issue #1000's save, again: in 1947 the German Reich, surrendered and dissolved in the story in 1945, was still a
+    // great power on the map, and its weariness was told as if it still fought. A war's end now records who lost
+    // (runtime/warEndings.js): occupations follow from it and a state dissolved in defeat leaves the map
+    // (gameState.js dissolvePolity); weariness at peace is told as recovery (Game/AI/peacePrompt.js).
+    id: "2026-11-wars-end-with-an-outcome",
+    kind: "minor",
+    date: "2026-11-15",
+    channel: "beta",
+    banners: [
+      {
+        title: "Wars end with an outcome",
+        items: [
+          "When a war has ended, the next time skip now says who lost it. Land a defeated occupier still holds goes back to its owner, and a state whose government was dissolved in defeat leaves the map: its land is divided among the powers that took it, and its armies go with it.",
+          "A country still weary from a war that is over is now told as recovering, not as still fighting.",
+        ],
+      },
+    ],
+  },
+  {
     // Advisor replies that promise a draft Action but omit the machine block
     // now receive a bounded semantic/format check, retaining native review.
     id: "2026-11-advisor-action-completeness",
