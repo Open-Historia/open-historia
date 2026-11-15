@@ -388,11 +388,13 @@ func memory_text() -> String:
 	var mb := 1048576.0
 	var pictures := int(Performance.get_monitor(Performance.RENDER_TEXTURE_MEM_USED) / mb)
 	if OS.get_name() == "Android":
+		var status := _proc_text("/proc/%d/status" % OS.get_process_id())
+		var meminfo := _proc_text("/proc/meminfo")
 		return "pictures %d MB, app %d MB, free %d of %d MB" % [
 			pictures,
-			_proc_kb("/proc/self/status", "VmRSS:") / 1024,
-			_proc_kb("/proc/meminfo", "MemAvailable:") / 1024,
-			_proc_kb("/proc/meminfo", "MemTotal:") / 1024,
+			_proc_kb(status, "VmRSS:") / 1024,
+			_proc_kb(meminfo, "MemAvailable:") / 1024,
+			_proc_kb(meminfo, "MemTotal:") / 1024,
 		]
 	var info := OS.get_memory_info()
 	return "pictures %d MB, app %d MB, free %d of %d MB" % [
@@ -403,12 +405,15 @@ func memory_text() -> String:
 	]
 
 
-static func _proc_kb(path: String, key: String) -> int:
-	var file := FileAccess.open(path, FileAccess.READ)
-	if file == null:
-		return -1
-	while not file.eof_reached():
-		var line := file.get_line()
+static func _proc_text(path: String) -> String:
+	var output: Array = []
+	if OS.execute("/system/bin/cat", PackedStringArray([path]), output) != 0 or output.is_empty():
+		return ""
+	return str(output[0])
+
+
+static func _proc_kb(text: String, key: String) -> int:
+	for line in text.split("\n"):
 		if line.begins_with(key):
 			return line.substr(key.length()).strip_edges().get_slice(" ", 0).to_int()
 	return -1
