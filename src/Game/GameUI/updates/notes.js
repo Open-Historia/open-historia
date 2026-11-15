@@ -54,6 +54,19 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-native-android-community-keeps-answering",
+    kind: "minor",
+    date: "2026-11-15",
+    banners: [
+      {
+        title: "The Community tab keeps answering on Android",
+        items: [
+          "On Android, the Community tab shows its first scenarios at once and adds the rest a few at a time, so the screen keeps answering taps while the list fills.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-native-android-lighter-community",
     kind: "minor",
     date: "2026-11-15",
