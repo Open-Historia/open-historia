@@ -27,6 +27,7 @@ import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
 import { ProjectsBoard, ProjectsTabIcon } from "./projects.jsx";
+import { isKnownToPlayer, isProjectOpen } from "../../runtime/projects.js";
 import {
     PANEL_HEIGHT_VAR,
     actionsLayoutReducer,
@@ -669,7 +670,10 @@ const ACTIONS_TABS = [
     ["projects", "Projects"],
 ];
 
-const selectProjectCount = (world) => (Array.isArray(world?.projects) ? world.projects.length : 0);
+// The tab counts the open projects the player can see: other countries run
+// their own now, and a covert one nobody has found must not show even as a number.
+const NO_PROJECTS = [];
+const selectProjects = (world) => (Array.isArray(world?.projects) ? world.projects : NO_PROJECTS);
 
 const OrdersTabIcon = () => (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -802,7 +806,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     // The board is drawn from the first time its tab is opened and then kept,
     // so its search and its ticked tags survive a look at the orders.
     const [boardOpened, setBoardOpened] = React.useState(false);
-    const projectCount = useRuntimeState("world", selectProjectCount);
+    const boardProjects = useRuntimeState("world", selectProjects);
     React.useEffect(() => {
         if (requestedTab?.tab === "actions" || requestedTab?.tab === "projects") setTab(requestedTab.tab);
     }, [requestedTab]);
@@ -813,6 +817,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     const [inputValue, setInputValue] = React.useState("");
     const game = useRuntimeState("game", selectGameHeader);
     const country = game.country || "your nation";
+    const projectCount = React.useMemo(
+        () => boardProjects.filter((project) => isProjectOpen(project) && isKnownToPlayer(project, game.country)).length,
+        [boardProjects, game.country],
+    );
     // Full display name for the header, never the code.
     const countryDisplayName = useCountryDisplayName(country);
     const gameDate = game.gameDate
