@@ -7,6 +7,8 @@ signal library_changed
 const CARD_WIDTH := 336.0
 const GRID_MIN := 264.0
 const GRID_GAP := 13.0
+const FIRST_CARDS := 2
+const FILL_BUDGET_MS := 12
 const HELP_BASIS := 320.0
 const INK_HELP := Color(1, 1, 1, 0.55)
 const INK_STAT := Color(1, 1, 1, 0.65)
@@ -40,6 +42,7 @@ var _browse := {}
 var _browse_seq := 0
 var _missing_map := {}
 var _grids: Array[GridContainer] = []
+var _fill_round := 0
 var _featured_scroll := 0
 var _offers_slot: VBoxContainer
 var _list_view: VBoxContainer
@@ -324,6 +327,7 @@ func _render_list() -> void:
 		_featured_scroll = featured.scroll_horizontal
 	_clear_children(_list_body)
 	_grids.clear()
+	_fill_round += 1
 	if _publish_open:
 		_list_body.add_child(CommunityKit.margin_below(_publish_picker(), 14))
 	_add_banners(_list_body)
@@ -458,8 +462,7 @@ func _scenario_row(title: String, ids: Array, empty_text: String, layout: String
 		grid.add_theme_constant_override("h_separation", int(GRID_GAP))
 		grid.add_theme_constant_override("v_separation", int(GRID_GAP))
 		grid.columns = 4
-		for post in posts:
-			grid.add_child(_card(post, true))
+		_add_cards(grid, posts, true)
 		_grids.append(grid)
 		stack.add_child(CommunityKit.margin_below(grid, 6))
 	else:
@@ -469,8 +472,7 @@ func _scenario_row(title: String, ids: Array, empty_text: String, layout: String
 		scroller.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER if _phone else ScrollContainer.SCROLL_MODE_AUTO
 		_thin_scrollbar(scroller.get_h_scroll_bar())
 		var line := CommunityKit.row(GRID_GAP)
-		for post in posts:
-			line.add_child(_card(post, false))
+		_add_cards(line, posts, false)
 		scroller.add_child(CommunityKit.margin_below(line, 6))
 		stack.add_child(scroller)
 		var restore := _featured_scroll
@@ -482,6 +484,29 @@ func _scenario_row(title: String, ids: Array, empty_text: String, layout: String
 	if layout == "scroll":
 		holder.name = "FeaturedRow"
 	return holder
+
+
+func _add_cards(holder: Container, posts: Array, fill: bool) -> void:
+	var gradual := (OS.get_name() == "Android" or _phone) and is_inside_tree()
+	var now := mini(posts.size(), FIRST_CARDS) if gradual else posts.size()
+	for index in range(now):
+		holder.add_child(_card(posts[index], fill))
+	if now < posts.size():
+		_fill_later(holder, posts.slice(now), fill, _fill_round)
+
+
+func _fill_later(holder: Container, rest: Array, fill: bool, fill_round: int) -> void:
+	var index := 0
+	while index < rest.size():
+		await get_tree().process_frame
+		if fill_round != _fill_round or not is_instance_valid(holder) or not holder.is_inside_tree():
+			return
+		var began := Time.get_ticks_msec()
+		holder.add_child(_card(rest[index], fill))
+		index += 1
+		while index < rest.size() and Time.get_ticks_msec() - began < FILL_BUDGET_MS:
+			holder.add_child(_card(rest[index], fill))
+			index += 1
 
 
 func _thin_scrollbar(bar: ScrollBar) -> void:
