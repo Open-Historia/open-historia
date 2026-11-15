@@ -2,11 +2,13 @@ class_name HubImages
 extends Node
 
 const MAX_ACTIVE := 6
+const PHONE_ACTIVE := 2
 const AVATAR_DAYS := 1
 
 static var _instance: HubImages
 static var _cache := {}
 static var cache_dir := ""
+static var max_width := 1600
 
 var _waiting := {}
 var _queue: Array[String] = []
@@ -41,6 +43,9 @@ static func _ensure() -> HubImages:
 	var tree := Engine.get_main_loop() as SceneTree
 	if not tree:
 		return null
+	if OS.get_name() == "Android":
+		var screen := DisplayServer.screen_get_size()
+		max_width = clampi(screen.x, 480, 1600)
 	_instance = HubImages.new()
 	_instance.name = "HubImages"
 	tree.root.add_child.call_deferred(_instance)
@@ -83,7 +88,8 @@ func _fresh(file: String, url: String) -> bool:
 
 
 func _pump() -> void:
-	while _active < MAX_ACTIVE and not _queue.is_empty():
+	var most := PHONE_ACTIVE if OS.get_name() == "Android" else MAX_ACTIVE
+	while _active < most and not _queue.is_empty():
 		var url: String = _queue.pop_front()
 		_active += 1
 		var file := _file_for(url)
@@ -144,7 +150,7 @@ static func _convert_avif(owner: WeakRef, url: String, body: PackedByteArray) ->
 	var frames: Array = data.get("frames", [])
 	var loader := owner.get_ref() as HubImages
 	if loader != null:
-		loader._decoded(url, data if frames.size() > 1 else (_fit(frames[0]) if frames.size() == 1 else null))
+		loader._decoded(url, data if frames.size() > 1 else (_fit(frames[0], max_width) if frames.size() == 1 else null))
 
 
 static func _decode_any(body: PackedByteArray) -> Variant:
@@ -157,25 +163,25 @@ static func _decode_any(body: PackedByteArray) -> Variant:
 		if frames.size() > 1:
 			return known
 		if frames.size() == 1:
-			return _fit(frames[0])
+			return _fit(frames[0], max_width)
 		var cached := ImageLoader.avif_cached(body) if not ImageLoader.is_avif_sequence(body) else null
-		return _fit(cached) if cached != null else body
-	return decode_image(body)
+		return _fit(cached, max_width) if cached != null else body
+	return decode_image(body, max_width)
 
 
-static func _fit(image: Image) -> Image:
-	if image.get_width() > 1600:
-		image.resize(1600, int(round(image.get_height() * 1600.0 / image.get_width())), Image.INTERPOLATE_LANCZOS)
+static func _fit(image: Image, limit := 1600) -> Image:
+	if image.get_width() > limit:
+		image.resize(limit, maxi(1, int(round(image.get_height() * float(limit) / image.get_width()))), Image.INTERPOLATE_LANCZOS)
 	image.generate_mipmaps()
 	return image
 
 
-static func decode_image(body: PackedByteArray) -> Image:
+static func decode_image(body: PackedByteArray, limit := 1600) -> Image:
 	if ImageLoader.is_gif(body):
 		return ImageLoader.decode_gif(body)
 	if ImageLoader.is_avif(body):
 		var cached := ImageLoader.avif_cached(body)
-		return _fit(cached) if cached != null else null
+		return _fit(cached, limit) if cached != null else null
 	if body.size() < 12:
 		return null
 	var image := Image.new()
@@ -188,7 +194,7 @@ static func decode_image(body: PackedByteArray) -> Image:
 		status = image.load_webp_from_buffer(body)
 	if status != OK or image.is_empty():
 		return null
-	return _fit(image)
+	return _fit(image, limit)
 
 
 static func decode(body: PackedByteArray) -> Texture2D:

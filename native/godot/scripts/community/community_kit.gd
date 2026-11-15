@@ -357,6 +357,16 @@ static func placeholder_cover() -> Texture2D:
 	return _placeholder
 
 
+static func near_screen(item: Control) -> bool:
+	if not item.is_inside_tree() or not item.is_visible_in_tree():
+		return false
+	var rect := item.get_global_rect()
+	if rect.size.x <= 0.0:
+		return false
+	var view := item.get_viewport_rect()
+	return rect.intersects(view.grow(view.size.y * 0.75))
+
+
 static func cover_material(radius: float) -> ShaderMaterial:
 	if not _cover_shader:
 		_cover_shader = Shader.new()
@@ -416,6 +426,8 @@ class Cover extends Control:
 	var _material: ShaderMaterial
 	var _texture: Texture2D
 	var _url := ""
+	var _fallback := true
+	var _later := false
 
 	func _init(corner := 10.0, ratio := 9.0 / 16.0) -> void:
 		aspect = ratio
@@ -425,11 +437,36 @@ class Cover extends Control:
 		size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		resized.connect(_fit)
 
+	func _ready() -> void:
+		set_process(_later)
+
+	func _process(_delta: float) -> void:
+		if not _later:
+			set_process(false)
+			return
+		if CommunityKit.near_screen(self):
+			_later = false
+			set_process(false)
+			_load()
+
 	func show_url(url: String, fallback_to_placeholder := true) -> void:
 		_url = url
+		_fallback = fallback_to_placeholder
 		if url.is_empty():
+			_later = false
 			set_texture(CommunityKit.placeholder_cover() if fallback_to_placeholder else null)
 			return
+		if OS.get_name() == "Android" and not CommunityKit.near_screen(self):
+			_later = true
+			if is_inside_tree():
+				set_process(true)
+			return
+		_later = false
+		_load()
+
+	func _load() -> void:
+		var url := _url
+		var fallback_to_placeholder := _fallback
 		HubImages.fetch(self, url, func(texture: Texture2D) -> void:
 			if not is_instance_valid(self) or _url != url:
 				return
@@ -466,6 +503,7 @@ class Cover extends Control:
 
 class Avatar extends Control:
 	var _cover: Cover
+	var _url := ""
 
 	func _init(diameter: float) -> void:
 		custom_minimum_size = Vector2(diameter, diameter)
@@ -478,9 +516,30 @@ class Avatar extends Control:
 		_cover.set_texture(null)
 		_cover.visible = false
 
+	func _ready() -> void:
+		set_process(not _url.is_empty())
+
+	func _process(_delta: float) -> void:
+		if _url.is_empty():
+			set_process(false)
+			return
+		if CommunityKit.near_screen(self):
+			set_process(false)
+			_load(_url)
+			_url = ""
+
 	func show_url(url: String) -> void:
 		if url.is_empty():
 			return
+		if OS.get_name() == "Android" and not CommunityKit.near_screen(self):
+			_url = url
+			if is_inside_tree():
+				set_process(true)
+			return
+		_url = ""
+		_load(url)
+
+	func _load(url: String) -> void:
 		HubImages.fetch(self, url, func(texture: Texture2D) -> void:
 			if not is_instance_valid(self) or not texture:
 				return
