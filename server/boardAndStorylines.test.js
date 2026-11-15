@@ -291,9 +291,14 @@ test("the director tells the jump that a polity's own Project is a Board entry, 
 });
 
 // The director used to say this too; the board's own block says it once now,
-// beside the entries it is about.
-test("the jump is told that routine Board progress is still written as an event", () => {
-  const board = buildJumpProjectsDirective("- Operation \"Bridge at Remagen\" [id project-1], ours, active, 40% complete.");
-  assert.match(board, /Write what happens to an entry as an event however routine it is/);
-  assert.match(board, /Name each effort exactly as the board names it/);
+// beside the entries it is about. The engine runs the board: what the skip
+// tells is what the engine decided for the period, on its dates.
+test("the jump is told to tell what the engine decided, by name, on its date", () => {
+  const board = buildJumpProjectsDirective("- \"Bridge at Remagen\" · ours · 40% · done ~1945-04-01 · nothing a month · funding normal · active", {
+    forecast: "- 1945-03-07: France · \"Bridge at Remagen\" reaches \"Bridge taken\".",
+  });
+  assert.match(board, /every line happens on its date, as written/);
+  assert.match(board, /names the project exactly/);
+  assert.match(board, /reaches "Bridge taken"/);
+  assert.doesNotMatch(board, /\[id /);
 });

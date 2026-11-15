@@ -105,7 +105,7 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
 
 // The narrator's and the engine's own. Never in any view.
 export const HOST_ONLY_WORLD_KEYS = Object.freeze([
-  "actionSuggestions", "boardReviewedRound", "chargedRefusals", "chatKnowledgeCursors", "consolidatedHistory",
+  "actionSuggestions", "chargedRefusals", "chatKnowledgeCursors", "consolidatedHistory",
   "gmAudit", "gmChanges", "historyDocument", "idlePulseTick", "lastJumpSummary", "naviesRaised", "notes",
   "pendingEventOutreach", "politicalSimulation", "seatBoards", "simulationReminders",
   "storylines",
