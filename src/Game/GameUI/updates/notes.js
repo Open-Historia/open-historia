@@ -54,6 +54,63 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Advisor replies that promise a draft Action but omit the machine block
+    // now receive a bounded semantic/format check, retaining native review.
+    id: "2026-11-advisor-action-completeness",
+    kind: "minor",
+    date: "2026-11-15",
+    channel: "beta",
+    banners: [
+      {
+        title: "Clearer reviews for Advisors and Political World",
+        items: [
+          "Advisors now check for promised Action proposals accidentally missing from a reply and try to restore the review card.",
+          "Actions still require Proceed. If recovery fails, the reply reports the problem rather than claiming the order is ready.",
+          "Political World suggestions now summarize named changes rather than displaying internal paths and raw record JSON.",
+          "Political World generation now asks for short, historically grounded ideology labels instead of long party biographies or manifestos.",
+          "Advanced generation can target Standard, Rich or Full political detail for every active polity, including non-sovereign polities.",
+        ],
+      },
+    ],
+  },
+  {
+    // Individual Advisor group turns retain exclusive silent-pass validation;
+    // a bounded format-only recovery prevents a stray memory suffix from
+    // aborting an otherwise completed multi-minister conversation.
+    id: "2026-11-advisor-group-silent-repair",
+    kind: "minor",
+    date: "2026-11-14",
+    channel: "beta",
+    banners: [
+      {
+        title: "Advisor group replies recover from invalid silence",
+        items: [
+          "Group chats can recover when a silent advisor adds private memory by mistake, without asking the other advisors to speak again.",
+          "A silent advisor's private memory is never shown or saved; invalid replies still have to pass validation before joining the meeting.",
+        ],
+      },
+    ],
+  },
+  {
+    // Keep scenario-authored Day-One figures canonical. Harden native stats
+    // decoding and require calibration only when an audit actually needs it.
+    id: "2026-11-country-stats-reliability",
+    kind: "minor",
+    date: "2026-11-14",
+    channel: "beta",
+    banners: [
+      {
+        title: "More reliable country stats",
+        items: [
+          "Your scenario's starting country figures stay intact when you first open Stats.",
+          "Stats generation handles regional figures from more AI models without losing valid rows.",
+          "Rebuilding country stats still checks the country's territory and requires economic evidence.",
+          "Game Master corrections no longer put standard economy values into custom stats, preventing a Stats refresh validation error.",
+        ],
+      },
+    ],
+  },
+  {
     // "there should be absolutely no keywording done in this game anywhere its super unreliable ... and no whackamoleing issues. fix the core issue don't just patch it"
     // (the owner, 2026-11-13): every word list, English synonym table and a-z fold that judged meaning, replaced by the AI's structured answers, the game's own records and exact names.
     id: "2026-11-every-language-alike",

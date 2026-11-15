@@ -127,13 +127,12 @@ const needsLegacyComponentCapAudit = (value) =>
     value.territorialComponents.length === 64 &&
     populationCalibrationVersion(value) < COUNTRY_STATS_POPULATION_CALIBRATION_VERSION;
 
-// 8B.2.18 start-state migration. Old full-component sheets can be structurally valid
-// yet have a bad national scale because hundreds of province estimates or one opaque
-// whole-polity anchor were used. Rebuild those once through bounded regional calibration
-// automatically ONLY at Round One/start date. Mature alternate-history campaigns are
-// never silently re-anchored; they keep their persisted canon unless the user asks for
-// a hard audit.
-const needsStartPopulationCalibrationAudit = (value, player) => Boolean(
+// A complete authored scenario stat sheet is canonical even if it predates
+// bounded causal calibration. At the scenario start, a missing version stamp
+// triggers only a NATIVE territorial-coverage verification. The generator
+// returns matching sheets with zero AI calls and zero mutations, while still
+// repairing actual mismatches, including the older 64-component truncation.
+const needsStartStatsCoverageVerification = (value, player) => Boolean(
     value &&
     player?.startDate &&
     player?.date === player.startDate &&
@@ -1883,8 +1882,9 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 const persisted = world?.countryStats?.[code];
                 const persistedIsValid = persisted && isDisplayableStatSheet(persisted, statSheetDefinition);
                 const persistedNeedsCapAudit = !statSheetDefinition.custom && persistedIsValid && needsLegacyComponentCapAudit(persisted);
-                const persistedNeedsPopulationAudit = !statSheetDefinition.custom && persistedIsValid && needsStartPopulationCalibrationAudit(persisted, player);
-                const persistedNeedsNativeAudit = persistedNeedsCapAudit || persistedNeedsPopulationAudit;
+                const persistedNeedsCoverageCheck = !statSheetDefinition.custom && persistedIsValid &&
+                    needsStartStatsCoverageVerification(persisted, player);
+                const persistedNeedsNativeAudit = persistedNeedsCapAudit || persistedNeedsCoverageCheck;
                 if (persistedIsValid && !persistedNeedsNativeAudit) {
                     rememberSheet(cacheKey, { date: player.date, sheet: persisted });
                     setState({ status: "ready", sheet: persisted, error: "" });
@@ -1902,7 +1902,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 cached &&
                 isDisplayableStatSheet(cached.sheet, statSheetDefinition) &&
                 (statSheetDefinition.custom || !needsLegacyComponentCapAudit(cached.sheet)) &&
-                (statSheetDefinition.custom || !needsStartPopulationCalibrationAudit(cached.sheet, player))
+                (statSheetDefinition.custom || !needsStartStatsCoverageVerification(cached.sheet, player))
             ) {
                 const sheet = mergeStatSheet(cached.sheet, aiOverride);
                 rememberSheet(cacheKey, { date: player.date, sheet });
@@ -1949,7 +1949,8 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 if (statsLoadRef.current.sequence !== sequence || controller.signal.aborted) return;
                 const pendingUsable = pending &&
                     isDisplayableStatSheet(pending, statSheetDefinition) &&
-                    (statSheetDefinition.custom || (!needsLegacyComponentCapAudit(pending) && !needsStartPopulationCalibrationAudit(pending, player)));
+                    (statSheetDefinition.custom || (!needsLegacyComponentCapAudit(pending) &&
+                        !needsStartStatsCoverageVerification(pending, player)));
                 if (pendingUsable) {
                     const sheet = finalizeCountryStatSheet(pending);
                     rememberSheet(cacheKey, { date: player.date, sheet });

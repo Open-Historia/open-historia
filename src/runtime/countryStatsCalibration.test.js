@@ -12,6 +12,8 @@ import {
   decodeCountryStatMacroEstimates,
   normalizeNearBoundaryHistoricalNominalScale,
   validateNativeEconomicCalibration,
+  shouldPreserveLegacyStartStatsBaseline,
+  countryStatsValidationFailure,
 } from "./countryStatsCalibration.js";
 
 const plan = [
@@ -29,6 +31,69 @@ test("macro rows decode one per planned bucket, in plan order", () => {
     { index: 1, group: "core", population: 40000000, gdpPerCapita: 38000 },
     { index: 2, group: "integrated", population: 1200000, gdpPerCapita: 15000.5 },
   ]);
+});
+
+test("bounded macro transport recognizes actual and escaped newline separators but still rejects missing rows", () => {
+  const rows = ["1~core~40,000,000~3000", "2~integrated~2,000,000~1200"];
+  const expected = decodeCountryStatMacroEstimates(rows.join("\n"), plan);
+  assert.equal(expected.error, "");
+  for (const separator of ["\\n", "\\r\\n", "\\r", "\r\n"]) {
+    const result = decodeCountryStatMacroEstimates(rows.join(separator), plan);
+    assert.equal(result.error, "", JSON.stringify(separator));
+    assert.deepEqual(result.estimates, expected.estimates);
+  }
+  const duplicate = decodeCountryStatMacroEstimates(rows.concat(rows[0]).join("\\n"), plan);
+  assert.equal(duplicate.error, "", "existing duplicate-row tolerance is unchanged");
+  const absent = decodeCountryStatMacroEstimates(rows.slice(0, 1).join("\\n"), plan);
+  assert.match(absent.error, /missing index\(es\): 2\./);
+});
+
+test("realistic Russia-sized escaped macro transport preserves exact 12-bucket coverage", () => {
+  const separator = String.fromCharCode(92) + "n";
+  const twelve = Array.from({ length: 12 }, (_, i) => ({
+    index: i + 1,
+    members: [{ componentId: "RU" + (i + 1) }],
+  }));
+  const rows = twelve.map(({ index }) => index + "~core~1000000~2500");
+  const result = decodeCountryStatMacroEstimates(rows.join(separator), twelve);
+  assert.equal(result.error, "");
+  assert.equal(result.estimates.length, 12);
+  const missing = decodeCountryStatMacroEstimates(rows.slice(0, 11).join(separator), twelve);
+  assert.deepEqual(missing.estimates, []);
+  assert.match(missing.error, /missing index\(es\): 12\./);
+});
+
+test("an invalid mapped macro transport error takes precedence over its derivative empty-sheet schema error", () => {
+  const coverageError = "territorialMacroComponentsText must contain exactly one valid row for every native macro bucket; missing index(es): 1, 2.";
+  const emptyError = "$.territorialComponents may be empty only when $.territorialScope is nonterritorial.";
+  assert.equal(countryStatsValidationFailure({ schemaError: emptyError, coverageError }), coverageError);
+  assert.equal(countryStatsValidationFailure({ schemaError: emptyError, coverageError, economicCalibrationError: "economicCalibration required" }),
+    coverageError + " economicCalibration required");
+  assert.equal(countryStatsValidationFailure({ schemaError: "$.capital must not be empty.", coverageError }),
+    "$.capital must not be empty.", "independent schema errors are not masked");
+  assert.equal(countryStatsValidationFailure({ schemaError: "", coverageError }), coverageError);
+  assert.equal(countryStatsValidationFailure({ schemaError: "" }), "");
+});
+
+test("complete matching scenario stats preserve their numeric canon without a forced Round-One reroll", () => {
+  const original = {
+    previousComplete: true,
+    atScenarioStartState: true,
+    hasAuthoritativeTerritorialFingerprint: true,
+    territorialCoverageMatches: true,
+    previousStateFingerprint: "",
+    unaccountedEconomicEvents: 0,
+    forceReassess: false,
+  };
+  assert.equal(shouldPreserveLegacyStartStatsBaseline(original), true);
+  for (const patch of [
+    { previousComplete: false }, { atScenarioStartState: false },
+    { hasAuthoritativeTerritorialFingerprint: false }, { territorialCoverageMatches: false },
+    { previousStateFingerprint: "stats-already-stamped" }, { unaccountedEconomicEvents: 1 },
+    { forceReassess: true },
+  ]) {
+    assert.equal(shouldPreserveLegacyStartStatsBaseline({ ...original, ...patch }), false, JSON.stringify(patch));
+  }
 });
 
 test("a missing, empty or invalid macro row is an error naming what is missing", () => {

@@ -9,6 +9,7 @@ import {
   normalizeCountryStatSheet,
 } from "../../runtime/countryStats.js";
 import { gameDateDayNumber, parseGameDate } from "../../runtime/gameDates.js";
+import { standardStatsPreviousSummary } from "../../runtime/countryStatsOwnership.js";
 import { regionOwnerName } from "./regionVocab.js";
 import { STATS_DEMOGRAPHIC_TAGS, STATS_ECONOMIC_TAGS, eventConcernsTarget, eventHasAnyTag } from "./statsEventEvidence.js";
 
@@ -753,7 +754,7 @@ const buildStatsWorkerMiddleContext = ({
   const previousContext = !rebuildNumericBaseline && previous
     ? (() => {
         const normalizedPrevious = normalizeCountryStatSheet(previous) || previous;
-        const { territorialComponents: _previousComponents = [], ...previousSummary } = normalizedPrevious;
+        const previousSummary = standardStatsPreviousSummary(normalizedPrevious);
         const macroSummary = buildStatsPreviousMacroContextKernel(
           normalizedPrevious,
           territorialMacroPlan,

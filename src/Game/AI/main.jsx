@@ -53,6 +53,11 @@ import {
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { withDifficultyPriority } from "../../runtime/difficulty.js";
 import { guardPromptTemplate, normalizePromptPack } from "./gameplayPrompts.js";
+import {
+    ADVISOR_ACTION_COMPLETION_MAX_TOKENS,
+    ADVISOR_ACTION_COMPLETION_SYSTEM,
+    buildAdvisorActionCompletionQuestion,
+} from "./advisorActionCompletion.js";
 import { notePromptsOverLimit } from "../../runtime/promptLimitNotice.js";
 import { promptTranslationsVersion } from "../../runtime/promptTranslations.js";
 import {
@@ -152,7 +157,7 @@ import { advisorMemoryDirectiveForMode, advisorMemoryContextEntry, latestAdvisor
 import { pendingAdvisorActionDrafts, redactHistoricalAdvisorActionBlocks, renderHistoricalAdvisorReply, renderPendingAdvisorActionDrafts, sanitizeAdvisorModelHistory } from "./advisorActionHistory.js";
 import { advisorDiplomaticLookups, renderAdvisorDiplomaticContext } from "./advisorDiplomaticContext.js";
 import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorGroupForReply, advisorOfficeStatus, advisorRecipientForReply, advisorRecipientType, assertAdvisorRecipientCanReply, chiefAdvisorProfile } from "../../runtime/advisorThreads.js";
-import { GROUP_MEETING_CONTEXT_MAX_CHARS, advisorGroupSpeakerName, OPTIONAL_GROUP_SPEECH_STANDARD, parseAdvisorGroupIndividualReply, renderAdvisorGroupHistory, selectAdvisorGroupSpeakers } from "./advisorGroupMeetings.js";
+import { GROUP_MEETING_CONTEXT_MAX_CHARS, advisorGroupSpeakerName, OPTIONAL_GROUP_SPEECH_STANDARD, parseAdvisorGroupIndividualReply, malformedAdvisorGroupSilentPass, visibleAdvisorGroupStreamReply, parseAdvisorGroupSilentRepair, renderAdvisorGroupHistory, selectAdvisorGroupSpeakers } from "./advisorGroupMeetings.js";
 import { groupSpeakerBatches, parseAdvisorGroupBatch, advisorBatchOutputContract, buildAdvisorSharedBatchPrompt } from "./advisorGroupBatching.js";
 import { readAdvisorGroupSettings } from "./advisorGroupSettings.js";
 import { describeChiefAdvisorOverride } from "./advisorPersona.js";
@@ -3962,6 +3967,9 @@ ${OPTIONAL_GROUP_SPEECH_STANDARD} If no material contribution remains, output ON
 
 Decide independently whether you need to speak as ${name}. Address a substantive question when you have useful counsel; otherwise pass. A material objection is always welcome.`;
         const sink = {};
+        let repairSink = null;
+        let initialResponseAccepted = true;
+        let shownStream = "";
         try {
             const raw = await callAI(`${systemPrompt}\n\n${meetingDirective}`,
                 [{ role: "user", parts: [{ text: "Apply the group participation decision above. Speak when you have a substantive answer, necessary clarification or important objection. Otherwise return exactly [[PASS]]. Do not produce a courtesy reply or imply silent execution." }] }],
@@ -3970,17 +3978,54 @@ Decide independently whether you need to speak as ${name}. Address a substantive
                     groupDebug: { turnId: groupTurnId, name: group.name,
                         batchIndex: batchIndex + 1, totalSpeakers: speakers.length, speakerIds: batch },
                     ...(lookups ? { lookups } : {}),
-                    onChunk: (delta, full) => { if (!shouldAbort?.() && !("[[PASS]]".startsWith(String(full || "").trim()))) onSpeakerChunk?.(speakerId, delta, full); } });
+                    onChunk: (_delta, full) => {
+                        if (shouldAbort?.()) return;
+                        const visible = visibleAdvisorGroupStreamReply(full);
+                        if (!visible || visible === shownStream) return;
+                        const delta = visible.startsWith(shownStream) ? visible.slice(shownStream.length) : visible;
+                        shownStream = visible;
+                        onSpeakerChunk?.(speakerId, delta, visible);
+                    } });
             if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
-            const record = parseAdvisorGroupIndividualReply(raw, speakerId, name);
+            let record;
+            try {
+                record = parseAdvisorGroupIndividualReply(raw, speakerId, name);
+            } catch (validationError) {
+                if (!malformedAdvisorGroupSilentPass(raw)) throw validationError;
+                // A model chose silence but appended forbidden private memory.
+                // Keep the parser fail-closed. Retry ONLY its short format
+                // contract, without world context, private memory or lookups.
+                // Do not replay earlier speakers and do not commit the first
+                // response, which is invalid. This retry is bounded to once.
+                initialResponseAccepted = false;
+                attachAttemptOutcome(sink.record, {
+                    ok: false, validationError: String(validationError?.message || validationError),
+                });
+                if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
+                repairSink = {};
+                const correctedRaw = await callAI(
+                    "[Advisor group silent-reply protocol correction] This member has already chosen to pass. "
+                      + "The previous reply was invalid because it appended private memory. "
+                      + "Return precisely [[PASS]] and nothing else. Do not write memory, speech or operations.",
+                    [{ role: "user", parts: [{ text: "Return exactly [[PASS]]. No suffix or private memory." }] }],
+                    { maxTokens: 64, languageMode: "chat", logLabel: "advisor group pass correction",
+                        taskKey: "advisor", agentKind: "advisor", __debugSink: repairSink,
+                        groupDebug: { turnId: groupTurnId, name: group.name,
+                            batchIndex: batchIndex + 1, totalSpeakers: speakers.length, speakerIds: batch } },
+                );
+                if (shouldAbort?.()) throw new Error("The group chat was cancelled after a campaign switch.");
+                record = parseAdvisorGroupSilentRepair(correctedRaw, speakerId, name);
+            }
             if (typeof onSpeakerComplete !== "function") throw new Error("Group speaker validation callback is missing.");
             const completed = await onSpeakerComplete(record);
             if (!completed || completed.speakerId !== speakerId) throw new Error("Group speaker identity changed during completion.");
             conversation.push(completed);
             result.push(completed);
-            attachAttemptOutcome(sink.record, { ok: true });
+            attachAttemptOutcome(initialResponseAccepted ? sink.record : repairSink?.record, { ok: true });
         } catch (error) {
-            attachAttemptOutcome(sink.record, { ok: false, validationError: String(error?.message || error) });
+            attachAttemptOutcome(repairSink?.record || sink.record, {
+                ok: false, validationError: String(error?.message || error),
+            });
             throw error;
         }
     }
@@ -4263,6 +4308,20 @@ export async function sendMessage(userMessage, options) {
         logDebugEvent("advisor", `Advisor turn failed after ${elapsedSeconds(startedAt)} — the question was rolled back off the history.`, err);
         throw err;
     }
+}
+
+// A second, bounded provider request verifies an omitted Action proposal
+// without sending the entire campaign prompt again. The UI owns the final
+// parser and native review state; this function creates NO canonical changes.
+export async function checkAdvisorActionCompleteness({ playerRequest, advisorReply } = {}) {
+    const result = await callAI(ADVISOR_ACTION_COMPLETION_SYSTEM, [
+        { role: "user", parts: [{ text: buildAdvisorActionCompletionQuestion({ playerRequest, advisorReply }) }] },
+    ], {
+        maxTokens: ADVISOR_ACTION_COMPLETION_MAX_TOKENS,
+        taskKey: "advisor", agentKind: "advisor",
+        logLabel: "advisor Action completeness", languageMode: "none",
+    });
+    return result;
 }
 
 export function loadHistory(savedMessages, threadId = "chief", { character = false } = {}) {
