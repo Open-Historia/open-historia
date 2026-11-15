@@ -1,7 +1,7 @@
 /*! Open Historia — portions (drawer close/slide + mobile layout) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useState, useRef, useEffect } from "react";
 import { Chart, registerables } from "chart.js";
-import { sendMessage, sendAdvisorGroupMessage, startChat, loadHistory } from "../AI/main.jsx";
+import { sendMessage, sendAdvisorGroupMessage, startChat, loadHistory, checkAdvisorActionCompleteness } from "../AI/main.jsx";
 import { completedSilentGroupTurnIndices } from "../AI/advisorGroupMeetings.js";
 import { requestDiplomaticChat } from "./chat.jsx";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
@@ -26,6 +26,7 @@ import { draftIdOf, sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.j
 import { repeatedOrder } from "../AI/playerFocus.js";
 import { institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
 import { parseAdvisorReply } from "./advisorReply.js";
+import { completeAdvisorActionReply } from "./advisorActionCompleteness.js";
 import { prepareAdvisorGroupMemberReply, stageAdvisorGroupBatch } from "./advisorGroupOrders.js";
 import { applyAdvisorGroupProjectBatch } from "./advisorProjectRouting.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
@@ -1643,7 +1644,28 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // The hidden ADVISOR_MEMORY line (AI/advisorMemory.js) is kept on the
             // message, never in its text: loadHistory sends the newest one ahead
             // of the history after a reload.
-            const { reply, memory } = splitAdvisorMemory(raw);
+            const { reply: rawReply, memory } = splitAdvisorMemory(raw);
+            // A chief or minister can have promised a reviewable Action but
+            // omitted its structured fence. A bounded format check repairs
+            // only that missing paperwork, or reports an unresolved omission.
+            // Characters, group batches and existing/malformed fences retain
+            // their current native rules and never use this path.
+            const canProposeActions = threadId === CHIEF_ADVISOR_THREAD
+                || advisorRecipientType(recipient) === ADVISOR_RECIPIENT_TYPES.MINISTER;
+            const completion = await completeAdvisorActionReply({
+                reply: rawReply,
+                canPropose: canProposeActions,
+                check: () => checkAdvisorActionCompleteness({
+                    playerRequest: text,
+                    advisorReply: parseAdvisorReply(rawReply).text,
+                }),
+            });
+            if (leftCampaign()) return;
+            const reply = completion.reply;
+            logDebugEvent("advisor", "Advisor Action completeness reviewed.", {
+                status: completion.status,
+                problem: completion.problem || "(none)",
+            }, { verbose: true });
             // No reply is authority to write an Action. Persist one durable
             // message-bound proposal per valid fenced op, then wait for Proceed.
             const replyId = `advisor-reply-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`}`;
@@ -1654,11 +1676,14 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
             });
             const { proposals: actionProposals, problems: invalidProposals } =
-                (threadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(recipient) === ADVISOR_RECIPIENT_TYPES.MINISTER)
+                canProposeActions
                     ? reviewAdvisorActionProposals(actionsProposal, replyId,
                         await readJson(JSON_URLS.actions, { force: true }))
                     : { proposals: [], problems: [] };
-            const actionsProblems = [...actionBlockProblems, ...invalidProposals];
+            const actionsProblems = [
+                ...(completion.problem ? [completion.problem] : []),
+                ...actionBlockProblems, ...invalidProposals,
+            ];
             // Same one-shot treatment for the projects board, with truncation
             // salvage: a full backfill of a long campaign is the one block big
             // enough to be cut off mid-array by the reply token cap.

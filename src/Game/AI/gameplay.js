@@ -196,6 +196,11 @@ import { SIMULATION_AUDIENCE, audienceSeesReport, audienceStoleReport, viewerAud
 import { buildTargetDossierKernel, buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
 import { buildTargetLedgerLines } from "./targetDossier.js";
 import { buildCustomStatContinuity, customStatRefreshDecision, describeFreshCustomStatEvidence } from "./customStatContinuity.js";
+import {
+  standardStatsMutationError,
+  standardStatsPreviousSummary,
+  standardGameMasterPatchForApply,
+} from "../../runtime/countryStatsOwnership.js";
 import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
 import {
   AGENT_REPORTS_FIELD,
@@ -207,6 +212,7 @@ import {
   getGameplayTool,
   getGameplayToolForCustomStatSheet,
   getGameplayToolForStatIndices,
+  withRequiredCountryStatsCalibration,
   HISTORY_FIELD,
   INTELLIGENCE_RATING_FIELD,
   NO_SKIP_HISTORY_JOB,
@@ -481,6 +487,8 @@ import {
   decodeCountryStatMacroEstimates,
   normalizeNearBoundaryHistoricalNominalScale,
   validateNativeEconomicCalibration,
+  shouldPreserveLegacyStartStatsBaseline,
+  countryStatsValidationFailure,
 } from "../../runtime/countryStatsCalibration.js";
 import {
   DEFAULT_STAT_INDEX_ROWS,
@@ -1954,6 +1962,8 @@ const validateStatContract = (taskKey, parsed, contract = {}) => {
   const { customFullStatSheet = false, customStatKeys = [], statSheetDefinition = null, statIndexRows = [] } = contract ?? {};
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "";
   if (!customFullStatSheet) {
+    const ownershipError = standardStatsMutationError(taskKey, parsed);
+    if (ownershipError) return ownershipError;
     return normalizeArray(statIndexRows).length ? validateTaskStatIndexKeys(taskKey, parsed, statIndexRows) : "";
   }
   const validateCustomObject = (customStats, path, { complete = false } = {}) => {
@@ -3260,6 +3270,21 @@ const loadTaskStatContract = async (taskKey) => {
   return { statSheetDefinition, customFullStatSheet, customStatRows, customStatKeys, statIndexRows, statIndexKeys, customStatIndices };
 };
 
+// Apply per-request Stats audit requirements to both synchronous and batched
+// output tools. The shared helper preserves the upstream per-feature tool
+// construction and does not mutate the frozen global tool schema.
+const withRequestedStatSheetTool = (taskKey, tool, variables, { customFullStatSheet = false } = {}) => {
+  const ratedTool = taskKey === "countryStatSheet" && variables?.statsRateIntelligence
+    ? withIntelligenceRating(tool)
+    : tool;
+  return taskKey === "countryStatSheet" && !customFullStatSheet
+    ? withRequiredCountryStatsCalibration(ratedTool, {
+        population: variables?.statsPopulationCalibrationRequested === true,
+        economic: variables?.statsEconomicCalibrationRequested === true,
+      })
+    : ratedTool;
+};
+
 // The output function a task is sent, before any reshaping of the call's own
 // (runJsonTask toolTransform): the task's tool for the scenario's statistics
 // and this game's features, the players' advice and the social posts on a time
@@ -3284,12 +3309,9 @@ const taskToolFor = (taskKey, { customFullStatSheet, customStatRows, statIndexRo
     // polls that are not open are dropped (socialFeed.js readSkipPollResults).
     ? withSocialPosts(advisedTool, isActiveFeatureEnabled("socialMedia"), { polls: true })
     : advisedTool;
-  // A first reading's sheet can carry the service's rating, in the same request
-  // (generateCountryStatSheet rateIntelligence, gameplaySchemas.js
-  // withIntelligenceRating).
-  return taskKey === "countryStatSheet" && variables?.statsRateIntelligence
-    ? withIntelligenceRating(taskTool)
-    : taskTool;
+  // Both normal requests and background batches use the same Stats tool
+  // requirements; only the task-specific feature layers above differ.
+  return withRequestedStatSheetTool(taskKey, taskTool, variables, { customFullStatSheet });
 };
 
 // The function a time skip's request would carry before it is folded, so the
@@ -3950,7 +3972,8 @@ const runJsonTask = async (taskKey, {
     const batchTool = withUnitTypeNames(forActiveFeatures(customFullStatSheet
       ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
       : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices })), variables?.unitTypeNames);
-    if (batchTool && providerSupportsBatch(taskKey)) {
+    const requestedBatchTool = withRequestedStatSheetTool(taskKey, batchTool, variables, { customFullStatSheet });
+    if (requestedBatchTool && providerSupportsBatch(taskKey)) {
       const customId = `oh_${taskKey}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`.slice(0, 64);
       const submitted = await submitAIBatch({
         customId,
@@ -3960,7 +3983,7 @@ const runJsonTask = async (taskKey, {
         // read from the cache on top of that (main.jsx submitAIBatch).
         staticPrefixEnd: staticPrefixEndOf(systemPrompt, staticPromptPrefix),
         taskKey,
-        tool: batchTool,
+        tool: requestedBatchTool,
       });
       if (submitted) {
         registerPendingBatch({
@@ -4667,11 +4690,15 @@ const runJsonTask = async (taskKey, {
           logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt}: ${salvaged.removed.length} malformed part(s) left out instead of asking again.`, salvaged.removed, { verbose: true });
         }
       }
-      if (validation.valid && (statsCoverageError || statsCalibrationError || statsEconomicCalibrationError || statsSplitError)) {
-        validation = {
-          valid: false,
-          error: [statsCoverageError, statsCalibrationError, statsEconomicCalibrationError, statsSplitError].filter(Boolean).join(" "),
-        };
+      if (taskKey === "countryStatSheet" && !customFullStatSheet) {
+        const primaryFailure = countryStatsValidationFailure({
+          schemaError: validation.valid ? "" : validation.error,
+          coverageError: statsCoverageError,
+          calibrationError: statsCalibrationError,
+          economicCalibrationError: statsEconomicCalibrationError,
+          splitError: statsSplitError,
+        });
+        if (primaryFailure) validation = { valid: false, error: primaryFailure };
       }
       if (transportDecodeError) {
         validation = { valid: false, error: transportDecodeError };
@@ -14114,15 +14141,14 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
     !territorialCoverageMatches
   );
 
-  // 8B.2.18 population calibration is deliberately a START-STATE migration only.
-  // A mature alternate-history campaign whose old ledger predates this feature must
-  // NOT be silently dragged toward history. At Round One/start date we can safely
-  // rebuild the newly-created baseline once; later campaigns preserve canon unless
-  // the user explicitly requests a hard audit.
+  // Calibration-version metadata alone is NOT evidence that an authored numeric
+  // ledger is wrong. Rebuild at Round One only when actual native geography
+  // coverage disagrees; otherwise preserve its canonical population and GDP.
   const startPopulationCalibrationUpgrade = Boolean(
     previousComplete &&
     hasAuthoritativeTerritorialFingerprint &&
     atScenarioStartState &&
+    !territorialCoverageMatches &&
     previousPopulationCalibrationVersion < COUNTRY_STATS_POPULATION_CALIBRATION_VERSION
   );
   const rebuildNumericBaseline = Boolean(
@@ -14175,9 +14201,31 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
     economicEvents: rawEconomicEvidence.relevantIds,
   }))}`;
 
+  // A scenario can author complete economic and demographic components before
+  // this continuity fingerprint existed. When every native geography still
+  // matches and no post-baseline event needs evaluation, preserve those actual
+  // scenario facts instead of silently substituting an AI-generated economy.
+  if (statCode && shouldPreserveLegacyStartStatsBaseline({
+    previousComplete,
+    atScenarioStartState,
+    hasAuthoritativeTerritorialFingerprint,
+    territorialCoverageMatches,
+    previousStateFingerprint,
+    unaccountedEconomicEvents: rawEconomicEvidence.unaccountedCount,
+    forceReassess,
+  })) {
+    // Do not even stamp continuity onto an author-owned legacy sheet: native
+    // normalization may otherwise discard older scenario-only metadata while
+    // copying its numerical values. Return the existing canonical record.
+    console.info("[stats 7A.2] complete mapped starting baseline retained for " + statCode +
+      "; exact native geography matches; no AI call or world write.");
+    return previous;
+  }
+
   // Only preserve the old zero-AI migration behavior when we have NO authoritative
   // map-derived territorial fingerprint at all (for example a landless/custom scenario).
-  // If a mapped territorial basis exists, the one-time bootstrap must reassess it.
+  // A mapped sheet with mismatched native geography still needs reassessment;
+  // a complete matching Day-One sheet above is reused without mutation.
   if (statCode && legacyContinuityBootstrap && !hasAuthoritativeTerritorialFingerprint) {
     try {
       let migrated = null;
@@ -14250,7 +14298,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
     : !rebuildNumericBaseline && previous
       ? (() => {
           const normalizedPrevious = normalizeCountryStatSheet(previous) || previous;
-          const { territorialComponents: _previousComponents = [], ...previousSummary } = normalizedPrevious;
+          const previousSummary = standardStatsPreviousSummary(normalizedPrevious);
           const macroSummary = buildStatsPreviousMacroContext(normalizedPrevious, territorialMacroPlan);
           return [
             "Previous whole-sheet metadata / derived aggregates:",
@@ -18714,6 +18762,12 @@ const validateGameMasterPreviewPayload = async (candidate, {
   if (worldChangeError) return worldChangeError;
   territoryNotes.forEach(note);
 
+  // Recheck the scenario-specific Stats field ownership before Preview and
+  // again at Apply. A generic GM transport can contain customStats even when
+  // the campaign uses a standard country sheet (Brazil inflation regression).
+  const statsContractError = validateStatContract(
+    "gameMaster", candidate, await loadTaskStatContract("gameMaster"));
+  if (statsContractError) return statsContractError;
   const statError = validateGameMasterStatPatches(candidate.countryStatPatches, world, candidate.events);
   if (statError) return statError;
 
@@ -19356,11 +19410,16 @@ export const applyGameMasterPreview = async (preview) => {
     }
 
     const statCountries = [];
+    const gmStatContract = normalizeArray(transaction.countryStatPatches).length
+      ? await loadTaskStatContract("gameMaster")
+      : null;
     for (const entry of normalizeArray(transaction.countryStatPatches)) {
       const country = normalizeString(entry?.country);
       const requestedPatch = cloneValue(entry?.patch);
       const capability = {};
-      const statsOnlyPatch = { ...requestedPatch };
+      const statsOnlyPatch = gmStatContract?.customFullStatSheet
+        ? { ...requestedPatch }
+        : standardGameMasterPatchForApply(requestedPatch);
       for (const key of ["intelligence", "military", "warWeariness", "warResources"]) {
         if (!Object.prototype.hasOwnProperty.call(requestedPatch, key)) continue;
         capability[key] = requestedPatch[key];

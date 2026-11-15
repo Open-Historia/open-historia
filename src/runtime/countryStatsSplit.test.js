@@ -51,6 +51,16 @@ test("a row's figure written with separators is no figure, in any language's way
   }
 });
 
+test("per-component splits read escaped newline separators without weakening identity or share checks", () => {
+  const escaped = decodeTerritorialComponentSplit("C1~90~core~40000\\nC2~10~overseas/dependent~20000", splitBuckets);
+  assert.deepEqual(escaped.rejected, []);
+  assert.equal(escaped.splits.get(1).length, 2);
+  assert.equal(Math.round(escaped.splits.get(1)[1].share * 100), 10);
+  const duplicated = decodeTerritorialComponentSplit("C1~90~core~40000\\nC1~5~core~40000\\nC2~5~overseas/dependent~20000", splitBuckets);
+  assert.equal(duplicated.splits.size, 0);
+  assert.equal(duplicated.rejected.length, 1);
+});
+
 test("a split that does not account for every component, once, is rejected", () => {
   const cases = {
     missing: "C1~100~core~40000",

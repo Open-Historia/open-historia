@@ -4221,3 +4221,16 @@ test("a political-system lock from an earlier one-call attempt is honoured and h
   assert.equal(result.failedPolities, 1);
   assert.deepEqual(result.politicalSystemLocksByPolity, { "Republic X": lock });
 });
+
+test("PWv2 ideology field requests political labels, not narrative program descriptions", () => {
+  const prompt = buildPoliticalWorldGenerationPrompt({
+    scenarioDate: "1911-10-08",
+    items: [{ polityKey: "Austrian Empire", depth: "rich", needs: [POLITICAL_GENERATION_NEEDS.REPRESENTATION_ENTITIES] }],
+    politicalActors: { byPolity: {} },
+  });
+  assert.match(prompt.systemPrompt, /ideology.*labels?/i);
+  assert.match(prompt.systemPrompt, /goals|publicPriorities|publicForeignPolicy/);
+  assert.match(prompt.systemPrompt, /do not.*biograph|no.*biograph/i);
+  assert.doesNotMatch(prompt.systemPrompt, /ideology \(a concise freeform description/i);
+  assert.match(prompt.systemPrompt, /Do not force parties into a Kaiserreich ideology taxonomy/);
+});

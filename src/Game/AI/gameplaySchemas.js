@@ -4471,6 +4471,23 @@ export const GAMEPLAY_TOOLS = Object.freeze({
 
 export const getGameplayTool = (taskKey) => GAMEPLAY_TOOLS[taskKey] ?? null;
 
+// Conditional calibration obligations belong in the actual provider-facing
+// output function as well as in native validation. A dynamic requirement is
+// imposed only on fresh/hard-audit Stats requests; normal reassessments must
+// continue to omit these generation-only provenance fields.
+export const withRequiredCountryStatsCalibration = (tool, { population = false, economic = false } = {}) => {
+  if (!tool?.schema?.properties || (!population && !economic)) return tool;
+  const required = [...(Array.isArray(tool.schema.required) ? tool.schema.required : [])];
+  for (const field of [population ? "populationCalibration" : "", economic ? "economicCalibration" : ""]) {
+    if (!field) continue;
+    if (!Object.hasOwn(tool.schema.properties, field)) {
+      throw new Error("Country Stats output function is missing required calibration field: " + field);
+    }
+    if (!required.includes(field)) required.push(field);
+  }
+  return { ...tool, schema: { ...tool.schema, required } };
+};
+
 const STOCK_STAT_INDEX_KEYS = new Set([
   "sovereignty",
   "foodAutonomy",
