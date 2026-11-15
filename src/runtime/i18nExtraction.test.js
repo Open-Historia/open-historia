@@ -170,7 +170,6 @@ test("the sentences the game puts in a composer are in the catalog whole", () =>
   for (const text of [
     "Let's brainstorm a plan of concrete actions for this round. Ask me what I'm trying to accomplish, then propose specific ones we can queue.",
     "Recover only the specific Project operations missing from your immediately previous reply. Its Projects block was malformed or incomplete; this is not a request to backfill history or open new programmes. Skip entries already on the board, and do not turn old reviews, agreements or frameworks into new active projects. Send at most ten concise entries. If you cannot identify exactly what was missed, tell me and add nothing.",
-    "Put my current projects and operations on the board — the sustained efforts, mine and any belonging to other powers that we know about. Start with the TEN most significant and stop there; I will ask for the next batch after. Keep each summary to one sentence, and give each only the milestones still ahead of it plus the single most recent one already achieved. Only include efforts that genuinely appear in our history — never invent one to round out the list — and say plainly if you are unsure about any of them.",
     "We accept: {{summary}}.",
     "We have reconsidered. We accept: {{summary}}.",
     "We refuse this demand.",

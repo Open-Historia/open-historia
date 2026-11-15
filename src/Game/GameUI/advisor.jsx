@@ -165,14 +165,11 @@ const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
         acc[item.change] = (acc[item.change] ?? 0) + 1;
         return acc;
     }, {});
-    const summary = ["opened", "updated", "completed", "closed", "deferred"]
+    const summary = ["opened", "updated", "closed"]
         .filter((change) => counts[change])
         .map((change) => `${counts[change]} ${change}`)
         .join(", ");
-    const verb = {
-        opened: "Opened: ", updated: "Updated: ", completed: "Completed: ", closed: "Closed: ",
-        deferred: "Awaiting the simulation: ",
-    };
+    const verb = { opened: "Opened: ", updated: "Updated: ", closed: "Closed: " };
 
     return (
         <div style={{ marginTop: "0.75rem", background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
@@ -188,9 +185,6 @@ const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
         {items.map((item, index) => (
             <li key={index} data-no-translate style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.75)", lineHeight: 1.5 }}>
             {verb[item.change] || "Changed: "}{item.title}
-            {item.change === "deferred" && (
-                <span style={{ color: "rgba(252,211,77,0.9)" }}> — this one changes the world, so the next time skip enacts it</span>
-            )}
             </li>
         ))}
         </ul>
