@@ -369,7 +369,7 @@ const orderPlans = (record, side, cities, decoded) => {
   return plans;
 };
 
-const OPEN_STATUSES = Object.freeze(["proposed", "active", "stalled", "paused"]);
+const OPEN_STATUSES = Object.freeze(["planning", "active", "stalled", "paused"]);
 
 // The Board's operations that send a side's troops at a place on this
 // battlefield, each with the place:

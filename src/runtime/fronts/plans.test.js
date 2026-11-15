@@ -125,7 +125,7 @@ test("an operation on the Board that sends troops at a place the other side hold
   const [plan] = plansOf(record, 0, context([operation()]));
   assert.deepEqual([plan.kind, plan.name, plan.objective, plan.status, plan.live, plan.edited, plan.off], ["project", "Operation Kingfisher", "city: Brod", "active", true, false, false]);
   assert.ok(near(endOf(plan), place("Brod")));
-  assert.equal(plansOf(record, 0, context([operation({ status: "proposed" })]))[0].live, false, "one not yet under way moves nothing");
+  assert.equal(plansOf(record, 0, context([operation({ status: "planning" })]))[0].live, false, "one not yet under way moves nothing");
 });
 
 // The place an operation attacks and how are its fields: `focus` and `approach`. Its name and summary are
@@ -335,7 +335,7 @@ test("an agent sends its owner the other side's real plans; one that was turned 
 test("plans are told in words with names and kinds, never a number of the game's own", () => {
   const { record } = opened([standing(0, "spearhead", { objective: "city: Brod" })]);
   const drawn = withDiversion(record, 0, { way: [[20.9, 49.2], [23.35, 49.42]], troops: 40 });
-  const lines = describePlans(drawn, plansOf(drawn, 0, context([operation({ summary: "Encircle Nova Brod.", approach: "encircle", focus: at("Nova Brod"), status: "proposed" })])), { cities });
+  const lines = describePlans(drawn, plansOf(drawn, 0, context([operation({ summary: "Encircle Nova Brod.", approach: "encircle", focus: at("Nova Brod"), status: "planning" })])), { cities });
   assert.equal(lines.length, 3);
   assert.match(lines[0], /^a spearhead toward city: Brod, about \d+ formations$/);
   assert.match(lines[1], /^an encirclement toward city: Nova Brod, about \d+ formations \(operation "Operation Kingfisher"\)$/);

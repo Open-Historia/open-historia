@@ -3406,7 +3406,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         const committed = { ...fresh, spies: next, spySeal: isSeal(fresh?.spySeal) ? fresh.spySeal : newSeal() };
         const ops = spyOperationOps(next, committed.projects, { date: gameDate, playerPolity: playerCountry });
         const toWrite = ops.length
-            ? applyProjectOpsToWorld({ date: gameDate, ops, playerCountry, world: committed }).world
+            ? applyProjectOpsToWorld({ actor: "engine", date: gameDate, ops, playerCountry, world: committed }).world
             : committed;
         await writeWorldState(toWrite);
     };
