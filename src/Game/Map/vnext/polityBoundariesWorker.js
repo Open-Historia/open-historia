@@ -17,7 +17,7 @@ import {
 } from "./polityGeometry.js";
 import { buildPolityLabelCollections } from "./polityLabels.js";
 import { buildRegionRenderRepair, isExplicitAuthoredGeometry } from "./regionRenderRepair.js";
-import { buildGroupAreaIndex, deriveGroupAreas } from "./groupAreas.js";
+import { EMPTY_GROUP_AREA_DATA, buildGroupAreaIndex, deriveGroupAreas } from "./groupAreas.js";
 
 const EMPTY_FC = Object.freeze({ type: "FeatureCollection", features: [] });
 
@@ -945,8 +945,7 @@ const updateOwnershipCartography = ({
 // answered on its own, from the caches the political pipeline already holds,
 // and never enters that pipeline's revisions. Nations asks only once this
 // worker has published catalog-ready, and again when repaired shapes land.
-const answerGroupAreas = ({ requestId, geometryEpoch, groupAreas, groups }) => {
-  const startedAt = performance.now();
+const groupAreaCaches = () => {
   ensureTopology();
   groupAreaIndex ??= buildGroupAreaIndex(cachedTopology);
   if (!groupLabelPoints) {
@@ -958,21 +957,47 @@ const answerGroupAreas = ({ requestId, geometryEpoch, groupAreas, groups }) => {
         : null;
     });
   }
-  const derived = deriveGroupAreas({
+  return {
     topology: cachedTopology,
     index: groupAreaIndex,
     regions: cachedRegions,
-    groupAreas,
-    groups,
     geometryFor: (id, feature) => renderRepairGeometryById.get(String(id)) ?? feature?.geometry,
     pointFor: (regionIndex) => groupLabelPoints[regionIndex],
-  });
+  };
+};
+
+const answerGroupAreas = ({ requestId, geometryEpoch, groupAreas, groups }) => {
+  const startedAt = performance.now();
+  const derived = deriveGroupAreas({ ...groupAreaCaches(), groupAreas, groups });
   self.postMessage({
     messageType: "group-areas-result",
     requestId,
     geometryEpoch,
     ...derived,
     stats: { elapsedMs: performance.now() - startedAt, groupCount: derived.fills.features.length },
+  });
+};
+
+// The diplomatic map's hatching (each marking's regions as one fill) and an
+// institution's outline (Map/DiplomaticLayers.jsx), cut the way groups' areas
+// are: { [regionId]: marking } and { [regionId]: institution }.
+const answerDiplomaticAreas = ({ requestId, geometryEpoch, hatch, outline }) => {
+  const startedAt = performance.now();
+  const caches = groupAreaCaches();
+  const namesOf = (areas) => Object.fromEntries([...new Set(Object.values(areas ?? {}))].map((name) => [name, { color: "#000000" }]));
+  const hatched = Object.keys(hatch ?? {}).length
+    ? deriveGroupAreas({ ...caches, groupAreas: hatch, groups: namesOf(hatch), parts: { fills: true, outlines: false, labels: false } }).fills
+    : EMPTY_GROUP_AREA_DATA.fills;
+  const outlined = Object.keys(outline ?? {}).length
+    ? deriveGroupAreas({ ...caches, groupAreas: outline, groups: namesOf(outline), parts: { fills: false, outlines: true, labels: false } }).outlines
+    : EMPTY_GROUP_AREA_DATA.outlines;
+  self.postMessage({
+    messageType: "diplomatic-areas-result",
+    requestId,
+    geometryEpoch,
+    hatch: hatched,
+    outlines: outlined,
+    stats: { elapsedMs: performance.now() - startedAt },
   });
 };
 
@@ -1089,6 +1114,20 @@ self.onmessage = async ({ data: message }) => {
     } catch (error) {
       self.postMessage({
         messageType: "battlefield-ground-result",
+        requestId,
+        geometryEpoch,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+
+  if (type === "diplomatic-areas") {
+    try {
+      answerDiplomaticAreas({ requestId, geometryEpoch, hatch: message.hatch ?? {}, outline: message.outline ?? {} });
+    } catch (error) {
+      self.postMessage({
+        messageType: "diplomatic-areas-result",
         requestId,
         geometryEpoch,
         error: error instanceof Error ? error.message : String(error),

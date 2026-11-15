@@ -46,7 +46,9 @@ test("The dock's tray, search, the date bar and the map-mode switch take the the
   assert.match(time, /color: countryButton && countryOpen \? "var\(--oh-ui-glass-active-text, #bfdbfe\)" : "var\(--oh-ui-accent, rgba\(147,197,253,0\.88\)\)"/, "the date bar's country");
   assert.match(time, /color: openPanel === "history" \? "var\(--oh-ui-glass-active-text, #bfdbfe\)"/, "the date bar's «");
   const mapMode = read("./MapModeSelector.jsx");
-  assert.equal((mapMode.match(/background: "var\(--oh-ui-glass-pill, var\(--oh-hud-bg\)\)"/g) || []).length, 2, "the map-mode switch and its legend");
+  assert.equal((mapMode.match(/background: "var\(--oh-ui-glass-pill, var\(--oh-hud-bg\)\)"/g) || []).length, 1, "the map-mode switch");
+  const legend = read("./DiplomaticLegend.jsx");
+  assert.equal((legend.match(/background: "var\(--oh-ui-glass-pill, var\(--oh-hud-bg\)\)"/g) || []).length, 1, "the diplomatic map's legend");
   for (const [file, text] of [["chat.jsx", diplomacy], ["search.jsx", search], ["time.jsx", time], ["MapModeSelector.jsx", mapMode]]) {
     assert.doesNotMatch(text, /(?:background|backgroundColor): "var\(--oh-hud-bg(?:-strong)?\)"/, `${file}: no HUD surface left on the bare HUD glass`);
   }

@@ -326,14 +326,14 @@ test("a picture's corners lie in the map's own copy of the world, whatever turn 
   assert.ok(layers.includes("coordinates: onto?.coordinates ?? pictureCorners(west, north, east, south),"));
 });
 
-test("on the diplomatic map a battlefield's ground is painted in the stances' colours, as the regions round it are", () => {
+test("on the diplomatic map a battlefield's ground is painted in the view's colours, as the regions round it are", () => {
   // "the drawn territory remains the same color on the diplomatic map making it not be the same color as your country"
-  // (the owner, 2026-10-15).
+  // (the owner, 2026-10-15). One view for the whole map (useDiplomaticView.js), the fills' and the ground's.
   const layers = fs.readFileSync(new URL("./FrontLayers.jsx", import.meta.url), "utf8");
-  assert.ok(layers.includes("mapMode === \"diplomatic\" ? buildDiplomaticStanceMap({ playerCountry, wars, agreements, relations, puppets }) : null"));
-  assert.ok(layers.includes("stances ? parseColorToRgb(getDiplomaticOwnerColor(name, stances)) ?? UNOWNED_RGB : rgbOf(name)"));
+  assert.ok(layers.includes("const diplomaticView = useDiplomaticView();"));
+  assert.ok(layers.includes("diplomaticView ? parseColorToRgb(diplomaticView.colorOf(name)) ?? UNOWNED_RGB : rgbOf(name)"));
   assert.ok(layers.includes("const [red, green, blue] = colorRef.current.groundRgbOf(name);"));
-  assert.ok(layers.includes("}, [colorMap, polityOverrides, groups, stances]);"), "a change of map repaints the ground");
+  assert.ok(layers.includes("}, [colorMap, polityOverrides, groups, diplomaticView]);"), "a change of map repaints the ground");
 });
 
 test("the front's field: half-way where the two sides' ground meets, and nowhere else", () => {

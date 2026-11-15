@@ -54,6 +54,15 @@ export const POLITICAL_FILL_OPACITY_STOPS = Object.freeze([
   [14.0, 0.84],
 ].map((stop) => Object.freeze(stop)));
 
+// The diplomatic map's fills (Nations.jsx): the same ramp lifted to a floor, so
+// the terrain under a world view no longer washes a view's colours out, and
+// never stronger than the political map's closest stop.
+export const DIPLOMATIC_FILL_OPACITY_FLOOR = 0.78;
+export const DIPLOMATIC_FILL_OPACITY_STOPS = Object.freeze(POLITICAL_FILL_OPACITY_STOPS
+  .map(([zoom, opacity]) => Object.freeze([zoom, Math.max(opacity, DIPLOMATIC_FILL_OPACITY_FLOOR)])));
+// How faint the countries a legend entry does not pick out are drawn.
+export const DIPLOMATIC_DIMMED_SHARE = 0.25;
+
 // The borders between polities (Nations.jsx polity-boundaries and its shadow),
 // in px by zoom: one list for those lines and the border a battlefield's ground
 // draws where its holders meet (frontGroundLayer.js), which carries them on

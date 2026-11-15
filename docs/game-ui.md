@@ -88,6 +88,7 @@ The Country drawer's **Politics** view can inspect both public political party r
 | `DateWidget` | `time.jsx` | Date/country pill + timeline-skip + event-history panels |
 | `Toolbar` | `chat.jsx` | Bottom-left cluster: 💬 Chat + ✦ Actions (with Projects & Operations as its second tab) + Rostra, the social network, while the game's Social media feature is on (`hudDock.js` `useDockGeometry`) |
 | `Other` | `other.jsx` | Player-country flag badge (desktop only) |
+| `MapModeSelector` | `MapModeSelector.jsx` + `DiplomaticLegend.jsx` | The Political / Diplomatic switch at the foot of the right-hand stack, and on the diplomatic map its legend (four views, the focus or the institution or the government axis, the entries with counts that pick countries out, ▾ to fold it, the switch's legend button to bring it back) and the tooltip; see [game-map.md §6c](game-map.md#6c-the-diplomatic-map). The mode and the legend's choices are kept per game |
 | `Search` | `search.jsx` | Place search: the world's own places first, then Photon → camera + the place's card |
 | `ForcesPanel` | `forces.jsx` | Unit list + deploy controls + mode banner |
 | `AdvisorButton` (🧭) | `main.jsx` (inline) | Toggles the advisor drawer; placed by `advisorDockStyle` |

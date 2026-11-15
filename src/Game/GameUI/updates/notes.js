@@ -54,6 +54,92 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "the diplomatic map is shit, redesign it and make it have full integration with the political world", then "only on
+    // alpha for now and ... be a major update" (the owner, 2026-11-15): four views (runtime/diplomaticViews.js), a legend
+    // that counts what is shown (GameUI/DiplomaticLegend.jsx), lines from the focus country's capital, kept for each game.
+    id: "2026-11-diplomatic-atlas",
+    kind: "major",
+    date: "2026-11-15",
+    channel: "alpha",
+    banners: [
+      {
+        theme: "diplomaticAtlas",
+        scene: "relations",
+        title: "The Diplomatic Map, Redrawn",
+        subtitle: "The whole political world on one map",
+        lead: "The Diplomatic map now has four views: Relations, Wars, Blocs and Government. Each shows the whole world, with a legend that counts what is on the map.",
+        sections: [
+          {
+            heading: "Relations",
+            icon: "people",
+            items: [
+              "Every country is coloured by its standing with the focus country: war, ceasefire, alliance, guarantee, non-aggression, peace, military access, trade, or how warm relations are.",
+              "Click any country to see the world from its side. Its card still opens as before, and Back to my country returns the focus to you.",
+              "Countries with no relations on record look different from neutral ones, and puppets and overlords have colours of their own.",
+            ],
+          },
+          {
+            heading: "Lines and borders",
+            icon: "map",
+            items: [
+              "Thin lines run from the focus country's capital to its allies, and dashed red ones to its enemies.",
+              "Borders where enemies meet are lit, and hovering over a country tells you its tie to the focus in one short line.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "diplomaticAtlas",
+        scene: "wars",
+        title: "Every War, Every Bloc",
+        subtitle: "Who fights whom, and who stands together",
+        sections: [
+          {
+            heading: "Wars",
+            icon: "swords",
+            items: [
+              "Every war in the world at once, each side in its own colour, with all the countries on a side shown together.",
+              "Ceasefires are hatched, the borders where the sides meet are lit, and clicking a war in the legend picks it out.",
+            ],
+          },
+          {
+            heading: "Blocs and institutions",
+            icon: "flag",
+            items: [
+              "Pick an institution, such as NATO, the EU or the UN, to see its members tinted and outlined as one area.",
+              "Candidates, observers and suspended members each look different, and the view opens on the largest institution you belong to.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "diplomaticAtlas",
+        scene: "government",
+        title: "Governments and Spheres",
+        subtitle: "How the world is ruled",
+        sections: [
+          {
+            heading: "Government",
+            icon: "book",
+            items: [
+              "Colour the world by regime, by how power is represented, by the ruling party's ideology, or by power tier.",
+              "Puppets take a shade of their overlord's colour, hatched, and occupied land is hatched too.",
+            ],
+          },
+          {
+            heading: "A clearer legend",
+            icon: "eye",
+            items: [
+              "The legend lists only what is on the map, with how many countries are in each entry. Click an entry to pick those countries out.",
+              "The colours are stronger, easier to tell apart for colour-blind players, and no longer look like empty land. Each game remembers how you left the map.",
+            ],
+          },
+        ],
+        button: "To the map",
+      },
+    ],
+  },
+  {
     // "lets rework projects entirely… right now they dont actually effect the world actively and dont progress normally. it seems like
     // they just sit doing nothing" (the owner, 2026-11-15): the projects engine (runtime/projectEngine.js) runs every project's clock;
     // a project costs money a month, changes the world when done, can be started from the Projects tab, and other countries run their own.

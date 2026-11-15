@@ -375,16 +375,19 @@ test("political fill opacity expressions keep zoom at MapLibre top level", () =>
   assert.match(nations, /const FILL_HIDDEN = \["boolean", \["feature-state", "ownershipTransitionHidden"\], false\];/);
   assert.match(
     nations,
-    /const transitionAwareFillOpacity = useMemo\([\s\S]*?buildPoliticalFillOpacity\(FILL_HIDDEN\)/,
+    /const hiddenAwareFillOpacity = useMemo\([\s\S]*?buildDiplomaticFillOpacity\(FILL_HIDDEN, highlightColors\)[\s\S]*?buildScenarioReliefFillOpacity\(reliefFillStops, FILL_HIDDEN\)[\s\S]*?buildPoliticalFillOpacity\(FILL_HIDDEN\)\)/,
   );
+  assert.match(nations, /const transitionAwareFillOpacity = customFlag \? hiddenAwareFillOpacity : 0;/);
+  // The diplomatic ramp keeps zoom on top too, the highlight inside each stop.
+  assert.match(nations, /export const buildDiplomaticFillOpacity = \(hiddenExpression = null, highlight = null\) => \[\s*"interpolate", \["linear"\], \["zoom"\]/);
   // The stock tiles' fill too: a battlefield's ground hides its regions there as well.
   assert.match(
     nations,
-    /const stockRegionsFillPaint = useMemo\([\s\S]*?"fill-opacity": reliefFillStops \? buildScenarioReliefFillOpacity\(reliefFillStops, FILL_HIDDEN\) : buildPoliticalFillOpacity\(FILL_HIDDEN\),/,
+    /const stockRegionsFillPaint = useMemo\([\s\S]*?"fill-opacity": hiddenAwareFillOpacity,/,
   );
   assert.doesNotMatch(
     nations,
-    /const transitionAwareFillOpacity = useMemo\([\s\S]*?\[\s*"case",[\s\S]*?POLITICAL_FILL_OPACITY/,
+    /const hiddenAwareFillOpacity = useMemo\([\s\S]*?\[\s*"case",[\s\S]*?POLITICAL_FILL_OPACITY/,
   );
   assert.match(nations, /const DISPUTED_TILE_FILL_OPACITY = POLITICAL_FILL_OPACITY/);
   assert.doesNotMatch(nations, /\["\*", POLITICAL_FILL_OPACITY,/);
