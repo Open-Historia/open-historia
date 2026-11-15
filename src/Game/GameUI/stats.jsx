@@ -1,3 +1,5 @@
+import { historicalStatSourceLabel } from "./statSourceView.js";
+import StatSources from "./StatSources.jsx";
 /*! Open Historia — national stats pane © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
@@ -98,9 +100,10 @@ const POWER_TIER_LABELS = Object.freeze({
 // game keeps on it in the backend (runtime/militaryStats.js), which the schema does not list. Checked with them, every
 // sheet that had them "failed validation: $.military is not allowed" and the Economy tab could not open.
 const withoutBackendFields = (sheet) => {
-    if (!sheet || typeof sheet !== "object" || !("military" in sheet)) return sheet;
+    if (!sheet || typeof sheet !== "object") return sheet;
     const checked = { ...sheet };
     delete checked.military;
+    delete checked.statProvenance;
     return checked;
 };
 
@@ -1133,6 +1136,8 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
     ];
 };
 
+const historyMetricReading = (sample, metric) => historyMetricValue(sample, metric.key, { custom: String(metric.unit || "").startsWith("custom:") });
+
 const ADVANCED_UNIT_LABELS = {
     gdp: "GDP · 2026-EUR equivalent",
     gdpPerCapita: "GDP per capita · 2026-EUR equivalent",
@@ -1179,7 +1184,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
     const metrics = metricKeys.map((key) => metricsByKey[key]).filter(Boolean);
     // Keep dated missing observations so a line cannot bridge an unknown interval.
     const validSamples = samples.filter((sample) => Number.isFinite(historyDateMs(sample.date)));
-    const hasValues = validSamples.some((sample) => metrics.some((metric) => Number.isFinite(historyMetricValue(sample, metric.key))));
+    const hasValues = validSamples.some((sample) => metrics.some((metric) => Number.isFinite(historyMetricReading(sample, metric))));
 
     if (!hasValues || !metrics.length) {
         return (
@@ -1198,7 +1203,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
     const minTime = Math.min(...times);
     const maxTime = Math.max(...times);
     const timeSpan = Math.max(1, maxTime - minTime);
-    const values = validSamples.flatMap((sample) => metrics.map((metric) => historyMetricValue(sample, metric.key)).filter(Number.isFinite));
+    const values = validSamples.flatMap((sample) => metrics.map((metric) => historyMetricReading(sample, metric)).filter(Number.isFinite));
     let minValue = Math.min(...values);
     let maxValue = Math.max(...values);
     const unit = metrics[0]?.unit;
@@ -1226,7 +1231,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
     const hovered = hoverIndex == null ? null : validSamples[hoverIndex];
     const hoverX = hovered ? xFor(hovered) : null;
 
-    const pathFor = (metric) => historyMetricPath(validSamples, metric.key, xFor, yFor);
+    const pathFor = (metric) => historyMetricPath(validSamples, metric.key, xFor, yFor, { custom: String(metric.unit || "").startsWith("custom:") });
 
     return (
         <div style={{ minHeight: 0, position: "relative", width: "100%" }}>
@@ -1255,7 +1260,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
                     <path key={metric.key} d={pathFor(metric)} fill="none" stroke={metric.color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ filter: `drop-shadow(0 0 5px ${metric.color}44)` }} />
                 ))}
                 {validSamples.length <= 24 && metrics.map((metric) => validSamples.map((sample) => {
-                    const value = historyMetricValue(sample, metric.key);
+                    const value = historyMetricReading(sample, metric);
                     if (!Number.isFinite(value)) return null;
                     return <circle key={`${metric.key}-${sample.date}`} cx={xFor(sample)} cy={yFor(value)} r="3.7" fill={metric.color} stroke="#141417" strokeWidth="2" />;
                 }))}
@@ -1263,7 +1268,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
                     <>
                         <line x1={hoverX} x2={hoverX} y1={pad.top} y2={pad.top + plotHeight} stroke="rgba(255,255,255,0.34)" strokeWidth="1" />
                         {metrics.map((metric) => {
-                            const value = historyMetricValue(hovered, metric.key);
+                            const value = historyMetricReading(hovered, metric);
                             if (!Number.isFinite(value)) return null;
                             return <circle key={`hover-${metric.key}`} cx={hoverX} cy={yFor(value)} r="6" fill={metric.color} stroke="#141417" strokeWidth="3" />;
                         })}
@@ -1283,12 +1288,15 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
                 <div style={{ backgroundColor: "rgba(16,16,18,0.96)", border: "1px solid rgba(148,163,184,0.22)", borderRadius: "10px", boxShadow: "0 12px 35px rgba(0,0,0,0.35)", left: `min(calc(${((hoverX / width) * 100).toFixed(2)}% + 10px), calc(100% - 190px))`, padding: "0.55rem 0.65rem", pointerEvents: "none", position: "absolute", top: "1.1rem", width: "180px", zIndex: 2 }}>
                     <div data-no-translate style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.64rem", fontWeight: 800, letterSpacing: "0.04em", marginBottom: "0.45rem", textTransform: "uppercase" }}>{formatHistoryDate(hovered.date)}</div>
                     {metrics.map((metric) => {
-                        const value = historyMetricValue(hovered, metric.key);
+                        const value = historyMetricReading(hovered, metric);
                         if (!Number.isFinite(value)) return null;
                         return (
                             <div key={metric.key} style={{ alignItems: "center", display: "flex", gap: "0.45rem", justifyContent: "space-between", marginTop: "0.28rem" }}>
                                 <span style={{ alignItems: "center", color: "rgba(255,255,255,0.62)", display: "flex", fontSize: "0.66rem", gap: "0.35rem", minWidth: 0 }}><span style={{ backgroundColor: metric.color, borderRadius: "999px", height: "7px", width: "7px" }} />{metric.label}</span>
-                                <span data-no-translate style={{ color: "#fff", fontSize: "0.7rem", fontWeight: 850 }}>{metric.format(value)}</span>
+                                <span style={{ textAlign: "right" }}>
+                                    <span data-no-translate style={{ color: "#fff", fontSize: "0.7rem", fontWeight: 850 }}>{metric.format(value)}</span>
+                                    <span style={{ display: "block", color: "rgba(255,255,255,0.45)", fontSize: "0.6rem", marginTop: "0.15rem" }}>{historicalStatSourceLabel(hovered, metric, value)}</span>
+                                </span>
                             </div>
                         );
                     })}
@@ -1425,7 +1433,7 @@ const AdvancedStatsModal = ({
                         {first && last && (
                             <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: `repeat(${Math.min(isMobile ? 2 : 4, selectedMetrics.length)}, minmax(0, 1fr))`, marginTop: "0.7rem" }}>
                                 {selectedMetrics.map((metric) => {
-                                    const { end, delta } = historyMetricChange(visibleSamples, metric.key);
+                                    const { end, delta } = historyMetricChange(visibleSamples, metric.key, { custom: String(metric.unit || "").startsWith("custom:") });
                                     const deltaText = delta == null
                                         ? "—"
                                         : String(metric.unit || "").startsWith("custom:")
@@ -2669,6 +2677,8 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                     <MilitaryCard world={worldSnapshot} country={resolvedTargetKey || targetCountry} />
                     </>
                 )}
+
+                <StatSources sheet={sheet} definition={statSheetDefinition} world={worldSnapshot} country={resolvedTargetKey || targetCountry} />
 
                 <button
                 type="button"

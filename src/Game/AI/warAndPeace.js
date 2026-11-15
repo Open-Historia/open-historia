@@ -1,3 +1,4 @@
+import { recordNativeWarOrigins } from "../../../server/statProvenance.js";
 /*! Open Historia — war weariness, alliances coming due, and peace on terms: what the game does with them © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // "A peace offer the player accepts or declines, with war weariness." "Also
 // have war weariness, wars that end with terms and reparations." "Alliances
@@ -547,7 +548,7 @@ export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "
   next = endWarsOnPuppets(next, { date, round: turn });
   next = endConqueredWars(next, { held: holdings, date, round: turn });
   next = { ...next, peaceOffers: withTurnPeaceOffers(next.peaceOffers, { wars: next.wars, round: turn }) };
-  return next;
+  return recordNativeWarOrigins(baseWorld, next, { date, round: turn });
 };
 
 // "fully conquouring an enemy should end the war" (the owner, 2026-11-03): a war

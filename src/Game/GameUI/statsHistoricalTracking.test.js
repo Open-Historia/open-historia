@@ -125,3 +125,15 @@ test("sparse medieval observations leave chart gaps and retain genuine zeros", (
   assert.equal(historyMetricValue({ indices: { security: 0 } }, "security"), 0);
   assert.equal(historyMetricValue({ population: 1200 }, "population"), 1200);
 });
+
+test("scenario metrics with stock names use their own history values and gaps", () => {
+  const samples = [{ date: "1200-01-01", x: 0, gdp: 1000000, customStats: { gdp: 12 } },
+    { date: "1200-02-01", x: 1, gdp: 2000000 },
+    { date: "1200-03-01", x: 2, gdp: 3000000, customStats: { gdp: 20 } }];
+  const options = { custom: true };
+  assert.equal(historyMetricValue(samples[0], "gdp", options), 12);
+  assert.equal(historyMetricValue(samples[1], "gdp", options), null);
+  assert.equal(historyMetricValue(samples[0], "gdp"), 1000000);
+  assert.equal(historyMetricPath(samples, "gdp", (s) => s.x, (v) => v, options), "M0.00,12.00 M2.00,20.00");
+  assert.deepEqual(historyMetricChange(samples, "gdp", options), { end: 20, delta: 8 });
+});

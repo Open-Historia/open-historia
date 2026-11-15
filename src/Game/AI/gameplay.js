@@ -1,3 +1,4 @@
+import { recordExternalStatOrigin } from "../../../server/statProvenance.js";
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { nextTask } from "../../runtime/nextTask.js";
 import { callAI, geminiDeclaresTaskFunction, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
@@ -9778,10 +9779,10 @@ const applySimulationResult = async ({
   // And what the troops raised this turn cost their countries in people, less
   // the men who came home (runtime/fronts/manpower.js): "military recruitment
   // directly draws from and reduces the available population pool."
-  impactedWorld = withFrontManpower(impactedWorld, turnFronts, applyCountryStatPatchToWorld);
+  impactedWorld = withFrontManpower(impactedWorld, turnFronts, applyCountryStatPatchToWorld, { date: nextGame.gameDate, round: nextGame.round });
   // And what a blockade cost the country it was laid on, off its economy
   // (runtime/naval/blockade.js): "make blockades affect the economy".
-  impactedWorld = withBlockadeEconomy(impactedWorld, turnFronts, applyCountryStatPatchToWorld);
+  impactedWorld = withBlockadeEconomy(impactedWorld, turnFronts, applyCountryStatPatchToWorld, { date: nextGame.gameDate, round: nextGame.round });
   // And what the war room's air strikes did (runtime/fronts/airStrike.js): kept for the war room, the war stats and
   // the map, a structure struck damaged or destroyed, a city struck its people killed and its country's economy hurt.
   impactedWorld = withAirStrikes(impactedWorld, turnFronts, { round: nextGame.round, date: baseGame.gameDate, patch: applyCountryStatPatchToWorld });
@@ -10118,7 +10119,7 @@ const applySimulationResult = async ({
   }
   // The figures the skip wrote of the countries that fight (warFiguresPrompt.js), kept where a country has
   // none, before anything after the turn asks for them (requestConflictSheets).
-  if (frontsOn()) worldWithImpacts = keepWarFigures(worldWithImpacts, result.warFigures);
+  if (frontsOn()) worldWithImpacts = keepWarFigures(worldWithImpacts, result.warFigures, nextGame);
   // Each segment was checked on its own; this is the merged round. A finished
   // turn is never lost to this check, but its verdict is worth a report. Read
   // as the one period it is (startsInForce), as the last attempt's repair
@@ -12961,7 +12962,7 @@ const warFiguresBlockOf = (world, game) => {
 // country at war or on an open battlefield, under the name its war gives it, never a group (a group is no country
 // with a sheet), and only what it has none of: of its people, economy, budget and debt (statsBackend.js) and of its
 // military figures, each one it has no figure for. The world as it was where nothing is kept.
-const keepWarFigures = (world, lines) => {
+const keepWarFigures = (world, lines, game = {}) => {
   const read = readWarFigures(lines);
   if (read.length === 0) return world;
   const fighting = fightingNames(world);
@@ -12980,7 +12981,7 @@ const keepWarFigures = (world, lines) => {
     const missing = Object.fromEntries(Object.entries(military ?? {}).filter(([field]) => had[field] === undefined || had[field] === null));
     if (Object.keys(missing).length > 0) patch.military = missing;
     if (Object.keys(patch).length === 0) continue;
-    applyCountryStatPatchToWorld(next, key, patch);
+    applyCountryStatPatchToWorld(next, key, patch, { origin: { source: "ai", date: game.gameDate, round: game.round } });
     kept.push(key);
   }
   if (kept.length === 0) return world;
@@ -14071,12 +14072,15 @@ const storeFirstIntelligenceRating = async (name, assessment, { campaign, signal
   // Applied to the world as it is inside the write queue: a turn may have
   // rated the service meanwhile, and its number wins.
   let ratedMeanwhile = null;
+  const recordedGame = await readGameData({ force: false });
   await mutateWorldState((latest) => {
     if (isIntelligenceRated(latest, name)) {
       ratedMeanwhile = intelligenceOf(latest, name);
       return null;
     }
-    return { ...latest, intelligence: { ...(latest.intelligence ?? {}), [name]: rating } };
+    const next = { ...latest, countryStats: { ...latest.countryStats }, intelligence: { ...(latest.intelligence ?? {}), [name]: rating } };
+    recordExternalStatOrigin(next, name, rating, { source: "ai", date: recordedGame?.gameDate, round: recordedGame?.round });
+    return next;
   });
   if (ratedMeanwhile !== null) return ratedMeanwhile;
   const service = normalizeString(assessment?.service);
@@ -14167,9 +14171,10 @@ export const ensureConflictBackends = (targets, { reason = "" } = {}) => {
           const whole = values && keys.every((stat) => Object.prototype.hasOwnProperty.call(values, stat));
           // Its military figures, where it was rated and has none of its own yet.
           const rated = rateMilitary && military && !militaryLookup(latest)(name) ? { military } : {};
-          applyCountryStatPatchToWorld(latest, key, { ...(whole ? { customStats: values } : {}), ...statsBackendPatch(backend), ...rated }, whole
-            ? { continuity: { assessedDate: currentDate, assessedRound: Math.max(0, Math.trunc(Number(bundle.game?.round) || 0)) } }
-            : {});
+          applyCountryStatPatchToWorld(latest, key, { ...(whole ? { customStats: values } : {}), ...statsBackendPatch(backend), ...rated }, {
+            origin: { source: "ai", date: currentDate, round: Math.max(0, Math.trunc(Number(bundle.game?.round) || 0)) },
+            ...(whole ? { continuity: { assessedDate: currentDate, assessedRound: Math.max(0, Math.trunc(Number(bundle.game?.round) || 0)) } } : {}),
+          });
           kept.push(key);
         }
         return kept.length > 0 ? latest : null;
@@ -14264,7 +14269,7 @@ export const ensureMilitaryFigures = (targets, { reason = "" } = {}) => {
             const people = population > 0 && !(peopleFor(latest, name) > 0) ? { population: { total: population } } : {};
             if (Object.keys(missing).length === 0 && !people.population) continue;
             const key = canonicalStatsPolity(name, latest) || name;
-            applyCountryStatPatchToWorld(latest, key, { ...(Object.keys(missing).length > 0 ? { military: missing } : {}), ...people });
+            applyCountryStatPatchToWorld(latest, key, { ...(Object.keys(missing).length > 0 ? { military: missing } : {}), ...people }, { origin: { source: "ai", date } });
             kept.push(key);
             changed = true;
           }
@@ -14489,6 +14494,7 @@ ${JSON.stringify(previousValues)}`
 
   // (A backend the answer left out, or wrote unusably, leaves the one the sheet had.)
   const sheet = mergeCountryStatPatch(previous, { customStats, ...statsBackendPatch(payload?.[STATS_BACKEND_FIELD]) }, {
+    origin: { source: "ai", date: currentDate, round: currentRound },
     continuity: {
       assessedDate: currentDate,
       assessedRound: currentRound,
@@ -15181,6 +15187,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
             guarded.sheet,
             {
               replaceComponents: true,
+              origin: { source: "ai", date: currentDate, round: currentRound },
               continuity,
             },
           );
@@ -19907,7 +19914,9 @@ export const applyGameMasterPreview = async (preview) => {
     const statCountries = [];
     for (const entry of normalizeArray(transaction.countryStatPatches)) {
       const country = normalizeString(entry?.country);
-      const nextSheet = applyCountryStatPatchToWorld(nextWorld, country, cloneValue(entry?.patch));
+      const nextSheet = applyCountryStatPatchToWorld(nextWorld, country, cloneValue(entry?.patch), {
+        origin: { source: "ai", date: bundle.game.gameDate || bundle.game.startDate, round: bundle.game.round },
+      });
       if (!nextSheet) throw new Error(`Stats patch for ${country || "unknown polity"} could not be applied. Nothing was persisted.`);
       statCountries.push(country);
       const reputation = Number(nextSheet?.indices?.internationalReputation);

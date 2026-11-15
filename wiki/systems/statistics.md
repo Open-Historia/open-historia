@@ -355,3 +355,38 @@ relation and treaty ledgers — so it can answer about your figures rather than 
 - [The advisor](/wiki/advisor/) — asking someone to interpret all this for you.
 - [Espionage](/wiki/espionage/) — the intelligence rating in practice.
 - [Military](/wiki/military/) — what the military figures do in a war.
+
+### Sources and estimates
+
+Open **Sources and estimates** below the National/Economy figures to inspect their
+origins, including population, economic conditions, strategic indices, sectors,
+custom metrics, intelligence and military figures. The section works on phones as
+well as desktop. Historical chart details use the source saved with that reading,
+not the source of today's value.
+
+| Label | Meaning |
+|---|---|
+| Scenario value | A recorded starting value carried into a new game from its scenario |
+| Manual edit | A value changed through the Country Editor |
+| AI estimate | A changed value accepted from an AI assessment, event or GM response |
+| Calculated | A figure computed by native game rules, which may themselves use estimates |
+| Game default | A shared fallback used because no individual figure has been recorded |
+| Source unspecified | A recorded value whose origin was not retained, including older saves |
+| Unknown | No numeric observation is available |
+
+These labels identify where the game recorded a number. They do **not** certify
+historical accuracy, provide historical citations, or classify an author's number
+as a measured fact. The date and turn are the last accepted **value change**, when
+the writer supplied that context. An unchanged value keeps its previous source
+and date; an unknown date stays omitted.
+
+New games retain origins for recorded scenario starting values. Existing games,
+clones and imports keep the origins they already have; opening a legacy save does
+not guess its origins. If a value changes through an untracked path, a source bound
+to its old number is not shown as the source of the new one. Direct edits to save
+files do not constitute a verified audit trail.
+
+Metadata travels with the existing world and history data. Older game versions
+can discard it while retaining the numbers. No extra AI requests, economic rules,
+or accounting engine are introduced. Full change logs, event links, reviewed
+historical citations and author-facing certainty controls remain separate work.

@@ -321,7 +321,7 @@ test("a blockade is taken off the economy of the country it is laid on, by how h
   assert.ok(Math.abs((2e11 - year) / (2e11 - expected) - 365 / 30) < 0.01, `${2e11 - year} / ${2e11 - expected}`);
   // The turn writes both: what the blockade cost, and the record of it.
   const gameplay = read("gameplay.js");
-  assert.ok(gameplay.includes("impactedWorld = withBlockadeEconomy(impactedWorld, turnFronts, applyCountryStatPatchToWorld);"));
+  assert.ok(gameplay.includes("impactedWorld = withBlockadeEconomy(impactedWorld, turnFronts, applyCountryStatPatchToWorld, { date: nextGame.gameDate, round: nextGame.round });"));
   assert.ok(gameplay.includes("...(turnFronts ? { blockades: turnBlockades(baseWorld, turnFronts) } : null),"));
 });
 

@@ -94,6 +94,7 @@ const persistCountryStats = async (payload = {}) => {
     payload?.sheet || {},
     {
       replaceComponents: true,
+      origin: { source: "ai", date: payload?.date, round: payload?.round },
       continuity:
         payload?.continuity && typeof payload.continuity === "object"
           ? payload.continuity

@@ -112,7 +112,7 @@
     <h1>National Statistics</h1>
     <p class="tagline">The stat sheet: strategic indices, population, GDP and the rest — where the numbers come from and how to track them.</p>
     
-    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#national-stability">National stability</a></li><li class="d2"><a href="#strategic-indices">Strategic indices</a></li><li class="d2"><a href="#intelligence-service">Intelligence service</a></li><li class="d2"><a href="#population-and-economy">Population and economy</a></li><li class="d2"><a href="#military-power">Military power</a></li><li class="d2"><a href="#there-is-no-treasury">There is no treasury</a></li><li class="d2"><a href="#where-the-numbers-come-from">Where the numbers come from</a></li><li class="d2"><a href="#reading-someone-else39s">Reading someone else&#39;s</a></li><li class="d2"><a href="#the-politics-tab">The Politics tab</a></li><li class="d2"><a href="#the-ranking-tab">The Ranking tab</a></li><li class="d2"><a href="#a-record-not-a-snapshot">A record, not a snapshot</a></li><li class="d3"><a href="#tracked-history">Tracked history</a></li><li class="d3"><a href="#advanced-statistics">Advanced Statistics</a></li><li class="d3"><a href="#the-diplomacy-block">The diplomacy block</a></li><li class="d3"><a href="#territory-overseas-and-landless">Territory, overseas and landless</a></li><li class="d2"><a href="#scenario-stat-sheets">Scenario stat sheets</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#national-stability">National stability</a></li><li class="d2"><a href="#strategic-indices">Strategic indices</a></li><li class="d2"><a href="#intelligence-service">Intelligence service</a></li><li class="d2"><a href="#population-and-economy">Population and economy</a></li><li class="d2"><a href="#military-power">Military power</a></li><li class="d2"><a href="#there-is-no-treasury">There is no treasury</a></li><li class="d2"><a href="#where-the-numbers-come-from">Where the numbers come from</a></li><li class="d2"><a href="#reading-someone-else39s">Reading someone else&#39;s</a></li><li class="d2"><a href="#the-politics-tab">The Politics tab</a></li><li class="d2"><a href="#the-ranking-tab">The Ranking tab</a></li><li class="d2"><a href="#a-record-not-a-snapshot">A record, not a snapshot</a></li><li class="d3"><a href="#tracked-history">Tracked history</a></li><li class="d3"><a href="#advanced-statistics">Advanced Statistics</a></li><li class="d3"><a href="#the-diplomacy-block">The diplomacy block</a></li><li class="d3"><a href="#territory-overseas-and-landless">Territory, overseas and landless</a></li><li class="d2"><a href="#scenario-stat-sheets">Scenario stat sheets</a></li><li class="d2"><a href="#next">Next</a></li><li class="d3"><a href="#sources-and-estimates">Sources and estimates</a></li></ul></nav>
     <p>Every country has a <strong>stat sheet</strong> — relations, agreements and conflicts, then leader,
 government, stability, six strategic indices, population and a set of economic figures. Open it
 from the <strong>Stats</strong> tab of the advisor drawer (the <strong>Advisor</strong> button, bottom right). It has two
@@ -508,6 +508,62 @@ relation and treaty ledgers — so it can answer about your figures rather than 
 <li><a href="/wiki/espionage/">Espionage</a> — the intelligence rating in practice.</li>
 <li><a href="/wiki/military/">Military</a> — what the military figures do in a war.</li>
 </ul>
+<h3 id="sources-and-estimates">Sources and estimates</h3>
+<p>Open <strong>Sources and estimates</strong> below the National/Economy figures to inspect their
+origins, including population, economic conditions, strategic indices, sectors,
+custom metrics, intelligence and military figures. The section works on phones as
+well as desktop. Historical chart details use the source saved with that reading,
+not the source of today&#39;s value.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Label</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Scenario value</td>
+<td>A recorded starting value carried into a new game from its scenario</td>
+</tr>
+<tr>
+<td>Manual edit</td>
+<td>A value changed through the Country Editor</td>
+</tr>
+<tr>
+<td>AI estimate</td>
+<td>A changed value accepted from an AI assessment, event or GM response</td>
+</tr>
+<tr>
+<td>Calculated</td>
+<td>A figure computed by native game rules, which may themselves use estimates</td>
+</tr>
+<tr>
+<td>Game default</td>
+<td>A shared fallback used because no individual figure has been recorded</td>
+</tr>
+<tr>
+<td>Source unspecified</td>
+<td>A recorded value whose origin was not retained, including older saves</td>
+</tr>
+<tr>
+<td>Unknown</td>
+<td>No numeric observation is available</td>
+</tr>
+</tbody></table></div>
+<p>These labels identify where the game recorded a number. They do <strong>not</strong> certify
+historical accuracy, provide historical citations, or classify an author&#39;s number
+as a measured fact. The date and turn are the last accepted <strong>value change</strong>, when
+the writer supplied that context. An unchanged value keeps its previous source
+and date; an unknown date stays omitted.</p>
+<p>New games retain origins for recorded scenario starting values. Existing games,
+clones and imports keep the origins they already have; opening a legacy save does
+not guess its origins. If a value changes through an untracked path, a source bound
+to its old number is not shown as the source of the new one. Direct edits to save
+files do not constitute a verified audit trail.</p>
+<p>Metadata travels with the existing world and history data. Older game versions
+can discard it while retaining the numbers. No extra AI requests, economic rules,
+or accounting engine are introduced. Full change logs, event links, reviewed
+historical citations and author-facing certainty controls remain separate work.</p>
 
     <nav class="wiki-pager" aria-label="Pagination">
         <a class="prev" href="/wiki/projects/"><span>← Previous</span><b>Projects &amp; operations</b></a>

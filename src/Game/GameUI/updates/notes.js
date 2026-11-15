@@ -54,6 +54,19 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-statistic-sources",
+    kind: "minor",
+    date: "2026-11-09",
+    banners: [{
+      title: "Where your statistics come from",
+      items: [
+        "Open Sources and estimates on a national sheet to see where each recorded value came from and when it last changed.",
+        "Scenario values, manual edits, AI estimates and calculated figures have distinct labels; older values keep an unspecified source.",
+        "Historical chart details keep the source recorded with each snapshot, even after the current value changes.",
+      ],
+    }],
+  },
+  {
     // "remove the reccomended thing from command code on the popup when you start a game and dont have a configured key"
     // (the owner, 2026-11-10): GameUI/apiSetupPrompt.jsx ChoiceCard has no recommended badge or highlight.
     id: "2026-11-setup-choices-alike",

@@ -870,6 +870,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
     const save = () => runBusy(async () => {
         if (!target) throw new Error("Pick a country first.");
 
+        const recordedGame = await readGameData({ force: false });
         const world = await readWorldState({ force: true });
         const existing = world.polityOverrides?.[target] ?? {};
         // Only what the player changed since the form loaded: a turn may have
@@ -919,7 +920,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
             ? countryStatPatchFromForm({ form, changed, politicalActor: nextPoliticalActor })
             : null;
         if (patch) {
-            nextSheet = applyCountryStatPatchToWorld(world, target, patch);
+            nextSheet = applyCountryStatPatchToWorld(world, target, patch, { origin: { source: "manual", date: recordedGame?.gameDate, round: recordedGame?.round } });
             const reputation = Number(nextSheet?.indices?.internationalReputation);
             if (Number.isFinite(reputation)) {
                 world.internationalReputation = {
