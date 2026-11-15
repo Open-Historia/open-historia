@@ -134,6 +134,8 @@ test("the tasks that decide nothing for the player are told nothing of the diffi
     "placeFeed",
     // Rostra's first posts, on its empty feed's Refresh.
     "rostraFeed",
+    // A project's plan: what it would honestly take; what becomes of it is the projects engine's.
+    "projectPlan",
     // The player's own generals in the war room: they advise and take orders, and what comes of one is the front engine's.
     "warRoom",
     // A scenario's language packs, made in the Workshop.

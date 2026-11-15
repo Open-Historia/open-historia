@@ -15,7 +15,6 @@ import {
   repeatedOrder,
   settleOrders,
   trimWorldForFocus,
-  slipPassedMilestones,
 } from "./playerFocus.js";
 
 test("an unknown or missing Player focus reads as Balanced", () => {
@@ -108,20 +107,6 @@ const campaign = {
   ],
 };
 
-test("what the player has going on: orders and due dates must be answered, the rest may be drawn on", () => {
-  const material = collectPlayerMaterial({ ...campaign, ...window, playerNames: [PLAYER] });
-  const byKind = (kind) => material.filter((item) => item.kind === kind);
-  assert.deepEqual(byKind("order").map((item) => [item.id, item.required]), [["a1", true]]);
-  assert.deepEqual(byKind("milestone").map((item) => [item.id, item.required]), [["m1", true], ["m2", false]]);
-  assert.deepEqual(byKind("target").map((item) => [item.id, item.required]), [["p-argus", true]]);
-  assert.deepEqual(byKind("storyline").map((item) => item.id), ["s1"]);
-  assert.deepEqual(byKind("war").map((item) => item.id), ["w2"]);
-  assert.deepEqual(byKind("relation").map((item) => item.label), ["Relations with Argentina: hostile"]);
-  assert.deepEqual(byKind("chat").map((item) => item.id), ["c1"]);
-  assert.deepEqual(byKind("consequence").map((item) => item.id), ["e1"]);
-  assert.ok(material.every((item) => item.label));
-});
-
 test("a quiet stretch has nothing going on", () => {
   assert.deepEqual(collectPlayerMaterial({ ...window, playerNames: [PLAYER] }), []);
 });
@@ -211,75 +196,6 @@ test("repeatedOrder finds the same order still queued, or carried out in the las
   assert.equal(repeatedOrder(actions, "Keep Robb at Winterfell", { round: 57 }), null, "an order with no round cannot be dated");
   assert.equal(repeatedOrder(actions, "A new order", { round: 57 }), null);
   assert.equal(repeatedOrder(actions, "", { round: 57 }), null);
-});
-
-test("a milestone whose date passed with no outcome slips; reached ones, later ones and closed Projects are left alone", () => {
-  const board = [
-    {
-      id: "p1", status: "active",
-      milestones: [
-        { id: "m1", date: "2016-08-15", status: "pending" },
-        { id: "m2", date: "2016-08-10", status: "done" },
-        { id: "m3", date: "2016-09-15", status: "pending" },
-        { id: "m4", date: "2016-08-31", status: "pending" },
-      ],
-    },
-    { id: "p2", status: "complete", milestones: [{ id: "m5", date: "2016-08-01", status: "pending" }] },
-  ];
-  const slipped = slipPassedMilestones(board, { date: "2016-08-31" });
-  assert.deepEqual(slipped[0].milestones.map((milestone) => milestone.status), ["slipped", "done", "pending", "slipped"]);
-  assert.equal(slipped[1], board[1]);
-  assert.equal(slipPassedMilestones(slipped, { date: "2016-08-31" })[0], slipped[0], "nothing left to slip changes nothing");
-});
-
-test("the filler filter spares an event that answers an order or moves a Project with something due", () => {
-  const material = collectPlayerMaterial({ ...campaign, ...window, playerNames: [PLAYER] });
-  const spare = createSpareTest(material);
-  assert.equal(spare({ title: "Officials review plans", impacts: { actionIds: ["a1"] } }), true);
-  assert.equal(spare({ title: "Engineers bring the first node online", impacts: { projectOps: [{ op: "milestone", projectId: "p-turing", milestone: { title: "First quantum node online", status: "done" } }] } }), true);
-  assert.equal(spare({ title: "A schedule review", impacts: { projectOps: [{ op: "update", name: "project argus", lastUpdate: "Behind." }] } }), true, "by the Board's name, case aside");
-  // A Project's name in the words, with no op: not what spares it.
-  assert.equal(spare({ title: "Project Turing engineers bring the first node online", impacts: {} }), false);
-  // Another Project's op, or one only in its lead-up month: not due.
-  assert.equal(spare({ title: "A carrier", impacts: { projectOps: [{ op: "update", projectId: "p-foreign" }] } }), false);
-  assert.equal(spare({ title: "Ministry reviews road standards", impacts: {} }), false);
-  assert.equal(createSpareTest([])({ title: "x", impacts: { projectOps: [{ op: "update", projectId: "p-turing" }] } }), false);
-});
-
-// A folded skip's board ops have been lifted off its events by the time the
-// filter runs (gameplay.js foldedTurnReview): the caller hands them back by event.
-test("the filler filter reads the board ops the caller hands it for each event", () => {
-  const material = collectPlayerMaterial({ ...campaign, ...window, playerNames: [PLAYER] });
-  const lifted = new Map([["segment-1-event-2", [{ op: "update", projectId: "p-argus", progress: 80 }]]]);
-  const spare = createSpareTest(material, { boardOpsOf: (event) => lifted.get(event.id) ?? [] });
-  assert.equal(spare({ id: "segment-1-event-2", title: "Quiet progress", impacts: {} }), true);
-  assert.equal(spare({ id: "segment-1-event-3", title: "Quiet progress", impacts: {} }), false);
-});
-
-// Names were folded to their a-z and 0-9, so one in another script folded to
-// nothing: a Project named in the player's language never spared the event
-// that named it, and one owned by a polity named in Cyrillic had a blank owner,
-// which on the Board means the player.
-test("Projects and their owners are told apart in any script, and an event about one is spared by its op in any language", () => {
-  const board = {
-    ...campaign,
-    projects: [
-      { id: "p-fortress", name: "Проект «Береговая крепость»", ownerCode: "", status: "active", targetDate: "2016-08-20", milestones: [] },
-      { id: "p-carrier", name: "Авианосец «Шторм»", ownerCode: "Российская Федерация", status: "active", targetDate: "2016-08-10", milestones: [] },
-      { id: "p-rail", name: "高速铁路计划", ownerCode: "中华人民共和国", status: "active", targetDate: "2016-08-12", milestones: [] },
-    ],
-  };
-  const material = collectPlayerMaterial({ ...board, ...window, playerNames: [PLAYER] });
-  assert.deepEqual(material.filter((item) => item.kind === "target").map((item) => item.id), ["p-fortress"], "another polity's Projects are not the player's");
-
-  const spare = createSpareTest(material);
-  const op = { op: "update", projectId: "p-fortress", progress: 90 };
-  // The same event told in four languages: spared alike by its op, and alike without it.
-  for (const title of ["Coastal Fortress: battery commissioned", "Forteresse côtière : batterie mise en service", "Проект «Береговая крепость»: артиллерийская батарея введена в строй", "海岸要塞：炮台投入使用"]) {
-    assert.equal(spare({ title, impacts: { projectOps: [op] } }), true, title);
-    assert.equal(spare({ title, impacts: {} }), false, title);
-  }
-  assert.equal(spare({ title: "Министерство пересматривает дорожные нормы", impacts: { projectOps: [{ op: "update", name: "Проект «Береговая крепость»" }] } }), true, "by the Board's own name in its own script");
 });
 
 test("Focused and Spotlight trim the world's lanes and evidence, lowest-ranked first; the player's stay", () => {
@@ -406,31 +322,11 @@ test("a Player event in Russian or Chinese counts exactly as its English twin, b
   assert.deepEqual([counted(english), counted(russian), counted(chinese)], [2, 2, 2]);
 });
 
-test("a Project named in Cyrillic is the player's or another's by its owner, and is spared by its op", () => {
-  const board = [
-    { id: "p-leviathan", name: "Проект Левиафан", ownerCode: "", status: "active", targetDate: "2014-06-01", milestones: [] },
-    { id: "p-fortress", name: "Проект Береговая Крепость", ownerCode: RUSSIA, status: "active", targetDate: "2014-05-15", milestones: [] },
-    { id: "p-kyiv", name: "Программа перевооружения", ownerCode: "Украина", status: "active", targetDate: "2014-05-20", milestones: [] },
-  ];
-  const material = collectPlayerMaterial({
-    projects: board, originDate: "2014-05-01", targetDate: "2014-06-01", playerNames: [RUSSIA],
-  });
-  assert.deepEqual(
-    material.filter((item) => item.kind === "target").map((item) => item.id).sort(),
-    ["p-fortress", "p-leviathan"],
-    "Ukraine's programme is not the player's: its owner has a name",
-  );
-  const spare = createSpareTest(material);
-  assert.equal(spare({ title: "Установлен энергетический блок", impacts: { projectOps: [{ op: "update", projectId: "p-leviathan", progress: 70 }] } }), true);
-  assert.equal(spare({ title: "Проект Левиафан: установлен энергетический блок", impacts: {} }), false, "named in the words alone");
-  assert.equal(spare({ title: "Министерство пересматривает дорожные нормы", impacts: { projectOps: [{ op: "update", projectId: "p-kyiv" }] } }), false, "another polity's programme is not due");
-});
-
 test("the jump is told to mark its Player events, and that the mark is what is counted", () => {
   const text = buildPlayerFocusDirective({ focus: "balanced", material: plenty, playerName: PLAYER });
   assert.match(text, /Mark every Player event playerRelated: that mark is what the engine counts\./);
-  const due = buildPlayerFocusDirective({ focus: "balanced", material: [{ kind: "target", id: "p", label: "Project Argus: target date 2016-08-20", required: true }], playerName: PLAYER });
-  assert.match(due, /DUE THIS PERIOD — each gets an outcome in an event that names the Project exactly: reached, slipped or missed, with the board op that records it wherever you keep the board\./);
+  const due = buildPlayerFocusDirective({ focus: "balanced", material: [{ kind: "target", id: "p", label: "Project Argus: completed on 2016-08-20", required: true }], playerName: PLAYER });
+  assert.match(due, /DECIDED THIS PERIOD — what the engine has already worked out/);
 });
 
 // A time skip's [This Round] lists the orders with their ids and words
@@ -447,4 +343,69 @@ test("where the orders are listed above, the focus names them by id and does not
   assert.equal(text.includes("Fund the shipyard") || text.includes("Recall the ambassador"), false);
   const { readFileSync } = await import("node:fs");
   assert.match(readFileSync(new URL("./gameplay.js", import.meta.url), "utf8"), /playerFocusDirective: buildPlayerFocusDirective\(\{[\s\S]{0,400}?ordersAbove: true,/);
+});
+
+// --- The player's Projects: what the engine decided for the window ---
+// The engine runs every Project (runtime/projectEngine.js), and the skip's
+// period is run before its story: the checkpoints, completions and stalls it
+// decides for the player's own Projects are what the skip must tell.
+
+const OUTCOMES = [
+  { type: "milestone", date: "2016-08-15", project: "Project Turing", owner: PLAYER, milestone: "First quantum node online" },
+  { type: "complete", date: "2016-08-20", project: "Project Argus", owner: PLAYER, effects: [] },
+  { type: "stall", date: "2016-08-25", project: "Project Turing", owner: PLAYER, reason: "funds" },
+  { type: "milestone", date: "2016-08-10", project: "Russian Carrier", owner: "Russia", milestone: "Launch" },
+  { type: "yield", date: "2016-08-30", project: "Project Argus", owner: PLAYER, share: 1 },
+];
+
+test("what the player has going on: orders, and the engine's checkpoints, completions and stalls of their own Projects, must be told", () => {
+  const material = collectPlayerMaterial({ ...campaign, ...window, playerNames: [PLAYER], projectOutcomes: OUTCOMES });
+  const byKind = (kind) => material.filter((item) => item.kind === kind);
+  assert.deepEqual(byKind("order").map((item) => [item.id, item.required]), [["a1", true]]);
+  assert.deepEqual(byKind("milestone").map((item) => [item.label, item.required]), [['Project Turing: reaches "First quantum node online" on 2016-08-15', true]]);
+  assert.deepEqual(byKind("target").map((item) => item.label), ["Project Argus: completed on 2016-08-20", "Project Turing: stalls for want of funds on 2016-08-25"]);
+  assert.ok(!material.some((item) => item.projectName === "Russian Carrier"), "another country's Project is not the player's");
+  assert.ok(!material.some((item) => item.label.includes("2016-08-30")), "a month of a programme's yields is not news");
+  assert.deepEqual(byKind("storyline").map((item) => item.id), ["s1"]);
+  assert.deepEqual(byKind("war").map((item) => item.id), ["w2"]);
+  assert.deepEqual(byKind("chat").map((item) => item.id), ["c1"]);
+  assert.deepEqual(byKind("consequence").map((item) => item.id), ["e1"]);
+});
+
+test("the jump is told the engine's decisions for the player's Projects as settled", () => {
+  const material = collectPlayerMaterial({ ...campaign, ...window, playerNames: [PLAYER], projectOutcomes: OUTCOMES });
+  const text = buildPlayerFocusDirective({ focus: "balanced", material, playerName: PLAYER });
+  assert.match(text, /DECIDED THIS PERIOD — what the engine has already worked out for British Empire's Projects: tell each in an event on its date that names the Project exactly\. It happens as listed; never say otherwise\./);
+  assert.match(text, /- Project Argus: completed on 2016-08-20/);
+});
+
+test("the filler filter spares an event that answers an order, or that carries a line on a Project the engine moves this period", () => {
+  const material = collectPlayerMaterial({ ...campaign, ...window, playerNames: [PLAYER], projectOutcomes: OUTCOMES });
+  const spare = createSpareTest(material);
+  assert.equal(spare({ title: "Officials review plans", impacts: { actionIds: ["a1"] } }), true);
+  assert.equal(spare({ title: "The first node comes online", impacts: { projectOps: [{ op: "update", name: "Project Turing", lastUpdate: "Online." }] } }), true);
+  assert.equal(spare({ title: "Argus is finished", impacts: { projectOps: [{ op: "update", name: "project argus", lastUpdate: "Done." }] } }), true, "by the Board's name, case aside");
+  assert.equal(spare({ title: "Project Turing engineers bring the first node online", impacts: {} }), false, "a Project's name in the words is not what spares it");
+  assert.equal(spare({ title: "A carrier", impacts: { projectOps: [{ op: "update", name: "Russian Carrier" }] } }), false);
+  // A folded skip's board ops have been lifted off its events: the caller hands them back by event.
+  const lifted = new Map([["segment-1-event-2", [{ op: "update", name: "Project Argus", lastUpdate: "Done." }]]]);
+  const spareLifted = createSpareTest(material, { boardOpsOf: (event) => lifted.get(event.id) ?? [] });
+  assert.equal(spareLifted({ id: "segment-1-event-2", title: "Quiet", impacts: {} }), true);
+  assert.equal(spareLifted({ id: "segment-1-event-3", title: "Quiet", impacts: {} }), false);
+});
+
+test("a Project named in another script is the player's or another's by its owner, and is spared by its op", () => {
+  const board = [
+    { id: "p-leviathan", name: "Проект Левиафан", ownerCode: "", status: "active" },
+    { id: "p-fortress", name: "Проект Береговая Крепость", ownerCode: RUSSIA, status: "active" },
+    { id: "p-kyiv", name: "Программа перевооружения", ownerCode: "Украина", status: "active" },
+    { id: "p-rail", name: "高速铁路计划", ownerCode: "中华人民共和国", status: "active" },
+  ];
+  const outcomes = board.map((entry) => ({ type: "complete", date: "2014-05-20", project: entry.name, owner: entry.ownerCode || RUSSIA }));
+  const material = collectPlayerMaterial({ projects: board, originDate: "2014-05-01", targetDate: "2014-06-01", playerNames: [RUSSIA], projectOutcomes: outcomes });
+  assert.deepEqual(material.filter((item) => item.kind === "target").map((item) => item.projectId).sort(), ["p-fortress", "p-leviathan"]);
+  const spare = createSpareTest(material);
+  assert.equal(spare({ title: "Установлен энергетический блок", impacts: { projectOps: [{ op: "update", name: "Проект Левиафан", lastUpdate: "x" }] } }), true);
+  assert.equal(spare({ title: "Проект Левиафан: установлен энергетический блок", impacts: {} }), false, "named in the words alone");
+  assert.equal(spare({ title: "x", impacts: { projectOps: [{ op: "update", name: "Программа перевооружения" }] } }), false, "another polity's programme is not the player's");
 });

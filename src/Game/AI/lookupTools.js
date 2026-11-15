@@ -23,6 +23,7 @@ import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../runtime/politicalKnowledge.js";
 import { normalizeInstitutions } from "../../runtime/institutions.js";
 import { isProjectOpen } from "../../runtime/projects.js";
+import { describeEffects } from "../../runtime/projectEngine.js";
 import { gameDateDayNumber } from "../../runtime/gameDates.js";
 import { livePuppetsFor } from "../../runtime/puppets.js";
 import { findGroupKey, groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
@@ -177,8 +178,8 @@ export const LOOKUP_TOOLS = Object.freeze([
   {
     name: "list_projects",
     description:
-      "The Projects & Operations board: long-running programmes with owner, status, priority, progress, target date, "
-      + "next milestone, last update and what completing them changes on the map. Open entries by default.",
+      "The Projects & Operations board: long-running programmes with owner, status, funding, progress, expected finish, "
+      + "cost a month, next checkpoint, last update and what completing them does. Open entries by default.",
     schema: object("Optional filters.", {
       owner: text("Optional exact power name; omit for every power's projects."),
       status: text("open (default), closed, or all."),
@@ -911,6 +912,9 @@ const warBetween = (war, a, b) => {
   return (has(sideA, a) && has(sideB, b)) || (has(sideA, b) && has(sideB, a));
 };
 
+// One entry as a lookup answers it: by name (an op finds an entry by its name),
+// with what the engine knows of it (runtime/projectEngine.js): progress, when it
+// should be done, its cost and funding, its next checkpoint, and what it does.
 const projectBrief = (project, regionRef = writtenRegion) => {
   const effects = project?.onComplete && typeof project.onComplete === "object" ? project.onComplete : null;
   const mapEffects = effects ? [
@@ -918,19 +922,23 @@ const projectBrief = (project, regionRef = writtenRegion) => {
     ...array(effects.regionClaims).map((c) => `claim ${regionRef(c)} by ${c.claimantCode}`),
     ...array(effects.polityChanges).map((p) => `polity ${p.code || p.name}`),
   ] : [];
+  const plan = project?.plan && typeof project.plan === "object" ? project.plan : null;
+  const next = array(plan?.milestones).find((entry) => !entry?.reached && !entry?.missed);
   return {
-    id: clean(project?.id),
     name: clean(project?.name),
     kind: clean(project?.kind),
     owner: clean(project?.ownerCode || project?.owner),
     status: clean(project?.status) || "active",
-    priority: clean(project?.priority),
-    progress: Number(project?.progress) || 0,
+    ...(clean(project?.stallReason) ? { stalledFor: clean(project.stallReason) } : {}),
+    funding: clean(project?.funding) || "normal",
+    progress: Math.floor(Number(project?.progress) || 0),
     ...(project?.secrecy && clean(project.secrecy) !== "public" ? { secrecy: clean(project.secrecy) } : {}),
     summary: clean(project?.summary).slice(0, 300),
     startedAt: clean(project?.startedAt),
-    ...(project?.ongoing ? { ongoing: true } : { targetDate: clean(project?.targetDate) }),
-    ...(project?.nextMilestone ? { nextMilestone: { title: clean(project.nextMilestone.title), date: clean(project.nextMilestone.date), status: clean(project.nextMilestone.status) } } : {}),
+    ...(project?.ongoing ? { ongoing: true } : { expectedFinish: clean(project?.targetDate) }),
+    ...(plan ? { monthlyCost: Number(plan.monthlyCost) || 0, durationDays: Number(plan.durationDays) || 0 } : {}),
+    ...(next ? { nextCheckpoint: { title: clean(next.title), atProgress: Number(next.atProgress) || 0 } } : {}),
+    ...(array(plan?.effects).length ? { effects: describeEffects(plan.effects, { owner: clean(project?.ownerCode) }) } : {}),
     lastUpdate: clean(project?.lastUpdate).slice(0, 300),
     ...(mapEffects.length ? { onComplete: mapEffects.slice(0, 12) } : {}),
   };

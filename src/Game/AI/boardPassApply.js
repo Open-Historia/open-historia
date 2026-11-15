@@ -27,13 +27,15 @@ import { materiallyChangedEntryIds } from "../../runtime/projects.js";
 const clean = (value) => String(value ?? "").trim();
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-// An operation's focus is where on the map it happens: the place the war room
-// sends its troops at (runtime/fronts/plans.js operationsOn). A time skip's board
+// A project's focus is where on the map it happens: for an operation, the place
+// the war room sends its troops at (runtime/fronts/plans.js operationsOn); for
+// any project, where a structure its plan builds stands when the plan gives it
+// no coordinates (gameState.js applyProjectOutcomesToWorld). A time skip's board
 // ops carry none (gameplaySchemas.js FOLDED_PROJECT_OP_OMITS), and the place used
 // to be found by reading the operation's name and summary for an enemy city, in
-// English only. Where an op that opens or moves an operation gives no focus,
-// and the operation has none yet, the event that carries the op says where it
-// happens: the first of its places (its `places` field, as found on the map,
+// English only. Where an op that opens a project, or moves an operation, gives
+// no focus, and the entry has none yet, the event that carries the op says where
+// it happens: the first of its places (its `places` field, as found on the map,
 // runtime/eventPlaces.js) that is a point. Nothing is read from its words.
 const placePointOf = (event) => {
   const place = normalizeEventPlaces(event?.places).find((entry) => Number.isFinite(entry.lng) && Number.isFinite(entry.lat));
@@ -50,10 +52,10 @@ export const withEventFocus = (ops, event, projects = []) => {
     // Where the op's own fields are: a nested create's are its `project`, an update's its `patch` or `project`.
     const body = kind === "create" ? (isRecord(op.project) ? op.project : op) : (isRecord(op.patch) ? op.patch : isRecord(op.project) ? op.project : op);
     if (body.focus) return op;
-    const operation = kind === "create"
-      ? clean(body.kind).toLowerCase() === "operation"
+    const placed = kind === "create"
+      ? !entryOf(op)
       : kind === "update" && entryOf(op)?.kind === "operation" && !entryOf(op)?.focus;
-    if (!operation) return op;
+    if (!placed) return op;
     return body === op ? { ...op, focus: point } : { ...op, [body === op.project ? "project" : "patch"]: { ...body, focus: point } };
   });
 };

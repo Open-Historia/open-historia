@@ -30,7 +30,7 @@ import { militaryLookup } from "../../runtime/militaryStats.js";
 import { applyCountryCapabilityPatchToWorld, validateCountryCapabilityPatch } from "../../runtime/countryCapabilities.js";
 import { MILITARY_CHANGE_RULE, describeMilitaryStanding } from "../../runtime/militaryStanding.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
-import { STATS_BACKEND_FIELD, conflictSheetTargets, hasStatsBackend, statsBackendInstruction, statsBackendOf, statsBackendPatch, statsBackendTurnRule } from "../../runtime/statsBackend.js";
+import { STATS_BACKEND_FIELD, conflictSheetTargets, hasStatsBackend, readableFigure, statsBackendInstruction, statsBackendOf, statsBackendPatch, statsBackendTurnRule } from "../../runtime/statsBackend.js";
 import { CONFLICT_BACKENDS_MOST, conflictBackendsRequest, readConflictBackends } from "./conflictBackends.js";
 import { MILITARY_BATCH_MOST, militaryRatingRequest, militaryTargets, ratedScaleOf, readMilitaryRatings, wantsRating } from "./militaryRating.js";
 import { peopleFor } from "../../runtime/militaryPower.js";
@@ -74,7 +74,6 @@ import {
   normalizePlayerFocus,
   playerFocusShortfall,
   settleOrders,
-  slipPassedMilestones,
   trimWorldForFocus,
 } from "./playerFocus.js";
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
@@ -171,13 +170,24 @@ import {
 } from "./jumpSegments.js";
 import { collapseRepeatedWorldContext, collapseRepeatsInsideJob, templateAlreadySays } from "./promptDedupe.js";
 import {
-  HIGH_PRIORITY_ASSESSMENT_MARKER,
-  HIGH_PRIORITY_ASSESSMENT_RULE,
-  buildBoardPassDirective,
+  PROJECT_EFFECTS_RULE,
   buildJumpProjectsDirective,
   buildJumpProjectsRules,
   JUMP_PROJECTS_RULES_HEADING,
 } from "./projectsDirective.js";
+import {
+  AI_OPEN_PER_COUNTRY_MOST,
+  COST_SHARE_OF_BUDGET_MOST,
+  DURATION_LEAST,
+  DURATION_MOST,
+  boundPlanForOwner,
+  describeOutcomes,
+  normalizeProjectPlan,
+  ownerMeans,
+  sheetOf,
+  tickProjects,
+  worldProjectGate,
+} from "../../runtime/projectEngine.js";
 import { filterBoundLedgerUpdatesToKeptEvents, keepWarRecordsBeyondEvents } from "./ledgerEventBinding.js";
 import { giveSegmentEventIds, pinLedgersToEvents } from "./ledgerPins.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
@@ -313,7 +323,6 @@ import {
   boardPassReasons,
   isProjectOpen,
   spyProvenanceOps,
-  unassessedHighPriorityEntries,
 } from "../../runtime/projects.js";
 import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
 import { assertPoliticalLandscapeConsistency, describeElectionsDue, normalizePoliticalLandscape } from "../../runtime/politics.js";
@@ -339,6 +348,7 @@ import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment,
 import {
   buildActionHistoryText,
   buildDetailedChatHistoryText,
+  buildProjectsSummaryText,
   buildEventHistoryText,
   buildPromptContext,
   buildWorldPromptSnapshot,
@@ -392,7 +402,10 @@ import {
   advanceStandingOrders,
   standingOrdersAskWater,
   applyEventImpactsToWorld,
+  advanceProjectsInWorld,
   applyProjectOpsToWorld,
+  applyProjectOutcomesToWorld,
+  findProjectIndexForOp,
   confirmResolvedDeployments,
   lastUnitMoveDates,
   linkStructuresToProjects,
@@ -2971,10 +2984,9 @@ const buildJumpStaticRules = async (variables = {}) => {
     unitsOnTheMapBlock(game?.gameDate, eraSettingOf(world)),
     `[Military Feasibility]\n${MILITARY_FEASIBILITY}`,
     TAKING_GROUND_BLOCK,
-    // How the board is kept, once there is a board (projectsDirective.js).
-    normalizeArray(world.projects).length > 0
-      ? `${JUMP_PROJECTS_RULES_HEADING}\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) && variables?.foldedBoard !== false })}`
-      : "",
+    // How the board is kept (projectsDirective.js): always, since the engine runs
+    // it and an empty board is where the first projects are opened.
+    `${JUMP_PROJECTS_RULES_HEADING}\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) && variables?.foldedBoard !== false })}`,
     isActiveFeatureEnabled("groups") ? `${GROUPS_RULE_HEADING}\n${GROUPS_RULE}` : "",
     `${WAR_LEDGER_RULES_HEADING}\n${warLedgerRules(playerName)}`,
     `${DIPLOMATIC_LEDGER_RULES_HEADING}\n${diplomaticLedgerRules(playerName)}`,
@@ -3196,10 +3208,12 @@ ${pending}`);
   const foldedBoard = foldedSkip && variables.foldedBoard !== false;
   const board = buildJumpProjectsDirective(variables.projectsSummary, {
     folded: foldedBoard,
-    // The rules are above, among the standing ones, when the board had entries
-    // as the opening was built (buildJumpStaticRules).
-    rulesAbove: rulesAbove && normalizeArray(world.projects).length > 0,
+    // The rules are above, among the standing ones (buildJumpStaticRules).
+    rulesAbove,
     doubted: normalizeString(variables.foldedBoardDoubts),
+    // What the engine decided for this period, worked out before this prompt.
+    forecast: normalizeString(variables.projectsForecast),
+    players: humanCountriesOf(game),
   });
   if (board) blocks.push(board);
 
@@ -3486,7 +3500,7 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
       const [world, game] = await Promise.all([readWorldState({ force: false }), readGameData()]);
       const brief = espionageBrief(normalizeWorldState(world), await readOpenedIntercepts(), { playerPolity: normalizeString(game.country) });
       if (brief) {
-        const framing = "\n\n[Espionage]\nWhat the player's service has read, uncensored — the player sees only what it could decode. This is the ONE source that can put another power's long-term work on the board: when an intercept reveals a programme a rival is running (a weapon, a canal, a mobilisation, a covert operation of their own), open it as a FOREIGN entry with ownerCode set to that polity's full name, and move it as later intercepts say it moved. Reach for this only when the traffic genuinely shows a sustained effort — a rival grumbling about a treaty is not a programme.\nA report from a TURNED agent is marked as planted, and what it describes may be a fabrication. Open it anyway if it reads as a programme: the board records what the player's service believes, and a phantom entry that never delivers is exactly what a successful deception looks like from this side. Never write that an agent has been turned, or that an entry came from a spy at all.\nWhere the brief says the service no longer has an agent somewhere, every foreign entry for that polity is now UNCONFIRMED. Do not advance it, and do not invent a reason it went quiet: mark it stalled with a lastUpdate saying plainly that nothing has been heard since that date. Losing the source IS the blocker, and an honest entry says so.\n[Doubted intelligence]\nAn entry marked doubted was sourced from an agent the service no longer trusts, and may be a fabrication it was fed. Where the board below says a FRESH agent is now inside that polity, settle it from what that new source shows: set verification \"confirmed\" and let the entry run on if the programme is real, or \"refuted\" and fail it if the new material shows there was never anything there. Settle it only when the new source actually bears on it — leave it doubted otherwise, because guessing is what put the phantom on the board to begin with. Never write that any of this came from a spy, or that an agent was turned.\n";
+        const framing = "\n\n[Espionage]\nWhat the player's service has read, uncensored — the player sees only what it could decode. Never write that an agent has been turned, or that an entry came from a spy at all.\n[Doubted intelligence]\nAn entry marked doubted was sourced from an agent the service no longer trusts, and may be a fabrication it was fed. Where the board below says a FRESH agent is now inside that polity, settle it from what that new source shows: set verification \"confirmed\" with op update and let the entry run on if the programme is real, or \"refuted\" and fail it if the new material shows there was never anything there. Settle it only when the new source actually bears on it — leave it doubted otherwise, because guessing is what put the phantom on the board to begin with. Never write that any of this came from a spy, or that an agent was turned.\n";
         systemPrompt = systemPrompt + framing + brief;
       }
     } catch {
@@ -3528,35 +3542,15 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
     systemPrompt = `${systemPrompt}\n\n[Unit Coordinates]\nPlace every unit you move with \`at\`, as [Placing Things] below describes. If you give lng and lat at all, write each as a plain decimal number, using a POINT for the decimal mark and no other characters: lng 37.06, not "37,06", not "37.06\u00b0E". Never 0,0: it is open ocean off West Africa, never a valid position, and a unit placed there is discarded.`;
   }
 
-  // The Projects & Operations board. It exists precisely so long-running work
-  // does not vanish between rounds, which only holds if the jump that narrates a
-  // programme also MOVES it — otherwise the board freezes at whatever the advisor
-  // last said and the player stops trusting it. Only the game master moves the
-  // board inline: the jump hands it to the separate `projects` task
-  // (generateProjectOps), whose whole prompt is the board and whose schema is the
-  // only place projectOps now appears for a jump.
+  // The Projects & Operations board, for the Game Master: the engine runs every
+  // project (runtime/projectEngine.js), and the Game Master's events say what they
+  // did to one, under the same rules a time skip keeps (projectsDirective.js).
   if (taskKey === "gameMaster") {
     const projects = normalizeString(variables.projectsSummary);
     const board = projects && !projects.startsWith("No projects")
       ? `\n\nThe board as it stands:\n${projects}`
       : "";
-    systemPrompt = `${systemPrompt}\n\n[Projects & Operations]\nThe player keeps a board of long-running efforts - research and industrial programmes, construction projects, military and covert operations, sustained political campaigns - each with a status, progress, timeline and next milestone. Keep it in step with what you narrate, using impacts.projectOps.\nWhen an event advances, delays, funds, starves, exposes or ends one of the efforts below, that SAME event must carry a projectOps entry moving it: op update for progress or a change of status, op milestone when a checkpoint is reached or missed, op complete when it finishes. A checkpoint is reached when it happens, not on its date: the FIRST event that reports a pending checkpoint done carries op milestone for it, even weeks early, and once the board's Last reported line says a checkpoint is done, its date arriving later is not news - never narrate it a second time. Copy the id and name EXACTLY as they appear below - an op that names something not on the board is dropped. When an event STARTS a new multi-round effort (a power lays down a programme, opens a construction project, mounts an operation), open it with op create, including a foreign power's programme the player's services have learned of - set ownerCode to that country's full name.\nBe proportionate. A programme does not move every jump, and inventing progress is worse than reporting none: if nothing happened to it this period, leave it alone. A long jump should move the things that plausibly advanced over that span; a six-hour jump almost never moves any of them. Never open a project for an internal act - a rename, a recolour, a flag, a title, a proclamation, a reshuffle - or for a transfer the other side has already agreed to: those are enacted outright by the event that narrates them (see [Sovereign Acts and What Needs Consent]), and a progress bar for one is always wrong.${board}
-
-Whose project it is. Entries marked THEIRS belong to another power; everything else is the player's own. A foreign programme moves because ITS OWNER moved it and the player's services observed as much - never because the player wished it stopped or ordered it stopped. The player has no priority dial and no cancel over another government's work, so an order of theirs is not a reason to touch a foreign entry: if their orders this period were aimed at a rival's programme, what happens is that THEIR OWN counter-effort advances - the sabotage, the embargo, the covert operation, the race to build first - and the rival's entry then moves only insofar as that effort actually bit, narrated as an event with the consequences that follow. Retaliation is the same rule, not an exception to it: a wrecked programme is wrecked by an event that says who did what and at what cost, and if the operation failed then the rival's programme carries right on. Never close, cancel or deprioritise a foreign entry to satisfy an instruction; close it only when the story genuinely ended it, and say what ended it.
-
-The board above carries a \"Needs a decision this jump\" list. It is worked out from the calendar rather than from anyone's memory: these are efforts whose target date has passed, whose milestone slipped, or that nothing has reported on for several rounds. Deal with EVERY entry on it. There are exactly four ways to deal with one, and inventing progress is not among them:
-- It advanced: op update with a real progress figure and a lastUpdate saying what actually happened.
-- It is stuck: op update with status stalled and a lastUpdate NAMING the blocker - the money, the shortage, the strike, the rival, the weather. \"Progress continues\" is not an answer. A stalled project with a named cause is, and it gives the player something they can act on.
-- It reached or missed a checkpoint: op milestone.
-- It is over: op complete, cancel or fail, with a note.
-${HIGH_PRIORITY_ASSESSMENT_RULE} A project marked low priority may be left drifting with a one-line note, and that is a correct answer for it. Everything else is normal: move it when the story plausibly moved it, and say so plainly when it did not. Never raise a progress figure that nothing in this jump's events justifies - a board of quietly inflating percentages is worth less than an honest one full of stalls.`;
-  }
-  // The board pass's rules live in its template, which every campaign keeps a
-  // frozen copy of; the HIGH PRIORITY rule changed, so it is appended here to
-  // reach games whose copy still demands movement — and skipped for one whose
-  // template already carries the new rule.
-  if (taskKey === "projects" && !templateAlreadySays(systemPrompt, HIGH_PRIORITY_ASSESSMENT_MARKER)) {
-    systemPrompt = `${systemPrompt}\n\n${buildBoardPassDirective()}`;
+    systemPrompt = `${systemPrompt}\n\n[Projects & Operations]\n${buildJumpProjectsRules({ folded: true })}${board}`;
   }
   // The between-rounds pulse may now move the world's forces a little, so it needs
   // the same discipline the jump gets — injected here so it reaches existing games
@@ -5081,8 +5075,8 @@ const runJsonTask = async (taskKey, {
 // does not point the player at a timeline card that is not there.
 // The board's ops when a review already holds them: the folded skip's own
 // answer (foldedTurnReview), or a Scene's map check (runSceneReview).
-// `skipped` is what it is for generateProjectOps below: the board was not looked
-// at, so nothing on it moves and nothing is proven against it.
+// `skipped`: the board was not looked at, so nothing on it moves and nothing is
+// proven against it.
 const reviewedProjectOps = ({ review, visibleEvents, hiddenEvents, idMap }) => {
   const part = review?.parts?.board;
   if (!part) return { ops: [], skipped: true };
@@ -5097,60 +5091,6 @@ const reviewedProjectOps = ({ review, visibleEvents, hiddenEvents, idMap }) => {
     logDebugEvent("turn", `Projects board: ${dropped} op(s) dropped because the event they rested on was withheld from the record.`, undefined, { verbose: true });
   }
   return { ops, skipped: false };
-};
-
-const generateProjectOps = async (bundle, events, { signal, hiddenEvents = [] } = {}) => {
-  const board = normalizeArray(bundle.world?.projects);
-  const hidden = normalizeArray(hiddenEvents);
-  // Nothing to keep in step, and nothing an event could plausibly open against
-  // an empty board that is worth a whole extra request.
-  if (board.length === 0 || (events.length === 0 && hidden.length === 0)) return { ops: [], skipped: true };
-
-  const variables = await buildTemplateVariables(bundle, { taskKey: "projects", lookups: true });
-  // The events, numbered, because eventIndex is how an op says which one moved
-  // the effort. Impacts are deliberately left out: this call decides what the
-  // STORY did to the board, and the other levers are noise for that question.
-  const eventList = [
-    ...events.map((event, index) => `[${index}] ${event.date || "undated"} — ${event.title}\n${event.description}`),
-    ...hidden.map((event, index) =>
-      `[${events.length + index}] ${event.date || "undated"} — ${event.title} (kept off the timeline)\n${event.description}`),
-  ].join("\n\n");
-  const hiddenNote = hidden.length
-    ? "\n\nEvents marked (kept off the timeline) happened, but were too routine to show the player as a card. "
-      + "Move the board from them exactly like any other event, and write lastUpdate so it stands on its own "
-      + "without pointing at a timeline entry."
-    : "";
-
-  // Doubted entries the player now has a clean pair of eyes on. Named explicitly
-  // rather than left for the model to notice, because settling one is only honest
-  // when a fresh source genuinely exists — and that is a fact about world state,
-  // not something readable from the board text. The sealed file is enough: only
-  // `planted` is read, so nothing has to be decrypted.
-  const gathered = await readInterceptsState({ force: false }).catch(() => ({}));
-  const pendingDoubts = doubtedAwaitingFreshSource(
-    normalizeSpies(bundle.world?.spies),
-    board,
-    {
-      playerPolity: normalizeString(bundle.game?.country),
-      intercepts: normalizeIntercepts(gathered),
-    },
-  );
-  const doubtBlock = pendingDoubts.length
-    ? `\n\nThese doubted entries can now be settled — a fresh agent is in place:\n${describeDoubtedForPrompt(pendingDoubts)}`
-    : "";
-
-  const { generation, payload } = await runJsonTask("projects", {
-    lookups: buildTaskLookups(bundle),
-    signal,
-    userMessage:
-      `These events have just been simulated. Move the board to match them, and return `
-      + `{"projectOps":[]} if nothing on it genuinely moved.${BOARD_MILESTONE_NOTE}${hiddenNote}\n\n${eventList}${doubtBlock}`,
-    variables,
-    // No fallback: an empty board is exactly what a failed call should leave
-    // behind, and runJsonTask throwing is what lets the caller tell the player
-    // the board did not update rather than pretending it did.
-  });
-  return { generation, ops: normalizeArray(payload?.projectOps) };
 };
 
 // The turn is generated and waiting, not lost. Flagged so the UI can tell this
@@ -7650,6 +7590,13 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // Null outside timeline jumps: their events are held to what their own ops
   // and a scripted beat's impacts change, as every event is (no prose is read).
   politicalClaimContext = null,
+  // The projects a time skip (or a scene) may open: only for countries nobody
+  // plays, each with a plan, and no more than the engine's caps
+  // (projectEngine.js AI_OPEN_PER_COUNTRY_MOST, AI_OPEN_TOTAL_MOST,
+  // SKIP_CREATES_MOST). `players` are the countries people play. False for the
+  // Game Master, whose word is the administrator's.
+  worldProjects = false,
+  players = null,
   // Final-attempt-only bounded AI bridge supplied by the timeline jump. It may
   // complete a structured political decision with canonical operations, but the
   // operations still pass native shape/reference/dry-run validation before they
@@ -7752,14 +7699,24 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     }
   }
   // Every project an op could legitimately address: what is already on the
-  // board, plus anything a create earlier in this same payload opens.
+  // board, plus anything a create earlier in this same payload opens. Found as
+  // the board finds it (gameState.js findProjectIndexForOp): by id, else by its
+  // name, so an op with a wrong id and the right name is the right project's.
   const knownProjects = new Map();
-  for (const project of normalizeArray(world?.projects)) {
-    const name = normalizeString(project?.name);
-    if (!name) continue;
-    knownProjects.set(name.toLowerCase(), name);
-    if (normalizeString(project?.id)) knownProjects.set(normalizeString(project.id), name);
-  }
+  const boardForOps = normalizeArray(world?.projects)
+    .filter((project) => normalizeString(project?.name))
+    .map((project) => ({ id: normalizeString(project.id), name: normalizeString(project.name), ownerCode: normalizeString(project.ownerCode), status: normalizeString(project.status) || "active" }));
+  for (const project of boardForOps) knownProjects.set(project.name.toLowerCase(), project.name);
+  const projectKnown = (operation) => findProjectIndexForOp(boardForOps, {
+    projectId: normalizeString(operation?.projectId || operation?.id),
+    name: normalizeString(operation?.name || operation?.project),
+  }) !== -1;
+  // The engine's caps on what the world opens, counted over the board as it is
+  // and what this answer has opened so far.
+  const admitWorldCreate = worldProjectGate({
+    board: boardForOps,
+    players: normalizeArray(players ?? [playerCountry]).map((name) => toCountryName(normalizeString(name)) || normalizeString(name)).filter(Boolean),
+  });
 
   // The map read at most once for the whole pass (createRenderedRegionsReader).
   const renderedRegions = createRenderedRegionsReader();
@@ -8182,27 +8139,45 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
 
       if (op === "create") {
         const project = operation.project ?? operation;
-        if (!normalizeString(project?.name)) {
+        const projectName = normalizeString(project?.name);
+        if (!projectName) {
           if (strict) return `${operationPath} must name the project it is opening.`;
           drop(path, "a project was not opened — the create operation gave it no name.", "projectUnnamed");
           continue;
         }
+        // What the world opens (a time skip, a scene): another country's, with
+        // a plan, within the caps. Never the work of a country a person plays:
+        // that is theirs to open, from the Projects tab.
+        if (worldProjects && !projectKnown(project)) {
+          const refusal = admitWorldCreate(project);
+          if (refusal === "theirs") {
+            drop(path, `the project "${projectName}" was not opened — a country a person plays opens its own projects, from the Projects tab.`, "projectNotTheirs", { name: projectName });
+            continue;
+          }
+          if (refusal === "plan") {
+            drop(path, `the project "${projectName}" was not opened — it came with no plan (durationDays and monthlyCost).`, "projectNoPlan", { name: projectName });
+            continue;
+          }
+          if (refusal) {
+            drop(path, `the project "${projectName}" was not opened — its country runs as many projects as a country may at once (${AI_OPEN_PER_COUNTRY_MOST}), or the world has opened its share this period.`, "projectCap", { name: projectName });
+            continue;
+          }
+        }
         // A create is also how a project first appears, so remember it: a later
         // op in the SAME turn may legitimately reference something opened above.
-        knownProjects.set(normalizeString(project.name).toLowerCase(), normalizeString(project.name));
-        if (normalizeString(project.id)) knownProjects.set(normalizeString(project.id), normalizeString(project.name));
+        boardForOps.push({ id: normalizeString(project.id), name: projectName, ownerCode: normalizeString(project.ownerCode), status: "active" });
+        knownProjects.set(projectName.toLowerCase(), projectName);
         keptProjectOps.push(operation);
         continue;
       }
 
-      const target = normalizeString(operation?.projectId || operation?.id).toLowerCase()
-        || normalizeString(operation?.name || operation?.project).toLowerCase();
+      const target = normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project);
       if (!target) {
         if (strict) return `${operationPath} must carry the name (or id) of the project it changes.`;
         drop(path, `a project ${op || "update"} was dropped — it named no project.`, "projectChangeNoProject");
         continue;
       }
-      if (!knownProjects.has(target)) {
+      if (!projectKnown(operation)) {
         if (strict) return buildProjectFeedback(operationPath, operation, knownProjects);
         drop(path, `the project ${op || "update"} on "${normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project)}" was dropped — nothing on the board has that name, so the board did not move.`, "projectChangeUnknown", { name: normalizeString(operation?.projectId || operation?.id || operation?.name || operation?.project) });
         continue;
@@ -8770,6 +8745,71 @@ export const waterTestFor = async (world) => {
 // retried. Callers with no board story (advanceActiveInteractive) simply omit
 // it and are unchanged; the GM console never comes through here
 // (applyGameMasterPreview writes its own previewed transaction).
+// ---- The projects engine in a turn ---------------------------------------------------
+// The country a blank owner on the board means: the game's own.
+const projectsHost = (game) => toCountryName(normalizeString(game?.country)) || normalizeString(game?.country);
+
+// The period a time skip of `bundle` to `toDate` runs for the board, as the
+// engine runs it (projectEngine.js tickProjects): the same inputs before the
+// prompt (the forecast) and after the answer (the apply), so the same days.
+const projectsPeriod = (bundle, toDate, fromDate = normalizeString(bundle?.game?.gameDate)) => tickProjects({
+  projects: normalizeWorldState(bundle?.world).projects,
+  world: bundle?.world,
+  fromDate,
+  toDate,
+  host: projectsHost(bundle?.game),
+  round: (Number(bundle?.game?.round) || 1) + 1,
+});
+
+// What the engine decided for a skip's period, as its prompt is told it.
+const projectsForecastText = (outcomes) => describeOutcomes(outcomes);
+
+// The engine's turn (see applySimulationResult): the tick, the effects it
+// releases, and the territory a completion moves, found on the map by name and
+// enacted through the event path like any other border change.
+const runProjectsEngine = async ({ baseWorld, world, colors, fromDate, toDate, host, round }) => {
+  const advanced = advanceProjectsInWorld({ baseWorld, world, fromDate, toDate, host, round });
+  if (!advanced.days) return { world, colors, renamedPolities: [] };
+  const released = applyProjectOutcomesToWorld({ world: advanced.world, outcomes: advanced.outcomes, date: toDate, round, host });
+  let nextWorld = released.world;
+  let nextColors = colors;
+  const renamedPolities = [];
+  if (released.territory.length) {
+    const containers = released.territory.map((entry, index) => ({
+      event: { title: entry.project },
+      impacts: { regionTransfers: entry.regionTransfers.map((transfer) => ({ ...transfer })), regionClaims: entry.regionClaims.map((claim) => ({ ...claim })), groupOps: [] },
+      path: `projects[${index}]`,
+    }));
+    try {
+      const unresolved = await resolveRegionTransfers(containers, nextWorld, { renderedRegions: createRenderedRegionsReader() });
+      for (const entry of normalizeArray(unresolved)) {
+        console.warn(`[projects] "${normalizeString(entry?.label)}" was not found on the map; that part of a project's completion was left out.`);
+      }
+      const events = released.territory.map((entry, index) => ({
+        id: `project-done-${index}-${normalizeString(entry.date)}`,
+        date: entry.date,
+        title: entry.project,
+        description: "",
+        impacts: { polityChanges: entry.polityChanges, regionTransfers: containers[index].impacts.regionTransfers, regionClaims: containers[index].impacts.regionClaims },
+      }));
+      const merged = applyEventImpactsToWorld({ colors: nextColors, events, world: nextWorld, motion: null, round, boardOnlyEventIds: events.map((event) => event.id) });
+      nextWorld = merged.world;
+      nextColors = merged.colors;
+      renamedPolities.push(...normalizeArray(merged.renamedPolities));
+    } catch (error) {
+      console.warn("[projects] a completed project's territory could not be applied; the rest of the turn stands.", error);
+    }
+  }
+  const told = advanced.outcomes.filter((outcome) => outcome.type !== "yield");
+  if (told.length || released.applied.length) {
+    logDebugEvent("turn", `Projects engine: ${advanced.days} day(s), ${told.length} outcome(s), ${released.applied.length} effect(s) applied.`, {
+      outcomes: told.map((outcome) => `${outcome.date} ${outcome.owner} · ${outcome.project}: ${outcome.type}${outcome.milestone ? ` (${outcome.milestone})` : ""}`),
+      effects: released.applied.map((entry) => `${entry.owner} · ${entry.project}: ${entry.effect.type} ${entry.effect.stat ?? entry.effect.name ?? entry.effect.country ?? ""} ${entry.effect.change ?? ""}`),
+    }, { verbose: true });
+  }
+  return { world: nextWorld, colors: nextColors, renamedPolities };
+};
+
 const applySimulationResult = async ({
   baseActions,
   baseChats,
@@ -8884,7 +8924,7 @@ const applySimulationResult = async ({
   // its place among the events the board was shown; they are read back by event.
   const applyFocus = await readPlayerFocusContext({ game: baseGame, world: baseWorld });
   const focusMaterial = playerMaterialFor(
-    { actions: baseActions, chats: baseChats, events: baseEvents, world: baseWorld },
+    { actions: baseActions, chats: baseChats, events: baseEvents, world: baseWorld, game: baseGame },
     applyFocus,
     { originDate: baseGame.gameDate, targetDate: normalizeString(result.stopDate) || baseGame.gameDate },
   );
@@ -9747,6 +9787,7 @@ const applySimulationResult = async ({
   ];
   if (spySync.length) {
     worldWithImpacts = applyProjectOpsToWorld({
+      actor: "engine",
       date: nextGame.gameDate,
       ops: spySync,
       playerCountry: playerPolity,
@@ -9762,6 +9803,7 @@ const applySimulationResult = async ({
   });
   if (doubtOps.length) {
     worldWithImpacts = applyProjectOpsToWorld({
+      actor: "engine",
       date: nextGame.gameDate,
       ops: doubtOps,
       playerCountry: playerPolity,
@@ -9812,31 +9854,13 @@ const applySimulationResult = async ({
       .map((event, index) => (provisionalIds.has(event.id) && !eventCarriesOwnConsequence(event) ? index : -1))
       .filter((index) => index >= 0));
     try {
-      const { ops, skipped } = review
-        // Answered already, by the review's board part — which numbered the
-        // events as the skip WROTE them, so its ops are moved onto the list the
-        // turn ended with (turnReview.js remapBoardOps). No board part means the
-        // board does not move this turn; it never holds the turn, because the
-        // only way to un-hold it would be another request.
-        ? reviewedProjectOps({ review, visibleEvents: freshEvents, hiddenEvents: boardHiddenEvents, idMap: canonicalEventIdentity.idMap })
-        // Kept in the replay once it answers, so a turn kept for its campaign
-        // is written later without asking the board again. A failure is not
-        // kept: it holds the turn, and the retry is exactly this call again.
-        // Kept with the turn's checks too, only so that retrying another check
-        // (which starts a new replay) does not ask the board again; its own
-        // failure throws and holds the turn on the board (HELD_TURN.board), as
-        // before.
-        : await replayAnswer(replay, "projectsBoard", () => boardCheck(() => generateProjectOps(
-          // The LIVE world, not projects.bundle's pre-turn copy: the bundle was
-          // read before the turn ran, so its board carries none of this turn's
-          // impacts and none of the covert-operation sync just above.
-          { ...projects.bundle, game: nextGame, world: worldWithImpacts },
-          freshEvents,
-          { signal: projects.signal, hiddenEvents: boardHiddenEvents },
-        )), { rememberFailure: false });
-      // The board was looked at this round, whatever it found (projects.js
-      // boardPassReasons counts the quiet rounds from here).
-      if (!skipped) worldWithImpacts = { ...worldWithImpacts, boardReviewedRound: nextGame.round };
+      // Answered already, by the review's board part — which numbered the events
+      // as the skip WROTE them, so its ops are moved onto the list the turn ended
+      // with (turnReview.js remapBoardOps). No board part means the board takes
+      // nothing from this turn's story; it never holds the turn, because the only
+      // way to un-hold it would be another request. (The engine still runs it,
+      // below.)
+      const { ops, skipped } = reviewedProjectOps({ review, visibleEvents: freshEvents, hiddenEvents: boardHiddenEvents, idMap: canonicalEventIdentity.idMap });
       // One carrier per event, in date order across the visible and Hidden lists,
       // so an entry a Hidden event opens exists before a later event moves it.
       const carriers = boardPassCarriers({
@@ -9897,13 +9921,10 @@ const applySimulationResult = async ({
         }
         worldWithImpacts = withLatestTurnEventIds(worldWithImpacts, (ids) => ids.filter((id) => !unbackedIds.has(id)));
       }
-      const unassessed = skipped ? [] : unassessedHighPriorityEntries(worldWithImpacts.projects, ops, { playerCountry: playerPolity });
       console.info(
         `[OH board] ${boardHiddenEvents.length} Hidden event(s) read, ${hiddenEventsThatMoved} of them moved `
         + `${movedByHidden.size} Board entr${movedByHidden.size === 1 ? "y" : "ies"}; `
-        + `${provisionalIndexes.size} provisional major event(s), ${unbackedIds.size} unbacked and kept off the timeline; `
-        + `${unassessed.length} HIGH PRIORITY entr${unassessed.length === 1 ? "y" : "ies"} not assessed`
-        + `${unassessed.length ? ` (${unassessed.map((entry) => entry.name).join(", ")})` : ""}.`,
+        + `${provisionalIndexes.size} provisional major event(s), ${unbackedIds.size} unbacked and kept off the timeline.`,
       );
     } catch (error) {
       // A deliberate cancel is the player's and aborts the turn like any other.
@@ -9921,13 +9942,27 @@ const applySimulationResult = async ({
   // the map and the board are final (nativeStructureDirector.js).
   worldWithImpacts = linkStructuresToProjects(worldWithImpacts, result.structureLinks);
 
-  // A milestone whose date this skip passed with nothing said about it is late,
-  // not still pending (playerFocus.js): the Board says so, and the next skip is
-  // asked to answer it. After the board pass, so a milestone the model reached
-  // or missed this turn keeps the outcome it was given.
-  const slippedProjects = slipPassedMilestones(normalizeArray(worldWithImpacts.projects), { date: nextGame.gameDate });
-  if (slippedProjects.some((project, index) => project !== normalizeArray(worldWithImpacts.projects)[index])) {
-    worldWithImpacts = { ...worldWithImpacts, projects: slippedProjects };
+  // The projects engine (runtime/projectEngine.js): the days this turn covers,
+  // run on the board as the turn BEGAN — the board the skip's prompt was told
+  // about, so what it was told happens — and laid over the board the turn's ops
+  // left. Each owner's budget pays its projects, the work moves, checkpoints are
+  // reached on their days, a project starved of money stalls and one that has
+  // money again resumes; a project done this period changes the world, once,
+  // and a programme that runs on pays its yields. No request is made.
+  const projectsRun = await runProjectsEngine({
+    baseWorld,
+    world: worldWithImpacts,
+    colors: nextColors,
+    fromDate: baseGame.gameDate,
+    toDate: nextGame.gameDate,
+    host: projectsHost(baseGame),
+    round: nextGame.round,
+  });
+  worldWithImpacts = projectsRun.world;
+  nextColors = projectsRun.colors;
+  if (projectsRun.renamedPolities.length) {
+    renamedPolities.push(...projectsRun.renamedPolities);
+    worldWithImpacts = await rekeyRenamedPolities(worldWithImpacts, projectsRun.renamedPolities);
   }
 
   // The documents that changed hands this turn, delivered to the player the way
@@ -12858,6 +12893,93 @@ export const generateRostraPosts = async ({ signal } = {}) => {
     return posts.length ? { ...latest, socialFeed: withSkipPosts(latest.socialFeed, posts) } : null;
   });
   return { kept };
+};
+
+// ---- Planning a project -----------------------------------------------------------
+// "Panel plus an instant plan" (the owner's choice, 2026-11-15): the player names
+// a project and its goal in the Projects tab (GameUI/projects.jsx), and ONE
+// request, the projectPlan task, drafts its plan at once: how many days of work,
+// what it costs a month, its checkpoints, and what it does to the world. The
+// player sees the plan and starts it or throws it away. Asked because the
+// player pressed the button, so it goes through the request budget and the
+// fallback list like any task the player asks for, and through nothing else.
+
+// What the planner is told of the country it plans for: its economy and its
+// project budget (projectEngine.js), how fast it can work, the figures a plan
+// may move (as their stat paths, with their values now), and the unit types it
+// knows of.
+const projectMeansText = (world, owner) => {
+  const sheet = sheetOf(world, owner) ?? {};
+  const means = ownerMeans(world, owner, world.projects, owner);
+  const lines = [`${owner}.`];
+  const gdp = Number(sheet?.economy?.gdp);
+  const currency = normalizeString(sheet?.economy?.currency);
+  if (gdp > 0) {
+    lines.push(`GDP ${readableFigure(gdp)}${currency ? ` ${currency}` : ""} a year. Project budget ${readableFigure(means.budget)} a month, of which its running projects take ${readableFigure(means.committed)}; one project may cost at most ${readableFigure(means.budget * COST_SHARE_OF_BUDGET_MOST)} a month.`);
+  } else {
+    lines.push("Its economy is not on record: give the monthly cost in whatever unit this world counts money in; it is paid in full.");
+  }
+  lines.push(`How fast it can work, from its economy and stability: ${means.capacity} (1 is an ordinary state).`);
+  const figures = [];
+  if (Number.isFinite(Number(sheet?.stability))) figures.push(`stability ${sheet.stability}`);
+  for (const [key, value] of Object.entries(sheet?.indices ?? {})) figures.push(`indices.${key} ${value}`);
+  for (const [key, value] of Object.entries(sheet?.military ?? {})) if (["quality", "technology", "land", "sea", "air", "spending"].includes(key)) figures.push(`military.${key} ${value}`);
+  for (const key of ["gdpGrowth", "inflation", "unemployment", "budgetBalance", "publicDebt"]) {
+    if (Number.isFinite(Number(sheet?.economy?.[key]))) figures.push(`economy.${key} ${sheet.economy[key]}`);
+  }
+  for (const [key, value] of Object.entries(sheet?.customStats ?? {})) figures.push(`customStats.${key} ${value}`);
+  lines.push(figures.length ? `Its figures now: ${figures.join(", ")}.` : "Its sheet has no figures yet: a stat effect on it changes nothing.");
+  const types = normalizeArray(world.unitTypes).map((type) => normalizeString(type?.name)).filter(Boolean);
+  if (types.length) lines.push(`Unit types this world has: ${types.join(", ")}.`);
+  return lines.join("\n");
+};
+
+const PROJECT_PLAN_RULES = [
+  `durationDays: the days of work at normal funding (${DURATION_LEAST} to ${DURATION_MOST}), as long as this would really take in this era and this country. The engine runs it every day; the player may fund it low (half the cost, half the speed), high (one and a half of each) or not at all.`,
+  "monthlyCost: what it costs a month at normal funding, in the country's GDP currency: what this would really cost, within its project budget. A budget that cannot pay for everything slows every project it pays for.",
+  "milestones: two to five checkpoints on the way, each at the share of the work (atProgress, 1-99) when it is reached.",
+  "effects: what it does to the world, once, when done. Set ongoing true for a programme that runs on once set up (a standing patrol, an intelligence service, a subsidy), and give it yields: small stat or relation changes it makes every month it is paid for.",
+  PROJECT_EFFECTS_RULE,
+  "Be honest: a grand project takes years and money, and a plan that promises too much is capped by the engine anyway. Never plan an internal act the government simply decides (a rename, a flag, a reshuffle): plan the effort, not a decree.",
+].join("\n");
+
+// The plan for a project the player has named: { name, summary, kind, secrecy,
+// tags, focus, plan, owner } with `plan` bounded to the country's means
+// (projectEngine.js boundPlanForOwner). Throws when no usable plan came back.
+export const planProject = async ({ name = "", goal = "", signal = null } = {}) => {
+  const wanted = normalizeString(name);
+  if (!wanted) throw new Error("Give the project a name.");
+  if (isSimulationBusy()) throw new Error("A turn is being resolved: plan the project once it has landed.");
+  const bundle = await readGameStateBundle({ force: true });
+  const world = normalizeWorldState(bundle.world);
+  const owner = projectsHost(bundle.game);
+  const variables = await buildTemplateVariables(bundle, { taskKey: "projectPlan" });
+  const { payload } = await runJsonTask("projectPlan", {
+    signal,
+    userMessage: `Plan this project.\nName: ${wanted}\nWhat it is for: ${normalizeString(goal) || "as its name says"}`,
+    variables: {
+      ...variables,
+      projectPlanRules: PROJECT_PLAN_RULES,
+      projectMeans: projectMeansText(world, owner),
+      projectsSummary: buildProjectsSummaryText(world, bundle.game, { compact: true }),
+    },
+    validatePayload: (candidate) => (normalizeProjectPlan(candidate) ? "" : "durationDays and monthlyCost are required."),
+  });
+  const plan = boundPlanForOwner(payload, sheetOf(world, owner), { sheetFor: (country) => sheetOf(world, country) });
+  if (!plan) throw new Error("The plan came back without its days and its cost.");
+  const focus = payload?.focus && Number.isFinite(Number(payload.focus.lng)) && Number.isFinite(Number(payload.focus.lat))
+    ? { lng: Number(payload.focus.lng), lat: Number(payload.focus.lat) }
+    : null;
+  return {
+    name: normalizeString(payload?.name) || wanted,
+    summary: normalizeString(payload?.summary) || normalizeString(goal),
+    kind: normalizeString(payload?.kind) === "operation" ? "operation" : "project",
+    secrecy: ["public", "restricted", "covert"].includes(normalizeString(payload?.secrecy)) ? normalizeString(payload.secrecy) : "public",
+    tags: normalizeArray(payload?.tags).map(normalizeString).filter(Boolean).slice(0, 6),
+    ...(focus ? { focus } : {}),
+    plan: { ...plan, plannedAt: normalizeString(bundle.game?.gameDate) },
+    owner,
+  };
 };
 
 // The fronts a scenario begins with (runtime/fronts/scenarioFronts.js), built
@@ -16109,6 +16231,9 @@ const readPlayerFocusContext = async (bundle) => {
 };
 
 // What the player has going on over one window, from this campaign's own state.
+// The Projects' outcomes in the window are the engine's, worked out from the
+// skip's own start (bundle.game.gameDate) so a later segment sees the same days
+// the whole skip does, and only those in the window kept.
 const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => collectPlayerMaterial({
   playerNames: focusContext.playerNames,
   isPlayerEvent: focusContext.isPlayerEvent,
@@ -16116,6 +16241,8 @@ const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => 
   targetDate,
   actions: normalizeArray(bundle?.actions),
   projects: normalizeArray(bundle?.world?.projects),
+  projectOutcomes: projectsPeriod(bundle, targetDate).outcomes
+    .filter((outcome) => !originDate || normalizeString(outcome.date) > normalizeString(originDate)),
   storylines: normalizeArray(bundle?.world?.storylines),
   wars: normalizeArray(bundle?.world?.wars),
   relations: normalizeArray(bundle?.world?.relations),
@@ -16202,10 +16329,10 @@ const skipDeclaredChars = (tool, beside = []) => geminiDeclaredChars([tool, ...b
 const prepareFoldedSkip = async ({ bundle, originDate, variables, campaignId }) => {
   const world = normalizeWorldState(bundle.world);
   const playerCountry = normalizeString(bundle.game?.country);
-  // The skip keeps the board exactly when it is shown one: an empty board has
-  // no directive (projectsDirective.js), and then nothing asks for board ops.
-  const boardShown = Boolean(buildJumpProjectsDirective(variables?.projectsSummary, { folded: true }));
-  const board = boardShown ? normalizeArray(bundle.world?.projects) : [];
+  // The board is always the skip's: the engine runs it, and an empty one is
+  // where the countries nobody plays open their first projects.
+  const boardShown = true;
+  const board = normalizeArray(bundle.world?.projects);
   const espionage = isActiveFeatureEnabled("espionage");
   const filed = board.length || espionage
     ? normalizeIntercepts(await readInterceptsState({ force: false }).catch(() => ({})))
@@ -16886,6 +17013,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             receipt: draft,
             actions: bundle.actions,
             playerCountry: bundle.game.country,
+            worldProjects: true,
+            players: humanCountriesOf(bundle.game),
             politicalClaimContext,
             politicalClaimRepair: finalAttempt && Number(attempt) >= 2 && politicalClaimContext.mode === "structured"
               ? async ({ candidate: repairCandidate, world: repairWorld, claimContext, validationError, validationFailure }) => {
@@ -17566,7 +17695,7 @@ const boardEventList = (events, hidden) => [
 // Every running entry needs dates to be paced against: Player focus asks the
 // skip to answer a milestone whose date it passes (playerFocus.js), and an entry
 // with no milestones at all can never come due.
-const BOARD_MILESTONE_NOTE = " Any running entry with no milestones at all gets two or three dated checkpoints on its way to its target date, so its progress has something to be measured against; a standing effort with no end (an agent in place, a permanent patrol) gets none.";
+
 
 const BOARD_HIDDEN_NOTE = "\n\nEvents marked (kept off the timeline) happened, but were too routine to show the player as a card. "
   + "Move the board from them exactly like any other event, and write lastUpdate so it stands on its own "
@@ -17641,14 +17770,7 @@ const runSceneReview = async ({ context, merged, signal, state, agentKind = "", 
       playerPolity: playerCountry,
       intercepts: normalizeIntercepts(gathered),
     });
-    const boardReasons = boardPassReasons({
-      board,
-      events: [...candidates, ...segmentHidden],
-      gameDate: stopDate,
-      round,
-      reviewedRound: normalizeWorldState(bundle.world).boardReviewedRound,
-      playerCountry,
-    });
+    const boardReasons = boardPassReasons({ board, events: [...candidates, ...segmentHidden] });
     if (pendingDoubts.length) boardReasons.push(`${pendingDoubts.length} doubted entr${pendingDoubts.length === 1 ? "y" : "ies"} can now be settled`);
     if (boardReasons.length) reasons.push(`the Projects board: ${boardReasons.slice(0, 3).join("; ")}${boardReasons.length > 3 ? `; and ${boardReasons.length - 3} more` : ""}`);
   }
@@ -17670,8 +17792,8 @@ const runSceneReview = async ({ context, merged, signal, state, agentKind = "", 
       key: "board",
       taskKey: "projects",
       title: "the Projects board",
-      instruction: `These events have just been simulated. Move the board to match them, and return `
-        + `{"projectOps":[]} if nothing on it genuinely moved.${BOARD_MILESTONE_NOTE}${segmentHidden.length ? BOARD_HIDDEN_NOTE : ""}\n\n`
+      instruction: `These events have just been simulated. Record what they did to the board — a project an event set back, brought on or ended, or a line about one — and return `
+        + `{"projectOps":[]} when they did nothing to it: the engine moves every project by itself.${segmentHidden.length ? BOARD_HIDDEN_NOTE : ""}\n\n`
         + `${boardEventList(candidates, segmentHidden)}${doubtBlock}`,
     }, await buildTemplateVariables(boardBundle, { taskKey: "projects" }));
   }
@@ -18084,6 +18206,11 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   // (For the map, which plays it at each event while the story is written: foreseenFronts.js.)
   foreseeFronts(foughtBefore);
   const frontsForecast = foughtBefore ? { ...foughtBefore } : null;
+  // The Projects of the period are run BEFORE its story too (projectEngine.js):
+  // what the engine decides — checkpoints, completions and their effects, stalls
+  // — goes into the prompt, so the events tell what happens to them instead of
+  // guessing. The same days are run again when the answer is applied.
+  const projectsForecast = projectsForecastText(projectsPeriod(bundle, targetDate).outcomes);
   // Guarantee at least one event per queued action, so each planned action has a
   // slot to resolve into (bounded so a huge queue can't demand absurd counts).
   const plannedActionCount = normalizeActions(bundle.actions).filter((action) => action.status === "planned").length;
@@ -18128,7 +18255,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     safeDays,
     segmentDays,
     targetDate,
-    variables: frontsForecast ? { ...variables, frontsForecast } : variables,
+    variables: { ...variables, projectsForecast, ...(frontsForecast ? { frontsForecast } : {}) },
     // Settings, AI: "Stop when my events fail" (playerTurnFailures.js). Read
     // once, at the start, so a toggle mid-skip does not change the skip.
     // The host's own setting, read from the host's device, is not the other

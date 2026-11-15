@@ -54,9 +54,11 @@ const fold = (value) => ` ${asText(value).normalize("NFD").replace(/[̀-ͯ]/g, "
 //
 // Everything a jump could write a Player event about, for its window:
 //   order       a queued order                         — must be answered
-//   milestone   a pending or slipped milestone due by the window's end
-//               — must be answered; one due in the month after is a lead-up
-//   target      an open Project's target date by the window's end — must be answered
+//   milestone   a checkpoint of one of the player's Projects the engine
+//               reaches in the window (projectEngine.js, the period's
+//               forecast) — must be told
+//   target      one of the player's Projects the engine completes, sets up or
+//               stalls in the window — must be told
 //   storyline   an unresolved Storyline the player is part of
 //   war         a war the player is in
 //   relation    a relation with the player that moved recently
@@ -64,19 +66,11 @@ const fold = (value) => ` ${asText(value).normalize("NFD").replace(/[̀-ͯ]/g, "
 //   consequence one of the player's own recent events, so it can be followed through
 // `required` marks what the jump must give an outcome; the rest is what the
 // player's share may be drawn from. Only the player's own Board entries count.
-const LEAD_UP_DAYS = 30;
 const RECENT_DAYS = 60;
 const CHAT_MEMORY_DAYS = 90;
 const MAX_CONSEQUENCES = 3;
-// Entries whose dates a jump is asked to answer. A paused entry is deliberately
-// absent: its dates are not being worked towards, so neither its milestones nor
-// its target date belong in what the player "has going on". Its milestones can
-// still slip (SLIPPABLE_PROJECT_STATUSES), because a date passes whether or not
-// anyone is working. The Board's own isProjectOpen is a different question — what
-// still counts as running — and projects.js owns that one.
-const PACED_PROJECT_STATUSES = new Set(["proposed", "active", "stalled"]);
-const SLIPPABLE_PROJECT_STATUSES = new Set([...PACED_PROJECT_STATUSES, "paused"]);
-const UNREACHED_MILESTONE_STATUSES = new Set(["pending", "slipped"]);
+// What the engine decided for a Project this period that the jump must tell.
+const TOLD_OUTCOMES = new Set(["milestone", "complete", "established", "stall"]);
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const nameKey = (value) => fold(value).trim();
@@ -103,6 +97,9 @@ export const collectPlayerMaterial = ({
   targetDate = "",
   actions = [],
   projects = [],
+  // The period's outcomes, as the engine forecast them (projectEngine.js
+  // tickProjects): what happens to the Projects is decided, and the jump tells it.
+  projectOutcomes = [],
   storylines = [],
   wars = [],
   relations = [],
@@ -128,27 +125,26 @@ export const collectPlayerMaterial = ({
     items.push({ kind: "order", id: asText(action.id), label: owner ? `(${owner}) ${label}` : label, overdue: action.overdue === true, required: true });
   }
 
-  for (const project of asArray(projects)) {
-    if (!PACED_PROJECT_STATUSES.has(asText(project?.status) || "active") || !isPlayersEntry(project, playerKeys)) continue;
+  for (const outcome of asArray(projectOutcomes)) {
+    if (!TOLD_OUTCOMES.has(asText(outcome?.type))) continue;
+    const project = asArray(projects).find((entry) => asText(entry?.name) === asText(outcome.project));
+    if (!project || !isPlayersEntry(project, playerKeys)) continue;
     const name = asText(project.name);
-    for (const milestone of asArray(project.milestones)) {
-      if (!UNREACHED_MILESTONE_STATUSES.has(asText(milestone?.status) || "pending")) continue;
-      const due = within(milestone.date, null, end);
-      const leadUp = !due && end !== null && within(milestone.date, end + 1, end + LEAD_UP_DAYS);
-      if (!due && !leadUp) continue;
-      items.push({
-        kind: "milestone",
-        id: asText(milestone.id),
-        projectId: asText(project.id),
-        projectName: name,
-        label: `${name}: ${asText(milestone.title)} (${asText(milestone.date)})`,
-        date: asText(milestone.date),
-        required: due,
-      });
-    }
-    if (!project.ongoing && within(project.targetDate, null, end)) {
-      items.push({ kind: "target", id: asText(project.id), projectId: asText(project.id), projectName: name, label: `${name}: target date ${asText(project.targetDate)}`, date: asText(project.targetDate), required: true });
-    }
+    const date = asText(outcome.date);
+    const label = outcome.type === "milestone"
+      ? `${name}: reaches "${asText(outcome.milestone)}" on ${date}`
+      : outcome.type === "complete" ? `${name}: completed on ${date}`
+        : outcome.type === "established" ? `${name}: set up and running from ${date}`
+          : `${name}: stalls for want of funds on ${date}`;
+    items.push({
+      kind: outcome.type === "milestone" ? "milestone" : "target",
+      id: `${asText(project.id)}:${outcome.type}:${asText(outcome.milestone)}`,
+      projectId: asText(project.id),
+      projectName: name,
+      label,
+      date,
+      required: true,
+    });
   }
 
   for (const storyline of asArray(storylines)) {
@@ -267,27 +263,10 @@ export const repeatedOrder = (actions, title, { round } = {}) => {
     && (asText(action?.status) === "planned" || (asText(action?.status) === "resolved" && recent(action)))) || null;
 };
 
-// --- After the jump: milestones ---
-//
-// A milestone the jump reached its date on without an outcome is marked
-// slipped: late, not yet reached, and still something the next jump must
-// answer. The Board shows it as such rather than a stale pending date.
-export const slipPassedMilestones = (projects, { date = "" } = {}) => {
-  const today = dayNumber(date);
-  if (today === null) return projects;
-  const passed = (milestone) => (asText(milestone?.status) || "pending") === "pending"
-    && dayNumber(milestone?.date) !== null && dayNumber(milestone.date) <= today;
-  return asArray(projects).map((project) => {
-    if (!SLIPPABLE_PROJECT_STATUSES.has(asText(project?.status) || "active")) return project;
-    if (!asArray(project?.milestones).some(passed)) return project;
-    return { ...project, milestones: project.milestones.map((milestone) => (passed(milestone) ? { ...milestone, status: "slipped" } : milestone)) };
-  });
-};
-
 // --- The filler filter ---
 //
 // An event that answers one of the player's orders (its actionIds), or that
-// moves a Project with a milestone or target due in the window (one of its
+// tells of a Project the engine moves this period (one of its
 // board ops addresses that Project, by its id or by the board's own name for
 // it, as the board's ops find an entry: projects.js opTargetsEntry), is exactly
 // what the player asked the jump for. The filler filter may not remove it,
@@ -342,7 +321,6 @@ const MATERIAL_HEADINGS = {
   relation: "Relations",
   chat: "Diplomatic threads",
   consequence: "Recent events to follow through",
-  milestone: "Coming up",
 };
 
 // `ordersAbove`: the prompt lists the orders with their ids and words already
@@ -371,13 +349,13 @@ export const buildPlayerFocusDirective = ({ focus, worldShare = 0, material = []
     for (const order of orders) lines.push(`- [${order.id}]${ordersAbove ? "" : ` ${order.label}`}${order.overdue ? " (OVERDUE: carried over unanswered from the last period; answer it first)" : ""}`);
   }
   if (due.length) {
-    lines.push("", `DUE THIS PERIOD — each gets an outcome in an event that names the Project exactly: reached, slipped or missed, with the board op that records it wherever you keep the board. Never leave a date behind with nothing said.`);
+    lines.push("", `DECIDED THIS PERIOD — what the engine has already worked out for ${player}'s Projects: tell each in an event on its date that names the Project exactly. It happens as listed; never say otherwise.`);
     for (const item of due) lines.push(`- ${item.label}`);
   }
   const grouped = new Map();
   for (const item of optional) grouped.set(item.kind, [...(grouped.get(item.kind) ?? []), item]);
   if (grouped.size) {
-    lines.push("", `ALSO GOING ON — draw ${player}'s share from these, following through on what earlier events set in motion. A milestone coming up may get a lead-up event; it does not need one.`);
+    lines.push("", `ALSO GOING ON — draw ${player}'s share from these, following through on what earlier events set in motion.`);
     for (const [kind, group] of grouped) lines.push(`${MATERIAL_HEADINGS[kind] ?? kind}: ${group.map((item) => item.label).join("; ")}`);
   }
   return lines.join("\n");
