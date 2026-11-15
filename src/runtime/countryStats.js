@@ -47,6 +47,11 @@ const ECONOMY_NUMERIC_KEYS = Object.freeze([
 ]);
 
 const clean = (value) => String(value ?? "").trim();
+// Structured tool calls sometimes double-escape line breaks within a row-based
+// string field. Decode ONLY line separators; keep each row's strict native
+// identity, bucket count, numeric and percentage validation unchanged.
+export const normalizeStatsTransportRows = (value) =>
+  clean(value).replace(/\\r\\n|\\n|\\r/g, "\n");
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const finite = (value) => Number.isFinite(Number(value));
 
@@ -670,7 +675,7 @@ export const decodeTerritorialComponentSplit = (text, splitBuckets = []) => {
 
   const rows = new Map();
   const duplicated = new Set();
-  for (const rawLine of clean(text).split(/\r?\n/)) {
+  for (const rawLine of normalizeStatsTransportRows(text).split(/\r?\n/)) {
     const parts = rawLine.trim().split("~").map((part) => part.trim());
     if (parts.length !== 4) continue;
     const componentId = parts[0].replace(/^\[|\]$/g, "").toUpperCase();

@@ -71,3 +71,13 @@ test("Political World generation recovery is plain-language and polity-oriented"
   assert.doesNotMatch(source, /stubborn target\(s\)/);
   assert.doesNotMatch(source, /AI call\(s\) total/);
 });
+
+test("Advanced PWv2 lets authors choose a uniform depth and protects checkpoint Resume", () => {
+  const source = readFileSync(new URL("./PoliticalWorldGenerationPanel.jsx", import.meta.url), "utf8");
+  assert.match(source, /Uniform depth \(all active polities\)/);
+  assert.match(source, /Standard|Rich|Full/);
+  assert.match(source, /uniformDepth/);
+  assert.match(source, /setUniformDepth/);
+  assert.match(source, /disabled=\{busy \|\| applying \|\| Boolean\(v2Checkpoint\)\}/);
+  assert.match(source, /visibleCheckpoint\.generationSelection/);
+});

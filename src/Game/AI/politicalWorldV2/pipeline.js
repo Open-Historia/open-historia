@@ -5,6 +5,8 @@ import { compareGameDates, isCanonicalGameDate } from "../../../runtime/gameDate
 import { resolveScenarioHistoryAuthority } from "../../../runtime/scenarioHistoryAuthority.js";
 import { isFinitePowerScore, normalizePowerStatus, refreshPowerStatus } from "../../../runtime/powerStatus.js";
 import { normalizePoliticalActors } from "../../../runtime/politicalActors.js";
+import { POLITICAL_GENERATION_DEPTHS } from "../../../runtime/politicalWorldGeneration.js";
+import { POLITICAL_WORLD_GENERATION_MODES } from "../../../runtime/politicalWorldGenerationReview.js";
 import { initializePoliticalDispositionsForWorld } from "../../../runtime/politicalDisposition.js";
 import { reconcilePoliticalWorldV2ReferenceState } from "./referenceBootstrap.js";
 import { rebasePoliticalWorldV2ReferenceCanon } from "./checkpointRebase.js";
@@ -37,6 +39,45 @@ const activePolityKeys = (polities = []) => array(polities)
   .filter((entry) => typeof entry === "string" || entry?.active !== false)
   .map((entry) => clean(typeof entry === "string" ? entry : entry?.polityKey))
   .filter(Boolean);
+
+// New checkpoint runs retain the author's chosen generation depth as part of
+// their resumable plan. The source-world fingerprint alone deliberately does
+// not encode UI preferences, so compare both before spending provider calls.
+// Older checkpoints without a recorded choice keep their legacy resume path.
+const requestedGenerationSelection = (inputs) => {
+  const mode = clean(inputs?.generationMode) || POLITICAL_WORLD_GENERATION_MODES.BALANCED;
+  if (!Object.values(POLITICAL_WORLD_GENERATION_MODES).includes(mode)) {
+    throw new Error("Unknown Political World generation mode.");
+  }
+  const uniformDepth = mode === POLITICAL_WORLD_GENERATION_MODES.UNIFORM ? clean(inputs?.uniformDepth) : null;
+  if (mode === POLITICAL_WORLD_GENERATION_MODES.UNIFORM) {
+    if (![POLITICAL_GENERATION_DEPTHS.STANDARD, POLITICAL_GENERATION_DEPTHS.RICH, POLITICAL_GENERATION_DEPTHS.FULL].includes(uniformDepth)) {
+      throw new Error("Uniform Political World generation depth must be standard, rich or full.");
+    }
+    // The option is a native completeness promise. A caller may not label a
+    // standard-depth worklist "uniform full" and accidentally mark it ready.
+    for (const polity of activePolityKeys(inputs?.polities)) {
+      if (clean(inputs?.relevanceByPolity?.[polity]?.depth) !== uniformDepth) {
+        throw new Error("Uniform Political World depth plan does not match every active polity.");
+      }
+    }
+  }
+  return { mode, uniformDepth };
+};
+
+const requireMatchingGenerationSelection = (checkpoint, currentSelection) => {
+  if (checkpoint?.generationSelection === undefined) return;
+  const saved = checkpoint.generationSelection;
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)
+      || !Object.values(POLITICAL_WORLD_GENERATION_MODES).includes(saved.mode)
+      || (saved.mode === POLITICAL_WORLD_GENERATION_MODES.UNIFORM
+        && ![POLITICAL_GENERATION_DEPTHS.STANDARD, POLITICAL_GENERATION_DEPTHS.RICH, POLITICAL_GENERATION_DEPTHS.FULL].includes(saved.uniformDepth))) {
+    throw new Error("Saved Political World generation selection is invalid; do not discard the checkpoint automatically.");
+  }
+  if (saved.mode !== currentSelection.mode || (saved.uniformDepth ?? null) !== currentSelection.uniformDepth) {
+    throw new Error("Political World generation mode or uniform depth changed since this checkpoint was created. Resume using its saved settings, or explicitly discard the checkpoint to start over.");
+  }
+};
 
 const temporalVerificationRequiredFor = (world, scenarioDate) => {
   const authority = resolveScenarioHistoryAuthority({ world, scenarioDate });
@@ -218,6 +259,7 @@ const runPoliticalWorldV2 = async ({
   const scenarioDate = clean(inputs?.scenarioDate);
   if (!id) throw new Error("Political World v2 requires a scenario id.");
   if (!isCanonicalGameDate(scenarioDate)) throw new Error("Political World v2 requires the canonical saved scenario date.");
+  const generationSelection = requestedGenerationSelection(inputs);
 
   const inputFingerprint = buildPoliticalWorldInputFingerprint({
     scenarioId: id,
@@ -236,6 +278,7 @@ const runPoliticalWorldV2 = async ({
     }
   }
   if (checkpoint && checkpointMatchesInput(checkpoint, inputFingerprint)) {
+    requireMatchingGenerationSelection(checkpoint, generationSelection);
     inputs = withPartialApplyDepths(inputs, checkpoint);
   }
   if (!checkpoint || !checkpointMatchesInput(checkpoint, inputFingerprint)) {
@@ -249,6 +292,7 @@ const runPoliticalWorldV2 = async ({
       maxModelCalls,
     });
     checkpoint.qualityMode = qualityMode;
+    checkpoint.generationSelection = generationSelection;
     checkpoint.allowEntityExpansion = allowEntityExpansion === true;
     checkpoint.historicalVerificationRequired = verificationRequired;
     checkpoint.bootstrap = {

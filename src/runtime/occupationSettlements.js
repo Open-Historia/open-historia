@@ -5,8 +5,9 @@
 // fills what its answer must hold, not what a paragraph asks (and a required string it fills with ""). So the time
 // skip's answer has a required field for it, occupationSettlements, an object with one required key a group of the
 // regions listed under [Occupations Outliving Their War] ({ o1: "Poland" }; Game/AI/standingContext.js
-// occupationGroups, gameplaySchemas.js withOccupationSettlements), each group told how its war ended; lines of
-// "<region>~<the polity it goes to>" are read too. Who keeps the land is
+// occupationGroups, gameplaySchemas.js withOccupationSettlements), "returned" or "kept"; lines of
+// "<region>~<the polity it goes to>" are read too. An occupation its war's recorded outcome settles is not asked
+// (runtime/warEndings.js). Who keeps the land is
 // the story's to say; the game applies the answer:
 //   to the sovereign: the occupation ends (control back to it);
 //   to the occupier: it keeps the land, now its own;
@@ -19,19 +20,15 @@ export const OCCUPATION_SETTLEMENTS_FIELD = "occupationSettlements";
 // What each key answers: returned to the sovereign, or kept by the occupier. A polity's name is read too (another
 // power that took the land).
 export const OCCUPATION_OUTCOMES = ["returned", "kept"];
-// A group whose war is on the ledger is asked instead who lost it ("<occupier> lost" / "<sovereign> lost"): a live
-// skip on issue #1000's save, its world still showing the German Reich a great power of 38 regions, answered "kept"
-// twice though the war's note said Germany had surrendered; who lost is what the note says outright. Asked "who
-// lost", it answered "Poland lost" (Poland fell in 1939): the question is who had lost when the war ENDED.
-export const occupationOutcomesFor = (group) => (group?.war
-  ? [`${group.sovereign} lost at the end`, `${group.controller} lost at the end`]
-  : OCCUPATION_OUTCOMES);
-// The polity that holds a group's land after the answer: the sovereign for "returned" or "<occupier> lost at the
-// end", the occupier for "kept" or "<sovereign> lost at the end", a polity's name as written otherwise.
+// An occupation its war's outcome settles is not asked here (runtime/warEndings.js, standingContext.js
+// occupationGroups): asked who holds the land, live skips on issue #1000's save named the occupier, which had
+// surrendered; how a war ended is asked of the war, once, and every occupation it left follows from it.
+// The polity that holds a group's land after the answer: the sovereign for "returned", the occupier for "kept", a
+// polity's name as written otherwise.
 export const occupationAnswerPolity = (to, group) => {
   const said = fold(to);
-  if (said === "returned" || said === fold(`${group?.controller} lost at the end`)) return group?.sovereign ?? "";
-  if (said === "kept" || said === fold(`${group?.sovereign} lost at the end`)) return group?.controller ?? "";
+  if (said === "returned") return group?.sovereign ?? "";
+  if (said === "kept") return group?.controller ?? "";
   return clean(to);
 };
 

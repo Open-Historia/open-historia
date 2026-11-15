@@ -408,10 +408,30 @@ const pointInGeometry = (point, geometry) => {
     && !polygon.slice(1).some((hole) => pointInRing(point, hole)));
 };
 
+// The middle of a region's box, or for one that crosses the antimeridian (its
+// box wider than half the world: Alaska, Chukotka, Fiji) the middle of the box
+// its longitudes make read on the far side, 0 to 360: a plain box put Alaska
+// at longitude 0, in the middle of Europe, the nearest region to anything there
+// (a dissolved Germany's land went to the United States: runtime/warEndings.js).
 const centroidOf = (region, bbox) => {
   const lng = Number(region?.lng); const lat = Number(region?.lat);
   if (Number.isFinite(lng) && Number.isFinite(lat)) return [lng, lat];
-  return bbox ? [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2] : null;
+  if (!bbox) return null;
+  if (bbox[2] - bbox[0] <= 180) return [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
+  let min = Infinity; let max = -Infinity;
+  const visit = (coords) => {
+    if (!Array.isArray(coords)) return;
+    if (typeof coords[0] === "number") {
+      const x = coords[0] < 0 ? coords[0] + 360 : coords[0];
+      if (x < min) min = x; if (x > max) max = x;
+      return;
+    }
+    for (const entry of coords) visit(entry);
+  };
+  visit(region?.geometry?.coordinates);
+  if (!Number.isFinite(min)) return [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
+  const middle = (min + max) / 2;
+  return [middle > 180 ? middle - 360 : middle, (bbox[1] + bbox[3]) / 2];
 };
 const NEAREST_CENTROID_DEGREES = 2.5;
 const distanceSquared = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;

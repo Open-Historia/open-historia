@@ -45,6 +45,7 @@ import { FEATURE_DEFINITIONS } from "../../../server/gameFeatures.js";
 import { PROMPT_EDITOR_SECTIONS, PROMPT_GUIDANCE_DEFAULTS } from "../AI/gameplayPrompts.js";
 import { guidanceSegmentsFor } from "../AI/promptGuidance.js";
 import { REVIEW_SECTIONS, sectionOfChange } from "../../runtime/suggestionSections.js";
+import { summarizePoliticalChanges } from "./politicsSuggestionPresentation.js";
 import { MUSIC_SITUATION_LABELS, SCENARIO_MUSIC_SITUATIONS, normalizeScenarioMusic, scenarioMusicVolumes } from "../../runtime/scenarioMusic.js";
 import { scenarioLanguagePack } from "../../../server/scenarioLanguages.js";
 import { languageDisplayName } from "../../runtime/i18n.js";
@@ -247,7 +248,53 @@ const DetailValue = ({ change, coverBefore }) => {
   if (change.kind === "stats") {
     return <div style={quietTextStyle}>{statsSummary(change.from)} → {statsSummary(change.to)}</div>;
   }
-  if (change.kind === "politics" || change.kind === "history") {
+  if (change.kind === "politics") {
+    // Review only: retain the original canonical suggestion for Accept/Reject.
+    // Internal generator provenance and stable IDs are not player-facing field
+    // labels, and they must not crowd actual political changes off this card.
+    const summary = summarizePoliticalChanges(change, { max: POLITICS_PATHS_SHOWN });
+    return (
+      <div style={{ display: "grid", gap: "0.25rem" }}>
+        <div style={quietTextStyle}>{change.op === "add" ? "Added" : change.op === "remove" ? "Removed" : "Changed"}</div>
+        {(change.op === "change" || !change.op) && (
+          <>
+            {summary.rows.map((row) => (
+              <div key={row.key} style={{ display: "grid", gap: "0.15rem", fontSize: "0.76rem", lineHeight: 1.45, overflowWrap: "anywhere" }}>
+                <div>
+                  <span style={{ color: "rgba(255,255,255,0.65)", fontWeight: 650 }}>{row.label}</span>
+                  <span style={{ color: "rgba(255,255,255,0.5)" }}>:</span>
+                </div>
+                {row.type === "collection" ? row.edits.map((edit, index) => (
+                  <div key={index} style={{ display: "flex", flexWrap: "wrap", columnGap: "0.3rem" }}>
+                    <span style={{ color: "rgba(255,255,255,0.55)" }}>
+                      {edit.operation === "added" ? "Added" : edit.operation === "removed" ? "Removed"
+                        : edit.operation === "updated" ? "Updated" : "Order changed"}
+                    </span>
+                    {edit.names.map((name, i) => (
+                      <React.Fragment key={i}>
+                        {i > 0 ? <span>,</span> : null}
+                        {name === "Unnamed entry" ? <span>Unnamed entry</span> : <span data-no-translate>{name}</span>}
+                      </React.Fragment>
+                    ))}
+                    {edit.remaining > 0 ? <span data-no-translate>(+{edit.remaining})</span> : null}
+                  </div>
+                )) : row.type === "details" ? <div>Details updated</div> : (
+                  <div>
+                    <span data-no-translate style={{ color: "#fecaca", textDecoration: "line-through" }}>{row.before}</span>
+                    <span style={{ color: "rgba(255,255,255,0.5)" }}> → </span>
+                    <span data-no-translate style={{ color: "#bbf7d0" }}>{row.after}</span>
+                  </div>
+                )}
+              </div>
+            ))}
+            {summary.bookkeepingOnly ? <div style={quietTextStyle}>Only internal record metadata changed.</div> : null}
+            {summary.hiddenCount > 0 ? <div style={quietTextStyle}>More political changes not shown: <span data-no-translate>{summary.hiddenCount}</span></div> : null}
+          </>
+        )}
+      </div>
+    );
+  }
+  if (change.kind === "history") {
     const text = change.op === "add" ? "Added" : change.op === "remove" ? "Removed" : "Changed";
     // Which fields of the entry changed, the way tracked changes show a word;
     // for a value changed whole (the canon context), its fields, a new one's
@@ -261,7 +308,7 @@ const DetailValue = ({ change, coverBefore }) => {
       <div style={{ display: "grid", gap: "0.2rem" }}>
         <div style={quietTextStyle}>{text}</div>
         {paths.slice(0, POLITICS_PATHS_SHOWN).map((entry) => (
-          <div data-no-translate key={entry.path} style={{ fontSize: "0.76rem", lineHeight: 1.45, overflowWrap: "anywhere" }}>
+          <div key={entry.path} style={{ fontSize: "0.76rem", lineHeight: 1.45, overflowWrap: "anywhere" }}>
             <span style={{ color: "rgba(255,255,255,0.55)" }}>{entry.path}: </span>
             <span style={{ color: "#fecaca", textDecoration: "line-through" }}>{politicsValueText(entry.from)}</span>
             <span style={{ color: "rgba(255,255,255,0.5)" }}> → </span>

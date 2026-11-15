@@ -196,6 +196,11 @@ import { SIMULATION_AUDIENCE, audienceSeesReport, audienceStoleReport, viewerAud
 import { buildTargetDossierKernel, buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
 import { buildTargetLedgerLines } from "./targetDossier.js";
 import { buildCustomStatContinuity, customStatRefreshDecision, describeFreshCustomStatEvidence } from "./customStatContinuity.js";
+import {
+  standardStatsMutationError,
+  standardStatsPreviousSummary,
+  standardGameMasterPatchForApply,
+} from "../../runtime/countryStatsOwnership.js";
 import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
 import {
   AGENT_REPORTS_FIELD,
@@ -207,6 +212,7 @@ import {
   getGameplayTool,
   getGameplayToolForCustomStatSheet,
   getGameplayToolForStatIndices,
+  withRequiredCountryStatsCalibration,
   HISTORY_FIELD,
   INTELLIGENCE_RATING_FIELD,
   NO_SKIP_HISTORY_JOB,
@@ -221,6 +227,7 @@ import {
   withFrontOrders,
   withOccupationSettlements,
   withScriptedBeat,
+  withWarEndings,
   withWarFigures,
   withIntelligenceRating,
   withSocialPosts,
@@ -247,6 +254,7 @@ import { chatMessageTags } from "./chatTags.js";
 import { PEACE_BLOCK_HEADING, buildPeaceBlock } from "./peacePrompt.js";
 import { WAR_FIGURES_WANTED_MOST, buildWarFiguresBlock, readWarFigures } from "./warFiguresPrompt.js";
 import { applyOccupationSettlements, occupationAnswerPolity, planOccupationSettlements, readOccupationAnswers, readOccupationSettlements } from "../../runtime/occupationSettlements.js";
+import { divideLand, readWarEndings, recordWarEndings, warsAwaitingOutcome } from "../../runtime/warEndings.js";
 import { reshelveJumpAnswer } from "./jumpAnswerShelves.js";
 import { readPeaceVerdict, readTreatyLines, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { PEACE_ANSWERS_FIELD, buildWarStatsBlock, describePeaceTalk, warsOf } from "./warStatsPrompt.js";
@@ -425,6 +433,7 @@ import {
   writeCanonicalTurnState,
   PROJECT_OPS,
   projectOpKind,
+  dissolvePolity,
 } from "../../runtime/gameState.js";
 import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "../../runtime/politicalBackground.js";
 import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
@@ -481,6 +490,8 @@ import {
   decodeCountryStatMacroEstimates,
   normalizeNearBoundaryHistoricalNominalScale,
   validateNativeEconomicCalibration,
+  shouldPreserveLegacyStartStatsBaseline,
+  countryStatsValidationFailure,
 } from "../../runtime/countryStatsCalibration.js";
 import {
   DEFAULT_STAT_INDEX_ROWS,
@@ -546,6 +557,7 @@ import {
   describeIntelligenceStanding,
   describeLeaderStanding,
   describeOccupationsAfterTheirWar,
+  describeWarsAwaitingOutcome,
   occupationGroups,
   describeReputationStanding,
   describeTerritorialRows,
@@ -1249,52 +1261,129 @@ const perfNow = () =>
 const LEAN_TERRITORIAL_ROWS = 12;
 // A time skip's `inView` (promptContext.js buildPromptFocus): the rows grouped
 // by who holds what, those of the powers in view in full.
-// Occupations whose war is over (standingContext.js occupationsAfterTheirWar), for the time skip to settle. Issue
-// #1000: Germany surrendered in 1945 and Poland was still German on the map in 1947.
-// { text, groups }: the block, and the groups the answer's keys are (standingContext.js occupationGroups).
-const buildOccupationsAfterWarContext = async (worldLike) => {
-  const world = normalizeWorldState(worldLike);
-  const catalog = await loadRegionCatalog().catch(() => []);
-  const rows = occupationsAfterTheirWar(territorialControlRows(world, catalog), world);
-  if (!rows.length) return { text: "", groups: [] };
-  const namer = await promptRegionNamer(world, catalog).catch(() => null);
-  return {
-    text: describeOccupationsAfterTheirWar(rows, { world, regionName: namer ? (id, name) => namer(id) || name : null }),
-    groups: occupationGroups(rows, world).map(({ key, controller, sovereign, rows: held, war }) => ({ key, controller, sovereign, count: held.length, war })),
-  };
-};
-
-// The skip's occupationSettlements (runtime/occupationSettlements.js), applied to the occupations that outlived
-// their war when it was asked (`baseWorld`) and are still held as they were then (an event of this turn may have
-// settled one already). Issue #1000.
-const settleOccupationsAfterWar = async (world, baseWorld, answer) => {
-  const keyed = readOccupationAnswers(answer);
-  const written = readOccupationSettlements(answer);
-  if (!keyed.length && !written.length) return world;
-  const before = normalizeWorldState(baseWorld);
-  const catalog = await loadRegionCatalog().catch(() => []);
-  const pending = occupationsAfterTheirWar(territorialControlRows(before, catalog), before);
-  if (!pending.length) return world;
-  // A key stands for every region of its group, as the prompt listed them.
-  const groups = new Map(occupationGroups(pending).map((group) => [group.key, group]));
-  const lines = [
-    ...keyed.flatMap(({ key, to }) => (groups.get(key)?.rows ?? []).map((row) => ({ region: row.regionId, to: occupationAnswerPolity(to, groups.get(key)) }))),
-    ...written,
-  ];
-  const namer = await promptRegionNamer(before, catalog).catch(() => null);
+// The polities on the map by name, folded: every holder, owner code, polity record and catalog country, each as
+// the map writes it.
+const knownPolitiesOf = (world, catalog) => {
   const polities = new Map();
   for (const name of [
     ...Object.values(world?.regionOwnershipOverrides ?? {}),
     ...normalizeArray(world?.ownerCodes),
     ...Object.keys(world?.polityOverrides ?? {}),
-    ...catalog.map((region) => region?.country),
+    ...normalizeArray(catalog).map((region) => region?.country),
   ]) {
     const text = normalizeString(name);
     if (text && !polities.has(text.toLowerCase())) polities.set(text.toLowerCase(), text);
   }
-  const plan = planOccupationSettlements(lines, pending, {
+  return (name) => polities.get(normalizeString(toCountryName(name) || name).toLowerCase()) || "";
+};
+
+// What the time skip is asked to settle of the wars that are over. Issue #1000: Germany surrendered in 1945, and in
+// 1947 Poland was still German on the map and the German Reich still a great power.
+//   - the ended wars with no outcome on record (runtime/warEndings.js warsAwaitingOutcome), for warEndings;
+//   - the occupations that outlived their war (standingContext.js occupationsAfterTheirWar) that no recorded or
+//     awaited outcome settles, for occupationSettlements.
+// { warsText, wars, text, groups }: the blocks, and what the answer's keys are.
+const buildOccupationsAfterWarContext = async (worldLike) => {
+  const world = normalizeWorldState(worldLike);
+  const wars = warsAwaitingOutcome(world);
+  const awaiting = new Set(wars.map((entry) => entry.id));
+  const warsText = describeWarsAwaitingOutcome(wars);
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const rows = occupationsAfterTheirWar(territorialControlRows(world, catalog), world);
+  if (!rows.length) return { warsText, wars, text: "", groups: [] };
+  const namer = await promptRegionNamer(world, catalog).catch(() => null);
+  return {
+    warsText,
+    wars,
+    text: describeOccupationsAfterTheirWar(rows, { world, awaiting, regionName: namer ? (id, name) => namer(id) || name : null }),
+    groups: occupationGroups(rows, world, { awaiting }).filter((group) => group.key)
+      .map(({ key, controller, sovereign, rows: held }) => ({ key, controller, sovereign, count: held.length })),
+  };
+};
+
+// The skip's warEndings (runtime/warEndings.js), for the wars it was asked about (`baseWorld`): recorded on each
+// war, and a state whose government it says was dissolved ends through the one door every polity ends by
+// (gameState.js dissolvePolity). Its occupations go back to their sovereigns; its own land is divided among the
+// powers the answer names (naming none: the side that beat it), each region to the one standing nearest it.
+const settleWarEndings = async (world, baseWorld, answer, { date = "" } = {}) => {
+  const entries = warsAwaitingOutcome(normalizeWorldState(baseWorld));
+  if (!entries.length || !answer) return world;
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const knownPolity = knownPolitiesOf(world, catalog);
+  const read = readWarEndings(answer, entries, { knownPolity });
+  if (!read.length) return world;
+  let next = { ...world, wars: recordWarEndings(world?.wars, read, { date }) };
+  logDebugEvent("turn", `Wars' outcomes recorded: ${read.map((entry) => `${entry.warId}: ${entry.lost.length ? `${entry.lost.join(", ")} lost` : "neither side lost"}${entry.dissolved ? `, ${entry.dissolved} dissolved` : ""}`).join("; ")}.`, read);
+  const gone = (name) => normalizeString(next?.polityOverrides?.[name]?.status).toLowerCase() === "dissolved";
+  const toEnd = read.filter((entry) => entry.dissolved && knownPolity(entry.dissolved) && !gone(knownPolity(entry.dissolved)));
+  if (!toEnd.length) return next;
+  next = normalizeWorldState(structuredClone(next));
+  for (const entry of toEnd) {
+    const code = knownPolity(entry.dissolved);
+    if (gone(code)) continue;
+    const heirs = (entry.landTo.length ? entry.landTo : entry.won.map(knownPolity))
+      .filter((name) => name && !gone(name) && name.toLowerCase() !== code.toLowerCase());
+    if (!heirs.length) {
+      logDebugEvent("turn", `${code} was told dissolved, but no power on the map took its land: it stands.`);
+      continue;
+    }
+    // Who holds what, and where, as the game's own map reads it (the regions placed by their geometry, as a
+    // country split places them: countrySplit.js), read again for each state ended, the last one's land moved.
+    const context = await lazyLookupContext({ world: next })();
+    const rowsOf = (name) => normalizeArray(context.ownerRows.get(context.resolveOwner(name) || name));
+    // (Only its own land: what it occupies goes back to its sovereign as it ends, gameState.js dissolvedPolityLand.)
+    const ownLand = (row) => !normalizeString(row.sovereign) || normalizeString(row.sovereign).toLowerCase() === code.toLowerCase();
+    const land = rowsOf(code).filter(ownLand).map((row) => ({ id: row.id, centroid: row.centroid }));
+    const shares = divideLand(land, heirs, (heir) => rowsOf(heir).map((row) => row.centroid).filter(Boolean));
+    // (Land the catalog gives it with no row of its own gets one, so the dissolution can hand it over.)
+    for (const { id } of land) if (!next.regionOwnershipOverrides[id]) next.regionOwnershipOverrides[id] = code;
+    const ended = dissolvePolity(next, code, { heir: heirs[0], heirOf: (id) => shares.get(id) || "", date });
+    logDebugEvent("turn", ended
+      ? `${code} dissolved after its defeat: ${land.length} region(s) to ${heirs.join(", ")}.`
+      : `${code} was told dissolved, and its dissolution was refused.`);
+  }
+  return next;
+};
+
+// The skip's occupationSettlements (runtime/occupationSettlements.js) and its wars' recorded outcomes, applied to
+// the occupations that outlived their war and are still held as they were (an event of this turn may have settled
+// one already):
+//   - an occupation whose war has a recorded outcome with a loser, on the world as this turn left it (its outcome
+//     may have been recorded this very turn): back to the sovereign where the occupier lost, the occupier's own
+//     where the sovereign did;
+//   - one the skip was asked about (`baseWorld`, by its key), as the answer says.
+// Issue #1000.
+const settleOccupationsAfterWar = async (world, baseWorld, answer) => {
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const lines = [];
+  const rows = new Map();
+  const now = normalizeWorldState(world);
+  for (const group of occupationGroups(occupationsAfterTheirWar(territorialControlRows(now, catalog), now), now)) {
+    if (!group.ruling) continue;
+    for (const row of group.rows) {
+      rows.set(row.regionId, row);
+      lines.push({ region: row.regionId, to: group.ruling === "returned" ? group.sovereign : group.controller });
+    }
+  }
+  const keyed = readOccupationAnswers(answer);
+  const written = readOccupationSettlements(answer);
+  if (keyed.length || written.length) {
+    const before = normalizeWorldState(baseWorld);
+    const awaiting = new Set(warsAwaitingOutcome(before).map((entry) => entry.id));
+    // A key stands for every region of its group, as the prompt listed them.
+    const asked = occupationGroups(occupationsAfterTheirWar(territorialControlRows(before, catalog), before), before, { awaiting }).filter((group) => group.key);
+    const groups = new Map(asked.map((group) => [group.key, group]));
+    for (const group of asked) for (const row of group.rows) if (!rows.has(row.regionId)) rows.set(row.regionId, row);
+    lines.push(
+      ...keyed.flatMap(({ key, to }) => (groups.get(key)?.rows ?? []).map((row) => ({ region: row.regionId, to: occupationAnswerPolity(to, groups.get(key)) }))),
+      ...written,
+    );
+  }
+  if (!lines.length) return world;
+  const namer = await promptRegionNamer(now, catalog).catch(() => null);
+  const plan = planOccupationSettlements(lines, [...rows.values()], {
     namesOf: (row) => [row.regionId, row.name, namer?.(row.regionId)],
-    knownPolity: (name) => polities.get(normalizeString(toCountryName(name) || name).toLowerCase()) || "",
+    knownPolity: knownPolitiesOf(world, catalog),
   });
   const held = world?.regionOwnershipOverrides ?? {};
   const live = plan.filter((entry) => normalizeString(held[entry.regionId]).toLowerCase() === normalizeString(entry.from).toLowerCase());
@@ -1548,6 +1637,8 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       inView: variables.promptFocus?.inView ?? null,
     });
     const occupations = await buildOccupationsAfterWarContext(bundle.world);
+    variables.warsAwaitingOutcomeContext = occupations.warsText;
+    variables.warEndingEntries = occupations.wars;
     variables.occupationsAfterWarContext = occupations.text;
     variables.occupationGroups = occupations.groups;
   }
@@ -1954,6 +2045,8 @@ const validateStatContract = (taskKey, parsed, contract = {}) => {
   const { customFullStatSheet = false, customStatKeys = [], statSheetDefinition = null, statIndexRows = [] } = contract ?? {};
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "";
   if (!customFullStatSheet) {
+    const ownershipError = standardStatsMutationError(taskKey, parsed);
+    if (ownershipError) return ownershipError;
     return normalizeArray(statIndexRows).length ? validateTaskStatIndexKeys(taskKey, parsed, statIndexRows) : "";
   }
   const validateCustomObject = (customStats, path, { complete = false } = {}) => {
@@ -3007,6 +3100,8 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
   // priority line opens the system prompt (main.jsx callAI).
 
   blocks.push(`[Occupied and Contested Regions]\n${normalizeString(variables.territorialControlContext) || "None."}`);
+  const warsOver = normalizeString(variables.warsAwaitingOutcomeContext);
+  if (warsOver) blocks.push(warsOver);
   const afterWar = normalizeString(variables.occupationsAfterWarContext);
   if (afterWar) blocks.push(afterWar);
   if (isActiveFeatureEnabled("groups")) blocks.push(buildJumpGroupsBlock(variables.groupsContext, { rulesAbove }));
@@ -3260,6 +3355,21 @@ const loadTaskStatContract = async (taskKey) => {
   return { statSheetDefinition, customFullStatSheet, customStatRows, customStatKeys, statIndexRows, statIndexKeys, customStatIndices };
 };
 
+// Apply per-request Stats audit requirements to both synchronous and batched
+// output tools. The shared helper preserves the upstream per-feature tool
+// construction and does not mutate the frozen global tool schema.
+const withRequestedStatSheetTool = (taskKey, tool, variables, { customFullStatSheet = false } = {}) => {
+  const ratedTool = taskKey === "countryStatSheet" && variables?.statsRateIntelligence
+    ? withIntelligenceRating(tool)
+    : tool;
+  return taskKey === "countryStatSheet" && !customFullStatSheet
+    ? withRequiredCountryStatsCalibration(ratedTool, {
+        population: variables?.statsPopulationCalibrationRequested === true,
+        economic: variables?.statsEconomicCalibrationRequested === true,
+      })
+    : ratedTool;
+};
+
 // The output function a task is sent, before any reshaping of the call's own
 // (runJsonTask toolTransform): the task's tool for the scenario's statistics
 // and this game's features, the players' advice and the social posts on a time
@@ -3273,7 +3383,9 @@ const taskToolFor = (taskKey, { customFullStatSheet, customStatRows, statIndexRo
   // scripted events, on every skip of it, so the function stays the same from turn to turn.
   const beatTool = JUMP_TASK_KEYS.has(taskKey) && normalizeArray(getActiveWorldDirection()?.scriptedEvents).length ? withScriptedBeat(featureTool) : featureTool;
   // Occupations that outlived their war (issue #1000): settled in a field the answer must hold, when there are any.
-  const settlingTool = JUMP_TASK_KEYS.has(taskKey) && normalizeArray(variables?.occupationGroups).length ? withOccupationSettlements(beatTool, variables.occupationGroups) : beatTool;
+  const occupyingTool = JUMP_TASK_KEYS.has(taskKey) && normalizeArray(variables?.occupationGroups).length ? withOccupationSettlements(beatTool, variables.occupationGroups) : beatTool;
+  // And how each ended war with no outcome on record ended (runtime/warEndings.js), when there are any.
+  const settlingTool = JUMP_TASK_KEYS.has(taskKey) && normalizeArray(variables?.warEndingEntries).length ? withWarEndings(occupyingTool, variables.warEndingEntries) : occupyingTool;
   // The players' advice, asked of the time skip whose prompt asks for it.
   const advisedTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(settlingTool) : settlingTool;
   // And the social posts after all of it, or none where the game has no Rostra
@@ -3284,12 +3396,9 @@ const taskToolFor = (taskKey, { customFullStatSheet, customStatRows, statIndexRo
     // polls that are not open are dropped (socialFeed.js readSkipPollResults).
     ? withSocialPosts(advisedTool, isActiveFeatureEnabled("socialMedia"), { polls: true })
     : advisedTool;
-  // A first reading's sheet can carry the service's rating, in the same request
-  // (generateCountryStatSheet rateIntelligence, gameplaySchemas.js
-  // withIntelligenceRating).
-  return taskKey === "countryStatSheet" && variables?.statsRateIntelligence
-    ? withIntelligenceRating(taskTool)
-    : taskTool;
+  // Both normal requests and background batches use the same Stats tool
+  // requirements; only the task-specific feature layers above differ.
+  return withRequestedStatSheetTool(taskKey, taskTool, variables, { customFullStatSheet });
 };
 
 // The function a time skip's request would carry before it is folded, so the
@@ -3950,7 +4059,8 @@ const runJsonTask = async (taskKey, {
     const batchTool = withUnitTypeNames(forActiveFeatures(customFullStatSheet
       ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
       : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices })), variables?.unitTypeNames);
-    if (batchTool && providerSupportsBatch(taskKey)) {
+    const requestedBatchTool = withRequestedStatSheetTool(taskKey, batchTool, variables, { customFullStatSheet });
+    if (requestedBatchTool && providerSupportsBatch(taskKey)) {
       const customId = `oh_${taskKey}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`.slice(0, 64);
       const submitted = await submitAIBatch({
         customId,
@@ -3960,7 +4070,7 @@ const runJsonTask = async (taskKey, {
         // read from the cache on top of that (main.jsx submitAIBatch).
         staticPrefixEnd: staticPrefixEndOf(systemPrompt, staticPromptPrefix),
         taskKey,
-        tool: batchTool,
+        tool: requestedBatchTool,
       });
       if (submitted) {
         registerPendingBatch({
@@ -4667,11 +4777,15 @@ const runJsonTask = async (taskKey, {
           logDebugEvent("ai", `Task "${taskKey}" attempt ${outputAttempt}: ${salvaged.removed.length} malformed part(s) left out instead of asking again.`, salvaged.removed, { verbose: true });
         }
       }
-      if (validation.valid && (statsCoverageError || statsCalibrationError || statsEconomicCalibrationError || statsSplitError)) {
-        validation = {
-          valid: false,
-          error: [statsCoverageError, statsCalibrationError, statsEconomicCalibrationError, statsSplitError].filter(Boolean).join(" "),
-        };
+      if (taskKey === "countryStatSheet" && !customFullStatSheet) {
+        const primaryFailure = countryStatsValidationFailure({
+          schemaError: validation.valid ? "" : validation.error,
+          coverageError: statsCoverageError,
+          calibrationError: statsCalibrationError,
+          economicCalibrationError: statsEconomicCalibrationError,
+          splitError: statsSplitError,
+        });
+        if (primaryFailure) validation = { valid: false, error: primaryFailure };
       }
       if (transportDecodeError) {
         validation = { valid: false, error: transportDecodeError };
@@ -9463,7 +9577,8 @@ const applySimulationResult = async ({
   // attacked; every country's weariness moves by what the turn did to it; and
   // the peaces the skip says two sides nobody plays made are made. Nobody
   // offers anybody peace here: a country does in the skip's letters (below).
-  // Occupations that outlived their war, as the skip settled them (issue #1000).
+  // How the wars that were over ended (runtime/warEndings.js), then the occupations they left (issue #1000).
+  worldWithImpacts = await settleWarEndings(worldWithImpacts, baseWorld, result.warEndings, { date: nextGame.gameDate });
   worldWithImpacts = await settleOccupationsAfterWar(worldWithImpacts, baseWorld, result.occupationSettlements);
   const toldTreaties = readTreatyLines(result.peaceTreaties);
   const samePair = (line, entry) => [line.from, line.to].map((name) => normalizeString(name).toLowerCase()).sort().join("|") === [entry.from, entry.to].map((name) => normalizeString(name).toLowerCase()).sort().join("|");
@@ -14114,15 +14229,14 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
     !territorialCoverageMatches
   );
 
-  // 8B.2.18 population calibration is deliberately a START-STATE migration only.
-  // A mature alternate-history campaign whose old ledger predates this feature must
-  // NOT be silently dragged toward history. At Round One/start date we can safely
-  // rebuild the newly-created baseline once; later campaigns preserve canon unless
-  // the user explicitly requests a hard audit.
+  // Calibration-version metadata alone is NOT evidence that an authored numeric
+  // ledger is wrong. Rebuild at Round One only when actual native geography
+  // coverage disagrees; otherwise preserve its canonical population and GDP.
   const startPopulationCalibrationUpgrade = Boolean(
     previousComplete &&
     hasAuthoritativeTerritorialFingerprint &&
     atScenarioStartState &&
+    !territorialCoverageMatches &&
     previousPopulationCalibrationVersion < COUNTRY_STATS_POPULATION_CALIBRATION_VERSION
   );
   const rebuildNumericBaseline = Boolean(
@@ -14175,9 +14289,31 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
     economicEvents: rawEconomicEvidence.relevantIds,
   }))}`;
 
+  // A scenario can author complete economic and demographic components before
+  // this continuity fingerprint existed. When every native geography still
+  // matches and no post-baseline event needs evaluation, preserve those actual
+  // scenario facts instead of silently substituting an AI-generated economy.
+  if (statCode && shouldPreserveLegacyStartStatsBaseline({
+    previousComplete,
+    atScenarioStartState,
+    hasAuthoritativeTerritorialFingerprint,
+    territorialCoverageMatches,
+    previousStateFingerprint,
+    unaccountedEconomicEvents: rawEconomicEvidence.unaccountedCount,
+    forceReassess,
+  })) {
+    // Do not even stamp continuity onto an author-owned legacy sheet: native
+    // normalization may otherwise discard older scenario-only metadata while
+    // copying its numerical values. Return the existing canonical record.
+    console.info("[stats 7A.2] complete mapped starting baseline retained for " + statCode +
+      "; exact native geography matches; no AI call or world write.");
+    return previous;
+  }
+
   // Only preserve the old zero-AI migration behavior when we have NO authoritative
   // map-derived territorial fingerprint at all (for example a landless/custom scenario).
-  // If a mapped territorial basis exists, the one-time bootstrap must reassess it.
+  // A mapped sheet with mismatched native geography still needs reassessment;
+  // a complete matching Day-One sheet above is reused without mutation.
   if (statCode && legacyContinuityBootstrap && !hasAuthoritativeTerritorialFingerprint) {
     try {
       let migrated = null;
@@ -14250,7 +14386,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
     : !rebuildNumericBaseline && previous
       ? (() => {
           const normalizedPrevious = normalizeCountryStatSheet(previous) || previous;
-          const { territorialComponents: _previousComponents = [], ...previousSummary } = normalizedPrevious;
+          const previousSummary = standardStatsPreviousSummary(normalizedPrevious);
           const macroSummary = buildStatsPreviousMacroContext(normalizedPrevious, territorialMacroPlan);
           return [
             "Previous whole-sheet metadata / derived aggregates:",
@@ -17773,6 +17909,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     warFigures: merged.warFigures,
     // Who each occupation that outlived its war goes to (runtime/occupationSettlements.js).
     occupationSettlements: merged.occupationSettlements,
+    // How each ended war with no outcome on record ended (runtime/warEndings.js).
+    warEndings: merged.warEndings,
     // What was posted on Rostra in the period (runtime/socialFeed.js), read when the turn is written.
     socialPosts: merged.socialPosts,
     // What the public answered to the player's open polls (runtime/socialFeed.js readSkipPollResults).
@@ -18777,6 +18915,12 @@ const validateGameMasterPreviewPayload = async (candidate, {
   if (worldChangeError) return worldChangeError;
   territoryNotes.forEach(note);
 
+  // Recheck the scenario-specific Stats field ownership before Preview and
+  // again at Apply. A generic GM transport can contain customStats even when
+  // the campaign uses a standard country sheet (Brazil inflation regression).
+  const statsContractError = validateStatContract(
+    "gameMaster", candidate, await loadTaskStatContract("gameMaster"));
+  if (statsContractError) return statsContractError;
   const statError = validateGameMasterStatPatches(candidate.countryStatPatches, world, candidate.events);
   if (statError) return statError;
 
@@ -19419,11 +19563,16 @@ export const applyGameMasterPreview = async (preview) => {
     }
 
     const statCountries = [];
+    const gmStatContract = normalizeArray(transaction.countryStatPatches).length
+      ? await loadTaskStatContract("gameMaster")
+      : null;
     for (const entry of normalizeArray(transaction.countryStatPatches)) {
       const country = normalizeString(entry?.country);
       const requestedPatch = cloneValue(entry?.patch);
       const capability = {};
-      const statsOnlyPatch = { ...requestedPatch };
+      const statsOnlyPatch = gmStatContract?.customFullStatSheet
+        ? { ...requestedPatch }
+        : standardGameMasterPatchForApply(requestedPatch);
       for (const key of ["intelligence", "military", "warWeariness", "warResources"]) {
         if (!Object.prototype.hasOwnProperty.call(requestedPatch, key)) continue;
         capability[key] = requestedPatch[key];

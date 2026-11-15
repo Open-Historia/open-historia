@@ -33,6 +33,7 @@
 import { toCountryName } from "./ownerNames.js";
 import { compareGameDates, normalizeGameDate } from "./gameDates.js";
 import { nameId } from "../../server/nameId.js";
+import { normalizeWarOutcome } from "./warEndings.js";
 
 export const WAR_STATUSES = Object.freeze(["active", "ceasefire", "ended"]);
 const STATUS_SET = new Set(WAR_STATUSES);
@@ -212,6 +213,9 @@ export const normalizeWarRecord = (entry, { fallbackId = "" } = {}) => {
   // that renews nothing has the shape it always had.
   const renews = cleanWarId(entry.renews);
   if (renews && renews !== id) war.renews = renews;
+  // How it ended (runtime/warEndings.js): kept only on an ended war that has one.
+  const outcome = status === "ended" ? normalizeWarOutcome(entry.outcome) : null;
+  if (outcome) war.outcome = outcome;
   return war;
 };
 

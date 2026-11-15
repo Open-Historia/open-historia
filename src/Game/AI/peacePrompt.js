@@ -37,7 +37,7 @@ const fold = (value) => clean(value).toLowerCase();
 const list = (value) => (Array.isArray(value) ? value : []);
 
 const ALLIANCE_RULE = "Alliances bind, and the game acts on them. When a war begins, the country it was begun against is joined, as the period ends and by the game itself, by those bound to defend it: the other parties of an active alliance or mutual defence agreement, the guarantor of a guarantee, and the full members of a security alliance or defence pact it belongs to. Write no join for them. An ally that will not come breaks the treaty: tell that in an event and end or suspend the agreement in the same answer, and the game takes it off the breaker's reputation. A country a person plays is asked by the game and answers for itself.";
-const WEARY_RULE = "The game keeps how weary of its war each country is, from 0 (fresh) to 100 (spent): it rises with time, the men called up, ground lost and a blockade. Tell it at home, the more the higher: shortages, strikes, desertion, a government pressed to end the war. Its armies recover more slowly for it; the game does that.";
+const WEARY_RULE = "The game keeps how weary of its war each country is, from 0 (fresh) to 100 (spent): it rises with time, the men called up, ground lost and a blockade. Tell it at home, the more the higher: shortages, strikes, desertion, a government pressed to end the war. Its armies recover more slowly for it; the game does that. Once its wars are over it falls away, a little every month: a country at peace that is still weary is recovering from the war it fought, not fighting one.";
 const PEACE_RULE = [
   `A war can end on terms: who keeps the ground, whether one side pays the other reparations, a share of its economy a year (at most ${Math.round(REPARATIONS_SHARE_CAP * 100)}%) for some years (at most ${REPARATIONS_YEARS_CAP}), and whatever else the two agree: one of them annexed whole, regions ceded, one made the other's puppet, any other condition. The game carries out a peace on terms, but never decides one: whether a country wants peace, when, and on what terms is yours to judge, from its figures under [War Situation] and its own interests and character. A weary or losing country may still fight on, and a strong one may still want peace.`,
   "A country nobody plays that offers a player peace does it in a letter: an entry of diplomaticOutreach from that country to the player, its leader's own words in openingMessage, with peaceOffer holding the terms (territory; reparationsPayer empty when nobody pays, else the payer with reparationsPercent and reparationsYears; moreTerms for any other term, written as in a peaceTreaties line). The player accepts or declines it in that chat. Write no event that the peace was made: it is made when the player accepts.",
@@ -97,7 +97,12 @@ export const buildPeaceBlock = ({ world = {}, game = {}, players = [], max = PEA
   section("Bound to defend:", bonds.map((line) => `${line}.`));
   // (Countries at war have theirs in the situation below; the rest are told here.)
   const toldBelow = new Set(situation ? fighting.map(fold) : []);
-  section("War weariness:", weary.filter((entry) => !toldBelow.has(fold(entry.country))).slice(0, 12).map((entry) => `${entry.country} ${Math.round(entry.value)}, ${wearinessWord(entry.value)}`));
+  // (At war or at peace by the ledger: a country whose wars are over is told as recovering, so a figure left from a
+  // war ended long ago is never read as one still being fought; issue #1000, weary 47 twenty months after its surrender.)
+  const atWar = new Set(fighting.map(fold));
+  const wearyLine = (entry) => `${entry.country} ${Math.round(entry.value)}, ${wearinessWord(entry.value)}`;
+  section("War weariness, at war:", weary.filter((entry) => atWar.has(fold(entry.country)) && !toldBelow.has(fold(entry.country))).slice(0, 12).map(wearyLine));
+  section("War weariness, at peace and recovering from the war they fought:", weary.filter((entry) => !atWar.has(fold(entry.country))).slice(0, 12).map(wearyLine));
   if (situation && situation.length + 1 <= room()) lines.push(situation);
   return lines.join("\n");
 };
