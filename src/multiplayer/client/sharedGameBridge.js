@@ -19,8 +19,8 @@ export const inSharedGame = () => remoteRuntimeActive();
 // open the Events panel on it, as they do on a time skip the page ran itself.
 export const SHARED_ROUND_LANDED = "oh:shared-round-landed";
 
-// A guest's rounds, replies and stat sheets are all the host's work, on the
-// host's AI key; the role says which one this page is. For useSyncExternalStore.
+// The role says which one this page is: the host's screen or a guest's. For
+// useSyncExternalStore.
 export const sharedGameRole = () => role;
 export const subscribeSharedGameRole = (listener) => {
   roleListeners.add(listener);
@@ -31,6 +31,25 @@ export const setSharedGameRole = (next) => {
   if (value === role) return;
   role = value;
   for (const listener of [...roleListeners]) listener();
+};
+
+// The countries people play in this shared game: the lobby's seats a person's
+// device holds, whoever minds them now. A screen answers a country differently
+// when a person plays it (a peace is put to them by name, and they answer it
+// themselves). Empty in no shared game. For useSyncExternalStore, with the role's
+// subscription.
+const NOBODY = Object.freeze([]);
+let people = NOBODY;
+export const sharedGamePeople = () => people;
+export const setSharedGamePeople = (names) => {
+  const next = [...new Set((Array.isArray(names) ? names : []).map((name) => String(name ?? "").replace(/\s+/g, " ").trim()).filter(Boolean))];
+  if (next.length === people.length && next.every((name, at) => name === people[at])) return;
+  people = next.length ? Object.freeze(next) : NOBODY;
+  for (const listener of [...roleListeners]) listener();
+};
+export const playedByPerson = (country) => {
+  const key = String(country ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  return Boolean(key) && people.some((name) => name.toLowerCase() === key);
 };
 
 export const setSharedRequester = (request) => {

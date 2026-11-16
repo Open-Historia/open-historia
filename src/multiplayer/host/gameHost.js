@@ -75,6 +75,14 @@ const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 // A word for a player's screen, as long as a notice may be (game/messages.js):
 // one naming two long countries was longer, and would not be sent at all.
 const notice = (level, text) => ({ t: "notice", level, text: clean(text).slice(0, 500) });
+// Why a seat's answer about war and peace did nothing (warAndPeace.js playerDiplomacy), in its words.
+const PEACE_REFUSALS = Object.freeze({
+  "not-yours": "This is not yours to answer.",
+  played: "That side is led by another player: make peace with them in a chat.",
+  crossed: "Another player fights on against you in this war, so no peace can take you out of it yet.",
+  "no-war": "That war is over.",
+  "not-in-war": "You are not in that war.",
+});
 const same = (left, right) => Boolean(clean(left)) && clean(left).toLocaleLowerCase() === clean(right).toLocaleLowerCase();
 const list = (value) => (Array.isArray(value) ? value : []);
 const fold = (value) => clean(value).toLocaleLowerCase();
@@ -909,12 +917,13 @@ export const createGameHost = ({
       return "";
     },
     // War and peace (Game/AI/warAndPeace.js): the seat's own answer to an
-    // offer of peace or a call to arms, or terms of its own put to an enemy
-    // nobody plays, which wait for that enemy's leader to answer them in the
+    // offer of peace or a call to arms, or terms of its own: put to an enemy
+    // nobody plays, they wait for that enemy's leader to answer them in the
     // seat's chat with it (the host's own table turn, runChatActionBatch, reads
-    // the answer). Whose answer it is is the seat's country and nothing the
+    // the answer); put to another player (`to`), they wait for that player's
+    // own answer. Whose answer it is is the seat's country and nothing the
     // message says.
-    peace: async (connection, { op, ref, terms }, seat) => {
+    peace: async (connection, { op, ref, terms, to }, seat) => {
       let refusal = "";
       // (A peace taken may annex a country or cede regions by name: they are found on the map.)
       const map = op === "accept"
@@ -924,9 +933,9 @@ export const createGameHost = ({
         : null;
       await store.updateForces(({ world, game }) => {
         const regions = map ? map.rendered(map.catalog, world) : [];
-        const outcome = playerDiplomacy(world, { op, ref, terms, country: seat.country, players: humanCountriesOf(game), date: clean(game?.gameDate), round: game?.round, regions });
+        const outcome = playerDiplomacy(world, { op, ref, terms, to: clean(to), country: seat.country, players: humanCountriesOf(game), date: clean(game?.gameDate), round: game?.round, regions });
         if (outcome.error) {
-          refusal = outcome.error === "not-yours" ? "This is not yours to answer." : outcome.error === "played" ? "That side is led by another player: make peace with them in a chat." : "This is no longer open.";
+          refusal = PEACE_REFUSALS[outcome.error] ?? "This is no longer open.";
           return null;
         }
         return { world: outcome.world };

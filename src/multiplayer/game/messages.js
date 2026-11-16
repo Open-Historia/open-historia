@@ -58,7 +58,9 @@ import { SAY_FROM_DRAFT_MAX } from "../client/sharedThreads.js";
 // 14: a stat sheet is written once and stands: the "sheet" request has no
 // `fresh` (nothing is read again in a shared game), and with settings.replies
 // "own" the host leaves a missing sheet to the asking device, which writes it
-// on its own AI key and sends the figures (the "ownSheet" request).
+// on its own AI key and sends the figures (the "ownSheet" request). And a
+// player puts terms of peace to another player by name (the "peace" request's
+// `to`): each country makes its own peace.
 export const SHARED_GAME_VERSION = "14";
 
 // The documents a player's view holds: the game itself first (a screen that
@@ -174,7 +176,9 @@ export const PLAYER_REQUESTS = Object.freeze({
   // peace ("accept", "decline") or to a call to arms ("honour", "refuse"), by
   // its id; or terms of its own put to the other side of a war ("propose", by
   // the war's id, with `terms`). Whose answer it is is the seat's country.
-  peace: obj({ t: literal("peace"), id: REQUEST_ID, op: str(8, { enum: ["accept", "decline", "honour", "refuse", "propose"] }), ref: str(160, { min: 1 }), terms: json(3) }),
+  // `to`, for "propose": the country the terms are put to, a person on the
+  // other side by name (warAndPeace.js proposePeace).
+  peace: obj({ t: literal("peace"), id: REQUEST_ID, op: str(8, { enum: ["accept", "decline", "honour", "refuse", "propose"] }), ref: str(160, { min: 1 }), terms: json(3), to: COUNTRY }, ["to"]),
   // An institution's business, done by the host for the asker's country:
   // found one, apply, invite, answer a case, vote, table a proposal, open its
   // Council or a hearing, and the Council's or the hearing's turn

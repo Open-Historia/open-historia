@@ -198,6 +198,41 @@ test("a person puts terms of their own, and they wait, open, for the enemy's lea
   assert.deepEqual(offered.world.peaceOffers.map((offer) => [offer.from, offer.to, offer.source]), [["Borduria", "Aland", "chat"]]);
 });
 
+// "Peace between people: offers between players, each country making its own peace" (the owner, 2026-11-15). Every
+// door was shut for a side with a person on it: "That side is led by another player", and a war between two people
+// ended only by conquest.
+test("terms of peace are put to another player by name, who takes or declines them, and each country makes its own peace", () => {
+  const cede = { territory: TERRITORY_RESTORED };
+  const people = ["Aland", "Borduria"];
+  const put = (state, players, extra = {}) => proposePeace(state, { warId: "war-1", from: "Aland", to: "Borduria", terms: cede, players, date: "1915-01-10", round: 8, ...extra });
+  const offered = put(world(), people);
+  assert.deepEqual([offered.reason, offered.to, offered.offer.from, offered.offer.status], ["", "Borduria", "Aland", "open"]);
+  // Theirs to answer, through the same door as any offer; nobody else's.
+  const act = (state, op, country, players = people) => playerDiplomacy(state, { op, ref: offered.offer.id, country, players, date: "1915-01-12", round: 8 });
+  assert.equal(act(offered.world, "accept", "Aland").error, "not-yours");
+  const taken = act(offered.world, "accept", "Borduria");
+  assert.deepEqual([taken.error, war(taken.world).status, holder(taken.world, "b9")], ["", "ended", "Borduria"], "the two of them, and nobody else, in it: the war is over");
+  assert.deepEqual([war(act(offered.world, "decline", "Borduria").world).status], ["active"]);
+  // The story tells it as theirs: the AI answers none of it.
+  const told = buildPeaceBlock({ world: offered.world, game: { round: 8 }, players: people });
+  assert.match(told, /Offers of peace that wait for an answer \(the answer is theirs: write none, and the war goes on meanwhile\):\n- Aland has offered Borduria peace/);
+  assert.doesNotMatch(told, /Offers of peace a player has made/);
+  // With another player beside Aland, Aland's peace takes only Aland out.
+  const beside = world({ wars: [{ ...WAR, sideA: ["Aland", "Cisland"] }] });
+  const three = ["Aland", "Borduria", "Cisland"];
+  const separate = act(put(beside, three).world, "accept", "Borduria", three);
+  assert.deepEqual([war(separate.world).status, war(separate.world).sideA, war(separate.world).sideB], ["active", ["Cisland"], ["Borduria"]]);
+  // Another player fighting on against each of the two: no peace can take either out yet.
+  const crossed = world({ wars: [{ ...WAR, sideA: ["Aland", "Cisland"], sideB: ["Borduria", "Dorland"] }] });
+  assert.equal(put(crossed, ["Aland", "Borduria", "Cisland", "Dorland"]).reason, "crossed");
+  // A side the AI plays answers through its first country, as before, whichever of it is named; one a person leads
+  // is that person's to answer, and the AI beside them answers nothing.
+  const coalition = world({ wars: [{ ...WAR, sideB: ["Borduria", "Dorland"] }] });
+  assert.deepEqual([put(coalition, ["Aland"], { to: "Dorland" }).to, put(coalition, ["Aland"], { to: "Dorland" }).reason], ["Borduria", ""]);
+  assert.equal(put(coalition, ["Aland", "Borduria"], { to: "Dorland" }).reason, "played");
+  assert.equal(put(world(), ["Aland"], { to: "Cisland" }).to, "Borduria", "a country not in the war is put nothing");
+});
+
 const turn = (state, extra = {}) => turnWarAndPeace({ world: state, baseWorld: state, days: 30, date: "1915-02-01", round: 9, players: ["Aland"], fronts: null, ...extra });
 
 test("a turn moves weariness, and nobody offers peace or settles a war unless the skip says so", () => {

@@ -910,6 +910,33 @@ test("the war room's fortified lines and fleets are the seat's own, held to the 
   assert.match(s.ack(s.guest, id(14)).error, /Nothing was asked/);
 });
 
+test("a player puts terms of peace to another player by name, and that player's own answer makes the peace", async () => {
+  // "Peace between people: offers between players, each country making its own peace" (the owner, 2026-11-15).
+  // The host answered every such proposal "That side is led by another player", and nothing else could be done.
+  const s = setup();
+  s.store.docs.world.wars = [{ id: "war-1", title: "The Baltic War", status: "active", sideA: [RUSSIA], sideB: [LATVIA], startedDate: "2014-03-01" }];
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const terms = { territory: "restored" };
+  // Put to nobody by name, they are still refused: that side is a person's.
+  await s.request(s.guest, { t: "peace", id: id(2), op: "propose", ref: "war-1", terms });
+  assert.match(s.ack(s.guest, id(2)).error, /led by another player/);
+  // Put to the host's country by name, they wait for the host's player.
+  await s.request(s.guest, { t: "peace", id: id(3), op: "propose", ref: "war-1", terms, to: LATVIA });
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  const offer = s.store.docs.world.peaceOffers.find((entry) => entry.status === "open");
+  assert.deepEqual([offer.from, offer.to], [RUSSIA, LATVIA]);
+  assert.ok(s.shown(s.hostPlayer).world.peaceOffers.some((entry) => entry.id === offer.id), "the one it is put to sees it");
+  // Nobody answers it but the one it was put to.
+  await s.request(s.guest, { t: "peace", id: id(4), op: "accept", ref: offer.id });
+  assert.match(s.ack(s.guest, id(4)).error, /not yours to answer/);
+  await s.request(s.hostPlayer, { t: "peace", id: id(5), op: "accept", ref: offer.id });
+  assert.equal(s.ack(s.hostPlayer, id(5)).ok, true);
+  assert.equal(s.store.docs.world.wars[0].status, "ended");
+});
+
 test("a city struck from the air is the host's own map's: how many live there is never the page's to say", async () => {
   // A guest's page sent the people of the city it struck, and the host took the figure: fifty million "killed"
   // in a town of thousands, as the page liked. The host now looks the city up on its own map.

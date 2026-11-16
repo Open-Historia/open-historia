@@ -26,7 +26,7 @@ import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/te
 import { planWorldWrite, revealedTurnOf, suggestionsOutlived } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
-import { SHARED_ROUND_LANDED, setSharedGameRole, setSharedRequester } from "./sharedGameBridge.js";
+import { SHARED_ROUND_LANDED, setSharedGamePeople, setSharedGameRole, setSharedRequester } from "./sharedGameBridge.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
 import { createClientSession } from "../session/client.js";
 import { probeNetwork } from "../transport/peer.js";
@@ -256,6 +256,8 @@ const makeClient = (send) => createGameClient({
     if (current) current.hostNotices = notices;
     // The host's feature switches are the game's on this screen too.
     if (lobby?.features) setSharedGameFeatures(lobby.features);
+    // And who plays which country: a seat a person's device holds (game/messages.js SEAT `held`), not one they watch.
+    if (lobby) setSharedGamePeople((Array.isArray(lobby.seats) ? lobby.seats : []).filter((seat) => seat?.held === true && seat?.status !== "watching").map((seat) => seat.country));
     set({
       lobby,
       round,
@@ -585,6 +587,7 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   leaving?.session?.leave();
   set({ ...IDLE });
   setSharedGameRole("");
+  setSharedGamePeople([]);
   // This device's own features again.
   setSharedGameFeatures(null);
   // Back to this device's own documents, and the library's own entry.

@@ -1,5 +1,5 @@
 /*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, isTouchPrimary, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -63,7 +63,7 @@ import { commitInstitutionalPlayerMessage } from "../../runtime/institutionalGov
 import { buildPlayerPoliticalKnowledgeView } from "../../runtime/politicalKnowledge.js";
 import { commitInstitutionLifecycleCommand, institutionLifecycleCasesForPolity, institutionLifecycleConversationState, institutionPortfolioForPolity } from "../../runtime/institutionLifecycle.js";
 import { buildLifecycleReplyRevealPlan } from "./institutionLifecyclePresentation.js";
-import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, requestFromHost, sharedGamePeople, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import { afterSharedSay, followSharedThread, pendingSharedThread, sayRequestFor, sharedFollowStep } from "../../multiplayer/client/sharedThreads.js";
 import { ownReplyAsked } from "../../multiplayer/client/ownReplies.js";
 import { answerOnThisDevice, dismissOwnReply, retryOwnReply, useOwnReply } from "./ownTableReplies.js";
@@ -1376,6 +1376,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     const warsAll = useRuntimeState("world", selectWars);
     const peaceCounterpart = oneOnOne && !isAdvisorDesk ? counterparts[0] ?? null : null;
     const peaceWar = peaceCounterpart ? warBetween(warsAll, playerCountry, peaceCounterpart.name) : null;
+    // (In a shared game the enemy may be another player's country: they take or decline the terms themselves.)
+    const sharedPeople = useSyncExternalStore(subscribeSharedGameRole, sharedGamePeople, sharedGamePeople);
+    const peaceWithPerson = Boolean(peaceCounterpart) && sharedPeople.some((name) => name.toLowerCase() === String(peaceCounterpart.name ?? "").trim().toLowerCase());
     const threadOffers = useMemo(() => peaceOffersForThread({
         offers: peaceOffersAll,
         player: playerCountry,
@@ -2133,7 +2136,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         const proposePeaceHere = async (terms) => {
             if (!peaceWar || isLoading) return "no-war";
             const messageId = newThreadId("msg");
-            const put = await sendPeaceAnswer("propose", peaceWar.id, terms, { chatId: chat.id, messageId });
+            const put = await sendPeaceAnswer("propose", peaceWar.id, terms, { chatId: chat.id, messageId, to: peaceCounterpart?.name });
             if (!put.ok) return put.error || "That could not be done.";
             setPeaceFormOpen(false);
             await submitPlayerText(uiString("We propose peace on these terms: {{terms}}.", { terms: describeTerms(terms) }), { id: messageId });
@@ -2587,7 +2590,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         ))}
                     </div>
                 )}
-                {canProposePeace && peaceFormOpen && <PeaceTermsForm viewer={playerCountry} enemy={peaceCounterpart?.name} busy={isLoading} onSend={proposePeaceHere} onCancel={() => setPeaceFormOpen(false)} />}
+                {canProposePeace && peaceFormOpen && <PeaceTermsForm viewer={playerCountry} enemy={peaceCounterpart?.name} person={peaceWithPerson} busy={isLoading} onSend={proposePeaceHere} onCancel={() => setPeaceFormOpen(false)} />}
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     {canProposePeace && (
                         <button type="button" className="oh-tap" onClick={() => setPeaceFormOpen((open) => !open)} aria-pressed={peaceFormOpen} title={`Propose peace to ${peaceCounterpart?.name}`} style={{ background: peaceFormOpen ? "rgba(43,193,243,.16)" : "rgba(255,255,255,0.05)", border: `1px solid ${peaceFormOpen ? "rgba(43,193,243,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: peaceFormOpen ? "#2bc1f3" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Peace</button>

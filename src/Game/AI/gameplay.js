@@ -15904,7 +15904,7 @@ const peaceRegionCatalog = () => loadRegionCatalog().catch(() => []);
 //   ref   the offer's, the call's or (for "propose") the war's id
 //   chatId, messageId   for "propose": the thread and the player's message that put the terms
 // Resolves { ok, error, accepted, to, offerId }.
-export const answerDiplomacy = async ({ op = "", ref = "", terms = null, chatId = "", messageId = "" } = {}) => {
+export const answerDiplomacy = async ({ op = "", ref = "", terms = null, to = "", chatId = "", messageId = "" } = {}) => {
   if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish.");
   const game = await readGameData();
   // (A peace taken may annex a country or cede regions by name: they are found on the map.)
@@ -15915,6 +15915,7 @@ export const answerDiplomacy = async ({ op = "", ref = "", terms = null, chatId 
       op,
       ref,
       terms,
+      to,
       country: game?.country,
       players: humanCountriesOf(game),
       date: normalizeString(game?.gameDate || game?.startDate),

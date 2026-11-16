@@ -264,6 +264,13 @@ const NEW_UPDATES = [
           "An order to end a war is now the offer of the player who gave it: another player's order no longer offers peace in your country's name.",
         ],
       },
+      {
+        title: "Peace between players",
+        items: [
+          "You can now offer peace to another player: in your chat with them, press Peace and set your terms. They accept or decline them there.",
+          "Each country makes its own peace. When you make peace, a player fighting on your side stays at war and keeps the land they hold, and the war goes on for them.",
+        ],
+      },
     ],
   },
   {
