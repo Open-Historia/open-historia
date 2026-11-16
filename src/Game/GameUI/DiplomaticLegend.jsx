@@ -85,8 +85,9 @@ const chip = (on) => ({
   alignItems: "center",
   justifyContent: "center",
   gap: "0.25rem",
-  // The chosen one widens so its name is whole; the others keep their icon.
-  flex: on ? "2.2 1 auto" : "1 1 0",
+  // Each as wide as its name: four names fit the legend's width; on a phone the
+  // others show their icon alone.
+  flex: "1 1 auto",
   minWidth: 0,
   padding: "0.28rem 0.3rem",
   borderRadius: "7px",

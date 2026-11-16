@@ -159,6 +159,8 @@ test("the diplomatic fills are stronger than the political, never past its close
   // A legend entry picked dims the rest by one expression on the fill colour, no write per region.
   const nations = read("./Nations.jsx");
   assert.match(nations, /\["in", \["to-string", \["feature-state", "fillColor"\]\], \["literal", highlight\]\]/);
+  // A battlefield's ground is laid as strongly as the fills round it.
+  assert.match(read("./FrontLayers.jsx"), /groundStrengthRef\.current = diplomaticView \? diplomaticFillOpacityAtZoom : politicalFillOpacityAtZoom;/);
   // Stripes of a dispute follow the view's colours.
   assert.match(nations, /stripeRgbs\.push\(stripeRgbOf\(key\)\)/);
   assert.doesNotMatch(nations, /stripeRgbs\.push\(resolveOwnerRgb/);
