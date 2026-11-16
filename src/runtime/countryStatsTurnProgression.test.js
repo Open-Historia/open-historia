@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCountryStatPatchToWorld, applyEventImpactsToWorld } from "./gameState.js";
+import { applyCountryStatPatchToWorld, applyEventImpactsToWorld, applyProjectOps } from "./gameState.js";
 import { normalizeCountryStatSheet } from "./countryStats.js";
 
 const sheet = () => normalizeCountryStatSheet({
@@ -144,4 +144,91 @@ test("a map-backed reassessment lifts the title-change hold without retroactive 
   assert.ok(later.countryStats.Borduria.economy.gdp > rebuilt.countryStats.Borduria.economy.gdp);
   assert.equal(later.countryStats.Borduria.continuity.lastProgressedDate, "2027-07-01");
   assert.notEqual(later.countryStats.Borduria.economy.gdp, paused);
+});
+
+test("a stock-map legal donor is held when no World override or transfer.fromCode exists", () => {
+  const before = world();
+  delete before.regionOwnershipOverrides["region-A"];
+  const after = applyEventImpactsToWorld({
+    world: before,
+    events: [event("stock-cession", "2026-07-01", {
+      regionTransfers: [{ regionId: "region-A", toCode: "Borduria" }],
+    })],
+    regionCatalog: [{ id: "region-A", country: "Geographic Aland", bakedOwner: "Aland" }],
+    motion: { originDate: "2026-01-01", statsToDate: "2027-01-01", round: 2 },
+  }).world;
+  assert.equal(after.regionOwnershipOverrides["region-A"], "Borduria");
+  assert.equal(after.countryStats.Aland.continuity.progressionBlocked, true);
+  assert.equal(after.countryStats.Borduria.continuity.progressionBlocked, true);
+});
+
+test("historical map political owner takes precedence over a different base geography", () => {
+  const before = world();
+  delete before.regionOwnershipOverrides["region-A"];
+  before.countryStats.Geographia = sheet();
+  before.polityOverrides.Geographia = { code: "Geographia", name: "Geographia" };
+  const after = applyEventImpactsToWorld({
+    world: before,
+    events: [event("historical-cession", "2026-07-01", {
+      regionTransfers: [{ regionId: "region-A", fromCode: "Geographia", toCode: "Borduria" }],
+    })],
+    regionCatalog: [{ id: "region-A", country: "Geographia", bakedOwner: "Aland" }],
+    motion: { originDate: "2026-01-01", statsToDate: "2027-01-01", round: 2 },
+  }).world;
+  assert.equal(after.countryStats.Aland.continuity.progressionBlocked, true,
+    "actual political owner is the donor, even when an event's fromCode or geographic country disagrees");
+  assert.equal(after.countryStats.Geographia.continuity.progressionBlocked, undefined);
+});
+
+test("an explicitly unowned map polygon must not assign its base geography a fictitious donor", () => {
+  const before = world();
+  delete before.regionOwnershipOverrides["region-A"];
+  const after = applyEventImpactsToWorld({
+    world: before,
+    events: [event("unowned-cession", "2026-07-01", {
+      regionTransfers: [{ regionId: "region-A", toCode: "Borduria" }],
+    })],
+    regionCatalog: [{ id: "region-A", country: "Aland", bakedOwner: "" }],
+    motion: { originDate: "2026-01-01", statsToDate: "2027-01-01", round: 2 },
+  }).world;
+  assert.equal(after.countryStats.Aland.continuity.progressionBlocked, undefined);
+  assert.equal(after.countryStats.Borduria.continuity.progressionBlocked, true);
+});
+
+test("the project onComplete transfer also identifies a stock-map donor", () => {
+  const before = world();
+  delete before.regionOwnershipOverrides["region-A"];
+  before.projects = applyProjectOps([], [{
+    op: "create",
+    name: "Settlement",
+    summary: "Transfer one region",
+    status: "active",
+    onComplete: { regionTransfers: [{ regionId: "region-A", toCode: "Borduria" }] },
+  }]);
+  const after = applyEventImpactsToWorld({
+    world: before,
+    events: [event("complete-settlement", "2026-07-01", {
+      projectOps: [{ op: "complete", name: "Settlement" }],
+    })],
+    regionCatalog: [{ id: "region-A", country: "Geographic Aland", bakedOwner: "Aland" }],
+    motion: { originDate: "2026-01-01", statsToDate: "2027-01-01", round: 2 },
+  }).world;
+  assert.equal(after.regionOwnershipOverrides["region-A"], "Borduria");
+  assert.equal(after.countryStats.Aland.continuity.progressionBlocked, true);
+  assert.equal(after.countryStats.Borduria.continuity.progressionBlocked, true);
+});
+
+test("a missing authoritative region refuses time-advancing legal transfer without mutating the source world", () => {
+  const before = world();
+  delete before.regionOwnershipOverrides["region-A"];
+  const original = structuredClone(before);
+  assert.throws(() => applyEventImpactsToWorld({
+    world: before,
+    events: [event("unsupported-transfer", "2026-07-01", {
+      regionTransfers: [{ regionId: "region-A", fromCode: "Aland", toCode: "Borduria" }],
+    })],
+    regionCatalog: [{ id: "not-this-region", country: "Aland", bakedOwner: "Aland" }],
+    motion: { originDate: "2026-01-01", statsToDate: "2027-01-01", round: 2 },
+  }), /no matching region in the authoritative map catalog/);
+  assert.deepEqual(before, original, "no partial World mutation reaches the canonical input");
 });

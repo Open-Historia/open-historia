@@ -6061,6 +6061,7 @@ export const dissolvePolity = (world, code, { heir = "", heirOf = null, date = "
 // not stamped into an entry's activity, which lists timeline events only.
 export const applyEventImpactsToWorld = ({
   colors = {}, events = [], world, motion = null, round = 0, boardOnlyEventIds = [],
+  regionCatalog = null,
 }) => {
   const boardOnly = new Set(normalizeArray(boardOnlyEventIds).map(normalizeOptionalString).filter(Boolean));
   let nextColors = cloneValue(colors) ?? {};
@@ -6081,6 +6082,28 @@ export const applyEventImpactsToWorld = ({
       return true;
     });
   statsCursor = statsStart;
+  // The live map's compact catalog is the seed-title authority when a region
+  // has no sparse World override. Do not confuse historical base geography
+  // with the map's baked political owner, or trust an optional AI fromCode.
+  // Only build the index if a legal transfer actually needs an old owner.
+  let mapRegionsById = null;
+  const baseLegalOwnerOf = (regionId) => {
+    if (!mapRegionsById) {
+      const rows = Array.isArray(regionCatalog)
+        ? regionCatalog
+        : (getPrimedScenarioRegionCatalog() ?? []);
+      mapRegionsById = new Map(rows
+        .filter((row) => normalizeOptionalString(row?.id))
+        .map((row) => [normalizeOptionalString(row.id), row]));
+    }
+    const row = mapRegionsById.get(regionId);
+    if (!row) return { found: false, owner: "" };
+    const baked = Object.hasOwn(row, "bakedOwner")
+      ? row.bakedOwner
+      : row.country || row.countryCode || "";
+    const owner = normalizeOptionalString(baked);
+    return { found: true, owner: toCountryName(owner) || owner };
+  };
   const progressTo = (date) => {
     if (!validStatsChronology || !date || !(diffGameDays(statsCursor, date) > 0)) return;
     const settled = advanceCountryStatsInterval(nextWorld.countryStats, {
@@ -6193,7 +6216,17 @@ export const applyEventImpactsToWorld = ({
         const newSovereign = nextWorld.regionSovereigntyOverrides?.[regionId] || "";
         // Screened/refused transfers and mere occupation do not change title.
         if (oldController === newController && oldSovereign === newSovereign) continue;
-        const oldLegalOwner = oldSovereign || oldController || transfer?.fromCode || "";
+        const mapTitle = !oldSovereign && !oldController
+          ? baseLegalOwnerOf(regionId)
+          : null;
+        // The accepted turn supplies the active map catalog explicitly. Without
+        // a matching map region, an AI fromCode is not proof of the donor:
+        // refuse the whole in-memory apply rather than persist stale Stats.
+        if (Array.isArray(regionCatalog) && mapTitle && !mapTitle.found) {
+          throw new Error(`Cannot settle legal title for "${regionId}": no matching region in the authoritative map catalog.`);
+        }
+        const oldLegalOwner = oldSovereign || oldController
+          || (mapTitle?.found ? mapTitle.owner : transfer?.fromCode || "");
         const newLegalOwner = newSovereign || newController || transfer?.toCode || "";
         if (samePolity(oldLegalOwner, newLegalOwner)) continue;
         for (const owner of [oldLegalOwner, newLegalOwner]) {

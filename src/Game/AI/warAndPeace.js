@@ -306,11 +306,12 @@ export const withTreatyPuppet = (world, puppet, { warId = "", date = "", round =
 };
 
 // A world with an event's impacts applied: no time passes (the ground a peace settles).
-const withImpacts = (world, impacts, { id = "", date = "", round = 0, description = "" } = {}) => {
+const withImpacts = (world, impacts, { id = "", date = "", round = 0, description = "", regionCatalog = null } = {}) => {
   if (list(impacts?.regionTransfers).length === 0 && list(impacts?.regionControlOps).length === 0) return world;
   return applyEventImpactsToWorld({
     world,
     round,
+    regionCatalog,
     events: [{
       id,
       date: clean(date),
@@ -342,10 +343,14 @@ export const makePeace = (world, { warId = "", from = "", to = "", terms = null,
   if (!war || !settleable(war)) return world;
   let read = normalizeTerms(terms);
   const turn = Math.max(0, Math.round(figure(round)));
-  let next = withImpacts(world, peaceImpacts(world, war, read.territory), { id: `peace-${clean(warId)}-${clean(date)}`, date, round: turn, description: "The ground as the peace settles it." });
+  // Peace terms already have the active map's region catalog; pass its baked
+  // owner into the same native title/Stats guard used by time skips. With no
+  // verified catalog, preserve the existing world-only compatibility path.
+  const regionCatalog = Array.isArray(regions) && regions.length ? regions : null;
+  let next = withImpacts(world, peaceImpacts(world, war, read.territory), { id: `peace-${clean(warId)}-${clean(date)}`, date, round: turn, description: "The ground as the peace settles it.", regionCatalog });
   if (read.annexed || read.cessions) {
     const moved = termsImpacts(next, read, { from, to, regions, note: `Peace: ${clean(war?.title) || clean(warId)}` });
-    next = withImpacts(next, moved.impacts, { id: `peace-terms-${clean(warId)}-${clean(date)}`, date, round: turn, description: "The land the peace's terms hand over." });
+    next = withImpacts(next, moved.impacts, { id: `peace-terms-${clean(warId)}-${clean(date)}`, date, round: turn, description: "The land the peace's terms hand over.", regionCatalog });
     // (Kept as ceded on the map; a name found nowhere is told as a condition, for the story to settle.)
     read = normalizeTerms({
       ...read,

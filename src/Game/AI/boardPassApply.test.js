@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 
 import { applyBoardCarriers } from "./boardPassApply.js";
 import { applyProjectOps, normalizeWorldState } from "../../runtime/gameState.js";
+import { normalizeCountryStatSheet } from "../../runtime/countryStats.js";
 
 const project = (onComplete) => ({
   op: "create",
@@ -139,4 +140,42 @@ test("an update gives an operation that has no focus its event's place, and leav
   // A fallback rides on an event it did not come from: that event's places are not the operation's.
   const fallback = applyBoardCarriers({ world, colors: {}, carriers: [{ ...completing(), fallback: true, stampsActivity: false, ops: [{ op: "update", name: "Operation Kingfisher", progress: 20 }] }], visibleEvents: [event], date: "2024-03-05", round: 5 }).world.projects;
   assert.equal(fallback.find((entry) => entry.name === "Operation Kingfisher").focus, null);
+});
+
+test("board-only completion pauses the stock-map donor without a narrated transfer", () => {
+  const state = worldWith({
+    regionTransfers: [{ regionId: "region-A", toCode: "Borduria" }],
+  });
+  const stat = normalizeCountryStatSheet({
+    territorialComponents: [{ geography: "Mainland", group: "core", population: 1_000_000, gdpPerCapita: 12000 }],
+    economy: { gdpGrowth: 2 },
+  });
+  state.countryStats = { Aland: stat, Borduria: stat };
+  state.polityOverrides.Aland = { code: "Aland", name: "Aland" };
+  state.polityOverrides.Borduria = { code: "Borduria", name: "Borduria" };
+  const pass = applyBoardCarriers({
+    world: state,
+    colors: {},
+    carriers: [completing()],
+    visibleEvents: events,
+    regionCatalog: [{ id: "region-A", country: "Geographic Aland", bakedOwner: "Aland" }],
+    date: "1871-01-18",
+    round: 4,
+  });
+  assert.equal(pass.world.regionOwnershipOverrides["region-A"], "Borduria");
+  assert.equal(pass.world.countryStats.Aland.continuity.progressionBlocked, true);
+  assert.equal(pass.world.countryStats.Borduria.continuity.progressionBlocked, true);
+});
+
+test("board-only completion refuses a map region absent from an explicit authoritative catalog", () => {
+  const state = worldWith({ regionTransfers: [{ regionId: "region-A", toCode: "Borduria" }] });
+  assert.throws(() => applyBoardCarriers({
+    world: state,
+    colors: {},
+    carriers: [completing()],
+    visibleEvents: events,
+    regionCatalog: [{ id: "some-other-region", country: "Aland", bakedOwner: "Aland" }],
+    date: "1871-01-18",
+    round: 4,
+  }), /no matching region in the authoritative map catalog/);
 });
