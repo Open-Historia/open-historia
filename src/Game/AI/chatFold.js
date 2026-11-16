@@ -5,6 +5,7 @@
 // Moved out of gameplay.js so node tests can drive it.
 
 import { logDebugEvent } from "../../runtime/debugLog.js";
+import { nextChatActivityOrdinal } from "../../runtime/chatInboxOrder.js";
 
 const clean = (value) => String(value ?? "").trim();
 const asArray = (value) => (Array.isArray(value) ? value : []);
@@ -116,6 +117,20 @@ const withCases = (chat, built, messages) => {
 export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "" } = {}) => {
   let chats = [...storageChats];
   const created = [];
+  let nextOrdinal = nextChatActivityOrdinal(storageChats);
+  const touchExisting = (index, updated) => {
+    const previous = chats[index];
+    const gainedMessages = asArray(updated.messages).length > asArray(previous.messages).length;
+    const gainedCases = asArray(updated.lifecycleCaseIds).length > asArray(previous.lifecycleCaseIds).length;
+    if (!gainedMessages && !gainedCases) {
+      chats = chats.map((chat, at) => at === index ? updated : chat);
+      return;
+    }
+    const touched = { ...updated, activityOrdinal: nextOrdinal++ };
+    // Source order doubles as a legacy fallback; keep it consistent with the
+    // durable ordinal for clients that have not upgraded their inbox UI.
+    chats = [touched, ...chats.filter((_, at) => at !== index)];
+  };
   const stamp = (messages) => (stampTime
     ? messages.map((msg) => (msg.time ? msg : { ...msg, time: stampTime }))
     : messages);
@@ -125,25 +140,27 @@ export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampT
       const sameIdIdx = clean(built.id) ? chats.findIndex((chat) => clean(chat?.id) === clean(built.id)) : -1;
       if (sameIdIdx !== -1) {
         logGeneratedChat(built, "updated its negotiation");
-        chats = chats.map((chat, index) => (index === sameIdIdx
-          ? withCases({ ...chat, ...built, messages: chat.messages }, chat, stamp(asArray(built.messages)))
-          : chat));
+        touchExisting(sameIdIdx, withCases(
+          { ...chats[sameIdIdx], ...built, messages: chats[sameIdIdx].messages },
+          chats[sameIdIdx],
+          stamp(asArray(built.messages)),
+        ));
         continue;
       }
       const storedIdx = chats.findIndex((chat) => sameNegotiation(chat, built));
       if (storedIdx !== -1) {
         logGeneratedChat(built, "joined the open negotiation that holds its case");
-        chats = chats.map((chat, index) => (index === storedIdx ? withCases(chat, built, stamp(asArray(built.messages))) : chat));
+        touchExisting(storedIdx, withCases(chats[storedIdx], built, stamp(asArray(built.messages))));
         continue;
       }
       const createdIdx = created.findIndex((chat) => sameNegotiation(chat, built));
       if (createdIdx !== -1) {
         logGeneratedChat(built, "merged into another negotiation from the same turn");
-        created[createdIdx] = withCases(created[createdIdx], built, stamp(built.messages));
+        created[createdIdx] = { ...withCases(created[createdIdx], built, stamp(built.messages)), activityOrdinal: nextOrdinal++ };
         continue;
       }
       logGeneratedChat(built, "opened a negotiation of its own");
-      created.push({ ...built, messages: stamp(built.messages) });
+      created.push({ ...built, messages: stamp(built.messages), activityOrdinal: nextOrdinal++ });
       continue;
     }
     // A shared game's thread is one person's (chat.player, blank for the
@@ -157,9 +174,10 @@ export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampT
       && chatParticipantKey(chat.countries) === key) : -1;
     if (existingIdx !== -1) {
       logGeneratedChat(built, "appended to an existing thread");
-      chats = chats.map((chat, index) => (index === existingIdx
-        ? { ...chat, messages: appendMessages(chat.messages, stamp(built.messages)) }
-        : chat));
+      touchExisting(existingIdx, {
+        ...chats[existingIdx],
+        messages: appendMessages(chats[existingIdx].messages, stamp(built.messages)),
+      });
       continue;
     }
     const createdIdx = key ? created.findIndex((chat) =>
@@ -168,11 +186,14 @@ export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampT
       && chatParticipantKey(chat.countries) === key) : -1;
     if (createdIdx !== -1) {
       logGeneratedChat(built, "merged into another note from the same turn");
-      created[createdIdx] = { ...created[createdIdx], messages: appendMessages(created[createdIdx].messages, stamp(built.messages)) };
+      const appended = appendMessages(created[createdIdx].messages, stamp(built.messages));
+      if (appended.length > asArray(created[createdIdx].messages).length) {
+        created[createdIdx] = { ...created[createdIdx], messages: appended, activityOrdinal: nextOrdinal++ };
+      }
       continue;
     }
     logGeneratedChat(built, "opened a new thread");
-    created.push({ ...built, messages: appendMessages([], stamp(built.messages)) });
+    created.push({ ...built, messages: appendMessages([], stamp(built.messages)), activityOrdinal: nextOrdinal++ });
   }
 
   return [...created, ...chats];

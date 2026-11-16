@@ -58,12 +58,17 @@ test("The dock's tray, search, the date bar and the map-mode switch take the the
 
 test("Diplomacy list, tabs, unread filter, thread controls and workspace use themed chrome", () => {
   assert.match(diplomacy, /data-diplomacy-workspace-header="modern"[\s\S]*?background: "var\(--oh-ui-overlay-header, transparent\)"/);
-  assert.match(diplomacy, /data-diplomacy-thread-row="modern"[\s\S]*?background: hovered \? "var\(--oh-ui-hover,/);
+  assert.match(diplomacy, /data-diplomacy-thread-row="modern"[\s\S]*?background: selected \? "var\(--oh-ui-active,[\s\S]*?: hovered \? "var\(--oh-ui-hover,/);
   assert.match(diplomacy, /backgroundColor: "var\(--oh-ui-overlay, rgba\(24,24,27,0\.95\)\)"/);
   assert.match(diplomacy, /background: currentView === key \? "var\(--oh-ui-active,/);
   assert.match(diplomacy, /background: showUnreadOnly \? "var\(--oh-ui-active,/);
-  assert.match(diplomacy, /Start New Chat/);
-  assert.match(diplomacy, /onMouseLeave=\{e => e\.currentTarget\.style\.background = "var\(--oh-ui-overlay-card,/);
+  const newChannelButtons = diplomacy.match(/<button type="button" className="oh-diplomacy-new-chat" onClick=\{\(\) => setShowSelector\(true\)\}>\+ New diplomatic channel<\/button>/g) || [];
+  assert.equal(newChannelButtons.length, 2, "inbox and conversation sidebar must share one exact new-channel control");
+  const picker = read("./diplomacyInbox.css");
+  assert.match(picker, /\.oh-diplomacy-picker \{[\s\S]*?var\(--oh-ui-overlay,/);
+  assert.match(picker, /\.oh-diplomacy-picker-country\.is-selected \{[\s\S]*?var\(--oh-ui-active,/);
+  assert.match(picker, /\.oh-diplomacy-picker-country:focus-visible/);
+  assert.doesNotMatch(picker, /#3b82f6|#2563eb/, "the picker must not hardcode blue palette colors");
 });
 
 test("Events and Timeline use themeable translucent surfaces without changing skip guards", () => {

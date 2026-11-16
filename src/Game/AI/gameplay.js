@@ -149,6 +149,7 @@ import {
 import { validateGameMasterRequestedPuppetCompleteness } from "./gameMasterRequestCompleteness.js";
 import { GAME_MASTER_MODES, GM_AUTO_MODE, validateGameMasterModeSelection } from "./gameMasterAutoMode.js";
 import { STATS_DEMOGRAPHIC_TAGS, STATS_ECONOMIC_TAGS, eventConcernsTarget, eventHasAnyTag } from "./statsEventEvidence.js";
+import { mayReuseCountryStatsAssessment } from "./statsRefreshEligibility.js";
 import { eventPartyNames } from "./eventParties.js";
 import { GAME_MASTER_EDIT_TOOL, applyGameMasterPreviewEdits, validateGameMasterEditResponse } from "./gameMasterPreviewEdit.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
@@ -3836,6 +3837,7 @@ ${buildStatsComponentSplitContract(variables?.statsComponentSplitBuckets)}- Do n
 - gdpPerCapita inside each macro bucket is NOMINAL output per person expressed in constant 2026-USD accounting terms so components and eras can be aggregated. It is NOT PPP/international-dollar purchasing power and does NOT import 2026 technology, institutions, productivity, or living standards.
 - population totals and GDP aggregates are DERIVED by native JavaScript after regional expansion.
 - economy.gdpGrowth, inflation, unemployment, publicDebt and budgetBalance are percentages expressed as plain numbers; budgetBalance is negative for deficit and positive for surplus.
+- population.annualGrowthRate is OPTIONAL: an evidence-backed annual net population change estimate (%), including migration, independent of GDP growth. Supply it only where scenario/historical/campaign evidence supports it; otherwise omit it. The native calendar only advances population automatically when this rate is known.
 - economy.currency is the polity's actual current domestic currency/medium, even though GDP accounting uses 2026-USD-equivalent values.
 - GDP breakdown must sum to exactly 100.
 - Never invent a war, reform, boom, depression, trade bloc, annexation, reconstruction program, tax change, loan, or fiscal shock absent from supplied campaign evidence.
@@ -9170,15 +9172,57 @@ const applySimulationResult = async ({
     })
     : [];
 
+  // The World stores sparse region overrides; a first legal cession can leave
+  // its donor entirely in the rendered map's baked political ownership. The
+  // resolver already primes this compact catalog when resolving region IDs.
+  // Also cover a Project's stored onComplete transfer, released inside the
+  // reducer rather than repeated in the event (including a project opened and
+  // completed in this event batch). The catalog remains a conditional read.
+  const hasUnrecordedLegalOwner = (transfers, world) => normalizeArray(transfers)
+    .some((transfer) => {
+      const id = normalizeString(transfer?.regionId);
+      return id && !world?.regionSovereigntyOverrides?.[id]
+        && !world?.regionOwnershipOverrides?.[id];
+    });
+  const eventProjectOps = freshEvents.flatMap((event) => normalizeArray(event?.impacts?.projectOps));
+  const projectMayTransfer = eventProjectOps.length > 0 && (
+    eventProjectOps.some((op) => hasUnrecordedLegalOwner(op?.onComplete?.regionTransfers, baseWorld))
+    || normalizeArray(baseWorld?.projects).some((project) => hasUnrecordedLegalOwner(project?.onComplete?.regionTransfers, baseWorld))
+  );
+  const needsSeedLegalOwners = ["jump", "auto"].includes(result.mode)
+    && (projectMayTransfer || freshEvents.some((event) => hasUnrecordedLegalOwner(event?.impacts?.regionTransfers, baseWorld)));
+  let statsRegionCatalog = null;
+  const ensureStatsRegionCatalog = async () => {
+    if (statsRegionCatalog) return statsRegionCatalog;
+    let catalog = await loadScenarioRegionCatalog({ force: false }).catch(() => []);
+    // The resolver itself falls back to the stock catalog only when no active
+    // scenario features exist. Do not merge unrelated stock IDs into a custom map.
+    if (!catalog.length) catalog = await loadRegionCatalog({ force: false }).catch(() => []);
+    if (!catalog.length) {
+      throw new Error("The active map's legal region ownership could not be read; this turn was not applied.");
+    }
+    statsRegionCatalog = catalog;
+    return catalog;
+  };
+  if (needsSeedLegalOwners) await ensureStatsRegionCatalog();
+
   const impactMerge = applyEventImpactsToWorld({
     colors: baseColors,
     events: freshEvents,
+    regionCatalog: statsRegionCatalog,
     // Give every unit op a travel budget of the days between the previous event
     // and its own, so a move op advances a formation as far as it could actually
     // have got rather than teleporting it. An over-long move becomes a partial
     // advance plus a standing order the engine keeps working on later turns.
     //
-    motion: { originDate: baseGame.gameDate, round: nextGame.round, tick: 0 },
+    motion: {
+      originDate: baseGame.gameDate,
+      round: nextGame.round,
+      tick: 0,
+      // Only accepted time-advancing turns run the native national clock.
+      // GM, previews, board carriers and same-day interactions do not.
+      ...(["jump", "auto"].includes(result.mode) ? { statsToDate: nextGame.gameDate } : {}),
+    },
     world: {
       ...baseWorld,
       // The battlefields as the front engine left them. Written before the
@@ -9805,12 +9849,24 @@ const applySimulationResult = async ({
         .filter((carrier) => carrier.onTimeline)
         .flatMap((carrier) => carrier.ops.map((op) => ({ ...op, eventIndex: carrier.eventIndex }))));
 
+      // Project completions in this second pass can release title transfers
+      // absent from the turn's event impacts. Give that reducer the SAME map
+      // evidence, even if the first pass did not need it.
+      const boardMayTransferTitle = carriers.length > 0 && (
+        carriers.some((carrier) => normalizeArray(carrier?.ops)
+          .some((op) => hasUnrecordedLegalOwner(op?.onComplete?.regionTransfers, worldWithImpacts)))
+        || normalizeArray(worldWithImpacts.projects)
+          .some((project) => hasUnrecordedLegalOwner(project?.onComplete?.regionTransfers, worldWithImpacts))
+      );
+      if (boardMayTransferTitle) await ensureStatsRegionCatalog();
+
       // Applied one event at a time, provisional events judged on the Board
       // itself (boardPassApply.js says how).
       const boardPass = applyBoardCarriers({
         world: worldWithImpacts,
         colors: nextColors,
         carriers,
+        regionCatalog: statsRegionCatalog,
         visibleEvents: freshEvents,
         hiddenEvents: boardHiddenEvents,
         provisionalIndexes,
@@ -14282,9 +14338,9 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       }
     : rawEconomicEvidence;
 
+  // Fingerprint evidence, not the calendar: a date/round change by itself
+  // never calls AI again now that the native economic clock owns progression.
   const stateFingerprint = `stats-${stableStatsHash(JSON.stringify({
-    date: currentDate,
-    round: currentRound,
     territory: territorialFingerprint,
     economicEvents: rawEconomicEvidence.relevantIds,
   }))}`;
@@ -14350,13 +14406,16 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
   // where a new border fingerprint could be stamped onto stale pre-annexation totals.
   // An explicit manual hard audit (Stats ↻ > Rebuild baseline) is the deliberate escape hatch:
   // it bypasses this zero-call guard so a suspect baseline can be rebuilt from live canon.
-  if (
-    !rebuildNumericBaseline &&
-    previousComplete &&
-    territorialCoverageMatches &&
-    previousStateFingerprint === stateFingerprint &&
-    economicEvidence.unaccountedCount === 0
-  ) {
+  if (mayReuseCountryStatsAssessment({
+    forceReassess,
+    rebuildNumericBaseline,
+    previousComplete,
+    territorialCoverageMatches,
+    previousStateFingerprint,
+    previousTerritorialFingerprint,
+    territorialFingerprint,
+    unaccountedEconomicEvents: economicEvidence.unaccountedCount,
+  })) {
     console.info(`[stats 7A.2] same-state refresh for ${statCode}; canonical baseline reused with zero AI calls.`);
     return previous;
   }

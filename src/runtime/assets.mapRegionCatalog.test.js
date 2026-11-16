@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 globalThis.window = Object.assign(new EventTarget(), { location: new URL("http://localhost/") });
 globalThis.caches = { open: async () => ({ match: async () => undefined, put: async () => {}, keys: async () => [], delete: async () => false }) };
 
-const { JSON_URLS, loadScenarioRegionCatalog, primeCustomRegionCatalogEntries } = await import("./assets.js");
+const { JSON_URLS, loadScenarioRegionCatalog, primeCustomRegionCatalog, primeCustomRegionCatalogEntries } = await import("./assets.js");
 const { announceGameOpening, markPolitiesReady, mapIsOpening, setReadinessGame } = await import("./mapReadiness.js");
 
 const FILE = {
@@ -89,4 +89,28 @@ test("a catalog the map primed for another game is not handed out for this one",
   await asked;
   assert.equal(answer[0].name, "From the map");
   assert.equal(reads, 0);
+});
+
+test("the compact map catalog preserves political owner separately from base geography", () => {
+  const rows = primeCustomRegionCatalogEntries([
+    { id: "r-historical", country: "Base Geography", owner: "Imperial Sovereign" },
+    { id: "r-unowned", country: "Base Geography", owner: "" },
+    { id: "r-legacy", country: "Legacy Owner" },
+  ], { url: JSON_URLS.regionsGeojson, invalidateCatalog: false });
+  assert.equal(rows[0].country, "Base Geography");
+  assert.equal(rows[0].bakedOwner, "Imperial Sovereign");
+  assert.equal(rows[1].bakedOwner, "", "a blank political owner remains explicitly unowned");
+  assert.equal(rows[2].bakedOwner, "Legacy Owner", "legacy country-only seed remains supported");
+});
+
+test("the GeoJSON direct primer retains the baked owner even when geographic country differs", () => {
+  const rows = primeCustomRegionCatalog({
+    features: [{
+      type: "Feature",
+      properties: { id: "r-live", country: "Base Geography", owner: "Historical State", name: "Borderland" },
+      geometry: null,
+    }],
+  }, { url: JSON_URLS.regionsGeojson, invalidateCatalog: false });
+  assert.equal(rows[0].country, "Base Geography");
+  assert.equal(rows[0].bakedOwner, "Historical State");
 });

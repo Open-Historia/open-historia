@@ -21,7 +21,7 @@ import { TERRITORY_AS_HELD, readPeaceVerdict, termsOfLetter } from "../../runtim
 import { peaceOffersForThread, placePeaceOffers } from "../GameUI/peacePlacement.js";
 import { GAMEPLAY_TOOLS, normalizeGameplayPayload, validateGameplayPayload } from "./gameplaySchemas.js";
 import { mergeSegmentPayloads } from "./jumpSegments.js";
-import { buildPeaceBlock } from "./peacePrompt.js";
+import { PEACE_BLOCK_MAX, buildPeaceBlock } from "./peacePrompt.js";
 import { answerPeaceProposal, offerPeace, playerDiplomacy, turnWarAndPeace } from "./warAndPeace.js";
 import { PEACE_ANSWERS_FIELD, PEACE_LINE, WAR_STATS_HEADING, buildWarStatsBlock, describePeaceTalk, describeWarStats, isAtWar } from "./warStatsPrompt.js";
 
@@ -86,6 +86,8 @@ test("the war's figures are in every prompt where a country at war speaks or dec
   // The time skip.
   const skip = buildPeaceBlock({ world: world(), game: { round: 9 }, players: ["Aland"] });
   assert.ok(skip.includes(`\n${WAR_STATS_HEADING}\n`) && skip.includes("Borduria:\n- The Border War:"), skip);
+  assert.ok(skip.includes("Bound to defend:\n- Borduria is defended by Dorland."), "war facts must not crowd out the alliance obligations");
+  assert.ok(skip.length <= PEACE_BLOCK_MAX, `the war evidence must fit the existing ${PEACE_BLOCK_MAX}-character cap`);
   // A leader's reply in a one-on-one chat.
   const main = read("main.jsx");
   const leader = main.slice(main.indexOf("export async function buildDiplomaticSystemPrompt("), main.indexOf("const advisorSessions = createAdvisorSessionRegistry();"));

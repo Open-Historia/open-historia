@@ -5,6 +5,8 @@ import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { dedupeByName, landHolderNames, pickableCountries } from "../../runtime/countryList.js";
+import { resolveStockCountryCode } from "../../runtime/polityIdentity.js";
+import OFFICIAL_COUNTRY_CODES_BY_NAME from "../../runtime/generated/officialCountryAliases.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { SharedGameRefusal, answerPeaceInChat, checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
@@ -67,6 +69,8 @@ import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGa
 import { afterSharedSay, followSharedThread, pendingSharedThread, sayRequestFor, sharedFollowStep } from "../../multiplayer/client/sharedThreads.js";
 import { askHostForInstitution } from "../../runtime/sharedInstitutions.js";
 import { setOpenConversation } from "../../runtime/openConversation.js";
+import { chatInboxSignature, holdChatsInListOrder, nextChatActivityOrdinal, promoteChatActivity, sortChatsForInbox } from "../../runtime/chatInboxOrder.js";
+import "./diplomacyInbox.css";
 
 // Who the player is and when it is: all this panel reads of game.json.
 const selectGameIdentity = (game) => ({
@@ -861,7 +865,7 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
 
     return (
         <div style={{ display: "flex", flexDirection: "column", alignItems: isPlayer ? "flex-end" : "flex-start", overflow: "visible", marginTop: compact ? "-.55rem" : 0 }}>
-        <div style={{ position: "relative", maxWidth: isError ? "82%" : "min(70%, 42rem)", overflow: "visible" }}>
+        <div style={{ position: "relative", maxWidth: isError ? "82%" : "min(84%, 44rem)", overflow: "visible" }}>
 
         {!isPlayer && !compact && (
             <span style={{ display: "inline-flex", alignItems: "center", gap: ".34rem", fontSize: ".7rem", color: "rgba(255,255,255,.46)", marginBottom: ".28rem",
@@ -888,10 +892,10 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
             <div data-no-translate={isError ? undefined : ""} dir={isPlayer || isError ? undefined : chatTextDirection()} style={{
                 padding: ".62rem .82rem",
                 borderRadius: isPlayer ? "13px 13px 3px 13px" : "13px 13px 13px 3px",
-                backgroundColor: isPlayer ? "var(--oh-ui-active, rgba(59,130,246,.92))" : isError ? "rgba(239,68,68,0.16)" : `color-mix(in srgb, ${accentColor} 4%, var(--oh-ui-surface, rgba(35,35,39,0.96)))`,
+                backgroundColor: isPlayer ? "color-mix(in srgb, var(--oh-ui-accent, #91c9e7) 13%, var(--oh-ui-surface, #22252b))" : isError ? "rgba(239,68,68,0.16)" : `color-mix(in srgb, ${accentColor} 4%, var(--oh-ui-surface, rgba(35,35,39,0.96)))`,
                 fontSize: ".85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
-                border: isPlayer ? "1px solid rgba(147,197,253,.2)" : isError ? "1px solid rgba(239,68,68,0.3)" : "1px solid rgba(255,255,255,.08)",
-                borderLeft: (!isPlayer && !isError) ? `2px solid color-mix(in srgb, ${accentColor} 72%, white 8%)` : undefined,
+                border: isPlayer ? "1px solid color-mix(in srgb, var(--oh-ui-accent, #91c9e7) 29%, transparent)" : isError ? "1px solid rgba(239,68,68,0.3)" : "1px solid var(--oh-ui-line, rgba(255,255,255,.09))",
+                borderLeft: (!isPlayer && !isError) ? `2px solid color-mix(in srgb, ${accentColor} 72%, white 8%)` : isPlayer ? "2px solid var(--oh-ui-accent, #91c9e7)" : undefined,
                 boxSizing: "border-box", boxShadow: "0 2px 10px rgba(0,0,0,.12)",
             }}>
             {isPlayer ? msg.text : <Markdown className="chat-markdown">{msg.text}</Markdown>}
@@ -1023,126 +1027,128 @@ const activeCampaignNow = () => String(getLibraryState()?.activeGameId ?? "").tr
 
 // ── Country selector ──────────────────────────────────────────────────────────
 
-const CountryTile = ({ country, code, flagUrl, isSelected, onToggle }) => {
-    const [hovered, setHovered] = React.useState(false);
-    const shortName = country.length > 12 ? country.slice(0, 11) + "…" : country;
-    return (
-        <button
+const CountryTile = ({ country, flagUrl, isSelected, onToggle }) => (
+    <button
+        type="button"
+        className={"oh-diplomacy-picker-country" + (isSelected ? " is-selected" : "")}
         onClick={onToggle}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        style={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "0.35rem",
-            height: "5.5rem",
-            padding: "0 0.4rem",
-            borderRadius: "10px",
-            border: isSelected
-            ? "1px solid rgba(59,130,246,0.6)"
-            : hovered
-            ? "1px solid rgba(255,255,255,0.15)"
-            : "1px solid rgba(255,255,255,0.07)",
-            background: isSelected
-            ? "rgba(59,130,246,0.18)"
-            : hovered
-            ? "rgba(255,255,255,0.07)"
-            : "rgba(255,255,255,0.04)",
-            cursor: "pointer",
-            transition: "all 0.12s ease",
-            fontFamily: "sans-serif",
-            position: "relative",
-            width: "100%",
-            boxSizing: "border-box",
-        }}
-        >
-        {isSelected && (
-            <div style={{ position: "absolute", top: "0.3rem", right: "0.3rem", width: "14px", height: "14px", borderRadius: "50%", background: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.55rem", color: "white", fontWeight: 700 }}>✓</div>
-        )}
-        <FlagImg url={flagUrl} alt={country} width="2.3rem" height="1.6rem" />
-        <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.8)", textAlign: "center", lineHeight: 1.3 }}>{shortName}</span>
-        </button>
-    );
-};
+        aria-pressed={isSelected}
+        title={country}
+    >
+        <span className="oh-diplomacy-picker-country-flag"><FlagImg url={flagUrl} alt={country} width="1.7rem" height="1.15rem" /></span>
+        <span className="oh-diplomacy-picker-country-name">{country}</span>
+        <span className="oh-diplomacy-picker-country-indicator" aria-hidden="true">{isSelected ? "✓" : "+"}</span>
+    </button>
+);
 
 const CountrySelectorModal = ({
     countries, loading, onStart, onCancel,
-    title = "Start New Diplomatic Chat",
-    subtitle = "Select countries to invite to the conversation",
-    selectedLabel = "Selected Countries",
+    title = "New diplomatic channel",
+    subtitle = "Choose one or more governments for your correspondence.",
+    selectedLabel = "Recipients",
     emptyLabel = "No countries selected yet",
-    confirmLabel = (n) => `Chat with ${n} ${n === 1 ? "country" : "countries"}`,
+    confirmLabel = (n) => n ? "Start conversation" : "Choose a recipient",
     single = false,
 }) => {
-    const [search, setSearch]     = React.useState("");
+    const [search, setSearch] = React.useState("");
     const [selected, setSelected] = React.useState([]);
-    // Deduped before anything is rendered: the tiles and the selection are both
-    // keyed by name, so a repeated name collides React keys — the same country
-    // appears several times, a search misses what it matched, and clicking one
-    // tile marks another selected without highlighting it. countryList.js fixes
-    // the source of the duplicates; this makes the picker safe from any source.
-    const filtered = useMemo(
-        () => dedupeByName(countries).filter(c => c.name.toLowerCase().includes(search.toLowerCase())),
-        [countries, search],
-    );
+    // This picker also handles a HUMINT single-country target and additions to
+    // an existing diplomatic group. Keep both selection contracts intact.
+    const uniqueCountries = useMemo(() => dedupeByName(countries), [countries]);
+    const filtered = useMemo(() => {
+        const query = search.trim().toLowerCase();
+        if (!query) return uniqueCountries;
+        // A country can have an era-specific formal name ("French Republic")
+        // while players search for the ordinary name ("France"). Use the same
+        // stock-code aliases as the canonical identity resolver, but ONLY to
+        // discover a visible candidate: never change the selected polity name.
+        const aliasCodes = query.length >= 3
+            ? new Set(Object.entries(OFFICIAL_COUNTRY_CODES_BY_NAME)
+                .filter(([alias]) => alias.startsWith(query))
+                .map(([, code]) => code))
+            : new Set();
+        return uniqueCountries.filter((country) => (
+            country.name.toLowerCase().includes(query)
+            || String(country.code || "").toLowerCase().includes(query)
+            || aliasCodes.has(resolveStockCountryCode(country.code || country.name))
+        ));
+    }, [uniqueCountries, search]);
     const filteredFlagUrls = useCountryFlagUrls(filtered);
     const selectedFlagUrls = useCountryFlagUrls(selected);
-    const isSelectedName = (name) => selected.some(s => s.name === name);
-    // single: a spy goes to ONE country, so picking another replaces the pick
-    // rather than adding to it, and picking the same one again clears it.
-    const toggle = ({ name, code }) => setSelected(prev => prev.some(s => s.name === name)
-        ? prev.filter(s => s.name !== name)
-        : single ? [{ name, code }] : [...prev, { name, code }]);
+    const isSelectedName = (name) => selected.some((entry) => entry.name === name);
+    const toggle = ({ name, code }) => setSelected((previous) => previous.some((entry) => entry.name === name)
+        ? previous.filter((entry) => entry.name !== name)
+        : single ? [{ name, code }] : [...previous, { name, code }]);
 
     return (
-        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(24,24,27,0.98)", borderRadius: "16px", display: "flex", flexDirection: "column", zIndex: 10 }}>
-        <div style={{ padding: "1.1rem 1.25rem 0.6rem", flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
-        <div>
-        <div style={{ fontWeight: 700, fontSize: "1.05rem", color: "white" }}>{title}</div>
-        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>{subtitle}</div>
-        </div>
-        <button className="oh-tap" aria-label="Close" onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.5)", fontSize: "1.1rem", padding: "0.1rem 0.3rem", borderRadius: "6px", lineHeight: 1 }}
-        onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
-        onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
-        </div>
-        <div style={{ marginTop: "0.85rem", padding: "0.65rem 0.9rem", borderRadius: "10px", backgroundColor: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
-        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "rgba(255,255,255,0.8)" }}>{selectedLabel}{single ? "" : ` (${selected.length})`}:</div>
-        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", marginTop: "0.2rem", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}>
-        {selected.length === 0 ? emptyLabel : selected.map((c, i) => (
-            <span key={c.name} style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem" }}>
-            <FlagImg url={selectedFlagUrls[c.name]} alt={c.name} size="0.9em" />{c.name}{i < selected.length - 1 ? "," : ""}
-            </span>
-        ))}
-        </div>
-        </div>
-        <div style={{ position: "relative", display: "flex", alignItems: "center", marginTop: "0.75rem" }}>
-        <span style={{ position: "absolute", left: "0.75rem", color: "rgba(255,255,255,0.35)", display: "flex", pointerEvents: "none" }}><SearchIcon /></span>
-        <input type="text" placeholder="Search countries..." value={search} onChange={e => setSearch(e.target.value)}
-        style={{ width: "100%", padding: "0.55rem 0.85rem 0.55rem 2.2rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.05)", color: "white", fontSize: "0.82rem", outline: "none", boxSizing: "border-box", fontFamily: "sans-serif" }}
-        onFocus={e => e.target.style.borderColor = "rgba(255,255,255,0.25)"}
-        onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.12)"} />
-        </div>
-        </div>
-        <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.5rem 1rem", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "5.5rem", gap: "0.5rem", alignContent: "start" }}>
-        {loading && <p style={{ gridColumn: "1/-1", color: "rgba(255,255,255,0.35)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center" }}>Loading countries…</p>}
-        {filtered.map(c => (
-            <CountryTile key={c.name} country={c.name} code={c.code} flagUrl={filteredFlagUrls[c.name] ?? null} isSelected={isSelectedName(c.name)} onToggle={() => toggle(c)} />
-        ))}
-        </div>
-        <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: "0.5rem", flexShrink: 0 }}>
-        <button className="oh-tap-row" onClick={onCancel} style={{ flex: 1, padding: "0.65rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.8)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
-        onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
-        onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.06)"}>Cancel</button>
-        <button className="oh-tap-row" onClick={() => selected.length > 0 && onStart(selected)} disabled={selected.length === 0}
-        style={{ flex: 2, padding: "0.65rem", borderRadius: "10px", border: "none", background: selected.length > 0 ? "rgba(255,255,255,0.28)" : "rgba(59,130,246,0.3)", color: "white", fontSize: "0.85rem", fontWeight: 600, cursor: selected.length > 0 ? "pointer" : "not-allowed", fontFamily: "sans-serif" }}
-        onMouseEnter={e => { if (selected.length > 0) e.currentTarget.style.background = "#2563eb"; }}
-        onMouseLeave={e => { if (selected.length > 0) e.currentTarget.style.background = "#3b82f6"; }}>
-        {confirmLabel(selected.length)}
-        </button>
-        </div>
+        <div className="oh-diplomacy-picker" role="dialog" aria-modal="true" aria-label={title} data-diplomacy-country-picker="directory">
+            <header className="oh-diplomacy-picker-heading">
+                <div className="oh-diplomacy-picker-heading-copy">
+                    <div className="oh-diplomacy-picker-kicker">{single ? "Target directory" : "Diplomatic directory"}</div>
+                    <h2 className="oh-diplomacy-picker-title">{title}</h2>
+                    <p className="oh-diplomacy-picker-subtitle">{subtitle}</p>
+                </div>
+                <button type="button" className="oh-diplomacy-picker-close oh-tap" aria-label="Close" onClick={onCancel}>✕</button>
+            </header>
+            <div className="oh-diplomacy-picker-controls">
+                <div className="oh-diplomacy-picker-search">
+                    <span className="oh-diplomacy-picker-search-icon" aria-hidden="true"><SearchIcon /></span>
+                    <input
+                        autoFocus
+                        type="search"
+                        placeholder="Search countries..."
+                        aria-label="Search countries"
+                        value={search}
+                        onChange={(event) => setSearch(event.target.value)}
+                    />
+                </div>
+                <div className="oh-diplomacy-picker-selection">
+                    <div className="oh-diplomacy-picker-section-top">
+                        <span>{selectedLabel}</span>
+                        <span className="oh-diplomacy-picker-selection-count">{selected.length}</span>
+                    </div>
+                    <div className="oh-diplomacy-picker-chips">
+                        {selected.length === 0
+                            ? <span className="oh-diplomacy-picker-empty-selection">{emptyLabel}</span>
+                            : selected.map((country) => (
+                                <button type="button" key={country.name} className="oh-diplomacy-picker-chip" onClick={() => toggle(country)} aria-label={"Remove " + country.name} title={"Remove " + country.name}>
+                                    <FlagImg url={selectedFlagUrls[country.name]} alt={country.name} size="0.9em" />
+                                    <span>{country.name}</span><span aria-hidden="true">×</span>
+                                </button>
+                            ))}
+                    </div>
+                </div>
+            </div>
+            <div className="oh-diplomacy-picker-results-heading">
+                <span>Available countries</span>
+                <span className="oh-diplomacy-picker-results-count">{loading ? "Loading..." : filtered.length + " of " + uniqueCountries.length}</span>
+            </div>
+            <div className="oh-diplomacy-picker-results" role="group" aria-label="Available countries">
+                {loading ? (
+                    <p className="oh-diplomacy-picker-empty">Loading countries…</p>
+                ) : filtered.length === 0 ? (
+                    <div className="oh-diplomacy-picker-empty">No matching countries.</div>
+                ) : (
+                    <div className="oh-diplomacy-picker-grid">
+                        {filtered.map((country) => (
+                            <CountryTile
+                                key={country.name}
+                                country={country.name}
+                                flagUrl={filteredFlagUrls[country.name] ?? null}
+                                isSelected={isSelectedName(country.name)}
+                                onToggle={() => toggle(country)}
+                            />
+                        ))}
+                    </div>
+                )}
+            </div>
+            <footer className="oh-diplomacy-picker-footer">
+                <button type="button" className="oh-diplomacy-picker-cancel" onClick={onCancel}>Cancel</button>
+                <button type="button" className="oh-diplomacy-picker-confirm" onClick={() => selected.length > 0 && onStart(selected)} disabled={selected.length === 0}>
+                    {confirmLabel(selected.length)}
+                    {selected.length > 0 && <span aria-hidden="true">→</span>}
+                </button>
+            </footer>
         </div>
     );
 };
@@ -2573,7 +2579,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     {/* An inline min-width beats the class's, so the icon-only
                         button is widened to a thumb here, not by oh-tap. */}
                     <button className="oh-tap" aria-label="Send message" onClick={handlePlayerSubmit} disabled={!playerInput.trim()}
-                    style={{ backgroundColor: playerInput.trim() ? (isInstitutionCouncil ? "var(--oh-grey-raised)" : "#3b82f6") : (isInstitutionCouncil ? "rgba(255,255,255,.04)" : "rgba(59,130,246,0.3)"), border: isInstitutionCouncil ? "1px solid var(--oh-grey-border-strong)" : "none", borderRadius: "10px", minWidth: isInstitutionCouncil ? "4.3rem" : isTouch ? "2.75rem" : "2.5rem", height: "2.5rem", padding: isInstitutionCouncil ? "0 .7rem" : 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: isInstitutionCouncil ? ".66rem" : "1rem", fontWeight: 800, color: "white", transition: "background-color 0.2s" }}
+                    style={{ backgroundColor: playerInput.trim() ? (isInstitutionCouncil ? "var(--oh-grey-raised)" : "var(--oh-ui-active, rgba(96,165,250,.24))") : (isInstitutionCouncil ? "rgba(255,255,255,.04)" : "var(--oh-ui-overlay-card, rgba(255,255,255,.05))"), border: isInstitutionCouncil ? "1px solid var(--oh-grey-border-strong)" : "none", borderRadius: "10px", minWidth: isInstitutionCouncil ? "4.3rem" : isTouch ? "2.75rem" : "2.5rem", height: "2.5rem", padding: isInstitutionCouncil ? "0 .7rem" : 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: isInstitutionCouncil ? ".66rem" : "1rem", fontWeight: 800, color: "white", transition: "background-color 0.2s" }}
                     >{isInstitutionCouncil ? "Send ↗" : <SendIcon />}</button>
                 </div>
                 <div style={{ marginTop: ".28rem", fontSize: isInstitutionCouncil ? ".5rem" : ".54rem", color: "rgba(255,255,255,.26)" }}>Enter to send · Shift+Enter for a new line</div>
@@ -2843,86 +2849,25 @@ const isChatUnread = (chat, seen) => {
     return prev === undefined || chatMessageCount(chat) > prev;
 };
 
-// ── Ordering & date grouping ──────────────────────────────────────────────────
-// Sorted purely by last-message recency (a brand-new, still-empty chat counts
-// as the most recent — the player just opened it) rather than pinning unread
-// ones to the top: recency already surfaces anything newly active, and this
-// way the list reads as one clean timeline instead of two competing orders.
-// The unread dot/bold on each row (ChatListItem) is what still marks "new".
-
-// Walks BACKWARD from the last message to the first usable `time` — not just
-// the very last message. AI-opened chats used to leave their opener's `time`
-// blank (fixed in gameplay.js's foldGeneratedChatsIntoStorage, but that fix
-// only stops NEW blanks; every chat already saved with one needs this to
-// self-heal), and a one-sided note the player never replied to has no OTHER
-// message to fall back on if only the last one were checked.
-const chatLastMessageTime = (chat) => {
-    const messages = chat.messages ?? [];
+// ── Activity-ordered correspondence ─────────────────────────────────────────
+// Canonical reads/writes persist activityOrdinal; legacy chats fall back to
+// their real game date until someone speaks again. Header dates never sort.
+const sortChatsByRecency = sortChatsForInbox;
+const chatLastGameDate = (chat) => {
+    const messages = Array.isArray(chat?.messages) ? chat.messages : [];
     for (let i = messages.length - 1; i >= 0; i -= 1) {
-        const raw = messages[i]?.time;
-        if (!raw) continue;
-        const ms = new Date(raw).getTime();
-        if (Number.isFinite(ms)) return ms;
+        const value = String(messages[i]?.time || "").trim();
+        if (parseGameDate(value)) return value;
     }
-    return null;
+    return "";
 };
-
-// The label a chat's row groups under — the in-game date of its most recent
-// TIMED message (not the real-world calendar day, which would be meaningless
-// against a historical or alt-history timeline). "New" is reserved for a chat
-// with literally no messages yet; one with messages but no usable date at all
-// (every one blank/unparseable) falls back to "Undated" rather than being
-// mistaken for a chat that was just opened. Chats sharing a label render under
-// one header, in the order sortChatsByRecency already put them in.
-const chatGroupLabel = (chat) => {
-    if (!chat.messages?.length) return "New";
-    const ms = chatLastMessageTime(chat);
-    return ms === null
-        ? "Undated"
-        : new Date(ms).toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" });
+// Only the diagnostics notification hook needs a JavaScript epoch value.
+const chatLastMessageTime = (chat) => {
+    const date = chatLastGameDate(chat);
+    if (!date) return null;
+    const ms = Date.parse(date);
+    return Number.isFinite(ms) ? ms : null;
 };
-
-// A brand-new, still-empty chat ("New") and a chat with real messages that
-// just happen to carry no usable date ("Undated") both resolve to `null` from
-// chatLastMessageTime — but they don't belong in the same spot: "New" is
-// current (the player just opened it) and belongs at the top, "Undated" is
-// unknown-age history and belongs at the bottom, not floated above chats that
-// DO have a real, recent date.
-const chatSortKey = (chat) => {
-    if (!chat.messages?.length) return "new";
-    const ms = chatLastMessageTime(chat);
-    return ms === null ? "undated" : ms;
-};
-
-const sortChatsByRecency = (list) => [...list].sort((a, b) => {
-    const ka = chatSortKey(a);
-    const kb = chatSortKey(b);
-    if (ka === "new") return kb === "new" ? 0 : -1;
-    if (kb === "new") return 1;
-    if (ka === "undated") return kb === "undated" ? 0 : 1;
-    if (kb === "undated") return -1;
-    return kb - ka; // both dated — most recent message first
-});
-
-// Clusters an already-ordered list into {label, chats[]} runs — consecutive
-// same-label chats become one section rather than repeating the header per row.
-const groupChatsByDate = (orderedList) => {
-    const groups = [];
-    for (const chat of orderedList) {
-        const label = chatGroupLabel(chat);
-        const current = groups[groups.length - 1];
-        if (current && current.label === label) current.chats.push(chat);
-        else groups.push({ label, chats: [chat] });
-    }
-    return groups;
-};
-
-const ChatGroupHeader = ({ label }) => (
-    <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.05em", margin: "0.7rem 0 0.15rem", padding: "0 0.15rem", textTransform: "uppercase" }}>
-    {label}
-    </div>
-);
-
 // Sits above the chat list while isChatGenerationLikely() is true — i.e. while
 // the idle poll is actually asking whether a polity would send a note, and only
 // then. It is the visible half of "before the chat is generated": a note that's
@@ -2966,7 +2911,7 @@ const puppetMarkersFor = (world, player) => {
     return next;
 };
 
-const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, unread = false, puppetMarkers = {} }) => {
+const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, unread = false, selected = false, puppetMarkers = {} }) => {
     const [hovered, setHovered] = React.useState(false);
     const [confirming, setConfirming] = React.useState(false);
     useTouchDisarm(confirming, setConfirming);
@@ -2978,7 +2923,9 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
     const counterparts = diplomaticCounterparts(chat?.countries, playerCountry);
     const previewCountries = counterparts.slice(0, 4);
     const flagUrlMap = useCountryFlagUrls(previewCountries);
-    const names = chat?.title || summarizeDiplomaticParticipants(counterparts);
+    const names = summarizeDiplomaticParticipants(counterparts) || chat?.title || "Diplomatic contact";
+    const threadSubject = chat?.title && chat.title !== names ? chat.title : "";
+    const lastDate = chatLastGameDate(chat);
     const lastMsg = chat.messages?.at(-1);
     const rawPreview = String(lastMsg?.text || "No messages yet").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
     const preview = rawPreview.slice(0, 96) + (rawPreview.length > 96 ? "…" : "");
@@ -2988,12 +2935,12 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
 
     return (
         <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => { setHovered(false); setConfirming(false); }} style={{ position: "relative" }}>
-        <button data-diplomacy-thread-row="modern" onClick={onClick} style={{
-            width: "100%", padding: canHover ? ".76rem 3rem .76rem .9rem" : ".76rem 6.7rem .76rem .9rem", borderRadius: 12,
-            border: `1px solid ${hovered ? "var(--oh-ui-accent, rgba(255,255,255,.13))" : unread ? "var(--oh-ui-line, rgba(96,165,250,.15))" : "var(--oh-ui-line, rgba(255,255,255,.07))"}`,
-            background: hovered ? "var(--oh-ui-hover, rgba(255,255,255,.065))" : unread ? "var(--oh-ui-overlay-card, rgba(59,130,246,.035))" : "var(--oh-ui-overlay-card, rgba(255,255,255,.025))",
+        <button data-diplomacy-thread-row="modern" className="oh-diplomacy-inbox-row" onClick={onClick} style={{
+            width: "100%", padding: canHover ? ".79rem 3rem .79rem .9rem" : ".79rem 6.7rem .79rem .9rem", borderRadius: 10,
+            border: `1px solid ${selected || hovered ? "var(--oh-ui-accent, rgba(133,203,230,.5))" : unread ? "var(--oh-ui-line, rgba(96,165,250,.15))" : "var(--oh-ui-line, rgba(255,255,255,.07))"}`,
+            background: selected ? "var(--oh-ui-active, rgba(96,165,250,.16))" : hovered ? "var(--oh-ui-hover, rgba(255,255,255,.065))" : unread ? "var(--oh-ui-overlay-card, rgba(59,130,246,.035))" : "var(--oh-ui-overlay-card, rgba(255,255,255,.025))",
             display: "flex", alignItems: "center", gap: ".78rem", cursor: "pointer",
-            transition: "background .15s, border-color .15s, transform .15s", transform: hovered ? "translateY(-1px)" : "translateY(0)",
+            transition: "background .15s, border-color .15s",
             fontFamily: "sans-serif", textAlign: "left", boxShadow: hovered ? "0 6px 18px rgba(0,0,0,.12)" : "none",
         }}>
             <div style={{ width: ".52rem", flexShrink: 0, display: "flex", justifyContent: "center" }} aria-hidden="true">
@@ -3009,10 +2956,11 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
             <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: ".48rem", minWidth: 0 }}>
                     <div style={{ flex: 1, minWidth: 0, fontSize: ".84rem", fontWeight: unread ? 740 : 650, color: unread ? "#fff" : "rgba(255,255,255,.9)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{names}</div>
-                    <span style={{ flexShrink: 0, fontSize: ".59rem", color: chatMarker ? "rgba(234,179,8,.9)" : "rgba(255,255,255,.25)", textTransform: "uppercase", letterSpacing: ".045em" }}>{chatMarker || channelMeta}</span>
+                    <span className="oh-diplomacy-row-date">{lastDate ? formatGameDateReadable(lastDate) : "New"}</span>
                 </div>
-                <div style={{ marginTop: ".17rem", fontSize: ".74rem", color: unread ? "rgba(255,255,255,.59)" : "rgba(255,255,255,.38)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {speaker && counterparts.length > 1 && <span style={{ color: "rgba(255,255,255,.5)", fontWeight: 600 }}>{speaker}: </span>}{preview}
+                <div className="oh-diplomacy-row-subject">{threadSubject || (chatMarker || channelMeta)}</div>
+                <div className="oh-diplomacy-row-preview">
+                    {speaker && counterparts.length > 1 && <span style={{ fontWeight: 650 }}>{speaker}: </span>}{preview}
                 </div>
             </div>
         </button>
@@ -3863,14 +3811,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // into ad-hoc country chats, while retaining them in unread tracking.
     const openChats = allOpenChats.filter((chat) => !chat.institutionId || (chat.lifecycleInstitutionId && chat.lifecycleCaseIds?.length));
 
-    // Which chats to flag as unread: seeded from the persisted baseline when the
-    // panel OPENS, then only ever added to (arrivals) or cleared per-chat (an
-    // actual read) — never wholesale, so a row stays bold until its message is
-    // opened. displayOrder freezes at open for a different reason: a background
-    // message landing for some OTHER chat must not visibly jump it up the list
-    // mid-read. Reopening the panel is what re-sorts.
+    // Unread state is independent of inbox order. The old frozen order
+    // stranded active diplomacy until closing/reopening; activity now reorders
+    // immediately, and a scrolled reader gets a return-to-newest affordance.
     const [unreadIds, setUnreadIds] = useState(() => new Set());
-    const [displayOrder, setDisplayOrder] = useState([]);
     const snapshotTakenRef = useRef(false);
 
     // `chats` is only refreshed while the panel is OPEN, so between opens it goes
@@ -3896,7 +3840,6 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         } else {
             setUnreadIds(new Set(allOpenChats.filter((chat) => isChatUnread(chat, seen)).map((chat) => String(chat.id))));
         }
-        setDisplayOrder(sortChatsByRecency(openChats).map((chat) => String(chat.id)));
         // Deliberately NOT writing the baseline here. Opening the panel is not
         // reading your mail: seeing a row in a list is not seeing the message.
         // The baseline only advances when a chat is actually opened
@@ -3920,26 +3863,56 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         setUnreadIds((prev) => (arrived.every((id) => prev.has(id)) ? prev : new Set([...prev, ...arrived])));
     }, [isOpen, allOpenChats, activeChat]);
 
-    // Follows the frozen displayOrder — each id's LIVE chat object, so unread
-    // status and preview text still update in place — with anything that
-    // arrived after the snapshot (an idle-diplomacy note while the panel sat
-    // open) prepended rather than silently missing from the list.
-    const orderedIds = new Set(displayOrder);
-    const orderedChats = [
-        ...openChats.filter((chat) => !orderedIds.has(String(chat.id))),
-        ...displayOrder.map((id) => openChats.find((chat) => String(chat.id) === id)).filter(Boolean),
-    ];
+    // The canonical ordinal reorders immediately while at the top of the inbox.
+    // Scrolling into history pins the current row positions instead; new mail
+    // queues a visible "Latest" action, preventing the viewport from jumping.
+    const [heldInbox, setHeldInbox] = useState(null);
+    const inboxListRef = useRef(null);
+    const sidebarListRef = useRef(null);
+    const canonicalChats = sortChatsByRecency(openChats);
+    const orderedChats = heldInbox
+        ? holdChatsInListOrder(canonicalChats, heldInbox.ids)
+        : canonicalChats;
+    const inboxHasNewActivity = Boolean(heldInbox
+        && (nextChatActivityOrdinal(openChats) - 1 > heldInbox.ordinal
+            || canonicalChats[0]?.id !== heldInbox.ids[0]));
+    const handleInboxScroll = (event) => {
+        const scrollTop = event.currentTarget.scrollTop;
+        if (scrollTop <= 24) {
+            if (heldInbox) setHeldInbox(null);
+        } else if (scrollTop > 100 && !heldInbox) {
+            setHeldInbox({
+                ids: canonicalChats.map((chat) => String(chat.id)),
+                ordinal: nextChatActivityOrdinal(openChats) - 1,
+            });
+        }
+    };
+    const revealLatestInbox = () => {
+        setHeldInbox(null);
+        inboxListRef.current?.scrollTo({ top: 0, behavior: "auto" });
+        sidebarListRef.current?.scrollTo({ top: 0, behavior: "auto" });
+    };
 
     // Unread filter — resets to off on every fresh open so it never silently
     // hides chats the player forgot they'd filtered down to last time.
     const [showUnreadOnly, setShowUnreadOnly] = useState(false);
     useEffect(() => {
-        if (!isOpen) setShowUnreadOnly(false);
+        if (!isOpen) {
+            setShowUnreadOnly(false);
+            setHeldInbox(null);
+            setContactQuery("");
+        }
     }, [isOpen]);
     const visibleChats = showUnreadOnly
         ? orderedChats.filter((chat) => unreadIds.has(String(chat.id)))
         : orderedChats;
-    const groupedChats = groupChatsByDate(visibleChats);
+    const [contactQuery, setContactQuery] = useState("");
+    const searchedChats = visibleChats.filter((chat) => {
+        const query = contactQuery.toLocaleLowerCase().trim();
+        if (!query) return true;
+        return [chat.title, ...(chat.countries || []).map((country) => country.name || country.code)]
+            .some((value) => String(value || "").toLocaleLowerCase().includes(query));
+    });
 
     // Single writer for a chat's read state: updates BOTH the persisted baseline
     // (localStorage, read back on the next panel/toolbar check) and the in-memory
@@ -4110,8 +4083,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 return;
             }
             setChats((prev) => {
-                const signature = (list) => list.map((c) => `${c.id}:${c.status}:${c.messages?.length ?? 0}`).join("|");
-                if (signature(saved) === signature(prev)) return prev;
+                // Date and message count alone are not recency. An idle update
+                // may advance activityOrdinal without changing the count;
+                // preserve its new inbox position on the live store feed.
+                if (chatInboxSignature(saved) === chatInboxSignature(prev)) return prev;
                 setActiveChat((ac) => {
                     if (!ac) return ac;
                     const updated = saved.find((c) => sameChatId(c.id, ac.id));
@@ -4169,9 +4144,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     const handleMessagesUpdate = (chatId, newMessages) => {
         if (newMessages?.at(-1)?.role === "user") recordRecentDiplomaticOutgoing(chatId);
         setChats(prev => {
-            const updated = prev.map(c => sameChatId(c.id, chatId) ? { ...c, messages: newMessages } : c);
+            const updated = promoteChatActivity(prev, chatId, newMessages);
             persistChats(updated);
-            setActiveChat(ac => sameChatId(ac?.id, chatId) ? { ...ac, messages: newMessages } : ac);
+            const touched = updated.find((chat) => sameChatId(chat.id, chatId));
+            setActiveChat(ac => sameChatId(ac?.id, chatId) ? (touched || ac) : ac);
             return updated;
         });
     };
@@ -4346,7 +4322,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             setActiveChat(pendingSharedThread(selected));
             return;
         }
-        const newChat = { id: newChatId(), countries: selected, messages: [], status: "open" };
+        const newChat = { id: newChatId(), countries: selected, messages: [], status: "open", activityOrdinal: nextChatActivityOrdinal(chatsRef.current) };
         setChats(prev => { const u = [newChat, ...prev]; persistChats(u); return u; });
         setShowSelector(false);
         setActiveChat(newChat);
@@ -4480,7 +4456,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 if (draftText) setComposerDraft({ chatId: pending.id, text: draftText, fromDraft });
                 return prev;
             }
-            const newChat = { id: newChatId(), countries: [{ name: country.name, code }], messages: [], status: "open" };
+            const newChat = { id: newChatId(), countries: [{ name: country.name, code }], messages: [], status: "open", activityOrdinal: nextChatActivityOrdinal(chatsRef.current) };
             const u = [newChat, ...prev];
             persistChats(u);
             setView("chats");
@@ -4554,7 +4530,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 frame), so the two meet with the same 0.5rem gap and never stack.
                 Nothing else is held back: the panel shrinks only once the drawer
                 would really reach it, not the moment the drawer opens. */}
-            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem - var(--oh-right-drawer-safe-offset, 0px)))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "var(--oh-ui-overlay, rgba(24,24,27,0.95))", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
+            <div className="oh-diplomacy-shell" style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(68rem, calc(100vw - 1rem - var(--oh-right-drawer-safe-offset, 0px)))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "var(--oh-ui-overlay, rgba(24,24,27,0.95))", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
                 ...(isTouch ? { width: `min(58rem, calc(100vw - 1.5rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`, height: `min(50rem, calc(${APP_HEIGHT} - 10.25rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`, minHeight: "10rem" } : {}) }}>
 
             {chatsLoadFailed ? (
@@ -4571,6 +4547,29 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
             {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
+                <div className="oh-diplomacy-split" data-diplomacy-layout="responsive-split">
+                    <aside className="oh-diplomacy-active-sidebar" aria-label="Diplomatic correspondence">
+                        <div className="oh-diplomacy-sidebar-heading">
+                            <span className="oh-diplomacy-sidebar-kicker">Foreign affairs</span>
+                            <span className="oh-diplomacy-sidebar-title">Correspondence</span>
+                            <span className="oh-diplomacy-sidebar-subtitle">Governments and diplomatic channels</span>
+                        </div>
+                        <div className="oh-diplomacy-sidebar-controls">
+                            <input className="oh-diplomacy-search" type="search" value={contactQuery} onChange={(e) => setContactQuery(e.target.value)} placeholder="Search contacts or subjects" aria-label="Search diplomatic conversations" />
+                            <span className="oh-diplomacy-inbox-heading">Recent activity <span className="oh-diplomacy-inbox-count">· {searchedChats.length}</span></span>
+                            {inboxHasNewActivity && <button className="oh-diplomacy-activity-top" onClick={revealLatestInbox}>↑ New activity — return to latest</button>}
+                        </div>
+                        <div className="oh-diplomacy-active-list" ref={sidebarListRef} onScroll={handleInboxScroll}>
+                            {searchedChats.map((chat) => (
+                                <ChatListItem key={chat.id} chat={chat} selected={sameChatId(activeChat?.id, chat.id)} playerCountry={playerCountry} puppetMarkers={puppetMarkers} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} onToggleRead={() => setChatReadState(chat, unreadIds.has(String(chat.id)))} />
+                            ))}
+                            {searchedChats.length === 0 && <div className="oh-diplomacy-sidebar-subtitle">No matching correspondence.</div>}
+                        </div>
+                        <div className="oh-diplomacy-sidebar-footer">
+                            <button type="button" className="oh-diplomacy-new-chat" onClick={() => setShowSelector(true)}>+ New diplomatic channel</button>
+                        </div>
+                    </aside>
+                    <section className="oh-diplomacy-active-thread" aria-label="Active diplomatic conversation">
                 <ConversationView key={String(activeChat.id)} chat={activeChat} puppetMarkers={puppetMarkers} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onSharedThreadOpened={followThreadFromAck} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
                 unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => toggleActiveChatRead(activeChat)}
                 draft={sameChatId(composerDraft?.chatId, activeChat.id) ? composerDraft.text : ""}
@@ -4578,6 +4577,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 onDraftApplied={() => setComposerDraft(null)}
                 availableCountries={availableCountries}
                 onInstitutionNavigate={(section) => { const institutionId = activeChat.institutionId || activeChat.lifecycleInstitutionId; if (institutionId) navigateInstitution(institutionId, section); }} onLifecycleResult={adoptInstitutionalResult} onInstitutionBusinessOpened={runInstitutionCouncilTurn} />
+                    </section>
+                </div>
             ) : (
                 <>
                 <div data-diplomacy-workspace-header="modern" style={{ padding: isTouch ? ".35rem .85rem .3rem" : ".7rem .85rem .65rem", borderBottom: "1px solid var(--oh-ui-line, rgba(255,255,255,0.07))", background: "var(--oh-ui-overlay-header, transparent)", flexShrink: 0 }}>
@@ -4650,6 +4651,13 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                     />
                 ) : (
                 <>
+                <div className="oh-diplomacy-search-header">
+                    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: ".6rem", marginBottom: ".48rem" }}>
+                        <span className="oh-diplomacy-inbox-heading">Recent correspondence</span>
+                        <span className="oh-diplomacy-inbox-count" style={{ fontSize: ".68rem" }}>{searchedChats.length} conversations</span>
+                    </div>
+                    <input className="oh-diplomacy-search" type="search" value={contactQuery} onChange={(e) => setContactQuery(e.target.value)} placeholder="Search governments or subjects" aria-label="Search diplomatic conversations" />
+                </div>
                 {/* The unread filter belongs to the Contacts list only — Intelligence
                     has no chat read/unread notion, so it sits inside this branch
                     rather than above the tab switch. */}
@@ -4668,27 +4676,23 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                     )}
                     </div>
                 )}
-                <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                {inboxHasNewActivity && <button className="oh-diplomacy-activity-top" onClick={revealLatestInbox} style={{ margin: ".4rem 1rem .1rem" }}>↑ New activity — return to latest</button>}
+                <div ref={inboxListRef} onScroll={handleInboxScroll} style={{ flex: 1, overflowY: "auto", scrollbarWidth: "thin", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
                 {isGenerating && <GeneratingBanner />}
                 {openChats.length === 0 ? (
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.25)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
                     No diplomatic conversations yet.<br />Start one below.
                     </div>
-                ) : visibleChats.length === 0 ? (
+                ) : searchedChats.length === 0 ? (
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.25)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center", padding: "2rem" }}>
-                    No unread chats — you're all caught up.
+                    {contactQuery ? "No matching correspondence." : "No unread chats — you're all caught up."}
                     </div>
-                ) : groupedChats.map((group, index) => (
-                    <React.Fragment key={`${group.label}-${group.chats[0]?.id ?? index}`}>
-                    <ChatGroupHeader label={group.label} />
-                    {group.chats.map(chat => <ChatListItem key={chat.id} chat={chat} playerCountry={playerCountry} puppetMarkers={puppetMarkers} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} onToggleRead={() => setChatReadState(chat, unreadIds.has(String(chat.id)))} />)}
-                    </React.Fragment>
+                ) : searchedChats.map((chat) => (
+                    <ChatListItem key={chat.id} chat={chat} playerCountry={playerCountry} puppetMarkers={puppetMarkers} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} onToggleRead={() => setChatReadState(chat, unreadIds.has(String(chat.id)))} />
                 ))}
                 </div>
-                <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-                <button className="oh-tap-row" onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))", background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.07))", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
-                onMouseEnter={e => e.currentTarget.style.background = "var(--oh-ui-hover, rgba(255,255,255,0.12))"}
-                onMouseLeave={e => e.currentTarget.style.background = "var(--oh-ui-overlay-card, rgba(255,255,255,0.07))"}>Start New Chat</button>
+                <div className="oh-diplomacy-sidebar-footer">
+                    <button type="button" className="oh-diplomacy-new-chat" onClick={() => setShowSelector(true)}>+ New diplomatic channel</button>
                 </div>
                 </>
                 )}

@@ -43,7 +43,8 @@ test("the advisor is handed the panel's figures as authoritative", () => {
   assert.match(text, /Total population: 410M/);
   assert.match(text, /GDP \$433B/);
   assert.match(text, /growth \+6.2%/);
-  assert.match(text, /GDP per capita \$1,057/);
+  // A legacy 1,057 reading conflicts with GDP 433B / 410M: native derived GDP per capita wins.
+  assert.match(text, /GDP per capita \$1,056/);
   assert.match(text, /budget balance -0.4% of GDP/);
   assert.match(text, /domestic currency Chinese Yuan \(Fapi\)/);
   assert.match(text, /agriculture 48%, industry 32%, services 20%/);
