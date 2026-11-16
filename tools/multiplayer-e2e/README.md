@@ -73,6 +73,8 @@ The real desktop app's hidden engine window is not part of this run.
   - With an AI government at the table: that government answers for itself, to
     everyone at the table. The model is told who the people are, whichever of
     them is writing.
+  - A vote at that table: the host calls it from its panel, and the guest
+    votes in it from its own screen; the host keeps the guest's vote.
 - **Orders:** the game starts, and each player queues an order through the
   game's own Actions panel, seeing only its own.
 - **A player's own saves:**
@@ -100,9 +102,10 @@ The real desktop app's hidden engine window is not part of this run.
     made.
   - No save was turned away with an error on either screen.
   - No screen made a change that no request carries to the host (the one
-    door: `client/seatWrites.js` `unroutedChanges`, logged by the page). Its
-    first run caught an idle pulse begun on the host's screen before it shared
-    its game, writing into the shared view.
+    door: `client/seatWrites.js` `unroutedChanges`, logged by the page). It
+    compares a save with the view in the shape the page saves it in: its first
+    runs flagged the empty defaults a save fills in for the engine's own fields,
+    which no view carries.
 - **Whose AI answers for the AI's governments** (the host's choice,
   `host/settings.js` `replies`): until here the host's AI answered. Then:
   - The host changes it under Players, and the guest is told that its own AI

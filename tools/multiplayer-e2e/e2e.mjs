@@ -642,10 +642,6 @@ try {
       && firstRoster.some((line) => line.startsWith(`- ${HOST_COUNTRY} — HUMAN-controlled (the player)`))
       && firstRoster.some((line) => line.startsWith(`- ${GUEST_COUNTRY} — HUMAN-controlled (another player)`)),
     JSON.stringify({ ai: AI_COUNTRY, asked: chatBodies.length - askedBeforeTable, guestSees: namesOf(guestTable), hostSees: namesOf(hostTable), roster: firstRoster }));
-  // A vote is nothing the host can be asked for yet: at a table of a shared
-  // game it is not offered. Called from the host's own screen it ran the table
-  // there, which a shared game refuses, and Retry ran it again.
-  check("no vote is offered at a shared game's table", (await host.eval("window.__e2e.buttons('Vote').length")) === 0);
   // The guest speaks at the same table, which is the host's thread.
   await backToList(guest);
   await until(guest, "document.querySelectorAll('[data-diplomacy-thread-row]').length > 1", 15000);
@@ -691,6 +687,33 @@ try {
       && secondBody.includes(`${HOST_COUNTRY}: ${LINE_TO_TABLE}`) && secondBody.includes(`${GUEST_COUNTRY} has just said: ${LINE_AT_TABLE}`),
     JSON.stringify({ guestHeard, asked: chatBodies.length - askedBeforeTable, roster: secondRoster, hostLineNamed: secondBody.includes(`${HOST_COUNTRY}: ${LINE_TO_TABLE}`) }));
   await shoot(guest, "1-guest-conference");
+
+  // A vote at the table (game/messages.js "say" `poll` and "vote"): the host
+  // calls it from its panel, and the guest votes in it from its own screen.
+  // Until 2026-11-16 neither was offered in a shared game.
+  const QUESTION = "Shall the conference meet in Tallinn?";
+  const pollAtTable = `window.__e2e.view('chat').then((chats) => ((chats.find((chat) => (chat.messages || []).some((message) => message.text === ${JSON.stringify(LINE_TO_TABLE)})) || {}).polls || []).find((poll) => poll.question === ${JSON.stringify(QUESTION)}) || null)`;
+  const voteOffered = await host.eval("window.__e2e.click('Vote')");
+  const composerOpen = await until(host, `Boolean(document.querySelector('input[placeholder="What should this group decide?"]'))`, 10000);
+  await host.eval(`(() => { window.__e2e.type(document.querySelector('input[placeholder="What should this group decide?"]'), ${JSON.stringify(QUESTION)}); return true; })()`);
+  await sleep(300);
+  await host.eval("window.__e2e.click('Open vote')");
+  const called = await until(host, `${pollAtTable}.then(Boolean)`, 30000);
+  const guestSeesVote = await until(guest, `${pollAtTable}.then(Boolean)`, 30000);
+  // The guest is on its Institutions tab: back to its conversations, into the table.
+  await guest.eval("(() => { const tab = [...document.querySelectorAll('button')].find((b) => b.textContent.trim().startsWith('Contacts')); if (tab) tab.click(); return Boolean(tab); })()");
+  await until(guest, "document.querySelectorAll('[data-diplomacy-thread-row]').length > 1", 15000);
+  await guest.eval(`(() => { const row = [...document.querySelectorAll('[data-diplomacy-thread-row]')].find((entry) => entry.textContent.includes(${JSON.stringify(AI_COUNTRY)})); if (row) row.click(); return Boolean(row); })()`);
+  const VOTE_CARD = `[...document.querySelectorAll('div')].find((box) => [...box.children].some((child) => child.textContent === ${JSON.stringify(QUESTION)}))`;
+  const ballot = await until(guest, `Boolean(${VOTE_CARD})`, 15000);
+  const cast = await guest.eval(`(() => { const card = ${VOTE_CARD}; const option = card && [...card.querySelectorAll('button')].find((b) => b.textContent.trim().startsWith('No') && !b.disabled); if (option) option.click(); return Boolean(option); })()`);
+  const counted = await until(host, `${pollAtTable}.then((poll) => Boolean(poll && Object.keys(poll.votes || {}).includes(${JSON.stringify(GUEST_COUNTRY)})))`, 20000);
+  const heldVote = await host.eval(pollAtTable);
+  const guestChose = heldVote?.options?.find((option) => option.id === heldVote?.votes?.[GUEST_COUNTRY])?.label ?? "";
+  check("a vote is called at a shared game's table from the host's panel, and the guest votes in it from its own screen",
+    voteOffered && composerOpen && called && guestSeesVote && ballot && cast && counted && guestChose === "No" && heldVote?.openedBy === HOST_COUNTRY,
+    JSON.stringify({ voteOffered, composerOpen, called, guestSeesVote, ballot, cast, counted, guestChose, openedBy: heldVote?.openedBy ?? "", votes: heldVote?.votes ?? {} }));
+  await shoot(guest, "1-guest-vote");
   await toggleChats(host);
   await toggleChats(guest);
   await sleep(400);

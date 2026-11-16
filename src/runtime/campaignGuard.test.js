@@ -50,8 +50,8 @@ test("the wording can name what was refused", () => {
 });
 
 // A shared game is another world in front of the page (its documents are the host's view): a writer that began in
-// the page's own game and finishes after a shared game began is refused by this same check. An idle pulse begun
-// before the host shared its game wrote into the shared view, where it was dropped (the two-browser run).
+// the page's own game and finishes after a shared game began is refused by this same check, as one that began in
+// another campaign is: its world is not the view's, and its save would be dropped there.
 test("a writer begun in the page's own game does not land in a shared game begun meanwhile, nor the other way", () => {
   assert.equal(campaignChanged("game-1", "shared:game-1"), true);
   assert.equal(campaignChanged("shared:game-1", "game-1"), true);

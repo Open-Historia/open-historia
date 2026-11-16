@@ -71,3 +71,25 @@ test("what a save changes that no door takes is named, and the empty defaults a 
   assert.deepEqual(unroutedChanges("flags", { A: "x" }, { A: "y" }), ["flags"]);
   assert.deepEqual(unroutedChanges("flags", {}, undefined), []);
 });
+
+// A save is in the shape the page's writers save in (each normalizes what it saves), and the view is the host's
+// projection, which leaves the engine's own fields out. Compared as they came, the defaults the normalizer fills in
+// for those were flagged on the host's screen in the two-browser run: AI Suggestions asked there saved a world with
+// idlePulseTick 0 and empty institutions and politicalSimulation ledgers. The page compares like with like.
+test("a page's save of a view it did not change is no change, once the view is in the shape the page saves it in", async () => {
+  const { normalizeWorldState } = await import("../../runtime/gameState.js");
+  const { HOST_ONLY_WORLD_KEYS } = await import("../host/projection.js");
+  // The view as the host sends it: its stored (normalized) world, without the engine's own fields.
+  const stored = normalizeWorldState({ countryStats: [{ name: "France", gdp: 1 }], projects: [{ id: "p1", name: "Rail programme", status: "active" }] });
+  const view = Object.fromEntries(Object.entries(stored).filter(([key]) => !HOST_ONLY_WORLD_KEYS.includes(key)));
+  const saved = { ...normalizeWorldState(view), actionSuggestions: [{ id: "s1", title: "Talks" }] };
+  const raw = unroutedChanges("world", view, saved);
+  // (The run's third field, institutions, is reshaped per viewer by the projection, which this view skips.)
+  for (const field of ["idlePulseTick", "politicalSimulation"]) assert.ok(raw.includes(field), `what the run flagged: ${field}`);
+  assert.deepEqual(unroutedChanges("world", normalizeWorldState(view), saved), []);
+  assert.equal(planWorldWrite(normalizeWorldState(view), saved).board, null, "the board is not sent again by an unrelated save");
+  // A field really changed is still named.
+  assert.deepEqual(unroutedChanges("world", normalizeWorldState(view), { ...saved, idlePulseTick: 37 }), ["idlePulseTick"]);
+  const page = (await import("node:fs")).readFileSync(new URL("./sharedGame.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(page, /const before = asThePageSavesIt\(key, held\);[\s\S]*?unroutedChanges\(key, before, wanted\)[\s\S]*?planWorldWrite\(before, wanted\)/);
+});
