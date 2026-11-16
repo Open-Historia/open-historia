@@ -60,6 +60,8 @@ export const POLITICAL_FILL_OPACITY_STOPS = Object.freeze([
 export const DIPLOMATIC_FILL_OPACITY_FLOOR = 0.78;
 export const DIPLOMATIC_FILL_OPACITY_STOPS = Object.freeze(POLITICAL_FILL_OPACITY_STOPS
   .map(([zoom, opacity]) => Object.freeze([zoom, Math.max(opacity, DIPLOMATIC_FILL_OPACITY_FLOOR)])));
+// The same at one zoom, for a layer that draws it by hand (a battlefield's ground, frontGroundLayer.js).
+export const diplomaticFillOpacityAtZoom = (zoom) => zoomStopValue(DIPLOMATIC_FILL_OPACITY_STOPS, zoom);
 // How faint the countries a legend entry does not pick out are drawn.
 export const DIPLOMATIC_DIMMED_SHARE = 0.25;
 

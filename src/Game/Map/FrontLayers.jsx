@@ -26,7 +26,7 @@
 // every label; the troops above the cities and structures and just below the
 // unit counters.
 
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { getNationColors } from "../../runtime/assets.js";
 import { useDiplomaticView } from "./useDiplomaticView.js";
@@ -36,7 +36,7 @@ import { latToY, projectorOf, yToLat } from "../../runtime/fronts/frame.js";
 import { useWorldState } from "./useWorldState.js";
 import { createOwnerRgbResolver, ownerDisplayCss, parseColorToRgb } from "./ownerColors.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
-import { POLITICAL_FILL_OPACITY_STOPS, politicalFillOpacityAtZoom } from "./vnext/presentationPolicy.js";
+import { POLITICAL_FILL_OPACITY_STOPS, diplomaticFillOpacityAtZoom, politicalFillOpacityAtZoom } from "./vnext/presentationPolicy.js";
 import { getFrontTargets, settleFront, startFrontsSync, subscribeFronts } from "./frontsController.js";
 import { arrowDetailAt, frontArrowFeatures, frontArrowRgb, frontAt, frontShownOn, frontTroopFeatures, stageOf } from "./frontGeometry.js";
 import { createFrontField, createPaintPlayer, landMask, paintPixels, paintScaleFor, pictureCorners, pictureFits, touchedCells, viewWithin, writeFrontField } from "./frontPaint.js";
@@ -285,6 +285,10 @@ const FrontLayers = () => {
   // making it not be the same color as your country" (the owner, 2026-10-15). One view for the whole map
   // (useDiplomaticView.js): the fills' and this are the same computation.
   const diplomaticView = useDiplomaticView();
+  // ...and as strongly as the regions round it: the diplomatic map lays its colours stronger (presentationPolicy.js).
+  const groundStrengthRef = useRef(politicalFillOpacityAtZoom);
+  groundStrengthRef.current = diplomaticView ? diplomaticFillOpacityAtZoom : politicalFillOpacityAtZoom;
+  const groundStrength = useCallback((zoom) => groundStrengthRef.current(zoom), []);
   // The war room's marks on the troops: the general whose troops are lit, and
   // the troops picked out (warRoomStore.js).
   const warRoomOpen = useWarRoom((state) => state.open);
@@ -362,7 +366,7 @@ const FrontLayers = () => {
           return { ...area, version: picturePaintedTimes(area.canvas), ready: whole };
         });
       },
-      strength: politicalFillOpacityAtZoom,
+      strength: groundStrength,
       onState: (working) => setGround((now) => (now === "failed" ? now : working ? "working" : "failed")),
       onError: (error) => console.warn("[fronts] a battlefield's ground could not be drawn by its own layer; the bare map is put back under it instead.", error),
     });
@@ -387,7 +391,7 @@ const FrontLayers = () => {
       } catch { /* the map is gone */ }
       if (groundLayerRef.current === layer) groundLayerRef.current = null;
     };
-  }, [map, anyPainted, groundFailed]);
+  }, [map, anyPainted, groundFailed, groundStrength]);
 
   // The battlefields the ground layer is to draw, told to the political map,
   // which asks the regions worker for their regions and hides their fills
@@ -447,7 +451,7 @@ const FrontLayers = () => {
       // (The layer draws the painted ground whole, the bare map and the colour over it, from the
       // picture itself: it does not wait on the map's own copy of the picture, nor need it.)
       pictures: () => picturesRef.current,
-      strength: politicalFillOpacityAtZoom,
+      strength: groundStrength,
       onState: (working) => setSeenThrough(working === true),
       onError: (error) => console.warn("[fronts] the bare map could not be put back under the painted ground; it is cleared to grey instead.", error),
     });
@@ -481,7 +485,7 @@ const FrontLayers = () => {
       } catch { /* the map is gone */ }
       setSeenThrough(false);
     };
-  }, [map, painted]);
+  }, [map, painted, groundStrength]);
 
   useEffect(() => {
     let cancelled = false;
