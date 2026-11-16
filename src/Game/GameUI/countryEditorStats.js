@@ -57,6 +57,10 @@ export const countryStatPatchFromForm = ({ form = {}, changed = new Set(), polit
     const stability = number("stability", { min: 0, max: 100, label: "Stability" });
     const economy = {};
     const gdpGrowth = number("gdpGrowth", { min: -1000, max: 1000, label: "GDP growth" });
+    const annualGrowthRate = number("annualGrowthRate", { min: -20, max: 20, label: "Annual population growth" });
+    if (changed.has("annualGrowthRate") && annualGrowthRate === null) {
+        throw new Error("An established annual population growth rate cannot be cleared here.");
+    }
     const inflation = number("inflation", { min: -1000, max: 1000, label: "Inflation" });
     const unemployment = number("unemployment", { min: 0, max: 100, label: "Unemployment" });
     const publicDebt = number("publicDebt", { min: 0, max: 1000, label: "Public debt" });
@@ -96,7 +100,10 @@ export const countryStatPatchFromForm = ({ form = {}, changed = new Set(), polit
         ...(leader ? { leader } : {}),
         ...(stability == null ? {} : { stability }),
         ...(Object.keys(indices).length ? { indices } : {}),
-        ...(populationM == null ? {} : { population: { total: Math.round(populationM * 1e6) } }),
+        ...(populationM == null && annualGrowthRate == null ? {} : { population: {
+            ...(populationM == null ? {} : { total: Math.round(populationM * 1e6) }),
+            ...(annualGrowthRate == null ? {} : { annualGrowthRate }),
+        } }),
         ...(Object.keys(economy).length ? { economy } : {}),
         ...(gdpBreakdown ? { gdpBreakdown } : {}),
     };

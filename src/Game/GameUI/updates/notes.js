@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-national-stats-improvements",
+    kind: "minor",
+    date: "2026-11-16",
+    channel: "beta",
+    banners: [
+      {
+        title: "More reliable national statistics",
+        items: [
+          "GDP per capita now consistently uses whole-polity GDP divided by the full population, with the core/integrated figure labeled separately.",
+          "AI-generated events can no longer change GDP by supplying only a GDP-per-capita number; legacy sheets with both GDP and population also recalculate the ratio.",
+          "GDP advances across time skips using each country's saved annual growth rate, without extra AI requests.",
+          "Population advances only when an explicit demographic trend is recorded; legal territorial transfers pause stale national ledgers until reassessed.",
+          "Refresh no longer calls AI solely because the date changed; Rebuild baseline remains available for a fresh assessment.",
+        ],
+      },
+    ],
+  },
+  {
     // Issue #1000's save, again: in 1947 the German Reich, surrendered and dissolved in the story in 1945, was still a
     // great power on the map, and its weariness was told as if it still fought. A war's end now records who lost
     // (runtime/warEndings.js): occupations follow from it and a state dissolved in defeat leaves the map

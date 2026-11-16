@@ -46,6 +46,7 @@ import { normalizeSpyOp, spyTasking } from "./spycraft.js";
 import { eventsFromLegacyChat, normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
 import { latestTurnEventIds, unseenEvents, withoutUnseenChats, withoutUnseenEvents, withoutUnseenReports } from "./unseenEvents.js";
 import { COUNTRY_STATS_EVENT_RESCALE_LIMIT, mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
+import { advanceCountryStatsInterval } from "./countryStatsProgression.js";
 import {
   canonicalInstitutionIdentity,
   institutionChannelParticipants,
@@ -76,7 +77,7 @@ import {
   wrapLng,
 } from "./unitMotion.js";
 import { noteMapMeasure } from "./mapMeasure.js";
-import { compareGameDates, normalizeGameDate } from "./gameDates.js";
+import { compareGameDates, diffGameDays, normalizeGameDate } from "./gameDates.js";
 import { normalizeBattlefields, withWarIdFrontsRenamed } from "./fronts/record.js";
 import { normalizeTransports } from "./fronts/transports.js";
 import { normalizeStrikes } from "./strikes.js";
@@ -5932,6 +5933,7 @@ const applyPolityAndTerritoryImpacts = ({
       const merged = applyCountryStatPatchToWorld(world, code, change.stats, {
         continuity: eventId ? { accountedEventIds: [eventId] } : null,
         maxAggregateRescale: COUNTRY_STATS_EVENT_RESCALE_LIMIT,
+        allowPerCapitaRescale: false,
       });
       const rep = Number(merged?.indices?.internationalReputation);
       if (Number.isFinite(rep)) {
@@ -6064,6 +6066,29 @@ export const applyEventImpactsToWorld = ({
   let nextColors = cloneValue(colors) ?? {};
   const nextWorld = normalizeWorldState(world);
   let cursorDate = motion ? normalizeOptionalString(motion.originDate) : "";
+  const statsStart = normalizeGameDate(motion?.originDate);
+  const statsEnd = normalizeGameDate(motion?.statsToDate);
+  const turnEvents = normalizeEvents(events);
+  // Fail closed on out-of-order, undated or out-of-range events; do not assign
+  // economic effects to the wrong side of a historical shock or cession.
+  let statsCursor = statsStart;
+  const validStatsChronology = Boolean(statsStart && statsEnd && diffGameDays(statsStart, statsEnd) > 0)
+    && turnEvents.every((event) => {
+      const date = normalizeGameDate(event.date);
+      if (!date || diffGameDays(statsStart, date) < 0 || diffGameDays(date, statsEnd) < 0
+        || diffGameDays(statsCursor, date) < 0) return false;
+      statsCursor = date;
+      return true;
+    });
+  statsCursor = statsStart;
+  const progressTo = (date) => {
+    if (!validStatsChronology || !date || !(diffGameDays(statsCursor, date) > 0)) return;
+    const settled = advanceCountryStatsInterval(nextWorld.countryStats, {
+      fromDate: statsCursor, toDate: date,
+    });
+    nextWorld.countryStats = settled.countryStats;
+    statsCursor = date;
+  };
   // Every polity renamed by this apply, for gameplay.js to carry into what the
   // world does not hold (the game's own polity, chats, flags, baked regions).
   // A save from before renames re-keyed still shows a display name over a key;
@@ -6089,7 +6114,10 @@ export const applyEventImpactsToWorld = ({
   // one event is a name the next event can already be using.
   let resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
 
-  for (const event of normalizeEvents(events)) {
+  for (const event of turnEvents) {
+    // Rates and demographic totals evolve until this event, BEFORE its dated
+    // GDP/population shock or growth-rate change becomes canonical.
+    progressTo(normalizeGameDate(event.date));
     // A project this event COMPLETES releases its effects into this event, before
     // anything at all is applied. See releaseProjectCompletionEffects for why it
     // cannot be done further down where the project ops themselves are applied:
@@ -6119,6 +6147,11 @@ export const applyEventImpactsToWorld = ({
       ));
     }
 
+    const territoryTransfers = [...event.impacts.regionTransfers, ...released.regionTransfers];
+    const previousTerritorialOwners = territoryTransfers.map(({ regionId }) => [
+      nextWorld.regionOwnershipOverrides?.[regionId] || "",
+      nextWorld.regionSovereigntyOverrides?.[regionId] || "",
+    ]);
     const renamedHere = applyPolityAndTerritoryImpacts({
       colors: nextColors,
       eventDate: event.date,
@@ -6126,9 +6159,26 @@ export const applyEventImpactsToWorld = ({
       polityChanges,
       regionClaims: [...event.impacts.regionClaims, ...released.regionClaims],
       regionControlOps: event.impacts.regionControlOps,
-      regionTransfers: [...event.impacts.regionTransfers, ...released.regionTransfers],
+      regionTransfers: territoryTransfers,
       resolveOwner,
       world: nextWorld,
+    });
+    // Legal title changes can invalidate the component geography baseline.
+    // Until a new reassessment supplies the actual map-backed ledger, stop
+    // using the old owners' economic totals as if the land had never moved.
+    territoryTransfers.forEach((transfer, index) => {
+      const regionId = transfer.regionId;
+      if (previousTerritorialOwners[index][0] === (nextWorld.regionOwnershipOverrides?.[regionId] || "")
+        && previousTerritorialOwners[index][1] === (nextWorld.regionSovereigntyOverrides?.[regionId] || "")) return;
+      for (const owner of [transfer.fromCode, transfer.toCode]) {
+        const code = resolveOwner(owner) || owner;
+        const sheet = nextWorld.countryStats?.[code];
+        if (!sheet) continue;
+        nextWorld.countryStats[code] = {
+          ...sheet,
+          continuity: { ...(sheet.continuity || {}), progressionBlocked: true },
+        };
+      }
     });
     if (renamedHere.length) {
       renamedPolities.push(...renamedHere);
@@ -6316,6 +6366,10 @@ export const applyEventImpactsToWorld = ({
       );
     }
   }
+
+  // The days after the last event also belong to the interval. Settlement
+  // stays in the same accepted World transaction as history and power tiers.
+  progressTo(statsEnd);
 
   return {
     colors: nextColors,

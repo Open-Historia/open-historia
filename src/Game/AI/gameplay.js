@@ -149,6 +149,7 @@ import {
 import { validateGameMasterRequestedPuppetCompleteness } from "./gameMasterRequestCompleteness.js";
 import { GAME_MASTER_MODES, GM_AUTO_MODE, validateGameMasterModeSelection } from "./gameMasterAutoMode.js";
 import { STATS_DEMOGRAPHIC_TAGS, STATS_ECONOMIC_TAGS, eventConcernsTarget, eventHasAnyTag } from "./statsEventEvidence.js";
+import { mayReuseCountryStatsAssessment } from "./statsRefreshEligibility.js";
 import { eventPartyNames } from "./eventParties.js";
 import { GAME_MASTER_EDIT_TOOL, applyGameMasterPreviewEdits, validateGameMasterEditResponse } from "./gameMasterPreviewEdit.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
@@ -3836,6 +3837,7 @@ ${buildStatsComponentSplitContract(variables?.statsComponentSplitBuckets)}- Do n
 - gdpPerCapita inside each macro bucket is NOMINAL output per person expressed in constant 2026-USD accounting terms so components and eras can be aggregated. It is NOT PPP/international-dollar purchasing power and does NOT import 2026 technology, institutions, productivity, or living standards.
 - population totals and GDP aggregates are DERIVED by native JavaScript after regional expansion.
 - economy.gdpGrowth, inflation, unemployment, publicDebt and budgetBalance are percentages expressed as plain numbers; budgetBalance is negative for deficit and positive for surplus.
+- population.annualGrowthRate is OPTIONAL: an evidence-backed annual net population change estimate (%), including migration, independent of GDP growth. Supply it only where scenario/historical/campaign evidence supports it; otherwise omit it. The native calendar only advances population automatically when this rate is known.
 - economy.currency is the polity's actual current domestic currency/medium, even though GDP accounting uses 2026-USD-equivalent values.
 - GDP breakdown must sum to exactly 100.
 - Never invent a war, reform, boom, depression, trade bloc, annexation, reconstruction program, tax change, loan, or fiscal shock absent from supplied campaign evidence.
@@ -9178,7 +9180,14 @@ const applySimulationResult = async ({
     // have got rather than teleporting it. An over-long move becomes a partial
     // advance plus a standing order the engine keeps working on later turns.
     //
-    motion: { originDate: baseGame.gameDate, round: nextGame.round, tick: 0 },
+    motion: {
+      originDate: baseGame.gameDate,
+      round: nextGame.round,
+      tick: 0,
+      // Only accepted time-advancing turns run the native national clock.
+      // GM, previews, board carriers and same-day interactions do not.
+      ...(["jump", "auto"].includes(result.mode) ? { statsToDate: nextGame.gameDate } : {}),
+    },
     world: {
       ...baseWorld,
       // The battlefields as the front engine left them. Written before the
@@ -14282,9 +14291,9 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       }
     : rawEconomicEvidence;
 
+  // Fingerprint evidence, not the calendar: a date/round change by itself
+  // never calls AI again now that the native economic clock owns progression.
   const stateFingerprint = `stats-${stableStatsHash(JSON.stringify({
-    date: currentDate,
-    round: currentRound,
     territory: territorialFingerprint,
     economicEvents: rawEconomicEvidence.relevantIds,
   }))}`;
@@ -14350,13 +14359,16 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
   // where a new border fingerprint could be stamped onto stale pre-annexation totals.
   // An explicit manual hard audit (Stats ↻ > Rebuild baseline) is the deliberate escape hatch:
   // it bypasses this zero-call guard so a suspect baseline can be rebuilt from live canon.
-  if (
-    !rebuildNumericBaseline &&
-    previousComplete &&
-    territorialCoverageMatches &&
-    previousStateFingerprint === stateFingerprint &&
-    economicEvidence.unaccountedCount === 0
-  ) {
+  if (mayReuseCountryStatsAssessment({
+    forceReassess,
+    rebuildNumericBaseline,
+    previousComplete,
+    territorialCoverageMatches,
+    previousStateFingerprint,
+    previousTerritorialFingerprint,
+    territorialFingerprint,
+    unaccountedEconomicEvents: economicEvidence.unaccountedCount,
+  })) {
     console.info(`[stats 7A.2] same-state refresh for ${statCode}; canonical baseline reused with zero AI calls.`);
     return previous;
   }

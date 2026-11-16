@@ -3441,6 +3441,10 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
       properties: {
         assessedDate: nonEmptyTextSchema("Simulation date of the last full country-stat reassessment."),
         assessedRound: { type: "integer", minimum: 0 },
+        lastProgressedDate: nonEmptyTextSchema("Native date through which interim GDP/demographic progression was settled. Runtime validates chronology; AI must not author this."),
+        populationRemainder: { type: "number", minimum: -0.5, maximum: 0.5, description: "Native fractional population carry from prior settled time intervals." },
+        gdpRemainder: { type: "number", minimum: -1000000000, maximum: 1000000000, description: "Native fractional/territorial productivity rounding carry from prior settled intervals." },
+        progressionBlocked: { type: "boolean", description: "Native hold after a legal territory change until a map-backed reassessment restores consistent geographical components." },
         stateFingerprint: nonEmptyTextSchema("Native fingerprint of the assessed simulation/economic state."),
         territorialFingerprint: nonEmptyTextSchema("Native fingerprint of the assessed legal territorial basis."),
         populationCalibrationVersion: {
@@ -3503,6 +3507,10 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
         total: { type: "integer", minimum: 0 },
         coreIntegrated: { type: "integer", minimum: 0 },
         otherTerritories: { type: "integer", minimum: 0 },
+        annualGrowthRate: statNumberSchema(
+          "Optional estimated annual total population change in percent, including net migration. Supply only when supported by scenario or historical evidence; omit rather than invent an era-independent demographic trend.",
+          { minimum: -20, maximum: 20 },
+        ),
       },
       additionalProperties: false,
     },

@@ -2316,15 +2316,17 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
     const hasOtherTerritories = Number.isFinite(otherPopulation) && otherPopulation > 0;
     const wholePerCapita = Number(sheet?.economy?.gdpPerCapita);
     const corePerCapita = Number(sheet?.economy?.coreGdpPerCapita);
-    const displayedPerCapita = hasOtherTerritories && Number.isFinite(corePerCapita)
-        ? corePerCapita
-        : wholePerCapita;
+    // The headline GDP is whole-polity, so its per-capita headline must have
+    // the SAME denominator. Core productivity remains visible as secondary data.
+    const displayedPerCapita = Number.isFinite(wholePerCapita)
+        ? wholePerCapita
+        : corePerCapita;
     const populationScope = hasOtherTerritories
         ? `Core/integrated ${formatPopulation(corePopulation)} · Other territories ${formatPopulation(otherPopulation)}`
         : "";
-    const capitaScope = hasOtherTerritories
-        ? `Core/integrated · Whole polity ${formatDollarPerCapita(wholePerCapita)}`
-        : "Whole polity";
+    const capitaScope = hasOtherTerritories && Number.isFinite(corePerCapita)
+        ? `Whole polity · Core/integrated ${formatDollarPerCapita(corePerCapita)}`
+        : Number.isFinite(wholePerCapita) ? "Whole polity" : "Core/integrated";
 
     return (
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
@@ -2406,6 +2408,20 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 >↻</button>
             )}
             </div>
+
+            {statsView === "economy" && sheet && (
+                <div style={{ color: "rgba(255,255,255,0.54)", fontSize: "0.66rem", lineHeight: 1.55, marginTop: "0.4rem" }}>
+                    {sheet?.continuity?.progressionBlocked
+                        ? "Territory changed: refresh this country's Stats to update its geographic baseline before automatic progression resumes."
+                        : "GDP advances automatically when a valid annual growth rate exists. Population advances only with an explicitly recorded demographic trend."}
+                    {sheet?.continuity?.assessedDate && (
+                        <span> Last assessed: {sheet.continuity.assessedDate}.</span>
+                    )}
+                    {sheet?.continuity?.lastProgressedDate && (
+                        <span> Progressed through: {sheet.continuity.lastProgressedDate}.</span>
+                    )}
+                </div>
+            )}
 
             {/* The hard audit used to be Shift+click on ↻: out of reach on a
                 touch screen, and nothing said what either refresh costs. */}

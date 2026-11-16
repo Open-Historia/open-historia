@@ -316,6 +316,16 @@ test("the canonical stat mutation boundary preserves an explicit empty non-terri
   assert.equal(persisted.statsSchemaVersion, 1);
   assert.equal(isCompleteCountryStatSheet(persisted), true);
   assert.deepEqual(validateGameplayPayload("countryStatSheet", persisted), { valid: true, error: "" });
+  const settled = { ...persisted, continuity: {
+    ...persisted.continuity,
+    lastProgressedDate: "2026-09-14", populationRemainder: 0.25,
+    gdpRemainder: 40, progressionBlocked: false,
+  } };
+  assert.deepEqual(validateGameplayPayload("countryStatSheet", settled), { valid: true, error: "" },
+    "native progression receipts are part of the strict country-stat schema");
+  const invalidRemainder = { ...settled, continuity: { ...settled.continuity, populationRemainder: 2 } };
+  assert.match(validateGameplayPayload("countryStatSheet", invalidRemainder).error, /populationRemainder/,
+    "the strict schema still rejects impossible native fractional carry");
 
   // An ordinary mapped actor with an explicit empty replacement ledger must stay
   // explicit too, so canonical validation can reject it instead of hiding the bug
