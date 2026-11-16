@@ -2409,20 +2409,6 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             )}
             </div>
 
-            {statsView === "economy" && sheet && (
-                <div style={{ color: "rgba(255,255,255,0.54)", fontSize: "0.66rem", lineHeight: 1.55, marginTop: "0.4rem" }}>
-                    {sheet?.continuity?.progressionBlocked
-                        ? "Territory changed: refresh this country's Stats to update its geographic baseline before automatic progression resumes."
-                        : "GDP advances automatically when a valid annual growth rate exists. Population advances only with an explicitly recorded demographic trend."}
-                    {sheet?.continuity?.assessedDate && (
-                        <span> Last assessed: {sheet.continuity.assessedDate}.</span>
-                    )}
-                    {sheet?.continuity?.lastProgressedDate && (
-                        <span> Progressed through: {sheet.continuity.lastProgressedDate}.</span>
-                    )}
-                </div>
-            )}
-
             {/* The hard audit used to be Shift+click on ↻: out of reach on a
                 touch screen, and nothing said what either refresh costs. */}
             {refreshMenuStep && (
@@ -2509,6 +2495,23 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             </div>
 
             <div className="oh-country-content" data-view={statsView}>
+            {/* Only a real Statistics hold needs a visible notice. Routine
+                progression dates and mechanics do not belong between the
+                country identity and its navigation tabs. */}
+            {statsView === "economy" && sheet?.continuity?.progressionBlocked && (
+                <div role="status" style={{
+                    borderLeft: "3px solid #f59e0b",
+                    background: "var(--oh-ui-overlay-card, rgba(245,158,11,0.08))",
+                    borderRadius: "6px",
+                    color: "var(--oh-ui-text, rgba(255,255,255,0.82))",
+                    fontSize: "0.73rem",
+                    lineHeight: 1.45,
+                    marginTop: "0.8rem",
+                    padding: "0.6rem 0.8rem",
+                }}>
+                    Territory changed: refresh this country's Stats to update its geographic baseline before automatic progression resumes.
+                </div>
+            )}
             {statsView === "politics" && (
                 <PoliticalOverview
                     profile={publicPoliticalProfile}
