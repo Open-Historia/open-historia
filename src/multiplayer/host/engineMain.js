@@ -30,7 +30,7 @@ import { setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { discardHeldTurns, endSimulation, enterSimulation } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
-import { hasCountryStatSheet, readCountryForPlayer, runChatActionBatch, simulateTimelineJump, takeCountryStatSheet, warRoomChart } from "../../Game/AI/gameplay.js";
+import { declineInteractiveOffer, hasCountryStatSheet, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, warRoomChart } from "../../Game/AI/gameplay.js";
 import { lendBoards, returnBoards } from "./seatBoards.js";
 import { createLoopbackEngineSide } from "../transport/loopback.js";
 import { createHostSession } from "../session/host.js";
@@ -309,6 +309,13 @@ const boot = async () => {
     // their own (host/foundings.js).
     let host = clean(docs.game?.country);
     if (!host) throw new Error("Open a game with a country before sharing it.");
+    // A shared game plays no interactive scene (the owner, 2026-11-15: left out
+    // of shared games until designed for several players). One the host left in
+    // progress would stop every round ("An interactive event is in
+    // progress"), and nobody's screen could end it: it is set aside, ending with
+    // nothing written, and an offer still waiting is let pass.
+    if (docs.world?.activeInteractive) await setAsideActiveInteractive();
+    if (docs.world?.interactiveOffer) await declineInteractiveOffer();
     // The game and its scenario, as the library knows them: a player must open
     // the same scenario to see the same map.
     const library = getLibraryState();

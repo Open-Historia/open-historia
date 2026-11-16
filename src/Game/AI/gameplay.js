@@ -9932,9 +9932,13 @@ const applySimulationResult = async ({
   // Now and then a time skip offers one of its events to be played out as an
   // interactive event (runtime/interactiveOffer.js). Chosen here, where the
   // turn's events are final, and at no cost: no request is made until the player
-  // takes it up. Every skip replaces the last skip's offer, taken up or not.
+  // takes it up. Every skip replaces the last skip's offer, taken up or not. A
+  // shared game's round offers none: a scene is one player's, and scenes are
+  // left out of shared games until they are designed for several (the owner,
+  // 2026-11-15). The offer went to the host's screen, about any player's
+  // country, and neither of its buttons could do anything there.
   if (result.mode === "jump" || result.mode === "auto") {
-    const offer = chooseInteractiveOffer({
+    const offer = hostingSharedGame() ? null : chooseInteractiveOffer({
       events: freshEvents,
       round: nextGame.round,
       lastOfferRound: baseWorld?.lastInteractiveOfferRound,
