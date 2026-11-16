@@ -1118,6 +1118,46 @@ test("a vote is called with its line, in a thread the line opens too, and each p
   assert.match(s.ack(s.guest, id(8)).error, /conversation of several countries/);
 });
 
+test("an order keeps the id its screen gave it: queued once, never another's, given other words or withdrawn by its owner", async () => {
+  // It went as its words alone and the host gave it an id of its own: an AI suggestion's card never said it was queued
+  // (a second press queued it again), and an advisor's proposal could not be approved at all.
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const queued = () => s.store.docs.actions.filter((action) => action.id === "suggestion-7");
+  await s.request(s.guest, { t: "order", id: id(2), text: "Call up the reserves.", ref: "suggestion-7", title: "Mobilise", source: "suggested" });
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  assert.deepEqual(queued().map((action) => [action.ownerCode, action.title, action.text, action.source, action.status]), [[RUSSIA, "Mobilise", "Call up the reserves.", "suggested", "planned"]]);
+  // Asked again (a lost answer, a second press): one order.
+  await s.request(s.guest, { t: "order", id: id(3), text: "Call up the reserves.", ref: "suggestion-7" });
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  assert.equal(queued().length, 1);
+  await s.request(s.guest, { t: "order", id: id(4), text: "Something else.", ref: "suggestion-7" });
+  assert.match(s.ack(s.guest, id(4)).error, /other words/);
+  await s.request(s.hostPlayer, { t: "order", id: id(5), text: "Call up the reserves.", ref: "suggestion-7" });
+  assert.match(s.ack(s.hostPlayer, id(5)).error, /someone else's/);
+  // An order that opens a conversation keeps whom it invites and its opening line.
+  await s.request(s.guest, { t: "order", id: id(6), text: "Open talks.", ref: "s-8", kind: "chat", invitees: [ESTONIA], chatStarter: "Shall we talk?" });
+  const talks = s.store.docs.actions.find((action) => action.id === "s-8");
+  assert.deepEqual([talks.kind, talks.invitees, talks.chatStarter], ["chat", [ESTONIA], "Shall we talk?"]);
+  await s.request(s.guest, { t: "order", id: id(7), text: "Open talks.", kind: "chat", invitees: ["Atlantis"] });
+  assert.match(s.ack(s.guest, id(7)).error, /Unknown country/);
+  // Given other words by its owner alone; the rest of it stays.
+  await s.request(s.hostPlayer, { t: "reword", id: id(8), order: "suggestion-7", title: "Mine now" });
+  assert.match(s.ack(s.hostPlayer, id(8)).error, /not one of your queued orders/);
+  await s.request(s.guest, { t: "reword", id: id(9), order: "suggestion-7", title: "Mobilise at once" });
+  assert.equal(s.ack(s.guest, id(9)).ok, true);
+  assert.deepEqual(queued().map((action) => [action.title, action.text, action.source]), [["Mobilise at once", "Call up the reserves.", "suggested"]]);
+  await s.request(s.guest, { t: "unorder", id: id(10), order: "suggestion-7" });
+  assert.equal(s.ack(s.guest, id(10)).ok, true);
+  assert.equal(queued().length, 0);
+  // An order the screen named no id for is given one, as before.
+  await s.request(s.guest, { t: "order", id: id(11), text: "Hold the line." });
+  assert.ok(s.store.docs.actions.find((action) => action.text === "Hold the line.").id.startsWith("order-"));
+});
+
 test("a conversation is renamed, given countries and closed for everyone in it, by someone in it", async () => {
   // "All shared" (the owner, 2026-11-16): on the asker's screen alone these were dropped, the thread came back, the
   // name reverted, and an added country never heard a word.

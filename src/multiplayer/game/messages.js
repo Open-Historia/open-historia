@@ -18,7 +18,7 @@
 import { HEX_ID, NAME, bool, int, json, list, literal, num, obj, str } from "../protocol/validate.js";
 import { SETTINGS_SCHEMA } from "../host/settings.js";
 import { POLL_CHOICES_MAX, POLL_CHOICE_MAX_CHARS, SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
-import { SAY_FROM_DRAFT_MAX } from "../client/sharedThreads.js";
+import { SAY_FROM_DRAFT_MAX, SAY_RECIPIENTS_MAX } from "../client/sharedThreads.js";
 import { TREATY_TERMS_MAX, TREATY_TITLE_MAX, TREATY_TYPES } from "../../runtime/treatyOffers.js";
 import { PLAYER_GOAL_MAX_CHARS } from "../../runtime/playerGoal.js";
 import { POLL_LABEL_MAX_CHARS, POLL_OPTION_LIMIT, POLL_QUESTION_MAX_CHARS } from "../../runtime/chatThreads.js";
@@ -106,6 +106,10 @@ export const INSTITUTION_CALLS = Object.freeze(["lifecycle", "governance", "prop
 
 // Orders are free text in single player; in a shared game one is held to this.
 export const ORDER_MAX_CHARS = 1500;
+// An order's id and title (runtime/gameState.js normalizeActionEntry; an
+// advisor's proposal names ids and titles up to these, advisorActionReview.js).
+export const ORDER_ID_MAX = 150;
+export const ORDER_TITLE_MAX = 240;
 export const SAY_MAX_CHARS = 2000;
 // A country's name, as long as the game lets one be: the AI founds countries
 // like "Provisional Government of the Northern Territories", and one name over
@@ -122,8 +126,23 @@ export const PLAYER_REQUESTS = Object.freeze({
   ready: obj({ t: literal("ready"), id: REQUEST_ID, value: bool() }),
   revealed: obj({ t: literal("revealed"), id: REQUEST_ID, round: int(0, 1_000_000) }),
   // The player's government.
-  order: obj({ t: literal("order"), id: REQUEST_ID, text: str(ORDER_MAX_CHARS, { min: 1 }) }),
-  unorder: obj({ t: literal("unorder"), id: REQUEST_ID, order: str(120, { min: 1 }) }),
+  // An order keeps what the screen queued: its own id (`ref`, an AI
+  // suggestion's or an advisor's proposal's), so that screen finds it again and
+  // the same order sent twice is queued once; its title and where it came from;
+  // and a conversation it opens (`kind` "chat": who it invites, its opening line).
+  order: obj({
+    t: literal("order"), id: REQUEST_ID, text: str(ORDER_MAX_CHARS, { min: 1 }),
+    ref: str(ORDER_ID_MAX, { min: 1 }),
+    title: str(ORDER_TITLE_MAX),
+    source: str(16, { enum: ["manual", "suggested", "advisor"] }),
+    kind: str(8, { enum: ["action", "chat"] }),
+    invitees: list(COUNTRY, SAY_RECIPIENTS_MAX),
+    chatStarter: str(ORDER_MAX_CHARS),
+  }, ["ref", "title", "source", "kind", "invitees", "chatStarter"]),
+  unorder: obj({ t: literal("unorder"), id: REQUEST_ID, order: str(ORDER_ID_MAX, { min: 1 }) }),
+  // A queued order of one's own, given other words (an advisor's proposal to
+  // change it, approved by the player).
+  reword: obj({ t: literal("reword"), id: REQUEST_ID, order: str(ORDER_ID_MAX, { min: 1 }), title: str(ORDER_TITLE_MAX), text: str(ORDER_MAX_CHARS) }, ["title", "text"]),
   goal: obj({ t: literal("goal"), id: REQUEST_ID, text: str(600) }),
   // A post on Rostra, the social network (runtime/socialFeed.js), as the leader
   // of the seat's own country, never one the message names; `quote` the id of
@@ -248,7 +267,7 @@ export const PLAYER_REQUESTS = Object.freeze({
   }, ["title", "members"]),
   say: obj({
     t: literal("say"), id: REQUEST_ID, thread: str(120, { nullable: true }),
-    to: list(COUNTRY, 8), text: str(SAY_MAX_CHARS, { min: 1 }),
+    to: list(COUNTRY, SAY_RECIPIENTS_MAX), text: str(SAY_MAX_CHARS, { min: 1 }),
     fromDraft: str(SAY_FROM_DRAFT_MAX),
     // A demand the line carries, in the one-on-one thread between a player
     // and their own Overlord or Puppet (runtime/demandCheck.js): "make" one

@@ -22,6 +22,7 @@ import { useTurnRunning } from "./useTurnRunning.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { orderRequestFor } from "../../multiplayer/client/sharedOrders.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
@@ -958,11 +959,13 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             // In a shared game an order is the host's to queue; its answer comes
             // back in the next view.
             if (inSharedGame()) {
-                const answer = await requestFromHost("order", { text: nextAction.text || trimmed });
+                const answer = await requestFromHost("order", orderRequestFor(nextAction, trimmed));
+                // Refused: the order stays in the box, and the host's reason is said.
                 if (!answer.ok) {
-                    console.warn("[actions] the host refused the order:", answer.error);
+                    setSaveError(answer.error || ORDER_NOT_SAVED);
                     return;
                 }
+                setSaveError("");
                 logDebugEvent("action", `Order sent to the host: ${nextAction.title || nextAction.text || "(untitled)"}`);
                 setInputValue("");
                 return;
@@ -1025,7 +1028,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     const handleDelete = async (index) => {
         const removed = actions[index];
         if (inSharedGame()) {
-            await requestFromHost("unorder", { order: String(removed?.id || "") });
+            const answer = await requestFromHost("unorder", { order: String(removed?.id || "") });
+            setSaveError(answer.ok ? "" : answer.error || ORDER_NOT_REMOVED);
             return;
         }
         if (movesUnit(removed) && isSimulationBusy()) return;
@@ -1058,7 +1062,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         }
 
         if (inSharedGame()) {
-            const answer = await requestFromHost("order", { text: queuedAction.text || queuedAction.title });
+            // By the card's own id, so the card says it is queued and a second
+            // press queues nothing more.
+            const answer = await requestFromHost("order", orderRequestFor(queuedAction));
+            setSaveError(answer.ok ? "" : answer.error || ORDER_NOT_SAVED);
             if (!answer.ok) return;
         } else if (!(await persistActions([...actions, queuedAction]))) {
             // Not saved: the card stays unqueued, so it can be tried again.

@@ -28,7 +28,7 @@ import { seatFoundings, seatSuccessions, withSeatMoved } from "./foundings.js";
 import { sessionRecordOf } from "./sessionRecord.js";
 import { REPLY_MODES, roundSettingsOf } from "./settings.js";
 import { projectForViewer } from "./projection.js";
-import { COUNTRY_MAX_CHARS, HOST_MESSAGES, ORDER_MAX_CHARS, THREAD_MEMBERS_MAX, THREAD_TITLE_MAX, VIEW_KEYS } from "../game/messages.js";
+import { COUNTRY_MAX_CHARS, HOST_MESSAGES, ORDER_MAX_CHARS, ORDER_TITLE_MAX, THREAD_MEMBERS_MAX, THREAD_TITLE_MAX, VIEW_KEYS } from "../game/messages.js";
 import { createPlayerPollEvent, eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
 import { openDemandOf, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
 import { livePuppetsFor } from "../../runtime/puppets.js";
@@ -719,31 +719,69 @@ export const createGameHost = ({
       round.revealedBy(seat.country, message.round);
       return "";
     },
-    order: async (connection, { text }, seat) => {
+    order: async (connection, { text, ref, title, source, kind, invitees, chatStarter }, seat) => {
       if (!started()) return "Orders are taken while a round is being planned.";
       const body = clean(text).slice(0, ORDER_MAX_CHARS);
       if (!body) return "An order needs words.";
+      const chat = kind === "chat";
+      const invited = chat ? list(invitees).map(clean).filter(Boolean) : [];
+      if (invited.some((country) => same(country, seat.country))) return "A government does not write to itself.";
+      if (invited.some((country) => !countriesNow.some((known) => same(known, country)))) return "Unknown country.";
+      const id = clean(ref);
       let refusal = "";
       await store.updateActions((actions) => {
-        const mine = list(actions).filter((action) => same(action?.ownerCode, seat.country) && clean(action?.status || "planned") === "planned");
+        const all = list(actions);
+        // An order the screen named is queued once, however often it is sent
+        // (a lost answer, a second press), and is never another's.
+        const held = id ? all.find((action) => clean(action?.id) === id) : null;
+        if (held) {
+          if (!same(held.ownerCode, seat.country)) refusal = "That order is someone else's.";
+          else if (clean(held.status || "planned") !== "planned") refusal = "That order was carried out already.";
+          else if (clean(held.text) !== body) refusal = "That order is queued already, in other words.";
+          return null;
+        }
+        const mine = all.filter((action) => same(action?.ownerCode, seat.country) && clean(action?.status || "planned") === "planned");
         if (mine.length >= MAX_ORDERS_PER_ROUND) {
           refusal = `At most ${MAX_ORDERS_PER_ROUND} orders a round.`;
           return null;
         }
-        return [...list(actions), {
-          id: mintId("order", now),
-          kind: "action",
-          source: "manual",
+        const named = clean(title).slice(0, ORDER_TITLE_MAX);
+        return [...all, {
+          id: id || mintId("order", now),
+          kind: chat ? "chat" : "action",
+          source: clean(source) || "manual",
           status: "planned",
-          title: body.length > 64 ? `${body.slice(0, 61)}...` : body,
+          title: named || (body.length > 64 ? `${body.slice(0, 61)}...` : body),
           text: body,
           rawInput: body,
+          ...(chat ? { invitees: invited, chatStarter: clean(chatStarter).slice(0, ORDER_MAX_CHARS) } : {}),
           ownerCode: seat.country,
           createdAt: new Date(now()).toISOString(),
         }];
       });
       round.touch(seat.country);
       return refusal;
+    },
+    // A queued order of the seat's own, given other words; nothing else of it
+    // changes (advisorBlocks.js planAdvisorActionEdits, as single player edits it).
+    reword: async (connection, { order, title, text }, seat) => {
+      if (!started()) return "Orders are changed while a round is being planned.";
+      const named = clean(title).slice(0, ORDER_TITLE_MAX);
+      const body = clean(text).slice(0, ORDER_MAX_CHARS);
+      if (!named && !body) return "An order needs words.";
+      let found = false;
+      await store.updateActions((actions) => {
+        const all = list(actions);
+        const index = all.findIndex((action) =>
+          clean(action?.id) === clean(order) && same(action?.ownerCode, seat.country) && clean(action?.status || "planned") === "planned");
+        if (index < 0) return null;
+        found = true;
+        const next = [...all];
+        next[index] = { ...all[index], ...(named ? { title: named } : {}), ...(body ? { text: body } : {}) };
+        return next;
+      });
+      round.touch(seat.country);
+      return found ? "" : "That is not one of your queued orders.";
     },
     unorder: async (connection, { order }, seat) => {
       if (!started()) return "Orders can be withdrawn while a round is being planned.";

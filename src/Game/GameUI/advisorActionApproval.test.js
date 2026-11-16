@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { approveAdvisorAction } from "./advisorActionApproval.js";
+import { approveAdvisorAction, cancelApprovedAdvisorAction, hostRequestForProposal } from "./advisorActionApproval.js";
+import { PLAYER_REQUESTS } from "../../multiplayer/game/messages.js";
+import { validate } from "../../multiplayer/protocol/validate.js";
 import { actionProposalsFromReply } from "./advisorActionReview.js";
 import { CHIEF_ADVISOR_THREAD, ADVISOR_RECIPIENT_TYPES } from "../../runtime/advisorThreads.js";
 
@@ -94,11 +96,71 @@ test("retry after queue succeeded but receipt failed uses stable ID, no duplicat
   assert.equal(ctx.advisor[1].actionReceipts[proposal.id].status, "queued");
 });
 
-test("a shared host request without a stable ID fails closed before any writes", async () => {
+// In a shared game the queue is the host's. Proceed was refused there ("needs host-backed proposal IDs"): the order
+// request carried words only, so a lost answer asked again could queue it twice. It is asked by the proposal's own id.
+const sharedHost = ({ loseFirstAnswer = false } = {}) => {
+  let queue = [];
+  let lose = loseFirstAnswer;
+  const asked = [];
+  return {
+    asked,
+    get queue() { return queue; },
+    api: {
+      sharedGame: true,
+      readActions: async () => queue,
+      requestFromHost: async (kind, fields) => {
+        asked.push([kind, fields]);
+        assert.equal(validate(PLAYER_REQUESTS[kind], { t: kind, id: "0123456789abcdef", ...fields }).ok, true, "a request the host takes");
+        if (kind === "order" && !queue.some((order) => order.id === fields.ref)) {
+          queue = [...queue, { id: fields.ref, title: fields.title, text: fields.text, kind: fields.kind, source: fields.source, status: "planned" }];
+        }
+        if (kind === "unorder") queue = queue.filter((order) => order.id !== fields.order);
+        if (lose) {
+          lose = false;
+          return { ok: false, error: "The host did not answer in time." };
+        }
+        return { ok: true };
+      },
+    },
+  };
+};
+
+test("in a shared game Proceed asks the host by the proposal's own id, and a lost answer asked again is one order", async () => {
   const ctx = setup();
-  await assert.rejects(approveAdvisorAction({ ...ctx.api, sharedGame: true }), /host-backed proposal IDs/);
-  assert.equal(ctx.actionWrites, 0);
-  assert.equal(ctx.receiptWrites, 0);
+  const host = sharedHost({ loseFirstAnswer: true });
+  await assert.rejects(approveAdvisorAction({ ...ctx.api, ...host.api }), /did not answer in time/);
+  assert.equal(ctx.receiptWrites, 0, "no receipt for an answer never had");
+  // The host queued it all the same; asked again, the player's view already holds it, and nothing is asked twice.
+  const accepted = await approveAdvisorAction({ ...ctx.api, ...host.api });
+  assert.equal(accepted.status, "queued");
+  assert.equal(accepted.actionId, proposal.actionId);
+  assert.deepEqual(host.asked, [["order", { text: proposal.text, title: proposal.title, ref: proposal.actionId, source: "advisor", kind: "action" }]]);
+  assert.equal(host.queue.length, 1);
+  assert.equal(ctx.actionWrites, 0, "the page writes no queue of its own");
+  assert.equal(ctx.advisor[1].actionReceipts[proposal.id].status, "queued", "the receipt is the device's own advisor's");
+});
+
+test("in a shared game Cancel withdraws the order by its id, and a page with no way to the host writes nothing", async () => {
+  const ctx = setup();
+  const host = sharedHost();
+  await approveAdvisorAction({ ...ctx.api, ...host.api });
+  const cancelled = await cancelApprovedAdvisorAction({ ...ctx.api, ...host.api });
+  assert.equal(cancelled.status, "cancelled");
+  assert.deepEqual(host.asked.at(-1), ["unorder", { order: proposal.actionId }]);
+  assert.deepEqual(host.queue, []);
+  const lost = setup();
+  await assert.rejects(approveAdvisorAction({ ...lost.api, sharedGame: true }), /shared game's queue could not be reached/);
+  assert.equal(lost.actionWrites, 0);
+  assert.equal(lost.receiptWrites, 0);
+});
+
+test("an advisor's change or withdrawal of a queued order is asked of the host as one", () => {
+  const [edit, remove] = actionProposalsFromReply([{ id: "order-x", title: "Hold Riga" }, { id: "order-y", remove: true }], messageId).proposals;
+  assert.deepEqual(hostRequestForProposal(edit), ["reword", { order: "order-x", title: "Hold Riga" }]);
+  assert.deepEqual(hostRequestForProposal(remove), ["unorder", { order: "order-y" }]);
+  for (const [kind, fields] of [hostRequestForProposal(edit), hostRequestForProposal(remove)]) {
+    assert.equal(validate(PLAYER_REQUESTS[kind], { t: kind, id: "0123456789abcdef", ...fields }).ok, true);
+  }
 });
 
 test("a valid reviewed Action after a rejected model entry retains its source position", async () => {

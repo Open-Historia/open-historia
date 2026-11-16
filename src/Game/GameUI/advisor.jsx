@@ -12,7 +12,7 @@ import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from ".
 import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
 import { uiString } from "../../runtime/translator.js";
-import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, mutateWorldState, normalizeActionEntry, readAdvisorMessages, viewAsSeen } from "../../runtime/gameState.js";
+import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, mutateWorldState, normalizeActionEntry, readActionsState, readAdvisorMessages, viewAsSeen } from "../../runtime/gameState.js";
 import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorGroupForReply, advisorGroups, advisorMessagesFor, advisorOfficeStatus, advisorRecipientType, archiveAdvisorContact, archiveAdvisorGroup, createAdvisorGroup, reviseAdvisorGroup, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, reorderAdvisorContact, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile, withSavedActionReceipts } from "../../runtime/advisorThreads.js";
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
@@ -45,7 +45,7 @@ import { commitInstitutionLifecycleCommand } from "../../runtime/institutionLife
 import { getLibraryState } from "../../runtime/library.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
 import { TURN_RUNNING_NOTE, assertNoTurnRunning, isSimulationBusy } from "../AI/simulationStatus.js";
-import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
 Chart.register(...registerables);
 
@@ -1880,6 +1880,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 threadId, messageId, proposalId,
                 readAdvisorMessages, mutateActionsState, mutateAdvisorState,
                 sharedGame: inSharedGame(),
+                readActions: () => readActionsState({ force: true }),
+                requestFromHost,
                 assertReady: assertNoTurnRunning,
             });
             if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
@@ -1922,6 +1924,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 normalizeAction: normalizeActionEntry,
                 repeatOf: (queue, title) => repeatedOrder(queue, title, { round: Number(round) || 0 }),
                 sharedGame: inSharedGame(),
+                readActions: () => readActionsState({ force: true }),
+                requestFromHost,
                 assertReady: assertNoTurnRunning,
             });
             if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
