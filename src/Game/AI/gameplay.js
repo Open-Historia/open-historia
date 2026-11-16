@@ -327,7 +327,7 @@ import {
 } from "../../runtime/projects.js";
 import { activeSpies, applySpyOps, spyServicesOf, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
 import { assertPoliticalLandscapeConsistency, describeElectionsDue, normalizePoliticalLandscape } from "../../runtime/politics.js";
-import { foldLandscapeIntoActor } from "../../runtime/politicalLandscapeFold.js";
+import { foldLandscapeIntoActor, partiesCompiled } from "../../runtime/politicalLandscapeFold.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
 import { frontOrderLinesBlock } from "./frontPrompt.js";
 import { collectionOrders, covertOperationsBlock, untracedTargets } from "./covertOperationsDirective.js";
@@ -14030,7 +14030,9 @@ export const ensureCountryAssessed = (target, options = {}) =>
 // World record (runtime/politicalLandscapeFold.js): its parties' native names, freeform ideologies and positions, roles and
 // seats, the legislature and the next election, for a record generated before the Political World kept them, or
 // one the player wants read afresh. Between readings turns move it with the Political World's own ops.
-export const assessPoliticalLandscape = async (target, { signal } = {}) => {
+// `commit`: where the reading goes instead of this game's world, ({ name, entry }) => the record as it then stands.
+// A page playing a shared game hands it to the host there (gameplayLazy.js).
+export const assessPoliticalLandscape = async (target, { signal, commit = null } = {}) => {
   const name = normalizeString(target);
   if (!name) return null;
   const campaign = activeCampaignId();
@@ -14060,6 +14062,7 @@ export const assessPoliticalLandscape = async (target, { signal } = {}) => {
   const entry = normalizePoliticalLandscape({ ...payload, asOf: variables.date || "" });
   if (!entry) throw new Error("The answer named no government and no parties.");
   assertPoliticalLandscapeConsistency(entry);
+  if (commit) return commit({ name, entry });
   // Re-read at write time, as assessIntelligenceService does: a turn may have
   // run, and the campaign in front of the player may have changed.
   await waitForSimulationIdle({ signal });
@@ -14076,10 +14079,46 @@ export const assessPoliticalLandscape = async (target, { signal } = {}) => {
   return folded;
 };
 
+// A shared game's host. Whether a polity's parties are filled in (they stand,
+// as a stat sheet does), and the reading of them a player's own device made on
+// its own AI key (settings.replies "own"), folded as the game folds its own, for
+// a polity whose parties are still not filled in. The first to come is the
+// record: { taken: false } says one was there.
+const politicalActorOf = (world, name) => {
+  const byPolity = world?.politicalActors?.byPolity ?? {};
+  const key = Object.keys(byPolity).find((entry) => entry.toLowerCase() === normalizeString(name).toLowerCase()) ?? normalizeString(name);
+  return { key, actor: byPolity[key] ?? null };
+};
+export const hasCompiledParties = async (target) => {
+  const world = normalizeWorldState(await readWorldState({ force: true }));
+  return partiesCompiled(politicalActorOf(world, target).actor);
+};
+export const takePoliticalLandscape = async ({ name: target, landscape } = {}) => {
+  const name = normalizeString(target);
+  const entry = normalizePoliticalLandscape(landscape);
+  if (!name || !entry) throw new Error("The answer named no government and no parties.");
+  assertPoliticalLandscapeConsistency(entry);
+  let taken = false;
+  await mutateWorldState((latest) => {
+    const actors = latest?.politicalActors && typeof latest.politicalActors === "object" ? latest.politicalActors : {};
+    const byPolity = actors.byPolity && typeof actors.byPolity === "object" ? actors.byPolity : {};
+    const { key, actor } = politicalActorOf(latest, name);
+    if (partiesCompiled(actor)) return null;
+    const folded = foldLandscapeIntoActor(actor, entry, { polityKey: key });
+    if (!folded) return null;
+    taken = true;
+    return { ...latest, politicalActors: { ...actors, byPolity: { ...byPolity, [key]: folded } } };
+  });
+  return { taken };
+};
+
 // How far the player's standing goal has come (runtime/playerGoal.js), read on
 // demand from the Actions panel and kept with the goal. Out of turn, like the
 // parties above: it waits for the simulation and re-reads before it writes.
-export const assessGoalProgress = async ({ signal } = {}) => {
+// `commit`: where the reading goes instead of this game's world,
+// ({ goalText, reading }) => the progress as it then stands: a page playing a
+// shared game hands it to the host, which keeps it with that player's goal.
+export const assessGoalProgress = async ({ signal, commit = null } = {}) => {
   const campaign = activeCampaignId();
   await waitForSimulationIdle({ signal });
   const bundle = await readGameStateBundle({ force: true });
@@ -14104,6 +14143,7 @@ export const assessGoalProgress = async ({ signal } = {}) => {
     ].filter(Boolean).join("\n\n"),
     variables,
   });
+  if (commit) return commit({ goalText: goal.text, reading: { ...payload, asOf: variables.date || "", round: bundle.game?.round } });
   await waitForSimulationIdle({ signal });
   throwIfAborted(signal);
   if (activeCampaignId() !== campaign) throw new Error("The campaign changed while the goal was being assessed.");

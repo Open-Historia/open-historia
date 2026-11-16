@@ -23,7 +23,7 @@ import { normalizeActions, normalizeChats, normalizeEvents, normalizeWorldState 
 import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/telemetry.js";
-import { planWorldWrite, revealedTurnOf, suggestionsOutlived } from "./seatWrites.js";
+import { planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
 import { SHARED_ROUND_LANDED, setSharedGamePeople, setSharedGameRole, setSharedRequester } from "./sharedGameBridge.js";
@@ -165,6 +165,11 @@ const asThePageSavesIt = (key, value) => {
 const ownWrite = ({ key, wanted, held }) => {
   const owner = current;
   if (!owner?.runtime) return undefined;
+  // A change no door takes is said, not passed for saved (seatWrites.js unroutedChanges).
+  const unrouted = unroutedChanges(key, held, wanted);
+  if (unrouted.length) {
+    logDebugEvent("shared game", `a change only this screen made, which the host never heard: ${key}: ${unrouted.slice(0, 8).join(", ")}`, undefined, { problem: true });
+  }
   if (key === "world") {
     const plan = planWorldWrite(held, wanted);
     if (Object.keys(plan.device).length) {

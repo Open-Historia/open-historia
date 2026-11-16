@@ -118,6 +118,7 @@ const setup = (options = {}) => {
   const replies = [];
   const sheets = [];
   const taken = [];
+  const compiled = [];
   const settings = normalizeSettings({ roundMinutes: 10, countdownSeconds: 30, leaverGraceMinutes: 1, ...options.settings }).settings;
   const host = createGameHost({
     transport: { send: (id, message) => sent.push({ id, message }) },
@@ -159,6 +160,18 @@ const setup = (options = {}) => {
     },
     ...(options.readChart ? { readChart: options.readChart } : {}),
     ...(options.readCities ? { readCities: options.readCities } : {}),
+    ...(options.setFlag ? { setFlag: options.setFlag } : {}),
+    // The game's parties reading (gameplay.js): filled in once; a device's reading taken only for a country with none.
+    compileParties: async ({ country }) => {
+      compiled.push(country);
+      store.docs.world = { ...store.docs.world, politicalActors: { byPolity: { ...store.docs.world.politicalActors?.byPolity, [country]: { parties: [{ name: "Host Party", role: "governing" }] } } } };
+    },
+    hasParties: async (country) => Boolean(store.docs.world.politicalActors?.byPolity?.[country]),
+    takeParties: async ({ country, landscape }) => {
+      if (store.docs.world.politicalActors?.byPolity?.[country]) return { taken: false };
+      store.docs.world = { ...store.docs.world, politicalActors: { byPolity: { ...store.docs.world.politicalActors?.byPolity, [country]: { parties: landscape.parties } } } };
+      return { taken: true };
+    },
     ...(options.institution ? { institution: options.institution } : {}),
     ...(options.onSeatsMoved ? { onSeatsMoved: options.onSeatsMoved } : {}),
     ...(options.countriesOf ? { countriesOf: options.countriesOf } : {}),
@@ -179,7 +192,7 @@ const setup = (options = {}) => {
   const ack = (player, id) => to(player, "ack").find((message) => message.id === id);
   // What a player's screen holds: every view it was sent, applied in order.
   const shown = (player) => Object.assign({}, ...to(player, "view").map((view) => view.docs));
-  return { clock, store, sent, resolved, replies, sheets, taken, host, hostPlayer, guest, request, to, ack, shown };
+  return { clock, store, sent, resolved, replies, sheets, taken, compiled, host, hostPlayer, guest, request, to, ack, shown };
 };
 
 const id = (n) => n.toString(16).padStart(16, "0");
@@ -974,6 +987,102 @@ test("a treaty one player puts to another is seen by those two alone until it is
   const docs = { world: { treatyOffers: [{ id: "t1", from: RUSSIA, to: LATVIA, type: "alliance", status: "open" }] }, game: { country: LATVIA }, events: [], chat: [], actions: [] };
   const seen = (viewer) => projectForViewer(docs, viewer).world.treatyOffers.map((offer) => offer.id);
   assert.deepEqual([seen(RUSSIA), seen(LATVIA), seen(ESTONIA)], [["t1"], ["t1"], []]);
+});
+
+test("a player changes their own country's flag, and the host also those of the countries the AI plays", async () => {
+  // "Own + host" (the owner, 2026-11-16): a flag changed on a page was answered "saved" and dropped.
+  const set = [];
+  const s = setup({ setFlag: async (change) => { set.push(change); } });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const image = "data:image/png;base64,iVBORw0KGgo=";
+  await s.request(s.guest, { t: "flag", id: id(2), country: RUSSIA, image });
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  // Not another's: neither the host's country nor one the AI plays, for a guest.
+  await s.request(s.guest, { t: "flag", id: id(3), country: LATVIA, image });
+  assert.match(s.ack(s.guest, id(3)).error, /your own country/);
+  await s.request(s.guest, { t: "flag", id: id(4), country: ESTONIA, image });
+  assert.match(s.ack(s.guest, id(4)).error, /your own country/);
+  // The host: its own, and a country the AI plays; never a player's.
+  await s.request(s.hostPlayer, { t: "flag", id: id(5), country: ESTONIA, image: "" });
+  assert.equal(s.ack(s.hostPlayer, id(5)).ok, true);
+  await s.request(s.hostPlayer, { t: "flag", id: id(6), country: RUSSIA, image });
+  assert.match(s.ack(s.hostPlayer, id(6)).error, /your own country/);
+  assert.deepEqual(set, [{ country: RUSSIA, image }, { country: ESTONIA, image: "" }]);
+  // Only an image, and only so big.
+  assert.equal(validate(PLAYER_REQUESTS.flag, { t: "flag", id: id(7), country: RUSSIA, image: "javascript:alert(1)" }).ok, false);
+});
+
+test("a country's parties are filled in once, by the host's AI or the asker's own, as a stat sheet is", async () => {
+  // "Like sheets" (the owner, 2026-11-16): on a page they were read on the player's key and kept nowhere.
+  const s = setup({ settings: { replies: "own" } });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "parties", id: id(2), country: ESTONIA });
+  assert.deepEqual([s.ack(s.guest, id(2)).ok, s.ack(s.guest, id(2)).result, s.compiled], [true, { answer: "own" }, []]);
+  await s.request(s.guest, { t: "ownParties", id: id(3), country: ESTONIA, landscape: { parties: [{ name: "Isamaa", role: "governing" }] } });
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  assert.equal(s.shown(s.hostPlayer).world.politicalActors.byPolity[ESTONIA].parties[0].name, "Isamaa");
+  // Filled in, they stand: asked again, nobody's AI is asked.
+  await s.request(s.guest, { t: "parties", id: id(4), country: ESTONIA });
+  assert.deepEqual([s.ack(s.guest, id(4)).result, s.compiled], [undefined, []]);
+  // With the host's AI answering, the host fills them in.
+  s.host.control.setReplies("host");
+  await s.request(s.guest, { t: "ownParties", id: id(5), country: LATVIA, landscape: { parties: [] } });
+  assert.match(s.ack(s.guest, id(5)).error, /host's AI fills in the parties/);
+  await s.request(s.guest, { t: "parties", id: id(6), country: LATVIA });
+  assert.deepEqual([s.ack(s.guest, id(6)).ok, s.compiled], [true, [LATVIA]]);
+});
+
+test("a goal's progress, read on the player's own device, is kept with that player's goal alone", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "goal", id: id(2), text: "Hold the Baltic coast" });
+  await s.request(s.guest, { t: "goalProgress", id: id(3), goal: "Hold the Baltic coast", reading: { progress: 40, summary: "Halfway there." } });
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  assert.equal(s.shown(s.guest).world.playerGoals[RUSSIA].progress.progress, 40);
+  assert.equal(s.shown(s.hostPlayer).world.playerGoals?.[RUSSIA], undefined, "nobody else sees it");
+  await s.request(s.guest, { t: "goalProgress", id: id(4), goal: "Another goal", reading: { progress: 90, summary: "" } });
+  assert.match(s.ack(s.guest, id(4)).error, /goal has changed/);
+});
+
+test("a conversation is renamed, given countries and closed for everyone in it, by someone in it", async () => {
+  // "All shared" (the owner, 2026-11-16): on the asker's screen alone these were dropped, the thread came back, the
+  // name reverted, and an added country never heard a word.
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [LATVIA], text: "Shall we talk?" });
+  const thread = s.store.docs.chat.find((chat) => chat.player === RUSSIA);
+  const held = () => s.store.docs.chat.find((chat) => chat.id === thread.id);
+  // Renamed, by someone in it: everyone in it sees the name.
+  await s.request(s.hostPlayer, { t: "thread", id: id(3), op: "rename", thread: thread.id, title: "The Baltic talks" });
+  assert.equal(s.ack(s.hostPlayer, id(3)).ok, true);
+  assert.equal(held().title, "The Baltic talks");
+  assert.equal(s.shown(s.guest).chat.find((chat) => chat.id === thread.id).title, "The Baltic talks");
+  // Given a country: it is in the thread now, for the next line to reach.
+  await s.request(s.guest, { t: "thread", id: id(4), op: "add", thread: thread.id, members: [ESTONIA] });
+  assert.equal(s.ack(s.guest, id(4)).ok, true);
+  assert.deepEqual(held().countries.map((entry) => entry.name).sort(), [ESTONIA, LATVIA].sort());
+  assert.ok(held().events.some((event) => event.kind === "member_joined" && event.member.name === ESTONIA && event.by === RUSSIA));
+  await s.request(s.guest, { t: "thread", id: id(5), op: "add", thread: thread.id, members: ["Atlantis"] });
+  assert.match(s.ack(s.guest, id(5)).error, /Unknown country/);
+  // Closed for everyone in it.
+  await s.request(s.guest, { t: "thread", id: id(7), op: "close", thread: thread.id });
+  assert.equal(s.ack(s.guest, id(7)).ok, true);
+  assert.equal(held().status, "closed");
+  assert.equal(s.shown(s.hostPlayer).chat.find((chat) => chat.id === thread.id)?.status ?? "closed", "closed");
+  await s.request(s.guest, { t: "thread", id: id(8), op: "rename", thread: "no-such-thread", title: "x" });
+  assert.match(s.ack(s.guest, id(8)).error, /not in that conversation/);
 });
 
 test("a city struck from the air is the host's own map's: how many live there is never the page's to say", async () => {

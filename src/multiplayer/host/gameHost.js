@@ -28,10 +28,11 @@ import { seatFoundings, seatSuccessions, withSeatMoved } from "./foundings.js";
 import { sessionRecordOf } from "./sessionRecord.js";
 import { REPLY_MODES, roundSettingsOf } from "./settings.js";
 import { projectForViewer } from "./projection.js";
-import { COUNTRY_MAX_CHARS, HOST_MESSAGES, ORDER_MAX_CHARS, VIEW_KEYS } from "../game/messages.js";
+import { COUNTRY_MAX_CHARS, HOST_MESSAGES, ORDER_MAX_CHARS, THREAD_MEMBERS_MAX, THREAD_TITLE_MAX, VIEW_KEYS } from "../game/messages.js";
+import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
 import { validate } from "../protocol/validate.js";
 import { digestText } from "../protocol/digest.js";
-import { withPlayerGoal } from "../../runtime/playerGoal.js";
+import { withGoalProgress, withPlayerGoal } from "../../runtime/playerGoal.js";
 import { withPlayerPost } from "../../runtime/socialFeed.js";
 import { normalizeProjects } from "../../runtime/gameState.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
@@ -62,7 +63,7 @@ const AT_ONCE = new Set(["ready", "revealed", "viewed"]);
 // Their thinking is the AI's, done outside the queue so it holds nobody up;
 // what they write is put in the queue (a stat sheet under the game's own lock,
 // an institution's business by the desk, engineMain.js).
-const THINKING = new Set(["sheet", "institution"]);
+const THINKING = new Set(["sheet", "parties", "institution"]);
 // Lines whose answer a player's own device is writing (settings.replies "own"):
 // the newest this many are remembered.
 const OWN_LINES_KEPT = 200;
@@ -178,6 +179,16 @@ export const createGameHost = ({
   // stands and how many live there, never a page's count; resolves with null
   // when it could not be read.
   readCities = async () => null,
+  // A country's parties filled in on the host's AI (gameplay.js
+  // assessPoliticalLandscape), whether they are, and a reading of them a
+  // player's own device made, taken when they still are not: { taken }.
+  compileParties = async () => {},
+  hasParties = async () => false,
+  takeParties = async () => ({ taken: false }),
+  // A country's flag set to an image (a data URL), or "" for the one it had,
+  // as the game sets one (runtime/polityFlags.js setPolityFlag); rejects with
+  // the reason when it cannot.
+  setFlag = async () => {},
   // An institution's business for a seat (host/institutions.js): resolves
   // { institutionId, proposalId, chatId } or rejects with the reason.
   institution = async () => {
@@ -1051,6 +1062,136 @@ export const createGameHost = ({
         connection.acked = rev;
         connection.lastAckAt = now();
       }
+      return "";
+    },
+    // A conversation's own business, for everyone in it ("All shared", the
+    // owner, 2026-11-16): closed, as a single player's delete closes it, so it
+    // leaves every member's list; renamed; or with countries added, who then
+    // read it and answer in it. Each is an entry of the thread's own log
+    // (runtime/chatThreads.js), dated by the game and minted here, by someone
+    // in it. On the asker's screen alone they were dropped: the thread came
+    // back, the name reverted, and an added country never heard a word.
+    // A country's parties filled in, by the replies setting as a stat sheet is
+    // (the owner, 2026-11-16: "Like sheets"): the host's AI, as many as are
+    // asked for, or the asking device's own ({ answer: "own" }; it sends the
+    // reading as "ownParties"). Filled in, they stand for everyone: there is no
+    // reading them again in a shared game. On a page they were read on the
+    // player's key and kept nowhere.
+    parties: async (connection, { country }, seat) => {
+      const name = countriesNow.find((known) => same(known, country));
+      if (!name) return "Unknown country.";
+      try {
+        if (await hasParties(name)) return "";
+        if (replies === "own") return { error: "", result: { answer: "own" } };
+        await compileParties({ country: name });
+      } catch (failure) {
+        return clean(failure?.message || failure).slice(0, 280) || "The host could not fill in those parties.";
+      }
+      round.touch(seat.country);
+      return "";
+    },
+    ownParties: async (connection, { country, landscape }, seat) => {
+      if (replies !== "own") return "The host's AI fills in the parties in this game.";
+      const name = countriesNow.find((known) => same(known, country));
+      if (!name) return "Unknown country.";
+      try {
+        await takeParties({ country: name, landscape });
+      } catch (failure) {
+        return clean(failure?.message || failure).slice(0, 280) || "The host could not take those parties.";
+      }
+      round.touch(seat.country);
+      return "";
+    },
+    // How far the seat's own standing goal has come, read on its own device and
+    // AI key: kept with that goal (runtime/playerGoal.js), which only its player
+    // sees; a reading of a goal since reworded judged something else.
+    goalProgress: async (connection, { goal, reading }, seat) => {
+      let refusal = "";
+      await store.updateForces(({ world, game }) => {
+        const next = withGoalProgress(world, seat.country, clean(goal), { ...reading, asOf: clean(game?.gameDate), round: game?.round });
+        if (next === world) {
+          refusal = "Your goal has changed since it was assessed.";
+          return null;
+        }
+        return { world: next };
+      });
+      round.touch(seat.country);
+      return refusal;
+    },
+    // A country's flag, drawn on every map: a player's own country's, and the
+    // host's for a country the AI plays (the owner, 2026-11-16: "Own + host").
+    flag: async (connection, { country, image }, seat) => {
+      const name = countriesNow.find((known) => same(known, country));
+      if (!name) return "Unknown country.";
+      const ais = !seats.humanCountries().some((human) => same(human, name));
+      if (!same(name, seat.country) && !(isHost(connection) && ais)) {
+        return "You change your own country's flag; the host changes those of the countries the AI plays.";
+      }
+      try {
+        await setFlag({ country: name, image: clean(image) });
+      } catch (failure) {
+        return clean(failure?.message || failure).slice(0, 280) || "The flag could not be changed.";
+      }
+      round.touch(seat.country);
+      return "";
+    },
+    thread: async (connection, { op, thread, title, members }, seat) => {
+      const id = clean(thread);
+      const gameDate = clean((await store.read())?.game?.gameDate);
+      let refusal = "";
+      await store.updateChats((chats) => {
+        const all = list(chats);
+        const index = all.findIndex((chat) => clean(chat?.id) === id);
+        const chat = all[index];
+        const owner = chat ? clean(chat.player) || hostCountry : "";
+        const inIt = chat && (same(owner, seat.country) || membersOf(chat).some((name) => same(name, seat.country)));
+        if (!inIt) {
+          refusal = "You are not in that conversation.";
+          return null;
+        }
+        const next = [...all];
+        if (op === "close") {
+          next[index] = { ...chat, status: "closed" };
+          return next;
+        }
+        let added = [];
+        if (op === "rename") {
+          const name = clean(title).slice(0, THREAD_TITLE_MAX).trim();
+          if (!name) {
+            refusal = "Give the conversation a name.";
+            return null;
+          }
+          added = [{ id: mintId("title", now), kind: "title_changed", time: gameDate, by: seat.country, title: name }];
+        } else {
+          // A table of an institution sits by its membership, not by invitation.
+          if (isInstitutionThread(chat)) {
+            refusal = "An institution's table seats its members.";
+            return null;
+          }
+          const present = [owner, ...membersOf(chat)];
+          const joining = [];
+          for (const wanted of list(members).map(clean).filter(Boolean)) {
+            const country = countriesNow.find((known) => same(known, wanted));
+            if (!country) {
+              refusal = "Unknown country.";
+              return null;
+            }
+            if (!present.some((name) => same(name, country)) && !joining.some((name) => same(name, country))) joining.push(country);
+          }
+          if (!joining.length) return null;
+          if (present.length - 1 + joining.length > THREAD_MEMBERS_MAX) {
+            refusal = `A conversation holds at most ${THREAD_MEMBERS_MAX} countries besides the one that opened it.`;
+            return null;
+          }
+          added = joining.map((country) => ({ id: mintId("join", now), kind: "member_joined", time: gameDate, by: seat.country, member: { name: country, code: country } }));
+        }
+        const events = [...(list(chat.events).length ? list(chat.events) : eventsFromLegacyChat(chat)), ...added];
+        const projected = projectChatThread(events);
+        next[index] = { ...chat, events, countries: projected.countries, title: projected.title, polls: projected.polls, demands: projected.demands };
+        return next;
+      });
+      if (refusal) return refusal;
+      round.touch(seat.country);
       return "";
     },
     say: async (connection, { thread, to, text, fromDraft }, seat) => {

@@ -195,11 +195,66 @@ export const generateCountryStatSheet = async (...args) => (inSharedGame()
   : (await gameplay()).generateCountryStatSheet(...args));
 // Settles with that reading's sheet (or null), or at once with null when none is running.
 export const pendingCountryStatSheet = async (...args) => (await gameplay()).pendingCountryStatSheet(...args);
-// A briefing on a country, in prose: asked with the player's own key from what
-// the player's own screen holds, and written nowhere. A page playing a shared
-// game asks it like any other.
-export const assessPoliticalLandscape = async (...args) => (await gameplay()).assessPoliticalLandscape(...args);
-export const assessGoalProgress = async (...args) => (await gameplay()).assessGoalProgress(...args);
+// A country's parties filled in, kept in its Political World record. In a
+// shared game the record is the host's: the page asks ("parties"), and the
+// host fills them in on its AI or leaves them to this device's own key, as a
+// stat sheet; then the record comes with the view. Once filled in they stand.
+const PARTIES_ANSWER_MS = 5 * 60 * 1000;
+const politicalActorIn = (world, name) => {
+  const byPolity = world?.politicalActors?.byPolity ?? {};
+  const key = Object.keys(byPolity).find((entry) => entry.toLowerCase() === String(name ?? "").trim().toLowerCase());
+  return key ? byPolity[key] : null;
+};
+const partiesFromHost = async (target, { signal } = {}) => {
+  const country = String(target ?? "").trim();
+  const answer = await requestFromHost("parties", { country }, { timeoutMs: PARTIES_ANSWER_MS });
+  if (signal?.aborted) throw new DOMException("Stats panel/selection changed.", "AbortError");
+  if (!answer.ok) throw new Error(answer.error || "The host did not fill in the parties.");
+  if (answer.result?.answer === "own") {
+    await (await gameplay()).assessPoliticalLandscape(country, {
+      signal,
+      commit: async ({ entry }) => {
+        const sent = await requestFromHost("ownParties", { country, landscape: entry }, { timeoutMs: PARTIES_ANSWER_MS });
+        if (!sent.ok) throw new Error(sent.error || "The host did not take the parties.");
+        return null;
+      },
+    });
+  }
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const actor = politicalActorIn(await readWorldStateView({ force: true }).catch(() => null), country);
+    if (actor) return actor;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return null;
+};
+export const assessPoliticalLandscape = async (...args) => (inSharedGame()
+  ? partiesFromHost(...args)
+  : (await gameplay()).assessPoliticalLandscape(...args));
+// How far the player's goal has come: read on this device's own key, and in a
+// shared game kept with the player's goal by the host ("goalProgress"), which
+// only this player sees.
+export const assessGoalProgress = async (options = {}) => (inSharedGame()
+  ? (await gameplay()).assessGoalProgress({
+    ...options,
+    commit: async ({ goalText, reading }) => {
+      const sent = await requestFromHost("goalProgress", { goal: goalText, reading: goalReadingForHost(reading) });
+      if (!sent.ok) throw new Error(sent.error || "The host did not keep that reading.");
+      return { progress: reading.progress };
+    },
+  })
+  : (await gameplay()).assessGoalProgress(options));
+// A goal's reading as the "goalProgress" request carries it (game/messages.js).
+const goalReadingForHost = (reading) => {
+  const lines = (value, most) => (Array.isArray(value) ? value : []).map((line) => String(line ?? "").trim().slice(0, 400)).filter(Boolean).slice(0, most);
+  const progress = Number(reading?.progress);
+  return {
+    progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : 0,
+    summary: String(reading?.summary ?? "").trim().slice(0, 600),
+    achieved: lines(reading?.achieved, 5),
+    obstacles: lines(reading?.obstacles, 4),
+    nextSteps: lines(reading?.nextSteps, 3),
+  };
+};
 export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);
 // Rostra's empty feed: one request for its first posts, written into the
 // feed (gameplay.js generateRostraPosts).

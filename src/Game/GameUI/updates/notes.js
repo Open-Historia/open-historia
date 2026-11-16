@@ -265,6 +265,9 @@ const NEW_UPDATES = [
           "An order to end a war is now the offer of the player who gave it: another player's order no longer offers peace in your country's name.",
           "A shared game no longer offers interactive events, which only the host saw and nobody could play: they come back to shared games once they are made for several players.",
           "An order to place or recall an agent now runs your own intelligence service: a guest's order used to place the host's agent instead.",
+          "Renaming a conversation, adding a country to it and deleting it now apply for everyone in it. Before, they only looked done on your own screen.",
+          "You can change your own country's flag in a shared game, and the host can change those of the countries the AI plays.",
+          "A country's parties are filled in once for everyone, by the host's AI or the asking player's own, as its figures are. Your goal's progress is read on your own AI and kept for you alone.",
         ],
       },
       {

@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { planWorldWrite, revealedTurnOf, suggestionsOutlived } from "./seatWrites.js";
+import { planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges } from "./seatWrites.js";
 
 const unit = (id, lng = 10, lat = 50, extra = {}) => ({ id, ownerCode: "France", status: "idle", lng, lat, orderId: "", ...extra });
 const held = () => ({
@@ -55,4 +55,19 @@ test("the newest turn is revealed event by event when it is a time skip", () => 
   assert.equal(revealedTurnOf({ simulationHistory: [{ mode: "jump", eventIds: [] }] }), null);
   assert.deepEqual(revealedTurnOf({ simulationHistory: [{ mode: "jump", round: 7, eventIds: ["e7", "e8"] }, { mode: "jump", eventIds: ["e1"] }] }), { key: "e7", eventIds: ["e7", "e8"], round: 7 });
   assert.equal(revealedTurnOf({ simulationHistory: [{ mode: "gm", eventIds: ["g1"] }] }), null, "a Game Master's change is one moment");
+});
+
+// The map's rule 6: a change a save holds beyond what a door takes is named, by document and field, instead of
+// passing for saved (a thread deleted, a flag changed, a unit edited: each was found by a player).
+test("what a save changes that no door takes is named, and the empty defaults a page fills in are no change", () => {
+  const held = { wars: [{ id: "w" }], projects: [], actionSuggestions: [] };
+  assert.deepEqual(unroutedChanges("world", held, { ...held, projects: [{ id: "p" }], actionSuggestions: [{ id: "s" }] }), []);
+  assert.deepEqual(unroutedChanges("world", held, { ...held, seatBoards: {}, interactiveOffer: null, notes: "" }), [], "defaults filled in");
+  assert.deepEqual(unroutedChanges("world", held, { ...held, units: [{ id: "u", strength: 99 }], wars: [] }), ["units", "wars"]);
+  const threads = [{ id: "t1", title: "Talks", messages: [{ id: "m1", role: "user", text: "Hello" }] }];
+  const bubble = { role: "error", speaker: "System", text: "The host did not take that." };
+  assert.deepEqual(unroutedChanges("chat", threads, [{ ...threads[0], messages: [...threads[0].messages, bubble] }]), [], "the screen's own bubble");
+  assert.deepEqual(unroutedChanges("chat", threads, [{ ...threads[0], status: "closed" }]), ["thread t1"]);
+  assert.deepEqual(unroutedChanges("flags", { A: "x" }, { A: "y" }), ["flags"]);
+  assert.deepEqual(unroutedChanges("flags", {}, undefined), []);
 });

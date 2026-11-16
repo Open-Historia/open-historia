@@ -38,6 +38,47 @@ export const planWorldWrite = (held, wanted) => {
   return plan;
 };
 
+// WHAT NO DOOR TAKES (the map's rule 6: one door for every change a screen
+// makes). A page saves whole documents, and the host never sees a save: what
+// of it is the player's own is picked out above, and every other change has a
+// request of its own. A change a save holds beyond those is one some screen made
+// that the host never heard: it was answered "saved" and dropped, which is how
+// each such bug was found, by a player. Listed here, by document and field, so
+// it is said (client/sharedGame.js) instead of passing for saved.
+//
+// Two fields are equal when they hold the same JSON, a missing one counting as
+// empty (null, [], {} or ""): a page fills in the empty defaults of fields its
+// view leaves out, and those are no change. In `chat`, a bubble the screen shows
+// of its own (role "error": a refusal, a failed reply) is the screen's.
+const empty = (value) => value === undefined || value === null || value === ""
+  || (Array.isArray(value) && value.length === 0)
+  || (isRecord(value) && Object.keys(value).length === 0);
+const same = (left, right) => (empty(left) && empty(right)) || !differs(left, right);
+const ROUTED_WORLD_KEYS = new Set([...DEVICE_WORLD_KEYS, "projects"]);
+const withoutOwnBubbles = (thread) => (isRecord(thread)
+  ? { ...thread, messages: list(thread.messages).filter((message) => message?.role !== "error") }
+  : thread);
+export const unroutedChanges = (key, held, wanted) => {
+  if (key === "world") {
+    const before = isRecord(held) ? held : {};
+    const after = isRecord(wanted) ? wanted : {};
+    return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+      .filter((field) => !ROUTED_WORLD_KEYS.has(field) && !same(before[field], after[field]))
+      .sort();
+  }
+  if (key === "chat") {
+    const byId = new Map(list(held).map((thread) => [String(thread?.id ?? ""), withoutOwnBubbles(thread)]));
+    return list(wanted)
+      .map(withoutOwnBubbles)
+      .filter((thread) => {
+        const was = byId.get(String(thread?.id ?? ""));
+        return !was || differs(was, thread);
+      })
+      .map((thread) => `thread ${String(thread?.id ?? "?")}`);
+  }
+  return same(held, wanted) ? [] : [key];
+};
+
 // The AI's suggestions are for the round they were asked in.
 export const suggestionsOutlived = (heldRound, viewRound) => {
   const before = Number(heldRound);

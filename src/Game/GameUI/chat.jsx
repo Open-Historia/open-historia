@@ -1436,10 +1436,21 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         });
     };
 
+    // In a shared game a conversation's name and its countries are everyone's in it: the host keeps them, and the
+    // next view brings the change (the "thread" request). Said here when it would not.
+    const askHostForThread = async (fields) => {
+        const answer = await requestFromHost("thread", { thread: String(chat.id), ...fields });
+        if (!answer.ok) pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: answer.error || "The host did not take that.", time: gameDate }]);
+    };
+
     const handleSaveTitle = (nextTitle) => {
         const trimmed = (nextTitle ?? titleDraft).trim();
         setIsEditingTitle(false);
         if (!trimmed || trimmed === displayThreadTitle) return;
+        if (inSharedGame()) {
+            void askHostForThread({ op: "rename", title: trimmed });
+            return;
+        }
         appendThreadEvents([{
             id: newThreadId("title"),
             kind: "title_changed",
@@ -1452,6 +1463,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     const handleAddMembers = (newSelected) => {
         setShowAddMemberModal(false);
         if (!newSelected?.length) return;
+        if (inSharedGame()) {
+            void askHostForThread({ op: "add", members: newSelected.map((country) => country.name).filter(Boolean) });
+            return;
+        }
         const joinEvents = newSelected.map((country) => ({
             id: newThreadId("join"),
             kind: "member_joined",
@@ -4441,6 +4456,18 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // control any more: two buttons that both close a chat only invited the
     // question of which one really deleted it.
     const handleDeleteChat = (id) => {
+        // In a shared game it is closed for everyone in it, by the host (the "thread" request); a refusal is said
+        // in the conversation, which stays.
+        if (inSharedGame()) {
+            void requestFromHost("thread", { op: "close", thread: String(id) }).then((answer) => {
+                if (answer.ok) return;
+                setChats((prev) => prev.map((chat) => (sameChatId(chat.id, id)
+                    ? { ...chat, messages: [...(chat.messages ?? []), { role: "error", speaker: "System", text: answer.error || "The host did not take that.", time: gameDate }] }
+                    : chat)));
+            });
+            if (sameChatId(activeChat?.id, id)) setActiveChat(null);
+            return;
+        }
         setChats(prev => {
             const updated = prev.map(chat => sameChatId(chat.id, id) ? { ...chat, status: "closed" } : chat);
             persistChats(updated);

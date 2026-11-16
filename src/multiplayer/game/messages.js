@@ -20,6 +20,7 @@ import { SETTINGS_SCHEMA } from "../host/settings.js";
 import { POLL_CHOICES_MAX, POLL_CHOICE_MAX_CHARS, SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
 import { SAY_FROM_DRAFT_MAX } from "../client/sharedThreads.js";
 import { TREATY_TERMS_MAX, TREATY_TITLE_MAX, TREATY_TYPES } from "../../runtime/treatyOffers.js";
+import { PLAYER_GOAL_MAX_CHARS } from "../../runtime/playerGoal.js";
 
 // A host and its players must speak the same game: raised whenever these
 // messages or the views (host/projection.js) change in a way an older player's
@@ -63,6 +64,12 @@ import { TREATY_TERMS_MAX, TREATY_TITLE_MAX, TREATY_TYPES } from "../../runtime/
 // player puts terms of peace to another player by name (the "peace" request's
 // `to`): each country makes its own peace. And two players sign treaties (the
 // "treaty" request), and a view carries a player's own (world.treatyOffers).
+// A conversation is closed, renamed or given countries for everyone in it (the
+// "thread" request), where those were the asker's screen's alone and dropped,
+// and a flag is changed through the host (the "flag" request). A country's
+// parties are filled in once, by the replies setting, as a stat sheet is
+// ("parties", "ownParties"), and a goal's progress read on the player's own
+// device is kept with the goal ("goalProgress").
 export const SHARED_GAME_VERSION = "14";
 
 // The documents a player's view holds: the game itself first (a screen that
@@ -72,6 +79,16 @@ export const VIEW_KEYS = Object.freeze(["world", "game", "events", "chat", "acti
 // A view's connection, as the host names it.
 const EPOCH = str(24, { min: 1, pattern: /^[0-9a-z]+$/ });
 const REV = int(0, 2 ** 40);
+
+// A flag as the "flag" request carries it: an image as a data URL, scaled as
+// the flag picker scales an upload, or nothing.
+export const FLAG_IMAGE_MAX = 400_000;
+const FLAG_IMAGE = /^(data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/]+=*)?$/;
+
+// The longest a conversation's name may be (the "thread" request's `title`).
+export const THREAD_TITLE_MAX = 120;
+// The most countries a conversation holds beside its owner.
+export const THREAD_MEMBERS_MAX = 12;
 
 // A government's reply written on a player's device (the "reply" request): how
 // long one government's words may be, and how many lines one reply may hold.
@@ -199,6 +216,33 @@ export const PLAYER_REQUESTS = Object.freeze({
   // Diplomacy: into a thread the player is in, or to open one with `to`.
   // `fromDraft`: the id of the advisor's drafted letter the line was sent from
   // (client/sharedThreads.js), kept on the line so the draft says it went.
+  // A country's parties filled in (Game/AI/gameplay.js assessPoliticalLandscape),
+  // as a stat sheet is: written once, by the host's AI or, with
+  // settings.replies "own", the asker's ({ answer: "own" }; then "ownParties",
+  // the reading alone). One filled in stands.
+  parties: obj({ t: literal("parties"), id: REQUEST_ID, country: COUNTRY }),
+  ownParties: obj({ t: literal("ownParties"), id: REQUEST_ID, country: COUNTRY, landscape: json(6) }),
+  // How far the asker's standing goal has come, read on its own device and AI
+  // key (assessGoalProgress), for the goal as it reads it: kept with that goal,
+  // which only its player sees.
+  goalProgress: obj({
+    t: literal("goalProgress"), id: REQUEST_ID, goal: str(PLAYER_GOAL_MAX_CHARS, { min: 1 }),
+    reading: obj({
+      progress: num(0, 100), summary: str(600),
+      achieved: list(str(400), 5), obstacles: list(str(400), 4), nextSteps: list(str(400), 3),
+    }, ["achieved", "obstacles", "nextSteps"]),
+  }),
+  // A country's flag (runtime/polityFlags.js), an image, or "" for the one it
+  // had: a player's own country's, or the host's for a country the AI plays.
+  flag: obj({ t: literal("flag"), id: REQUEST_ID, country: COUNTRY, image: str(FLAG_IMAGE_MAX, { pattern: FLAG_IMAGE }) }),
+  // A conversation's own business, done for everyone in it (the owner,
+  // 2026-11-16: "All shared"): closed ("close", as a single player's delete
+  // closes it), renamed ("rename", with `title`), or with countries added
+  // ("add", with `members`). Only by someone in it.
+  thread: obj({
+    t: literal("thread"), id: REQUEST_ID, op: str(8, { enum: ["close", "rename", "add"] }),
+    thread: str(120, { min: 1 }), title: str(THREAD_TITLE_MAX), members: list(COUNTRY, 8),
+  }, ["title", "members"]),
   say: obj({
     t: literal("say"), id: REQUEST_ID, thread: str(120, { nullable: true }),
     to: list(COUNTRY, 8), text: str(SAY_MAX_CHARS, { min: 1 }),

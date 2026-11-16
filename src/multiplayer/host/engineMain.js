@@ -16,6 +16,7 @@
 
 import { getLibraryState, refreshLibraryCatalog } from "../../runtime/library.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { setPolityFlag } from "../../runtime/polityFlags.js";
 import {
   mutateActionsState,
   mutateCanonicalTurnState,
@@ -30,7 +31,7 @@ import { setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { discardHeldTurns, endSimulation, enterSimulation } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
-import { declineInteractiveOffer, hasCountryStatSheet, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, warRoomChart } from "../../Game/AI/gameplay.js";
+import { assessPoliticalLandscape, declineInteractiveOffer, hasCompiledParties, hasCountryStatSheet, takePoliticalLandscape, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, warRoomChart } from "../../Game/AI/gameplay.js";
 import { lendBoards, returnBoards } from "./seatBoards.js";
 import { createLoopbackEngineSide } from "../transport/loopback.js";
 import { createHostSession } from "../session/host.js";
@@ -404,6 +405,17 @@ const boot = async () => {
       readChart: () => warRoomChart(),
       // Its cities, for a city struck from the air: the host's own, never a page's.
       readCities: () => readJson(JSON_URLS.citiesGeojson, { defaultValue: null }),
+      // A country's parties filled in on the host's AI, when they are not.
+      compileParties: async ({ country }) => {
+        if (!(await hasCompiledParties(country))) await assessPoliticalLandscape(country);
+      },
+      hasParties: (country) => hasCompiledParties(country),
+      takeParties: ({ country, landscape }) => takePoliticalLandscape({ name: country, landscape }),
+      // A country's flag, as the game sets one.
+      setFlag: async ({ country, image }) => {
+        const docs = await store.read();
+        await setPolityFlag({ polity: country, world: docs.world, dataUrl: image });
+      },
       replyTo,
       // A player's institution business, run here for their country. Each
       // thing it writes is an entry in the queue; a Council's or a hearing's

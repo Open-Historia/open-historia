@@ -2505,6 +2505,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                     intelligence={currentPoliticalKnowledge?.intelligence || null}
                     institutions={worldSnapshot ? institutionPortfolioForPolity(worldSnapshot, targetCountry, { viewerPolity: player.code }) : []}
                     onCompile={worldSnapshot ? partiesCompile.compile : null}
+                    compileOnce={sharedGame}
                     compiling={partiesCompile.busy}
                     compileError={partiesCompile.error}
                 />
