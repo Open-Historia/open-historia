@@ -1,0 +1,53 @@
+/* Diplomacy inbox — theme-aware, responsive correspondence workspace. */
+.oh-diplomacy-shell { container-type: inline-size; }
+.oh-diplomacy-split { display:flex; flex:1; min-width:0; min-height:0; overflow:hidden; }
+.oh-diplomacy-active-sidebar {
+  display:flex; flex-direction:column; flex:0 0 clamp(16.5rem, 34%, 21rem);
+  min-width:0; min-height:0; overflow:hidden;
+  background:var(--oh-ui-overlay-card,rgba(255,255,255,.026));
+  border-right:1px solid var(--oh-ui-line,rgba(255,255,255,.12));
+}
+.oh-diplomacy-active-thread { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.oh-diplomacy-sidebar-heading {
+  padding:1rem .95rem .75rem;
+  border-bottom:1px solid var(--oh-ui-line,rgba(255,255,255,.1));
+  display:flex; flex-direction:column; gap:.34rem;
+}
+.oh-diplomacy-sidebar-kicker { color:var(--oh-ui-accent,#91c9e7); font-size:.61rem; font-weight:850; letter-spacing:.12em; text-transform:uppercase; }
+.oh-diplomacy-sidebar-title { color:var(--oh-ui-text,#f4f4f5); font-size:1.04rem; font-weight:850; letter-spacing:-.018em; }
+.oh-diplomacy-sidebar-subtitle { color:var(--oh-ui-muted,rgba(255,255,255,.52)); font-size:.7rem; }
+.oh-diplomacy-sidebar-controls { display:flex;flex-direction:column;gap:.48rem;padding:.65rem .7rem;border-bottom:1px solid var(--oh-ui-line,rgba(255,255,255,.08)); }
+.oh-diplomacy-search {
+  box-sizing:border-box; width:100%; min-width:0;
+  padding:.57rem .72rem; background:var(--oh-ui-overlay-card,rgba(255,255,255,.055));
+  border:1px solid var(--oh-ui-line,rgba(255,255,255,.13)); border-radius:9px;
+  color:var(--oh-ui-text,#f4f4f5);font:500 .76rem sans-serif;
+  outline:none;transition:border-color .14s, box-shadow .14s;
+}
+.oh-diplomacy-search::placeholder { color:var(--oh-ui-muted,rgba(255,255,255,.36)); }
+.oh-diplomacy-search:focus-visible { border-color:var(--oh-ui-accent,#91c9e7); box-shadow:0 0 0 2px var(--oh-ui-active,rgba(96,165,250,.16)); }
+.oh-diplomacy-active-list { display:flex;flex-direction:column;gap:.34rem;flex:1;min-height:0;overflow-y:auto;padding:.58rem .52rem;scrollbar-width:thin; }
+.oh-diplomacy-sidebar-footer { display:flex;padding:.65rem .7rem;border-top:1px solid var(--oh-ui-line,rgba(255,255,255,.09)); }
+.oh-diplomacy-new-chat {
+  display:flex;align-items:center;justify-content:center;gap:.36rem;width:100%;cursor:pointer;
+  background:var(--oh-ui-active,rgba(96,165,250,.14));color:var(--oh-ui-accent,#91c9e7);
+  border:1px solid var(--oh-ui-line,rgba(96,165,250,.3));border-radius:9px;
+  font:750 .75rem sans-serif;padding:.63rem .6rem;
+}
+.oh-diplomacy-new-chat:hover { background:var(--oh-ui-hover,rgba(96,165,250,.22)); }
+.oh-diplomacy-inbox-row:focus-visible, .oh-diplomacy-new-chat:focus-visible {
+  outline:2px solid var(--oh-ui-accent,#91c9e7);outline-offset:2px;
+}
+.oh-diplomacy-row-date { flex-shrink:0;color:var(--oh-ui-muted,rgba(255,255,255,.46));font:650 .59rem sans-serif; }
+.oh-diplomacy-row-subject { margin-top:.22rem;color:var(--oh-ui-text,rgba(255,255,255,.7));opacity:.68;font-size:.69rem;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.oh-diplomacy-row-preview { margin-top:.18rem;color:var(--oh-ui-muted,rgba(255,255,255,.48));font-size:.72rem;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.oh-diplomacy-search-header { padding:.72rem 1rem .55rem;border-bottom:1px solid var(--oh-ui-line,rgba(255,255,255,.08)); }
+.oh-diplomacy-inbox-heading {font:800 .69rem sans-serif;text-transform:uppercase;letter-spacing:.075em;color:var(--oh-ui-muted,rgba(255,255,255,.5));}
+.oh-diplomacy-inbox-count {color:var(--oh-ui-accent,#91c9e7);font-weight:800;}
+.oh-diplomacy-activity-top {display:flex;align-items:center;justify-content:center;gap:.35rem;background:var(--oh-ui-active,rgba(96,165,250,.15));color:var(--oh-ui-accent,#91c9e7);font:750 .7rem sans-serif;border:1px solid var(--oh-ui-line,rgba(96,165,250,.2));border-radius:8px;cursor:pointer;padding:.45rem .6rem;margin-bottom:.35rem;}
+@container (max-width: 47rem) {
+  .oh-diplomacy-active-sidebar {display:none;}
+}
+@media (prefers-reduced-motion:reduce) {
+  .oh-diplomacy-search {transition:none;}
+}

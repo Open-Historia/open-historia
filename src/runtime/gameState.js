@@ -880,6 +880,10 @@ export const normalizeChatEntry = (entry, index = 0) => {
     source: projected?.source || normalizeOptionalString(entry.source) || "manual",
     status: normalizeOptionalString(entry.status) || "open",
     title: projected?.title || normalizeOptionalString(entry.title),
+    // The inbox's persisted activity order is independent of the historical
+    // date. Never derive a fresh ordinal while normalizing/read-replaying.
+    ...(Number.isSafeInteger(entry.activityOrdinal) && entry.activityOrdinal > 0
+      ? { activityOrdinal: entry.activityOrdinal } : {}),
   };
 };
 

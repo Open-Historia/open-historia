@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-diplomatic-correspondence-refresh",
+    kind: "minor",
+    date: "2026-11-16",
+    channel: "beta",
+    banners: [
+      {
+        title: "A better diplomatic inbox",
+        items: [
+          "Recent diplomatic conversations now follow actual message activity, including new replies on the same game day, and retain their order after loading a save.",
+          "Contacts can be searched by government or subject; on a wide screen the inbox stays alongside the open conversation.",
+          "New letters do not move the list while you are reading older correspondence. Return to latest when you choose.",
+          "Diplomatic messages and the composer now follow your interface theme instead of using a fixed bright-blue treatment.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-national-stats-improvements",
     kind: "minor",
     date: "2026-11-16",

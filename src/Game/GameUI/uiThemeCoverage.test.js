@@ -58,7 +58,7 @@ test("The dock's tray, search, the date bar and the map-mode switch take the the
 
 test("Diplomacy list, tabs, unread filter, thread controls and workspace use themed chrome", () => {
   assert.match(diplomacy, /data-diplomacy-workspace-header="modern"[\s\S]*?background: "var\(--oh-ui-overlay-header, transparent\)"/);
-  assert.match(diplomacy, /data-diplomacy-thread-row="modern"[\s\S]*?background: hovered \? "var\(--oh-ui-hover,/);
+  assert.match(diplomacy, /data-diplomacy-thread-row="modern"[\s\S]*?background: selected \? "var\(--oh-ui-active,[\s\S]*?: hovered \? "var\(--oh-ui-hover,/);
   assert.match(diplomacy, /backgroundColor: "var\(--oh-ui-overlay, rgba\(24,24,27,0\.95\)\)"/);
   assert.match(diplomacy, /background: currentView === key \? "var\(--oh-ui-active,/);
   assert.match(diplomacy, /background: showUnreadOnly \? "var\(--oh-ui-active,/);

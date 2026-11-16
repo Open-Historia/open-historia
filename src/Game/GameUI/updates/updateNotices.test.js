@@ -20,6 +20,22 @@ const list = [
   { id: "a", kind: "major", date: "2026-07-01", banners: [{ title: "A" }] },
 ];
 
+test("the diplomatic correspondence update has one Beta notice without replacing the Stats notice", () => {
+  const id = "2026-11-diplomatic-correspondence-refresh";
+  const matches = UPDATES.filter((entry) => entry.id === id);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].date, "2026-11-16");
+  assert.equal(matches[0].channel, "beta");
+  assert.equal(matches[0].kind, "minor");
+  assert.equal(matches[0].banners[0].items.length, 4);
+  assert.match(matches[0].banners[0].items[0], /same game day/);
+  assert.match(matches[0].banners[0].items[1], /wide screen/);
+  assert.match(matches[0].banners[0].items[2], /older correspondence/);
+  assert.match(matches[0].banners[0].items[3], /interface theme/);
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+});
+
 test("the interim national Stats improvements have one readable Beta Update History notice", () => {
   const id = "2026-11-national-stats-improvements";
   const matches = UPDATES.filter((entry) => entry.id === id);
