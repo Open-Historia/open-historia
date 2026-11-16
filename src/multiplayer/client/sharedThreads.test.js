@@ -54,6 +54,25 @@ test("a line sent from one of the advisor's drafted letters says which, and the 
   assert.equal(say({ ...asked, fromDraft: "x".repeat(SAY_FROM_DRAFT_MAX + 1) }).ok, false);
 });
 
+test("a line carries the vote it calls, in a thread the host keeps or one it opens, and a vote is asked by its ids", () => {
+  const poll = { question: "A summit in Riga?", options: ["Yes", "No"] };
+  const opening = sayRequestFor(pendingSharedThread([{ name: "Republic of Latvia" }, { name: "Republic of Estonia" }]), "I call a vote: A summit in Riga?", { poll });
+  assert.deepEqual(opening.poll, poll);
+  assert.equal(say(opening).ok, true);
+  assert.equal(say(sayRequestFor({ id: "thread-abc-1" }, "I call a vote: x", { poll })).ok, true);
+  assert.equal(say({ ...opening, poll: { question: "x", options: Array.from({ length: 11 }, (_, index) => `Choice ${index}`) } }).ok, false);
+  assert.equal(say({ ...opening, poll: { question: "", options: ["Yes", "No"] } }).ok, false);
+  const vote = (fields) => validate(PLAYER_REQUESTS.vote, { t: "vote", id: "0123456789abcdef", ...fields });
+  assert.equal(vote({ thread: "thread-abc-1", poll: "poll-1", option: "poll-1-o2" }).ok, true);
+  assert.equal(vote({ thread: "thread-abc-1", poll: "poll-1", option: "poll-1-o2", by: "Republic of Latvia" }).ok, false, "never cast for another");
+  // The panel asks the host for both in a shared game, where they were not offered.
+  const chat = readFileSync(new URL("../../Game/GameUI/chat.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(chat, /const canCallChatVote = isGroup && !isInstitutional && !isLifecycleConversation;/);
+  assert.match(chat, /onVote=\{\(optionId\) => handlePlayerVote\(poll, optionId\)\}/);
+  assert.match(chat, /requestFromHost\("vote", \{ thread: String\(chat\.id\), poll: String\(poll\.id\), option: String\(optionId\) \}\)/);
+  assert.match(chat, /await submitPlayerText\(line, \{ poll: \{ question: pollEvent\.question, options: pollEvent\.options\.map\(\(option\) => option\.label\) \} \}\);/);
+});
+
 test("a line opens a thread with no more countries than the host takes", () => {
   const many = Array.from({ length: SAY_RECIPIENTS_MAX + 3 }, (_, index) => ({ name: `Country ${index}` }));
   const asked = sayRequestFor(pendingSharedThread(many), "A conference.");
@@ -79,7 +98,7 @@ test("every way the diplomacy panel begins a thread in a shared game leaves it p
   assert.match(consume.slice(shared, local), /pendingSharedThread\(\[\{ name: country\.name, code \}\]\)[\s\S]*?return prev;/);
   // A line is sent as the thread asks (with the drafted letter it came from,
   // if any), and a thread the host opened is followed.
-  assert.match(chat, /requestFromHost\("say", sayRequestFor\(target, text, \{ fromDraft, demand \}\)\)/);
+  assert.match(chat, /requestFromHost\("say", sayRequestFor\(target, text, \{ fromDraft, demand, poll \}\)\)/);
   assert.match(chat, /onSharedThreadOpened=\{followThreadFromAck\}/);
 });
 
@@ -130,7 +149,7 @@ test("both shared-game sends shut the composer until the ack and follow a thread
   const group = chat.slice(chat.indexOf("const runGroupTurn = async "), chat.indexOf("setIsLoading(true);\n            // The player's line"));
   assert.match(group, /await sayToHost\(chatOverride \|\| chat, text, nextMessages\);/);
   const submit = chat.slice(chat.indexOf("const submitPlayerText = async "), chat.indexOf("const moment = await readSeenChatMoment(gameDate);"));
-  assert.match(submit, /if \(inSharedGame\(\)\) \{\s*await sayToHost\(chat, text, messagesRef\.current, \{ fromDraft, demand \}\);\s*return;/);
+  assert.match(submit, /if \(inSharedGame\(\)\) \{\s*await sayToHost\(chat, text, messagesRef\.current, \{ fromDraft, demand, poll \}\);\s*return;/);
   assert.equal((chat.match(/requestFromHost\("say"/g) ?? []).length, 1, "no other path says a line to the host");
   // The composer is only drawn while nothing is loading.
   assert.match(chat, /\) : !isLoading \? \(\s*<div data-diplomacy-composer="modern"/);

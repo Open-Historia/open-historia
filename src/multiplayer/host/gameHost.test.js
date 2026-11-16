@@ -1081,6 +1081,43 @@ test("a demand made or answered rides on its line, entered by the host by the ga
   assert.ok(held().messages.some((message) => message.text === "We refuse this demand."), "with its line");
 });
 
+test("a vote is called with its line, in a thread the line opens too, and each person in it votes once, by a choice it has", async () => {
+  // Neither could be done in a shared game: a vote called on a page was an entry of the thread's log, dropped, and a
+  // ballot was not offered at all.
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  // The line that opens a conversation calls its vote: one choice twice is one choice.
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [LATVIA, ESTONIA], text: "I call a vote: A summit in Riga?", poll: { question: "A summit in Riga?", options: ["Yes", "No", "Yes"] } });
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  const thread = s.store.docs.chat.find((chat) => chat.player === RUSSIA).id;
+  const held = () => s.store.docs.chat.find((chat) => chat.id === thread);
+  const called = held().events.find((event) => event.kind === "poll_created");
+  assert.deepEqual([called.by, called.question, called.options.map((option) => option.label)], [RUSSIA, "A summit in Riga?", ["Yes", "No"]]);
+  const said = held().events.findIndex((event) => event.kind === "message" && event.text === "I call a vote: A summit in Riga?");
+  assert.ok(said >= 0 && said < held().events.indexOf(called), "the line, then its vote");
+  assert.equal(held().polls[0].question, "A summit in Riga?");
+  // Each votes for itself, once.
+  const [yes, no] = called.options;
+  await s.request(s.hostPlayer, { t: "vote", id: id(3), thread, poll: called.pollId, option: no.id });
+  assert.equal(s.ack(s.hostPlayer, id(3)).ok, true);
+  await s.request(s.hostPlayer, { t: "vote", id: id(4), thread, poll: called.pollId, option: yes.id });
+  assert.match(s.ack(s.hostPlayer, id(4)).error, /voted in it already/);
+  await s.request(s.guest, { t: "vote", id: id(5), thread, poll: called.pollId, option: "no-such-option" });
+  assert.match(s.ack(s.guest, id(5)).error, /no choice of that vote/);
+  await s.request(s.guest, { t: "vote", id: id(6), thread, poll: called.pollId, option: yes.id });
+  assert.equal(s.ack(s.guest, id(6)).ok, true);
+  assert.deepEqual(held().polls[0].votes, { [LATVIA]: no.id, [RUSSIA]: yes.id });
+  assert.equal(s.shown(s.guest).chat.find((chat) => chat.id === thread).polls[0].votes[LATVIA], no.id, "everyone in it sees each vote");
+  await s.request(s.guest, { t: "vote", id: id(7), thread: "no-such-thread", poll: called.pollId, option: yes.id });
+  assert.match(s.ack(s.guest, id(7)).error, /not in that conversation/);
+  // A vote of two is a question: none is called between two countries alone.
+  await s.request(s.guest, { t: "say", id: id(8), thread: null, to: [LATVIA], text: "I call a vote: Peace?", poll: { question: "Peace?", options: ["Yes", "No"] } });
+  assert.match(s.ack(s.guest, id(8)).error, /conversation of several countries/);
+});
+
 test("a conversation is renamed, given countries and closed for everyone in it, by someone in it", async () => {
   // "All shared" (the owner, 2026-11-16): on the asker's screen alone these were dropped, the thread came back, the
   // name reverted, and an added country never heard a word.

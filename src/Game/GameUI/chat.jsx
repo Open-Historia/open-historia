@@ -1226,7 +1226,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     // Not in a shared game: the host keeps every thread, and a vote is nothing
     // a player can ask it for yet. Called here, it ran the table on this
     // screen, which a shared game refuses, and Retry ran it again.
-    const canCallChatVote = isGroup && !isInstitutional && !isLifecycleConversation && !inSharedGame();
+    const canCallChatVote = isGroup && !isInstitutional && !isLifecycleConversation;
     const playerLifecycleCase = useMemo(() => {
         if (!isLifecycleConversation || !playerCountry) return null;
         const wanted = new Set((Array.isArray(chat?.lifecycleCaseIds) ? chat.lifecycleCaseIds : []).map((id) => String(id || "").trim()));
@@ -1822,13 +1822,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // host. A pending thread the host opened is followed until the view
         // brings it, and stays shut till then; one it did not name leaves for the
         // list, where it arrives.
-        const sayToHost = async (target, text, baseMessages, { fromDraft = "", demand = null } = {}) => {
+        const sayToHost = async (target, text, baseMessages, { fromDraft = "", demand = null, poll = null } = {}) => {
             setIsLoading(true);
             let waiting = false;
             try {
                 let answer;
                 try {
-                    answer = await requestFromHost("say", sayRequestFor(target, text, { fromDraft, demand }));
+                    answer = await requestFromHost("say", sayRequestFor(target, text, { fromDraft, demand, poll }));
                 } catch (error) {
                     answer = { ok: false, error: error?.message || "" };
                 }
@@ -2043,6 +2043,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             setPollError("");
             cutIn();
             const line = `I call a vote: ${pollEvent.question}`;
+            // In a shared game the host calls it with the line (the "say"
+            // request's `poll`), and the governments at the table answer it there.
+            if (inSharedGame()) {
+                setPollComposerOpen(false);
+                setPollQuestion("");
+                setPollOptionsText("Yes\nNo\nAbstain");
+                await submitPlayerText(line, { poll: { question: pollEvent.question, options: pollEvent.options.map((option) => option.label) } });
+                return;
+            }
             const current = chatRef.current ?? chat;
             const existing = current.events?.length
                 ? current.events
@@ -2085,6 +2094,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (!poll?.id || !optionId) return;
             const already = Object.keys(poll.votes ?? {}).some((voter) => voter.toLowerCase() === String(playerCountry ?? "").toLowerCase());
             if (already) return;
+            // In a shared game the host keeps the vote (the "vote" request); a refusal is said in the thread.
+            if (inSharedGame()) {
+                void requestFromHost("vote", { thread: String(chat.id), poll: String(poll.id), option: String(optionId) }).then((answer) => {
+                    if (!answer.ok) pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: answer.error || "The host did not take that.", time: gameDate }]);
+                });
+                return;
+            }
             const events = [
                 ...(chat.events?.length ? chat.events : eventsFromLegacyChat({ ...chat, messages: messagesRef.current })),
                 { id: `vote-${poll.id}-${playerCountry}`, kind: "poll_vote_cast", time: gameDate, by: playerCountry, pollId: poll.id, optionId },
@@ -2219,7 +2235,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // player's terms of peace, kept with the war, name it).
         // `fromDraft`: the id of the advisor's drafted letter the line was sent from.
         // `demand`: in a shared game, the demand the line makes or answers, which the host enters with it.
-        const submitPlayerText = async (text, { onSent = null, id = "", fromDraft = "", demand = null } = {}) => {
+        const submitPlayerText = async (text, { onSent = null, id = "", fromDraft = "", demand = null, poll = null } = {}) => {
             if (!text || isLoading || writingOwnReply) return;
             // Speaking while the table is still talking cuts it off.
             cutIn();
@@ -2230,7 +2246,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             // view holds it; a host that does not say which it opened leaves the
             // player at the list, where it arrives.
             if (inSharedGame()) {
-                await sayToHost(chat, text, messagesRef.current, { fromDraft, demand });
+                await sayToHost(chat, text, messagesRef.current, { fromDraft, demand, poll });
                 return;
             }
             // What the world did since this thread last spoke, told to the
@@ -2543,7 +2559,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     playerCountry={playerCountry}
                     // A vote cast here would stay on this screen: the host keeps
                     // the thread in a shared game, and takes no votes yet.
-                    onVote={inSharedGame() ? null : (optionId) => handlePlayerVote(poll, optionId)}
+                    onVote={(optionId) => handlePlayerVote(poll, optionId)}
                 />
             ))}
             {/* A demand whose message is older than the window, or which was

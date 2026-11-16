@@ -21,6 +21,7 @@ import { POLL_CHOICES_MAX, POLL_CHOICE_MAX_CHARS, SOCIAL_POST_MAX_CHARS } from "
 import { SAY_FROM_DRAFT_MAX } from "../client/sharedThreads.js";
 import { TREATY_TERMS_MAX, TREATY_TITLE_MAX, TREATY_TYPES } from "../../runtime/treatyOffers.js";
 import { PLAYER_GOAL_MAX_CHARS } from "../../runtime/playerGoal.js";
+import { POLL_LABEL_MAX_CHARS, POLL_OPTION_LIMIT, POLL_QUESTION_MAX_CHARS } from "../../runtime/chatThreads.js";
 
 // A host and its players must speak the same game: raised whenever these
 // messages or the views (host/projection.js) change in a way an older player's
@@ -66,7 +67,8 @@ import { PLAYER_GOAL_MAX_CHARS } from "../../runtime/playerGoal.js";
 // "treaty" request), and a view carries a player's own (world.treatyOffers).
 // A conversation is closed, renamed or given countries for everyone in it (the
 // "thread" request), where those were the asker's screen's alone and dropped;
-// a line may carry a demand made or answered (the "say" request's `demand`),
+// a line may carry a demand made or answered, or call a vote (the "say"
+// request's `demand` and `poll`), and a player votes (the "vote" request),
 // and a flag is changed through the host (the "flag" request). A country's
 // parties are filled in once, by the replies setting, as a stat sheet is
 // ("parties", "ownParties"), and a goal's progress read on the player's own
@@ -258,7 +260,13 @@ export const PLAYER_REQUESTS = Object.freeze({
       demandId: str(160), answer: str(24, { enum: ["accepted", "refused", "alternative", "alternative_accepted"] }),
       text: str(SAY_MAX_CHARS),
     }, ["demandId", "answer", "text"]),
-  }, ["fromDraft", "demand"]),
+    // A vote the line calls, in a group conversation (runtime/chatThreads.js
+    // createPlayerPollEvent): its question and its choices.
+    poll: obj({ question: str(POLL_QUESTION_MAX_CHARS, { min: 1 }), options: list(str(POLL_LABEL_MAX_CHARS, { min: 1 }), POLL_OPTION_LIMIT) }),
+  }, ["fromDraft", "demand", "poll"]),
+  // A player's vote in a conversation's poll, by the poll's and the choice's
+  // ids: one each, never cast for them.
+  vote: obj({ t: literal("vote"), id: REQUEST_ID, thread: str(120, { min: 1 }), poll: str(160, { min: 1 }), option: str(160, { min: 1 }) }),
   // With settings.replies "own": what the governments the AI plays answered a
   // line of the asker's, written on the asker's own device and AI key
   // (GameUI/ownTableReplies.js). Words only: each entry is one government's

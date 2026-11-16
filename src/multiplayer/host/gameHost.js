@@ -29,7 +29,7 @@ import { sessionRecordOf } from "./sessionRecord.js";
 import { REPLY_MODES, roundSettingsOf } from "./settings.js";
 import { projectForViewer } from "./projection.js";
 import { COUNTRY_MAX_CHARS, HOST_MESSAGES, ORDER_MAX_CHARS, THREAD_MEMBERS_MAX, THREAD_TITLE_MAX, VIEW_KEYS } from "../game/messages.js";
-import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
+import { createPlayerPollEvent, eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
 import { openDemandOf, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
 import { livePuppetsFor } from "../../runtime/puppets.js";
 import { validate } from "../protocol/validate.js";
@@ -1085,6 +1085,42 @@ export const createGameHost = ({
       }
       return "";
     },
+    // A seat's own vote in a conversation's poll: once, by a choice the poll
+    // has, and only by someone in it (runtime/chatThreads.js). No model ever
+    // casts it for a person.
+    vote: async (connection, { thread, poll, option }, seat) => {
+      const id = clean(thread);
+      const gameDate = clean((await store.read())?.game?.gameDate);
+      let refusal = "";
+      await store.updateChats((chats) => {
+        const all = list(chats);
+        const index = all.findIndex((chat) => clean(chat?.id) === id);
+        const chat = all[index];
+        const owner = chat ? clean(chat.player) || hostCountry : "";
+        if (!chat || !(same(owner, seat.country) || membersOf(chat).some((name) => same(name, seat.country)))) {
+          refusal = "You are not in that conversation.";
+          return null;
+        }
+        const events = list(chat.events).length ? list(chat.events) : eventsFromLegacyChat(chat);
+        const held = list(projectChatThread(events).polls).find((entry) => clean(entry?.id) === clean(poll));
+        if (!held || !list(held.options).some((entry) => clean(entry?.id) === clean(option))) {
+          refusal = "That is no choice of that vote.";
+          return null;
+        }
+        if (Object.keys(held.votes ?? {}).some((voter) => same(voter, seat.country))) {
+          refusal = "You have voted in it already.";
+          return null;
+        }
+        const nextEvents = [...events, { id: mintId("vote", now), kind: "poll_vote_cast", time: gameDate, by: seat.country, pollId: held.id, optionId: clean(option) }];
+        const projected = projectChatThread(nextEvents);
+        const next = [...all];
+        next[index] = { ...chat, events: nextEvents, polls: projected.polls };
+        return next;
+      });
+      if (refusal) return refusal;
+      round.touch(seat.country);
+      return "";
+    },
     // A conversation's own business, for everyone in it ("All shared", the
     // owner, 2026-11-16): closed, as a single player's delete closes it, so it
     // leaves every member's list; renamed; or with countries added, who then
@@ -1215,7 +1251,7 @@ export const createGameHost = ({
       round.touch(seat.country);
       return "";
     },
-    say: async (connection, { thread, to, text, fromDraft, demand }, seat) => {
+    say: async (connection, { thread, to, text, fromDraft, demand, poll }, seat) => {
       const body = clean(text);
       if (!body) return "A message needs words.";
       const recipients = list(to).map(clean).filter(Boolean);
@@ -1253,46 +1289,56 @@ export const createGameHost = ({
       };
       await store.updateChats((chats) => {
         const all = list(chats);
-        if (chatId) {
-          const index = all.findIndex((chat) => clean(chat?.id) === chatId);
-          const chat = all[index];
-          // A thread's owner is chat.player, or the host's seat when blank.
-          const owner = chat ? clean(chat.player) || hostCountry : "";
-          const members = membersOf(chat);
-          const inIt = chat && (same(owner, seat.country) || members.some((name) => same(name, seat.country)));
-          if (!inIt) {
-            refusal = "You are not in that conversation.";
-            return null;
-          }
-          parties = [owner, ...members];
-          institutional = isInstitutionThread(chat);
-          const next = [...all];
-          // A demand the line carries (runtime/demandCheck.js): made by an
-          // Overlord of its own Puppet, or answered, by the side that may, in
-          // the one-on-one thread between them. On the page it was an entry of
-          // the thread's log, dropped; the host enters it with the line.
-          const demanded = demand ? demandEventFor(chat, { demand, seat: seat.country, owner, members, world: docs?.world, message, gameDate }) : null;
-          if (demand && !demanded) {
-            refusal = "That is not a demand you can make or answer here.";
-            return null;
-          }
-          if (demanded) {
-            const events = [...(list(chat.events).length ? list(chat.events) : eventsFromLegacyChat(chat)), demanded];
-            const projected = projectChatThread(events);
-            next[index] = { ...chat, events, demands: projected.demands, messages: [...list(chat.messages), message] };
-            return next;
-          }
-          next[index] = { ...chat, messages: [...list(chat.messages), message] };
+        // The thread the line is written into: the one it names, or the one
+        // it opens, owned by the writer, with the countries it is written to.
+        // Either way the line is one line: what it carries is entered with it
+        // the same, in a thread the host opens with it as in one it keeps.
+        if (!chatId) chatId = mintId("thread", now);
+        const found = opens ? -1 : all.findIndex((chat) => clean(chat?.id) === chatId);
+        const index = opens ? all.length : found;
+        const chat = opens
+          ? { id: chatId, player: seat.country, countries: recipients.map((country) => ({ code: country, name: country })), messages: [] }
+          : all[found];
+        // A thread's owner is chat.player, or the host's seat when blank.
+        const owner = chat ? clean(chat.player) || hostCountry : "";
+        const members = membersOf(chat);
+        const inIt = chat && (same(owner, seat.country) || members.some((name) => same(name, seat.country)));
+        if (!inIt) {
+          refusal = "You are not in that conversation.";
+          return null;
+        }
+        parties = [owner, ...members];
+        institutional = isInstitutionThread(chat);
+        const next = [...all];
+        // A demand the line carries (runtime/demandCheck.js): made by an
+        // Overlord of its own Puppet, or answered, by the side that may, in
+        // the one-on-one thread between them. On the page it was an entry of
+        // the thread's log, dropped; the host enters it with the line.
+        const demanded = demand ? demandEventFor(chat, { demand, seat: seat.country, owner, members, world: docs?.world, message, gameDate }) : null;
+        if (demand && !demanded) {
+          refusal = "That is not a demand you can make or answer here.";
+          return null;
+        }
+        // A vote the line calls (runtime/chatThreads.js createPlayerPollEvent),
+        // in a conversation of several countries that is no institution's,
+        // whose ballots are formal and its own.
+        const called = poll && members.length >= 2 && !institutional
+          ? createPlayerPollEvent({ player: seat.country, question: poll.question, options: poll.options, time: gameDate, idFor: (prefix) => mintId(prefix, now) })
+          : null;
+        if (poll && !called) {
+          refusal = "A vote is called in a conversation of several countries, with a question and at least two different choices.";
+          return null;
+        }
+        if (demanded || called) {
+          // The line and what it does, in the thread's own log, in order.
+          const line = { id: message.id, kind: "message", time: gameDate, by: seat.country, role: "user", code: seat.country, text: message.text };
+          const events = [...(list(chat.events).length ? list(chat.events) : eventsFromLegacyChat(chat)), line, demanded ?? called];
+          const projected = projectChatThread(events);
+          next[index] = { ...chat, events, demands: projected.demands, polls: projected.polls, messages: [...list(chat.messages), message] };
           return next;
         }
-        chatId = mintId("thread", now);
-        parties = [seat.country, ...recipients];
-        return [...all, {
-          id: chatId,
-          player: seat.country,
-          countries: recipients.map((country) => ({ code: country, name: country })),
-          messages: [message],
-        }];
+        next[index] = { ...chat, messages: [...list(chat.messages), message] };
+        return next;
       });
       if (refusal) return refusal;
       round.touch(seat.country);
