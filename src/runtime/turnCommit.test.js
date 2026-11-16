@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { restorePointIndexEntry } from "../../server/restorePoints.js";
 import {
   NO_RESTORE_POINT_NOTE,
+  SHARED_ROUND_NOTE,
   heldTurnOutdated,
   mergeActionsAtCommit,
   restorePointProblem,
@@ -100,6 +102,19 @@ test("a restore point from another campaign is refused", () => {
   assert.equal(restorePointProblem(list, { round: 6, campaignId: "game-b" }), "");
   // One saved before restore points knew their campaign cannot be checked.
   assert.equal(restorePointProblem([point(5)], { round: 6, campaignId: "game-a" }), "");
+});
+
+// "get rid of undoing a round UNLESS there is a failure" (the owner, 2026-11-15, on the host's powers). The host
+// could stop sharing and undo the shared rounds alone: the players came back to a world, orders and boards rewound.
+test("a shared game's round is not undone alone, in the game or after it stopped being shared", () => {
+  const list = [point(5, { shared: true }), point(4)];
+  assert.equal(restorePointProblem(list, { round: 6 }), SHARED_ROUND_NOTE);
+  assert.equal(undoableTurns(list, { round: 6 }), 0, "Undo is not offered");
+  // The rounds played alone after it may be undone, down to the first shared one.
+  assert.equal(undoableTurns([point(7), point(6), point(5, { shared: true })], { round: 8 }), 2);
+  // The index the Undo button counts by keeps the mark; one with none is as before.
+  assert.equal(undoableTurns([point(5, { shared: true })].map(restorePointIndexEntry), { round: 6 }), 0);
+  assert.equal("shared" in restorePointIndexEntry(point(5)), false);
 });
 
 test("nothing to restore is a problem; a restore point with no round is taken on trust", () => {

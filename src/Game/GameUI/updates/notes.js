@@ -253,6 +253,7 @@ const NEW_UPDATES = [
           "A country that is renamed keeps its player, even one who was away at the time, and a country with a very long name no longer keeps everyone out of the lobby.",
           "Orders and messages sent while a round is being played are no longer refused: they wait, and count for the next round. When the host's AI cannot play a round, everyone is told why, the orders stay queued, and the host can try again at once.",
           "A player who reconnects, or misses part of an update, is sent the whole game again, so the map no longer freezes or shows half a round. If the host's window reloads, it goes straight back to the shared game, and the round waits for it.",
+          "A round of a shared game belongs to every player: the host can no longer undo it alone, even after the game stops being shared.",
         ],
       },
       {

@@ -8376,6 +8376,8 @@ const captureRollbackSnapshot = async ({ campaignId = "", round, fromDate, toDat
       fromDate,
       toDate,
       capturedAt: new Date().toISOString(),
+      // A round of a shared game (runtime/turnCommit.js SHARED_ROUND_NOTE): never undone by the host alone.
+      ...(hostingSharedGame() ? { shared: true } : {}),
       state: {
         game: cloneValue(game),
         world: cloneValue(world),
