@@ -6148,10 +6148,15 @@ export const applyEventImpactsToWorld = ({
     }
 
     const territoryTransfers = [...event.impacts.regionTransfers, ...released.regionTransfers];
-    const previousTerritorialOwners = territoryTransfers.map(({ regionId }) => [
-      nextWorld.regionOwnershipOverrides?.[regionId] || "",
-      nextWorld.regionSovereigntyOverrides?.[regionId] || "",
-    ]);
+    const dissolvingOwners = polityChanges
+      .filter(({ change }) => change.operation === "dissolve")
+      .map(({ code }) => code);
+    // Snapshot ONLY on legal transfer/dissolution events. The former sovereign
+    // may be absent from an optional transfer.fromCode, while dissolution can
+    // pass additional regions to an heir without an explicit transfer row.
+    const trackLegalTitle = territoryTransfers.length > 0 || dissolvingOwners.length > 0;
+    const ownersBefore = trackLegalTitle ? { ...nextWorld.regionOwnershipOverrides } : null;
+    const sovereignsBefore = trackLegalTitle ? { ...nextWorld.regionSovereigntyOverrides } : null;
     const renamedHere = applyPolityAndTerritoryImpacts({
       colors: nextColors,
       eventDate: event.date,
@@ -6163,23 +6168,45 @@ export const applyEventImpactsToWorld = ({
       resolveOwner,
       world: nextWorld,
     });
-    // Legal title changes can invalidate the component geography baseline.
-    // Until a new reassessment supplies the actual map-backed ledger, stop
-    // using the old owners' economic totals as if the land had never moved.
-    territoryTransfers.forEach((transfer, index) => {
-      const regionId = transfer.regionId;
-      if (previousTerritorialOwners[index][0] === (nextWorld.regionOwnershipOverrides?.[regionId] || "")
-        && previousTerritorialOwners[index][1] === (nextWorld.regionSovereigntyOverrides?.[regionId] || "")) return;
-      for (const owner of [transfer.fromCode, transfer.toCode]) {
-        const code = resolveOwner(owner) || owner;
-        const sheet = nextWorld.countryStats?.[code];
-        if (!sheet) continue;
-        nextWorld.countryStats[code] = {
-          ...sheet,
-          continuity: { ...(sheet.continuity || {}), progressionBlocked: true },
-        };
+    // The legal owner is the recorded sovereign, or the controller when no
+    // divergent sovereign is recorded. A transfer's optional fromCode is only
+    // a fallback when the prior title was not held in the World overrides.
+    // Dissolution may hand *other* regions to its heir without explicit rows.
+    // These recipients must not compound their pre-annexation component ledgers.
+    if (trackLegalTitle) {
+      const candidates = new Map(territoryTransfers.map((transfer) => [transfer.regionId, transfer]));
+      if (dissolvingOwners.length) {
+        for (const regionId of new Set([
+          ...Object.keys(ownersBefore),
+          ...Object.keys(sovereignsBefore),
+        ])) {
+          const legalOwner = sovereignsBefore[regionId] || ownersBefore[regionId] || "";
+          if (dissolvingOwners.some((code) => samePolity(code, legalOwner)) && !candidates.has(regionId)) {
+            candidates.set(regionId, null);
+          }
+        }
       }
-    });
+      for (const [regionId, transfer] of candidates) {
+        const oldController = ownersBefore[regionId] || "";
+        const oldSovereign = sovereignsBefore[regionId] || "";
+        const newController = nextWorld.regionOwnershipOverrides?.[regionId] || "";
+        const newSovereign = nextWorld.regionSovereigntyOverrides?.[regionId] || "";
+        // Screened/refused transfers and mere occupation do not change title.
+        if (oldController === newController && oldSovereign === newSovereign) continue;
+        const oldLegalOwner = oldSovereign || oldController || transfer?.fromCode || "";
+        const newLegalOwner = newSovereign || newController || transfer?.toCode || "";
+        if (samePolity(oldLegalOwner, newLegalOwner)) continue;
+        for (const owner of [oldLegalOwner, newLegalOwner]) {
+          const code = resolveOwner(owner) || owner;
+          const sheet = nextWorld.countryStats?.[code];
+          if (!sheet) continue;
+          nextWorld.countryStats[code] = {
+            ...sheet,
+            continuity: { ...(sheet.continuity || {}), progressionBlocked: true },
+          };
+        }
+      }
+    }
     if (renamedHere.length) {
       renamedPolities.push(...renamedHere);
       // The polity is keyed by its new name now: this event's unit, Political

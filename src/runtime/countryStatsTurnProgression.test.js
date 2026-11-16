@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyEventImpactsToWorld } from "./gameState.js";
+import { applyCountryStatPatchToWorld, applyEventImpactsToWorld } from "./gameState.js";
 import { normalizeCountryStatSheet } from "./countryStats.js";
 
 const sheet = () => normalizeCountryStatSheet({
@@ -76,4 +76,72 @@ test("out-of-order dated events must never silently misdate annual growth", () =
   const before = world();
   const after = apply(before, events);
   assert.deepEqual(after.countryStats, before.countryStats);
+});
+test("the canonical previous sovereign is blocked when a legal transfer omits fromCode", () => {
+  const before = world();
+  const after = apply(before, [event("bare-transfer", "2026-07-01", {
+    regionTransfers: [{ regionId: "region-A", toCode: "Borduria" }],
+  })]);
+  assert.equal(after.regionOwnershipOverrides["region-A"], "Borduria");
+  assert.equal(after.countryStats.Aland.continuity.progressionBlocked, true,
+    "existing lawful donor cannot keep growing its pre-cession territorial ledger");
+  assert.equal(after.countryStats.Borduria.continuity.progressionBlocked, true);
+});
+
+test("the legal sovereign, not an occupying controller, is the donor whose ledger pauses", () => {
+  const before = world();
+  before.regionOwnershipOverrides["region-A"] = "Occupier";
+  before.regionSovereigntyOverrides = { "region-A": "Aland" };
+  before.polityOverrides.Occupier = { code: "Occupier", name: "Occupier" };
+  before.countryStats.Occupier = sheet();
+  const after = apply(before, [event("occupied-transfer", "2026-07-01", {
+    regionTransfers: [{ regionId: "region-A", toCode: "Borduria" }],
+  })]);
+  assert.equal(after.countryStats.Aland.continuity.progressionBlocked, true);
+  assert.equal(after.countryStats.Borduria.continuity.progressionBlocked, true);
+  assert.equal(after.countryStats.Occupier.continuity.progressionBlocked, undefined,
+    "a title transfer need not invalidate the occupier's distinct ledger");
+});
+
+test("implicit succession from a dissolution pauses a known heir's stale numeric ledger", () => {
+  const before = world();
+  before.countryStats.Newland = sheet();
+  before.polityOverrides.Newland = { code: "Newland", name: "Newland" };
+  const after = apply(before, [event("succession", "2026-07-01", {
+    polityChanges: [{ operation: "create", code: "Newland" }, { operation: "dissolve", code: "Aland" }],
+  })]);
+  assert.equal(after.polityOverrides.Aland.status, "dissolved");
+  assert.equal(after.regionOwnershipOverrides["region-A"], "Newland");
+  assert.equal(after.countryStats.Newland.continuity.progressionBlocked, true,
+    "heir must not grow a pre-inheritance national ledger using the enlarged borders");
+});
+
+test("occupation without a legal sovereignty change does not freeze either country's Stats", () => {
+  const after = apply(world(), [event("occupation", "2026-07-01", {
+    regionControlOps: [{ op: "control", regionId: "region-A", fromCode: "Aland", toCode: "Borduria" }],
+  })]);
+  assert.equal(after.regionOwnershipOverrides["region-A"], "Borduria");
+  assert.equal(after.regionSovereigntyOverrides["region-A"], "Aland");
+  assert.equal(after.countryStats.Aland.continuity.progressionBlocked, undefined);
+  assert.equal(after.countryStats.Borduria.continuity.progressionBlocked, undefined);
+});
+test("a map-backed reassessment lifts the title-change hold without retroactive catch-up", () => {
+  const affected = apply(world(), [event("cession", "2026-07-01", {
+    regionTransfers: [{ regionId: "region-A", toCode: "Borduria" }],
+  })]);
+  assert.equal(affected.countryStats.Borduria.continuity.progressionBlocked, true);
+  const paused = affected.countryStats.Borduria.economy.gdp;
+  const passiveEdit = structuredClone(affected);
+  applyCountryStatPatchToWorld(passiveEdit, "Borduria", { economy: { gdpGrowth: 1.5 } });
+  assert.equal(passiveEdit.countryStats.Borduria.continuity.progressionBlocked, true);
+  const rebuilt = structuredClone(passiveEdit);
+  applyCountryStatPatchToWorld(rebuilt, "Borduria", {
+    territorialComponents: [{ geography: "Province A", group: "core", population: 1_500_000, gdpPerCapita: 10000 }],
+  }, { replaceComponents: true, continuity: { assessedDate: "2027-06-01" } });
+  assert.equal(rebuilt.countryStats.Borduria.continuity.progressionBlocked, false);
+  assert.equal(rebuilt.countryStats.Borduria.continuity.lastProgressedDate, "2027-06-01");
+  const later = apply(rebuilt, [], "2027-01-01", "2027-07-01");
+  assert.ok(later.countryStats.Borduria.economy.gdp > rebuilt.countryStats.Borduria.economy.gdp);
+  assert.equal(later.countryStats.Borduria.continuity.lastProgressedDate, "2027-07-01");
+  assert.notEqual(later.countryStats.Borduria.economy.gdp, paused);
 });
