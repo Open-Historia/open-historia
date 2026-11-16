@@ -65,7 +65,8 @@ import { PLAYER_GOAL_MAX_CHARS } from "../../runtime/playerGoal.js";
 // `to`): each country makes its own peace. And two players sign treaties (the
 // "treaty" request), and a view carries a player's own (world.treatyOffers).
 // A conversation is closed, renamed or given countries for everyone in it (the
-// "thread" request), where those were the asker's screen's alone and dropped,
+// "thread" request), where those were the asker's screen's alone and dropped;
+// a line may carry a demand made or answered (the "say" request's `demand`),
 // and a flag is changed through the host (the "flag" request). A country's
 // parties are filled in once, by the replies setting, as a stat sheet is
 // ("parties", "ownParties"), and a goal's progress read on the player's own
@@ -247,7 +248,17 @@ export const PLAYER_REQUESTS = Object.freeze({
     t: literal("say"), id: REQUEST_ID, thread: str(120, { nullable: true }),
     to: list(COUNTRY, 8), text: str(SAY_MAX_CHARS, { min: 1 }),
     fromDraft: str(SAY_FROM_DRAFT_MAX),
-  }, ["fromDraft"]),
+    // A demand the line carries, in the one-on-one thread between a player
+    // and their own Overlord or Puppet (runtime/demandCheck.js): "make" one
+    // (the composer's "make this a demand", or an alternative rejected, with
+    // the revised words in `text` or none to restate it), or "answer" the one
+    // in play (`demandId`, `answer`, an alternative's words in `text`).
+    demand: obj({
+      op: str(8, { enum: ["make", "answer"] }),
+      demandId: str(160), answer: str(24, { enum: ["accepted", "refused", "alternative", "alternative_accepted"] }),
+      text: str(SAY_MAX_CHARS),
+    }, ["demandId", "answer", "text"]),
+  }, ["fromDraft", "demand"]),
   // With settings.replies "own": what the governments the AI plays answered a
   // line of the asker's, written on the asker's own device and AI key
   // (GameUI/ownTableReplies.js). Words only: each entry is one government's

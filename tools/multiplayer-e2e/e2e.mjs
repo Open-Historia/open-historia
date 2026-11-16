@@ -884,6 +884,14 @@ try {
   check("no save was turned away with an error on either screen", complaints(host).length === 0 && complaints(guest).length === 0,
     JSON.stringify({ host: complaints(host).slice(0, 3), guest: complaints(guest).slice(0, 3) }));
 
+  // One door for every change a screen makes (the map's rule 6): a save holding a change no request takes is
+  // logged by the page (client/seatWrites.js unroutedChanges), and here it is a failure: it was dropped unheard.
+  const unrouted = async (tab) => (await tab.eval(`(() => { try { return (JSON.parse(localStorage.getItem('oh_debug_log_v1') || '{}').entries || []).map((entry) => String(entry.message)).filter((message) => message.includes("a change only this screen made")).slice(0, 4); } catch { return ["the log could not be read"]; } })()`)) ?? [];
+  const unroutedHost = await unrouted(host);
+  const unroutedGuest = await unrouted(guest);
+  check("no screen made a change that no request carries to the host", unroutedHost.length === 0 && unroutedGuest.length === 0,
+    JSON.stringify({ host: unroutedHost, guest: unroutedGuest }));
+
   // Whose AI answers a message to a country the AI plays is the host's choice
   // (host/settings.js `replies`): "build C and D, and the host can choose, but
   // no sending api keys". Until here the host's AI answered (C). The host now

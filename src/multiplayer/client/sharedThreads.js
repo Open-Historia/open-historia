@@ -35,13 +35,16 @@ export const SAY_FROM_DRAFT_MAX = 160;
 // its countries, any other is written into by its id. `fromDraft`: the id of
 // the advisor's drafted letter the line was sent from (GameUI/advisorDrafts.js),
 // which the host keeps on the line.
-export const sayRequestFor = (chat, text, { fromDraft = "" } = {}) => {
+// `demand`: a demand the line makes or answers (game/messages.js "say"), entered
+// by the host with the line.
+export const sayRequestFor = (chat, text, { fromDraft = "", demand = null } = {}) => {
   const draft = clean(fromDraft).slice(0, SAY_FROM_DRAFT_MAX);
   return {
     ...(isPendingSharedThread(chat)
       ? { thread: null, to: (Array.isArray(chat.countries) ? chat.countries : []).map(nameOf).filter(Boolean).slice(0, SAY_RECIPIENTS_MAX), text }
       : { thread: clean(chat?.id), to: [], text }),
     ...(draft ? { fromDraft: draft } : {}),
+    ...(demand && !isPendingSharedThread(chat) ? { demand } : {}),
   };
 };
 

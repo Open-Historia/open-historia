@@ -17,6 +17,7 @@
 import { getLibraryState, refreshLibraryCatalog } from "../../runtime/library.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { setPolityFlag } from "../../runtime/polityFlags.js";
+import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
 import {
   mutateActionsState,
   mutateCanonicalTurnState,
@@ -31,7 +32,7 @@ import { setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { discardHeldTurns, endSimulation, enterSimulation } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
-import { assessPoliticalLandscape, declineInteractiveOffer, hasCompiledParties, hasCountryStatSheet, takePoliticalLandscape, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, warRoomChart } from "../../Game/AI/gameplay.js";
+import { assessPoliticalLandscape, checkDemandReply, declineInteractiveOffer, hasCompiledParties, hasCountryStatSheet, takePoliticalLandscape, readCountryForPlayer, runChatActionBatch, setAsideActiveInteractive, simulateTimelineJump, takeCountryStatSheet, warRoomChart } from "../../Game/AI/gameplay.js";
 import { lendBoards, returnBoards } from "./seatBoards.js";
 import { createLoopbackEngineSide } from "../transport/loopback.js";
 import { createHostSession } from "../session/host.js";
@@ -215,7 +216,29 @@ const replyTo = async ({ chatId, seat }) => {
   if (!chat) return null;
   const lastLine = [...list(chat.messages)].reverse().find((message) => clean(message?.speaker || message?.code) === clean(seat));
   const outcome = await tableTurn({ chat, seat, playerMessage: clean(lastLine?.text) });
+  await checkDemandsAfter({ chatId, seat, lastLine });
   return { unreachable: outcome?.generation?.source === "fallback" };
+};
+
+// What the reply did about a demand, in the one-on-one thread between a seat
+// and its own Overlord or Puppet: the game's own check (gameplay.js
+// checkDemandReply, one small request, and none in any other thread), as single
+// player runs it after each such reply, for that seat. Its events join the
+// thread's log in the host's order.
+const checkDemandsAfter = async ({ chatId, seat, lastLine }) => {
+  const chat = list(await readChatsState({ force: true })).find((entry) => clean(entry?.id) === clean(chatId));
+  // The answer: the first line after the seat's own that is not the seat's and is no error.
+  const lines = list(chat?.messages);
+  const from = lines.findIndex((message) => clean(message?.id) && clean(message?.id) === clean(lastLine?.id));
+  const reply = lines.slice(from + 1).find((message) => clean(message?.speaker || message?.code) && clean(message?.speaker || message?.code) !== clean(seat) && !["error", "user"].includes(clean(message?.role)));
+  if (!chat || from < 0 || !reply) return;
+  const events = await checkDemandReply({ chat, speaker: clean(reply.speaker || reply.code), reply: clean(reply.text), answering: clean(lastLine.text), messageId: clean(reply.id), time: clean(reply.time), player: seat }).catch(() => []);
+  if (!events.length) return;
+  await writeInOrder("demand-checked", () => mutateChatsState((current) => list(current).map((entry) => {
+    if (clean(entry?.id) !== clean(chatId)) return entry;
+    const log = [...(list(entry.events).length ? list(entry.events) : eventsFromLegacyChat(entry)), ...events];
+    return { ...entry, events: log, demands: projectChatThread(log).demands };
+  })));
 };
 
 const boot = async () => {

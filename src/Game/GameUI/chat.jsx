@@ -1822,13 +1822,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // host. A pending thread the host opened is followed until the view
         // brings it, and stays shut till then; one it did not name leaves for the
         // list, where it arrives.
-        const sayToHost = async (target, text, baseMessages, { fromDraft = "" } = {}) => {
+        const sayToHost = async (target, text, baseMessages, { fromDraft = "", demand = null } = {}) => {
             setIsLoading(true);
             let waiting = false;
             try {
                 let answer;
                 try {
-                    answer = await requestFromHost("say", sayRequestFor(target, text, { fromDraft }));
+                    answer = await requestFromHost("say", sayRequestFor(target, text, { fromDraft, demand }));
                 } catch (error) {
                     answer = { ok: false, error: error?.message || "" };
                 }
@@ -2098,12 +2098,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // the thread's log AND said, as a line from the player, so the other side
         // answers it the way it answers anything typed — and that answer is then
         // checked in turn. Only a refusal costs the Puppet anything.
+        // In a shared game the host enters the move with the line (the "say"
+        // request's `demand`): the thread's log is the host's.
         const answerDemand = async (demand, answer, text = "") => {
             const event = playerAnswerEvent({ demand, player: playerCountry, answer, text, time: gameDate, idFor: newThreadId });
             if (!event) return;
+            const shared = inSharedGame();
             setDemandBusy(true);
             try {
-                appendThreadEvents([event]);
+                if (!shared) appendThreadEvents([event]);
                 // A change of mind says so, or the other side reads the
                 // acceptance as coming out of nowhere.
                 const reconsidered = demand.status === "refused";
@@ -2115,7 +2118,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         : uiString("We accept: {{summary}}.", { summary: demand.summary }))
                     : answer === "refused" ? uiString("We refuse this demand.")
                         : (reconsidered ? uiString("We have reconsidered. {{text}}", { text }) : text);
-                await submitPlayerText(line);
+                await submitPlayerText(line, shared ? { demand: { op: "answer", demandId: demand.id, answer, ...(answer === "alternative" ? { text } : {}) } } : {});
             } finally {
                 setDemandBusy(false);
             }
@@ -2124,10 +2127,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         const acceptAlternative = async (demand) => {
             const event = playerAnswerEvent({ demand, player: playerCountry, answer: "alternative_accepted", time: gameDate, idFor: newThreadId });
             if (!event) return;
+            const shared = inSharedGame();
             setDemandBusy(true);
             try {
-                appendThreadEvents([event]);
-                await submitPlayerText(uiString("We accept your alternative: {{alternative}}.", { alternative: demand.alternative }));
+                if (!shared) appendThreadEvents([event]);
+                await submitPlayerText(uiString("We accept your alternative: {{alternative}}.", { alternative: demand.alternative }),
+                    shared ? { demand: { op: "answer", demandId: demand.id, answer: "alternative_accepted" } } : {});
             } finally {
                 setDemandBusy(false);
             }
@@ -2139,6 +2144,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             setDemandBusy(true);
             try {
                 await submitPlayerText(revised || uiString("No. The demand stands: {{summary}}.", { summary: demand.summary }), {
+                    demand: { op: "make", text: revised },
                     onSent: ({ messageId, time }) => appendThreadEvents([playerDemandEvent({
                         player: playerCountry,
                         target: demand.target,
@@ -2188,6 +2194,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             setMakeDemand(false);
             await submitPlayerText(text, {
                 fromDraft,
+                ...(asDemand ? { demand: { op: "make" } } : {}),
                 // Rejecting an alternative from the card is demanding again; so is
                 // this. Either replaces whatever demand was still in play.
                 onSent: asDemand
@@ -2211,7 +2218,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // `id`: the message's own, when something already points at it (the
         // player's terms of peace, kept with the war, name it).
         // `fromDraft`: the id of the advisor's drafted letter the line was sent from.
-        const submitPlayerText = async (text, { onSent = null, id = "", fromDraft = "" } = {}) => {
+        // `demand`: in a shared game, the demand the line makes or answers, which the host enters with it.
+        const submitPlayerText = async (text, { onSent = null, id = "", fromDraft = "", demand = null } = {}) => {
             if (!text || isLoading || writingOwnReply) return;
             // Speaking while the table is still talking cuts it off.
             cutIn();
@@ -2222,7 +2230,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             // view holds it; a host that does not say which it opened leaves the
             // player at the list, where it arrives.
             if (inSharedGame()) {
-                await sayToHost(chat, text, messagesRef.current, { fromDraft });
+                await sayToHost(chat, text, messagesRef.current, { fromDraft, demand });
                 return;
             }
             // What the world did since this thread last spoke, told to the

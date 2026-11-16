@@ -79,7 +79,7 @@ test("every way the diplomacy panel begins a thread in a shared game leaves it p
   assert.match(consume.slice(shared, local), /pendingSharedThread\(\[\{ name: country\.name, code \}\]\)[\s\S]*?return prev;/);
   // A line is sent as the thread asks (with the drafted letter it came from,
   // if any), and a thread the host opened is followed.
-  assert.match(chat, /requestFromHost\("say", sayRequestFor\(target, text, \{ fromDraft \}\)\)/);
+  assert.match(chat, /requestFromHost\("say", sayRequestFor\(target, text, \{ fromDraft, demand \}\)\)/);
   assert.match(chat, /onSharedThreadOpened=\{followThreadFromAck\}/);
 });
 
@@ -130,7 +130,7 @@ test("both shared-game sends shut the composer until the ack and follow a thread
   const group = chat.slice(chat.indexOf("const runGroupTurn = async "), chat.indexOf("setIsLoading(true);\n            // The player's line"));
   assert.match(group, /await sayToHost\(chatOverride \|\| chat, text, nextMessages\);/);
   const submit = chat.slice(chat.indexOf("const submitPlayerText = async "), chat.indexOf("const moment = await readSeenChatMoment(gameDate);"));
-  assert.match(submit, /if \(inSharedGame\(\)\) \{\s*await sayToHost\(chat, text, messagesRef\.current, \{ fromDraft \}\);\s*return;/);
+  assert.match(submit, /if \(inSharedGame\(\)\) \{\s*await sayToHost\(chat, text, messagesRef\.current, \{ fromDraft, demand \}\);\s*return;/);
   assert.equal((chat.match(/requestFromHost\("say"/g) ?? []).length, 1, "no other path says a line to the host");
   // The composer is only drawn while nothing is loading.
   assert.match(chat, /\) : !isLoading \? \(\s*<div data-diplomacy-composer="modern"/);

@@ -5635,9 +5635,16 @@ const mergePolityCatalog = (countryCatalog, world) => {
 // it reads its state and checks it again before writing, because the runtime
 // endpoints follow the active campaign and a switch mid-turn would otherwise
 // land the whole turn on the campaign that was switched to (campaignGuard.js).
+// A shared game is another world in front of the page: its documents are the
+// host's view (multiplayer/client/remoteRuntime.js), whatever the library's
+// active game. So a writer that began in the page's own game and finishes after
+// a shared game began, or the other way round, is refused by the same check:
+// an idle pulse begun before the host shared its game wrote into the shared
+// view, where the write was dropped (the two-browser run's one-door check).
 const activeCampaignId = () => {
   try {
-    return String(getLibraryState()?.activeGameId ?? "").trim();
+    const id = String(getLibraryState()?.activeGameId ?? "").trim();
+    return id && inSharedGame() ? `shared:${id}` : id;
   } catch {
     return "";
   }
@@ -15817,14 +15824,15 @@ export const runPostTurnInstitutionBallots = async ({
 // from a reply to something else. The caller appends what comes back.
 const mintDemandId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
-export const checkDemandReply = async ({ chat, speaker, reply, answering = "", messageId = "", time = "", signal = null } = {}) => {
+// `player`: the person it answered, in a shared game (the seat); the game's own country otherwise.
+export const checkDemandReply = async ({ chat, speaker, reply, answering = "", messageId = "", time = "", signal = null, player = "" } = {}) => {
   const stored = normalizeChats([chat])[0];
   if (!stored || !normalizeString(reply)) return [];
   const [world, game] = await Promise.all([readWorldState({ force: true }), readGameData({ force: true })]);
   const context = demandCheckContext({
     world,
     speaker,
-    playerCountry: normalizeString(game?.country),
+    playerCountry: normalizeString(player) || normalizeString(game?.country),
     participants: stored.countries,
   });
   if (!context) return [];

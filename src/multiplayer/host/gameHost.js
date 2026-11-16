@@ -30,6 +30,8 @@ import { REPLY_MODES, roundSettingsOf } from "./settings.js";
 import { projectForViewer } from "./projection.js";
 import { COUNTRY_MAX_CHARS, HOST_MESSAGES, ORDER_MAX_CHARS, THREAD_MEMBERS_MAX, THREAD_TITLE_MAX, VIEW_KEYS } from "../game/messages.js";
 import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
+import { openDemandOf, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
+import { livePuppetsFor } from "../../runtime/puppets.js";
 import { validate } from "../protocol/validate.js";
 import { digestText } from "../protocol/digest.js";
 import { withGoalProgress, withPlayerGoal } from "../../runtime/playerGoal.js";
@@ -107,6 +109,25 @@ const membersOf = (chat) => list(chat?.countries).map((entry) => clean(typeof en
 // An institution's Council or a hearing: its governments vote and decide in
 // their answer, which only the host's own game can carry out.
 const isInstitutionThread = (chat) => Boolean(clean(chat?.institutionId) || clean(chat?.lifecycleInstitutionId));
+// The demand event a line carries (game/messages.js "say" `demand`), by the
+// game's own rules (runtime/demandCheck.js), or null when it may not be made:
+// only in the one-on-one thread between the writer and the other side, made by
+// an Overlord of its own Puppet, answered by the side that may answer.
+const demandEventFor = (chat, { demand, seat, owner, members, world, message, gameDate }) => {
+  const others = [owner, ...members].filter((name) => clean(name).toLowerCase() !== clean(seat).toLowerCase());
+  if (others.length !== 1) return null;
+  const other = others[0];
+  const idFor = (prefix) => `${prefix}-${String(message.id).replace(/^message-/, "")}`;
+  if (demand.op === "make") {
+    const overlordOf = livePuppetsFor(world ?? {}, seat).some((row) => clean(row.overlord).toLowerCase() === clean(seat).toLowerCase()
+      && clean(row.puppet).toLowerCase() === clean(other).toLowerCase());
+    if (!overlordOf) return null;
+    return playerDemandEvent({ player: seat, target: other, text: clean(demand.text) || (demand.text === undefined ? clean(message.text) : ""), openDemand: openDemandOf(chat), messageId: message.id, time: gameDate, idFor });
+  }
+  const projected = projectChatThread(list(chat.events).length ? list(chat.events) : eventsFromLegacyChat(chat));
+  const held = list(projected.demands).find((entry) => clean(entry?.id) === clean(demand.demandId));
+  return playerAnswerEvent({ demand: held, player: seat, answer: demand.answer, text: demand.text ?? "", time: gameDate, idFor });
+};
 
 // One player's Projects board put where the game keeps it: the host's seat has
 // the game's own (world.projects, single player's); every other person's is
@@ -1194,7 +1215,7 @@ export const createGameHost = ({
       round.touch(seat.country);
       return "";
     },
-    say: async (connection, { thread, to, text, fromDraft }, seat) => {
+    say: async (connection, { thread, to, text, fromDraft, demand }, seat) => {
       const body = clean(text);
       if (!body) return "A message needs words.";
       const recipients = list(to).map(clean).filter(Boolean);
@@ -1246,6 +1267,21 @@ export const createGameHost = ({
           parties = [owner, ...members];
           institutional = isInstitutionThread(chat);
           const next = [...all];
+          // A demand the line carries (runtime/demandCheck.js): made by an
+          // Overlord of its own Puppet, or answered, by the side that may, in
+          // the one-on-one thread between them. On the page it was an entry of
+          // the thread's log, dropped; the host enters it with the line.
+          const demanded = demand ? demandEventFor(chat, { demand, seat: seat.country, owner, members, world: docs?.world, message, gameDate }) : null;
+          if (demand && !demanded) {
+            refusal = "That is not a demand you can make or answer here.";
+            return null;
+          }
+          if (demanded) {
+            const events = [...(list(chat.events).length ? list(chat.events) : eventsFromLegacyChat(chat)), demanded];
+            const projected = projectChatThread(events);
+            next[index] = { ...chat, events, demands: projected.demands, messages: [...list(chat.messages), message] };
+            return next;
+          }
           next[index] = { ...chat, messages: [...list(chat.messages), message] };
           return next;
         }
@@ -1276,7 +1312,11 @@ export const createGameHost = ({
         // its own, or accept the writer's terms (AI/warStatsPrompt.js
         // describePeaceTalk, which asks the same of the same wars). Those are
         // answered here, whatever the setting.
-        const decides = institutional || governments.some((name) => Boolean(warBetween(docs?.world?.wars, name, seat.country)));
+        // So does a government that is the writer's own Overlord or Puppet: its
+        // answer may make, answer or settle a demand, which the host's engine
+        // checks after it (engineMain.js replyTo, gameplay.js checkDemandReply).
+        const tied = new Set(livePuppetsFor(docs?.world ?? {}, seat.country).flatMap((row) => [row.overlord, row.puppet]).map((name) => clean(name).toLowerCase()));
+        const decides = institutional || governments.some((name) => Boolean(warBetween(docs?.world?.wars, name, seat.country)) || tied.has(clean(name).toLowerCase()));
         if (replies === "own" && !decides) {
           // The writer's own device answers, on its own AI key: the ack says
           // so, with the line it is to answer and the governments that do

@@ -1053,6 +1053,34 @@ test("a goal's progress, read on the player's own device, is kept with that play
   assert.match(s.ack(s.guest, id(4)).error, /goal has changed/);
 });
 
+test("a demand made or answered rides on its line, entered by the host by the game's own rules", async () => {
+  // On a page "make this a demand" and a demand card's answer were entries of the thread's log, dropped: only the
+  // words reached the host. Russia (the guest) is the host's Latvia's overlord here.
+  const s = setup();
+  s.store.docs.world.puppets = [{ id: "p1", overlord: RUSSIA, puppet: LATVIA, kind: "satellite", status: "active", secrecy: "open", loyalty: 60 }];
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [LATVIA], text: "We must talk." });
+  const thread = s.store.docs.chat.find((chat) => chat.player === RUSSIA).id;
+  const held = () => s.store.docs.chat.find((chat) => chat.id === thread);
+  await s.request(s.guest, { t: "say", id: id(3), thread, to: [], text: "Close your ports to our enemies.", demand: { op: "make" } });
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  const made = held().events.find((event) => event.kind === "demand_made");
+  assert.deepEqual([made.by, made.target, made.summary], [RUSSIA, LATVIA, "Close your ports to our enemies."]);
+  // Only the overlord makes one: Latvia cannot demand of Russia.
+  await s.request(s.hostPlayer, { t: "say", id: id(4), thread, to: [], text: "And you, ours.", demand: { op: "make" } });
+  assert.match(s.ack(s.hostPlayer, id(4)).error, /not a demand you can make or answer/);
+  // The puppet answers it from its card; the overlord cannot answer for it.
+  await s.request(s.guest, { t: "say", id: id(5), thread, to: [], text: "We accept.", demand: { op: "answer", demandId: made.demandId, answer: "accepted" } });
+  assert.match(s.ack(s.guest, id(5)).error, /not a demand you can make or answer/);
+  await s.request(s.hostPlayer, { t: "say", id: id(6), thread, to: [], text: "We refuse this demand.", demand: { op: "answer", demandId: made.demandId, answer: "refused" } });
+  assert.equal(s.ack(s.hostPlayer, id(6)).ok, true);
+  assert.equal(held().demands.find((demand) => demand.id === made.demandId).status, "refused");
+  assert.ok(held().messages.some((message) => message.text === "We refuse this demand."), "with its line");
+});
+
 test("a conversation is renamed, given countries and closed for everyone in it, by someone in it", async () => {
   // "All shared" (the owner, 2026-11-16): on the asker's screen alone these were dropped, the thread came back, the
   // name reverted, and an added country never heard a word.
