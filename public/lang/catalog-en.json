@@ -514,6 +514,7 @@
  "A second source stands this up.",
  "A segment of this jump failed.",
  "A shared game is already open.",
+ "A shared game no longer offers interactive events, which only the host saw and nobody could play: they come back to shared games once they are made for several players.",
  "A shared game now remembers who plays which country. Stop sharing it, share it again even days later, and every player gets their own country back. It opens paused, and the host resumes it when everyone is in.",
  "A side nobody plays decides for itself to attack, probe, hold or dig in, by its strength and by who began the war.",
  "A side that holds the sky with fewer wings than the other is told as holding it with fewer but stronger ones, and worn-out wings are no longer counted.",
