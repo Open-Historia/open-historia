@@ -41,6 +41,7 @@ import { applyWarRoomOp, cleanWarRoomOp } from "../../runtime/fronts/warRoomOps.
 import { applyFortifyOp, cleanFortifyOp } from "../../runtime/fronts/fortifyOps.js";
 import { applyFleetOp, cleanFleetOp } from "../../runtime/naval/fleetOps.js";
 import { applyAirStrikeOp, cleanAirStrikeOp } from "../../runtime/fronts/airStrikeOps.js";
+import { frontCitiesOf } from "../../runtime/frontCities.js";
 import { activeTransportMedia, activeWars, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { transportFiguresOf } from "../../runtime/militaryStats.js";
 import { eraSettingOf } from "../../runtime/warSettings.js";
@@ -49,9 +50,6 @@ import { playerDiplomacy } from "../../Game/AI/warAndPeace.js";
 import { warBetween } from "../../runtime/peaceTerms.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
-// Stat sheets a player may ask the host to write in one round: each is a
-// request on the host's own AI key.
-export const MAX_SHEETS_PER_ROUND = 6;
 // The answers a device's requests were given, kept so that one sent again (the
 // page sends again what was not answered before a reconnect) is applied once
 // and answered as it was the first time.
@@ -143,13 +141,24 @@ export const createGameHost = ({
   // shared game is stopped meanwhile.
   resolveRound = async () => {},
   replyTo = async () => {},
-  // Write a country's stat sheet (the game's own, on the host's AI key);
-  // rejects with the reason when it cannot.
+  // Write a country's stat sheet (the game's own, on the host's AI key) when
+  // it has none; rejects with the reason when it cannot.
   readCountry = async () => {},
+  // Whether a country has its figures: a whole sheet, which stands.
+  hasSheet = async () => false,
+  // Take a sheet a player's own device wrote ({ country, sheet, continuity,
+  // rating }): resolves { taken } (false when the country had its figures
+  // already), or rejects with the reason when it is no whole sheet.
+  takeSheet = async () => ({ taken: false }),
   // The host's own chart of the map (runtime/warRoomChart.js: where the sea
   // is, whose the ground), which the war room's fortified lines and fleets
   // are held to; resolves with null when the map could not be read.
   readChart = async () => null,
+  // The map's cities file as the host's game serves it (GeoJSON), which a city
+  // struck from the air is looked up on (runtime/frontCities.js): where it
+  // stands and how many live there, never a page's count; resolves with null
+  // when it could not be read.
+  readCities = async () => null,
   // An institution's business for a seat (host/institutions.js): resolves
   // { institutionId, proposalId, chatId } or rejects with the reason.
   institution = async () => {
@@ -193,8 +202,6 @@ export const createGameHost = ({
   const connections = new Map();
   // device → Map(request id → its ack, or null while it is being applied).
   const answers = new Map();
-  // seat (folded) → { round, count }: the stat sheets it has asked for this round.
-  const sheetsAsked = new Map();
   // Who answers a player's message to a government the AI plays (settings.js
   // `replies`): the host's computer, or the writer's own device. The host may
   // change it while the game runs (control.setReplies).
@@ -818,15 +825,20 @@ export const createGameHost = ({
       return refusal;
     },
     // The war room's air strikes (runtime/fronts/airStrikeOps.js), by the same
-    // rule: the air unit must be the seat's country's, and a city struck is held
-    // to the host's own map. Flown when the round is resolved.
+    // rule: the air unit must be the seat's country's, and a city struck is the
+    // host's own map's, held to its chart, with as many people as the host's
+    // world says live there. Flown when the round is resolved.
     airstrike: async (connection, { op }, seat) => {
       const sent = cleanAirStrikeOp(op);
       if (!sent) return "Nothing was asked.";
-      const chart = sent.op === "airstrike" && sent.kind === "city" ? await Promise.resolve().then(readChart).catch(() => null) : null;
+      const city = sent.op === "airstrike" && sent.kind === "city";
+      const [chart, cityMap] = city
+        ? await Promise.all([Promise.resolve().then(readChart).catch(() => null), Promise.resolve().then(readCities).catch(() => null)])
+        : [null, null];
       let refusal = "";
       await store.updateForces(({ world, game }) => {
-        const result = applyAirStrikeOp(world, sent, { player: seat.country, date: clean(game?.gameDate), round: game?.round, chart, air: activeWars().air });
+        const cities = cityMap ? frontCitiesOf(cityMap, world, game) : null;
+        const result = applyAirStrikeOp(world, sent, { player: seat.country, date: clean(game?.gameDate), round: game?.round, chart, cities, air: activeWars().air });
         if (result.error) {
           refusal = result.error;
           return null;
@@ -861,21 +873,37 @@ export const createGameHost = ({
       round.touch(seat.country);
       return refusal;
     },
-    // A country's stat sheet, when the player's Stats pane has none to show:
-    // the host writes it, on its own AI key, and it reaches every view. The
-    // answer waits for the writing, so the pane can say why when it fails. The
-    // model is asked outside the queue; the sheet is written under the game's
-    // own lock, which a round being resolved holds (gameplay.js beginStatsWrite).
-    sheet: async (connection, { country, fresh }, seat) => {
-      const current = round.status().round;
-      const asked = sheetsAsked.get(fold(seat.country));
-      const count = asked?.round === current ? asked.count : 0;
-      if (count >= MAX_SHEETS_PER_ROUND) return `A player may ask for ${MAX_SHEETS_PER_ROUND} stat sheets a round.`;
-      sheetsAsked.set(fold(seat.country), { round: current, count: count + 1 });
+    // A country's stat sheet, when the player's Stats pane has none to show.
+    // Whose AI writes it is the host's setting (settings.js `replies`), as it
+    // is for the messages to governments the AI plays: the host's own, as many
+    // as are asked for, or each player's own, when the answer leaves it to the
+    // asking device ({ answer: "own" }; it sends the figures as "ownSheet"). A
+    // sheet once written stands: nothing is read again in a shared game, for
+    // anyone, so a country is written for once. The host's answer waits for
+    // its writing, so the pane can say why when it fails. The model is asked
+    // outside the queue; the sheet is written under the game's own lock, which
+    // a round being resolved holds (gameplay.js beginStatsWrite).
+    sheet: async (connection, { country }, seat) => {
+      const name = clean(country);
       try {
-        await readCountry({ country: clean(country), fresh: fresh === true, seat: seat.country });
+        if (replies === "own" && !(await hasSheet(name))) return { error: "", result: { answer: "own" } };
+        await readCountry({ country: name, seat: seat.country });
       } catch (failure) {
         return clean(failure?.message || failure).slice(0, 280) || "The host could not write that country's figures.";
+      }
+      round.touch(seat.country);
+      return "";
+    },
+    // With settings.replies "own": the sheet a player's device wrote on its own
+    // AI key for a country that had none. The first to come is the sheet; one
+    // that comes after it is answered as written, and the page reads the one
+    // its view holds.
+    ownSheet: async (connection, { country, sheet, continuity, rating }, seat) => {
+      if (replies !== "own") return "The host's AI writes the figures in this game.";
+      try {
+        await takeSheet({ country: clean(country), sheet, continuity: continuity ?? null, rating: rating ?? null });
+      } catch (failure) {
+        return clean(failure?.message || failure).slice(0, 280) || "The host could not take those figures.";
       }
       round.touch(seat.country);
       return "";

@@ -55,7 +55,11 @@ import { SAY_FROM_DRAFT_MAX } from "../client/sharedThreads.js";
 // 13: the lobby states the game's inputs every screen uses: its map's checksum
 // (`scenario.hash`, which a guest's copy must match) and its feature switches
 // (`features`, which a guest's screen takes for its own while it plays).
-export const SHARED_GAME_VERSION = "13";
+// 14: a stat sheet is written once and stands: the "sheet" request has no
+// `fresh` (nothing is read again in a shared game), and with settings.replies
+// "own" the host leaves a missing sheet to the asking device, which writes it
+// on its own AI key and sends the figures (the "ownSheet" request).
+export const SHARED_GAME_VERSION = "14";
 
 // The documents a player's view holds: the game itself first (a screen that
 // asks for one before the first view arrives waits for it), then the three a
@@ -152,9 +156,20 @@ export const PLAYER_REQUESTS = Object.freeze({
     t: literal("agent"), id: REQUEST_ID, op: str(8, { enum: ["deploy", "recall", "expel", "turn", "story", "focus", "mission"] }),
     target: str(80), spy: str(160), story: str(300),
   }),
-  // A country's stat sheet, for the host to write when the player's Stats pane
-  // has none to show (`fresh`: write it again although there is one).
-  sheet: obj({ t: literal("sheet"), id: REQUEST_ID, country: COUNTRY, fresh: bool() }),
+  // A country's stat sheet, when the player's Stats pane has none to show: the
+  // host writes it on its own AI key, or answers `{ answer: "own" }` when its
+  // setting leaves it to each player's own (settings.replies). A sheet that is
+  // there stands: there is nothing to ask for to have it written again.
+  sheet: obj({ t: literal("sheet"), id: REQUEST_ID, country: COUNTRY }),
+  // With settings.replies "own": that sheet, written on the asker's own device
+  // and AI key (Game/AI/gameplayLazy.js), with the continuity it was assessed
+  // under and the rating of the country's intelligence service that came in
+  // the same request. Figures alone, no key: the host takes them for a country
+  // that still has none, as the game merges its own reading.
+  ownSheet: obj({
+    t: literal("ownSheet"), id: REQUEST_ID, country: COUNTRY, sheet: json(8),
+    continuity: json(5), rating: int(0, 100, { nullable: true }),
+  }, ["continuity", "rating"]),
   // War and peace (Game/AI/warAndPeace.js): the player's answer to an offer of
   // peace ("accept", "decline") or to a call to arms ("honour", "refuse"), by
   // its id; or terms of its own put to the other side of a war ("propose", by

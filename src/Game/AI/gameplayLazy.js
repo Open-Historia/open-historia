@@ -137,17 +137,50 @@ export const ensureIntelligenceRated = hostQuietly(async (...args) => (await gam
 // The figures of the countries the game needs and has none for, rated against the others (militaryRating.js).
 export const ensureMilitaryFigures = hostQuietly(async (...args) => (await gameplay()).ensureMilitaryFigures(...args));
 export const readOpenedIntercepts = async (...args) => (await gameplay()).readOpenedIntercepts(...args);
-// A stat sheet is the game's own record, so in a shared game the host writes
-// it, on the host's AI key: the page asks (the host answers once it is
-// written, which takes as long as the model does) and reads the sheet out of
-// its next view. A refusal is thrown with the host's reason, as any failed
-// reading is, and the Stats pane shows it.
+// A stat sheet is the game's own record, so in a shared game the host keeps
+// it: the page asks for a country's figures and reads the sheet out of its next
+// view. Whose AI writes them is the host's setting (settings.replies), as for
+// the messages to governments the AI plays. The host's own: the host answers
+// once it has written the sheet, which takes as long as the model does. Each
+// player's own: the host answers that this device is to write it, and the
+// game's own reading runs here, on this device's AI key and from what its view
+// holds, and hands the finished sheet to the host ("ownSheet"), which takes it
+// if the country still has none. No key leaves this device. A sheet once
+// written stands: nothing is read again in a shared game, so there is no
+// reassessment to ask the host for. A refusal is thrown with the host's
+// reason, as any failed reading is, and the Stats pane shows it.
 const SHEET_ANSWER_MS = 5 * 60 * 1000;
-const sheetFromHost = async ({ code, name, forceReassess = false, signal } = {}) => {
+const aborted = () => new DOMException("Stats panel/selection changed.", "AbortError");
+const sheetOnOwnKey = async (country, signal) => {
+  let assessment = null;
+  const view = await readWorldStateView({ force: true }).catch(() => null);
+  const rated = Number.isFinite(Number(view?.intelligence?.[country]));
+  await (await gameplay()).generateCountryStatSheet({
+    code: country,
+    name: country,
+    signal,
+    // The service's first rating comes in the same request, as on the host.
+    ...(rated ? {} : { rateIntelligence: true, onIntelligenceRating: (value) => { assessment = value; } }),
+    commit: async ({ sheet, continuity }) => {
+      if (signal?.aborted) throw aborted();
+      const rating = Number(assessment?.intelligence);
+      const sent = await requestFromHost("ownSheet", {
+        country,
+        sheet,
+        continuity: continuity ?? null,
+        rating: Number.isFinite(rating) ? Math.max(0, Math.min(100, Math.round(rating))) : null,
+      }, { timeoutMs: SHEET_ANSWER_MS });
+      if (!sent.ok) throw new Error(sent.error || "The host did not take the stat sheet.");
+      return sheet;
+    },
+  });
+};
+const sheetFromHost = async ({ code, name, signal } = {}) => {
   const country = String(code || name || "").trim();
-  const answer = await requestFromHost("sheet", { country, fresh: forceReassess === true }, { timeoutMs: SHEET_ANSWER_MS });
-  if (signal?.aborted) throw new DOMException("Stats panel/selection changed.", "AbortError");
+  const answer = await requestFromHost("sheet", { country }, { timeoutMs: SHEET_ANSWER_MS });
+  if (signal?.aborted) throw aborted();
   if (!answer.ok) throw new Error(answer.error || "The host did not write the stat sheet.");
+  if (answer.result?.answer === "own") await sheetOnOwnKey(country, signal);
   // The sheet comes with the view the host sends right after its answer.
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const world = await readWorldStateView({ force: true }).catch(() => null);

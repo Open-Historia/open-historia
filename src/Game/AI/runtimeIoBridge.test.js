@@ -76,8 +76,11 @@ test("the page ignores everything that is not an io request", async () => {
 test("Country Stats hosted-worker path keeps the page-side runtime I/O bridge wired", () => {
   const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
   assert.match(gameplay, /import \{ IO_CONFIG, IO_REQUEST, serveWorkerIo \} from "\.\/runtimeIoBridge\.js"/);
-  // And a shared game's engine window, whose writes carry its credential (runtime/writeCredential.js).
-  assert.match(gameplay, /VITE_OH_WEB \|\| hasWriteCredential\(\)\) worker\.postMessage\(\{ type: IO_CONFIG, bridgeRuntimeIo: true \}\)/);
+  // And a shared game's engine window, whose writes carry its credential (runtime/writeCredential.js), and a
+  // page playing a shared game, whose documents are the host's view: told before each job, since a page joins
+  // and leaves shared games while the worker lives (a desktop guest's worker read its stand-in game).
+  assert.match(gameplay, /const runtimeIoAnsweredHere = \(\) => Boolean\(import\.meta\.env\.VITE_OH_WEB \|\| hasWriteCredential\(\) \|\| inSharedGame\(\)\);/);
+  assert.match(gameplay, /const bridged = runtimeIoAnsweredHere\(\);\s*if \(bridged !== countryStatsWorkerBridged\) \{\s*countryStatsWorker\.postMessage\(\{ type: IO_CONFIG, bridgeRuntimeIo: bridged \}\);/);
   assert.match(gameplay, /event\?\.data\?\.type === IO_REQUEST/);
   assert.match(gameplay, /serveWorkerIo\(event\.data, fetch\)/);
 });

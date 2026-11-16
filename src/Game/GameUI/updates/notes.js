@@ -240,6 +240,8 @@ const NEW_UPDATES = [
           "A reply written on a player's device is words only: a country cannot make peace, sign a treaty or call a vote in it. So a country at war with you, and an institution's council, are still answered by the host's AI, which can. Everything said is read when the round is played, like any conversation.",
           "With the host's AI, a conversation is answered one message at a time, so two messages sent quickly no longer lose each other's replies, and you are told when the host's AI could not be reached instead of being left without an answer.",
           "A conversation no longer disappears when you write in it after the player who started it has left the game.",
+          "A country's figures in the Stats panel follow the same choice: a country with none yet has them written by the host's AI, for as many countries as players ask, or by the asking player's own AI on their own device.",
+          "In a shared game a country's figures, once written, stay the same for everyone: they cannot be rebuilt from scratch, and only the rounds move them.",
         ],
       },
       {
@@ -259,6 +261,7 @@ const NEW_UPDATES = [
           "Every screen now draws the host's map as the host's game does: its seas, region types and projection reach every player, so a flat or fantasy map is the same map on every screen.",
           "When you join, your copy of the host's scenario is checked against the host's. If its map differs, you are told so and asked to import the host's copy, instead of playing on a different map.",
           "The host's game settings apply on every screen: a feature the host's game has switched off is off for every player.",
+          "An order to end a war is now the offer of the player who gave it: another player's order no longer offers peace in your country's name.",
         ],
       },
     ],

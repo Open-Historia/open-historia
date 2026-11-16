@@ -21,7 +21,7 @@ import { collectFoundedPolities, foundingPolityChange } from "../../runtime/poli
 import { describeBasisAction, describeUnknownBasis, sameRegionChange, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
 import { GROUP_OP_KINDS, PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, findGroupKey, groupOpKind, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
-import { hostingSharedGame, humanCountriesOf } from "../../runtime/humanPolities.js";
+import { hostingSharedGame, humanCountriesOf, orderOwner } from "../../runtime/humanPolities.js";
 import { uiString } from "../../runtime/translator.js";
 import { withTurnSeaBattles } from "../../runtime/naval/record.js";
 import { withFrontFortifications } from "../../runtime/warGeography.js";
@@ -213,6 +213,7 @@ import {
 } from "../../runtime/countryStatsOwnership.js";
 import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
 import { hasWriteCredential } from "../../runtime/writeCredential.js";
+import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
 import {
   AGENT_REPORTS_FIELD,
   decodeGameMasterTransportPayload,
@@ -996,10 +997,7 @@ const screenSegmentFrontOrders = (candidate, { game, actions, receipt = null } =
   }
   // (Prose where orders go was said, and dropped, when they were tied to their events: pinSegmentLedgers.)
   const events = normalizeArray(candidate?.events);
-  const owners = new Map(normalizeArray(actions).map((action) => [
-    normalizeString(action?.id),
-    normalizeString(action?.ownerCode) || normalizeString(game?.country),
-  ]));
+  const owners = new Map(normalizeArray(actions).map((action) => [normalizeString(action?.id), orderOwner(action, game)]));
   const { kept, dropped } = screenFrontOrders(bindFrontOrdersToEvents(candidate?.frontOrders, events), {
     events,
     humanSides: humanCountriesOf(game),
@@ -9066,7 +9064,7 @@ const applySimulationResult = async ({
   // refused, with the events that told it and what they changed on the map. One
   // the player's own order brought about is put to the other side as their offer
   // of peace instead (turnWarAndPeace below).
-  const playersWars = holdPlayersWars({ updates: result.warUpdates, events: curatedEvents, wars: baseWorld?.wars, players: humanCountriesOf(baseGame), orders: baseActions, offers: baseWorld?.peaceOffers });
+  const playersWars = holdPlayersWars({ updates: result.warUpdates, events: curatedEvents, wars: baseWorld?.wars, players: humanCountriesOf(baseGame), orders: baseActions, offers: baseWorld?.peaceOffers, game: baseGame });
   if (playersWars.refused.length) {
     curatedEvents = playersWars.events;
     const offered = new Set(playersWars.proposals.map((entry) => entry.update));
@@ -11888,23 +11886,39 @@ const resetCountryStatsWorker = ({ failed = false, reason = null } = {}) => {
   countryStatsWorkerPending.clear();
 };
 
+// Hosted builds (website, Android app) answer /api/* with a patch on THIS
+// thread's fetch, which the worker never sees: its runtime reads and writes
+// come here as `io` messages and go back as `io-result` (runtimeIoBridge.js).
+// So do a shared game's engine window, whose writes must carry its credential
+// (runtime/writeCredential.js), and a page playing a shared game, whose
+// documents are the host's view (multiplayer/client/remoteRuntime.js): the
+// desktop's server would answer the worker with this device's own stand-in
+// game. A page joins and leaves shared games while the worker lives, so the
+// worker is told before each job. Otherwise the desktop's server answers the
+// worker directly.
+const runtimeIoAnsweredHere = () => Boolean(import.meta.env.VITE_OH_WEB || hasWriteCredential() || inSharedGame());
+let countryStatsWorkerBridged = false;
+
 const getCountryStatsWorker = () => {
   if (countryStatsWorkerBroken || typeof Worker === "undefined") return null;
-  if (countryStatsWorker) return countryStatsWorker;
+  if (!countryStatsWorker) countryStatsWorker = startCountryStatsWorker();
+  if (!countryStatsWorker) return null;
+  const bridged = runtimeIoAnsweredHere();
+  if (bridged !== countryStatsWorkerBridged) {
+    countryStatsWorker.postMessage({ type: IO_CONFIG, bridgeRuntimeIo: bridged });
+    countryStatsWorkerBridged = bridged;
+  }
+  return countryStatsWorker;
+};
 
+const startCountryStatsWorker = () => {
   try {
     const worker = new Worker(
       new URL("./countryStatsWorker.js", import.meta.url),
       { type: "module", name: "openhistoria-country-stats" },
     );
-
-    // Hosted builds (website, Android app) answer /api/* with a patch on THIS
-    // thread's fetch, which the worker never sees: its runtime reads and writes
-    // come here as `io` messages and go back as `io-result` (runtimeIoBridge.js).
-    // So does a shared game's engine window, whose writes must carry its
-    // credential (runtime/writeCredential.js). Otherwise the desktop's server
-    // answers the worker directly, so it is never told.
-    if (import.meta.env.VITE_OH_WEB || hasWriteCredential()) worker.postMessage({ type: IO_CONFIG, bridgeRuntimeIo: true });
+    // A new worker reads with its own fetch until it is told otherwise.
+    countryStatsWorkerBridged = false;
 
     worker.onmessage = (event) => {
       if (event?.data?.type === IO_REQUEST) {
@@ -11937,7 +11951,6 @@ const getCountryStatsWorker = () => {
       });
     };
 
-    countryStatsWorker = worker;
     return worker;
   } catch {
     countryStatsWorkerBroken = true;
@@ -13881,21 +13894,28 @@ export const ensureCountryStatSheet = (target, { reason = "", rateIntelligence =
 // one reading of a polity runs at a time. Resolves to the sheet; rejects with
 // the reason when it could not be written.
 const playerReadingsInFlight = new Map();
+// A polity's sheet when it is whole by the scenario's own definition of one
+// (a custom-stats scenario's keys, or the standard sheet's); null otherwise.
+const completeStatSheetOf = (world, name, definition) => {
+  const sheet = normalizeCountryStatSheet(world?.countryStats?.[name]);
+  const complete = definition.custom
+    ? isCompleteCustomCountryStatSheet(sheet, statSheetKeys(definition))
+    : isCompleteCountryStatSheet(sheet);
+  return complete ? sheet : null;
+};
+const readStatSheetBasis = () => Promise.all([
+  readWorldState({ force: true }).then(normalizeWorldState),
+  loadStatSheetDefinition(),
+]);
 export const readCountryForPlayer = (target) => {
   const name = normalizeString(target);
   if (!name) return Promise.reject(new Error("There is no country to read."));
   const key = firstReadingKey("a player's stat sheet", name);
   if (playerReadingsInFlight.has(key)) return playerReadingsInFlight.get(key);
   const run = (async () => {
-    const [world, definition] = await Promise.all([
-      readWorldState({ force: true }).then(normalizeWorldState),
-      loadStatSheetDefinition(),
-    ]);
-    const persisted = normalizeCountryStatSheet(world.countryStats?.[name]);
-    const complete = definition.custom
-      ? isCompleteCustomCountryStatSheet(persisted, statSheetKeys(definition))
-      : isCompleteCountryStatSheet(persisted);
-    if (complete) return persisted;
+    const [world, definition] = await readStatSheetBasis();
+    const persisted = completeStatSheetOf(world, name, definition);
+    if (persisted) return persisted;
     await waitForSimulationIdle();
     const rate = !isIntelligenceRated(world, name);
     const campaign = activeCampaignId();
@@ -13914,6 +13934,62 @@ export const readCountryForPlayer = (target) => {
   })().finally(() => playerReadingsInFlight.delete(key));
   playerReadingsInFlight.set(key, run);
   return run;
+};
+
+// Whether a polity has its figures: a whole sheet, which in a shared game
+// stands (nothing is read again there). The host asks before it leaves a sheet
+// to a player's own AI key (multiplayer/host/engineMain.js).
+export const hasCountryStatSheet = async (target) => {
+  const name = normalizeString(target);
+  if (!name) return false;
+  const [world, definition] = await readStatSheetBasis();
+  return Boolean(completeStatSheetOf(world, name, definition));
+};
+
+// A shared game's host, taking the sheet a player's own device wrote on its
+// own AI key (settings.replies "own"): figures for a polity with no whole sheet
+// yet, merged as the game merges its own reading (runtime/countryStats.js),
+// assessed as of the host's own date and round, and the rating of its service
+// that came in the same request where nothing has rated it. The first sheet to
+// come is the sheet: one already there stands, and { taken: false } says so.
+// Rejects with the reason when what came is no whole sheet.
+export const takeCountryStatSheet = async ({ name: target, sheet, continuity = null, rating = null } = {}) => {
+  const name = normalizeString(target);
+  if (!name) throw new Error("There is no country to read.");
+  const [world, definition] = await readStatSheetBasis();
+  if (completeStatSheetOf(world, name, definition)) return { taken: false };
+  const options = { ...(definition.custom ? {} : { replaceComponents: true }) };
+  const given = mergeCountryStatPatch(null, sheet, options);
+  if (!completeStatSheetOf({ countryStats: { [name]: given } }, name, definition)) {
+    throw new Error("Those figures are not a whole stat sheet.");
+  }
+  const campaign = activeCampaignId();
+  let taken = false;
+  await beginStatsWrite(campaign);
+  try {
+    const game = await readGameData();
+    const date = normalizeString(game?.gameDate || game?.startDate);
+    const round = Math.max(0, Math.trunc(Number(game?.round) || 0));
+    await mutateWorldState((latest) => {
+      // A sheet that landed meanwhile stands.
+      if (completeStatSheetOf(latest, name, definition)) return null;
+      const next = applyCountryStatPatchToWorld(latest, name, sheet, {
+        ...options,
+        continuity: { ...(continuity && typeof continuity === "object" ? continuity : {}), assessedDate: date, assessedRound: round },
+      });
+      latest.countryStatsHistory = appendCountryStatHistorySample(latest.countryStatsHistory, name, next, { date, round });
+      taken = true;
+      return latest;
+    }, { emitEvents: false });
+  } finally {
+    endSimulation();
+  }
+  if (taken && normalizeIntelligenceRating(rating) !== null) {
+    await storeFirstIntelligenceRating(name, { intelligence: rating }, { campaign }).catch((error) => {
+      logDebugEvent("espionage", `${name}: the rating that came with a player's stat sheet was not kept: ${error?.message || error}`);
+    });
+  }
+  return { taken };
 };
 
 // The background stat-sheet reading now running for this polity, or null. The
@@ -14040,6 +14116,7 @@ const generateScenarioCustomStatSheet = async ({
   rateIntelligence = false,
   onIntelligenceRating = null,
   forceReassess = false,
+  commit = null,
 } = {}) => {
   const currentDate = normalizeString(bundle?.game?.gameDate || bundle?.game?.startDate);
   const currentRound = Math.max(0, Math.trunc(Number(bundle?.game?.round) || 0));
@@ -14173,6 +14250,7 @@ Reassess existing values only as a response to newly changed canonical evidence.
   }, { continuity });
 
   if (!statCode || !sheet) return sheet;
+  if (commit) return commit({ code: statCode, sheet, continuity });
 
   await beginStatsWrite(campaign, signal);
   try {
@@ -14229,7 +14307,11 @@ Reassess existing values only as a response to newly changed canonical evidence.
 // campaign context as the intelligence briefing.
 // `rateIntelligence` asks for the polity's intelligence rating in the same
 // request, handed to `onIntelligenceRating` (ensureCountryStatSheet writes it).
-export const generateCountryStatSheet = async ({ code, name, forceReassess = false, signal, requestKind, agentKind = "", budget = null, onRequest, rateIntelligence = false, onIntelligenceRating = null } = {}) => {
+// `commit`: where the finished sheet goes instead of this game's world,
+// ({ code, sheet, continuity }) => the sheet as it then stands. A page playing
+// a shared game whose host leaves the figures to each player's own AI key
+// hands its sheet to the host there (gameplayLazy.js), and writes nothing.
+export const generateCountryStatSheet = async ({ code, name, forceReassess = false, signal, requestKind, agentKind = "", budget = null, onRequest, rateIntelligence = false, onIntelligenceRating = null, commit = null } = {}) => {
   // Issue #724: wait out any running simulation before reading the world.
   // The Stats pane calls this directly, not through ensureCountryStatSheet, so
   // it skipped the idle wait every other out-of-turn writer takes — on a fresh
@@ -14271,6 +14353,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       rateIntelligence,
       onIntelligenceRating,
       forceReassess,
+      commit,
     });
   }
 
@@ -14791,6 +14874,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
             && storedSplitRegions.get(splitKey(member?.geography)) === heldRegionCount(member)))
         .map((member) => ({ geography: member.geography, regions: heldRegionCount(member) })),
     };
+    if (commit) return commit({ code: statCode, sheet: guarded.sheet, continuity });
 
     await beginStatsWrite(campaign, signal);
     try {

@@ -38,6 +38,7 @@ import { PeaceControls, ReparationsNote } from "./warAndPeace.jsx";
 import { WarReportsList } from "./afterAction.jsx";
 import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
+import { sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
     appendCountryStatHistorySample,
@@ -1643,6 +1644,9 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
 const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }) => {
     const { activeGameId, runtimeScenario, token: libraryToken } = useLibraryState();
     const displayCurrency = useSyncExternalStore(subscribeEconomicDisplayCurrency, getActiveEconomicDisplayCurrency);
+    // In a shared game a sheet once written stands, for everyone: its figures
+    // move only as the rounds move them, so there is nothing to read again.
+    const sharedGame = Boolean(useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole));
     const [player, setPlayer] = useState({ code: "", date: "", startDate: "", round: 0, gameKey: "game" });
     const [targetCountry, setTargetCountry] = useState("");
     // A requested polity that arrived before the game was read: the first
@@ -2251,7 +2255,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
     }, [active, advancedOpen, targetCountry, player.date, player.round, state.sheet]);
 
     const sheet = state.sheet;
-    const refreshMenuStep = refreshMenu.target === targetCountry && statsView === "economy" && state.status !== "loading"
+    const refreshMenuStep = refreshMenu.target === targetCountry && statsView === "economy" && state.status !== "loading" && !sharedGame
         ? refreshMenu.step
         : "";
     // Header identity can safely use the already-loaded canonical world's shallow
@@ -2394,7 +2398,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 </div>
             )}
             </div>
-            {statsView === "economy" && state.status !== "loading" && (
+            {statsView === "economy" && state.status !== "loading" && !sharedGame && (
                 <button
                 type="button"
                 className="oh-tap"

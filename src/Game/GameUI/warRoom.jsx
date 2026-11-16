@@ -604,7 +604,7 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
       if (!city) return { op: "airstrike", unit, kind, to: [lng, lat] };
       const chart = await Promise.resolve().then(() => warRoomChart()).catch(() => null);
       const country = enemies.find((name) => chart?.holds?.(name, Number(city.lng), Number(city.lat)) === true) ?? (chart ? "" : enemies.length === 1 ? enemies[0] : "");
-      return { op: "airstrike", unit, kind, to: [Number(city.lng), Number(city.lat)], target: city.name, country, people: Number(city.population) || 0 };
+      return { op: "airstrike", unit, kind, to: [Number(city.lng), Number(city.lat)], target: city.name, country };
     }
     return { op: "airstrike", unit, kind: "troops", to: [lng, lat], battlefield: name, target: placeNear(lng, lat) };
   };
@@ -765,7 +765,6 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
       country: order.country,
       battlefield: order.battlefield,
       marker: order.marker,
-      people: order.people,
       radius: strikeRadiusOf(radius),
     });
     if (!done) setWarRoom({ strikeRadius: strikeRadiusOf(order.radius) });

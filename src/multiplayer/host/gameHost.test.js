@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createGameHost, MAX_ORDERS_PER_ROUND, MAX_SHEETS_PER_ROUND, VIEW_ACK_MS } from "./gameHost.js";
+import { createGameHost, MAX_ORDERS_PER_ROUND, VIEW_ACK_MS } from "./gameHost.js";
 import { digestText } from "../protocol/digest.js";
 import { startRemoteRuntime, stopRemoteRuntime } from "../client/remoteRuntime.js";
 import { normalizeSettings } from "./settings.js";
@@ -117,6 +117,7 @@ const setup = (options = {}) => {
   const resolved = [];
   const replies = [];
   const sheets = [];
+  const taken = [];
   const settings = normalizeSettings({ roundMinutes: 10, countdownSeconds: 30, leaverGraceMinutes: 1, ...options.settings }).settings;
   const host = createGameHost({
     transport: { send: (id, message) => sent.push({ id, message }) },
@@ -139,12 +140,25 @@ const setup = (options = {}) => {
       // what the engine says of the answer ({ unreachable }).
       return options.replyTo?.(info, store);
     },
+    // The game's own reading (gameplay.js readCountryForPlayer): a sheet is
+    // written for a country that has none, and one there stands.
     readCountry: async (info) => {
       sheets.push(info);
       if (info.country === ESTONIA && options.sheetFails) throw new Error("The model did not answer.");
+      if (store.docs.world.countryStats?.[info.country]) return;
       store.docs.world = { ...store.docs.world, countryStats: { ...store.docs.world.countryStats, [info.country]: { capital: "A capital", stability: 50 } } };
     },
+    hasSheet: async (country) => Boolean(store.docs.world.countryStats?.[country]),
+    // gameplay.js takeCountryStatSheet: the first sheet to come is the sheet.
+    takeSheet: async (info) => {
+      taken.push(info);
+      if (!info.sheet?.capital) throw new Error("Those figures are not a whole stat sheet.");
+      if (store.docs.world.countryStats?.[info.country]) return { taken: false };
+      store.docs.world = { ...store.docs.world, countryStats: { ...store.docs.world.countryStats, [info.country]: info.sheet } };
+      return { taken: true };
+    },
     ...(options.readChart ? { readChart: options.readChart } : {}),
+    ...(options.readCities ? { readCities: options.readCities } : {}),
     ...(options.institution ? { institution: options.institution } : {}),
     ...(options.onSeatsMoved ? { onSeatsMoved: options.onSeatsMoved } : {}),
     ...(options.countriesOf ? { countriesOf: options.countriesOf } : {}),
@@ -165,7 +179,7 @@ const setup = (options = {}) => {
   const ack = (player, id) => to(player, "ack").find((message) => message.id === id);
   // What a player's screen holds: every view it was sent, applied in order.
   const shown = (player) => Object.assign({}, ...to(player, "view").map((view) => view.docs));
-  return { clock, store, sent, resolved, replies, sheets, host, hostPlayer, guest, request, to, ack, shown };
+  return { clock, store, sent, resolved, replies, sheets, taken, host, hostPlayer, guest, request, to, ack, shown };
 };
 
 const id = (n) => n.toString(16).padStart(16, "0");
@@ -526,26 +540,63 @@ test("a player's agents: its own to place and recall, and a caught one the busin
   assert.equal(s.store.docs.world.seatBoards[RUSSIA][0].status, "cancelled");
 });
 
-test("a stat sheet is written by the host when a player's Stats pane has none, a few a round, and reaches everyone", async () => {
+test("a stat sheet is written by the host when a player's Stats pane has none, as many as are asked for, and reaches everyone", async () => {
+  // The owner: stat sheets follow the replies setting, "either unlimited host use or use your own api", and
+  // "there should be no stat rerolling tho on multiplayer".
   const s = setup({ sheetFails: true });
   s.host.join(s.hostPlayer);
   s.host.join(s.guest);
   await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
   await s.host.control.start();
-  await s.request(s.guest, { t: "sheet", id: id(2), country: RUSSIA, fresh: false });
+  await s.request(s.guest, { t: "sheet", id: id(2), country: RUSSIA });
   assert.equal(s.ack(s.guest, id(2)).ok, true);
-  assert.deepEqual(s.sheets, [{ country: RUSSIA, fresh: false, seat: RUSSIA }]);
+  assert.deepEqual(s.sheets, [{ country: RUSSIA, seat: RUSSIA }]);
   assert.equal(s.shown(s.guest).world.countryStats[RUSSIA].capital, "A capital");
   assert.equal(s.shown(s.hostPlayer).world.countryStats[RUSSIA].capital, "A capital", "a sheet is public");
   // The host's reason for failing is the player's answer.
-  await s.request(s.guest, { t: "sheet", id: id(3), country: ESTONIA, fresh: true });
+  await s.request(s.guest, { t: "sheet", id: id(3), country: ESTONIA });
   assert.equal(s.ack(s.guest, id(3)).error, "The model did not answer.");
-  // Each is a request on the host's key: a player has a few a round.
-  for (let n = 0; n < MAX_SHEETS_PER_ROUND; n += 1) await s.request(s.guest, { t: "sheet", id: id(10 + n), country: LATVIA, fresh: false });
-  assert.match(s.ack(s.guest, id(10 + MAX_SHEETS_PER_ROUND - 1)).error, /stat sheets a round/);
-  // The other player's count is its own.
-  await s.request(s.hostPlayer, { t: "sheet", id: id(40), country: LATVIA, fresh: false });
-  assert.equal(s.ack(s.hostPlayer, id(40)).ok, true);
+  // On the host's own key, as many as are asked for: no count a round.
+  for (let n = 0; n < 12; n += 1) await s.request(s.guest, { t: "sheet", id: id(10 + n), country: n % 2 ? LATVIA : RUSSIA });
+  assert.ok(Array.from({ length: 12 }, (_, n) => s.ack(s.guest, id(10 + n)).ok).every(Boolean));
+  // A sheet once written stands: there is no asking for it to be written again.
+  s.store.docs.world.countryStats[RUSSIA].stability = 51;
+  await s.request(s.guest, { t: "sheet", id: id(30), country: RUSSIA });
+  assert.equal(s.store.docs.world.countryStats[RUSSIA].stability, 51);
+  assert.equal(validate(PLAYER_REQUESTS.sheet, { t: "sheet", id: id(31), country: RUSSIA, fresh: true }).ok, false, "a reroll is no request");
+});
+
+test("with each player's own AI, a missing sheet is written on the asking device and the host takes the figures, once", async () => {
+  const s = setup({ settings: { replies: "own" } });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  // No sheet: the host leaves it to the device that asked, and its own AI writes nothing.
+  await s.request(s.guest, { t: "sheet", id: id(2), country: LATVIA });
+  assert.deepEqual([s.ack(s.guest, id(2)).ok, s.ack(s.guest, id(2)).result], [true, { answer: "own" }]);
+  assert.deepEqual(s.sheets, []);
+  // The device sends the figures it wrote: no key, figures alone. They reach everyone.
+  const figures = { country: LATVIA, sheet: { capital: "Riga", stability: 62 }, continuity: { stateFingerprint: "stats-1" }, rating: 55 };
+  await s.request(s.guest, { t: "ownSheet", id: id(3), ...figures });
+  assert.equal(s.ack(s.guest, id(3)).ok, true);
+  assert.deepEqual(s.taken, [{ country: LATVIA, sheet: figures.sheet, continuity: figures.continuity, rating: 55 }]);
+  assert.equal(s.shown(s.hostPlayer).world.countryStats[LATVIA].capital, "Riga");
+  // The first is the sheet: one sent after it changes nothing, and asking again asks nobody's AI.
+  await s.request(s.hostPlayer, { t: "ownSheet", id: id(4), country: LATVIA, sheet: { capital: "Elsewhere", stability: 1 } });
+  assert.equal(s.ack(s.hostPlayer, id(4)).ok, true);
+  await s.request(s.guest, { t: "sheet", id: id(5), country: LATVIA });
+  assert.equal(s.ack(s.guest, id(5)).result, undefined);
+  assert.equal(s.store.docs.world.countryStats[LATVIA].capital, "Riga");
+  // What is no whole sheet is refused with the reason.
+  await s.request(s.guest, { t: "ownSheet", id: id(6), country: ESTONIA, sheet: { stability: 3 } });
+  assert.match(s.ack(s.guest, id(6)).error, /not a whole stat sheet/);
+  // Once the host's AI writes the figures again, a device's are not taken.
+  s.host.control.setReplies("host");
+  await s.request(s.guest, { t: "ownSheet", id: id(7), country: ESTONIA, sheet: { capital: "Tallinn" } });
+  assert.match(s.ack(s.guest, id(7)).error, /host's AI writes the figures/);
+  await s.request(s.guest, { t: "sheet", id: id(8), country: ESTONIA });
+  assert.deepEqual([s.ack(s.guest, id(8)).result, s.store.docs.world.countryStats[ESTONIA].capital], [undefined, "A capital"]);
 });
 
 test("a structure the map placed approximately is settled by the player it belongs to, and by nobody else", async () => {
@@ -857,6 +908,44 @@ test("the war room's fortified lines and fleets are the seat's own, held to the 
   // What is no op of theirs is refused in words.
   await s.request(s.guest, { t: "fleet", id: id(14), op: { op: "sink", unit: "lv-fleet" } });
   assert.match(s.ack(s.guest, id(14)).error, /Nothing was asked/);
+});
+
+test("a city struck from the air is the host's own map's: how many live there is never the page's to say", async () => {
+  // A guest's page sent the people of the city it struck, and the host took the figure: fifty million "killed"
+  // in a town of thousands, as the page liked. The host now looks the city up on its own map.
+  let readable = true;
+  const cityMap = {
+    type: "FeatureCollection",
+    features: [
+      { type: "Feature", properties: { city: "Riga", population: 600000 }, geometry: { type: "Point", coordinates: [24.1, 56.95] } },
+      { type: "Feature", properties: { city: "Daugavpils", population: 80000 }, geometry: { type: "Point", coordinates: [26.5, 55.87] } },
+    ],
+  };
+  const s = setup({ readCities: async () => (readable ? cityMap : null) });
+  s.store.docs.world.units = [{ id: "ru-air", name: "6th Air Army", type: "air", ownerCode: RUSSIA, strength: 90, lng: 28.3, lat: 57.8, status: "idle" }];
+  s.store.docs.world.wars = [{ id: "war-1", status: "active", sideA: [RUSSIA], sideB: [LATVIA] }];
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const strike = () => (s.store.docs.world.airStrikeOrders ?? [])[0] ?? null;
+  const asked = { op: "airstrike", unit: "ru-air", kind: "city", to: [24.1, 56.95], target: "Riga", country: LATVIA, people: 50000000 };
+
+  await s.request(s.guest, { t: "airstrike", id: id(2), op: asked });
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  assert.deepEqual([strike().target, strike().people, strike().owner], ["Riga", 600000, RUSSIA]);
+  // As many as the host's world says live there now: a figure the game set for the city stands over the map's.
+  s.store.docs.world.cityPopulations = { riga: 450000 };
+  await s.request(s.guest, { t: "airstrike", id: id(3), op: { ...asked, radius: 1.5 } });
+  assert.deepEqual([strike().people, strike().radius], [450000, 1.5]);
+  // A city the host's map does not have there is refused.
+  await s.request(s.guest, { t: "airstrike", id: id(4), op: { ...asked, target: "Atlantis" } });
+  assert.match(s.ack(s.guest, id(4)).error, /which city/);
+  // Where the host's map of cities could not be read, its people are unknown: still not the page's figure.
+  readable = false;
+  await s.request(s.guest, { t: "airstrike", id: id(5), op: asked });
+  assert.equal(s.ack(s.guest, id(5)).ok, true);
+  assert.equal(strike().people, 0);
 });
 
 test("an order given while a round is resolved waits behind it and is the next round's; one given as its events are read is taken at once", async () => {

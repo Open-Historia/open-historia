@@ -344,9 +344,22 @@ test("the war room's orders: only the asker's own air units, at what an enemy ha
   const w = world();
   assert.deepEqual(airUnitsOf(w, "Aland").map((unit) => [unit.id, unit.pending]), [["bombers", false], ["new", true]]);
   assert.deepEqual(strikableStructures(w, "Aland").map((marker) => marker.name), ["Fort Brod"]);
-  const city = ask({ op: "airstrike", unit: "bombers", kind: "city", to: [25, 51], target: "Brod", country: "borduria", people: 50000 });
+  // A city: how many live there is never the asker's to say. Without the map's cities, the place and name asked
+  // and its people unknown (a share of its country's when it flies).
+  const city = ask({ op: "airstrike", unit: "bombers", kind: "city", to: [25, 51], target: "Brod", country: "borduria", people: 50000000 });
   assert.equal(city.error, undefined);
-  assert.deepEqual([city.order.kind, city.order.target, city.order.country, city.order.people, city.order.owner], ["city", "Brod", "Borduria", 50000, "Aland"]);
+  assert.deepEqual([city.order.kind, city.order.target, city.order.country, city.order.people, city.order.owner], ["city", "Brod", "Borduria", 0, "Aland"]);
+  // With them, the map's own city of that name nearest the place asked: where it stands, and its people.
+  const cities = [
+    { name: "Brod", lng: 25.01, lat: 51.002, population: 180000 },
+    { name: "Brod", lng: 31, lat: 51, population: 9 },
+    { name: "Nova", lng: 25, lat: 51, population: 7000000 },
+  ];
+  const mapped = ask({ op: "airstrike", unit: "bombers", kind: "city", to: [25, 51], target: "brod", country: "Borduria", people: 50000000 }, { cities });
+  assert.deepEqual([mapped.order.target, mapped.order.people, mapped.order.lng, mapped.order.lat], ["Brod", 180000, 25.01, 51.002]);
+  // A city the map does not have there is no city to strike.
+  assert.match(ask({ op: "airstrike", unit: "bombers", kind: "city", to: [28, 51], target: "Brod", country: "Borduria" }, { cities }).error, /which city of a country you are at war with/);
+  assert.match(ask({ op: "airstrike", unit: "bombers", kind: "city", to: [25, 51], target: "Atlantis", country: "Borduria" }, { cities }).error, /which city of a country you are at war with/);
   const structure = ask({ op: "airstrike", unit: "bombers", kind: "structure", marker: "m1" });
   assert.deepEqual([structure.order.target, structure.order.country, structure.order.lng], ["Fort Brod", "Borduria", 25]);
   // One strike a unit: a second replaces the first; and it can be called off.
@@ -371,7 +384,7 @@ test("the war room's orders: only the asker's own air units, at what an enemy ha
   const chart = { holds: (country) => country !== "Borduria" };
   assert.match(ask({ op: "airstrike", unit: "bombers", kind: "city", to: [25, 51], target: "Brod", country: "Borduria" }, { chart }).error, /not held by a country you are at war with/);
   // What crosses the wire is an op's own fields and nothing else.
-  assert.deepEqual(cleanAirStrikeOp({ op: "airstrike", unit: "u", kind: "city", to: [1, 2, 3], target: "T", extra: 1, people: -5 }), { op: "airstrike", unit: "u", kind: "city", to: [1, 2], target: "T" });
+  assert.deepEqual(cleanAirStrikeOp({ op: "airstrike", unit: "u", kind: "city", to: [1, 2, 3], target: "T", extra: 1, people: 5000 }), { op: "airstrike", unit: "u", kind: "city", to: [1, 2], target: "T" });
   assert.equal(cleanAirStrikeOp({ op: "bomb" }), null);
 });
 

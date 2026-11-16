@@ -7,7 +7,7 @@
 // for the country that asked (runtime/warRoomWrites.js sendAirStrikeOp,
 // multiplayer/host/gameHost.js):
 //
-//   { op: "airstrike", unit, kind, to, target, country, battlefield, marker, people, radius }
+//   { op: "airstrike", unit, kind, to, target, country, battlefield, marker, radius }
 //   { op: "unairstrike", unit }     its strike called off
 //
 //   radius            the strike radius, a share of the era's blast (airStrike.js
@@ -20,7 +20,10 @@
 //   kind "city"       `to` is the city's place, `target` its name, `country`
 //                     who holds it, a country the asker is at war with (held
 //                     to the map's chart where it could be read: runtime/
-//                     warRoomChart.js holds); `people`, how many live there
+//                     warRoomChart.js holds). How many live there is never
+//                     asked: the city is looked up on the map of whoever
+//                     applies the op (runtime/frontCities.js), the host's own
+//                     in a shared game
 //
 // The place lies within the air unit's era's reach of its base (air.js
 // AIR_REACH_KM). One strike a unit: another replaces it; at most
@@ -70,6 +73,15 @@ const REFUSED = Object.freeze({
 const pointOf = (value) => (Array.isArray(value) && finite(value[0]) && finite(value[1]) && Math.abs(Number(value[1])) <= 90
   ? [round4(value[0]), round4(value[1])]
   : null);
+
+// The city of a map's cities (runtime/frontCities.js frontCitiesOf) of that name nearest a place, and no further from it
+// than CITY_NEAR_KM; null for none. A city asked for was picked from the same map, so it stands where it was asked.
+const CITY_NEAR_KM = 5;
+const cityNamedNear = (cities, name, [lng, lat], measure) => list(cities)
+  .filter((city) => city && fold(city.name) === fold(name) && finite(city.lng) && finite(city.lat))
+  .map((city) => ({ city, km: kmBetween(lng, lat, Number(city.lng), Number(city.lat), measure) }))
+  .filter((item) => item.km <= CITY_NEAR_KM)
+  .sort((a, b) => a.km - b.km)[0]?.city ?? null;
 
 // How far an air unit reaches, and how far the bombs of one strike fall, in km, at a date in a world.
 export const airReachOf = (world, date) => {
@@ -158,8 +170,10 @@ export const strikableStructures = (world, player) => {
 //   player   the country asking (the seat's, in a shared game)
 //   date     the game's date, and `round` its round: when it was ordered
 //   chart    the map's chart (runtime/warRoomChart.js), null where it could not be read: a city's holder is then taken as given
+//   cities   the map's cities as this world has them (runtime/frontCities.js frontCitiesOf), read by whoever applies the
+//            op, null where they could not be read: a city struck is then the place and name asked, its people unknown
 //   air      false in a scenario without air units (the Wars feature)
-export const applyAirStrikeOp = (world, op, { player = "", date = "", round = 0, chart = null, air = true } = {}) => {
+export const applyAirStrikeOp = (world, op, { player = "", date = "", round = 0, chart = null, cities = null, air = true } = {}) => {
   if (!op || !AIR_STRIKE_OPS.includes(op.op)) return { error: REFUSED.nothing };
   if (air === false) return { error: REFUSED.off };
   const owner = clean(player, 120);
@@ -181,6 +195,7 @@ export const applyAirStrikeOp = (world, op, { player = "", date = "", round = 0,
   const kind = AIR_STRIKE_KINDS.includes(op.kind) ? op.kind : "";
   if (!kind) return { error: REFUSED.kind };
 
+  const measure = measureOptions(engineMapOf(worldMeasureOf(world)));
   let to = null;
   let target = "";
   let country = "";
@@ -208,11 +223,21 @@ export const applyAirStrikeOp = (world, op, { player = "", date = "", round = 0,
       target = clean(op.target, 160);
       country = [...list(world?.wars).flatMap((war) => [...list(war?.sideA), ...list(war?.sideB)])].map((name) => clean(name, 120)).find((name) => fold(name) === fold(op.country)) ?? "";
       if (!target || !country || !enemies.has(fold(country))) return { error: REFUSED.city };
+      // The city is the map's own, as whoever applies the op reads it: the one of that name nearest the place
+      // asked, struck where it stands, with as many people as that map says live there. What an asker counts is
+      // no fact of this world (a page in a shared game says what it likes); where the cities could not be read,
+      // its people are unknown, and airStrike.js takes a share of its country's when it flies.
+      if (cities) {
+        const city = cityNamedNear(cities, target, to, measure);
+        if (!city) return { error: REFUSED.city };
+        to = [round4(city.lng), round4(city.lat)];
+        target = clean(city.name, 160);
+        people = Math.max(0, Math.round(Number(city.population) || 0));
+      }
       if (chart && typeof chart.holds === "function" && chart.holds(country, to[0], to[1]) === false) return { error: REFUSED.held };
-      people = Math.max(0, Math.round(Number(op.people) || 0));
     }
   }
-  const far = kmBetween(Number(unit.lng), Number(unit.lat), to[0], to[1], measureOptions(engineMapOf(worldMeasureOf(world))));
+  const far = kmBetween(Number(unit.lng), Number(unit.lat), to[0], to[1], measure);
   if (!(far <= reach)) return { error: `That is beyond ${clean(unit.name) || "the air unit"}'s reach: ${Math.round(far).toLocaleString("en-US")} km, and it reaches ${reach.toLocaleString("en-US")} km.` };
   if (others.filter((order) => fold(order.owner) === fold(owner)).length >= AIR_STRIKE_ORDERS_MOST) return { error: REFUSED.many };
   const radius = strikeRadiusOf(op.radius);
@@ -250,7 +275,6 @@ export const cleanAirStrikeOp = (op) => {
     if (clean(op.country)) sent.country = clean(op.country, 120);
     if (clean(op.battlefield)) sent.battlefield = clean(op.battlefield, 120);
     if (clean(op.marker)) sent.marker = clean(op.marker, 160);
-    if (Number(op.people) > 0) sent.people = Math.round(Number(op.people));
     if (strikeRadiusOf(op.radius) !== AIR_STRIKE_RADIUS_DEFAULT) sent.radius = strikeRadiusOf(op.radius);
   }
   return sent;

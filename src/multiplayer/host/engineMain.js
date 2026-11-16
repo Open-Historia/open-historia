@@ -30,7 +30,7 @@ import { setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { discardHeldTurns, endSimulation, enterSimulation } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
 import { GENERATION_COMPLETE_EVENT } from "../../Game/AI/telemetry.js";
-import { generateCountryStatSheet, readCountryForPlayer, runChatActionBatch, simulateTimelineJump, warRoomChart } from "../../Game/AI/gameplay.js";
+import { hasCountryStatSheet, readCountryForPlayer, runChatActionBatch, simulateTimelineJump, takeCountryStatSheet, warRoomChart } from "../../Game/AI/gameplay.js";
 import { lendBoards, returnBoards } from "./seatBoards.js";
 import { createLoopbackEngineSide } from "../transport/loopback.js";
 import { createHostSession } from "../session/host.js";
@@ -144,6 +144,14 @@ const gameCountries = (world, game) => {
     if (clean(entry?.status || "active").toLowerCase() === "active") owners.add(clean(entry?.name || entry?.code || key));
   }
   return [...owners].filter(Boolean).sort((a, b) => a.localeCompare(b));
+};
+// A polity of this game, as the game names it, by the name a player's screen
+// gave; throws when it is none.
+const countryOfGame = async (country) => {
+  const now = await store.read();
+  const name = gameCountries(now.world, now.game).find((known) => clean(known).toLocaleLowerCase() === clean(country).toLocaleLowerCase());
+  if (!name) throw new Error("That is not a country of this game.");
+  return name;
 };
 
 // One invite token per campaign, kept until the host rotates it, so a host that
@@ -376,16 +384,19 @@ const boot = async () => {
         }
       },
       // A country's stat sheet for a player whose Stats pane has none: only
-      // for a polity of this game, and the game's own reading writes it.
-      readCountry: async ({ country, fresh }) => {
-        const now = await store.read();
-        const name = gameCountries(now.world, now.game).find((known) => clean(known).toLocaleLowerCase() === clean(country).toLocaleLowerCase());
-        if (!name) throw new Error("That is not a country of this game.");
-        if (fresh) await generateCountryStatSheet({ code: name, name, forceReassess: true });
-        else await readCountryForPlayer(name);
+      // for a polity of this game, and the game's own reading writes it on the
+      // host's AI key. One there already stands (nothing is read again in a
+      // shared game).
+      readCountry: async ({ country }) => {
+        await readCountryForPlayer(await countryOfGame(country));
       },
+      hasSheet: async (country) => hasCountryStatSheet(await countryOfGame(country)),
+      // The sheet a player's own device wrote, on its own AI key.
+      takeSheet: async ({ country, sheet, continuity, rating }) => takeCountryStatSheet({ name: await countryOfGame(country), sheet, continuity, rating }),
       // The map as this game's own engine reads it, for the war room's lines and fleets.
       readChart: () => warRoomChart(),
+      // Its cities, for a city struck from the air: the host's own, never a page's.
+      readCities: () => readJson(JSON_URLS.citiesGeojson, { defaultValue: null }),
       replyTo,
       // A player's institution business, run here for their country. Each
       // thing it writes is an entry in the queue; a Council's or a hearing's
