@@ -64,6 +64,7 @@ import {
   withTurnPeaceOffers,
 } from "../../runtime/peaceTerms.js";
 import { startingWearinessOf } from "../../runtime/militaryStats.js";
+import { withTurnTreatyOffers } from "../../runtime/treatyOffers.js";
 import { landWeightsOf } from "../../runtime/militaryPower.js";
 import { populationFigureOf } from "../../runtime/populationFigure.js";
 import { normalizeWarWeariness, wearinessGoingIn, wearinessOf, withTurnWeariness } from "../../runtime/warWeariness.js";
@@ -604,6 +605,8 @@ export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "
   next = endWarsOnPuppets(next, { date, round: turn });
   next = endConqueredWars(next, { held: holdings, date, round: turn });
   next = { ...next, peaceOffers: withTurnPeaceOffers(next.peaceOffers, { wars: next.wars, round: turn }) };
+  // (And a treaty one player put to another lapses when it stood too long, or the two went to war: treatyOffers.js.)
+  if (Array.isArray(next.treatyOffers) && next.treatyOffers.length) next = { ...next, treatyOffers: withTurnTreatyOffers(next.treatyOffers, { wars: next.wars, round: turn }) };
   return next;
 };
 

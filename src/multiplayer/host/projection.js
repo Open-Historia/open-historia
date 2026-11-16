@@ -273,6 +273,10 @@ const FILTERED_WORLD_KEYS = Object.freeze({
   // A player's advisor and the orders they suggest (AI/seatAdvice.js): theirs alone.
   seatAdvice: (world, viewer) => Object.fromEntries(Object.entries(isRecord(world.seatAdvice) ? world.seatAdvice : {})
     .filter(([country]) => same(country, viewer))),
+  // A treaty one player put to another (runtime/treatyOffers.js) is the two's own business until it is signed: then
+  // it is an agreement, which everyone sees.
+  treatyOffers: (world, viewer) => (Array.isArray(world.treatyOffers) ? world.treatyOffers : [])
+    .filter((offer) => same(offer?.from, viewer) || same(offer?.to, viewer)),
 
   // Its own government in full; every other only as the public sees it.
   politicalActors: (world, viewer) => {

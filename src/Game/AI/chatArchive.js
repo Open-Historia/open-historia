@@ -20,7 +20,8 @@
 // Never archived, whatever its age:
 // - the conversation the player has open (runtime/openConversation.js);
 // - a chat with a demand still to be answered (chatThreads.js demands: open
-//   or countered) or a peace offer still open (world.peaceOffers);
+//   or countered), a peace offer still open (world.peaceOffers) or a treaty
+//   one player put to another (world.treatyOffers);
 // - a chat with a power on either side of a live war the player is in (an
 //   enemy is who peace is made with, an ally who the war is planned with);
 // - an institution's open lifecycle negotiation (its case is still being
@@ -122,6 +123,10 @@ export const archiveExemption = (chat, ctx = {}) => {
     || (!clean(offer?.chatId) && [fold(offer?.from), fold(offer?.to)].some((name) => name === me)
       && [fold(offer?.from), fold(offer?.to)].some((name) => name !== me && members.has(name)))
   ))) return "peace offer";
+  // (A treaty one player put to another and still open, in their one-on-one chat: runtime/treatyOffers.js.)
+  if (list(ctx.treatyOffers).some((offer) => clean(offer?.status || "open") === "open"
+    && [fold(offer?.from), fold(offer?.to)].some((name) => name === me)
+    && [fold(offer?.from), fold(offer?.to)].some((name) => name !== me && members.has(name)))) return "treaty offer";
   const parties = ctx.warParties ?? playerWarParties(ctx.wars, ctx.player);
   if ([...members].some((name) => parties.has(name))) return "war";
   if (chat?.status !== "closed" && chat?.lifecycleInstitutionId && list(chat?.lifecycleCaseIds).length) return "negotiation";
@@ -143,6 +148,7 @@ export const chatArchiveContext = (bundle, { openChatId = "" } = {}) => {
     player,
     wars: list(world.wars),
     peaceOffers: list(world.peaceOffers),
+    treatyOffers: list(world.treatyOffers),
     warParties: playerWarParties(world.wars, player),
   };
 };

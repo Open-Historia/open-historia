@@ -9,6 +9,7 @@ import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { SharedGameRefusal, answerPeaceInChat, checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
 import { CallToArmsCard, PeaceOfferCard, PeaceTermsForm, sendPeaceAnswer } from "./warAndPeace.jsx";
+import { TreatyForm, TreatyOfferCard, sendTreaty, treatyOffersForThread } from "./treaties.jsx";
 import { describeTerms, warBetween } from "../../runtime/peaceTerms.js";
 import { peaceOffersForThread, placePeaceOffers } from "./peacePlacement.js";
 import { createPlayerPollEvent, eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
@@ -1187,6 +1188,7 @@ const NO_PEACE_ROWS = Object.freeze([]);
 const selectPeaceOffers = (world) => (Array.isArray(world?.peaceOffers) ? world.peaceOffers : NO_PEACE_ROWS);
 const selectCallsToArms = (world) => (Array.isArray(world?.callsToArms) ? world.callsToArms : NO_PEACE_ROWS);
 const selectWars = (world) => (Array.isArray(world?.wars) ? world.wars : NO_PEACE_ROWS);
+const selectTreatyOffers = (world) => (Array.isArray(world?.treatyOffers) ? world.treatyOffers : NO_PEACE_ROWS);
 
 const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onSharedThreadOpened = null, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", draftFrom = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, onInstitutionBusinessOpened, embeddedInstitution = false, puppetMarkers = {}, availableCountries = [] }) => {    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
@@ -1402,6 +1404,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     const myOpenTerms = threadOffers.some((offer) => offer.status === "open" && String(offer.from).trim().toLowerCase() === String(playerCountry ?? "").trim().toLowerCase());
     const canProposePeace = Boolean(peaceWar) && !myOpenTerms;
     const [peaceFormOpen, setPeaceFormOpen] = useState(false);
+    // TREATIES, in the one-on-one chat between two players of a shared game (treaties.jsx): the treaties between them
+    // at the foot of the thread, and Treaty in the composer while they are not at war and none waits.
+    const treatyOffersAll = useRuntimeState("world", selectTreatyOffers);
+    const threadTreaties = useMemo(() => (peaceWithPerson
+        ? treatyOffersForThread({ offers: treatyOffersAll, player: playerCountry, counterpart: peaceCounterpart?.name ?? "" })
+        : []), [peaceWithPerson, treatyOffersAll, playerCountry, peaceCounterpart]);
+    const canProposeTreaty = peaceWithPerson && !peaceWar && !threadTreaties.some((offer) => offer.status === "open");
+    const [treatyFormOpen, setTreatyFormOpen] = useState(false);
     const [demandBusy, setDemandBusy] = useState(false);
     const newThreadId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -2143,6 +2153,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             return "";
         };
 
+        // A treaty put to the other player (TreatyForm): its card comes with the host's view. Resolves "" once it is
+        // put, else why not.
+        const proposeTreatyHere = async ({ type, title, terms }) => {
+            const why = await sendTreaty("propose", { to: peaceCounterpart?.name ?? "", type, ...(title ? { title } : {}), ...(terms ? { terms } : {}) });
+            if (!why) setTreatyFormOpen(false);
+            return why;
+        };
+
         const handlePlayerSubmit = async () => {
             const text = playerInput.trim();
             if (!text || isLoading || writingOwnReply) return;
@@ -2510,6 +2528,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 foot of the thread rather than nowhere. */}
             {strandedDemands.map(renderDemandCard)}
             {strandedPeace.map(renderPeaceCard)}
+            {threadTreaties.map((offer) => <TreatyOfferCard key={offer.id} offer={offer} viewer={playerCountry} />)}
             {threadCalls.stranded.map((call) => <CallToArmsCard key={call.id} call={call} viewer={playerCountry} />)}
             {isLoading && lifecycleGroupThinking
                 ? <LifecycleThinkingBubble count={lifecycleState.responseCases.length || countries.length} />
@@ -2591,9 +2610,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     </div>
                 )}
                 {canProposePeace && peaceFormOpen && <PeaceTermsForm viewer={playerCountry} enemy={peaceCounterpart?.name} person={peaceWithPerson} busy={isLoading} onSend={proposePeaceHere} onCancel={() => setPeaceFormOpen(false)} />}
+                {canProposeTreaty && treatyFormOpen && <TreatyForm busy={isLoading} onSend={proposeTreatyHere} onCancel={() => setTreatyFormOpen(false)} />}
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     {canProposePeace && (
                         <button type="button" className="oh-tap" onClick={() => setPeaceFormOpen((open) => !open)} aria-pressed={peaceFormOpen} title={`Propose peace to ${peaceCounterpart?.name}`} style={{ background: peaceFormOpen ? "rgba(43,193,243,.16)" : "rgba(255,255,255,0.05)", border: `1px solid ${peaceFormOpen ? "rgba(43,193,243,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: peaceFormOpen ? "#2bc1f3" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Peace</button>
+                    )}
+                    {canProposeTreaty && (
+                        <button type="button" className="oh-tap" onClick={() => setTreatyFormOpen((open) => !open)} aria-pressed={treatyFormOpen} title="Propose a treaty" style={{ background: treatyFormOpen ? "rgba(43,193,243,.16)" : "rgba(255,255,255,0.05)", border: `1px solid ${treatyFormOpen ? "rgba(43,193,243,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: treatyFormOpen ? "#2bc1f3" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Treaty</button>
                     )}
                     {canCallChatVote && (
                         <button type="button" className="oh-tap" onClick={() => { setPollComposerOpen((open) => !open); setPollError(""); }} aria-pressed={pollComposerOpen} title="Call a binding conversational vote in this group chat" style={{ background: pollComposerOpen ? "rgba(59,130,246,.2)" : "rgba(255,255,255,0.05)", border: `1px solid ${pollComposerOpen ? "rgba(96,165,250,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: pollComposerOpen ? "#bfdbfe" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Vote</button>

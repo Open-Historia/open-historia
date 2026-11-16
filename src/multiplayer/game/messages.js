@@ -19,6 +19,7 @@ import { HEX_ID, NAME, bool, int, json, list, literal, num, obj, str } from "../
 import { SETTINGS_SCHEMA } from "../host/settings.js";
 import { POLL_CHOICES_MAX, POLL_CHOICE_MAX_CHARS, SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
 import { SAY_FROM_DRAFT_MAX } from "../client/sharedThreads.js";
+import { TREATY_TERMS_MAX, TREATY_TITLE_MAX, TREATY_TYPES } from "../../runtime/treatyOffers.js";
 
 // A host and its players must speak the same game: raised whenever these
 // messages or the views (host/projection.js) change in a way an older player's
@@ -60,7 +61,8 @@ import { SAY_FROM_DRAFT_MAX } from "../client/sharedThreads.js";
 // "own" the host leaves a missing sheet to the asking device, which writes it
 // on its own AI key and sends the figures (the "ownSheet" request). And a
 // player puts terms of peace to another player by name (the "peace" request's
-// `to`): each country makes its own peace.
+// `to`): each country makes its own peace. And two players sign treaties (the
+// "treaty" request), and a view carries a player's own (world.treatyOffers).
 export const SHARED_GAME_VERSION = "14";
 
 // The documents a player's view holds: the game itself first (a screen that
@@ -179,6 +181,15 @@ export const PLAYER_REQUESTS = Object.freeze({
   // `to`, for "propose": the country the terms are put to, a person on the
   // other side by name (warAndPeace.js proposePeace).
   peace: obj({ t: literal("peace"), id: REQUEST_ID, op: str(8, { enum: ["accept", "decline", "honour", "refuse", "propose"] }), ref: str(160, { min: 1 }), terms: json(3), to: COUNTRY }, ["to"]),
+  // A treaty between two players (runtime/treatyOffers.js): put to another
+  // player's country ("propose", with its type, title and terms), signed or
+  // declined by the one it was put to, or withdrawn by the one who put it
+  // ("sign", "decline", "withdraw", by the offer's id). Signed, it is an
+  // agreement of the world's. Whose answer it is is the seat's country.
+  treaty: obj({
+    t: literal("treaty"), id: REQUEST_ID, op: str(8, { enum: ["propose", "sign", "decline", "withdraw"] }),
+    ref: str(160), to: COUNTRY, type: str(32, { enum: TREATY_TYPES }), title: str(TREATY_TITLE_MAX), terms: str(TREATY_TERMS_MAX),
+  }, ["ref", "to", "type", "title", "terms"]),
   // An institution's business, done by the host for the asker's country:
   // found one, apply, invite, answer a case, vote, table a proposal, open its
   // Council or a hearing, and the Council's or the hearing's turn

@@ -8,6 +8,7 @@ import { normalizeNaviesRaised, normalizeSeaBattles } from "./naval/record.js";
 import { normalizeBlockades } from "./naval/blockade.js";
 import { normalizeCallsToArms } from "./alliances.js";
 import { normalizePeaceOffers, normalizePeaceTreaties, normalizeReparations } from "./peaceTerms.js";
+import { normalizeTreatyOffers } from "./treatyOffers.js";
 import { normalizeWarWeariness } from "./warWeariness.js";
 import { MAX_WAR_SIDE_MEMBERS, normalizeWarRecord, normalizeWarRecords, referencedWarIds } from "./warRecord.js";
 import { normalizeWarResources } from "./warResources.js";
@@ -351,6 +352,9 @@ export const WORLD_DEFAULTS = {
   peaceOffers: [],
   reparations: [],
   peaceTreaties: [],
+  // Treaties one country a person plays put to another (treatyOffers.js), waiting to be signed or answered; one
+  // signed is an agreement of world.agreements.
+  treatyOffers: [],
   // Alliances coming due (alliances.js): who was called on to defend whom in
   // which war, and what they answered.
   callsToArms: [],
@@ -4363,6 +4367,7 @@ export const normalizeWorldState = (world) => {
     peaceOffers: normalizePeaceOffers(nextWorld.peaceOffers),
     reparations: normalizeReparations(nextWorld.reparations),
     peaceTreaties: normalizePeaceTreaties(nextWorld.peaceTreaties),
+    treatyOffers: normalizeTreatyOffers(nextWorld.treatyOffers),
     callsToArms: normalizeCallsToArms(nextWorld.callsToArms),
     puppets: normalizeWorldPuppets(nextWorld.puppets, diplomaticIdentityWorld),
     storylines: normalizeWorldStorylines(nextWorld.storylines),

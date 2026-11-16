@@ -48,6 +48,7 @@ import { eraSettingOf } from "../../runtime/warSettings.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
 import { playerDiplomacy } from "../../Game/AI/warAndPeace.js";
 import { warBetween } from "../../runtime/peaceTerms.js";
+import { answerTreaty, proposeTreaty } from "../../runtime/treatyOffers.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
 // The answers a device's requests were given, kept so that one sent again (the
@@ -75,6 +76,16 @@ const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 // A word for a player's screen, as long as a notice may be (game/messages.js):
 // one naming two long countries was longer, and would not be sent at all.
 const notice = (level, text) => ({ t: "notice", level, text: clean(text).slice(0, 500) });
+// Why a seat's treaty was not put or answered (runtime/treatyOffers.js), in its words.
+const TREATY_REFUSALS = Object.freeze({
+  nobody: "Say which country the treaty is with.",
+  "not-played": "A treaty is signed between two players: a country the AI plays makes its agreements in the story.",
+  type: "Say what kind of treaty it is.",
+  "at-war": "You are at war with them: make peace first.",
+  open: "A treaty between you already waits for an answer.",
+  "not-open": "This is no longer open.",
+  "not-yours": "This is not yours to answer.",
+});
 // Why a seat's answer about war and peace did nothing (warAndPeace.js playerDiplomacy), in its words.
 const PEACE_REFUSALS = Object.freeze({
   "not-yours": "This is not yours to answer.",
@@ -939,6 +950,27 @@ export const createGameHost = ({
           return null;
         }
         return { world: outcome.world };
+      });
+      round.touch(seat.country);
+      return refusal;
+    },
+    // A treaty between two players (runtime/treatyOffers.js): put to another
+    // player's country, or signed, declined or withdrawn, as the seat's own
+    // country and nothing the message says. Signed, it is an agreement of the
+    // world's, which every view, the wars and every prompt read.
+    treaty: async (connection, { op, ref, to, type, title, terms }, seat) => {
+      let refusal = "";
+      await store.updateForces(({ world, game }) => {
+        const date = clean(game?.gameDate);
+        if (op === "propose") {
+          const put = proposeTreaty(world, { from: seat.country, to: clean(to), type, title, terms, players: humanCountriesOf(game), date, round: game?.round });
+          refusal = put.reason ? TREATY_REFUSALS[put.reason] ?? "That could not be done." : "";
+          return put.reason ? null : { world: put.world };
+        }
+        const answer = answerTreaty(world, { op, ref, country: seat.country, date, round: game?.round });
+        refusal = answer.error ? TREATY_REFUSALS[answer.error] ?? "That could not be done." : "";
+        // (Signed after the two went to war, it lapses: that is written, and said.)
+        return answer.world === world ? null : { world: answer.world };
       });
       round.touch(seat.country);
       return refusal;

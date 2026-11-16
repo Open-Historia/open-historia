@@ -271,6 +271,13 @@ const NEW_UPDATES = [
           "Each country makes its own peace. When you make peace, a player fighting on your side stays at war and keeps the land they hold, and the war goes on for them.",
         ],
       },
+      {
+        title: "Treaties between players",
+        items: [
+          "Two players can now sign a treaty: in your chat with another player, press Treaty, choose its kind and write its terms. They sign or decline it there.",
+          "A signed treaty holds like any treaty in the world: an alliance calls both of you to arms, and every country, the map included, knows of it.",
+        ],
+      },
     ],
   },
   {

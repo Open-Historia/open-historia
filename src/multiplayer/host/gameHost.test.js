@@ -937,6 +937,45 @@ test("a player puts terms of peace to another player by name, and that player's 
   assert.equal(s.store.docs.world.wars[0].status, "ended");
 });
 
+test("two players sign a treaty: one puts it, the other signs it, and it is an agreement every view holds", async () => {
+  // "Treaties and alliances between people: a sign action both must accept, which becomes a record the map, wars
+  // and AI governments all see" (the owner, 2026-11-15).
+  const { setHostingSharedGame } = await import("../../runtime/humanPolities.js");
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  setHostingSharedGame(true, { host: LATVIA });
+  try {
+    await s.host.control.start();
+    // Only between two players: a country the AI plays makes its agreements in the story.
+    await s.request(s.guest, { t: "treaty", id: id(2), op: "propose", to: ESTONIA, type: "alliance" });
+    assert.match(s.ack(s.guest, id(2)).error, /signed between two players/);
+    await s.request(s.guest, { t: "treaty", id: id(3), op: "propose", to: LATVIA, type: "non_aggression", title: "The Riga Pact", terms: "Neither attacks the other." });
+    assert.equal(s.ack(s.guest, id(3)).ok, true);
+    const offer = s.store.docs.world.treatyOffers[0];
+    // The two's own business until it is signed.
+    assert.equal(s.shown(s.hostPlayer).world.treatyOffers.length, 1);
+    // Signed by the one it was put to, and nobody else.
+    await s.request(s.guest, { t: "treaty", id: id(4), op: "sign", ref: offer.id });
+    assert.match(s.ack(s.guest, id(4)).error, /not yours to answer/);
+    await s.request(s.hostPlayer, { t: "treaty", id: id(5), op: "sign", ref: offer.id });
+    assert.equal(s.ack(s.hostPlayer, id(5)).ok, true);
+    const agreement = s.store.docs.world.agreements.at(-1);
+    assert.deepEqual([agreement.type, agreement.title, agreement.status, agreement.parties], ["non_aggression", "The Riga Pact", "active", [RUSSIA, LATVIA]]);
+    assert.ok(s.shown(s.guest).world.agreements.some((entry) => entry.id === agreement.id), "and every view holds it");
+  } finally {
+    setHostingSharedGame(false);
+  }
+});
+
+test("a treaty one player puts to another is seen by those two alone until it is signed", async () => {
+  const { projectForViewer } = await import("./projection.js");
+  const docs = { world: { treatyOffers: [{ id: "t1", from: RUSSIA, to: LATVIA, type: "alliance", status: "open" }] }, game: { country: LATVIA }, events: [], chat: [], actions: [] };
+  const seen = (viewer) => projectForViewer(docs, viewer).world.treatyOffers.map((offer) => offer.id);
+  assert.deepEqual([seen(RUSSIA), seen(LATVIA), seen(ESTONIA)], [["t1"], ["t1"], []]);
+});
+
 test("a city struck from the air is the host's own map's: how many live there is never the page's to say", async () => {
   // A guest's page sent the people of the city it struck, and the host took the figure: fifty million "killed"
   // in a town of thousands, as the page liked. The host now looks the city up on its own map.
