@@ -1595,3 +1595,50 @@ test("a player who holds a seat is let back in however many newcomers came meanw
   assert.equal(s.host.roomFor("device-guest"), false, "the one already in without a seat has it");
   assert.equal(s.host.roomFor("device-new"), true);
 });
+
+test("the round waits while the host's screen is gone, and goes on when it is back; a round the host paused itself stays paused", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  // The host's page reloads: its screen is gone a moment.
+  s.host.leave(s.hostPlayer);
+  await s.clock.flush();
+  assert.equal(s.to(s.guest, "round").at(-1).paused, true, "nothing runs out meanwhile");
+  assert.match(s.to(s.guest, "notice").at(-1).text, /host's screen is away/);
+  await s.clock.advance(20 * 60_000);
+  assert.equal(s.resolved.length, 0, "no round is resolved with nobody at the host's screen");
+  s.host.join({ ...s.hostPlayer, id: "loopback-2" });
+  await s.clock.flush();
+  assert.equal(s.to(s.guest, "round").at(-1).paused, false);
+  assert.match(s.to(s.guest, "notice").at(-1).text, /host is back/);
+  // Paused by the host, and the host's screen goes and comes back: still paused.
+  s.host.control.pause();
+  s.host.leave({ ...s.hostPlayer, id: "loopback-2" });
+  s.host.join({ ...s.hostPlayer, id: "loopback-3" });
+  await s.clock.flush();
+  assert.equal(s.to(s.guest, "round").at(-1).paused, true);
+});
+
+test("a round that comes to be planned while the host's screen is gone waits for it too", async () => {
+  let release;
+  const holdResolve = new Promise((resolve) => { release = resolve; });
+  const s = setup({ holdResolve });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.hostPlayer, { t: "ready", id: id(2), value: true });
+  await s.request(s.guest, { t: "ready", id: id(3), value: true });
+  await s.clock.flush();
+  assert.equal(s.to(s.guest, "round").at(-1).phase, "resolving");
+  // The host's screen goes while the round is resolved: the skip runs on.
+  s.host.leave(s.hostPlayer);
+  release();
+  await s.clock.flush();
+  await s.clock.flush();
+  const after = s.to(s.guest, "round").at(-1);
+  assert.equal(after.phase, "revealing");
+  assert.equal(after.paused, true, "the reading waits for the host");
+});

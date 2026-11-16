@@ -407,6 +407,30 @@ export const createGameHost = ({
     return rest;
   });
 
+  // The host's screen gone (a reload, a crash, its window closed): the round
+  // waits for it, and goes on when it is back. A round the host had paused
+  // itself stays paused. Before, the engine went on resolving rounds on the
+  // host's AI key with nobody at the host's screen. `hostSeen`: the host's
+  // screen has been here (it is not yet while the game opens).
+  let hostSeen = false;
+  let waitingForHost = false;
+  const hostHere = () => [...connections.values()].some(isHost);
+  const holdForHost = () => {
+    if (stopped || !hostSeen || waitingForHost || hostHere()) return;
+    const status = round.status();
+    if (status.paused || !["planning", "countdown", "revealing"].includes(status.phase)) return;
+    waitingForHost = true;
+    round.pause();
+    for (const connection of connections.values()) send(connection, notice("info", "The host's screen is away: the round waits until it is back."));
+  };
+  const hostReturned = () => {
+    hostSeen = true;
+    if (!waitingForHost) return;
+    waitingForHost = false;
+    round.resume();
+    for (const connection of connections.values()) send(connection, notice("info", "The host is back: the round goes on."));
+  };
+
   // The round last saved with the game.
   let savedRound = -1;
   const round = createRoundMachine({
@@ -422,6 +446,9 @@ export const createGameHost = ({
         savedRound = roundToPlan(status);
         sessionChanged();
       }
+      // A round that comes to be planned or read while the host's screen is
+      // gone waits for it too.
+      holdForHost();
     },
     // The round is one entry in the queue: it starts once whatever was being
     // applied is done, and nothing else is applied until it has landed.
@@ -1181,6 +1208,7 @@ export const createGameHost = ({
       if (seat && seat.status !== SEAT_STATUS.HUMAN) seats.returned(player.device, { name: player.name });
       const connection = connections.get(player.id);
       send(connection, lobbyFor(connection));
+      if (isHost(connection)) hostReturned();
       send(connection, roundMessage(round.status()));
       void seatsChanged();
     },
@@ -1188,9 +1216,14 @@ export const createGameHost = ({
       const connection = connections.get(player.id);
       if (!connection) return;
       connections.delete(player.id);
-      // Another connection of the same device (a reconnect) keeps the seat, and
-      // the host's own seat is the host's for as long as the game runs.
-      if ([...connections.values()].some((entry) => entry.device === connection.device) || isHost(connection)) return;
+      // Another connection of the same device (a reconnect) keeps the seat.
+      if ([...connections.values()].some((entry) => entry.device === connection.device)) return;
+      // The host's own seat is the host's for as long as the game runs: the
+      // round waits for its screen to come back.
+      if (isHost(connection)) {
+        holdForHost();
+        return;
+      }
       seats.left(connection.device);
       void seatsChanged();
     },

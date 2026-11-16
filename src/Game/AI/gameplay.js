@@ -197,6 +197,7 @@ import { buildTargetDossierKernel, buildTargetStatsTerritorialBasisKernel } from
 import { buildTargetLedgerLines } from "./targetDossier.js";
 import { buildCustomStatContinuity, customStatRefreshDecision, describeFreshCustomStatEvidence } from "./customStatContinuity.js";
 import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
+import { hasWriteCredential } from "../../runtime/writeCredential.js";
 import {
   AGENT_REPORTS_FIELD,
   decodeGameMasterTransportPayload,
@@ -11750,8 +11751,10 @@ const getCountryStatsWorker = () => {
     // Hosted builds (website, Android app) answer /api/* with a patch on THIS
     // thread's fetch, which the worker never sees: its runtime reads and writes
     // come here as `io` messages and go back as `io-result` (runtimeIoBridge.js).
-    // The desktop's server answers the worker directly, so it is never told.
-    if (import.meta.env.VITE_OH_WEB) worker.postMessage({ type: IO_CONFIG, bridgeRuntimeIo: true });
+    // So does a shared game's engine window, whose writes must carry its
+    // credential (runtime/writeCredential.js). Otherwise the desktop's server
+    // answers the worker directly, so it is never told.
+    if (import.meta.env.VITE_OH_WEB || hasWriteCredential()) worker.postMessage({ type: IO_CONFIG, bridgeRuntimeIo: true });
 
     worker.onmessage = (event) => {
       if (event?.data?.type === IO_REQUEST) {

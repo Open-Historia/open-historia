@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createGameClient } from "./gameClient.js";
-import { createLoopbackEngineSide, createLoopbackScreenSide } from "../transport/loopback.js";
+import { ALIVE_MS, GONE_MS, createLoopbackEngineSide, createLoopbackScreenSide } from "../transport/loopback.js";
 
 const manualTimers = () => {
   const pending = new Map();
@@ -84,11 +84,16 @@ test("the loopback carries the screen's requests and controls to the engine, and
     onMessage: (message) => seen.messages.push(message),
     onStatus: (status) => seen.statuses.push(status),
   });
+  // Closed whatever happens: an open channel keeps the test file running.
+  try {
   screen.hello("device-host", "Host");
   screen.request({ t: "ready", id: "0123456789abcdef", value: true });
   screen.request({ t: "ready", id: "0123456789abcdef", value: true, isHost: true }); // not a request
   screen.control("start");
   screen.control("becomeGod");
+  // An optional field left undefined is left out, not the control refused:
+  // the host's page coming back after a reload opens with no settings.
+  screen.control("open", { settings: undefined, name: "Host" });
   // The last word each way is a valid one: once it has arrived, everything sent
   // before it on that side has too, so what was dropped was dropped (a fixed
   // wait was too short on a busy machine).
@@ -101,11 +106,13 @@ test("the loopback carries the screen's requests and controls to the engine, and
   }
   assert.deepEqual(seen.hello, { device: "device-host", name: "Host" });
   assert.deepEqual(seen.requests, [{ t: "ready", id: "0123456789abcdef", value: true }]);
-  assert.deepEqual(seen.controls, [["start", null], ["pause", null]]);
+  assert.deepEqual(seen.controls, [["start", null], ["open", { name: "Host" }], ["pause", null]]);
   assert.deepEqual(seen.messages, [{ t: "notice", level: "info", text: "Round 2 begins." }]);
   assert.deepEqual(seen.statuses, [{ token: "oh1-abc", players: 2 }]);
-  engine.close();
-  screen.close();
+  } finally {
+    engine.close();
+    screen.close();
+  }
 });
 
 test("a closed loopback end goes quiet: a late status or parting word is dropped, not thrown", async () => {
@@ -138,4 +145,57 @@ test("a request not yet answered goes again with its own id after a reconnect, a
   assert.deepEqual(await asked, { ok: true, error: "" });
   assert.equal(client.resend(), 0, "nothing left to send");
   client.close();
+});
+
+// Heartbeats are driven by hand: each end's interval is caught and called.
+const handTimers = () => {
+  const beats = [];
+  return {
+    beats,
+    timers: { setInterval: (fn) => { beats.push(fn); return beats.length; }, clearInterval: () => {} },
+  };
+};
+const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+
+test("each end of the loopback says it is there, and takes the other for gone when it falls quiet", async () => {
+  let t = 1_000;
+  const now = () => t;
+  const engineBeats = handTimers();
+  const screenBeats = handTimers();
+  let byes = 0;
+  let gone = 0;
+  const engine = createLoopbackEngineSide({ onBye: () => { byes += 1; }, timers: engineBeats.timers, now });
+  const screen = createLoopbackScreenSide({ onGone: () => { gone += 1; }, timers: screenBeats.timers, now });
+  // Closed whatever happens: an open channel keeps the test file running.
+  try {
+  // Nobody is taken for gone before they have been heard.
+  t += GONE_MS * 2;
+  engineBeats.beats[0]();
+  screenBeats.beats[0]();
+  assert.deepEqual([byes, gone], [0, 0]);
+  screen.hello("device-host", "Host");
+  await settle();
+  engineBeats.beats[0]();
+  await settle();
+  // Both alive: each heard the other's word.
+  t += ALIVE_MS;
+  screenBeats.beats[0]();
+  await settle();
+  engineBeats.beats[0]();
+  assert.deepEqual([byes, gone], [0, 0]);
+  // The screen falls quiet (a page that froze or crashed says no bye).
+  t += GONE_MS + 1;
+  engineBeats.beats[0]();
+  assert.equal(byes, 1, "the engine treats it as a screen that left");
+  engineBeats.beats[0]();
+  assert.equal(byes, 1, "once");
+  // The engine falls quiet.
+  screenBeats.beats[0]();
+  assert.equal(gone, 1, "the screen says the engine window stopped");
+  screenBeats.beats[0]();
+  assert.equal(gone, 1, "once");
+  } finally {
+    engine.close();
+    screen.close();
+  }
 });

@@ -53,11 +53,17 @@ import {
 } from "../../runtime/institutionalGovernance.js";
 import { commitWithVotingRuleBackfill } from "../../Game/AI/institutionGovernanceRetry.js";
 import { normalizeSettings } from "./settings.js";
+import { credentialFromAddress, installWriteCredential } from "../../runtime/writeCredential.js";
 import { sessionFromRecord } from "./sessionRecord.js";
 
 const SCREEN = "host-screen";
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value : []);
+
+// The one writer of the game it hosts (server/oneWriter.js): every write this
+// window makes, and its workers ask it to make, carries the credential the app
+// gave it in its address. Before anything else here can write.
+installWriteCredential(credentialFromAddress());
 
 // This window shares the app's storage with the host's own screen. Its log is
 // sent there (see boot) and never stored from here, or the two windows would

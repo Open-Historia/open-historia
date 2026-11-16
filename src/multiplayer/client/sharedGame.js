@@ -78,6 +78,31 @@ let current = null; // { client, runtime, gameId, session?, screen?, pendingView
 
 // How long the host's screen waits for its engine window to open the game.
 const ENGINE_START_MS = 120_000;
+// This tab hosts a shared game: kept for the tab alone (sessionStorage), so a
+// reload comes back to it as the host's screen (resumeHosting), and another
+// tab or window of the same app does not.
+const HOSTING_KEY = "oh:mp:hosting";
+const rememberHosting = (name) => {
+  try {
+    sessionStorage.setItem(HOSTING_KEY, JSON.stringify({ name: String(name || "Host").slice(0, 40) }));
+  } catch {
+    // a reload then finds the game single player, refused by the server
+  }
+};
+const forgetHosting = () => {
+  try {
+    sessionStorage.removeItem(HOSTING_KEY);
+  } catch {
+    // nothing kept
+  }
+};
+const hostingRemembered = () => {
+  try {
+    return JSON.parse(sessionStorage.getItem(HOSTING_KEY) || "null");
+  } catch {
+    return null;
+  }
+};
 
 const deviceIdentity = () => loadDeviceIdentity(localStorage);
 
@@ -244,7 +269,10 @@ const startViews = () => {
 
 // --- Hosting (desktop) ---------------------------------------------------------
 
-export const hostSharedGame = async ({ settings, name } = {}) => {
+// `resuming`: this page comes back to a game its engine window already runs
+// (resumeHosting). Whatever goes wrong then leaves that game running: only a
+// first opening is undone, since nothing else holds the engine window open.
+export const hostSharedGame = async ({ settings, name, resuming = false } = {}) => {
   if (sharedGameActive()) throw new Error("A shared game is already open.");
   const probe = await fetch("/api/multiplayer/engine").then((response) => response.json()).catch(() => ({ supported: false }));
   // On the development server only, a developer may open /engine.html in
@@ -283,13 +311,28 @@ export const hostSharedGame = async ({ settings, name } = {}) => {
     onLog: (entries) => {
       for (const entry of entries) logDebugEvent(entry.category, `(host's engine) ${entry.message}`, entry.detail || undefined, { problem: entry.problem });
     },
+    // The engine window crashed or froze: said, and Leave closes it, since it
+    // cannot close itself.
+    onGone: () => {
+      if (!current || current.screen !== screen) return;
+      current.engineGone = true;
+      logDebugEvent("shared game", "the shared game's engine window stopped answering", undefined, { problem: true });
+      set({ mode: "ended", error: "The shared game's window stopped answering. Leave to play your game on your own again." });
+    },
   });
   current.screen = screen;
   current.client = makeClient((message) => screen.request(message));
+  // A page that goes (reloaded, its window closed) says so as it goes: the
+  // round waits for the host's screen at once, and goes on when the page is
+  // back (resumeHosting), rather than running on until the engine notices the
+  // silence (transport/loopback.js GONE_MS).
+  const goodbye = () => screen.bye();
+  window.addEventListener("pagehide", goodbye);
+  current.forgetGoodbye = () => window.removeEventListener("pagehide", goodbye);
   if (!devEngine) {
     const opened = await fetch("/api/multiplayer/engine/open", { method: "POST" }).then((response) => response.json()).catch((error) => ({ error: String(error?.message || error) }));
     if (!opened?.open) {
-      await leaveSharedGame();
+      await leaveSharedGame({ stopHosting: !resuming });
       throw new Error(opened?.error || "The engine window did not open.");
     }
   }
@@ -304,13 +347,48 @@ export const hostSharedGame = async ({ settings, name } = {}) => {
   if (!state.engine?.open) {
     const reason = state.engine?.error
       || (devEngine ? "No engine answered: open /engine.html in another tab first." : "The engine window did not start.");
-    await leaveSharedGame();
+    await leaveSharedGame({ stopHosting: !resuming });
     throw new Error(reason);
   }
   // The host's own campaign is the page's active game already: its view
   // replaces the documents from here on.
   startViews();
+  rememberHosting(name);
   return state.token;
+};
+
+// A page that was this tab's host's screen before it reloaded comes back to
+// its shared game as the host's screen, while the engine window still runs it.
+// Before, it came back as an ordinary single-player page writing the shared
+// game beside its engine (the server now refuses that: server/oneWriter.js).
+export const resumeHosting = async () => {
+  const kept = hostingRemembered();
+  if (!kept || sharedGameActive()) return false;
+  const probe = await fetch("/api/multiplayer/engine").then((response) => response.json()).catch(() => null);
+  if (!probe?.open) {
+    forgetHosting();
+    return false;
+  }
+  logDebugEvent("shared game", "this page was the host's screen before it reloaded: back to the shared game");
+  // The library first: the game shown in the menu bar is the hosted one.
+  await refreshLibraryCatalog({ force: true }).catch(() => {});
+  // Tried again while the engine window still runs the game: it may be busy a
+  // while (a round being resolved on a slow machine), and the game is never
+  // ended for it. The host's Stop ends it.
+  for (;;) {
+    try {
+      await hostSharedGame({ name: kept.name || "Host", resuming: true });
+      return true;
+    } catch (error) {
+      logDebugEvent("shared game", `could not come back to the shared game yet: ${String(error?.message || error)}`, undefined, { problem: true });
+    }
+    const still = await fetch("/api/multiplayer/engine").then((response) => response.json()).catch(() => null);
+    if (!still?.open || !hostingRemembered()) {
+      forgetHosting();
+      return false;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
 };
 
 // The host's controls (hosting only).
@@ -481,13 +559,22 @@ export const sharedRemainingMs = () => current?.client?.remainingMs() ?? 0;
 
 export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   const leaving = current;
+  // An engine window that never answered this page, or stopped answering it,
+  // cannot be trusted to close itself when it is told to stop.
+  const unanswered = Boolean(leaving?.screen) && (leaving.engineGone || !state.engine?.open);
   current = null;
   if (remoteRuntimeActive()) stopRemoteRuntime();
   leaving?.client?.close();
   if (leaving?.screen) {
+    leaving.forgetGoodbye?.();
     leaving.screen.bye();
     if (stopHosting) leaving.screen.control("stop");
     leaving.screen.close();
+    if (stopHosting) forgetHosting();
+    // An engine window that stopped answering cannot close itself: closed here,
+    // so the game is this page's to write again. One that answers closes
+    // itself once it has stopped (host/engineMain.js "stop").
+    if (stopHosting && unanswered) await fetch("/api/multiplayer/engine/close", { method: "POST" }).catch(() => {});
   }
   leaving?.session?.leave();
   set({ ...IDLE });

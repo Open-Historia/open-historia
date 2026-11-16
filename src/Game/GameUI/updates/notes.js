@@ -81,7 +81,7 @@ const NEW_UPDATES = [
           "Once the game has started, a player changes country only if the host agrees: ask under Players, and the host allows or refuses it. A player whose country is annexed or dissolved goes on watching, and can take any free country.",
           "A country that is renamed keeps its player, even one who was away at the time, and a country with a very long name no longer keeps everyone out of the lobby.",
           "Orders and messages sent while a round is being played are no longer refused: they wait, and count for the next round. When the host's AI cannot play a round, everyone is told why, the orders stay queued, and the host can try again at once.",
-          "A player who reconnects, or misses part of an update, is sent the whole game again, so the map no longer freezes or shows half a round.",
+          "A player who reconnects, or misses part of an update, is sent the whole game again, so the map no longer freezes or shows half a round. If the host's window reloads, it goes straight back to the shared game, and the round waits for it.",
         ],
       },
     ],

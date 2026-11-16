@@ -141,6 +141,7 @@ import { handleMcpMessage, tokenMatches } from "./agentMcp.js";
 import { AGENT_WAIT_MS, createAgentQueue } from "./agentQueue.js";
 import { appKindOf } from "./appKind.js";
 import { createClockOffsetCache } from "./clockOffset.js";
+import { ENGINE_CREDENTIAL_HEADER, hostedWriteRefusal } from "./oneWriter.js";
 import { createDiscordPresence, DISCORD_APPLICATION_ID, normalizePresence } from "./discordPresence.js";
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -763,6 +764,24 @@ const sharedGameEngine = () => globalThis.__ohSharedGameEngine || null;
 export const HOSTING_HOLDS_THE_GAME = "This computer is hosting a shared game, and the game it hosts stays its open game. Stop sharing first.";
 setActiveGameHold(() => (sharedGameEngine()?.status?.().open ? HOSTING_HOLDS_THE_GAME : ""));
 
+// And it is written by that window alone (oneWriter.js): every route that
+// writes a game or a scenario asks, before it reads a byte of the body.
+// `target(req)` says what the write touches: { gameId, scenarioId, key }.
+const hostedGame = () => {
+  const catalog = getGameCatalog();
+  const game = (catalog.games ?? []).find((entry) => entry?.id === catalog.activeGameId);
+  return { gameId: String(catalog.activeGameId || ""), scenarioId: String(game?.scenarioId || "") };
+};
+const oneWriter = (target) => (req, res, next) => {
+  const engine = sharedGameEngine();
+  if (!engine?.status?.().open) return next();
+  const refusal = hostedWriteRefusal({ engine, hosted: hostedGame(), target: target(req) ?? {}, offered: req.get(ENGINE_CREDENTIAL_HEADER) });
+  if (!refusal) return next();
+  return res.status(423).json({ error: refusal });
+};
+// The open game: what the runtime routes write.
+const theOpenGame = (key = "") => () => ({ gameId: String(getGameCatalog().activeGameId || ""), key });
+
 // How far this computer's clock is from the signaling relays' (clockOffset.js):
 // { offsetMs, sources }. A shared game asks before it joins or hosts, and
 // stamps its signaling by the relays' time (src/multiplayer/client/clock.js).
@@ -902,7 +921,7 @@ app.put("/api/scenarios/selected", jsonParser, (req, res) => {
   }
 });
 
-app.put("/api/scenarios/:scenarioId", jsonParser, (req, res) => {
+app.put("/api/scenarios/:scenarioId", oneWriter((req) => ({ scenarioId: req.params.scenarioId })), jsonParser, (req, res) => {
   try {
     res.json(updateScenario(req.params.scenarioId, req.body ?? {}));
   } catch (error) {
@@ -933,7 +952,7 @@ app.post("/api/scenarios/import", largeJsonParser, async (req, res) => {
 
 // Replace an existing scenario's content with a fresh bundle — the community
 // hub's "Update" button for scenarios imported unmodified from a post.
-app.put("/api/scenarios/:scenarioId/import", largeJsonParser, async (req, res) => {
+app.put("/api/scenarios/:scenarioId/import", oneWriter((req) => ({ scenarioId: req.params.scenarioId })), largeJsonParser, async (req, res) => {
   try {
     updateScenarioFromBundle(req.params.scenarioId, req.body ?? {});
     await migrateEmbeddedTiledArchives();
@@ -945,7 +964,7 @@ app.put("/api/scenarios/:scenarioId/import", largeJsonParser, async (req, res) =
 
 // The community basemap an import or Update could not download, downloaded
 // since: { payload: { dataUrl } | { geojson } }.
-app.put("/api/scenarios/:scenarioId/basemap", largeJsonParser, (req, res) => {
+app.put("/api/scenarios/:scenarioId/basemap", oneWriter((req) => ({ scenarioId: req.params.scenarioId })), largeJsonParser, (req, res) => {
   try {
     res.json(restoreScenarioBasemap(req.params.scenarioId, req.body?.payload));
   } catch (error) {
@@ -967,7 +986,7 @@ app.get("/api/scenarios/:scenarioId/assets/:assetKey", (req, res) => {
   }
 });
 
-app.put("/api/scenarios/:scenarioId/assets/:assetKey", uploadParser, (req, res) => {
+app.put("/api/scenarios/:scenarioId/assets/:assetKey", oneWriter((req) => ({ scenarioId: req.params.scenarioId })), uploadParser, (req, res) => {
   try {
     const buffer = Buffer.isBuffer(req.body)
       ? req.body
@@ -1042,7 +1061,7 @@ app.get("/api/games/:gameId/snapshots", (req, res) => {
   }
 });
 
-app.put("/api/games/:gameId/snapshots", largeJsonParser, (req, res) => {
+app.put("/api/games/:gameId/snapshots", oneWriter((req) => ({ gameId: req.params.gameId })), largeJsonParser, (req, res) => {
   try {
     res.json(writeGameSnapshots(req.params.gameId, req.body));
   } catch (error) {
@@ -1061,7 +1080,7 @@ app.get("/api/games/:gameId/parked-turn", (req, res) => {
   }
 });
 
-app.put("/api/games/:gameId/parked-turn", largeJsonParser, (req, res) => {
+app.put("/api/games/:gameId/parked-turn", oneWriter((req) => ({ gameId: req.params.gameId })), largeJsonParser, (req, res) => {
   try {
     res.json(writeGameParkedTurn(req.params.gameId, req.body));
   } catch (error) {
@@ -1069,7 +1088,7 @@ app.put("/api/games/:gameId/parked-turn", largeJsonParser, (req, res) => {
   }
 });
 
-app.delete("/api/games/:gameId/parked-turn", (req, res) => {
+app.delete("/api/games/:gameId/parked-turn", oneWriter((req) => ({ gameId: req.params.gameId })), (req, res) => {
   try {
     res.json(removeGameParkedTurn(req.params.gameId));
   } catch (error) {
@@ -1093,7 +1112,7 @@ app.put("/api/games/active", jsonParser, (req, res) => {
   }
 });
 
-app.put("/api/games/:gameId", jsonParser, (req, res) => {
+app.put("/api/games/:gameId", oneWriter((req) => ({ gameId: req.params.gameId })), jsonParser, (req, res) => {
   try {
     res.json(updateGame(req.params.gameId, req.body ?? {}));
   } catch (error) {
@@ -1110,7 +1129,7 @@ app.get("/api/games/:gameId/assets/:assetKey", (req, res) => {
   }
 });
 
-app.put("/api/games/:gameId/assets/:assetKey", uploadParser, (req, res) => {
+app.put("/api/games/:gameId/assets/:assetKey", oneWriter((req) => ({ gameId: req.params.gameId })), uploadParser, (req, res) => {
   try {
     const buffer = Buffer.isBuffer(req.body)
       ? req.body
@@ -1172,7 +1191,7 @@ app.delete("/api/trash", (req, res) => {
   }
 });
 
-app.delete("/api/games/:gameId/assets/:assetKey", (req, res) => {
+app.delete("/api/games/:gameId/assets/:assetKey", oneWriter((req) => ({ gameId: req.params.gameId })), (req, res) => {
   try {
     res.json(removeGameAsset(req.params.gameId, req.params.assetKey));
   } catch (error) {
@@ -1180,7 +1199,7 @@ app.delete("/api/games/:gameId/assets/:assetKey", (req, res) => {
   }
 });
 
-app.delete("/api/scenarios/:scenarioId/assets/:assetKey", (req, res) => {
+app.delete("/api/scenarios/:scenarioId/assets/:assetKey", oneWriter((req) => ({ scenarioId: req.params.scenarioId })), (req, res) => {
   try {
     res.json(removeScenarioAsset(req.params.scenarioId, req.params.assetKey));
   } catch (error) {
@@ -1188,7 +1207,7 @@ app.delete("/api/scenarios/:scenarioId/assets/:assetKey", (req, res) => {
   }
 });
 
-app.delete("/api/scenarios/:scenarioId", (req, res) => {
+app.delete("/api/scenarios/:scenarioId", oneWriter((req) => ({ scenarioId: req.params.scenarioId })), (req, res) => {
   try {
     res.json(deleteScenario(req.params.scenarioId));
   } catch (error) {
@@ -1240,7 +1259,7 @@ app.get("/api/runtime/snapshots/:snapshotId", (req, res) => {
   }
 });
 
-app.put("/api/runtime/turn-commit", jsonParser, (req, res) => {
+app.put("/api/runtime/turn-commit", oneWriter(theOpenGame()), jsonParser, (req, res) => {
   try {
     if (!Number(req.headers["content-length"])) {
       return sendError(res, 400, new Error("Refusing to commit turn: the request had no body."));
@@ -1262,7 +1281,7 @@ const runtimeJsonWriteParser = (req, res, next) => {
   parser(req, res, next);
 };
 
-app.put("/api/runtime/json/:assetKey", runtimeJsonWriteParser, (req, res) => {
+app.put("/api/runtime/json/:assetKey", oneWriter((req) => theOpenGame(req.params.assetKey)()), runtimeJsonWriteParser, (req, res) => {
   try {
     // express.json() hands us {} when the body was absent or unparseable, which is
     // indistinguishable from a genuine {} — and for an object-shaped asset like

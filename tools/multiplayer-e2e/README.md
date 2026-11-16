@@ -114,6 +114,13 @@ The real desktop app's hidden engine window is not part of this run.
   another country. The host's Players button says someone is asking, and the
   host is shown who asks, with Allow and Refuse, and Release and Ban on the
   guest's seat. The host refuses, and the guest is told it keeps its country.
+- **One writer:** while the game is shared, the host's server refuses a write
+  to it from anything but the engine tab (which the run opens with the engine's
+  credential in its address, as the desktop app does), a forged credential
+  too, and the world is left as it was.
+- **The host's page reloads:** it comes back to the shared game as the host's
+  screen; the round waited for it, the guest was told it was away and back,
+  and the page wrote nothing meanwhile.
 - **Stopping:** when the host stops, the guest is told.
 - **The session kept with the game** (`host/sessionRecord.js`): it is in the
   campaign (`/api/runtime/json/shared`), the guest's seat bound to its device,

@@ -15,6 +15,7 @@
 //   tab on engine.html (the hidden engine window) and a tab on the game (the
 //   host's screen). Guest: app server B, its own origin, library and storage.
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +23,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { startRelay } from "./relay.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+// The engine window's credential (server/oneWriter.js), as the desktop app
+// mints one when it opens the window: given to the host's server, and to the
+// engine tab alone, in its address.
+const ENGINE_CREDENTIAL = crypto.randomBytes(18).toString("base64url");
 const REPO = path.join(HERE, "..", "..");
 const CHROME = process.env.CHROME || [
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -98,7 +103,7 @@ seedMap([path.join(scratch, "host"), path.join(scratch, "guest")]);
 const startApp = (name, port, role) => {
   const child = spawn(process.execPath, [path.join(HERE, "app-server.mjs"), path.join(scratch, name), String(port), role], {
     cwd: REPO,
-    env: { ...process.env, ...(mapSource ? { OH_E2E_ASSETS: MAP_ASSETS } : {}) },
+    env: { ...process.env, ...(mapSource ? { OH_E2E_ASSETS: MAP_ASSETS } : {}), ...(role === "host" ? { OH_E2E_ENGINE_CREDENTIAL: ENGINE_CREDENTIAL } : {}) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.on("data", (data) => serverLogs.push(`[${name}] ${data}`));
@@ -370,7 +375,8 @@ try {
   // The engine and the host's screen: the run opens engine.html itself, with
   // this device's settings (the relay, and the key) and the stand-in model
   // before anything can call it.
-  const engine = await openTab(`${HOST}/engine.html`);
+  const ENGINE_PAGE = `${HOST}/engine.html#credential=${ENGINE_CREDENTIAL}`;
+  const engine = await openTab(ENGINE_PAGE);
   engineTab = engine;
   await until(engine, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
   await standInModel(engine);
@@ -528,9 +534,38 @@ try {
   const LINE_FROM_HOST = "Washington proposes talks on arms limits.";
   const LINE_FROM_GUEST = "Moscow is willing to talk, in Geneva.";
   const toggleChats = (tab) => tab.eval(`(() => { const b = document.querySelector('button[title^="Chat"]'); if (!b) return false; b.click(); return true; })()`);
+  // A country picked in the country picker (chat.jsx CountrySelectorModal): its
+  // tile is looked for inside the picker, never as the first button of that
+  // name anywhere on the page, and the pick is checked on the tile. What the
+  // page showed is said when it was not picked.
+  const pickCountry = async (tab, name) => {
+    // The picker: the search box's nearest box that also holds its Cancel button.
+    const PICKER = `(() => { let node = document.querySelector('input[placeholder="Search countries..."]'); while (node && !(node.querySelectorAll && [...node.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Cancel'))) node = node.parentElement; return node; })()`;
+    await tab.eval(`(() => { window.__e2e.type(document.querySelector('input[placeholder="Search countries..."]'), ${JSON.stringify(name)}); return true; })()`);
+    // The list filters as the search changes, which on a busy machine takes a
+    // while: the tile is waited for, then clicked.
+    await until(tab, `(() => { const picker = ${PICKER}; return Boolean(picker) && [...picker.querySelectorAll('button')].some((b) => b.textContent.trim() === ${JSON.stringify(name)}); })()`, 15000);
+    const clicked = await tab.eval(`(() => { const picker = ${PICKER}; const tile = picker && [...picker.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(name)}); if (tile) tile.click(); return Boolean(tile); })()`);
+    // A picked tile wears a check mark before its name (chat.jsx CountryTile).
+    const picked = await until(tab, `(() => { const picker = ${PICKER}; return Boolean(picker) && [...picker.querySelectorAll('button')].some((b) => b.textContent.trim() === ${JSON.stringify(`✓${name}`)}); })()`, 10000);
+    if (!picked) {
+      await shoot(tab, "x-country-not-picked");
+      const named = await tab.eval(`[...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === ${JSON.stringify(name)}).map((b) => (b.closest('[class], [style]')?.parentElement?.textContent || '').replace(/\\s+/g, ' ').slice(0, 120))`).catch(() => []);
+      const picker = await tab.eval(`(() => { const picker = ${PICKER}; return picker ? { buttons: [...picker.querySelectorAll('button')].map((b) => b.textContent.trim()).slice(0, 12), selected: (picker.textContent.match(/Selected[^:]*:[^A-Z]*/) || [''])[0].slice(0, 80) } : null; })()`).catch((error) => String(error));
+      const diagnostics = await tab.eval(`(() => { try { return (JSON.parse(localStorage.getItem('oh_debug_log_v1') || '{}').entries || []).filter((entry) => entry.category === 'shared game' || entry.problem).slice(-15).map((entry) => String(entry.category) + ': ' + String(entry.message).slice(0, 160)); } catch (error) { return [String(error)]; } })()`).catch(() => []);
+      throw new Error(`${name} was not picked (tile found: ${clicked}); the picker: ${JSON.stringify(picker)}; buttons named so on the page: ${JSON.stringify(named)}; its console: ${JSON.stringify(tab.logs.slice(-15))}; its log: ${JSON.stringify(diagnostics)}`);
+    }
+    await sleep(300);
+  };
   const SEND = `document.querySelector('button[aria-label="Send message"]')`;
   const sayInOpenThread = async (tab, line) => {
-    await until(tab, `Boolean(${SEND})`, 15000);
+    // A thread that never opened is said, with what the screen showed then.
+    if (!(await until(tab, `Boolean(${SEND})`, 15000))) {
+      await shoot(tab, "x-no-send-button");
+      const showing = await tab.eval(`document.body.innerText.split("
+").map((text) => text.trim()).filter(Boolean).slice(0, 40).join(" | ")`).catch(() => "");
+      throw new Error(`no thread open to write ${JSON.stringify(line)} in; the screen showed: ${String(showing).slice(0, 1200)}`);
+    }
     await tab.eval(`(() => { window.__e2e.type(${SEND}.parentElement.querySelector('textarea'), ${JSON.stringify(line)}); return true; })()`);
     await sleep(300);
     await tab.eval(`${SEND}.click(); true`);
@@ -541,10 +576,7 @@ try {
   await until(host, "window.__e2e.buttons('Start New Chat').length > 0", 15000);
   await host.eval("window.__e2e.click('Start New Chat')");
   await until(host, `Boolean(document.querySelector('input[placeholder="Search countries..."]'))`, 15000);
-  await host.eval(`(() => { window.__e2e.type(document.querySelector('input[placeholder="Search countries..."]'), ${JSON.stringify(GUEST_COUNTRY)}); return true; })()`);
-  await sleep(500);
-  await host.eval(`(() => { const tile = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(GUEST_COUNTRY)}); if (tile) tile.click(); return Boolean(tile); })()`);
-  await sleep(300);
+  await pickCountry(host, GUEST_COUNTRY);
   await host.eval("window.__e2e.click('Chat with 1 country')");
   await sayInOpenThread(host, LINE_FROM_HOST);
   const holds = (line) => `window.__e2e.view('chat').then((chats) => JSON.stringify(chats).includes(${JSON.stringify(line)}))`;
@@ -585,12 +617,6 @@ try {
   const LINE_TO_TABLE = "Washington proposes a conference on the arms talks.";
   const LINE_AT_TABLE = "Moscow will attend the conference.";
   const backToList = (tab) => tab.eval(`(() => { const b = document.querySelector('button[aria-label="Back to diplomacy"]'); if (b) b.click(); return Boolean(b); })()`);
-  const pickCountry = async (tab, name) => {
-    await tab.eval(`(() => { window.__e2e.type(document.querySelector('input[placeholder="Search countries..."]'), ${JSON.stringify(name)}); return true; })()`);
-    await sleep(500);
-    await tab.eval(`(() => { const tile = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(name)}); if (tile) tile.click(); return Boolean(tile); })()`);
-    await sleep(300);
-  };
   const rosterOf = (body) => body.split("\n").filter((line) => line.includes("-controlled")).map((line) => line.trim());
   await backToList(host);
   await until(host, "window.__e2e.buttons('Start New Chat').length > 0", 15000);
@@ -990,6 +1016,41 @@ try {
     canAsk && guestAsked && hostAsked && askShown && handOnSeat && keptAs && stillPlays && askGone,
     JSON.stringify({ canAsk, guestAsked, hostAsked, askShown, handOnSeat, keptAs, stillPlays, askGone }));
 
+  // One writer (server/oneWriter.js): while the game is shared, its server
+  // takes a write to it only from the engine window. Anything else (the host's
+  // page after a reload, a second window, another device) is refused with why.
+  const refusedWrite = await fetch(`${HOST}/api/runtime/json/world`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ written: "by someone other than the engine" }) });
+  const refusedWords = (await refusedWrite.json().catch(() => ({}))).error ?? "";
+  const refusedTurn = (await fetch(`${HOST}/api/runtime/turn-commit`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: "{}" })).status;
+  const forgedWrite = (await fetch(`${HOST}/api/runtime/json/world`, { method: "PUT", headers: { "Content-Type": "application/json", "X-OH-Engine": "not-the-engines-credential" }, body: "{}" })).status;
+  // And the shared world is as it was: the refused write left no trace.
+  const worldKept = !(await (await fetch(`${HOST}/api/runtime/json/world?v=e2e`)).json())?.written;
+  check("while the game is shared only its engine window writes it: anyone else's write, or a forged credential, is refused with why",
+    refusedWrite.status === 423 && /being shared/.test(refusedWords) && refusedTurn === 423 && forgedWrite === 423 && worldKept,
+    JSON.stringify({ world: refusedWrite.status, words: refusedWords, turn: refusedTurn, forged: forgedWrite }));
+
+  // The host's page reloads (F5, the update banner, a crash's Reload): it comes
+  // back to its shared game as the host's screen, and the round waits for it
+  // meanwhile, as every player is told.
+  await guest.eval(`(() => { window.__hostAway = { away: false, back: false }; new MutationObserver(() => { const text = document.body.textContent; if (text.includes("The host's screen is away")) window.__hostAway.away = true; if (text.includes("The host is back")) window.__hostAway.back = true; }).observe(document.body, { childList: true, subtree: true, characterData: true }); return true; })()`);
+  const roundBeforeReload = Number(await host.eval("(document.body.textContent.match(/Round (\\d+) ·/) || [])[1] || 0"));
+  await host.send("Page.reload");
+  await sleep(1000);
+  await until(host, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
+  await sleep(500);
+  await withHelpers(host);
+  const hostBack = await until(host, `document.body.textContent.includes(${JSON.stringify(`Round ${roundBeforeReload} · `)}) && (window.__e2e.buttons('Pause').length > 0 || window.__e2e.buttons('Resume').length > 0)`, 90000);
+  const guestToldOfHost = await until(guest, "window.__hostAway && window.__hostAway.away && window.__hostAway.back", 30000);
+  const hostView = await host.eval("window.__e2e.view('game')").catch(() => null);
+  const reloadComplaints = host.logs.filter((line) => /HTTP 423|Failed to save/i.test(line));
+  // Back in the game, as hosting goes into it: the main menu is not left up.
+  await openVaultDoor(host).catch(() => false);
+  const hostInGame = await until(host, "window.__e2e.buttons('Lobbies').length === 0", 60000);
+  await shoot(host, "5-host-back-after-reload");
+  check("the host's page reloads and comes back to its shared game as the host's screen; the round waited for it, every player was told, and the page wrote nothing meanwhile",
+    hostBack && guestToldOfHost && hostView?.country === HOST_COUNTRY && reloadComplaints.length === 0 && hostInGame,
+    JSON.stringify({ hostBack, guestTold: await guest.eval("window.__hostAway"), country: hostView?.country, complaints: reloadComplaints.slice(0, 3), inGame: hostInGame }));
+
   // Where the rounds are when the host stops sharing: the round read through
   // is done, so the one being planned is the one a game shared again plans.
   const roundAtStop = Number(await host.eval("(document.body.textContent.match(/Round (\\d+) ·/) || [])[1] || 0"));
@@ -1009,7 +1070,11 @@ try {
   // Shared again another day, in a new engine window, as the desktop app opens
   // one: every player has their own country back, without choosing, at the
   // round the game was at, which waits paused for the host.
-  await engine.send("Page.reload");
+  // (A new window: its credential comes in its address, which the old page
+  // took out of its own on opening.)
+  await engine.send("Page.navigate", { url: "about:blank" });
+  await sleep(500);
+  await engine.send("Page.navigate", { url: ENGINE_PAGE });
   await sleep(500);
   await until(engine, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
   await until(host, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
@@ -1026,6 +1091,7 @@ try {
   const codeAgain = await until(host, "Boolean(document.querySelector('code') && document.querySelector('code').textContent === " + JSON.stringify(token) + ")", 15000);
   check("shared again, the game goes on at the round it was at, paused for the host, with the same invite code under Players",
     resumedPaused && codeAgain, JSON.stringify({ resumedPaused, codeAgain, roundAtStop }));
+  await until(host, "window.__e2e.buttons('Lobbies').length === 0", 60000);
   await shoot(host, "5-host-shared-again-paused");
 
   await guest.eval("window.__e2e.click('Back to my games')");
@@ -1045,6 +1111,7 @@ try {
   const neverChose = !(await guest.eval("[...document.querySelectorAll('select')].some((s) => s.options[0] && s.options[0].textContent.startsWith('Choose your country'))"));
   check("the guest joins again with the same code and plays its own country again without choosing it",
     backInBar && backAs === GUEST_COUNTRY && neverChose, JSON.stringify({ backInBar, backAs, neverChose }));
+  await until(guest, "!document.querySelector('.oh-loading-screen')", 90000);
   await shoot(guest, "5-guest-back-in-its-country");
   await host.eval("window.__e2e.click('Resume')");
   const resumed = await until(host, "window.__e2e.buttons('Pause').length > 0", 15000);
@@ -1062,6 +1129,12 @@ try {
     console.log((engineTab?.logs ?? []).slice(-40).join(String.fromCharCode(10)));
     console.log("--- server logs (tail) ---");
     console.log(serverLogs.join("").split("\n").slice(-25).join("\n"));
+  }
+  // E2E_HOLD=<seconds>: a failed run leaves its browser and servers up that
+  // long, to be looked at over the DevTools port, before it cleans up.
+  if (passed < results.length && Number(process.env.E2E_HOLD) > 0) {
+    console.log(`holding for ${Number(process.env.E2E_HOLD)} s: DevTools on port ${DEBUG_PORT}, host ${HOST}, guest ${GUEST}`);
+    await sleep(Number(process.env.E2E_HOLD) * 1000);
   }
   chrome.kill();
   hostServer.kill();
