@@ -52,7 +52,10 @@ import { SAY_FROM_DRAFT_MAX } from "../client/sharedThreads.js";
 // host releases it, a seated player's change of country is asked of the host
 // (the lobby's `changes`), and a player whose country is gone watches it
 // (a seat's status "watching"). The round says the last one that failed.
-export const SHARED_GAME_VERSION = "12";
+// 13: the lobby states the game's inputs every screen uses: its map's checksum
+// (`scenario.hash`, which a guest's copy must match) and its feature switches
+// (`features`, which a guest's screen takes for its own while it plays).
+export const SHARED_GAME_VERSION = "13";
 
 // The documents a player's view holds: the game itself first (a screen that
 // asks for one before the first view arrives waits for it), then the three a
@@ -208,7 +211,9 @@ export const HOST_MESSAGES = Object.freeze({
     started: bool(),
     // Players asking to change country, for the host to allow (sent to the host only).
     changes: list(obj({ from: COUNTRY, to: COUNTRY, name: str(40) }), 64),
-  }, ["changes"]),
+    // The host's feature switches, as its game resolves them (runtime/gameFeatures.js).
+    features: json(6),
+  }, ["changes", "features"]),
   round: obj({
     t: literal("round"),
     phase: str(12, { enum: ["lobby", "planning", "countdown", "resolving", "revealing"] }),

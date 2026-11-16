@@ -123,6 +123,9 @@ export const createGameHost = ({
   // device; its seat is taken before anyone joins.
   hostSeat = { device: "", name: "", country: "" },
   scenario = { id: "", name: "", hash: "" },
+  // The game's feature switches as the host's game resolves them, which every
+  // screen plays by (runtime/gameFeatures.js setSharedGameFeatures).
+  features = null,
   countries = [],
   // The game's countries as the world has them now, every one (a country
   // founded mid-game is among them, one dissolved or annexed whole is not):
@@ -288,6 +291,7 @@ export const createGameHost = ({
     changes: (!connection || isHost(connection) ? [...changes.values()] : [])
       .map((entry) => ({ from: entry.from, to: entry.to, name: clean(entry.name).slice(0, 40) }))
       .filter((entry) => fits(entry.from) && fits(entry.to)).slice(0, 64),
+    ...(features && typeof features === "object" ? { features } : {}),
   });
 
   const roundMessage = (status) => ({

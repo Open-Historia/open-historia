@@ -8,6 +8,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { WORLD_DEFAULTS, normalizeChats, normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { projectChatThread } from "../../runtime/chatThreads.js";
@@ -475,4 +478,63 @@ test("a player's advisor brings them their government's secrets, in a thread of 
   assert.deepEqual(Object.keys(lv.world.seatAdvice), [LATVIA]);
   assert.equal(JSON.stringify(lv).includes("CANARY-RU-ADVICE"), false);
   assert.equal(JSON.stringify(projectForViewer(docs, ESTONIA)).includes("CANARY-CAUGHT"), false);
+});
+
+// Every key the game's code reads of the world, read from the code itself:
+// a key the views do not classify is in no view, and a key that only some
+// scenarios have (a map's projection, its seas) slipped past a check that knew
+// only the keys every world has. Names read off something else called "world"
+// are listed here, each with what it is.
+const NOT_THE_WORLD = new Map([
+  // runtime/fronts/syntheticMap.js and testKit.js: a test map's own helpers.
+  ["controller", "fronts test map"], ["controllerOf", "fronts test map"], ["sovereignOf", "fronts test map"],
+  ["frame", "fronts test map"], ["map", "fronts test map, the Editor's search results"], ["regions", "fronts test map"],
+  // Editor/exportPreset.js and AI/gameplay.js: a scenario's world.json file, by name.
+  ["json", "world.json, a file name"],
+  // Editor/SearchBar.jsx: a list of places.
+  ["length", "the Editor's search results"],
+  // Game/Map/seasonTint.js: a colour and how strongly it tints.
+  ["rgb", "a season's tint"], ["strength", "a season's tint"],
+]);
+
+test("every key of the world the game's code reads is public, filtered for the viewer, or the host's alone", () => {
+  const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const read = new Set();
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules") walk(full);
+      } else if (/\.(?:js|jsx)$/.test(entry.name) && !/\.test\.(?:js|jsx)$/.test(entry.name)) {
+        for (const match of fs.readFileSync(full, "utf8").matchAll(/\bworld\??\.([A-Za-z_]\w*)/g)) read.add(match[1]);
+      }
+    }
+  };
+  walk(SRC);
+  const classified = new Set([...PUBLIC_WORLD_KEYS, ...FILTERED_WORLD_KEY_NAMES, ...HOST_ONLY_WORLD_KEYS]);
+  const unclassified = [...read].filter((key) => !classified.has(key) && !NOT_THE_WORLD.has(key)).sort();
+  assert.deepEqual(unclassified, [], "classify these world keys in projection.js (or name what else they are read off)");
+  assert.ok(read.has("projection") && read.has("seas"), "the code was read");
+});
+
+test("the map as the scenario draws it reaches every view: its projection, region types and seas", () => {
+  const docs = state();
+  docs.world = {
+    ...docs.world,
+    projection: { kind: "flat", noGlobe: true },
+    regionTypes: [{ id: "sea", name: "Sea", water: true }],
+    seas: [{ name: "Inner Sea", point: [10, 10] }],
+    customGeometry: true,
+    prehistory: { events: [{ title: "CANARY-PREHISTORY" }] },
+    canonContext: { referencePacks: ["CANARY-CANON"] },
+  };
+  for (const viewer of [LATVIA, RUSSIA]) {
+    const world = projectForViewer(docs, viewer).world;
+    assert.deepEqual(world.projection, { kind: "flat", noGlobe: true });
+    assert.equal(world.regionTypes[0].id, "sea");
+    assert.equal(world.seas[0].name, "Inner Sea");
+    assert.equal(world.customGeometry, true);
+    assert.equal(JSON.stringify(world).includes("CANARY-PREHISTORY"), false, "the Workshop's own record stays the host's");
+    assert.equal(JSON.stringify(world).includes("CANARY-CANON"), false);
+  }
 });

@@ -1,5 +1,6 @@
 /*! Open Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import fs from "fs";
+import { mapFingerprint } from "./scenarioFingerprint.js";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "./gameFeatures.js";
 import { assertEconomicDisplayCurrencyChoice } from "./economicDisplayCurrency.js";
 import { layOutScenarioBundle } from "./mapProjection.js";
@@ -3598,6 +3599,33 @@ const resolveRuntimeGeojsonAsset = (assetKey) => {
   return { contentType: "application/json; charset=utf-8", sourcePath };
 };
 
+// A scenario's map as one checksum (scenarioFingerprint.js), which a shared
+// game's host states in its lobby and each guest checks its own copy against:
+// the files the runtime draws the map from (resolveRuntimeGeojsonAsset: the
+// scenario's own, or the stock world's regions where it has none), each first
+// brought to the owners' schema the runtime serves it in, so two copies of one
+// map agree wherever they were first opened; and the scenario's own tiles, by
+// size.
+const scenarioMapFingerprint = (scenarioId) => {
+  ensureScenarioStore();
+  const id = String(scenarioId ?? "").trim();
+  if (!id || !fs.existsSync(getScenarioMetaPath(id))) throw new Error(`The scenario "${id}" is not in this library.`);
+  ensureScenarioOwnerSchema(id);
+  const parts = Object.keys(SCENARIO_GEOJSON_ASSET_FILES).map((assetKey) => {
+    const own = getScenarioUploadPath(id, assetKey);
+    if (fs.existsSync(own)) return { name: assetKey, path: own };
+    if (assetKey !== "regionsGeojson" || id === DEFAULT_SCENARIO_ID) return { name: assetKey, path: null };
+    const stockPath = resolveStockRegionsPath();
+    if (stockPath && stockPath !== STOCK_REGIONS_PATH) ensureScenarioOwnerSchema(DEFAULT_SCENARIO_ID);
+    return { name: assetKey, path: stockPath || null };
+  });
+  for (const assetKey of Object.keys(PMTILES_ASSET_FILES)) {
+    const own = getScenarioUploadPath(id, assetKey);
+    parts.push({ name: assetKey, path: fs.existsSync(own) ? own : null, sizeOnly: true });
+  }
+  return mapFingerprint(parts);
+};
+
 // Restore points, one file each (server/restorePoints.js): storage/snapshots/
 // holds them and storage/snapshots-index.json their order, newest first, with
 // id/round/dates and the file each is in. A turn writes the one it adds and
@@ -4994,6 +5022,7 @@ const removeGameParkedTurn = (gameId) => {
 };
 
 export {
+  scenarioMapFingerprint,
   createGame,
   createScenario,
   deleteGame,

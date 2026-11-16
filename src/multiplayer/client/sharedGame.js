@@ -30,7 +30,9 @@ import { SHARED_ROUND_LANDED, setSharedGameRole, setSharedRequester } from "./sh
 import { createLoopbackScreenSide } from "../transport/loopback.js";
 import { createClientSession } from "../session/client.js";
 import { probeNetwork } from "../transport/peer.js";
-import { hostingHere, joinFailure, scenarioMissing, unreadableFromHost } from "./joinProgress.js";
+import { hostingHere, joinFailure, scenarioDiffers, scenarioMissing, unreadableFromHost } from "./joinProgress.js";
+import { chooseStandInScenario } from "./standIn.js";
+import { setSharedGameFeatures } from "../../runtime/gameFeatures.js";
 import { relayChannelFactory, usesCustomRelays } from "../signaling/relays.js";
 import { describeClock, offsetClock, readSignalingClock } from "./clock.js";
 import { loadDeviceIdentity } from "../identity.js";
@@ -252,6 +254,8 @@ const makeClient = (send) => createGameClient({
   },
   onChange: ({ lobby, round, notices }) => {
     if (current) current.hostNotices = notices;
+    // The host's feature switches are the game's on this screen too.
+    if (lobby?.features) setSharedGameFeatures(lobby.features);
     set({
       lobby,
       round,
@@ -396,24 +400,26 @@ export const hostControl = (action, args = null) => current?.screen?.control(act
 
 // --- Joining ---------------------------------------------------------------------
 
-// The host's scenario must be in this library: the map is drawn from it. It is
-// looked for by its id, and then by its name: a scenario the host made or
-// changed has an id of its own on every device it was copied to, and the one
-// scenario here with the host's name is that scenario.
-const sameName = (left, right) => String(left ?? "").trim().toLocaleLowerCase() === String(right ?? "").trim().toLocaleLowerCase();
+// The host's scenario must be in this library, with the host's map: the game is
+// drawn on it (client/standIn.js chooses the copy).
 const prepareStandIn = async (owner, lobby, roomId) => {
   await refreshLibraryCatalog({ force: true }).catch(() => {});
   const library = getLibraryState();
-  const scenarios = library.scenarios ?? [];
   const hostName = String(lobby?.scenario?.name || "").trim();
-  let scenario = scenarios.find((entry) => entry?.id && entry.id === String(lobby?.scenario?.id || ""));
-  if (!scenario && hostName) {
-    const named = scenarios.filter((entry) => sameName(entry?.name, hostName));
-    if (named.length === 1) [scenario] = named;
-  }
+  // The copy whose map is the host's (client/standIn.js), by the checksum the
+  // host states (server/scenarioFingerprint.js), whatever it is called here.
+  const { scenario, differs } = await chooseStandInScenario({
+    scenarios: library.scenarios ?? [],
+    host: lobby?.scenario ?? {},
+    fingerprintOf: (id) => fetch(`/api/scenarios/${encodeURIComponent(id)}/fingerprint`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((answer) => String(answer?.fingerprint || "")),
+  });
   if (!scenario) {
-    logDebugEvent("shared game", `the host's scenario is not in this library: "${hostName}" (${String(lobby?.scenario?.id || "no id")})`, undefined, { problem: true });
-    throw new Error(scenarioMissing(hostName));
+    logDebugEvent("shared game", differs
+      ? `this library's copy of the host's scenario has another map: "${hostName}"`
+      : `the host's scenario is not in this library: "${hostName}" (${String(lobby?.scenario?.id || "no id")})`, undefined, { problem: true });
+    throw new Error(differs ? scenarioDiffers(hostName) : scenarioMissing(hostName));
   }
   const scenarioId = String(scenario.id);
   const key = `oh:mp:standin:${roomId}`;
@@ -579,6 +585,8 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   leaving?.session?.leave();
   set({ ...IDLE });
   setSharedGameRole("");
+  // This device's own features again.
+  setSharedGameFeatures(null);
   // Back to this device's own documents, and the library's own entry.
   setSharedGameEntry(null);
   await refreshLibraryCatalog({ force: true }).catch(() => {});

@@ -149,6 +149,7 @@ const setup = (options = {}) => {
     ...(options.onSeatsMoved ? { onSeatsMoved: options.onSeatsMoved } : {}),
     ...(options.countriesOf ? { countriesOf: options.countriesOf } : {}),
     campaign: options.campaign ?? "",
+    ...(options.features ? { features: options.features } : {}),
     restored: options.restored ?? null,
     now: clock.now,
     timers: clock.timers,
@@ -1641,4 +1642,15 @@ test("a round that comes to be planned while the host's screen is gone waits for
   const after = s.to(s.guest, "round").at(-1);
   assert.equal(after.phase, "revealing");
   assert.equal(after.paused, true, "the reading waits for the host");
+});
+
+test("the lobby states the game's inputs every screen uses: its map's checksum and its feature switches", async () => {
+  const features = { socialMedia: { enabled: false, look: "phone" }, worldDirection: { enabled: true } };
+  const s = setup({ features });
+  s.host.join(s.guest);
+  await s.clock.flush();
+  const lobby = s.to(s.guest, "lobby").at(-1);
+  assert.deepEqual(lobby.features, features);
+  assert.equal(lobby.scenario.hash, "abc");
+  assert.equal(validate(HOST_MESSAGES.lobby, lobby).ok, true);
 });

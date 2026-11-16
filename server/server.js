@@ -24,6 +24,7 @@ import {
   getLibraryCatalog,
   getScenarioCatalog,
   getScenarioDetails,
+  scenarioMapFingerprint,
   readScenarioLanguagePack,
   importGameBundle,
   importScenarioBundle,
@@ -918,6 +919,18 @@ app.put("/api/scenarios/selected", jsonParser, (req, res) => {
     res.json(setSelectedScenario(req.body?.scenarioId));
   } catch (error) {
     sendError(res, 400, error);
+  }
+});
+
+// A scenario's map as one checksum (libraryStore.js scenarioMapFingerprint):
+// what a shared game's host states in its lobby, and what each guest's copy is
+// checked against before it takes a country.
+app.get("/api/scenarios/:scenarioId/fingerprint", (req, res) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ fingerprint: scenarioMapFingerprint(req.params.scenarioId) });
+  } catch (error) {
+    sendError(res, 404, error);
   }
 });
 

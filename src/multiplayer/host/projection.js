@@ -101,6 +101,15 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "socialFeed",
   // The stat sheets, and how each has moved: public figures (see the limits above).
   "countryStats", "countryStatsHistory",
+  // The map itself, as the scenario draws it: how it is projected, its region
+  // types (a sea, a wasteland), its seas, whether it is drawn by hand, how its
+  // cities' people are counted, its countries' common names, and which built-in
+  // map it is. In no view before, the host's own included, so on a flat or
+  // custom map every screen drew a different map from the one the engine ran:
+  // seas painted as land, a flat sheet wrapped round the globe, distances as on
+  // Earth.
+  "projection", "regionTypes", "seas", "customGeometry", "cityPopulationBasis", "commonNames",
+  "builtInMap", "builtInRevision",
 ]);
 
 // The narrator's and the engine's own. Never in any view.
@@ -113,6 +122,15 @@ export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   "promptSnapshot", "promptReference",
   // The campaign's canon, kept beside the history document (runtime/historyTiers.js).
   "canonFacts",
+  // And the scenario's canon model (runtime/scenarioCanon.js).
+  "canonContext", "canonModelVersion",
+  // What the Workshop wrote for a new game to open with: its pre-history
+  // (runtime/scenarioPrehistory.js) and its fronts (AI/frontScenario.js). A game
+  // holds what they made (its events, its battlefields), which the views carry.
+  "prehistory", "scenarioFronts",
+  // What an old save kept apart, folded into the Political World on reading
+  // (runtime/politicalLandscapeFold.js).
+  "politics",
 ]);
 
 // The host seat's single-player features (a scene in progress, the key its own

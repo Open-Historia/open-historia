@@ -253,6 +253,14 @@ const NEW_UPDATES = [
           "A player who reconnects, or misses part of an update, is sent the whole game again, so the map no longer freezes or shows half a round. If the host's window reloads, it goes straight back to the shared game, and the round waits for it.",
         ],
       },
+      {
+        title: "Everyone in the same world",
+        items: [
+          "Every screen now draws the host's map as the host's game does: its seas, region types and projection reach every player, so a flat or fantasy map is the same map on every screen.",
+          "When you join, your copy of the host's scenario is checked against the host's. If its map differs, you are told so and asked to import the host's copy, instead of playing on a different map.",
+          "The host's game settings apply on every screen: a feature the host's game has switched off is off for every player.",
+        ],
+      },
     ],
   },
   {

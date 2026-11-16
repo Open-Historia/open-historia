@@ -100,6 +100,10 @@ export const unreadableFromHost = () => "The host sent something this version of
 export const hostingHere = () => "This computer is hosting a shared game. Another window on the same computer shares its library, so it cannot join a shared game while that one is open. Join from another computer, or stop sharing first.";
 
 // The host's scenario is not on this device.
+// The host's scenario is here, but its map is not the host's: an older
+// version, or one changed since (server/scenarioFingerprint.js).
+export const scenarioDiffers = (name) => `Your copy of "${String(name || "the host's scenario").slice(0, 120)}" is not the host's: its map differs, so you would not see the world the game is played in. Import the host's copy of the scenario, then join again.`;
+
 export const scenarioMissing = (name) => `The host is playing "${String(name || "a scenario").slice(0, 120)}", and that scenario is not in your library, so its map cannot be shown here. Add it from the Community tab, or import the host's copy of it, then join again.`;
 
 // What the host's screen says about people who are not in the player list yet:

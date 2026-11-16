@@ -53,6 +53,7 @@ import {
 } from "../../runtime/institutionalGovernance.js";
 import { commitWithVotingRuleBackfill } from "../../Game/AI/institutionGovernanceRetry.js";
 import { normalizeSettings } from "./settings.js";
+import { getActiveFeatures, sharedGameFeaturesOf } from "../../runtime/gameFeatures.js";
 import { credentialFromAddress, installWriteCredential } from "../../runtime/writeCredential.js";
 import { sessionFromRecord } from "./sessionRecord.js";
 
@@ -311,6 +312,11 @@ const boot = async () => {
     // The session this game saved when it was last shared, taken up again: its
     // seats are their devices' (host/sessionRecord.js). A record that does not
     // read, or is another campaign's or another host's, is not used.
+    const fingerprint = await fetch(`/api/scenarios/${encodeURIComponent(clean(entry?.scenarioId))}/fingerprint`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((answer) => (/^[0-9a-f]{64}$/.test(String(answer?.fingerprint || "")) ? String(answer.fingerprint) : ""))
+      .catch(() => "");
+    if (!fingerprint) logDebugEvent("shared game", "this game's map has no checksum: guests' copies are not checked against it", undefined, { problem: true });
     const saved = await store.readShared().catch(() => null);
     const restored = sessionFromRecord(saved, { campaign, hostDevice: identity.id });
     if (restored) logDebugEvent("shared game", `taking up the session saved with this game: round ${restored.round}, ${restored.seats.length} seat(s)`);
@@ -320,7 +326,10 @@ const boot = async () => {
       },
       settings,
       hostSeat: { device: identity.id, name: clean(name) || "Host", country: host },
-      scenario: { id: clean(entry?.scenarioId).slice(0, 120), name: clean(scenario?.name || entry?.name || "Open Historia").slice(0, 120), hash: "" },
+      // Its map by checksum (server/scenarioFingerprint.js): each guest's copy
+      // must be this map, or it draws another world.
+      scenario: { id: clean(entry?.scenarioId).slice(0, 120), name: clean(scenario?.name || entry?.name || "Open Historia").slice(0, 120), hash: fingerprint },
+      features: sharedGameFeaturesOf(getActiveFeatures()),
       countries: gameCountries(docs.world, docs.game),
       countriesOf: (now) => gameCountries(now.world, now.game),
       campaign,
