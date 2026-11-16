@@ -166,7 +166,8 @@ test("the hold comes before anything is written, and before the board is asked",
     const hold = apply.indexOf("throw playerEventsHeldError(playerFailures)");
     assert.ok(hold > 0, "the apply holds on the player's failures");
     assert.ok(hold > apply.indexOf("settleOrders("), "once the orders are settled");
-    assert.ok(hold < apply.indexOf("boardCheck(() => generateProjectOps("), "before the board");
+    assert.ok(hold < apply.indexOf("const { ops, skipped } = reviewedProjectOps("), "before the board");
+    assert.ok(hold < apply.indexOf("await runProjectsEngine("), "and before the projects engine");
     assert.ok(hold < apply.indexOf("await writeCanonicalTurnState("), "before the write");
     assert.match(apply, /if \(result\.holdOnPlayerFailures\)/, "only when the setting asked for it");
 });

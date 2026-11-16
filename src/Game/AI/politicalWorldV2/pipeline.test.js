@@ -226,3 +226,40 @@ test("a polity applied early keeps the depth it was built at, so Resume does not
   );
   assert.ok(calls <= 1);
 });
+
+test("uniform-depth checkpoint remembers the requested depth and refuses silent route changes on Resume", async () => {
+  clearPoliticalWorldV2CheckpointMemoryForTests();
+  const options = runOptions("pw-uniform-depth-resume", async () => { throw new Error("provider unavailable"); });
+  options.inputs.generationMode = "uniform";
+  options.inputs.uniformDepth = "full";
+  options.inputs.relevanceByPolity = { Avalon: { depth: "full" } };
+  let unplannedCalls = 0;
+  await assert.rejects(generateOrResumePoliticalWorldV2({
+    ...options,
+    inputs: { ...options.inputs, relevanceByPolity: { Avalon: { depth: "standard" } } },
+    callModel: async () => { unplannedCalls += 1; throw new Error("unexpected"); },
+  }), /uniform.*depth plan/i);
+  assert.equal(unplannedCalls, 0, "a mismatched uniform worklist never spends provider calls");
+
+  const paused = await generateOrResumePoliticalWorldV2(options);
+  assert.deepEqual(paused.generationSelection, { mode: "uniform", uniformDepth: "full" });
+  assert.ok(paused.modelCalls > 0, "the first run attempted to generate missing politics");
+
+  let calls = 0;
+  await assert.rejects(generateOrResumePoliticalWorldV2({
+    ...options,
+    inputs: { ...options.inputs, uniformDepth: "standard", relevanceByPolity: { Avalon: { depth: "standard" } } },
+    callModel: async () => { calls += 1; throw new Error("unexpected"); },
+  }), /generation mode|checkpoint.*depth|uniform.*depth/i);
+  assert.equal(calls, 0, "invalid resume spent no model calls");
+
+  await assert.rejects(generateOrResumePoliticalWorldV2({
+    ...options,
+    inputs: { ...options.inputs, generationMode: "balanced" },
+    callModel: async () => { calls += 1; throw new Error("unexpected"); },
+  }), /generation mode|checkpoint.*depth|uniform.*depth/i);
+  assert.equal(calls, 0);
+
+  const resumed = await generateOrResumePoliticalWorldV2(options);
+  assert.deepEqual(resumed.generationSelection, { mode: "uniform", uniformDepth: "full" });
+});

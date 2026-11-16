@@ -18,7 +18,8 @@ import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
 import { PARTY_ROLES } from "../../runtime/politics.js";
 import { POLITICAL_SYSTEM_TYPES } from "../../runtime/politicalActors.js";
 import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
-import { OCCUPATION_SETTLEMENTS_FIELD, occupationOutcomesFor } from "../../runtime/occupationSettlements.js";
+import { OCCUPATION_OUTCOMES, OCCUPATION_SETTLEMENTS_FIELD } from "../../runtime/occupationSettlements.js";
+import { WAR_ENDINGS_FIELD, warOutcomeChoices } from "../../runtime/warEndings.js";
 import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
 import { CANON_KINDS } from "../../runtime/historyTiers.js";
 import { SOCIAL_POST_REACH } from "../../runtime/socialFeed.js";
@@ -639,135 +640,125 @@ const markerOpSchema = {
   ],
 };
 
-const projectMilestoneSchema = {
+// ---- Projects: the plan, the effects, the ops ---------------------------------
+// The projects engine runs every project's clock (runtime/projectEngine.js): a
+// model plans a project once, and afterwards only tells what an event did to it.
+// So the board's contract is a plan, its bounded effects, and the few ops a
+// story can carry: open one (with its plan), set one back, bring one on, end one,
+// or say a line about one. Never its progress, status or dates.
+
+// One change a project makes to the world, as a number on one of the game's own
+// systems; the engine holds its size (projectEngine.js normalizeProjectEffect).
+const projectEffectSchema = {
   type: "object",
-  description: "One dated checkpoint on the way to a project's completion.",
+  description: "One change the project makes to the world. The engine caps its size.",
   properties: {
-    id: textSchema("Stable milestone identifier, when updating an existing one."),
-    title: nonEmptyTextSchema("Short description of the checkpoint, e.g. \"Sea trials begin\"."),
-    date: textSchema("In-game date the checkpoint is expected or was reached (YYYY-MM-DD)."),
-    status: {
+    type: {
       type: "string",
-      description:
-        "pending until reached; done once achieved; slipped if it is late but still coming "
-        + "(give it a new date); missed if it will never be reached. The engine marks a milestone "
-        + "slipped when its date passes with nothing said. "
-        + "For a recurring checkpoint, send done each time it is performed - the engine "
-        + "rolls it to the next occurrence and sets it pending again by itself.",
-      enum: ["pending", "slipped", "done", "missed"],
+      description: "stat: a figure of a country's sheet; relation: a relation; structure: a structure on the map; unitType: a unit type its owner may field; territory: a region that changes hands or is claimed.",
+      enum: ["stat", "relation", "structure", "unitType", "territory"],
     },
-    repeat: {
-      type: "string",
-      description:
-        "Set for a standing commitment that comes round again - an annual drill, a "
-        + "quarterly review, a monthly rotation. Marking it done does NOT retire it: the "
-        + "engine advances the date by one interval (keeping the same day of the year) and "
-        + "sets it pending, so the board always shows the next one. Give a recurring "
-        + "checkpoint a date, so it keeps the slot it is meant to fall on; without one the "
-        + "engine can only count forward from whenever it was last performed. Leave empty "
-        + "for a one-off checkpoint that happens once and is finished.",
-      enum: ["weekly", "monthly", "quarterly", "annual", "biennial"],
-    },
-    note: textSchema("Brief detail about the checkpoint."),
+    stat: textSchema("stat: the figure, as stability, indices.<key>, military.<quality|technology|land|sea|air|spending>, economy.<gdp|gdpGrowth|inflation|unemployment|budgetBalance|publicDebt>, population.total or customStats.<key>."),
+    change: { type: "number", description: "stat or relation: the change. Points on a 0-100 scale; per cent for economy.gdp and population.total; percentage points for the economy's rates." },
+    country: textSchema("relation: the other country. territory: who gains or claims it. stat: whose figure, only when not the owner's."),
+    name: textSchema("structure or unitType: its name."),
+    kind: textSchema("structure: what it is, e.g. naval base."),
+    base: { type: "string", description: "unitType: what it is underneath.", enum: ["infantry", "armor", "air", "naval", "artillery", "garrison"] },
+    attack: { type: "number", description: "unitType: against an ordinary unit (1)." },
+    toughness: { type: "number", description: "unitType: against an ordinary unit (1)." },
+    speed: { type: "number", description: "unitType: against an ordinary unit (1)." },
+    region: textSchema("territory: the region's name as the map spells it."),
+    claim: { type: "boolean", description: "territory: claimed rather than taken." },
+    lng: { type: "number", description: "structure: longitude.", minimum: -180, maximum: 180 },
+    lat: { type: "number", description: "structure: latitude.", minimum: -90, maximum: 90 },
   },
-  required: ["title"],
+  required: ["type"],
   additionalProperties: false,
 };
 
-const projectSchema = {
+const projectPlanMilestoneSchema = {
+  type: "object",
+  properties: {
+    title: nonEmptyTextSchema("The checkpoint, e.g. Keel laid."),
+    // Its ranges are said, not enforced: the engine holds each number to its
+    // bounds (projectEngine.js), where a schema bound would cut a whole op out
+    // of an answer over one number.
+    atProgress: { type: "integer", description: "The share of the work done when it is reached, 1-99." },
+  },
+  required: ["title", "atProgress"],
+  additionalProperties: false,
+};
+
+// A project's plan: what it takes and costs, its checkpoints, and what it does.
+const projectPlanSchema = {
+  type: "object",
+  description: "The plan: what it takes and costs, its checkpoints, and what it does to the world.",
+  properties: {
+    durationDays: { type: "integer", description: "Days of work at normal funding, 14-3650." },
+    monthlyCost: { type: "number", description: "What it costs a month at normal funding, in the owner's GDP currency." },
+    ongoing: { type: "boolean", description: "A programme that runs on once set up, paying its yields every month." },
+    milestones: { type: "array", description: "Two to five checkpoints on the way.", items: projectPlanMilestoneSchema },
+    effects: { type: "array", description: "What it does once, when done (or, for a programme, once set up).", items: projectEffectSchema },
+    yields: { type: "array", description: "ongoing only: what it does every month it runs (stat or relation).", items: projectEffectSchema },
+  },
+  required: ["durationDays", "monthlyCost"],
+  additionalProperties: false,
+};
+
+const projectOwnerSchema = textSchema(
+  "The country running it, by its FULL name. Leave empty for the player's own. "
+  + "A time skip opens projects only for countries nobody plays.",
+);
+const projectKindSchema = {
+  type: "string",
+  description: "operation for a military, intelligence or covert undertaking; project for a programme, build or civil effort.",
+  enum: ["project", "operation"],
+};
+const projectSecrecySchema = {
+  type: "string",
+  description: "public if openly known, restricted if known only inside government, covert if deniable and secret.",
+  enum: ["public", "restricted", "covert"],
+};
+// Only the two VERDICTS are offered. "doubted" is stamped by the engine when the
+// agent an entry came from turns out to be compromised, and is absent from this
+// enum on purpose.
+const projectVerificationSchema = {
+  type: "string",
+  description: "Only for an entry shown as doubted, once a fresh agent is in place: confirmed if it is real, refuted if it never was (fail it too).",
+  enum: ["confirmed", "refuted"],
+};
+
+// ONE flat op, discriminated by `op`: the friendliest shape for Gemini and for
+// small local models. normalizeProjectOp (runtime/gameState.js) reads it, a
+// create's fields flat or nested under `project`.
+const projectOpSchema = {
   type: "object",
   description:
-    "A long-running effort that spans multiple rounds: a research or industrial "
-    + "programme, a construction project, a military operation, a covert operation, "
-    + "or a sustained political or diplomatic campaign. Distinct from a queued "
-    + "action, which is one thing done this round and resolved by the next jump.",
+    "A change to the Projects board. The engine moves every project by itself; an op says only what an event did to one. "
+    + "create opens one with its plan; setback and boost say an event set it back or brought it on; cancel and fail end it; "
+    + "update changes what it is or says a line about it.",
   properties: {
-    id: textSchema("Stable project identifier. Copy it EXACTLY from the running-projects list when updating one; omit it when starting something new."),
-    name: nonEmptyTextSchema("The name the project is known by, e.g. \"Project Leviathan\" or \"Operation Kingfisher\"."),
-    kind: {
+    op: {
       type: "string",
-      description: "operation for a military, intelligence or covert undertaking; project for a programme, build or civil effort.",
-      enum: ["project", "operation"],
+      description: "Which change this is.",
+      enum: ["create", "update", "setback", "boost", "cancel", "fail"],
     },
-    ownerCode: textSchema(
-      "Running polity's FULL country name (\"Spain\"), never a country code. Leave empty "
-      + "for the player's own - and this field decides who controls the entry, so getting "
-      + "it wrong matters: an entry with an owner other than the player's is THEIRS, the "
-      + "player can only watch it, and neither they nor you may set its priority or call it "
-      + "off. Set it for a foreign power's programme the player's services have learned of; "
-      + "leave it empty for anything the player is actually running, including an operation "
-      + "of theirs aimed AT a foreign programme.",
-    ),
-    summary: nonEmptyTextSchema("One or two sentences on what this is and what it is meant to achieve."),
-    status: {
-      type: "string",
-      description:
-        "proposed (agreed but not begun), active (under way), stalled (blocked or "
-        + "starved of resources), paused (deliberately suspended), complete, failed, "
-        + "or cancelled.",
-      enum: ["proposed", "active", "stalled", "paused", "complete", "failed", "cancelled"],
-    },
-    priority: {
-      type: "string",
-      description:
-        "How much attention the PLAYER wants this to get. They set it themselves "
-        + "on the board - leave it out entirely unless they have told you in this "
-        + "conversation to raise or drop something's priority. It is never your own "
-        + "judgement of how important a programme is, and overwriting it discards an "
-        + "instruction they gave. It exists only on the player's OWN work: a foreign "
-        + "power's programme has no priority, they cannot give it one, and asking for "
-        + "one on their behalf is refused.",
-      enum: ["high", "normal", "low"],
-    },
-    progress: {
-      type: "integer",
-      description: "How far along it is, 0-100. Move this whenever the narrative advances or sets it back.",
-      minimum: 0,
-      maximum: 100,
-    },
-    tags: stringArraySchema(
-      "Short lowercase categories the player can filter by - military, political, "
-      + "naval, economic, research, intelligence, infrastructure, nuclear, space. "
-      + "Invent what fits this campaign; reuse the same spelling across projects.",
-    ),
-    secrecy: {
-      type: "string",
-      description: "public if openly known, restricted if known only inside government, covert if deniable and secret.",
-      enum: ["public", "restricted", "covert"],
-    },
-    // Only the two VERDICTS are offered. "doubted" is stamped by the engine when
-    // the agent an entry came from turns out to be compromised, and is absent from
-    // this enum on purpose: a model must never be able to cast doubt on the board
-    // itself, only to settle a doubt already cast — and only from a fresh source.
-    verification: {
-      type: "string",
-      description:
-        "Only for an entry the board shows as doubted, and only once a fresh source is in place: "
-        + "confirmed if the new material shows the effort is real, refuted if it shows there was never "
-        + "anything there (pair refuted with failing the entry). Leave it out otherwise.",
-      enum: ["confirmed", "refuted"],
-    },
-    startedAt: textSchema("In-game date work began (YYYY-MM-DD)."),
-    ongoing: {
-      type: "boolean",
-      description:
-        "True for a standing effort with no planned end - a permanent patrol, a "
-        + "continuous intelligence or security programme, an alliance kept in good "
-        + "repair. Leave targetDate empty when this is true, and never invent an end "
-        + "date for something that is simply meant to continue.",
-    },
-    targetDate: textSchema("In-game date it is expected to complete (YYYY-MM-DD). Omit entirely for an ongoing effort. This is what the board measures overdue against."),
-    milestones: {
-      type: "array",
-      description: "Checkpoints along the way, earliest first. The soonest pending one is shown as the project's next milestone.",
-      items: projectMilestoneSchema,
-    },
-    lastUpdate: textSchema("One present-tense sentence on what most recently changed. Shown to the player verbatim."),
-    linkedUnitIds: stringArraySchema("Ids of units carrying this out, copied exactly from the unit list."),
-    linkedMarkerIds: stringArraySchema("Ids of structures this is built around, copied exactly from the structure list."),
+    name: nonEmptyTextSchema("The project's name: a new one for create, otherwise exactly as the board writes it."),
+    newName: textSchema("update only: a new name."),
+    kind: projectKindSchema,
+    ownerCode: projectOwnerSchema,
+    summary: textSchema("create: what it is and what it is for, one or two sentences."),
+    secrecy: projectSecrecySchema,
+    tags: stringArraySchema("Short lowercase categories: military, naval, economic, research, infrastructure."),
+    plan: projectPlanSchema,
+    days: { type: "integer", description: "setback: days of work lost (1-180); boost: days gained (1-90)." },
+    overrun: { type: "integer", description: "setback only: how much dearer it becomes a month, in per cent (1-50)." },
+    lastUpdate: textSchema("One present-tense sentence on what this event did to it. Shown to the player."),
+    note: textSchema("cancel or fail: how it ended."),
+    verification: projectVerificationSchema,
     focus: {
       type: "object",
-      description: "Where on the map this is happening, so the player can jump the camera to it.",
+      description: "Where on the map it happens.",
       properties: {
         lng: { type: "number", description: "Longitude.", minimum: -180, maximum: 180 },
         lat: { type: "number", description: "Latitude.", minimum: -90, maximum: 90 },
@@ -776,133 +767,36 @@ const projectSchema = {
       additionalProperties: false,
     },
     // kw5-units: how an operation's troops attack its focus on a battlefield
-    // (runtime/fronts/plans.js operationsOn), where its words were read for it.
-    // Optional; the time skip's board ops do not carry it (FOLDED_PROJECT_OP_OMITS).
+    // (runtime/fronts/plans.js operationsOn). Optional; the time skip's board
+    // ops do not carry it (FOLDED_PROJECT_OP_OMITS).
     approach: {
       type: "string",
       description: "operation only: how its troops attack the place at its focus.",
       enum: [...OPERATION_APPROACHES],
     },
-    note: textSchema("Anything else worth keeping: estimated cost, blockers, who is running it."),
-    onComplete: {
-      type: "object",
-      description:
-        "What finishing this project DOES to the world, applied automatically the "
-        + "moment it is completed and never applied twice - and never at all if it "
-        + "is cancelled or fails. Use it whenever the project's whole point is a "
-        + "concrete change: a campaign to annex a province (regionTransfers), a "
-        + "unification or regime change that renames or recolours a polity "
-        + "(polityChanges), a claim the effort would drop if it collapsed "
-        + "(regionClaims with drop true). Without this a finished project is only a "
-        + "progress bar that reached 100 while the map stayed exactly as it was. "
-        + "MOST PROJECTS HAVE NO onComplete: a research programme, a construction "
-        + "project or a campaign of influence finishes narratively and takes none. "
-        + "Attach one only when completion causes a specific, nameable change of "
-        + "territory or of a polity's identity.",
-      // Described by reference rather than re-embedded. These three schemas are
-      // already spelled out in full under impacts in the very same payload, and
-      // repeating them here cost ~6.3 KB of every jump prompt to say the same
-      // thing a second time. normalizeProjectOnComplete (runtime/gameState.js)
-      // normalizes whatever arrives, so the loose shape costs nothing at the
-      // ingest end either.
-      properties: {
-        polityChanges: {
-          type: "array",
-          description: "Polity identity changes enacted on completion. Same entry shape as impacts.polityChanges.",
-          items: { type: "object" },
-        },
-        regionTransfers: {
-          type: "array",
-          description: "Map ownership changes enacted on completion. Same entry shape as impacts.regionTransfers.",
-          items: { type: "object" },
-        },
-        regionClaims: {
-          type: "array",
-          description: "Claims asserted or dropped on completion. Same entry shape as impacts.regionClaims.",
-          items: { type: "object" },
-        },
-      },
-      additionalProperties: false,
-    },
   },
-  required: ["name", "summary"],
+  required: ["op", "name"],
   additionalProperties: false,
 };
 
-// ONE flat op, discriminated by `op`, rather than six overlapping anyOf variants.
-//
-// Why: the six-variant version was 41.5 KB serialized — 66% of the ENTIRE jump
-// tool schema, three times what every other impact branch cost put together —
-// because three of its variants (nested create, flat create, update) each
-// restated projectSchema's twenty properties in full. It was ~10k tokens sent on
-// every jump, and on a segmented jump, once per segment.
-//
-// Collapsing it is not only cheaper, it is more reliable. A six-branch anyOf is
-// one of the worst constructs for Gemini's OpenAPI subset (see geminiSchema.js)
-// and for small local models, which routinely pick the wrong branch or emit a
-// blend of two. One object with an op enum is what they handle well.
-//
-// Nothing is lost at the ingest end: normalizeProjectOp (runtime/gameState.js)
-// already resolves every op name and alias, already reads a create written flat
-// OR nested (`operation.project ?? operation`), and already merges a create that
-// names an existing project into an update of only the fields it carried. The
-// old schema was describing tolerance the reducer had all along.
-const projectOpSchema = {
+// ---- The planner: one request, when the player asks for a plan ----------------
+// The Projects tab's "Plan it" (GameUI/projects.jsx) and the board's "Plan" on an
+// entry still planning: the player names a project and its goal, and one request
+// drafts the plan. Its own small contract, read by projectEngine.js
+// normalizeProjectPlan and boundPlanForOwner.
+export const PROJECT_PLAN_SCHEMA = {
   type: "object",
-  description:
-    "A change to the player's Projects & Operations board. Set op, name the project, "
-    + "and send ONLY the fields that op needs — everything omitted keeps its current value. "
-    + "op create opens a new effort (give it a summary too); update moves an existing one; "
-    + "milestone records a checkpoint; complete, cancel or fail close it while keeping it on "
-    + "the board; remove erases an entry that should never have been opened, which is NOT how "
-    + "a project ends.",
+  description: "The plan for one project.",
   properties: {
-    op: {
-      type: "string",
-      description: "Which change this is.",
-      enum: ["create", "update", "milestone", "complete", "cancel", "fail", "remove"],
-    },
-    projectId: textSchema("Existing project id, copied EXACTLY from the running-projects list. Omit when opening something new."),
-    name: nonEmptyTextSchema(
-      "The project's name — the new name when opening one, otherwise its CURRENT name copied "
-      + "exactly from the running-projects list, which is how it is found when no id is given.",
-    ),
-    newName: textSchema("A new name, only when the project is being renamed."),
-    milestone: projectMilestoneSchema,
-    // Every descriptive field a project has, all optional. `name` is redefined
-    // above (a create names a new project, an update identifies an existing
-    // one), and `id` is spelled projectId here.
-    kind: projectSchema.properties.kind,
-    ownerCode: projectSchema.properties.ownerCode,
-    summary: textSchema("What this is and what it is meant to achieve. Required when opening one; on an update send it only if it changed."),
-    status: projectSchema.properties.status,
-    priority: projectSchema.properties.priority,
-    progress: projectSchema.properties.progress,
-    tags: projectSchema.properties.tags,
-    secrecy: projectSchema.properties.secrecy,
-    startedAt: projectSchema.properties.startedAt,
-    ongoing: projectSchema.properties.ongoing,
-    targetDate: projectSchema.properties.targetDate,
-    milestones: projectSchema.properties.milestones,
-    lastUpdate: projectSchema.properties.lastUpdate,
-    linkedUnitIds: projectSchema.properties.linkedUnitIds,
-    linkedMarkerIds: projectSchema.properties.linkedMarkerIds,
-    focus: projectSchema.properties.focus,
-    approach: projectSchema.properties.approach,
-    note: textSchema("Anything else worth keeping, or — when closing one — a sentence on how it ended."),
-    onComplete: projectSchema.properties.onComplete,
-    // The nested spelling of a create, kept permissive rather than re-embedding
-    // projectSchema for the third time. The model is no longer TOLD to nest, so
-    // this is pure tolerance for one that does anyway: additionalProperties is
-    // false, so without this key a nested create would fail schema validation and
-    // cost the whole turn, which is exactly the failure the flat variant was
-    // added to prevent. normalizeProjectOp reads it either way.
-    project: {
-      type: "object",
-      description: "Legacy nested form of a create. Prefer the flat fields above.",
-    },
+    name: nonEmptyTextSchema("The project's name, as the player gave it (corrected only for spelling)."),
+    summary: nonEmptyTextSchema("What it is and what it is for, in one or two sentences."),
+    kind: projectKindSchema,
+    secrecy: projectSecrecySchema,
+    tags: stringArraySchema("Short lowercase categories: military, naval, economic, research, infrastructure."),
+    ...projectPlanSchema.properties,
+    focus: projectOpSchema.properties.focus,
   },
-  required: ["op", "name"],
+  required: ["name", "summary", "durationDays", "monthlyCost", "milestones", "effects"],
   additionalProperties: false,
 };
 
@@ -1071,11 +965,8 @@ const impactsSchema = {
     projectOps: {
       type: "array",
       description:
-        "Changes to the Projects & Operations board. Use whenever the event starts, "
-        + "advances, sets back, completes or ends a multi-round effort - a research "
-        + "or industrial programme, a construction project, a military or covert "
-        + "operation, a sustained political campaign - so the board matches the "
-        + "story. Prefer updating a running project over starting a duplicate.",
+        "What this event did to the Projects board: a project it opens (with its plan), "
+        + "sets back, brings on or ends. The engine moves every project by itself.",
       items: projectOpSchema,
     },
   },
@@ -1165,53 +1056,57 @@ const jumpImpactsSchema = {
 // skip does with the extra fields.
 //
 // The board's op is the board's own (projectOpSchema) without the fields an
-// event never sets: the priority is the player's dial, the links and the map
-// focus are the board's bookkeeping, the nested spelling of a create is
-// tolerance for a habit this contract never teaches, and a completion's effects
-// (onComplete) are the completing event's own impacts here, since that event
-// moves the map itself. Fewer optional fields is also less grammar for a
-// provider that compiles the schema (geminiSchema.js), on a contract every
-// event of every skip carries. Its field notes are in the prompt
-// ([Projects & Operations]), as the other compact families' are.
-//
-// Its checkpoints are the ones the rules teach, too: a milestone op's
-// {title, date, status} (and the id of one that exists), and a create's plan as
-// [{title, date}]. A recurring checkpoint (`repeat`) and a checkpoint's note are
-// the board pass's and the Game Master's to set; offered here they were the
-// same sub-schema twice over on every event, some 400 characters of a contract
-// held under the size Gemini takes (foldedSkipSent.test.js).
-// (And an operation's `approach`, kw5-units: the skip's function has no room for
-// it, so a skip's operations attack as an advance until a board pass or the Game
-// Master says otherwise. Their place is the place their event happens: AI/boardPassApply.js.)
-const FOLDED_PROJECT_OP_OMITS = new Set(["priority", "startedAt", "linkedUnitIds", "linkedMarkerIds", "focus", "approach", "project", "onComplete"]);
-const FOLDED_MILESTONE_OMITS = new Set(["repeat", "note"]);
-const foldedMilestoneSchema = {
-  ...projectMilestoneSchema,
-  properties: Object.fromEntries(
-    Object.entries(projectMilestoneSchema.properties).filter(([key]) => !FOLDED_MILESTONE_OMITS.has(key)),
-  ),
-};
-const foldedMilestonePlanSchema = {
-  type: "array",
-  items: {
-    type: "object",
-    properties: { title: projectMilestoneSchema.properties.title, date: projectMilestoneSchema.properties.date },
-    required: ["title"],
-    additionalProperties: false,
+// event never sets: a new name, tags, a note (a skip's ending says how in
+// lastUpdate), the map focus and an operation's approach are the board's own
+// bookkeeping, and fewer optional fields is less grammar for a provider that
+// compiles the schema (geminiSchema.js), on a contract every event of every skip
+// carries. Its field notes are in the prompt ([How the Board Is Kept]), as the
+// other compact families' are.
+// A plan a skip opens for a country nobody plays is the planner's without a
+// programme's monthly yields and without a unit type of its own (rare, and each
+// a second copy of the effect's grammar on every event), and a structure it
+// builds stands where the event that opened it happened (its focus,
+// boardPassApply.js withEventFocus; gameState.js applyProjectOutcomesToWorld)
+// rather than at coordinates of its own: some 950 characters of a contract held under the
+// size Gemini takes (foldedSkipSent.test.js).
+const FOLDED_PROJECT_OP_OMITS = new Set(["newName", "tags", "note", "focus", "approach"]);
+const FOLDED_EFFECT_KEEPS = new Set(["type", "stat", "change", "country", "name", "kind", "region", "claim"]);
+const foldedEffectSchema = {
+  ...projectEffectSchema,
+  properties: {
+    ...Object.fromEntries(Object.entries(projectEffectSchema.properties).filter(([key]) => FOLDED_EFFECT_KEEPS.has(key))),
+    type: { ...projectEffectSchema.properties.type, enum: ["stat", "relation", "structure", "territory"] },
   },
 };
-
+const foldedPlanSchema = {
+  ...projectPlanSchema,
+  properties: {
+    durationDays: projectPlanSchema.properties.durationDays,
+    monthlyCost: projectPlanSchema.properties.monthlyCost,
+    milestones: projectPlanSchema.properties.milestones,
+    effects: { ...projectPlanSchema.properties.effects, items: foldedEffectSchema },
+  },
+};
+// And its numbers without their bounds: the engine holds every one of them
+// (projectEngine.js), and the prompt says each range.
+const withoutNumberBounds = (schema) => {
+  if (Array.isArray(schema)) return schema.map(withoutNumberBounds);
+  if (!schema || typeof schema !== "object") return schema;
+  return Object.fromEntries(Object.entries(schema)
+    .filter(([key, value]) => !((key === "minimum" || key === "maximum") && typeof value === "number"))
+    .map(([key, value]) => [key, withoutNumberBounds(value)]));
+};
 const foldedProjectOpsSchema = compactJumpImpactSchema({
   type: "array",
-  description: "The board ops of THIS event; rules under [Projects & Operations]. Most events have none.",
-  items: {
+  description: "What THIS event did to the Projects board; rules under [How the Board Is Kept]. Most events have none.",
+  items: withoutNumberBounds({
     ...projectOpSchema,
     properties: Object.fromEntries(
       Object.entries(projectOpSchema.properties)
         .filter(([key]) => !FOLDED_PROJECT_OP_OMITS.has(key))
-        .map(([key, schema]) => [key, key === "milestone" ? foldedMilestoneSchema : key === "milestones" ? foldedMilestonePlanSchema : schema]),
+        .map(([key, schema]) => [key, key === "plan" ? foldedPlanSchema : schema]),
     ),
-  },
+  }),
 });
 
 // What the validation schema accepts under an event's impacts: the lean jump
@@ -1579,6 +1474,13 @@ export const JUMP_FORWARD_SCHEMA = {
     // Who each occupation outliving its war goes to (runtime/occupationSettlements.js), a line a region, for the
     // regions listed under [Occupations Outliving Their War]. SENT, required, only when there are some
     // (withOccupationSettlements); read either way.
+    // How each war ended without an outcome on record (runtime/warEndings.js): SENT only when one did, in full
+    // (withWarEndings); read either way.
+    [WAR_ENDINGS_FIELD]: {
+      type: "object",
+      description: "For each war key in the prompt, how it ended.",
+      additionalProperties: { type: "object" },
+    },
     [OCCUPATION_SETTLEMENTS_FIELD]: {
       type: "object",
       description: "For each occupation key in the prompt, the polity that holds that land now.",
@@ -1661,6 +1563,7 @@ const JUMP_FORWARD_LEAN_SCHEMA = (() => {
     [FRONT_ORDERS_FIELD]: _frontOrders,
     [WAR_FIGURES_FIELD]: _warFigures,
     [OCCUPATION_SETTLEMENTS_FIELD]: _occupationSettlements,
+    [WAR_ENDINGS_FIELD]: _warEndings,
     [SEAT_ADVICE_FIELD]: _seatAdvice,
     [SOCIAL_POSTS_FIELD]: _socialPosts,
     [POLL_RESULTS_FIELD]: _pollResults,
@@ -3205,14 +3108,13 @@ export const STRUCTURE_DIRECTOR_SCHEMA = {
 export const PROJECTS_SCHEMA = {
   type: "object",
   description:
-    "Changes to the Projects & Operations board that follow from the events just simulated.",
+    "What the events just simulated did to the Projects board.",
   properties: {
     projectOps: {
       type: "array",
       description:
-        "One entry per change. Return an empty array when nothing on the board moved this "
-        + "period — that is a normal and correct answer, and inventing progress is worse "
-        + "than reporting none.",
+        "One entry per thing an event did to a project. The engine moves every project by itself, "
+        + "so an empty array is the usual answer.",
       items: {
         ...projectOpSchema,
         properties: {
@@ -4077,10 +3979,9 @@ export const withWarFigures = (tool) => {
 // #1000). Told in words alone, a live skip settled none of them; a field the answer must hold is what a small model
 // fills.
 // One key a group (standingContext.js occupationGroups: { key, controller, sovereign, count }), each required: a
-// required free string came back "" in a live skip with the regions listed above it. Each key answers how it ended,
-// "returned" or "kept", not a polity: asked who holds the land, two live skips on issue #1000's save named the German
-// Reich, the holder, though the prompt said it had surrendered. Where the war is on the ledger, the key asks who lost
-// it (runtime/occupationSettlements.js occupationOutcomesFor).
+// required free string came back "" in a live skip with the regions listed above it. Each key answers "returned" or
+// "kept", not a polity: asked who holds the land, live skips on issue #1000's save named the occupier, the holder.
+// An occupation whose war's outcome settles it is never asked here (withWarEndings below).
 export const withOccupationSettlements = (tool, groups = []) => {
   const properties = tool?.schema?.properties;
   const list = (Array.isArray(groups) ? groups : []).filter((group) => group?.key);
@@ -4090,10 +3991,8 @@ export const withOccupationSettlements = (tool, groups = []) => {
     description: "For each key, how its occupation ended.",
     properties: Object.fromEntries(list.map((group) => [group.key, {
       type: "string",
-      enum: occupationOutcomesFor(group),
-      description: group.war
-        ? `${group.controller}'s ${group.count === 1 ? "occupied region" : `${group.count} occupied regions`} of ${group.sovereign}. Their war${group.war.title ? `, ${group.war.title}` : ""}, ended${group.war.ended ? ` ${group.war.ended}` : ""}${group.war.note ? ` (${group.war.note})` : ""}: which side had surrendered or been defeated when it ended, whatever happened earlier in it?`
-        : `${group.controller}'s ${group.count === 1 ? "occupied region" : `${group.count} occupied regions`} of ${group.sovereign}. returned: ${group.controller} withdrew or was driven out, and ${group.sovereign} holds the land again. kept: a treaty or annexation made it ${group.controller}'s.`,
+      enum: OCCUPATION_OUTCOMES,
+      description: `${group.controller}'s ${group.count === 1 ? "occupied region" : `${group.count} occupied regions`} of ${group.sovereign}. returned: ${group.controller} withdrew or was driven out, and ${group.sovereign} holds the land again. kept: a treaty or annexation made it ${group.controller}'s.`,
     }])),
     required: list.map((group) => group.key),
   };
@@ -4103,6 +4002,46 @@ export const withOccupationSettlements = (tool, groups = []) => {
       ...tool.schema,
       properties: { ...properties, [OCCUPATION_SETTLEMENTS_FIELD]: field },
       required: [...new Set([...(Array.isArray(tool.schema.required) ? tool.schema.required : []), OCCUPATION_SETTLEMENTS_FIELD])],
+    },
+  };
+};
+
+// A time skip's tool with warEndings in it, required: only when ended wars have no outcome on record
+// (runtime/warEndings.js warsAwaitingOutcome). One required key a war, each an object: `outcome`, from the war's
+// closed set of choices (warOutcomeChoices: which side had lost when it ended, and whether a defeated state's
+// government was dissolved), and `landTo`, the powers that took a dissolved state's land. Issue #1000's save: the
+// German Reich's surrender and dissolution told in prose, and no structured change written for either.
+export const withWarEndings = (tool, entries = []) => {
+  const properties = tool?.schema?.properties;
+  const list = (Array.isArray(entries) ? entries : []).filter((entry) => entry?.key);
+  if (!properties?.events || !properties?.stopDate || !list.length) return tool;
+  const field = {
+    type: "object",
+    description: "For each key, how that war ended.",
+    properties: Object.fromEntries(list.map((entry) => [entry.key, {
+      type: "object",
+      description: `${entry.title || "The war"}, ended${entry.ended ? ` ${entry.ended}` : ""}${entry.note ? ` (${entry.note})` : ""}.`,
+      properties: {
+        outcome: {
+          type: "string",
+          enum: warOutcomeChoices(entry),
+          description: "Which side had surrendered or been defeated when the war ended, whatever happened earlier in it, and whether its government was dissolved.",
+        },
+        landTo: {
+          type: "string",
+          description: "Only for a dissolved government: the full names of the powers that took over its land, comma-separated. Empty otherwise.",
+        },
+      },
+      required: ["outcome", "landTo"],
+    }])),
+    required: list.map((entry) => entry.key),
+  };
+  return {
+    ...tool,
+    schema: {
+      ...tool.schema,
+      properties: { ...properties, [WAR_ENDINGS_FIELD]: field },
+      required: [...new Set([...(Array.isArray(tool.schema.required) ? tool.schema.required : []), WAR_ENDINGS_FIELD])],
     },
   };
 };
@@ -4166,6 +4105,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   goalProgress: GOAL_PROGRESS_SCHEMA,
   placeFeed: PLACE_FEED_SCHEMA,
   rostraFeed: ROSTRA_FEED_SCHEMA,
+  projectPlan: PROJECT_PLAN_SCHEMA,
   warRoom: WAR_ROOM_SCHEMA,
   actions: ACTIONS_SCHEMA,
   jumpForward: JUMP_ANSWER_CHECKED_SCHEMA,
@@ -4336,7 +4276,7 @@ export const INTERACTIVE_SUMMARY_TOOL = makeTool(
 
 export const PROJECTS_TOOL = makeTool(
   "submit_project_ops",
-  "Submit the Projects & Operations board changes that follow from the events just simulated.",
+  "Submit what the events just simulated did to the Projects board.",
   PROJECTS_SCHEMA,
 );
 
@@ -4426,6 +4366,12 @@ export const PLACE_FEED_TOOL = makeTool(
   PLACE_FEED_SCHEMA,
 );
 
+export const PROJECT_PLAN_TOOL = makeTool(
+  "submit_project_plan",
+  "Submit the plan for the project: what it takes and costs, its checkpoints, and what it does.",
+  PROJECT_PLAN_SCHEMA,
+);
+
 export const ROSTRA_FEED_TOOL = makeTool(
   "submit_rostra_posts",
   "Submit the posts the people who make the news are writing on Rostra.",
@@ -4445,6 +4391,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   goalProgress: GOAL_PROGRESS_TOOL,
   placeFeed: PLACE_FEED_TOOL,
   rostraFeed: ROSTRA_FEED_TOOL,
+  projectPlan: PROJECT_PLAN_TOOL,
   warRoom: WAR_ROOM_TOOL,
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
@@ -4470,6 +4417,23 @@ export const GAMEPLAY_TOOLS = Object.freeze({
 
 
 export const getGameplayTool = (taskKey) => GAMEPLAY_TOOLS[taskKey] ?? null;
+
+// Conditional calibration obligations belong in the actual provider-facing
+// output function as well as in native validation. A dynamic requirement is
+// imposed only on fresh/hard-audit Stats requests; normal reassessments must
+// continue to omit these generation-only provenance fields.
+export const withRequiredCountryStatsCalibration = (tool, { population = false, economic = false } = {}) => {
+  if (!tool?.schema?.properties || (!population && !economic)) return tool;
+  const required = [...(Array.isArray(tool.schema.required) ? tool.schema.required : [])];
+  for (const field of [population ? "populationCalibration" : "", economic ? "economicCalibration" : ""]) {
+    if (!field) continue;
+    if (!Object.hasOwn(tool.schema.properties, field)) {
+      throw new Error("Country Stats output function is missing required calibration field: " + field);
+    }
+    if (!required.includes(field)) required.push(field);
+  }
+  return { ...tool, schema: { ...tool.schema, required } };
+};
 
 const STOCK_STAT_INDEX_KEYS = new Set([
   "sovereignty",
@@ -5092,16 +5056,18 @@ const normalizeIdleDiplomacyShape = (value) => {
 // wrote `"id"` instead of `projectId`, which held the whole turn. The reducer has
 // always read `projectId || id` (gameState.js normalizeProjectOp); only the
 // schema refused it.
+// A board op is named by the project's name, the way every op finds an entry
+// (gameState.js findProjectIndexForOp); the board is shown to the model by name
+// and no id at all. An id or projectId written from habit, or copied from an
+// older prompt, is left out here rather than costing the op its schema check.
+const withoutProjectIds = (ops) => ops.map((entry) => {
+  if (!isPlainRecord(entry) || (entry.id === undefined && entry.projectId === undefined)) return entry;
+  const { id: _id, projectId: _projectId, ...op } = entry;
+  return op;
+});
 const normalizeProjectsShape = (value) => {
   if (!isPlainRecord(value) || !Array.isArray(value.projectOps)) return value;
-  return {
-    ...value,
-    projectOps: value.projectOps.map((entry) => {
-      if (!isPlainRecord(entry) || entry.id === undefined) return entry;
-      const { id, ...op } = entry;
-      return op.projectId === undefined ? { ...op, projectId: id } : op;
-    }),
-  };
+  return { ...value, projectOps: withoutProjectIds(value.projectOps) };
 };
 
 // The stat sheet's version field is the runtime's to fill ("the runtime fills
@@ -5370,6 +5336,12 @@ export const normalizeGameplayPayload = (taskKey, value) => {
   delete candidate.actionsResolved;
 
   if (Array.isArray(candidate.events)) candidate.events = candidate.events.map(normalizeEventShape);
+  // An event's board ops named by name alone, as the board's own (above).
+  if (Array.isArray(candidate.events)) {
+    candidate.events = candidate.events.map((event) => (isPlainRecord(event) && isPlainRecord(event.impacts) && Array.isArray(event.impacts.projectOps)
+      ? { ...event, impacts: { ...event.impacts, projectOps: withoutProjectIds(event.impacts.projectOps) } }
+      : event));
+  }
   if (Array.isArray(candidate.diplomaticOutreach)) candidate.diplomaticOutreach = normalizeChatList(candidate.diplomaticOutreach);
   // A letter offering peace is the skip's own outreach (peacePrompt.js). One
   // written into an event's createdChats instead is moved there, with the event

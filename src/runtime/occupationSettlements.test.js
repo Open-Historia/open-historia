@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyOccupationSettlements, occupationAnswerPolity, occupationOutcomesFor, planOccupationSettlements, readOccupationAnswers, readOccupationSettlements } from "./occupationSettlements.js";
+import { OCCUPATION_OUTCOMES, applyOccupationSettlements, occupationAnswerPolity, planOccupationSettlements, readOccupationAnswers, readOccupationSettlements } from "./occupationSettlements.js";
 
 test("an answer of keys is read key by key, segments' answers together, and anything else is not a key", () => {
   assert.deepEqual(readOccupationAnswers({ o1: "Poland", o2: " Soviet Union ", note: "x", o3: "" }), [{ key: "o1", to: "Poland" }, { key: "o2", to: "Soviet Union" }]);
@@ -17,12 +17,7 @@ test("a key's answer, returned or kept, names the group's sovereign or occupier;
   assert.equal(occupationAnswerPolity("returned", group), "Poland");
   assert.equal(occupationAnswerPolity(" Kept ", group), "German Reich");
   assert.equal(occupationAnswerPolity("Soviet Union", group), "Soviet Union");
-  // With its war on the ledger, the key says who lost it.
-  const fought = { ...group, war: { title: "Polish War", ended: "1945-05-08" } };
-  assert.deepEqual(occupationOutcomesFor(fought), ["Poland lost at the end", "German Reich lost at the end"]);
-  assert.deepEqual(occupationOutcomesFor(group), ["returned", "kept"]);
-  assert.equal(occupationAnswerPolity("German Reich lost at the end", fought), "Poland");
-  assert.equal(occupationAnswerPolity("poland lost at the end", fought), "German Reich");
+  assert.deepEqual(OCCUPATION_OUTCOMES, ["returned", "kept"]);
 });
 
 // Issue #1000's save, cut down: Poland still under the German Reich after its surrender, one region under the Soviets.

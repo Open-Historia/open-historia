@@ -1,4 +1,4 @@
-import { splitAdvisorMemory } from "./advisorMemory.js";
+import { splitAdvisorMemory, stripAdvisorMemory } from "./advisorMemory.js";
 
 // Pure, bounded group-meeting context. Identity and response authority are
 // validated in advisorThreads.js before a model is addressed.
@@ -31,6 +31,35 @@ export const parseAdvisorGroupIndividualReply = (raw, speakerId, name) => {
   return pass
     ? { role: "advisor", speakerId, silent: true, text: "" }
     : { role: "advisor", speakerId, text: reply.trim(), ...(memory ? { memory } : {}) };
+};
+
+// The strict parser above MUST still reject silent replies with hidden memory.
+// Recovery is eligible only if the model unambiguously chose literal silence,
+// but appended an invalid suffix. This is a transport-only repair candidate,
+// never permission to persist the malformed response or its private memory.
+export const malformedAdvisorGroupSilentPass = (raw) => {
+  const source = String(raw ?? "").trim();
+  if (!source || source === "[[PASS]]") return false;
+  return splitAdvisorMemory(raw).reply.trim() === "[[PASS]]";
+};
+
+// Streaming happens before native validation, so even an invalid pass must
+// never expose a hidden memory suffix in the advisor drawer. A normal speaking
+// reply still streams, with its memory stripped through the shared parser.
+export const visibleAdvisorGroupStreamReply = (raw) => {
+  const source = String(raw ?? "").trimStart();
+  if (!source || "[[PASS]]".startsWith(source) || source.startsWith("[[PASS]]")) return "";
+  return stripAdvisorMemory(raw);
+};
+
+// The follow-up is ONLY a format repair of already-chosen silence. It cannot
+// introduce new speech, memory, proposals or operations without the original
+// game context. Run the original strict parser again after this exact check.
+export const parseAdvisorGroupSilentRepair = (raw, speakerId, name) => {
+  if (String(raw ?? "").trim() !== "[[PASS]]") {
+    throw new Error("Group member " + name + " did not return an exact silent pass on correction.");
+  }
+  return parseAdvisorGroupIndividualReply(raw, speakerId, name);
 };
 
 const clean = (v) => String(v ?? "").replace(/\s+/g, " ").trim();

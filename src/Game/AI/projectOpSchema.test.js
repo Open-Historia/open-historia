@@ -1,21 +1,17 @@
 /*! Open Historia — projectOps schema contract tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/projectOpSchema.test.js
 //
-// The six-variant anyOf that used to describe impacts.projectOps was 41.5 KB
-// serialized — 66% of the whole jump tool schema — because three of its variants
-// each restated projectSchema in full. It collapsed to one object discriminated
-// by `op`.
-//
-// This file is the safety net for that collapse: EVERY op shape the old schema
-// accepted must still validate, because a payload the schema rejects costs the
-// player the whole turn, not just the one op. The shapes below are taken from
-// what the old variants declared and from the fixtures in
-// src/runtime/projectOps.test.js, which exercises the reducer these feed.
+// impacts.projectOps is one object discriminated by `op` (the six-variant anyOf
+// it replaced was 41.5 KB). Since the projects engine runs the board
+// (runtime/projectEngine.js), the ops are only what a story can say: open a
+// project with its plan, set one back or bring it on, end it, or a line about
+// it. Never its progress, status or dates; and a skip carries a lean copy
+// (gameplaySchemas.js foldedProjectOpsSchema), held to a size.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { GAME_MASTER_SCHEMA, GAMEPLAY_TOOLS, validateGameplayPayload } from "./gameplaySchemas.js";
+import { GAME_MASTER_SCHEMA, GAMEPLAY_TOOLS, foldJumpTool, validateGameplayPayload } from "./gameplaySchemas.js";
 
 // The ops are their own task payload now: the board moved out of the jump into
 // a separate call (PROJECTS_SCHEMA), so this validates the envelope that
@@ -26,99 +22,6 @@ const accepts = (op, what) => {
   const result = validateGameplayPayload("projects", boardOps(op));
   assert.equal(result.valid, true, `${what} should validate, got: ${result.error}`);
 };
-
-test("every op verb the old anyOf declared still validates", () => {
-  accepts({ op: "create", name: "Project Leviathan", summary: "A new battleship programme.", kind: "project" }, "create");
-  accepts({ op: "update", name: "Project Leviathan", progress: 58, status: "stalled", lastUpdate: "Steel deliveries stopped." }, "update");
-  accepts({ op: "milestone", name: "Project Leviathan", milestone: { title: "Keel laid", date: "1936-05-01" } }, "milestone");
-  accepts({ op: "complete", name: "Project Leviathan", note: "She commissioned on time." }, "complete");
-  accepts({ op: "cancel", name: "Project Leviathan", note: "The budget was cut." }, "cancel");
-  accepts({ op: "fail", name: "Project Leviathan", note: "The yard was bombed." }, "fail");
-  accepts({ op: "remove", name: "Project Leviathan", note: "Opened in error." }, "remove");
-});
-
-// The flat create exists because models routinely put the fields beside `op`
-// instead of nesting them, and the schema refusing it threw away the WHOLE turn
-// over one op. That must stay true.
-test("a create written flat is accepted, with every descriptive field", () => {
-  accepts({
-    op: "create",
-    name: "Operation Kingfisher",
-    summary: "Infiltrate the northern shipyards.",
-    kind: "operation",
-    ownerCode: "Spain",
-    status: "active",
-    priority: "high",
-    progress: 0,
-    tags: ["intelligence", "naval"],
-    secrecy: "covert",
-    startedAt: "1936-03-02",
-    ongoing: false,
-    targetDate: "1937-01-01",
-    milestones: [{ title: "Agents in place", date: "1936-06-01" }],
-    lastUpdate: "Approved by the ministry.",
-    linkedUnitIds: ["unit-3"],
-    linkedMarkerIds: ["marker-7"],
-    focus: { lng: -3.7, lat: 40.4 },
-    note: "Funded from the reserve.",
-  }, "a fully populated flat create");
-});
-
-// The nested spelling is no longer taught, but a model that emits it anyway must
-// not cost the turn — the reducer reads `operation.project ?? operation`.
-test("the legacy nested create is still tolerated", () => {
-  accepts(
-    { op: "create", name: "Project Leviathan", project: { name: "Project Leviathan", summary: "A new battleship programme." } },
-    "a nested create",
-  );
-});
-
-test("an onComplete payload validates without the schemas being re-embedded", () => {
-  accepts({
-    op: "create",
-    name: "The Northern Marches Campaign",
-    summary: "Obtain the disputed provinces.",
-    onComplete: {
-      regionTransfers: [{ regionId: "Northern Marches", toCode: "Ruritania" }],
-      polityChanges: [{ code: "Ruritania", name: "Federal Republic of Ruritania" }],
-      regionClaims: [{ regionId: "Northern Marches", claimantCode: "Ruritania", drop: true }],
-    },
-  }, "a create carrying onComplete");
-});
-
-test("a rename carries both the current and the new name", () => {
-  accepts({ op: "update", name: "Project Leviathan", newName: "Project Poseidon" }, "a rename");
-});
-
-// The collapse must not turn the schema into an anything-goes object: a typo'd
-// field is how a silently-dropped op happens, and the strict/salvage validator
-// downstream relies on the schema catching it first.
-test("the schema still rejects what it should", () => {
-  const unknownField = validateGameplayPayload("projects", boardOps({ op: "update", name: "X", progres: 50 }));
-  assert.equal(unknownField.valid, false, "a misspelled field must not pass silently");
-
-  const unknownOp = validateGameplayPayload("projects", boardOps({ op: "advance", name: "X" }));
-  assert.equal(unknownOp.valid, false, "an op verb outside the enum must be rejected");
-
-  const noName = validateGameplayPayload("projects", boardOps({ op: "update", progress: 50 }));
-  assert.equal(noName.valid, false, "an op that names nothing cannot be routed to a project");
-
-  const badProgress = validateGameplayPayload("projects", boardOps({ op: "update", name: "X", progress: 150 }));
-  assert.equal(badProgress.valid, false, "progress outside 0-100 must be rejected");
-});
-
-// An op carries the event that caused it, so the ops can be attached back onto
-// the jump's events before the world is written.
-test("an op says which event caused it", () => {
-  accepts({ op: "update", name: "Project Leviathan", eventIndex: 3, progress: 60 }, "an op with eventIndex");
-  // Optional: not every change traces to one event.
-  accepts({ op: "update", name: "Project Leviathan", progress: 60 }, "an op without eventIndex");
-  assert.equal(
-    validateGameplayPayload("projects", boardOps({ op: "update", name: "X", eventIndex: -1 })).valid,
-    false,
-    "a negative event index addresses nothing",
-  );
-});
 
 // An empty board is a normal answer, and the prompt says so. If the schema
 // rejected it the model would be pushed into inventing progress, which is the
@@ -243,4 +146,87 @@ test("the board no longer costs the jump anything", () => {
     true,
     "the game master lost its board access",
   );
+});
+
+// ---- the ops a story may carry, now that the engine runs the board ---------------
+
+test("every op a story may carry validates: create with its plan, update, setback, boost, cancel, fail", () => {
+  accepts({
+    op: "create",
+    name: "Plan Z",
+    kind: "project",
+    ownerCode: "Germany",
+    summary: "A battle fleet to rival Britain's.",
+    secrecy: "restricted",
+    plan: {
+      durationDays: 2000,
+      monthlyCost: 4e8,
+      milestones: [{ title: "First battleship", atProgress: 30 }],
+      effects: [
+        { type: "stat", stat: "military.sea", change: 6 },
+        { type: "relation", country: "United Kingdom", change: -10 },
+        { type: "structure", name: "Wilhelmshaven Yards", kind: "shipyard", lng: 8.1, lat: 53.5 },
+        { type: "unitType", name: "H-class Battleship", base: "naval", attack: 1.3, toughness: 1.4, speed: 1 },
+        { type: "territory", region: "Heligoland", country: "Germany", claim: true },
+      ],
+    },
+  }, "a create with its plan");
+  accepts({ op: "update", name: "Plan Z", lastUpdate: "The yards work three shifts." }, "a line on it");
+  accepts({ op: "update", name: "Plan Z", verification: "confirmed" }, "a verdict on doubted intelligence");
+  accepts({ op: "setback", name: "Plan Z", days: 60, overrun: 15, lastUpdate: "A fire in the yard." }, "a setback");
+  accepts({ op: "boost", name: "Plan Z", days: 30, lastUpdate: "A new welding method." }, "a boost");
+  accepts({ op: "cancel", name: "Plan Z", note: "The money went to tanks." }, "cancel");
+  accepts({ op: "fail", name: "Plan Z", note: "The yards were bombed." }, "fail");
+  accepts({ op: "setback", name: "Plan Z", eventIndex: 2, days: 10 }, "an op that says which event caused it");
+});
+
+test("a programme that runs on carries its monthly yields", () => {
+  accepts({
+    op: "create",
+    name: "Coastal Watch",
+    ownerCode: "Italy",
+    summary: "Standing patrols.",
+    plan: { durationDays: 60, monthlyCost: 1e7, ongoing: true, yields: [{ type: "stat", stat: "stability", change: 0.5 }] },
+  }, "an ongoing create");
+});
+
+test("the schema refuses what no story may say: progress, a status, the old verbs, a plan without its days", () => {
+  const refused = (op, what) => assert.equal(validateGameplayPayload("projects", boardOps(op)).valid, false, what);
+  refused({ op: "update", name: "X", progress: 50 }, "progress is the engine's");
+  refused({ op: "update", name: "X", status: "complete" }, "so is a status");
+  refused({ op: "milestone", name: "X" }, "the engine reaches checkpoints");
+  refused({ op: "complete", name: "X" }, "and completes projects");
+  refused({ op: "remove", name: "X" }, "an entry is ended, never erased");
+  // A number past its range is the engine's to hold (projectEngine.js), never a reason to cut the op out.
+  accepts({ op: "setback", name: "X", days: 400, overrun: 90 }, "a setback past its bound, which the engine holds");
+  refused({ op: "update", progress: 50 }, "an op names its project");
+  refused({ op: "create", name: "X", plan: { monthlyCost: 1 } }, "a plan says how long");
+  refused({ op: "create", name: "X", plan: { durationDays: 100, monthlyCost: 1, effects: [{ type: "magic", change: 3 }] } }, "an effect is one of the game's systems");
+  refused({ op: "update", name: "X", projectId: "project-1" }, "ids are not part of the board's language any more");
+});
+
+test("the planner's own small contract: a plan, with what the project is", () => {
+  const plan = {
+    name: "Taranto Naval Base",
+    summary: "A deep-water base for the fleet.",
+    kind: "project",
+    durationDays: 540,
+    monthlyCost: 1.2e8,
+    milestones: [{ title: "Breakwater", atProgress: 40 }],
+    effects: [{ type: "stat", stat: "military.sea", change: 4 }],
+  };
+  assert.equal(validateGameplayPayload("projectPlan", plan).valid, true);
+  assert.equal(validateGameplayPayload("projectPlan", { ...plan, durationDays: undefined }).valid, false);
+  assert.equal(validateGameplayPayload("projectPlan", { ...plan, progress: 20 }).valid, false);
+  assert.equal(GAMEPLAY_TOOLS.projectPlan.name, "submit_project_plan");
+  assert.ok(JSON.stringify(GAMEPLAY_TOOLS.projectPlan.schema).length < 7000, "a small request's small contract");
+});
+
+test("a skip's board op is the board's own, lean: no yields, no unit type, no coordinates, no ids", () => {
+  const jump = foldJumpTool(GAMEPLAY_TOOLS.jumpForward, { board: true }).schema;
+  const op = jump.properties.events.items.properties.impacts.properties.projectOps.items;
+  assert.deepEqual(op.properties.op.enum, ["create", "update", "setback", "boost", "cancel", "fail"]);
+  assert.deepEqual(Object.keys(op.properties.plan.properties), ["durationDays", "monthlyCost", "milestones", "effects"]);
+  assert.deepEqual(op.properties.plan.properties.effects.items.properties.type.enum, ["stat", "relation", "structure", "territory"]);
+  for (const absent of ["projectId", "progress", "status", "focus", "approach"]) assert.equal(absent in op.properties, false, absent);
 });

@@ -86,10 +86,12 @@ test("a time skip's shape leaves an op word as written, and builds only by the w
 // ---------------------------------------------------------------------------
 // The projects board: the turn's validation takes exactly the ops the board applies
 
-test("the board's ops are the schema's seven and its own close; a verb in any language is none of them", () => {
-  assert.deepEqual([...PROJECT_OPS], ["create", "update", "milestone", "complete", "cancel", "fail", "remove", "close"]);
+test("the board's ops are the schema's six and its own close; a verb in any language is none of them", () => {
+  assert.deepEqual([...PROJECT_OPS], ["create", "update", "setback", "boost", "cancel", "fail", "close"]);
   assert.equal(projectOpKind({ op: " Create " }), "create");
-  assert.equal(projectOpKind({ action: "milestone" }), "milestone", "the field the board has always also read");
+  assert.equal(projectOpKind({ action: "setback" }), "setback", "the field the board has always also read");
+  // The engine's alone now (runtime/projectEngine.js): a story never completes a project or reaches its checkpoints.
+  for (const op of ["milestone", "complete", "remove"]) assert.equal(projectOpKind({ op }), "", op);
   for (const op of ["start", "lancer", "launch", "open", "ouvrir", "add", "finish", "terminer", ""]) {
     assert.equal(projectOpKind({ op }), "", op);
   }

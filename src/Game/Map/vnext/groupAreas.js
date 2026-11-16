@@ -156,6 +156,8 @@ const labelPoint = (members, pointFor) => {
  * @param groups     { [groupName]: { color } }
  * @param geometryFor optional (regionId, feature) => geometry, for repaired shapes
  * @param pointFor   optional (regionIndex) => { lng, lat, weight } for the label
+ * @param parts      which of the three to work out (the diplomatic map asks for
+ *                   the fills alone to hatch, or the outlines alone)
  */
 export const deriveGroupAreas = ({
   topology,
@@ -165,6 +167,7 @@ export const deriveGroupAreas = ({
   groups = {},
   geometryFor = null,
   pointFor = null,
+  parts = { fills: true, outlines: true, labels: true },
 } = {}) => {
   if (!topology?.regionIds?.length || !index) return EMPTY_GROUP_AREA_DATA;
   const membersByGroup = new Map();
@@ -183,22 +186,24 @@ export const deriveGroupAreas = ({
     const color = String(groups[name]?.color || "#e11d48");
     const properties = { group: name, color };
 
-    const polygons = [];
-    for (const regionIndex of members) {
-      const feature = regions?.features?.[regionIndex];
-      const geometry = geometryFor ? geometryFor(topology.regionIds[regionIndex], feature) : feature?.geometry;
-      polygons.push(...polygonsOf(geometry));
-    }
-    if (polygons.length) {
-      fills.push({ type: "Feature", properties, geometry: { type: "MultiPolygon", coordinates: polygons } });
+    if (parts.fills !== false) {
+      const polygons = [];
+      for (const regionIndex of members) {
+        const feature = regions?.features?.[regionIndex];
+        const geometry = geometryFor ? geometryFor(topology.regionIds[regionIndex], feature) : feature?.geometry;
+        polygons.push(...polygonsOf(geometry));
+      }
+      if (polygons.length) {
+        fills.push({ type: "Feature", properties, geometry: { type: "MultiPolygon", coordinates: polygons } });
+      }
     }
 
-    const coordinates = stitchSegments(outlineSegments(topology, index, members), topology.precision);
+    const coordinates = parts.outlines !== false ? stitchSegments(outlineSegments(topology, index, members), topology.precision) : [];
     if (coordinates.length) {
       outlines.push({ type: "Feature", properties, geometry: { type: "MultiLineString", coordinates } });
     }
 
-    const at = labelPoint(members, pointFor);
+    const at = parts.labels !== false ? labelPoint(members, pointFor) : null;
     if (at) {
       labels.push({ type: "Feature", properties: { ...properties, regions: members.size }, geometry: { type: "Point", coordinates: at } });
     }

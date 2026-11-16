@@ -4,11 +4,43 @@
 // outside the nominal-scale guard is nudged to its boundary, and the economic
 // calibration is audited. Pure and import-light, so node --test can load it
 // (gameplay.js cannot be).
-import { normalizeCountryStatsMacroEstimate } from "./countryStats.js";
+import { normalizeCountryStatsMacroEstimate, normalizeStatsTransportRows } from "./countryStats.js";
 import { parseGameDate } from "./gameDates.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
+
+// If a mapped sheet fails to decode its required macro rows, the empty component
+// array is only a consequence. Tell the model exactly which rows failed rather
+// than requesting fictional nonterritorial status or loosening coverage.
+const EMPTY_MAPPED_STATS_ERROR = "$.territorialComponents may be empty only when $.territorialScope is nonterritorial.";
+export const countryStatsValidationFailure = ({
+  schemaError = "", coverageError = "", calibrationError = "",
+  economicCalibrationError = "", splitError = "",
+} = {}) => {
+  const details = [coverageError, calibrationError, economicCalibrationError, splitError].filter(Boolean).join(" ");
+  if (!schemaError || (coverageError && schemaError === EMPTY_MAPPED_STATS_ERROR)) {
+    return details || schemaError;
+  }
+  return schemaError;
+};
+
+// A complete authored Day-One component ledger is canonical data. The absence
+// of a newer Stats calibration stamp is not proof the country requires a new
+// numeric baseline. Reuse the original canonical sheet without an AI call or
+// persistence mutation when the native geography matches and no events are pending.
+export const shouldPreserveLegacyStartStatsBaseline = ({
+  previousComplete = false, atScenarioStartState = false,
+  hasAuthoritativeTerritorialFingerprint = false, territorialCoverageMatches = false,
+  previousStateFingerprint = "", unaccountedEconomicEvents = null,
+  forceReassess = false,
+} = {}) => Boolean(
+  previousComplete && atScenarioStartState &&
+  hasAuthoritativeTerritorialFingerprint && territorialCoverageMatches &&
+  !normalizeString(previousStateFingerprint) && !forceReassess &&
+  Number(unaccountedEconomicEvents) === 0 && unaccountedEconomicEvents !== null &&
+  unaccountedEconomicEvents !== undefined
+);
 
 export const decodeCountryStatMacroEstimates = (value, macroPlan = []) => {
   const nativePlan = normalizeArray(macroPlan)
@@ -18,7 +50,7 @@ export const decodeCountryStatMacroEstimates = (value, macroPlan = []) => {
     }))
     .filter((entry) => entry.memberCount > 0);
 
-  const text = normalizeString(value);
+  const text = normalizeStatsTransportRows(value);
   if (nativePlan.length > 0) {
     if (!text) {
       return { estimates: [], error: `territorialMacroComponentsText is empty; return exactly ${nativePlan.length} macro estimate row(s).` };

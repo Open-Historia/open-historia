@@ -69,7 +69,7 @@ export const agentOrderFor = (world, board, seat, { op, target, spy, story } = {
   // The asker's own agents on the asker's own board.
   const ops = spyOperationOps(next, list(board), { date, playerPolity: me });
   const nextBoard = ops.length
-    ? applyProjectOpsToWorld({ date, ops, playerCountry: me, world: { ...withSpies, projects: list(board) } }).world.projects
+    ? applyProjectOpsToWorld({ actor: "engine", date, ops, playerCountry: me, world: { ...withSpies, projects: list(board) } }).world.projects
     : list(board);
   return { world: withSpies, board: nextBoard };
 };

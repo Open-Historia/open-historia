@@ -159,41 +159,39 @@ Not a single object: an `anyOf` of four shapes discriminated by `op`. Each branc
 
 ### 4.5-bis `projectOpSchema` — ONE object, discriminated by `op`
 
-Unlike `unitOpSchema` and `markerOpSchema`, this is a single object with an `op` enum and all-optional fields, not an `anyOf`.
+Unlike `unitOpSchema` and `markerOpSchema`, this is a single object with an `op` enum and all-optional fields, not an `anyOf`. Since 2026-11-15 the projects engine runs every project (`runtime/projectEngine.js`), so an op says only what an event did to one, by its name (no ids: `normalizeProjectsShape` and the jump's shape normalizer leave out an `id` or `projectId` written from habit):
 
 | `op` | Meaning |
 |---|---|
-| `create` | open a new effort (give it a `summary` too) |
-| `update` | progress moved, or the status changed; `newName` renames |
-| `milestone` | a checkpoint reached or missed (`projectMilestoneSchema`) |
-| `complete` / `cancel` / `fail` | it ended; all three keep it on the board under Closed |
-| `remove` | erase an entry that should never have been opened — NOT how a project ends |
+| `create` | open a project, with its `plan` (below); `ownerCode` for another country's |
+| `update` | what it IS (`summary`, `kind`, `secrecy`, `tags`, `newName`), a line on what an event did (`lastUpdate`), a verdict on doubted intelligence (`verification`: `confirmed` / `refuted`) |
+| `setback` | an event set it back: `days` of work lost (1-180), `overrun` (1-50 % dearer a month); takes hold from the next period |
+| `boost` | an event brought it on: `days` gained (1-90); next period |
+| `cancel` / `fail` | it ended; both keep it on the board under Closed (`note`) |
 
-Required: `op` and `name`. `eventIndex` says which of the events this op follows from.
+Required: `op` and `name`. `eventIndex` says which of the events this op follows from. No progress, status, dates or checkpoints: those are the engine's. Numbers carry their ranges in words, not as schema bounds: the engine holds each (a bound in the schema would cut a whole op out of an answer over one number).
 
-> **Why it is not an `anyOf`.** It used to be, with six branches — and three of them (nested `create`, flat `create`, `update`) each restated `projectSchema`'s twenty properties in full. Serialized, that was **41,538 characters of a 63,161-character jump schema**: two thirds of the entire output contract for one impact branch, more than three times every other branch combined, sent on every jump and once per segment.
->
-> It was also duplication rather than information. `normalizeProjectOp` (`runtime/gameState.js`) already accepts a create written flat *or* nested (`operation.project ?? operation`), already resolves every op alias, and already merges a create naming an existing project into an update of only the fields it carried. The schema was spending 13 KB describing tolerance the reducer had all along.
->
-> Collapsing it was also a **reliability** win, not only a size one: a six-branch `anyOf` is one of the worst constructs for Gemini's OpenAPI subset (see `geminiSchema.js`) and for small local models, which routinely pick the wrong branch or blend two. `onComplete` was thinned the same way — it re-embedded `polityChangeSchema`, `regionTransferSchema` and `regionClaimSchema` in full, all three of which appear elsewhere in the very same payload.
->
-> The nested `create` spelling survives as a permissive `project: { type: "object" }` key. The model is no longer told to nest, but `additionalProperties: false` means one that does anyway would fail validation and cost the whole turn — the exact failure the flat variant was added to prevent. ~150 characters instead of 13,000.
->
-> `src/Game/AI/projectOpSchema.test.js` is the safety net: every op shape the six-variant schema accepted must still validate.
+**`plan`** (`projectPlanSchema`): `{ durationDays* (days of work at normal funding, 14-3650), monthlyCost* (at normal funding, in the owner's GDP currency), ongoing?, milestones?: [{ title*, atProgress* (1-99) }], effects?: [effect], yields?: [effect] (ongoing only, monthly) }`.
 
-### 4.5-ter `PROJECTS_SCHEMA` — the board's own task
+**`effect`** (`projectEffectSchema`): `{ type* (stat | relation | structure | unitType | territory), stat?, change?, country?, name?, kind?, base?, attack?, toughness?, speed?, region?, claim?, lng?, lat? }`, normalized and bounded by `projectEngine.js normalizeProjectEffect` ([world-state.md §2e-bis](world-state.md)).
 
-A skip keeps the board itself, in every mode: `foldJumpTool` adds `impacts.projectOps` to the contract it is sent (`foldedProjectOpsSchema`: this op without `priority`, `startedAt`, the links, `focus`, the nested `project` and `onComplete`), `agentReports` at the top level when an agent's report is due, and `history` (`{ summary*, document* }`, the consolidator's two fields) last of all when a fold of the history document is due. `JUMP_FORWARD_SCHEMA`, which every answer is validated against, accepts both contracts, and takes `agentReports` and `history` loosely: each is judged where it is read, so a poor one costs that report or that fold and never the turn. See [the folded time skip](ai-overview.md#the-folded-time-skip-one-request-its-own-consequences).
+> **Why it is not an `anyOf`.** It used to be, with six branches, three of which restated `projectSchema` in full: 41,538 characters of a 63,161-character jump schema. A six-branch `anyOf` is also one of the worst constructs for Gemini's OpenAPI subset (`geminiSchema.js`) and for small local models. `src/Game/AI/projectOpSchema.test.js` holds the contract.
 
-For a skip a provider refused in its folded form, `projectOps` does not appear on the jump the model is sent: `jumpImpactsSchema` is `impactsSchema` minus that branch, and the board is moved by the `board` job of the one turn review that skip gets, after the segments merge and before anything is written.
+### 4.5-ter `PROJECTS_SCHEMA`, the skip's board rider, and `PROJECT_PLAN_SCHEMA`
+
+A skip keeps the board itself, in every mode: `foldJumpTool` adds `impacts.projectOps` to the contract it is sent (`foldedProjectOpsSchema`: this op without `newName`, `tags`, `note`, `focus` and `approach`, its plan without `ongoing` and `yields`, its effects `stat | relation | structure | territory` without a unit type's figures or coordinates — a structure stands where the event that opened the project happened, `boardPassApply.js withEventFocus` — and its numbers without bounds; some 1,340 characters, `foldedSkipSent.test.js`), `agentReports` at the top level when an agent's report is due, and `history` (`{ summary*, document* }`) last of all when a fold is due. `JUMP_FORWARD_SCHEMA`, which every answer is validated against, accepts the full op.
+
+`PROJECTS_SCHEMA` (`submit_project_ops`) is the same ops with `eventIndex`, for a Scene's map check (`runSceneReview`):
 
 ```
-{ "projectOps": [ { "op": "update", "id": "...", "name": "...", "eventIndex": 0, "progress": 58, ... } ] }
+{ "projectOps": [ { "op": "setback", "name": "...", "eventIndex": 0, "days": 30, "lastUpdate": "..." } ] }
 ```
 
-`{"projectOps": []}` is a valid and expected answer — the prompt says so explicitly, because a schema that rejected it would push the model into inventing progress, which is the one thing the board must never contain.
+`{"projectOps": []}` is the usual answer: the engine moves every project by itself.
 
-The **game master keeps the full `impactsSchema`**, board included: it is a single call with no second pass to hand the work to.
+`PROJECT_PLAN_SCHEMA` (`submit_project_plan`, the `projectPlan` task, [ai-prompts.md §7.17](ai-prompts.md)): `{ name*, summary*, kind?, secrecy?, tags?, durationDays*, monthlyCost*, ongoing?, milestones*, effects*, yields?, focus? }`, under 7,000 characters.
+
+The **game master keeps the full `impactsSchema`**, board included.
 
 Jump schema size across the two changes, measured when they landed: **63,161 → 31,678 → 21,609 characters.** It grew again with what beta added to the jump (31,720 once `at` joined), and the **description audit** brought it to **24,915**: every field description says what the field *is* in a line, because the levers are explained at length in the actions reference and the call-time directives the jump is always given — a paragraph in a field description was the same paragraph a third time. The guard in `projectOpSchema.test.js` is now **28,000**, raised on purpose when `impacts.reports` landed (26,363 chars; ~1,450 for the family). It is a prompt-size guard, not a provider limit: an impact family that saves a *request* may raise it — reports inside the jump cost ~1,450 characters instead of a whole request a turn, which is the trade the budget asks for.
 

@@ -23,6 +23,7 @@ import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../runtime/politicalKnowledge.js";
 import { normalizeInstitutions } from "../../runtime/institutions.js";
 import { isProjectOpen } from "../../runtime/projects.js";
+import { describeEffects } from "../../runtime/projectEngine.js";
 import { gameDateDayNumber } from "../../runtime/gameDates.js";
 import { livePuppetsFor } from "../../runtime/puppets.js";
 import { findGroupKey, groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
@@ -177,8 +178,8 @@ export const LOOKUP_TOOLS = Object.freeze([
   {
     name: "list_projects",
     description:
-      "The Projects & Operations board: long-running programmes with owner, status, priority, progress, target date, "
-      + "next milestone, last update and what completing them changes on the map. Open entries by default.",
+      "The Projects & Operations board: long-running programmes with owner, status, funding, progress, expected finish, "
+      + "cost a month, next checkpoint, last update and what completing them does. Open entries by default.",
     schema: object("Optional filters.", {
       owner: text("Optional exact power name; omit for every power's projects."),
       status: text("open (default), closed, or all."),
@@ -408,10 +409,30 @@ const pointInGeometry = (point, geometry) => {
     && !polygon.slice(1).some((hole) => pointInRing(point, hole)));
 };
 
+// The middle of a region's box, or for one that crosses the antimeridian (its
+// box wider than half the world: Alaska, Chukotka, Fiji) the middle of the box
+// its longitudes make read on the far side, 0 to 360: a plain box put Alaska
+// at longitude 0, in the middle of Europe, the nearest region to anything there
+// (a dissolved Germany's land went to the United States: runtime/warEndings.js).
 const centroidOf = (region, bbox) => {
   const lng = Number(region?.lng); const lat = Number(region?.lat);
   if (Number.isFinite(lng) && Number.isFinite(lat)) return [lng, lat];
-  return bbox ? [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2] : null;
+  if (!bbox) return null;
+  if (bbox[2] - bbox[0] <= 180) return [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
+  let min = Infinity; let max = -Infinity;
+  const visit = (coords) => {
+    if (!Array.isArray(coords)) return;
+    if (typeof coords[0] === "number") {
+      const x = coords[0] < 0 ? coords[0] + 360 : coords[0];
+      if (x < min) min = x; if (x > max) max = x;
+      return;
+    }
+    for (const entry of coords) visit(entry);
+  };
+  visit(region?.geometry?.coordinates);
+  if (!Number.isFinite(min)) return [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
+  const middle = (min + max) / 2;
+  return [middle > 180 ? middle - 360 : middle, (bbox[1] + bbox[3]) / 2];
 };
 const NEAREST_CENTROID_DEGREES = 2.5;
 const distanceSquared = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
@@ -891,6 +912,9 @@ const warBetween = (war, a, b) => {
   return (has(sideA, a) && has(sideB, b)) || (has(sideA, b) && has(sideB, a));
 };
 
+// One entry as a lookup answers it: by name (an op finds an entry by its name),
+// with what the engine knows of it (runtime/projectEngine.js): progress, when it
+// should be done, its cost and funding, its next checkpoint, and what it does.
 const projectBrief = (project, regionRef = writtenRegion) => {
   const effects = project?.onComplete && typeof project.onComplete === "object" ? project.onComplete : null;
   const mapEffects = effects ? [
@@ -898,19 +922,23 @@ const projectBrief = (project, regionRef = writtenRegion) => {
     ...array(effects.regionClaims).map((c) => `claim ${regionRef(c)} by ${c.claimantCode}`),
     ...array(effects.polityChanges).map((p) => `polity ${p.code || p.name}`),
   ] : [];
+  const plan = project?.plan && typeof project.plan === "object" ? project.plan : null;
+  const next = array(plan?.milestones).find((entry) => !entry?.reached && !entry?.missed);
   return {
-    id: clean(project?.id),
     name: clean(project?.name),
     kind: clean(project?.kind),
     owner: clean(project?.ownerCode || project?.owner),
     status: clean(project?.status) || "active",
-    priority: clean(project?.priority),
-    progress: Number(project?.progress) || 0,
+    ...(clean(project?.stallReason) ? { stalledFor: clean(project.stallReason) } : {}),
+    funding: clean(project?.funding) || "normal",
+    progress: Math.floor(Number(project?.progress) || 0),
     ...(project?.secrecy && clean(project.secrecy) !== "public" ? { secrecy: clean(project.secrecy) } : {}),
     summary: clean(project?.summary).slice(0, 300),
     startedAt: clean(project?.startedAt),
-    ...(project?.ongoing ? { ongoing: true } : { targetDate: clean(project?.targetDate) }),
-    ...(project?.nextMilestone ? { nextMilestone: { title: clean(project.nextMilestone.title), date: clean(project.nextMilestone.date), status: clean(project.nextMilestone.status) } } : {}),
+    ...(project?.ongoing ? { ongoing: true } : { expectedFinish: clean(project?.targetDate) }),
+    ...(plan ? { monthlyCost: Number(plan.monthlyCost) || 0, durationDays: Number(plan.durationDays) || 0 } : {}),
+    ...(next ? { nextCheckpoint: { title: clean(next.title), atProgress: Number(next.atProgress) || 0 } } : {}),
+    ...(array(plan?.effects).length ? { effects: describeEffects(plan.effects, { owner: clean(project?.ownerCode) }) } : {}),
     lastUpdate: clean(project?.lastUpdate).slice(0, 300),
     ...(mapEffects.length ? { onComplete: mapEffects.slice(0, 12) } : {}),
   };

@@ -54,6 +54,175 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "the diplomatic map is shit, redesign it and make it have full integration with the political world", then "only on
+    // alpha for now and ... be a major update" (the owner, 2026-11-15): four views (runtime/diplomaticViews.js), a legend
+    // that counts what is shown (GameUI/DiplomaticLegend.jsx), lines from the focus country's capital, kept for each game.
+    id: "2026-11-diplomatic-atlas",
+    kind: "major",
+    date: "2026-11-15",
+    channel: "alpha",
+    banners: [
+      {
+        theme: "diplomaticAtlas",
+        scene: "relations",
+        title: "The Diplomatic Map, Redrawn",
+        subtitle: "The whole political world on one map",
+        lead: "The Diplomatic map now has four views: Relations, Wars, Blocs and Government. Each shows the whole world, with a legend that counts what is on the map.",
+        sections: [
+          {
+            heading: "Relations",
+            icon: "people",
+            items: [
+              "Every country is coloured by its standing with the focus country: war, ceasefire, alliance, guarantee, non-aggression, peace, military access, trade, or how warm relations are.",
+              "Click any country to see the world from its side. Its card still opens as before, and Back to my country returns the focus to you.",
+              "Countries with no relations on record look different from neutral ones, and puppets and overlords have colours of their own.",
+            ],
+          },
+          {
+            heading: "Lines and borders",
+            icon: "map",
+            items: [
+              "Thin lines run from the focus country's capital to its allies, and dashed red ones to its enemies.",
+              "Borders where enemies meet are lit, and hovering over a country tells you its tie to the focus in one short line.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "diplomaticAtlas",
+        scene: "wars",
+        title: "Every War, Every Bloc",
+        subtitle: "Who fights whom, and who stands together",
+        sections: [
+          {
+            heading: "Wars",
+            icon: "swords",
+            items: [
+              "Every war in the world at once, each side in its own colour, with all the countries on a side shown together.",
+              "Ceasefires are hatched, the borders where the sides meet are lit, and clicking a war in the legend picks it out.",
+            ],
+          },
+          {
+            heading: "Blocs and institutions",
+            icon: "flag",
+            items: [
+              "Pick an institution, such as NATO, the EU or the UN, to see its members tinted and outlined as one area.",
+              "Candidates, observers and suspended members each look different, and the view opens on the largest institution you belong to.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "diplomaticAtlas",
+        scene: "government",
+        title: "Governments and Spheres",
+        subtitle: "How the world is ruled",
+        sections: [
+          {
+            heading: "Government",
+            icon: "book",
+            items: [
+              "Colour the world by regime, by how power is represented, by the ruling party's ideology, or by power tier.",
+              "Puppets take a shade of their overlord's colour, hatched, and occupied land is hatched too.",
+            ],
+          },
+          {
+            heading: "A clearer legend",
+            icon: "eye",
+            items: [
+              "The legend lists only what is on the map, with how many countries are in each entry. Click an entry to pick those countries out.",
+              "The colours are stronger, easier to tell apart for colour-blind players, and no longer look like empty land. Each game remembers how you left the map.",
+            ],
+          },
+        ],
+        button: "To the map",
+      },
+    ],
+  },
+  {
+    // "lets rework projects entirely… right now they dont actually effect the world actively and dont progress normally. it seems like
+    // they just sit doing nothing" (the owner, 2026-11-15): the projects engine (runtime/projectEngine.js) runs every project's clock;
+    // a project costs money a month, changes the world when done, can be started from the Projects tab, and other countries run their own.
+    // Alpha only for now (the coordinator, 2026-11-15).
+    id: "2026-11-projects-that-build",
+    kind: "major",
+    date: "2026-11-15",
+    channel: "alpha",
+    banners: [
+      {
+        theme: "projects",
+        scene: "works",
+        title: "Projects That Build",
+        subtitle: "The work goes on while you play",
+        lead: "Projects no longer wait for the story to remember them. Every day your budget pays for them, the work moves forward, and when one is finished it changes your country.",
+        sections: [
+          {
+            heading: "Real progress",
+            icon: "gear",
+            items: [
+              "Every project now advances day by day, at the pace its plan, its funding and your country's economy and stability allow.",
+              "Checkpoints are reached on real dates, and the Projects tab shows when each project should be done.",
+              "Each time skip is told what your projects will reach in it, so the story tells it as it happens.",
+            ],
+          },
+          {
+            heading: "Money matters",
+            icon: "star",
+            items: [
+              "Each project costs a sum every month from your country's project budget, a share of its economy.",
+              "Fund each one Off, Low, Normal or High: more money buys more speed. When the budget runs short, the best funded are paid first.",
+              "A project left without money for a month stalls, and starts again by itself once there is money for it.",
+            ],
+          },
+          {
+            heading: "It changes the world",
+            icon: "map",
+            items: [
+              "A finished project changes your country: its figures, its relations, new structures on the map, new unit types, even territory.",
+              "Every effect has a limit, so no single project transforms a country overnight.",
+              "Programmes that run on, like a standing patrol, give something back every month they are paid for.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "projects",
+        scene: "plans",
+        title: "Plan Your Own",
+        subtitle: "Name it, plan it, start it",
+        lead: "You can start projects yourself now, from the Projects tab in the Actions panel.",
+        sections: [
+          {
+            heading: "New project",
+            icon: "book",
+            items: [
+              "Write a name and what it is for, then press Plan it: one AI request drafts how long it takes, what it costs, its checkpoints and what it will do.",
+              "Read the plan, then start it or discard it.",
+              "Your advisor can still open projects for you once you decide on one.",
+            ],
+          },
+          {
+            heading: "Other countries",
+            icon: "eye",
+            items: [
+              "Countries the AI plays now run projects of their own on the same rules, and the world's events tell how they go.",
+              "Known projects abroad lists the ones your services know of; secret ones stay hidden until an agent finds them.",
+            ],
+          },
+          {
+            heading: "Setbacks and breakthroughs",
+            icon: "swords",
+            items: [
+              "Strikes, sabotage, fires and windfalls can set a project back or bring it on, always for a reason an event tells.",
+              "Projects from older saves carry on from where they stood, at no cost.",
+            ],
+          },
+        ],
+        button: "To the drafting table",
+      },
+    ],
+  },
+  {
     // "build C and D, and the host can choose, but no sending api keys" (the owner, 2026-11-15): who answers a player's message to a
     // country the AI plays is the host's choice (multiplayer/host/settings.js `replies`): the host's AI, or each player's own device.
     // "any issues should not be roughly patched or whackamoled, the core of the issue should be fixed archetecturally" (the owner,
@@ -82,6 +251,82 @@ const NEW_UPDATES = [
           "A country that is renamed keeps its player, even one who was away at the time, and a country with a very long name no longer keeps everyone out of the lobby.",
           "Orders and messages sent while a round is being played are no longer refused: they wait, and count for the next round. When the host's AI cannot play a round, everyone is told why, the orders stay queued, and the host can try again at once.",
           "A player who reconnects, or misses part of an update, is sent the whole game again, so the map no longer freezes or shows half a round. If the host's window reloads, it goes straight back to the shared game, and the round waits for it.",
+        ],
+      },
+    ],
+  },
+  {
+    // Issue #1000's save, again: in 1947 the German Reich, surrendered and dissolved in the story in 1945, was still a
+    // great power on the map, and its weariness was told as if it still fought. A war's end now records who lost
+    // (runtime/warEndings.js): occupations follow from it and a state dissolved in defeat leaves the map
+    // (gameState.js dissolvePolity); weariness at peace is told as recovery (Game/AI/peacePrompt.js).
+    id: "2026-11-wars-end-with-an-outcome",
+    kind: "minor",
+    date: "2026-11-15",
+    channel: "beta",
+    banners: [
+      {
+        title: "Wars end with an outcome",
+        items: [
+          "When a war has ended, the next time skip now says who lost it. Land a defeated occupier still holds goes back to its owner, and a state whose government was dissolved in defeat leaves the map: its land is divided among the powers that took it, and its armies go with it.",
+          "A country still weary from a war that is over is now told as recovering, not as still fighting.",
+        ],
+      },
+    ],
+  },
+  {
+    // Advisor replies that promise a draft Action but omit the machine block
+    // now receive a bounded semantic/format check, retaining native review.
+    id: "2026-11-advisor-action-completeness",
+    kind: "minor",
+    date: "2026-11-15",
+    channel: "beta",
+    banners: [
+      {
+        title: "Clearer reviews for Advisors and Political World",
+        items: [
+          "Advisors now check for promised Action proposals accidentally missing from a reply and try to restore the review card.",
+          "Actions still require Proceed. If recovery fails, the reply reports the problem rather than claiming the order is ready.",
+          "Political World suggestions now summarize named changes rather than displaying internal paths and raw record JSON.",
+          "Political World generation now asks for short, historically grounded ideology labels instead of long party biographies or manifestos.",
+          "Advanced generation can target Standard, Rich or Full political detail for every active polity, including non-sovereign polities.",
+        ],
+      },
+    ],
+  },
+  {
+    // Individual Advisor group turns retain exclusive silent-pass validation;
+    // a bounded format-only recovery prevents a stray memory suffix from
+    // aborting an otherwise completed multi-minister conversation.
+    id: "2026-11-advisor-group-silent-repair",
+    kind: "minor",
+    date: "2026-11-14",
+    channel: "beta",
+    banners: [
+      {
+        title: "Advisor group replies recover from invalid silence",
+        items: [
+          "Group chats can recover when a silent advisor adds private memory by mistake, without asking the other advisors to speak again.",
+          "A silent advisor's private memory is never shown or saved; invalid replies still have to pass validation before joining the meeting.",
+        ],
+      },
+    ],
+  },
+  {
+    // Keep scenario-authored Day-One figures canonical. Harden native stats
+    // decoding and require calibration only when an audit actually needs it.
+    id: "2026-11-country-stats-reliability",
+    kind: "minor",
+    date: "2026-11-14",
+    channel: "beta",
+    banners: [
+      {
+        title: "More reliable country stats",
+        items: [
+          "Your scenario's starting country figures stay intact when you first open Stats.",
+          "Stats generation handles regional figures from more AI models without losing valid rows.",
+          "Rebuilding country stats still checks the country's territory and requires economic evidence.",
+          "Game Master corrections no longer put standard economy values into custom stats, preventing a Stats refresh validation error.",
         ],
       },
     ],

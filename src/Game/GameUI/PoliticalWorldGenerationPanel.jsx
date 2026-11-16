@@ -98,6 +98,17 @@ const MODE_OPTIONS = [
     label: "Basic",
     description: "The player's country and countries at war get full detail, and every other country gets standard detail, even one that already has Political Actors. The AI's answers are the shortest.",
   },
+  {
+    id: POLITICAL_WORLD_GENERATION_MODES.UNIFORM,
+    label: "Uniform depth (all active polities)",
+    description: "Advanced: explicitly choose one detail level for every active polity, including the player's country, client states and landless polities. Existing authored data remains authoritative.",
+  },
+];
+
+const UNIFORM_DEPTH_OPTIONS = [
+  { value: "standard", label: "Standard" },
+  { value: "rich", label: "Rich" },
+  { value: "full", label: "Full" },
 ];
 
 const buildRows = (result, { allowRosterExpansion = false, selectValid = true } = {}) => {
@@ -430,6 +441,7 @@ const restorePipelineResultFromDiagnostic = (diagnostic, { scenarioId = "", scen
 
 const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } = {}) => {
   const [mode, setMode] = useState(POLITICAL_WORLD_GENERATION_MODES.BALANCED);
+  const [uniformDepth, setUniformDepth] = useState("rich");
   const [allowRosterExpansion, setAllowRosterExpansion] = useState(false);
   const [busy, setBusy] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -478,11 +490,11 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
 
   const inputs = useMemo(() => {
     try {
-      return buildScenarioPoliticalGenerationInputs(details, { mode, maxBatchSize: 8, countryTags: scenarioTags });
+      return buildScenarioPoliticalGenerationInputs(details, { mode, uniformDepth, maxBatchSize: 8, countryTags: scenarioTags });
     } catch {
       return null;
     }
-  }, [details, mode, scenarioTags]);
+  }, [details, mode, uniformDepth, scenarioTags]);
 
   const testInputs = useMemo(() => {
     try {
@@ -592,6 +604,14 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         if (!cancelled) {
           setV2Checkpoint(visibleCheckpoint);
           if (visibleCheckpoint) {
+            // Restore the paid checkpoint's original depth selection before
+            // Resume, rather than silently swapping to Balanced on reload.
+            if (visibleCheckpoint.generationSelection?.mode) {
+              setMode(visibleCheckpoint.generationSelection.mode);
+              if (visibleCheckpoint.generationSelection.mode === POLITICAL_WORLD_GENERATION_MODES.UNIFORM) {
+                setUniformDepth(visibleCheckpoint.generationSelection.uniformDepth);
+              }
+            }
             setRunKind("political-world-v2");
             if (visibleCheckpoint?.pauseReason === "reference-canon-rebase") {
               setProgress("Political World progress recovered. Scenario context changed; Continue Generation will refresh reference institutions without rebuilding completed political actors.");
@@ -651,7 +671,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       // settings.
       const freshDetails = await loadScenarioDetails(details?.scenario?.id);
       const freshTags = await downloadScenarioJsonAsset(freshDetails?.scenario?.id || details?.scenario?.id, "tags");
-      const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, maxBatchSize: 8, countryTags: freshTags });
+      const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, uniformDepth, maxBatchSize: 8, countryTags: freshTags });
       if (freshInputs.scenarioDate !== inputs.scenarioDate) {
         throw new Error(`Scenario start date changed from ${inputs.scenarioDate} to ${freshInputs.scenarioDate || "<blank>"}. Save/reload before generating Political World.`);
       }
@@ -783,7 +803,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
           throw new Error(`Scenario start date changed from ${v2Checkpoint.scenarioDate} to ${freshDate || "<blank>"}. Start a fresh Political World generation for the new date.`);
         }
         const { applyPoliticalWorldV2Checkpoint, discardPoliticalWorldV2Checkpoint } = await import("../AI/politicalWorldV2/pipeline.js");
-        const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, maxBatchSize: 8 });
+        const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, uniformDepth, maxBatchSize: 8 });
         const world = applyPoliticalWorldV2Checkpoint({
           checkpoint: v2Checkpoint,
           freshWorld: freshDetails?.data?.world ?? {},
@@ -931,7 +951,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         throw new Error(`Scenario start date changed from ${v2Checkpoint.scenarioDate} to ${freshDate || "<blank>"}. Resume from a fresh v2 checkpoint.`);
       }
       const { applyCompletePoliticalWorldV2Work, keepPoliticalWorldV2CheckpointAfterPartialApply } = await import("../AI/politicalWorldV2/pipeline.js");
-      const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, maxBatchSize: 8 });
+      const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, uniformDepth, maxBatchSize: 8 });
       const application = applyCompletePoliticalWorldV2Work({
         checkpoint: v2Checkpoint,
         freshWorld: freshDetails?.data?.world ?? {},
@@ -944,7 +964,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       // The checkpoint is re-keyed to the scenario exactly as saved, before the
       // panel reloads it, so it stays the one Resume continues.
       const savedDetails = saved?.data?.world ? saved : await loadScenarioDetails(details.scenario.id);
-      const savedInputs = buildScenarioPoliticalGenerationInputs(savedDetails, { mode, maxBatchSize: 8 });
+      const savedInputs = buildScenarioPoliticalGenerationInputs(savedDetails, { mode, uniformDepth, maxBatchSize: 8 });
       const kept = await keepPoliticalWorldV2CheckpointAfterPartialApply({
         checkpoint: v2Checkpoint,
         world: savedInputs.world,
@@ -1153,7 +1173,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
     abortRef.current = controller;
     try {
       const freshDetails = await loadScenarioDetails(details.scenario.id);
-      const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, maxBatchSize: 8 });
+      const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, uniformDepth, maxBatchSize: 8 });
       if (freshInputs.scenarioDate !== result.scenarioDate) {
         throw new Error(`Scenario start date changed from ${result.scenarioDate} to ${freshInputs.scenarioDate || "<blank>"}. Generate political proposals again for the new canonical date.`);
       }
@@ -1242,7 +1262,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         ]);
         // Checked against the saved scenario, exactly as a Resume would run.
         const freshDetails = await loadScenarioDetails(details?.scenario?.id);
-        const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, maxBatchSize: 8 });
+        const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, uniformDepth, maxBatchSize: 8 });
         const restoredCheckpoint = restorePoliticalWorldV2CheckpointFile(diagnostic, {
           scenarioId: details?.scenario?.id,
           inputs: freshInputs,
@@ -1484,10 +1504,18 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
           </label>
           <label style={{ alignItems: "center", color: "rgba(255,255,255,0.58)", display: "inline-flex", fontSize: "0.68rem", gap: "0.35rem" }}>
             Generation mode
-            <select disabled={busy || applying} onChange={(event) => setMode(event.target.value)} style={selectStyle} value={mode}>
+            <select disabled={busy || applying || Boolean(v2Checkpoint)} onChange={(event) => setMode(event.target.value)} style={selectStyle} value={mode}>
               {MODE_OPTIONS.map((option) => <option key={option.id} style={{ background: "#2b2b30", color: "#f8fafc" }} value={option.id}>{option.label}</option>)}
             </select>
           </label>
+          {mode === POLITICAL_WORLD_GENERATION_MODES.UNIFORM && (
+            <label style={{ alignItems: "center", color: "rgba(255,255,255,0.58)", display: "inline-flex", fontSize: "0.68rem", gap: "0.35rem" }}>
+              Detail for every active polity
+              <select disabled={busy || applying || Boolean(v2Checkpoint)} onChange={(event) => setUniformDepth(event.target.value)} style={selectStyle} value={uniformDepth}>
+                {UNIFORM_DEPTH_OPTIONS.map((option) => <option key={option.value} style={{ background: "#2b2b30", color: "#f8fafc" }} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          )}
           <button disabled={busy || applying || dateMismatch} onClick={() => generate(false)} style={{ ...buttonStyle, opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">Generate Missing Politics</button>
           <button disabled={busy || applying || dateMismatch} onClick={repairGoverningAlignment} style={{ ...buttonStyle, opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">Repair Governing Alignment</button>
           <button disabled={busy || applying || dateMismatch} onClick={() => generate(true)} style={{ ...buttonStyle, opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">Test 15 Polities</button>
@@ -1505,6 +1533,16 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.35rem" }}>
           Generation mode applies to Generate Political World and to Generate Missing Politics.
         </div>
+        {mode === POLITICAL_WORLD_GENERATION_MODES.UNIFORM && (
+          <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.66rem", lineHeight: 1.5, marginTop: "0.35rem" }}>
+            Full detail for every active polity can require many more AI calls and may reach the generation safety ceiling. This targets missing supported fields, not a guarantee of historical completeness.
+          </div>
+        )}
+        {v2Checkpoint && (
+          <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem", marginTop: "0.35rem" }}>
+            Generation depth is locked while this saved checkpoint exists. Continue or apply the saved work before starting with another depth.
+          </div>
+        )}
         <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.5rem" }}>
           Repair Governing Alignment can only fill missing rulingPartyIds / coalitionPartyIds from party IDs that already exist and never runs the temporal verifier.
         </div>
