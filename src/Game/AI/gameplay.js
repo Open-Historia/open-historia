@@ -325,7 +325,7 @@ import {
   isProjectOpen,
   spyProvenanceOps,
 } from "../../runtime/projects.js";
-import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
+import { activeSpies, applySpyOps, spyServicesOf, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
 import { assertPoliticalLandscapeConsistency, describeElectionsDue, normalizePoliticalLandscape } from "../../runtime/politics.js";
 import { foldLandscapeIntoActor } from "../../runtime/politicalLandscapeFold.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
@@ -9715,23 +9715,35 @@ const applySimulationResult = async ({
   // home) with a skipped order logged instead of a lost turn, and so the board
   // sync right below already sees the new agent. After resolveEspionage on
   // purpose: an agent placed this turn is not also caught this turn.
-  const spyOrders = normalizeArray(freshEvents).flatMap((event) => normalizeArray(event?.impacts?.spyOps));
-  if (spyOrders.length && !isActiveFeatureEnabled("espionage")) {
-    logDebugEvent("espionage", `Spy orders ignored: espionage is off for this game (${spyOrders.length}).`);
-  } else if (spyOrders.length) {
-    const outcome = applySpyOps(worldWithImpacts, spyOrders, { date: nextGame.gameDate, playerPolity });
-    worldWithImpacts.spies = outcome.spies;
-    if (outcome.applied.length) {
-      logDebugEvent("espionage", `Spy orders applied: ${outcome.applied.map((entry) => `${entry.op} ${entry.target}`).join(", ")}`);
-    }
-    for (const skipped of outcome.rejected) {
-      logDebugEvent("espionage", `Spy order skipped: ${skipped.reason}`, { op: skipped.op });
-    }
-    // An agent ordered into a polity nobody has rated: get that service its
-    // first reading now (it waits for this turn's write), so the espionage
-    // maths it meets next turn run on a judgement rather than the default.
-    for (const entry of outcome.applied) {
-      if (entry.op === "deploy") void ensureCountryAssessed(entry.target, { reason: "agent deployed by order" });
+  //
+  // Whose service runs them is the player whose order the event carried out
+  // (its impacts.actionIds, runtime/humanPolities.js orderOwner), or whom its
+  // agency names as acting on a player's order; with one player in the game,
+  // theirs, as it always was. A shared skip carries several players' orders,
+  // and one carried out for nobody it names is nobody's: every spy order was
+  // run for the host's service, so a guest's order to plant an agent placed
+  // the host's (the shared-games investigation, 2026-11-15).
+  const spyServices = spyServicesOf(freshEvents, { game: baseGame, actions: baseActions });
+  const spyOrderCount = [...spyServices.byService.values()].reduce((sum, ops) => sum + ops.length, 0) + spyServices.unowned;
+  if (spyOrderCount && !isActiveFeatureEnabled("espionage")) {
+    logDebugEvent("espionage", `Spy orders ignored: espionage is off for this game (${spyOrderCount}).`);
+  } else if (spyOrderCount) {
+    if (spyServices.unowned) logDebugEvent("espionage", `Spy orders skipped: no player's order named whose service runs them (${spyServices.unowned}).`);
+    for (const [service, spyOrders] of spyServices.byService) {
+      const outcome = applySpyOps(worldWithImpacts, spyOrders, { date: nextGame.gameDate, playerPolity: service });
+      worldWithImpacts.spies = outcome.spies;
+      if (outcome.applied.length) {
+        logDebugEvent("espionage", `Spy orders applied for ${service}: ${outcome.applied.map((entry) => `${entry.op} ${entry.target}`).join(", ")}`);
+      }
+      for (const skipped of outcome.rejected) {
+        logDebugEvent("espionage", `Spy order skipped for ${service}: ${skipped.reason}`, { op: skipped.op });
+      }
+      // An agent ordered into a polity nobody has rated: get that service its
+      // first reading now (it waits for this turn's write), so the espionage
+      // maths it meets next turn run on a judgement rather than the default.
+      for (const entry of outcome.applied) {
+        if (entry.op === "deploy") void ensureCountryAssessed(entry.target, { reason: "agent deployed by order" });
+      }
     }
   }
   const spySync = [

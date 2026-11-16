@@ -13,6 +13,7 @@
 // every branch.
 
 import { nameId } from "../../server/nameId.js";
+import { humanCountriesOf, orderOwner } from "./humanPolities.js";
 
 export const DEFAULT_INTELLIGENCE = 40;
 export const MAX_ACTIVE_SPIES = 3;   // per owner
@@ -248,6 +249,51 @@ export const cancelOperation = (world, id) => {
 // the whole turn. Returns the next spies list plus what was applied and what
 // was skipped, with the reason in the words the UI would have shown.
 export const SPY_OP_KINDS = ["deploy", "recall"];
+
+// Whose intelligence service runs each of a turn's spy orders (its events'
+// impacts.spyOps): the player whose order the event carried out (its
+// impacts.actionIds; whose an order is, orderOwner), or whom its agency names as
+// acting on a player's order (authority "player-order" or "player-commitment");
+// with one player in the game, theirs, as it always was. An event that carries
+// orders of several players, or of none it names, says nobody's service: its
+// spy orders are nobody's to run. In a shared game every one was run for the
+// host's service, so a guest's order to plant an agent placed the host's.
+//   events    the turn's events
+//   game      the game: whose an order naming no owner is, and who plays
+//   actions   the orders the turn carried out
+//   players   the countries people play (humanCountriesOf the game, by default)
+// Returns { byService: Map(player -> ops, in order), unowned: how many ops were nobody's }.
+const ACTING_ON_ORDERS = new Set(["player-order", "player-commitment"]);
+export const spyServicesOf = (events, { game = null, actions = [], players = null } = {}) => {
+  const fold = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  const people = (Array.isArray(players) ? players : humanCountriesOf(game)).map((name) => String(name ?? "").trim()).filter(Boolean);
+  const personNamed = (name) => people.find((person) => fold(person) === fold(name)) ?? "";
+  const ordersById = new Map((Array.isArray(actions) ? actions : []).map((order) => [String(order?.id ?? "").trim(), order]));
+  const byService = new Map();
+  let unowned = 0;
+  for (const event of Array.isArray(events) ? events : []) {
+    const ops = (Array.isArray(event?.impacts?.spyOps) ? event.impacts.spyOps : []).filter(Boolean);
+    if (!ops.length) continue;
+    const named = new Set();
+    for (const id of Array.isArray(event?.impacts?.actionIds) ? event.impacts.actionIds : []) {
+      const order = ordersById.get(String(id ?? "").trim());
+      const person = order ? personNamed(orderOwner(order, game)) : "";
+      if (person) named.add(person);
+    }
+    const agency = event?.agency;
+    if (agency && ACTING_ON_ORDERS.has(fold(agency.authority))) {
+      const person = personNamed(agency.principal);
+      if (person) named.add(person);
+    }
+    const service = named.size === 1 ? [...named][0] : named.size === 0 && people.length === 1 ? people[0] : "";
+    if (!service) {
+      unowned += ops.length;
+      continue;
+    }
+    byService.set(service, [...(byService.get(service) ?? []), ...ops]);
+  }
+  return { byService, unowned };
+};
 
 // One order as it is STORED on an event. It used to be read straight off the raw
 // event and never normalized, so it did not survive a save: the order applied

@@ -1160,6 +1160,7 @@
  "An order to a unit was not carried out: it did not say which unit.",
  "An order to build something beyond your era's science gets early research, a long programme or a failure, not a working device within months.",
  "An order to end a war is now the offer of the player who gave it: another player's order no longer offers peace in your country's name.",
+ "An order to place or recall an agent now runs your own intelligence service: a guest's order used to place the host's agent instead.",
  "An order to the unit \"{{unit}}\" was not carried out: no unit has that id, and it may have been destroyed.",
  "An order with this proposal ID already exists with different contents.",
  "An order with this proposal ID already exists with different provenance.",
