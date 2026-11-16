@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { resolveStockCountryCode } from "../../runtime/polityIdentity.js";
+import OFFICIAL_COUNTRY_CODES_BY_NAME from "../../runtime/generated/officialCountryAliases.js";
 
 const source = fs.readFileSync(new URL("./chat.jsx", import.meta.url), "utf8");
 const main = fs.readFileSync(new URL("./main.jsx", import.meta.url), "utf8");
@@ -60,4 +62,29 @@ test("the inbox and conversation use a responsive split, readable activity cues 
   assert.match(source, /color-mix\(in srgb, var\(--oh-ui-accent/);
   assert.match(styles, /@container \(max-width: 47rem\)/);
   assert.match(styles, /prefers-reduced-motion/);
+});
+
+test("country directory is searchable and selection is removable without changing single-target/group semantics", () => {
+  const styles = fs.readFileSync(new URL("./diplomacyInbox.css", import.meta.url), "utf8");
+  assert.match(source, /data-diplomacy-country-picker="directory"/);
+  assert.match(source, /role="dialog" aria-modal="true" aria-label=\{title\}/);
+  assert.match(source, /aria-pressed=\{isSelected\}/);
+  assert.match(source, /className="oh-diplomacy-picker-search"/);
+  assert.match(source, /autoFocus[\s\S]*?type="search"[\s\S]*?aria-label="Search countries"/);
+  assert.match(source, /className="oh-diplomacy-picker-chip" onClick=\{\(\) => toggle\(country\)\}/);
+  assert.match(source, /: single \? \[\{ name, code \}\] : \[\.\.\.previous, \{ name, code \}\]/);
+  assert.match(source, /onClick=\{\(\) => selected\.length > 0 && onStart\(selected\)\} disabled=\{selected\.length === 0\}/);
+  assert.match(source, /title="Add Countries to Chat"/);
+  assert.match(source, /single title="Deploy a Network"/);
+  assert.match(styles, /\.oh-diplomacy-picker-grid \{display:grid;grid-template-columns:repeat\(auto-fit,/);
+  assert.match(styles, /\.oh-diplomacy-picker-country-name \{[^}]*text-overflow:ellipsis/);
+});
+
+test("country directory reuses canonical country aliases for discovery, not for renamed selections", () => {
+  const fra = resolveStockCountryCode("France");
+  assert.equal(fra, "FRA");
+  assert.equal(resolveStockCountryCode("French Republic"), fra);
+  assert.ok(Object.entries(OFFICIAL_COUNTRY_CODES_BY_NAME).some(([alias, code]) => alias.startsWith("fran") && code === fra));
+  assert.match(source, /aliasCodes\.has\(resolveStockCountryCode\(country\.code \|\| country\.name\)\)/);
+  assert.match(source, /onToggle=\{\(\) => toggle\(country\)\}/);
 });

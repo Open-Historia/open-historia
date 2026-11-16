@@ -5,6 +5,8 @@ import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { dedupeByName, landHolderNames, pickableCountries } from "../../runtime/countryList.js";
+import { resolveStockCountryCode } from "../../runtime/polityIdentity.js";
+import OFFICIAL_COUNTRY_CODES_BY_NAME from "../../runtime/generated/officialCountryAliases.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { SharedGameRefusal, answerPeaceInChat, checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
@@ -1025,126 +1027,128 @@ const activeCampaignNow = () => String(getLibraryState()?.activeGameId ?? "").tr
 
 // ── Country selector ──────────────────────────────────────────────────────────
 
-const CountryTile = ({ country, code, flagUrl, isSelected, onToggle }) => {
-    const [hovered, setHovered] = React.useState(false);
-    const shortName = country.length > 12 ? country.slice(0, 11) + "…" : country;
-    return (
-        <button
+const CountryTile = ({ country, flagUrl, isSelected, onToggle }) => (
+    <button
+        type="button"
+        className={"oh-diplomacy-picker-country" + (isSelected ? " is-selected" : "")}
         onClick={onToggle}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        style={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "0.35rem",
-            height: "5.5rem",
-            padding: "0 0.4rem",
-            borderRadius: "10px",
-            border: isSelected
-            ? "1px solid rgba(59,130,246,0.6)"
-            : hovered
-            ? "1px solid rgba(255,255,255,0.15)"
-            : "1px solid rgba(255,255,255,0.07)",
-            background: isSelected
-            ? "rgba(59,130,246,0.18)"
-            : hovered
-            ? "rgba(255,255,255,0.07)"
-            : "rgba(255,255,255,0.04)",
-            cursor: "pointer",
-            transition: "all 0.12s ease",
-            fontFamily: "sans-serif",
-            position: "relative",
-            width: "100%",
-            boxSizing: "border-box",
-        }}
-        >
-        {isSelected && (
-            <div style={{ position: "absolute", top: "0.3rem", right: "0.3rem", width: "14px", height: "14px", borderRadius: "50%", background: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.55rem", color: "white", fontWeight: 700 }}>✓</div>
-        )}
-        <FlagImg url={flagUrl} alt={country} width="2.3rem" height="1.6rem" />
-        <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.8)", textAlign: "center", lineHeight: 1.3 }}>{shortName}</span>
-        </button>
-    );
-};
+        aria-pressed={isSelected}
+        title={country}
+    >
+        <span className="oh-diplomacy-picker-country-flag"><FlagImg url={flagUrl} alt={country} width="1.7rem" height="1.15rem" /></span>
+        <span className="oh-diplomacy-picker-country-name">{country}</span>
+        <span className="oh-diplomacy-picker-country-indicator" aria-hidden="true">{isSelected ? "✓" : "+"}</span>
+    </button>
+);
 
 const CountrySelectorModal = ({
     countries, loading, onStart, onCancel,
-    title = "Start New Diplomatic Chat",
-    subtitle = "Select countries to invite to the conversation",
-    selectedLabel = "Selected Countries",
+    title = "New diplomatic channel",
+    subtitle = "Choose one or more governments for your correspondence.",
+    selectedLabel = "Recipients",
     emptyLabel = "No countries selected yet",
-    confirmLabel = (n) => `Chat with ${n} ${n === 1 ? "country" : "countries"}`,
+    confirmLabel = (n) => n ? "Start conversation" : "Choose a recipient",
     single = false,
 }) => {
-    const [search, setSearch]     = React.useState("");
+    const [search, setSearch] = React.useState("");
     const [selected, setSelected] = React.useState([]);
-    // Deduped before anything is rendered: the tiles and the selection are both
-    // keyed by name, so a repeated name collides React keys — the same country
-    // appears several times, a search misses what it matched, and clicking one
-    // tile marks another selected without highlighting it. countryList.js fixes
-    // the source of the duplicates; this makes the picker safe from any source.
-    const filtered = useMemo(
-        () => dedupeByName(countries).filter(c => c.name.toLowerCase().includes(search.toLowerCase())),
-        [countries, search],
-    );
+    // This picker also handles a HUMINT single-country target and additions to
+    // an existing diplomatic group. Keep both selection contracts intact.
+    const uniqueCountries = useMemo(() => dedupeByName(countries), [countries]);
+    const filtered = useMemo(() => {
+        const query = search.trim().toLowerCase();
+        if (!query) return uniqueCountries;
+        // A country can have an era-specific formal name ("French Republic")
+        // while players search for the ordinary name ("France"). Use the same
+        // stock-code aliases as the canonical identity resolver, but ONLY to
+        // discover a visible candidate: never change the selected polity name.
+        const aliasCodes = query.length >= 3
+            ? new Set(Object.entries(OFFICIAL_COUNTRY_CODES_BY_NAME)
+                .filter(([alias]) => alias.startsWith(query))
+                .map(([, code]) => code))
+            : new Set();
+        return uniqueCountries.filter((country) => (
+            country.name.toLowerCase().includes(query)
+            || String(country.code || "").toLowerCase().includes(query)
+            || aliasCodes.has(resolveStockCountryCode(country.code || country.name))
+        ));
+    }, [uniqueCountries, search]);
     const filteredFlagUrls = useCountryFlagUrls(filtered);
     const selectedFlagUrls = useCountryFlagUrls(selected);
-    const isSelectedName = (name) => selected.some(s => s.name === name);
-    // single: a spy goes to ONE country, so picking another replaces the pick
-    // rather than adding to it, and picking the same one again clears it.
-    const toggle = ({ name, code }) => setSelected(prev => prev.some(s => s.name === name)
-        ? prev.filter(s => s.name !== name)
-        : single ? [{ name, code }] : [...prev, { name, code }]);
+    const isSelectedName = (name) => selected.some((entry) => entry.name === name);
+    const toggle = ({ name, code }) => setSelected((previous) => previous.some((entry) => entry.name === name)
+        ? previous.filter((entry) => entry.name !== name)
+        : single ? [{ name, code }] : [...previous, { name, code }]);
 
     return (
-        <div style={{ position: "absolute", inset: 0, backgroundColor: "rgba(24,24,27,0.98)", borderRadius: "16px", display: "flex", flexDirection: "column", zIndex: 10 }}>
-        <div style={{ padding: "1.1rem 1.25rem 0.6rem", flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
-        <div>
-        <div style={{ fontWeight: 700, fontSize: "1.05rem", color: "white" }}>{title}</div>
-        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>{subtitle}</div>
-        </div>
-        <button className="oh-tap" aria-label="Close" onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.5)", fontSize: "1.1rem", padding: "0.1rem 0.3rem", borderRadius: "6px", lineHeight: 1 }}
-        onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
-        onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
-        </div>
-        <div style={{ marginTop: "0.85rem", padding: "0.65rem 0.9rem", borderRadius: "10px", backgroundColor: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
-        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "rgba(255,255,255,0.8)" }}>{selectedLabel}{single ? "" : ` (${selected.length})`}:</div>
-        <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", marginTop: "0.2rem", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem" }}>
-        {selected.length === 0 ? emptyLabel : selected.map((c, i) => (
-            <span key={c.name} style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem" }}>
-            <FlagImg url={selectedFlagUrls[c.name]} alt={c.name} size="0.9em" />{c.name}{i < selected.length - 1 ? "," : ""}
-            </span>
-        ))}
-        </div>
-        </div>
-        <div style={{ position: "relative", display: "flex", alignItems: "center", marginTop: "0.75rem" }}>
-        <span style={{ position: "absolute", left: "0.75rem", color: "rgba(255,255,255,0.35)", display: "flex", pointerEvents: "none" }}><SearchIcon /></span>
-        <input type="text" placeholder="Search countries..." value={search} onChange={e => setSearch(e.target.value)}
-        style={{ width: "100%", padding: "0.55rem 0.85rem 0.55rem 2.2rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.05)", color: "white", fontSize: "0.82rem", outline: "none", boxSizing: "border-box", fontFamily: "sans-serif" }}
-        onFocus={e => e.target.style.borderColor = "rgba(255,255,255,0.25)"}
-        onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.12)"} />
-        </div>
-        </div>
-        <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.5rem 1rem", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gridAutoRows: "5.5rem", gap: "0.5rem", alignContent: "start" }}>
-        {loading && <p style={{ gridColumn: "1/-1", color: "rgba(255,255,255,0.35)", fontSize: "0.82rem", fontStyle: "italic", textAlign: "center" }}>Loading countries…</p>}
-        {filtered.map(c => (
-            <CountryTile key={c.name} country={c.name} code={c.code} flagUrl={filteredFlagUrls[c.name] ?? null} isSelected={isSelectedName(c.name)} onToggle={() => toggle(c)} />
-        ))}
-        </div>
-        <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: "0.5rem", flexShrink: 0 }}>
-        <button className="oh-tap-row" onClick={onCancel} style={{ flex: 1, padding: "0.65rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.8)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
-        onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
-        onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.06)"}>Cancel</button>
-        <button className="oh-tap-row" onClick={() => selected.length > 0 && onStart(selected)} disabled={selected.length === 0}
-        style={{ flex: 2, padding: "0.65rem", borderRadius: "10px", border: "none", background: selected.length > 0 ? "rgba(255,255,255,0.28)" : "rgba(59,130,246,0.3)", color: "white", fontSize: "0.85rem", fontWeight: 600, cursor: selected.length > 0 ? "pointer" : "not-allowed", fontFamily: "sans-serif" }}
-        onMouseEnter={e => { if (selected.length > 0) e.currentTarget.style.background = "#2563eb"; }}
-        onMouseLeave={e => { if (selected.length > 0) e.currentTarget.style.background = "#3b82f6"; }}>
-        {confirmLabel(selected.length)}
-        </button>
-        </div>
+        <div className="oh-diplomacy-picker" role="dialog" aria-modal="true" aria-label={title} data-diplomacy-country-picker="directory">
+            <header className="oh-diplomacy-picker-heading">
+                <div className="oh-diplomacy-picker-heading-copy">
+                    <div className="oh-diplomacy-picker-kicker">{single ? "Target directory" : "Diplomatic directory"}</div>
+                    <h2 className="oh-diplomacy-picker-title">{title}</h2>
+                    <p className="oh-diplomacy-picker-subtitle">{subtitle}</p>
+                </div>
+                <button type="button" className="oh-diplomacy-picker-close oh-tap" aria-label="Close" onClick={onCancel}>✕</button>
+            </header>
+            <div className="oh-diplomacy-picker-controls">
+                <div className="oh-diplomacy-picker-search">
+                    <span className="oh-diplomacy-picker-search-icon" aria-hidden="true"><SearchIcon /></span>
+                    <input
+                        autoFocus
+                        type="search"
+                        placeholder="Search countries..."
+                        aria-label="Search countries"
+                        value={search}
+                        onChange={(event) => setSearch(event.target.value)}
+                    />
+                </div>
+                <div className="oh-diplomacy-picker-selection">
+                    <div className="oh-diplomacy-picker-section-top">
+                        <span>{selectedLabel}</span>
+                        <span className="oh-diplomacy-picker-selection-count">{selected.length}</span>
+                    </div>
+                    <div className="oh-diplomacy-picker-chips">
+                        {selected.length === 0
+                            ? <span className="oh-diplomacy-picker-empty-selection">{emptyLabel}</span>
+                            : selected.map((country) => (
+                                <button type="button" key={country.name} className="oh-diplomacy-picker-chip" onClick={() => toggle(country)} aria-label={"Remove " + country.name} title={"Remove " + country.name}>
+                                    <FlagImg url={selectedFlagUrls[country.name]} alt={country.name} size="0.9em" />
+                                    <span>{country.name}</span><span aria-hidden="true">×</span>
+                                </button>
+                            ))}
+                    </div>
+                </div>
+            </div>
+            <div className="oh-diplomacy-picker-results-heading">
+                <span>Available countries</span>
+                <span className="oh-diplomacy-picker-results-count">{loading ? "Loading..." : filtered.length + " of " + uniqueCountries.length}</span>
+            </div>
+            <div className="oh-diplomacy-picker-results" role="group" aria-label="Available countries">
+                {loading ? (
+                    <p className="oh-diplomacy-picker-empty">Loading countries…</p>
+                ) : filtered.length === 0 ? (
+                    <div className="oh-diplomacy-picker-empty">No matching countries.</div>
+                ) : (
+                    <div className="oh-diplomacy-picker-grid">
+                        {filtered.map((country) => (
+                            <CountryTile
+                                key={country.name}
+                                country={country.name}
+                                flagUrl={filteredFlagUrls[country.name] ?? null}
+                                isSelected={isSelectedName(country.name)}
+                                onToggle={() => toggle(country)}
+                            />
+                        ))}
+                    </div>
+                )}
+            </div>
+            <footer className="oh-diplomacy-picker-footer">
+                <button type="button" className="oh-diplomacy-picker-cancel" onClick={onCancel}>Cancel</button>
+                <button type="button" className="oh-diplomacy-picker-confirm" onClick={() => selected.length > 0 && onStart(selected)} disabled={selected.length === 0}>
+                    {confirmLabel(selected.length)}
+                    {selected.length > 0 && <span aria-hidden="true">→</span>}
+                </button>
+            </footer>
         </div>
     );
 };
@@ -4562,7 +4566,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                             {searchedChats.length === 0 && <div className="oh-diplomacy-sidebar-subtitle">No matching correspondence.</div>}
                         </div>
                         <div className="oh-diplomacy-sidebar-footer">
-                            <button className="oh-diplomacy-new-chat" onClick={() => setShowSelector(true)}>+ New diplomatic channel</button>
+                            <button type="button" className="oh-diplomacy-new-chat" onClick={() => setShowSelector(true)}>+ New diplomatic channel</button>
                         </div>
                     </aside>
                     <section className="oh-diplomacy-active-thread" aria-label="Active diplomatic conversation">
@@ -4687,10 +4691,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                     <ChatListItem key={chat.id} chat={chat} playerCountry={playerCountry} puppetMarkers={puppetMarkers} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} onToggleRead={() => setChatReadState(chat, unreadIds.has(String(chat.id)))} />
                 ))}
                 </div>
-                <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-                <button className="oh-tap-row" onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))", background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.07))", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
-                onMouseEnter={e => e.currentTarget.style.background = "var(--oh-ui-hover, rgba(255,255,255,0.12))"}
-                onMouseLeave={e => e.currentTarget.style.background = "var(--oh-ui-overlay-card, rgba(255,255,255,0.07))"}>Start New Chat</button>
+                <div className="oh-diplomacy-sidebar-footer">
+                    <button type="button" className="oh-diplomacy-new-chat" onClick={() => setShowSelector(true)}>+ New diplomatic channel</button>
                 </div>
                 </>
                 )}
