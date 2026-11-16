@@ -437,9 +437,13 @@ const Main = ({
     && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen && !showGameLoading
     && sharedRole !== "guest";
   // The game master's tools are not offered in a shared game (see onOpenCheats
-  // below): a panel already open when one begins closes.
+  // below): a panel already open when one begins closes, and so does its Force
+  // Manager (the Forces panel, which only the Cheats panel opens: it edits and
+  // places any unit by hand).
   useEffect(() => {
-    if (sharedRole) setIsCheatsOpen(false);
+    if (!sharedRole) return;
+    setIsCheatsOpen(false);
+    setIsForcesOpen(false);
   }, [sharedRole]);
 
   // Asked again while the warning is up. WebGL is refused for a moment while
