@@ -124,7 +124,7 @@ const Chart = ({ scene, still }) => {
               style={kind === "ally" ? { "--oh-upd-length": 400, strokeDashoffset: still ? 0 : undefined, ...motion(still, "ohUpdDraw", 1400, 700 + at * 220) } : motion(still, "ohUpdFade", 900, 700 + at * 220)}
             />
           ))}
-          <g style={{ transform: `translate(${MIDDLE[shown.from][0]}px, ${MIDDLE[shown.from][1]}px)` }}>
+          <g transform={`translate(${MIDDLE[shown.from][0]} ${MIDDLE[shown.from][1]})`}>
             <circle fill={ATLAS_IVORY} r="6" stroke={ATLAS_INK} strokeWidth="2" />
             <circle fill="none" r="9" stroke={ATLAS_IVORY} strokeWidth="1.6" style={forever(still, "ohUpdRing", 2200, 400, "cubic-bezier(0.2, 0.7, 0.2, 1)")} />
           </g>
@@ -146,17 +146,19 @@ const Chart = ({ scene, still }) => {
           style={{ "--oh-upd-length": 1600, ...motion(still, "ohUpdDraw", 2600, 600, "cubic-bezier(0.45, 0, 0.3, 1)") }}
         />
       )}
-      {/* The legend card, counting what the view shows. */}
-      <g style={{ transform: "translate(18px, 150px)", ...motion(still, "ohUpdRise", 700, 900) }}>
+      {/* The legend card, counting what the view shows (placed by the attribute: the rise animates the style's transform). */}
+      <g transform="translate(18 128)">
+      <g style={motion(still, "ohUpdFade", 700, 900)}>
         <rect fill={ATLAS_INK} height={shown.legend.length * 15 + 12} opacity="0.92" rx="5" stroke={ATLAS_BRASS} strokeOpacity="0.6" width="58" y={-shown.legend.length * 15 + 66} />
         {shown.legend.map(([color, count, hatched], at) => (
-          <g key={`${color}${at}`} style={{ transform: `translate(8px, ${72 - (shown.legend.length - at) * 15}px)` }}>
+          <g key={`${color}${at}`} transform={`translate(8 ${72 - (shown.legend.length - at) * 15})`}>
             <rect fill={color} height="10" rx="2" width="10" />
             {hatched && <rect fill={`url(#oh-atlas-hatch-${scene})`} height="10" rx="2" width="10" />}
             <text fill={ATLAS_IVORY_SOFT} fontFamily={ATLAS_FACE} fontSize="9" x="18" y="9">{count}</text>
             <rect fill={ATLAS_IVORY_SOFT} height="2" opacity="0.5" width="16" x="28" y="5" />
           </g>
         ))}
+      </g>
       </g>
     </svg>
   );
