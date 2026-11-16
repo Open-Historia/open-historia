@@ -641,6 +641,8 @@ export const normalizePeaceTreaties = (value) => {
       from: clean(raw.from),
       to: clean(raw.to),
       sides: [0, 1].map((side) => list(raw.sides?.[side]).map((name) => clean(name)).filter(Boolean).slice(0, MAX_WAR_SIDE_MEMBERS)),
+      // A separate peace (warAndPeace.js leavingByPeace): who it took out of a war that goes on.
+      ...(list(raw.left).some((name) => clean(name)) ? { left: list(raw.left).map((name) => clean(name)).filter(Boolean).slice(0, MAX_WAR_SIDE_MEMBERS) } : {}),
       terms: normalizeTerms(raw.terms),
       by: TREATY_WAYS.includes(raw.by) ? raw.by : "offer",
     });

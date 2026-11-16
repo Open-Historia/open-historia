@@ -18,6 +18,7 @@ import { normalizeWorldState } from "../../runtime/gameState.js";
 import { TERRITORY_AS_HELD, TERRITORY_RESTORED, readTermsLine, readTreatyLines } from "../../runtime/peaceTerms.js";
 import { WEARINESS_A_YEAR, wearinessOf } from "../../runtime/warWeariness.js";
 import { PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
+import { buildPeaceBlock } from "./peacePrompt.js";
 import { playerFronts } from "../GameUI/warRoomData.js";
 import {
   acceptPeaceOffer,
@@ -118,6 +119,50 @@ test("an offer of peace is taken or turned down by the country it was made to", 
   assert.equal(act("dance", "Aland").error, "unknown");
   assert.equal(act("accept", "").error, "nobody");
   assert.equal(act("accept", "Cisland").world, state);
+});
+
+// "each country making its own peace while the war goes on for the rest" (the owner, 2026-11-15, on peace in
+// shared games). Germany and Italy, both played, fought France; France offered Germany peace and Germany took it:
+// Italy's war was over too, and the French land Italy had taken went back. Italy was never asked.
+test("a person's peace is their own: beside another person, they leave the war, which goes on for the rest", () => {
+  const offers = [
+    { id: "peace:war-1:borduria:8", warId: "war-1", from: "Borduria", to: "Aland", terms: { territory: TERRITORY_RESTORED }, date: "1915-01-01", round: 8, status: "open" },
+    { id: "peace:war-1:borduria:8b", warId: "war-1", from: "Borduria", to: "Cisland", terms: { territory: TERRITORY_AS_HELD }, date: "1915-01-01", round: 8, status: "open" },
+  ];
+  const state = world({
+    wars: [{ ...WAR, sideA: ["Aland", "Cisland"] }],
+    // Aland holds b8 and b9 of Borduria's, Cisland b10, and Borduria a10 of Aland's.
+    regionOwnershipOverrides: { ...regions("a", "Aland", 9), a10: "Borduria", ...regions("b", "Borduria", 7), b8: "Aland", b9: "Aland", b10: "Cisland", ...regions("c", "Cisland", 4) },
+    regionSovereigntyOverrides: { a10: "Aland", b8: "Borduria", b9: "Borduria", b10: "Borduria" },
+    peaceOffers: offers,
+  });
+  const players = ["Aland", "Cisland"];
+  const taken = acceptPeaceOffer(state, offers[0].id, { date: "1915-01-10", round: 8, players });
+  // Aland is out; the war goes on between Cisland and Borduria.
+  assert.deepEqual([war(taken).status, war(taken).sideA, war(taken).sideB], ["active", ["Cisland"], ["Borduria"]]);
+  // The ground between Aland and Borduria is settled by the terms, and none of Cisland's.
+  assert.deepEqual(["b8", "b9", "a10", "b10"].map((id) => holder(taken, id)), ["Borduria", "Borduria", "Aland", "Cisland"]);
+  assert.equal(sovereign(taken, "b10"), "Borduria", "what Cisland holds of Borduria's is still theirs to fight over");
+  // It is kept as a separate peace; Cisland's own offer still waits for Cisland.
+  assert.deepEqual(taken.peaceTreaties.map((treaty) => [treaty.from, treaty.to, treaty.left]), [["Borduria", "Aland", ["Aland"]]]);
+  assert.deepEqual(taken.peaceOffers.map((offer) => offer.status), ["accepted", "open"]);
+  // The same answer through the one door, whoever's screen it came from.
+  const door = playerDiplomacy(state, { op: "accept", ref: offers[0].id, country: "Aland", players, date: "1915-01-10", round: 8 });
+  assert.deepEqual([door.error, war(door.world).sideA], ["", ["Cisland"]]);
+  // Then Cisland takes its own: nobody else plays in it now, and the war is over.
+  const both = acceptPeaceOffer(taken, offers[1].id, { date: "1915-01-20", round: 8, players });
+  assert.deepEqual([war(both).status, holder(both, "b10"), sovereign(both, "b10")], ["ended", "Cisland", "Cisland"]);
+  // With one person in the war, as in a game played alone, a peace ends the war for the AI's countries beside them.
+  const alone = acceptPeaceOffer(state, offers[0].id, { date: "1915-01-10", round: 8, players: ["Aland"] });
+  assert.deepEqual([war(alone).status, holder(alone, "b10"), alone.peaceTreaties[0].left], ["ended", "Borduria", undefined]);
+  // No peace takes a country out of a war a person who did not make it still fights it in.
+  const crossed = world({ wars: [{ ...WAR, sideA: ["Aland", "Cisland"], sideB: ["Borduria", "Dorland"] }] });
+  assert.equal(makePeace(crossed, { warId: "war-1", from: "Borduria", to: "Aland", terms: { territory: TERRITORY_RESTORED }, date: "1915-01-10", round: 8, players: ["Aland", "Cisland", "Dorland"] }), crossed);
+  // The next period's story is told it as what it is: the war goes on.
+  const told = buildPeaceBlock({ world: taken, game: { round: 8 }, players });
+  assert.match(told, /Separate peace made since the last period \(whoever left the war is already out of it in the ledger, and the war goes on for the rest/);
+  assert.match(told, /The Border War: Borduria and Aland made peace on 1915-01-10, and Aland left the war; /);
+  assert.doesNotMatch(told, /Peace made by the game or a player since the last period/);
 });
 
 test("a person puts terms of their own, and they wait, open, for the enemy's leader to answer in the chat", () => {
