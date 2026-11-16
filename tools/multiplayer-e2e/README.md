@@ -99,6 +99,10 @@ The real desktop app's hidden engine window is not part of this run.
   - The host's AI debug console and diagnostics log cover the calls its engine
     made.
   - No save was turned away with an error on either screen.
+  - No screen made a change that no request carries to the host (the one
+    door: `client/seatWrites.js` `unroutedChanges`, logged by the page). Its
+    first run caught an idle pulse begun on the host's screen before it shared
+    its game, writing into the shared view.
 - **Whose AI answers for the AI's governments** (the host's choice,
   `host/settings.js` `replies`): until here the host's AI answered. Then:
   - The host changes it under Players, and the guest is told that its own AI
