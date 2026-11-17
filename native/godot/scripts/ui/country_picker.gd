@@ -28,6 +28,7 @@ var _options: Array = []
 var _groups: Array = []
 var _difficulties: Array = []
 var _offers_groups := false
+var _currency := "USD"
 var _tab := "country"
 var _query := ""
 var _pick: Dictionary = {}
@@ -144,6 +145,7 @@ func open(data: Dictionary) -> void:
 	_groups = data.get("groups", [])
 	_difficulties = data.get("difficulties", [])
 	_offers_groups = bool(data.get("offersGroups", false))
+	_currency = str(data.get("economicCurrency", "USD")) if not str(data.get("economicCurrency", "")).is_empty() else "USD"
 	_play_game_id = str(data.get("playGameId", ""))
 	var map: Dictionary = data.get("map", {})
 	_region_ids = map.get("regionIds", [])
@@ -595,6 +597,8 @@ func _render_difficulty() -> void:
 	elif _pick.has("group"):
 		var group: Dictionary = _pick["group"]
 		_content.add_child(_selected_card("", _hex(str(group.get("color", "#a1a1aa"))), str(group.get("name", "")), "Selected Group"))
+	if _play_game_id.is_empty():
+		_content.add_child(_currency_field())
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 10)
@@ -643,6 +647,46 @@ func _render_difficulty() -> void:
 	_content.add_child(holder)
 
 
+func _currency_field() -> Control:
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 0)
+	var caption := UI.label("GDP display currency", 12, Color(1, 1, 1, 0.72), 700)
+	column.add_child(_spaced(caption, 6))
+	var select := OptionButton.new()
+	select.focus_mode = Control.FOCUS_NONE
+	select.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	select.custom_minimum_size.y = 46
+	select.fit_to_longest_item = false
+	select.clip_text = true
+	select.tooltip_text = "GDP display currency"
+	var normal := UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.1), 12, 1, Vector4(14, 10, 14, 10))
+	var hover := UI.box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.18), 12, 1, Vector4(14, 10, 14, 10))
+	for state in ["normal", "focus", "disabled"]:
+		select.add_theme_stylebox_override(state, normal)
+	for state in ["hover", "pressed"]:
+		select.add_theme_stylebox_override(state, hover)
+	select.add_theme_font_size_override("font_size", 14)
+	for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		select.add_theme_color_override(name, Color("#f8fafc"))
+	for entry in _data.get("economicCurrencies", []):
+		if not (entry is Dictionary):
+			continue
+		var code := str((entry as Dictionary).get("code", ""))
+		select.add_item("%s (%s, %s)" % [str((entry as Dictionary).get("name", "")), code, str((entry as Dictionary).get("symbol", ""))])
+		select.set_item_metadata(select.item_count - 1, code)
+		if code == _currency:
+			select.select(select.item_count - 1)
+	select.item_selected.connect(func(index: int) -> void: _currency = str(select.get_item_metadata(index)))
+	column.add_child(select)
+	var hint := UI.wrapped("Display only · fixed 2026 reference rates. The simulation keeps USD accounting; you can change this later.", 11, Color(1, 1, 1, 0.45))
+	var hint_box := MarginContainer.new()
+	hint_box.add_theme_constant_override("margin_top", 6)
+	hint_box.add_child(hint)
+	column.add_child(hint_box)
+	return _spaced(column, 14)
+
+
 func _selected_card(flag_path: String, swatch: Color, name: String, caption: String) -> Control:
 	var card := EventCards.frame(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.1), 10, Vector4(14, 10, 14, 10))
 	var row := HBoxContainer.new()
@@ -680,6 +724,8 @@ func _selected_card(flag_path: String, swatch: Color, name: String, caption: Str
 
 func _start(difficulty: String) -> void:
 	var request := {"difficulty": difficulty}
+	if _play_game_id.is_empty():
+		request["economicDisplayCurrency"] = _currency
 	if _pick.has("faction"):
 		request["faction"] = _pick["faction"]
 	elif _pick.has("group"):

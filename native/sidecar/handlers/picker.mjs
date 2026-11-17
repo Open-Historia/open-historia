@@ -164,6 +164,8 @@ export const register = (ctx) => {
         bypassWarning: !playGameId && engine.edPrompts.promptPackBypassesLimit(details?.data?.prompts),
         groups: Object.values(groups).map((group) => ({ name: clean(group.name), color: hexToRgb(group.color), hex: clean(group.color), description: clean(group.description), regionCount: list(areas[group.name]).length })),
         difficulties: engine.DIFFICULTY_LEVELS.map((level) => ({ id: level.id, label: level.label, emoji: level.emoji, blurb: level.blurb })),
+        economicCurrency: engine.econCurrency.normalizeEconomicDisplayCurrency(details?.data?.game?.economicDisplayCurrency),
+        economicCurrencies: engine.econCurrency.ECONOMIC_DISPLAY_CURRENCIES.map(({ code, name, symbol }) => ({ code, name, symbol })),
       };
   };
 
@@ -207,11 +209,12 @@ export const register = (ctx) => {
       return { value: dataUrl, file: flagFileOf(ctx, dataUrl) };
     },
     "picker.flags.file": async ({ value = "" } = {}) => ({ file: flagFileOf(ctx, value) }),
-    "picker.start": async ({ scenarioId, country = "", difficulty = "", faction = null, group = null }) => {
+    "picker.start": async ({ scenarioId, country = "", difficulty = "", faction = null, group = null, economicDisplayCurrency = "" }) => {
       const id = clean(scenarioId);
       const { scenario } = await scenarioOf(id);
       const name = clean(scenario?.name);
-      const patchOf = (who) => ({ ...(who ? { country: who } : null), ...(clean(difficulty) ? { difficulty: clean(difficulty) } : null) });
+      const currency = clean(economicDisplayCurrency) ? { economicDisplayCurrency: engine.econCurrency.normalizeEconomicDisplayCurrency(economicDisplayCurrency) } : null;
+      const patchOf = (who) => ({ ...(who ? { country: who } : null), ...(clean(difficulty) ? { difficulty: clean(difficulty) } : null), ...currency });
       if (faction || group) {
         const lead = faction ?? group;
         const leadName = clean(lead?.name);
