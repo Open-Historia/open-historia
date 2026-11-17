@@ -6,7 +6,8 @@ This reference describes the **current Beta engine** following the BETA-3 integr
 
 - `world.projects` contains canonical project records. IDs are the project identity; names are presentation, not unique keys.
 - Project operations prefer explicit `projectId`, validate the actual owner and refuse ambiguous name-only matching. Player controls cannot modify another country's project by reusing a title or ID.
-- Normal project additions are refused once the 120-entry board is full. **Debt:** normalization of legacy saves already over that cap can still evict old records; no archive/migration policy has been approved.
+- Normal project additions are refused once the 120-entry board is full. **Legacy over-cap saves fail closed** with `ProjectBoardOverflowError` instead of discarding records. An explicit save-owner recovery tool in the Games library can now create a **separate recovered copy**, with every selected project preserved in a reversible archive. The source game is never overwritten.
+- Legacy entries without IDs now acquire deterministic, Unicode-safe migration identities based on owner namespace, title, recorded creation/start dates, summary and occurrence ordinal for otherwise indistinguishable duplicates. Existing IDs are preserved, no wall-clock creation/update timestamps are fabricated, and seat-board normalization uses the guest country for blank owners. An imported board with colliding explicit IDs is rejected with `ProjectBoardIdCollisionError` instead of dropping a record.
 - Native project clock outcomes carry `projectId`, owner and name. Completion effects match exact ID and owner; legacy name-only outcomes require one unique match within that owner. The public project-outcome filter likewise checks ID, owner, title consistency, and public secrecy.
 
 ## Multiplayer seat-board lending
@@ -15,7 +16,19 @@ This reference describes the **current Beta engine** following the BETA-3 integr
 - Lending now uses **stable project IDs, not globally unique names**. A host project and a guest project may share the title "Riga port"; both can be simulated, and two distinct same-name projects within a seat remain distinct.
 - The transient `world.projectSeatLoans` maps loaned project IDs to guest countries. It is **host-only** under multiplayer view projection, survives canonical normalization during a round, and is cleared when loans come home or an interrupted round is settled. A guest ID collision cannot evict an unrelated host project from the active board.
 - Project IDs are still assumed globally unique across canonical records. The engine refuses to lend a duplicate ID; it does not mint an alias or overwrite the host's record to compensate.
-- **Outstanding:** project boards that were already over the 120-entry cap, and the return of new guest projects onto a full guest board, still need a separate explicit retention/admission contract. Do not silently relax the cap or move a genuinely active entry into a closed archive.
+- **Outstanding:** when new guest projects are returned onto a guest board that has become full during a time skip, admission still needs its own native rule. The library recovery tool handles preexisting over-cap host and guest boards out of band; it cannot authorize a guest's live over-cap writes or fix a partially returned in-flight loan.
+
+## Recovery of oversized legacy campaigns
+
+From a game card's **More → Recover Projects…** menu, the save owner can inspect the raw, exported campaign (including one that fails `normalizeWorldState` because its board exceeds 120). This is a **library-level save-maintenance operation**, never the player's in-world foreign-projects view.
+
+- The tool enumerates every main and multiplayer seat Projects board. It requires an **explicit checkbox selection** of enough records to bring *every* board to 120 or fewer. No automatic eviction, forced archiving or default choice. A highlighted warning and confirmation explain that manually shelved **active** projects will stop advancing until restored.
+- Only after validation does it create a **new imported campaign** with the surviving projects in `world.projects`/`world.seatBoards`, and the complete original selected project records in bounded `world.projectRecoveryArchive` (maximum 512 records). Every archive entry stores its canonical ID, original board, source project object, prior status and in-game shelving date. Unknown historical project fields remain intact. The original save and its game identity are not modified.
+- The new campaign retains all other world and game data and its scenario reference. Restore-point history is copied only when the source world is already on the current country-owner schema; otherwise native owner migration would discard incompatible rollback files on first activation. The interface warns before recovery. Old restore points remain in the **original** game and are never rewritten by recovery. Even compatible copied restore points may contain oversized boards and require another recovery if applied. The tool never silently rewrites history.
+- From the same game's recovery menu, **Restore shelved** can create another new copy returning explicitly selected records to their original board. A full 120-row board can **swap** one explicitly selected live record into the archive while restoring one archived record in the same transaction, without an intermediate clone. It does not backfill simulated progress for skipped time.
+- Recovery inspects malformed records and ID collisions without silently skipping them, refuses a pending multiplayer project-loan manifest, and does not weaken `normalizeProjects` or its 120-entry cap. The archive is **host-only** in multiplayer projections: it may contain covert work and must not become a guest's intelligence feed.
+- The archive is held in `world.json` for save-portable state, with a separate 512-record limit. It adds JSON weight to affected recovered games; it is not a second ticking board. A future off-world storage optimization needs a separately reviewed game-bundle and browser/desktop migration.
+- Validation includes runtime recovery tests, actual desktop and browser export/import round trips, a native time-advance / disk-save / reload / restore smoke test, and an isolated headless Chrome library→recovery→create-copy UI interaction. The modal was visually inspected at desktop width and 375 px mobile width without horizontal overflow. **A real model/provider campaign playtest, human-operated desktop acceptance, real host/guest session and archival bandwidth measurements remain pending.**
 
 ## Scenario funding modes (not fiscal ledgers)
 
@@ -51,8 +64,8 @@ For the future financial integration:
 
 ## Remaining integration debt
 
-- `src/runtime/gameState.js` writes the whole `world.json` through `writeJson` with no revision-aware compare-and-swap. Projects' panel read/edit/write can race the Stats worker and other world writers, despite the per-turn batch-publication protections. **This requires a shared canonical world mutation contract across all writers**, not a Projects-only queue or retry.
-- Existing legacy boards above 120 projects need explicit non-destructive archival/admission semantics.
+- The Projects player panel now uses existing `mutateWorldState` for its native, authorized write operation: the read and write occur inside the shared canonical page queue, which also coordinates the page's Stats-worker handoff and guards against campaign switches. Other direct world writers and cross-process clients still lack durable revision-aware compare-and-swap. **This remains a shared canonical persistence boundary**, not an excuse to add a Projects-only queue or declare cross-process atomicity achieved.
+- A library-level recovery workflow can now copy oversized legacy games into a valid board state with all manually shelved records preserved and restorable. An over-cap **original** remains blocked until the save owner performs recovery; no implicit migration occurs. Duplicate explicit-ID or malformed-entry repairs beyond the safe inspection contract still require separately authorized, source-specific treatment.
 - Full native intelligence/disclosure controls remain incomplete across event generation and diplomacy.
 - GDP-proxy funding and `project.spent` are not reconciled with treasury/fiscal accounting. The interim mode and UI **do not claim otherwise**.
 - Release acceptance must include real playtest scenarios: missing GDP, author-selected nonmonetary work, legacy saves, identical project titles, ownership transfer, covert projects, legal transfer refusal, scenario creation/reload, full tests and production build.
@@ -62,6 +75,9 @@ For the future financial integration:
 `src/runtime/projectEngine.js`: funding basis, deterministic work, plan limits and preview.
 `src/runtime/gameState.js`: canonical world normalization, authorization, project outcome effects.
 `src/runtime/projectTerritorySettlement.js`: fail-closed completion-to-map adapter.
+`src/runtime/projectRecovery.js`: recovery inspection and clone-bundle assembly; preservation of original records and board-cap checks.
+`src/Game/GameUI/ProjectRecoveryDialog.jsx`: save-owner explicit shelving/restoration interface.
+`src/multiplayer/host/projection.js`: host-only projection of recovery archive.
 `src/Game/AI/gameplay.js`: time-skip turn orchestrator and existing canonical event writer.
 `src/Game/GameUI/projects.jsx`: player controls, visibility, funding presentation.
 `src/Game/GameUI/libraryBar.jsx`: scenario-authoring funding basis.

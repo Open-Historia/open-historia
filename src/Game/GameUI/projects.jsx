@@ -28,9 +28,9 @@ import {
   PROJECT_BOARD_LIMIT,
   applyProjectOpsToWorld,
   isPolityLandless,
+  mutateWorldState,
   readEventsState,
   readWorldState,
-  writeWorldState,
 } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { refreshRuntimeState } from "../../runtime/runtimeStore.js";
@@ -1387,17 +1387,21 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   // The board's player-authored writes, through the door that lets a government
   // touch its own programmes only (actor "player").
   const writeOps = useCallback(async (ops) => {
-    const world = await readWorldState({ force: true });
-    const { refusedProjectIds, world: nextWorld } = applyProjectOpsToWorld({
-      actor: "player",
-      date: gameDate,
-      ops,
-      playerCountry,
-      round,
-      world,
+    // Shared canonical queue: read the latest world *inside* the mutation.
+    // This serializes Projects edits with other page writers and the Stats
+    // worker handoff, and rejects a queued edit after a campaign switch.
+    await mutateWorldState((world) => {
+      const { refusedProjectIds, world: nextWorld } = applyProjectOpsToWorld({
+        actor: "player",
+        date: gameDate,
+        ops,
+        playerCountry,
+        round,
+        world,
+      });
+      if (refusedProjectIds.length > 0) throw new Error("Project change refused: not authorized or the board is full.");
+      return nextWorld;
     });
-    if (refusedProjectIds.length > 0) throw new Error("Project change refused: not authorized or the board is full.");
-    await writeWorldState(nextWorld);
   }, [gameDate, playerCountry, round]);
 
   const setFunding = useCallback(async (project, funding) => {

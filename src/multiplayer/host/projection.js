@@ -109,7 +109,9 @@ export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   "actionSuggestions", "chargedRefusals", "chatKnowledgeCursors", "consolidatedHistory",
   "gmAudit", "gmChanges", "historyDocument", "idlePulseTick", "lastJumpSummary", "naviesRaised", "notes",
   // Active per-seat Projects loans are host orchestration state, never a viewer record.
-  "pendingEventOutreach", "politicalSimulation", "seatBoards", "projectSeatLoans", "simulationReminders",
+  // Projects deliberately shelved by the game owner are save-management
+  // records, not public game intelligence; the archive may contain covert work.
+  "pendingEventOutreach", "politicalSimulation", "seatBoards", "projectSeatLoans", "projectRecoveryArchive", "simulationReminders",
   "storylines",
   // What the last time skip's prompt read (runtime/promptSnapshot.js).
   "promptSnapshot", "promptReference",

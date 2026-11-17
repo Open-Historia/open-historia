@@ -67,6 +67,7 @@ import ScenarioLanguagesPanel from "./ScenarioLanguagesPanel.jsx";
 import { normalizeScenarioLanguages } from "../../../server/scenarioLanguages.js";
 const PoliticalWorldAuthoringPanel = lazy(() => import("./PoliticalWorldAuthoringPanel.jsx"));
 const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
+const ProjectRecoveryDialog = lazy(() => import("./ProjectRecoveryDialog.jsx"));
 import { isFeatureEnabled, normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
@@ -1353,7 +1354,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
 // face of the card. Three verbs compete for width with Play, and Play is the one a
 // player came to press; the other three are occasional, and none of them is
 // destructive, which is why Archive stays out here on its own.
-const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete = null, onEdit, onExport }) => {
+const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete = null, onEdit, onExport, onRecover }) => {
   const cardImageUrl = game.coverImageUrl || DEFAULT_SCENARIO_COVER;
   const touch = useTouchPrimary();
   const isMobile = useIsMobile();
@@ -1407,6 +1408,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
   const cardMenuItems = [
     ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
     ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
+    ["Recover Projects…", () => { setCardMenuOpen(false); onRecover(game); }, false],
     [game.archived ? "Unarchive" : "Archive", () => { setCardMenuOpen(false); onArchive(game); }, false],
     // Offered everywhere, the Android app included: runtime/saveFile.js saves
     // the zip into Downloads/Open Historia there (runtime/native/fileSave.js).
@@ -2834,6 +2836,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [editorSection, setEditorSection] = useState("overview");
   const [promptSectionKey, setPromptSectionKey] = useState("leader");
   const [isBusy, setIsBusy] = useState(false);
+  // Save-owner maintenance, accessible even when an over-cap old save cannot
+  // be normalized into a live world. Never a gameplay/foreign-intel view.
+  const [projectRecoveryGame, setProjectRecoveryGame] = useState(null);
   const assetFileInputsRef = useRef({});
   const importScenarioInputRef = useRef(null);
   const importGameInputRef = useRef(null);
@@ -5557,7 +5562,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   {continueGames.length > 0 && (
                     <MenuRow description="Pick up exactly where you left off." icon="▶" title="Continue Playing">
                       {continueGames.map((game) => (
-                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} />
+                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} onRecover={setProjectRecoveryGame} />
                       ))}
                     </MenuRow>
                   )}
@@ -5588,7 +5593,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                         child either way, so an empty view still says so. */}
                     {loaded
                       ? browsedGames.map((game) => (
-                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} />
+                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} onRecover={setProjectRecoveryGame} />
                       ))
                       : <MenuCardSkeletons count={isMobile ? 3 : 8} kind="game" width={SHELF_CARD_WIDTH} />}
                   </LibraryCollection>
@@ -5671,6 +5676,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       {menuOpen && historyOpen && (
         <Suspense fallback={null}>
           <UpdateHistory onClose={() => setHistoryOpen(false)} />
+        </Suspense>
+      )}
+
+      {menuOpen && projectRecoveryGame && (
+        <Suspense fallback={null}>
+          <ProjectRecoveryDialog
+            game={projectRecoveryGame}
+            onClose={() => setProjectRecoveryGame(null)}
+          />
         </Suspense>
       )}
 

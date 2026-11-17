@@ -1589,3 +1589,38 @@ test("a bundle carries the language packs out and back in, a clone keeps them, a
   ok(await scenarios("PUT", `${copy}/import`, version("Hub Map v3", null, 3)));
   assert.equal("languages" in ok(await scenarios("GET", copy)).scenario, false, "a version without packs keeps none of the old");
 });
+
+test("web/Android game recovery clones a 121-active Projects save without losing the original or its restore points", async () => {
+  const { inspectProjectRecovery, prepareProjectRecoveryBundle } = await import("../projectRecovery.js");
+  await reset();
+  const source = await newGame("Oversized web campaign");
+  const rawWorld = {
+    ownerSchema: 4,
+    projects: Array.from({ length: 121 }, (_, index) => ({
+      id: `web-${index}`, name: `Work ${index}`, ownerCode: "Testland",
+      status: "active", progress: index, secrecy: index === 23 ? "covert" : "public",
+      historicalEvidence: { original: index },
+    })),
+    notes: "original stays untouched",
+  };
+  ok(await runtime("PUT", "world", rawWorld));
+  ok(await runtime("PUT", "snapshots", [SNAPSHOT]));
+  const before = ok(await games("GET", `${source}/export`));
+  const selection = inspectProjectRecovery(before.data.world).boards[0].rows[23].token;
+  const recoveredBundle = prepareProjectRecoveryBundle(before, { shelve: [selection] });
+  const recoveredGameId = ok(await games("POST", "import", recoveredBundle)).game.id;
+  const oldSnapshots = ok(await games("GET", `${source}/snapshots`));
+  ok(await games("PUT", `${recoveredGameId}/snapshots`, oldSnapshots));
+  assert.notEqual(recoveredGameId, source);
+  assert.equal((await library()).activeGameId, source);
+  const original = ok(await games("GET", `${source}/export`));
+  const recovered = ok(await games("GET", `${recoveredGameId}/export`));
+  assert.equal(original.data.world.projects.length, 121);
+  assert.equal(original.data.world.projectRecoveryArchive, undefined);
+  assert.equal(recovered.data.world.projects.length, 120);
+  assert.equal(recovered.data.world.projectRecoveryArchive.length, 1);
+  assert.equal(recovered.data.world.projectRecoveryArchive[0].board, "world");
+  assert.equal(recovered.data.world.projectRecoveryArchive[0].project.secrecy, "covert");
+  assert.deepEqual(recovered.data.world.projectRecoveryArchive[0].project.historicalEvidence, { original: 23 });
+  assert.deepEqual(ok(await games("GET", `${recoveredGameId}/snapshots`)), [SNAPSHOT]);
+});
