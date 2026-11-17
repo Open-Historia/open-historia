@@ -57,10 +57,11 @@ const NEW_UPDATES = [
     // "the diplomatic map is shit, redesign it and make it have full integration with the political world", then "only on
     // alpha for now and ... be a major update" (the owner, 2026-11-15): four views (runtime/diplomaticViews.js), a legend
     // that counts what is shown (GameUI/DiplomaticLegend.jsx), lines from the focus country's capital, kept for each game.
+    // On beta too since "commit to beta" (the owner, 2026-11-16).
     id: "2026-11-diplomatic-atlas",
     kind: "major",
-    date: "2026-11-15",
-    channel: "alpha",
+    date: "2026-11-16",
+    channel: "beta",
     banners: [
       {
         theme: "diplomaticAtlas",
@@ -143,11 +144,11 @@ const NEW_UPDATES = [
     // "lets rework projects entirely… right now they dont actually effect the world actively and dont progress normally. it seems like
     // they just sit doing nothing" (the owner, 2026-11-15): the projects engine (runtime/projectEngine.js) runs every project's clock;
     // a project costs money a month, changes the world when done, can be started from the Projects tab, and other countries run their own.
-    // Alpha only for now (the coordinator, 2026-11-15).
+    // Alpha first (the coordinator, 2026-11-15), then on beta since "commit to beta" (the owner, 2026-11-16).
     id: "2026-11-projects-that-build",
     kind: "major",
-    date: "2026-11-15",
-    channel: "alpha",
+    date: "2026-11-16",
+    channel: "beta",
     banners: [
       {
         theme: "projects",
