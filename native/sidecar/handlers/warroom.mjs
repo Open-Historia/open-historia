@@ -671,6 +671,12 @@ export const register = (ctx) => {
           id: unit.id,
           name: unit.name,
           type: unit.type,
+          unitType: controller.getUnitTypeOf(unit)?.id ?? "",
+          kindName: controller.getUnitTypeOf(unit)?.name ?? "",
+          kindIcon: controller.getUnitTypeOf(unit)?.icon ?? "",
+          ownTypes: list(controller.getUnitTypes())
+            .filter((entry) => entry.id === unit.unitType || engine.unitTypes.mayFieldUnitType(entry, unit.ownerCode))
+            .map((entry) => ({ id: entry.id, name: entry.name, icon: entry.icon, base: entry.base })),
           strength: unit.strength,
           status: unit.status,
           posture: unit.posture ?? "",

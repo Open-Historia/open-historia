@@ -38,24 +38,15 @@ const POSTURE_LABEL = {
 };
 const strengthColor = (strength) => (strength > 60 ? "#4ade80ff" : strength > 25 ? "#fbbf24ff" : "#f87171ff");
 
-const KIND_EMOJI = [
-  [/city|town|settlement|metropolis|capital/, "🏙"],
-  [/military base|army base|fort|fortress|barracks|garrison|outpost|citadel|castle/, "🏰"],
-  [/bunker|shelter/, "🛡"],
-  [/missile|silo|launch/, "🚀"],
-  [/embassy|consulate/, "🏛"],
-  [/port|harbor|harbour|naval/, "⚓"],
-  [/airbase|airfield|airport|air base/, "✈"],
-  [/nuclear|reactor|plant|power/, "⚡"],
-  [/factory|industrial|refinery|mine/, "🏭"],
-  [/radar|listening|intelligence|spy/, "📡"],
-  [/monument|memorial|shrine|temple|cathedral|mosque/, "🗿"],
-];
-const emojiForKind = (kind) => {
-  const normalized = String(kind || "").toLowerCase();
-  for (const [pattern, emoji] of KIND_EMOJI) if (pattern.test(normalized)) return emoji;
-  return "📍";
-};
+const FAMILY_EMOJI = Object.freeze({
+  settlement: "🏙",
+  military: "🏰",
+  resource: "⛏",
+  infrastructure: "🏗",
+  "industry-science": "🏭",
+  diplomatic: "🏛",
+  landmark: "📍",
+});
 const titleCase = (value) => String(value || "").split(/\s+/).map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word)).join(" ");
 const TIER_LABEL = { 1: "Town", 2: "City", 3: "Major city", 4: "Capital" };
 const MARKER_STATUS_META = {
@@ -162,7 +153,7 @@ export const register = (ctx) => {
     const raw = cleanText(value);
     if (!raw) return { resolved: "", code: "" };
     try {
-      const identity = extras.polityIdentity.resolvePolityIdentity(raw, world, { allowUnknown, requireActive: false, allowCoreMatch: true, allowStockBase: true });
+      const identity = extras.polityIdentity.resolvePolityIdentity(raw, world, { allowUnknown, requireActive: false, allowStockBase: true });
       return { resolved: cleanText(identity?.resolved), code: cleanText(identity?.code) };
     } catch {
       return { resolved: "", code: "" };
@@ -326,7 +317,7 @@ export const register = (ctx) => {
     const aliases = Array.isArray(identity?.polity?.aliases) ? identity.polity.aliases.map(cleanText).filter(Boolean) : [];
     const tags = asArray(extras.countryTags.resolveCountryTags(baseTags, world, key)).map(cleanText).filter(Boolean);
     const lists = extras.countryInfoPanel.classifyPolityRegions({ catalog: catalog ?? [], world: world ?? {}, polityKey: key, includeUncatalogued: !drawn });
-    const involves = extras.countryInfoPanel.createEventMatcher({ key, name: identity.currentName, aliases: identity?.polity?.aliases ?? [], knownNames: extras.countryInfoPanel.knownPolityNames(world) });
+    const involves = extras.countryInfoPanel.createEventMatcher({ key, name: identity.currentName, aliases: identity?.polity?.aliases ?? [], formerNames: Array.isArray(identity?.polity?.formerNames) ? identity.polity.formerNames : [] });
     const events = extras.countryInfoPanel.sortEventsNewestFirst(asArray(allEvents).filter(involves)).map((event) => {
       const description = String(event.description ?? "");
       return {
@@ -429,9 +420,9 @@ export const register = (ctx) => {
       id: unit.id,
       lng: unit.lng,
       lat: unit.lat,
-      glyph: TYPE_GLYPH[unit.type] ?? "🛡",
+      glyph: controller.getUnitTypeOf(unit)?.icon || (TYPE_GLYPH[unit.type] ?? "🛡"),
       name: cleanText(unit.name),
-      subtitle: `${TYPE_LABEL[unit.type] ?? unit.type} · ${nameOf(unit.ownerCode || "")}`,
+      subtitle: `${controller.getUnitTypeOf(unit)?.name || (TYPE_LABEL[unit.type] ?? unit.type)} · ${nameOf(unit.ownerCode || "")}`,
       covert: Boolean(unit.covert),
       note: cleanText(unit.note),
       composition: cleanText(unit.composition),
@@ -485,7 +476,7 @@ export const register = (ctx) => {
       id: cleanText(feature.id),
       source: isCity ? "city" : "marker",
       name: cleanText(feature.name),
-      glyph: isCity ? (feature.capital === "primary" ? "⭐" : "🏙") : emojiForKind(feature.kind),
+      glyph: isCity ? (feature.capital === "primary" ? "⭐" : "🏙") : FAMILY_EMOJI[engine.markerFamily.markerFamilyOf(feature)] || FAMILY_EMOJI.landmark,
       kind: `Map Feature · ${kind}`,
       status: isCity ? null : { label: status.label.toUpperCase(), color: status.color },
       rows,

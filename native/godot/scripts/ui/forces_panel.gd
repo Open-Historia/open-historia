@@ -6,6 +6,8 @@ signal world_changed
 
 const TYPE_LABEL := {"infantry": "Infantry", "armor": "Armor", "air": "Air", "naval": "Naval", "artillery": "Artillery", "garrison": "Garrison"}
 const TYPE_GLYPH := {"infantry": "🛡", "armor": "⚙", "air": "✈", "naval": "⚓", "artillery": "💥", "garrison": "🏰"}
+const OWN_TYPE := "own:"
+const UNIT_TYPES_GROUP_LABEL := "Unit types"
 const POSTURE_LABEL := {"holding": "Holding position", "massing": "Massing", "patrol": "Patrolling", "transit": "In transit", "exercise": "On exercise", "blockade": "Blockading", "withdrawing": "Withdrawing", "assaulting": "Assaulting"}
 const MODE_HINT := {"deploy": "Click the map to place your unit", "admin-place": "Click the map to move this unit", "structure-place": "Click the map where this structure really is"}
 const STATUS_LABEL := {"idle": "Idle", "moving": "Moving", "engaged": "Engaged", "defeated": "Defeated", "pending": "Pending"}
@@ -191,6 +193,37 @@ func _select(options: Array, labels: Dictionary, current: String, changed: Calla
 	return select
 
 
+static func unit_kind_label(unit: Dictionary) -> String:
+	if not str(unit.get("kindName", "")).is_empty():
+		return str(unit.get("kindName", ""))
+	var type_name := str(unit.get("type", ""))
+	return str(TYPE_LABEL.get(type_name, type_name))
+
+
+static func unit_kind_glyph(unit: Dictionary) -> String:
+	if not str(unit.get("kindIcon", "")).is_empty():
+		return str(unit.get("kindIcon", ""))
+	return str(TYPE_GLYPH.get(str(unit.get("type", "")), "🛡"))
+
+
+func _kind_select(unit: Dictionary) -> OptionButton:
+	var select := _select(types, TYPE_LABEL, str(_editor.get("type", "")), func(value: String) -> void: _editor["type"] = value)
+	var offered: Array = unit.get("ownTypes", []) if unit.get("ownTypes") is Array else []
+	if offered.is_empty():
+		return select
+	select.add_separator(UNIT_TYPES_GROUP_LABEL)
+	for entry in offered:
+		var row: Dictionary = entry
+		var icon := str(row.get("icon", ""))
+		select.add_item(("%s %s" % [icon, str(row.get("name", ""))]) if not icon.is_empty() else str(row.get("name", "")))
+		var index := select.item_count - 1
+		select.set_item_metadata(index, OWN_TYPE + str(row.get("id", "")))
+		select.set_item_auto_translate_mode(index, Node.AUTO_TRANSLATE_MODE_DISABLED)
+		if OWN_TYPE + str(row.get("id", "")) == str(_editor.get("type", "")):
+			select.select(index)
+	return select
+
+
 func _small_button(text: String, bg := Color(1, 1, 1, 0.08), weight := 400) -> Button:
 	var button := Button.new()
 	button.text = text
@@ -343,7 +376,7 @@ func _unit_row(list: VBoxContainer, unit: Dictionary, dimmed: bool) -> void:
 	var inner := HBoxContainer.new()
 	inner.add_theme_constant_override("separation", 8)
 	inner.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var glyph := _label(str(TYPE_GLYPH.get(str(unit.get("type", "")), "🛡")), 17, UI.WHITE)
+	var glyph := _label(unit_kind_glyph(unit), 17, UI.WHITE)
 	glyph.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	inner.add_child(glyph)
 	var words := VBoxContainer.new()
@@ -354,8 +387,7 @@ func _unit_row(list: VBoxContainer, unit: Dictionary, dimmed: bool) -> void:
 	name_label.clip_text = true
 	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	words.add_child(name_label)
-	var type_name := str(unit.get("type", ""))
-	var detail := _label("%s · %s · %s" % [str(TYPE_LABEL.get(type_name, type_name)), str(unit.get("owner", "")), _activity(unit)], 10, Color(1, 1, 1, 0.55))
+	var detail := _label("%s · %s · %s" % [unit_kind_label(unit), str(unit.get("owner", "")), _activity(unit)], 10, Color(1, 1, 1, 0.55))
 	detail.clip_text = true
 	detail.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	words.add_child(detail)
@@ -382,7 +414,7 @@ func _unit_row(list: VBoxContainer, unit: Dictionary, dimmed: bool) -> void:
 			editing = ""
 		else:
 			editing = id
-			_editor = {"name": str(unit.get("name", "")), "type": str(unit.get("type", "")), "strength": str(int(float(unit.get("strength", 0)))), "status": str(unit.get("status", "")), "note": str(unit.get("note", "")), "saving": false, "error": ""}
+			_editor = {"name": str(unit.get("name", "")), "type": (OWN_TYPE + str(unit.get("unitType", ""))) if not str(unit.get("unitType", "")).is_empty() else str(unit.get("type", "")), "strength": str(int(float(unit.get("strength", 0)))), "status": str(unit.get("status", "")), "note": str(unit.get("note", "")), "saving": false, "error": ""}
 		_render())
 	line.add_child(edit)
 	list.add_child(line)
@@ -402,7 +434,7 @@ func _unit_editor(unit: Dictionary) -> Control:
 	column.add_child(name_field)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 5)
-	row.add_child(_select(types, TYPE_LABEL, str(_editor.get("type", "")), func(value: String) -> void: _editor["type"] = value))
+	row.add_child(_kind_select(unit))
 	row.add_child(_number_field(str(_editor.get("strength", "")), func(value: String) -> void: _editor["strength"] = value))
 	column.add_child(row)
 	column.add_child(_select(statuses, STATUS_LABEL, str(_editor.get("status", "")), func(value: String) -> void: _editor["status"] = value))
@@ -448,9 +480,16 @@ func _save_unit(unit: Dictionary) -> void:
 	var number := float(given) if given.is_valid_float() else 0.0
 	var strength := clampf(number if number != 0.0 else float(unit.get("strength", 0)), 1.0, 100.0)
 	var name := str(_editor.get("name", "")).strip_edges()
+	var chosen := str(_editor.get("type", ""))
+	var own := {}
+	if chosen.begins_with(OWN_TYPE):
+		for entry in unit.get("ownTypes", []):
+			if entry is Dictionary and OWN_TYPE + str((entry as Dictionary).get("id", "")) == chosen:
+				own = entry
 	var patch := {
 		"name": name if not name.is_empty() else str(unit.get("name", "")),
-		"type": str(_editor.get("type", "")),
+		"type": str(own.get("base", "")) if not own.is_empty() else (str(unit.get("type", "")) if chosen.begins_with(OWN_TYPE) else chosen),
+		"unitType": str(own.get("id", "")) if not own.is_empty() else "",
 		"strength": strength,
 		"status": str(_editor.get("status", "")),
 		"note": str(_editor.get("note", "")).strip_edges(),
