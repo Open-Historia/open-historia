@@ -69,3 +69,14 @@ test("the political form counts as changed only when it was edited", () => {
   assert.equal(editorStateChanged(structuredClone(politics), politics), false);
   assert.equal(editorStateChanged({ ...politics, parties: [{ id: "p1", name: "Centre", ruling: false }] }, politics), true);
 });
+
+test("authoritative demographic rate is an optional sparse edit, never guessed from GDP growth", () => {
+  const form = { ...loaded, annualGrowthRate: "-0.35" };
+  const patch = countryStatPatchFromForm({ form, changed: changedEditorFields(form, loaded) });
+  assert.deepEqual(patch, { population: { annualGrowthRate: -0.35 } });
+  assert.equal(countryStatPatchFromForm({ form: loaded, changed: new Set() }), null);
+  const invalid = { ...loaded, annualGrowthRate: "30" };
+  assert.throws(() => countryStatPatchFromForm({ form: invalid, changed: changedEditorFields(invalid, loaded) }), /Annual population growth must be between -20 and 20/);
+  const cleared = { ...loaded, annualGrowthRate: "" };
+  assert.throws(() => countryStatPatchFromForm({ form: cleared, changed: new Set(["annualGrowthRate"]) }), /cannot be cleared/);
+});

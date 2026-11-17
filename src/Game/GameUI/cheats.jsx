@@ -747,6 +747,7 @@ const CountryEditorView = ({ meta, header, busy, status, statusFailed, polities,
                     populationM: Number.isFinite(population) ? cleanEditorNumber(population / 1e6) : "",
                     gdpB: Number.isFinite(gdp) ? String(Number((toDisplayCurrency(gdp, displayCurrency) / 1e9).toPrecision(12))) : "",
                     gdpGrowth: sheet?.economy?.gdpGrowth ?? "",
+                    annualGrowthRate: sheet?.population?.annualGrowthRate ?? "",
                     inflation: sheet?.economy?.inflation ?? "",
                     unemployment: sheet?.economy?.unemployment ?? "",
                     publicDebt: sheet?.economy?.publicDebt ?? "",
@@ -1593,6 +1594,7 @@ const CountryEditorView = ({ meta, header, busy, status, statusFailed, polities,
                                         <div style={{ ...inputStyle, color: "rgba(255,255,255,0.62)", cursor: "default" }}>{perCapitaText}</div>
                                     </div>
                                     {pairedField("GDP growth (%)", "gdpGrowth", { type: "number", step: "0.1" })}
+                                    {pairedField("Annual population change (%) · optional", "annualGrowthRate", { type: "number", min: "-20", max: "20", step: "0.01" })}
                                 </div>
                                 <div style={{
                                     background: "rgba(59,130,246,0.07)",

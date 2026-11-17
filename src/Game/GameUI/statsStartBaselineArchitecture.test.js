@@ -17,3 +17,19 @@ test("an already complete scenario Stats sheet does not automatically reroll mer
   assert.match(engine, /!territorialCoverageMatches/, "territorial mismatch still requires a numeric repair");
   assert.match(engine, /forceReassess/, "explicit manual reassessment is still possible");
 });
+
+test("the country header leads directly into its tabs; only an actionable Stats hold appears in content", () => {
+  const ui = readFileSync(new URL("./stats.jsx", import.meta.url), "utf8");
+  const hero = ui.indexOf('className="oh-country-hero"');
+  const tabs = ui.indexOf('className="oh-country-dossier-tabs"');
+  const content = ui.indexOf('className="oh-country-content"');
+  const hold = ui.indexOf('sheet?.continuity?.progressionBlocked', content);
+  const notice = ui.indexOf("Territory changed: refresh this country's Stats", content);
+  assert.ok(hero > 0 && hero < tabs && tabs < content && content < hold && hold < notice,
+    "only a real geographical Stats hold should appear below navigation in the National view");
+  assert.match(ui.slice(content, notice), /statsView === "economy" && sheet\?\.continuity\?\.progressionBlocked/);
+  assert.match(ui.slice(content, notice), /role="status"/);
+  assert.doesNotMatch(ui, /GDP advances automatically when a valid annual growth rate exists/);
+  assert.doesNotMatch(ui, /Last assessed: \{/);
+  assert.doesNotMatch(ui, /Progressed through: \{/);
+});

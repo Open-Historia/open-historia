@@ -70,13 +70,18 @@ export const buildPeaceBlock = ({ world = {}, game = {}, players = [], max = PEA
     const sides = [list(war.sideA), list(war.sideB)].map((members) => members.map(clean).filter(Boolean));
     return sides.flatMap((members, index) => (members.some((member) => human.some((name) => fold(name) === fold(member))) ? sides[1 - index] : []));
   });
-  const situation = buildWarStatsBlock({ world, countries: [...human, ...enemiesOfPlayers, ...fighting], max: WAR_STATS_MAX });
+  const situationCountries = [...human, ...enemiesOfPlayers, ...fighting];
 
   const lines = [PEACE_BLOCK_HEADING];
   if (bonds.length > 0 || wars.length > 0) lines.push(ALLIANCE_RULE);
   if (wars.length > 0 || weary.length > 0) lines.push(WEARY_RULE);
   if (wars.length > 0 || treaties.length > 0) lines.push(PEACE_RULE);
-  const room = () => max - lines.join("\n").length;
+  // Peace terms, calls to arms and alliance obligations are authoritative
+  // turn instructions. Keep their existing priority; size the optional war
+  // figures to the room they actually leave, instead of constructing a full
+  // WAR_STATS_MAX block and silently dropping it when it won't fit.
+  let warReserve = 0;
+  const room = () => max - lines.join("\n").length - warReserve;
   const section = (title, rows) => {
     if (rows.length === 0 || room() < title.length + 40) return;
     lines.push(title);
@@ -99,14 +104,18 @@ export const buildPeaceBlock = ({ world = {}, game = {}, players = [], max = PEA
   section("Calls to arms that wait for a player's answer (theirs to give):", calls.map((call) => `${call.ally} is called on to defend ${call.defender} against ${call.attackers.join(" and ") || "its attacker"}${call.via.title ? `, under ${call.via.title}` : ""}.`));
   section("Reparations being paid (the game moves the money; tell what paying them does to the country):", owed.map((entry) => `${describeReparation(entry)}.`));
   section("Bound to defend:", bonds.map((line) => `${line}.`));
+  const situationRoom = Math.min(WAR_STATS_MAX, Math.max(0, room() - 1));
+  const situation = situationRoom > 0 ? buildWarStatsBlock({ world, countries: situationCountries, max: situationRoom }) : "";
+  // Reserve for the war block before lower-priority weariness summaries.
+  warReserve = situation && situation.length <= situationRoom ? situation.length + 1 : 0;
   // (Countries at war have theirs in the situation below; the rest are told here.)
-  const toldBelow = new Set(situation ? fighting.map(fold) : []);
+  const toldBelow = new Set(fighting.filter((country) => warReserve > 0 && situation.includes(`\n${country}:\n`)).map(fold));
   // (At war or at peace by the ledger: a country whose wars are over is told as recovering, so a figure left from a
   // war ended long ago is never read as one still being fought; issue #1000, weary 47 twenty months after its surrender.)
   const atWar = new Set(fighting.map(fold));
   const wearyLine = (entry) => `${entry.country} ${Math.round(entry.value)}, ${wearinessWord(entry.value)}`;
   section("War weariness, at war:", weary.filter((entry) => atWar.has(fold(entry.country)) && !toldBelow.has(fold(entry.country))).slice(0, 12).map(wearyLine));
   section("War weariness, at peace and recovering from the war they fought:", weary.filter((entry) => !atWar.has(fold(entry.country))).slice(0, 12).map(wearyLine));
-  if (situation && situation.length + 1 <= room()) lines.push(situation);
+  if (warReserve > 0) lines.push(situation);
   return lines.join("\n");
 };

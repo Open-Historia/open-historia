@@ -2320,15 +2320,17 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
     const hasOtherTerritories = Number.isFinite(otherPopulation) && otherPopulation > 0;
     const wholePerCapita = Number(sheet?.economy?.gdpPerCapita);
     const corePerCapita = Number(sheet?.economy?.coreGdpPerCapita);
-    const displayedPerCapita = hasOtherTerritories && Number.isFinite(corePerCapita)
-        ? corePerCapita
-        : wholePerCapita;
+    // The headline GDP is whole-polity, so its per-capita headline must have
+    // the SAME denominator. Core productivity remains visible as secondary data.
+    const displayedPerCapita = Number.isFinite(wholePerCapita)
+        ? wholePerCapita
+        : corePerCapita;
     const populationScope = hasOtherTerritories
         ? `Core/integrated ${formatPopulation(corePopulation)} · Other territories ${formatPopulation(otherPopulation)}`
         : "";
-    const capitaScope = hasOtherTerritories
-        ? `Core/integrated · Whole polity ${formatDollarPerCapita(wholePerCapita)}`
-        : "Whole polity";
+    const capitaScope = hasOtherTerritories && Number.isFinite(corePerCapita)
+        ? `Whole polity · Core/integrated ${formatDollarPerCapita(corePerCapita)}`
+        : Number.isFinite(wholePerCapita) ? "Whole polity" : "Core/integrated";
 
     return (
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
@@ -2497,6 +2499,23 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             </div>
 
             <div className="oh-country-content" data-view={statsView}>
+            {/* Only a real Statistics hold needs a visible notice. Routine
+                progression dates and mechanics do not belong between the
+                country identity and its navigation tabs. */}
+            {statsView === "economy" && sheet?.continuity?.progressionBlocked && (
+                <div role="status" style={{
+                    borderLeft: "3px solid #f59e0b",
+                    background: "var(--oh-ui-overlay-card, rgba(245,158,11,0.08))",
+                    borderRadius: "6px",
+                    color: "var(--oh-ui-text, rgba(255,255,255,0.82))",
+                    fontSize: "0.73rem",
+                    lineHeight: 1.45,
+                    marginTop: "0.8rem",
+                    padding: "0.6rem 0.8rem",
+                }}>
+                    Territory changed: refresh this country's Stats to update its geographic baseline before automatic progression resumes.
+                </div>
+            )}
             {statsView === "politics" && (
                 <PoliticalOverview
                     profile={publicPoliticalProfile}

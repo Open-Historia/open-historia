@@ -67,6 +67,7 @@ export const applyBoardCarriers = ({
   visibleEvents = [],
   hiddenEvents = [],
   provisionalIndexes = new Set(),
+  regionCatalog = null,
   date = "",
   round = 0,
 } = {}) => {
@@ -87,6 +88,7 @@ export const applyBoardCarriers = ({
     // A fallback rides on an event it did not come from, whose places are not its.
     events: [{ id: event.id, date: event.date || date, title: event.title, description: "", impacts: { projectOps: carrier.fallback ? carrier.ops : withEventFocus(carrier.ops, event, before?.projects) } }],
     world: before,
+    regionCatalog,
     motion: null,
     round,
     boardOnlyEventIds: stamped ? [] : [event.id],
