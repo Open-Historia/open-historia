@@ -558,6 +558,8 @@ try {
     }
     await sleep(300);
   };
+  // The picker's confirm button: "Start conversation", with an arrow after it.
+  const startConversation = (tab) => tab.eval("(() => { const button = [...document.querySelectorAll('button')].find((b) => !b.disabled && b.textContent.trim().startsWith('Start conversation')); if (button) button.click(); return Boolean(button); })()");
   const SEND = `document.querySelector('button[aria-label="Send message"]')`;
   const sayInOpenThread = async (tab, line) => {
     // A thread that never opened is said, with what the screen showed then.
@@ -578,7 +580,7 @@ try {
   await host.eval("window.__e2e.click('+ New diplomatic channel')");
   await until(host, `Boolean(document.querySelector('input[placeholder="Search countries..."]'))`, 15000);
   await pickCountry(host, GUEST_COUNTRY);
-  await host.eval("window.__e2e.click('Start conversation')");
+  await startConversation(host);
   await sayInOpenThread(host, LINE_FROM_HOST);
   const holds = (line) => `window.__e2e.view('chat').then((chats) => JSON.stringify(chats).includes(${JSON.stringify(line)}))`;
   const lineReached = await until(guest, holds(LINE_FROM_HOST), 20000);
@@ -625,7 +627,7 @@ try {
   await until(host, `Boolean(document.querySelector('input[placeholder="Search countries..."]'))`, 15000);
   await pickCountry(host, GUEST_COUNTRY);
   await pickCountry(host, AI_COUNTRY);
-  await host.eval("window.__e2e.click('Start conversation')");
+  await startConversation(host);
   const askedBeforeTable = chatBodies.length;
   await sayInOpenThread(host, LINE_TO_TABLE);
   const aiAnswered = await until(guest, holds(LINE_FROM_AI), 45000);
@@ -962,7 +964,7 @@ try {
   await guest.eval("window.__e2e.click('+ New diplomatic channel')");
   await until(guest, `Boolean(document.querySelector('input[placeholder="Search countries..."]'))`, 15000);
   await pickCountry(guest, AI_COUNTRY);
-  await guest.eval("window.__e2e.click('Start conversation')");
+  await startConversation(guest);
   await sayInOpenThread(guest, LINE_TO_AI);
   const ownReplyShown = await until(guest, `document.body.textContent.includes(${JSON.stringify(LINE_FROM_GUESTS_AI)})`, 60000);
   const ownTable = tableWith(await chatsOf(), LINE_TO_AI);
