@@ -9,6 +9,14 @@ This reference describes the **current Beta engine** following the BETA-3 integr
 - Normal project additions are refused once the 120-entry board is full. **Debt:** normalization of legacy saves already over that cap can still evict old records; no archive/migration policy has been approved.
 - Native project clock outcomes carry `projectId`, owner and name. Completion effects match exact ID and owner; legacy name-only outcomes require one unique match within that owner. The public project-outcome filter likewise checks ID, owner, title consistency, and public secrecy.
 
+## Multiplayer seat-board lending
+
+- During a shared time skip, `src/multiplayer/host/seatBoards.js` temporarily lends each guest's owned open projects to the host's canonical `world.projects` board, leaving the source copies in `world.seatBoards`. Lending is constrained to the existing board capacity, with room reserved for the skip's own projects.
+- Lending now uses **stable project IDs, not globally unique names**. A host project and a guest project may share the title "Riga port"; both can be simulated, and two distinct same-name projects within a seat remain distinct.
+- The transient `world.projectSeatLoans` maps loaned project IDs to guest countries. It is **host-only** under multiplayer view projection, survives canonical normalization during a round, and is cleared when loans come home or an interrupted round is settled. A guest ID collision cannot evict an unrelated host project from the active board.
+- Project IDs are still assumed globally unique across canonical records. The engine refuses to lend a duplicate ID; it does not mint an alias or overwrite the host's record to compensate.
+- **Outstanding:** project boards that were already over the 120-entry cap, and the return of new guest projects onto a full guest board, still need a separate explicit retention/admission contract. Do not silently relax the cap or move a genuinely active entry into a closed archive.
+
 ## Scenario funding modes (not fiscal ledgers)
 
 `world.projectFundingMode` is a scenario-level, enumerated **basis for work**, selected in the Scenario Editor and copied into new campaign worlds. Normalization accepts only:

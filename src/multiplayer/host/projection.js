@@ -108,7 +108,8 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
 export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   "actionSuggestions", "chargedRefusals", "chatKnowledgeCursors", "consolidatedHistory",
   "gmAudit", "gmChanges", "historyDocument", "idlePulseTick", "lastJumpSummary", "naviesRaised", "notes",
-  "pendingEventOutreach", "politicalSimulation", "seatBoards", "simulationReminders",
+  // Active per-seat Projects loans are host orchestration state, never a viewer record.
+  "pendingEventOutreach", "politicalSimulation", "seatBoards", "projectSeatLoans", "simulationReminders",
   "storylines",
   // What the last time skip's prompt read (runtime/promptSnapshot.js).
   "promptSnapshot", "promptReference",
