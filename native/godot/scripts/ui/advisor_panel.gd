@@ -3152,15 +3152,13 @@ func _projects_card(items: Array) -> Control:
 	var card := _card(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.1), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.3))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
-	column.add_child(_card_header("🎯 Projects " + _summary_of(items, ["opened", "updated", "completed", "closed", "deferred"]), Color(191 / 255.0, 219 / 255.0, 254 / 255.0, 0.95), "Open Projects", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.5), Color(191 / 255.0, 219 / 255.0, 254 / 255.0, 0.9), func() -> void: open_projects.emit()))
+	column.add_child(_card_header("🎯 Projects " + _summary_of(items, ["opened", "updated", "closed"]), Color(191 / 255.0, 219 / 255.0, 254 / 255.0, 0.95), "Open Projects", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.5), Color(191 / 255.0, 219 / 255.0, 254 / 255.0, 0.9), func() -> void: open_projects.emit()))
 	column.add_child(_gap(6.4))
-	var verbs := {"opened": "Opened: ", "updated": "Updated: ", "completed": "Completed: ", "closed": "Closed: ", "deferred": "Awaiting the simulation: "}
+	var verbs := {"opened": "Opened: ", "updated": "Updated: ", "closed": "Closed: "}
 	for item in items:
 		var entry: Dictionary = item
 		var change := str(entry.get("change", ""))
 		var line := _escape(str(verbs.get(change, "Changed: ")) + str(entry.get("title", "")))
-		if change == "deferred":
-			line += "[color=#fcd34de6] — this one changes the world, so the next time skip enacts it[/color]"
 		column.add_child(_bullet_line(line, 12, Color(1, 1, 1, 0.75)))
 	card.add_child(column)
 	return card
