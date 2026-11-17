@@ -57,10 +57,11 @@ const NEW_UPDATES = [
     // "the diplomatic map is shit, redesign it and make it have full integration with the political world", then "only on
     // alpha for now and ... be a major update" (the owner, 2026-11-15): four views (runtime/diplomaticViews.js), a legend
     // that counts what is shown (GameUI/DiplomaticLegend.jsx), lines from the focus country's capital, kept for each game.
+    // On beta too since "commit to beta" (the owner, 2026-11-16).
     id: "2026-11-diplomatic-atlas",
     kind: "major",
-    date: "2026-11-15",
-    channel: "alpha",
+    date: "2026-11-16",
+    channel: "beta",
     banners: [
       {
         theme: "diplomaticAtlas",
@@ -143,11 +144,11 @@ const NEW_UPDATES = [
     // "lets rework projects entirely… right now they dont actually effect the world actively and dont progress normally. it seems like
     // they just sit doing nothing" (the owner, 2026-11-15): the projects engine (runtime/projectEngine.js) runs every project's clock;
     // a project costs money a month, changes the world when done, can be started from the Projects tab, and other countries run their own.
-    // Alpha only for now (the coordinator, 2026-11-15).
+    // Alpha first (the coordinator, 2026-11-15), then on beta since "commit to beta" (the owner, 2026-11-16).
     id: "2026-11-projects-that-build",
     kind: "major",
-    date: "2026-11-15",
-    channel: "alpha",
+    date: "2026-11-16",
+    channel: "beta",
     banners: [
       {
         theme: "projects",
@@ -219,6 +220,41 @@ const NEW_UPDATES = [
           },
         ],
         button: "To the drafting table",
+      },
+    ],
+  },
+  {
+    id: "2026-11-diplomatic-correspondence-refresh",
+    kind: "minor",
+    date: "2026-11-16",
+    channel: "beta",
+    banners: [
+      {
+        title: "A better diplomatic inbox",
+        items: [
+          "Recent diplomatic conversations now follow actual message activity, including new replies on the same game day, and retain their order after loading a save.",
+          "Contacts can be searched by government or subject; on a wide screen the inbox stays alongside the open conversation.",
+          "New letters do not move the list while you are reading older correspondence. Return to latest when you choose.",
+          "Diplomatic messages and the composer now follow your interface theme instead of using a fixed bright-blue treatment.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "2026-11-national-stats-improvements",
+    kind: "minor",
+    date: "2026-11-16",
+    channel: "beta",
+    banners: [
+      {
+        title: "More reliable national statistics",
+        items: [
+          "GDP per capita now consistently uses whole-polity GDP divided by the full population, with the core/integrated figure labeled separately.",
+          "AI-generated events can no longer change GDP by supplying only a GDP-per-capita number; legacy sheets with both GDP and population also recalculate the ratio.",
+          "GDP advances across time skips using each country's saved annual growth rate, without extra AI requests.",
+          "Population advances only when an explicit demographic trend is recorded; legal territorial transfers pause stale national ledgers until reassessed.",
+          "Refresh no longer calls AI solely because the date changed; Rebuild baseline remains available for a fresh assessment.",
+        ],
       },
     ],
   },

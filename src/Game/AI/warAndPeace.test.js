@@ -620,3 +620,20 @@ test("a skip's line accepting a player's offer is taken in whichever twin war th
   assert.deepEqual(made.wars.map((entry) => [entry.id, entry.status]).sort(), [["war-1", "ended"], ["war-2", "ended"]]);
   assert.equal(made.peaceOffers.find((entry) => entry.id === "peace:war-2:aland:3")?.status, "accepted");
 });
+
+test("a treaty cession uses the map's baked donor when the old World override is sparse", () => {
+  const state = world();
+  delete state.regionOwnershipOverrides.b1;
+  const catalog = [
+    { id: "b1", name: "Klow", country: "Borduria", bakedOwner: "Borduria" },
+  ];
+  const terms = readTermsLine("as held; cede~Klow~Aland", { from: "Aland", to: "Borduria" });
+  const next = makePeace(state, {
+    warId: "war-1", from: "Aland", to: "Borduria",
+    terms, regions: catalog, date: "1915-01-10", round: 9,
+  });
+  assert.equal(next.regionOwnershipOverrides.b1, "Aland");
+  assert.equal(next.countryStats.Borduria.continuity.progressionBlocked, true,
+    "the map's seed legal donor must not retain a pre-cession statistics baseline");
+  assert.equal(next.countryStats.Aland.continuity.progressionBlocked, true);
+});

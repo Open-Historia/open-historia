@@ -68,6 +68,7 @@ import { normalizeSpyOp, spyTasking } from "./spycraft.js";
 import { eventsFromLegacyChat, normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
 import { latestTurnEventIds, unseenEvents, withoutUnseenChats, withoutUnseenEvents, withoutUnseenReports } from "./unseenEvents.js";
 import { COUNTRY_STATS_EVENT_RESCALE_LIMIT, mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
+import { advanceCountryStatsInterval } from "./countryStatsProgression.js";
 import {
   canonicalInstitutionIdentity,
   institutionChannelParticipants,
@@ -98,7 +99,7 @@ import {
   wrapLng,
 } from "./unitMotion.js";
 import { noteMapMeasure } from "./mapMeasure.js";
-import { compareGameDates, normalizeGameDate } from "./gameDates.js";
+import { compareGameDates, diffGameDays, normalizeGameDate } from "./gameDates.js";
 import { normalizeBattlefields, withWarIdFrontsRenamed } from "./fronts/record.js";
 import { normalizeTransports } from "./fronts/transports.js";
 import { normalizeStrikes } from "./strikes.js";
@@ -897,6 +898,10 @@ export const normalizeChatEntry = (entry, index = 0) => {
     source: projected?.source || normalizeOptionalString(entry.source) || "manual",
     status: normalizeOptionalString(entry.status) || "open",
     title: projected?.title || normalizeOptionalString(entry.title),
+    // The inbox's persisted activity order is independent of the historical
+    // date. Never derive a fresh ordinal while normalizing/read-replaying.
+    ...(Number.isSafeInteger(entry.activityOrdinal) && entry.activityOrdinal > 0
+      ? { activityOrdinal: entry.activityOrdinal } : {}),
   };
 };
 
@@ -5617,6 +5622,7 @@ const applyPolityAndTerritoryImpacts = ({
       const merged = applyCountryStatPatchToWorld(world, code, change.stats, {
         continuity: eventId ? { accountedEventIds: [eventId] } : null,
         maxAggregateRescale: COUNTRY_STATS_EVENT_RESCALE_LIMIT,
+        allowPerCapitaRescale: false,
       });
       const rep = Number(merged?.indices?.internationalReputation);
       if (Number.isFinite(rep)) {
@@ -5744,11 +5750,57 @@ export const dissolvePolity = (world, code, { heir = "", heirOf = null, date = "
 // not stamped into an entry's activity, which lists timeline events only.
 export const applyEventImpactsToWorld = ({
   colors = {}, events = [], world, motion = null, round = 0, boardOnlyEventIds = [],
+  regionCatalog = null,
 }) => {
   const boardOnly = new Set(normalizeArray(boardOnlyEventIds).map(normalizeOptionalString).filter(Boolean));
   let nextColors = cloneValue(colors) ?? {};
   const nextWorld = normalizeWorldState(world);
   let cursorDate = motion ? normalizeOptionalString(motion.originDate) : "";
+  const statsStart = normalizeGameDate(motion?.originDate);
+  const statsEnd = normalizeGameDate(motion?.statsToDate);
+  const turnEvents = normalizeEvents(events);
+  // Fail closed on out-of-order, undated or out-of-range events; do not assign
+  // economic effects to the wrong side of a historical shock or cession.
+  let statsCursor = statsStart;
+  const validStatsChronology = Boolean(statsStart && statsEnd && diffGameDays(statsStart, statsEnd) > 0)
+    && turnEvents.every((event) => {
+      const date = normalizeGameDate(event.date);
+      if (!date || diffGameDays(statsStart, date) < 0 || diffGameDays(date, statsEnd) < 0
+        || diffGameDays(statsCursor, date) < 0) return false;
+      statsCursor = date;
+      return true;
+    });
+  statsCursor = statsStart;
+  // The live map's compact catalog is the seed-title authority when a region
+  // has no sparse World override. Do not confuse historical base geography
+  // with the map's baked political owner, or trust an optional AI fromCode.
+  // Only build the index if a legal transfer actually needs an old owner.
+  let mapRegionsById = null;
+  const baseLegalOwnerOf = (regionId) => {
+    if (!mapRegionsById) {
+      const rows = Array.isArray(regionCatalog)
+        ? regionCatalog
+        : (getPrimedScenarioRegionCatalog() ?? []);
+      mapRegionsById = new Map(rows
+        .filter((row) => normalizeOptionalString(row?.id))
+        .map((row) => [normalizeOptionalString(row.id), row]));
+    }
+    const row = mapRegionsById.get(regionId);
+    if (!row) return { found: false, owner: "" };
+    const baked = Object.hasOwn(row, "bakedOwner")
+      ? row.bakedOwner
+      : row.country || row.countryCode || "";
+    const owner = normalizeOptionalString(baked);
+    return { found: true, owner: toCountryName(owner) || owner };
+  };
+  const progressTo = (date) => {
+    if (!validStatsChronology || !date || !(diffGameDays(statsCursor, date) > 0)) return;
+    const settled = advanceCountryStatsInterval(nextWorld.countryStats, {
+      fromDate: statsCursor, toDate: date,
+    });
+    nextWorld.countryStats = settled.countryStats;
+    statsCursor = date;
+  };
   // Every polity renamed by this apply, for gameplay.js to carry into what the
   // world does not hold (the game's own polity, chats, flags, baked regions).
   // A save from before renames re-keyed still shows a display name over a key;
@@ -5774,7 +5826,10 @@ export const applyEventImpactsToWorld = ({
   // one event is a name the next event can already be using.
   let resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
 
-  for (const event of normalizeEvents(events)) {
+  for (const event of turnEvents) {
+    // Rates and demographic totals evolve until this event, BEFORE its dated
+    // GDP/population shock or growth-rate change becomes canonical.
+    progressTo(normalizeGameDate(event.date));
     // Resolve this event's polity changes first — both to fold the renames they
     // make into the alias map before any owner is read through it, and so a
     // change addressed to a polity's current display name lands on that polity
@@ -5790,6 +5845,16 @@ export const applyEventImpactsToWorld = ({
       ));
     }
 
+    const territoryTransfers = event.impacts.regionTransfers;
+    const dissolvingOwners = polityChanges
+      .filter(({ change }) => change.operation === "dissolve")
+      .map(({ code }) => code);
+    // Snapshot ONLY on legal transfer/dissolution events. The former sovereign
+    // may be absent from an optional transfer.fromCode, while dissolution can
+    // pass additional regions to an heir without an explicit transfer row.
+    const trackLegalTitle = territoryTransfers.length > 0 || dissolvingOwners.length > 0;
+    const ownersBefore = trackLegalTitle ? { ...nextWorld.regionOwnershipOverrides } : null;
+    const sovereignsBefore = trackLegalTitle ? { ...nextWorld.regionSovereigntyOverrides } : null;
     const renamedHere = applyPolityAndTerritoryImpacts({
       colors: nextColors,
       eventDate: event.date,
@@ -5797,10 +5862,59 @@ export const applyEventImpactsToWorld = ({
       polityChanges,
       regionClaims: event.impacts.regionClaims,
       regionControlOps: event.impacts.regionControlOps,
-      regionTransfers: event.impacts.regionTransfers,
+      regionTransfers: territoryTransfers,
       resolveOwner,
       world: nextWorld,
     });
+    // The legal owner is the recorded sovereign, or the controller when no
+    // divergent sovereign is recorded. A transfer's optional fromCode is only
+    // a fallback when the prior title was not held in the World overrides.
+    // Dissolution may hand *other* regions to its heir without explicit rows.
+    // These recipients must not compound their pre-annexation component ledgers.
+    if (trackLegalTitle) {
+      const candidates = new Map(territoryTransfers.map((transfer) => [transfer.regionId, transfer]));
+      if (dissolvingOwners.length) {
+        for (const regionId of new Set([
+          ...Object.keys(ownersBefore),
+          ...Object.keys(sovereignsBefore),
+        ])) {
+          const legalOwner = sovereignsBefore[regionId] || ownersBefore[regionId] || "";
+          if (dissolvingOwners.some((code) => samePolity(code, legalOwner)) && !candidates.has(regionId)) {
+            candidates.set(regionId, null);
+          }
+        }
+      }
+      for (const [regionId, transfer] of candidates) {
+        const oldController = ownersBefore[regionId] || "";
+        const oldSovereign = sovereignsBefore[regionId] || "";
+        const newController = nextWorld.regionOwnershipOverrides?.[regionId] || "";
+        const newSovereign = nextWorld.regionSovereigntyOverrides?.[regionId] || "";
+        // Screened/refused transfers and mere occupation do not change title.
+        if (oldController === newController && oldSovereign === newSovereign) continue;
+        const mapTitle = !oldSovereign && !oldController
+          ? baseLegalOwnerOf(regionId)
+          : null;
+        // The accepted turn supplies the active map catalog explicitly. Without
+        // a matching map region, an AI fromCode is not proof of the donor:
+        // refuse the whole in-memory apply rather than persist stale Stats.
+        if (Array.isArray(regionCatalog) && mapTitle && !mapTitle.found) {
+          throw new Error(`Cannot settle legal title for "${regionId}": no matching region in the authoritative map catalog.`);
+        }
+        const oldLegalOwner = oldSovereign || oldController
+          || (mapTitle?.found ? mapTitle.owner : transfer?.fromCode || "");
+        const newLegalOwner = newSovereign || newController || transfer?.toCode || "";
+        if (samePolity(oldLegalOwner, newLegalOwner)) continue;
+        for (const owner of [oldLegalOwner, newLegalOwner]) {
+          const code = resolveOwner(owner) || owner;
+          const sheet = nextWorld.countryStats?.[code];
+          if (!sheet) continue;
+          nextWorld.countryStats[code] = {
+            ...sheet,
+            continuity: { ...(sheet.continuity || {}), progressionBlocked: true },
+          };
+        }
+      }
+    }
     if (renamedHere.length) {
       renamedPolities.push(...renamedHere);
       // The polity is keyed by its new name now: this event's unit, Political
@@ -5988,6 +6102,10 @@ export const applyEventImpactsToWorld = ({
       );
     }
   }
+
+  // The days after the last event also belong to the interval. Settlement
+  // stays in the same accepted World transaction as history and power tiers.
+  progressTo(statsEnd);
 
   return {
     colors: nextColors,

@@ -1716,6 +1716,9 @@ const customRegionRawEntries = (geojson) => {
       // A drawn region's baked owner is its `owner` property; carrying it as the
       // catalog's base country lets the prompt tell a real change from the seed.
       country: props.country ? String(props.country) : props.owner ? String(props.owner) : "",
+      // Political seed owner is distinct from geographic country on historical
+      // maps. Keep the field's presence (including an explicitly unowned "").
+      ...(Object.hasOwn(props, "owner") ? { owner: String(props.owner ?? "") } : {}),
       countryCode: props.gid0 ? String(props.gid0) : props.GID_0 ? String(props.GID_0) : "",
       id,
       name: props.name ?? props.NAME_1 ?? props.name_1 ?? id,
@@ -1748,6 +1751,11 @@ const compactCustomRegionEntries = (rawEntries) => {
       // this every drawn region primed by the map lost its base owner — and with it
       // who holds what, wherever this catalog is read.
       country: raw?.country ? String(raw.country) : raw?.owner ? String(raw.owner) : "",
+      // Used for title changes against a sparse World. Unlike "country" this
+      // is the rendered map's political seed owner, not its base geography.
+      // Preserve explicit "" as unowned rather than claiming its geographic
+      // country; legacy catalog entries with only country still work.
+      bakedOwner: raw?.owner == null ? String(raw?.country ?? "") : String(raw.owner),
       countryCode: raw?.countryCode ? String(raw.countryCode) : "",
       id,
       name: name || id,
@@ -2018,6 +2026,7 @@ const readStockRegionEntries = async (seen) => {
     if (!seen.has(key)) {
       seen.set(key, {
         country,
+        bakedOwner: country,
         countryCode,
         id: key,
         name: String(name),
@@ -2036,12 +2045,14 @@ const mergeCustomRegionEntries = (seen, customEntries) => {
     if (existing) {
       if (entry.name) existing.name = String(entry.name);
       if (entry.country) existing.country = String(entry.country);
+      if (Object.hasOwn(entry, "bakedOwner")) existing.bakedOwner = String(entry.bakedOwner);
       if (entry.countryCode) existing.countryCode = String(entry.countryCode);
       existing.custom = true;
       continue;
     }
     seen.set(id, {
       country: entry.country ? String(entry.country) : "",
+      bakedOwner: String(entry.bakedOwner ?? entry.country ?? ""),
       countryCode: entry.countryCode ? String(entry.countryCode) : "",
       custom: true,
       id,
