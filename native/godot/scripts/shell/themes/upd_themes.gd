@@ -10,8 +10,9 @@ const Rostra := preload("res://scripts/shell/themes/theme_rostra.gd")
 const AirRaid := preload("res://scripts/shell/themes/theme_air_raid.gd")
 const Themes := preload("res://scripts/shell/themes/theme_themes.gd")
 const AiOverhaul := preload("res://scripts/shell/themes/theme_ai_overhaul.gd")
+const ProjectsTheme := preload("res://scripts/shell/themes/theme_projects.gd")
 
-const REGISTERED := ["aiOverhaul", "themes", "rostra", "airRaid", "espionage2", "swarms", "warsAndFronts2", "seasonsAndWeather", "music", "chronicle"]
+const REGISTERED := ["projects", "aiOverhaul", "themes", "rostra", "airRaid", "espionage2", "swarms", "warsAndFronts2", "seasonsAndWeather", "music", "chronicle"]
 
 
 static func px(value: float) -> float:
@@ -33,6 +34,8 @@ static func page(banner: Dictionary, update: Dictionary, ctx: Dictionary) -> Con
 	if str(update.get("kind", "")) != "major":
 		return minor_banner(banner, update, ctx)
 	match str(banner.get("theme", "")):
+		"projects":
+			return ProjectsTheme.page(banner, update, ctx)
 		"aiOverhaul":
 			return AiOverhaul.page(banner, update, ctx)
 		"themes":
@@ -65,6 +68,8 @@ static func chrome(banner: Dictionary, update: Dictionary) -> Dictionary:
 			"skip": {},
 		}
 	match str(banner.get("theme", "")):
+		"projects":
+			return ProjectsTheme.chrome()
 		"aiOverhaul":
 			return AiOverhaul.chrome()
 		"themes":
