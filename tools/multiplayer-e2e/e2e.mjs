@@ -695,7 +695,19 @@ try {
   // calls it from its panel, and the guest votes in it from its own screen.
   // Until 2026-11-16 neither was offered in a shared game.
   const QUESTION = "Shall the conference meet in Tallinn?";
-  const pollAtTable = `window.__e2e.view('chat').then((chats) => ((chats.find((chat) => (chat.messages || []).some((message) => message.text === ${JSON.stringify(LINE_TO_TABLE)})) || {}).polls || []).find((poll) => poll.question === ${JSON.stringify(QUESTION)}) || null)`;
+  // The vote as the table's thread holds it: its polls when the view carries
+  // them, else read from the thread's log, as the panel reads it (a player's
+  // view carries the log, runtime/chatThreads.js projectChatThread).
+  const pollAtTable = `window.__e2e.view('chat').then((chats) => {
+    const chat = chats.find((entry) => (entry.messages || []).some((message) => message.text === ${JSON.stringify(LINE_TO_TABLE)})) || {};
+    const held = (chat.polls || []).find((poll) => poll.question === ${JSON.stringify(QUESTION)});
+    if (held) return held;
+    const made = (chat.events || []).find((event) => event.kind === 'poll_created' && event.question === ${JSON.stringify(QUESTION)});
+    if (!made) return null;
+    const votes = {};
+    for (const event of chat.events || []) if (event.kind === 'poll_vote_cast' && event.pollId === made.pollId && !votes[event.by]) votes[event.by] = event.optionId;
+    return { id: made.pollId, question: made.question, options: made.options, openedBy: made.by, votes };
+  })`;
   const voteOffered = await host.eval("window.__e2e.click('Vote')");
   const composerOpen = await until(host, `Boolean(document.querySelector('input[placeholder="What should this group decide?"]'))`, 10000);
   await host.eval(`(() => { window.__e2e.type(document.querySelector('input[placeholder="What should this group decide?"]'), ${JSON.stringify(QUESTION)}); return true; })()`);

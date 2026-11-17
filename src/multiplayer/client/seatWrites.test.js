@@ -90,6 +90,13 @@ test("a page's save of a view it did not change is no change, once the view is i
   assert.equal(planWorldWrite(normalizeWorldState(view), saved).board, null, "the board is not sent again by an unrelated save");
   // A field really changed is still named.
   assert.deepEqual(unroutedChanges("world", normalizeWorldState(view), { ...saved, idlePulseTick: 37 }), ["idlePulseTick"]);
+  // A save that is not normalized (the run's own Projects board PUT: the view and a board) is put in the same shape:
+  // once only the held side was, its missing defaults were flagged on the guest's screen instead.
+  const board = [{ id: "p1", name: "Rail programme", status: "active" }, { id: "p2", name: "Port works", status: "active" }];
+  const rawSave = { ...view, projects: board };
+  assert.ok(unroutedChanges("world", normalizeWorldState(view), rawSave).includes("idlePulseTick"), "one side shaped, the other not");
+  assert.deepEqual(unroutedChanges("world", normalizeWorldState(view), normalizeWorldState(rawSave)), []);
+  assert.equal(planWorldWrite(normalizeWorldState(view), normalizeWorldState(rawSave)).board.length, 2, "the board it changed is still sent");
   const page = (await import("node:fs")).readFileSync(new URL("./sharedGame.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
-  assert.match(page, /const before = asThePageSavesIt\(key, held\);[\s\S]*?unroutedChanges\(key, before, wanted\)[\s\S]*?planWorldWrite\(before, wanted\)/);
+  assert.match(page, /const before = asThePageSavesIt\(key, held\);\s*const after = asThePageSavesIt\(key, wanted\);[\s\S]*?unroutedChanges\(key, before, after\)[\s\S]*?planWorldWrite\(before, after\)/);
 });

@@ -165,20 +165,21 @@ const asThePageSavesIt = (key, value) => {
 const ownWrite = ({ key, wanted, held }) => {
   const owner = current;
   if (!owner?.runtime) return undefined;
-  // What the page holds, in the shape its writers save in: a save is that
-  // shape (every writer normalizes what it saves), and the view is the host's
-  // projection, which leaves the engine's own fields out. Compared as they
-  // came, the defaults a save fills in for those (a pulse count of 0, empty
-  // ledgers) read as changes nobody made, and a list the normalizer rounds out
-  // read as one the player changed.
+  // What the page holds and what it saves, both in the shape the page's own
+  // writers save in. The view is the host's projection, which leaves the
+  // engine's own fields out; a save may be normalized (the game's writers) or
+  // not. Compared as they came, the defaults one side fills in (a pulse count
+  // of 0, empty ledgers) read as changes nobody made, and a list the
+  // normalizer rounds out read as one the player changed.
   const before = asThePageSavesIt(key, held);
+  const after = asThePageSavesIt(key, wanted);
   // A change no door takes is said, not passed for saved (seatWrites.js unroutedChanges).
-  const unrouted = unroutedChanges(key, before, wanted);
+  const unrouted = unroutedChanges(key, before, after);
   if (unrouted.length) {
     logDebugEvent("shared game", `a change only this screen made, which the host never heard: ${key}: ${unrouted.slice(0, 8).join(", ")}`, undefined, { problem: true });
   }
   if (key === "world") {
-    const plan = planWorldWrite(before, wanted);
+    const plan = planWorldWrite(before, after);
     if (Object.keys(plan.device).length) {
       owner.suggestedInRound = Number(owner.round);
       owner.runtime.patch("world", plan.device, { quiet: true });
