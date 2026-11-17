@@ -330,7 +330,11 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false, stream
   // interpreting that inline mention as the opener consumes the *real* block
   // later in the reply and silently discards otherwise valid proposals.
   const opening = "(^|\\r?\\n)[ \\t]{0,3}```" + lang + "[ \\t]*\\r?\\n";
-  const closing = "^[ \\t]{0,3}```[ \\t]*(?:\\r?\\n|$)";
+  // A provider may fuse a closing fence with the next known structured opener,
+  // e.g. \`\`\`"\`\`\`senddraft. Consume only the closing backticks and
+  // stray quote; extracting the prior block leaves the next opener on its own
+  // line. The complete payload must still pass normal JSON validation.
+  const closing = "^[ \\t]{0,3}```[ \\t]*(?:\\r?\\n|$|[\"'](?=\\r?\\n|$)|[\"']?(?=```(?:chart|actions|senddraft|institutiondraft|deploy|projects)[ \\t]*\\r?\\n))";
   const regex = new RegExp(opening + "([\\s\\S]*?)" + closing, "m");
   const match = text.match(regex);
 
