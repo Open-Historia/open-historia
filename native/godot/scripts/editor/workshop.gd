@@ -74,6 +74,8 @@ var sidebar_hidden := false
 var war_selection := {}
 var war_tab := "terrain"
 var review := {}
+var unit_types: Array = []
+var saved_renames: Array = []
 var _style_rev := -1
 var map: WorkshopMap
 var _busy_action := ""
@@ -141,6 +143,9 @@ func open(scenario_record: Dictionary, open_options: Dictionary) -> void:
 	if options.has("warSettings"):
 		args["warSettings"] = options["warSettings"]
 		args["hasWarSettings"] = true
+	if options.has("unitTypes"):
+		args["unitTypes"] = options["unitTypes"]
+		args["hasUnitTypes"] = true
 	if options.get("review") is Dictionary:
 		args["review"] = options["review"]
 	var reply := await engine.request("workshop.open", args)
@@ -153,6 +158,7 @@ func open(scenario_record: Dictionary, open_options: Dictionary) -> void:
 		return
 	var result: Dictionary = reply["result"]
 	session = str(result.get("session", ""))
+	unit_types = result.get("unitTypes", []) if result.get("unitTypes") is Array else []
 	var named: Dictionary = result.get("scenario", {})
 	if not str(named.get("name", "")).is_empty():
 		_scenario_name = str(named.get("name", ""))
@@ -742,6 +748,16 @@ func polity_choices() -> Array:
 			return str(a["key"]) < str(b["key"])
 		return left.naturalnocasecmp_to(right) < 0)
 	return rows
+
+
+func unit_type_of(unit: Dictionary) -> Dictionary:
+	var wanted := str(unit.get("unitType", ""))
+	if wanted.is_empty():
+		return {}
+	for entry in unit_types:
+		if entry is Dictionary and str((entry as Dictionary).get("id", "")) == wanted:
+			return entry
+	return {}
 
 
 func polity_name(key: String) -> String:
@@ -1640,6 +1656,7 @@ func persist(play: bool, close_after: bool) -> void:
 		return
 	await apply(result)
 	var details: Variant = result.get("details")
+	saved_renames = result.get("renames", []) if result.get("renames") is Array else []
 	if details is Dictionary:
 		saved.emit(details)
 	if result.get("review") is Dictionary and not (result["review"] as Dictionary).has("active"):

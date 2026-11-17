@@ -898,6 +898,8 @@ export const register = (ctx) => {
     type: f.type || "Coordinate",
     populationByYear: f.populationByYear || null,
     isMap: engine.wsMapFeatures.isMapFeature(f),
+    family: engine.wsMapFeatures.isMapFeature(f) ? engine.wsMapFeatures.mapFeatureFamily(f) : "",
+    glyph: engine.wsPresentation.getMarkerPresentation({ kind: f.kind || "", family: engine.wsMapFeatures.isMapFeature(f) ? engine.wsMapFeatures.mapFeatureFamily(f) : "", status: f.status || "" }).glyph,
   }));
 
   const warPart = (s) => ({
@@ -1138,6 +1140,7 @@ export const register = (ctx) => {
         id: String(u.id || mapDoc.newId("unit")),
         name: String(u.name || "Unit"),
         type: String(u.type || "infantry"),
+        ...(String(u.unitType || "").trim() ? { unitType: String(u.unitType).trim() } : {}),
         ownerCode: String(u.ownerCode || ""),
         lng: Number(u.lng),
         lat: Number(u.lat),
@@ -3302,7 +3305,7 @@ export const register = (ctx) => {
   };
 
   return {
-    "workshop.open": async ({ scenarioId, world = null, gameDate = "", warSettings = null, hasWarSettings = false, review = null } = {}) => {
+    "workshop.open": async ({ scenarioId, world = null, gameDate = "", warSettings = null, hasWarSettings = false, unitTypes = null, hasUnitTypes = false, review = null } = {}) => {
       if (session) closeSession(session);
       const details = await lib.loadScenarioDetails(clean(scenarioId));
       const scenario = details.scenario;
@@ -3312,6 +3315,7 @@ export const register = (ctx) => {
         const sourceWorld = world && typeof world === "object" ? world : details?.data?.world ?? {};
         const initialMap = await buildSeedFor(scenario, sourceWorld, { gameDate: gameDate || details?.data?.game?.gameDate || "", warSettings: hasWarSettings ? warSettings : undefined });
         if (session !== s) throw new Error("The map editor was closed.");
+        initialMap.unitTypes = engine.scenarioUnitTypes.savedUnitTypes(hasUnitTypes ? unitTypes : sourceWorld.unitTypes);
         s.initialMap = initialMap;
         await hydrate(s, initialMap);
         startReview(s, review);
@@ -3319,7 +3323,7 @@ export const register = (ctx) => {
         closeSession(s);
         throw new Error(`The map editor was closed because this scenario's map could not be loaded, so nothing was saved over it. ${error?.message || error}`);
       }
-      return { ...delta(s, { all: true }), scenario: { id: s.scenario.id, name: s.scenario.name }, bake: { file: s.bakeFile }, ...(s.review ? { review: reviewView(s) } : {}) };
+      return { ...delta(s, { all: true }), scenario: { id: s.scenario.id, name: s.scenario.name }, unitTypes: plain(s.initialMap.unitTypes), bake: { file: s.bakeFile }, ...(s.review ? { review: reviewView(s) } : {}) };
     },
     "workshop.edit.rings": async ({ session: id, ids = [] } = {}) => plain({ rings: editRings(need(id), list(ids).map(String)) }),
     "workshop.edit.snap": async ({ session: id, at = [0, 0], resolution = 1, pixels = 10 } = {}) => {
@@ -4234,6 +4238,12 @@ export const register = (ctx) => {
       }]);
       return { ...delta(s, { units: true }), id: uid };
     },
+    "workshop.unitTypes.offered": async ({ session: id, ownerCode = "", unitType = "" } = {}) => {
+      const s = need(id);
+      const types = Array.isArray(s.initialMap?.unitTypes) ? s.initialMap.unitTypes : [];
+      const own = types.find((type) => type.id === unitType) ?? null;
+      return plain(types.filter((type) => type === own || engine.unitTypes.mayFieldUnitType(type, ownerCode)));
+    },
     "workshop.unit.update": async ({ session: id, unitId = "", patch = {} } = {}) => {
       const s = need(id);
       setters(s).units((rows) => rows.map((u) => (u.id === unitId ? { ...u, ...patch } : u)));
@@ -5056,7 +5066,7 @@ export const register = (ctx) => {
             console.warn("[editor] could not record the review:", error);
           }
         }
-        outcome = { note, details: plain(details), gameId, ...(reviewRecord ? { review: reviewRecord } : {}) };
+        outcome = { note, details: plain(details), renames: plain(renames), gameId, ...(reviewRecord ? { review: reviewRecord } : {}) };
       } catch (error) {
         console.warn("[editor] scenario save failed:", error);
         outcome = { error: `Could not save the map into the scenario: ${error?.message || error}` };

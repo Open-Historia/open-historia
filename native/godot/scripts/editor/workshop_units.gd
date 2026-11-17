@@ -50,7 +50,7 @@ func _render() -> void:
 		var entry: Dictionary = unit
 		var owner := str(entry.get("ownerCode", ""))
 		if not query.is_empty():
-			var text := "%s %s %s %s %s" % [str(entry.get("name", "")), str(entry.get("type", "")), owner, host.polity_name(owner) if not owner.is_empty() else "", str(entry.get("composition", ""))]
+			var text := "%s %s %s %s %s %s" % [str(entry.get("name", "")), str(entry.get("type", "")), str(host.unit_type_of(entry).get("name", "")), owner, host.polity_name(owner) if not owner.is_empty() else "", str(entry.get("composition", ""))]
 			if not text.to_lower().contains(query):
 				continue
 		rows.append(entry)
@@ -76,7 +76,11 @@ func _render() -> void:
 		var name := str(entry.get("name", ""))
 		texts.add_child(UI.label(name if not name.is_empty() else "Unit", 13, Color(1, 1, 1), 600))
 		var owner := str(entry.get("ownerCode", ""))
-		var sub := "%s · %s · %d%%" % [str(TYPE_LABELS.get(str(entry.get("type", "")), str(entry.get("type", "")))), host.polity_name(owner) if not owner.is_empty() else "no owner", int(float(entry.get("strength", 100)))]
+		var own := host.unit_type_of(entry)
+		var kind_text := str(TYPE_LABELS.get(str(entry.get("type", "")), str(entry.get("type", ""))))
+		if not own.is_empty():
+			kind_text = ("%s %s" % [str(own.get("icon", "")), str(own.get("name", ""))]) if not str(own.get("icon", "")).is_empty() else str(own.get("name", ""))
+		var sub := "%s · %s · %d%%" % [kind_text, host.polity_name(owner) if not owner.is_empty() else "no owner", int(float(entry.get("strength", 100)))]
 		if not str(entry.get("composition", "")).is_empty():
 			sub += " · " + str(entry.get("composition", ""))
 		texts.add_child(UI.label(sub, 11, Color(1, 1, 1, 0.5)))

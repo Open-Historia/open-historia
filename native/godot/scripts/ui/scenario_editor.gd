@@ -56,6 +56,7 @@ const SECTION_ICONS := {
 	"prompts": "<path d='M5 5.5h14v10H9.5L5 19.5z'/><path d='M8.5 9.5h7M8.5 12.5h4.5'/>",
 	"bundles": "<path d='M12 4.5v10M8 10.5l4 4 4-4'/><path d='M5 16.5v2a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5v-2'/>",
 }
+const UnitTypesPanel := preload("res://scripts/editor/unit_types_panel.gd")
 const UNIT_TYPES := ["infantry", "armor", "air", "naval", "artillery", "garrison"]
 const UNIT_TYPE_LABELS := {
 	"infantry": "Infantry",
@@ -1088,6 +1089,23 @@ func _render_world() -> void:
 	var language := _field_line("Language", "language")
 	language.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	grid.add_child(language)
+	var currencies: Array = []
+	for entry in _constants.get("economicCurrencies", []):
+		if entry is Dictionary:
+			var code := str((entry as Dictionary).get("code", ""))
+			currencies.append([code, "%s (%s, %s)" % [str((entry as Dictionary).get("name", "")), code, str((entry as Dictionary).get("symbol", ""))]])
+	var chosen_currency := str(_form.get("economicDisplayCurrency", "USD"))
+	var currency := EditorKit.field("Default GDP display currency" if _kind == "scenario" else "GDP display currency", EditorKit.select(currencies, chosen_currency if not chosen_currency.is_empty() else "USD", func(value: String) -> void: _set_form("economicDisplayCurrency", value)))
+	currency.add_child(EditorKit.hint(("Suggested for new campaigns; players can override it." if _kind == "scenario" else "This campaign only.") + " GDP numbers remain in canonical 2026 USD.", 11, Color(1, 1, 1, 0.45)))
+	currency.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	grid.add_child(currency)
+	if _kind == "scenario":
+		var funding_options := [["gdp-proxy", "Estimated national GDP allowance"], ["nonmonetary", "Non-monetary time and effort"]]
+		var funding_mode := str(_form.get("projectFundingMode", "gdp-proxy"))
+		var funding := EditorKit.field("Projects funding basis", EditorKit.select(funding_options, funding_mode if not funding_mode.is_empty() else "gdp-proxy", func(value: String) -> void: _set_form("projectFundingMode", value)))
+		funding.add_child(EditorKit.hint("GDP allowance is an estimate, not treasury cash. Non-monetary scenarios advance projects by time and capacity without recording financial payments; no GDP is required.", 11, Color(1, 1, 1, 0.45)))
+		funding.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		grid.add_child(funding)
 	(begins[1] as VBoxContainer).add_child(grid)
 	_content.add_child(begins[0])
 	if _kind == "scenario":
@@ -1250,8 +1268,18 @@ func _render_wars(holder: VBoxContainer) -> void:
 	_host(EditorWarSettings.new(), {"value": _form.get("warSettings"), "value_field": "warSettings"}, func(value: Variant) -> void:
 		_set_form("warSettings", value)
 		_update_panels(), holder)
+	_host(UnitTypesPanel.new(), {"value": _form.get("unitTypes", []), "value_field": "unitTypes", "countries": _unit_type_countries()}, func(value: Variant) -> void:
+		_set_form("unitTypes", value), holder)
 	_host(EditorMilitaryPanel.new(), {}, Callable(), holder)
 	_host(EditorFrontsPanel.new(), {}, Callable(), holder)
+
+
+func _unit_type_countries() -> Array:
+	var names: Array = []
+	for option in _country_options:
+		if option is Dictionary and not str((option as Dictionary).get("code", "")).is_empty():
+			names.append(str((option as Dictionary).get("code", "")))
+	return names
 
 
 func _render_politics() -> void:
@@ -2029,7 +2057,7 @@ func _open_workshop() -> void:
 		if _workshop == workshop:
 			_workshop = null)
 	var game_date := str(_form.get("gameDate", _data_game().get("gameDate", "")))
-	workshop.open(scenario, {"world": _world(), "gameDate": game_date, "warSettings": _form.get("warSettings")})
+	workshop.open(scenario, {"world": _world(), "gameDate": game_date, "warSettings": _form.get("warSettings"), "unitTypes": _form.get("unitTypes", [])})
 
 
 func _stop_workshop() -> void:
@@ -2052,6 +2080,13 @@ func _on_workshop_saved(details: Dictionary) -> void:
 	for key in ["country", "gameDate"]:
 		if str(_form.get(key, "")) == str(before.get(key, "")):
 			_form[key] = after.get(key, "")
+	var renames: Array = []
+	if _workshop and is_instance_valid(_workshop) and _workshop.get("saved_renames") is Array:
+		renames = _workshop.get("saved_renames")
+	if not renames.is_empty() and _form.get("unitTypes") is Array:
+		var renamed := await engine.request("editor.unitTypes", {"op": "renamed", "types": _form.get("unitTypes"), "renames": renames})
+		if renamed.get("ok", false) and renamed.get("result") is Array:
+			_form["unitTypes"] = renamed["result"]
 	library_changed.emit()
 	_render_nav()
 	if _section in ["overview", "world", "prompts", "assets", "bundles"]:

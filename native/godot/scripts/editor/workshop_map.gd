@@ -49,14 +49,6 @@ const KINETIC_MIN_VELOCITY := 0.05
 const KINETIC_DELAY_MS := 100
 const KINETIC_DURATION_MS := 500
 const BOX_ZOOM_TOOLS := ["select", "pan", "dissolve", "delete", "feature", "marker", "unit", "modify", "border", "move", "scale"]
-const MARKER_GLYPHS := [
-	["\\b(capital|city|town|settlement|metropolis|municipality)\\b", "●"],
-	["\\b(military|army|naval|defen[cs]e|command|headquarters|hq|base|fort|fortress|bunker|silo|garrison|missile|radar|airfield|airbase|barracks|outpost|citadel|arsenal|testing range)\\b", "▲"],
-	["\\b(lithium|resource|basin|mine|mining|deposit|oil ?field|gas ?field|coal ?field|ore ?field|quarry|well)\\b", "◆"],
-	["\\b(port|harbou?r|terminal|logistics|rail|railway|station|airport|bridge|canal|corridor|transit|pipeline|grid|storage|hub)\\b", "■"],
-	["\\b(factory|plant|works|industrial|manufactur|laborator|laboratory|research|science|scientific|technology|institute|university|energy|power|reactor)\\b", "✦"],
-	["\\b(embassy|consulate|mission|secretariat|liaison|administration|diplomatic)\\b", "◇"],
-]
 const UNIT_GLYPH := {"infantry": "I", "armor": "A", "air": "✈", "naval": "N", "artillery": "R", "garrison": "G"}
 const WORLD := 4096.0
 const SCALE_INK := Color("#06222d")
@@ -1923,7 +1915,7 @@ func _draw_map_feature(canvas: Control, row: Dictionary, screen: Vector2, zoom: 
 		color.a = 0.55
 	if selected:
 		color = Color("#facc15")
-	var glyph := marker_glyph(str(row.get("kind", "")), str(row.get("name", "")))
+	var glyph := str(row.get("glyph", "•")) if not str(row.get("glyph", "")).is_empty() else "•"
 	var size := 17 if selected else 15
 	var glyph_box := _text_box(bold, glyph, size, screen)
 	if _free(taken, glyph_box):
@@ -1939,23 +1931,6 @@ func _draw_map_feature(canvas: Control, row: Dictionary, screen: Vector2, zoom: 
 			return
 		taken.append(box)
 		_text(canvas, font, text, 11, centre, Color("#fef3c7") if selected else Color(1, 1, 1), Color(0, 0, 0, 0.85))
-
-
-static var _marker_patterns: Array = []
-
-
-static func marker_glyph(kind: String, name: String) -> String:
-	if _marker_patterns.is_empty():
-		for rule in MARKER_GLYPHS:
-			var pattern := RegEx.new()
-			pattern.compile(str(rule[0]))
-			_marker_patterns.append([pattern, str(rule[1])])
-	var clean := RegEx.create_from_string("[^a-z0-9]+")
-	var searchable := ("%s %s" % [clean.sub((kind if not kind.is_empty() else "landmark").to_lower(), " ", true).strip_edges(), clean.sub(name.to_lower(), " ", true).strip_edges()]).strip_edges()
-	for rule in _marker_patterns:
-		if (rule[0] as RegEx).search(searchable) != null:
-			return str(rule[1])
-	return "•"
 
 
 func _draw_unit(canvas: Control, row: Dictionary, screen: Vector2, zoom: float, bold: Font, taken: Array[Rect2]) -> void:

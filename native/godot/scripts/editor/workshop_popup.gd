@@ -7,6 +7,9 @@ const SIZES := [[1, "Town"], [2, "City"], [3, "Major city"]]
 const UNIT_TYPES := ["infantry", "armor", "air", "naval", "artillery", "garrison"]
 const UNIT_LABELS := {"infantry": "Infantry", "armor": "Armour", "air": "Air", "naval": "Naval", "artillery": "Artillery", "garrison": "Garrison"}
 const MAP_FEATURE_KINDS := [["landmark", "Landmark"], ["military hq", "Military HQ"], ["military base", "Military base"], ["fortress", "Fortress"], ["airfield", "Airfield"], ["port", "Port"], ["mine", "Mine or quarry"], ["oil field", "Oil field"], ["industrial plant", "Industrial plant"], ["power plant", "Power plant"], ["research facility", "Research facility"], ["embassy", "Embassy"]]
+const MAP_FEATURE_FAMILIES := [["landmark", "Landmark"], ["settlement", "Settlement"], ["military", "Military"], ["resource", "Resource"], ["infrastructure", "Infrastructure"], ["industry-science", "Industry and science"], ["diplomatic", "Diplomatic"]]
+const UNIT_TYPES_GROUP_LABEL := "Unit types"
+const OWN_TYPE := "own:"
 const STATUS_LABELS := [["planned", "Planned"], ["under_construction", "Under construction"], ["active", "Active"], ["damaged", "Damaged"], ["inactive", "Inactive"], ["abandoned", "Abandoned"], ["destroyed", "Destroyed"]]
 
 var host: Workshop
@@ -16,6 +19,8 @@ var is_new := false
 var _column: VBoxContainer
 var _custom_kind := false
 var _row: Dictionary = {}
+var _kind_select: OptionButton
+var _offer_turn := 0
 
 
 func setup(workshop: Workshop, popup_kind: String, id: String, fresh: bool) -> void:
@@ -189,6 +194,13 @@ func _build_marker() -> void:
 				listed = true
 		var custom := WorkshopUI.input("" if listed else current_kind, "shipyard, missile silo, monastery…", func(text: String) -> void: _update({"kind": text.to_lower()}), 12.0, 28.0)
 		_column.add_child(custom)
+		_column.add_child(_caption("Drawn as"))
+		var family := str(_row.get("family", "")).strip_edges().to_lower()
+		var known_family := false
+		for entry in MAP_FEATURE_FAMILIES:
+			if str(entry[0]) == family:
+				known_family = true
+		_column.add_child(WorkshopUI.select(MAP_FEATURE_FAMILIES, family if known_family else "landmark", func(value: String) -> void: _update({"family": value}), 12.0, 28.0))
 	_column.add_child(_caption("Held by"))
 	var owner := str(_row.get("owner", "")) if _row.get("owner") != null else ""
 	var holders: Array = [["", "No one"]]
@@ -220,8 +232,9 @@ func _build_unit() -> void:
 	var types: Array = []
 	for type_id in UNIT_TYPES:
 		types.append([type_id, str(UNIT_LABELS.get(type_id, type_id))])
-	var type_select := WorkshopUI.select(types, str(_row.get("type", "infantry")), func(value: String) -> void: _update({"type": value}), 12.0, 28.0)
+	var type_select := WorkshopUI.select(types, str(_row.get("type", "infantry")), _pick_kind, 12.0, 28.0)
 	type_select.tooltip_text = "Unit type"
+	_kind_select = type_select
 	line.add_child(type_select)
 	line.add_child(_caption("Strength"))
 	var strength := WorkshopUI.input(str(int(float(_row.get("strength", 100)))), "", Callable(), 12.0, 28.0)
@@ -248,9 +261,51 @@ func _build_unit() -> void:
 			known = true
 	if not known:
 		owners.insert(0, ["", ("%s (not on this map)" % owner) if not owner.is_empty() else "Choose a country…"])
-	_column.add_child(WorkshopUI.select(owners, owner if known else "", func(value: String) -> void: _update({"ownerCode": value}), 12.0, 28.0))
+	_column.add_child(WorkshopUI.select(owners, owner if known else "", func(value: String) -> void:
+		await _update({"ownerCode": value})
+		_offer_unit_types(), 12.0, 28.0))
 	_column.add_child(_caption("Composition"))
 	_column.add_child(WorkshopUI.input(str(_row.get("composition", "")), "e.g. 3 tank regiments, 1 mechanised brigade", func(text: String) -> void: _update({"composition": text}), 12.0, 28.0))
 	_column.add_child(_caption("What it is doing"))
 	_column.add_child(WorkshopUI.input(str(_row.get("note", "")), "One sentence, e.g. Holding the northern border", func(text: String) -> void: _update({"note": text}), 12.0, 28.0))
 	_buttons()
+	_offer_unit_types()
+
+
+func _pick_kind(value: String) -> void:
+	if not value.begins_with(OWN_TYPE):
+		_update({"type": value, "unitType": ""})
+		return
+	var wanted := value.substr(OWN_TYPE.length())
+	for entry in host.unit_types:
+		if entry is Dictionary and str((entry as Dictionary).get("id", "")) == wanted:
+			_update({"type": str((entry as Dictionary).get("base", "infantry")), "unitType": wanted})
+			return
+
+
+func _offer_unit_types() -> void:
+	if host.unit_types.is_empty() or _kind_select == null:
+		return
+	_offer_turn += 1
+	var turn := _offer_turn
+	var reply := await host.request_raw("workshop.unitTypes.offered", {"ownerCode": str(_row.get("ownerCode", "")), "unitType": str(_row.get("unitType", ""))})
+	if turn != _offer_turn or not is_instance_valid(_kind_select) or not reply.get("ok", false) or not (reply.get("result") is Array):
+		return
+	while _kind_select.item_count > UNIT_TYPES.size():
+		_kind_select.remove_item(_kind_select.item_count - 1)
+	var offered: Array = reply["result"]
+	if not offered.is_empty():
+		_kind_select.add_separator(UNIT_TYPES_GROUP_LABEL)
+	for entry in offered:
+		var row: Dictionary = entry
+		var icon := str(row.get("icon", ""))
+		var label := ("%s %s" % [icon, str(row.get("name", ""))]) if not icon.is_empty() else str(row.get("name", ""))
+		_kind_select.add_item(label)
+		_kind_select.set_item_metadata(_kind_select.item_count - 1, OWN_TYPE + str(row.get("id", "")))
+		_kind_select.set_item_auto_translate_mode(_kind_select.item_count - 1, Node.AUTO_TRANSLATE_MODE_DISABLED)
+	var current := str(_row.get("unitType", ""))
+	var wanted := (OWN_TYPE + current) if not current.is_empty() else str(_row.get("type", "infantry"))
+	for index in range(_kind_select.item_count):
+		if not _kind_select.is_item_separator(index) and str(_kind_select.get_item_metadata(index)) == wanted:
+			_kind_select.select(index)
+			return

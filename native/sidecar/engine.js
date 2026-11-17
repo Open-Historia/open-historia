@@ -408,3 +408,4 @@ export * as dayOneFacts from "../../src/runtime/scenarioPrehistoryDayOne.js";
 export * as canonicalAgreements from "../../src/runtime/scenarioCanonicalAgreements.js";
 export * as politicsSuggestionPresentation from "../../src/Game/GameUI/politicsSuggestionPresentation.js";
 export * as nameKey from "../../server/nameKey.js";
+export * as wsPresentation from "../../src/Game/Map/vnext/presentationPolicy.js";

@@ -132,6 +132,7 @@ export const register = (ctx) => {
       eyebrow: scenario.eyebrow ?? "",
       features: engine.edFeatures.normalizeFeatureSettings(scenario.features),
       gameDate: game.gameDate ?? "",
+      economicDisplayCurrency: engine.econCurrency.normalizeEconomicDisplayCurrency(game.economicDisplayCurrency),
       heroSubtitle: scenario.heroSubtitle ?? "",
       heroTitle: scenario.heroTitle ?? "",
       language: game.language ?? world.language ?? "English",
@@ -143,9 +144,11 @@ export const register = (ctx) => {
       labelHaloColor: world.labelHaloColor ?? "",
       labelTextColor: world.labelTextColor ?? "",
       simulationRules: world.simulationRules ?? "",
+      projectFundingMode: world.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy",
       startingTimelineText: world.startingTimelineText ?? "",
       subtitle: scenario.subtitle ?? "",
       warSettings: engine.edWarSettings.compactWarSettings(world.warSettings),
+      unitTypes: engine.scenarioUnitTypes.formUnitTypes(world),
     };
   };
 
@@ -161,6 +164,7 @@ export const register = (ctx) => {
       features: engine.edFeatures.normalizeFeatureOverrides(gameMeta.features),
       scenarioFeatures: engine.edFeatures.normalizeFeatureSettings(details?.scenario?.features),
       gameDate: game.gameDate ?? "",
+      economicDisplayCurrency: engine.econCurrency.normalizeEconomicDisplayCurrency(game.economicDisplayCurrency),
       heroSubtitle: gameMeta.heroSubtitle ?? "",
       heroTitle: gameMeta.heroTitle ?? "",
       language: game.language ?? world.language ?? "English",
@@ -328,8 +332,26 @@ export const register = (ctx) => {
       labelFonts: list(engine.mapSettings?.LABEL_FONT_SUGGESTIONS),
       licenseUrl: engine.edLicense.SCENARIO_LICENSE_URL,
       unitTypes: [...engine.gameState.UNIT_TYPES],
+      economicCurrencies: plain(engine.econCurrency.ECONOMIC_DISPLAY_CURRENCIES),
+      unitTypesMost: engine.unitTypes.UNIT_TYPES_MOST,
       dataRoot: ctx.dataRoot,
     }),
+
+    "editor.unitTypes": async ({ op = "", types = [], id = "", name = "", patch = {}, owner = "", renames = [], text = "", most = 0 } = {}) => {
+      const helpers = engine.scenarioUnitTypes;
+      if (op === "add") return plain(helpers.withNewUnitType(types, name));
+      if (op === "change") return plain(helpers.withUnitType(types, id, patch));
+      if (op === "remove") return plain(helpers.withoutUnitType(types, id));
+      if (op === "addOwner") return plain(helpers.withUnitTypeOwner(types, id, owner));
+      if (op === "removeOwner") return plain(helpers.withoutUnitTypeOwner(types, id, owner));
+      if (op === "renamed") return plain(helpers.withRenamedUnitTypeOwners(types, renames));
+      if (op === "figure") return plain(helpers.typedUnitTypeFigure(text, Number(most) || engine.unitTypes.FIGURE_MOST));
+      if (op === "limits") {
+        const U = engine.unitTypes;
+        return { most: U.UNIT_TYPES_MOST, figureMost: U.FIGURE_MOST, speedMost: U.SPEED_MOST, nameMost: U.NAME_MOST, noteMost: U.NOTE_MOST, iconMost: U.ICON_MOST, kinds: [...U.UNIT_TYPES] };
+      }
+      throw new Error(`Unknown unit type edit: ${op}`);
+    },
 
     "editor.open": async ({ kind = "scenario", id }) => (kind === "scenario" ? openScenario(id) : openGame(id)),
 
@@ -374,6 +396,9 @@ export const register = (ctx) => {
             ...currentGame,
             country: editorState.country,
             gameDate: editorState.gameDate,
+            ...(editorState.economicDisplayCurrency !== engine.econCurrency.normalizeEconomicDisplayCurrency(currentGame.economicDisplayCurrency)
+              ? { economicDisplayCurrency: editorState.economicDisplayCurrency }
+              : {}),
             language: editorState.language,
             startDate: editorState.gameDate || currentGame.startDate || "",
           },
@@ -394,9 +419,13 @@ export const register = (ctx) => {
             labelTextColor: editorState.labelTextColor,
             language: editorState.language,
             simulationRules: editorState.simulationRules,
+            projectFundingMode: editorState.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy",
             startingTimelineText: editorState.startingTimelineText,
             ...(editorState.warSettings || currentWorld.warSettings !== undefined
               ? { warSettings: engine.edWarSettings.compactWarSettings(editorState.warSettings) }
+              : {}),
+            ...(engine.scenarioUnitTypes.savedUnitTypes(editorState.unitTypes).length > 0 || currentWorld.unitTypes !== undefined
+              ? { unitTypes: engine.scenarioUnitTypes.savedUnitTypes(editorState.unitTypes) }
               : {}),
           },
         });
@@ -424,7 +453,7 @@ export const register = (ctx) => {
         return { ...packOf("scenario", details), stats: savedStats, keepStats: statsFailed };
       }
       const baseline = savedForm ?? {};
-      const gamePatch = engine.edForm.changedFields(editorState, baseline, ["country", "gameDate", "language"]);
+      const gamePatch = engine.edForm.changedFields(editorState, baseline, ["country", "gameDate", "language", "economicDisplayCurrency"]);
       const worldPatch = engine.edForm.changedFields(editorState, baseline, [
         "labelFont",
         "labelHaloColor",
