@@ -1,6 +1,5 @@
 import { labStaffPolicy, trainedStaffPolicy } from "../../src/runtime/fronts/mind/trained.js";
 import { engineRegionsOf, runTurnFronts } from "../../src/Game/AI/frontTurn.js";
-import { eventNarratesHardCombat } from "../../src/Game/AI/nativeWarLedger.js";
 import { territoryTempoAllowance } from "../../src/Game/AI/worldDirection.js";
 import { rustRunMaker } from "./rustFronts.mjs";
 
@@ -25,7 +24,7 @@ const regionsReadHere = async (ask) => {
 };
 
 export const fightInRust = async (host, data = {}, { ask, pause = null, onRuns = null, slice } = {}) => {
-  const { staff = null, tempo = 0, narrates = false, strikes = [], readsMap = false, readsRegions = false, findsRegionsFile = false, ...rest } = data ?? {};
+  const { staff = null, tempo = 0, strikes = [], readsMap = false, readsRegions = false, findsRegionsFile = false, ...rest } = data ?? {};
   const asks = Array.isArray(strikes) ? strikes : [];
   let regionIds = null;
   const led = Boolean(staff && trainedStaffPolicy());
@@ -46,7 +45,6 @@ export const fightInRust = async (host, data = {}, { ask, pause = null, onRuns =
       pause: typeof pause === "function" ? pause : async () => {},
       ...(tempo > 0 ? { tempoAllowance: (days) => territoryTempoAllowance(tempo, Math.max(1, days)) } : {}),
       ...(led ? { staffPolicy: labStaffPolicy(staff) } : {}),
-      ...(narrates ? { narratesCombat: eventNarratesHardCombat } : {}),
       ...(asks.length > 0 ? {
         strikePlaces: Object.fromEntries(asks.map((name) => [name, (value) => ask(`strike.${name}`, value)])),
       } : {}),
