@@ -2156,10 +2156,11 @@ export const normalizeProjects = (projects) =>
     normalizeArray(projects)
       .map((entry, index) => normalizeProjectEntry(entry, index))
       .filter(Boolean)
-      // Deduplicate by name, keeping the FIRST occurrence: two entries for the
-      // same programme are a model restating itself.
+      // A project ID, not its display name, owns its canonical identity.
+      // Countries (and even one country) may run different programmes with the
+      // same title. Restatements are resolved by applyProjectOps instead.
       .filter((entry, index, list) =>
-        list.findIndex((other) => other.name.toLowerCase() === entry.name.toLowerCase()) === index),
+        list.findIndex((other) => other.id === entry.id) === index),
   );
 
 // The board's size limit, exported so the panel can warn the player as they
@@ -2303,19 +2304,29 @@ const patchedAlias = (patch, field) => {
 // quotes and a label word in front included ('Operation "Standing Watch"').
 const DISPLAYED_PROJECT_TITLE = /^(?:[^\s"«“„]+\s+)?["«“„](.+)["»”“]$/u;
 
-export const findProjectIndexForOp = (list, op) => {
+export const findProjectIndexForOp = (list, op, { owner = null, host = "" } = {}) => {
+  const sameOwner = (project) => {
+    if (owner === null) return true;
+    const actual = normalizeOptionalString(project.ownerCode);
+    const wanted = normalizeOptionalString(owner);
+    return wanted
+      ? Boolean(actual && samePolityName(actual, wanted))
+      : !actual || Boolean(host && samePolityName(actual, host));
+  };
   if (op.projectId) {
     const byId = list.findIndex((project) => project.id === op.projectId);
-    if (byId !== -1) return byId;
+    if (byId !== -1 && sameOwner(list[byId])) return byId;
   }
   if (!op.name) return -1;
-  const wanted = op.name.toLowerCase();
-  const exact = list.findIndex((project) => project.name.toLowerCase() === wanted);
-  if (exact !== -1) return exact;
-  const folded = list.findIndex((project) => samePolityName(project.name, op.name));
-  if (folded !== -1) return folded;
+  // Name-only operations are a compatibility fallback, never an invitation to
+  // mutate the first of several identically named programmes. Create operations
+  // additionally scope the fallback to the intended owner.
   const bare = op.name.trim().match(DISPLAYED_PROJECT_TITLE)?.[1]?.trim();
-  return bare ? list.findIndex((project) => project.name.toLowerCase() === bare.toLowerCase() || samePolityName(project.name, bare)) : -1;
+  const candidates = [op.name, bare].filter(Boolean);
+  const matches = list.map((project, index) => ({ project, index }))
+    .filter(({ project }) => candidates.some((name) => samePolityName(project.name, name)))
+    .filter(({ project }) => sameOwner(project));
+  return matches.length === 1 ? matches[0].index : -1;
 };
 
 // Fold a project op's owner name onto the polity it actually names, before the op
@@ -2345,7 +2356,7 @@ const resolveProjectOpOwner = (raw, resolveOwner) => {
 //   engine                 the engine's own ops (the covert-operation sync and
 //                          the doubt), which may also set a status.
 export const applyProjectOps = (projects, ops, ctx = {}) => {
-  const { date = "", eventId = "", round = 0, engine = false, boundPlan = (plan) => plan } = ctx;
+  const { date = "", eventId = "", round = 0, engine = false, host = "", boundPlan = (plan) => plan, onRefusal = () => {} } = ctx;
   const stamp = new Date().toISOString();
   let next = normalizeProjects(projects);
 
@@ -2380,7 +2391,9 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
     const op = normalizeProjectOp(raw);
     if (!op) continue;
     if (op.op === "create") {
-      const existingIndex = indexOf({ projectId: op.project.id, name: op.project.name });
+      const existingIndex = findProjectIndexForOp(next, {
+        projectId: op.project.id, name: op.project.name,
+      }, { owner: op.project.ownerCode, host });
       if (existingIndex !== -1) {
         // Re-announcing a running project is a restatement, not a second one:
         // only what it said is taken, and never its progress or its course. A
@@ -2397,6 +2410,21 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
         }
         const normalized = renormalize(merged, existingIndex);
         if (normalized) next = next.map((project, index) => (index === existingIndex ? touch(normalized) : project));
+        continue;
+      }
+      // IDs cannot be recycled across owners, and a name-only create must not
+      // guess which of two same-owner entries it is restating.
+      const ambiguousName = next.filter((project) => findProjectIndexForOp(
+        [project], { name: op.project.name }, { owner: op.project.ownerCode, host },
+      ) !== -1).length > 1;
+      if (ambiguousName || next.some((project) => project.id === op.project.id)) {
+        onRefusal(op.project.id, ambiguousName ? "ambiguous project title" : "duplicate project ID");
+        continue;
+      }
+      // Reject a new entry while the canonical board is full. Never report a
+      // successful create that a later normalization will silently evict.
+      if (next.length >= MAX_PROJECTS) {
+        onRefusal(op.project.id, "project board is full");
         continue;
       }
       next = [...next, touch(withPlan({
@@ -6147,14 +6175,29 @@ export const applyProjectOpsToWorld = ({
     const op = normalizeProjectOp(raw);
     if (!op) return actor === "engine";
     if (actor === "engine") return true;
-    if (op.op === "create") return isPlayersOwn(op.project.ownerCode);
+    if (op.op === "create") {
+      if (!isPlayersOwn(op.project.ownerCode)) return false;
+      const matched = findProjectIndexForOp(nextWorld.projects, {
+        projectId: op.project.id, name: op.project.name,
+      }, { owner: op.project.ownerCode, host: player });
+      // Even an explicit spoofed ID must never make a player's create write
+      // another country's project.
+      if (matched !== -1 && !isPlayersOwn(nextWorld.projects[matched].ownerCode)) {
+        refused.add(nextWorld.projects[matched].id);
+        return false;
+      }
+      return true;
+    }
     if (op.op === "setback" || op.op === "boost") return false;
     const index = findProjectIndexForOp(nextWorld.projects, op);
     if (index === -1) return true;
     const target = nextWorld.projects[index];
     const own = isPlayersOwn(target.ownerCode);
     // What a government does to its own programmes: fund, plan, call off.
-    const steers = op.op === "close" || (op.op === "update" && (op.patch?.funding !== undefined || op.patch?.plan !== undefined));
+    const steers = op.op === "close" || (op.op === "update" && (
+      op.patch?.funding !== undefined || op.patch?.plan !== undefined ||
+      closedValue(PROJECT_SECRECY_SET)(op.patch?.secrecy)
+    ));
     if (actor === "player" && (!canPlayerDirect(target, player) || (op.op === "update" && !steers))) {
       refused.add(target.id);
       return false;
@@ -6166,12 +6209,27 @@ export const applyProjectOpsToWorld = ({
     return true;
   });
 
-  nextWorld.projects = applyProjectOps(nextWorld.projects, allowed, {
+  // A player update may steer funding/planning and secrecy, not smuggle other
+  // canonical fields in alongside an otherwise authorized control.
+  const safeOps = actor === "player" ? allowed.map((raw) => {
+    const op = normalizeProjectOp(raw);
+    if (op?.op !== "update") return raw;
+    const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
+    return {
+      op: "update", projectId: op.projectId, name: op.name,
+      patch: Object.fromEntries(["funding", "plan", "secrecy"]
+        .filter((field) => patch[field] !== undefined).map((field) => [field, patch[field]])),
+    };
+  }) : allowed;
+
+  nextWorld.projects = applyProjectOps(nextWorld.projects, safeOps, {
     date,
     eventId,
     round,
+    host: player,
     engine: actor === "engine",
     boundPlan: projectPlanBounder(nextWorld, player),
+    onRefusal: (id) => refused.add(id),
   });
 
   return { refusedProjectIds: [...refused], world: nextWorld };

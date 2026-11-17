@@ -1707,8 +1707,21 @@ const parseConservativeJsonArrayText = (value) => {
 
 const parseActorPatchFromWireProposal = (rawProposal) => {
   if (isPlainObject(rawProposal?.actorPatch)) return canonicalizeWireActorPatch(rawProposal.actorPatch);
+  // Some providers decode the JSON-text argument into an object even when
+  // the shallow tool explicitly requires a string. This is transport-only:
+  // the resulting patch still passes requested-scope and native validation.
+  if (isPlainObject(rawProposal?.actorPatchJson)) return canonicalizeWireActorPatch(rawProposal.actorPatchJson);
   const parsed = parseConservativeJsonObjectText(rawProposal?.actorPatchJson);
-  return parsed ? canonicalizeWireActorPatch(parsed) : null;
+  if (parsed) return canonicalizeWireActorPatch(parsed);
+  // Four live replies omitted exactly one closing brace immediately before
+  // the final entity-array bracket. Repair this transport field alone, never
+  // historical-verification JSON; canonical validation still decides validity.
+  const rawJson = typeof rawProposal?.actorPatchJson === "string" ? rawProposal.actorPatchJson.trim() : "";
+  if (rawJson.endsWith("]}")) {
+    const repaired = parseConservativeJsonObjectText(rawJson.slice(0, -2) + "}" + rawJson.slice(-2));
+    if (repaired) return canonicalizeWireActorPatch(repaired);
+  }
+  return null;
 };
 
 const parseHistoricalIdentityJson = (value) => parseConservativeJsonObjectText(value);

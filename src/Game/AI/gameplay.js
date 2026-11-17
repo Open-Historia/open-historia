@@ -188,6 +188,7 @@ import {
   tickProjects,
   worldProjectGate,
 } from "../../runtime/projectEngine.js";
+import { publicProjectOutcomes } from "../../runtime/projectDisclosure.js";
 import { filterBoundLedgerUpdatesToKeptEvents, keepWarRecordsBeyondEvents } from "./ledgerEventBinding.js";
 import { giveSegmentEventIds, pinLedgersToEvents } from "./ledgerPins.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
@@ -8762,7 +8763,8 @@ const projectsPeriod = (bundle, toDate, fromDate = normalizeString(bundle?.game?
 });
 
 // What the engine decided for a skip's period, as its prompt is told it.
-const projectsForecastText = (outcomes) => describeOutcomes(outcomes);
+const projectsForecastText = (outcomes, world, host) =>
+  describeOutcomes(publicProjectOutcomes(outcomes, world?.projects, host));
 
 // The engine's turn (see applySimulationResult): the tick, the effects it
 // releases, and the territory a completion moves, found on the map by name and
@@ -18203,7 +18205,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   // what the engine decides — checkpoints, completions and their effects, stalls
   // — goes into the prompt, so the events tell what happens to them instead of
   // guessing. The same days are run again when the answer is applied.
-  const projectsForecast = projectsForecastText(projectsPeriod(bundle, targetDate).outcomes);
+  const projectsForecast = projectsForecastText(projectsPeriod(bundle, targetDate).outcomes, bundle.world, projectsHost(bundle.game));
   // Guarantee at least one event per queued action, so each planned action has a
   // slot to resolve into (bounded so a huge queue can't demand absurd counts).
   const plannedActionCount = normalizeActions(bundle.actions).filter((action) => action.status === "planned").length;

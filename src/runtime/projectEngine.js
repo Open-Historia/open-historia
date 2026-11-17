@@ -538,7 +538,9 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
   board.forEach((project, index) => {
     if (!isRecord(project) || !ticks(project)) return;
     const owner = projectOwnerOf(project, host);
-    const key = owner.toLowerCase();
+    // Use the same polity identity fold as sheetOf and ownerMeans. Otherwise
+    // aliases of one country create multiple independent daily funding pools.
+    const key = nameKey(owner);
     if (!owners.has(key)) {
       const sheet = sheetOf(world, owner);
       const monthly = monthlyProjectBudget(sheet);

@@ -467,7 +467,7 @@ const Milestones = ({ plan }) => {
 
 // ---- one card --------------------------------------------------------------
 
-const ProjectCard = memo(({ project, eventTitles, expanded, busy, playerCountry, playerLandless, ownerFlags, ownerNames, finish, planning, onToggleExpand, onAskAdvisor, onShowOnMap, onSetFunding, onAbandon, onPlan }) => {
+const ProjectCard = memo(({ project, eventTitles, expanded, busy, playerCountry, playerLandless, ownerFlags, ownerNames, finish, planning, onToggleExpand, onAskAdvisor, onShowOnMap, onSetFunding, onSetSecrecy, onAbandon, onPlan }) => {
   const flags = deriveProjectFlags(project);
   const open = isProjectOpen(project);
   const mine = isPlayerProject(project, playerCountry);
@@ -643,6 +643,21 @@ const ProjectCard = memo(({ project, eventTitles, expanded, busy, playerCountry,
           ) : (
             <FundingSwitch busy={busy} value={project.funding} onSelect={(funding) => onSetFunding(project, funding)} />
           )}
+          <label style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.68rem", color: "rgba(255,255,255,0.7)" }}>
+            {uiString("Visibility")}
+            <select
+              className="oh-tap-row"
+              aria-label={uiString("Project visibility")}
+              value={project.secrecy || "public"}
+              disabled={busy}
+              onChange={(event) => onSetSecrecy(project, event.target.value)}
+              style={{ ...inputStyle, padding: "0.25rem 0.35rem", fontSize: "0.68rem" }}
+            >
+              <option value="public">{uiString("Public")}</option>
+              <option value="restricted">{uiString("Restricted")}</option>
+              <option value="covert">{uiString("Covert")}</option>
+            </select>
+          </label>
           <button
             type="button"
             className="oh-tap-row"
@@ -717,12 +732,16 @@ const NewProject = ({ owner, onStarted, writeOps }) => {
   const [error, setError] = useState("");
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
+  // By default retain the planner's proposed classification; the owner can
+  // explicitly override it before the project is written to canonical state.
+  const [secrecyChoice, setSecrecyChoice] = useState("auto");
 
   const reset = () => {
     setName("");
     setGoal("");
     setDraft(null);
     setError("");
+    setSecrecyChoice("auto");
   };
 
   const plan = async () => {
@@ -747,7 +766,7 @@ const NewProject = ({ owner, onStarted, writeOps }) => {
         name: draft.name,
         summary: draft.summary,
         kind: draft.kind,
-        secrecy: draft.secrecy,
+        secrecy: secrecyChoice === "auto" ? draft.secrecy : secrecyChoice,
         tags: draft.tags,
         ...(draft.focus ? { focus: draft.focus } : {}),
         plan: draft.plan,
@@ -804,6 +823,21 @@ const NewProject = ({ owner, onStarted, writeOps }) => {
           </div>
         </>
       )}
+      <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.7)" }}>
+        {uiString("Project visibility")}
+        <select
+          value={secrecyChoice}
+          onChange={(event) => setSecrecyChoice(event.target.value)}
+          disabled={planning || saving}
+          style={{ ...inputStyle, padding: "0.3rem 0.4rem", flex: 1 }}
+          aria-label={uiString("New project visibility")}
+        >
+          <option value="auto">{draft ? `As planned (${draft.secrecy || "public"})` : uiString("Use planner's classification")}</option>
+          <option value="public">{uiString("Public")}</option>
+          <option value="restricted">{uiString("Restricted")}</option>
+          <option value="covert">{uiString("Covert")}</option>
+        </select>
+      </label>
       {draft && <PlanCard draft={draft} owner={owner} busy={saving} onStart={start} onDiscard={() => { setDraft(null); }} />}
       {error && <div style={{ color: "#fca5a5", fontSize: "0.7rem" }}>{error}</div>}
     </div>
@@ -1356,7 +1390,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
       round,
       world,
     });
-    if (refusedProjectIds.length > 0 && JSON.stringify(nextWorld.projects) === JSON.stringify(world.projects)) return;
+    if (refusedProjectIds.length > 0) throw new Error("Project change refused: not authorized or the board is full.");
     await writeWorldState(nextWorld);
   }, [gameDate, playerCountry, round]);
 
@@ -1364,9 +1398,21 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     if (project.funding === funding) return;
     setPendingId(project.id);
     try {
-      await writeOps([{ op: "update", name: project.name, funding }]);
+      await writeOps([{ op: "update", projectId: project.id, name: project.name, funding }]);
     } catch {
       // A failed write leaves the board as it was; the poll re-reads it.
+    } finally {
+      setPendingId("");
+    }
+  }, [writeOps]);
+
+  const setSecrecy = useCallback(async (project, secrecy) => {
+    if (project.secrecy === secrecy) return;
+    setPendingId(project.id);
+    try {
+      await writeOps([{ op: "update", projectId: project.id, name: project.name, secrecy }]);
+    } catch (failure) {
+      setPlanError(String(failure?.message || failure || "").trim());
     } finally {
       setPendingId("");
     }
@@ -1376,7 +1422,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const abandonProject = useCallback(async (project) => {
     setPendingId(project.id);
     try {
-      await writeOps([{ op: "cancel", name: project.name, note: uiString("Abandoned by the player.") }]);
+      await writeOps([{ op: "cancel", projectId: project.id, name: project.name, note: uiString("Abandoned by the player.") }]);
     } catch {
       // As above.
     } finally {
@@ -1390,7 +1436,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     setPlanError("");
     try {
       const draft = await planProject({ name: project.name, goal: project.summary });
-      await writeOps([{ op: "update", name: project.name, plan: draft.plan }]);
+      await writeOps([{ op: "update", projectId: project.id, name: project.name, plan: draft.plan }]);
     } catch (failure) {
       setPlanError(String(failure?.message || failure || "").trim() || uiString("The plan could not be made."));
     } finally {
@@ -1435,6 +1481,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
       onAskAdvisor={askAdvisor}
       onShowOnMap={showOnMap}
       onSetFunding={setFunding}
+      onSetSecrecy={setSecrecy}
       onAbandon={abandonProject}
       onPlan={planEntry}
     />
@@ -1507,8 +1554,8 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
         }}
         >
           {projects.length >= PROJECT_BOARD_LIMIT
-            ? `The board is full (${PROJECT_BOARD_LIMIT}). Completed and cancelled entries are dropped first to make room.`
-            : `${PROJECT_BOARD_LIMIT - projects.length} slots left before the board starts dropping its oldest closed entries.`}
+            ? `The board is full (${PROJECT_BOARD_LIMIT}). New projects are refused; existing entries are preserved.`
+            : `${PROJECT_BOARD_LIMIT - projects.length} slots left before new projects are refused.`}
         </div>
       )}
 
