@@ -16,19 +16,22 @@
 
 export const POPULATION_FIGURE_MOST = 2e10;
 
-const SCALES = { k: 1e3, thousand: 1e3, m: 1e6, mn: 1e6, million: 1e6, b: 1e9, bn: 1e9, billion: 1e9 };
+// A whole number written in digits, grouped in threes by any one separator a
+// language writes them with: "12,500,000", "12.500.000", "12 500 000",
+// "12'500'000".
+const GROUPED_DIGITS = /^\d{1,3}([,.'’_ ])\d{3}(?:\1\d{3})*$/u;
 
-// A figure as it is typed ("12,500,000", "12.5 million", "850k", 4000000), as
-// a whole number of people; 0 for nothing, or for what is not a number.
+// A figure as it is typed (12500000, "12,500,000", "12.500.000",
+// "12 500 000"), as a whole number of people; 0 for nothing, or for what is not
+// a whole number written in digits. Never a word: "12.5 million" and "850k"
+// were read and "12,5 millions" or "12,5 Millionen" were not, and "12,5" was
+// read as 125 (the owner, 2026-11-13: no keywording anywhere).
 export const readPopulationFigure = (value) => {
   if (typeof value === "number") return Number.isFinite(value) && value >= 1 ? Math.min(POPULATION_FIGURE_MOST, Math.round(value)) : 0;
-  const text = String(value ?? "").trim().toLowerCase().replace(/[,\s_'’]/g, "");
-  const match = /^(\d+(?:\.\d+)?)([a-z]*)$/.exec(text);
-  if (!match) return 0;
-  const scale = match[2] ? SCALES[match[2]] : 1;
-  if (!scale) return 0;
-  const people = Number(match[1]) * scale;
-  return Number.isFinite(people) && people >= 1 ? Math.min(POPULATION_FIGURE_MOST, Math.round(people)) : 0;
+  const text = String(value ?? "").trim().replace(/[\u00a0\u202f\u2009]/g, " ");
+  if (!/^\d+$/.test(text) && !GROUPED_DIGITS.test(text)) return 0;
+  const people = Number(text.replace(/\D/g, ""));
+  return Number.isFinite(people) && people >= 1 ? Math.min(POPULATION_FIGURE_MOST, people) : 0;
 };
 
 // The figure a record carries, read the same way: 0 for none.

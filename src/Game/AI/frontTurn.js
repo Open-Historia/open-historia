@@ -31,6 +31,7 @@ import { airArmsForOrders } from "../../runtime/fronts/airStrikeOps.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
 import { DEFAULT_MUSTER, musterTable } from "../../runtime/mustering.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
+import { normalizeUnitTypes } from "../../runtime/unitTypes.js";
 import { normalizeClimateZones, normalizeFortifications, normalizeFreezingRegions, normalizeTerrainAreas, zoneWeightAt } from "../../runtime/warGeography.js";
 import { climateZonesOf, terrainAreasOf } from "../../runtime/worldGeographyDefaults.js";
 import { freezesAt } from "../../runtime/fronts/climate.js";
@@ -480,8 +481,12 @@ export const engineNamer = (renames, known = []) => {
   };
 };
 
-// "country: Russia" in a field that takes a country or a group is Russia.
-const withoutKind = (value) => clean(value).replace(/^(?:country|group|polity|nation|state|side)\s*:\s*/i, "");
+// "country: Russia" in a field that takes a country or a group is Russia, and
+// "group: Wagner" is Wagner: the game's own two tags for one (nameRefs.js). A
+// word before a colon that is neither is part of the name, as nameRefs.js reads
+// it: "polity:", "nation:", "state:" and "side:" were once stripped too, a list
+// of English words that never ends (the owner, 2026-11-13: no keywording).
+const withoutKind = (value) => clean(value).replace(/^(?:country|group)\s*:\s*/i, "");
 
 // A turn's strikes placed (runtime/strikes.js): each with its places where they can be found, among the places of
 // the event that tells of it, the map's cities, the world's structures and its formations, and then as the game finds
@@ -535,8 +540,7 @@ export const placeStrikes = async (struck, { events = [], cities = [], world = n
 // battlefield being fought over, taking it from one side of that battlefield
 // for the other, is the story stating a result: the region was CAPTURED that
 // day. That is what a model writes when it does not write an order (it is how
-// every capture was written before there were battlefields), what a capture
-// told only in an event's prose becomes (narratedCapture.js), and what the
+// every capture was written before there were battlefields), and what the
 // Game Master writes. The operation stays on its event and is applied as it
 // always was; the engine is told of the change of control on that day, as it
 // is of any other, AND told the capture as a result, so that the nearest
@@ -827,21 +831,19 @@ export const attachFrontFlips = (events, flips, { dayOf = () => 0, aboutOf = nul
   return { events: next, unattached };
 };
 
-// Whether an event tells the place a change of hands was at: one of its places
-// is that region (by its id or its name) or a town in it, or its title or text
-// names one of them. Names are matched whole, in any case: that is who the
-// place is, and nothing is read of what the event says happened there.
-const wholeName = (name) => new RegExp(`(?<![\\p{L}\\p{N}])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "iu");
+// Whether an event tells the place a change of hands was at: one of its
+// `places` (the field the skip fills, eventPlaces.js) is that region, by its id
+// or its name, or a town in it. Its title and text are never read for a name:
+// a story told in French names Moscou where the map says Moscow, and an English
+// one names Berlin as where a war was declared as readily as where it was won.
+// What no event's places tell, the engine tells itself (frontReportEvents).
 export const frontPlaceTold = (event, flip) => {
   const names = [clean(flip?.name), ...asArray(flip?.cities).map(clean)].filter(Boolean);
   const regionId = clean(flip?.regionId);
-  const placed = asArray(event?.places).some((place) => {
+  return asArray(event?.places).some((place) => {
     if (typeof place === "string") return names.some((name) => fold(place).replace(/^[a-z]+\s*:\s*/, "").split(",")[0].trim() === fold(name));
     return (regionId && clean(place?.regionId) === regionId) || names.some((name) => fold(place?.name) === fold(name));
   });
-  if (placed) return true;
-  const text = `${clean(event?.title)} ${clean(event?.description)}`;
-  return names.some((name) => wholeName(name).test(text));
 };
 
 // What the engine itself tells of the changes of hands no event of the story
@@ -1171,7 +1173,6 @@ const listed = (names, most = 3) => `${names.slice(0, most).join("; ")}${names.l
 //   difficulty       the game's difficulty, by its id: above Medium the side
 //                    fighting a person's country has an edge in the land war,
 //                    below it that side is held back (runtime/fronts/handicap.js)
-//   narratesCombat   (event) => whether an event tells of fighting
 //   foretold         true when the period was fought BEFORE the story was asked
 //                    for and the story was given its account (frontApply.js
 //                    forecastTurnFronts): the same run, then, with the answer's
@@ -1260,7 +1261,6 @@ export const runTurnFronts = async ({
   // The campaign's own seed for its weather (runtime/fronts/weather.js): the same whatever the turn.
   climateSeed = "",
   difficulty = "",
-  narratesCombat = null,
   // The fronts a scenario begins with (runtime/fronts/scenarioFronts.js), on
   // the one run that builds them: what they are called and how many troops
   // each side has. No other run is given any.
@@ -1327,6 +1327,9 @@ export const runTurnFronts = async ({
     }
   };
   if (struck.length > 0) strikes.push(...await placeStrikes(struck, { events: list, cities: asArray(map?.cities), world, strikePlaces, fromDate, toDate }));
+  // The scenario's own unit types (runtime/unitTypes.js): a formation of one fights by its type's figures, in the
+  // air, on the battlefields and at sea alike.
+  const unitTypes = normalizeUnitTypes(world?.unitTypes);
   // The air strikes the war room ordered (runtime/fronts/airStrike.js), flown as the period begins: who rose
   // against each and the air battle fought here, and their bombs on the battlefields in the engine's run below.
   // The same in the run made before the story and the one that applies it. (None in a scenario without air units.)
@@ -1343,6 +1346,7 @@ export const runTurnFronts = async ({
       markers: asArray(world?.markers),
       peopleOf: readers.peopleOf,
       date: fromDate,
+      ...(unitTypes.length > 0 ? { unitTypes } : {}),
     })
     : { strikes: [], moments: [], unitChanges: [] };
   // The formations as the strikes leave them: those that flew or rose are worn, and the land war begins with them so.
@@ -1501,6 +1505,8 @@ export const runTurnFronts = async ({
       isGroup: (name) => readers.isGroup(name) || foundedGroups.has(fold(name)),
       groupOwnerOf: readers.groupOwnerOf,
       units: flown,
+      // (A formation of one of the scenario's own unit types fights by its type's figures: runtime/unitTypes.js.)
+      ...(unitTypes.length > 0 ? { unitTypes } : {}),
       transports: normalizeTransports(world?.transports),
       // (What the Wars feature switched off carries nothing: runtime/fronts/transports.js transportBar.)
       ...(Array.isArray(transportMedia) ? { transportMedia } : {}),
@@ -1587,6 +1593,7 @@ export const runTurnFronts = async ({
         ...measureOptions(map),
         caps: unitCaps ?? {},
         raised: asArray(world?.naviesRaised),
+        ...(unitTypes.length > 0 ? { unitTypes } : {}),
         era: Number.isInteger(era) ? era : null,
         ...(mechanics?.military === true ? { militaryOf: readers.militaryOf } : {}),
         ...(mechanics?.weather === true && clean(climateSeed) ? { weatherSeed: clean(climateSeed) } : {}),
@@ -1635,9 +1642,13 @@ export const runTurnFronts = async ({
 
   // Fighting told on a battlefield no order was written for: the troops there
   // kept the orders they had, and the model is told so it writes them next time.
-  // (Not where the story was told the fighting before it wrote: it tells what
-  // standing orders did, and owes no line for it.)
-  if (typeof narratesCombat === "function" && !foretold) {
+  // Fighting is what an event's own fields say: belligerents of both sides on
+  // the field (its combatants), in the battlefield's war or in none. Its words
+  // are not read: an English word list asked them, and a battle told in the
+  // player's language was no battle to it. (Not where the story was told the
+  // fighting before it wrote: it tells what standing orders did, and owes no
+  // line for it.)
+  if (!foretold) {
     const human = new Set(asArray(players).map(fold).filter(Boolean));
     const ordered = new Set(orders.map((order) => foldBattlefieldName(order.battlefield)));
     const unordered = asArray(result.battlefields).filter((record) => record.status === "active"
@@ -1645,10 +1656,8 @@ export const runTurnFronts = async ({
       && !record.sides.flat().every((member) => human.has(fold(member)))
       && list.some((event) => {
         const bound = clean(event?.warId);
-        const onIt = bound
-          ? bound === record.warId
-          : record.sides.every((members) => asArray(event?.combatants).some((name) => members.some((member) => fold(member) === fold(nameOf(name)))));
-        return onIt && narratesCombat(event);
+        const both = record.sides.every((members) => asArray(event?.combatants).some((name) => members.some((member) => fold(member) === fold(nameOf(name)))));
+        return both && (!bound || bound === record.warId);
       }));
     if (unordered.length) {
       notes.push({

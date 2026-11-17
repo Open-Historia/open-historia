@@ -680,6 +680,12 @@ const appUpdateReply = (res, feed = {}) => res.json({
 app.get("/api/app-update", async (req, res) => {
   const track = String(req.query.track || "stable");
   const manifestUrl = APP_UPDATE_MANIFESTS[track];
+  // The player switched update checks off on the Windows installer's privacy
+  // page (electron/installOptions.cjs): the app's own capability, no feed.
+  if (String(process.env.OH_UPDATE_CHECKS ?? "") === "0") {
+    appUpdateReply(res);
+    return;
+  }
   if (!manifestUrl) {
     res.json({}); // unknown track -> no update info, never an error
     return;

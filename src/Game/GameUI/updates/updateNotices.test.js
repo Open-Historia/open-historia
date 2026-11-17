@@ -20,6 +20,71 @@ const list = [
   { id: "a", kind: "major", date: "2026-07-01", banners: [{ title: "A" }] },
 ];
 
+test("the diplomatic correspondence update has one Beta notice without replacing the Stats notice", () => {
+  const id = "2026-11-diplomatic-correspondence-refresh";
+  const matches = UPDATES.filter((entry) => entry.id === id);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].date, "2026-11-16");
+  assert.equal(matches[0].channel, "beta");
+  assert.equal(matches[0].kind, "minor");
+  assert.equal(matches[0].banners[0].items.length, 4);
+  assert.match(matches[0].banners[0].items[0], /same game day/);
+  assert.match(matches[0].banners[0].items[1], /wide screen/);
+  assert.match(matches[0].banners[0].items[2], /older correspondence/);
+  assert.match(matches[0].banners[0].items[3], /interface theme/);
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+});
+
+test("the interim national Stats improvements have one readable Beta Update History notice", () => {
+  const id = "2026-11-national-stats-improvements";
+  const matches = UPDATES.filter((entry) => entry.id === id);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].channel, "beta");
+  assert.equal(matches[0].date, "2026-11-16");
+  assert.equal(matches[0].kind, "minor");
+  assert.equal(matches[0].banners.length, 1);
+  assert.equal(matches[0].banners[0].items.length, 5);
+  assert.match(matches[0].banners[0].items[0], /whole-polity GDP divided by the full population/);
+  assert.match(matches[0].banners[0].items[1], /can no longer change GDP/);
+  assert.match(matches[0].banners[0].items[2], /time skips/);
+  assert.match(matches[0].banners[0].items[3], /demographic trend/);
+  assert.match(matches[0].banners[0].items[4], /Refresh no longer calls AI/);
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+});
+
+test("missing Advisor Action proposals have a minor Beta recovery notice", () => {
+  const id = "2026-11-advisor-action-completeness";
+  const updates = UPDATES.filter((entry) => entry.id === id);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].kind, "minor");
+  assert.equal(updates[0].channel, "beta");
+  assert.equal(updates[0].date, "2026-11-15");
+  assert.equal(updates[0].banners.length, 1);
+  assert.equal(updates[0].banners[0].items.length, 5);
+  assert.ok(updates[0].banners[0].items[2].includes("internal paths"));
+  assert.ok(updates[0].banners[0].items[3].includes("ideology labels"));
+  assert.ok(updates[0].banners[0].items[4].includes("every active polity"));
+  assert.ok(updates[0].banners[0].items[0].includes("missing from a reply"));
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+});
+
+test("Advisor silent-pass reliability has its own minor Beta notice", () => {
+  const id = "2026-11-advisor-group-silent-repair";
+  const updates = UPDATES.filter((entry) => entry.id === id);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].channel, "beta");
+  assert.equal(updates[0].date, "2026-11-14");
+  assert.equal(updates[0].kind, "minor");
+  assert.equal(updates[0].banners.length, 1);
+  assert.equal(updates[0].banners[0].items.length, 2);
+  assert.ok(updates[0].banners[0].items[0].includes("without asking the other advisors"));
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+});
+
 test("only an update with a notice is shown, once, and nothing where it could not be kept", () => {
   // A build with no new entry (a hotfix, a notice forgotten): the newest entry was seen, so nothing.
   assert.deepEqual(pendingUpdates({ updates: list, seen: "c", keeps: true }), []);
@@ -33,6 +98,52 @@ test("only an update with a notice is shown, once, and nothing where it could no
   const app = readFileSync(new URL("../../../App.jsx", import.meta.url), "utf8");
   assert.match(app, /if \(noticeShown && !notice\.preview\) rememberUpdate\(notice\.updates\[0\]\.id\);/);
   assert.doesNotMatch(app, /closeNotice = useCallback\([^\n]*rememberUpdate/);
+});
+
+test("one Beta release entry covers the combined Advisor, country tools and currency batch", () => {
+  const id = "2026-11-advisor-country-tools";
+  const updates = UPDATES.filter((update) => update.id === id);
+  assert.equal(updates.length, 1);
+  const update = updates[0];
+  assert.equal(update.kind, "minor");
+  assert.equal(update.channel, "beta");
+  assert.equal(update.date, "2026-11-12");
+  assert.equal(update.banners.length, 1);
+  assert.equal(update.banners[0].items.length, 6);
+  assert.equal(NOTICE_UPDATES.filter((item) => item.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+  assert.deepEqual(noticePages([update]).map((page) => page.key), [id + "#0"]);
+});
+
+test("country stats reliability has its own minor Beta notice", () => {
+  const id = "2026-11-country-stats-reliability";
+  const updates = UPDATES.filter((entry) => entry.id === id);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].kind, "minor");
+  assert.equal(updates[0].channel, "beta");
+  assert.equal(updates[0].date, "2026-11-14");
+  assert.equal(updates[0].banners.length, 1);
+  assert.equal(updates[0].banners[0].items.length, 4);
+  assert.ok(updates[0].banners[0].items.some((text) => text.includes("starting country figures")));
+  assert.ok(updates[0].banners[0].items.some((text) => text.includes("Game Master corrections")));
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+});
+
+test("Political World and pre-game history improvements have a Beta update notice", () => {
+  const id = "2026-11-political-world-prehistory";
+  const updates = UPDATES.filter((update) => update.id === id);
+  assert.equal(updates.length, 1, "the update is listed once in history");
+  const update = updates[0];
+  assert.equal(update.kind, "minor");
+  assert.equal(update.channel, "beta");
+  assert.equal(update.date, "2026-11-13");
+  assert.equal(update.banners.length, 1);
+  assert.equal(update.banners[0].items.length, 6);
+  assert.ok(update.banners[0].items.some((text) => /Existing treaties generated with Political World/.test(text)));
+  assert.equal(NOTICE_UPDATES.filter((entry) => entry.id === id).length, 1);
+  assert.equal(previewedUpdates("?updateNotice=" + id)[0]?.id, id);
+  assert.deepEqual(noticePages([update]).map((page) => page.key), [id + "#0"]);
 });
 
 test("the website's browser version shows no update notices; the apps do", () => {

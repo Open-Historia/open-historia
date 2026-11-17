@@ -86,22 +86,31 @@ test("array text escaped once too often decodes, with or without the quotes roun
   assert.match(decodeGameMasterTransportPayload({ ...bareTransport, eventsJson: twice }).error, /\$\.eventsJson must /);
 });
 
-test("a unit posture said in other words reads as the posture it means", async () => {
+// A posture is one of the schema's eight, spelled as the schema spells it. Any other word, in English or in French,
+// is no posture and is left out (the field is optional), so it neither fails the transaction nor reads as a guess.
+test("a unit posture is one of the schema's own; any other word, in any language, is left out", async () => {
   const { validateGameplayPayload } = await import("./gameplaySchemas.js");
-  const move = { op: "move", unitId: "2nd Army", at: "region: Nice, country: France", posture: "Defensive" };
-  const eventsJson = JSON.stringify([eventWith([spawn("offensive"), move, spawn("retreating")])]);
-  const { payload, error } = decodeGameMasterTransportPayload({ ...bareTransport, eventsJson });
-  assert.equal(error, "");
-  const [first, second, third] = payload.events[0].impacts.unitOps;
-  assert.equal(first.unit.posture, "assaulting");
-  assert.equal(second.posture, "holding");
-  assert.equal(third.unit.posture, "withdrawing");
-  // A word that means none of them is left for the schema to name.
-  const odd = decodeGameMasterTransportPayload({ ...bareTransport, eventsJson: JSON.stringify([eventWith([spawn("pondering")])]) }).payload;
-  assert.equal(odd.events[0].impacts.unitOps[0].unit.posture, "pondering");
-  const verdict = validateGameplayPayload("gameMaster", odd);
-  assert.equal(verdict.valid, false);
-  assert.match(verdict.error, /posture/);
+  const read = (unitOps) => {
+    const { payload, error } = decodeGameMasterTransportPayload({ ...bareTransport, eventsJson: JSON.stringify([eventWith(unitOps)]) });
+    assert.equal(error, "");
+    assert.equal(validateGameplayPayload("gameMaster", payload).valid, true, JSON.stringify(unitOps));
+    return payload.events[0].impacts.unitOps;
+  };
+  const move = (posture) => ({ op: "move", unitId: "2nd Army", at: "region: Nice, country: France", posture });
+
+  const [own, ownMove] = read([spawn(" Assaulting "), move("HOLDING")]);
+  assert.equal(own.unit.posture, "assaulting", "case and spaces aside, the schema's own word");
+  assert.equal(ownMove.posture, "holding");
+
+  const english = read([spawn("offensive"), move("Defensive"), spawn("retreating"), move("")]);
+  const french = read([spawn("offensive"), move("défensive"), spawn("en retraite"), move("")]);
+  for (const ops of [english, french]) {
+    assert.equal("posture" in ops[0].unit, false);
+    assert.equal("posture" in ops[1], false);
+    assert.equal("posture" in ops[2].unit, false);
+    assert.equal("posture" in ops[3], false, "an empty posture is none");
+  }
+  assert.deepEqual(english, french, "the English words and their French twins are read alike: as no posture");
 });
 
 test("the events field names the postures a unit may take, since the text carries no enum", () => {

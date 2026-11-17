@@ -14,22 +14,18 @@ const hash = (value) => {
   return (n >>> 0).toString(36);
 };
 
+// `concernsTarget(event)`: whether the event is about the country, by its
+// structure (statsEventEvidence.js eventConcernsTarget): the parties its
+// operations name, its combatants, its places, the player's own events. Never
+// its words.
 export const buildCustomStatContinuity = ({
-  events = [], prior = null, currentState = {}, targetMatches = () => false,
+  events = [], prior = null, currentState = {}, concernsTarget = () => false,
 } = {}) => {
   const eligible = [];
   for (const event of array(events)) {
     const id = clean(event?.id);
     if (!id) continue;
-    const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-    const direct = array(impacts.polityChanges).some((entry) => targetMatches(
-      [entry?.code, entry?.name, entry?.country].filter(Boolean).join(" ")));
-    const movement = array(impacts.regionTransfers).some((entry) =>
-      targetMatches([entry?.fromCode, entry?.toCode].filter(Boolean).join(" ")));
-    const combatants = array(event?.combatants).some((entry) => targetMatches(
-      typeof entry === "string" ? entry : JSON.stringify(entry)));
-    const text = [event?.title, event?.description, event?.quote].filter(Boolean).join(" ");
-    if (!direct && !movement && !combatants && !targetMatches(text)) continue;
+    if (!concernsTarget(event)) continue;
     eligible.push(event);
   }
   const tracked = eligible.slice(-MAX_EVIDENCE_IDS);

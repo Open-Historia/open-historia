@@ -79,10 +79,9 @@ test("an unresolved transfer or control change picks its own sentence", () => {
   assert.equal(unresolvedTerritoryNote({ label: "Kharkiv" }, "regionControlOps").text, "The change of control over Kharkiv was not applied: no region on the map matches that name.");
   assert.equal(unresolvedTerritoryNote({ label: "Donbas", unknownOwner: "DPR" }, "regionTransfers").text, "The transfer of Donbas was not applied: DPR is not a country on this map.");
   assert.equal(unresolvedTerritoryNote({ label: "Ukraine", wholeCountry: true }, "regionTransfers").text, "The transfer of all of Ukraine's land was not applied: no regions are held under that exact name.");
-  assert.equal(
-    unresolvedTerritoryNote({ kind: "narrated-city-coverage", cityName: "Mariupol", label: "x", regionName: "Donetsk" }, "regionControlOps", "Siege ends").event,
-    "Siege ends",
-  );
+  assert.equal(unresolvedTerritoryNote({ label: "Mariupol", unmatched: true }, "regionControlOps", "Siege ends").event, "Siege ends");
+  // A name the map lacks in any language is the same sentence, with the name as written.
+  assert.equal(unresolvedTerritoryNote({ label: "Oblast de Kharkiv", unmatched: true }, "regionTransfers").text, "The transfer of Oblast de Kharkiv was not applied: no region on the map matches that name.");
 });
 
 test("a basis that moves no border is said as a claim or as nothing", () => {

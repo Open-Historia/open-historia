@@ -51,12 +51,28 @@ const RECONNECT_DELAYS = [1000, 2000, 5000, 10_000, 30_000];
 // seconds later. The relay is still listened to, and the others carry what is
 // said: any one of them is enough.
 const QUIET_AFTER_RATE_LIMIT_MS = 60_000;
-// What relays say when an event's time stamp is outside what they take: strfry
-// "ephemeral event expired" and "created_at too late", others "too old", "in
-// the future", "is too far off". Only the stamp can cause these, and the stamp
-// is this computer's clock.
-export const CLOCK_REFUSAL = /expired|too old|too late|in the future|too far|created_at/i;
 const QUIET_AFTER_BAN_MS = 15 * 60_000;
+
+// Why a relay refused an event, by the machine-readable prefix NIP-01 puts
+// before the words of an ["OK", id, false, message]: "duplicate", "pow",
+// "blocked", "rate-limited", "invalid", "restricted", "mute", "error" (and
+// "banned", which relays send in the same form). The words after it are the
+// relay's own, in its own language and wording, and are never read: the
+// clock used to be found in English phrases ("expired", "too old", "in the
+// future"). "" for a message with no prefix.
+export const refusalPrefix = (said) => {
+  const match = /^\s*([a-z-]+):/i.exec(String(said ?? ""));
+  return match ? match[1].toLowerCase() : "";
+};
+
+// An event this channel signs is well formed: its id is its hash and its
+// signature is good, so a relay that finds it "invalid" can only mean its time
+// stamp, which is this computer's clock (strfry "invalid: ephemeral event
+// expired", "invalid: created_at too late").
+export const refusedForClock = (said) => refusalPrefix(said) === "invalid";
+
+// How long nothing is published to a relay, by why it refused: none for most.
+const QUIET_FOR = Object.freeze({ "rate-limited": QUIET_AFTER_RATE_LIMIT_MS, blocked: QUIET_AFTER_BAN_MS, banned: QUIET_AFTER_BAN_MS });
 
 const HEX64 = str(64, { min: 64, pattern: /^[0-9a-f]+$/ });
 const EVENT = obj({
@@ -90,7 +106,7 @@ const open = (key, topic, content) => {
 //   onStatus({ connected, total })      relays currently open
 //   onRefused({ relay, said, clock })   a relay refused an event we sent;
 //                                       `clock` when for its time stamp: this
-//                                       computer's clock is wrong (CLOCK_REFUSAL)
+//                                       computer's clock is wrong (refusedForClock)
 export const createNostrChannel = ({
   topic,
   key,
@@ -138,7 +154,7 @@ export const createNostrChannel = ({
   };
 
   const quieten = (entry, said) => {
-    const ms = /^\s*(banned|blocked)\b/i.test(said) ? QUIET_AFTER_BAN_MS : /^\s*rate-limited\b/i.test(said) ? QUIET_AFTER_RATE_LIMIT_MS : 0;
+    const ms = QUIET_FOR[refusalPrefix(said)] ?? 0;
     if (!ms || now() + ms <= (entry.quietUntil ?? 0)) return;
     entry.quietUntil = now() + ms;
     log(`relay ${entry.url}: nothing more is published to it for ${Math.round(ms / 60_000)} min`);
@@ -220,7 +236,7 @@ export const createNostrChannel = ({
         const said = String(rest[2] ?? "").slice(0, 120);
         log(`relay ${url} refused an event: ${said}`);
         quieten(entry, said);
-        onRefused({ relay: url, said, clock: CLOCK_REFUSAL.test(said) });
+        onRefused({ relay: url, said, clock: refusedForClock(said) });
       }
       else if (type === "NOTICE" || type === "CLOSED") log(`relay ${url}: ${String(rest.at(-1) ?? "").slice(0, 120)}`);
     };

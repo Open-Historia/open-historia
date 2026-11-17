@@ -32,7 +32,10 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState(null);
   const [importing, setImporting] = useState(false);
-  const [importNote, setImportNote] = useState("");
+  // What the last import said, and whether it failed: the kind is set with the
+  // words, never read back out of them (a note starting "Import failed" was red).
+  const [importNote, setImportNoteLine] = useState({ text: "", failed: false });
+  const setImportNote = (text, kind = "ok") => setImportNoteLine({ text: String(text ?? ""), failed: kind === "error" });
   const fileInputRef = useRef(null);
   const [bulkTag, setBulkTag] = useState("");
 
@@ -134,7 +137,7 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
       );
     } catch (e) {
       console.warn("[editor] city import failed:", e);
-      setImportNote("Import failed: the city list could not be downloaded. Check the connection and try again.");
+      setImportNote("Import failed: the city list could not be downloaded. Check the connection and try again.", "error");
     } finally {
       setImporting(false);
     }
@@ -157,7 +160,7 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
         + ".",
       );
     } catch (e) {
-      setImportNote(`Import failed: ${e?.message || e}`);
+      setImportNote(`Import failed: ${e?.message || e}`, "error");
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
@@ -226,8 +229,8 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
           onChange={(e) => importFile(e.target.files?.[0] || null)}
         />
       </div>
-      {importNote && (
-        <div style={{ fontSize: 11, lineHeight: 1.4, color: importNote.startsWith("Import failed") ? "#f87171" : "rgba(255,255,255,0.7)" }}>{importNote}</div>
+      {importNote.text && (
+        <div style={{ fontSize: 11, lineHeight: 1.4, color: importNote.failed ? "#f87171" : "rgba(255,255,255,0.7)" }}>{importNote.text}</div>
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: selectedCount ? "rgba(250,204,21,0.06)" : "rgba(255,255,255,0.03)" }}>

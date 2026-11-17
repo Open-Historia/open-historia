@@ -54,6 +54,17 @@ test("the tint is every member region's shape, one surface per group, in the gro
   }
 });
 
+test("the diplomatic map asks for only the part it draws: the fills to hatch, or the outline", () => {
+  const regions = collection(box("a1", "A", 0, 1), box("a2", "A", 1, 2), box("b1", "B", 2, 3));
+  const fillsOnly = derive(regions, { a1: "ceasefire", a2: "ceasefire" }, { ceasefire: { color: "#000000" } }, { parts: { fills: true, outlines: false, labels: false } });
+  assert.equal(fillsOnly.fills.features.length, 1);
+  assert.equal(fillsOnly.outlines.features.length, 0);
+  assert.equal(fillsOnly.labels.features.length, 0);
+  const outlineOnly = derive(regions, { a1: "NATO", b1: "NATO" }, { NATO: { color: "#000000" } }, { parts: { fills: false, outlines: true, labels: false } });
+  assert.equal(outlineOnly.fills.features.length, 0);
+  assert.equal(outlineOnly.outlines.features.length, 1);
+});
+
 test("a seam whose two sides were simplified apart is not drawn inside the area", () => {
   // p's right side and q's left side miss each other by 0.001° — inside the
   // topology's recovery tolerance — so they are one seam, not two coasts.

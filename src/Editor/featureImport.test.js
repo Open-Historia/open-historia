@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { mergeImportedFeatures, parseFeatureImport } from "./featureImport.js";
-import { buildMarkersForGame, isMapFeature, newMapFeature } from "./mapFeatures.js";
+import { MAP_FEATURE_FAMILIES, buildMarkersForGame, isMapFeature, mapFeatureFamily, markerToFeature, newMapFeature } from "./mapFeatures.js";
+import { MARKER_FAMILIES } from "../runtime/markerFamily.js";
 
 test("a Workshop document's bases, ports and landmarks stay map features", () => {
   const base = { ...newMapFeature({ id: "feat_1", coord: [30.5, 50.4], owner: "Ukraine" }), name: "Hostomel", kind: "airfield", status: "damaged", note: "Contested since morning", markerId: "m-7", markerExtra: { builtBy: "ai", createdAt: "2022-02-24T00:00:00.000Z" } };
@@ -26,6 +28,54 @@ test("a Workshop document's bases, ports and landmarks stay map features", () =>
   assert.equal(isMapFeature(town), false);
   assert.equal(town.tier, 3);
   assert.equal(town.symbol, "star");
+});
+
+// How the game draws a Workshop structure is its family (runtime/markerFamily.js):
+// its kind's for one the tool offers, the author's pick ("Drawn as") for a kind
+// of their own, and never a family left over from before the kind changed.
+test("a Workshop structure goes to the game with the family it is drawn as", () => {
+  const at = { coord: [30.5, 50.4] };
+  const listed = { ...newMapFeature({ id: "feat_1", ...at }), name: "Hostomel", kind: "airfield" };
+  const own = { ...newMapFeature({ id: "feat_2", ...at }), name: "Severodvinsk", kind: "shipyard", family: "industry-science" };
+  // The same, typed in Russian: drawn alike.
+  const ownRu = { ...newMapFeature({ id: "feat_3", ...at }), name: "Северодвинск", kind: "верфь", family: "industry-science" };
+  const unpicked = { ...newMapFeature({ id: "feat_4", ...at }), name: "Monastery", kind: "monastery" };
+  // An AI-built silo, its kind since changed to a port by the author.
+  const changed = { ...newMapFeature({ id: "feat_5", ...at }), name: "Old Silo", kind: "port", family: "military", markerExtra: { family: "military", strategic: true } };
+  const markers = buildMarkersForGame([listed, own, ownRu, unpicked, changed]);
+  assert.deepEqual(markers.map((marker) => marker.family), ["military", "industry-science", "industry-science", undefined, "infrastructure"]);
+  assert.equal(markers[4].strategic, true, "what the Workshop does not edit goes back as it was");
+  // A marker from the world comes into the Workshop with its family, and back out with it.
+  const [fromWorld] = buildMarkersForGame([markerToFeature({ id: "m-9", name: "Base", kind: "база", family: "military", lng: 30, lat: 50 }, "feat_9")]);
+  assert.equal(fromWorld.family, "military");
+  // A document read back from a file keeps the pick.
+  const { features } = parseFeatureImport(JSON.stringify({ name: "Doc", features: [own] }));
+  assert.equal(features[0].family, "industry-science");
+  assert.equal(mapFeatureFamily(features[0]), "industry-science");
+});
+
+test("the Workshop's popup offers a family for a kind of the author's own, and its map draws by it", () => {
+  const read = (file) => fs.readFileSync(new URL(file, import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const popup = read("./MarkerPopup.jsx");
+  assert.match(popup, /\{customKind && \(\n\s*<label[^>]*>\n\s*<span[^>]*>Drawn as<\/span>/);
+  assert.match(popup, /onChange=\{\(e\) => onChange\(\{ family: e\.target\.value \}\)\}/);
+  assert.match(popup, /MAP_FEATURE_FAMILIES\.map\(\(entry\) =>/);
+  const map = read("./OlMap.jsx");
+  assert.match(map, /family: isMapFeature\(f\) \? mapFeatureFamily\(f\) : ""/);
+  assert.match(map, /getMarkerPresentation\(\{ kind: feature\.get\("kind"\), family: feature\.get\("family"\), status: feature\.get\("status"\) \}\)/);
+  // Every family the game has can be picked, and nothing else.
+  assert.deepEqual(MAP_FEATURE_FAMILIES.map((entry) => entry.id).sort(), [...MARKER_FAMILIES].sort());
+});
+
+test("a feature with no id of its own is a marker named for its name in any script, as its English twin is", () => {
+  // Cut to a-z and 0-9, every one named in another script was "marker--": one
+  // marker, which the game looks up by id.
+  const markerId = (name) => buildMarkersForGame([{ ...newMapFeature({ id: "", coord: [30.5, 50.4] }), name, kind: "port" }])[0].id;
+  assert.equal(markerId("Port Arthur"), "marker-port-arthur", "as it always was");
+  for (const [first, second] of [["Port Arthur", "Port Said"], ["Порт-Артур", "Порт-Саид"], ["旅顺港", "塞得港"]]) {
+    assert.notEqual(markerId(first), markerId(second), first);
+    assert.equal(markerId(first), markerId(first), first);
+  }
 });
 
 test("a GeoJSON 'kind' is only a tag: a file of towns imports as cities", () => {

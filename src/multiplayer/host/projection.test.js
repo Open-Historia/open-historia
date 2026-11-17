@@ -417,6 +417,31 @@ test("what one government alone found out is shown to that government's player a
   assert.equal(projectForViewer(state(), ESTONIA).events.length, state().events.length);
 });
 
+// "Yours" is what an event says it is about, never its words: a name found in
+// the text made "Oman" Romania's and left "la Roumanie" nobody's.
+test("an event is each player's own by what it says it concerns, in any language, never by its words", () => {
+  const docs = state();
+  docs.events = [
+    { id: "a", date: "2014-03-30", title: "Riga and Moscow trade notes", description: "Notes are exchanged.", concerns: [LATVIA, RUSSIA] },
+    { id: "b", date: "2014-03-30", title: "Riga et Moscou échangent des notes", description: "Des notes sont échangées.", concerns: ["republic of latvia", RUSSIA] },
+    { id: "c", date: "2014-03-30", title: "Republic of Estonia and the Russian Federation", description: "Named in the words only." },
+    { id: "d", date: "2014-03-30", title: "Skirmish", description: "Shots on the border.", combatants: [RUSSIA, ESTONIA] },
+  ];
+  const mine = (seat) => projectForViewer(docs, seat).events.filter((event) => event.playerRelated).map((event) => event.id);
+  assert.deepEqual(mine(RUSSIA), ["a", "b", "d"], "the French twin is Russia's as the English one is; the words alone are nobody's");
+  assert.deepEqual(mine(ESTONIA), ["d"]);
+  assert.deepEqual(mine(LATVIA), ["a", "b"]);
+  // The host's own seat keeps the skip's own mark of what is the player's.
+  docs.events = [{ id: "e", date: "2014-03-30", title: "Quiet", description: "Nothing named.", playerRelated: true }];
+  assert.deepEqual(mine(LATVIA), ["e"]);
+  assert.deepEqual(mine(RUSSIA), [], "another seat does not take the host's mark");
+  // What an event concerns is kept across a save, and an event that names
+  // nobody saves as it always did.
+  const [kept, plain] = normalizeEvents([{ id: "k", title: "K", concerns: [RUSSIA, " russian  federation ", "", LATVIA] }, { id: "p", title: "P" }]);
+  assert.deepEqual(kept.concerns, [RUSSIA, LATVIA]);
+  assert.equal("concerns" in plain, false);
+});
+
 test("the game keeps who an event is for across a save, and adds nothing to an event for everybody", () => {
   const [marked, open] = normalizeEvents([
     { id: "a", title: "Marked", audience: [RUSSIA, RUSSIA, "", " "] },

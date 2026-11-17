@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  bindSelectedStorylineEvents,
+  normalizeWorldStorylineEventLinks,
 } from "../src/Game/AI/nativeWorldDirector.js";
 import {
   validateGameplayPayload,
@@ -27,77 +27,62 @@ const korea = {
     "Working-level nuclear negotiations between Washington and Pyongyang concluded without agreement.",
 };
 
-test("selected-storyline native binding attaches the orphan Nov 18 Korea drill event", () => {
-  const candidate = {
-    events: [{
-      id: "event-ai-r0072-20191118-003",
-      date: "2019-11-18",
-      importance: "major",
-      kind: "military",
-      title: "United States, South Korea, and Japan Conduct Joint Missile-Defense Readiness Drills",
-      description:
-        "Following the breakdown of working-level nuclear negotiations in Stockholm, armed forces of the United States, South Korea, and Japan execute joint ballistic missile-defense tracking and readiness drills in response to ongoing North Korean missile testing.",
-      storylineIds: [],
-      impacts: {
-        actionIds: [],
-        createdChats: [],
-        markerOps: [],
-        polityChanges: [],
-        regionClaims: [],
-        regionTransfers: [],
-        unitOps: [],
-      },
-    }],
-  };
-
-  const result = bindSelectedStorylineEvents(candidate, {
-    selectedStorylines: [korea],
-    world: {},
-  });
-
-  assert.equal(result.bound, 1);
-  assert.deepEqual(candidate.events[0].storylineIds, [
-    "storyline-korean-peninsula-crisis",
-  ]);
+const drill = (title, description) => ({
+  id: "event-ai-r0072-20191118-003",
+  date: "2019-11-18",
+  importance: "major",
+  kind: "military",
+  title,
+  description,
+  storylineIds: [],
+  impacts: {
+    actionIds: [],
+    createdChats: [],
+    markerOps: [],
+    polityChanges: [],
+    regionClaims: [],
+    regionTransfers: [],
+    unitOps: [],
+  },
 });
 
-test("selected-storyline native binding refuses ambiguous near-ties", () => {
-  const shared = {
-    status: "active",
-    participants: ["Republic of Korea", "Japan"],
-    pressure: 60,
-    momentum: 50,
-    state: "Regional security coordination remains active.",
-  };
+const DRILLS = [
+  ["United States, South Korea, and Japan Conduct Joint Missile-Defense Readiness Drills", "Following the breakdown of working-level nuclear negotiations in Stockholm, armed forces of the United States, South Korea, and Japan execute joint ballistic missile-defense tracking and readiness drills in response to ongoing North Korean missile testing."],
+  ["미국·한국·일본, 합동 미사일 방어 준비태세 훈련 실시", "스톡홀름 실무 협상이 결렬된 뒤 세 나라 군은 북한의 계속되는 미사일 시험에 대응해 합동 탄도미사일 방어 추적 훈련을 실시했다."],
+];
 
-  const candidate = {
-    events: [{
-      title: "South Korea and Japan Hold Regional Security Coordination Drills",
-      description: "South Korea and Japan conduct regional security coordination drills.",
-      storylineIds: [],
-    }],
-  };
+// A selected storyline used to collect any event whose words scored high
+// enough against its title, state and participants (bindSelectedStorylineEvents):
+// the English drill above was bound to the Korea crisis, its Korean twin to
+// nothing, and an event about the player's own programmes landed in a Gulf
+// crisis because it said "British". A storyline's events are now the ones its
+// record names, by number, and the ones that name it.
+test("an event joins a selected storyline when the storyline's record names it, in any language", () => {
+  for (const [title, description] of DRILLS) {
+    const named = { events: [drill(title, description)], storylineUpdates: [{ ...korea, eventIndexes: [0] }] };
+    normalizeWorldStorylineEventLinks(named);
+    assert.deepEqual(named.storylineUpdates[0].eventIndexes, [0], title);
 
-  const result = bindSelectedStorylineEvents(candidate, {
-    selectedStorylines: [
-      {
-        ...shared,
-        id: "storyline-a",
-        kind: "crisis",
-        title: "Regional Security Crisis",
-      },
-      {
-        ...shared,
-        id: "storyline-b",
-        kind: "crisis",
-        title: "Regional Security Coordination",
-      },
-    ],
-    world: {},
-  });
+    const unnamed = { events: [drill(title, description)], storylineUpdates: [{ ...korea, eventIndexes: [] }] };
+    normalizeWorldStorylineEventLinks(unnamed);
+    assert.deepEqual(unnamed.storylineUpdates[0].eventIndexes, [], `${title}: its words tie it to nothing`);
+    assert.deepEqual(unnamed.events[0].storylineIds, []);
+  }
+});
 
-  assert.equal(result.bound, 0);
-  assert.deepEqual(candidate.events[0].storylineIds, []);
+test("an event that names its storyline is that storyline's, whatever either says", () => {
+  for (const [title, description] of DRILLS) {
+    const tagged = { events: [{ ...drill(title, description), storylineIds: [korea.id] }], storylineUpdates: [{ ...korea, eventIndexes: [] }] };
+    normalizeWorldStorylineEventLinks(tagged);
+    assert.deepEqual(tagged.storylineUpdates[0].eventIndexes, [0], title);
+  }
+});
+
+test("a number that names no event of the answer is taken off, and nothing replaces it", () => {
+  const candidate = { events: [drill(...DRILLS[0])], storylineUpdates: [{ ...korea, eventIndexes: [0, 3] }] };
+  const result = normalizeWorldStorylineEventLinks(candidate);
+  assert.deepEqual(candidate.storylineUpdates[0].eventIndexes, [0]);
+  assert.equal(result.strippedInvalid, 1);
 });
 
 test("world motion repair schema physically allows only one storyline semantic update", () => {
@@ -132,52 +117,9 @@ test("world motion repair schema physically allows only one storyline semantic u
   const validation = validateGameplayPayload("worldMotionRepair", invalid);
   assert.equal(validation.valid, false);
   assert.match(validation.error, /not allowed|unexpected property|additional/i);
-});
 
-// From a player's log: the player mediated a Gulf crisis, the storyline listed
-// the player as a participant, and from then on every event that said
-// "British" was bound to the Gulf crisis — shipyards, fusion, Nigeria.
-const gulfCrisis = {
-  id: "saudi-iran-crisis-2016",
-  status: "active",
-  kind: "politics",
-  pressure: 60,
-  momentum: 20,
-  title: "Saudi-Iranian Diplomatic Crisis",
-  participants: ["Saudi Arabia", "Iran", "United Arab Emirates", "British Empire"],
-  state: "The Omani auditing panel continued routine inspections in the Strait of Hormuz.",
-};
-
-test("naming the player is not enough to bind an event to a storyline the player is in", () => {
-  const candidate = {
-    events: [{
-      title: "British Admiralty Advances Portsmouth Leviathan Hull Assembly",
-      description: "Naval engineers at Portsmouth integrated automated quantum diagnostic grids with shipyard assembly lines for upcoming Leviathan-class hulls.",
-      storylineIds: [],
-    }],
-  };
-  const result = bindSelectedStorylineEvents(candidate, {
-    selectedStorylines: [gulfCrisis],
-    world: {},
-    gameCountry: "British Empire",
-  });
-  assert.equal(result.bound, 0);
-  assert.deepEqual(candidate.events[0].storylineIds, []);
-});
-
-test("an event about the storyline's own subject still binds when the player is in it", () => {
-  const candidate = {
-    events: [{
-      title: "Saudi Arabia and Iran Trade Accusations Over Strait of Hormuz Inspections",
-      description: "Riyadh and Tehran accused each other of obstructing the Omani auditing panel's inspections in the Strait of Hormuz.",
-      storylineIds: [],
-    }],
-  };
-  const result = bindSelectedStorylineEvents(candidate, {
-    selectedStorylines: [gulfCrisis],
-    world: {},
-    gameCountry: "British Empire",
-  });
-  assert.equal(result.bound, 1);
-  assert.deepEqual(candidate.events[0].storylineIds, ["saudi-iran-crisis-2016"]);
+  // A storyline's kind is one word of a fixed list (runtime/storylineKinds.js).
+  const freeKind = validateGameplayPayload("worldMotionRepair", { ...valid, storyline: { ...valid.storyline, kind: "security crisis" } });
+  assert.equal(freeKind.valid, false);
+  assert.match(freeKind.error, /kind must be one of "war", "crisis", "unrest", "diplomacy", "politics", "economy", "world"/);
 });

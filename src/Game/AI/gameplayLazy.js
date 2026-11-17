@@ -163,6 +163,10 @@ export const generateCountryStats = async (...args) => (await gameplay()).genera
 // Rostra's empty feed: one request for its first posts, written into the
 // feed (gameplay.js generateRostraPosts).
 export const generateRostraPosts = async (...args) => (await gameplay()).generateRostraPosts(...args);
+// The Projects tab's "Plan it": one request for a project's plan (gameplay.js planProject).
+// It writes nothing: the player starts the plan, through the board's own door,
+// so a page playing a shared game plans its own projects like any other.
+export const planProject = async (...args) => (await gameplay()).planProject(...args);
 // Rostra's Search: one request for what people in a place are posting
 // (runtime/placeFeed.js). It writes nothing to the game: asked with the
 // player's own key, kept on the player's own device, so a page playing a shared

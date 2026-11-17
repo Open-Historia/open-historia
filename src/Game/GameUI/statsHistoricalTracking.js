@@ -13,7 +13,6 @@ const resolveWithIndex = (value, world, identityIndex) => {
     const resolved = resolvePolityIdentity(raw, world, {
       allowUnknown: true,
       requireActive: false,
-      allowCoreMatch: true,
       allowStockBase: true,
       identityIndex,
     });

@@ -23,9 +23,10 @@ test("Advisor runs each recipient using isolated AI conversation state and persi
   assert.match(ui, /sendMessage\(text, \{ threadId, recipient,/);
   assert.match(main, /createAdvisorSessionRegistry\(\)/);
   assert.match(main, /advisorState\(threadId\)/);
-  assert.match(main, /buildAdvisorSystemPrompt\(\{ recipient: storedRecipient \}\)/);
+  assert.match(main, /buildAdvisorSystemPrompt\(\{ recipient: storedRecipient, currentQuestion: userMessage \}\)/);
   assert.match(main, /recipient\.personality/);
-  assert.match(main, /loadHistory\(savedMessages, threadId = "chief"\)/);
+  assert.match(main, /loadHistory\(savedMessages, threadId = "chief", \{ character = false \} = \{\}\)/);
+  assert.match(main, /compactConversationHistory\(character \? restoredHistory : sanitizeAdvisorModelHistory\(restoredHistory\)\)/);
 });
 
 test("Chief and minister Actions require player review while both can auto-apply Projects", () => {

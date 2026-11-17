@@ -13,8 +13,10 @@
 // nobody's puppet, and a puppet holds none of its own. Ended rows (released,
 // annexed, revolted) are history and pass through untouched.
 //
-// Imports only the import-free runtime/puppets.js, so the export and the tests
-// share it.
+// Imports only the import-free runtime/puppets.js and server/nameId.js, so the
+// export and the tests share it.
+
+import { nameId } from "../../server/nameId.js";
 
 export const PUPPET_KIND_OPTIONS = Object.freeze([
   { id: "protectorate", label: "Protectorate" },
@@ -33,7 +35,10 @@ const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const rows = (puppets) => (Array.isArray(puppets) ? puppets.filter((row) => row && typeof row === "object") : []);
 const isLive = (row) => (clean(row?.status) || "active") === "active";
 const same = (a, b) => clean(a).toLocaleLowerCase() === clean(b).toLocaleLowerCase() && clean(a) !== "";
-const slug = (value) => clean(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "polity";
+// A row's id, from its puppet's name by the game's one rule for an id made from
+// a name (server/nameId.js): a Latin name keeps its slug, a name in another
+// script is its own hash instead of "polity".
+const slug = (value) => nameId(value, (name) => clean(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")) || "polity";
 const loyaltyOf = (value) => {
   const n = Number(value);
   return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : 50;

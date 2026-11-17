@@ -28,8 +28,9 @@ const range = (count) => Array.from({ length: count }, (_, index) => index);
 
 test("one answer is still held to each decoder's cap; a merged turn asks for all of it", () => {
   const lines = (count, line) => range(count).map(line).join("\n");
-  assert.equal(decodeWarUpdates(lines(20, (i) => `war-${i}~start~A${i}~B${i}~1~x`)).length, 16);
-  assert.equal(decodeWarUpdates(lines(20, (i) => `war-${i}~start~A${i}~B${i}~1~x`), { limit: Infinity }).length, 20);
+  // (A war answer holds 64 records: a world war's coalitions join a member a line.)
+  assert.equal(decodeWarUpdates(lines(70, (i) => `war-${i}~start~A${i}~B${i}~1~x`)).length, 64);
+  assert.equal(decodeWarUpdates(lines(70, (i) => `war-${i}~start~A${i}~B${i}~1~x`), { limit: Infinity }).length, 70);
   assert.equal(decodeWorldStorylineUpdates(range(20).map((i) => ({ id: `story-${i}` }))).length, 16);
   assert.equal(decodeWorldStorylineUpdates(range(20).map((i) => ({ id: `story-${i}` })), { limit: Infinity }).length, 20);
   assert.equal(decodeRelationUpdates(range(30).map((i) => ({ id: `rel-${i}`, a: `A${i}`, b: `B${i}` }))).length, 20);
@@ -65,7 +66,8 @@ test("every war a segmented turn starts is applied, not just the first sixteen",
     round: 2,
     ...options,
   });
-  assert.equal(apply({}).appliedIds.length, 16, "the default is one answer's worth");
+  assert.equal(apply({ limit: 16 }).appliedIds.length, 16, "a limit is one answer's worth");
+  assert.equal(apply({}).appliedIds.length, 20, "and one answer holds 64");
   const whole = apply({ limit: Infinity });
   assert.equal(whole.appliedIds.length, 20);
   assert.ok(whole.appliedIds.includes("war-2-9"), "the last segment's last war is in the ledger");

@@ -18,6 +18,7 @@ import { SCENARIO_LICENSE_FILE, SCENARIO_LICENSE_TEXT, scenarioLicense } from ".
 import { countChanges, isDetailFieldPath, POLITICS_FIELDS, summarizeChangesForComment, WAR_MAP_FIELDS } from "./scenarioChanges.js";
 import { SUGGESTION_MARKER } from "./hubPosts.js";
 import { scenarioLanguageCode } from "../../server/scenarioLanguages.js";
+import { fileSafeName } from "../../server/nameKey.js";
 
 export const SUGGESTION_SCHEMA = "open-historia-scenario-suggestion/1";
 const MAX_NOTE = 1500;
@@ -36,7 +37,7 @@ export const newPublishKey = () => `oh-${randomHex(8)}`;
 export const newSuggestionId = () => `sug-${randomHex(8)}`;
 
 const clean = (value, max) => String(value ?? "").replace(/\r\n/g, "\n").trim().slice(0, max);
-const slug = (value) => String(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "scenario";
+const slug = (value) => fileSafeName(value, { fallback: "scenario", lower: true, max: 60 });
 
 export const suggestionFileName = (scenarioName) => `${slug(scenarioName)}-suggestion.zip`;
 

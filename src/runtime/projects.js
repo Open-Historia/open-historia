@@ -1,229 +1,72 @@
-import { addGameDays, compareGameDates, diffGameDays, formatGameDate, formatGameDateReadable, gameDateDaysInMonth, parseGameDate, shiftGameYear } from "./gameDates.js";
+import { compareGameDates, formatGameDateReadable } from "./gameDates.js";
+import { sameName } from "../../server/nameKey.js";
 
 /*! Open Historia — portions (projects & operations board: derived status, sorting, filtering) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Everything the Projects & Operations board can work out for ITSELF, with no AI
-// turn involved.
+// Everything the Projects & Operations board works out for ITSELF, with no AI
+// turn involved: which entries are open, whose they are, how they sort and
+// filter, the covert operations that track a real agent, and which of a turn's
+// ops address which entry. The clock itself is runtime/projectEngine.js.
 //
-// This split is the point of the feature. The model owns what only it can know —
-// what a programme is, how far along it is, what comes next — and this file owns
-// everything that follows from the calendar. A project whose target date slips
-// past is flagged the moment the clock moves, whether or not the AI ever
-// mentions it again. That is what stops the board reading like a snapshot of
-// whenever the model last thought about it.
-//
-// DELIBERATELY IMPORT-FREE, the same trick unitMotion.js / eventFocus.js /
-// forcePosture.js use: gameState.js reaches assets.js, which imports maplibre-gl,
-// so anything importing it cannot be tested without a full install. Keeping this
-// file dependency-free means `node --test src/runtime/projects.test.js` runs in a
-// bare checkout. Worth preserving.
-
-// A milestone landing inside this window is "due soon". Sized against the jump
-// buttons the player actually uses: the 1-month jump is the common one, so a
-// month of look-ahead means the board warns you before the jump that would blow
-// through the milestone, not after it.
-export const DUE_SOON_DAYS = 30;
-
-// Rounds without an update before a project reads as drifting. Three is roughly
-// "the AI has narrated three turns of this campaign and had nothing to say about
-// this programme", which is the point at which the player should probably ask.
-export const STALE_ROUNDS = 3;
+// DELIBERATELY IMPORT-FREE apart from gameDates.js and server/nameKey.js (which
+// import nothing), the same trick unitMotion.js / eventFocus.js use:
+// gameState.js reaches assets.js, which imports maplibre-gl, so anything
+// importing it cannot be tested without a full install.
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
 
-// Signed day difference, unlike unitMotion's daysBetweenDates which clamps at 0.
-// The sign IS the information here: -12 means the target slipped twelve days ago.
-// Returns null for anything that is not a strict YYYY-MM-DD, which deliberately
-// includes the non-Gregorian dates some scenarios run on ("1200 BCE") — those get
-// no date-derived flags rather than nonsense ones.
-export const signedDaysBetween = (from, to) => diffGameDays(from, to);
-
-// Statuses that are still running. Mirrors PROJECT_OPEN_STATUSES in gameState.js
-// — duplicated rather than imported ONLY to keep this module import-free (see the
-// banner). No test can compare the two without importing gameState.js and giving
-// that up, so this is a hand-kept invariant: add a status to PROJECT_STATUSES and
-// you must decide here whether it is open.
-const OPEN_STATUSES = new Set(["proposed", "active", "stalled", "paused"]);
+// Statuses that are still running. Mirrors projectEngine.js
+// OPEN_ENGINE_STATUSES, duplicated only to keep this module import-free.
+const OPEN_STATUSES = new Set(["planning", "active", "stalled", "paused"]);
 
 export const isProjectOpen = (project) => OPEN_STATUSES.has(asText(project?.status) || "active");
 
 // The complement, exported so the panel's Closed filter and its count cannot
-// drift apart from each other or from the sort — this used to be an inline
-// ["complete","failed","cancelled"] literal written out in two separate places.
+// drift apart from each other or from the sort.
 export const isProjectClosed = (project) => !isProjectOpen(project);
 
-// The soonest outstanding milestone. Reads the stored `nextMilestone` first
-// (normalizeProjectEntry already derived it from the milestone list on the way
-// in, so it is the authoritative answer) and only falls back to scanning when a
-// project arrived without one.
-// A checkpoint nobody has settled yet. "slipped" is late — its date passed with
-// nothing said (AI/playerFocus.js) — but late is not reached, so it is still the
-// one the Board shows next and the one the next skip is asked to answer. Shared
-// with gameState.js, which derives the same answer on the way in.
-export const isMilestoneOutstanding = (milestone) => {
-  const status = asText(milestone?.status) || "pending";
-  return status === "pending" || status === "slipped";
+// The next checkpoint still ahead, from the plan: { title, atProgress } or null.
+export const nextMilestoneOf = (project) => {
+  const ahead = asArray(project?.plan?.milestones).filter((entry) => !entry?.reached && !entry?.missed);
+  return ahead.length ? { title: asText(ahead[0].title), atProgress: Number(ahead[0].atProgress) || 0 } : null;
 };
 
-export const deriveNextMilestone = (project) => {
-  if (project?.nextMilestone && asText(project.nextMilestone.title)) return project.nextMilestone;
-  const pending = asArray(project?.milestones).filter(isMilestoneOutstanding);
-  if (pending.length === 0) return null;
-  const dated = pending.filter((entry) => asText(entry.date)).sort((a, b) => compareGameDates(a.date, b.date));
-  const next = dated[0] || pending[0];
-  return {
-    title: asText(next.title),
-    date: asText(next.date),
-    note: asText(next.note),
-    repeat: asText(next.repeat),
-    completedCount: Number(next.completedCount) || 0,
-  };
-};
-
-// What the card badges. Every field here is a pure function of the project and
-// the game clock, so none of it can be stale in the way an AI-written status can.
-//
-// Returns, for one project:
-//   overdue     - target date is behind us and the project is still running
-//   dueSoon     - the next milestone lands within DUE_SOON_DAYS
-//   milestoneMissed - a milestone's date passed while it was still pending, or it slipped
-//   stale       - explicitly stalled, or untouched for STALE_ROUNDS rounds
-//   daysToTarget / daysToMilestone - signed, null when undateable
-export const deriveProjectFlags = (project, gameDate, round = 0) => {
+// What the card badges, all of it the engine's: open, set up and running (a
+// programme), stalled and why, paid less than it is due (underfunded), and
+// the next checkpoint.
+export const deriveProjectFlags = (project) => {
   const open = isProjectOpen(project);
-  const nextMilestone = deriveNextMilestone(project);
-
-  const daysToTarget = signedDaysBetween(gameDate, project?.targetDate);
-  const daysToMilestone = nextMilestone ? signedDaysBetween(gameDate, nextMilestone.date) : null;
-
-  // A milestone whose date has passed while it is still pending. Distinct from
-  // `overdue`, which is about the whole programme: a slipped milestone on a
-  // project with a year still to run is a warning, not a failure.
-  const milestoneMissed = asArray(project?.milestones).some((entry) => {
-    if (asText(entry?.status) === "slipped") return true;
-    if (!isMilestoneOutstanding(entry) || !asText(entry.date)) return false;
-    const delta = signedDaysBetween(gameDate, entry.date);
-    return delta !== null && delta < 0;
-  });
-
-  const updatedRound = Number(project?.updatedRound) || 0;
-  const roundsSinceUpdate = round > 0 && updatedRound > 0 ? round - updatedRound : 0;
-
+  const status = asText(project?.status) || "active";
   return {
     open,
-    ongoing: Boolean(project?.ongoing),
-    nextMilestone,
-    daysToTarget,
-    daysToMilestone,
-    // An ongoing effort can never be overdue — there is no date it was meant to
-    // finish by. It can still miss a milestone, which is the useful signal.
-    overdue: open && !project?.ongoing && daysToTarget !== null && daysToTarget < 0,
-    dueSoon: open && daysToMilestone !== null && daysToMilestone >= 0 && daysToMilestone <= DUE_SOON_DAYS,
-    milestoneMissed: open && milestoneMissed,
-    stale: open && (asText(project?.status) === "stalled" || roundsSinceUpdate >= STALE_ROUNDS),
+    ongoing: Boolean(project?.ongoing || project?.plan?.ongoing),
+    running: Boolean(project?.established) && open,
+    planning: status === "planning",
+    paused: status === "paused",
+    stalled: open && status === "stalled",
+    stallReason: status === "stalled" ? asText(project?.stallReason) : "",
+    underfunded: open && status === "active" && Number(project?.paidShare ?? 1) < 0.9,
+    nextMilestone: nextMilestoneOf(project),
   };
-};
-
-// ---- recurring milestones --------------------------------------------------
-//
-// A standing commitment that comes round again: an annual drill, a quarterly
-// review, a monthly patrol rotation. Marking one done does not retire it — the
-// engine rolls it to its next occurrence and sets it pending again, so the board
-// always shows when the next one is due instead of going blank the moment the
-// last one was ticked off.
-export const MILESTONE_REPEATS = ["weekly", "monthly", "quarterly", "annual", "biennial"];
-
-// What a model actually writes when it means "every year". Same reasoning as the
-// project-op aliases: reject the synonym and the feature silently does nothing.
-const REPEAT_ALIASES = {
-  yearly: "annual", annually: "annual", year: "annual", "every year": "annual", "1y": "annual",
-  biannual: "biennial", "two-yearly": "biennial", "2y": "biennial",
-  quarter: "quarterly", "3m": "quarterly",
-  month: "monthly", "1m": "monthly",
-  week: "weekly", "1w": "weekly",
-  daily: "", day: "",
-};
-
-// Months to advance per occurrence; weekly is handled as days instead.
-const REPEAT_MONTHS = { monthly: 1, quarterly: 3, annual: 12, biennial: 24 };
-
-export const normalizeMilestoneRepeat = (value) => {
-  const raw = asText(value).toLowerCase();
-  if (!raw) return "";
-  if (MILESTONE_REPEATS.includes(raw)) return raw;
-  return REPEAT_ALIASES[raw] ?? "";
-};
-
-// Any game date, BC included (runtime/gameDates.js).
-const parseYmd = (value) => parseGameDate(value);
-
-// Clamps the day into the target month, so an exercise on the 31st does not
-// vanish in February — it lands on the 28th (or 29th) and keeps its slot. The
-// year carry steps over the missing year zero.
-const buildYmd = ({ year, month, day }) => {
-  const carry = Math.floor((month - 1) / 12);
-  const normYear = shiftGameYear(year, carry);
-  const normMonth = ((month - 1) % 12 + 12) % 12 + 1;
-  return formatGameDate({ year: normYear, month: normMonth, day: Math.min(day, gameDateDaysInMonth(normYear, normMonth)) });
-};
-
-// The next occurrence of a recurring date STRICTLY AFTER `notBefore`.
-//
-// Rolls from the milestone's own date rather than from today, so an annual drill
-// on 1 June stays on 1 June year after year instead of drifting to whenever it
-// happened to be marked off. A commitment that was missed for several cycles
-// advances as many times as it takes to get ahead of the clock — the board should
-// show the next one that is actually coming, not a date already behind us.
-export const advanceRecurringDate = (date, repeat, notBefore = "") => {
-  const cadence = normalizeMilestoneRepeat(repeat);
-  const start = parseYmd(date);
-  if (!cadence || !start) return "";
-
-  const floor = parseYmd(notBefore);
-  const floorKey = floor ? buildYmd(floor) : "";
-
-  // Weekly is plain arithmetic: the first whole number of weeks that lands
-  // strictly after the floor. (Stepping it through the month loop below would
-  // re-seed each step with the original day and never get ahead of the clock.)
-  if (cadence === "weekly") {
-    const behind = floorKey ? diffGameDays(formatGameDate(start), floorKey) : null;
-    const weeks = behind === null ? 1 : Math.max(1, Math.floor(behind / 7) + 1);
-    return addGameDays(formatGameDate(start), weeks * 7);
-  }
-
-  let next = { ...start };
-  // Bounded: the cap keeps a nonsense date (year 0001) from spinning here forever.
-  for (let guard = 0; guard < 600; guard += 1) {
-    next = { year: next.year, month: next.month + REPEAT_MONTHS[cadence], day: start.day };
-
-    const candidate = buildYmd(next);
-    if (!floorKey || compareGameDates(candidate, floorKey) > 0) return candidate;
-    // Re-seed from the normalised value so month overflow accumulates correctly.
-    const reparsed = parseYmd(candidate);
-    if (!reparsed) return candidate;
-    next = { ...reparsed, day: start.day };
-  }
-  return buildYmd(next);
 };
 
 // ---- sorting ---------------------------------------------------------------
 
 export const PROJECT_SORTS = [
   { key: "updated", label: "Recently updated" },
-  { key: "priority", label: "Priority" },
-  { key: "milestone", label: "Next milestone" },
+  { key: "finish", label: "Expected finish" },
   { key: "progress", label: "Progress" },
+  { key: "cost", label: "Cost per month" },
   { key: "name", label: "Name" },
   { key: "status", label: "Status" },
 ];
 
 // Running work above finished work, then by how much trouble it is in. This is
-// the tiebreak under every sort, so a completed project never sits above an
-// overdue one just because it was touched more recently.
+// the tiebreak under every sort.
 const STATUS_RANK = {
   stalled: 0,
   active: 1,
-  proposed: 2,
+  planning: 2,
   paused: 3,
   complete: 4,
   failed: 5,
@@ -235,30 +78,12 @@ const statusRank = (project) => {
   return rank === undefined ? 3 : rank;
 };
 
-// The player's own dial (world.projects[].priority). Same shape and same
-// defaulting rule as STATUS_RANK above: an entry from a save written before the
-// field existed reads as normal, so it sorts in the middle rather than being
-// swept to one end of a board the player has never touched.
-//
-// Deliberately NOT folded into the other comparators as a tiebreak. Doing that
-// would reshuffle every existing player's board under the sort they already had
-// selected, for a reason they did not ask for and cannot see; priority is its own
-// sort, chosen deliberately.
-const PRIORITY_RANK = { high: 0, normal: 1, low: 2 };
-
-const priorityRank = (project) => {
-  const rank = PRIORITY_RANK[asText(project?.priority)];
-  return rank === undefined ? 1 : rank;
-};
-
-// Undated things sort LAST under every date-driven comparator, rather than
-// first, which is what a bare string compare against "" would do — a project
-// with no milestone is not the most urgent one on the board.
+// Undated things sort LAST under a date comparator, rather than first.
 const compareDates = (a, b) => {
   if (!a && !b) return 0;
   if (!a) return 1;
   if (!b) return -1;
-  return a.localeCompare(b);
+  return compareGameDates(a, b);
 };
 
 export const sortProjects = (projects, key = "updated") => {
@@ -266,49 +91,39 @@ export const sortProjects = (projects, key = "updated") => {
   const byName = (a, b) => asText(a.name).localeCompare(asText(b.name));
 
   const comparators = {
-    // Most recently touched first. updatedAt is an ISO stamp, so a plain reverse
-    // string compare is correct and needs no Date parsing.
+    // Most recently touched first. updatedAt is an ISO stamp.
     updated: (a, b) => asText(b.updatedAt).localeCompare(asText(a.updatedAt)) || byName(a, b),
-    milestone: (a, b) => compareDates(deriveNextMilestone(a)?.date, deriveNextMilestone(b)?.date) || byName(a, b),
+    finish: (a, b) => compareDates(asText(a.targetDate), asText(b.targetDate)) || byName(a, b),
     progress: (a, b) => (Number(b.progress) || 0) - (Number(a.progress) || 0) || byName(a, b),
+    cost: (a, b) => (Number(b.plan?.monthlyCost) || 0) - (Number(a.plan?.monthlyCost) || 0) || byName(a, b),
     name: byName,
     status: (a, b) => statusRank(a) - statusRank(b) || byName(a, b),
-    // Status second, so within one priority band the work in trouble surfaces
-    // first — that is the order the player actually wants to read down.
-    priority: (a, b) => priorityRank(a) - priorityRank(b) || statusRank(a) - statusRank(b) || byName(a, b),
   };
 
   const compare = comparators[key] || comparators.updated;
-  // Open work always outranks closed work, whatever the chosen sort — a board
-  // whose first screen is finished projects is not telling you anything.
+  // Open work always outranks closed work, whatever the chosen sort.
   return list.sort((a, b) => (isProjectOpen(b) ? 1 : 0) - (isProjectOpen(a) ? 1 : 0) || compare(a, b));
 };
 
 // ---- filtering -------------------------------------------------------------
 
-// Case-, diacritic- and punctuation-insensitive identity for an owner name.
-//
-// A HAND-KEPT DUPLICATE of ownerIdentityKey in ownerNames.js — same reasoning as
-// OPEN_STATUSES above: importing it would cost this file its import-free promise,
-// and the two must not drift. If you change the fold there, change it here.
-//
-// A plain toLowerCase() was not enough. The model spells a country back the way
-// it remembers it, so the player's own programme arrives owned by "Cote dIvoire"
-// while game.country is "Côte d'Ivoire", the entry files itself under Foreign,
-// and the player loses the two levers they have over their own work.
-const ownerIdentity = (value) => String(value ?? "")
-  .normalize("NFD")
-  .toLowerCase()
-  .replace(/[^a-z0-9]+/g, "");
-
 // Owner is compared by NAME, because that is the namespace every polity-keyed
-// field in world state uses. A blank ownerCode means the player: the model is not
-// made to restate their own country on every entry, since a field it has to
-// repeat is a field it eventually gets wrong.
+// field in world state uses, through the game's one name fold
+// (server/nameKey.js, which imports nothing, so this file still runs in a bare
+// checkout). Case, accents and punctuation do not make a different owner: the
+// model spells a country back the way it remembers it, so the player's own
+// programme may arrive owned by "Cote dIvoire" while game.country is "Côte
+// d'Ivoire", and filing it under Foreign would cost the player the two levers
+// they have over their own work.
+//
+// A blank ownerCode means the player: the model is not made to restate their
+// own country on every entry, since a field it has to repeat is a field it
+// eventually gets wrong. Blank is judged on the text itself, never on its fold:
+// under the old a-z fold every Chinese or Russian name folded to nothing, so a
+// programme owned by "中国" counted as the player's own.
 export const isPlayerProject = (project, playerCountry) => {
-  const owner = ownerIdentity(project?.ownerCode);
-  if (!owner) return true;
-  return owner === ownerIdentity(playerCountry);
+  if (!asText(project?.ownerCode)) return true;
+  return sameName(project.ownerCode, playerCountry);
 };
 
 export const isForeignProject = (project, playerCountry) => !isPlayerProject(project, playerCountry);
@@ -325,6 +140,18 @@ export const isForeignProject = (project, playerCountry) => !isPlayerProject(pro
 //
 // Closed work is excluded for the reason it always was: neither lever means
 // anything on an entry that has already ended.
+// Whether the player knows of an entry at all. Their own, always. Another
+// country's when its owner does not hide it (public), when an agent of theirs
+// told of it (linkedSpyIds, spyProvenanceOps), when their services have a view
+// on it (verification), or when it was on their board before the engine
+// (known: such an entry was there because their services had learned of it).
+// What the panel's "Known projects abroad" lists.
+export const isKnownToPlayer = (project, playerCountry) => {
+  if (isPlayerProject(project, playerCountry)) return true;
+  if ((asText(project?.secrecy) || "public") === "public") return true;
+  return project?.known === true || asArray(project?.linkedSpyIds).length > 0 || Boolean(asText(project?.verification));
+};
+
 export const canPlayerDirect = (project, playerCountry) =>
   isProjectOpen(project) && isPlayerProject(project, playerCountry);
 
@@ -364,7 +191,7 @@ export const filterProjects = (projects, {
       project.note,
       project.lastUpdate,
       project.ownerCode,
-      deriveNextMilestone(project)?.title,
+      nextMilestoneOf(project)?.title,
       ...asArray(project.tags),
     ].some((field) => asText(field).toLowerCase().includes(needle));
   });
@@ -387,25 +214,6 @@ export const collectProjectTags = (projects) => {
     .map(([tag]) => tag);
 };
 
-// A short, human summary of where a project stands, for the card's timeline row.
-// Kept here rather than in the panel so the wording is testable and the same
-// phrasing can be reused (the advisor's seed prompt quotes it).
-export const describeTimeline = (project, gameDate) => {
-  const started = asText(project?.startedAt);
-  const target = asText(project?.targetDate);
-  // A standing effort is not "missing" its end date; say so, rather than showing
-  // a bare start date that reads like an entry nobody finished filling in.
-  if (project?.ongoing) return started ? `Began ${started} · ongoing` : "Ongoing";
-  if (!started && !target) return "";
-  if (started && !target) return `Began ${started}`;
-  if (!started) return `Target ${target}`;
-
-  const delta = signedDaysBetween(gameDate, target);
-  if (delta === null) return `${started} → ${target}`;
-  if (delta < 0) return `${started} → ${target} (${Math.abs(delta)}d overdue)`;
-  return `${started} → ${target} (${delta}d left)`;
-};
-
 // ---- covert operations that track a real agent -----------------------------
 // A spy in the field IS a long-running covert operation, so it belongs on the
 // board next to everything else the player is running — and the board is where
@@ -413,9 +221,9 @@ export const describeTimeline = (project, gameDate) => {
 //
 // The split of responsibility is deliberate. The ENGINE owns whether an entry
 // exists and whether it has ended, because that is bookkeeping and must never
-// drift from world.spies. The MODEL owns the story: progress, milestones and
-// lastUpdate arrive through the ordinary projects task, because the entry is an
-// ordinary board entry once it exists.
+// drift from world.spies. Once it exists it is an ordinary board entry, which
+// the projects engine runs like any other (a programme that runs on, set up in
+// a month, at no cost of its own).
 //
 // Deliberately NOT handled here:
 //  * `turned`. A double agent still looks alive to its owner, and the player is
@@ -467,9 +275,11 @@ export const spyOperationOps = (spies, projects, { date = "", playerPolity = "" 
         // Blank means the player's own, so the model is never made to restate it.
         ownerCode: "",
         status: "active",
-        // A planted agent runs until it is pulled or caught; it has no target
-        // date, and `ongoing` is what stops the board calling that overdue.
+        // A planted agent runs until it is pulled or caught: a programme that
+        // runs on, set up in a month, at no cost of its own (the agent's keep
+        // is the Intelligence tab's business).
         ongoing: true,
+        plan: { durationDays: 30, monthlyCost: 0, ongoing: true, milestones: [], effects: [], yields: [] },
         startedAt: asText(spy?.deployedAt) || asText(date),
         summary: `An agent of ours is in place inside ${target}, reading its private diplomacy.`,
         linkedSpyIds: [id],
@@ -591,6 +401,7 @@ export const spyIntelDoubtOps = (spies, projects, { playerPolity = "", date = ""
       name: asText(project.name),
       verification: "doubted",
       status: "stalled",
+      stallReason: "blocked",
       lastUpdate: `Our analysts no longer trust how we came by this${date ? ` (as of ${formatGameDateReadable(date) || date})` : ""}.`
         + " It stands unconfirmed until someone else can look.",
     });
@@ -654,89 +465,20 @@ export const describeDoubtedForPrompt = (pending) => {
 
 // ---- Which Board entries an event concerns ------------------------------------
 //
-// The engine's own answer to "is this event about something on the Board?", so
-// nothing new has to be asked of the model. Its one job is the world director's
-// consequence check: a major event with no other consequence may pass it
-// provisionally when it concerns an open Board entry, and the board pass then
-// has to prove it by actually changing a Board entry. A false match therefore
-// costs one provisional pass that verification takes back, while a miss costs a
-// retried segment — so this leans towards matching.
-//
-// Words are folded the way ownerIdentity folds a polity name (accents dropped,
-// case ignored), then compared as crude stems so "shipyards" meets "shipyard".
-// They are words of any script: folded to a-z0-9, a Board kept in Russian or
-// Chinese had no words at all, so every event missed every entry on it.
-
-// Words that say what KIND of thing an entry is rather than which one, so they
-// can never be the reason an event matches.
-const GENERIC_ENTRY_WORDS = new Set([
-  "project", "projects", "operation", "operations", "programme", "programmes",
-  "program", "programs", "plan", "initiative", "campaign", "effort", "scheme",
-  "the", "and", "for", "with", "from", "into", "its", "their", "our", "new",
-  "national", "state", "phase", "stage", "first", "second", "third",
-]);
-
-const foldWords = (value) => String(value ?? "")
-  .normalize("NFD")
-  .replace(/[̀-ͯ]/g, "")
-  .toLowerCase()
-  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
-  .trim()
-  .split(" ")
-  .filter(Boolean);
-
-const stemWord = (word) => (word.length > 4 ? word.replace(/(?:ies|es|s)$/, "") : word);
-
-const distinctiveStems = (value, minLength) => [
-  ...new Set(
-    foldWords(value)
-      .filter((word) => word.length >= minLength && !GENERIC_ENTRY_WORDS.has(word))
-      .map(stemWord),
-  ),
-];
-
-// Enough of the summary to name the thing without its name: three distinctive
-// words, or two when the event also names the owner.
-const SUMMARY_WORDS_ALONE = 3;
-const SUMMARY_WORDS_WITH_OWNER = 2;
-
-export const boardEntriesConcernedByEvent = (event, board, { playerCountry = "" } = {}) => {
-  const eventWords = foldWords(`${asText(event?.title)} ${asText(event?.description)}`);
-  if (!eventWords.length) return [];
-  const eventStems = new Set(eventWords.map(stemWord));
-  const eventPhrase = ` ${eventWords.join(" ")} `;
-
-  const matches = [];
-  for (const entry of asArray(board)) {
-    if (!isProjectOpen(entry)) continue;
-
-    const nameWords = foldWords(entry?.name).filter((word) => !GENERIC_ENTRY_WORDS.has(word));
-    const namedExactly = nameWords.length > 0 && eventPhrase.includes(` ${nameWords.join(" ")} `);
-
-    const nameStems = distinctiveStems(entry?.name, 3);
-    const nameHits = nameStems.filter((stem) => eventStems.has(stem)).length;
-    const namedEnough = nameStems.length > 0 && nameHits >= Math.ceil(nameStems.length / 2);
-
-    // At the start of a word, so "Iranian" names Iran but "Romania" never names
-    // Oman. A blank owner is the player's, as everywhere on the Board.
-    const ownerWords = foldWords(asText(entry?.ownerCode) || playerCountry);
-    const ownerNamed = ownerWords.length > 0 && eventPhrase.includes(` ${ownerWords.join(" ")}`);
-
-    const summaryHits = distinctiveStems(entry?.summary, 4).filter((stem) => eventStems.has(stem)).length;
-    const describedEnough = summaryHits >= (ownerNamed ? SUMMARY_WORDS_WITH_OWNER : SUMMARY_WORDS_ALONE);
-
-    if (!namedExactly && !namedEnough && !describedEnough) continue;
-    matches.push({ entry, ownerNamed, score: (namedExactly ? 10 : 0) + nameHits * 3 + summaryHits });
-  }
-
-  // The owner decides between entries the words alone cannot tell apart — two
-  // countries' naval Projects. Only when at least one matched entry's owner is
-  // named: an event that names nobody keeps every candidate.
-  const anyOwnerNamed = matches.some((match) => match.ownerNamed);
-  return matches
-    .filter((match) => !anyOwnerNamed || match.ownerNamed)
-    .sort((a, b) => b.score - a.score)
-    .map((match) => match.entry);
+// The open entries the event's own board ops address (impacts.projectOps: an
+// update, a checkpoint or an ending names its entry by id, or by the name the
+// Board gives it, case aside; opTargetsEntry below), in the Board's order. What
+// the event SAYS it did to the Board, never what its words resemble: its title
+// and description used to be compared with each entry's name, summary and
+// owner as stemmed English words, so "Projet Québec" was found in "Quebec
+// project advances", a Board kept in Chinese was found only where punctuation
+// cut a name out of a sentence, and a request was bought on the strength of it.
+// Read by the world director's consequence check (nativeWorldDirector.js) and
+// by boardPassReasons below. (The options a caller passes are not needed.)
+export const boardEntriesConcernedByEvent = (event, board) => {
+  const ops = asArray(event?.impacts?.projectOps).filter((op) => op && typeof op === "object");
+  if (!ops.length) return [];
+  return asArray(board).filter((entry) => isProjectOpen(entry) && ops.some((op) => opTargetsEntry(op, entry)));
 };
 
 // ---- Where the board pass's ops go ------------------------------------------
@@ -800,16 +542,12 @@ export const boardPassCarriers = ({ ops, visibleEvents = [], hiddenEvents = [] }
 };
 
 // Which Board entries changed MATERIALLY between two states of the Board: opened,
-// a status or a (rounded) progress change, or a checkpoint reached or missed —
-// including a recurring one that rolled over. Words alone (a new lastUpdate) and
-// a restated figure are not a change, and neither is re-dating a checkpoint.
+// a status change, a plan given, a setback or breakthrough recorded, or a
+// checkpoint reached. Words alone (a new lastUpdate) are not a change.
 //
 // Compared on the Board itself rather than read off the ops, so every spelling
-// the Board's own normalizer accepts ("reached", "launch", a nested patch)
-// counts exactly as it does when applied. This is how the turn proves that a
-// provisional major event was backed: the Board before its ops, the Board after.
-const REACHED_MILESTONE_STATUSES = new Set(["done", "missed"]);
-
+// the Board's own normalizer accepts counts exactly as it does when applied.
+// This is how the turn proves that a provisional major event was backed.
 export const materiallyChangedEntryIds = (before, after) => {
   const previous = new Map(asArray(before).map((entry) => [asText(entry?.id), entry]));
   const changed = [];
@@ -822,126 +560,44 @@ export const materiallyChangedEntryIds = (before, after) => {
     }
     const statusMoved = (asText(entry.status) || "active") !== (asText(prior.status) || "active");
     const progressMoved = Math.round(Number(entry.progress) || 0) !== Math.round(Number(prior.progress) || 0);
-    const priorMilestones = new Map(asArray(prior.milestones).map((milestone) => [asText(milestone?.id), milestone]));
-    const checkpointReached = asArray(entry.milestones).some((milestone) => {
-      const was = priorMilestones.get(asText(milestone?.id));
-      if ((Number(milestone?.completedCount) || 0) > (Number(was?.completedCount) || 0)) return true;
-      return REACHED_MILESTONE_STATUSES.has(asText(milestone?.status)) && asText(was?.status) !== asText(milestone?.status);
-    });
-    if (statusMoved || progressMoved || checkpointReached) changed.push(id);
+    const planned = Boolean(entry.plan) !== Boolean(prior.plan);
+    const adjusted = asArray(entry.adjustments).length !== asArray(prior.adjustments).length;
+    const reached = asArray(entry.plan?.milestones).filter((milestone) => milestone?.reached).length
+      !== asArray(prior.plan?.milestones).filter((milestone) => milestone?.reached).length;
+    if (statusMoved || progressMoved || planned || adjusted || reached) changed.push(id);
   }
   return changed;
 };
 
-// Does this op address this Board entry? By id, or by name as the board pass
-// copies it (case aside) — the same two ways the Board's own ops find an entry.
+// Does this op address this Board entry? By id, or by its name, case and
+// accents aside — the same two ways the Board's own ops find an entry.
 export const opTargetsEntry = (op, entry) => {
   const id = asText(op?.projectId || op?.id);
-  const name = asText(op?.name).toLowerCase();
-  return Boolean((id && id === asText(entry?.id)) || (name && name === asText(entry?.name).toLowerCase()));
+  const name = asText(op?.name);
+  return Boolean((id && id === asText(entry?.id)) || (name && (name.toLowerCase() === asText(entry?.name).toLowerCase() || sameName(name, entry?.name))));
 };
 
-// HIGH PRIORITY buys an explicit assessment every jump — "no material change,
-// because..." included — so an open, player-owned HIGH PRIORITY entry the board
-// pass returned no op for is worth a line in the turn log. Reported, never
-// retried: the story may genuinely have nothing to say, and a second call to make
-// it say something is how progress gets invented.
-export const unassessedHighPriorityEntries = (board, ops, { playerCountry = "" } = {}) =>
-  asArray(board).filter((entry) =>
-    canPlayerDirect(entry, playerCountry)
-    && asText(entry?.priority) === "high"
-    && !asArray(ops).some((op) => opTargetsEntry(op, entry)));
-
-// ---- Does the board need a pass this turn? -----------------------------------
+// ---- Does a turn's board need looking at? -----------------------------------
 //
-// The board pass is a model request, and on a free key requests are what run out
-// (AI/requestBudget.js). It used to be made after every time skip that had a
-// board and an event. Most of those passes returned nothing: no event touched an
-// entry and nothing was due. Everything that makes a pass worth making is visible
-// from here, without asking anyone:
-//
-//   - an event names, or plainly describes, an open entry;
-//   - an event reads like the START of a long effort (the pass is the only thing
-//     that opens entries);
-//   - the calendar has caught up with an entry — overdue, a slipped milestone, or
-//     nothing reported for STALE_ROUNDS — and nobody has looked at it for
-//     BOARD_PASS_QUIET_ROUNDS;
-//   - one of the player's own HIGH PRIORITY entries has gone that long unassessed.
-//
-// The quiet-rounds rule is what keeps one permanently overdue programme from
-// buying a request every turn: it is looked at, and then left for a round. It is
-// counted twice over — from the entry's own last update, and from the last pass
-// that ran at all (`reviewedRound`, world.boardReviewedRound) — because a pass
-// may look at an overdue entry and rightly leave it alone, and an entry nobody
-// touched must not ask again the very next turn.
-// HIGH PRIORITY used to mean "assessed every jump"; while requests are being
-// saved it means "at least every second one", and sooner whenever an event
-// concerns it.
-//
-// Returns the reasons, for the turn log; empty means the pass can be skipped.
-export const BOARD_PASS_QUIET_ROUNDS = 2;
+// The engine moves every entry by itself (runtime/projectEngine.js), so what is
+// left for a model to say about the board is what an event DID to it: opened an
+// effort, set one back, brought one on, ended one. A turn's board is looked at
+// when one of its events says it did (its own board ops address an open entry,
+// or open a new one), and never because of the calendar. Returns the reasons,
+// for the turn log; empty means there is nothing to look at.
+export const eventOpensEffort = (event) =>
+  asArray(event?.impacts?.projectOps).some((op) => asText(op?.op).toLowerCase() === "create");
 
-const EFFORT_START_PATTERN = new RegExp(
-  "\\b(?:launch(?:es|ed|ing)?|begins?|began|begun|starts?|started|initiat\\w+|commission(?:s|ed|ing)?|"
-  + "authori[sz]\\w+|approv\\w+|green-?lights?|breaks? ground|broke ground|lays? (?:down )?the keel|"
-  + "funds?|funded|unveil\\w*|announc\\w+|orders?|ordered|embarks?|embarked|sets? up|establish\\w*)\\b"
-  + "[^.!?]{0,90}"
-  + "\\b(?:programmes?|programs?|projects?|operations?|construction|initiatives?|campaigns?|build-?up|"
-  + "moderni[sz]ation|rearmament|expansion|reactors?|canals?|railways?|railroads?|pipelines?|shipyards?|"
-  + "fleets?|five-year plan|reforms?|networks?|academ(?:y|ies)|bureau|agenc(?:y|ies))\\b",
-  "i",
-);
-
-export const eventStartsLongEffort = (event) =>
-  EFFORT_START_PATTERN.test(`${asText(event?.title)}. ${asText(event?.description)}`);
-
-// An entry the ENGINE keeps in step by itself: the covert-operation entries
-// spyOperationOps opens and closes for every agent in place (they carry
-// linkedSpyIds, and that sync runs before the board pass every turn). Such an
-// entry must never be the REASON a request is made. One is called "Agent in
-// Ukraine", so half its distinctive words are a country name — and in a
-// campaign fought over Ukraine, every event that mentions the place matched it
-// and bought the board job a request a skip (seen in a live run, 2026-09-17).
-// The model may still move one if it looks at the board for some other reason;
-// this only stops it being what wakes the board.
-const isEngineSyncedEntry = (entry) => asArray(entry?.linkedSpyIds).length > 0;
-
-export const boardPassReasons = ({ board, events = [], gameDate = "", round = 0, reviewedRound = 0, playerCountry = "" } = {}) => {
+export const boardPassReasons = ({ board, events = [] } = {}) => {
   const open = asArray(board).filter(isProjectOpen);
-  const asks = open.filter((entry) => !isEngineSyncedEntry(entry));
-  const happened = asArray(events);
   const reasons = [];
-
-  for (const event of happened) {
-    const concerned = asks.length ? boardEntriesConcernedByEvent(event, asks, { playerCountry }) : [];
+  for (const event of asArray(events)) {
+    const concerned = open.length ? boardEntriesConcernedByEvent(event, open) : [];
     if (concerned.length) {
       reasons.push(`"${asText(event?.title)}" concerns ${concerned.slice(0, 2).map((entry) => `"${asText(entry?.name)}"`).join(", ")}`);
-    } else if (eventStartsLongEffort(event)) {
-      reasons.push(`"${asText(event?.title)}" may start a new entry`);
+    } else if (eventOpensEffort(event)) {
+      reasons.push(`"${asText(event?.title)}" opens a new entry`);
     }
   }
-
-  // The calendar only asks again once the board has been left alone for a round.
-  // A pass "later" than this round is a number carried over from another
-  // campaign (a save turned into a scenario), and counts as never.
-  const lastPass = Number(reviewedRound) || 0;
-  if (round > 0 && lastPass > 0 && lastPass <= round && round - lastPass < BOARD_PASS_QUIET_ROUNDS) return reasons;
-
-  for (const entry of asks) {
-    const updatedRound = Number(entry?.updatedRound) || 0;
-    // An entry with no round on it has never been looked at; one from a save that
-    // predates rounds is treated the same way, once.
-    const quietFor = round > 0 && updatedRound > 0 ? round - updatedRound : BOARD_PASS_QUIET_ROUNDS;
-    if (quietFor < BOARD_PASS_QUIET_ROUNDS) continue;
-    const flags = deriveProjectFlags(entry, gameDate, round);
-    const untouched = round > 0 && updatedRound > 0 && round - updatedRound >= STALE_ROUNDS;
-    if (flags.overdue) reasons.push(`"${asText(entry?.name)}" is past its target date`);
-    else if (flags.milestoneMissed) reasons.push(`"${asText(entry?.name)}" missed a milestone`);
-    else if (untouched) reasons.push(`"${asText(entry?.name)}" has had no report for ${round - updatedRound} rounds`);
-    else if (asText(entry?.priority) === "high" && isPlayerProject(entry, playerCountry)) {
-      reasons.push(`"${asText(entry?.name)}" is HIGH PRIORITY and was last assessed ${quietFor} rounds ago`);
-    }
-  }
-
   return reasons;
 };

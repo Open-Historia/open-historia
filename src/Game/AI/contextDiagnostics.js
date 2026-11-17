@@ -152,10 +152,10 @@ const TASK_PROFILE_MAP = Object.freeze({
   rostraFeed: CONTEXT_PROFILE_KEYS.WORLD_SIMULATION,
   warRoom: CONTEXT_PROFILE_KEYS.ADVISOR,
   projects: CONTEXT_PROFILE_KEYS.MECHANICAL,
+  projectPlan: CONTEXT_PROFILE_KEYS.ADVISOR,
   worldMotionRepair: CONTEXT_PROFILE_KEYS.WORLD_SIMULATION,
   worldBreadthRepair: CONTEXT_PROFILE_KEYS.WORLD_SIMULATION,
   eventConsolidator: CONTEXT_PROFILE_KEYS.HISTORY,
-  geographyResolver: CONTEXT_PROFILE_KEYS.MECHANICAL,
   timelineCurator: CONTEXT_PROFILE_KEYS.HISTORY,
   unitDirector: CONTEXT_PROFILE_KEYS.WAR,
   territoryDirector: CONTEXT_PROFILE_KEYS.MECHANICAL,
@@ -416,7 +416,6 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
     "worldBeforeRoundOne",
   ]),
   eventConsolidator: Object.freeze(["actionsToConsolidate", "historyDocumentContext"]),
-  geographyResolver: Object.freeze(["geographyResolverItems"]),
   // projectsSummary: the [Projects & Operations] directive shows the board.
   gameMaster: Object.freeze(["gameMasterMode", "territorialControlContext", "projectsSummary"]),
   idleDiplomacy: Object.freeze([

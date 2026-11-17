@@ -28,11 +28,14 @@ test("a region belongs to the country its code names, whoever holds it", () => {
     assert.equal(baseCountryOf({ id: "y", country: "Gondor" }, toName), "Gondor");
 });
 
-test("an area is found by its name, with or without an article, or by a code", () => {
+test("an area is found by its name as the map spells it, or by a code; an article is part of a name", () => {
     const index = buildAreaIndex(CATALOG, { toName });
     assert.deepEqual(findArea(index, "Greenland", { toName }).regions.map((region) => region.id), ["4709", "4710"]);
     assert.equal(findArea(index, "greenland", { toName }).name, "Greenland");
-    assert.equal(findArea(index, "the United States", { toName }).regions.length, 2);
+    assert.equal(findArea(index, "United States", { toName }).regions.length, 2);
+    // No language's article is taken off: the English one no more than the French.
+    assert.equal(findArea(index, "the United States", { toName }), null);
+    assert.equal(findArea(index, "les United States", { toName }), null);
     assert.equal(findArea(index, "PRI", { toName }).name, "Puerto Rico");
     assert.equal(findArea(index, "Atlantis", { toName }), null);
     assert.equal(findArea(index, "", { toName }), null);

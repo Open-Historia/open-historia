@@ -1,7 +1,7 @@
 /*! Open Historia — portions (drawer close/slide + mobile layout) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useState, useRef, useEffect } from "react";
 import { Chart, registerables } from "chart.js";
-import { sendMessage, sendAdvisorGroupMessage, startChat, loadHistory } from "../AI/main.jsx";
+import { sendMessage, sendAdvisorGroupMessage, startChat, loadHistory, checkAdvisorActionCompleteness } from "../AI/main.jsx";
 import { completedSilentGroupTurnIndices } from "../AI/advisorGroupMeetings.js";
 import { requestDiplomaticChat } from "./chat.jsx";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
@@ -22,10 +22,11 @@ import { describeReplyProblems, extractFencedJson, looksLikeProjectOps } from ".
 import { reviewAdvisorActionProposals, advisorActionCardState, mergeAdvisorActionReceiptIntoView } from "./advisorActionReview.js";
 import { approveAdvisorAction, cancelApprovedAdvisorAction } from "./advisorActionApproval.js";
 import { applyAdvisorProjectProposal, canAdvisorApplyProjectOps } from "./advisorProjectRouting.js";
-import { sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.js";
+import { draftIdOf, sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.js";
 import { repeatedOrder } from "../AI/playerFocus.js";
 import { institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
 import { parseAdvisorReply } from "./advisorReply.js";
+import { completeAdvisorActionReply } from "./advisorActionCompleteness.js";
 import { prepareAdvisorGroupMemberReply, stageAdvisorGroupBatch } from "./advisorGroupOrders.js";
 import { applyAdvisorGroupProjectBatch } from "./advisorProjectRouting.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
@@ -164,14 +165,11 @@ const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
         acc[item.change] = (acc[item.change] ?? 0) + 1;
         return acc;
     }, {});
-    const summary = ["opened", "updated", "completed", "closed", "deferred"]
+    const summary = ["opened", "updated", "closed"]
         .filter((change) => counts[change])
         .map((change) => `${counts[change]} ${change}`)
         .join(", ");
-    const verb = {
-        opened: "Opened: ", updated: "Updated: ", completed: "Completed: ", closed: "Closed: ",
-        deferred: "Awaiting the simulation: ",
-    };
+    const verb = { opened: "Opened: ", updated: "Updated: ", closed: "Closed: " };
 
     return (
         <div style={{ marginTop: "0.75rem", background: "rgba(59,130,246,0.1)", border: "1px solid rgba(59,130,246,0.3)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
@@ -187,9 +185,6 @@ const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
         {items.map((item, index) => (
             <li key={index} data-no-translate style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.75)", lineHeight: 1.5 }}>
             {verb[item.change] || "Changed: "}{item.title}
-            {item.change === "deferred" && (
-                <span style={{ color: "rgba(252,211,77,0.9)" }}> — this one changes the world, so the next time skip enacts it</span>
-            )}
             </li>
         ))}
         </ul>
@@ -413,8 +408,8 @@ const AdvisorActionProposalCard = ({ proposal, receipt, queueAction, targetActio
 // to fail: at worst the chat opens with the text waiting in it.
 const AdvisorDraftSend = ({ draft, onDraft }) => {
     const [handedOff, setHandedOff] = useState(false);
-    // The same letter already in the chat with that country (advisorDrafts.js):
-    // the advisor re-drafts letters the player has sent, and nothing said so.
+    // When the player sent a message from this very draft (advisorDrafts.js:
+    // the message carries the draft's id), so it is not sent twice.
     const sentOn = useRuntimeState("chat", (chats) => sentLetterDate(draft, chats));
     const resetTimer = useRef(null);
 
@@ -816,9 +811,14 @@ const formatAdvisorDate = (dateStr) => {
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
 const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
-    const { text, chartConfig, chartProblem, messageDrafts, institutionDrafts, deployments } = msg.role === "advisor"
+    const { text, chartConfig, chartProblem, messageDrafts: parsedDrafts, institutionDrafts, deployments } = msg.role === "advisor"
         ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null, streaming: Boolean(msg.streaming) })
         : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
+    // Each letter's own id (advisorDrafts.js draftIdOf), which the message sent
+    // from it carries: how its button knows it went.
+    const messageDrafts = Array.isArray(parsedDrafts)
+        ? parsedDrafts.map((draft, index) => ({ ...draft, id: draftIdOf(msg.id, index) }))
+        : parsedDrafts;
     const asWritten = msg.role === "advisor" && chatDiffers;
 
     return (
@@ -1300,7 +1300,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             updateMessages(selectedMessages);
             setInput(contactDraftsRef.current.get(id) || "");
             setVisibleMessageLimit(ADVISOR_INITIAL_RENDER_WINDOW);
-            loadHistory(selectedMessages, id);
+            loadHistory(selectedMessages, id, { character: advisorContacts(saved).some((contact) =>
+                contact.id === id && advisorRecipientType(contact) !== ADVISOR_RECIPIENT_TYPES.MINISTER) });
             shouldAutoScrollRef.current = true;
         } catch (error) {
             setLoadFailed(true);
@@ -1637,7 +1638,28 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // The hidden ADVISOR_MEMORY line (AI/advisorMemory.js) is kept on the
             // message, never in its text: loadHistory sends the newest one ahead
             // of the history after a reload.
-            const { reply, memory } = splitAdvisorMemory(raw);
+            const { reply: rawReply, memory } = splitAdvisorMemory(raw);
+            // A chief or minister can have promised a reviewable Action but
+            // omitted its structured fence. A bounded format check repairs
+            // only that missing paperwork, or reports an unresolved omission.
+            // Characters, group batches and existing/malformed fences retain
+            // their current native rules and never use this path.
+            const canProposeActions = threadId === CHIEF_ADVISOR_THREAD
+                || advisorRecipientType(recipient) === ADVISOR_RECIPIENT_TYPES.MINISTER;
+            const completion = await completeAdvisorActionReply({
+                reply: rawReply,
+                canPropose: canProposeActions,
+                check: () => checkAdvisorActionCompleteness({
+                    playerRequest: text,
+                    advisorReply: parseAdvisorReply(rawReply).text,
+                }),
+            });
+            if (leftCampaign()) return;
+            const reply = completion.reply;
+            logDebugEvent("advisor", "Advisor Action completeness reviewed.", {
+                status: completion.status,
+                problem: completion.problem || "(none)",
+            }, { verbose: true });
             // No reply is authority to write an Action. Persist one durable
             // message-bound proposal per valid fenced op, then wait for Proceed.
             const replyId = `advisor-reply-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`}`;
@@ -1648,11 +1670,14 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
             });
             const { proposals: actionProposals, problems: invalidProposals } =
-                (threadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(recipient) === ADVISOR_RECIPIENT_TYPES.MINISTER)
+                canProposeActions
                     ? reviewAdvisorActionProposals(actionsProposal, replyId,
                         await readJson(JSON_URLS.actions, { force: true }))
                     : { proposals: [], problems: [] };
-            const actionsProblems = [...actionBlockProblems, ...invalidProposals];
+            const actionsProblems = [
+                ...(completion.problem ? [completion.problem] : []),
+                ...actionBlockProblems, ...invalidProposals,
+            ];
             // Same one-shot treatment for the projects board, with truncation
             // salvage: a full backfill of a long campaign is the one block big
             // enough to be cut off mid-array by the reply token cap.
@@ -1705,6 +1730,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             logDebugEvent("advisor", "Advisor reply blocks reviewed.", {
                 actionsBlock: actionsProposal ? `${Array.isArray(actionsProposal) ? actionsProposal.length : 1} op(s)` : "(none in the reply)",
                 actionsProposed: `${actionProposals.length} pending review (zero auto-queued)`,
+                actionsProblems: actionsProblems.length ? actionsProblems : "(none)",
                 projectsBlock: projectsProposal ? `${Array.isArray(projectsProposal) ? projectsProposal.length : 1} op(s)` : "(none in the reply)",
                 projectsApplied: projectsSummary ? `${projectsSummary.length} change(s)` : "nothing",
                 projectsProblem: projectsProblem || "(none)",
@@ -1788,7 +1814,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             setContacts(advisorContacts(saved));
             setChiefProfile(chiefAdvisorProfile(saved));
             updateMessages(merged);
-            loadHistory(merged, threadId);
+            loadHistory(merged, threadId, { character: advisorContacts(saved).some((contact) =>
+                contact.id === threadId && advisorRecipientType(contact) !== ADVISOR_RECIPIENT_TYPES.MINISTER) });
             if (said.length) await saveMessages(merged, threadId);
         } finally {
             setStorageRetrying(false);
@@ -1932,7 +1959,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             ? draft.country
             : `${target.targetType === "institution-council" ? "Council" : "hearing"} ${draft.institutionId}${draft.caseId ? ` / ${draft.caseId}` : ""}`;
         logDebugEvent("advisor", `Draft handed to the Diplomacy composer for ${destination}.`, draft.text, { verbose: true });
-        requestDiplomaticChat(target, { draft: draft.text });
+        // With its id: the message the player sends from it says which draft it was.
+        requestDiplomaticChat(target, { draft: draft.text, fromDraft: draft.id || "" });
         stepAsideRef.current?.();
     }, []);
 

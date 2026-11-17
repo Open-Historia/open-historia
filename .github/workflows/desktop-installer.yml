@@ -82,11 +82,15 @@ jobs:
       # every build would look identical to the one already installed and the app
       # would never update itself. run_number increments per run and is shared by
       # all three jobs in it, so one release is one version on every platform.
+      # APP_VERSION: the product version every signed file must carry
+      # (.signpath/artifact-configuration.xml); the speech program is built with it
+      # (scripts/build-speech-helpers.mjs).
       - name: Stamp the app version
         shell: bash
         run: |
           node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='0.0.${{ github.run_number }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
           node -p "'version: '+require('./package.json').version"
+          echo "APP_VERSION=0.0.${{ github.run_number }}" >> "$GITHUB_ENV"
 
       # The map editor's Generate drawer runs the game's own copy of Azgaar's
       # Fantasy Map Generator, and the installer packs it (build.files:
@@ -125,6 +129,21 @@ jobs:
       # each round is an upload, a signing request that waits for the owner's
       # approval, and the signed files put back. .signpath/artifact-configuration.xml
       # says what is signed in each.
+      # electron-builder's resource editor writes the program's product version
+      # as four numbers (0.0.N.0); every signed file must say the build's own
+      # 0.0.N, as the installer and the speech program do.
+      - name: Write the program's product version as the build's
+        if: env.SIGNPATH_ENABLED == 'true'
+        shell: bash
+        run: node scripts/set-product-version.mjs --version "$APP_VERSION" "release/win-unpacked/Open Historia.exe"
+
+      # SignPath enforces this too; checking first fails in seconds instead of
+      # after an approval.
+      - name: Check the programs' product name and version
+        if: env.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: ./scripts/check-signing-metadata.ps1 -Version $env:APP_VERSION -Path release/win-unpacked -Include '*.exe' -Unpacked
+
       - name: Collect the app's programs for signing
         id: unsigned-app
         if: env.SIGNPATH_ENABLED == 'true'
@@ -149,6 +168,9 @@ jobs:
           project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
           signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
           artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          # The artifact configuration's ${version}: every signed file must say it.
+          parameters: |
+            version: "${{ env.APP_VERSION }}"
           github-artifact-id: ${{ steps.unsigned-app.outputs.artifact-id }}
           wait-for-completion: true
           wait-for-completion-timeout-in-seconds: 3600
@@ -168,6 +190,11 @@ jobs:
         run: node scripts/package-desktop.mjs --win --prepackaged release/win-unpacked --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Check the installer's product name and version
+        if: env.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: ./scripts/check-signing-metadata.ps1 -Version $env:APP_VERSION -Path release -Include 'Open-Historia-Setup.exe'
 
       - name: Collect the installer for signing
         id: unsigned-installer
@@ -190,6 +217,9 @@ jobs:
           project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
           signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
           artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          # The artifact configuration's ${version}: every signed file must say it.
+          parameters: |
+            version: "${{ env.APP_VERSION }}"
           github-artifact-id: ${{ steps.unsigned-installer.outputs.artifact-id }}
           wait-for-completion: true
           wait-for-completion-timeout-in-seconds: 3600

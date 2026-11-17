@@ -12,14 +12,45 @@ import { decodeWarUpdates } from "./nativeWarLedger.js";
 
 test("a part is a side of the country or a place in it, with a share or half", () => {
   assert.deepEqual(readSplitPart("north"), { direction: "north", share: 0.5 });
-  assert.deepEqual(readSplitPart("the North-East"), { direction: "northeast", share: 0.5 });
-  assert.deepEqual(readSplitPart("southern half"), { direction: "south", share: 0.5 });
+  assert.deepEqual(readSplitPart("SouthEast"), { direction: "southeast", share: 0.5 });
   assert.deepEqual(readSplitPart("east 30%"), { direction: "east", share: 0.3 });
-  assert.deepEqual(readSplitPart("around Aleppo 40%"), { place: "Aleppo", share: 0.4 });
+  assert.deepEqual(readSplitPart("west 0.4"), { direction: "west", share: 0.4 });
+  assert.deepEqual(readSplitPart("city: Aleppo 40%"), { place: "Aleppo", share: 0.4 });
   assert.deepEqual(readSplitPart("region: Cyrenaica"), { place: "Cyrenaica", share: 0.5 });
+  assert.deepEqual(readSplitPart("Benghazi"), { place: "Benghazi", share: 0.5 });
   // Never a sliver nor the whole country.
   assert.equal(readSplitPart("west 2%").share, 0.15);
   assert.equal(readSplitPart("west 99%").share, 0.85);
+});
+
+// The part is the rules' grammar: one compass word, or a place by its name. An English way of saying a side
+// is read no more than a French one (the owner, 2026-11-13: no keywording anywhere): each is the name of a
+// place the country does not have, and the split goes to the far side from the capital.
+test("a side said in other words is no compass word, in English as in any language", () => {
+  for (const written of ["the North-East", "southern half", "north east", "around Aleppo"]) {
+    assert.equal(readSplitPart(written).direction, undefined, written);
+    assert.equal(readSplitPart(written).place, written, written);
+  }
+  for (const written of ["le nord-est", "moitié sud", "nord", "север"]) {
+    assert.equal(readSplitPart(written).direction, undefined, written);
+    assert.equal(readSplitPart(written).place, written, written);
+  }
+  const english = splitRegions({ regions: grid, part: "the north", capitalRegion: "r00" });
+  const french = splitRegions({ regions: grid, part: "le nord", capitalRegion: "r00" });
+  assert.deepEqual(english.ids, french.ids, "the English and the French twin split the same way");
+  assert.equal(english.ids[0], "r32", "the far side from the capital");
+});
+
+test("a place of any script is found by its exact name", () => {
+  const rows = [
+    { id: "a", name: "Алеппо", centroid: [37, 36] },
+    { id: "b", name: "Хомс", centroid: [36.7, 34.7] },
+    { id: "c", name: "Дамаск", centroid: [36.3, 33.5] },
+    { id: "d", name: "Латакия", centroid: [35.8, 35.5] },
+  ];
+  const split = splitRegions({ regions: rows, part: "region: Алеппо 25%", capitalRegion: "c" });
+  assert.deepEqual(split.ids, ["a"]);
+  assert.equal(split.seed, "Алеппо");
 });
 
 // A country of three rows of four regions, from 30°E to 33°E and 35°N to 37°N; its capital in the middle of the east.
@@ -37,7 +68,7 @@ test("the breakaway takes the side it is told, the government keeps its capital"
 });
 
 test("a place: the regions nearest it, a region or a town of that name", () => {
-  const around = splitRegions({ regions: grid, part: "around R00" });
+  const around = splitRegions({ regions: grid, part: "region: R00" });
   assert.equal(around.ids[0], "r00");
   assert.ok(around.ids.every((id) => ["r00", "r01", "r10", "r11", "r20", "r02", "r21"].includes(id)));
   const town = splitRegions({ regions: grid, part: "Port Town", places: [{ name: "Port Town", point: [33, 37] }] });
@@ -93,6 +124,18 @@ test("one control entry is a civil war: half the country to the breakaway, and t
   assert.deepEqual([war.actors, war.opponents], [["Free Syrian Republic"], ["Syria"]]);
   assert.match(candidate.warUpdates, /Title: Syria Civil War;/);
   assert.match(receipt.notes[0].text, /Free Syrian Republic takes 6 of Syria's 12 regions \(west\), held in a civil war/);
+});
+
+test("a civil war of a country named in another script gets an id of its own names, never an empty one", async () => {
+  const split = async (country, breakaway) => {
+    const candidate = { events: [{ title: "Split", impacts: { regionControlOps: [{ op: "control", regionId: `country: ${country}`, fromCode: country, toCode: breakaway, part: "west" }] } }], warUpdates: "" };
+    const containers = candidate.events.map((event, index) => ({ event, impacts: event.impacts, path: `$.events[${index}].impacts` }));
+    await splitCountryOps(candidate, containers, { receipt: { notes: [] }, lookupContext: async () => contextOf({ owners: { [country]: grid } }), titleAt: () => "Split" });
+    return decodeWarUpdates(candidate.warUpdates)[0]?.id;
+  };
+  assert.equal(await split("Syria", "Free Syria"), "war-civil-syria-free-syria");
+  assert.equal(await split("Сирия", "Свободная Сирия"), "war-civil-сирия-свободная-сирия");
+  assert.equal(await split("سوريا", "سوريا الحرة"), "war-civil-سوريا-سوريا-الحرة");
 });
 
 test("a war already there, or one the answer starts, is not started again", async () => {

@@ -21,39 +21,51 @@
 // gone). A Director that fails costs only its own changes; the events always
 // stand as written. The player's Cancel is not a failure: it ends the turn.
 
-import { directGeneratedUnitOps, orderRaisesForces } from "./nativeUnitDirector.js";
+import { directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
-import { directGeneratedStructureOps, orderBuildsStructure } from "./nativeStructureDirector.js";
+import { directGeneratedStructureOps } from "./nativeStructureDirector.js";
+import { SCENE_MAP_CHANGED_FIELD } from "./gameplaySchemas.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const text = (value) => String(value ?? "").trim();
 
-// An event that answers the player's order to raise forces or build something is
-// the Directors' to read, however it is worded. Seen in the same game: the player
-// ordered things raised and built, and the events that answered were worded so the
-// Directors' text checks passed them by. The hint (`ordered`) lives only while the
-// turn is being made; applyMapConsequences takes it off again.
+// An event that answers an order of the player's is the Directors' to read,
+// however it is worded: one whose impacts cite the order's id (actionIds), an
+// exact reference to a queued Action. Seen in a live game: the player ordered
+// things raised and built, and the events that answered were worded so the
+// Directors' text checks passed them by. The hint (`ordered`) lives only while
+// the turn is being made; applyMapConsequences takes it off again.
+//
+// Which Director an order is for was read from the order's English words
+// ("raise", "build"): an order written in any other language marked nothing,
+// and the owner's rule is that nothing is (2026-11-13: "there should be
+// absolutely no keywording done in this game anywhere"). An order is marked for
+// every Director; each reads the event and may well add nothing.
 export const markOrderedEvents = (events, actions) => {
-    const byId = new Map(asArray(actions).filter((action) => text(action?.id)).map((action) => [text(action.id), action]));
-    return asArray(events).map((event) => {
-        const orders = asArray(event?.impacts?.actionIds).map((id) => byId.get(text(id))).filter(Boolean);
-        if (!orders.length) return event;
-        return markedBy(event, orders.map((action) => `${text(action.title)} ${text(action.text)}`));
-    });
+    const ids = new Set(asArray(actions).map((action) => text(action?.id)).filter(Boolean));
+    return asArray(events).map((event) => (asArray(event?.impacts?.actionIds).some((id) => ids.has(text(id)))
+        ? ordered(event)
+        : event));
 };
 
-// A Scene's beats are the player's choices and what came of them: they mark the
-// Scene outcome as an order marks the event that answers it, because the model
-// that sums the Scene up may leave out the headquarters or the battalion.
-export const markSceneOutcome = (outcome, beats) => (outcome
-    ? markedBy(outcome, asArray(beats).map((beat) => `${text(beat?.choice)} ${text(beat?.summary)}`))
+// Whether a finished Scene changed the map, as the answer that ended it says:
+// its record's `recordMapChanged` (interactiveExecutor) or the summary's
+// `mapChanged` (interactiveSummary). Only `true` counts; a Scene whose answer
+// leaves it out changed nothing on the map, and its map check is not asked
+// (gameplay.js runSceneReview): a request is the scarce thing, and no word of
+// the Scene is read to decide it, in any language.
+export const sceneChangedMap = (answer) => answer?.[SCENE_MAP_CHANGED_FIELD.record] === true
+    || answer?.[SCENE_MAP_CHANGED_FIELD.summary] === true;
+
+// A Scene that changed the map is the Directors' to read as an order's outcome
+// is, however it is summed up, because the model that sums the Scene up may
+// leave out the headquarters or the battalion. One that did not is left as it
+// is: `mapChanged` is sceneChangedMap's answer.
+export const markSceneOutcome = (outcome, mapChanged) => (outcome && mapChanged === true
+    ? ordered(outcome)
     : outcome);
 
-const markedBy = (event, words) => {
-    const forces = words.some(orderRaisesForces);
-    const build = words.some(orderBuildsStructure);
-    return forces || build ? { ...event, ordered: { forces, build } } : event;
-};
+const ordered = (event) => ({ ...event, ordered: { forces: true, build: true } });
 
 const withoutHints = (events) => asArray(events).map((event) => {
     if (!event || typeof event !== "object" || !("ordered" in event)) return event;

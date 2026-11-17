@@ -52,7 +52,7 @@ test("in a war the skip is told the rules, who is bound to whom, and each side's
   const situation = block.slice(block.lastIndexOf(`\n${WAR_STATS_HEADING}\n`) + 1);
   assert.ok(situation.startsWith(`${WAR_STATS_HEADING}\n${WAR_STATS_RULE}\nAland:\n- The Border War: against Borduria, alone;`), situation);
   assert.ok(situation.includes("Borduria:\n- The Border War: against Aland, alone; it holds 0 of the enemy's regions and the enemy holds 0 of its own; weariness 64 (war-weary), Aland's 22 (uneasy)."));
-  assert.equal(block.includes("War weariness:"), false, "a country at war has its weariness in its own lines, and one hardly touched is not told");
+  assert.equal(block.includes("War weariness, "), false, "a country at war has its weariness in its own lines, and one hardly touched is not told");
   assert.ok(block.length <= PEACE_BLOCK_MAX);
 });
 
@@ -97,4 +97,17 @@ test("the rule that alliances do not make war is gone from every prompt, and the
   const console = read("gameplayPrompts.js");
   assert.equal(console.includes("alliances do not automatically create belligerency"), false);
   assert.ok(console.includes("A defensive alliance binds once a turn is played"));
+});
+
+// Issue #1000: weary 47 twenty months after its surrender, listed as if still fighting.
+test("a country whose wars are over is told as recovering, not as fighting", () => {
+  const block = buildPeaceBlock({
+    world: { wars: [{ id: "w", status: "ended", sideA: ["German Reich"], sideB: ["Poland"] }], warWeariness: [{ country: "German Reich", value: 47 }, { country: "Poland", value: 12 }] },
+    game: { round: 180 },
+    players: ["Japan"],
+  });
+  assert.ok(block.includes("War weariness, at peace and recovering from the war they fought:\n- German Reich 47, strained"), block);
+  assert.equal(block.includes("War weariness, at war:"), false);
+  assert.equal(block.includes("Poland"), false, "one hardly touched is not told");
+  assert.ok(block.includes("a country at peace that is still weary is recovering from the war it fought"));
 });

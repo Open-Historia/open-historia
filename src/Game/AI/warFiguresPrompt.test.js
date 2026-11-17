@@ -35,13 +35,14 @@ test("a world with no figures yet lets the skip set the scale, and asks of no mo
   assert.match(buildWarFiguresBlock({}), /^NONE YET: none\.$/m);
 });
 
-test("the answer is read loosely: bars or colons, any order, thousands, millions, percents", () => {
+test("the answer is read as the format writes it: its labels, plain digits, bars or colons, any order, percents", () => {
   const read = readWarFigures([
-    "France | people 67,000,000 | economy 2800 | budget -4.5% | debt 110 | quality 72 | technology 82 | land 68 | sea 75 | air 78 | spending 80 | manpower 11 | cavalry 25% | siege 0.1",
-    "- Belgium: air 45, people 11.6 million, economy 600, tech 75, naval 25",
+    "France | people 67000000 | economy 2800 | budget -4.5% | debt 110 | quality 72 | technology 82 | land 68 | sea 75 | air 78 | spending 80 | manpower 11 | cavalry 25% | siege 0.1",
+    "- Belgium: air 45, people 11600000, economy 600, technology 75, sea 25",
     "the war goes on",
     "France | people 1 | quality 1",
     "Nowhere | colour blue",
+    "Japan | People 125000000 | QUALITY 70.",
   ].join("\n"));
   assert.deepEqual(read, [
     {
@@ -50,12 +51,39 @@ test("the answer is read loosely: bars or colons, any order, thousands, millions
       military: { quality: 72, technology: 82, land: 68, sea: 75, air: 78, spending: 80, manpowerShare: 11, cavalryShare: 0.25, siegeShare: 0.1 },
     },
     { name: "Belgium", backend: { population: 11600000, gdp: 600 }, military: { technology: 75, sea: 25, air: 45 } },
+    { name: "Japan", backend: { population: 125000000 }, military: { quality: 70 } },
   ]);
   assert.deepEqual(readWarFigures(""), []);
   assert.deepEqual(readWarFigures(["Aland | quality 50", "Borduria | people 2000"]), [
     { name: "Aland", military: { quality: 50 } },
     { name: "Borduria", backend: { population: 2000 } },
   ]);
+});
+
+test("no synonym, number word or digit grouping is read, in any language: such a figure is unread, never misread", () => {
+  // The reading took English synonyms ("pop", "tech", "navy", "armour",
+  // "artillery"), English number words ("million") and commas or spaces as
+  // thousands, so the same figure was read in English and lost, or misread,
+  // in the next language ("4,2" is 4.2 in French; "1,234" is 1.234 in German).
+  for (const piece of ["pop 47000000", "tech 70", "navy 30", "armour 0.3", "artillery 0.2", "population 47000000", "gdp 1400",
+    "people 47,000,000", "people 47 000 000", "people 47.000.000", "people 47 million", "economy 1.4 billion", "budget -4,2", "people 4.2e7"]) {
+    assert.deepEqual(readWarFigures(`Spain | ${piece}`), [], piece);
+  }
+  // A comma between pieces never cuts a figure in two.
+  assert.deepEqual(readWarFigures("Spain: people 47,000,000, quality 60"), [{ name: "Spain", military: { quality: 60 } }]);
+});
+
+test("a game in another language reads the same figures as its English twin, the labels being the game's own", () => {
+  const english = readWarFigures("Russia | people 146000000 | quality 60 | sea 55");
+  for (const name of ["Россия", "俄罗斯", "Russie"]) {
+    assert.deepEqual(readWarFigures(`${name} | people 146000000 | quality 60 | sea 55`), [{ ...english[0], name }], name);
+  }
+  // A label written in another language is none of the format's: the prompt
+  // asks for them as shown, never translated.
+  assert.deepEqual(readWarFigures("Россия | население 146000000 | качество 60"), []);
+  const block = buildWarFiguresBlock({ wanted: ["Россия"] });
+  assert.match(block, /Write the labels exactly as shown, never translated, and the figures in plain digits/);
+  assert.match(block, /NONE YET \(at war, and the game has no figures of them\): Россия$/m);
 });
 
 test("the field is sent with fronts on, last and required, and every answer may carry it", () => {

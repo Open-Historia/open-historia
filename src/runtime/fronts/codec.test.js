@@ -222,3 +222,26 @@ test("a key names a list and nothing looser", () => {
   assert.notEqual(hashKey(["a", "b"]), hashKey(["ab"]));
   assert.notEqual(hashKey(["a", "b"]), hashKey(["b", "a"]));
 });
+
+// A troop's owner had three bits, so a battlefield seated eight a side (the
+// owner, 2026-11-13: "Warfronts only handles 8"). A side past eight is written
+// wide; one of eight or fewer is written as it always was.
+test("a side of eight members or fewer is written as it always was; a larger one is written wide and reads back whole", async () => {
+  const codec = await import("./codec.js");
+  const troop = (owner, extra = {}) => ({ x: 3.5, y: 2.25, strength: 80, kind: "infantry", owner, named: false, dig: 0, state: "holding", ...extra });
+  const narrow = codec.encodeTroops([troop(0), troop(7, { named: true })]);
+  assert.equal(narrow.length, 2 * codec.TROOP_LETTERS);
+  assert.equal(narrow.startsWith(codec.TROOP_WIDE_MARK), false);
+  assert.deepEqual(codec.decodeTroops(narrow).map((entry) => entry.owner), [0, 7]);
+
+  const owners = Array.from({ length: 64 }, (_, index) => index);
+  const wide = codec.encodeTroops(owners.map((owner) => troop(owner, { dig: 3 / 7, strength: 100 })));
+  assert.ok(wide.startsWith(codec.TROOP_WIDE_MARK));
+  assert.equal(wide.length, codec.TROOP_WIDE_MARK.length + 64 * codec.TROOP_WIDE_LETTERS);
+  assert.ok(codec.PACKED_TEXT.test(wide), "a saved battlefield may hold it");
+  const read = codec.decodeTroops(wide);
+  assert.deepEqual(read.map((entry) => entry.owner), owners);
+  assert.deepEqual([read[63].x, read[63].y, read[63].strength, read[63].dig], [3.5, 2.25, 100, 3 / 7]);
+  assert.deepEqual(codec.troopLayoutOf(wide), { letters: codec.TROOP_WIDE_LETTERS, from: 1 });
+  assert.deepEqual(codec.troopLayoutOf(narrow), { letters: codec.TROOP_LETTERS, from: 0 });
+});

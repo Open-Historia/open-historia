@@ -74,12 +74,16 @@ test("a line of orders sends a transporter: ship, rail or airlift, with what car
   assert.deepEqual(TRANSPORT_ORDERS, { ship: "sea", rail: "land", airlift: "air" });
   const [ship, train, drop, plain, bare, lost] = decodeFrontOrders([
     "Operation Tide~Aland~ship~~2~city: Port~~major~troop convoy~12~600",
-    "The Eastern Front~Aland~by rail~~1~region: Eastmark~~~armoured trains~6",
-    "Operation Sky~Aland~Airdrop~~~country: Borduria",
+    "The Eastern Front~Aland~Rail~~1~region: Eastmark~~~armoured trains~6",
+    "Operation Sky~Aland~AIRLIFT~~~country: Borduria",
     "The Border~Aland~advance~all~1",
-    "Operation Tide~Aland~convoy~~1~city: Port~~~~many~fast",
+    "Operation Tide~Aland~ship~~1~city: Port~~~~many~fast",
     "Operation Nowhere~Aland~ship",
   ].join("\n"));
+  // The rules' words only: "by rail" or "convoy" is no transporter, nor is "par bateau".
+  for (const word of ["by rail", "convoy", "Airdrop", "par bateau", "Lufttransport"]) {
+    assert.match(decodeFrontOrders([`Operation Tide~Aland~${word}~~1~city: Port`])[0].problem, /is not an order/, word);
+  }
   assert.deepEqual([ship.order, ship.battlefield, ship.side, ship.objective, ship.effort, ship.carrier, ship.strength, ship.speed, ship.eventIndexes], ["ship", "Operation Tide", "Aland", "city: Port", "major", "troop convoy", 12, 600, [1]]);
   assert.deepEqual([train.order, train.carrier, train.strength, train.speed], ["rail", "armoured trains", 6, undefined], "a speed that is not given is the year's usual");
   assert.deepEqual([drop.order, drop.objective, drop.carrier, drop.strength], ["airlift", "country: Borduria", undefined, undefined]);

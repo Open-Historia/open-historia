@@ -84,7 +84,7 @@
   // was made in, answered from the next.
   var POSTS = [
     { t: 0.2, id: "p1", author: "Margot Lefèvre", role: "Political editor, Le Quotidien", country: "France", date: "2016-01-01", text: "Happy new year from Paris. The unions promise a hard spring, the Élysée a quiet one. One of them is wrong.", reposts: 210, likes: 1900 },
-    { t: 0.5, id: "p2", author: "The Chancellor of Germany", country: "Germany", flag: ["#000000", "#dd0000", "#ffce00"], across: true, date: "2016-01-01", text: "A good start to 2016 with our friends in France. Europe is strongest when Paris and Berlin speak with one voice.", reposts: 9800, likes: 64000 },
+    { t: 0.5, id: "p2", author: "The Chancellor of Germany", country: "Germany", flag: ["#000000", "#dd0000", "#ffce00"], across: true, date: "2016-01-01", mentions: ["France"], text: "A good start to 2016 with our friends in France. Europe is strongest when Paris and Berlin speak with one voice.", reposts: 9800, likes: 64000 },
     { t: 0.75, id: "p3", author: "Luca Marino", role: "Actor", country: "Italy", flag: ["#009246", "#ffffff", "#ce2b37"], date: "2016-01-01", kind: "everyday", text: "Three hours in the queue at a bakery in Montmartre for one croissant. Worth every minute. I would do it again tomorrow.", reposts: 7400, likes: 88000 },
     { t: 1.2, id: "p4", author: "The President of Russia", country: "Russia", flag: ["#ffffff", "#0039a6", "#d52b1e"], across: true, date: "2016-08-09", text: "Ten missiles crossed the Arctic tonight. Russia will remember who fired them, and when.", reposts: 41000, likes: 230000 },
     { t: 1.95, id: "p5", author: "Margot Lefèvre", role: "Political editor, Le Quotidien", country: "France", date: "2016-08-09", text: "Seven caught, three through. Paris is very quiet tonight.", reposts: 520, likes: 4100 },
@@ -94,9 +94,9 @@
     { t: 5.2, id: "p9", author: "The President of the United States", country: "United States", flag: ["#3c3b6e", "#ffffff", "#b22234"], across: true, date: "2017-01-01", quote: "p8", text: "Washington accepts. Our Secretary of State will lead the delegation to Strasbourg.", reposts: 18000, likes: 150000 },
     { t: 5.25, id: "p10", author: "The President of China", country: "China", flag: ["#de2910", "#de2910", "#de2910"], date: "2017-01-01", quote: "p8", text: "China will bring its neighbour. The armistice line is the one held on the day of signing.", reposts: 9100, likes: 72000 },
     { t: 6.3, id: "p11", author: "The President of Russia", country: "Russia", flag: ["#ffffff", "#0039a6", "#d52b1e"], across: true, date: "2017-01-14", quote: "p8", text: "We will come to Strasbourg, as the injured party. Inspectors go to Montana as well as to Plesetsk.", reposts: 33000, likes: 210000 },
-    { t: 7.3, id: "p12", author: "Camille Rousseau", role: "Deputy, Assemblée nationale", country: "France", date: "2017-02-09", text: "341 to 156. France goes to Strasbourg with the Assemblée behind it.", reposts: 2100, likes: 19000 },
+    { t: 7.3, id: "p12", author: "Camille Rousseau", role: "Deputy, Assemblée nationale", country: "France", date: "2017-02-09", mentions: ["France"], text: "341 to 156. France goes to Strasbourg with the Assemblée behind it.", reposts: 2100, likes: 19000 },
     { t: 7.6, id: "p13", author: "Tunde Adeyemi", role: "Footballer", country: "Nigeria", flag: ["#008751", "#ffffff", "#008751"], date: "2017-02-09", kind: "everyday", text: "Hat-trick tonight and my mother still wants to know why I missed the fourth.", reposts: 15000, likes: 120000 },
-    { t: 8.3, id: "p14", author: "The Secretary-General of the United Nations", date: "2017-03-02", quote: "p8", text: "The Final Act of Strasbourg is signed: an armistice in Korea, and ten years without a launch. The world owes France a debt today.", reposts: 61000, likes: 420000 }
+    { t: 8.3, id: "p14", author: "The Secretary-General of the United Nations", date: "2017-03-02", quote: "p8", mentions: ["France"], text: "The Final Act of Strasbourg is signed: an armistice in Korea, and ten years without a launch. The world owes France a debt today.", reposts: 61000, likes: 420000 }
   ];
   // France's figures at the middle of each chapter; each takes what it does not set from the one before.
   var FIGURES = [
@@ -608,15 +608,15 @@
   // [key, label, value of each country (France's from its figures where it has them), format]
   var RANKINGS = [
     ["population", "Population", { "China": 1379, "India": 1324, "United States": 323, "Brazil": 206, "Russia": 144, "Japan": 127, "Germany": 82.5, "Turkey": 79.5, "France": null, "United Kingdom": 65.6, "Italy": 60.6, "South Korea": 51.2, "Canada": 36.3, "North Korea": 25.4, "Australia": 24.1 }, function (v) { return v.toFixed(1) + "M"; }],
-    ["economy", "Economy", { "United States": 18.7, "China": 11.2, "Japan": 4.9, "Germany": 3.5, "United Kingdom": 2.7, "France": null, "India": 2.3, "Italy": 1.9, "Brazil": 1.8, "Canada": 1.5, "South Korea": 1.4, "Russia": 1.3, "Australia": 1.2, "Turkey": 0.86, "North Korea": 0.03 }, function (v) { return "€" + (v >= 1 ? v.toFixed(1) + "T" : Math.round(v * 1000) + "B"); }],
-    ["wealth", "Wealth per person", { "United States": 57900, "Australia": 49900, "Canada": 42300, "Germany": 42100, "United Kingdom": 41100, "Japan": 38900, "France": null, "Italy": 30500, "South Korea": 27600, "Russia": 8700, "Turkey": 10900, "China": 8100, "Brazil": 8700, "India": 1700, "North Korea": 1200 }, function (v) { return "€" + Math.round(v / 100) * 100 >= 0 ? "€" + (Math.round(v / 100) * 100).toLocaleString("en") : ""; }],
+    ["economy", "Economy", { "United States": 18.7, "China": 11.2, "Japan": 4.9, "Germany": 3.5, "United Kingdom": 2.7, "France": null, "India": 2.3, "Italy": 1.9, "Brazil": 1.8, "Canada": 1.5, "South Korea": 1.4, "Russia": 1.3, "Australia": 1.2, "Turkey": 0.86, "North Korea": 0.03 }, function (v) { return "$" + (v >= 1 ? v.toFixed(1) + "T" : Math.round(v * 1000) + "B"); }],
+    ["wealth", "Wealth per person", { "United States": 57900, "Australia": 49900, "Canada": 42300, "Germany": 42100, "United Kingdom": 41100, "Japan": 38900, "France": null, "Italy": 30500, "South Korea": 27600, "Russia": 8700, "Turkey": 10900, "China": 8100, "Brazil": 8700, "India": 1700, "North Korea": 1200 }, function (v) { return "$" + Math.round(v / 100) * 100 >= 0 ? "$" + (Math.round(v / 100) * 100).toLocaleString("en") : ""; }],
     ["military", "Military power", { "United States": 94.2, "Russia": 86.5, "China": 82.1, "India": 64.8, "France": 61.3, "United Kingdom": 59.7, "Japan": 52.4, "South Korea": 51.6, "Turkey": 47.9, "Germany": 46.2, "Italy": 42.5, "Brazil": 39.8, "North Korea": 38.4, "Australia": 33.1, "Canada": 27.6 }, function (v) { return v.toFixed(1); }],
     ["land", "Land held", { "Russia": 85, "Canada": 72, "United States": 186, "China": 34, "Brazil": 27, "Australia": 8, "India": 36, "France": 66, "Turkey": 81, "Germany": 16, "Japan": 47, "Italy": 20, "United Kingdom": 72, "South Korea": 17, "North Korea": 13 }, function (v) { return String(Math.round(v)); }],
     ["stability", "Stability", { "Canada": 81, "Australia": 79, "Germany": 77, "Japan": 76, "United Kingdom": 66, "France": null, "Italy": 61, "United States": 58, "South Korea": 55, "China": 72, "India": 57, "Brazil": 44, "Turkey": 41, "Russia": 49, "North Korea": 38 }, function (v) { return String(Math.round(v)); }],
     ["reputation", "Reputation", { "Canada": 86, "Germany": 84, "Japan": 82, "Australia": 79, "France": null, "United Kingdom": 74, "Italy": 70, "South Korea": 69, "United States": 61, "Brazil": 58, "India": 60, "Turkey": 43, "China": 47, "Russia": 31, "North Korea": 8 }, function (v) { return String(Math.round(v)); }],
     ["weariness", "War weariness", { "North Korea": 41, "South Korea": 47, "Russia": 22, "United States": 9, "France": 0, "Germany": 0, "United Kingdom": 0, "Japan": 3, "China": 2, "India": 0, "Italy": 0, "Brazil": 0, "Canada": 0, "Australia": 0, "Turkey": 0 }, function (v) { return String(Math.round(v)); }]
   ];
-  RANKINGS[2][3] = function (v) { return "€" + (Math.round(v / 100) * 100).toLocaleString("en"); };
+  RANKINGS[2][3] = function (v) { return "$" + (Math.round(v / 100) * 100).toLocaleString("en"); };
   var dossier = { rank: "economy", openRank: "France", openRelation: "", relSearch: "", relSort: "strongest" };
   function bar(value, colour) { return '<div class="gx-bar"><i style="width:' + Math.max(0, Math.min(100, value)).toFixed(1) + "%;background-color:" + colour + '"></i></div>'; }
   function stabilityColour(v) { return v < 40 ? "#ef4444" : v < 70 ? "#f59e0b" : "#22c55e"; }
@@ -704,14 +704,14 @@
     }).join("") + "</div>";
     html += '<div class="gx-dos-title econ">👥 Population</div><div class="gx-dos-card"><div class="k">Total population</div><div class="pop">' + v.population.toFixed(1) + "M</div></div>";
     html += '<div class="gx-dos-title econ">📈 Economy</div><div class="gx-dos-econ">' + [
-      ["GDP", "€" + v.gdp.toFixed(2) + "T", "Growth " + signed(v.growth, 1) + "% · 2026-EUR eq.", "#34d399"],
-      ["GDP/capita", "€" + (Math.round(v.gdpc / 10) * 10).toLocaleString("en"), "Whole polity", "#e7e7e9"],
+      ["GDP", "$" + v.gdp.toFixed(2) + "T", "Growth " + signed(v.growth, 1) + "% · 2026-USD eq.", "#34d399"],
+      ["GDP/capita", "$" + (Math.round(v.gdpc / 10) * 10).toLocaleString("en"), "Whole polity", "#e7e7e9"],
       ["Inflation", v.inflation.toFixed(1) + "%", "", "#34d399"],
       ["Unemployment", v.unemployment.toFixed(1) + "%", "", "#34d399"],
       ["Public debt", v.debt.toFixed(1) + "%", "of GDP", "#34d399"],
       ["Budget balance", signed(v.balance, 1) + "%", (v.balance < 0 ? "Deficit" : "Surplus") + " · of GDP", v.balance < 0 ? "#f87171" : "#34d399"]
     ].map(function (c) { return '<div class="cell"><div class="k">' + c[0] + '</div><div class="v" style="color:' + c[3] + '">' + c[1] + "</div>" + (c[2] ? '<div class="s">' + c[2] + "</div>" : "") + "</div>"; }).join("") + "</div>";
-    html += '<div class="gx-dos-currency">Domestic currency: EUR · GDP accounting shown in 2026-EUR-equivalent values.</div>';
+    html += '<div class="gx-dos-currency">Domestic currency: EUR · GDP accounting shown in 2026-USD-equivalent values.</div>';
     html += '<div class="gx-dos-card gdp"><div class="t">GDP breakdown</div><div class="stack"><i style="width:2%;background:#22c55e"></i><i style="width:19%;background:#3b82f6"></i><i style="width:79%;background:#f59e0b"></i></div>' +
       '<div class="legend"><span><i style="background:#22c55e"></i>Agriculture 2%</span><span><i style="background:#3b82f6"></i>Industry 19%</span><span><i style="background:#f59e0b"></i>Services 79%</span></div></div>';
     var weariness = T >= 1 && T < 5 ? 4 : 0;
@@ -783,7 +783,7 @@
   ];
   var METRICS = {};
   METRIC_GROUPS.forEach(function (g) { g[2].forEach(function (m) { METRICS[m[0]] = m; }); });
-  var UNIT_LABELS = { gdp: "GDP · 2016-EUR equivalent", gdpPerCapita: "GDP per capita · 2016-EUR equivalent", population: "Population", percent: "Percent", index: "Index · 0–100", sector: "Share of GDP · %" };
+  var UNIT_LABELS = { gdp: "GDP · 2016-USD equivalent", gdpPerCapita: "GDP per capita · 2016-USD equivalent", population: "Population", percent: "Percent", index: "Index · 0–100", sector: "Share of GDP · %" };
   var advanced = { open: false, range: "all", sel: ["gdp"], hover: -1 };
   function compact(v) {
     var a = Math.abs(v);
@@ -791,8 +791,8 @@
   }
   function formatMetric(key, v) {
     var unit = METRICS[key][3];
-    if (unit === "gdp") return "€" + compact(v);
-    if (unit === "gdpPerCapita") return "€" + Math.round(v).toLocaleString("en");
+    if (unit === "gdp") return "$" + compact(v);
+    if (unit === "gdpPerCapita") return "$" + Math.round(v).toLocaleString("en");
     if (unit === "population") return compact(v);
     if (unit === "percent") return (key === "gdpGrowth" || key === "budgetBalance" ? (v >= 0 ? "+" : "") : "") + v.toFixed(1) + "%";
     if (key === "stability") return String(Math.round(v));
@@ -800,8 +800,8 @@
   }
   function formatDelta(key, d) {
     var unit = METRICS[key][3], sign = d > 0 ? "+" : d < 0 ? "−" : "";
-    if (unit === "gdp") return sign + "€" + compact(Math.abs(d));
-    if (unit === "gdpPerCapita") return sign + "€" + Math.round(Math.abs(d)).toLocaleString("en");
+    if (unit === "gdp") return sign + "$" + compact(Math.abs(d));
+    if (unit === "gdpPerCapita") return sign + "$" + Math.round(Math.abs(d)).toLocaleString("en");
     if (unit === "population") return sign + compact(Math.abs(d));
     if (unit === "percent" || unit === "sector") return sign + Math.abs(d).toFixed(1) + " pp";
     return sign + Math.abs(Math.round(d));
@@ -1288,10 +1288,12 @@
     return POSTS.filter(function (p) { return p.t <= upTo; }).concat(social.user).sort(function (a, b) { return b.t - a.t || (b.n || 0) - (a.n || 0); });
   }
   function findPost(feed, id) { for (var i = 0; i < feed.length; i += 1) if (feed[i].id === id) return feed[i]; return null; }
+  // As the game has it (runtime/socialFeed.js mentionsPlayer): a post that quotes France's, or that names France among
+  // the polities it mentions (each canned post says so, as a time skip does), never the words of the post.
   function isMention(p, feed) {
     if (p.kind === "player") return false;
     var quoted = p.quote && findPost(feed, p.quote);
-    return !!(quoted && quoted.kind === "player") || /\bFrance\b|President of France/.test(p.text);
+    return !!(quoted && quoted.kind === "player") || (p.mentions || []).indexOf("France") >= 0;
   }
   function inTab(p, tab, feed) {
     if (tab === "mentions") return isMention(p, feed);

@@ -23,6 +23,7 @@ import { buildCompactEconomicContext, normalizeCountryStatSheet, normalizeCountr
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { normalizeWorldState } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { normalizeWarOutcome, outcomeSideOf, sideLabel } from "../../runtime/warEndings.js";
 import { intelligenceOf } from "../../runtime/spycraft.js";
 
 const asText = (value) => String(value ?? "").trim();
@@ -154,7 +155,7 @@ export const describeStatHistory = (world, name, limit = STAT_HISTORY_ROWS) => {
   const samples = normalizeCountryStatsHistory({ [key]: asObject(world?.countryStatsHistory)[key] })[key] ?? [];
   return samples.slice(-Math.max(0, limit)).map((sample) => {
     const values = [
-      field("GDP-eq", sample.gdp, (number) => `€${compactNumber(number)}`),
+      field("GDP-eq", sample.gdp, (number) => `$${compactNumber(number)}`),
       field("growth", sample.gdpGrowth, (number) => `${number}%`),
       field("inflation", sample.inflation, (number) => `${number}%`),
       field("unemployment", sample.unemployment, (number) => `${number}%`),
@@ -278,14 +279,10 @@ export const occupationsAfterTheirWar = (rows, world) => {
   });
 };
 
-// Those rows by occupier and sovereign, the largest first: [{ key: "o1", controller, sovereign, rows }]. The keys
-// are what the time skip answers (occupationSettlements), so the block, the tool and the reading all take them from
-// here, from the same world. At most OCCUPATION_GROUPS_MOST groups (the rest wait for a later skip).
-export const OCCUPATION_GROUPS_MOST = 12;
 // The war that brought an occupation, as the war ledger tells it: the latest ended war with the occupier and the
-// sovereign on opposite sides, { title, ended, note }, or null. A live skip (issue #1000, gemini-3.5-flash-lite) given
-// only "German Reich holds 17 regions of Poland" handed them to the German Reich, which had surrendered; the ledger's
-// note says how the war ended, and the story reads it from there.
+// sovereign on opposite sides, { id, title, ended, note, outcome }, or null. A live skip (issue #1000,
+// gemini-3.5-flash-lite) given only "German Reich holds 17 regions of Poland" handed them to the German Reich, which
+// had surrendered; the war's outcome (runtime/warEndings.js) is what settles it.
 export const occupationWar = (world, controller, sovereign) => {
   const fold = (value) => asText(value).toLowerCase();
   const a = fold(controller);
@@ -299,13 +296,37 @@ export const occupationWar = (world, controller, sovereign) => {
     })
     .sort((x, y) => asText(y?.endedDate).localeCompare(asText(x?.endedDate)))[0];
   if (!war) return null;
-  return { title: asText(war.title), ended: asText(war.endedDate), note: asText(war.note).slice(0, 200) };
+  return {
+    id: asText(war.id),
+    title: asText(war.title),
+    ended: asText(war.endedDate),
+    note: asText(war.note).slice(0, 200),
+    outcome: normalizeWarOutcome(war.outcome),
+  };
 };
 const describeOccupationWar = (war) => (war
   ? `Their war${war.title ? ` (${war.title})` : ""} ended${war.ended ? ` ${war.ended}` : ""}${war.note ? `: ${war.note}` : ""}`
   : "");
 
-export const occupationGroups = (rows, world = null) => {
+// What a war's recorded outcome says of an occupation it left: "returned" when the occupier lost, "kept" when the
+// sovereign did, "" when it says neither (no outcome, or nobody lost).
+export const occupationRuling = (war, controller, sovereign) => {
+  if (!war) return "";
+  if (outcomeSideOf(war, controller) === "lost") return "returned";
+  if (outcomeSideOf(war, sovereign) === "lost") return "kept";
+  return "";
+};
+
+// Those rows by occupier and sovereign, the largest first: [{ key, controller, sovereign, rows, war, ruling }].
+// An occupation is settled one of three ways:
+//   - its war has a recorded outcome with a loser: `ruling` says how, and the game settles it (gameplay.js);
+//   - its war is one the skip is asked the outcome of (`awaiting`: war ids, runtime/warEndings.js
+//     warsAwaitingOutcome): it follows from that answer, so it is not asked again;
+//   - otherwise the skip is asked, and `key` ("o1", "o2"…) is what it answers in occupationSettlements.
+// The block, the tool and the reading all take the keys from here, from the same world. At most
+// OCCUPATION_GROUPS_MOST groups are asked (the rest wait for a later skip); the others have key "".
+export const OCCUPATION_GROUPS_MOST = 12;
+export const occupationGroups = (rows, world = null, { awaiting = null } = {}) => {
   const groups = new Map();
   for (const row of Array.isArray(rows) ? rows : []) {
     const id = `${asText(row.controller).toLowerCase()}\u0001${asText(row.sovereign).toLowerCase()}`;
@@ -313,21 +334,28 @@ export const occupationGroups = (rows, world = null) => {
     group.rows.push(row);
     groups.set(id, group);
   }
+  const waiting = awaiting instanceof Set ? awaiting : new Set(Array.isArray(awaiting) ? awaiting : []);
+  let asked = 0;
   return [...groups.values()]
     .sort((a, b) => b.rows.length - a.rows.length || `${a.controller}|${a.sovereign}`.localeCompare(`${b.controller}|${b.sovereign}`))
-    .slice(0, OCCUPATION_GROUPS_MOST)
-    .map((group, index) => ({ key: `o${index + 1}`, ...group, war: occupationWar(world, group.controller, group.sovereign) }));
+    .map((group) => {
+      const war = occupationWar(world, group.controller, group.sovereign);
+      const ruling = occupationRuling(war, group.controller, group.sovereign);
+      const ask = !ruling && !(war && waiting.has(war.id)) && asked < OCCUPATION_GROUPS_MOST;
+      if (ask) asked += 1;
+      return { key: ask ? `o${asked}` : "", ...group, war, ruling };
+    });
 };
 
-// The block for the time skip: each group under its key, with the regions, every region by the name it is written
-// with (`regionName`, nameRefs.js regionNamer: "region: X" where needed). Empty when there is none.
+// The block for the time skip: each group it is asked about, under its key, with the regions, every region by the
+// name it is written with (`regionName`, nameRefs.js regionNamer: "region: X" where needed). Empty when there is none.
 export const OCCUPATIONS_AFTER_WAR_MOST = 60;
-export const describeOccupationsAfterTheirWar = (rows, { regionName = null, most = OCCUPATIONS_AFTER_WAR_MOST, world = null } = {}) => {
-  if (!rows.length) return "";
-  const groups = occupationGroups(rows, world).map((group) => ({
+export const describeOccupationsAfterTheirWar = (rows, { regionName = null, most = OCCUPATIONS_AFTER_WAR_MOST, world = null, awaiting = null } = {}) => {
+  const groups = occupationGroups(rows, world, { awaiting }).filter((group) => group.key).map((group) => ({
     ...group,
     names: group.rows.map((row) => (regionName ? regionName(row.regionId, row.name) : "") || row.name),
   }));
+  if (!groups.length) return "";
   let room = most;
   const lines = groups.map((group) => {
     const shown = group.names.slice(0, Math.max(0, room));
@@ -337,8 +365,19 @@ export const describeOccupationsAfterTheirWar = (rows, { regionName = null, most
   });
   return [
     "[Occupations Outliving Their War]",
-    "These regions are held by a power no longer at war with their sovereign: the war that brought the occupation has ended, and nothing has settled the land since. In occupationSettlements, answer each key below as the war's end and the story since have it. Where its war is told, say who had lost when it ended: the land goes back to the sovereign if the occupier lost, and stays the occupier's if the sovereign did. Otherwise 'returned' where the occupier withdrew or was driven out, 'kept' where a treaty or annexation made the land its own. Tell it in an event where it matters to the story.",
+    "These regions are held by a power no longer at war with their sovereign, and nothing has settled the land since. In occupationSettlements, answer each key below as the story has it: 'returned' where the occupier withdrew or was driven out and the sovereign holds the land again, 'kept' where a treaty or annexation made it the occupier's own. Tell it in an event where it matters to the story.",
     ...lines,
+  ].join("\n");
+};
+
+// The ended wars the skip is asked the outcome of (runtime/warEndings.js warsAwaitingOutcome), as its block:
+// each under its key, its sides, when it ended and how the ledger noted it. Empty when there is none.
+export const describeWarsAwaitingOutcome = (entries) => {
+  if (!Array.isArray(entries) || entries.length === 0) return "";
+  return [
+    "[Wars Ended Without an Outcome]",
+    "These wars have ended, and the game does not yet know how. In warEndings, answer each key below as the story has it: which side had surrendered or been defeated when the war ended, whatever happened earlier in it; whether the defeated state's government was dissolved; and if it was, in landTo, the full names of the powers that took over its land, which the game divides among them by where each stands. The land a defeated occupier still holds goes back to its sovereign, and a defeated sovereign's land its occupier keeps; a dissolved state leaves the map, its armies with it.",
+    ...entries.map((entry) => `- ${entry.key}: ${entry.title || "a war"}: ${sideLabel(entry.sideA)} against ${sideLabel(entry.sideB)}, ended${entry.ended ? ` ${entry.ended}` : ""}${entry.note ? `: ${entry.note}` : ""}`),
   ].join("\n");
 };
 

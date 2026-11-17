@@ -7,6 +7,7 @@
 // the scenario forbids.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { describeReplyProblems, filterAdvisorDeployments, planAdvisorActionEdits } from "./advisorBlocks.js";
 import { buildMessageDrafts } from "./advisorDrafts.js";
@@ -291,13 +292,95 @@ test("a block that is not valid JSON, or not a list, is reported whole", () => {
   assert.match(parsed.draftProblems[0], /^it was not a list/);
 });
 
+// A plan written in prose is prose, in every language: only the advisor's
+// ```actions block is an Action. English "Action:"/"Lead:" headings used to be
+// read as an Action it forgot to submit; the same plan in French was not.
+test("a plan written in prose is never read as an Action, under English headings or any other", () => {
+  const english = [
+    "The emergency response is underway.",
+    "**Updated Action: GNCCN Emergency Activation**",
+    "Lead: Foreign Minister Bondarev.",
+    "1. Protocol Initiation: Maintain formal crisis activation.",
+    "2. Communications Architecture: Coordinate secure threads.",
+  ].join("\n");
+  const french = [
+    "La réponse d'urgence est en cours.",
+    "**Action mise à jour : activation d'urgence du GNCCN**",
+    "Responsable : le ministre des Affaires étrangères Bondarev.",
+    "1. Lancement du protocole : maintenir l'activation de crise.",
+  ].join("\n");
+  for (const reply of [english, french]) {
+    const parsed = parseAdvisorReply(reply);
+    assert.equal(parsed.actionsProposal, null, "prose alone is never a native Action");
+    assert.deepEqual(parsed.actionBlockProblems, []);
+    assert.equal("unreviewableActionTitle" in parsed, false, "nothing is read out of the prose");
+  }
+});
+
+test("inline actions syntax before real Action JSON preserves two reviewable proposals", () => {
+  const reply = [
+    "**Updated Action: Bushehr Nuclear Safety Coordination**",
+    "Lead: Foreign Minister Bondarev.",
+    "1. Emergency Consultations: Contact the IAEA.",
+    "I previously omitted the ```actions block.",
+    fence("actions", JSON.stringify([
+      { title: "Bushehr Nuclear Safety Follow-up", text: "Seek IAEA verification.", kind: "action" },
+      { title: "GNCCN Crisis Follow-up", text: "Maintain authorized data exchange.", kind: "action" },
+    ])),
+    "These remain subject to human review.",
+  ].join("\n");
+  const parsed = parseAdvisorReply(reply);
+  assert.deepEqual(parsed.actionsProposal?.map((op) => op.title), [
+    "Bushehr Nuclear Safety Follow-up", "GNCCN Crisis Follow-up",
+  ]);
+  assert.deepEqual(parsed.actionBlockProblems, []);
+  const { proposals, problems } = actionProposalsFromReply(parsed.actionsProposal, "advisor-reply-bushehr-20261113");
+  assert.equal(proposals.length, 2);
+  assert.ok(proposals.every((p) => p.operation === "create"));
+  assert.deepEqual(problems, []);
+});
+
 test("a reply with no fences has no problems", () => {
   const parsed = parseAdvisorReply("Just advice.");
   assert.equal(parsed.text, "Just advice.");
   assert.deepEqual([parsed.draftProblems, parsed.institutionDraftProblems, parsed.deployProblems], [[], [], []]);
 });
 
-// I155: the receipt covered only chart, actions and projects, so the advisor
+test("Advisors still proactively submit ordinary strategic Actions through structured review cards", () => {
+  const source = readFileSync(new URL("../AI/main.jsx", import.meta.url), "utf8");
+  assert.match(source, /When the player asks for strategy, options, priorities or next steps, actively recommend one or two concrete Actions/);
+  assert.match(source, /use a fenced actions block for proposals worth reviewing even before the player agrees/);
+  const reply = "The French presidency should confirm the working visit.\n"
+    + fence("actions", JSON.stringify([{ title: "Paris Working Visit - Coordination & Agenda", text: "Confirm the dates with the French Presidency." }]));
+  const parsed = parseAdvisorReply(reply);
+  const { proposals, problems } = actionProposalsFromReply(parsed.actionsProposal, "advisor-reply-proactive-regression");
+  assert.equal(proposals.length, 1, "proactive proposals remain reviewable, without requiring the user to ask for an Action");
+  assert.equal(proposals[0].operation, "create");
+  assert.deepEqual(problems, []);
+});
+
+test("the review cards are the one way an Action is offered: no control is drawn from a reply's prose", () => {
+  const ui = readFileSync(new URL("./advisor.jsx", import.meta.url), "utf8");
+  assert.doesNotMatch(ui, /RequestMissingAction|unreviewableActionTitle/);
+  assert.match(ui, /Array\.isArray\(msg\.actionProposals\) && msg\.actionProposals\.map/, "existing review cards remain the canonical UI path");
+  assert.match(ui, /actionsProblems: actionsProblems.length \? actionsProblems :/, "final native review failures reach diagnostics");
+});
+
+test("a valid Action fence is the Action, whatever prose stands around it", () => {
+  const plan = "Action: Bushehr Nuclear Safety Emergency Coordination\nLead: Foreign Minister Bondarev.\n1. Contact the IAEA.";
+  const valid = parseAdvisorReply(plan + "\n" + fence("actions", '[{"title":"Bushehr Nuclear Safety Emergency Coordination","text":"Contact the IAEA."}]'));
+  assert.equal(valid.actionsProposal?.length, 1);
+  assert.equal(parseAdvisorReply("Action: Check the status of the old order.").actionsProposal, null);
+});
+
+test("historical Action-engine annotations are hidden from rendered Advisor prose without touching user messages", () => {
+  const reply = "Real safety plan.\n[Historical Action proposal omitted from conversation replay. Only the current planned Actions list identifies editable orders; new follow-up work requires a separate proposal and player review.]\n[Historical Action review cards, not editable queue entries: Safety coordination (historical receipt: queued; current status unknown)]";
+  const parsed = parseAdvisorReply(reply);
+  assert.equal(parsed.text, "Real safety plan.");
+  assert.doesNotMatch(parsed.text, /Historical Action|historical receipt/);
+});
+
+ // I155: the receipt covered only chart, actions and projects, so the advisor
 // believed it had offered buttons that were never drawn.
 test("the receipt names every block type that drew nothing", () => {
   const problems = describeReplyProblems({

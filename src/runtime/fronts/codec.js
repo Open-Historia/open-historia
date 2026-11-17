@@ -5,7 +5,7 @@
 //
 //   mask    who holds each cell of the frame, as runs          encodeMask
 //   band    the distance to the line for the cells near it     encodeBand
-//   troops  seven letters a troop                              encodeTroops
+//   troops  seven letters a troop (eight, wide)                encodeTroops
 //   lines   the drawn line, three letters a vertex             encodeLines
 //   tracks  a troop's path through a run, eight letters a point  encodeTracks
 //
@@ -208,6 +208,25 @@ export const decodeBand = (text, count) => {
 // index into TROOP_STATES (three bits: up to eight states).
 export const TROOP_LETTERS = 7;
 
+// A side with more members than three bits can name (a coalition: a war's side
+// holds up to 64, runtime/warRecord.js) is written WIDE: TROOP_WIDE_MARK, then
+// eight letters a troop, its owner in eight bits and one bit spare. A side of
+// eight members or fewer is written as it always was, seven letters a troop,
+// so a battlefield saved before reads the same, and every reader reads either
+// (each goes through decodeTroops). The mark is no letter of the alphabet, and
+// a packed string may hold it (PACKED_TEXT). The owner had three bits only, so
+// a battlefield seated eight a side and a ninth member's land was a wall (the
+// owner, 2026-11-13: "Warfronts only handles 8").
+export const TROOP_WIDE_MARK = ";";
+export const TROOP_WIDE_LETTERS = 8;
+export const TROOP_OWNERS_MOST = 256;
+const NARROW_OWNERS = 8;
+
+// How one side's string is laid out: the letters a troop takes, and the letter its troops begin at.
+export const troopLayoutOf = (text) => (String(text ?? "").startsWith(TROOP_WIDE_MARK)
+  ? { letters: TROOP_WIDE_LETTERS, from: TROOP_WIDE_MARK.length }
+  : { letters: TROOP_LETTERS, from: 0 });
+
 const indexIn = (list, value) => {
   if (typeof value === "number") return value;
   const index = list.indexOf(String(value ?? ""));
@@ -215,34 +234,43 @@ const indexIn = (list, value) => {
 };
 
 export const encodeTroops = (troops) => {
+  const list = Array.isArray(troops) ? troops : [];
+  const wide = list.some((troop) => clampInt(troop?.owner, 0, TROOP_OWNERS_MOST - 1) >= NARROW_OWNERS);
   const writer = createBitWriter();
-  for (const troop of Array.isArray(troops) ? troops : []) {
+  for (const troop of list) {
     writer.write(clampInt((Number(troop?.x) || 0) * TROOP_UNITS, 0, 4095), 12);
     writer.write(clampInt((Number(troop?.y) || 0) * TROOP_UNITS, 0, 4095), 12);
     writer.write(clampInt(((Number(troop?.strength) || 0) * 63) / 100, 0, 63), 6);
     writer.write(clampInt(indexIn(TROOP_KINDS, troop?.kind), 0, TROOP_KINDS.length - 1), 2);
-    writer.write(clampInt(troop?.owner, 0, 7), 3);
+    if (wide) writer.write(clampInt(troop?.owner, 0, TROOP_OWNERS_MOST - 1), 8);
+    else writer.write(clampInt(troop?.owner, 0, NARROW_OWNERS - 1), 3);
     writer.write(troop?.named ? 1 : 0, 1);
     writer.write(clampInt((Number(troop?.dig) || 0) * 7, 0, 7), 3);
     writer.write(clampInt(indexIn(TROOP_STATES, troop?.state), 0, TROOP_STATES.length - 1), 3);
+    // (The spare bit: a wide troop is eight whole letters, so its string too is cut cleanly at any troop.)
+    if (wide) writer.write(0, 1);
   }
-  return writer.end();
+  return (wide ? TROOP_WIDE_MARK : "") + writer.end();
 };
 
 export const decodeTroops = (text) => {
-  const source = String(text ?? "");
+  const raw = String(text ?? "");
+  const { letters, from } = troopLayoutOf(raw);
+  const wide = from > 0;
+  const source = raw.slice(from);
   const reader = createBitReader(source);
   const troops = [];
-  const count = Math.floor(source.length / TROOP_LETTERS);
+  const count = Math.floor(source.length / letters);
   for (let index = 0; index < count; index += 1) {
     const x = reader.read(12) / TROOP_UNITS;
     const y = reader.read(12) / TROOP_UNITS;
     const strength = (reader.read(6) * 100) / 63;
     const kind = Math.min(TROOP_KINDS.length - 1, reader.read(2));
-    const owner = reader.read(3);
+    const owner = reader.read(wide ? 8 : 3);
     const named = reader.read(1) === 1;
     const dig = reader.read(3) / 7;
     const state = Math.min(TROOP_STATES.length - 1, reader.read(3));
+    if (wide) reader.read(1);
     troops.push({ x, y, strength, kind, owner, named, dig, state });
   }
   return troops;

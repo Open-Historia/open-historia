@@ -1,15 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  bindScriptedPoliticalClaims,
+  buildScriptedPoliticalImpactInstruction,
   clearPoliticalClaimBindings,
   politicalImpactCompletenessFailure,
   politicalImpactCompletenessIssue,
   politicalImpactCompletenessIssues,
-  polityImpactCompletenessIssue,
   preparePoliticalClaimContext,
+  scriptedPoliticalImpactRequirements,
   validatePoliticalImpactCompleteness,
-  validatePolityImpactCompleteness,
 } from "./politicalImpactCompleteness.js";
+import { normalizePoliticalActors } from "../../runtime/politicalActors.js";
+
+// What an event changes is read from structure only: the answer's
+// politicalClaims, the event's own politicalActorOps, a scripted beat's
+// authored impacts. Its words were read by English regexes (elections,
+// cabinets, coups, renames, a prime minister resigning), which misfired on
+// ordinary English and never fired in any other language.
 
 const event = (title, description = "", ops = []) => ({
   title, description, impacts: { politicalActorOps: ops },
@@ -18,22 +26,65 @@ const event = (title, description = "", ops = []) => ({
 const op = (name, args = {}) => ({ op: name, polityKey: "The Baltic Union", argsJson: JSON.stringify(args) });
 const opFor = (polityKey, name, args = {}) => ({ op: name, polityKey, argsJson: JSON.stringify(args) });
 
-test("completed parliamentary election cannot remain timeline-only prose", () => {
-  const issue = politicalImpactCompletenessIssue(event(
-    "Baltic Union Convenes First General Parliamentary Elections in Riga",
-    "Voters cast ballots across the union and the first parliament is returned.",
-  ));
-  assert.equal(issue?.kind, "election");
-  assert.match(issue?.message || "", /politicalActorOps/);
+// The first issue of a candidate, under the claims it gives (none: undefined).
+const issueOf = (events, { world = null, claims } = {}) => {
+  const candidate = { events: Array.isArray(events) ? events : [events], ...(claims === undefined ? {} : { politicalClaims: claims }) };
+  const claimContext = preparePoliticalClaimContext(candidate);
+  return politicalImpactCompletenessFailure(candidate, { world, claimContext })?.issue ?? null;
+};
+
+const baltic = (overrides = {}) => ({
+  politicalActors: normalizePoliticalActors({
+    byPolity: {
+      "The Baltic Union": {
+        polityKey: "The Baltic Union",
+        politicalSystem: { type: "parliamentary_republic", representation: "electoral", regimeCharacter: "democratic" },
+        government: { form: "Parliamentary Republic", rulingPartyIds: [], coalitionPartyIds: [] },
+        parties: [
+          { id: "baltic-democratic-party", name: "Baltic Democratic Party" },
+          { id: "baltic-social-democratic-party", name: "Baltic Social Democratic Party" },
+          { id: "baltic-national-conservative-party", name: "Baltic National Conservative Party" },
+        ],
+        ...overrides,
+      },
+    },
+  }),
 });
 
-test("constitutional charter ratification requires canonical Political Actor mutation", () => {
-  const issue = politicalImpactCompletenessIssue(event(
-    "Baltic Parliament Ratifies Permanent Constitutional Charter",
-    "The newly convened parliament formally ratifies a permanent constitutional framework.",
-  ));
-  assert.equal(issue?.kind, "constitutional");
-  assert.match(issue?.message || "", /set-political-system/);
+// --- Words change nothing -----------------------------------------------------
+
+const PROSE = [
+  ["Baltic Union Convenes First General Parliamentary Elections in Riga", "Voters cast ballots across the union and the first parliament is returned."],
+  ["L'Union balte tient ses premières élections législatives à Riga", "Les électeurs votent dans toute l'union et le premier parlement est élu."],
+  ["Provisional Government Established in Nanjing under Sun Yat-sen", "A provisional government is established and assumes executive authority."],
+  ["Военная хунта захватывает власть", "Хунта распускает парламент и берёт на себя исполнительную власть."],
+  ["Prime Minister Jaan Poska Resigns", ""],
+  ["Le Premier ministre Jaan Poska démissionne", ""],
+  ["New Rail Link Inaugurated", "The prime minister cuts the ribbon on the new line."],
+  ["Coalition Forces Enter Baghdad", "US-led coalition troops enter the city after heavy fighting."],
+  ["United States Formally Adopts the Name United Republic of Socialist Nations", "The federal government replaces the previous country name."],
+];
+
+test("an event's words alone change no Political World and ask for no ops, in any language", () => {
+  for (const [title, description] of PROSE) {
+    assert.equal(issueOf(event(title, description)), null, title);
+    assert.equal(issueOf(event(title, description), { claims: "" }), null, `${title}, with an empty ledger`);
+  }
+  assert.equal(politicalImpactCompletenessIssue(event(...PROSE[0])), null);
+  // No op is ever added to an event from its words: a resignation in prose was
+  // once turned into a set-government vacancy by English verbs.
+  const resignation = event("Evika Siliņa Resigns as Prime Minister of Latvia", "Prime Minister Evika Siliņa resigns after a political crisis.");
+  assert.equal(validatePoliticalImpactCompleteness({ events: [resignation] }), "");
+  assert.deepEqual(resignation.impacts.politicalActorOps, []);
+});
+
+test("a claim asks for its ops, the same in every language", () => {
+  for (const title of ["Shigeru Ishiba Assumes Office as Prime Minister", "Shigeru Ishiba devient Premier ministre", "石破茂が首相に就任"]) {
+    const transition = event(title, "", [opFor("Germany", "replace-leader", { office: "headOfGovernment", leader: { name: "Friedrich Merz" } })]);
+    assert.equal(issueOf(transition, { claims: "1~Japan~leadership" })?.kind, "leadership", title);
+    transition.impacts.politicalActorOps = [opFor("Japan", "replace-leader", { office: "headOfGovernment", leader: { name: "Shigeru Ishiba" } })];
+    assert.equal(issueOf(transition, { claims: "1~Japan~leadership" }), null, title);
+  }
 });
 
 test("matching political operation satisfies structural completeness", () => {
@@ -44,52 +95,13 @@ test("matching political operation satisfies structural completeness", () => {
   )] }), "");
 });
 
-test("scheduled election and ordinary policy debate do not force a structural mutation", () => {
-  assert.equal(validatePoliticalImpactCompleteness({ events: [
-    event("Baltic Assembly Schedules General Elections for December", "Campaigning begins next month."),
-    event("French Chamber Debates Income Tax Reform", "Deputies continue debate without a cabinet change."),
-  ] }), "");
-});
-
-test("political keywords in separate clauses do not fabricate completed structural transitions", () => {
-  assert.equal(politicalImpactCompletenessIssue(event(
-    "Election Campaign Continues as Cabinet Holds Security Meeting",
-    "The general election remains scheduled for December. The cabinet holds a routine security meeting today.",
-  )), null);
-
-  assert.equal(politicalImpactCompletenessIssue(event(
-    "Constitutional Court Reviews Charter as Parliament Adopts Annual Budget",
-    "The constitutional court continues its review. In a separate vote, parliament adopts the annual budget.",
-  )), null);
-
-  assert.equal(politicalImpactCompletenessIssue(event(
-    "President Establishes Cabinet Committee on Procurement",
-    "The president establishes a cabinet committee to review procurement rules; the existing government remains in office.",
-  )), null);
-});
-
-
-test("new provisional government establishment cannot remain prose-only", () => {
-  const issue = politicalImpactCompletenessIssue(event(
-    "Provisional Government Established in Nanjing under Sun Yat-sen",
-    "A provisional government is established and assumes executive authority.",
-  ));
-  assert.equal(issue?.kind, "government");
-  assert.match(issue?.message || "", /government.*politicalActorOps/i);
-});
-
-test("election result requires both landscape and governing outcome", () => {
-  const issue = politicalImpactCompletenessIssue(event(
-    "Baltic Union Election Results Return a Liberal Majority",
-    "Final results award the National Liberal Party a plurality of seats.",
-    [op("set-government")],
-  ));
+test("an election claim needs both the landscape and the governing outcome", () => {
+  const issue = issueOf(event("Baltic Union Election Results Return a Liberal Majority", "", [op("set-government")]), { claims: "1~The Baltic Union~election" });
   assert.equal(issue?.kind, "election-result");
   assert.match(issue?.message || "", /political landscape/i);
 });
 
-test("foundational election result hydrates sparse emergent Political Actor instead of leaving a shell", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
+test("foundational election result hydrates sparse emergent Political Actor instead of leaving a shell", () => {
   const world = {
     politicalActors: normalizePoliticalActors({
       byPolity: {
@@ -114,18 +126,13 @@ test("foundational election result hydrates sparse emergent Political Actor inst
     op("set-party-support"),
     op("form-coalition"),
   ];
-  const issue = politicalImpactCompletenessIssue(event(
-    "Baltic Union Election Results Return a Liberal-Agrarian Majority",
-    "Final results allocate seats and a governing coalition forms after the count.",
-    ops,
-  ), { world });
+  const issue = issueOf(event("Baltic Union Election Results Return a Liberal-Agrarian Majority", "", ops), { world, claims: "1~The Baltic Union~election" });
   assert.equal(issue?.kind, "emergent-political-hydration");
   assert.match(issue?.message || "", /set-strategy/);
   assert.match(issue?.message || "", /set-traits/);
 });
 
-test("foundational election result accepts a full sparse-actor maturation bundle", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
+test("foundational election result accepts a full sparse-actor maturation bundle", () => {
   const world = {
     politicalActors: normalizePoliticalActors({ byPolity: { "The Baltic Union": { polityKey: "The Baltic Union" } } }),
   };
@@ -141,15 +148,10 @@ test("foundational election result accepts a full sparse-actor maturation bundle
     op("set-strategy", { patch: { goals: ["Secure independence"], fears: ["Russian reconquest"], ambitions: ["Consolidate Baltic statehood"], domesticPressures: ["Regional integration"] } }),
     op("set-traits", { traits: { pragmatism: 78, consensusDriven: 72 } }),
   ];
-  assert.equal(politicalImpactCompletenessIssue(event(
-    "Baltic Union Election Results Return a Liberal-Agrarian Majority",
-    "Final results allocate parliamentary seats and establish the first elected government.",
-    ops,
-  ), { world }), null);
+  assert.equal(issueOf(event("Baltic Union Election Results Return a Liberal-Agrarian Majority", "", ops), { world, claims: "1~The Baltic Union~election" }), null);
 });
 
-test("sparse polity hydration rejects token strategy or trait operations that leave the actor effectively empty", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
+test("sparse polity hydration rejects token strategy or trait operations that leave the actor effectively empty", () => {
   const world = {
     politicalActors: normalizePoliticalActors({ byPolity: { "The Baltic Union": { polityKey: "The Baltic Union" } } }),
   };
@@ -163,527 +165,118 @@ test("sparse polity hydration rejects token strategy or trait operations that le
     op("set-strategy", { patch: { goals: ["Secure independence"] } }),
     op("set-traits", { traits: { pragmatism: 80 } }),
   ];
-  const issue = politicalImpactCompletenessIssue(event(
-    "Baltic Union Election Results Return a Liberal-Agrarian Majority",
-    "Final results allocate parliamentary seats and establish the first elected government.",
-    ops,
-  ), { world });
+  const issue = issueOf(event("Baltic Union Election Results Return a Liberal-Agrarian Majority", "", ops), { world, claims: "1~The Baltic Union~election" });
   assert.equal(issue?.kind, "emergent-political-hydration");
   assert.match(issue?.message || "", /goals, fears and ambitions/);
   assert.match(issue?.message || "", /at least two justified canonical dimensions/);
 });
 
-test("live Baltic government-formation case cannot install a PM while leaving parliamentary governing force empty", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        "The Baltic Union": {
-          polityKey: "The Baltic Union",
-          politicalSystem: {
-            type: "parliamentary_republic",
-            representation: "electoral",
-            regimeCharacter: "democratic",
-            publicLabel: "Parliamentary Republic",
-          },
-          government: {
-            form: "Parliamentary Republic",
-            rulingPartyIds: [],
-            coalitionPartyIds: [],
-          },
-          parties: [
-            { id: "baltic-democratic-party", name: "Baltic Democratic Party" },
-            { id: "baltic-social-democratic-party", name: "Baltic Social Democratic Party" },
-            { id: "baltic-national-conservative-party", name: "Baltic National Conservative Party" },
-          ],
-        },
-      },
-    }),
-  };
+// --- Governing force ----------------------------------------------------------
 
-  const issue = politicalImpactCompletenessIssue(event(
+test("live Baltic government-formation case cannot install a PM while leaving parliamentary governing force empty", () => {
+  const issue = issueOf(event(
     "Baltic Union Establishes First Constitutional Government",
-    "Following the inaugural November 1912 general elections, the Baltic Union successfully concludes coalition negotiations to establish its first permanent constitutional government under its parliamentary-republic framework, formalizing executive leadership under Prime Minister Jaan Poska.",
+    "",
     [
       op("set-government", { patch: { form: "Parliamentary Republic", ideology: "liberal democracy" } }),
       op("replace-leader", { office: "headOfGovernment", leader: { name: "Jaan Poska" } }),
     ],
-  ), { world });
+  ), { world: baltic(), claims: "1~The Baltic Union~government" });
 
   assert.equal(issue?.kind, "government-governing-force");
   assert.match(issue?.message || "", /form-coalition/i);
   assert.match(issue?.message || "", /set-government plus replace-leader alone/i);
+  assert.match(issue?.message || "", /rulingPartyIds: \[\]/);
 });
 
-test("parliamentary government formation is complete when canonical governing membership is established", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        "The Baltic Union": {
-          polityKey: "The Baltic Union",
-          politicalSystem: { type: "parliamentary_republic", representation: "electoral", regimeCharacter: "democratic" },
-          government: { form: "Parliamentary Republic", rulingPartyIds: [], coalitionPartyIds: [] },
-          parties: [
-            { id: "baltic-democratic-party", name: "Baltic Democratic Party" },
-            { id: "baltic-social-democratic-party", name: "Baltic Social Democratic Party" },
-          ],
-        },
-      },
-    }),
-  };
-
-  assert.equal(politicalImpactCompletenessIssue(event(
+test("parliamentary government formation is complete when canonical governing membership is established", () => {
+  assert.equal(issueOf(event(
     "Baltic Union Establishes First Constitutional Government",
-    "Coalition negotiations successfully conclude and the first permanent constitutional government is established under Prime Minister Jaan Poska.",
+    "",
     [
       op("form-coalition", { rulingPartyIds: ["baltic-democratic-party"], coalitionPartyIds: ["baltic-social-democratic-party"], coalitionName: "Democratic-Social Coalition" }),
       op("set-government", { patch: { form: "Parliamentary Republic", ideology: "liberal democracy" } }),
       op("replace-leader", { office: "headOfGovernment", leader: { name: "Jaan Poska" } }),
     ],
-  ), { world }), null);
+  ), { world: baltic(), claims: "1~The Baltic Union~government,coalition" }), null);
 });
 
-test("explicitly completed coalition formation cannot be satisfied by set-government alone", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        "The Baltic Union": {
-          polityKey: "The Baltic Union",
-          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-          government: { form: "Parliamentary Republic", rulingPartyIds: ["baltic-democratic-party"] },
-          parties: [
-            { id: "baltic-democratic-party", name: "Baltic Democratic Party" },
-            { id: "baltic-social-democratic-party", name: "Baltic Social Democratic Party" },
-          ],
-        },
-      },
-    }),
-  };
-
-  const issue = politicalImpactCompletenessIssue(event(
-    "Baltic Parties Conclude Coalition Negotiations",
-    "The parties successfully conclude coalition negotiations and establish a new cabinet agreement.",
-    [op("set-government", { patch: { ideology: "liberal democracy" } })],
-  ), { world });
-
-  assert.equal(issue?.kind, "coalition-formation");
+test("a coalition claim cannot be satisfied by set-government alone", () => {
+  const issue = issueOf(
+    event("Baltic Parties Conclude Coalition Negotiations", "", [op("set-government", { patch: { ideology: "liberal democracy" } })]),
+    { world: baltic({ government: { form: "Parliamentary Republic", rulingPartyIds: ["baltic-democratic-party"] } }), claims: "1~The Baltic Union~coalition" },
+  );
+  assert.equal(issue?.kind, "coalition");
   assert.match(issue?.message || "", /governing-party membership/i);
 });
 
-test("explicit caretaker or technocratic cabinet remains a legitimate non-party exception", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        "The Baltic Union": {
-          polityKey: "The Baltic Union",
-          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-          government: { form: "Parliamentary Republic", rulingPartyIds: [], coalitionPartyIds: [] },
-          parties: [
-            { id: "baltic-democratic-party", name: "Baltic Democratic Party" },
-            { id: "baltic-social-democratic-party", name: "Baltic Social Democratic Party" },
-          ],
-        },
-      },
-    }),
-  };
-
-  assert.equal(politicalImpactCompletenessIssue(event(
-    "Baltic Union Forms Technocratic Caretaker Government",
-    "A technocratic caretaker government is formed pending renewed coalition negotiations.",
-    [
-      op("set-government", { patch: { form: "Parliamentary Republic", ideology: "technocratic caretaker" } }),
+// A non-party cabinet was told apart by the words of its form ("caretaker",
+// "technocratic", "interim"), in English only. It says so in its own op now:
+// set-government with rulingPartyIds: [].
+test("a non-party cabinet is the one whose set-government gives rulingPartyIds: [], whatever its form is called", () => {
+  for (const form of ["Technocratic Caretaker Government", "Gouvernement technique intérimaire", "Временное правительство"]) {
+    const formed = (patch) => event("Cabinet Takes Office", "", [
+      op("set-government", { patch }),
       op("replace-leader", { office: "headOfGovernment", leader: { name: "Independent Administrator" } }),
-    ],
-  ), { world }), null);
+    ]);
+    assert.equal(issueOf(formed({ form, rulingPartyIds: [] }), { world: baltic(), claims: "1~The Baltic Union~government" }), null, form);
+    assert.equal(issueOf(formed({ form }), { world: baltic(), claims: "1~The Baltic Union~government" })?.kind, "government-governing-force", `${form}: its words exempt nothing`);
+  }
 });
 
-test("existing parliamentary governing force does not require redundant form-coalition for a leadership-only government change", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        "The Baltic Union": {
-          polityKey: "The Baltic Union",
-          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-          government: { form: "Parliamentary Republic", rulingPartyIds: ["baltic-democratic-party"] },
-          parties: [{ id: "baltic-democratic-party", name: "Baltic Democratic Party" }],
-        },
-      },
-    }),
-  };
-
-  assert.equal(politicalImpactCompletenessIssue(event(
+test("existing parliamentary governing force does not require redundant form-coalition for a leadership-only government change", () => {
+  assert.equal(issueOf(event(
     "New Baltic Government Takes Office under a New Prime Minister",
-    "The existing parliamentary majority remains in power as a new prime minister takes office.",
+    "",
     [
       op("set-government", { patch: { form: "Parliamentary Republic" } }),
       op("replace-leader", { office: "headOfGovernment", leader: { name: "Successor Prime Minister" } }),
     ],
-  ), { world }), null);
+  ), { world: baltic({ government: { form: "Parliamentary Republic", rulingPartyIds: ["baltic-democratic-party"] } }), claims: "1~The Baltic Union~government,leadership" }), null);
 });
 
-test("government formation reuses an established party landscape instead of minting replacement parties", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        "The Baltic Union": {
-          polityKey: "The Baltic Union",
-          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-          government: { form: "Parliamentary Republic", rulingPartyIds: [], coalitionPartyIds: [] },
-          parties: [
-            { id: "baltic-democratic-party", name: "Baltic Democratic Party" },
-            { id: "baltic-social-democratic-party", name: "Baltic Social Democratic Party" },
-            { id: "baltic-national-conservative-party", name: "Baltic National Conservative Party" },
-          ],
-        },
-      },
-    }),
-  };
-
-  const issue = politicalImpactCompletenessIssue(event(
-    "Baltic Union Establishes First Permanent Constitutional Government",
-    "Liberal and conservative representatives conclude coalition negotiations and establish the first permanent cabinet.",
-    [
-      op("create-party", { party: { id: "baltic-liberal", name: "Baltic Democratic Liberal Party" } }),
-      op("create-party", { party: { id: "baltic-conservative", name: "Baltic Conservative Party" } }),
-      op("form-coalition", { rulingPartyIds: ["baltic-liberal"], coalitionPartyIds: ["baltic-conservative"] }),
-      op("replace-leader", { office: "headOfGovernment", leader: { name: "Example PM" } }),
-    ],
-  ), { world });
-
-  assert.equal(issue?.kind, "government-party-reuse");
-  assert.match(issue?.message || "", /baltic-democratic-party/);
-  assert.match(issue?.message || "", /reuse/i);
-});
-
-test("an explicit party split or founding during government formation may create a genuinely new party", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        "The Baltic Union": {
-          polityKey: "The Baltic Union",
-          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-          government: { form: "Parliamentary Republic", rulingPartyIds: [], coalitionPartyIds: [] },
-          parties: [
-            { id: "baltic-democratic-party", name: "Baltic Democratic Party" },
-            { id: "baltic-national-conservative-party", name: "Baltic National Conservative Party" },
-          ],
-        },
-      },
-    }),
-  };
-
-  assert.equal(politicalImpactCompletenessIssue(event(
-    "Baltic Reformers Found New Party and Enter Government",
-    "A reformist split from the Baltic Democratic Party formally founds a new Reform Party before concluding coalition negotiations and establishing a cabinet.",
-    [
-      op("create-party", { party: { id: "baltic-reform-party", name: "Baltic Reform Party" } }),
-      op("form-coalition", { rulingPartyIds: ["baltic-democratic-party"], coalitionPartyIds: ["baltic-reform-party"] }),
-      op("replace-leader", { office: "headOfGovernment", leader: { name: "Example PM" } }),
-    ],
-  ), { world }), null);
-});
-
-test("a coalition label without stable governing party ids does not count as canonical governing force", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        "The Baltic Union": {
-          polityKey: "The Baltic Union",
-          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-          government: { form: "Parliamentary Republic", coalitionName: "Old Coalition", rulingPartyIds: [], coalitionPartyIds: [] },
-          parties: [
-            { id: "baltic-democratic-party", name: "Baltic Democratic Party" },
-            { id: "baltic-national-conservative-party", name: "Baltic National Conservative Party" },
-          ],
-        },
-      },
-    }),
-  };
-
-  const issue = politicalImpactCompletenessIssue(event(
-    "Baltic Union Establishes Permanent Government",
-    "The first permanent parliamentary government is established and a prime minister takes office.",
-    [op("replace-leader", { office: "headOfGovernment", leader: { name: "Example PM" } })],
-  ), { world });
-
+test("a coalition label without stable governing party ids does not count as canonical governing force", () => {
+  const issue = issueOf(
+    event("Baltic Union Establishes Permanent Government", "", [op("replace-leader", { office: "headOfGovernment", leader: { name: "Example PM" } })]),
+    { world: baltic({ government: { form: "Parliamentary Republic", coalitionName: "Old Coalition", rulingPartyIds: [], coalitionPartyIds: [] } }), claims: "1~The Baltic Union~government" },
+  );
   assert.equal(issue?.kind, "government-governing-force");
 });
 
-// --- Ordinary prose is not a change of government ---
-// Each of these once cost a whole re-request, and on the final attempt the
-// canned fallback in place of the generated history.
-
-const PROSE_THAT_CHANGES_NO_GOVERNMENT = [
-  ["New Rail Link Inaugurated", "The prime minister cuts the ribbon on the new line."],
-  ["Digital Revolution Reshapes Korean Industry", "Robotics spread through the country's factories."],
-  ["Restoration of Notre-Dame Completed", "The cathedral reopens after five years of work."],
-  ["President Names New Ambassador", "The president named a new ambassador to Japan."],
-  ["President Named New Ambassador to France", "The appointment fills a post left vacant in spring."],
-  ["Former President Carter Dies", "The former president died at his home aged 100."],
-  ["Opposition Calls for Early Elections", "Protests grow; police hold demonstrators in the capital."],
-  ["Government to Hold Elections in May", "The cabinet sets the date for the vote."],
-  ["Poll Shows Ruling Party Would Win Majority in Upcoming Election", "The survey puts the opposition far behind."],
-  ["Election Law Passed by Large Majority", "Parliament adopts the new rules for campaigning."],
-  ["Coalition Forces Enter Baghdad", "US-led coalition troops enter the city after heavy fighting."],
-  ["Coalition Partners Agree on Budget", "The governing coalition agrees a spending plan."],
-  ["Failed Coup Attempt Crushed in Ankara", "Loyal troops thwart the coup within hours."],
-  ["New Ambassador Sworn In", "The ambassador was sworn in at the foreign ministry."],
-  ["New Government Programme Launched", "A new government programme for housing starts in April."],
-  ["Police Hold Protesters After Election Rally", "Dozens are detained outside the party offices."],
-  ["Elections to Be Held in May", "The electoral commission publishes the calendar."],
-  ["Election Debate Held on State TV", "The candidates clash over pensions."],
-  ["Party Names Tusk Prime Minister Candidate", "The campaign begins in Gdansk."],
-];
-
-for (const [title, description] of PROSE_THAT_CHANGES_NO_GOVERNMENT) {
-  test(`"${title}" needs no politicalActorOps`, () => {
-    assert.equal(politicalImpactCompletenessIssue(event(title, description)), null);
-  });
-}
-
-const PROSE_THAT_CHANGES_A_GOVERNMENT = [
-  ["Prime Minister Jaan Poska Resigns", "", "leadership"],
-  ["Parliament Names New Prime Minister", "", "leadership"],
-  ["Scholz Elected Chancellor", "", "leadership"],
-  ["King Dies; Crown Prince Proclaimed King", "", "leadership"],
-  ["Military Overthrows President", "", "regime"],
-  ["Army Seizes Power in Coup", "", "regime"],
-  ["Monarchy Restored in Spain", "The restoration of the monarchy ends the republic.", "regime"],
-  ["Liberals Leave the Governing Coalition", "", "coalition"],
-  ["Coalition Collapses in Rome", "", "coalition"],
-  ["Germany Holds Federal Elections", "Voters head to the polls.", "election"],
-  ["Parliamentary Elections Held in Poland", "", "election"],
-  ["Party Wins Majority in Parliamentary Elections", "", "election"],
-  ["Sejm Elects Andrzej Duda as President", "", "leadership"],
-  ["King Appoints Smith Prime Minister", "", "leadership"],
-  ["Monarchy Restored in Spain", "", "regime"],
-  ["Election Results Hand Labour a Majority", "", "election"],
-  ["New Cabinet Sworn In", "", "government"],
-  ["Biden Sworn In as President", "", "government"],
-];
-
-for (const [title, description, kind] of PROSE_THAT_CHANGES_A_GOVERNMENT) {
-  test(`"${title}" still needs its politicalActorOps`, () => {
-    assert.equal(politicalImpactCompletenessIssue(event(title, description))?.kind, kind);
-  });
-}
+// A parliamentary system is its type, an enum, not the word "parliament" in its
+// form: a constitutional monarchy's government answers to its parliament too,
+// and a presidential republic's does not, whatever their forms say.
+test("which systems need a governing force is read from the system type", () => {
+  const forming = () => event("Cabinet Takes Office", "", [op("replace-leader", { office: "headOfGovernment", leader: { name: "Example PM" } })]);
+  const claims = "1~The Baltic Union~government";
+  const monarchy = baltic({ politicalSystem: { type: "constitutional_monarchy", representation: "electoral" }, government: { form: "Monarchie constitutionnelle", rulingPartyIds: [] } });
+  assert.equal(issueOf(forming(), { world: monarchy, claims })?.kind, "government-governing-force");
+  const presidential = baltic({ politicalSystem: { type: "presidential_republic", representation: "electoral" }, government: { form: "Parliamentary-style presidential republic", rulingPartyIds: [] } });
+  assert.equal(issueOf(forming(), { world: presidential, claims }), null);
+});
 
 test("every offending event is reported with its index, not only the first", () => {
-  const issues = politicalImpactCompletenessIssues({ events: [
-    event("Coalition Collapses in Rome"),
-    event("New Rail Link Inaugurated"),
-    event("Prime Minister Jaan Poska Resigns"),
-  ] });
+  const candidate = {
+    events: [
+      event("Coalition Collapses in Rome"),
+      event("New Rail Link Inaugurated"),
+      event("Prime Minister Jaan Poska Resigns"),
+    ],
+    politicalClaims: "1~Italy~coalition\n3~Estonia~leadership",
+  };
+  const claimContext = preparePoliticalClaimContext(candidate);
+  const issues = politicalImpactCompletenessIssues(candidate, { claimContext });
   assert.deepEqual(issues.map((issue) => [issue.index, issue.kind, issue.title]), [
     [0, "coalition", "Coalition Collapses in Rome"],
     [2, "leadership", "Prime Minister Jaan Poska Resigns"],
   ]);
-  assert.equal(validatePoliticalImpactCompleteness({ events: [event("Coalition Collapses in Rome")] }), issues[0].message);
+  assert.equal(validatePoliticalImpactCompleteness(candidate, { claimContext }), issues[0].message);
 });
 
-test("scripted leadership resignation is identified as requiring canonical Political World ops", async () => {
-  const { scriptedPoliticalImpactRequirements, buildScriptedPoliticalImpactInstruction } = await import("./politicalImpactCompleteness.js");
-  const beats = [{ id: "silina-resigns", date: "2026-09-01", title: "Prime Minister Evika Siliņa Resigns", text: "Prime Minister Evika Siliņa resigns after losing coalition support." }];
-  const rows = scriptedPoliticalImpactRequirements(beats, { world: {} });
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].issue.kind, "leadership");
-  assert.match(buildScriptedPoliticalImpactInstruction(rows), /matching politicalActorOps on THAT event/i);
-});
-
-test("scripted assassination asks the simulator to derive succession from current Political World", async () => {
-  const { scriptedPoliticalImpactRequirements, buildScriptedPoliticalImpactInstruction } = await import("./politicalImpactCompleteness.js");
-  const beats = [{
-    id: "george-i-assassinated",
-    date: "1913-03-18",
-    title: "George I Assassinated",
-    text: "King George I is assassinated in Thessaloniki.",
-  }];
-  const world = {
-    politicalActors: {
-      byPolity: {
-        Greece: {
-          polityKey: "Greece",
-          leader: { id: "george-i", name: "George I", title: "King of the Hellenes" },
-          politicalSystem: { type: "constitutional_monarchy", representation: "electoral", regimeCharacter: "constitutional", publicLabel: "Constitutional Monarchy" },
-          government: {
-            headOfState: "George I",
-            headOfGovernment: "Eleftherios Venizelos",
-            rulingPartyIds: ["liberal-party"],
-            coalitionPartyIds: [],
-          },
-          parties: [{ id: "liberal-party", name: "Liberal Party", leader: "Eleftherios Venizelos" }],
-        },
-      },
-    },
-  };
-
-  const rows = scriptedPoliticalImpactRequirements(beats, { world });
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].issue.kind, "leadership");
-
-  const instruction = buildScriptedPoliticalImpactInstruction(rows, { world });
-  assert.match(instruction, /SIMULATE the immediate political consequences from the CURRENT campaign canon/);
-  assert.match(instruction, /constitutional succession/);
-  assert.match(instruction, /Do not hardcode the real-history successor or settlement/);
-  assert.match(instruction, /POLITY: Greece/);
-  assert.match(instruction, /George I/);
-  assert.match(instruction, /liberal-party/);
-});
-
-test("new-cabinet reference language does not masquerade as a second government installation", () => {
-  assert.equal(politicalImpactCompletenessIssue(event(
-    "Latvian Government Ratifies AirBaltic and Energy Security Frameworks Under New Cabinet Mandate",
-    "Convening its first formal plenary session under the newly sworn cabinet, the Latvian Ministry of Economics and Ministry of Transport review and formally ratify the resolved milestones.",
-  )), null);
-
-  assert.equal(politicalImpactCompletenessIssue(event(
-    "New Cabinet Reviews Energy Security Programme",
-    "The new cabinet reviews inherited energy-security commitments without changing the government itself.",
-  )), null);
-});
-
-test("actual cabinet installation language still requires canonical Political World mutation", () => {
-  const issue = politicalImpactCompletenessIssue(event(
-    "President Swears In New Cabinet",
-    "The president swears in a new cabinet which assumes office immediately.",
-  ));
-  assert.equal(issue?.kind, "government");
-  assert.match(issue?.message || "", /government.*politicalActorOps/i);
-});
-
-test("unambiguous current head-of-government resignation gets a native vacancy instead of stale canon", async () => {
-  const { normalizePoliticalActors, getPoliticalProfile } = await import("../../runtime/politicalActors.js");
-  const { applyPoliticalActorOperation } = await import("../../runtime/politicalActorOps.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        Latvia: {
-          polityKey: "Latvia",
-          leader: { name: "Edgars Rinkēvičs" },
-          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-          government: {
-            form: "Parliamentary Republic",
-            headOfState: { name: "Edgars Rinkēvičs" },
-            headOfGovernment: { name: "Evika Siliņa" },
-            rulingPartyIds: ["new-unity"],
-          },
-          parties: [{ id: "new-unity", name: "New Unity" }],
-        },
-      },
-    }),
-  };
-  const resignation = event(
-    "Evika Siliņa Resigns as Prime Minister of Latvia",
-    "Prime Minister Evika Siliņa resigns after a political crisis. The president accepts the resignation and begins consultations.",
-  );
-
-  assert.equal(validatePoliticalImpactCompleteness({ events: [resignation] }, { world }), "");
-  assert.equal(resignation.impacts.politicalActorOps.length, 1);
-  assert.equal(resignation.impacts.politicalActorOps[0].op, "set-government");
-  assert.equal(resignation.impacts.politicalActorOps[0].polityKey, "Latvia");
-  assert.deepEqual(JSON.parse(resignation.impacts.politicalActorOps[0].argsJson), { patch: { headOfGovernment: "" } });
-  assert.equal(getPoliticalProfile(world, "Latvia")?.government?.headOfGovernment?.name, "Evika Siliņa", "validation never mutates the live world");
-
-  const appliedWorld = structuredClone(world);
-  const packed = resignation.impacts.politicalActorOps[0];
-  const applied = applyPoliticalActorOperation(appliedWorld, {
-    ...JSON.parse(packed.argsJson),
-    op: packed.op,
-    polityKey: packed.polityKey,
-  });
-  assert.equal(applied.applied, true);
-  assert.equal(getPoliticalProfile(appliedWorld, "Latvia")?.government?.headOfGovernment, undefined);
-});
-
-test("native vacancy repair stays fail-closed when the departing HoG is also the actor-level leader", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        Example: {
-          polityKey: "Example",
-          leader: { name: "Alex Morgan" },
-          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-          government: {
-            form: "Parliamentary Republic",
-            headOfGovernment: { name: "Alex Morgan" },
-            rulingPartyIds: ["example-party"],
-          },
-          parties: [{ id: "example-party", name: "Example Party" }],
-        },
-      },
-    }),
-  };
-  const resignation = event(
-    "Alex Morgan Resigns as Prime Minister",
-    "Prime Minister Alex Morgan resigns after losing parliamentary confidence.",
-  );
-
-  assert.match(validatePoliticalImpactCompleteness({ events: [resignation] }, { world }), /changes a head of state\/government/i);
-  assert.deepEqual(resignation.impacts.politicalActorOps, []);
-});
-
-test("native vacancy repair never guesses through an event that also establishes a successor", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        Latvia: {
-          polityKey: "Latvia",
-          leader: { name: "Edgars Rinkēvičs" },
-          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-          government: {
-            form: "Parliamentary Republic",
-            headOfState: { name: "Edgars Rinkēvičs" },
-            headOfGovernment: { name: "Evika Siliņa" },
-            rulingPartyIds: ["new-unity"],
-          },
-          parties: [{ id: "new-unity", name: "New Unity" }],
-        },
-      },
-    }),
-  };
-  const succession = event(
-    "Evika Siliņa Resigns and a Successor Is Sworn In",
-    "Prime Minister Evika Siliņa resigns and Arvils Ašeradens is sworn in as the new prime minister.",
-  );
-
-  // "Sworn in as the new prime minister" is a government taking office, which
-  // is checked before the change of leader: either complaint keeps it closed.
-  assert.match(
-    validatePoliticalImpactCompleteness({ events: [succession] }, { world }),
-    /forms or installs a government\/cabinet|changes a head of state\/government/i,
-  );
-  assert.deepEqual(succession.impacts.politicalActorOps, []);
-});
-
-test("completeness validation carries accepted Political World mutations forward between events", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        "The Baltic Union": {
-          polityKey: "The Baltic Union",
-          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-          government: { form: "Parliamentary Republic", rulingPartyIds: [], coalitionPartyIds: [] },
-          parties: [
-            { id: "baltic-democratic-party", name: "Baltic Democratic Party" },
-            { id: "baltic-social-democratic-party", name: "Baltic Social Democratic Party" },
-          ],
-        },
-      },
-    }),
-  };
+test("completeness validation carries accepted Political World mutations forward between events", () => {
   const first = event(
     "Baltic Union Forms Permanent Government",
-    "The Baltic Union forms a permanent government and the coalition takes office.",
+    "",
     [
       op("form-coalition", { rulingPartyIds: ["baltic-democratic-party"], coalitionPartyIds: ["baltic-social-democratic-party"] }),
       op("replace-leader", { office: "headOfGovernment", leader: { name: "First Prime Minister" } }),
@@ -691,163 +284,115 @@ test("completeness validation carries accepted Political World mutations forward
   );
   const second = event(
     "New Baltic Government Takes Office under a New Prime Minister",
-    "The existing parliamentary majority remains in power as a new prime minister takes office.",
+    "",
     [
       op("set-government", { patch: { form: "Parliamentary Republic" } }),
       op("replace-leader", { office: "headOfGovernment", leader: { name: "Successor Prime Minister" } }),
     ],
   );
-
-  assert.equal(validatePoliticalImpactCompleteness({ events: [first, second] }, { world }), "");
+  const candidate = { events: [first, second], politicalClaims: "1~The Baltic Union~government\n2~The Baltic Union~government" };
+  const claimContext = preparePoliticalClaimContext(candidate);
+  assert.equal(validatePoliticalImpactCompleteness(candidate, { world: baltic(), claimContext }), "");
 });
 
+// --- Scripted beats -----------------------------------------------------------
 
-test("subnational gubernatorial election results do not rewrite national Political World canon", () => {
-  const issue = politicalImpactCompletenessIssue(event(
-    "Venezuelan Electoral Authorities Finalize Regional Gubernatorial Vote Tallies",
-    "Regional gubernatorial elections conclude across several states and governors are certified. National executive and parliamentary control are unchanged.",
-  ));
-  assert.equal(issue, null);
-
-  const national = politicalImpactCompletenessIssue(event(
-    "Hungarian Parliamentary Elections Return a New Majority",
-    "Parliamentary elections conclude and final results return a new national majority.",
-  ));
-  assert.equal(national?.kind, "election");
+// A beat changes a polity's politics when its author's impacts say so (a "New
+// leader or government" row, compiled to a polityChanges update). Its words
+// were read instead, so a beat written in another language asked for nothing.
+const leaderBeat = (title, text, polity, stats) => ({
+  id: title,
+  date: "2026-09-01",
+  title,
+  text,
+  impacts: { polityChanges: [{ operation: "update", code: polity, stats }] },
 });
 
-test("coalition references cannot combine with unrelated verbs into a governing-coalition mutation", () => {
-  const issue = politicalImpactCompletenessIssue(event(
-    "IRGC Fast Attack Craft Swarms Disrupt Shipping Lanes Outside Strait of Hormuz",
-    "Iranian craft harass commercial tankers and coalition naval escorts as the broader air campaign enters its fourth week.",
-  ));
-  assert.equal(issue, null);
-
-  const collapse = politicalImpactCompletenessIssue(event(
-    "Governing Coalition Collapses After Junior Partner Withdraws",
-    "The governing coalition collapses after its junior partner withdraws from the coalition.",
-  ));
-  assert.equal(collapse?.kind, "coalition");
+test("a beat that changes a polity's politics is known by its authored impacts, never by its words", () => {
+  const beats = [
+    leaderBeat("Prime Minister Evika Siliņa Resigns", "She resigns after losing coalition support.", "Latvia", { leader: "Arvils Ašeradens" }),
+    leaderBeat("Ministru prezidente Evika Siliņa atkāpjas", "Viņa atkāpjas pēc koalīcijas atbalsta zaudēšanas.", "Latvia", { leader: "Arvils Ašeradens" }),
+    leaderBeat("A New Government in Riga", "", "Latvia", { government: "Grand coalition" }),
+    { id: "words-only", date: "2026-09-01", title: "King George I Assassinated", text: "The king is assassinated in Thessaloniki." },
+  ];
+  const requirements = scriptedPoliticalImpactRequirements(beats);
+  assert.deepEqual(requirements.map(({ beat, rows }) => [beat.title, rows]), [
+    ["Prime Minister Evika Siliņa Resigns", [{ polityKey: "Latvia", effects: ["leadership"] }]],
+    ["Ministru prezidente Evika Siliņa atkāpjas", [{ polityKey: "Latvia", effects: ["leadership"] }]],
+    ["A New Government in Riga", [{ polityKey: "Latvia", effects: ["government"] }]],
+  ]);
+  const instruction = buildScriptedPoliticalImpactInstruction(requirements);
+  assert.match(instruction, /SIMULATE the immediate political consequences from the CURRENT campaign canon/);
+  assert.match(instruction, /Do not hardcode the real-history successor or settlement/);
+  assert.match(instruction, /the author gives Latvia a new leader \(Arvils Ašeradens\): write the matching replace-leader politicalActorOps for Latvia on that event/);
+  assert.match(instruction, /the author gives Latvia a new government \(Grand coalition\): write the matching set-government politicalActorOps for Latvia on that event/);
+  assert.equal(buildScriptedPoliticalImpactInstruction(scriptedPoliticalImpactRequirements([beats[3]])), "", "a beat whose impacts change no politics asks for nothing");
 });
 
-test("junta references are not regime changes unless the same clause transfers power", () => {
-  const reference = politicalImpactCompletenessIssue(event(
-    "New Skirmishes Reported in Magway Region of Myanmar",
-    "Resistance forces attack junta military positions while the junta retains control of the regional capital.",
-  ));
-  assert.equal(reference, null);
-
-  const transfer = politicalImpactCompletenessIssue(event(
-    "Military Junta Seizes Power After Coup",
-    "The junta seizes power, dissolves parliament, and assumes national executive authority.",
-  ));
-  assert.equal(transfer?.kind, "regime");
-});
-
-test("leadership completeness is clause-bounded rather than keyword cross-contamination", () => {
-  const reference = politicalImpactCompletenessIssue(event(
-    "President Condemns Assassination of Opposition Mayor",
-    "The president addresses parliament after the opposition mayor was assassinated; the presidency itself is unchanged.",
-  ));
-  assert.equal(reference, null);
-
-  const resignation = politicalImpactCompletenessIssue(event(
-    "Prime Minister Announces Resignation",
-    "The prime minister resigns and remains in a caretaker role only until the formal handover.",
-  ));
-  assert.equal(resignation?.kind, "leadership");
-});
-
-test("formal country rename cannot remain prose-only world history", () => {
-  const missing = {
-    title: "United States Formally Adopts the Name United Republic of Socialist Nations",
-    description: "The federal government officially codifies the nation's new constitutional identity and replaces the previous country name.",
-    playerRelated: true,
-    impacts: { politicalActorOps: [], polityChanges: [] },
+test("the instruction shows the Political World of the polities the beats' impacts name, found by their exact key", () => {
+  const world = {
+    politicalActors: {
+      byPolity: {
+        Greece: {
+          polityKey: "Greece",
+          leader: { id: "george-i", name: "George I", title: "King of the Hellenes" },
+          politicalSystem: { type: "constitutional_monarchy", representation: "electoral", regimeCharacter: "democratic" },
+          government: { headOfState: "George I", headOfGovernment: "Eleftherios Venizelos", rulingPartyIds: ["liberal-party"], coalitionPartyIds: [] },
+          parties: [{ id: "liberal-party", name: "Liberal Party", leader: "Eleftherios Venizelos" }],
+        },
+        Serbia: { polityKey: "Serbia", government: { headOfState: "Peter I" } },
+      },
+    },
   };
-  const issue = polityImpactCompletenessIssue(missing);
-  assert.equal(issue?.kind, "polity-rename");
-  assert.match(validatePolityImpactCompleteness({ events: [missing] }), /polityChanges rename/i);
-
-  const canonical = structuredClone(missing);
-  canonical.impacts.polityChanges = [{
-    operation: "rename",
-    code: "United States",
-    name: "United Republic of Socialist Nations",
-  }];
-  assert.equal(polityImpactCompletenessIssue(canonical), null);
-  assert.equal(validatePolityImpactCompleteness({ events: [canonical] }), "");
-
-  const officeTitle = {
-    title: "President Officially Adopts the Title Head of State",
-    description: "The president standardizes the office title; the country's constitutional name is unchanged.",
-    playerRelated: true,
-    impacts: { politicalActorOps: [], polityChanges: [] },
-  };
-  assert.equal(polityImpactCompletenessIssue(officeTitle), null, "an office title is not a country rename");
-
-  const institution = {
-    title: "National Development Bank Officially Adopts the New Name Reconstruction Bank",
-    description: "The bank changes its brand while the republic's name remains unchanged.",
-    playerRelated: true,
-    impacts: { politicalActorOps: [], polityChanges: [] },
-  };
-  assert.equal(polityImpactCompletenessIssue(institution), null, "an institution rename is not a country rename");
+  const requirements = scriptedPoliticalImpactRequirements([leaderBeat("Ο Γεώργιος Α΄ δολοφονείται", "", "Greece", { leader: "Constantine I" })]);
+  const instruction = buildScriptedPoliticalImpactInstruction(requirements, { world });
+  assert.match(instruction, /POLITY: Greece/);
+  assert.match(instruction, /George I/);
+  assert.match(instruction, /liberal-party/);
+  assert.doesNotMatch(instruction, /POLITY: Serbia/, "only the polities the impacts name");
 });
+
+test("the event that tells such a beat must carry the matching ops, and an event carrying none of its impacts is not held to it", () => {
+  const requirements = scriptedPoliticalImpactRequirements([leaderBeat("Ministru prezidente atkāpjas", "", "Latvia", { leader: "Arvils Ašeradens" })]);
+  const told = { ...event("Ministru prezidente atkāpjas"), impacts: { politicalActorOps: [], polityChanges: [{ operation: "update", code: "Latvia", stats: { leader: "Arvils Ašeradens" } }] } };
+  const other = event("Riga Hosts a Trade Fair");
+  const candidate = { events: [told, other], politicalClaims: "" };
+  const claimContext = preparePoliticalClaimContext(candidate);
+  assert.equal(bindScriptedPoliticalClaims([told, other], requirements), 1);
+
+  const issues = politicalImpactCompletenessIssues(candidate, { claimContext });
+  assert.deepEqual(issues.map((issue) => [issue.index, issue.kind]), [[0, "leadership"]]);
+
+  told.impacts.politicalActorOps = [opFor("Latvia", "replace-leader", { office: "headOfGovernment", leader: { name: "Arvils Ašeradens" } })];
+  assert.equal(validatePoliticalImpactCompleteness(candidate, { claimContext }), "");
+
+  // A model's own update for another polity on the same event is not the author's claim.
+  const mixed = { ...event("Ministru prezidente atkāpjas"), impacts: { politicalActorOps: [], polityChanges: [{ operation: "update", code: "Estonia", stats: { leader: "Someone" } }] } };
+  assert.equal(bindScriptedPoliticalClaims([mixed], requirements), 0);
+  clearPoliticalClaimBindings({ events: [told, other] });
+});
+
+// --- The claim ledger ---------------------------------------------------------
 
 test("structured politicalClaims make ordinary generated prose non-authoritative for Political World transitions", () => {
   const industrialPolicy = event(
     "Ukraine Launches Industrial Electrification and Heating Modernization Directive",
-    "The Government of Ukraine has officially inaugurated the Nationwide Industrial Electrification and Heating Modernization Directive. The state-backed low-interest loan program has received its first municipal applications.",
+    "The Government of Ukraine has officially inaugurated the Nationwide Industrial Electrification and Heating Modernization Directive.",
   );
   const partyConference = event(
     "Ruling Fatherland Party Delegates Convene Pre-Election Policy Conference in Kyiv",
-    "Delegates of the governing Fatherland party convened a national policy conference in Kyiv to draft campaign manifestos and coordinate grassroots strategy ahead of the scheduled May 2028 parliamentary and presidential elections.",
+    "Delegates of the governing Fatherland party convened a national policy conference ahead of the scheduled elections.",
   );
-  const securitySession = event(
-    "Intelligence Warning Reaches Kyiv on Intensified Hybrid Sabotage Risks along Transport Nodes",
-    "Acting President Oleksandr Turchynov and Prime Minister Arseniy Yatsenyuk convened an emergency session of the National Security and Defense Council following an urgent intelligence briefing. The Cabinet is faced with an immediate security choice.",
-  );
-
-  // These demonstrate why prose inference is no longer allowed to own ordinary
-  // generated-event Political World truth. The first two were real community
-  // false positives of the looser prose patterns (a "government", an
-  // "election"); the tightened patterns no longer read them that way. The third
-  // is the screenshot report from the same corpus. The last is a reference the
-  // prose patterns do still read as a new government.
   const governmentReference = event(
     "Budget Talks Continue under the New Government",
     "Ministers meet again on Thursday.",
   );
-  assert.equal(politicalImpactCompletenessIssue(industrialPolicy), null);
-  assert.equal(politicalImpactCompletenessIssue(partyConference), null);
-  assert.equal(politicalImpactCompletenessIssue(governmentReference)?.kind, "government");
-
   const candidate = {
-    events: [industrialPolicy, partyConference, securitySession, governmentReference],
+    events: [industrialPolicy, partyConference, governmentReference],
     politicalClaims: "",
   };
   const claimContext = preparePoliticalClaimContext(candidate);
   assert.equal(claimContext.mode, "structured");
-  assert.equal(validatePoliticalImpactCompleteness(candidate, { claimContext }), "");
-});
-
-test("structured claims require matching canonical operations for the same polity", () => {
-  const transition = event(
-    "Shigeru Ishiba Assumes Office as Prime Minister",
-    "Shigeru Ishiba assumes office after the completed leadership transition.",
-    [opFor("Germany", "replace-leader", { office: "headOfGovernment", leader: { name: "Friedrich Merz" } })],
-  );
-  const candidate = { events: [transition], politicalClaims: "1~Japan~leadership" };
-  const claimContext = preparePoliticalClaimContext(candidate);
-  assert.match(
-    validatePoliticalImpactCompleteness(candidate, { claimContext }),
-    /Japan.*no matching replace-leader/i,
-  );
-
-  transition.impacts.politicalActorOps = [
-    opFor("Japan", "replace-leader", { office: "headOfGovernment", leader: { name: "Shigeru Ishiba" } }),
-  ];
   assert.equal(validatePoliticalImpactCompleteness(candidate, { claimContext }), "");
 });
 
@@ -903,13 +448,13 @@ test("political claim bindings survive native shallow event cloning after the pr
   );
 });
 
-test("malformed transient claims fall back to legacy validation without costing another AI request", () => {
+test("malformed transient claims are set aside without costing another AI request: the ops are checked on their own", () => {
   const candidate = {
     events: [event("Routine Policy Event", "Nothing structural changes.")],
     politicalClaims: "2~Ukraine~government",
   };
   const outOfRange = preparePoliticalClaimContext(candidate);
-  assert.equal(outOfRange.mode, "legacy");
+  assert.equal(outOfRange.mode, "unclaimed");
   assert.equal(outOfRange.discarded, true);
   assert.match(outOfRange.discardedReason, /outside this answer's 1-1 event range/);
 
@@ -917,43 +462,12 @@ test("malformed transient claims fall back to legacy validation without costing 
     events: candidate.events,
     politicalClaims: "1oops~Ukraine~government",
   });
-  assert.equal(junkNumber.mode, "legacy");
+  assert.equal(junkNumber.mode, "unclaimed");
   assert.equal(junkNumber.discarded, true);
   assert.match(junkNumber.discardedReason, /event 1oops/);
 });
 
-test("structured government claims derive the caretaker exception from canonical ops, not prose", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
-  const world = {
-    politicalActors: normalizePoliticalActors({
-      byPolity: {
-        Example: {
-          polityKey: "Example",
-          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
-          government: { form: "Parliamentary Republic", rulingPartyIds: [], coalitionPartyIds: [] },
-          parties: [
-            { id: "example-liberal", name: "Example Liberal Party" },
-            { id: "example-labour", name: "Example Labour Party" },
-          ],
-        },
-      },
-    }),
-  };
-  const transition = event(
-    "Interim Administration Takes Office",
-    "A temporary administration takes office pending coalition negotiations.",
-    [
-      opFor("Example", "set-government", { patch: { form: "Caretaker Government" } }),
-      opFor("Example", "replace-leader", { office: "headOfGovernment", leader: { name: "Alex Morgan" } }),
-    ],
-  );
-  const candidate = { events: [transition], politicalClaims: "1~Example~government" };
-  const claimContext = preparePoliticalClaimContext(candidate);
-  assert.equal(validatePoliticalImpactCompleteness(candidate, { world, claimContext }), "");
-});
-
-test("structured mode still derives hard Political World invariants from canonical ops when a claim line is omitted", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
+test("structured mode still derives hard Political World invariants from canonical ops when a claim line is omitted", () => {
   const world = {
     politicalActors: normalizePoliticalActors({
       byPolity: {
@@ -974,18 +488,16 @@ test("structured mode still derives hard Political World invariants from canonic
     "A new cabinet takes office.",
     [opFor("Example", "set-government", { patch: { form: "Parliamentary Republic" } })],
   );
-  const candidate = { events: [transition], politicalClaims: "" };
-  const claimContext = preparePoliticalClaimContext(candidate);
-
-  assert.match(
-    validatePoliticalImpactCompleteness(candidate, { world, claimContext }),
-    /canonical government membership is empty/i,
-    "an explicit canonical government mutation must not escape governing-force validation just because the model omitted its claim line",
-  );
+  for (const claims of ["", undefined]) {
+    assert.match(
+      issueOf(transition, { world, claims })?.message || "",
+      /canonical government membership is empty/i,
+      "an explicit canonical government mutation must not escape governing-force validation just because the model omitted its claim line, or the whole ledger",
+    );
+  }
 });
 
-test("structured foundational election claims preserve sparse-actor hydration requirements", async () => {
-  const { normalizePoliticalActors } = await import("../../runtime/politicalActors.js");
+test("structured foundational election claims preserve sparse-actor hydration requirements", () => {
   const world = {
     politicalActors: normalizePoliticalActors({ byPolity: { Newland: { polityKey: "Newland" } } }),
   };
@@ -1030,9 +542,9 @@ test("every issue and the first failure come from one walk, on the claims the ca
   assert.equal(failure.issue.message, issues[0].message);
   assert.equal(validatePoliticalImpactCompleteness(candidate), issues[0].message);
 
-  // Once the claims are cleared the candidate is ordinary prose again.
+  // Once the claims are cleared, the events' words claim nothing.
   clearPoliticalClaimBindings(candidate);
   delete candidate.politicalClaims;
-  assert.deepEqual(politicalImpactCompletenessIssues(candidate).map((issue) => [issue.index, issue.kind]), [[1, "leadership"]]);
+  assert.deepEqual(politicalImpactCompletenessIssues(candidate), []);
   assert.equal(politicalImpactCompletenessFailure({ events: [debate] }), null);
 });

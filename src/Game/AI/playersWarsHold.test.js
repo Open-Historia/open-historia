@@ -52,7 +52,7 @@ test("a war that is not in the ledger yet is left to the ledger", () => {
 test("the turn holds a player's wars before it keeps the ledger records, and the skip is told the rule", () => {
   const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
   assert.match(gameplay, /const playersWars = holdPlayersWars\(\{ updates: result\.warUpdates, events: curatedEvents, wars: baseWorld\?\.wars, players: humanCountriesOf\(baseGame\), orders: baseActions, offers: baseWorld\?\.peaceOffers \}\);/);
-  assert.match(gameplay, /filterBoundLedgerUpdatesToKeptEvents\(playersWars\.updates, dedupedEvents, curatedEvents\)/);
+  assert.match(gameplay, /keepWarRecordsBeyondEvents\(playersWars\.updates, dedupedEvents, curatedEvents\)/);
   const prompt = fs.readFileSync(new URL("./peacePrompt.js", import.meta.url), "utf8");
   assert.match(prompt, /A player's order to end their war is their offer of peace/);
 });

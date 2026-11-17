@@ -21,7 +21,6 @@
 import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { labStaffPolicy, trainedStaffPolicy } from "../../runtime/fronts/mind/trained.js";
 import { engineRegionsOf, runTurnFronts } from "./frontTurn.js";
-import { eventNarratesHardCombat } from "./nativeWarLedger.js";
 import { territoryTempoAllowance } from "./worldDirection.js";
 
 // The ground under each battlefield (runtime/fronts/arena.js), drawn once a map and kept while the same map is
@@ -36,13 +35,12 @@ const arenasFor = (key) => {
 //   staff         { outcomes, difficulty, players }: the lab's staff (trained.js labStaffPolicy), or null for the
 //                 engine's own
 //   tempo         the world's direction's ceiling on territory a month (worldDirection.js), 0 for none
-//   narrates      whether the turn's events are read for combat they tell of (nativeWarLedger.js)
 //   strikes       which of the places of strikes the page may be asked for: "find", "origin", "seat"
 //   readsMap      whether the page reads the map's facts (readMap); readsRegions, its shapes (loadRegions)
 //   findsRegionsFile  whether the page can say where those shapes' file is (regionsFile), for them to be read here
-export const AWAY_KEYS = Object.freeze(["staff", "tempo", "narrates", "strikes", "readsMap", "readsRegions", "findsRegionsFile"]);
+export const AWAY_KEYS = Object.freeze(["staff", "tempo", "strikes", "readsMap", "readsRegions", "findsRegionsFile"]);
 // What a run is handed that is the page's own to do, and never sent.
-export const PAGE_KEYS = Object.freeze(["createFrontRun", "readMap", "loadRegions", "regionsFile", "pause", "tempoAllowance", "staffPolicy", "narratesCombat", "strikePlaces", "arenas", "staffConfig", "tempo"]);
+export const PAGE_KEYS = Object.freeze(["createFrontRun", "readMap", "loadRegions", "regionsFile", "pause", "tempoAllowance", "staffPolicy", "strikePlaces", "arenas", "staffConfig", "tempo"]);
 
 // A run's input as it is sent away: its data, and what is not said as data. (`staffConfig` and `tempo` are what
 // frontApply.js turnRunInput adds beside the staff and the allowance it hands a run fought on the page.)
@@ -54,7 +52,6 @@ export const awayInputOf = (args = {}) => {
     ...data,
     staff: typeof args?.staffPolicy === "function" && args?.staffConfig ? args.staffConfig : null,
     tempo: Number(args?.tempo) > 0 ? Number(args.tempo) : 0,
-    narrates: typeof args?.narratesCombat === "function",
     strikes: ["find", "origin", "seat"].filter((name) => typeof places?.[name] === "function"),
     readsMap: typeof args?.readMap === "function",
     readsRegions: typeof args?.loadRegions === "function",
@@ -100,7 +97,7 @@ const regionsReadHere = async (ask) => {
 // slices of the run (frontTurn.js runFrontTurn), and stops it by throwing; `rehearsers`, the cores its staff's plans
 // may be fought on together (runtime/fronts/mind/rehearsers.js).
 export const fightAway = (data = {}, { ask, pause = null, rehearsers = null } = {}) => {
-  const { staff = null, tempo = 0, narrates = false, strikes = [], readsMap = false, readsRegions = false, findsRegionsFile = false, ...rest } = data ?? {};
+  const { staff = null, tempo = 0, strikes = [], readsMap = false, readsRegions = false, findsRegionsFile = false, ...rest } = data ?? {};
   const asks = Array.isArray(strikes) ? strikes : [];
   return runTurnFronts({
     ...rest,
@@ -115,7 +112,6 @@ export const fightAway = (data = {}, { ask, pause = null, rehearsers = null } = 
     ...(typeof pause === "function" ? { pause } : {}),
     ...(tempo > 0 ? { tempoAllowance: (days) => territoryTempoAllowance(tempo, Math.max(1, days)) } : {}),
     ...(staff && trainedStaffPolicy() ? { staffPolicy: labStaffPolicy(staff), ...(rehearsers ? { rehearsers } : {}) } : {}),
-    ...(narrates ? { narratesCombat: eventNarratesHardCombat } : {}),
     ...(asks.length > 0 ? {
       strikePlaces: Object.fromEntries(asks.map((name) => [name, (value) => ask(`strike.${name}`, value)])),
     } : {}),

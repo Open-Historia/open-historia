@@ -25,7 +25,9 @@ test("world-change validation enforces Political World structural completeness t
     gameplay,
     /if \(politicalCompletenessError && typeof politicalClaimRepair === "function"\)[\s\S]*?await politicalClaimRepair\([\s\S]*?politicalFailure = politicalImpactCompletenessFailure\(candidate, \{ world, claimContext: politicalClaimContext \}\)[\s\S]*?if \(politicalCompletenessError\) return politicalCompletenessError;/,
   );
-  assert.match(gameplay, /validatePolityImpactCompleteness\(candidate\)/);
+  // A rename is a polityChanges op; an English regex over the prose no longer
+  // refuses the answer for narrating one.
+  assert.doesNotMatch(gameplay, /validatePolityImpactCompleteness/);
   assert.match(gameplay, /Always return politicalClaims: transient validation/);
 });
 
@@ -56,7 +58,9 @@ test("lifecycle invitation hearings are gated away from formal Council governanc
 
 test("GM exhaustive territory uses territorialScopes and native base-geography expansion", () => {
   assert.match(gameplay, /expandGameMasterTerritorialScopes/);
-  assert.match(gameplay, /requestDemandsExhaustiveTerritorialScope\(request\)/);
+  // The field alone: the request's words are never read for a scope, and an
+  // answer is never refused for words like "all" or "every" in it.
+  assert.doesNotMatch(gameplay, /requestDemandsExhaustiveTerritorialScope|detectExplicitBaseTerritoryScope|explicitScopeText/);
   assert.match(gameplay, /resolveGameMasterBaseGeographyScope\(scope\.baseCountries, catalog\)/);
   assert.match(prompts, /EXHAUSTIVE TERRITORY IS A SET CONTRACT/);
   assert.match(prompts, /ONLY WHEN TERRITORY ACTUALLY CHANGES/);
@@ -93,5 +97,8 @@ test("structural scripted political beats block prose-only deterministic fallbac
   assert.match(gameplay, /buildScriptedPoliticalImpactInstruction\(scriptedPoliticalRequirements,\s*\{\s*world:\s*ledgerWorld\s*\}\)/);
   assert.match(gameplay, /state\.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements\.length > 0/);
   assert.match(gameplay, /if \(state\.structuralScriptedFallbackBlocked\) throw error/);
-  assert.match(gameplay, /politicalClaimContext\.legacyEvents\.add\(event\)/);
+  // The events that tell such a beat are held to its authored impacts, never
+  // found by matching the beat's words.
+  assert.match(gameplay, /bindScriptedPoliticalClaims\(scriptedEventsCarryingImpacts\(candidate\.events\), scriptedPoliticalImpactRequirements\(due\)\)/);
+  assert.doesNotMatch(gameplay, /legacyEvents/);
 });

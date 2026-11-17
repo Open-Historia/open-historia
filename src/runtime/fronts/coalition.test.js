@@ -163,3 +163,57 @@ test("the war room lists the player's allies and leads to their leaders, and the
   assert.match(globe, /const warRoomOpen = useWarRoom\(\(state\) => state\.open\);/);
   assert.match(globe, /const autoRotateDisabled = useMotionSetting\(MAP_SETTING_KEYS\.disableIdleRotation\) \|\| warRoomOpen;/);
 });
+
+// The owner, 2026-11-13: "Canonical wars support 12 countries per side, while
+// Warfronts only handles 8. I've actually reproduced cases where changing the
+// order of coalition members determines whether a front opens at all." The
+// engine kept the first eight of a side as written: a ninth was a country
+// outside the war, its land a wall and its border no contact.
+const MEMBERS = ["Member1", "Member2", "Member3", "Member4", "Member5", "Member6", "Member7", "Member8"];
+const bigLegend = { 1: MEMBERS[0], 2: MEMBERS[1], 3: MEMBERS[2], 4: MEMBERS[3], 5: MEMBERS[4], 6: MEMBERS[5], 7: MEMBERS[6], 8: MEMBERS[7], Z: "Zetland", B: "Borduria", "~": null };
+const bigSheet = () => syntheticMap({ layout: ["12345678ZBBB", "12345678ZBBB", "12345678ZBBB"], legend: bigLegend, west: 10, north: 52, step: 1, stepLat: 0.5, key: "coalition-nine" });
+const bigRun = (sideA, extra = {}) => runFronts(frontInput(bigSheet(), { wars: [{ id: "war-1", title: "The Big Coalition War", status: "active", sideA, sideB: ["Borduria"] }], days: 4, ...extra }));
+const openFields = (result) => result.battlefields.filter((record) => record.status !== "closed");
+
+test("a front opens wherever any member of a coalition borders the enemy, whatever order the coalition is written in", () => {
+  const orders = [[...MEMBERS, "Zetland"], ["Zetland", ...MEMBERS], [...MEMBERS.slice(0, 4), "Zetland", ...MEMBERS.slice(4)]];
+  const seated = orders.map((sideA) => {
+    const fields = openFields(bigRun(sideA));
+    assert.equal(fields.length, 1, `one front, the ninth member bordering the enemy: ${sideA.join(", ")}`);
+    assert.ok(fields[0].sides[0].includes("Zetland"), "the member that borders the enemy fights there");
+    assert.equal(fields[0].sides[0].length, 9, "every member of the side is seated: it seated eight");
+    return [...fields[0].sides[0]].sort().join("|");
+  });
+  assert.equal(new Set(seated).size, 1, "the same members are seated whatever order the war lists them in");
+});
+
+test("every member of a coalition is seated, a country a person plays among them, however far from the line it lies", () => {
+  const fields = openFields(bigRun([...MEMBERS, "Zetland"], { players: ["Member1"] }));
+  assert.equal(fields.length, 1);
+  assert.ok(fields[0].sides[0].includes("Member1"));
+});
+
+// "Battlefields that seat a whole coalition" (the owner, 2026-11-13): a troop's
+// owner had three bits, so a battlefield seated eight a side, and a ninth
+// member had no troops on it and its land was a wall.
+const TWELVE = Array.from({ length: 12 }, (_, index) => `Ally ${index + 1}`);
+const twelveKeys = "123456789acd";
+const twelveLegend = { ...Object.fromEntries([...twelveKeys].map((key, index) => [key, TWELVE[index]])), B: "Borduria", "~": null };
+const twelveSheet = () => syntheticMap({ layout: [...twelveKeys].map((key) => `${key.repeat(3)}BBBB`), legend: twelveLegend, west: 10, north: 50, step: 1, stepLat: 0.25, key: "coalition-twelve" });
+
+test("a coalition of twelve along one front has all twelve fighting on it, each with troops of its own", () => {
+  const world = twelveSheet();
+  const result = runFronts(frontInput(world, { wars: [{ id: "war-12", title: "The Twelve", status: "active", sideA: TWELVE, sideB: ["Borduria"] }], days: 4 }));
+  const fields = openFields(result);
+  assert.ok(fields.length >= 1);
+  for (const record of fields) {
+    assert.deepEqual([...record.sides[0]].sort(), [...TWELVE].sort(), `${record.name}: every member seated`);
+    for (const member of TWELVE) assert.ok(troopsOf(record, 0, member).length > 0, `${record.name}: ${member} has troops there`);
+    assert.ok(record.troops[0].startsWith(";"), "a side past eight is saved wide");
+  }
+  // Read again from the saved record (loadBattle), it fights on as it was.
+  const again = runFronts(frontInput(world, { wars: [{ id: "war-12", title: "The Twelve", status: "active", sideA: TWELVE, sideB: ["Borduria"] }], days: 2, battlefields: result.battlefields }));
+  for (const record of openFields(again)) {
+    for (const member of TWELVE) assert.ok(troopsOf(record, 0, member).length > 0, `${record.name}, next run: ${member} still has troops there`);
+  }
+});

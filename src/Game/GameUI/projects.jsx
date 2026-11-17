@@ -1,43 +1,23 @@
 /*! Open Historia — portions (projects & operations board panel) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// The Projects & Operations board: every long-running effort the player has going
-// — research and industrial programmes, construction projects, military and
-// covert operations — plus whatever their services have learned of other powers'.
+// The Projects & Operations board, the Actions panel's second tab (actions.jsx).
 //
-// It is the Actions panel's second tab (actions.jsx): "on beta add the projects
-// menu as a tab in the actions menu" (the owner, 2026-11-02). Its own launcher's
-// slot in the dock went to Rostra, the social network (social.jsx). This file
-// draws the board inside that tab, under the panel's own header.
+// Since 2026-11-15 the projects engine runs every project (runtime/
+// projectEngine.js): its owner's budget pays for it each day, its work moves at
+// the pace its plan, its funding and the country's economy allow, and what it
+// does to the world lands once, when it is done. This panel is where the player
+// steers their own:
 //
-// The player cannot author an entry's CONTENT here, deliberately. Two things
-// write what a project is: events, through impacts.projectOps on any
-// jump/GM/interactive event turn, and the advisor, through the ```projects block in a chat
-// reply. A board the player could hand-edit would be a wishlist; this one is a
-// readout of what the simulation actually believes is happening.
+//   New project   a name and a goal, "Plan it" (ONE AI request, the projectPlan
+//                 task), then the plan to Start or Discard;
+//   each project  its progress and expected finish, its cost a month and its
+//                 funding (none, low, normal, high: the cost and the speed), the
+//                 effects it will have, its status with the reason, and its
+//                 checkpoints with the days they were reached; Abandon;
+//   abroad        the projects of other countries the player's services know of
+//                 (projects.js isKnownToPlayer), to watch and act against.
 //
-// Two things the player DOES own, and only these two: a project's priority — how
-// much attention they want it to get, which the jump and advisor prompts then act
-// on — and whether to abandon it outright. Neither invents or rewrites anything;
-// they are the difference between a board of thirty programmes being steerable and
-// being a wall. Both go through applyProjectOpsToWorld, the same door the advisor
-// uses, rather than hand-editing the array: the ops pipeline is what stamps
-// updatedAt/updatedRound (so an abandoned project does not immediately reappear
-// wearing a "no recent progress" badge) and what closes out dangling milestones.
-//
-// And both belong to THEIR OWN work only. Roughly half a mature board is other
-// powers' programmes, tracked because the player's services have learned of them,
-// and a priority dial or an Abandon button on a rival's shipyard says the player
-// commands it. So a foreign card carries neither control, the ops door is called
-// with actor "player" so a stale render cannot get round that, and the advisor and
-// jump prompts are told to refuse the same request in words — with the one opening
-// that makes sense, which is opening the player's OWN counter-effort against it.
-//
-// Because of that split the board opens on Mine. A player who wants the rival
-// column asks for it; the default view is the work they can actually steer.
-//
-// Everything date-derived (overdue, due soon, a slipped milestone, a programme
-// nobody has mentioned in three rounds) is computed here from the game clock by
-// runtime/projects.js, NOT read off what the model last wrote. That is what keeps
-// the board honest between AI turns.
+// Every write goes through applyProjectOpsToWorld with actor "player", the door
+// that lets a government touch its own programmes only.
 import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
 
@@ -48,9 +28,9 @@ import {
   PROJECT_BOARD_LIMIT,
   applyProjectOpsToWorld,
   isPolityLandless,
+  mutateWorldState,
   readEventsState,
   readWorldState,
-  writeWorldState,
 } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { refreshRuntimeState } from "../../runtime/runtimeStore.js";
@@ -58,46 +38,32 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import {
   PROJECT_SORTS,
   collectProjectTags,
+  deriveProjectFlags,
+  filterProjects,
+  isKnownToPlayer,
+  isPlayerProject,
   isProjectClosed,
   isProjectOpen,
-  isPlayerProject,
-  deriveProjectFlags,
-  describeTimeline,
-  filterProjects,
   sortProjects,
 } from "../../runtime/projects.js";
+import { DAYS_PER_MONTH, dailyCostOf, estimateProjectFinish, ownerMeans, statMeasure } from "../../runtime/projectEngine.js";
+import { DEFAULT_STAT_INDEX_ROWS } from "../../runtime/statIndexDefinitions.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { uiString } from "../../runtime/translator.js";
 import { TAG_SEARCH_FROM, searchTags, stepTagFocus, tickedFirst } from "./projectTagMenu.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
+import { nameInitials } from "../../../server/nameKey.js";
+import { planProject } from "../AI/gameplayLazy.js";
 
-// The seed the empty state and the per-card button hand to the advisor. Both
-// pre-fill the input and never send — the player edits and presses send, which is
-// the rule the advisor's requestedPrompt path has always followed.
-// Deliberately asks for a BATCH, not for everything.
-//
-// The first version of this asked for every effort at once. On a campaign forty
-// rounds deep that is dozens of entries with full milestone histories, which runs
-// past the 8192-token reply cap and arrives as a half-written JSON array — the
-// board stays empty and the player gets a wall of text. Ten at a time, one
-// sentence each, and only the milestones still ahead keeps a reply inside its
-// budget; the retry button asks for the next batch.
-//
-// One string, so the string catalog reads it whole; handed over in the
-// interface's language (uiString).
-export const PROJECTS_BACKFILL_PROMPT = "Put my current projects and operations on the board — the sustained efforts, mine and any belonging to other powers that we know about. Start with the TEN most significant and stop there; I will ask for the next batch after. Keep each summary to one sentence, and give each only the milestones still ahead of it plus the single most recent one already achieved. Only include efforts that genuinely appear in our history — never invent one to round out the list — and say plainly if you are unsure about any of them.";
-
-// The card seeds below are whole sentences, one per variant, handed over in the
-// interface's language (uiString) like the backfill prompt: a kind or an owner
-// glued in as a word would stay English inside a translated sentence.
+// The card seeds are whole sentences, one per variant, handed over in the
+// interface's language (uiString): a kind or an owner glued in as a word would
+// stay English inside a translated sentence.
 const buildBriefPrompt = (project) => (project.kind === "operation"
   ? uiString("Brief me in full on the operation \"{{name}}\". Where does it actually stand right now, what has moved since the last round, what does the next milestone need from me, and what is most likely to go wrong? Be specific and tell me if the board is out of date.", { name: project.name })
   : uiString("Brief me in full on the project \"{{name}}\". Where does it actually stand right now, what has moved since the last round, what does the next milestone need from me, and what is most likely to go wrong? Be specific and tell me if the board is out of date.", { name: project.name }));
 
-// The same button on a foreign card, asking the questions that are actually
-// answerable about somebody else's programme. "What does the next milestone need
-// from me" is nonsense here — nothing about a rival's shipyard needs anything from
-// the player — and asking it invites the model to answer as though they ran it.
+// The same button on a foreign card, asking what is answerable about somebody
+// else's programme.
 const buildForeignBriefPrompt = (project, owner) => {
   const params = { name: project.name, owner };
   if (project.kind === "operation") {
@@ -110,53 +76,52 @@ const buildForeignBriefPrompt = (project, owner) => {
     : uiString("Brief me on the foreign programme \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.", params);
 };
 
-// The seed behind a foreign card's second button. Deliberately asks a QUESTION
-// rather than issuing an order: the player cannot cancel another government's
-// programme, but they can decide to do something about it, and that something is a
-// project of their own the advisor may legitimately open.
+// The seed behind a foreign card's second button: what the player can do about
+// a rival's programme is a project of their own.
 const buildCounterPrompt = (project, owner) => (owner
   ? uiString("What can we actually do about {{owner}}'s \"{{name}}\"? Lay out the realistic options — diplomatic, economic, covert, or simply outpacing them — with what each would cost us and how it could go wrong. If we settle on one, open it as our own effort.", { name: project.name, owner })
   : uiString("What can we actually do about this \"{{name}}\"? Lay out the realistic options — diplomatic, economic, covert, or simply outpacing them — with what each would cost us and how it could go wrong. If we settle on one, open it as our own effort.", { name: project.name }));
 
 // ---- styling ---------------------------------------------------------------
-// Inline objects and per-file constants, the house convention: there is no shared
-// primitives module, so the pattern is copied and the source cited. Surface and
-// palette match actions.jsx / time.jsx so the panel reads as part of the same HUD.
+// The grey HUD with the one accent, #2bc1f3, and flat colours only.
 
-// Same sizing rule as the Actions panel: use what a tall screen offers, never
-// below a usable 30rem, never into the 9rem the top HUD needs. Named because
-// the Tags menu is sized against it (TAG_MENU_MAX_HEIGHT). The Actions panel
-// can be dragged taller or shorter, and says how tall it is in a variable
-// (actionsPanelLayout.js PANEL_HEIGHT_VAR); this rule is only its fallback.
+const ACCENT = "#2bc1f3";
+const ACCENT_SOFT = "rgba(43,193,243,0.14)";
+const ACCENT_EDGE = "rgba(43,193,243,0.45)";
+
+// Same sizing rule as the Actions panel (actionsPanelLayout.js PANEL_HEIGHT_VAR).
 const PANEL_HEIGHT = `var(--oh-actions-panel-height, min(calc(${APP_HEIGHT} - 9rem), max(calc(${APP_HEIGHT} - 16rem), 30rem)))`;
 
 const STATUS_TONES = {
-  proposed: { label: "Proposed", color: "#93c5fd", bg: "rgba(59,130,246,0.16)" },
-  active: { label: "Active", color: "#4ade80", bg: "rgba(34,197,94,0.16)" },
-  stalled: { label: "Stalled", color: "#fbbf24", bg: "rgba(245,158,11,0.18)" },
+  planning: { label: "Planning", color: "rgba(255,255,255,0.75)", bg: "rgba(255,255,255,0.1)" },
+  active: { label: "Active", color: ACCENT, bg: ACCENT_SOFT },
+  running: { label: "Running", color: ACCENT, bg: ACCENT_SOFT },
+  stalled: { label: "Stalled", color: "#fbbf24", bg: "rgba(245,158,11,0.16)" },
   paused: { label: "Paused", color: "rgba(255,255,255,0.6)", bg: "rgba(255,255,255,0.08)" },
-  complete: { label: "Complete", color: "#67e8f9", bg: "rgba(6,182,212,0.16)" },
-  failed: { label: "Failed", color: "#f87171", bg: "rgba(239,68,68,0.18)" },
+  complete: { label: "Complete", color: "#86efac", bg: "rgba(34,197,94,0.14)" },
+  failed: { label: "Failed", color: "#f87171", bg: "rgba(239,68,68,0.16)" },
   cancelled: { label: "Cancelled", color: "rgba(255,255,255,0.45)", bg: "rgba(255,255,255,0.06)" },
 };
 
-const statusTone = (status) => STATUS_TONES[status] || STATUS_TONES.active;
+// Why a stalled project stands still, in words.
+const STALL_REASON_LABELS = {
+  funds: "Stalled: no funds",
+  site: "Stalled: site lost",
+  blocked: "Stalled: blocked",
+};
 
-// Progress reads against the project's health, not a fixed ramp: a stalled
-// programme at 80% is not doing well, and colouring it green would say it was.
-const progressColor = (project, flags) => {
-  if (project.status === "complete") return "#22d3ee";
+const progressColor = (project) => {
+  if (project.status === "complete") return "#86efac";
   if (project.status === "failed" || project.status === "cancelled") return "rgba(255,255,255,0.25)";
-  if (flags.overdue) return "#ef4444";
-  if (flags.stale || flags.milestoneMissed) return "#f59e0b";
-  return "#22c55e";
+  if (project.status === "stalled") return "#f59e0b";
+  if (project.status === "paused" || project.status === "planning") return "rgba(255,255,255,0.35)";
+  return ACCENT;
 };
 
 const SECRECY_GLYPH = { restricted: "🔒", covert: "🕵" };
 
 // How far an entry can be trusted, when it came from a spy at all. Never says
-// WHY — the player is not told their agent was turned, only that the analysts
-// stopped trusting the channel, which is the same thing the Spy tab shows.
+// WHY — the player is not told their agent was turned.
 const VERIFICATION_BADGE = {
   doubted: { label: "Doubtful", color: "#fbbf24", background: "rgba(251,191,36,0.14)", border: "rgba(251,191,36,0.4)", title: "Our analysts do not trust how we came by this. Put someone else in place to settle it." },
   confirmed: { label: "Confirmed", color: "#86efac", background: "rgba(34,197,94,0.14)", border: "rgba(34,197,94,0.4)", title: "A second source stands this up." },
@@ -205,8 +170,28 @@ const ghostButtonStyle = {
   transition: "all 0.12s ease",
 };
 
-// Reused from stats.jsx's Bar — a 6px pill track with a coloured fill that
-// animates its width.
+const accentButtonStyle = {
+  ...ghostButtonStyle,
+  background: ACCENT_SOFT,
+  border: `1px solid ${ACCENT_EDGE}`,
+  color: ACCENT,
+};
+
+const inputStyle = {
+  backgroundColor: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.12)",
+  borderRadius: "9px",
+  boxSizing: "border-box",
+  color: "white",
+  fontFamily: "sans-serif",
+  fontSize: "0.75rem",
+  outline: "none",
+  padding: "0.45rem 0.55rem",
+  width: "100%",
+};
+
+const smallLabel = { color: "rgba(255,255,255,0.45)", fontSize: "0.64rem", fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase" };
+
 const Bar = ({ value, color }) => (
   <div style={{ backgroundColor: "rgba(255,255,255,0.1)", borderRadius: "999px", height: "6px", overflow: "hidden" }}>
     <div style={{
@@ -214,7 +199,7 @@ const Bar = ({ value, color }) => (
       borderRadius: "999px",
       height: "100%",
       transition: "width 0.4s",
-      width: `${Math.max(0, Math.min(100, Math.round(Number(value) || 0)))}%`,
+      width: `${Math.max(0, Math.min(100, Number(value) || 0))}%`,
     }}
     />
   </div>
@@ -263,28 +248,79 @@ const SearchIcon = () => (
   </svg>
 );
 
-// Whose programme this is, with their flag.
-//
-// Same precedence every other flag in the game follows — copied and cited rather
-// than shared, the house pattern (see resolveEraFlagInfo in Selection/Regions.jsx
-// and resolveUnitFlagUrl in Map/unitFlagIcons.js): a flag the map-maker uploaded
-// into the scenario's flags.json wins, because it is the only one anyone chose on
-// purpose; then a scenario polity's own; then the ISO flag the owner name resolves
-// to. A custom era polity with none of the three shows its initials, exactly as
-// the country panel does.
+// ---- figures and words --------------------------------------------------------
+
+// Money as the sheet counts it, short: 1.2 billion is "1.2B" in English, as the
+// language writes it elsewhere (Intl's compact notation).
+const formatMoney = (value) => {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return "0";
+  try {
+    return new Intl.NumberFormat(undefined, { notation: "compact", maximumSignificantDigits: 3 }).format(amount);
+  } catch {
+    return String(Math.round(amount));
+  }
+};
+
+const readableDate = (date) => formatGameDateReadable(date) || date || "";
+
+// What a stat path is called on the sheet.
+const STAT_LABELS = {
+  stability: "Stability",
+  "military.quality": "Military quality",
+  "military.technology": "Military technology",
+  "military.land": "Land forces",
+  "military.sea": "Naval forces",
+  "military.air": "Air forces",
+  "military.spending": "Military spending",
+  "economy.gdp": "GDP",
+  "economy.gdpGrowth": "GDP growth",
+  "economy.inflation": "Inflation",
+  "economy.unemployment": "Unemployment",
+  "economy.budgetBalance": "Budget balance",
+  "economy.publicDebt": "Public debt",
+  "population.total": "Population",
+};
+const statLabel = (path) => {
+  if (STAT_LABELS[path]) return uiString(STAT_LABELS[path]);
+  const [head, key] = String(path ?? "").split(".");
+  if (head === "indices") return uiString(DEFAULT_STAT_INDEX_ROWS.find((row) => row.key === key)?.label || key);
+  return key || path;
+};
+const signed = (value) => `${value > 0 ? "+" : ""}${value}`;
+const changeText = (effect) => {
+  const measure = statMeasure(effect.stat);
+  if (measure === "percentGdp" || measure === "percentPopulation") return `${signed(effect.change)}%`;
+  if (measure === "rate" || measure === "debt") return uiString("{{change}} pts", { change: signed(effect.change) });
+  return signed(effect.change);
+};
+
+// One effect as the card says it.
+const describeEffectForPlayer = (effect, owner) => {
+  if (!effect) return "";
+  if (effect.type === "stat") {
+    return effect.country && effect.country !== owner
+      ? uiString("{{country}}: {{stat}} {{change}}", { country: effect.country, stat: statLabel(effect.stat), change: changeText(effect) })
+      : `${statLabel(effect.stat)} ${changeText(effect)}`;
+  }
+  if (effect.type === "relation") return uiString("Relations with {{country}} {{change}}", { country: effect.country, change: signed(effect.change) });
+  if (effect.type === "structure") return uiString("Builds {{name}}", { name: effect.name });
+  if (effect.type === "unitType") return uiString("New unit type: {{name}}", { name: effect.name });
+  if (effect.type === "territory") {
+    return effect.claim
+      ? uiString("{{country}} claims {{region}}", { country: effect.country, region: effect.region })
+      : uiString("{{region}} passes to {{country}}", { country: effect.country, region: effect.region });
+  }
+  return "";
+};
+
+// ---- the owner's flag -------------------------------------------------------------
+
 const resolveOwnerFlagUrl = (owner, customFlags, polities) => {
   if (!owner) return "";
   return customFlags?.[owner] || polities?.[owner]?.flag || flagImageUrlFromGid(owner) || "";
 };
 
-const ownerInitials = (owner) =>
-  String(owner).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??";
-
-// The board is half other people's work, and until this row existed the only clue
-// was a grey line of text that a player's own entries did not have at all — so
-// "Long-Range Rocket Programme" read as yours whether it was or not. Every card
-// carries it now, the player's included, and the flag is what the eye actually
-// picks up when scanning thirty of them.
 const OwnerBadge = ({ flagUrl, mine, name }) => {
   const [flagFailed, setFlagFailed] = useState(false);
   useEffect(() => { setFlagFailed(false); }, [flagUrl]);
@@ -293,10 +329,10 @@ const OwnerBadge = ({ flagUrl, mine, name }) => {
     <div style={{ alignItems: "center", display: "flex", gap: "0.35rem", marginTop: "0.25rem", minWidth: 0 }}>
       <span style={{
         alignItems: "center",
-        backgroundColor: "rgba(59,130,246,0.16)",
+        backgroundColor: "rgba(255,255,255,0.08)",
         border: "1px solid rgba(255,255,255,0.12)",
         borderRadius: "3px",
-        color: "#93c5fd",
+        color: "rgba(255,255,255,0.7)",
         display: "flex",
         flexShrink: 0,
         fontSize: "0.5rem",
@@ -314,7 +350,7 @@ const OwnerBadge = ({ flagUrl, mine, name }) => {
             onError={() => setFlagFailed(true)}
             style={{ height: "100%", objectFit: "cover", width: "100%" }}
           />
-        ) : ownerInitials(name)}
+        ) : nameInitials(name)}
       </span>
       <span
         data-no-translate
@@ -329,34 +365,22 @@ const OwnerBadge = ({ flagUrl, mine, name }) => {
       >
         {name}
       </span>
-      {!mine && (
-        <Pill color="rgba(253,186,116,0.9)" bg="rgba(249,115,22,0.16)" title="Another power's effort. You are tracking it, not running it.">
-          Foreign
-        </Pill>
-      )}
     </div>
   );
 };
 
-// ---- one card --------------------------------------------------------------
+// ---- funding ----------------------------------------------------------------------
 
-const PRIORITY_OPTIONS = [
-  { glyph: "▲", key: "high", label: "High priority — the advisor briefs it first and the simulation is told to keep it moving" },
-  { glyph: "●", key: "normal", label: "Normal priority" },
-  { glyph: "▼", key: "low", label: "Low priority — allowed to drift while more urgent work moves" },
+const FUNDING_OPTIONS = [
+  { key: "none", label: "Off", title: "No money and no work: the project waits" },
+  { key: "low", label: "Low", title: "Half the cost, half the speed" },
+  { key: "normal", label: "Normal", title: "The plan's cost and speed" },
+  { key: "high", label: "High", title: "One and a half times the cost and the speed" },
 ];
 
-const PRIORITY_PILL = {
-  high: { bg: "rgba(245,158,11,0.16)", color: "#fcd34d", label: "High" },
-  low: { bg: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.5)", label: "Low" },
-};
-
-// A three-segment control rather than a <select>: there are exactly three values,
-// the current one has to be readable at a glance on a card the player is scanning,
-// and a dropdown would hide the setting behind a click on every card.
-const PrioritySwitch = ({ busy, onSelect, value }) => (
-  <div style={{ display: "flex", gap: "0.15rem" }} role="group" aria-label="Priority">
-    {PRIORITY_OPTIONS.map((option) => {
+const FundingSwitch = ({ busy, onSelect, value }) => (
+  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.15rem" }} role="group" aria-label="Funding">
+    {FUNDING_OPTIONS.map((option) => {
       const active = value === option.key;
       return (
         <button
@@ -364,72 +388,121 @@ const PrioritySwitch = ({ busy, onSelect, value }) => (
           type="button"
           className="oh-tap"
           disabled={busy}
-          title={option.label}
-          aria-label={option.label}
+          title={option.title}
+          aria-label={option.title}
           aria-pressed={active}
           onClick={() => onSelect(option.key)}
           style={{
             ...ghostButtonStyle,
-            background: active ? "rgba(0,0,0,0.39)" : "rgba(255,255,255,0.06)",
-            border: `1px solid ${active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.12)"}`,
-            color: active ? "#f4f4f5" : "rgba(255,255,255,0.5)",
+            background: active ? ACCENT_SOFT : "rgba(255,255,255,0.06)",
+            border: `1px solid ${active ? ACCENT_EDGE : "rgba(255,255,255,0.12)"}`,
+            color: active ? ACCENT : "rgba(255,255,255,0.55)",
             cursor: busy ? "default" : "pointer",
             opacity: busy ? 0.5 : 1,
-            padding: "0.3rem 0.45rem",
+            padding: "0.28rem 0.5rem",
           }}
         >
-          {option.glyph}
+          {option.label}
         </button>
       );
     })}
   </div>
 );
 
-const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, busy, playerCountry, playerLandless, ownerFlags, ownerNames, onToggleExpand, onAskAdvisor, onShowOnMap, onSetPriority, onAbandon }) => {
-  // Derived here rather than passed in: a flags object built by the parent would
-  // be a new reference every render and the memo above would never hold.
-  const flags = deriveProjectFlags(project, gameDate, round);
-  const tone = statusTone(project.status);
+// ---- what a plan holds: its cost, its time, its checkpoints, its effects ----------
+
+// costShown: the card says the cost already (at the project's own funding), so
+// the plan's is left out.
+const PlanFacts = ({ plan, owner, costShown = false }) => {
+  if (!plan) return null;
+  const effects = (plan.effects ?? []).map((effect) => describeEffectForPlayer(effect, owner)).filter(Boolean);
+  const yields = (plan.yields ?? []).map((effect) => describeEffectForPlayer(effect, owner)).filter(Boolean);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginTop: "0.5rem" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.8rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.8)" }}>
+        <span>{uiString("{{days}} days of work", { days: plan.durationDays })}</span>
+        {!costShown && <span>{uiString("{{amount}} a month", { amount: formatMoney(plan.monthlyCost) })}</span>}
+        {plan.ongoing && <span>{uiString("Runs on once set up")}</span>}
+      </div>
+      {effects.length > 0 && (
+        <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.72)" }}>
+          <span style={smallLabel}>{uiString("When done")}</span>
+          <div data-no-translate style={{ marginTop: "0.15rem" }}>{effects.join(" · ")}</div>
+        </div>
+      )}
+      {yields.length > 0 && (
+        <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.72)" }}>
+          <span style={smallLabel}>{uiString("Every month")}</span>
+          <div data-no-translate style={{ marginTop: "0.15rem" }}>{yields.join(" · ")}</div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const Milestones = ({ plan }) => {
+  const list = plan?.milestones ?? [];
+  if (!list.length) return null;
+  return (
+    <div style={{ marginTop: "0.5rem" }}>
+      <span style={smallLabel}>{uiString("Checkpoints")}</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem", marginTop: "0.2rem" }}>
+        {list.map((milestone) => (
+          <div key={milestone.id || milestone.title} style={{ display: "flex", fontSize: "0.7rem", gap: "0.4rem" }}>
+            <span aria-hidden="true" style={{ color: milestone.reached ? ACCENT : milestone.missed ? "#f87171" : "rgba(255,255,255,0.35)" }}>
+              {milestone.reached ? "✓" : milestone.missed ? "✕" : "○"}
+            </span>
+            <span data-no-translate style={{ color: milestone.reached ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.55)", flex: 1, minWidth: 0 }}>{milestone.title}</span>
+            <span style={{ color: "rgba(255,255,255,0.4)", flexShrink: 0 }}>
+              {milestone.reached
+                ? (milestone.reachedAt ? readableDate(milestone.reachedAt) : uiString("Reached"))
+                : milestone.missed ? uiString("Missed") : `${milestone.atProgress}%`}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// ---- one card --------------------------------------------------------------
+
+const ProjectCard = memo(({ project, fundingMode, eventTitles, expanded, busy, playerCountry, playerLandless, ownerFlags, ownerNames, finish, planning, onToggleExpand, onAskAdvisor, onShowOnMap, onSetFunding, onSetSecrecy, onAbandon, onPlan }) => {
+  const flags = deriveProjectFlags(project);
   const open = isProjectOpen(project);
   const mine = isPlayerProject(project, playerCountry);
-  // Meaningless on somebody else's programme, and a legacy board can carry one:
-  // priority was settable on a foreign entry before this, so an old save still has
-  // "High" stamped on a rival's shipyard. Hide it rather than migrate the data —
-  // the field is harmless where it sits and the prompt suppresses it too.
-  const priorityPill = mine ? PRIORITY_PILL[project.priority] : null;
-  // Two-step confirm rather than window.confirm, which breaks this panel's visual
-  // language and is blocked outright in some embedded contexts. Reset whenever the
-  // card stops being abandonable, so a closed project cannot keep a primed button.
+  const toneKey = flags.running ? "running" : project.status;
+  const tone = STATUS_TONES[toneKey] || STATUS_TONES.active;
+  const toneLabel = project.status === "stalled" ? (STALL_REASON_LABELS[project.stallReason] || tone.label) : tone.label;
   const [confirmingAbandon, setConfirmingAbandon] = useState(false);
   useEffect(() => {
     if (!open) setConfirmingAbandon(false);
   }, [open]);
-  // The blur that disarms it with a mouse never comes on a phone (iOS does
-  // not focus a tapped button), so there the question lapses after four
-  // seconds instead of staying primed for a stray tap.
+  // The blur that disarms it with a mouse never comes on a phone, so there the
+  // question lapses after four seconds.
   const isTouch = useTouchPrimary();
   useEffect(() => {
     if (!confirmingAbandon || !isTouch) return undefined;
     const timer = setTimeout(() => setConfirmingAbandon(false), 4000);
     return () => clearTimeout(timer);
   }, [confirmingAbandon, isTouch]);
-  const timeline = describeTimeline(project, gameDate);
   const secrecy = SECRECY_GLYPH[project.secrecy];
-  // A blank ownerCode means the player (see isPlayerProject) — so their own cards
-  // fall back to their own country rather than showing no owner at all, which is
-  // what made a foreign entry indistinguishable from theirs in the first place.
   const ownerKey = String(project.ownerCode || "").trim() || String(playerCountry || "").trim();
-  // The era display name, so a renamed polity reads as the story calls it. The KEY
-  // stays the identity everything else is filed under (see ownerNames.js).
   const ownerLabel = ownerNames?.[ownerKey] || ownerKey;
-
-  // The camera target, resolved the same way the button does, so the button can
-  // be hidden rather than offered and then doing nothing.
   const hasFocus = Boolean(project.focus) || project.linkedMarkerIds.length > 0 || project.linkedUnitIds.length > 0;
-
   const activity = expanded
     ? project.eventIds.map((id) => ({ id, entry: eventTitles.get(id) })).filter((row) => row.entry)
     : [];
+  const progress = Math.floor(Number(project.progress) || 0);
+  const finishLine = (() => {
+    if (project.status === "complete") return project.completedAt ? uiString("Completed {{date}}", { date: readableDate(project.completedAt) }) : uiString("Completed");
+    if (!open) return "";
+    if (flags.planning) return uiString("Waiting for its plan");
+    if (flags.running) return uiString("Running");
+    if (project.status === "paused") return uiString("Paused");
+    if (finish) return uiString("Done by about {{date}}", { date: readableDate(finish) });
+    return uiString("No finish in sight");
+  })();
 
   return (
     <div style={cardStyle}>
@@ -460,19 +533,7 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
             </span>
           )}
         </div>
-        <div style={{ alignItems: "center", display: "flex", gap: "0.25rem" }}>
-          {priorityPill && (
-            <Pill color={priorityPill.color} bg={priorityPill.bg} title="Priority the player set for this effort">
-              {priorityPill.label}
-            </Pill>
-          )}
-          {flags.ongoing && (
-            <Pill color="rgba(255,255,255,0.55)" bg="rgba(255,255,255,0.08)" title="A standing effort with no planned end">
-              Ongoing
-            </Pill>
-          )}
-          <Pill color={tone.color} bg={tone.bg}>{tone.label}</Pill>
-        </div>
+        <Pill color={tone.color} bg={tone.bg}>{toneLabel}</Pill>
       </div>
 
       {ownerKey && (
@@ -497,13 +558,7 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
             <span
               key={tag}
               data-no-translate
-              style={{
-                backgroundColor: "rgba(255,255,255,0.06)",
-                borderRadius: "999px",
-                color: "rgba(255,255,255,0.5)",
-                fontSize: "0.62rem",
-                padding: "0.1rem 0.4rem",
-              }}
+              style={{ backgroundColor: "rgba(255,255,255,0.06)", borderRadius: "999px", color: "rgba(255,255,255,0.5)", fontSize: "0.62rem", padding: "0.1rem 0.4rem" }}
             >
               {tag}
             </span>
@@ -511,74 +566,39 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
         </div>
       )}
 
-      <div style={{ marginTop: "0.55rem" }}>
-        <div style={{
-          color: "rgba(255,255,255,0.45)",
-          display: "flex",
-          fontSize: "0.65rem",
-          justifyContent: "space-between",
-          marginBottom: "0.25rem",
-        }}
-        >
-          <span data-no-translate>{timeline}</span>
-          <span data-no-translate>{project.progress}%</span>
+      {!flags.planning && (
+        <div style={{ marginTop: "0.55rem" }}>
+          <div style={{ color: "rgba(255,255,255,0.5)", display: "flex", fontSize: "0.66rem", gap: "0.5rem", justifyContent: "space-between", marginBottom: "0.25rem" }}>
+            <span>{finishLine}</span>
+            <span data-no-translate>{progress}%</span>
+          </div>
+          <Bar value={project.progress} color={progressColor(project)} />
         </div>
-        <Bar value={project.progress} color={progressColor(project, flags)} />
-      </div>
+      )}
 
-      {flags.nextMilestone && (
+      {project.plan && fundingMode === "nonmonetary" && (
         <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.7rem", marginTop: "0.45rem" }}>
-          {flags.nextMilestone.repeat ? "↻" : "▸"} Next: {flags.nextMilestone.title}
-          {flags.nextMilestone.date ? ` — ${(formatGameDateReadable(flags.nextMilestone.date) || flags.nextMilestone.date)}` : ""}
-          {flags.nextMilestone.repeat && (
-            <span style={{ color: "rgba(255,255,255,0.35)" }}>
-              {" "}({flags.nextMilestone.repeat}
-              {flags.nextMilestone.completedCount > 0 ? `, done ${flags.nextMilestone.completedCount}×` : ""})
-            </span>
+          {uiString("Time and effort only; no financial payments recorded")}
+        </div>
+      )}
+      {project.plan && fundingMode !== "nonmonetary" && (open || Number(project.spent) > 0) && (
+        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.45rem", fontSize: "0.7rem", color: "rgba(255,255,255,0.65)" }}>
+          {open && <span>{uiString("Planned cost: {{amount}} per month", { amount: formatMoney(dailyCostOf(project) * DAYS_PER_MONTH) })}</span>}
+          {Number(project.spent) > 0 && <span>{uiString("Actually paid to date: {{amount}}", { amount: formatMoney(project.spent) })}</span>}
+          {flags.underfunded && (
+            <Pill color="#fbbf24" bg="rgba(245,158,11,0.14)" title={uiString("Received {{share}}% of planned funding last period", { share: Math.round(Number(project.paidShare) * 100) })}>
+              {uiString("Underfunded")}
+            </Pill>
           )}
         </div>
       )}
+
+      {project.plan && <PlanFacts costShown owner={ownerKey} plan={project.plan} />}
+      {project.plan && <Milestones plan={project.plan} />}
 
       {project.lastUpdate && (
-        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.7rem", fontStyle: "italic", marginTop: "0.35rem" }}>
+        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.7rem", fontStyle: "italic", marginTop: "0.4rem" }}>
           {project.lastUpdate}
-        </div>
-      )}
-
-      {/* Derived warnings. None of these come from the model, so they cannot be
-          out of date the way a written status can. */}
-      {(flags.overdue || flags.dueSoon || flags.milestoneMissed || flags.stale) && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.5rem" }}>
-          {flags.overdue && (
-            <Pill color="#fca5a5" bg="rgba(239,68,68,0.18)" title={`Target date passed ${Math.abs(flags.daysToTarget)} days ago`}>
-              ⚠ Overdue
-            </Pill>
-          )}
-          {flags.dueSoon && (
-            <Pill color="#fcd34d" bg="rgba(245,158,11,0.16)" title="A milestone falls inside the next month">
-              ⏳ Due in {flags.daysToMilestone}d
-            </Pill>
-          )}
-          {flags.milestoneMissed && !flags.overdue && (
-            <Pill color="#fcd34d" bg="rgba(245,158,11,0.16)" title="A milestone's date passed while it was still pending">
-              Milestone slipped
-            </Pill>
-          )}
-          {/* The same derived flag, said honestly for each side. On the player's own
-              work it means the programme has not moved; on a rival's it means
-              nothing has REACHED us about it for several rounds, which is a fact
-              about our sources and not about their shipyard. */}
-          {flags.stale && (
-            <Pill
-              color="rgba(255,255,255,0.55)"
-              bg="rgba(255,255,255,0.07)"
-              title={mine
-                ? "No progress reported for several rounds"
-                : "Nothing has reached us about this for several rounds"}
-            >
-              {mine ? "No recent progress" : "No fresh intelligence"}
-            </Pill>
-          )}
         </div>
       )}
 
@@ -587,77 +607,27 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
           type="button"
           className="oh-tap-row"
           style={ghostButtonStyle}
-          onClick={() => onAskAdvisor(mine
-            ? buildBriefPrompt(project)
-            : buildForeignBriefPrompt(project, ownerLabel))}
-          onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.09)"; }}
-          onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
+          onClick={() => onAskAdvisor(mine ? buildBriefPrompt(project) : buildForeignBriefPrompt(project, ownerLabel))}
         >
           🧭 {mine ? "Ask advisor" : "What do we know?"}
         </button>
-        {/* The one thing the player CAN do about a rival's programme, offered where
-            the priority dial would have been: not a lever on their work, a question
-            about ours. Whatever comes of it is a project of the player's own, opened
-            by the advisor the normal way. */}
         {!mine && open && (
-          <button
-            type="button"
-            className="oh-tap-row"
-            style={ghostButtonStyle}
-            onClick={() => onAskAdvisor(buildCounterPrompt(project, ownerLabel))}
-            onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(249,115,22,0.25)"; }}
-            onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
-          >
+          <button type="button" className="oh-tap-row" style={ghostButtonStyle} onClick={() => onAskAdvisor(buildCounterPrompt(project, ownerLabel))}>
             ⚖ Our options
           </button>
         )}
         {hasFocus && (
-          <button
-            type="button"
-            className="oh-tap-row"
-            style={ghostButtonStyle}
-            onClick={() => onShowOnMap(project)}
-            onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(59,130,246,0.25)"; }}
-            onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
-          >
+          <button type="button" className="oh-tap-row" style={ghostButtonStyle} onClick={() => onShowOnMap(project)}>
             📍 Show on map
           </button>
         )}
         {project.eventIds.length > 0 && (
-          <button
-            type="button"
-            className="oh-tap-row"
-            style={ghostButtonStyle}
-            onClick={() => onToggleExpand(project.id)}
-            onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.12)"; }}
-            onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
-          >
+          <button type="button" className="oh-tap-row" style={ghostButtonStyle} onClick={() => onToggleExpand(project.id)}>
             {expanded ? "▾" : "▸"} Activity ({project.eventIds.length})
           </button>
         )}
       </div>
 
-      {/* Why the controls below are missing, said once on the card rather than left
-          as an unexplained gap. Only while the work is running — a finished foreign
-          programme has no controls for anyone and needs no note about it. */}
-      {!mine && open && (
-        <div style={{
-          borderTop: "1px solid rgba(255,255,255,0.07)",
-          color: "rgba(255,255,255,0.38)",
-          fontSize: "0.66rem",
-          lineHeight: 1.45,
-          marginTop: "0.6rem",
-          paddingTop: "0.55rem",
-        }}
-        >
-          {ownerLabel ? `${ownerLabel} runs this` : "Another power runs this"} — you can watch it and act against it,
-          but its priority and its cancellation are not yours to set.
-        </div>
-      )}
-
-      {/* The player's own two levers, kept on their own row and only while the
-          work is still running and it is actually theirs: neither means anything on
-          a closed entry, and neither means anything at all on somebody else's. */}
       {open && mine && (
         <div style={{
           alignItems: "center",
@@ -670,16 +640,32 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
           paddingTop: "0.55rem",
         }}
         >
-          <PrioritySwitch
-            busy={busy}
-            value={project.priority}
-            onSelect={(priority) => onSetPriority(project, priority)}
-          />
+          {flags.planning ? (
+            <button type="button" className="oh-tap-row" disabled={busy || planning} style={{ ...accentButtonStyle, opacity: busy || planning ? 0.5 : 1 }} onClick={() => onPlan(project)}>
+              {planning ? uiString("Planning…") : uiString("Plan it")}
+            </button>
+          ) : (
+            <FundingSwitch busy={busy} value={project.funding} onSelect={(funding) => onSetFunding(project, funding)} />
+          )}
+          <label style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontSize: "0.68rem", color: "rgba(255,255,255,0.7)" }}>
+            {uiString("Visibility")}
+            <select
+              className="oh-tap-row"
+              aria-label={uiString("Project visibility")}
+              value={project.secrecy || "public"}
+              disabled={busy}
+              onChange={(event) => onSetSecrecy(project, event.target.value)}
+              style={{ ...inputStyle, padding: "0.25rem 0.35rem", fontSize: "0.68rem" }}
+            >
+              <option value="public">{uiString("Public")}</option>
+              <option value="restricted">{uiString("Restricted")}</option>
+              <option value="covert">{uiString("Covert")}</option>
+            </select>
+          </label>
           <button
             type="button"
             className="oh-tap-row"
             disabled={busy}
-            title="Close this out. It stays on the board under Closed, keeping the progress it reached."
             onClick={() => {
               if (!confirmingAbandon) { setConfirmingAbandon(true); return; }
               setConfirmingAbandon(false);
@@ -717,6 +703,150 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
     </div>
   );
 });
+
+// ---- a new project: a name, a goal, one request for its plan ------------------------
+
+const PlanCard = ({ draft, owner, fundingMode, busy, onStart, onDiscard }) => (
+  <div style={{ ...cardStyle, border: `1px solid ${ACCENT_EDGE}`, marginTop: "0.55rem" }}>
+    <div style={{ alignItems: "baseline", display: "flex", gap: "0.4rem" }}>
+      <span aria-hidden="true">{draft.kind === "operation" ? "⚔" : "🔬"}</span>
+      <span data-no-translate style={{ fontSize: "0.86rem", fontWeight: 700, wordBreak: "break-word" }}>{draft.name}</span>
+    </div>
+    {draft.summary && (
+      <p style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.75rem", lineHeight: 1.45, margin: "0.35rem 0 0" }}>{draft.summary}</p>
+    )}
+    <PlanFacts plan={draft.plan} owner={owner} costShown={fundingMode === "nonmonetary"} />
+    <Milestones plan={draft.plan} />
+    <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.65rem" }}>
+      <button type="button" className="oh-tap-row" disabled={busy} style={{ ...accentButtonStyle, opacity: busy ? 0.5 : 1 }} onClick={onStart}>
+        {uiString("Start")}
+      </button>
+      <button type="button" className="oh-tap-row" disabled={busy} style={{ ...ghostButtonStyle, opacity: busy ? 0.5 : 1 }} onClick={onDiscard}>
+        {uiString("Discard")}
+      </button>
+    </div>
+  </div>
+);
+
+const NewProject = ({ owner, fundingMode, onStarted, writeOps }) => {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [goal, setGoal] = useState("");
+  const [planning, setPlanning] = useState(false);
+  const [error, setError] = useState("");
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  // By default retain the planner's proposed classification; the owner can
+  // explicitly override it before the project is written to canonical state.
+  const [secrecyChoice, setSecrecyChoice] = useState("auto");
+
+  const reset = () => {
+    setName("");
+    setGoal("");
+    setDraft(null);
+    setError("");
+    setSecrecyChoice("auto");
+  };
+
+  const plan = async () => {
+    if (!name.trim() || planning) return;
+    setPlanning(true);
+    setError("");
+    try {
+      setDraft(await planProject({ name: name.trim(), goal: goal.trim() }));
+    } catch (failure) {
+      setError(String(failure?.message || failure || "").trim() || uiString("The plan could not be made."));
+    } finally {
+      setPlanning(false);
+    }
+  };
+
+  const start = async () => {
+    if (!draft || saving) return;
+    setSaving(true);
+    try {
+      await writeOps([{
+        op: "create",
+        name: draft.name,
+        summary: draft.summary,
+        kind: draft.kind,
+        secrecy: secrecyChoice === "auto" ? draft.secrecy : secrecyChoice,
+        tags: draft.tags,
+        ...(draft.focus ? { focus: draft.focus } : {}),
+        plan: draft.plan,
+      }]);
+      reset();
+      setOpen(false);
+      onStarted?.();
+    } catch (failure) {
+      setError(String(failure?.message || failure || "").trim());
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button type="button" className="oh-tap-row" style={{ ...accentButtonStyle, alignSelf: "flex-start" }} onClick={() => setOpen(true)}>
+        ＋ {uiString("New project")}
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ ...cardStyle, display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+      {!draft && (
+        <>
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder={uiString("Name")}
+            aria-label={uiString("Name")}
+            maxLength={120}
+            disabled={planning}
+            style={inputStyle}
+          />
+          <textarea
+            value={goal}
+            onChange={(event) => setGoal(event.target.value)}
+            placeholder={uiString("What is it for?")}
+            aria-label={uiString("What is it for?")}
+            rows={3}
+            maxLength={600}
+            disabled={planning}
+            style={{ ...inputStyle, resize: "vertical" }}
+          />
+          <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+            <button type="button" className="oh-tap-row" disabled={!name.trim() || planning} style={{ ...accentButtonStyle, opacity: !name.trim() || planning ? 0.5 : 1 }} onClick={plan}>
+              {planning ? uiString("Planning…") : uiString("Plan it")}
+            </button>
+            <button type="button" className="oh-tap-row" disabled={planning} style={ghostButtonStyle} onClick={() => { reset(); setOpen(false); }}>
+              {uiString("Cancel")}
+            </button>
+            {planning && <span style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.66rem" }}>{uiString("One AI request")}</span>}
+          </div>
+        </>
+      )}
+      <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.72rem", color: "rgba(255,255,255,0.7)" }}>
+        {uiString("Project visibility")}
+        <select
+          value={secrecyChoice}
+          onChange={(event) => setSecrecyChoice(event.target.value)}
+          disabled={planning || saving}
+          style={{ ...inputStyle, padding: "0.3rem 0.4rem", flex: 1 }}
+          aria-label={uiString("New project visibility")}
+        >
+          <option value="auto">{draft ? `As planned (${draft.secrecy || "public"})` : uiString("Use planner's classification")}</option>
+          <option value="public">{uiString("Public")}</option>
+          <option value="restricted">{uiString("Restricted")}</option>
+          <option value="covert">{uiString("Covert")}</option>
+        </select>
+      </label>
+      {draft && <PlanCard draft={draft} owner={owner} fundingMode={fundingMode} busy={saving} onStart={start} onDiscard={() => { setDraft(null); }} />}
+      {error && <div style={{ color: "#fca5a5", fontSize: "0.7rem" }}>{error}</div>}
+    </div>
+  );
+};
 
 // ---- the Tags menu ---------------------------------------------------------
 //
@@ -1101,23 +1231,30 @@ const TagMenu = ({ maxHeight, onClear, onOpenChange, onToggle, open, selected, t
 // registry never reaches this panel.
 const selectProjects = (world) => (Array.isArray(world?.projects) ? world.projects : []);
 const selectPolities = (world) => world?.polityOverrides ?? {};
+const selectCountryStats = (world) => world?.countryStats ?? {};
+const selectProjectFundingMode = (world) => world?.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy";
 const selectGameStamp = (game) => ({
   country: game?.country || "",
   gameDate: String(game?.gameDate ?? ""),
   round: Number(game?.round) || 0,
 });
 
+const SectionTitle = ({ children, count }) => (
+  <div style={{ ...smallLabel, display: "flex", gap: "0.35rem", marginTop: "0.2rem" }}>
+    <span>{children}</span>
+    {count > 0 && <span data-no-translate style={{ color: "rgba(255,255,255,0.3)" }}>{count}</span>}
+  </div>
+);
+
 // `isOpen`: the Actions panel is open on this tab. Closing either is closing the board.
 const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const projects = useRuntimeState("world", selectProjects);
   const polityOverrides = useRuntimeState("world", selectPolities);
+  const countryStats = useRuntimeState("world", selectCountryStats);
+  const projectFundingMode = useRuntimeState("world", selectProjectFundingMode);
   const { country, gameDate, round } = useRuntimeState("game", selectGameStamp);
   const [eventTitles, setEventTitles] = useState(() => new Map());
   const [hasLoaded, setHasLoaded] = useState(false);
-  // Everything the owner badge needs: the scenario's uploaded flags (a static
-  // asset, read once) and the live polity registry, which carries both a custom
-  // flag and the era display name. Held together so a card can resolve an owner
-  // without three lookups of its own.
   const [customFlags, setCustomFlags] = useState(() => ({}));
   const ownerFlags = useMemo(
     () => ({ custom: customFlags, polities: polityOverrides }),
@@ -1128,17 +1265,11 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
       .map(([code, polity]) => [code, String(polity?.name || "").trim()])
       .filter(([, name]) => name),
   ), [polityOverrides]);
-  // Canonicalised here, not in projects.js, which is deliberately import-free.
   // game.country is the picker's `code` ("GBR" on a stock scenario); every
   // project's ownerCode has been through toCountryName ("United Kingdom").
   const playerCountry = useMemo(() => toCountryName(String(country ?? "")), [country]);
-  // Is the PLAYER stateless? A landless player's name may still resolve to a real
-  // country, but they are not it — a government-in-exile is not the government —
-  // so their own cards must show neutral initials rather than borrow that
-  // country's flag. Same rule and same single source of truth as the Stats pane
-  // (see isPolityLandless, which exists for exactly these resolvers). Only the
-  // player's own entries: a FOREIGN owner that resolves to a country genuinely is
-  // that country as far as this board knows.
+  // A landless player's own cards show neutral initials rather than borrow the
+  // flag of the country their name resolves to (isPolityLandless).
   const playerLandless = useRuntimeState(
     "world",
     (world) => isPolityLandless(world, playerCountry),
@@ -1147,80 +1278,50 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
 
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState("updated");
-  // Opens on the player's own work. A mature board is roughly half other powers'
-  // programmes, and showing all of it by default buried the handful of things the
-  // player can actually steer among a column of rivals' shipyards they cannot.
-  // Foreign is one chip away and says how many are behind it.
-  const [owner, setOwner] = useState("mine");
   const [activeTags, setActiveTags] = useState([]);
   const [tagMenuOpen, setTagMenuOpen] = useState(false);
   const [showClosed, setShowClosed] = useState(false);
   const [expandedId, setExpandedId] = useState(null);
-  // The project a write is currently in flight for, so its own controls can be
-  // disabled without freezing the rest of the board.
   const [pendingId, setPendingId] = useState("");
+  const [planningId, setPlanningId] = useState("");
+  const [planError, setPlanError] = useState("");
 
   const isMobile = useIsMobile();
   const isTouch = useTouchPrimary();
-  // On a phone, either way up, the filters scroll away with the cards. Held
-  // fixed above them, with every chip finger-sized, they took most of a
-  // portrait panel and all of a landscape one, leaving the cards no room.
   const scrollAsOne = isMobile || isTouch;
 
-  // Author-set flags (the scenario's flags.json), fetched once. Not in the poll:
-  // it is a static asset, and getNationFlags memoizes it anyway.
   useEffect(() => {
     if (!isOpen) return undefined;
     let cancelled = false;
     getNationFlags()
       .then((flags) => {
-        if (cancelled) return;
-        setCustomFlags(flags || {});
+        if (!cancelled) setCustomFlags(flags || {});
       })
       .catch(() => { /* the badges fall back to the ISO flag, then to initials */ });
     return () => { cancelled = true; };
   }, [isOpen]);
 
-  // Opening the board is when it has to be current, so read now rather than
-  // waiting out the store's next tick. Later changes arrive through the slices.
   useEffect(() => {
     if (!isOpen) return undefined;
     let cancelled = false;
-    // Settled, not resolved: a failed read leaves the last good board up.
     refreshRuntimeState(["world", "game"]).finally(() => {
       if (!cancelled) setHasLoaded(true);
     });
     return () => { cancelled = true; };
   }, [isOpen]);
 
-  // Event titles for the activity feed, fetched only once a card is actually
-  // expanded. events.json is the biggest of the runtime documents and almost
-  // every open of this panel never expands anything.
-  //
-  // Fetched on DEMAND rather than once. The guard used to be `eventTitles.size > 0`,
-  // i.e. read the log once and never again — and this panel is never unmounted (the
-  // hasOpened latch keeps it alive for the session), so after a few more rounds a
-  // card would say "Activity (3)" and then "The events behind this are no longer in
-  // the log" about three events that were very much in it.
+  // Event titles for the activity feed, fetched only once a card is expanded.
   const expandedProject = useMemo(
     () => (expandedId ? projects.find((project) => project.id === expandedId) : null),
     [expandedId, projects],
   );
-  // Ids the open card needs and the lookup does not carry. Stays true when an event
-  // has genuinely aged out of the log, but the effect's deps do not change on a
-  // failed lookup, so that costs one read per expand rather than a loop.
-  const needsEventTitles = Boolean(
-    expandedProject?.eventIds.some((id) => !eventTitles.has(id)),
-  );
-
+  const needsEventTitles = Boolean(expandedProject?.eventIds.some((id) => !eventTitles.has(id)));
   useEffect(() => {
     if (!needsEventTitles) return undefined;
     let cancelled = false;
     readEventsState({ force: true })
       .then((events) => {
         if (cancelled) return;
-        // Merged, not replaced: an id learned earlier must survive a read taken
-        // after the log has been pruned past it.
         setEventTitles((current) => {
           const next = new Map(current);
           for (const event of events) next.set(event.id, { date: event.date, title: event.title });
@@ -1231,30 +1332,18 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     return () => { cancelled = true; };
   }, [needsEventTitles, expandedId]);
 
-  // Closing the panel resets the transient view state, so reopening is a clean
-  // read rather than whatever was half-filtered last time. Closed is in here
-  // because it is a VIEW, not a filter: coming back to the board and being shown
-  // finished work is not what anyone opening it expects. Owner is in here for the
-  // same reason — the board has a default and reopening should honour it, not
-  // strand the player in the rival column they glanced at last time. The Tags
-  // menu shuts with the panel because the panel is only ever hidden, never
-  // unmounted: left open it would still hold its Back step, and the next Back
-  // would close a menu nobody can see instead of the panel in front of them.
-  // The tags ticked in it stay ticked, as they always have.
+  // Closing the panel resets the transient view state.
   useEffect(() => {
     if (isOpen) return;
     setExpandedId(null);
     setShowClosed(false);
-    setOwner("mine");
     setTagMenuOpen(false);
   }, [isOpen]);
 
-  const availableTags = useMemo(() => collectProjectTags(projects), [projects]);
-
-  // A ticked tag that no longer exists on the board would filter everything out
-  // with no way to see why — the Tags menu lists only what the board carries, so
-  // there would be nothing left to untick — so drop a selection once its tag is
-  // gone.
+  // Only the projects the player knows of: their own, and those abroad their
+  // services have learned of (isKnownToPlayer). The rest run unseen.
+  const known = useMemo(() => projects.filter((project) => isKnownToPlayer(project, playerCountry)), [projects, playerCountry]);
+  const availableTags = useMemo(() => collectProjectTags(known), [known]);
   useEffect(() => {
     setActiveTags((current) => {
       const next = current.filter((tag) => availableTags.includes(tag));
@@ -1262,132 +1351,88 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     });
   }, [availableTags]);
 
-  // Closed is an EXCLUSIVE view, not an "also include" switch: off shows only
-  // work still running, on shows only work that has finished, failed or been
-  // cancelled. It used to widen the list to everything, which — because the sort
-  // always ranks open work above closed — buried the two closed entries under a
-  // screen of active ones and made the button look broken.
   const visible = useMemo(() => {
-    const filtered = filterProjects(projects, { owner, playerCountry, query, tags: activeTags });
+    const filtered = filterProjects(known, { owner: "all", playerCountry, query, tags: activeTags });
     const scoped = filtered.filter((project) => (showClosed ? isProjectClosed(project) : !isProjectClosed(project)));
     return sortProjects(scoped, sortKey);
-  }, [projects, owner, playerCountry, query, activeTags, showClosed, sortKey]);
+  }, [known, playerCountry, query, activeTags, showClosed, sortKey]);
+  const mine = useMemo(() => visible.filter((project) => isPlayerProject(project, playerCountry)), [visible, playerCountry]);
+  const abroad = useMemo(() => visible.filter((project) => !isPlayerProject(project, playerCountry)), [visible, playerCountry]);
 
-  const closedCount = useMemo(() => projects.filter(isProjectClosed).length, [projects]);
-  const openCount = projects.length - closedCount;
-  // Counts for the Mine/Foreign chips, so the default view never silently hides
-  // work: a board that is all foreign opens on an empty Mine column, and the
-  // number on the chip beside it is the whole explanation.
-  const mineCount = useMemo(
-    () => projects.filter((project) => isPlayerProject(project, playerCountry)).length,
-    [projects, playerCountry],
-  );
-  const foreignCount = projects.length - mineCount;
-
-  // Same trap as the Closed chip below, and the same fix: the Foreign chip is the
-  // only way back out of the Foreign view, and it is only rendered while there is
-  // something foreign to show. A board whose last rival programme goes away — it
-  // completed, it was removed, the player's polity was renamed and its entries
-  // folded back to being theirs — left the player looking at an empty column with
-  // the way out gone. Drop the view with its chip.
-  useEffect(() => {
-    if (foreignCount === 0) setOwner((current) => (current === "foreign" ? "mine" : current));
-  }, [foreignCount]);
-
-  // The Closed chip is the only way back out of the Closed view, and it is only
-  // rendered while there is something closed to show — so a board whose last
-  // closed entry goes away (reopened, removed, or evicted by the board cap) left
-  // the player looking at "No closed entries match those filters." with the way
-  // back gone and no amount of clicking to fix it. Drop the view with its chip.
+  const closedCount = useMemo(() => known.filter(isProjectClosed).length, [known]);
+  const openCount = known.length - closedCount;
   useEffect(() => {
     if (closedCount === 0) setShowClosed(false);
   }, [closedCount]);
-
-  // And once more for the Tags menu, whose control is only rendered while the
-  // board carries a tag at all. A menu open as the last tag went would come
-  // back open, unasked, with the next one. Shut it with its control.
   useEffect(() => {
     if (availableTags.length === 0) setTagMenuOpen(false);
   }, [availableTags]);
 
+  // The player's budget and when each project should be done at the pace it is
+  // going (projectEngine.js), worked out here from the world as it stands.
+  const engineWorld = useMemo(() => ({ countryStats, projects, projectFundingMode }), [countryStats, projects, projectFundingMode]);
+  const means = useMemo(() => ownerMeans(engineWorld, playerCountry, projects, playerCountry), [engineWorld, playerCountry, projects]);
+  const finishes = useMemo(() => new Map(visible.map((project) => [
+    project.id,
+    project.targetDate || estimateProjectFinish(project, { world: engineWorld, projects, host: playerCountry, date: gameDate }),
+  ])), [visible, engineWorld, projects, playerCountry, gameDate]);
+
   const toggleTag = useCallback((tag) => {
-    setActiveTags((current) => (current.includes(tag)
-      ? current.filter((entry) => entry !== tag)
-      : [...current, tag]));
+    setActiveTags((current) => (current.includes(tag) ? current.filter((entry) => entry !== tag) : [...current, tag]));
   }, []);
+  const clearTags = useCallback(() => setActiveTags([]), []);
+  const toggleExpand = useCallback((id) => setExpandedId((current) => (current === id ? null : id)), []);
+  const askAdvisor = useCallback((prompt) => { onOpenAdvisor?.(prompt); }, [onOpenAdvisor]);
 
-  const clearTags = useCallback(() => {
-    setActiveTags([]);
-  }, []);
-
-  const toggleExpand = useCallback((id) => {
-    setExpandedId((current) => (current === id ? null : id));
-  }, []);
-
-  const askAdvisor = useCallback((prompt) => {
-    onOpenAdvisor?.(prompt);
-  }, [onOpenAdvisor]);
-
-  // The board's only player-authored writes. See the file header for what they
-  // are allowed to touch and why they go through the ops pipeline.
-  //
-  // actor "player" is the door's own guard: it drops any op aimed at a project the
-  // player does not own. The buttons behind these are already hidden on a foreign
-  // card, so this is belt and braces — but the card renders off a 5s poll, and a
-  // project that changes hands (or a player polity that gets renamed) between the
-  // render and the click must not slip an Abandon through on a rival's programme.
+  // The board's player-authored writes, through the door that lets a government
+  // touch its own programmes only (actor "player").
   const writeOps = useCallback(async (ops) => {
-    const world = await readWorldState({ force: true });
-    const { refusedProjectIds, world: nextWorld } = applyProjectOpsToWorld({
-      actor: "player",
-      date: gameDate,
-      ops,
-      playerCountry,
-      round,
-      world,
+    // Shared canonical queue: read the latest world *inside* the mutation.
+    // This serializes Projects edits with other page writers and the Stats
+    // worker handoff, and rejects a queued edit after a campaign switch.
+    await mutateWorldState((world) => {
+      const { refusedProjectIds, world: nextWorld } = applyProjectOpsToWorld({
+        actor: "player",
+        date: gameDate,
+        ops,
+        playerCountry,
+        round,
+        world,
+      });
+      if (refusedProjectIds.length > 0) throw new Error("Project change refused: not authorized or the board is full.");
+      return nextWorld;
     });
-    // Nothing landed, so nothing is written: a refused write would still bump
-    // world.json and set every other panel's poll re-rendering for no change.
-    //
-    // Asked of the RESULT rather than by counting refusals against ops, because a
-    // batch can be part-refused — refusedProjectIds counts projects, not ops — and
-    // the applied half of such a batch must still be saved. readWorldState
-    // normalizes, and so does the door, so the two sides compare exactly.
-    if (refusedProjectIds.length > 0
-      && JSON.stringify(nextWorld.projects) === JSON.stringify(world.projects)) {
-      return;
-    }
-    // The write re-renders the board: it is canonical, so the store publishes
-    // the saved projects to this panel and every other.
-    await writeWorldState(nextWorld);
   }, [gameDate, playerCountry, round]);
 
-  const setPriority = useCallback(async (project, priority) => {
-    if (project.priority === priority) return;
+  const setFunding = useCallback(async (project, funding) => {
+    if (project.funding === funding) return;
     setPendingId(project.id);
     try {
-      await writeOps([{ op: "update", projectId: project.id, name: project.name, priority }]);
+      await writeOps([{ op: "update", projectId: project.id, name: project.name, funding }]);
     } catch {
-      // A failed write leaves the board as it was and the poll re-reads within
-      // five seconds — the same silence every other handler in this file keeps.
+      // A failed write leaves the board as it was; the poll re-reads it.
     } finally {
       setPendingId("");
     }
   }, [writeOps]);
 
-  // op cancel, never remove: the entry stays on the board under Closed with its
-  // REAL progress figure preserved, which is the record the player wants — "we
-  // got that to 40% and then stopped" — rather than the work vanishing as if it
-  // had never been opened.
+  const setSecrecy = useCallback(async (project, secrecy) => {
+    if (project.secrecy === secrecy) return;
+    setPendingId(project.id);
+    try {
+      await writeOps([{ op: "update", projectId: project.id, name: project.name, secrecy }]);
+    } catch (failure) {
+      setPlanError(String(failure?.message || failure || "").trim());
+    } finally {
+      setPendingId("");
+    }
+  }, [writeOps]);
+
+  // op cancel, never remove: the entry stays under Closed with the progress it reached.
   const abandonProject = useCallback(async (project) => {
     setPendingId(project.id);
     try {
-      await writeOps([{
-        op: "cancel",
-        projectId: project.id,
-        name: project.name,
-        note: "Abandoned by the player.",
-      }]);
+      await writeOps([{ op: "cancel", projectId: project.id, name: project.name, note: uiString("Abandoned by the player.") }]);
     } catch {
       // As above.
     } finally {
@@ -1395,134 +1440,130 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     }
   }, [writeOps]);
 
-  // Resolve a camera target in the order the card's button promises: an explicit
-  // focus, then a linked structure, then a linked unit. Reads the live world so
-  // a linked unit that has since moved flies to where it actually is.
+  // A project the advisor opened without a plan: one request plans it, and it starts.
+  const planEntry = useCallback(async (project) => {
+    setPlanningId(project.id);
+    setPlanError("");
+    try {
+      const draft = await planProject({ name: project.name, goal: project.summary });
+      await writeOps([{ op: "update", projectId: project.id, name: project.name, plan: draft.plan }]);
+    } catch (failure) {
+      setPlanError(String(failure?.message || failure || "").trim() || uiString("The plan could not be made."));
+    } finally {
+      setPlanningId("");
+    }
+  }, [writeOps]);
+
   const showOnMap = useCallback(async (project) => {
     const map = mapRef?.current;
     if (!map?.flyTo) return;
-
     let target = project.focus;
     if (!target) {
       try {
         const world = await readWorldState();
         const markers = Array.isArray(world?.markers) ? world.markers : [];
         const units = Array.isArray(world?.units) ? world.units : [];
-        const marker = markers.find((entry) => project.linkedMarkerIds.includes(entry.id));
-        const unit = units.find((entry) => project.linkedUnitIds.includes(entry.id));
-        const hit = marker || unit;
+        const hit = markers.find((entry) => project.linkedMarkerIds.includes(entry.id)) || units.find((entry) => project.linkedUnitIds.includes(entry.id));
         if (hit) target = { lng: hit.lng, lat: hit.lat };
       } catch {
-        // No world read, no camera move. Silent: the button simply does nothing
-        // rather than throwing out of a click handler.
+        // No world read, no camera move.
       }
     }
     if (!target || !Number.isFinite(target.lng) || !Number.isFinite(target.lat)) return;
     map.flyTo({ center: [target.lng, target.lat], zoom: 5 });
   }, [mapRef]);
 
-  const isEmptyBoard = hasLoaded && projects.length === 0;
-  // Warn with a little road left, not at the moment work starts disappearing.
   const nearLimit = projects.length >= PROJECT_BOARD_LIMIT - 10;
+  const card = (project) => (
+    <ProjectCard
+      key={project.id}
+      project={project}
+      fundingMode={means.mode}
+      eventTitles={eventTitles}
+      expanded={expandedId === project.id}
+      onToggleExpand={toggleExpand}
+      busy={pendingId === project.id}
+      planning={planningId === project.id}
+      playerCountry={playerCountry}
+      playerLandless={playerLandless}
+      ownerFlags={ownerFlags}
+      ownerNames={ownerNames}
+      finish={finishes.get(project.id) || ""}
+      onAskAdvisor={askAdvisor}
+      onShowOnMap={showOnMap}
+      onSetFunding={setFunding}
+      onSetSecrecy={setSecrecy}
+      onAbandon={abandonProject}
+      onPlan={planEntry}
+    />
+  );
 
   return (
     <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
-      {/* On a phone, the one scroller for everything under the header. On a
-          desktop it is not there as far as layout goes (display: contents),
-          so its children keep the panel's indentation. */}
       <div style={scrollAsOne
         ? { display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent" }
         : { display: "contents" }}
       >
-      {!isEmptyBoard && (
-        <div style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", padding: "0.6rem 1rem 0.7rem" }}>
-          <div style={{ position: "relative" }}>
-            <span style={{
-              color: "rgba(255,255,255,0.35)",
-              display: "flex",
-              left: "0.55rem",
-              position: "absolute",
-              top: "50%",
-              transform: "translateY(-50%)",
-            }}
-            >
-              <SearchIcon />
-            </span>
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search projects…"
-              data-no-translate
-              style={{
-                backgroundColor: "rgba(255,255,255,0.06)",
-                border: "1px solid rgba(255,255,255,0.12)",
-                borderRadius: "9px",
-                color: "white",
-                fontFamily: "sans-serif",
-                fontSize: "0.75rem",
-                outline: "none",
-                padding: "0.4rem 0.5rem 0.4rem 1.7rem",
-                width: "100%",
-              }}
-            />
-          </div>
-
-          {/* position: the open Tags menu hangs under this row and is as wide. */}
-          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem", position: "relative" }}>
-            <select
-              className="oh-tap-row"
-              value={sortKey}
-              onChange={(event) => setSortKey(event.target.value)}
-              style={selectStyle}
-              data-no-translate
-            >
-              {PROJECT_SORTS.map((sort) => (
-                <option key={sort.key} value={sort.key} style={{ backgroundColor: "#18181b" }}>
-                  {sort.label}
-                </option>
-              ))}
-            </select>
-            <Chip active={owner === "all"} onClick={() => setOwner("all")} title={`Everything on the board (${projects.length})`}>
-              All
-            </Chip>
-            <Chip active={owner === "mine"} onClick={() => setOwner("mine")} title="Your own projects and operations — the ones you can set a priority on or call off">
-              Mine{mineCount > 0 ? ` (${mineCount})` : ""}
-            </Chip>
-            {/* Only when there is something to show. A chip reading "Foreign (0)"
-                on a board with no rival programmes on it is a dead control that
-                tells the player the filter is broken. */}
-            {foreignCount > 0 && (
-              <Chip active={owner === "foreign"} onClick={() => setOwner("foreign")} title="Other powers' efforts your services have learned of. You track these; you do not run them.">
-                Foreign ({foreignCount})
-              </Chip>
-            )}
-            {closedCount > 0 && (
-              <Chip
-                active={showClosed}
-                onClick={() => setShowClosed((value) => !value)}
-                title={showClosed
-                  ? `Showing closed entries only — switch back to the ${openCount} still running`
-                  : `Show the ${closedCount} completed, failed or cancelled entries instead`}
-              >
-                {showClosed ? `← Running (${openCount})` : `Closed (${closedCount})`}
-              </Chip>
-            )}
-            {/* Only while the board carries a tag, as the chips were: a Tags
-                button opening onto nothing is a dead control. */}
-            {availableTags.length > 0 && (
-              <TagMenu
-                open={tagMenuOpen}
-                onOpenChange={setTagMenuOpen}
-                tags={availableTags}
-                selected={activeTags}
-                onToggle={toggleTag}
-                onClear={clearTags}
-                maxHeight={scrollAsOne ? TAG_MENU_MAX_HEIGHT_SCROLLING : TAG_MENU_MAX_HEIGHT}
-              />
-            )}
-          </div>
+      <div style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.6rem 1rem 0.7rem" }}>
+        <NewProject owner={playerCountry} fundingMode={means.mode} writeOps={writeOps} onStarted={() => setShowClosed(false)} />
+        <div
+          style={{ color: "rgba(255,255,255,0.5)", display: "flex", flexWrap: "wrap", fontSize: "0.68rem", gap: "0.6rem" }}
+          title={means.mode === "nonmonetary"
+            ? uiString("Projects consume time and capacity, without claiming money or a national treasury.")
+            : uiString("The project allowance is an estimate from GDP, budget balance and public debt. Spending is not reconciled to a national treasury.")}
+        >
+          {means.mode === "nonmonetary" ? (
+            <span>{uiString("Non-monetary project funding: time and capacity only; no GDP or cash payments required")}</span>
+          ) : means.budget === null ? (
+            <span style={{ color: "#fbbf24" }}>{uiString("No native GDP baseline: paid projects cannot receive funding until assessed")}</span>
+          ) : (
+            <>
+              <span>{uiString("Estimated project allowance: {{amount}} per month", { amount: formatMoney(means.budget) })}</span>
+              <span>{uiString("Planned monthly commitments: {{amount}}", { amount: formatMoney(means.committed) })}</span>
+              {means.covered < 1 && <span style={{ color: "#fbbf24" }}>{uiString("Underfunded: planned costs exceed allowance")}</span>}
+            </>
+          )}
         </div>
-      )}
+        {known.length > 0 && (
+          <>
+            <div style={{ position: "relative" }}>
+              <span style={{ color: "rgba(255,255,255,0.35)", display: "flex", left: "0.55rem", position: "absolute", top: "50%", transform: "translateY(-50%)" }}>
+                <SearchIcon />
+              </span>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search projects…"
+                data-no-translate
+                style={{ ...inputStyle, padding: "0.4rem 0.5rem 0.4rem 1.7rem" }}
+              />
+            </div>
+            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", position: "relative" }}>
+              <select className="oh-tap-row" value={sortKey} onChange={(event) => setSortKey(event.target.value)} style={selectStyle} data-no-translate>
+                {PROJECT_SORTS.map((sort) => (
+                  <option key={sort.key} value={sort.key} style={{ backgroundColor: "#18181b" }}>{sort.label}</option>
+                ))}
+              </select>
+              {closedCount > 0 && (
+                <Chip active={showClosed} onClick={() => setShowClosed((value) => !value)}>
+                  {showClosed ? `← Running (${openCount})` : `Closed (${closedCount})`}
+                </Chip>
+              )}
+              {availableTags.length > 0 && (
+                <TagMenu
+                  open={tagMenuOpen}
+                  onOpenChange={setTagMenuOpen}
+                  tags={availableTags}
+                  selected={activeTags}
+                  onToggle={toggleTag}
+                  onClear={clearTags}
+                  maxHeight={scrollAsOne ? TAG_MENU_MAX_HEIGHT_SCROLLING : TAG_MENU_MAX_HEIGHT}
+                />
+              )}
+            </div>
+          </>
+        )}
+      </div>
 
       {nearLimit && (
         <div style={{
@@ -1535,8 +1576,8 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
         }}
         >
           {projects.length >= PROJECT_BOARD_LIMIT
-            ? `The board is full (${PROJECT_BOARD_LIMIT}). Completed and cancelled entries are dropped first to make room — ask your advisor to close anything finished.`
-            : `${PROJECT_BOARD_LIMIT - projects.length} slots left before the board starts dropping its oldest closed entries.`}
+            ? `The board is full (${PROJECT_BOARD_LIMIT}). New projects are refused; existing entries are preserved.`
+            : `${PROJECT_BOARD_LIMIT - projects.length} slots left before new projects are refused.`}
         </div>
       )}
 
@@ -1546,133 +1587,23 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
             Loading…
           </div>
         )}
-
-        {/* The empty state is the backfill path, not a dead end: an existing
-            campaign has all of this in its history already, and the advisor's
-            prompt carries that history, so it can reconstruct the board. */}
-        {isEmptyBoard && (
-          <div style={{
-            border: "1px dashed rgba(255,255,255,0.15)",
-            borderRadius: "12px",
-            padding: "1.1rem 1rem",
-            textAlign: "center",
-          }}
-          >
-            <div style={{ fontSize: "1.5rem", marginBottom: "0.4rem" }}>🗂</div>
-            <div style={{ color: "rgba(255,255,255,0.75)", fontSize: "0.8rem", fontWeight: 600 }}>
-              Nothing on the board yet
-            </div>
-            <p style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", lineHeight: 1.5, margin: "0.4rem 0 0.85rem" }}>
-              Projects and operations are opened by your advisor and by what happens in the world —
-              you don&apos;t add them by hand. If you already have efforts under way, ask your advisor
-              to put them on the board.
-            </p>
-            <button
-              type="button"
-              className="oh-tap-row"
-              onClick={() => askAdvisor(uiString(PROJECTS_BACKFILL_PROMPT))}
-              style={{
-                background: "rgba(255,255,255,0.06)",
-                border: "1px solid rgba(255,255,255,0.25)",
-                borderRadius: "10px",
-                color: "white",
-                cursor: "pointer",
-                fontFamily: "sans-serif",
-                fontSize: "0.75rem",
-                fontWeight: 600,
-                padding: "0.45rem 0.8rem",
-              }}
-            >
-              🧭 Ask your advisor to populate this
-            </button>
-          </div>
-        )}
-
-        {hasLoaded && projects.length > 0 && visible.length === 0 && (
-          <div style={{
-            border: "1px dashed rgba(255,255,255,0.14)",
-            borderRadius: "10px",
-            color: "rgba(255,255,255,0.4)",
-            fontSize: "0.73rem",
-            fontStyle: "italic",
-            padding: "0.9rem",
-            textAlign: "center",
-          }}
-          >
+        {planError && <div style={{ color: "#fca5a5", fontSize: "0.7rem" }}>{planError}</div>}
+        {hasLoaded && known.length > 0 && visible.length === 0 && (
+          <div style={{ border: "1px dashed rgba(255,255,255,0.14)", borderRadius: "10px", color: "rgba(255,255,255,0.4)", fontSize: "0.73rem", fontStyle: "italic", padding: "0.9rem", textAlign: "center" }}>
             {showClosed ? "No closed entries match those filters." : "Nothing matches those filters."}
-            {/* The one case where the empty board is the DEFAULT's doing rather
-                than the player's: they opened the panel, it opened on Mine, and
-                every entry they have is somebody else's. Point at the chip. */}
-            {!showClosed && owner === "mine" && foreignCount > 0 && (
-              <div style={{ fontStyle: "normal", marginTop: "0.4rem" }}>
-                {foreignCount === 1 ? "One entry belongs" : `${foreignCount} entries belong`} to another power —
-                {" "}
-                <button
-                  type="button"
-                  className="oh-tap-row"
-                  onClick={() => setOwner("foreign")}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "#e4e4e7",
-                    cursor: "pointer",
-                    font: "inherit",
-                    padding: 0,
-                    textDecoration: "underline",
-                  }}
-                >
-                  show Foreign
-                </button>.
-              </div>
-            )}
           </div>
         )}
-
-        {visible.map((project) => (
-          <ProjectCard
-            key={project.id}
-            project={project}
-            gameDate={gameDate}
-            round={round}
-            eventTitles={eventTitles}
-            expanded={expandedId === project.id}
-            onToggleExpand={toggleExpand}
-            busy={pendingId === project.id}
-            playerCountry={playerCountry}
-            playerLandless={playerLandless}
-            ownerFlags={ownerFlags}
-            ownerNames={ownerNames}
-            onAskAdvisor={askAdvisor}
-            onShowOnMap={showOnMap}
-            onSetPriority={setPriority}
-            onAbandon={abandonProject}
-          />
-        ))}
-
-        {/* Re-sync stays available once the board has content: a campaign that
-            ran for a while before this existed will have gaps the advisor can
-            fill, and a player who has just been told the board is stale needs a
-            way to act on that. */}
-        {visible.length > 0 && (
-          <button
-            type="button"
-            className="oh-tap-row"
-            onClick={() => askAdvisor(uiString(PROJECTS_BACKFILL_PROMPT))}
-            style={{ ...ghostButtonStyle, marginTop: "0.2rem", padding: "0.45rem" }}
-            onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
-            onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
-          >
-            🧭 Ask the advisor to review or extend the board
-          </button>
-        )}
+        {mine.length > 0 && <SectionTitle count={mine.length}>{uiString("Your projects")}</SectionTitle>}
+        {mine.map(card)}
+        {abroad.length > 0 && <SectionTitle count={abroad.length}>{uiString("Known projects abroad")}</SectionTitle>}
+        {abroad.map(card)}
       </div>
       </div>{/* the phone scroller */}
     </div>
   );
 };
 
-// The board glyph, for its tab in the Actions panel: the same stroke family as
-// the launcher icons.
+// The board glyph, for its tab in the Actions panel.
 const ProjectsTabIcon = ({ size = 13 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <rect x="4" y="3" width="16" height="18" rx="2" />

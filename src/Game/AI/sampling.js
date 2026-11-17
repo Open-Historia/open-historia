@@ -8,7 +8,6 @@ export const NO_TEMPERATURE = null;
 export const TASK_TEMPERATURES = Object.freeze({
   // Classification and matching: one answer is right, the rest are wrong.
   demandCheck: 0.1,
-  geographyResolver: 0.1,
 
   // Reconciliation and summary, all told that changing nothing is a correct answer.
   eventConsolidator: 0.2,

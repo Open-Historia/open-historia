@@ -1,862 +1,357 @@
 /*! Open Historia — portions (project op application tests) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Needs node_modules: gameState.js reaches assets.js, which imports maplibre-gl.
-// Run with `npm ci && node --test src/runtime/projectOps.test.js`. The pure
-// derived-state helpers are tested separately in projects.test.js, which stays
-// import-free and runs in a bare checkout.
+// Run with `npm ci && node --test src/runtime/projectOps.test.js`.
+//
+// What a project op may still do, now that the engine runs every project
+// (runtime/projectEngine.js): open one (with its plan, or to be planned), say
+// what it IS, fund it, set it back or bring it on (taking hold next period), end
+// it. Never its progress, status or dates. The engine's own tests are
+// projectEngine.test.js.
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  advanceProjectsInWorld,
   applyEventImpactsToWorld,
   applyProjectOps,
+  applyProjectOutcomesToWorld,
   applyProjectOpsToWorld,
+  normalizeProjectEntry,
   normalizeWorldState,
-  releaseProjectCompletionEffects,
 } from "./gameState.js";
 
-const standingWatch = {
-  op: "create",
-  name: "Operation Standing Watch",
-  summary: "Permanent North Sea patrol.",
-  kind: "operation",
-  ongoing: true,
-  secrecy: "covert",
-  tags: ["naval", "military"],
-  progress: 35,
-  status: "stalled",
-  startedAt: "2030-01-01",
-  milestones: [{ title: "Annual drill", date: "2034-06-01", repeat: "annual" }],
+const PLAN = {
+  durationDays: 400,
+  monthlyCost: 1e9,
+  milestones: [{ title: "Keel laid", atProgress: 30 }, { title: "Sea trials", atProgress: 80 }],
+  effects: [{ type: "stat", stat: "military.sea", change: 5 }],
 };
 
-const open = (ops = [standingWatch], ctx = { date: "2033-01-01" }) => applyProjectOps([], ops, ctx);
+const leviathan = { op: "create", name: "Project Leviathan", summary: "A new battleship class.", kind: "project", plan: PLAN };
+const open = (ops = [leviathan], ctx = { date: "1936-01-01", round: 3 }) => applyProjectOps([], ops, ctx);
 
-// A jump that merely MENTIONS a running operation used to reset everything the
-// model had not bothered to restate: ongoing back to false, progress to 0,
-// status to active, secrecy to public, tags emptied, an operation demoted to a
-// project. The create branch spread the whole normalized op over the existing
-// entry instead of merging the fields it actually carried.
-test("a passing restatement preserves everything it did not mention", () => {
-  const before = open()[0];
-  const after = applyProjectOps(
-    [before],
-    [{ op: "create", name: "Operation Standing Watch", summary: "The patrol continues." }],
-    { date: "2034-01-01", round: 70 },
-  )[0];
-
-  assert.equal(after.ongoing, true, "ongoing was reset");
-  assert.equal(after.progress, 35, "progress was reset");
-  assert.equal(after.status, "stalled", "status was reset");
-  assert.equal(after.secrecy, "covert", "secrecy was reset");
-  assert.deepEqual(after.tags, ["naval", "military"], "tags were emptied");
-  assert.equal(after.kind, "operation", "an operation was demoted to a project");
-  assert.equal(after.startedAt, "2030-01-01");
-  assert.equal(after.milestones.length, 1);
-  assert.equal(after.milestones[0].repeat, "annual");
-
-  // What it DID send is applied, and identity survives.
-  assert.equal(after.summary, "The patrol continues.");
-  assert.equal(after.id, before.id);
-  assert.equal(after.createdAt, before.createdAt);
-  assert.equal(after.updatedRound, 70, "a mention still counts as being touched");
+test("a create opens a project with its plan, at nothing done, dated by its event", () => {
+  const [entry] = open();
+  assert.equal(entry.status, "active");
+  assert.equal(entry.progress, 0);
+  assert.equal(entry.funding, "normal");
+  assert.equal(entry.startedAt, "1936-01-01");
+  assert.equal(entry.plan.durationDays, 400);
+  assert.equal(entry.plan.monthlyCost, 1e9);
+  assert.deepEqual(entry.plan.milestones.map((milestone) => [milestone.title, milestone.atProgress]), [["Keel laid", 30], ["Sea trials", 80]]);
+  assert.deepEqual(entry.plan.effects, [{ type: "stat", stat: "military.sea", change: 5 }]);
 });
 
-test("a restatement that means to change things still can", () => {
-  const before = open()[0];
-  const after = applyProjectOps([before], [{
-    op: "create", name: "Operation Standing Watch", summary: "s",
-    ongoing: false, targetDate: "2040-01-01", progress: 60, status: "active", secrecy: "public",
-  }], {})[0];
+test("a create never sets its own progress, status or dates", () => {
+  const [entry] = open([{ ...leviathan, progress: 90, status: "complete", targetDate: "1936-02-01" }]);
+  assert.equal(entry.progress, 0);
+  assert.equal(entry.status, "active");
+  assert.notEqual(entry.targetDate, "1936-02-01");
+});
 
-  assert.equal(after.ongoing, false);
-  assert.equal(after.targetDate, "2040-01-01");
-  assert.equal(after.progress, 60);
+test("a create with no plan waits, planning, until it is given one", () => {
+  const [entry] = open([{ op: "create", name: "Project Leviathan", summary: "A new battleship class." }]);
+  assert.equal(entry.status, "planning");
+  assert.equal(entry.plan, null);
+  const [planned] = applyProjectOps([entry], [{ op: "update", name: "Project Leviathan", plan: PLAN }], { date: "1936-02-01" });
+  assert.equal(planned.status, "active");
+  assert.equal(planned.plan.durationDays, 400);
+});
+
+test("a plan is held to the owner's means by whoever opens it", () => {
+  const [entry] = applyProjectOps([], [leviathan], { date: "1936-01-01", boundPlan: (plan) => ({ ...plan, monthlyCost: 5 }) });
+  assert.equal(entry.plan.monthlyCost, 5);
+});
+
+test("a restatement of a running project changes only what it said, never its course", () => {
+  const [running] = open();
+  const ticked = { ...running, progress: 40 };
+  const [after] = applyProjectOps([ticked], [{ op: "create", name: "Project Leviathan", summary: "Restated.", plan: { durationDays: 20, monthlyCost: 1 } }], { date: "1936-06-01" });
+  assert.equal(after.summary, "Restated.");
+  assert.equal(after.progress, 40);
+  assert.equal(after.plan.durationDays, 400, "a plan is taken only by an entry still planning");
+});
+
+test("an update may say what it is and how it is funded, never its progress, status or dates", () => {
+  const [entry] = open();
+  const [after] = applyProjectOps([entry], [{
+    op: "update", name: "Project Leviathan", progress: 99, status: "complete", targetDate: "1936-02-01",
+    lastUpdate: "The yards are busy.", funding: "high", summary: "A faster battleship class.",
+  }], { date: "1936-01-15" });
+  assert.equal(after.progress, 0);
   assert.equal(after.status, "active");
-  assert.equal(after.secrecy, "public");
+  assert.equal(after.lastUpdate, "The yards are busy.");
+  assert.equal(after.funding, "high");
+  assert.equal(after.summary, "A faster battleship class.");
 });
 
-test("an explicitly emptied list is still an instruction, not an omission", () => {
-  const before = open()[0];
-  assert.deepEqual(applyProjectOps([before], [{ op: "create", name: before.name, tags: [] }], {})[0].tags, []);
+test("funding none pauses a project, and funding it again takes it up", () => {
+  const [entry] = open();
+  const [paused] = applyProjectOps([entry], [{ op: "update", name: "Project Leviathan", funding: "none" }]);
+  assert.equal(paused.status, "paused");
+  const [again] = applyProjectOps([paused], [{ op: "update", name: "Project Leviathan", funding: "low" }]);
+  assert.equal(again.status, "active");
+  assert.equal(again.funding, "low");
 });
 
-// The board prompt titles entries `Operation "Name"`, and a model copies the whole
-// title — label, quotes, and in a Russian game a translated label. Without an id
-// that update used to match nothing and vanish.
-test("an op naming a project by its displayed title still finds it", () => {
-  const before = applyProjectOps([], [{ op: "create", name: "Standing Watch", kind: "operation", summary: "s" }], {})[0];
-  for (const name of ['Operation "Standing Watch"', 'Операция "Standing Watch"', 'Operation «Standing Watch»']) {
-    const after = applyProjectOps([before], [{ op: "update", name, progress: 70 }], {});
-    assert.equal(after.length, 1, name);
-    assert.equal(after[0].progress, 70, name);
-  }
-  // The label may already be part of the name, in which case the prompt quotes the whole thing.
-  const labelled = applyProjectOps([], [{ op: "create", name: "Operation Kingfisher", kind: "operation", summary: "s" }], {})[0];
-  assert.equal(applyProjectOps([labelled], [{ op: "update", name: '"Operation Kingfisher"', progress: 40 }], {})[0].progress, 40);
+test("a save's priority becomes its funding, and a paused entry is one funded with nothing", () => {
+  assert.equal(normalizeProjectEntry({ name: "A", priority: "high" }).funding, "high");
+  assert.equal(normalizeProjectEntry({ name: "B", priority: "low" }).funding, "low");
+  assert.equal(normalizeProjectEntry({ name: "C" }).funding, "normal");
+  const paused = normalizeProjectEntry({ name: "D", status: "paused", priority: "high" });
+  assert.equal(paused.funding, "none");
+  assert.equal(paused.status, "paused");
 });
 
-test("a genuinely new project still receives its defaults", () => {
-  const fresh = applyProjectOps([], [{ op: "create", name: "Fresh", summary: "s" }], {})[0];
-  assert.equal(fresh.status, "active");
-  assert.equal(fresh.progress, 0);
-  assert.equal(fresh.ongoing, false);
-  assert.equal(fresh.secrecy, "public");
-});
-
-// The staged event reveal replays events straight out of events.json, so an op
-// that has been normalized and JSON round-tripped must merge exactly as the
-// original did. A Set of provided fields would have serialised to {} here and
-// quietly restored the destructive behaviour.
-test("a persisted, replayed op merges the same as a fresh one", () => {
-  const world = normalizeWorldState({ projects: open() });
-  const event = {
-    id: "e1", date: "2034-01-01", title: "The patrol continues", description: "d",
-    impacts: { projectOps: [{ op: "create", name: "Operation Standing Watch", summary: "A mention." }] },
-  };
-
-  const fresh = applyEventImpactsToWorld({ world, events: [event], round: 70 }).world.projects[0];
-  const replayed = applyEventImpactsToWorld({
-    world, events: JSON.parse(JSON.stringify([event])), round: 70,
-  }).world.projects[0];
-
-  assert.equal(fresh.ongoing, true);
-  assert.equal(replayed.ongoing, true, "ongoing lost on replay");
-  assert.equal(replayed.progress, 35, "progress lost on replay");
-  assert.equal(replayed.kind, "operation");
-});
-
-test("every other op leaves ongoing alone", () => {
-  const before = open()[0];
-  for (const op of [
-    { op: "update", name: before.name, progress: 50 },
-    { op: "update", name: before.name, status: "active" },
-    { op: "update", name: before.name, lastUpdate: "Something happened." },
-    { op: "milestone", name: before.name, milestone: { title: "Review", date: "2035-01-01" } },
-  ]) {
-    assert.equal(applyProjectOps([before], [op], {})[0].ongoing, true, JSON.stringify(op));
-  }
-  // Only an explicit instruction undoes it: `ongoing` is deliberately sticky, so
-  // a chatty simulation cannot quietly put an end date back on a standing effort.
-  assert.equal(applyProjectOps([before], [{ op: "update", name: before.name, ongoing: false }], {})[0].ongoing, false);
-});
-
-test("marking a milestone done keeps its date and note", () => {
-  // normalizeProjectMilestone fills every field, so spreading it over the entry
-  // erased the date and note whenever the model marked something done the
-  // natural way: {"title":"...","status":"done"}.
-  const before = applyProjectOps([], [{
-    op: "create", name: "P", summary: "s",
-    milestones: [{ title: "Sea trials", date: "2033-11-04", note: "At Faslane." }],
-  }], {})[0];
-  const after = applyProjectOps([before], [{
-    op: "milestone", name: "P", milestone: { title: "Sea trials", status: "done" },
-  }], { date: "2033-11-06" })[0];
-
-  assert.equal(after.milestones[0].status, "done");
-  assert.equal(after.milestones[0].date, "2033-11-04", "the due date was erased");
-  assert.equal(after.milestones[0].note, "At Faslane.", "the note was erased");
-});
-
-test("a recurring milestone rolls instead of retiring", () => {
-  const before = open()[0];
-  const after = applyProjectOps([before], [{
-    op: "milestone", name: before.name, milestone: { title: "Annual drill", status: "done" },
-  }], { date: "2034-06-03" })[0];
-
-  assert.equal(after.milestones[0].date, "2035-06-01", "did not roll to the next occurrence");
-  assert.equal(after.milestones[0].status, "pending");
-  assert.equal(after.milestones[0].completedCount, 1);
-  assert.equal(after.milestones[0].lastCompletedAt, "2034-06-03");
-});
-
-test("ending a project keeps it on the board; only remove erases", () => {
-  const before = open()[0];
-  for (const [op, status] of [["complete", "complete"], ["cancel", "cancelled"], ["fail", "failed"]]) {
-    const after = applyProjectOps([before], [{ op, name: before.name }], {});
-    assert.equal(after.length, 1, `op "${op}" removed the entry`);
-    assert.equal(after[0].status, status);
-  }
-  assert.equal(applyProjectOps([before], [{ op: "remove", name: before.name }], {}).length, 0);
-});
-
-// PROJECT_FIELD_ALIASES documents the field names the normalizer accepts, and the
-// create path has always honoured them. The update path matched canonical keys
-// only, so the natural thing for a model to write changed nothing at all — and the
-// advisor's ```projects block, which every button on the Projects panel drives,
-// has no schema to keep it to canonical names.
-test("an update op is applied through the same field aliases create accepts", () => {
-  const before = open()[0];
-  const after = applyProjectOps([before], [{
-    op: "update",
-    name: before.name,
-    description: "Hull complete; fitting out begins.",
-    dueDate: "2038-03-01",
-    owner: "Germany",
-    type: "project",
-    classification: "restricted",
-    startDate: "2029-05-05",
-    progress: 55,
-    ongoing: false,
-  }], { date: "2034-01-01" })[0];
-
-  assert.equal(after.summary, "Hull complete; fitting out begins.", "description alias dropped");
-  assert.equal(after.targetDate, "2038-03-01", "dueDate alias dropped");
-  assert.equal(after.ownerCode, "Germany", "owner alias dropped");
-  assert.equal(after.kind, "project", "type alias dropped");
-  assert.equal(after.secrecy, "restricted", "classification alias dropped");
-  assert.equal(after.startedAt, "2029-05-05", "startDate alias dropped");
-  assert.equal(after.progress, 55, "canonical field stopped working");
-});
-
-// A model asked to mark a checkpoint reached writes "completed" or "achieved" about
-// as often as it writes "done". An unrecognised value fell through to the "pending"
-// default, which is not a no-op: the merge assigned it unconditionally, so the op
-// meant to confirm a checkpoint pushed it back to pending — while still counting as
-// a change, so the advisor's receipt card reported an update that never happened.
-test("milestone status synonyms mark a checkpoint reached", () => {
-  const before = open([{ ...standingWatch, milestones: [{ title: "Sea trials", date: "2034-06-01" }] }])[0];
-
-  for (const status of ["done", "complete", "completed", "achieved", "reached"]) {
-    const after = applyProjectOps([before], [{
-      op: "milestone", name: before.name, milestone: { title: "Sea trials", status },
-    }], { date: "2034-06-03" })[0];
-    assert.equal(after.milestones[0].status, "done", `status "${status}" did not mark it done`);
-    assert.equal(after.nextMilestone, null, `status "${status}" left it outstanding`);
-  }
-
-  for (const status of ["missed", "unmet", "failed"]) {
-    const after = applyProjectOps([before], [{
-      op: "milestone", name: before.name, milestone: { title: "Sea trials", status },
-    }], { date: "2034-06-03" })[0];
-    assert.equal(after.milestones[0].status, "missed", `status "${status}" did not mark it missed`);
-  }
-
-  // Late is not the same as never: a slipped checkpoint is still outstanding, so
-  // it stays the next milestone and the next skip is asked to answer it.
-  for (const status of ["slipped", "late", "delayed", "overdue"]) {
-    const after = applyProjectOps([before], [{
-      op: "milestone", name: before.name, milestone: { title: "Sea trials", status },
-    }], { date: "2034-06-03" })[0];
-    assert.equal(after.milestones[0].status, "slipped", `status "${status}" did not mark it slipped`);
-    assert.equal(after.nextMilestone?.title, "Sea trials", `status "${status}" left nothing outstanding`);
-  }
-});
-
-// The other half of that fix: an op that only re-dates or annotates a checkpoint
-// carries no status, and normalizeProjectMilestone fills every field — so without
-// the statusProvided flag the merge would silently un-complete it.
-test("a milestone op with no status leaves the status alone", () => {
-  const done = applyProjectOps(
-    open([{ ...standingWatch, milestones: [{ title: "Sea trials", date: "2034-06-01" }] }]),
-    [{ op: "milestone", name: standingWatch.name, milestone: { title: "Sea trials", status: "done" } }],
-    { date: "2034-06-03" },
-  );
-  assert.equal(done[0].milestones[0].status, "done");
-
-  const redated = applyProjectOps(done, [{
-    op: "milestone", name: standingWatch.name, milestone: { title: "Sea trials", date: "2034-11-01" },
-  }], { date: "2034-07-01" })[0];
-
-  assert.equal(redated.milestones[0].status, "done", "re-dating un-completed the checkpoint");
-  assert.equal(redated.milestones[0].date, "2034-11-01", "the new date was not applied");
-});
-
-// updatedRound is the only thing deriveProjectFlags uses to decide a programme has
-// gone quiet, so an op batch that carries a round has to stamp it whichever verb it
-// used — otherwise the advisor updates a project and the card still reads stale.
-test("every op stamps updatedRound when the caller supplies a round", () => {
-  const before = { ...open()[0], updatedRound: 5 };
-  const cases = [
-    ["update", { op: "update", name: before.name, lastUpdate: "Fitting out." }],
-    ["create-as-restatement", { op: "create", name: before.name, summary: "The patrol continues." }],
-    ["milestone", { op: "milestone", name: before.name, milestone: { title: "Annual drill", status: "done" } }],
-    ["complete", { op: "complete", name: before.name }],
-  ];
-
-  for (const [label, op] of cases) {
-    const after = applyProjectOps([before], [op], { date: "2034-06-03", round: 12 })[0];
-    assert.equal(after.updatedRound, 12, `op "${label}" did not stamp the round`);
-  }
-});
-
-// A model writes {"title":"Annual drill","repeat":"annual"} with no date more or
-// less constantly. advanceRecurringDate cannot roll from nothing, so the roll was
-// declined and the commitment was marked done and quietly retired for good —
-// despite carrying the very flag that says it never finishes.
-test("an undated recurring milestone rolls from the date it was performed", () => {
-  const before = open([{
-    ...standingWatch,
-    milestones: [{ title: "Annual drill", repeat: "annual" }],
-  }])[0];
-  assert.equal(before.milestones[0].date, "", "the fixture should start undated");
-
-  const after = applyProjectOps([before], [{
-    op: "milestone", name: before.name, milestone: { title: "Annual drill", status: "done" },
-  }], { date: "2034-06-03" })[0];
-
-  assert.equal(after.milestones[0].date, "2035-06-03", "did not roll to a next occurrence");
-  assert.equal(after.milestones[0].status, "pending", "a standing commitment was retired");
-  assert.equal(after.milestones[0].completedCount, 1);
-  assert.equal(after.milestones[0].lastCompletedAt, "2034-06-03");
-});
-
-// The roll must not fire twice for one performance. A dated milestone still
-// anchors on its own date, so the annual drill on 1 June stays on 1 June.
-test("a dated recurring milestone still keeps its own day of the year", () => {
-  const before = open()[0];
-  const after = applyProjectOps([before], [{
-    op: "milestone", name: before.name, milestone: { title: "Annual drill", status: "done" },
-  }], { date: "2034-06-03" })[0];
-  assert.equal(after.milestones[0].date, "2035-06-01");
-});
-
-// --- onComplete: projects that actually change the world --------------------
-//
-// Issue #7. A project had no effect of its own: the close branch set a status,
-// pinned progress to 100 and wrote a note, and that was all. So a rename project
-// could reach 100% with the country still called what it always was, and an
-// annexation could finish without the border ever moving. These pin the whole
-// contract: effects fire on completion, exactly once, and never on a cancel or a
-// fail.
-
-const annexation = (onComplete) => ({
-  op: "create",
-  name: "Northern Question",
-  summary: "Obtain the northern marches.",
-  status: "active",
-  progress: 60,
-  onComplete,
-});
-
-const renameRuritania = {
-  polityChanges: [{ code: "Ruritania", name: "Federal Republic of Ruritania" }],
-};
-
-const eventWith = (projectOps, impacts = {}) => ({
-  date: "2030-06-01",
-  title: "The question is settled",
-  description: "test",
-  impacts: { projectOps, ...impacts },
-});
-
-const worldWith = (projects) => normalizeWorldState({ projects });
-
-test("onComplete survives a create and canonicalises its owners", () => {
-  const project = applyProjectOps([], [annexation({
-    polityChanges: [{ code: "ESP", name: "Spanish Republic" }],
-    regionTransfers: [{ regionId: "ESP.1_1", toCode: "ESP" }],
-  })])[0];
-
-  assert.equal(project.onComplete.polityChanges[0].code, "Spain", "a bare GADM code must fold to the country name");
-  assert.equal(project.onComplete.regionTransfers[0].toCode, "Spain");
-  assert.equal(project.onCompleteAppliedAt, "", "nothing has fired yet");
-});
-
-test("an onComplete carrying nothing usable normalizes to null, not an empty bag", () => {
-  const project = applyProjectOps([], [annexation({ polityChanges: [null, {}], regionTransfers: ["nope"] })])[0];
-  assert.equal(project.onComplete, null);
-});
-
-// The actual issue-#7 regression. Note the assertion on the KEY: polityOverrides
-// is keyed by the polity's stable identity and the new name is a display layer,
-// so a rename that moved the key would split one country into two.
-test("completing a project applies its onComplete rename, which re-keys the country", () => {
-  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-  const { world: next } = applyEventImpactsToWorld({
-    events: [eventWith([{ op: "complete", name: "Northern Question", note: "Done." }])],
-    world,
-  });
-
-  assert.equal(next.polityOverrides["Federal Republic of Ruritania"].name, "Federal Republic of Ruritania");
-  assert.equal("Ruritania" in next.polityOverrides, false, "the country is keyed by its new name");
-  assert.deepEqual(next.polityOverrides["Federal Republic of Ruritania"].formerNames, ["Ruritania"]);
-  assert.equal(next.projects[0].status, "complete");
-  assert.ok(next.projects[0].onCompleteAppliedAt, "the latch must be stamped");
-});
-
-test("replaying the same completion does not apply the effects twice", () => {
-  const world = worldWith(applyProjectOps([], [annexation({
-    regionTransfers: [{ regionId: "RUR.1_1", toCode: "Ruritania" }],
-  })]));
-  const event = eventWith([{ op: "complete", name: "Northern Question" }]);
-
-  const { world: once } = applyEventImpactsToWorld({ events: [event], world });
-  const stamped = once.projects[0].onCompleteAppliedAt;
-  once.regionOwnershipOverrides["RUR.1_1"] = "Someone Else";
-
-  const { world: twice } = applyEventImpactsToWorld({ events: [event], world: once });
-  assert.equal(twice.regionOwnershipOverrides["RUR.1_1"], "Someone Else", "the transfer fired a second time");
-  assert.equal(twice.projects[0].onCompleteAppliedAt, stamped);
-});
-
-// A Hidden event (a Canonical event kept off the timeline) still moves the Board,
-// through this same path so a completion releases its effects exactly as a
-// visible event's would — but it is not on the timeline, so it must not be
-// stamped into the entry's activity, which lists timeline events only.
-test("a board-only event completes a project and releases its effects without stamping its activity", () => {
-  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-  const hiddenCarrier = { ...eventWith([{ op: "complete", name: "Northern Question" }]), id: "hidden-1" };
-  const { world: next } = applyEventImpactsToWorld({
-    events: [hiddenCarrier],
-    world,
-    boardOnlyEventIds: ["hidden-1"],
-  });
-
-  assert.equal(next.projects[0].status, "complete");
-  assert.equal(next.polityOverrides["Federal Republic of Ruritania"].name, "Federal Republic of Ruritania", "the completion effects were lost");
-  assert.deepEqual(next.projects[0].eventIds, [], "a Hidden event is not a timeline card to link to");
-});
-
-for (const op of ["cancel", "fail"]) {
-  test("op " + op + " never releases onComplete effects", () => {
-    const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-    const { world: next } = applyEventImpactsToWorld({
-      events: [eventWith([{ op, name: "Northern Question", note: "Called off." }])],
-      world,
-    });
-
-    assert.deepEqual(next.polityOverrides, {}, "a project that did not succeed must change nothing");
-    assert.equal(next.projects[0].onCompleteAppliedAt, "");
-    assert.equal(next.projects[0].progress, 60, "the real progress figure is the informative one");
-  });
-}
-
-// The shape a model actually writes at least as often as an explicit close op.
-test("an update carrying status complete releases the effects too", () => {
-  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-  const { world: next } = applyEventImpactsToWorld({
-    events: [eventWith([{ op: "update", name: "Northern Question", status: "complete" }])],
-    world,
-  });
-
-  assert.equal(next.polityOverrides["Federal Republic of Ruritania"].name, "Federal Republic of Ruritania");
-  assert.ok(next.projects[0].onCompleteAppliedAt);
-});
-
-// Every other way a batch can finish a project releases the effects as well:
-// the release is worked out by the applier that stamps the latch, so the two
-// cannot disagree about what completed.
-test("a create restating a project as complete releases the effects", () => {
-  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-  const { world: next } = applyEventImpactsToWorld({
-    events: [eventWith([{ op: "create", name: "Northern Question", status: "complete" }])],
-    world,
-  });
-
-  assert.equal(next.projects[0].status, "complete");
-  assert.equal(next.polityOverrides["Federal Republic of Ruritania"].name, "Federal Republic of Ruritania");
-  assert.ok(next.projects[0].onCompleteAppliedAt);
-});
-
-test("a project opened and completed in the same batch releases the effects", () => {
-  const { world: next } = applyEventImpactsToWorld({
-    events: [eventWith([annexation(renameRuritania), { op: "complete", name: "Northern Question" }])],
-    world: worldWith([]),
-  });
-
-  assert.equal(next.projects[0].status, "complete");
-  assert.equal(next.polityOverrides["Federal Republic of Ruritania"].name, "Federal Republic of Ruritania");
-});
-
-test("a project renamed and then completed in the same batch releases the effects", () => {
-  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-  const { world: next } = applyEventImpactsToWorld({
-    events: [eventWith([
-      { op: "update", name: "Northern Question", newName: "Treaty of the Marches" },
-      { op: "complete", name: "Treaty of the Marches" },
-    ])],
-    world,
-  });
-
-  assert.equal(next.projects[0].status, "complete");
-  assert.equal(next.polityOverrides["Federal Republic of Ruritania"].name, "Federal Republic of Ruritania");
-  assert.ok(next.projects[0].onCompleteAppliedAt);
-});
-
-test("a later restatement of a completed project releases nothing a second time", () => {
-  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-  const { world: once } = applyEventImpactsToWorld({
-    events: [eventWith([{ op: "create", name: "Northern Question", status: "complete" }])],
-    world,
-  });
-  const released = releaseProjectCompletionEffects(once.projects, [
-    { op: "create", name: "Northern Question", status: "complete" },
-    { op: "complete", name: "Northern Question" },
+test("a setback and a boost are recorded with their round, bounded, to take hold next period", () => {
+  const [entry] = open();
+  const [after] = applyProjectOps([entry], [
+    { op: "setback", name: "Project Leviathan", days: 400, overrun: 90, lastUpdate: "A fire in the yard." },
+    { op: "boost", name: "Project Leviathan", days: 500 },
+  ], { date: "1936-03-01", round: 4 });
+  assert.equal(after.progress, 0, "nothing moves now");
+  assert.deepEqual(after.adjustments.map(({ kind, days, overrun, round }) => ({ kind, days, overrun, round })), [
+    { kind: "setback", days: 180, overrun: 50, round: 4 },
+    { kind: "boost", days: 90, overrun: undefined, round: 4 },
   ]);
-  assert.deepEqual(released.projectIds, []);
+  assert.equal(after.lastUpdate, "A fire in the yard.");
 });
 
-// Pins the fold-before-alias-rebuild ordering: released polityChanges are merged
-// into the event's own list BEFORE the owner resolver is rebuilt, so the event's
-// other impacts may already speak the name the completion introduces.
-test("an event may use the name its completed project introduces", () => {
-  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-  const { world: next } = applyEventImpactsToWorld({
-    events: [eventWith(
-      [{ op: "complete", name: "Northern Question" }],
-      { regionTransfers: [{ regionId: "RUR.2_1", toCode: "Federal Republic of Ruritania" }] },
-    )],
-    world,
-  });
-
-  assert.equal(next.regionOwnershipOverrides["RUR.2_1"], "Federal Republic of Ruritania", "the transfer lands on the renamed country");
+test("a setback on a project that has ended changes nothing", () => {
+  const [entry] = open();
+  const [ended] = applyProjectOps([entry], [{ op: "cancel", name: "Project Leviathan" }]);
+  const [after] = applyProjectOps([ended], [{ op: "setback", name: "Project Leviathan", days: 30 }]);
+  assert.deepEqual(after.adjustments, []);
 });
 
-test("onComplete region effects clear the dispute they settle", () => {
-  const world = normalizeWorldState({
-    projects: applyProjectOps([], [annexation({ regionTransfers: [{ regionId: "RUR.1_1", toCode: "Ruritania" }] })]),
-    regionClaimants: { "RUR.1_1": ["Ruritania"] },
-  });
-  const { world: next } = applyEventImpactsToWorld({
-    events: [eventWith([{ op: "complete", name: "Northern Question" }])],
-    world,
-  });
-
-  assert.equal(next.regionOwnershipOverrides["RUR.1_1"], "Ruritania");
-  assert.equal("RUR.1_1" in next.regionClaimants, false);
+test("cancel and fail end a project and leave it on the board; complete is the engine's alone", () => {
+  const [entry] = open();
+  const [cancelled] = applyProjectOps([entry], [{ op: "cancel", name: "Project Leviathan", note: "The budget went." }], { date: "1936-05-01" });
+  assert.equal(cancelled.status, "cancelled");
+  assert.equal(cancelled.lastUpdate, "The budget went.");
+  assert.ok(cancelled.plan.milestones.every((milestone) => milestone.missed), "a checkpoint still ahead of an ended project is missed");
+  const [failed] = applyProjectOps([entry], [{ op: "fail", name: "Project Leviathan" }]);
+  assert.equal(failed.status, "failed");
+  const [notCompleted] = applyProjectOps([entry], [{ op: "complete", name: "Project Leviathan" }, { op: "close", name: "Project Leviathan", status: "complete" }]);
+  assert.equal(notCompleted.status, "active");
 });
 
-// The pre-scan that releases the effects and the applier that stamps the latch
-// must resolve an op to the SAME entry, or the effects fire for one project and
-// are marked spent on another.
-test("a completion matched by name alone fires and latches the same entry", () => {
-  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-  const { world: next } = applyEventImpactsToWorld({
-    events: [eventWith([{ op: "complete", name: "northern question" }])],
-    world,
-  });
-
-  assert.equal(next.polityOverrides["Federal Republic of Ruritania"].name, "Federal Republic of Ruritania");
-  assert.ok(next.projects[0].onCompleteAppliedAt);
+test("an op finds its project by name when its id names nothing on the board", () => {
+  const [entry] = open();
+  const [after] = applyProjectOps([entry], [{ op: "update", projectId: "project-wrong", name: "Project Leviathan", lastUpdate: "Found by name." }]);
+  assert.equal(after.lastUpdate, "Found by name.");
 });
 
-// ONLY AN EVENT MAY CHANGE THE WORLD. The advisor reports and plans; the
-// simulation enacts. Its fences (chart/actions/senddraft/deploy/projects) touch no
-// border and no polity identity, and onComplete must not become a side door around
-// that — otherwise "rename us" is answered by opening a project with a
-// polityChanges payload and closing it a reply later, renaming the country from a
-// chat window with no jump and nothing in the record to explain it.
-test("the non-event door REFUSES to complete a project that would change the world", () => {
-  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-  const result = applyProjectOpsToWorld({ ops: [{ op: "complete", name: "Northern Question" }], world });
-
-  assert.deepEqual(result.world.polityOverrides, {}, "the advisor renamed a polity from chat");
-  assert.equal(result.world.projects[0].status, "active", "the project must stay open for the simulation to close");
-  assert.deepEqual(result.deferredProjectIds, [result.world.projects[0].id]);
+test("an op finds its project by name, case and accents aside, and as a prompt might quote it", () => {
+  const [entry] = open([{ ...leviathan, name: "Opération Kingfisher" }]);
+  for (const name of ["opération kingfisher", "Operation Kingfisher", "Opération \"Opération Kingfisher\""]) {
+    const [after] = applyProjectOps([entry], [{ op: "update", name, lastUpdate: name }]);
+    assert.equal(after.lastUpdate, name, name);
+  }
 });
 
-test("the non-event door holds a completion however the op spells it", () => {
-  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-  const restated = applyProjectOpsToWorld({
-    ops: [{ op: "create", name: "Northern Question", status: "complete", progress: 100 }],
-    world,
-  });
-  assert.equal(restated.world.projects[0].status, "active");
-  assert.equal(restated.world.projects[0].progress, 100, "the rest of the op still lands");
-  assert.deepEqual(restated.deferredProjectIds, [restated.world.projects[0].id]);
-
-  const opened = applyProjectOpsToWorld({
-    ops: [annexation(renameRuritania), { op: "complete", name: "Northern Question" }],
-    world: worldWith([]),
-  });
-  assert.deepEqual(opened.world.polityOverrides, {});
-  assert.equal(opened.world.projects[0].status, "active");
-  assert.equal(opened.world.projects[0].onCompleteAppliedAt, "", "a held completion is not spent");
-  assert.deepEqual(opened.deferredProjectIds, [opened.world.projects[0].id]);
+test("an op naming nothing on the board is dropped, never a phantom project", () => {
+  const [entry] = open();
+  const after = applyProjectOps([entry], [{ op: "setback", name: "Project Kraken", days: 10 }]);
+  assert.equal(after.length, 1);
+  assert.deepEqual(after[0].adjustments, []);
 });
 
-// Refusing to CLOSE it is not a reason to lose everything else the reply said.
-test("a refused completion still applies the rest of the batch", () => {
-  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-  const { world: next } = applyProjectOpsToWorld({
+test("the old verbs are no ops: milestone, complete, remove and English synonyms are left out", () => {
+  const [entry] = open();
+  const after = applyProjectOps([entry], [
+    { op: "milestone", name: "Project Leviathan", milestone: { title: "Keel laid", status: "done" } },
+    { op: "remove", name: "Project Leviathan" },
+    { op: "finish", name: "Project Leviathan" },
+  ]);
+  assert.equal(after.length, 1);
+  assert.equal(after[0].status, "active");
+  assert.ok(after[0].plan.milestones.every((milestone) => !milestone.reached));
+});
+
+// ---- the doors ----------------------------------------------------------------
+
+const worldWith = (projects) => normalizeWorldState({ projects, countryStats: { France: { economy: { gdp: 1.2e12, budgetBalance: 0, publicDebt: 40 }, stability: 60 } } });
+
+test("the player's door opens their own project, with its plan held to their budget", () => {
+  const { world } = applyProjectOpsToWorld({ actor: "player", date: "1936-01-01", playerCountry: "France", world: worldWith([]), ops: [leviathan] });
+  const [entry] = world.projects;
+  assert.equal(entry.name, "Project Leviathan");
+  // 2% of 1.2 trillion a year is 2 billion a month; one project may cost half of it.
+  assert.equal(entry.plan.monthlyCost, 1e9);
+  const dear = applyProjectOpsToWorld({ actor: "player", playerCountry: "France", world: worldWith([]), ops: [{ ...leviathan, plan: { ...PLAN, monthlyCost: 9e12 } }] }).world.projects[0];
+  assert.equal(dear.plan.monthlyCost, 1e9);
+});
+
+test("the player's door steers only their own work: funding, a plan, calling it off", () => {
+  const theirs = normalizeProjectEntry({ name: "Rocket Programme", ownerCode: "Germany", plan: PLAN, secrecy: "public" });
+  const mine = normalizeProjectEntry({ name: "Project Leviathan", plan: PLAN });
+  const { refusedProjectIds, world } = applyProjectOpsToWorld({
+    actor: "player",
+    playerCountry: "France",
+    world: worldWith([theirs, mine]),
     ops: [
-      { op: "update", name: "Northern Question", progress: 95, lastUpdate: "The delegation has signed." },
-      { op: "complete", name: "Northern Question" },
+      { op: "update", name: "Rocket Programme", funding: "none" },
+      { op: "cancel", name: "Rocket Programme" },
+      { op: "update", name: "Project Leviathan", funding: "high" },
+      { op: "update", name: "Project Leviathan", summary: "The player does not rewrite what it is." },
     ],
+  });
+  assert.deepEqual(refusedProjectIds.sort(), [theirs.id, mine.id].sort());
+  const byName = new Map(world.projects.map((entry) => [entry.name, entry]));
+  assert.equal(byName.get("Rocket Programme").status, "active");
+  assert.equal(byName.get("Project Leviathan").funding, "high");
+  assert.equal(byName.get("Project Leviathan").summary, mine.summary);
+});
+
+test("the advisor opens and steers the player's work and reports on any; it neither sets back nor opens another country's", () => {
+  const theirs = normalizeProjectEntry({ name: "Rocket Programme", ownerCode: "Germany", plan: PLAN });
+  const { world } = applyProjectOpsToWorld({
+    actor: "ai",
+    playerCountry: "France",
+    world: worldWith([theirs]),
+    ops: [
+      { op: "create", name: "Counter-Rocket Effort", summary: "Ours.", plan: PLAN },
+      { op: "create", name: "German Jets", ownerCode: "Germany", summary: "Theirs.", plan: PLAN },
+      { op: "update", name: "Rocket Programme", lastUpdate: "Our sources say it is behind." },
+      { op: "setback", name: "Rocket Programme", days: 60 },
+      { op: "cancel", name: "Rocket Programme" },
+    ],
+  });
+  const byName = new Map(world.projects.map((entry) => [entry.name, entry]));
+  assert.ok(byName.has("Counter-Rocket Effort"));
+  assert.equal(byName.has("German Jets"), false);
+  const rocket = byName.get("Rocket Programme");
+  assert.equal(rocket.lastUpdate, "Our sources say it is behind.");
+  assert.deepEqual(rocket.adjustments, []);
+  assert.equal(rocket.status, "active");
+});
+
+test("the engine's own ops may stall an entry whose intelligence is in doubt; a confirmation takes it up", () => {
+  const theirs = normalizeProjectEntry({ name: "Rocket Programme", ownerCode: "Germany", plan: PLAN, linkedSpyIds: ["spy-1"] });
+  const doubted = applyProjectOpsToWorld({
+    actor: "engine",
+    world: worldWith([theirs]),
+    ops: [{ op: "update", name: "Rocket Programme", verification: "doubted", status: "stalled", stallReason: "blocked" }],
+  }).world.projects[0];
+  assert.equal(doubted.status, "stalled");
+  assert.equal(doubted.stallReason, "blocked");
+  const confirmed = applyProjectOps([doubted], [{ op: "update", name: "Rocket Programme", verification: "confirmed" }])[0];
+  assert.equal(confirmed.status, "active");
+  assert.equal(confirmed.verification, "confirmed");
+});
+
+// ---- the event path ---------------------------------------------------------------
+
+test("an event opens a country's project on an empty board, its plan held to that country's means", () => {
+  const world = normalizeWorldState({ projects: [], countryStats: { Germany: { economy: { gdp: 6e11 } } } });
+  const result = applyEventImpactsToWorld({
     world,
+    events: [{ id: "e1", date: "1936-04-01", title: "Germany lays down a fleet", description: "", impacts: { projectOps: [{ op: "create", name: "Plan Z", ownerCode: "Germany", summary: "A fleet.", plan: { ...PLAN, monthlyCost: 1e12 } }] } }],
+    round: 3,
   });
-
-  assert.equal(next.projects[0].progress, 95);
-  assert.equal(next.projects[0].lastUpdate, "The delegation has signed.");
-  assert.equal(next.projects[0].status, "active");
+  const [entry] = result.world.projects;
+  assert.equal(entry.ownerCode, "Germany");
+  assert.equal(entry.startedAt, "1936-04-01");
+  assert.deepEqual(entry.eventIds, ["e1"]);
+  assert.equal(entry.plan.monthlyCost, 6e11 * 0.02 / 12 / 2);
 });
 
-// The ordinary case is untouched: a project with no world-changing payload closes
-// from chat exactly as it always did.
-test("the non-event door still closes an ordinary project", () => {
-  const world = worldWith(open());
-  const { deferredProjectIds, world: next } = applyProjectOpsToWorld({
-    ops: [{ op: "complete", name: "Operation Standing Watch", note: "Stood down." }],
-    world,
-  });
+// ---- what a finished project does to the world --------------------------------------
 
-  assert.equal(next.projects[0].status, "complete");
-  assert.deepEqual(deferredProjectIds, []);
+const statsWorld = (projects) => normalizeWorldState({
+  projects,
+  countryStats: {
+    France: { stability: 50, economy: { gdp: 1.2e12, gdpGrowth: 1, budgetBalance: 0, publicDebt: 40 }, military: { sea: 50 } },
+    Italy: { stability: 60 },
+  },
+  relations: [],
+  markers: [],
+  unitTypes: [],
 });
 
-// The deferred project is closed by the next EVENT, and the effects land there.
-test("the simulation closes what the advisor deferred, and the effects land then", () => {
-  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
-  const { world: afterChat } = applyProjectOpsToWorld({ ops: [{ op: "complete", name: "Northern Question" }], world });
-  const { world: afterJump } = applyEventImpactsToWorld({
-    events: [eventWith([{ op: "complete", name: "Northern Question", note: "Ratified." }])],
-    world: afterChat,
-  });
-
-  assert.equal(afterJump.polityOverrides["Federal Republic of Ruritania"].name, "Federal Republic of Ruritania");
-  assert.equal(afterJump.projects[0].status, "complete");
-});
-
-// --- priority: the one field on this board the player authors ---------------
-
-test("priority defaults to normal and accepts the synonyms a model writes", () => {
-  assert.equal(applyProjectOps([], [standingWatch])[0].priority, "normal");
-
-  const raised = applyProjectOps(open(), [{ op: "update", name: "Operation Standing Watch", priority: "critical" }]);
-  assert.equal(raised[0].priority, "high");
-
-  const dropped = applyProjectOps(raised, [{ op: "update", name: "Operation Standing Watch", priority: "low" }]);
-  assert.equal(dropped[0].priority, "low");
-});
-
-// The player sets this; a jump that merely mentions the operation must not wipe it.
-test("a passing restatement preserves a priority the player set", () => {
-  const raised = applyProjectOps(open(), [{ op: "update", name: "Operation Standing Watch", priority: "high" }]);
-  const after = applyProjectOps(
-    raised,
-    [{ op: "create", name: "Operation Standing Watch", summary: "The patrol continues." }],
-    { date: "2034-01-01", round: 70 },
-  )[0];
-
-  assert.equal(after.priority, "high");
-});
-
-// Regression: no EVENT could close a project at all.
-//
-// normalizeEventImpacts rewrites {"op":"complete"} to {"op":"close","status":
-// "complete"} on the way into events.json; applyProjectOps then re-normalizes
-// defensively (it must — the advisor hands it an unnormalized block); and
-// normalizeProjectOp had no branch for "close", so it returned null and the op
-// was dropped. A jump narrating a programme finishing left it active at 60%, and
-// cancel and fail went the same way. Only the advisor path worked, because its
-// ops pass through the normalizer exactly once.
-for (const [op, status] of [["complete", "complete"], ["cancel", "cancelled"], ["fail", "failed"]]) {
-  test("an event can " + op + " a project (its op survives a second normalize)", () => {
-    const world = normalizeWorldState({ projects: open() });
-    const { world: next } = applyEventImpactsToWorld({
-      events: [{
-        date: "2034-01-01",
-        title: "It ends",
-        description: "test",
-        impacts: { projectOps: [{ op, name: "Operation Standing Watch", note: "How it ended." }] },
-      }],
-      world,
-    });
-
-    assert.equal(next.projects[0].status, status);
-    assert.equal(next.projects[0].lastUpdate, "How it ended.");
-  });
-}
-
-// Every op normalizeProjectOp EMITS must survive being passed back through it —
-// that is the invariant the bug above broke, and the one worth pinning.
-test("normalized ops are idempotent: re-applying a normalized batch is a no-op", () => {
-  const world = normalizeWorldState({ projects: open() });
-  const event = {
-    date: "2034-01-01",
-    title: "It ends",
-    description: "test",
-    impacts: { projectOps: [{ op: "complete", name: "Operation Standing Watch" }] },
-  };
-  const { world: once } = applyEventImpactsToWorld({ events: [event], world });
-  assert.equal(once.projects[0].status, "complete");
-
-  // A close aimed at an already-closed project changes nothing but must still be
-  // understood rather than dropped.
-  const { world: twice } = applyEventImpactsToWorld({ events: [event], world: once });
-  assert.equal(twice.projects[0].status, "complete");
-});
-
-// --- whose project it is ----------------------------------------------------
-//
-// The board tracks other powers' programmes because the player's services have
-// learned of them. The player's two levers — priority and abandon — are things a
-// government does to its OWN work, so the panel hides them on a foreign card and
-// this door refuses the op behind them. Both matter: the card renders off a 5s
-// poll, and a project that changes hands between the render and the click must not
-// slip an Abandon through on somebody else's shipyard.
-
-const rivalProgramme = {
-  op: "create",
-  name: "Kestrel Rocket Programme",
-  summary: "Their long-range rocket effort.",
-  ownerCode: "Ruritania",
-  status: "active",
-  progress: 40,
-};
-
-const ownProgramme = {
-  op: "create",
+const finished = (overrides = {}) => normalizeProjectEntry({
+  id: "p1",
   name: "Project Leviathan",
-  summary: "Our own ship programme.",
-  status: "active",
-  progress: 20,
-};
-
-test("the player's door refuses to abandon another power's programme", () => {
-  const world = worldWith(applyProjectOps([], [rivalProgramme]));
-  const { refusedProjectIds, world: next } = applyProjectOpsToWorld({
-    actor: "player",
-    ops: [{ op: "cancel", name: "Kestrel Rocket Programme", note: "Abandoned by the player." }],
-    playerCountry: "Spain",
-    world,
-  });
-
-  assert.equal(next.projects[0].status, "active", "a rival's programme was called off from the panel");
-  assert.deepEqual(refusedProjectIds, [next.projects[0].id]);
-});
-
-test("the player's door refuses to set a priority on another power's programme", () => {
-  const world = worldWith(applyProjectOps([], [rivalProgramme]));
-  const { refusedProjectIds, world: next } = applyProjectOpsToWorld({
-    actor: "player",
-    ops: [{ op: "update", name: "Kestrel Rocket Programme", priority: "high" }],
-    playerCountry: "Spain",
-    world,
-  });
-
-  assert.equal(next.projects[0].priority, "normal");
-  assert.equal(refusedProjectIds.length, 1);
-});
-
-// The levers still work on their own work — both when the entry names the player
-// and when it carries no owner at all, which is how the model writes theirs.
-test("the player's door still steers their own work, named or unnamed", () => {
-  const world = worldWith(applyProjectOps([], [
-    ownProgramme,
-    { ...ownProgramme, name: "Project Titan", ownerCode: "Spain" },
-  ]));
-  const { refusedProjectIds, world: next } = applyProjectOpsToWorld({
-    actor: "player",
-    ops: [
-      { op: "update", name: "Project Leviathan", priority: "high" },
-      { op: "cancel", name: "Project Titan", note: "Abandoned by the player." },
+  progress: 99,
+  focus: { lng: 5.9, lat: 43.1 },
+  plan: {
+    durationDays: 100,
+    monthlyCost: 1e8,
+    effects: [
+      { type: "stat", stat: "military.sea", change: 6 },
+      { type: "stat", stat: "economy.gdp", change: 2 },
+      { type: "relation", country: "Italy", change: -10 },
+      { type: "structure", name: "Toulon Dry Dock", kind: "shipyard" },
+      { type: "unitType", name: "Leviathan Battleship", base: "naval", attack: 1.4, toughness: 1.5 },
     ],
-    playerCountry: "Spain",
-    world,
-  });
-
-  assert.deepEqual(refusedProjectIds, []);
-  assert.equal(next.projects[0].priority, "high");
-  assert.equal(next.projects[1].status, "cancelled");
-  assert.equal(next.projects[1].progress, 20, "an abandoned project keeps the progress it reached");
+  },
+  ...overrides,
 });
 
-// A renamed polity is the case that would have hurt most: the model writes the
-// name the story now uses, and without the fold the player's OWN programme files
-// itself under a country that does not exist and loses both levers.
-test("an owner written as a polity's display name folds back to the polity", () => {
-  const world = normalizeWorldState({
-    polityOverrides: { Ruritania: { code: "Ruritania", name: "Federal Republic of Ruritania" } },
-  });
-  const { world: next } = applyProjectOpsToWorld({
-    ops: [{ ...rivalProgramme, ownerCode: "Federal Republic of Ruritania" }],
-    world,
-  });
-
-  assert.equal(next.projects[0].ownerCode, "Ruritania", "the display name minted a second power");
+test("a project the engine completes changes the world once, by its effects, bounded and on its owner", () => {
+  const before = statsWorld([finished()]);
+  const advanced = advanceProjectsInWorld({ baseWorld: before, world: before, fromDate: "1936-01-01", toDate: "1936-01-10", host: "France", round: 2 });
+  assert.equal(advanced.outcomes.find((outcome) => outcome.type === "complete").date, "1936-01-02");
+  const { world, applied } = applyProjectOutcomesToWorld({ world: advanced.world, outcomes: advanced.outcomes, date: "1936-01-10", round: 2, host: "France" });
+  assert.equal(world.countryStats.France.military.sea, 56);
+  assert.equal(Math.round(world.countryStats.France.economy.gdp), Math.round(1.2e12 * 1.02));
+  const relation = world.relations.find((entry) => [entry.a, entry.b].includes("Italy"));
+  assert.equal(relation.score, -10);
+  const dock = world.markers.find((marker) => marker.name === "Toulon Dry Dock");
+  assert.deepEqual([dock.lng, dock.lat, dock.ownerCode], [5.9, 43.1, "France"], "a structure with no place of its own stands at the project's focus");
+  const type = world.unitTypes.find((entry) => entry.name === "Leviathan Battleship");
+  assert.deepEqual([type.base, type.attack, type.toughness, type.owners], ["naval", 1.4, 1.5, ["France"]]);
+  assert.equal(applied.length, 5);
+  assert.equal(world.projects[0].effectsAppliedAt, "1936-01-02");
+  // Told again (a turn applied a second time, a replay), nothing lands twice.
+  const twice = applyProjectOutcomesToWorld({ world, outcomes: advanced.outcomes, date: "1936-01-10", round: 2, host: "France" });
+  assert.equal(twice.world.countryStats.France.military.sea, 56);
+  assert.equal(twice.applied.length, 0);
 });
 
-test("an update that re-owns a project folds the new owner too", () => {
-  const world = normalizeWorldState({
-    polityOverrides: { Ruritania: { code: "Ruritania", name: "Federal Republic of Ruritania" } },
-    projects: applyProjectOps([], [ownProgramme]),
-  });
-  const { world: next } = applyProjectOpsToWorld({
-    ops: [{ op: "update", name: "Project Leviathan", owner: "Federal Republic of Ruritania" }],
-    world,
-  });
-
-  assert.equal(next.projects[0].ownerCode, "Ruritania");
+test("a completion's effects are bounded against the world as it stands when they land", () => {
+  const world = statsWorld([finished({ plan: { durationDays: 100, monthlyCost: 1, effects: [{ type: "stat", stat: "stability", change: 90 }, { type: "stat", stat: "military.sea", change: 6 }] } })]);
+  world.countryStats.France.military.sea = 98;
+  const advanced = advanceProjectsInWorld({ baseWorld: world, world, fromDate: "1936-01-01", toDate: "1936-01-03", host: "France", round: 2 });
+  const after = applyProjectOutcomesToWorld({ world: advanced.world, outcomes: advanced.outcomes, host: "France" }).world;
+  assert.equal(after.countryStats.France.stability, 58, "eight points at most");
+  assert.equal(after.countryStats.France.military.sea, 100, "and never past the scale");
 });
 
-// Reporting on a rival's programme is the whole reason foreign entries exist, and
-// the advisor's door is not the player's.
-test("the advisor's door updates a foreign programme freely", () => {
-  const world = worldWith(applyProjectOps([], [rivalProgramme]));
-  const { refusedProjectIds, world: next } = applyProjectOpsToWorld({
-    ops: [{ op: "update", name: "Kestrel Rocket Programme", progress: 65, lastUpdate: "Static firing observed." }],
-    playerCountry: "Spain",
-    world,
+test("a programme that runs on pays its yields every month it is paid for, whole points as they bank", () => {
+  const programme = normalizeProjectEntry({
+    id: "p9",
+    name: "Coastal Watch",
+    progress: 100,
+    established: true,
+    plan: { durationDays: 30, monthlyCost: 1e6, ongoing: true, yields: [{ type: "stat", stat: "stability", change: 0.5 }] },
   });
-
-  assert.deepEqual(refusedProjectIds, []);
-  assert.equal(next.projects[0].progress, 65);
+  let world = statsWorld([programme]);
+  for (const [from, to] of [["1936-01-01", "1936-01-31"], ["1936-01-31", "1936-03-01"], ["1936-03-01", "1936-03-31"], ["1936-03-31", "1936-04-30"]]) {
+    const advanced = advanceProjectsInWorld({ baseWorld: world, world, fromDate: from, toDate: to, host: "France", round: 2 });
+    world = applyProjectOutcomesToWorld({ world: advanced.world, outcomes: advanced.outcomes, host: "France" }).world;
+  }
+  assert.equal(world.countryStats.France.stability, 52, "half a point a month: one point every second month");
+  assert.equal(world.projects[0].status, "active");
 });
 
-// Closed work has no levers for anyone, which canPlayerDirect already said — but
-// the door must agree, or a stale card could re-cancel a finished project and
-// restamp its updatedAt for nothing.
-test("the player's door refuses a lever on their own CLOSED project", () => {
-  const world = worldWith(applyProjectOps([], [{ ...ownProgramme, status: "complete" }]));
-  const { refusedProjectIds } = applyProjectOpsToWorld({
-    actor: "player",
-    ops: [{ op: "update", name: "Project Leviathan", priority: "high" }],
-    playerCountry: "Spain",
-    world,
-  });
-
-  assert.equal(refusedProjectIds.length, 1);
+test("a project from before the engine still releases its own completion's territory, once, for the map to place", () => {
+  const legacy = normalizeProjectEntry({ id: "old", name: "Annex the Ticino", progress: 99.5, startedAt: "1936-01-01", targetDate: "1936-12-31", onComplete: { regionTransfers: [{ regionId: "region: Ticino", toCode: "Italy" }] } });
+  const world = statsWorld([legacy]);
+  const advanced = advanceProjectsInWorld({ baseWorld: world, world, fromDate: "1936-06-01", toDate: "1936-06-10", host: "Italy", round: 2 });
+  const released = applyProjectOutcomesToWorld({ world: advanced.world, outcomes: advanced.outcomes, host: "Italy" });
+  assert.equal(released.territory.length, 1);
+  assert.deepEqual(released.territory[0].regionTransfers.map((transfer) => transfer.toCode), ["Italy"]);
+  assert.ok(released.world.projects[0].onCompleteAppliedAt);
+  assert.equal(applyProjectOutcomesToWorld({ world: released.world, outcomes: advanced.outcomes, host: "Italy" }).territory.length, 0);
 });
 
-// ---- an intelligence programme is how a service is built up ----------------
-
-test("completing a programme raises the polity's intelligence through onComplete", () => {
-  // The espionage stat is deliberately reachable from the board: ACTIONS_REFERENCE
-  // sends a sustained build-up here rather than to a bare polityChange, so the
-  // player can see it coming, fund it, or have a rival wreck it first. A sudden
-  // shock (a purge, a defector) still goes direct.
-  const world = normalizeWorldState({
-    intelligence: { France: 40 },
-    projects: [{
-      id: "proj-bureau",
-      name: "The Deuxieme Bureau",
-      status: "active",
-      progress: 90,
-      onComplete: { polityChanges: [{ code: "France", intelligence: 72 }] },
-    }],
-  });
-  const event = {
-    id: "e-bureau",
-    date: "1740-06-01",
-    title: "The bureau opens its doors",
-    description: "",
-    impacts: { projectOps: [{ op: "complete", id: "proj-bureau", name: "The Deuxieme Bureau", note: "Done." }] },
-  };
-  const { world: next } = applyEventImpactsToWorld({ colors: {}, events: [event], world, round: 3 });
-  assert.equal(next.intelligence.France, 72, "the finished programme moved the service");
-  assert.equal(next.projects[0].status, "complete");
-});
-
-test("an intelligence programme that is only cancelled changes nothing", () => {
-  // onComplete releases on completion and never on a cancel or a fail — giving up
-  // on the programme must not hand over the capability anyway.
-  const world = normalizeWorldState({
-    intelligence: { France: 40 },
-    projects: [{
-      id: "proj-bureau",
-      name: "The Deuxieme Bureau",
-      status: "active",
-      onComplete: { polityChanges: [{ code: "France", intelligence: 72 }] },
-    }],
-  });
-  const event = {
-    id: "e-scrapped",
-    date: "1740-06-01",
-    title: "The bureau is scrapped",
-    description: "",
-    impacts: { projectOps: [{ op: "cancel", id: "proj-bureau", name: "The Deuxieme Bureau", note: "Defunded." }] },
-  };
-  const { world: next } = applyEventImpactsToWorld({ colors: {}, events: [event], world, round: 3 });
-  assert.equal(next.intelligence.France, 40, "an abandoned programme delivers nothing");
-  assert.equal(next.projects[0].status, "cancelled");
+test("another country's entry from before the engine stays known to the player; one the world opens now is known only if public", () => {
+  const legacy = normalizeProjectEntry({ name: "Rocket Programme", ownerCode: "Germany", secrecy: "covert", progress: 40 });
+  assert.equal(legacy.known, true);
+  assert.equal(legacy.plan.legacy, true);
+  assert.equal(normalizeProjectEntry(legacy).known, true, "and stays so");
+  const [opened] = applyProjectOps([], [{ op: "create", name: "Jet Programme", ownerCode: "Germany", secrecy: "covert", summary: "s", plan: PLAN }]);
+  assert.equal(opened.known, false);
 });

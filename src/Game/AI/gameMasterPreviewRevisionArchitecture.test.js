@@ -29,7 +29,7 @@ test("Auto-selected GM previews retain routing authority through deterministic r
   const end = gameplay.indexOf("export const applyGameMasterPreview = async", start);
   const source = gameplay.slice(start, end);
   assert.ok(start > 0 && end > start);
-  assert.match(source, /validateGameMasterModeSelection\(\{\s*requestedMode: prior\?\.requestedMode \|\| mode,\s*selectedMode: mode,\s*request: prior\.request,\s*countryStatPatches: candidate\.countryStatPatches,/);
+  assert.match(source, /validateGameMasterModeSelection\(\{\s*requestedMode: prior\?\.requestedMode \|\| mode,\s*selectedMode: mode,\s*countryStatPatches: candidate\.countryStatPatches,/);
   assert.match(source, /if \(routingError\) return `GM mode authorization failed:/);
   assert.ok(source.indexOf("validateGameMasterModeSelection(") < source.indexOf("validateGameMasterPreviewPayload(candidate"),
     "Auto route validation must run before accepting revised operations");

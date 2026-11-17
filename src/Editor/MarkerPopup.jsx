@@ -9,7 +9,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { panelSurface, inputStyle, pillButton } from "./editorStyles.js";
-import { MAP_FEATURE_KINDS, MAP_FEATURE_STATUSES } from "./mapFeatures.js";
+import { MAP_FEATURE_FAMILIES, MAP_FEATURE_KINDS, MAP_FEATURE_STATUSES } from "./mapFeatures.js";
+import { normalizeMarkerFamily } from "../runtime/markerFamily.js";
 
 const STATUS_LABELS = {
   planned: "Planned",
@@ -99,6 +100,23 @@ const MarkerPopup = ({ feature, x, y, isNew, polities = [], onChange, onDelete, 
           />
         )}
       </label>
+
+      {/* A kind of the author's own is drawn as the family they pick for it
+          (runtime/markerFamily.js): its words are never read for one. */}
+      {customKind && (
+        <label style={{ display: "grid", gap: 4, color: "rgba(255,255,255,0.7)" }}>
+          <span style={{ fontSize: 10.5, fontWeight: 700 }}>Drawn as</span>
+          <select
+            value={normalizeMarkerFamily(feature.family) || "landmark"}
+            onChange={(e) => onChange({ family: e.target.value })}
+            style={{ ...inputStyle, padding: "5px 6px" }}
+          >
+            {MAP_FEATURE_FAMILIES.map((entry) => (
+              <option key={entry.id} value={entry.id}>{entry.label}</option>
+            ))}
+          </select>
+        </label>
+      )}
 
       <label style={{ display: "grid", gap: 4, color: "rgba(255,255,255,0.7)" }}>
         <span style={{ fontSize: 10.5, fontWeight: 700 }}>Held by</span>

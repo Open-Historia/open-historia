@@ -39,6 +39,7 @@
 
 import { normalizeGroupOp } from "../../runtime/groups.js";
 import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
+import { nameKey } from "../../../server/nameKey.js";
 
 // ---------------------------------------------------------------------------
 // Bounds helpers. A bounds is [[west, south], [east, north]]; `east` may exceed
@@ -266,20 +267,12 @@ export const combineFocusBounds = (candidates) => {
 // Names
 // ---------------------------------------------------------------------------
 
-// Diacritic- and punctuation-insensitive word tokens. Both the names we search
-// for and the text we search in go through this, so "Côte d'Ivoire" in the index
-// matches "Cote d Ivoire" in the prose.
-export const focusTokens = (value) =>
-  String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .split(" ")
-    .filter(Boolean);
-
-export const focusNameKey = (value) => focusTokens(value).join(" ");
+// The key a name is looked up by, whole: the game's one name fold
+// (server/nameKey.js), of case, accents and punctuation in every script, so
+// "Côte d'Ivoire" in the index is "Cote d Ivoire" in an operation and "РОССИЯ"
+// is "Россия". It kept a-z only, so every name in another script was the empty
+// key and found nothing.
+export const focusNameKey = nameKey;
 
 // name/alias -> the token the bounds tables are keyed by. `entries` is
 // [{ token, names: [...] }]; the token is a GADM code for a stock country and a
@@ -650,11 +643,11 @@ export const buildPlaceCatalog = ({
     }
 
     if (region?.name) regionNameById.set(id, String(region.name));
-    const nameKey = focusNameKey(region?.name);
-    if (nameKey) {
-      const bucket = regionIdsByName.get(nameKey);
+    const regionKey = focusNameKey(region?.name);
+    if (regionKey) {
+      const bucket = regionIdsByName.get(regionKey);
       if (bucket) bucket.push(id);
-      else regionIdsByName.set(nameKey, [id]);
+      else regionIdsByName.set(regionKey, [id]);
     }
 
     regionOwners.push({ baseOwner: String(region?.country ?? "") || String(region?.countryCode ?? ""), id });

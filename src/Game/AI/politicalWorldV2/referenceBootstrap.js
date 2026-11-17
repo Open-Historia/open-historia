@@ -38,7 +38,6 @@ const resolveReferencePolity = (token, world, allowed) => {
   const resolved = resolvePolityIdentity(token, world, {
     allowUnknown: false,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
   });
   return allowed.get(clean(resolved?.resolved).toLocaleLowerCase()) || "";

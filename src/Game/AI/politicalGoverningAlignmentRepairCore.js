@@ -6,6 +6,7 @@ import {
   validatePoliticalGenerationProposal,
 } from "../../runtime/politicalWorldGeneration.js";
 import { isCanonicalGameDate } from "../../runtime/gameDates.js";
+import { nameKey } from "../../../server/nameKey.js";
 
 export const POLITICAL_GOVERNING_ALIGNMENT_BATCH_SIZE = 48;
 export const POLITICAL_GOVERNING_ALIGNMENT_MAX_ATTEMPTS = 2;
@@ -68,47 +69,28 @@ const parseResponseObject = (response) => {
   }
 };
 
-const normalizedTransportKey = (value) => clean(value)
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .toLocaleLowerCase()
-  .replace(/&/g, " and ")
-  .replace(/[^a-z0-9]+/g, " ")
-  .trim();
-
+// A requested polity is found by its exact label, or by the same label under
+// the game's one name fold (server/nameKey.js: case, accents and punctuation,
+// in every script) when that names exactly one requested polity. A shortened
+// or reworded label ("israel" for "State of Israel") names nobody: guessing a
+// polity from part of its name is how one country's answer lands on another's.
 const buildRequestedResolver = (items) => {
   const exact = new Set();
   const normalized = new Map();
-  const entries = [];
   for (const item of items) {
     const key = clean(item?.polityKey);
     if (!key) continue;
     exact.add(key);
-    const token = normalizedTransportKey(key);
-    entries.push({ key, token });
+    const token = nameKey(key);
+    if (!token) continue;
     if (!normalized.has(token)) normalized.set(token, new Set());
     normalized.get(token).add(key);
   }
   return (value) => {
     const raw = clean(value);
     if (exact.has(raw)) return raw;
-    const token = normalizedTransportKey(raw);
-    const matches = normalized.get(token);
-    if (matches?.size === 1) return [...matches][0];
-    if (!token) return "";
-
-    // Providers occasionally shorten a canonical polity label on a retry
-    // (for example "State of Israel" -> "israel"). Accept that transport
-    // drift only when it identifies exactly one currently-requested polity.
-    // Ambiguous short forms such as "congo" remain unresolved.
-    const fuzzy = entries.filter(({ token: candidate }) => candidate && (
-      candidate === token
-      || candidate.endsWith(` ${token}`)
-      || candidate.startsWith(`${token} `)
-      || token.endsWith(` ${candidate}`)
-      || token.startsWith(`${candidate} `)
-    ));
-    return fuzzy.length === 1 ? fuzzy[0].key : "";
+    const matches = normalized.get(nameKey(raw));
+    return matches?.size === 1 ? [...matches][0] : "";
   };
 };
 

@@ -56,6 +56,7 @@
 // Pure, and loads in plain Node.
 
 import { PUPPET_KINDS, puppetKindLabel } from "./puppets.js";
+import { MAX_WAR_SIDE_MEMBERS, keepOpenRows } from "./warRecord.js";
 
 export const TERRITORY_AS_HELD = "as held";
 export const TERRITORY_RESTORED = "restored";
@@ -277,7 +278,8 @@ export const normalizePeaceOffers = (value) => {
     const offer = normalizePeaceOffer(raw);
     if (offer) kept.set(offer.id, offer);
   }
-  return [...kept.values()].slice(-OFFERS_KEPT_MOST);
+  // (An open offer is never cut: runtime/warRecord.js keepOpenRows.)
+  return keepOpenRows([...kept.values()], OFFERS_KEPT_MOST, (offer) => offer.status === "open");
 };
 
 // The offers that wait for an answer from one country ("" for anybody's).
@@ -328,31 +330,39 @@ export const clampTerms = (raw, { from = "", to = "" } = {}) => {
   return { ...kept, reparations: { payer, receiver, share: round(within(payment.share, 0, REPARATIONS_SHARE_CAP), 4), years: Math.min(REPARATIONS_YEARS_CAP, payment.years) } };
 };
 
-// Terms as a line an AI writes, a term a part, the parts parted by ";":
-//   "as held; Borduria pays 2% for 5 years"   "restored; none"   "restored"
-//   "Borduria is annexed"                      (all its land passes to the other)
-//   "Borduria cedes Klow, Szohod to Syldavia"  "Klow passes to Syldavia"
-//   "Borduria becomes Syldavia's puppet"       (or protectorate, client state)
-//   anything else is a condition, told to the next time skip to carry out
+// ---- terms as an AI writes them ---------------------------------------------------------------
+//
+// Terms are written in the game's own record form, the same in every language
+// the game is played in. They were read as English sentences ("Borduria cedes
+// Klow to Syldavia", "Borduria becomes Syldavia's puppet", "keeps" for the
+// ground as held): in French a cession was a mere condition and the ground went
+// back, and in English "Syldavia keeps its army" handed over every region taken.
+// Parts parted by ";", each one of:
+//   as held | restored                 the ground (PEACE_TERRITORIES), or ground~as held, ground~restored
+//   cede~region~country                one region, by its name on the map, to the one of the two that gains it
+//   annex~country                      the one of the two that gives up all its land to the other
+//   puppet~country~kind                the one of the two made the other's puppet (PUPPET_KINDS)
+//   pay~country~percent~years          the one of the two that pays the other reparations, a share of its economy a year
+//   condition~words                    any other term, in the story's own words
+// The words before each ~, the ground and the kind are the game's, written as
+// here whatever language the rest is in; a name is the game's own name of it.
+// Any other part is a condition: shown to the player and told to the next time
+// skip, it never moves the ground. A record missing a field is no term. With no
+// ground written, the ground is the old borders.
+// i18n-ignore: the keys of the form a model writes, never shown.
+export const TERM_KEYS = Object.freeze(["ground", "cede", "annex", "puppet", "pay", "condition"]);
+// i18n-ignore: an example for the model, never shown.
+export const TERMS_LINE_EXAMPLE = "as held; cede~Klow~Syldavia; pay~Borduria~2~5; condition~the border forts are razed";
+// How the form is told to a model, after "the terms" (AI/peacePrompt.js, AI/warStatsPrompt.js).
+// i18n-ignore: the model's briefing, never shown.
+export const TERMS_FORM = `in the game's form, its keys as here in any language: parts parted by ";", the ground first ("as held": each keeps what it holds; "restored": the old borders), then as agreed cede~region~country (one region, by its map name, to the one of the two that gains it), annex~country (gives all its land to the other), puppet~country~kind (becomes the other's protectorate, satellite or client), pay~country~percent~years (pays the other that % of its economy a year) and condition~words (anything else), as in "${TERMS_LINE_EXAMPLE}"`;
+// A figure as a model writes one: "2", "2%", "2,5", "5 years".
+const termFigure = (value) => Number.parseFloat(clean(value).replace(",", "."));
+// A region as the game names one, with the game's own "region:" before it or not.
+const termRegion = (value) => clean(value).replace(/^region\s*:\s*/i, "");
 // `from` and `to` are the two making peace: a country a term names is one of
-// them (clampTerms). Ground it cannot read is the old borders.
-// i18n-ignore: an example for the model and a pattern, never shown.
-export const TERMS_LINE_EXAMPLE = "as held; Borduria cedes Klow, Szohod to Syldavia; Borduria becomes Syldavia's puppet; Borduria pays 2% for 5 years; the border forts are razed";
-// i18n-ignore: a pattern the terms are read with.
-const PUPPET_WORDS = "puppet(?: state)?|satellite|protectorate|client(?: state)?|vassal";
-const puppetKindOf = (word) => {
-  const read = fold(word);
-  return read.startsWith("protectorate") ? "protectorate" : read.startsWith("client") ? "client" : "satellite";
-};
+// them, by its name (clampTerms).
 export const readTermsLine = (text, { from = "", to = "" } = {}) => {
-  const parties = [clean(from), clean(to)];
-  const party = (named) => {
-    const read = fold(named).replace(/^the\s+/, "");
-    return parties.find((name) => name && (read === fold(name) || read.endsWith(` ${fold(name)}`))) ?? "";
-  };
-  const otherOf = (name) => parties.find((entry) => entry && fold(entry) !== fold(name)) ?? "";
-  // (A list of regions: "Klow, Szohod and Dospad". One whose own name has an "and" is told apart when it is ceded: warAndPeace.js.)
-  const regionsOf = (text) => clean(text, 1200).split(/\s*,\s*/).map((name) => clean(name).replace(/^(?:and|the region of)\s+/i, "")).filter(Boolean);
   let territory = TERRITORY_RESTORED;
   let reparations = null;
   let annexed = null;
@@ -360,81 +370,50 @@ export const readTermsLine = (text, { from = "", to = "" } = {}) => {
   const cessions = [];
   const conditions = [];
   for (const raw of clean(text, 2400).split(/\s*[;|]\s*/)) {
-    const part = clean(raw).replace(/^(?:and|also|plus)\s+/i, "").replace(/[.]+$/, "");
-    const lower = part.toLowerCase();
-    if (!part || /^(?:none|nothing|no reparations|nobody pays)$/.test(lower)) continue;
-    const paid = part.match(/^(.+?)\s+pays?\b[^0-9]*?(\d+(?:\.\d+)?)\s*%[^0-9]*?(\d+)\s*years?/i);
-    if (paid) {
-      const payer = party(paid[1]) || clean(paid[1]);
-      reparations = { payer, receiver: otherOf(payer), share: Number(paid[2]) / 100, years: Number(paid[3]) };
+    const part = clean(raw, PEACE_CONDITION_CHARS);
+    if (!part) continue;
+    const ground = PEACE_TERRITORIES.find((value) => value === fold(part));
+    if (ground) {
+      territory = ground;
       continue;
     }
-    const annex = part.match(/^annex(?:es|ation of)?\s+(?:all of\s+)?(.+)$/i)
-      ?? part.match(/^(.+?)\s+(?:is\s+|to be\s+)?annexed\b/i)
-      ?? part.match(/^(.+?)\s+gives? up all (?:of )?(?:its|their) (?:land|territory)/i)
-      ?? part.match(/^all (?:of )?(.+?)(?:'s (?:land|territory))?\s+(?:goes|passes) to\b/i);
-    if (annex && party(annex[1])) {
-      annexed = { country: party(annex[1]) };
+    const [head, ...fields] = part.split("~").map((field) => clean(field, PEACE_CONDITION_CHARS));
+    const key = fields.length ? TERM_KEYS.find((word) => word === fold(head)) : undefined;
+    if (!key) {
+      conditions.push(part);
       continue;
     }
-    const subject = part.match(new RegExp(`^(.+?)\\s+becomes?\\s+(?:a\\s+|an\\s+|the\\s+)?(?:(.+?)'s\\s+)?(${PUPPET_WORDS})(?:\\s+(?:of|to)\\s+(.+))?$`, "i"));
-    if (subject && party(subject[1])) {
-      puppet = { subject: party(subject[1]), kind: puppetKindOf(subject[3]) };
-      continue;
-    }
-    const made = part.match(new RegExp(`^(?:make\\s+)?(${PUPPET_WORDS})\\s+(?:of\\s+)?(.+)$`, "i"));
-    if (made && party(made[2])) {
-      puppet = { subject: party(made[2]), kind: puppetKindOf(made[1]) };
-      continue;
-    }
-    const cede = part.match(/^(?:(.+?)\s+)?cedes?\s+(.+?)(?:\s+to\s+(.+))?$/i);
-    if (cede) {
-      // ("cedes what it lost", "cedes the occupied ground": the ground as held.)
-      if (!cede[3] && /^(?:what|all it|the (?:ground|land|territory)|occupied)/i.test(cede[2])) {
-        territory = TERRITORY_AS_HELD;
-        continue;
-      }
-      const receiver = cede[3] ? party(cede[3]) : otherOf(party(cede[1] ?? ""));
-      if (receiver && (cede[3] || party(cede[1] ?? ""))) {
-        for (const region of regionsOf(cede[2])) cessions.push({ region, to: receiver });
-        continue;
-      }
-    }
-    const passes = part.match(/^(.+?)\s+(?:goes|go|pass(?:es)?|transfers?)\s+to\s+(.+)$/i);
-    if (passes && party(passes[2])) {
-      for (const region of regionsOf(passes[1])) cessions.push({ region, to: party(passes[2]) });
-      continue;
-    }
-    if (/\brestor|old borders|status quo|white peace/.test(lower)) {
-      territory = TERRITORY_RESTORED;
-      continue;
-    }
-    if (/\bas\s*held\b|\bkeeps?\b|\bheld\b/.test(lower)) {
-      territory = TERRITORY_AS_HELD;
-      continue;
-    }
-    conditions.push(part.replace(/^(?:condition|conditions|other)\s*:\s*/i, ""));
+    if (key === "ground") territory = PEACE_TERRITORIES.find((value) => value === fold(fields[0])) ?? territory;
+    else if (key === "cede" && termRegion(fields[0]) && fields[1]) cessions.push({ region: termRegion(fields[0]), to: fields[1] });
+    else if (key === "annex" && fields[0]) annexed = { country: fields[0] };
+    else if (key === "puppet" && fields[0]) puppet = { subject: fields[0], kind: fold(fields[1]) };
+    else if (key === "pay" && fields[0]) reparations = { payer: fields[0], receiver: "", share: termFigure(fields[1]) / 100, years: Math.round(termFigure(fields[2])) };
+    else if (key === "condition" && clean(fields.join("~"))) conditions.push(clean(fields.join("~")));
   }
   return clampTerms({ territory, reparations, annexed, cessions, puppet, conditions }, { from, to });
 };
 
-// What an AI answers about peace in a chat, read from one line:
-//   "accept"   "decline"   "offer as held; Borduria pays 2% for 5 years"   "counter restored; none"
-// Returns { verdict, terms } (terms only for an offer or a counter), or null for nothing it can read.
+// What an AI answers about peace in a chat, read from one line: its verdict, one
+// of the game's own words, written as it is whatever language the reply is in,
+// and for an offer or a counter its terms (readTermsLine):
+//   "accept"   "decline"   "offer as held; pay~Borduria~2~5"   "counter restored"
+// Returns { verdict, terms } (terms only for an offer or a counter), or null
+// when the line holds none of the four. ("accepted", "refuse" and "reject" were
+// read as answers too: English, where the reply is in the player's language.)
 //   from, to   the AI's country and the person's: who pays is read against them
 export const PEACE_VERDICTS = Object.freeze(["accept", "decline", "offer", "counter"]);
 export const readPeaceVerdict = (text, { from = "", to = "" } = {}) => {
-  const line = clean(text, 400);
-  const word = line.toLowerCase().match(/^(accept(?:s|ed)?|declin(?:e|es|ed)|refus(?:e|es|ed)|reject(?:s|ed)?|offer(?:s|ed)?|counter(?:-?offers?|s|ed)?)\b/);
-  if (!word) return null;
-  const head = word[1];
-  const verdict = head.startsWith("accept") ? "accept" : head.startsWith("offer") ? "offer" : head.startsWith("counter") ? "counter" : "decline";
+  const line = clean(text, 2400);
+  const head = line.match(/^[^\s:;,.|~!?]+/u)?.[0] ?? "";
+  const verdict = PEACE_VERDICTS.find((word) => word === fold(head));
+  if (!verdict) return null;
   if (verdict === "accept" || verdict === "decline") return { verdict };
-  return { verdict, terms: readTermsLine(line.slice(word[0].length).replace(/^[\s:,-]+/, ""), { from, to }) };
+  return { verdict, terms: readTermsLine(line.slice(head.length).replace(/^[\s:;,.|~!?-]+/u, ""), { from, to }) };
 };
 
-// The open offers as a turn ends: those whose war is over, or that have stood
-// too long, lapse. A turn makes no offer of its own: the AI does (offerFromAi).
+// The open offers as a turn ends: those whose war is over, whose two parties
+// no longer face each other in it, or that have stood too long, lapse. A turn
+// makes no offer of its own: the AI does (offerFromAi).
 //   offers   world.peaceOffers as the turn ends
 //   wars     the war ledger as the turn ends
 //   round    the turn it now is
@@ -444,7 +423,11 @@ export const withTurnPeaceOffers = (offers, { wars = [], round = 0 } = {}) => {
   return normalizePeaceOffers(offers).map((offer) => {
     if (offer.status !== "open") return offer;
     const war = warsById.get(offer.warId);
-    const stale = !war || !settleable(war) || now - offer.round >= PEACE_OFFER_STANDS_ROUNDS;
+    // (A peace is between the two it was offered between: an offer of one war's
+    // parties is no peace for a war fought by others, whatever its id.)
+    const [first, second] = sidesOf(war).map((members) => new Set(members.map(fold)));
+    const facing = (first.has(fold(offer.from)) && second.has(fold(offer.to))) || (first.has(fold(offer.to)) && second.has(fold(offer.from)));
+    const stale = !war || !settleable(war) || !facing || now - offer.round >= PEACE_OFFER_STANDS_ROUNDS;
     return stale ? { ...offer, status: "lapsed", answeredRound: now } : offer;
   });
 };
@@ -525,9 +508,9 @@ export const treatyFromSkip = ({ from = "", to = "", terms = null, wars = [], pl
 // peaceOfferSchema: territory, reparationsPayer, reparationsPercent,
 // reparationsYears, moreTerms), as terms are kept here. Who receives any
 // reparations is the other of the two making peace (clampTerms). moreTerms is
-// any other term, written as a peaceTreaties line writes it ("Borduria is
-// annexed; Klow passes to Syldavia"): kept as written (`more`), for it can only
-// be read knowing the two making peace (withMoreTerms).
+// any other term, in the form a peaceTreaties line writes it ("annex~Borduria;
+// cede~Klow~Syldavia"): kept as written (`more`), for it can only be read
+// knowing the two making peace (withMoreTerms).
 export const termsOfLetter = (offer) => {
   const payer = clean(offer?.reparationsPayer);
   const percent = figure(offer?.reparationsPercent);
@@ -588,7 +571,9 @@ export const normalizeReparations = (value) => {
     const entry = normalizeReparation(raw);
     if (entry && entry.paidDays < entry.days) kept.set(entry.id, entry);
   }
-  return [...kept.values()].slice(-REPARATIONS_KEPT_MOST);
+  // Every one kept is still owed, and none is forgiven by a cut (more than 24
+  // owed at once used to forgive the oldest).
+  return keepOpenRows([...kept.values()], REPARATIONS_KEPT_MOST, () => true);
 };
 
 // The reparations a peace begins: [] for terms with none.
@@ -655,7 +640,7 @@ export const normalizePeaceTreaties = (value) => {
       round: Math.max(0, Math.round(figure(raw.round))),
       from: clean(raw.from),
       to: clean(raw.to),
-      sides: [0, 1].map((side) => list(raw.sides?.[side]).map((name) => clean(name)).filter(Boolean).slice(0, 12)),
+      sides: [0, 1].map((side) => list(raw.sides?.[side]).map((name) => clean(name)).filter(Boolean).slice(0, MAX_WAR_SIDE_MEMBERS)),
       terms: normalizeTerms(raw.terms),
       by: TREATY_WAYS.includes(raw.by) ? raw.by : "offer",
     });

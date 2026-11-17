@@ -16,7 +16,7 @@ import { HISTORY_FIELD } from "./gameplaySchemas.js";
 import { getUnconsolidatedEvents } from "./promptContext.js";
 import {
   HISTORY_TIERS,
-  eraWordCount,
+  eraCharCount,
   hasHistoryTiers,
   judgeHistoryTiers,
   mergeHistoryTiers,
@@ -47,10 +47,17 @@ export const HISTORY_CONSOLIDATION = Object.freeze({
   // the next skip, however many events pile up: the request of its own it was
   // once asked as went on 2026-11-07 (gameplay.js applySkipHistoryFold).
   // What a skip's answer has to give for its fold to be taken at all
-  // (judgeSkipHistoryAnswer): a document of at least this many words, or
-  // failing that a summary of this many, which is then appended.
-  minDocumentWords: 80,
-  minSummaryWords: 40,
+  // (judgeSkipHistoryAnswer): a document of at least this many characters,
+  // and at least half of what the campaign has (up to half the budget's
+  // characters), or failing that a summary of this many, which is then
+  // appended. Counted in characters, the prompt's measure, in every script:
+  // words split on spaces made a whole Chinese or Japanese document one word,
+  // and every fold of such a campaign was refused (runtime/historyTiers.js went
+  // the same way). The floors are set where a summary in a script that says
+  // much in few characters still passes.
+  documentCharBudget: 9000,
+  minDocumentChars: 240,
+  minSummaryChars: 120,
 });
 
 export const countWords = (text) => {
@@ -148,8 +155,10 @@ export const yearSpanOf = (events) => {
 export const HISTORY_TIERS_OUTPUT = "{\"summary\": \"<this period's compressed history>\", \"years\": [{\"year\": 1936, \"text\": \"<the whole paragraph for that year>\"}], \"canon\": [{\"date\": \"YYYY-MM-DD\", \"kind\": \"treaty\", \"text\": \"<the fact>\", \"key\": \"<an office, or empty>\"}]}";
 export const buildHistoryDocumentDirective = (worldLike, { span = null } = {}) => {
   const world = normalizeWorldState(worldLike);
-  const eraWords = eraWordCount(world.historyDocument);
-  const condense = eraWords > HISTORY_TIERS.eraWordBudget;
+  // Counted in characters, the prompt's measure: words split on spaces made a
+  // paragraph in Chinese or Japanese one word long (runtime/historyTiers.js).
+  const eraChars = eraCharCount(world.historyDocument);
+  const condense = eraChars > HISTORY_TIERS.eraChars;
   const yearsCovered = Array.isArray(span) ? (span[0] === span[1] ? `${span[0]}` : `${span[0]} to ${span[1]}`) : "";
   const canon = renderCanonFacts(world.canonFacts, { maxChars: 3000 });
   const current = seedHistoryDocumentText(world);
@@ -160,7 +169,7 @@ export const buildHistoryDocumentDirective = (worldLike, { span = null } = {}) =
     `- "years": a paragraph for each game year the material below covers${yearsCovered ? ` (${yearsCovered})` : ""}, {"year": 1936, "text": "..."}: the WHOLE paragraph as that year should read from now on, keeping what its current paragraph below already says and folding the new material in. Standing facts rather than narration, at most 250 words a year.`,
     "- \"canon\": the facts in the material below that must never fade, one each, {\"date\": \"YYYY-MM-DD\", \"kind\": \"treaty | death | regime | border | office | war | other\", \"text\": \"...\", \"key\": \"...\"}: a treaty signed or broken, the death of a ruler or leader, a regime that fell or rose, a border or an annexation, who now holds an office (key: the office, such as \"Chancellor of Germany\", so that a later holder replaces this one), a war begun or ended. Only what is new here: the canon the campaign has is listed below and kept as it is. An empty list when nothing in the material is of that weight.",
     ...(condense
-      ? [`- "eras": the earlier years below run to ${eraWords} words, over the ${HISTORY_TIERS.eraWordBudget} they are kept near: return them condensed, the whole list, {"from": 1900, "to": 1920, "text": "..."}, an era a paragraph. Condense the least important first (minor incidents, interim states that later ones superseded, the detail of episodes that changed nothing lasting) and keep every divergence from real history, the cause and state of every war and crisis still running, and every commitment still in force.`]
+      ? [`- "eras": the earlier years below run to ${eraChars} characters, over the ${HISTORY_TIERS.eraChars} they are kept within: return them condensed, the whole list, {"from": 1900, "to": 1920, "text": "..."}, an era a paragraph. Condense the least important first (minor incidents, interim states that later ones superseded, the detail of episodes that changed nothing lasting) and keep every divergence from real history, the cause and state of every war and crisis still running, and every commitment still in force.`]
       : []),
     "Never drop, however old: how this world has diverged from real history; the causes and current state of every war and crisis still running; borders, regimes and polities that changed; treaties, alliances, occupations, debts and grievances still in force; and the lasting consequences of the player's own orders. Refer to polities by their full names and never to \"the player\".",
     ...(canon ? [canon] : ["The campaign has no canon yet."]),
@@ -194,7 +203,7 @@ export const applyHistoryDocumentUpdate = (worldLike, {
 } = {}) => {
   const world = normalizeWorldState(worldLike);
   const current = world.historyDocument;
-  const judged = tiers ? judgeHistoryTiers(tiers, { span, eraWords: eraWordCount(current) }) : null;
+  const judged = tiers ? judgeHistoryTiers(tiers, { span, eraChars: eraCharCount(current) }) : null;
   const canonFacts = judged?.canon.length ? normalizeCanonFacts([...world.canonFacts, ...judged.canon]) : world.canonFacts;
   if (judged && (judged.years.length || judged.eras)) {
     const merged = mergeHistoryTiers(current, judged, { startYear });
@@ -290,16 +299,16 @@ export const buildSkipHistoryJob = (brief) => {
 // for the events it replaces is no fold at all: it waits for the next skip.
 //
 // An answer in tiers (years, eras, canon: runtime/historyTiers.js) is judged
-// entry by entry against `span`, the years the fold covers, and `eraWords`, the
-// words the campaign's eras have; it is taken when any of its tiers is, and
-// its parts come back as `tiers` for applyHistoryDocumentUpdate.
-export const judgeSkipHistoryAnswer = (answer, { currentText = "", span = null, eraWords = 0 } = {}) => {
+// entry by entry against `span`, the years the fold covers, and `eraChars`, the
+// characters the campaign's eras have; it is taken when any of its tiers is,
+// and its parts come back as `tiers` for applyHistoryDocumentUpdate.
+export const judgeSkipHistoryAnswer = (answer, { currentText = "", span = null, eraChars = 0 } = {}) => {
   const source = answer && typeof answer === "object" && !Array.isArray(answer) ? answer : null;
   const summary = normalizeString(source?.summary);
   if (!summary) {
     return { ok: false, summary: "", document: "", reason: source ? "its history had no summary" : "it carried no history" };
   }
-  const judged = judgeHistoryTiers(source, { span, eraWords });
+  const judged = judgeHistoryTiers(source, { span, eraChars });
   if (judged.years.length || judged.eras) {
     return {
       ok: true,
@@ -311,18 +320,18 @@ export const judgeSkipHistoryAnswer = (answer, { currentText = "", span = null, 
   }
   // Canon with a document or a summary: the canon is kept with whichever is.
   const canonOnly = judged.canon.length ? { tiers: { years: [], eras: null, canon: judged.canon } } : {};
-  const { documentWordBudget, minDocumentWords, minSummaryWords } = HISTORY_CONSOLIDATION;
+  const { documentCharBudget, minDocumentChars, minSummaryChars } = HISTORY_CONSOLIDATION;
   const document = normalizeString(source?.document);
-  const before = countWords(currentText);
-  const written = countWords(document);
+  const before = normalizeString(currentText).length;
+  const written = document.length;
   // Half of what the campaign has, or of the budget when it has more than that:
   // a document condensed to its budget is still a document.
-  const floor = Math.max(minDocumentWords, Math.min(before, documentWordBudget) * 0.5);
+  const floor = Math.max(minDocumentChars, Math.min(before, documentCharBudget) * 0.5);
   if (document && written >= floor) return { ok: true, summary, document, reason: "", ...canonOnly };
   const why = document
-    ? `its document came back at ${written} word${written === 1 ? "" : "s"} against the ${before} the campaign has`
+    ? `its document came back at ${written} character${written === 1 ? "" : "s"} against the ${before} the campaign has`
     : "it gave no document";
-  if (countWords(summary) < minSummaryWords) {
+  if (summary.length < minSummaryChars) {
     return { ok: false, summary: "", document: "", reason: `${why}, and its summary is too short to stand for what it would replace` };
   }
   return { ok: true, summary, document: "", reason: `${why}; its summary is appended instead`, ...canonOnly };

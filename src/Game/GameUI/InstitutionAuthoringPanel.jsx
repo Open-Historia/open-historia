@@ -133,6 +133,12 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  // Whether the note under the buttons is good news: said where it is written, never read from its words.
+  const [messageOk, setMessageOk] = useState(false);
+  const say = (text, ok = false) => {
+    setMessage(text);
+    setMessageOk(ok);
+  };
   const [pendingLogoDataUrl, setPendingLogoDataUrl] = useState("");
   const fileRef = useRef(null);
 
@@ -255,9 +261,9 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
       setDraft(institutionAuthoringDraft(result.institution));
       setPendingLogoDataUrl("");
       setDirty(false);
-      setMessage("Institution saved to scenario canon.");
+      say("Institution saved to scenario canon.", true);
     } catch (error) {
-      setMessage(error?.message || "Could not save institution.");
+      say(error?.message || "Could not save institution.");
     } finally {
       setBusy(false);
     }
@@ -293,9 +299,9 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
       setSelectedId("");
       setPendingLogoDataUrl("");
       setDirty(false);
-      setMessage(`${label} deleted from the scenario.`);
+      say(`${label} deleted from the scenario.`, true);
     } catch (error) {
-      setMessage(error?.message || "Could not delete the institution.");
+      say(error?.message || "Could not delete the institution.");
     } finally {
       setBusy(false);
     }
@@ -312,7 +318,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
       setDirty(true);
       setDraft((current) => ({ ...current, logoUrl: "", logoAsset: true }));
     } catch (error) {
-      setMessage(error?.message || "Could not load logo.");
+      say(error?.message || "Could not load logo.");
     }
   };
 
@@ -436,7 +442,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
             </div>
 
             {message && (
-              <div style={{ background: /saved|deleted from/i.test(message) ? "rgba(34,197,94,0.08)" : "rgba(248,113,113,0.08)", border: `1px solid ${/saved|deleted from/i.test(message) ? "rgba(34,197,94,0.2)" : "rgba(248,113,113,0.22)"}`, borderRadius: "10px", color: /saved|deleted from/i.test(message) ? "#bbf7d0" : "#fecaca", fontSize: "0.68rem", lineHeight: 1.45, marginBottom: "0.7rem", padding: "0.55rem 0.65rem" }}>
+              <div style={{ background: messageOk ? "rgba(34,197,94,0.08)" : "rgba(248,113,113,0.08)", border: `1px solid ${messageOk ? "rgba(34,197,94,0.2)" : "rgba(248,113,113,0.22)"}`, borderRadius: "10px", color: messageOk ? "#bbf7d0" : "#fecaca", fontSize: "0.68rem", lineHeight: 1.45, marginBottom: "0.7rem", padding: "0.55rem 0.65rem" }}>
                 {message}
               </div>
             )}

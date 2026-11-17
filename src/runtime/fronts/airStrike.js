@@ -79,11 +79,18 @@
 // stats and the map, and the story is told it in a block of its own
 // (airStrikesBlock), every name a name.
 //
+// An air unit of one of the scenario's own types (runtime/unitTypes.js: a
+// dragon) fights in the air and bombs with its type's `attack` times the
+// weight, and loses its `toughness` times less to the fighters and the flak;
+// where its country's figures give it no air arm it flies at the worth every
+// country had (1), as over a battlefield (air.js).
+//
 // Only + - * / and comparisons (sqrt for a distance).
 
 import { hashSeed } from "../unitMotion.js";
+import { ORDINARY, unitFigures } from "../unitTypes.js";
 import { AIR_REACH_KM } from "./air.js";
-import { DUG_IN_LOSS } from "./constants.js";
+import { AIR_ROLE_FIGHTER_SHARE, DUG_IN_LOSS } from "./constants.js";
 import { airWorth, readMilitary } from "./military.js";
 import { isLive } from "./troops.js";
 import { kmBetween, measureOptions } from "./worldGrid.js";
@@ -255,30 +262,11 @@ export const withTurnAirStrikes = (before, added, round) => {
 
 // ---- an air unit's fighters ------------------------------------------------------------------
 
-const COUNTED = /(\d[\d,]*)\s+(?:[a-z0-9-]+\s+){0,2}?(fighter|interceptor|escort|bomber|attack aircraft|strike aircraft|dive bomber|torpedo bomber)s?/gi;
-const FIGHTER_WORD = /fighter|interceptor|pursuit|escort|air superiority/i;
-const BOMBER_WORD = /bomb|strike|attack|ground support|close support|torpedo/i;
-
-// What share of an air unit is fighters, 0 to 1: as its composition counts them ("120 fighters, 40 bombers"),
-// else as its composition or its name says it is (fighters, bombers or both), else half.
-export const fightersShareOf = (unit) => {
-  const text = `${clean(unit?.composition, 400)}`;
-  let fighters = 0;
-  let bombers = 0;
-  for (const match of text.matchAll(COUNTED)) {
-    const count = Number(match[1].replace(/,/g, ""));
-    if (!(count > 0)) continue;
-    if (/fighter|interceptor|escort/i.test(match[2]) && !/bomber/i.test(match[2])) fighters += count;
-    else bombers += count;
-  }
-  if (fighters + bombers > 0) return fighters / (fighters + bombers);
-  const words = `${text} ${clean(unit?.name)}`;
-  const fights = FIGHTER_WORD.test(words);
-  const bombs = BOMBER_WORD.test(words);
-  if (fights && !bombs) return 0.85;
-  if (bombs && !fights) return 0.15;
-  return 0.5;
-};
+// What share of an air unit is fighters, 0 to 1, by what it flies: its `airRole` (fighter, bomber or mixed,
+// constants.js AIR_ROLES), as the model or the scenario said. A unit that says none flies the mixed share. Its
+// composition and name are never read for it: "120 fighters" counted where "120 chasseurs" did not, and a
+// "Strike Wing" of interceptors was taken for bombers (the owner, 2026-11-13: no keywording anywhere).
+export const fightersShareOf = (unit) => AIR_ROLE_FIGHTER_SHARE[clean(unit?.airRole).toLowerCase()] ?? AIR_ROLE_FIGHTER_SHARE.mixed;
 
 // ---- who is at war with whom ---------------------------------------------------------------
 
@@ -312,13 +300,14 @@ export const enemiesIn = (wars, name) => {
 //   markers       world.markers: what a strike on a structure finds standing
 //   peopleOf      (name) => a country's people, for a city whose own the page did not know; null for none
 //   date, round   when it is flown
+//   unitTypes     world.unitTypes, the scenario's own unit types (runtime/unitTypes.js)
 // Returns { strikes, moments, unitChanges }:
 //   strikes       the strikes as they went (normalizeAirStrike), with what became of a structure struck
 //                 (`status`) and of a city (`dead`, `weariness`), and without what the bombs did to troops,
 //                 which the engine reports (bombTroops) and withTroopHits puts on
 //   moments       [{ type: "airstrike", day: 0, ref, owner, lng, lat, km, hit, at }] for the engine
 //   unitChanges   [{ unitId, strength } | { unitId, remove: true }] for the air units that flew or rose
-export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "", era = 3, flat = false, scale = undefined, measure = null, militaryOf = null, markers = [], peopleOf = null, date = "", round = 0 } = {}) => {
+export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "", era = 3, flat = false, scale = undefined, measure = null, militaryOf = null, markers = [], peopleOf = null, date = "", round = 0, unitTypes = [] } = {}) => {
   const waiting = normalizeAirStrikeOrders(orders);
   if (waiting.length === 0) return { strikes: [], moments: [], unitChanges: [] };
   const reach = AIR_REACH_KM[era] ?? 0;
@@ -326,14 +315,27 @@ export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "
   const find = AIR_FIND[era] ?? 0;
   const flak = era >= 3 ? AIR_FLAK_MODERN : 1;
   const worthOf = (name) => (typeof militaryOf === "function" ? airWorth(readMilitary(militaryOf(name))) : 1);
+  // (An air unit of the scenario's own flies at 1 where its country has no air arm.)
+  const worthOfEntry = (entry) => {
+    const worth = worthOf(entry.unit.ownerCode);
+    return entry.own && !(worth > 0) ? 1 : worth;
+  };
   const roll = (...parts) => (hashSeed([seed, "air", ...parts].join("|")) % 10000) / 10000;
   const options = measure ?? { flat, ...(scale ? { scale } : {}) };
   const far = (aLng, aLat, bLng, bLat) => kmBetween(aLng, aLat, bLng, bLat, options);
-  // The air units as the strikes leave them, by id: their strength.
+  // The air units as the strikes leave them, by id: their strength, and what their type makes of them (unitTypes.js).
   const air = new Map();
   for (const unit of list(units)) {
     if (fold(unit?.type) !== "air" || !clean(unit?.id) || !finite(unit.lng) || !finite(unit.lat) || fold(unit.status) === "pending") continue;
-    air.set(clean(unit.id), { unit, strength: Math.max(0, Math.min(100, Number(unit.strength) || 0)), began: Math.max(0, Math.min(100, Number(unit.strength) || 0)) });
+    const figures = unitFigures(unitTypes, unit);
+    air.set(clean(unit.id), {
+      unit,
+      strength: Math.max(0, Math.min(100, Number(unit.strength) || 0)),
+      began: Math.max(0, Math.min(100, Number(unit.strength) || 0)),
+      attack: figures.attack,
+      toughness: figures.toughness,
+      own: figures !== ORDINARY,
+    });
   }
   // The structures as the strikes leave them, by id: their status. (A second strike finds what the first left.)
   const standing = new Map(list(markers).filter((marker) => clean(marker?.id)).map((marker) => [clean(marker.id), fold(marker.status) || "active"]));
@@ -379,7 +381,7 @@ export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "
     // 1. Who rises against it, and finds it.
     const enemies = enemiesIn(wars, owner);
     const rising = [...air.values()]
-      .filter((entry) => entry !== flier && entry.strength >= 1 && enemies.has(fold(entry.unit.ownerCode)) && worthOf(entry.unit.ownerCode) > 0)
+      .filter((entry) => entry !== flier && entry.strength >= 1 && enemies.has(fold(entry.unit.ownerCode)) && worthOfEntry(entry) > 0)
       .map((entry) => ({ entry, km: far(entry.unit.lng, entry.unit.lat, order.lng, order.lat) }))
       .filter((item) => item.km <= reach)
       .sort((x, y) => x.km - y.km || (clean(x.entry.unit.id) < clean(y.entry.unit.id) ? -1 : 1))
@@ -387,9 +389,9 @@ export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "
       .slice(0, INTERCEPTORS_MOST)
       .map((item) => ({ entry: item.entry, fighters: item.entry.strength * fightersShareOf(item.entry.unit) }))
       .filter((item) => item.fighters > 0);
-    // 2. The air battle.
+    // 2. The air battle. (Each side's fighters deal their type's attack times as much, and take its toughness times less.)
     const share = fightersShareOf(flier.unit);
-    const wA = worthOf(owner);
+    const wA = flier.own && !(worthOf(owner) > 0) ? 1 : worthOf(owner);
     let fighters = a * share;
     let bombers = a - fighters;
     const fighters0 = fighters;
@@ -397,17 +399,17 @@ export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "
     const load0 = bombers + fighters * FIGHTER_LOAD;
     const guard0 = rising.map((item) => item.fighters);
     for (let at = 0; at < AIR_BATTLE_ROUNDS && rising.length > 0; at += 1) {
-      const theirs = rising.reduce((sum, item) => sum + item.fighters * worthOf(item.entry.unit.ownerCode), 0);
+      const theirs = rising.reduce((sum, item) => sum + item.fighters * worthOfEntry(item.entry) * item.entry.attack, 0);
       if (!(theirs > 0) || !(fighters + bombers > 0)) break;
       const dealt = AIR_DUEL * theirs * (0.8 + 0.4 * roll(order.id, "guard", at));
-      const returned = AIR_DUEL * fighters * wA * (0.8 + 0.4 * roll(order.id, "escort", at));
+      const returned = AIR_DUEL * fighters * wA * flier.attack * (0.8 + 0.4 * roll(order.id, "escort", at));
       const exposed = bombers / (bombers + fighters);
       const atBombers = dealt * exposed * (fighters > 0 ? ESCORT_SCREEN : 1);
       const atFighters = dealt - atBombers;
-      fighters = Math.max(0, fighters - atFighters);
-      bombers = Math.max(0, bombers - atBombers);
+      fighters = Math.max(0, fighters - atFighters / flier.toughness);
+      bombers = Math.max(0, bombers - atBombers / flier.toughness);
       const guarding = rising.reduce((sum, item) => sum + item.fighters, 0);
-      for (const item of rising) item.fighters = Math.max(0, item.fighters - (guarding > 0 ? (returned * item.fighters) / guarding : 0));
+      for (const item of rising) item.fighters = Math.max(0, item.fighters - (guarding > 0 ? (returned * item.fighters) / guarding / item.entry.toughness : 0));
     }
     // 3. What gets through.
     const load = bombers + fighters * FIGHTER_LOAD;
@@ -415,7 +417,7 @@ export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "
     const outcome = rising.length === 0 ? "unopposed" : kept >= AIR_THROUGH ? "through" : kept >= AIR_TURNED_BACK ? "partly" : "turned back";
     const reached = outcome !== "turned back";
     // 4. Flak, over the target.
-    const shot = reached ? Math.min(fighters + bombers, (AIR_FLAK[order.kind] ?? 0) * flak) : 0;
+    const shot = reached ? Math.min(fighters + bombers, ((AIR_FLAK[order.kind] ?? 0) * flak) / flier.toughness) : 0;
     const lost = (fighters0 - fighters) + (bombers0 - bombers) + shot;
     flier.strength = Math.max(0, a - lost);
     rising.forEach((item, at) => {
@@ -423,8 +425,8 @@ export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "
       item.entry.strength = Math.max(0, item.entry.strength - cut);
       told.intercepted.push({ name: clean(item.entry.unit.name) || "an air unit", owner: clean(item.entry.unit.ownerCode), lost: Math.round(cut) });
     });
-    // 5. The bombs: P as delivered, and P c as they fall on the strike radius's circle.
-    const power = reached ? load * wA : 0;
+    // 5. The bombs: P as delivered, and P c as they fall on the strike radius's circle. (Its type's attack times the weight.)
+    const power = reached ? load * wA * flier.attack : 0;
     const falls = power * radiusConcentration(order.radius);
     told.outcome = outcome;
     told.lost = Math.round(lost);

@@ -9,7 +9,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { buildGovernmentPartyPresentation, buildPoliticalLandscapeViews } from "../../runtime/politicalPresentation.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
-import { PARTY_ROLE_LABELS, findIdeology, isListedSubideology } from "../../runtime/politics.js";
+import { PARTY_ROLE_LABELS, findIdeology } from "../../runtime/politics.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value.map(clean).filter(Boolean) : (clean(value) ? [clean(value)] : []));
@@ -229,7 +229,10 @@ const PartyMore = ({ party }) => {
 // political support no party of the record's own explains is a row of its own.
 const PartyRow = ({ party, open, onToggle, legislatureSeats = 0, onHover = () => {} }) => {
   const family = findIdeology(party.ideologyFamily);
-  const listed = isListedSubideology(party.ideologyFamily, party.subideology);
+  // Freeform descriptors take precedence; older saves keep their legacy fallback.
+  const ideologyText = list(party.ideology).join(", ") || clean(party.subideology) || family?.name || "";
+  const politicalPosition = clean(party.politicalPosition)
+    || (family && ideologyText.toLowerCase() !== family.name.toLowerCase() ? family.name : "");
   const abbreviations = [...new Set([party.shortNameNative, party.shortName].map(clean).filter(Boolean))].join(" · ");
   const role = roleOf(party);
   const seats = Number.isFinite(party.seats) ? party.seats : null;
@@ -258,17 +261,10 @@ const PartyRow = ({ party, open, onToggle, legislatureSeats = 0, onHover = () =>
             ? <span style={{ color: "rgba(255,255,255,0.48)", flexShrink: 0, fontSize: "0.65rem", fontWeight: 800 }}>{formatSupport(party.support)}</span>
             : <span style={{ border: `1px solid ${ROLE_TONES[role]}55`, borderRadius: "999px", color: ROLE_TONES[role], flexShrink: 0, fontSize: "0.56rem", fontWeight: 800, padding: "0.1rem 0.38rem" }}>{PARTY_ROLE_LABELS[role]}</span>}
         </div>
-        {!party.isOther && (family || clean(party.subideology)) && (
+        {!party.isOther && (ideologyText || politicalPosition) && (
           <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.64rem", marginTop: "0.25rem" }}>
-            {family && <span style={{ color: family.colour || "#94a3b8", fontWeight: 800 }}>{family.name}</span>}
-            {clean(party.subideology) && (family
-              ? (
-                <span
-                  title={listed ? undefined : "Not one of this ideology's listed subideologies"}
-                  style={{ color: listed ? "rgba(255,255,255,0.62)" : "rgba(255,255,255,0.35)" }}
-                > · {party.subideology}{listed ? "" : " (unlisted)"}</span>
-              )
-              : <span data-no-translate>{party.subideology}</span>)}
+            {ideologyText && <span data-no-translate>{ideologyText}</span>}
+            {politicalPosition && <span data-no-translate>{ideologyText ? " · " : ""}{politicalPosition}</span>}
           </div>
         )}
         {!party.isOther && (
@@ -625,7 +621,7 @@ export default function PoliticalOverview({ profile, fallbackGovernment = "", fa
                 ariaLabel={landscape.mode === "party" ? "Political party support" : "Political power structure"}
               />
               <div className="oh-country-landscape-legend">
-                {landscape.entries.slice(0, 4).map((entry) => (
+                {landscape.slices.slice(0, 4).map((entry) => (
                   <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: "0.43rem", minWidth: 0 }}>
                     <span aria-hidden="true" style={{ backgroundColor: partyColor(entry), borderRadius: "999px", flexShrink: 0, height: "0.5rem", width: "0.5rem" }} />
                     <span data-no-translate title={entry.name} style={{ color: "rgba(229,240,247,0.83)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.shortName || entry.name}</span>

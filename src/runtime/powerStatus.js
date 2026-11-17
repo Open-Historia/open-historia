@@ -42,17 +42,18 @@ const canonicalPolity = (value, world, identityIndex = null) => {
   const identity = resolvePolityIdentity(token, world || {}, {
     allowUnknown: true,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
     identityIndex,
   });
   return clean(identity?.resolved || token);
 };
 
+// A record's tier is one of the game's three, as the game writes it (tierForScore
+// below; the model is never asked for one). Another word for a tier ("great-power",
+// "middle-power") is no tier: a synonym table reads English only, and the same
+// word in any other language never was one (the owner, 2026-11-13: no keywording).
 export const normalizePowerTier = (value) => {
   const text = lower(value).replace(/_/g, "-");
-  if (text === "great-power" || text === "global-power") return "major-power";
-  if (text === "middle-power") return "regional-power";
   return POWER_TIER_SET.has(text) ? text : "";
 };
 
@@ -94,6 +95,8 @@ const normalizePowerRecord = (value, polityKey = "") => {
     lastUpdatedRound: Math.max(0, Math.trunc(Number(source.lastUpdatedRound) || 0)),
     candidateTier: normalizePowerTier(source.candidateTier),
     candidateRounds: Math.max(0, Math.trunc(Number(source.candidateRounds) || 0)),
+    // Only when set, so a record without saves exactly as before.
+    ...(source.baselineOnly === true ? { baselineOnly: true } : {}),
     reasons: array(source.reasons).map(clean).filter(Boolean).slice(0, 12),
   };
 };
@@ -115,7 +118,6 @@ export const normalizePowerStatus = (input, world = {}) => {
   return { schemaVersion: POWER_STATUS_SCHEMA_VERSION, byPolity };
 };
 
-const actorFor = (world, polity) => world?.politicalActors?.byPolity?.[polity] || null;
 const statFor = (world, polity) => world?.countryStats?.[polity] || null;
 
 const activePowerPolities = (world) => collectActiveScenarioPolityKeys(world);
@@ -160,16 +162,15 @@ export const buildPowerReference = (world) => lookedUp(world, "powerReference", 
   };
 });
 
-const legacyPowerTier = (world, polity) => {
-  const tags = [
-    ...array(world?.countryTags?.[polity]),
-    ...array(actorFor(world, polity)?.tags),
-  ].map(lower);
-  if (tags.some((tag) => ["major-power", "great-power", "global-power", "superpower"].includes(tag))) return "major-power";
-  if (tags.some((tag) => ["regional-power", "middle-power"].includes(tag))) return "regional-power";
-  if (tags.includes("minor-power")) return "minor-power";
-  return "";
-};
+// A country's tags ("socialist", "nuclear", "superpuissance") are never read for
+// its power. They are open vocabulary the model writes in the player's language
+// (countryTags.js), so a tier or a capability taken from their words was the
+// English game's alone: "superpower" made a major power and "superpuissance" a
+// minor one, and "nuclear" was worth 8 points of sovereign capability that
+// "nucléaire" never was (the owner, 2026-11-13: no keywording). Power comes from
+// the game's own figures: GDP and population against the other active polities,
+// the Round-Zero baseline the generator set (baselineScore), or a tier an
+// explicit prior record holds.
 
 const institutionPowerContribution = (world, polity, identityIndex = null) => {
   let score = 0;
@@ -249,17 +250,10 @@ export const estimateNativePowerScore = (world, polityInput, referenceInput = nu
     sovereignReasons.push(`population rank ${Math.round((percentile ?? 0) * 100)}th percentile; ${round1(share * 100)}% of observed world population`);
   }
 
-  let sovereignCapability = evidence
+  const sovereignCapability = evidence
     ? materialScore
     : (generatedBaseline != null ? generatedBaseline : 0);
   if (!evidence && generatedBaseline != null) sovereignReasons.unshift(`Round-Zero era-relative baseline ${generatedBaseline}`);
-
-  const actor = actorFor(world, polity);
-  const tags = [...array(world?.countryTags?.[polity]), ...array(actor?.tags)].map(lower);
-  if (tags.includes("nuclear")) {
-    sovereignCapability += 8;
-    sovereignReasons.push("nuclear capability");
-  }
 
   // These are leverage/relevance, not sovereign capability. They may change how
   // much attention or reach an actor has without changing what it materially IS.
@@ -275,11 +269,11 @@ export const estimateNativePowerScore = (world, polityInput, referenceInput = nu
     // IMPORTANT: never treat a native/campaign fallback tier as new evidence.
     // Only explicit scenario/authored tiers (or old generated-estimate tiers kept
     // for backwards compatibility) may seed sovereign capability when material
-    // / generated-baseline evidence is absent.
-    const explicitPriorTier = ["authored", "scenario-derived", "generated-estimate"].includes(priorBasis)
+    // / generated-baseline evidence is absent. Nothing else does: a country's
+    // tags are not read for its power (above).
+    const legacy = ["authored", "scenario-derived", "generated-estimate"].includes(priorBasis)
       ? normalizePowerTier(prior?.tier || prior?.powerTier || prior?.status)
       : "";
-    const legacy = explicitPriorTier || legacyPowerTier(world, polity);
     const legacyScore = legacy === "major-power" ? 70 : legacy === "regional-power" ? 50 : legacy === "minor-power" ? 30 : null;
     if (legacyScore != null) {
       const sovereignScore = round1(clamp(legacyScore, 0, 100));
@@ -290,6 +284,10 @@ export const estimateNativePowerScore = (world, polityInput, referenceInput = nu
         sovereignCapabilityScore: sovereignScore,
         institutionalLeverageScore: round1(institutions.score),
         strategicActivityScore: round1(strategic.score),
+        // The score rests on the scenario's or the author's tier alone, with no
+        // material evidence: said as a flag, which refreshPowerStatus keeps on
+        // the record (its reason below is words for a person to read).
+        baselineOnly: true,
         reasons: [
           `${legacy} scenario/authored baseline; insufficient relative material data`,
           ...sovereignReasons,
@@ -322,13 +320,16 @@ export const estimateNativePowerScore = (world, polityInput, referenceInput = nu
   };
 };
 
+// A record whose score stood on no evidence of its own: a native fallback, or a
+// campaign score that rested on a tier alone (its `baselineOnly` flag, set by
+// estimateNativePowerScore). Never read from the words of its reasons: they
+// once decided this, by an English phrase the game wrote among them.
 const isUnresolvedFallbackRecord = (record) => {
   if (!record || typeof record !== "object" || Array.isArray(record)) return false;
   if (isFinitePowerScore(record.baselineScore ?? record.startingScore)) return false;
   const basis = lower(record.basis);
   if (basis === "native-fallback") return true;
-  return basis === "campaign-derived"
-    && array(record.reasons).some((reason) => /insufficient relative material data/i.test(clean(reason)));
+  return basis === "campaign-derived" && record.baselineOnly === true;
 };
 
 const tierForScore = (score) => {
@@ -403,17 +404,18 @@ export const refreshPowerStatus = (worldLike, { date = "", round = 0, immediate 
     const prior = powerStatus.byPolity[polity];
     if (!isFinitePowerScore(native.score)) {
       if (!prior) {
-        const legacy = legacyPowerTier(world, polity) || "minor-power";
+        // No figures, no baseline and no prior record: the floor tier, marked
+        // as the fallback it is, until the polity's evidence arrives.
         powerStatus.byPolity[polity] = {
           polityKey: polity,
-          tier: legacy,
+          tier: "minor-power",
           score: null,
           strategicWeight: null,
           sovereignCapabilityScore: null,
           institutionalLeverageScore: native.institutionalLeverageScore,
           strategicActivityScore: native.strategicActivityScore,
           baselineScore: null,
-          basis: legacyPowerTier(world, polity) ? "scenario-derived" : "native-fallback",
+          basis: "native-fallback",
           lastUpdatedDate: clean(date),
           lastUpdatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
           candidateTier: "",
@@ -421,21 +423,23 @@ export const refreshPowerStatus = (worldLike, { date = "", round = 0, immediate 
           reasons: native.reasons,
         };
       } else if (isUnresolvedFallbackRecord(prior)) {
-        // Migrate poisoned records created by the pre-fix fallback loop. Those
-        // records had a finite campaign-derived score but no baseline/material
-        // evidence, usually accompanied by "insufficient relative material
-        // data". Keeping that finite score would make old checkpoints continue
-        // to look complete even after the null-score bug was fixed. Preserve
-        // the visible fallback tier but make the missing evidence explicit.
+        // Migrate records whose finite campaign-derived score rested on a tier
+        // alone (baselineOnly). Keeping that finite score would make old
+        // checkpoints continue to look complete even after the null-score bug
+        // was fixed. Preserve the visible fallback tier but make the missing
+        // evidence explicit. (A save from before the flag, whose record says so
+        // only in the English words of its reasons, keeps its score until a
+        // refresh that finds the tier again writes the flag.)
+        const { baselineOnly: _scoreRestedOnTier, ...kept } = prior;
         powerStatus.byPolity[polity] = {
-          ...prior,
+          ...kept,
           score: null,
           strategicWeight: null,
           sovereignCapabilityScore: null,
           institutionalLeverageScore: native.institutionalLeverageScore,
           strategicActivityScore: native.strategicActivityScore,
           baselineScore: null,
-          basis: legacyPowerTier(world, polity) ? "scenario-derived" : "native-fallback",
+          basis: "native-fallback",
           lastUpdatedDate: clean(date) || prior.lastUpdatedDate || "",
           lastUpdatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
           candidateTier: "",
@@ -449,7 +453,7 @@ export const refreshPowerStatus = (worldLike, { date = "", round = 0, immediate 
     const sovereignTierScore = isFinitePowerScore(native.sovereignCapabilityScore)
       ? native.sovereignCapabilityScore
       : native.score;
-    const currentTier = prior?.tier || legacyPowerTier(world, polity) || tierForScore(sovereignTierScore);
+    const currentTier = prior?.tier || tierForScore(sovereignTierScore);
     const desired = desiredTierWithHysteresis(currentTier, sovereignTierScore);
     let tier = currentTier;
     let candidateTier = "";
@@ -491,6 +495,7 @@ export const refreshPowerStatus = (worldLike, { date = "", round = 0, immediate 
       lastUpdatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
       candidateTier,
       candidateRounds,
+      ...(native.baselineOnly === true ? { baselineOnly: true } : {}),
       reasons: native.reasons,
     };
   }
@@ -528,7 +533,8 @@ export const powerTierForPolity = (world, polityInput) => {
       if (fallback) return fallback;
     }
   }
-  return legacyPowerTier(world, polity) || "minor-power";
+  // No record: the floor tier, whatever its tags say (above).
+  return "minor-power";
 };
 
 // Bounded decision-facing profile. Coarse tier remains useful for UI/history, but

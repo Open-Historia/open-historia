@@ -19,11 +19,15 @@ export const canAdvisorApplyProjectOps = (threadId, recipient) => (
 // Shared, native Project outcome computation for one-to-one Advisor replies
 // and batched group replies. The latter stages all speakers in ONE canonical
 // world mutation, avoiding partially applied Project operations within a batch.
+// The advisor opens the player's projects, funds or calls them off, and reports
+// on any entry; the engine runs them (runtime/projectEngine.js), so nothing the
+// advisor writes completes one or moves its progress.
+const CLOSED = new Set(["complete", "failed", "cancelled"]);
 const projectOutcome = ({ world, proposal, gameDate, round, applyProjectOpsToWorld }) => {
   const before = Array.isArray(world.projects) ? world.projects : [];
   const previousById = new Map(before.map((project) => [project.id, project]));
-  const { deferredProjectIds = [], world: nextWorld } = applyProjectOpsToWorld({
-    date: String(gameDate || ""), ops: proposal, round: Number(round) || 0, world,
+  const { world: nextWorld } = applyProjectOpsToWorld({
+    actor: "ai", date: String(gameDate || ""), ops: proposal, round: Number(round) || 0, world,
   });
   const next = nextWorld.projects;
   const changes = [];
@@ -32,19 +36,12 @@ const projectOutcome = ({ world, proposal, gameDate, round, applyProjectOpsToWor
     if (!previous) changes.push({ change: "opened", title: project.name });
     else if (previous.updatedAt !== project.updatedAt) {
       changes.push({
-        change: project.status === "complete" && previous.status !== "complete" ? "completed" : "updated",
+        change: CLOSED.has(project.status) && !CLOSED.has(previous.status) ? "closed" : "updated",
         title: project.name,
       });
     }
   }
-  for (const project of before) {
-    if (!next.some((item) => item.id === project.id)) changes.push({ change: "closed", title: project.name });
-  }
-  for (const id of deferredProjectIds) {
-    const project = next.find((entry) => entry.id === id);
-    if (project) changes.push({ change: "deferred", title: project.name });
-  }
-  return { nextWorld, changes, changed: changes.some((change) => change.change !== "deferred") };
+  return { nextWorld, changes, changed: changes.length > 0 };
 };
 
 // The current world must be transformed while holding the canonical write

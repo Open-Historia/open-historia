@@ -290,7 +290,9 @@ test("the battlefield layer uses the pair, and clears to grey only where the map
   // screenshots showed bare map with no colour on it where the map had refused its own copy of the
   // picture, and then pale lines along every edge of the painted ground where the two drawings met.
   assert.ok(layers.includes("pictures: () => picturesRef.current,"));
-  assert.ok(layers.includes("strength: politicalFillOpacityAtZoom,"));
+  // As strongly as the fills: the political map's ramp, or the diplomatic map's stronger one.
+  assert.ok(layers.includes("strength: groundStrength,"));
+  assert.ok(layers.includes("groundStrengthRef.current = diplomaticView ? diplomaticFillOpacityAtZoom : politicalFillOpacityAtZoom;"));
   // The map's layers are sorted only when one of the two has just been added, never on every change
   // of style: sorting them each time moved every layer and sent whatever had just been added (a
   // border, a troop layer) under the territory. "All the country borders and troops keep

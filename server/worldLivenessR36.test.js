@@ -59,32 +59,28 @@ test("R3.6 keeps a structural 5/5 attention slate even when local actors are alr
   );
 });
 
-test("R3.6 trajectory heuristic prefers unstable branching processes over institutional newsletter cards", () => {
-  const report = deriveWorldTrajectoryValue({
-    title: "Federal Economic Chamber Publishes Quarterly Industrial Export Assessment",
-    description: "The chamber publishes its quarterly review and assessment of machinery exports.",
-    impacts: {},
-  });
-  const capability = deriveWorldTrajectoryValue({
-    title: "Coastal Defense Battery Enters Service",
-    description: "The new anti-ship missile battery becomes operational.",
-    impacts: { markerOps: [{ op: "build" }] },
-  });
-  const instability = deriveWorldTrajectoryValue({
-    title: "Tigray Leadership Rejects Federal Party Merger and Demands Regional Autonomy",
-    description: "The regional leadership refuses the merger, deepening a federal political schism and autonomy dispute.",
-    impacts: {},
-  });
-  const breakpoint = deriveWorldTrajectoryValue({
-    title: "Army Officers Launch Coup Attempt After Government Crisis",
-    description: "Mutinous officers seize government buildings and the cabinet declares a state of emergency.",
-    impacts: {},
-  });
-
-  assert.equal(report, 0);
-  assert.ok(capability >= 3);
-  assert.ok(instability >= 4);
-  assert.equal(breakpoint, 5);
+// An event's trajectory was read from breakpoint, instability, capability and
+// settlement word lists, in English only: a coup in Spanish was a 1. It is read
+// from what the event carries, the storyline pressure it advances and the
+// model's own rating of it, so a record and its twin in another language
+// always weigh the same.
+test("R3.6 trajectory is read from what an event carries and how the model rated it, in any language", () => {
+  const value = (record, title, options) => deriveWorldTrajectoryValue({ title, description: title, ...record }, options);
+  for (const title of [
+    "Army Officers Launch Coup Attempt After Government Crisis",
+    "Oficiales del ejército lanzan un intento de golpe tras la crisis del gobierno",
+  ]) {
+    assert.equal(value({ importance: "minor", impacts: {} }, title), 1, `${title}: a minor card that changes nothing`);
+    assert.equal(value({ importance: "moderate", impacts: {} }, title), 2);
+    assert.equal(value({ importance: "minor", impacts: {} }, title, { storylinePressure: 30 }), 2, "it advances a storyline");
+    assert.equal(value({ importance: "minor", impacts: { markerOps: [{ op: "build" }] } }, title), 3, "one hard consequence");
+    assert.equal(value({ importance: "major", impacts: {} }, title), 3);
+    assert.equal(value({ importance: "minor", impacts: {} }, title, { storylinePressure: 70 }), 3, "a high-pressure storyline");
+    assert.equal(value({ importance: "major", impacts: {} }, title, { storylinePressure: 70 }), 4, "rated major, in a high-pressure storyline");
+    assert.equal(value({ importance: "minor", impacts: { unitOps: [{ op: "move" }], regionControlOps: [{ op: "control" }] } }, title), 4, "two hard consequences");
+    assert.equal(value({ notable: true, impacts: { unitOps: [{ op: "move" }], politicalActorOps: [{ op: "set-government" }] } }, title), 5);
+    assert.equal(value({ importance: "critical", impacts: {} }, title), 5);
+  }
 });
 
 test("R3.6 protected crisis lane targets the strongest bounded wider-world latent trigger instead of remaining generic", () => {
@@ -117,37 +113,54 @@ test("R3.6 protected crisis lane targets the strongest bounded wider-world laten
     },
   };
 
-  const causalCandidates = [
-    {
-      id: "event:ethiopia",
-      type: "recent-event",
-      score: 12,
-      title: "Tigray Leadership Rejects Ethiopian Prosperity Party Merger and Demands Regional Autonomy",
-      detail: "The TPLF refuses the Ethiopian federal party merger, deepening a political schism over regional autonomy and competing legitimacy.",
-      storylineIds: [],
-      trajectoryValue: 4,
-    },
-    {
-      id: "event:austria",
-      type: "recent-event",
-      score: 13,
-      title: "Austrian Chamber Publishes Industrial Export Outlook",
-      detail: "A quarterly assessment reports steady machinery exports.",
-      storylineIds: [],
-      trajectoryValue: 0,
-    },
-  ];
+  // Each candidate carries the polities its source event's fields name and the
+  // event's own tags (nativeWorldDirector.js eventCandidate): the lane's actor
+  // and its channels are read from those, never from the candidate's words.
+  for (const [title, detail] of [
+    ["Tigray Leadership Rejects Ethiopian Prosperity Party Merger and Demands Regional Autonomy", "The TPLF refuses the Ethiopian federal party merger, deepening a political schism over regional autonomy and competing legitimacy."],
+    ["የትግራይ አመራር የብልጽግና ፓርቲ ውህደትን ውድቅ አደረገ", "ህወሓት የፌዴራል ፓርቲ ውህደትን አልተቀበለም።"],
+  ]) {
+    const causalCandidates = [
+      {
+        id: "event:ethiopia",
+        type: "recent-event",
+        score: 12,
+        title,
+        detail,
+        storylineIds: [],
+        parties: ["Federal Democratic Republic of Ethiopia"],
+        tags: ["Politics"],
+        impactKeys: ["politicalActorOps"],
+        trajectoryValue: 4,
+      },
+      {
+        id: "event:austria",
+        type: "recent-event",
+        score: 13,
+        title: "Austrian Chamber Publishes Industrial Export Outlook",
+        detail: "A quarterly assessment reports steady machinery exports.",
+        storylineIds: [],
+        parties: ["Republic of Austria"],
+        trajectoryValue: 1,
+      },
+    ];
 
-  const slate = buildNativeWorldExplorationSlate({ bundle, causalCandidates });
-  const crisis = slate.find((slot) => slot.type === "crisis-discovery");
+    const slate = buildNativeWorldExplorationSlate({ bundle, causalCandidates });
+    const crisis = slate.find((slot) => slot.type === "crisis-discovery");
 
-  assert.ok(crisis);
-  assert.equal(crisis.scope, "wider-world");
-  assert.equal(crisis.targetActor, "Federal Democratic Republic of Ethiopia");
-  assert.equal(crisis.trajectoryValue, 4);
-  assert.match(crisis.basis, /PROTECTED CURRENT TRIGGER/i);
-  assert.match(crisis.basis, /Tigray Leadership Rejects/i);
-  assert.ok(crisis.consequenceChannels.length >= 2);
+    assert.ok(crisis);
+    assert.equal(crisis.scope, "wider-world");
+    assert.equal(crisis.targetActor, "Federal Democratic Republic of Ethiopia", title);
+    assert.equal(crisis.trajectoryValue, 4);
+    assert.match(crisis.basis, /PROTECTED CURRENT TRIGGER/i);
+    assert.ok(crisis.basis.includes(title));
+    assert.deepEqual(crisis.consequenceChannels, ["persistent storyline", "relations", "polity/government state"]);
+
+    // Its words name Ethiopia, but its record names nobody: no lane is aimed.
+    const unnamed = buildNativeWorldExplorationSlate({ bundle, causalCandidates: [{ ...causalCandidates[0], parties: [] }] })
+      .find((slot) => slot.type === "crisis-discovery");
+    assert.equal(unnamed.targetActor, "", title);
+  }
 });
 
 test("R3.6 crisis-discovery audit requires a real new crisis, not a low-pressure label", () => {

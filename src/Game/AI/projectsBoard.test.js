@@ -5,6 +5,14 @@ import assert from "node:assert/strict";
 
 import { buildProjectsSummaryText } from "./promptContext.js";
 
+const plan = (extra = {}) => ({
+  durationDays: 100,
+  monthlyCost: 1.2e8,
+  milestones: [{ id: "m1", title: "First step", atProgress: 30 }],
+  effects: [{ type: "stat", stat: "military.sea", change: 4 }],
+  ...extra,
+});
+
 const project = (name, extra = {}) => ({
   id: `project-${name.toLowerCase().replace(/[^a-z]+/g, "-")}`,
   name,
@@ -12,72 +20,96 @@ const project = (name, extra = {}) => ({
   ownerCode: "",
   summary: `${name} summary.`,
   status: "active",
+  funding: "normal",
   progress: 20,
   tags: [],
   secrecy: "public",
   startedAt: "0299-01-04",
   targetDate: "0299-03-01",
-  milestones: [{ id: "m1", title: `${name} first step`, date: "0299-02-01", status: "pending" }],
+  plan: plan(),
   updatedRound: 40,
   updatedAt: "2026-10-19T20:00:00.000Z",
   ...extra,
 });
 
-// The White Harbor fishing boats stalled in April and the skip still wrote "no
-// keel laid" about them every few weeks: the board put a stalled project on its
-// "Needs a decision this jump" list, so every skip was asked to report on it.
-test("a stalled project is not on the skip's work list, and the skip is told to leave it alone", () => {
-  const text = buildProjectsSummaryText(
-    { projects: [project("Fishing boats", { status: "stalled" }), project("Catapults")] },
-    { gameDate: "0299-05-30", round: 57, country: "House Stark" },
-  );
-  const workList = text.split("Needs a decision this jump:")[1] || "";
-  assert.ok(!workList.includes("Fishing boats"), "the stalled project is not asked about");
-  assert.ok(workList.includes("Catapults"), "a running project that has gone quiet still is");
-  const stalled = text.split(/Stalled, waiting on the player/)[1] || "";
-  assert.ok(stalled.includes("project-fishing-boats"), "the stalled project is listed with its id, so an order can still reach it");
-  assert.match(text, /Stalled, waiting on the player[^\n]*leave/i);
-  const running = text.split(/Stalled, waiting on the player/)[0];
-  assert.ok(!running.includes("Fishing boats"), "and not among the running ones");
+const GAME = { gameDate: "0299-02-10", round: 41, country: "House Stark" };
+
+test("each entry is one row by name: owner, progress, expected finish, cost a month, funding, status", () => {
+  const text = buildProjectsSummaryText({ projects: [project("Catapults", { funding: "high" })] }, GAME, { compact: true });
+  assert.equal(text, '- "Catapults" · ours · 20% · done ~0299-03-01 · 120 million a month · funding high · active');
 });
 
-test("with nothing stalled the board has no stalled section", () => {
-  const text = buildProjectsSummaryText({ projects: [project("Catapults")] }, { gameDate: "0299-05-30", round: 57 });
-  assert.ok(!/Stalled, waiting on the player/.test(text));
+test("a stalled entry says why; a programme set up says it runs on; a paused one says so; none hides an id", () => {
+  const text = buildProjectsSummaryText({
+    projects: [
+      project("Fishing boats", { status: "stalled", stallReason: "funds" }),
+      project("Night's Watch Levy", { ongoing: true, established: true, plan: plan({ ongoing: true }) }),
+      project("Catapults", { status: "paused", funding: "none" }),
+      project("Ironborn Fleet", { ownerCode: "House Greyjoy", secrecy: "covert" }),
+    ],
+  }, GAME, { compact: true });
+  assert.match(text, /"Fishing boats" · ours · 20% · .* · stalled: funds/);
+  assert.match(text, /"Night's Watch Levy" · ours · 20% · runs on · .* · running/);
+  assert.match(text, /"Catapults" · ours · 20% · .* · funding none · paused/);
+  assert.match(text, /"Ironborn Fleet" · House Greyjoy · .* \[covert\]/);
+  assert.doesNotMatch(text, /project-|\[id /);
 });
 
-// A 130-round campaign had closed 110 entries, every one listed with its id on
-// every skip. The newest fifteen are named; the rest are counted.
-test("the board names the newest fifteen closed entries and counts the rest; every open one keeps its id", async () => {
+test("the player's own come first; the advisor also reads what each is for, its next checkpoint and what it will do", () => {
+  const text = buildProjectsSummaryText({ projects: [project("Ironborn Fleet", { ownerCode: "House Greyjoy", updatedAt: "2026-10-20T00:00:00.000Z" }), project("Catapults")] }, GAME);
+  assert.ok(text.indexOf('"Catapults"') < text.indexOf('"Ironborn Fleet"'));
+  assert.match(text, /Catapults summary\./);
+  assert.match(text, /Next checkpoint: First step at 30%\./);
+  assert.match(text, /When done: military\.sea \+4\./);
+  const compact = buildProjectsSummaryText({ projects: [project("Catapults")] }, GAME, { compact: true });
+  assert.doesNotMatch(compact, /Next checkpoint|When done/);
+});
+
+test("without a native GDP baseline, an unfunded project's finish date cannot be invented", () => {
+  const text = buildProjectsSummaryText({ projects: [project("Catapults", { targetDate: "", progress: 50 })], countryStats: {} }, GAME, { compact: true });
+  assert.match(text, /no finish in sight/);
+});
+
+test("an assessed native GDP baseline permits a forecast based on the actual project allowance", () => {
+  const text = buildProjectsSummaryText({
+    projects: [project("Catapults", { targetDate: "", progress: 50 })],
+    countryStats: { "House Stark": { stability: 50, economy: { gdp: 1.2e12, budgetBalance: 0, publicDebt: 40, gdpGrowth: 0 } } },
+  }, GAME, { compact: true });
+  assert.match(text, /done ~0299-04-01/);
+});
+
+// A 130-round campaign had closed 110 entries, every one listed on every skip.
+// The newest fifteen are named; the rest are counted.
+test("the board names the newest fifteen closed entries and counts the rest", async () => {
   const { CLOSED_PROJECTS_LISTED } = await import("./promptContext.js");
   const closed = Array.from({ length: 40 }, (_, index) => project(`Old Work ${String(index).padStart(2, "0")}`, {
-    id: `project-old-${index}`,
     status: "complete",
     progress: 100,
     updatedAt: `2026-10-${String(1 + (index % 28)).padStart(2, "0")}T${String(index % 24).padStart(2, "0")}:00:00.000Z`,
   }));
-  const open = Array.from({ length: 25 }, (_, index) => project(`Live Work ${index}`, { id: `project-live-${index}`, tags: ["research"] }));
-  const text = buildProjectsSummaryText({ projects: [...closed, ...open] }, { gameDate: "0299-02-10", round: 41 }, { compact: true });
-  for (const entry of open) assert.ok(text.includes(`[id ${entry.id}]`), `${entry.name} keeps its id`);
-  const listed = closed.filter((entry) => text.includes(`[id ${entry.id}],`));
+  const open = Array.from({ length: 25 }, (_, index) => project(`Live Work ${index}`));
+  const text = buildProjectsSummaryText({ projects: [...closed, ...open] }, GAME, { compact: true });
+  for (const entry of open) assert.ok(text.includes(`"${entry.name}" · ours`), entry.name);
+  const listed = closed.filter((entry) => text.includes(`"${entry.name}" (ours, complete)`));
   assert.equal(listed.length, CLOSED_PROJECTS_LISTED);
   const newest = [...closed].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, CLOSED_PROJECTS_LISTED);
   assert.deepEqual(new Set(listed), new Set(newest), "the newest are the ones named");
-  assert.match(text, /\nand 25 more finished or abandoned \(older; do not start any of them again under a new name\)/);
-  assert.doesNotMatch(text, /Tags: /, "a skip's board leaves the tags to the panel");
-  assert.match(buildProjectsSummaryText({ projects: open.slice(0, 1) }, { gameDate: "0299-02-10", round: 41 }), /Tags: research\./, "other tasks keep them");
+  assert.match(text, /; and 25 more\./);
+  assert.match(text, /never open these again/);
 });
 
-test("a skip's board points at its rules in the cached opening instead of repeating them", async () => {
-  const { buildJumpProjectsDirective, buildJumpProjectsRules, JUMP_PROJECTS_RULES_HEADING } = await import("./projectsDirective.js");
-  const board = buildProjectsSummaryText({ projects: [project("Live Work")] }, { gameDate: "0299-02-10", round: 41 });
-  const inline = buildJumpProjectsDirective(board, { folded: true });
-  const pointed = buildJumpProjectsDirective(board, { folded: true, rulesAbove: true, doubted: "- a doubted entry" });
-  assert.ok(inline.includes(buildJumpProjectsRules({ folded: true })));
-  assert.ok(!pointed.includes(buildJumpProjectsRules({ folded: true })));
-  assert.ok(pointed.includes(`Kept as ${JUMP_PROJECTS_RULES_HEADING} above says.`));
-  assert.match(pointed, /These doubted entries can now be settled/);
+test("an entry is its name as it is, whatever language the name is in, and a quoted copy of it still finds it", async () => {
+  const lineOf = (name) => buildProjectsSummaryText({ projects: [project(name, { kind: "operation" })] }, GAME, { compact: true });
+  for (const name of ["Kingfisher", "Operation Kingfisher", "Opération Kingfisher", "Операция Зимородок", "翠鸟行动"]) {
+    assert.ok(lineOf(name).startsWith(`- "${name}" · ours · 20%`), lineOf(name));
+  }
+  const { applyProjectOps } = await import("../../runtime/gameState.js");
+  const [entry] = applyProjectOps([], [{ op: "create", name: "Opération Kingfisher", kind: "operation", summary: "s", plan: plan() }], {});
+  assert.equal(applyProjectOps([entry], [{ op: "update", name: '"Opération Kingfisher"', lastUpdate: "Found." }], {})[0].lastUpdate, "Found.");
+});
+
+test("a skip's standing rules carry the board's rules, always, folded where its function offers the board's ops", async () => {
   const fs = await import("node:fs");
   const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  assert.ok(source.includes("${JUMP_PROJECTS_RULES_HEADING}\\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) && variables?.foldedBoard !== false })}"), "the standing rules carry them, folded where the skip's function offers the board's ops");
+  assert.ok(source.includes("`${JUMP_PROJECTS_RULES_HEADING}\\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) && variables?.foldedBoard !== false })}`,"));
 });

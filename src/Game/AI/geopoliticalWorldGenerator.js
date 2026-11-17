@@ -158,7 +158,6 @@ const canonicalPolity = (value, world, allowedByLower) => {
   const resolved = resolvePolityIdentity(token, world || {}, {
     allowUnknown: false,
     requireActive: false,
-    allowCoreMatch: true,
     allowStockBase: true,
   });
   const canonical = clean(resolved?.resolved);
@@ -234,13 +233,11 @@ const normalizeCatalogInstitution = (value, {
   references = [],
 } = {}) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const rawIdentityText = lower([value.id, value.name, value.shortName, ...array(value.aliases)].filter(Boolean).join(" "));
-  // A formal institution is one canonical global entity, never a generated
-  // country/member slice. This is a structural rule and is universe-agnostic.
-  if (/(^|[-\s])(membership|memberships|member-state|member-states|member)([-\s]|$)/.test(rawIdentityText)) {
-    warnings.push(`${clean(value.name || value.id || "Institution")}: rejected membership-shaped institution identity.`);
-    return null;
-  }
+  // A formal institution is one canonical global entity, never a country or
+  // member slice of one: that is the catalog prompt's rule ("Do NOT encode a
+  // membership or geographic/member subgroup in an institution id"). It is not
+  // judged here by the English word "member" in a name, which dropped the
+  // "Council of Member States" and never saw "États membres".
 
   const existingLedger = existingInstitutions || normalizeInstitutions(world?.institutions, world);
   const existingMatch = findInstitutionIdentityMatch(value, Object.values(existingLedger.byId));

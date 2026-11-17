@@ -6,13 +6,11 @@ import {
   eventAgencyStructureReason,
 } from "../../runtime/eventAgency.js";
 import { propagateCanonicalProcessAuthorityRefs } from "./playerAgencyAuthority.js";
-import {
-  institutionResolutionAuthorityIds,
-  listInstitutionResolutionAuthorities,
-} from "../../runtime/institutionalAuthority.js";
+import { institutionResolutionAuthorityIds } from "../../runtime/institutionalAuthority.js";
 import { resolveInstitutionRecord } from "../../runtime/institutions.js";
 import { compareGameDates, gameDateDayNumber } from "../../runtime/gameDates.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
+import { CRISIS_STORYLINE_KINDS, storylineKindOf } from "../../runtime/storylineKinds.js";
 // Native World Integrity (ported from kernely's Continuum branch).
 //
 // This module is deliberately separate from the World Director and Timeline
@@ -20,17 +18,17 @@ import { humanCountriesOf } from "../../runtime/humanPolities.js";
 // - provide a deterministic rotating exploration slate so "independent world"
 //   attention is concrete rather than a vague prompt sentence;
 // - derive exploration coverage from the actual returned world payload so audit bookkeeping is native;
-// - reject/sanitize a few objective pre-curation integrity failures BEFORE
-//   hidden multi-pass state can ingest them;
+// - tell whose decision each event is, from what it carries, and hold a
+//   person's country to that person's own orders and messages;
 // - decide whether a scheduler-deferred storyline has a material endogenous
 //   development or external trigger strong enough to re-enter this pass.
 //
 // It does NOT decide which plausible event is historically interesting. That
 // remains the semantic Timeline Curator's job.
 
-export const WORLD_INTEGRITY_VERSION = "0.18.0-native-event-provenance";
-export const NATIVE_AUTHORITY_BINDER_VERSION = "2.0.0-native-event-provenance";
-export const NATIVE_EVENT_PROVENANCE_VERSION = "1.0.0-semantic-native-owner";
+export const WORLD_INTEGRITY_VERSION = "0.19.0-structured-agency";
+export const NATIVE_AUTHORITY_BINDER_VERSION = "3.0.0-structured-authority";
+export const NATIVE_EVENT_PROVENANCE_VERSION = "2.0.0-structured-actors";
 
 // R3.6: keep the 10-lane attention slate structurally balanced rather than
 // hoping actor availability happens to produce 50/50. Up to five independent
@@ -59,113 +57,148 @@ const EXPLORATION_DOMAINS = Object.freeze([
   "strategic risk / coercive escalation / mobilization / brinkmanship / miscalculation when current interests support it",
 ]);
 
-const ROUTINE_MILITARY_CUE_RE =
-  /\b(skirmish(?:es)?|reconnaissance|patrol(?:s|ling)?|prob(?:e|es|ing)|artillery(?:\s+(?:fire|exchange|exchanges|bombardment|bombardments))?|counter[- ]battery|sporadic\s+(?:fire|clashes|fighting)|trench\s+(?:raid|raids)|outpost\s+(?:clash|clashes)|localized\s+(?:fighting|clashes|attacks?)|readiness\s+(?:remains?|stays?|continues?)\s+(?:elevated|heightened|high)|(?:elevated|heightened)\s+(?:military\s+)?readiness\s+(?:remains?|continues?)|maintain(?:s|ed|ing)?\s+(?:a\s+)?(?:heavy\s+|heightened\s+|elevated\s+)?(?:military\s+|security\s+)?posture|continued\s+(?:vigilance|monitoring|surveillance|alert\s+status)|security\s+posture\s+(?:remains?|continues?)|forces?\s+remain(?:s|ed)?\s+on\s+(?:heightened|high)\s+alert)\b/i;
+// The domains above that look across a border: a lane given one of them is
+// covered by what passes between polities (outreach, a ledger record, an event
+// with two parties). The game's own list, looked up exactly.
+const CROSS_BORDER_DOMAINS = new Set([
+  "diplomacy / foreign policy / commercial relations",
+  "economy / industry / trade / finance",
+  "third-party reaction to wars, crises, treaties, and balance-of-power changes",
+]);
 
-const STRONG_MILITARY_CONSEQUENCE_RE =
-  /\b(breakthrough|breaks?\s+through|captur(?:e|es|ed|ing)|seiz(?:e|es|ed|ing)|occup(?:y|ies|ied|ation)|liberat(?:e|es|ed|ion)|retreat(?:s|ed|ing)?|withdraw(?:s|al|n|ing)?|encircl(?:e|es|ed|ement)|surrender(?:s|ed|ing)?|ceasefire|armistice|collapse(?:s|d)?|destroy(?:s|ed|ing)?|annihilat(?:e|es|ed|ion)|casualt(?:y|ies)|loss(?:es)?|killed|wounded|captured|gain(?:s|ed)?\s+ground|advance(?:s|d|ing)?|repuls(?:e|es|ed)|defeat(?:s|ed)?|front\s+(?:breaks|collapses)|decisive\s+(?:victory|defeat)|major\s+offensive|general\s+offensive)\b/i;
+// No word list reads an event for the war: who is at war, who lives under war
+// conditions and whether fighting changed anything are the war ledger's
+// records and the event's own operations, in every language. "dont do
+// keywording its super unreliable" (the owner, 2026-11-06). Removed on
+// 2026-11-13: the rejection of a homefront condition for a polity the
+// pre-segment ledger had at peace (WAR_DEPENDENT_HOMEFRONT_RE, with
+// PREPAREDNESS_RE and FOREIGN_SPILLOVER_RE to excuse it), which also refused
+// "Poland introduces wartime rationing" in the very segment that opened
+// Poland's war; the hiding of "routine" military news (ROUTINE_MILITARY_CUE_RE,
+// excused by STRONG_MILITARY_CONSEQUENCE_RE, CONCRETE_MILESTONE_RE,
+// CLEARLY_NON_MILITARY_TITLE_RE and a "burn" word); and the words that woke or
+// kept asleep a deferred storyline (ENDOGENOUS_MATERIAL_CUE_RE and the same
+// two). The skip is told the rules instead: the war ledger's (a polity at peace
+// does not live under war conditions) and FOLDED_SKIP_CONSEQUENCES' (no filler).
+//
+// Nor is any event read for anything else, since the same day (the owner,
+// 2026-11-13: "absolutely no keywording ... anywhere"). Gone with the word
+// lists:
+// - the stripping of a polity's stat update from an event that read like a
+//   meeting (PROCESS_ONLY_POLITY_UPDATE_RE, CONCRETE_POLITY_OUTCOME_RE):
+//   "Committee reviews tariffs; rates rise 5%" lost its figures;
+// - the hiding of "routine administrative" cards, one at a time
+//   (ROUTINE_ADMINISTRATIVE_CUE_RE, ADMINISTRATIVE_MATERIAL_OUTCOME_RE) and in
+//   clusters (LOW_TRAJECTORY_INSTITUTIONAL_RE): the skip is told to write no
+//   filler and that nothing takes it off the timeline afterwards, and the
+//   curator judges what it writes anyway. Nothing in an event says
+//   "paperwork" in every language, and the model's rating of it (minor) is no
+//   such word: a minor event can be a real outcome;
+// - an event's weight read from breakpoint, instability, capability and
+//   settlement words (TRAJECTORY_*_RE): deriveWorldTrajectoryValue below reads
+//   what the event carries and the model's own rating of it;
+// - a storyline's kind read for a crisis (CRISIS_DISCOVERY_KIND_RE): a kind
+//   is one word of a fixed list (runtime/storylineKinds.js);
+// - who chose an event, read from its title's subject and English verbs, and
+//   whether the player's orders or messages backed it, read by the words they
+//   shared with it: see "Whose decision an event is" below.
 
-// A milestone reached: the one thing a routine-patrol card never reports.
-const CONCRETE_MILESTONE_RE =
-  /\b(complet(?:es|ed|ion)|enters?\s+service|entered\s+service|commission(?:s|ed)|launch(?:es|ed)|inaugurat(?:es|ed|ion)|becomes?\s+operational|became\s+operational|production\s+begins|ratif(?:y|ies|ied)|sign(?:s|ed)\s+(?:a|an|the)\s+(?:treaty|accord|agreement|pact))\b/i;
+// The impact families that change the world's records. A polity's lifecycle
+// (create, rename, restore, dissolve) is one; an update of its figures is not.
+const HARD_IMPACT_FAMILIES = Object.freeze([
+  "regionTransfers",
+  "regionClaims",
+  "groupOps",
+  "regionControlOps",
+  "politicalActorOps",
+  "unitOps",
+  "markerOps",
+  "createdChats",
+]);
 
-// High-signal civilian/scientific titles must not be hidden because their body
-// happens to mention a patrol, reconnaissance, readiness or another routine
-// military word. This guard is deliberately title-scoped: a genuinely military
-// card can still be screened even if its description mentions politics/science.
-const CLEARLY_NON_MILITARY_TITLE_RE =
-  /\b(?:elections?|referendum|protests?|demonstrations?|parliament|legislature|court|judicial|scientific|research|spacecraft|satellite|lunar|moon|mars|lander|space mission|space probe)\b/i;
+export const hardImpactKeysForEvent = (event) => {
+  const impacts =
+    event?.impacts && typeof event.impacts === "object"
+      ? event.impacts
+      : {};
 
-// Material endogenous changes that can legitimately wake a deferred process even
-// when they do not yet carry a hard map/ledger impact. The associated storyline
-// update must ALSO move objective state (status/pressure/momentum); this regex alone
-// never turns routine prose into a valid re-entry.
-const ENDOGENOUS_MATERIAL_CUE_RE =
-  /\b(counter[- ]?offensive|counter[- ]?attack|offensive|assault|mutiny|desertion|rebellion|uprising|riot|strike|mass\s+protest|resign(?:s|ed|ation)?|dismiss(?:es|ed|al)?|appoint(?:s|ed|ment)?|replac(?:e|es|ed|ement)|command\s+change|leadership\s+change|mobiliz(?:e|es|ed|ation)|reinforc(?:e|es|ed|ement)|conscription|ammunition\s+shortage|supply\s+(?:crisis|collapse|shortage)|food\s+shortage|epidemic|disease\s+outbreak|peace\s+(?:feelers?|talks?|proposal)|negotiat(?:e|es|ed|ion|ions)|mediat(?:e|es|ed|ion)|sanction(?:s|ed)?|election|vote|prototype|production\s+begins|enters\s+service|inaugurat(?:e|es|ed|ion)|complet(?:e|es|ed|ion)|bankrupt(?:cy)?|financial\s+crisis|political\s+crisis|government\s+crisis|cabinet\s+crisis|general\s+staff\s+shakeup)\b/i;
+  const keys = HARD_IMPACT_FAMILIES.filter((key) => normalizeArray(impacts[key]).length);
 
-const WAR_DEPENDENT_HOMEFRONT_RE =
-  /\b(wartime\s+(?:economy|rationing|food\s+(?:policy|distribution)|mobilization|demobilization|tax(?:es|ation)?|controls?|shortages?|production|administration)|war\s+economy|war\s+tax(?:es|ation)?|home[- ]front\s+(?:rationing|shortages?|mobilization)|demobilization\s+(?:crisis|strain|pressures?))\b/i;
+  const lifecycle = normalizeArray(impacts?.polityChanges).filter((change) =>
+    ["create", "rename", "restore", "dissolve"].includes(
+      normalizeString(change?.operation).toLowerCase()
+    )
+  );
 
-const PREPAREDNESS_RE =
-  /\b(prepare(?:s|d|ing|ation)?|preparedness|contingenc(?:y|ies)|simulate(?:s|d|ing|ion)?|test(?:s|ed|ing)?|exercise(?:s|d)?|reserve(?:s)?|stockpil(?:e|es|ed|ing)|study|studies|examin(?:e|es|ed|ing)|plan(?:s|ned|ning)?|potential\s+war|future\s+war|in\s+the\s+event\s+of\s+war|if\s+war|emergency\s+planning)\b/i;
+  if (lifecycle.length) keys.push("polityLifecycle");
+  return keys;
+};
 
-const FOREIGN_SPILLOVER_RE =
-  /\b(spillover|foreign\s+war|neighbou?r(?:ing)?\s+(?:war|conflict)|disrupted\s+imports?|refugee\s+pressure|border\s+trade\s+(?:disruption|interruption)|external\s+conflict|sanctions?|embargo|shipping\s+disruption|trade\s+disruption)\b/i;
+// The storyline pressure past which a process is held to the anti-stasis
+// cadence (nativeWorldDirector.js HIGH_PRESSURE_STAGNATION_THRESHOLD).
+const HIGH_STORYLINE_PRESSURE = 55;
 
-const PROCESS_ONLY_POLITY_UPDATE_RE =
-  /\b(debate(?:s|d)?|review(?:s|ed)?|meeting(?:s)?|committee|study|studies|proposal|discussion(?:s)?|consultation(?:s)?|hearing(?:s)?|assessment|conference|deliberation(?:s)?)\b/i;
-
-const CONCRETE_POLITY_OUTCOME_RE =
-  /\b(pass(?:es|ed)?|adopt(?:s|ed)?|enact(?:s|ed)?|approv(?:e|es|ed)|implement(?:s|ed)?|appoint(?:s|ed)?|resign(?:s|ed)?|dismiss(?:es|ed)?|dissolv(?:e|es|ed)|reorganiz(?:e|es|ed)|reform(?:s|ed)?|establish(?:es|ed)|abolish(?:es|ed)|ratif(?:y|ies|ied)|decree(?:s|d)?|takes?\s+office|government\s+(?:falls|forms)|constitution(?:al)?\s+(?:change|reform)|coup|law\s+(?:passes|is\s+enacted))\b/i;
-
-
-const ROUTINE_ADMINISTRATIVE_CUE_RE =
-  /\b(?:technical review|committee review|working group|administrative implementation|implementation review|compliance review|compliance tracking|inspection protocol|inspection standards|regulatory harmonization|protocol refinement|procedural update|standards update|monitoring framework|coordination mechanism|advisory committee|streamlined (?:procedures|protocols|standards)|finaliz(?:e|es|ed) (?:technical|administrative|inspection|compliance|procedural|regulatory)|publishes? (?:a )?(?:routine )?(?:review|assessment|report)|reports? on implementation)\b/i;
-
-const ADMINISTRATIVE_MATERIAL_OUTCOME_RE =
-  /\b(?:law (?:passes|is enacted)|tax (?:raised|cut|introduced)|ban (?:takes effect|imposed)|resign(?:s|ed|ation)|appoint(?:s|ed|ment)|government (?:falls|forms)|election|referendum|strike|protest|riot|shortage|shutdown|bank failure|default|market crash|mobiliz(?:e|es|ed|ation)|deploy(?:s|ed|ment)|sanction(?:s|ed)|embargo|treaty|agreement (?:signed|reached)|ceasefire|martial law|state of emergency|opens? (?:a )?(?:factory|plant|facility)|enters service|production begins|becomes operational|disaster|accident)\b/i;
-
-// A crisis-discovery lane is satisfied only by a genuinely NEW persistent
-// unstable process, not by another administrative card that happens to use the
-// word "crisis". The model still decides whether such a process exists.
-const CRISIS_DISCOVERY_KIND_RE =
-  /\b(crisis|revolution|uprising|insurgency|secession|constitutional|succession|financial|banking|government|political|security|standoff|coup)\b/i;
-
-// R3.6 — native trajectory value. This is intentionally cheap and conservative:
-// it does not decide history or force drama. It only tells candidate selection that
-// a grounded process with several materially different future branches is normally
-// more valuable than another isolated administrative success when both are valid.
-const TRAJECTORY_BREAKPOINT_RE =
-  /\b(coup(?: attempt)?|mutiny|uprising|rebellion|insurgency|secession|civil war|government falls?|cabinet collapses?|banking panic|bank run|sovereign default|currency crash|constitutional crisis|succession crisis|martial law|state of emergency|mobiliz(?:e|es|ed|ation)|ultimatum|blockade|border clash|armed clash|incursion|direct clash|nuclear alert)\b/i;
-const TRAJECTORY_INSTABILITY_RE =
-  /\b(reject(?:s|ed|ion)?|refus(?:e|es|ed|al)|schism|split(?:s|ting)?|breakaway|autonomy|federal tension|regional defiance|mass protest|general strike|nationwide strike|industrial dispute|leadership challenge|confidence vote|impeach(?:ment)?|sanction(?:s|ed)?|missile test|ends? (?:the )?moratorium|withdraw(?:s|al)? from|deadlock|talks? (?:fail|collapse|break down)|credit crunch|liquidity crisis|debt crisis|shortage|rationing|separatist|ethnic tension|communal violence)\b/i;
-const TRAJECTORY_CAPABILITY_RE =
-  /\b(enters? service|commission(?:s|ed)?|deploy(?:s|ed|ment)|production begins|factory opens?|plant opens?|law (?:passes|is enacted|is signed)|signs? (?:a |the )?(?:treaty|accord|agreement)|ratif(?:y|ies|ied)|election result|resign(?:s|ed|ation)|appoint(?:s|ed|ment)|reorganiz(?:e|es|ed)|restructur(?:e|es|ed)|merger|launches? (?:a )?(?:major )?(?:programme|program|facility)|operational)\b/i;
-const TRAJECTORY_SETTLED_RE =
-  /\b(avert(?:s|ed|ing)|settlement reached|agreement reached|deal reached|resolved|stabiliz(?:e|es|ed|ation)|stands? down|de[- ]?escalat(?:e|es|ed|ion)|ceasefire|armistice)\b/i;
-
-const TRAJECTORY_REPORTING_RE =
-  /\b(quarterly|annual|monthly)\s+(?:trade |economic |industrial |export |market )?(?:outlook|assessment|review|report)|publishes? (?:its |a )?(?:quarterly |annual |monthly )?(?:outlook|assessment|review|report)|releases? (?:its |a )?(?:quarterly |annual |monthly )?(?:outlook|assessment|review|report)\b/i;
-
-// R3.7 — low-trajectory feed saturation guard. This is intentionally narrower
-// than "administrative event": one concrete technical/implementation milestone is
-// fine. What we suppress is a cluster of low-branch cards monopolising scarce
-// visible slots while the recent feed is already full of the same texture.
-const LOW_TRAJECTORY_INSTITUTIONAL_RE =
-  /\b(?:technical (?:dialogue|consultations?|talks?|working sessions?|coordination)|working[- ]level consultations?|bilateral working sessions?|regulatory sandbox|administrative network|municipal data network|compliance framework|coordination framework|coordination mechanism|implementation framework|quarterly (?:outlook|assessment|review|report)|refinancing (?:facility|window)|customs efficiency|procedural harmonization|standards alignment)\b/i;
-const LOW_TRAJECTORY_RECENT_WINDOW = 12;
-const LOW_TRAJECTORY_RECENT_SATURATION = 4;
-const LOW_TRAJECTORY_BATCH_TRIGGER = 3;
-
-export const deriveWorldTrajectoryValue = (record = {}) => {
-  const text = `${normalizeString(record?.title)} ${normalizeString(record?.description || record?.detail || record?.state)}`;
+// How many different futures an event (or one of the director's candidates)
+// still opens, 0 to 5: from what it carries, the storyline it advances and the
+// model's own rating of it (importance, notable), never from its words. The
+// breakpoint, instability, capability and settlement word lists it was read
+// by were English, so a coup written in any other language was a 1. Candidate
+// selection prefers a higher value and the crisis lane looks for 4 and up; it
+// decides nothing about what happens.
+//
+// `storylinePressure`: the pressure of the busiest storyline the record
+// advances, or -1 when it advances none. A record may carry it itself.
+export const deriveWorldTrajectoryValue = (record = {}, { storylinePressure = record?.storylinePressure ?? -1 } = {}) => {
   const hardImpacts = hardImpactKeysForEvent(record).length;
-  if (TRAJECTORY_BREAKPOINT_RE.test(text)) return 5;
-  if (TRAJECTORY_INSTABILITY_RE.test(text) && !TRAJECTORY_SETTLED_RE.test(text)) return 4;
-  if (hardImpacts >= 2) return 4;
-  if (hardImpacts === 1 || TRAJECTORY_CAPABILITY_RE.test(text)) return 3;
-  if (TRAJECTORY_REPORTING_RE.test(text)) return 0;
-  if (ROUTINE_ADMINISTRATIVE_CUE_RE.test(text) && !ADMINISTRATIVE_MATERIAL_OUTCOME_RE.test(text)) return 0;
-  if (TRAJECTORY_SETTLED_RE.test(text)) return 2;
+  const importance = normalizeString(record?.importance).toLowerCase();
+  const rated = importance === "major" || importance === "critical" || record?.notable === true;
+  const pressure = Number.isFinite(Number(storylinePressure)) ? Number(storylinePressure) : -1;
+  if (importance === "critical" || (rated && hardImpacts >= 2)) return 5;
+  if (hardImpacts >= 2 || (rated && pressure >= HIGH_STORYLINE_PRESSURE)) return 4;
+  if (hardImpacts === 1 || rated || pressure >= HIGH_STORYLINE_PRESSURE) return 3;
+  if (importance === "moderate" || pressure >= 0 || normalizeString(record?.warId)) return 2;
   return 1;
 };
 
-const latentCrisisConsequenceChannels = (text) => {
-  const channels = new Set(["persistent storyline"]);
-  if (/\b(border|military|missile|mobiliz|security|clash|incursion|blockade|armed)\b/i.test(text)) {
-    channels.add("relations");
-    channels.add("units / readiness");
-    channels.add("war or territorial control if belligerency actually crosses the threshold");
+// What a crisis lane's trigger may lead to, from what its event carried: its
+// own tags (the model's categories) and the families of its operations. Every
+// crisis is a storyline in the making and moves relations.
+const CRISIS_CHANNELS_BY_TAG = Object.freeze({
+  Military: "units / readiness",
+  Politics: "polity/government state",
+  Economy: "Stats / economic-social state",
+  Disaster: "Stats / economic-social state",
+});
+const CRISIS_CHANNELS_BY_IMPACT = Object.freeze({
+  regionTransfers: "war or territorial control if belligerency actually crosses the threshold",
+  regionControlOps: "war or territorial control if belligerency actually crosses the threshold",
+  regionClaims: "war or territorial control if belligerency actually crosses the threshold",
+  groupOps: "war or territorial control if belligerency actually crosses the threshold",
+  unitOps: "units / readiness",
+  politicalActorOps: "polity/government state",
+  polityLifecycle: "polity/government state",
+});
+const crisisConsequenceChannels = (candidate) => {
+  const channels = new Set(["persistent storyline", "relations"]);
+  for (const tag of normalizeArray(candidate?.tags)) {
+    const channel = CRISIS_CHANNELS_BY_TAG[normalizeString(tag)];
+    if (channel) channels.add(channel);
   }
-  if (/\b(secession|autonomy|federal|constitutional|government|coup|succession|leadership)\b/i.test(text)) {
-    channels.add("polity/government state");
-    channels.add("relations");
-  }
-  if (/\b(bank|credit|debt|currency|financial|shortage|strike|labou?r|industry)\b/i.test(text)) {
-    channels.add("Stats / economic-social state");
+  for (const key of normalizeArray(candidate?.impactKeys)) {
+    const channel = CRISIS_CHANNELS_BY_IMPACT[normalizeString(key)];
+    if (channel) channels.add(channel);
   }
   return [...channels].slice(0, 5);
 };
+
+// The polities a director's candidate concerns, from its structured record
+// (nativeWorldDirector.js gives each candidate its `parties`): never the
+// names its title or detail happen to contain.
+const candidatePolities = (candidate, actorResolver) => uniqueStrings(
+  normalizeArray(candidate?.parties)
+    .map((party) => actorResolver.knownCanonical(party))
+    .filter(Boolean),
+);
 
 const deriveLatentCrisisDiscoveryCandidate = ({
   causalCandidates = [],
@@ -175,13 +208,12 @@ const deriveLatentCrisisDiscoveryCandidate = ({
   const rows = [];
   for (const candidate of normalizeArray(causalCandidates)) {
     if (normalizeArray(candidate?.storylineIds).length) continue;
-    const text = `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`;
-    const trajectoryValue = deriveWorldTrajectoryValue(candidate);
-    if (trajectoryValue < 4 || TRAJECTORY_SETTLED_RE.test(text)) continue;
+    const trajectoryValue = Number.isFinite(Number(candidate?.trajectoryValue))
+      ? Number(candidate.trajectoryValue)
+      : deriveWorldTrajectoryValue(candidate);
+    if (trajectoryValue < 4) continue;
 
-    const actors = actorResolver.mentionedPolities(text)
-      .map((actor) => actorResolver.canonical(actor))
-      .filter(Boolean);
+    const actors = candidatePolities(candidate, actorResolver);
     if (!actors.length) continue;
 
     const widerActors = actors.filter((actor) => !playerSphereKeys.has(actor.toLowerCase()));
@@ -189,13 +221,13 @@ const deriveLatentCrisisDiscoveryCandidate = ({
 
     rows.push({
       actor: widerActors[0],
-      actors: uniqueStrings(actors).slice(0, 4),
+      actors: actors.slice(0, 4),
       sourceCandidateId: normalizeString(candidate?.id),
       sourceTitle: normalizeString(candidate?.title),
       sourceDetail: normalizeString(candidate?.detail),
       trajectoryValue,
       score: (Number(candidate?.score) || 0) + trajectoryValue * 3,
-      consequenceChannels: latentCrisisConsequenceChannels(text),
+      consequenceChannels: crisisConsequenceChannels(candidate),
     });
   }
 
@@ -250,17 +282,6 @@ const activeWarEntries = (world) =>
   normalizeArray(world?.wars).filter((war) =>
     ["active", "ceasefire"].includes(normalizeString(war?.status).toLowerCase())
   );
-
-const activeBelligerentSet = (world) => {
-  const set = new Set();
-  for (const war of activeWarEntries(world)) {
-    for (const actor of [...normalizeArray(war?.sideA), ...normalizeArray(war?.sideB)]) {
-      const key = normalizeString(actor).toLowerCase();
-      if (key) set.add(key);
-    }
-  }
-  return set;
-};
 
 // `humans` are a shared game's other human polities (runtime/humanPolities.js):
 // known here even when no ledger names them yet, like the player.
@@ -471,56 +492,17 @@ export const createWorldActorResolver = (world, gameCountry = "", { humans = [] 
     return Boolean(a && b && a === b);
   };
 
-  const aliasesFor = (actor) => {
-    const target = canonical(actor);
-    const record = byCanonical.get(target.toLowerCase());
-    return uniqueStrings([target, ...(record?.aliases || [])]);
-  };
-
-  // One compiled whole-word pattern per alias, built the first time a text is
-  // searched. A jump screens every event against every polity, and compiling
-  // each alias again per event was most of its time on a large map.
-  const aliasPatterns = new Map();
-  const aliasPattern = (alias) => {
-    const token = normalizeString(alias).toLowerCase();
-    if (!token || token.length < 3) return null;
-    if (!aliasPatterns.has(token)) {
-      const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      aliasPatterns.set(token, new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, "i"));
-    }
-    return aliasPatterns.get(token);
-  };
-  const aliasesMentioned = (aliases, haystack) =>
-    aliases.some((alias) => Boolean(aliasPattern(alias)?.test(haystack)));
-
-  const mentioned = (value) => {
-    const haystack = ` ${normalizeString(value).toLowerCase()} `;
-    const matches = [];
-    for (const record of records) {
-      if (aliasesMentioned([record.canonical, ...normalizeArray(record.aliases)], haystack)) {
-        matches.push(record.canonical);
-      }
-    }
-    return uniqueStrings(matches);
-  };
-
-  // Whether the text names this actor: the exact name given, plus every alias
-  // of the polity whose canonical name it is (not of one it merely resolves to).
-  const mentions = (actor, value) => {
-    const target = normalizeString(actor);
-    if (!target) return true;
-    const record = byCanonical.get(target.toLowerCase());
-    return aliasesMentioned([target, ...normalizeArray(record?.aliases)], ` ${normalizeString(value).toLowerCase()} `);
-  };
-
+  // No resolver call looks for a name in a text: what an event, a candidate or
+  // a record concerns is read from the names its structured fields hold
+  // (eventStructuredPartyNames below), looked up exactly here. The whole-word
+  // alias search it had (mentionedPolities, mentions) found a polity only
+  // where its name was written as the save writes it, never in a translation,
+  // a demonym or another script.
   return {
     records,
     canonical,
     knownCanonical,
     equivalent,
-    aliasesFor,
-    mentionedPolities: mentioned,
-    mentions,
   };
 };
 
@@ -539,53 +521,42 @@ export const worldActorsEquivalent = (
   return Boolean(a && b && a === b);
 };
 
-const actorMentionedInText = (actor, text, world, gameCountry = "") =>
-  createWorldActorResolver(world, gameCountry).mentions(actor, text);
+const isPlainObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-const actorIsActiveBelligerent = (actor, world, records = polityAliasRecords(world)) => {
-  const rawBelligerents = activeBelligerentSet(world);
-  const target = normalizeString(actor).toLowerCase();
-  if (!target) return false;
-  if (rawBelligerents.has(target)) return true;
+// A chat participant as a name: a string, or a { name, code } record.
+const participantName = (value) => normalizeString(typeof value === "string" ? value : value?.name || value?.code);
 
-  const record = records
-    .find((entry) => entry.canonical.toLowerCase() === target);
-
-  return Boolean(record?.aliases.some((alias) =>
-    rawBelligerents.has(normalizeString(alias).toLowerCase())
-  ));
+// Every polity name an event's structured fields hold: who it says decided
+// (actors), who fought in it, the sovereign rows of its agency, and every
+// polity its operations name. Raw names, as written: a caller looks them up
+// (createWorldActorResolver knownCanonical). Its title and description are
+// never read for a name.
+export const eventStructuredPartyNames = (event) => {
+  if (!isPlainObject(event)) return [];
+  const impacts = isPlainObject(event.impacts) ? event.impacts : {};
+  const agency = isPlainObject(event.agency) ? event.agency : {};
+  return uniqueStrings([
+    ...normalizeArray(event.actors),
+    ...normalizeArray(event.combatants),
+    agency.sovereignPolity,
+    agency.jurisdictionPolity,
+    normalizeString(agency.principalKind).toLowerCase() === "polity" ? agency.principal : "",
+    ...normalizeArray(agency.sovereignActors).map((row) => row?.polity || row?.sovereignPolity),
+    ...normalizeArray(impacts.polityChanges).flatMap((change) => [change?.code, change?.name]),
+    ...normalizeArray(impacts.politicalActorOps).map((operation) => operation?.polityKey || operation?.polity || operation?.country),
+    ...normalizeArray(impacts.regionTransfers).flatMap((entry) => [entry?.fromCode, entry?.toCode]),
+    ...normalizeArray(impacts.regionClaims).flatMap((entry) => [entry?.claimantCode, entry?.claimant]),
+    ...normalizeArray(impacts.regionControlOps).flatMap((entry) => [entry?.fromCode, entry?.toCode, entry?.actorCode, entry?.claimantCode]),
+    ...normalizeArray(impacts.createdChats).flatMap((chat) => [chat?.speaker, chat?.to, ...normalizeArray(chat?.countries).map(participantName)]),
+    ...normalizeArray(impacts.unitOps).flatMap((operation) => [operation?.ownerCode, operation?.unit?.ownerCode]),
+    ...normalizeArray(impacts.institutionLifecycleOps).flatMap((operation) => [operation?.actorPolity, operation?.targetPolity]),
+  ].map((name) => (typeof name === "string" ? name : participantName(name))));
 };
 
-const hardImpactKeysForEvent = (event) => {
-  const impacts =
-    event?.impacts && typeof event.impacts === "object"
-      ? event.impacts
-      : {};
-
-  const keys = [];
-
-  for (const key of [
-    "regionTransfers",
-    "regionClaims",
-    "groupOps",
-    "regionControlOps",
-    "politicalActorOps",
-    "unitOps",
-    "markerOps",
-    "createdChats",
-  ]) {
-    if (normalizeArray(impacts[key]).length) keys.push(key);
-  }
-
-  const lifecycle = normalizeArray(impacts?.polityChanges).filter((change) =>
-    ["create", "rename", "restore", "dissolve"].includes(
-      normalizeString(change?.operation).toLowerCase()
-    )
-  );
-
-  if (lifecycle.length) keys.push("polityLifecycle");
-  return keys;
-};
+// The known polities among them, as the resolver names them.
+const eventPartyPolities = (event, resolver) => uniqueStrings(
+  eventStructuredPartyNames(event).map((name) => resolver.knownCanonical(name)).filter(Boolean),
+);
 
 const transportReferencesEventNumber = (value, oneBasedEventNumber) => {
   const target = Number(oneBasedEventNumber);
@@ -604,22 +575,49 @@ const transportReferencesEventNumber = (value, oneBasedEventNumber) => {
     });
 };
 
-const eventHasLedgerTrigger = (candidate, zeroBasedEventIndex) => {
-  const oneBased = zeroBasedEventIndex + 1;
+// The ledgers whose records an event rests on: wars, relations, agreements and
+// the battlefields' orders (nativeFrontLedger.js), which carry their events'
+// numbers in the same field.
+const EVENT_LEDGERS = Object.freeze(["warUpdates", "relationUpdates", "agreementUpdates", "frontOrders"]);
 
-  return [
-    candidate?.warUpdates,
-    candidate?.relationUpdates,
-    candidate?.agreementUpdates,
-    // An order to a battlefield rests on its events the same way, and carries
-    // their numbers in the same field (nativeFrontLedger.js).
-    candidate?.frontOrders,
-  ].some((value) =>
-    transportReferencesEventNumber(value, oneBased)
-  );
+// The records of one ledger tied to an event: by the event's id, or by its
+// place, once a skip's ledgers are pinned (ledgerPins.js) and read as objects;
+// by the event's number in a ledger still in its `~` lines.
+const ledgerRecordsOfEvent = (value, event, eventIndex) => {
+  if (!Array.isArray(value)) return transportReferencesEventNumber(value, eventIndex + 1) ? [{}] : [];
+  const eventId = normalizeString(event?.id);
+  return value.filter((record) => {
+    if (typeof record === "string") return transportReferencesEventNumber(record, eventIndex + 1);
+    if (!isPlainObject(record)) return false;
+    return (eventId && normalizeArray(record.eventIds).map(normalizeString).includes(eventId))
+      || normalizeArray(record.eventIndexes).map(Number).includes(eventIndex);
+  });
 };
 
-const newParticipantsMentionedInEvent = (prior, update, event) => {
+const eventHasLedgerTrigger = (candidate, zeroBasedEventIndex) => {
+  const event = normalizeArray(candidate?.events)[zeroBasedEventIndex];
+  return EVENT_LEDGERS.some((key) => ledgerRecordsOfEvent(candidate?.[key], event, zeroBasedEventIndex).length > 0);
+};
+
+// The polities a ledger record names: an agreement's parties, a relation's two
+// sides, a war's actors and opponents.
+const ledgerRecordPolities = (record) => uniqueStrings([
+  ...normalizeArray(record?.parties),
+  ...normalizeArray(record?.sideA),
+  ...normalizeArray(record?.sideB),
+  ...normalizeArray(record?.actors),
+  ...normalizeArray(record?.opponents),
+  record?.a,
+  record?.b,
+  record?.polityA,
+  record?.polityB,
+]);
+
+// Whether the event takes in a participant the storyline update adds: one the
+// event's structured fields or its ledger records name. Never one found in its
+// prose: a participant named in a translation, or in the genitive, was never
+// found, and one named in passing woke a storyline.
+const newParticipantsInEvent = (prior, update, candidate, event, eventIndex) => {
   const before = new Set(
     normalizeArray(prior?.participants)
       .map((item) => normalizeString(item).toLowerCase())
@@ -633,11 +631,12 @@ const newParticipantsMentionedInEvent = (prior, update, event) => {
 
   if (!additions.length) return false;
 
-  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
+  const named = new Set([
+    ...eventStructuredPartyNames(event),
+    ...EVENT_LEDGERS.flatMap((key) => ledgerRecordsOfEvent(candidate?.[key], event, eventIndex)).flatMap(ledgerRecordPolities),
+  ].map((name) => normalizeString(name).toLowerCase()).filter(Boolean));
 
-  return additions.some((participant) =>
-    actorMentionedInText(participant, text, {}, "")
-  );
+  return additions.some((participant) => named.has(participant.toLowerCase()));
 };
 
 const deferredUpdateHasObjectiveDelta = (prior, update) => {
@@ -656,6 +655,15 @@ const deferredUpdateHasObjectiveDelta = (prior, update) => {
   return Math.abs(nextMomentum - priorMomentum) >= 6;
 };
 
+// Whether a deferred storyline's linked events give it a reason to come back
+// into this pass, from what they carry and whom they name, never from what
+// their words say happened: an operation of their own, a war, relation,
+// agreement or front record, a new participant the event's own fields or
+// records name, or, with the storyline's own state moved, an event the model
+// rated major or notable. A minor event that changes nothing wakes nothing,
+// whatever it says, in any language (the words used to: "counteroffensive",
+// "mutiny", "election" and the rest woke a storyline, and "artillery" or
+// "patrol" kept one asleep, in English only).
 export const deferredStorylineReentryHasConcreteTrigger = (
   candidate,
   eventIndexes,
@@ -670,25 +678,9 @@ export const deferredStorylineReentryHasConcreteTrigger = (
     // Existing hard mechanics/ledger transitions remain sufficient by themselves.
     if (hardImpactKeysForEvent(event).length) return true;
     if (eventHasLedgerTrigger(candidate, eventIndex)) return true;
-    if (newParticipantsMentionedInEvent(prior, update, event)) return true;
-
-    const text =
-      `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-
-    // Routine battlefield continuity is still not a trigger, even if the model
-    // tries to buy re-entry by nudging pressure/momentum. A concrete consequence
-    // such as casualties, capture, retreat, breakthrough, etc. escapes this gate.
-    if (
-      ROUTINE_MILITARY_CUE_RE.test(text) &&
-      !STRONG_MILITARY_CONSEQUENCE_RE.test(text)
-    ) {
-      return false;
-    }
+    if (newParticipantsInEvent(prior, update, candidate, event, eventIndex)) return true;
 
     if (requireObjectiveDelta && !deferredUpdateHasObjectiveDelta(prior, update)) return false;
-
-    if (STRONG_MILITARY_CONSEQUENCE_RE.test(text)) return true;
-    if (ENDOGENOUS_MATERIAL_CUE_RE.test(text)) return true;
 
     const importance = normalizeString(event?.importance).toLowerCase();
     if (event?.notable === true || ["major", "critical"].includes(importance)) {
@@ -794,10 +786,10 @@ const actorPoolForExploration = (
 
   // Current causal evidence may introduce a relevant actor that is not otherwise
   // present in a formal ledger. This is bounded to the Director's filtered
-  // present-tense evidence, never the raw full history.
+  // present-tense evidence, never the raw full history, and to the polities a
+  // candidate's record names (its parties), never the names in its text.
   for (const candidate of normalizeArray(causalCandidates)) {
-    const text = `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`;
-    for (const actor of actorResolver.mentionedPolities(text)) {
+    for (const actor of candidatePolities(candidate, actorResolver)) {
       add(actor, 8, `current evidence: ${normalizeString(candidate?.title) || "active development"}`);
     }
   }
@@ -880,12 +872,12 @@ const buildPlayerSphereActorKeys = ({
 
   // Current evidence can pull a nearby/connected actor into the sphere even
   // before a formal relation ledger exists. This is intentionally bounded to
-  // the Director's present-tense causal candidate set.
+  // the Director's present-tense causal candidate set, and to the polities each
+  // candidate's record names beside the player.
   for (const candidate of normalizeArray(causalCandidates)) {
-    const text = `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`;
-    const mentioned = actorResolver.mentionedPolities(text);
-    if (mentioned.some((actor) => normalizeString(actor).toLowerCase() === playerKey)) {
-      for (const actor of mentioned) add(actor);
+    const parties = candidatePolities(candidate, actorResolver);
+    if (parties.some((actor) => normalizeString(actor).toLowerCase() === playerKey)) {
+      for (const actor of parties) add(actor);
     }
   }
 
@@ -1052,16 +1044,10 @@ export const buildNativeWorldExplorationSlate = ({
       .map((storyline) => normalizeString(storyline?.title))
       .filter(Boolean);
 
+    // The candidates whose record names this actor among its parties.
     const candidateEvidence = normalizeArray(causalCandidates)
       .filter((candidate) =>
-        actorResolver.aliasesFor(actor).some((alias) => {
-          const token = normalizeString(alias).toLowerCase();
-          if (!token || token.length < 3) return false;
-          const haystack = normalizeString(
-            `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`,
-          ).toLowerCase();
-          return haystack.includes(token);
-        })
+        candidatePolities(candidate, actorResolver).some((party) => actorResolver.equivalent(party, actor))
       )
       .slice(0, 2)
       .map((candidate) => normalizeString(candidate?.title))
@@ -1100,13 +1086,16 @@ export const buildNativeWorldExplorationSlate = ({
   const playerCount = actorSlots.filter((slot) => slot.scope === "player-sphere").length;
   const playerDeficit = Math.max(0, EXPLORATION_TARGET_PER_SCOPE - playerCount);
   for (let index = 0; index < playerDeficit; index += 1) {
+    const domain = index === 0
+      ? "cross-border reaction, non-sovereign domestic spillover, regional security pressure, incoming diplomacy, economic shock, social response, or a NEW latent problem inside the player's current causal sphere that is not merely another routine update to a selected storyline; do not originate a fresh government/parliament/sovereign choice for the human polity"
+      : EXPLORATION_DOMAINS[(seed + 17 + index * 5) % EXPLORATION_DOMAINS.length];
     systemSlots.push({
       id: nextId++,
       actor: index === 0 ? "Player-sphere regional system" : `Player-sphere independent system ${index + 1}`,
-      domain:
-        index === 0
-          ? "cross-border reaction, non-sovereign domestic spillover, regional security pressure, incoming diplomacy, economic shock, social response, or a NEW latent problem inside the player's current causal sphere that is not merely another routine update to a selected storyline; do not originate a fresh government/parliament/sovereign choice for the human polity"
-          : EXPLORATION_DOMAINS[(seed + 17 + index * 5) % EXPLORATION_DOMAINS.length],
+      domain,
+      // What covers the lane (deriveWorldExplorationAudit): material between
+      // polities, for the regional lane and a cross-border domain.
+      crossBorder: index === 0 || CROSS_BORDER_DOMAINS.has(domain),
       deferredTopics: [],
       basis:
         "same-scope balance filler: local actors already receiving selected-storyline attention remain excluded from independent actor slots; inspect independent regional/system consequences rather than borrowing a wider-world actor or servicing the selected storyline again. PLAYER-SPHERE is not player authority: if the human government must choose, stop at the pressure/proposal unless exact prior player authority exists",
@@ -1151,16 +1140,19 @@ export const buildNativeWorldExplorationSlate = ({
     relevance: 0,
     scope: "wider-world",
     type: "global",
+    crossBorder: true,
   });
 
   const widerCount = actorSlots.filter((slot) => slot.scope === "wider-world").length +
     systemSlots.filter((slot) => slot.scope === "wider-world").length;
   const widerDeficit = Math.max(0, EXPLORATION_TARGET_PER_SCOPE - widerCount);
   for (let index = 0; index < widerDeficit; index += 1) {
+    const domain = EXPLORATION_DOMAINS[(seed + 31 + index * 7) % EXPLORATION_DOMAINS.length];
     systemSlots.push({
       id: nextId++,
       actor: `Wider-world independent system ${index + 1}`,
-      domain: EXPLORATION_DOMAINS[(seed + 31 + index * 7) % EXPLORATION_DOMAINS.length],
+      domain,
+      crossBorder: CROSS_BORDER_DOMAINS.has(domain),
       deferredTopics: [],
       basis:
         "same-scope balance filler: current evidence did not provide another independent named wider-world actor, so inspect structural/latent causes without borrowing a player-sphere actor",
@@ -1175,6 +1167,8 @@ export const buildNativeWorldExplorationSlate = ({
   return [...actorSlots, ...systemSlots].slice(0, 10);
 };
 
+// A storyline record of the answer: an object, or its `~` line
+// (id~status~pressure~momentum~startedDate~kind~title~participantsCSV~eventNumbersCSV~state).
 const decodeStorylineAuditRecords = (value) => {
   if (Array.isArray(value)) return value.filter(Boolean);
 
@@ -1182,17 +1176,24 @@ const decodeStorylineAuditRecords = (value) => {
     .split(/\r?\n/)
     .map((line) => {
       const text = normalizeString(line);
-      if (!text) return null;
+      if (!text || !text.includes("~")) return null;
 
       const fields = text.split("~");
 
       return {
         id: normalizeString(fields[0]),
+        status: normalizeString(fields[1]).toLowerCase(),
+        pressure: Number(fields[2]) || 0,
+        kind: normalizeString(fields[5]),
         title: normalizeString(fields[6]),
         participants: normalizeString(fields[7])
           .split(",")
           .map(normalizeString)
           .filter(Boolean),
+        eventIndexes: normalizeString(fields[8])
+          .split(",")
+          .map((entry) => Number.parseInt(entry.trim(), 10) - 1)
+          .filter((entry) => Number.isInteger(entry) && entry >= 0),
         state: normalizeString(fields.slice(9).join("~")),
       };
     })
@@ -1204,20 +1205,20 @@ const hasNativeLedgerRecords = (value) =>
     ? value.length > 0
     : Boolean(normalizeString(value));
 
-const eventExplorationText = (event) => [
-  normalizeString(event?.id),
-  normalizeString(event?.title),
-  normalizeString(event?.description),
-  normalizeArray(event?.combatants).join(" "),
-  JSON.stringify(event?.impacts ?? {}),
-].filter(Boolean).join(" ");
+// The polities a ledger's records name, for a ledger already read into
+// records (a `~` line names its parties in fields of its own, and a raw ledger
+// is counted only as material).
+const ledgerPolities = (value) => normalizeArray(value)
+  .filter(isPlainObject)
+  .flatMap(ledgerRecordPolities);
 
-const storylineExplorationText = (entry) => [
-  normalizeString(entry?.id),
-  normalizeString(entry?.title),
-  normalizeString(entry?.state),
-  normalizeArray(entry?.participants).join(" "),
-].filter(Boolean).join(" ");
+// The polities an outreach letter names: who writes it, to whom, and the
+// governments in it.
+const outreachPolities = (chat) => uniqueStrings([
+  chat?.speaker,
+  chat?.to,
+  ...normalizeArray(chat?.countries).map(participantName),
+]);
 
 export const deriveWorldExplorationAudit = (
   candidate,
@@ -1236,8 +1237,6 @@ export const deriveWorldExplorationAudit = (
     candidate?.relationUpdates,
     candidate?.agreementUpdates,
   ];
-  const ledgerText = JSON.stringify(ledgerValues);
-  const outreachText = JSON.stringify(outreach);
   const entries = new Map();
   const claimedEventIndexes = new Set();
   const claimedStorylineIds = new Set();
@@ -1246,10 +1245,16 @@ export const deriveWorldExplorationAudit = (
   // that catalogue inside every actor/text probe turns exploration validation into
   // an accidental quadratic main-thread workload.
   const resolver = createWorldActorResolver(world, gameCountry);
+  // Who each event concerns, by its structured fields (eventStructuredPartyNames),
+  // and who the outreach and the ledgers name. Never a name in a text.
+  const eventParties = events.map((event) => eventPartyPolities(event, resolver));
+  const outreachParties = outreach.flatMap(outreachPolities);
+  const ledgerParties = ledgerValues.flatMap(ledgerPolities);
+  const names = (list, actor) => normalizeArray(list).some((name) => resolver.equivalent(name, actor));
 
   const claimEventForActor = (actor) => {
     for (let index = 0; index < events.length; index += 1) {
-      if (resolver.mentions(actor, eventExplorationText(events[index]))) {
+      if (names(eventParties[index], actor)) {
         claimedEventIndexes.add(index);
         return `event${index + 1}`;
       }
@@ -1259,7 +1264,7 @@ export const deriveWorldExplorationAudit = (
 
   const claimStorylineForActor = (actor) => {
     for (const update of storylineUpdates) {
-      if (resolver.mentions(actor, storylineExplorationText(update))) {
+      if (names(update?.participants, actor)) {
         const id = normalizeString(update?.id);
         if (id) claimedStorylineIds.add(id.toLowerCase());
         return id ? `storyline:${id}` : "";
@@ -1279,21 +1284,11 @@ export const deriveWorldExplorationAudit = (
 
     if (!verdict && actor) verdict = claimStorylineForActor(actor);
 
-    if (
-      !verdict &&
-      actor &&
-      outreach.length > 0 &&
-      resolver.mentions(actor, outreachText)
-    ) {
+    if (!verdict && actor && names(outreachParties, actor)) {
       verdict = "outreach";
     }
 
-    if (
-      !verdict &&
-      actor &&
-      ledgerValues.some(hasNativeLedgerRecords) &&
-      resolver.mentions(actor, ledgerText)
-    ) {
+    if (!verdict && actor && names(ledgerParties, actor)) {
       verdict = "ledger";
     }
 
@@ -1307,10 +1302,12 @@ export const deriveWorldExplorationAudit = (
     const id = Number(slot?.id);
     if (!Number.isInteger(id)) continue;
 
-    const domain = normalizeString(slot?.domain).toLowerCase();
     let verdict = "";
 
     if (slot?.type === "crisis-discovery") {
+      // A genuinely NEW persistent unstable process: a storyline the world does
+      // not have yet, of a crisis kind (runtime/storylineKinds.js), under real
+      // pressure, with a visible event.
       const existingIds = new Set(
         normalizeArray(world?.storylines)
           .map((entry) => normalizeString(entry?.id).toLowerCase())
@@ -1318,15 +1315,13 @@ export const deriveWorldExplorationAudit = (
       );
       const discovered = storylineUpdates.find((entry) => {
         const idValue = normalizeString(entry?.id).toLowerCase();
-        const kind = normalizeString(entry?.kind);
         const status = normalizeString(entry?.status).toLowerCase();
         return (
           idValue &&
           !existingIds.has(idValue) &&
           status !== "resolved" &&
-          CRISIS_DISCOVERY_KIND_RE.test(kind) &&
+          CRISIS_STORYLINE_KINDS.includes(storylineKindOf(entry?.kind)) &&
           (Number(entry?.pressure) || 0) >= 40 &&
-          deriveWorldTrajectoryValue(entry) >= 3 &&
           normalizeArray(entry?.eventIndexes).length > 0
         );
       });
@@ -1335,17 +1330,15 @@ export const deriveWorldExplorationAudit = (
         if (storylineId) claimedStorylineIds.add(storylineId.toLowerCase());
         verdict = storylineId ? `storyline:${storylineId}` : "new-crisis";
       }
-    } else if (/diplom|mediat|align|trade|alliance|cross-border|third-party/.test(domain)) {
+    } else if (slot?.crossBorder === true) {
       if (outreach.length > 0) {
         verdict = "outreach";
       } else if (ledgerValues.some(hasNativeLedgerRecords)) {
         verdict = "ledger";
       } else {
         for (let index = 0; index < events.length; index += 1) {
-          const text = eventExplorationText(events[index]);
-          const actorCount = resolver.mentionedPolities(text).length;
           const createdChats = normalizeArray(events[index]?.impacts?.createdChats).length;
-          if (actorCount >= 2 || createdChats > 0) {
+          if (eventParties[index].length >= 2 || createdChats > 0) {
             claimedEventIndexes.add(index);
             verdict = `event${index + 1}`;
             break;
@@ -1647,199 +1640,34 @@ const sanitizeNoOpRegionControlOps = (event, world) => {
   };
 };
 
-const sanitizeProcessOnlyPolityUpdates = (event) => {
-  if (!event || typeof event !== "object") {
-    return { event, removed: 0 };
-  }
-
-  const text =
-    `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-
-  if (
-    !PROCESS_ONLY_POLITY_UPDATE_RE.test(text) ||
-    CONCRETE_POLITY_OUTCOME_RE.test(text)
-  ) {
-    return { event, removed: 0 };
-  }
-
-  const impacts =
-    event?.impacts && typeof event.impacts === "object"
-      ? event.impacts
-      : {};
-
-  const changes = normalizeArray(impacts?.polityChanges);
-  if (!changes.length) return { event, removed: 0 };
-
-  const kept = changes.filter((change) =>
-    normalizeString(change?.operation).toLowerCase() !== "update"
-  );
-
-  const removed = changes.length - kept.length;
-  if (!removed) return { event, removed: 0 };
-
-  return {
-    event: {
-      ...event,
-      impacts: {
-        ...impacts,
-        polityChanges: kept,
-      },
-    },
-    removed,
-  };
-};
-
-const falseNonBelligerentWartimeReason = (
-  event,
-  world,
-  gameCountry = "",
-  resolver = null,
-) => {
-  const text =
-    `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-
-  if (!WAR_DEPENDENT_HOMEFRONT_RE.test(text)) return "";
-  if (PREPAREDNESS_RE.test(text) || FOREIGN_SPILLOVER_RE.test(text)) return "";
-
-  const actors = (resolver || createWorldActorResolver(world, gameCountry)).mentionedPolities(text);
-
-  if (!actors.length && event?.playerRelated && normalizeString(gameCountry)) {
-    actors.push(normalizeString(gameCountry));
-  }
-
-  if (!actors.length) return "";
-  const records = polityAliasRecords(world);
-  if (actors.some((actor) => actorIsActiveBelligerent(actor, world, records))) return "";
-
-  return `war-dependent domestic/economic condition asserted for non-belligerent actor(s): ${actors.join(", ")}`;
-};
-
-const routineMilitaryNoDeltaReason = (event) => {
-  const title = normalizeString(event?.title);
-  const text = `${title} ${normalizeString(event?.description)}`;
-
-  if (CLEARLY_NON_MILITARY_TITLE_RE.test(title)) return "";
-  if (!ROUTINE_MILITARY_CUE_RE.test(text)) return "";
-  if (STRONG_MILITARY_CONSEQUENCE_RE.test(text)) return "";
-  // Burning the dead destroys them, which a patrol that only looked does not:
-  // "Rangers of the Night's Watch Burn Twenty-Two Wights Beside Whitetree" was
-  // hidden as routine in a Game of Thrones skip. Not "burning", which is fires
-  // seen in the distance.
-  if (/\bburn(?:s|ed|t)?\b/i.test(text)) return "";
-  // A chapter of a storyline is not routine, however quiet: the story it belongs
-  // to is the reason it was written. (The administrative rule below already
-  // spares them.)
-  if (normalizeArray(event?.storylineIds).length) return "";
-  // The cue is single words, so it fires on a noun in passing: a drone
-  // programme's "unmanned surface patrol vessels" hid a Project milestone as
-  // "routine military activity". Something finished or brought into service is
-  // not a routine continuation, whatever it mentions on the way.
-  if (CONCRETE_MILESTONE_RE.test(text)) return "";
-  // The player's own news is left to the curator, which judges routine
-  // military continuation with the analyst's reading rather than a word list.
-  if (event?.playerRelated === true || normalizeString(event?.kind).toLowerCase() === "player") return "";
-  // An event explicitly bound to a queued player Action is the order's
-  // canonical answer. Hiding it here would make settleOrders carry the
-  // same order over as overdue even though the simulator cited it exactly.
-  if (normalizeArray(event?.impacts?.actionIds).length) return "";
-  if (hardImpactKeysForEvent(event).length) return "";
-
-  return "routine military continuation with no native material consequence";
-};
-
-
-const routineAdministrativeNoDeltaReason = (event) => {
-  const text =
-    `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-
-  if (!ROUTINE_ADMINISTRATIVE_CUE_RE.test(text)) return "";
-  if (ADMINISTRATIVE_MATERIAL_OUTCOME_RE.test(text)) return "";
-  if (hardImpactKeysForEvent(event).length) return "";
-  if (normalizeArray(event?.storylineIds).length) return "";
-  if (normalizeString(event?.warId)) return "";
-  if (event?.playerRelated === true) return "";
-  if (normalizeArray(event?.impacts?.actionIds).length) return "";
-
-  return "routine administrative/process card with no material native consequence";
-};
-
-
-
-const AUTHORITY_BINDING_STOP_WORDS = new Set([
-  "the", "and", "for", "with", "from", "that", "this", "into", "onto", "over", "under",
-  "its", "their", "your", "our", "his", "her", "they", "them", "you", "are", "was", "were",
-  "will", "would", "shall", "should", "can", "could", "have", "has", "had", "been", "being",
-  "new", "current", "existing", "event", "events", "government", "state", "polity", "country",
-]);
-
-const authorityTokenStem = (value) => {
-  const token = normalizeString(value).toLocaleLowerCase();
-  if (!token) return "";
-  return token.length >= 7 ? token.slice(0, 7) : token;
-};
-
-const authorityTokens = (value, excluded = new Set()) => {
-  const text = normalizeString(value).toLocaleLowerCase();
-  if (!text) return new Set();
-  const matches = text.match(/[\p{L}\p{N}]+/gu) || [];
-  const result = new Set();
-  for (const raw of matches) {
-    if (raw.length < 3 || AUTHORITY_BINDING_STOP_WORDS.has(raw)) continue;
-    const token = authorityTokenStem(raw);
-    if (!token || excluded.has(token)) continue;
-    result.add(token);
-  }
-  return result;
-};
-
-const authoritySemanticScore = (left, right, { excluded = new Set() } = {}) => {
-  const aText = normalizeString(left).toLocaleLowerCase();
-  const bText = normalizeString(right).toLocaleLowerCase();
-  if (!aText || !bText) return 0;
-
-  const a = authorityTokens(aText, excluded);
-  const b = authorityTokens(bText, excluded);
-  if (!a.size || !b.size) return 0;
-
-  let shared = 0;
-  let distinctive = 0;
-  for (const token of a) {
-    if (!b.has(token)) continue;
-    shared += 1;
-    if (token.length >= 5) distinctive += 1;
-  }
-  if (!shared) return 0;
-
-  const eventCoverage = shared / a.size;
-  const sourceCoverage = shared / b.size;
-  const dice = (2 * shared) / (a.size + b.size);
-  let score = Math.max(dice, (0.72 * eventCoverage) + (0.28 * sourceCoverage));
-
-  // Exact normalized phrase containment is strong evidence, but never let a
-  // single generic word become authority by itself.
-  if (Math.min(aText.length, bText.length) >= 14 && (aText.includes(bText) || bText.includes(aText))) {
-    score = Math.max(score, 0.92);
-  }
-  if (distinctive < 2 && score < 0.9) score = Math.min(score, 0.24);
-  return Number(score.toFixed(4));
-};
-
-const eventAuthoritySemanticText = (event) => [
-  normalizeString(event?.title),
-  normalizeString(event?.description),
-].filter(Boolean).join(" ");
-
-const eventAuthorityTitleText = (event) => normalizeString(event?.title);
-
-const actionAuthoritySemanticText = (action) => [
-  normalizeString(action?.title),
-  normalizeString(action?.text),
-  normalizeString(action?.rawInput),
-].filter(Boolean).join(" ");
-
-const messageAuthoritySemanticText = (message) => [
-  normalizeString(message?.text || message?.content || message?.message),
-].filter(Boolean).join(" ");
+// --- Whose decision an event is ----------------------------------------------
+//
+// An event's agency says who decided it, and on whose authority. It is read
+// from what the event carries, never from its words: the governments and
+// institutions it lists as deciding it (event.actors, a field of the skip's
+// event, sent in every game but a shared game's host, which has no room for
+// it: gameplaySchemas.js withEventActors), the parties of an agreement it
+// starts and the side that starts or joins a war by it (the answer's own
+// records, tied to it by id), a government
+// whose own strategy it rewrites, the queued orders it cites
+// (impacts.actionIds) and the open mandate it carries out. It used to be read
+// from its title's subject (English verbs cut it out), from English words for
+// police, protests, storms and meetings, and from the words it shared with the
+// player's orders and messages. In another language a player's own event was
+// "not safely classifiable", a treaty agreed in chat was unproven, and an
+// order was settled, or stripped from the event that answered it, by what its
+// words happened to share with the event's.
+//
+// A person's country decides only on that person's word: an order of theirs
+// the event cites, or a message of theirs to every other party of what the
+// event commits them to. Which of their words agreed to what is the model's to
+// read when it writes the event; the engine checks only who spoke to whom. A
+// shared game holds this hard (screenGeneratedWorldEvents); single player
+// logs it.
+//
+// An event that lists no one deciding it, cites no order, carries out no
+// mandate and belongs to no process already under way has no agency: the
+// neutral default, kept as written. Nothing is guessed for it.
 
 const currentActionRecords = (actions) => normalizeArray(actions)
   .filter((entry) => {
@@ -1849,41 +1677,40 @@ const currentActionRecords = (actions) => normalizeArray(actions)
   .map((entry) => ({
     id: normalizeString(entry?.id),
     source: entry,
-    text: actionAuthoritySemanticText(entry),
   }))
-  .filter((entry) => entry.id && entry.text);
+  .filter((entry) => entry.id);
 
 const currentActionIds = (actions) => new Set(currentActionRecords(actions).map((entry) => entry.id));
 
-const playerCommitmentRecords = (chats, resolver, playerCanonical, { roleFallback = true } = {}) => {
+// The messages a human wrote, each with the governments of its conversation.
+// Speaker identity is stronger provenance than generic chat role labels: the
+// role (user/player) counts only when the transport names no speaker, and
+// never in a shared game, where several people write.
+const humanMessageRecords = (chats, resolver, humanCanonical, { roleFallback = true } = {}) => {
   const records = [];
   for (const chat of normalizeArray(chats)) {
+    const countries = uniqueStrings(normalizeArray(chat?.countries).map(participantName));
     for (const message of normalizeArray(chat?.messages)) {
       const id = normalizeString(message?.id);
-      const text = messageAuthoritySemanticText(message);
-      if (!id || !text) continue;
+      if (!id || !normalizeString(message?.text || message?.content || message?.message)) continue;
       const role = normalizeString(message?.role).toLowerCase();
       const claimedActor = normalizeString(message?.polityKey || message?.code || message?.speaker);
-
-      // Speaker identity is stronger provenance than generic chat role labels.
-      // Only fall back to role=user/player when the transport has no actor identity.
-      const authoredByPlayer = claimedActor
-        ? resolver.equivalent(claimedActor, playerCanonical)
+      const authored = claimedActor
+        ? resolver.equivalent(claimedActor, humanCanonical)
         : roleFallback && (role === "user" || role === "player");
-      if (!authoredByPlayer) continue;
-      records.push({ id, source: message, text });
+      if (authored) records.push({ id, countries });
     }
   }
   return records;
 };
 
 // The human polities whose sovereignty the guard protects, and what each has
-// authorized: its own queued orders and the diplomatic messages it wrote.
-// Single player has one, the player, and every order is theirs. In a shared
-// game (runtime/humanPolities.js) an order counts only for the polity that gave
-// it (ownerCode, the player's when blank) and a message only for its speaker:
-// with several people writing, a bare "user" role says nothing about whose word
-// it is. The resolver must know every human (createWorldActorResolver humans).
+// authorized: its own queued orders and the messages it wrote. Single player
+// has one, the player, and every order is theirs. In a shared game
+// (runtime/humanPolities.js) an order counts only for the polity that gave it
+// (ownerCode, the player's when blank) and a message only for its speaker: with
+// several people writing, a bare "user" role says nothing about whose word it
+// is. The resolver must know every human (createWorldActorResolver humans).
 const humanAuthorities = ({ resolver, gameCountry = "", humanCountries = [], actions = [], chats = [] }) => {
   const primary = resolver.canonical(normalizeString(gameCountry));
   const canonicals = uniqueStrings(
@@ -1894,15 +1721,15 @@ const humanAuthorities = ({ resolver, gameCountry = "", humanCountries = [], act
   const shared = canonicals.length > 1;
   const records = currentActionRecords(actions);
   const humans = canonicals.map((canonical) => {
-    const commitmentRecords = playerCommitmentRecords(chats, resolver, canonical, { roleFallback: !shared });
+    const messages = humanMessageRecords(chats, resolver, canonical, { roleFallback: !shared });
     return {
       canonical,
       actionRecords: records.filter((entry) => {
         const owner = normalizeString(entry.source?.ownerCode);
         return resolver.equivalent(owner || primary, canonical);
       }),
-      commitmentRecords,
-      commitmentIds: new Set(commitmentRecords.map((entry) => entry.id)),
+      messages,
+      commitmentIds: new Set(messages.map((entry) => entry.id)),
     };
   });
   // The human a polity name stands for, or null for everyone else.
@@ -1947,83 +1774,16 @@ const canonicalProcessIds = (world) => {
   return ids;
 };
 
-const resolveUniqueSemanticAuthority = (event, records, {
-  playerCanonical = "",
-  threshold = 0.34,
-  margin = 0.1,
-} = {}) => {
-  const excluded = authorityTokens(playerCanonical);
-  const fullText = eventAuthoritySemanticText(event);
-  const titleText = eventAuthorityTitleText(event);
-  const scored = normalizeArray(records)
-    .map((entry) => ({
-      ...entry,
-      score: Math.max(
-        authoritySemanticScore(titleText, entry.text, { excluded }),
-        authoritySemanticScore(fullText, entry.text, { excluded }),
-      ),
-    }))
-    .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
-
-  const best = scored[0] || null;
-  const second = scored[1] || null;
-  if (!best || best.score < threshold) {
-    return { match: null, scored, reason: "no-semantic-match" };
-  }
-  if (second && best.score - second.score < margin) {
-    return { match: null, scored, reason: "ambiguous-semantic-match" };
-  }
-  return { match: best, scored, reason: "unique-semantic-match" };
-};
-
-// One event can carry out several of the player's queued orders at once: an
-// advisor that queues "strike the bridge", "break the blockade" and "deploy air
-// defence" gets one event, "Britain launches strike operations and an air
-// defence shield", that answers all three. Measured one order at a time, each
-// covers only its own part of the event, so none reaches the threshold (or all
-// tie and the match is called ambiguous). Seen in a player's Game
-// (2026-09-30): such an event was then read as a ministry's routine work,
-// refused as delegated-routine, and dropped, taking the player's orders and
-// the fleet's move with it.
-//
-// So the orders the event names in impacts.actionIds, when they are CURRENT
-// queued orders, are also measured together, as one text, and at a lower bar
-// (CLAIMED_ORDER_THRESHOLD) than an order the event does not name. The ids are
-// never trusted alone: the event still has to share at least two distinctive
-// words with what the orders say (authoritySemanticScore caps anything less at
-// 0.24). The same went for a single order (2026-09-30): "Mobilize Project
-// Ironclad Survey Teams" answered by a long event about the survey teams'
-// deployment, refused for the same reason. Every contender is one of the
-// player's own orders, so the authority is the player's whichever it is; the
-// best one is the authorityRef.
-//
-// Only the named orders the event itself carries out are bound: each must, on
-// its own, share two distinctive words with the event (a score at the bar). An
-// event that answers one order but names three would otherwise settle all
-// three; the ones it does not carry out are returned as `unproven`, and their
-// ids are taken off the event (bindWorldEventAuthorityRefs).
-const CLAIMED_ORDER_THRESHOLD = 0.25;
-const resolvePlayerOrderAuthority = (event, records, { playerCanonical = "" } = {}) => {
-  const resolved = resolveUniqueSemanticAuthority(event, records, { playerCanonical, threshold: 0.34, margin: 0.1 });
-  const claimedIds = new Set(normalizeArray(event?.impacts?.actionIds).map(normalizeString).filter(Boolean));
-  const claimed = resolved.scored.filter((entry) => claimedIds.has(entry.id));
-  const proven = claimed.filter((entry) => entry.score >= CLAIMED_ORDER_THRESHOLD);
-  // One order the event plainly answers: it, and the other named orders the
-  // event also carries out, are bound; the rest of what it names is not.
-  if (resolved.match) {
-    const matches = [resolved.match, ...proven.filter((entry) => entry.id !== resolved.match.id)];
-    const unproven = claimed.filter((entry) => !matches.some((match) => match.id === entry.id)).map((entry) => entry.id);
-    return { ...resolved, matches, unproven };
-  }
-
-  if (!proven.length) return { ...resolved, matches: [], unproven: [] };
-  const together = resolveUniqueSemanticAuthority(event, [{
-    id: proven[0].id,
-    text: proven.map((entry) => entry.text).join(" "),
-  }], { playerCanonical, threshold: CLAIMED_ORDER_THRESHOLD, margin: 0 });
-  if (!together.match) return { ...resolved, matches: [], unproven: [] };
-  const unproven = claimed.filter((entry) => !proven.includes(entry)).map((entry) => entry.id);
-  return { match: proven[0], matches: proven, unproven, scored: resolved.scored, reason: "named-player-orders-match" };
+const nativeCanonicalProcessCandidates = (event, world) => {
+  const allowed = canonicalProcessIds(world);
+  const candidates = new Set();
+  const add = (value) => {
+    const id = normalizeString(value);
+    if (id && allowed.has(id)) candidates.add(id);
+  };
+  for (const id of normalizeArray(event?.storylineIds)) add(id);
+  add(event?.warId);
+  return candidates;
 };
 
 const mirrorPrimaryAgencyRow = (agency) => {
@@ -2039,16 +1799,9 @@ const mirrorPrimaryAgencyRow = (agency) => {
   };
 };
 
-const INSTITUTION_SUBPRINCIPAL_HINT_RE = /\b(?:council|committee|secretariat|commission|assembly|board|bureau|office|service|agency|command|directorate|mission|delegation|court|panel|ministers?|ministerial|summit|conference|working group)\b/i;
-
-// Words of any script: an institution named in Cyrillic, Arabic or Chinese
-// used to fold to nothing here, and so could never be the one a text named.
-const normalizeInstitutionAuthorityPhrase = (value) => normalizeString(value)
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .toLocaleLowerCase()
-  .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
-  .trim();
+// A name as the game's own vocabulary is compared: case and spacing folded,
+// nothing else.
+const identityKey = (value) => normalizeString(value).normalize("NFKC").toLocaleLowerCase();
 
 const activeInstitutionEntries = (world = {}) => {
   const ledger = world?.institutions?.byId || world?.institutions || {};
@@ -2059,351 +1812,22 @@ const activeInstitutionEntries = (world = {}) => {
     .map(([id, institution]) => ({ ...institution, id: institution.id || id }));
 };
 
-// A model may name a real organ/sub-body (for example "EU Foreign Affairs Council")
-// while the canonical ledger owns the parent institution ("European Union"). Exact
-// canonical identity remains preferred. A bounded fallback is allowed only when one
-// active institution identity appears as a whole phrase inside an obvious institutional
-// organ label. This is data-driven and deliberately fails closed on ambiguity.
+// The one active institution a name is, by its exact id, name, short name or
+// alias (case and spacing aside). Two institutions under one name are no
+// answer. A name that merely contains an institution's ("EU Foreign Affairs
+// Council") is not that institution: it used to be, when it held an English
+// organ word (council, committee, ministers), and in no other language.
 const resolveInstitutionAuthorityPrincipal = (world = {}, principal = "") => {
-  const principalPhrase = normalizeInstitutionAuthorityPhrase(principal);
-  if (!principalPhrase) return null;
-
-  const entries = activeInstitutionEntries(world);
-  const identityRows = entries.map((institution) => ({
-    institution,
-    identities: [institution.id, institution.name, institution.shortName, ...normalizeArray(institution.aliases)]
-      .map(normalizeInstitutionAuthorityPhrase)
-      .filter(Boolean),
-  }));
-
-  // Exact identity is still strict: duplicate names/aliases are ambiguous and
-  // therefore fail closed rather than inheriting resolveInstitutionRecord's
-  // first-match convenience semantics.
-  const exactMatches = identityRows.filter(({ identities }) => identities.includes(principalPhrase));
-  if (exactMatches.length === 1) return exactMatches[0].institution;
-  if (exactMatches.length > 1) return null;
-
-  if (!INSTITUTION_SUBPRINCIPAL_HINT_RE.test(principalPhrase)) return null;
-
-  const rootedMatches = identityRows.filter(({ identities }) => identities.some((identity) => (
-    principalPhrase.startsWith(`${identity} `)
-    || principalPhrase.endsWith(` ${identity}`)
-    || principalPhrase.includes(` ${identity} `)
-  )));
-  return rootedMatches.length === 1 ? rootedMatches[0].institution : null;
+  const key = identityKey(principal);
+  if (!key) return null;
+  const matches = activeInstitutionEntries(world).filter((institution) =>
+    [institution.id, institution.name, institution.shortName, ...normalizeArray(institution.aliases)]
+      .some((identity) => identityKey(identity) === key));
+  return matches.length === 1 ? matches[0] : null;
 };
 
-const nativeCanonicalProcessCandidates = (event, world) => {
-  const allowed = canonicalProcessIds(world);
-  const candidates = new Set();
-  const add = (value) => {
-    const id = normalizeString(value);
-    if (id && allowed.has(id)) candidates.add(id);
-  };
-  for (const id of normalizeArray(event?.storylineIds)) add(id);
-  add(event?.warId);
-  return candidates;
-};
-
-// Native authority binder: model output may classify WHOSE authority is being
-// exercised, but opaque canonical ids are never trusted as model-authored facts.
-// This binder resolves those ids against current save state using semantic event
-// evidence and already-established native links. If a unique canonical source
-// cannot be proved, it deliberately leaves the ref blank so the existing hard
-// authority validator rejects the event. This is the single seam for player
-// orders, player-authored diplomatic commitments, and canonical-process refs.
-export const bindWorldEventAuthorityRefs = (candidate, {
-  world = {},
-  gameCountry = "",
-  // A shared game's human polities (runtime/humanPolities.js humanCountriesOf);
-  // single player passes none and has only gameCountry.
-  humanCountries = [],
-  actions = [],
-  chats = [],
-  resolver: sharedResolver = null,
-} = {}) => {
-  if (!candidate || typeof candidate !== "object") {
-    return { applied: 0, unresolved: [], bindings: [] };
-  }
-
-  // Preserve the earlier native storyline binder as one source of deterministic
-  // process provenance. Raw model update indexes remain excluded here.
-  propagateCanonicalProcessAuthorityRefs(candidate, {
-    world,
-    includeStorylineUpdates: false,
-  });
-
-  // A resolver handed in must already know every human polity (see the screen).
-  const resolver = sharedResolver || createWorldActorResolver(world, gameCountry, { humans: otherHumans(gameCountry, humanCountries) });
-  const authorities = humanAuthorities({ resolver, gameCountry, humanCountries, actions, chats });
-  const bindings = [];
-  const unresolved = [];
-  let applied = 0;
-
-  candidate.events = normalizeArray(candidate?.events).map((event, eventIndex) => {
-    if (!event || typeof event !== "object") return event;
-
-    let eventWithAgency = event;
-    let rawAgency = event?.agency;
-    // The jump never writes event.actors; the parties of a commitment this
-    // event starts are who acted. Used only to derive agency, never stored.
-    const ledgerActors = semanticActorTokens(event).length ? [] : agreementPartiesStartedByEvent(candidate, event, eventIndex);
-    const derivationEvent = ledgerActors.length ? { ...event, actors: ledgerActors } : event;
-    const rawStructureReason = eventAgencyStructureReason(rawAgency);
-    const rawNormalized = rawStructureReason ? null : normalizeEventAgency(rawAgency);
-
-    // event.agency is a model hint, not canonical truth. Missing or malformed
-    // provenance is reconstructed from semantic event evidence and current canon
-    // whenever native code can do so unambiguously. A model claim that touches
-    // player sovereignty is never overwritten here; it must pass the hard player
-    // authority checks below.
-    if (!rawNormalized || rawStructureReason) {
-      const derived = deriveNativeEventAgency(derivationEvent, {
-        world,
-        resolver,
-        humans: authorities.humans,
-      });
-      if (derived.agency) {
-        rawAgency = derived.agency;
-        eventWithAgency = { ...event, agency: rawAgency };
-        applied += 1;
-        bindings.push({
-          eventIndex,
-          rowIndex: -1,
-          authority: "native-provenance",
-          authorityRef: "",
-          principal: normalizeString(rawAgency.principal),
-          semanticScore: 1,
-          source: derived.source,
-          reason: derived.reason,
-        });
-      } else {
-        unresolved.push({
-          eventIndex,
-          rowIndex: -1,
-          authority: "native-provenance",
-          reason: derived.reason || rawStructureReason || "missing-event-agency",
-          candidateCount: 0,
-          bestScore: 0,
-          source: derived.source || "native-unresolved",
-          // The human whose choice it was, when several people play.
-          ...(derived.polity ? { polity: derived.polity } : {}),
-        });
-        return eventWithAgency;
-      }
-    }
-
-    let agency = { ...rawAgency };
-    let rows = Array.isArray(rawAgency.sovereignActors)
-      ? rawAgency.sovereignActors.map((row) => ({ ...row }))
-      : [];
-
-    const agencyAuthority = normalizeString(agency.authority).toLowerCase();
-    if (normalizeString(agency.principalKind).toLowerCase() === "institution"
-        && ["autonomous", "independent"].includes(agencyAuthority)) {
-      const institution = resolveInstitutionAuthorityPrincipal(world, agency.principal);
-      const canonicalPrincipal = normalizeString(institution?.name || institution?.shortName || institution?.id);
-      if (canonicalPrincipal && canonicalPrincipal !== normalizeString(agency.principal)) {
-        const originalPrincipal = normalizeString(agency.principal);
-        agency.principal = canonicalPrincipal;
-        applied += 1;
-        bindings.push({
-          eventIndex,
-          rowIndex: -1,
-          authority: "institution-principal",
-          authorityRef: normalizeString(institution?.id),
-          principal: originalPrincipal,
-          canonicalPrincipal,
-          semanticScore: 1,
-        });
-      }
-    }
-
-    // Backward-compatible normalization for a singular sovereign mirror.
-    if (!rows.length && normalizeString(rawAgency.sovereignPolity) &&
-        EVENT_AGENCY_SOVEREIGN_AUTHORITIES.includes(normalizeString(rawAgency.authority).toLowerCase())) {
-      rows = [{
-        polity: normalizeString(rawAgency.sovereignPolity),
-        authority: normalizeString(rawAgency.authority).toLowerCase(),
-        authorityRef: normalizeString(rawAgency.authorityRef),
-      }];
-    }
-
-    const boundActionIds = [];
-    // Named by the event but not carried out by it (resolvePlayerOrderAuthority).
-    const unprovenActionIds = new Set();
-    rows = rows.map((row, rowIndex) => {
-      const next = { ...row };
-      const polity = normalizeString(row?.polity || row?.sovereignPolity);
-      const canonical = resolver.canonical(polity);
-      const authority = normalizeString(row?.authority).toLowerCase();
-      // Which human this row speaks for; its authority can come only from that
-      // human's own orders and messages.
-      const human = canonical ? authorities.find(canonical) : null;
-
-      // Opaque ids on autonomous AI sovereign rows are never meaningful.
-      if (authority === "autonomous") {
-        next.authorityRef = "";
-        return next;
-      }
-      if (!human) return next;
-
-      if (authority === "player-order") {
-        // The orders the event carries out, by what it says (one order, or the
-        // several it names); failing that, the one order it cites, unless the
-        // event carries a sovereign choice of this human's (deriveNativeEventAgencyFor).
-        const semantic = resolvePlayerOrderAuthority(eventWithAgency, human.actionRecords, { playerCanonical: human.canonical });
-        const choosing = eventMakesStructuredChoiceFor(ledgerActors.length ? { ...eventWithAgency, actors: ledgerActors } : eventWithAgency, resolver, human.canonical);
-        const resolved = semantic.match || choosing ? semantic : citedCurrentOrder(eventWithAgency, human.actionRecords) || semantic;
-        next.authorityRef = resolved.match?.id || "";
-        for (const id of normalizeArray(resolved.unproven)) unprovenActionIds.add(id);
-        if (resolved.match) {
-          boundActionIds.push(...resolved.matches.map((entry) => entry.id));
-          applied += 1;
-          bindings.push({
-            eventIndex,
-            rowIndex,
-            authority,
-            authorityRef: resolved.match.id,
-            semanticScore: resolved.match.score,
-          });
-        } else {
-          unresolved.push({
-            eventIndex,
-            rowIndex,
-            authority,
-            reason: resolved.reason,
-            candidateCount: human.actionRecords.length,
-            bestScore: resolved.scored[0]?.score || 0,
-          });
-        }
-        return next;
-      }
-
-      if (authority === "player-commitment") {
-        const resolved = resolveUniqueSemanticAuthority(eventWithAgency, human.commitmentRecords, {
-          playerCanonical: human.canonical,
-          threshold: 0.28,
-          margin: 0.08,
-        });
-        next.authorityRef = resolved.match?.id || "";
-        if (resolved.match) {
-          applied += 1;
-          bindings.push({
-            eventIndex,
-            rowIndex,
-            authority,
-            authorityRef: resolved.match.id,
-            semanticScore: resolved.match.score,
-          });
-        } else {
-          unresolved.push({
-            eventIndex,
-            rowIndex,
-            authority,
-            reason: resolved.reason,
-            candidateCount: human.commitmentRecords.length,
-            bestScore: resolved.scored[0]?.score || 0,
-          });
-        }
-        return next;
-      }
-
-      return next;
-    });
-
-    if (rows.length) {
-      agency = mirrorPrimaryAgencyRow({ ...agency, sovereignActors: rows });
-    } else if (normalizeString(agency.authority).toLowerCase() === "canonical-process") {
-      // canonical-process may not borrow sovereign discretion. Prefer hard native
-      // event links (storyline/war). If none exists, a passed institutional
-      // resolution may own a later delegated consequence only when the event's
-      // institution principal resolves canonically and exactly one still-open
-      // resolution matches the event semantics. Proposal ids remain native-owned.
-      const candidates = nativeCanonicalProcessCandidates(eventWithAgency, world);
-      let authorityRef = "";
-      let semanticScore = 0;
-      let reason = candidates.size > 1 ? "ambiguous-native-process-link" : "missing-native-process-link";
-      let candidateCount = candidates.size;
-      if (candidates.size === 1) {
-        authorityRef = [...candidates][0];
-        semanticScore = 1;
-      } else if (candidates.size === 0 && normalizeString(agency.principalKind).toLowerCase() === "institution") {
-        const institution = resolveInstitutionRecord(world, agency.principal);
-        const records = institution
-          ? listInstitutionResolutionAuthorities(world, { institutionId: institution.id })
-          : [];
-        const resolved = resolveUniqueSemanticAuthority(eventWithAgency, records, { threshold: 0.34, margin: 0.1 });
-        authorityRef = resolved.match?.id || "";
-        semanticScore = resolved.match?.score || 0;
-        reason = resolved.reason;
-        candidateCount = records.length;
-      }
-      if (authorityRef) {
-        agency.authorityRef = authorityRef;
-        applied += 1;
-        bindings.push({ eventIndex, rowIndex: -1, authority: "canonical-process", authorityRef, semanticScore });
-      } else {
-        agency.authorityRef = "";
-        unresolved.push({
-          eventIndex,
-          rowIndex: -1,
-          authority: "canonical-process",
-          reason,
-          candidateCount,
-          bestScore: semanticScore,
-        });
-      }
-    }
-
-    // Beta deliberately exposes queued action ids to the time-skip model so an
-    // event can say which CURRENT player action it resolves. Treat those ids as
-    // untrusted references, not as native-only fields: preserve only exact ids
-    // that still exist in the current planned-action set, and union them with an
-    // id proven by a native player-order authority binding. Merely naming a valid
-    // action id never grants sovereign authority; the agency binder above still
-    // has to prove the event semantically matches the player's order.
-    const knownActionIds = currentActionIds(actions);
-    const claimedActionIds = normalizeArray(eventWithAgency?.impacts?.actionIds)
-      .map(normalizeString)
-      .filter((id) => id && knownActionIds.has(id) && !unprovenActionIds.has(id));
-    const boundActionIdList = [...new Set([...claimedActionIds, ...boundActionIds])];
-    const existingImpacts = eventWithAgency?.impacts && typeof eventWithAgency.impacts === "object" && !Array.isArray(eventWithAgency.impacts)
-      ? eventWithAgency.impacts
-      : null;
-    const impacts = existingImpacts
-      ? { ...existingImpacts, actionIds: boundActionIdList }
-      : boundActionIdList.length
-        ? { actionIds: boundActionIdList }
-        : eventWithAgency?.impacts;
-
-    return {
-      ...eventWithAgency,
-      agency,
-      ...(impacts ? { impacts } : {}),
-    };
-  });
-
-  return { applied, unresolved, bindings };
-};
-
-
-
-const EVENT_SUBJECT_VERB_RE = /\b(?:signs?|ratif(?:y|ies|ied)|launch(?:es|ed)?|review(?:s|ed)?|detect(?:s|ed)?|complete(?:s|d)?|conduct(?:s|ed)?|introduc(?:e|es|ed)|uncover(?:s|ed)?|report(?:s|ed)?|reject(?:s|ed)?|approv(?:e|es|ed)|adopt(?:s|ed)?|implement(?:s|ed)?|expand(?:s|ed)?|impos(?:e|es|ed)|deploy(?:s|ed)?|arrest(?:s|ed)?|detain(?:s|ed)?|warn(?:s|ed)?|begin(?:s)?|start(?:s|ed)?|open(?:s|ed)?|clos(?:e|es|ed)|rais(?:e|es|ed)|lower(?:s|ed)?|increas(?:e|es|ed)|reduc(?:e|es|ed)|conven(?:e|es|ed)|meet(?:s)?|vote(?:s|d)?|rule(?:s|d)?|order(?:s|ed)?|announce(?:s|d)?|condemn(?:s|ed)?|press(?:es|ed)?|intensif(?:y|ies|ied)|retake(?:s|n)?|advance(?:s|d)?|hold(?:s)?|elect(?:s|ed)?|form(?:s|ed)?|resign(?:s|ed)?|dismiss(?:es|ed)?|suspend(?:s|ed)?|resume(?:s|d)?|withdraw(?:s|n)?|enter(?:s|ed)?|leave(?:s|left)?|join(?:s|ed)?)\b/i;
-
-const DELEGATED_DOMESTIC_ACTOR_RE = /\b(?:border guard|coast guard|security service|intelligence service|police|constabulary|customs|fire service|emergency service|civil protection|regulator|central bank|national bank|armed forces|military command|national guard|ministry|ministerial department|public health agency|transport authority|port authority|railway authority|municipal(?:ity)?|local authorities?|national security council|cyber(?:security)? (?:centre|center|agency|service)|cert\.[a-z]{2})\b/i;
-const ENDOGENOUS_DOMESTIC_PROCESS_RE = /\b(?:opposition|protest(?:s|ers)?|strike(?:s|rs)?|scandal|court|judge|judiciary|prosecutor|journalist|media|corruption allegation|coalition dispute|party revolt|riot|demonstration|leak|bureaucratic failure|industrial accident|transport accident|power outage|public controversy|constitutional challenge|confidence challenge)\b/i;
-const EXOGENOUS_EVENT_RE = /\b(?:earthquake|storm|hurricane|cyclone|flood|wildfire|drought|epidemic|pandemic|volcanic|tsunami|landslide|meteor|natural disaster)\b/i;
-
-// Bounded multi-polity interactions are not automatically fresh sovereign acts.
-// Intelligence-service consultations, technical working groups, liaison meetings
-// and similar activity can occur under existing mandates without every member
-// government making a new policy choice. Who jointly chose a commitment is read
-// from the event's actors (eventMakesStructuredChoiceFor), never from this.
-const ROUTINE_COLLECTIVE_PROCESS_RE = /\b(?:meeting|consultations?|coordination|liaison|working\s+group|workshop|conference|technical\s+talks?|staff\s+talks?|expert\s+talks?|information[-\s]sharing|intelligence[-\s]sharing|threat[-\s]sharing|joint\s+review)\b/i;
-
-// Whether an event makes a polity's own sovereign choice is read from what the
-// event carries, never from its wording (no word lists: a world event that
+// Whether an event makes a polity's own sovereign choice is read from what
+// the event carries, never from its wording (no word lists: a world event that
 // mentions the player's country beside "government" or "approves" is still
 // the world's). The structured signs:
 //   - the polity is one of the event's actors: the parties of an agreement it
@@ -2418,403 +1842,197 @@ const politicalChoiceTargets = (event, resolver) => uniqueStrings(normalizeArray
   .map((operation) => resolver.canonical(normalizeString(operation?.polityKey || operation?.polity || operation?.country)))
   .filter(Boolean));
 
-const eventMakesStructuredChoiceFor = (event, resolver, polity) => Boolean(polity) && (
-  semanticActorPolities(event, resolver).some((actor) => resolver.equivalent(actor, polity))
-  || politicalChoiceTargets(event, resolver).some((target) => resolver.equivalent(target, polity))
+// The polities the event lists as deciding it (event.actors), by their exact
+// names: an institution, a mandate or a name the world does not know is none.
+const actorPolities = (event, resolver) => uniqueStrings(
+  normalizeArray(event?.actors).map((actor) => resolver.knownCanonical(normalizeString(actor))).filter(Boolean),
 );
 
-const nativeSubjectLabel = (event) => {
-  const title = normalizeString(event?.title);
-  if (!title) return "";
-  const match = EVENT_SUBJECT_VERB_RE.exec(title);
-  if (!match || match.index < 2) return title.slice(0, 96);
-  return normalizeString(title.slice(0, match.index)).replace(/^the\s+/i, "").slice(0, 96);
-};
-
-const identityPhraseMatches = (textValue, identityValue) => {
-  const text = normalizeInstitutionAuthorityPhrase(textValue);
-  const identity = normalizeInstitutionAuthorityPhrase(identityValue);
-  if (!text || !identity) return false;
-  return text === identity || text.startsWith(`${identity} `) || text.includes(` ${identity} `) || text.endsWith(` ${identity}`);
-};
-
-// Whether a text names a polity (or a word built on its name, "Latvian"). Only
-// ever a place to look for that polity's own orders and messages: being named
-// never makes an event the polity's choice.
-const actorFamilyMentioned = (textValue, aliases = []) => {
-  const text = normalizeString(textValue).toLowerCase();
-  if (!text) return false;
-  for (const alias of uniqueStrings(aliases)) {
-    const phrase = normalizeString(alias).toLowerCase();
-    if (!phrase) continue;
-    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (phrase.length >= 3 && new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, "i").test(text)) return true;
-    const tokens = phrase.replace(/[^a-z0-9\s-]/g, " ").split(/[\s-]+/).filter((token) => token.length >= 6);
-    if (tokens.some((token) => text.includes(token.slice(0, 5)))) return true;
-  }
-  return false;
-};
-
-const semanticActorTokens = (event) => uniqueStrings(normalizeArray(event?.actors).map(normalizeString).filter(Boolean));
-
-// The polities the answer's own records show choosing in the event (bound to
-// it by id or index): the parties of every agreement it starts, and the side
-// that starts a war by it or joins one. Relation parties are not actors (a
-// sanction's target is a party too), nor is the side a war is started on.
-const WAR_CHOICE_OPS = new Set(["start", "join-a", "join-b"]);
-const agreementPartiesStartedByEvent = (candidate, event, eventIndex) => {
-  const eventId = normalizeString(event?.id);
-  const tied = (update) => (eventId && normalizeArray(update?.eventIds).map(normalizeString).includes(eventId))
-    || normalizeArray(update?.eventIndexes).map(Number).includes(eventIndex);
-  return uniqueStrings([
-    ...normalizeArray(candidate?.agreementUpdates)
-      .filter((update) => normalizeString(update?.op).toLowerCase() === "start" && tied(update))
-      .flatMap((update) => normalizeArray(update?.parties)),
-    ...normalizeArray(candidate?.warUpdates)
-      .filter((update) => WAR_CHOICE_OPS.has(normalizeString(update?.op).toLowerCase()) && tied(update))
-      .flatMap((update) => normalizeArray(update?.actors)),
-  ].map(normalizeString).filter(Boolean));
-};
-
-const semanticActorPolities = (event, resolver) => uniqueStrings(
-  semanticActorTokens(event).map((actor) => resolver.knownCanonical(actor)).filter(Boolean),
-);
-
-const semanticActorInstitutions = (event, world) => {
+// The institutions it lists as deciding it, each by its exact identity.
+const actorInstitutions = (event, world, resolver) => {
   const byId = new Map();
-  for (const actor of semanticActorTokens(event)) {
-    const institution = resolveInstitutionRecord(world, actor);
+  for (const actor of normalizeArray(event?.actors)) {
+    if (resolver.knownCanonical(normalizeString(actor))) continue;
+    const institution = resolveInstitutionAuthorityPrincipal(world, actor);
     const id = normalizeString(institution?.id);
     if (id && !byId.has(id)) byId.set(id, institution);
   }
   return [...byId.values()];
 };
 
-const eventMentionedPolities = (event, resolver) => {
-  // When generation supplies an explicit semantic actor set, treat it as the
-  // stronger statement of WHO acts. This prevents a target polity mentioned in
-  // prose from being mistaken for a co-signatory or decision owner. Older/event
-  // payloads without actors keep the text-based fallback.
-  const explicitActors = semanticActorTokens(event);
-  const actorPolities = semanticActorPolities(event, resolver);
-  if (explicitActors.length && actorPolities.length) return actorPolities;
-  return uniqueStrings(
-    resolver.mentionedPolities(`${normalizeString(event?.title)} ${normalizeString(event?.description)}`),
+// The open mandate the event carries out: the id of an [Open Institutional
+// Mandates] resolution it lists among its actors (runtime/institutionalAuthority.js),
+// exactly as the skip was shown it.
+const citedMandate = (event, world) => {
+  const actors = normalizeArray(event?.actors).map(normalizeString).filter(Boolean);
+  if (!actors.length) return "";
+  const open = institutionResolutionAuthorityIds(world);
+  return actors.find((actor) => open.has(actor)) || "";
+};
+
+const eventMakesStructuredChoiceFor = (event, resolver, polity) => Boolean(polity) && (
+  actorPolities(event, resolver).some((actor) => resolver.equivalent(actor, polity))
+  || politicalChoiceTargets(event, resolver).some((target) => resolver.equivalent(target, polity))
+);
+
+// The answer's records tied to an event, by its id or, before it has one, by
+// its place: its agreements, wars and relations.
+const recordsOfEvent = (candidate, event, eventIndex) => {
+  const eventId = normalizeString(event?.id);
+  const tied = (record) => isPlainObject(record) && (
+    (eventId && normalizeArray(record.eventIds).map(normalizeString).includes(eventId))
+    || (Number.isInteger(eventIndex) && normalizeArray(record.eventIndexes).map(Number).includes(eventIndex))
   );
+  return {
+    agreements: normalizeArray(candidate?.agreementUpdates).filter(tied),
+    wars: normalizeArray(candidate?.warUpdates).filter(tied),
+    relations: normalizeArray(candidate?.relationUpdates).filter(tied),
+  };
 };
 
-// The polity an event shows acting: its one semantic actor, its one
-// combatant, or the one polity its title opens with. A polity that is merely
-// the only one the title mentions ("NATO Deploys Battalion to Latvia") is not
-// shown acting; subjectPolityFromEvent still falls back to it.
-const leadingSubjectPolity = (event, resolver) => {
-  const actorPolities = semanticActorPolities(event, resolver);
-  if (actorPolities.length === 1) return actorPolities[0];
+// A war record that makes its actors choose: they start the war or join it.
+const WAR_CHOICE_OPS = new Set(["start", "join-a", "join-b"]);
 
-  const combatants = uniqueStrings(normalizeArray(event?.combatants).map((actor) => resolver.knownCanonical(actor)).filter(Boolean));
-  if (combatants.length === 1) return combatants[0];
+// Who decided the event: the polities it lists as deciding it, the parties of
+// an agreement it starts, the side that starts or joins a war by it, and a
+// government whose own strategy or disposition it rewrites. A relation's
+// parties are not (a sanction's target is one), nor is the side a war is
+// started against.
+const choosersOf = (event, records, resolver) => uniqueStrings([
+  ...actorPolities(event, resolver),
+  ...records.agreements
+    .filter((record) => normalizeString(record?.op).toLowerCase() === "start")
+    .flatMap((record) => normalizeArray(record?.parties)),
+  ...records.wars
+    .filter((record) => WAR_CHOICE_OPS.has(normalizeString(record?.op).toLowerCase()))
+    .flatMap((record) => normalizeArray(record?.actors)),
+  ...politicalChoiceTargets(event, resolver),
+].map((name) => resolver.knownCanonical(normalizeString(name))).filter(Boolean));
 
-  const title = normalizeString(event?.title);
-  const titleMatches = [];
-  for (const record of resolver.records) {
-    if (uniqueStrings([record.canonical, ...normalizeArray(record.aliases)]).some((alias) => {
-      const escaped = normalizeString(alias).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return escaped && new RegExp(`^\\s*(?:the\\s+)?${escaped}(?:\\b|\\s)`, "i").test(title);
-    })) titleMatches.push(record.canonical);
-  }
-  const uniqueTitleMatches = uniqueStrings(titleMatches);
-  if (uniqueTitleMatches.length === 1) return uniqueTitleMatches[0];
-  return "";
+// Everyone the event commits its choosers to: the choosers themselves, and the
+// parties of every record tied to it.
+const involvedOf = (choosers, records, resolver) => uniqueStrings([
+  ...choosers,
+  ...[...records.agreements, ...records.wars, ...records.relations].flatMap(ledgerRecordPolities),
+].map((name) => resolver.knownCanonical(normalizeString(name))).filter(Boolean));
+
+// The first queued order of this human's that the event cites.
+const citedOrderOf = (event, human) => {
+  const owned = new Set(normalizeArray(human?.actionRecords).map((entry) => entry.id));
+  return normalizeArray(event?.impacts?.actionIds).map(normalizeString).find((id) => owned.has(id)) || "";
 };
 
-const subjectPolityFromEvent = (event, resolver) => {
-  const leading = leadingSubjectPolity(event, resolver);
-  if (leading) return leading;
-
-  const title = normalizeString(event?.title);
-  const mentionedTitle = resolver.mentionedPolities(title);
-  if (mentionedTitle.length === 1) return mentionedTitle[0];
-  const mentionedAll = resolver.mentionedPolities(`${title} ${normalizeString(event?.description)}`);
-  if (mentionedAll.length === 1) return mentionedAll[0];
-  return "";
+// A message of this human's to every other party of what the event commits it
+// to: the last one written in a conversation with any of them. "" when there is
+// no other party, or one this human never wrote to. Who wrote to whom is all
+// the engine reads; what the message agreed is the model's to have read.
+const messageAuthorityOf = (human, others, resolver) => {
+  if (!others.length) return "";
+  const heard = (polity) => normalizeArray(human?.messages)
+    .some((message) => message.countries.some((country) => resolver.equivalent(country, polity)));
+  if (!others.every(heard)) return "";
+  return normalizeArray(human?.messages)
+    .filter((message) => message.countries.some((country) => others.some((polity) => resolver.equivalent(country, polity))))
+    .at(-1)?.id || "";
 };
 
-const subjectInstitutionFromEvent = (event, world) => {
-  const actorInstitutions = semanticActorInstitutions(event, world);
-  if (actorInstitutions.length === 1) return actorInstitutions[0];
-  if (actorInstitutions.length > 1) return null;
+const othersThan = (involved, human, resolver) => involved.filter((polity) => !resolver.equivalent(polity, human.canonical));
 
-  const title = normalizeString(event?.title);
-  const full = `${title} ${normalizeString(event?.description)}`;
-  const entries = activeInstitutionEntries(world);
-  const rows = entries.map((institution) => ({
-    institution,
-    identities: uniqueStrings([institution.id, institution.name, institution.shortName, ...normalizeArray(institution.aliases)]),
-  }));
-  const starting = rows.filter(({ identities }) => identities.some((identity) => {
-    const normalizedTitle = normalizeInstitutionAuthorityPhrase(title);
-    const normalizedIdentity = normalizeInstitutionAuthorityPhrase(identity);
-    return normalizedIdentity && (normalizedTitle === normalizedIdentity || normalizedTitle.startsWith(`${normalizedIdentity} `));
-  }));
-  if (starting.length === 1) return starting[0].institution;
-  if (starting.length > 1) return null;
-  const mentioned = rows.filter(({ identities }) => identities.some((identity) => identityPhraseMatches(full, identity)));
-  return mentioned.length === 1 ? mentioned[0].institution : null;
+// An agency of sovereign rows, the first its principal. At most the native
+// limit of rows: every person's row is kept, the governments the AI plays
+// after them.
+const polityAgency = (allRows) => {
+  const rows = [
+    ...allRows.filter((row) => row.authority !== "autonomous"),
+    ...allRows.filter((row) => row.authority === "autonomous"),
+  ].slice(0, EVENT_AGENCY_MAX_SOVEREIGN_ACTORS);
+  const primary = allRows.find((row) => rows.includes(row)) || rows[0];
+  return {
+    principal: primary.polity,
+    principalKind: "polity",
+    sovereignPolity: primary.polity,
+    authority: primary.authority,
+    authorityRef: primary.authorityRef,
+    sovereignActors: [primary, ...rows.filter((row) => row !== primary)],
+  };
 };
 
-const rawAgencyClaimsPlayerSovereignty = (rawAgency, resolver, playerCanonical) => {
-  if (!rawAgency || typeof rawAgency !== "object" || Array.isArray(rawAgency) || !playerCanonical) return false;
-  const tokens = [
-    rawAgency.sovereignPolity,
-    ...normalizeArray(rawAgency.sovereignActors).map((row) => row?.polity || row?.sovereignPolity),
-  ].map(normalizeString).filter(Boolean);
-  if (tokens.some((token) => resolver.equivalent(token, playerCanonical))) return true;
-  const principalKind = normalizeString(rawAgency.principalKind).toLowerCase();
-  return principalKind === "polity" && resolver.equivalent(rawAgency.principal, playerCanonical);
-};
+// The agency an event's structure gives it, or none (see above).
+const deriveEventAgency = (event, { world = {}, resolver, authorities, records }) => {
+  if (!isPlainObject(event)) return { agency: null, reason: "not-an-event", source: "none" };
 
-// Whether a name is one of the world's polities, by any of its names. Such a
-// principal is a government, which no non-sovereign authority may stand for.
-const namesKnownPolity = (resolver, value) => {
-  const name = normalizeString(value).toLowerCase();
-  return Boolean(name) && resolver.records.some((record) =>
-    [record.canonical, ...normalizeArray(record.aliases)]
-      .some((alias) => normalizeString(alias).toLowerCase() === name));
-};
-
-// The domestic body or process a player's own event is about. The title's
-// subject is the natural label ("Latvian State Border Guard"), but a title that
-// opens with the country itself ("Poland Arrests Smuggling Ring") would make the
-// government the principal, and the agency check rightly refuses that. Such an
-// event is named after what the text shows acting instead: the police, the
-// protests.
-const nativeDomesticPrincipal = (event, playerCanonical, authority, resolver) => {
-  const label = nativeSubjectLabel(event);
-  if (label && !namesKnownPolity(resolver, label)) return label;
-  const fullText = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  const pattern = authority === "delegated-routine" ? DELEGATED_DOMESTIC_ACTOR_RE : ENDOGENOUS_DOMESTIC_PROCESS_RE;
-  const cue = normalizeString(pattern.exec(fullText)?.[0]).toLowerCase();
-  return cue ? `${playerCanonical} ${cue}` : `${playerCanonical} domestic process`;
-};
-
-// A queued order the event itself cites in impacts.actionIds: the player's own
-// government carrying out what the player asked for ("Poland Launches
-// Anti-Mafia Operation" answering "Crack down on organised crime"). The
-// citation is structured; the event's wording is not read to second-guess it.
-const citedCurrentOrder = (event, actionRecords) => {
-  const cited = new Set(normalizeArray(event?.impacts?.actionIds).map(normalizeString).filter(Boolean));
-  const matches = normalizeArray(actionRecords).filter((entry) => cited.has(entry.id));
-  if (matches.length !== 1) return null;
-  const match = { ...matches[0], score: 1 };
-  // In the shape of resolvePlayerOrderAuthority: the one order is all it binds.
-  return { match, matches: [match], unproven: [], scored: [], reason: "cited-current-order" };
-};
-
-const nativeDomesticAgency = (event, playerCanonical, authority, resolver) => ({
-  principal: nativeDomesticPrincipal(event, playerCanonical, authority, resolver),
-  principalKind: authority === "delegated-routine" ? "domestic-actor" : "domestic-process",
-  sovereignPolity: "",
-  authority,
-  authorityRef: "",
-  sovereignActors: [],
-  jurisdictionPolity: playerCanonical,
-  ...(authority === "delegated-routine" ? {
-    mandateBasis: "native provenance resolution: bounded execution inside an existing domestic operational/legal mandate; the event's actors and operations carry no sovereign choice",
-  } : {}),
-});
-
-// One human's reading of an event: that human as "the player", with its own
-// orders and messages, and every other polity as a foreign power. Single player
-// has exactly this reading; deriveNativeEventAgency combines one per human.
-const deriveNativeEventAgencyFor = (event, {
-  world = {},
-  resolver,
-  human = null,
-} = {}) => {
-  if (!event || typeof event !== "object") return { agency: null, reason: "not-an-event", source: "none" };
-  const playerCanonical = human?.canonical || "";
-  const actionRecords = human?.actionRecords || [];
-  const commitmentRecords = human?.commitmentRecords || [];
-  const rawAgency = event?.agency;
-  if (rawAgencyClaimsPlayerSovereignty(rawAgency, resolver, playerCanonical)) {
-    return { agency: null, reason: "model-agency-claims-player-sovereignty", source: "model" };
-  }
-
-  const fullText = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  const explicitActorTokens = semanticActorTokens(event);
-  const actorPolities = semanticActorPolities(event, resolver);
-  const hasExplicitPolityActors = Boolean(explicitActorTokens.length && actorPolities.length);
-  const playerIsSemanticActor = Boolean(
-    playerCanonical && actorPolities.some((polity) => resolver.equivalent(polity, playerCanonical)),
-  );
-  // Whether the event itself shows the player's government choosing: read from
-  // its actors and operations only (eventMakesStructuredChoiceFor), never from
-  // its wording.
-  const playerChoosing = eventMakesStructuredChoiceFor(event, resolver, playerCanonical);
-  // Where to look for the player's own order or message: an event that names
-  // the player or cites a queued order. Looking never refuses an event; it
-  // only finds the authority an event carries out. An explicit actor list is
-  // the stronger statement of who acts, so a TARGET named in "France sanctions
-  // Latvia" is not searched as Latvia's choice.
-  const playerNamed = Boolean(playerCanonical) && (hasExplicitPolityActors
-    ? playerIsSemanticActor
-    : actorFamilyMentioned(fullText, resolver.aliasesFor(playerCanonical)));
-  const citesOrder = normalizeArray(event?.impacts?.actionIds).some((id) => normalizeString(id));
-  const playerConcerned = Boolean(playerCanonical) && (playerNamed || playerChoosing || citesOrder);
-  // Several polities the event lists as its actors (or the parties of an
-  // agreement it starts) chose it together.
-  const jointSovereignChoice = actorPolities.length >= 2;
-
-  let actionMatch = null;
-  let commitmentMatch = null;
-  if (playerConcerned) {
-    actionMatch = resolvePlayerOrderAuthority(event, actionRecords, { playerCanonical });
-    // A cited order is the player's own government at work, unless the event
-    // carries a sovereign choice of the player's (an agreement it is party
-    // to, its strategy): citing an order never authorizes one the order's
-    // words did not ask for.
-    if (!actionMatch.match && !playerChoosing) actionMatch = citedCurrentOrder(event, actionRecords) || actionMatch;
-    commitmentMatch = resolveUniqueSemanticAuthority(event, commitmentRecords, {
-      playerCanonical,
-      threshold: 0.28,
-      margin: 0.08,
-    });
-  }
-
-  // Shared treaties / agreements / newly established intergovernmental
-  // arrangements are one place where semantic participants are materially
-  // stronger evidence than a single grammatical subject. Native code owns the
-  // legal rows; event.actors (or the parties of an agreement the event starts)
-  // only says WHO jointly chose. Targets and observers must not be listed
-  // there. The player row still requires pre-existing
-  // authority and therefore fails closed when neither an order nor a prior
-  // diplomatic commitment can be proved.
-  if (jointSovereignChoice) {
-    let playerAuthority = "";
-    if (playerIsSemanticActor) {
-      if (actionMatch?.match) playerAuthority = "player-order";
-      else if (commitmentMatch?.match) playerAuthority = "player-commitment";
-      else {
-        return {
-          agency: null,
-          reason: "joint-player-sovereign-choice-without-authority",
-          source: "native-unresolved-player",
-        };
-      }
+  // Who decided it. A person's country among them needs that person's word.
+  const choosers = choosersOf(event, records, resolver);
+  const involved = involvedOf(choosers, records, resolver);
+  const rows = [];
+  for (const polity of choosers) {
+    const human = authorities.find(polity);
+    if (!human) {
+      rows.push({ polity, authority: "autonomous", authorityRef: "" });
+      continue;
     }
-
-    const sovereignActors = actorPolities.map((polity) => ({
-      polity,
-      authority: playerCanonical && resolver.equivalent(polity, playerCanonical)
-        ? playerAuthority
-        : "autonomous",
-      authorityRef: "",
-    }));
-    const primary = sovereignActors[0];
-    return {
-      source: playerIsSemanticActor ? `native-joint-${playerAuthority}` : "native-joint-sovereign",
-      reason: playerIsSemanticActor
-        ? (playerAuthority === "player-order" ? actionMatch?.reason : commitmentMatch?.reason) || "joint-semantic-actors"
-        : "joint-semantic-actors",
-      agency: {
-        principal: primary.polity,
-        principalKind: "polity",
-        sovereignPolity: primary.polity,
-        authority: primary.authority,
-        authorityRef: "",
-        sovereignActors,
-      },
-    };
-  }
-
-  if (playerConcerned) {
-    if (actionMatch?.match) {
+    const order = citedOrderOf(event, human);
+    const message = order ? "" : messageAuthorityOf(human, othersThan(involved, human, resolver), resolver);
+    if (!order && !message) {
       return {
-        source: "native-player-order",
-        reason: actionMatch.reason,
-        agency: {
-          principal: playerCanonical,
-          principalKind: "polity",
-          sovereignPolity: playerCanonical,
-          authority: "player-order",
-          authorityRef: "",
-          sovereignActors: [{ polity: playerCanonical, authority: "player-order", authorityRef: "" }],
-        },
+        agency: null,
+        reason: choosers.length > 1 ? "joint-player-sovereign-choice-without-authority" : "player-fresh-sovereign-choice-without-authority",
+        source: "native-unresolved-player",
+        polity: human.canonical,
       };
     }
-    if (commitmentMatch?.match) {
-      return {
-        source: "native-player-commitment",
-        reason: commitmentMatch.reason,
-        agency: {
-          principal: playerCanonical,
-          principalKind: "polity",
-          sovereignPolity: playerCanonical,
-          authority: "player-commitment",
-          authorityRef: "",
-          sovereignActors: [{ polity: playerCanonical, authority: "player-commitment", authorityRef: "" }],
-        },
-      };
-    }
+    rows.push({ polity: human.canonical, authority: order ? "player-order" : "player-commitment", authorityRef: order || message });
   }
 
-  const processIds = nativeCanonicalProcessCandidates(event, world);
-  if (processIds.size === 1 && normalizeString(event?.warId)) {
+  // An open mandate the event carries out: the members act on the
+  // institution's resolution, not on a fresh choice of their own, unless a
+  // person's country is among them, whose own word then stands.
+  const mandate = citedMandate(event, world);
+  if (mandate && rows.every((row) => row.authority === "autonomous")) {
+    const institution = actorInstitutions(event, world, resolver)[0];
     return {
-      source: "native-canonical-process",
-      reason: "existing-war-process",
+      source: "native-mandate",
+      reason: "cited-open-mandate",
       agency: {
-        principal: `canonical process ${[...processIds][0]}`,
-        principalKind: "exogenous-process",
+        principal: normalizeString(institution?.name || institution?.shortName || institution?.id) || mandate,
+        principalKind: "institution",
         sovereignPolity: "",
         authority: "canonical-process",
-        authorityRef: "",
+        authorityRef: mandate,
         sovereignActors: [],
       },
     };
   }
 
-  const subjectPolity = subjectPolityFromEvent(event, resolver);
-  if (subjectPolity) {
-    if (playerCanonical && resolver.equivalent(subjectPolity, playerCanonical)) {
-      // The event's own actors or operations show the player's government
-      // choosing, and no order or message of the player's authorizes it.
-      if (playerChoosing) {
-        return { agency: null, reason: "player-fresh-sovereign-choice-without-authority", source: "native-unresolved-player" };
-      }
-      if (DELEGATED_DOMESTIC_ACTOR_RE.test(fullText)) {
-        return { source: "native-player-delegated", reason: "bounded-domestic-actor", agency: nativeDomesticAgency(event, playerCanonical, "delegated-routine", resolver) };
-      }
-      if (ENDOGENOUS_DOMESTIC_PROCESS_RE.test(fullText)) {
-        return { source: "native-player-endogenous", reason: "endogenous-domestic-process", agency: nativeDomesticAgency(event, playerCanonical, "endogenous-domestic", resolver) };
-      }
-      return { agency: null, reason: "player-event-not-safely-classifiable", source: "native-unresolved-player" };
-    }
+  if (rows.length) {
     return {
-      source: "native-foreign-polity",
-      reason: "unique-semantic-polity-subject",
-      agency: {
-        principal: subjectPolity,
-        principalKind: "polity",
-        sovereignPolity: subjectPolity,
-        authority: "autonomous",
-        authorityRef: "",
-        sovereignActors: [{ polity: subjectPolity, authority: "autonomous", authorityRef: "" }],
-      },
+      source: "native-actors",
+      reason: rows.length > 1 ? "joint-structured-choosers" : "structured-chooser",
+      agency: polityAgency(rows),
     };
   }
 
-  const institution = subjectInstitutionFromEvent(event, world);
-  if (institution) {
-    if (playerChoosing) {
-      return { agency: null, reason: "institution-event-also-implicates-player-fresh-sovereign-choice", source: "native-unresolved-player" };
+  // No one listed as deciding it, but it carries out queued orders: the
+  // governments that gave them, in the order the event cites them.
+  const ordered = [];
+  for (const id of normalizeArray(event?.impacts?.actionIds).map(normalizeString)) {
+    const human = authorities.humans.find((entry) => entry.actionRecords.some((record) => record.id === id));
+    if (human && !ordered.some((row) => row.polity === human.canonical)) {
+      ordered.push({ polity: human.canonical, authority: "player-order", authorityRef: id });
     }
-    const principal = normalizeString(institution?.name || institution?.shortName || institution?.id);
+  }
+  if (ordered.length) {
+    return { source: "native-player-order", reason: "cited-current-order", agency: polityAgency(ordered) };
+  }
+
+  // An institution acting in its own right.
+  const institutions = actorInstitutions(event, world, resolver);
+  if (institutions.length === 1) {
     return {
       source: "native-institution",
-      reason: "unique-canonical-institution-subject",
+      reason: "structured-institution-actor",
       agency: {
-        principal,
+        principal: normalizeString(institutions[0]?.name || institutions[0]?.shortName || institutions[0]?.id),
         principalKind: "institution",
         sovereignPolity: "",
         authority: "autonomous",
@@ -2824,154 +2042,184 @@ const deriveNativeEventAgencyFor = (event, {
     };
   }
 
-  // Several governments/agencies may participate in a bounded consultation or
-  // coordination process without the event itself exercising fresh sovereign
-  // discretion.  Represent the interaction honestly as a collective process
-  // instead of inventing a fake standing institution or pretending one polity
-  // alone owns the meeting. A commitment the event's actors chose together was
-  // taken above (jointSovereignChoice), and one the player's government is
-  // shown choosing is never relabelled a process.
-  const mentionedPolities = eventMentionedPolities(event, resolver);
-  if (!playerChoosing && mentionedPolities.length >= 2 && ROUTINE_COLLECTIVE_PROCESS_RE.test(fullText)) {
+  // A consequence of the one process already under way that it belongs to.
+  const processIds = nativeCanonicalProcessCandidates(event, world);
+  if (processIds.size === 1) {
+    const [processId] = [...processIds];
     return {
-      source: "native-collective-process",
-      reason: "bounded-multi-polity-coordination",
+      source: "native-canonical-process",
+      reason: "one-process-under-way",
       agency: {
-        principal: nativeSubjectLabel(event) || "multilateral coordination process",
-        principalKind: "collective-process",
-        sovereignPolity: "",
-        authority: "independent",
-        authorityRef: "",
-        sovereignActors: [],
-      },
-    };
-  }
-
-  if (playerChoosing) {
-    return { agency: null, reason: "player-fresh-sovereign-choice-without-authority", source: "native-unresolved-player" };
-  }
-  if (playerNamed && DELEGATED_DOMESTIC_ACTOR_RE.test(fullText)) {
-    return { source: "native-player-delegated", reason: "bounded-domestic-actor", agency: nativeDomesticAgency(event, playerCanonical, "delegated-routine", resolver) };
-  }
-  if (playerNamed && ENDOGENOUS_DOMESTIC_PROCESS_RE.test(fullText)) {
-    return { source: "native-player-endogenous", reason: "endogenous-domestic-process", agency: nativeDomesticAgency(event, playerCanonical, "endogenous-domestic", resolver) };
-  }
-
-  if (EXOGENOUS_EVENT_RE.test(fullText)) {
-    return {
-      source: "native-exogenous",
-      reason: "non-discretionary-exogenous-event",
-      agency: {
-        principal: nativeSubjectLabel(event) || "exogenous world process",
+        principal: `canonical process ${processId}`,
         principalKind: "exogenous-process",
         sovereignPolity: "",
-        authority: "external-consequence",
-        authorityRef: "",
+        authority: "canonical-process",
+        authorityRef: processId,
         sovereignActors: [],
       },
     };
   }
 
-  return { agency: null, reason: "no-unique-native-provenance", source: "native-unresolved" };
+  return { agency: null, reason: "no-structured-decider", source: "native-neutral" };
 };
 
-// The reasons a reading gives when an event makes a human polity's own
-// sovereign choice without that human's order or message: the boundary a
-// shared game holds hard (screenGeneratedWorldEvents).
-export const HUMAN_SOVEREIGN_REFUSALS = Object.freeze([
-  "model-agency-claims-player-sovereignty",
-  "joint-player-sovereign-choice-without-authority",
-  "player-fresh-sovereign-choice-without-authority",
-  "institution-event-also-implicates-player-fresh-sovereign-choice",
-]);
-const HUMAN_SOVEREIGN_REFUSAL_SET = new Set(HUMAN_SOVEREIGN_REFUSALS);
+// An agency an event already carries (none of the game's contracts asks the
+// model for one; a save or a test may hold one), its references bound from
+// what the event carries: a person's order row to the order of theirs it cites,
+// a commitment row to their message (an id of theirs it names, or the one its
+// parties heard), an institution principal to its exact name, and a process to
+// the one storyline or war it advances or the mandate it lists. Its claims are
+// never rewritten: the authority check judges them.
+const bindGivenAgency = (rawAgency, event, { world = {}, resolver, authorities, records }) => {
+  let agency = { ...rawAgency };
+  let rows = Array.isArray(rawAgency.sovereignActors)
+    ? rawAgency.sovereignActors.map((row) => ({ ...row }))
+    : [];
 
-// Who decided an event when several people play. Each human's reading is
-// taken (deriveNativeEventAgencyFor), then:
-//   1  a reading that finds its human's own sovereign choice made without that
-//      human's authority refuses the event, whoever else it concerns;
-//   2  a shared commitment (a treaty, a pact, a new joint body) naming several
-//      humans needs each of them to have authorized it, by order or message;
-//   3  a reading that makes a human polity an autonomous (AI) sovereign is set
-//      aside: from one human's side another human looks like a foreign power;
-//   4  of the rest, the reading that traces the event to its human's own order
-//      or message is taken (the event's subject decides between two, and with
-//      no subject to decide it nothing is bound); failing that, the first.
-// One human is single player: exactly its one reading.
-const deriveNativeEventAgency = (event, { world = {}, resolver, humans = [] } = {}) => {
-  if (normalizeArray(humans).length <= 1) {
-    return deriveNativeEventAgencyFor(event, { world, resolver, human: normalizeArray(humans)[0] || null });
+  const agencyAuthority = normalizeString(agency.authority).toLowerCase();
+  if (normalizeString(agency.principalKind).toLowerCase() === "institution"
+      && ["autonomous", "independent"].includes(agencyAuthority)) {
+    const institution = resolveInstitutionAuthorityPrincipal(world, agency.principal);
+    const canonicalPrincipal = normalizeString(institution?.name || institution?.shortName || institution?.id);
+    if (canonicalPrincipal) agency.principal = canonicalPrincipal;
   }
-  if (!event || typeof event !== "object") return { agency: null, reason: "not-an-event", source: "none" };
 
-  const readings = humans.map((human) => ({ human, result: deriveNativeEventAgencyFor(event, { world, resolver, human }) }));
-  const refused = readings.find(({ result }) => !result.agency && HUMAN_SOVEREIGN_REFUSAL_SET.has(result.reason));
-  if (refused) return { ...refused.result, polity: refused.human.canonical };
+  // Backward-compatible normalization for a singular sovereign mirror.
+  if (!rows.length && normalizeString(rawAgency.sovereignPolity) &&
+      EVENT_AGENCY_SOVEREIGN_AUTHORITIES.includes(agencyAuthority)) {
+    rows = [{
+      polity: normalizeString(rawAgency.sovereignPolity),
+      authority: agencyAuthority,
+      authorityRef: normalizeString(rawAgency.authorityRef),
+    }];
+  }
 
-  const isHuman = (polity) => humans.some((human) => resolver.equivalent(polity, human.canonical));
-  // A commitment several humans chose together: the event lists them among its
-  // actors (or they are parties of an agreement it starts).
-  const actorPolities = semanticActorPolities(event, resolver);
-  if (actorPolities.length >= 2) {
-    const named = humans.filter((human) => actorPolities.some((polity) => resolver.equivalent(polity, human.canonical)));
-    if (named.length >= 2) {
-      const sovereignActors = [];
-      for (const human of named) {
-        const order = resolveUniqueSemanticAuthority(event, human.actionRecords, {
-          playerCanonical: human.canonical,
-          threshold: 0.34,
-          margin: 0.1,
-        });
-        const message = order.match ? null : resolveUniqueSemanticAuthority(event, human.commitmentRecords, {
-          playerCanonical: human.canonical,
-          threshold: 0.28,
-          margin: 0.08,
-        });
-        const authority = order.match ? "player-order" : message?.match ? "player-commitment" : "";
-        if (!authority) {
-          return {
-            agency: null,
-            reason: "joint-player-sovereign-choice-without-authority",
-            source: "native-unresolved-player",
-            polity: human.canonical,
-          };
-        }
-        sovereignActors.push({ polity: human.canonical, authority, authorityRef: "" });
-      }
-      for (const polity of actorPolities) {
-        if (!isHuman(polity)) sovereignActors.push({ polity, authority: "autonomous", authorityRef: "" });
-      }
-      const primary = sovereignActors[0];
-      return {
-        source: "native-joint-humans",
-        reason: "joint-human-authorities",
-        agency: {
-          principal: primary.polity,
-          principalKind: "polity",
-          sovereignPolity: primary.polity,
-          authority: primary.authority,
-          authorityRef: "",
-          sovereignActors,
-        },
-      };
+  const involved = involvedOf(
+    [...choosersOf(event, records, resolver), ...rows.map((row) => normalizeString(row?.polity || row?.sovereignPolity))],
+    records,
+    resolver,
+  );
+  rows = rows.map((row) => {
+    const next = { ...row };
+    const authority = normalizeString(row?.authority).toLowerCase();
+    // Opaque ids on autonomous sovereign rows are never meaningful.
+    if (authority === "autonomous") {
+      next.authorityRef = "";
+      return next;
     }
+    const human = authorities.find(normalizeString(row?.polity || row?.sovereignPolity));
+    if (!human) return next;
+    if (authority === "player-order") next.authorityRef = citedOrderOf(event, human);
+    if (authority === "player-commitment" && !human.commitmentIds.has(normalizeString(row?.authorityRef))) {
+      next.authorityRef = messageAuthorityOf(human, othersThan(involved, human, resolver), resolver);
+    }
+    return next;
+  });
+
+  if (rows.length) {
+    agency = mirrorPrimaryAgencyRow({ ...agency, sovereignActors: rows });
+  } else if (agencyAuthority === "canonical-process" && !normalizeString(agency.authorityRef)) {
+    const processes = nativeCanonicalProcessCandidates(event, world);
+    agency.authorityRef = processes.size === 1 ? [...processes][0] : citedMandate(event, world);
+  }
+  return agency;
+};
+
+// The queued orders an event cites, as it cites them, while they are still
+// queued: an id is exact or it is no citation. Citing an order is what makes
+// the event its answer; the order's words and the event's are never compared
+// to confirm or refuse it.
+const withCurrentActionIds = (event, knownActionIds) => {
+  const impacts = isPlainObject(event?.impacts) ? event.impacts : null;
+  if (!impacts || !Array.isArray(impacts.actionIds)) return null;
+  const cited = impacts.actionIds
+    .map(normalizeString)
+    .filter((id) => id && knownActionIds.has(id));
+  return { ...impacts, actionIds: [...new Set(cited)] };
+};
+
+// Each event's agency, from what it carries (deriveEventAgency), or an agency
+// it already has with its references bound (bindGivenAgency), and its order
+// citations held to the orders still queued. An event left without one is
+// listed in `unresolved`, with the reason; one that makes a person's country
+// choose without that person's word is listed as such (source
+// native-unresolved-player), which a shared game refuses.
+export const bindWorldEventAuthorityRefs = (candidate, {
+  world = {},
+  gameCountry = "",
+  // A shared game's human polities (runtime/humanPolities.js humanCountriesOf);
+  // single player passes none and has only gameCountry.
+  humanCountries = [],
+  actions = [],
+  chats = [],
+  resolver: sharedResolver = null,
+} = {}) => {
+  if (!candidate || typeof candidate !== "object") {
+    return { applied: 0, unresolved: [], bindings: [] };
   }
 
-  const makesHumanAutonomous = (agency) => normalizeArray(agency?.sovereignActors).some((row) =>
-    normalizeString(row?.authority).toLowerCase() === "autonomous" && isHuman(row?.polity));
-  const usable = readings.filter(({ result }) => result.agency && !makesHumanAutonomous(result.agency));
-  const authorized = usable.filter(({ human, result }) => normalizeArray(result.agency?.sovereignActors).some((row) =>
-    resolver.equivalent(row?.polity, human.canonical)
-    && ["player-order", "player-commitment"].includes(normalizeString(row?.authority).toLowerCase())));
-  if (authorized.length === 1) return authorized[0].result;
-  if (authorized.length > 1) {
-    const subject = subjectPolityFromEvent(event, resolver);
-    const bySubject = subject ? authorized.find(({ human }) => resolver.equivalent(subject, human.canonical)) : null;
-    return bySubject ? bySubject.result : { agency: null, reason: "ambiguous-human-authority", source: "native-unresolved" };
-  }
-  if (usable.length) return usable[0].result;
-  return readings.find(({ result }) => !result.agency)?.result
-    || { agency: null, reason: "no-unique-native-provenance", source: "native-unresolved" };
+  // A canonical-process agency the event already has takes the one storyline
+  // it advances (playerAgencyAuthority.js). Raw model update indexes remain
+  // excluded here.
+  propagateCanonicalProcessAuthorityRefs(candidate, {
+    world,
+    includeStorylineUpdates: false,
+  });
+
+  // A resolver handed in must already know every human polity (see the screen).
+  const resolver = sharedResolver || createWorldActorResolver(world, gameCountry, { humans: otherHumans(gameCountry, humanCountries) });
+  const authorities = humanAuthorities({ resolver, gameCountry, humanCountries, actions, chats });
+  const knownActionIds = currentActionIds(actions);
+  const bindings = [];
+  const unresolved = [];
+  let applied = 0;
+
+  candidate.events = normalizeArray(candidate?.events).map((event, eventIndex) => {
+    if (!isPlainObject(event)) return event;
+
+    const context = { world, resolver, authorities, records: recordsOfEvent(candidate, event, eventIndex) };
+    const structureReason = eventAgencyStructureReason(event.agency);
+    const given = structureReason ? null : normalizeEventAgency(event.agency);
+    let agency = null;
+    if (given) {
+      agency = bindGivenAgency(event.agency, event, context);
+    } else {
+      const derived = deriveEventAgency(event, context);
+      if (derived.agency) {
+        agency = derived.agency;
+        applied += 1;
+        bindings.push({
+          eventIndex,
+          rowIndex: -1,
+          authority: "native-provenance",
+          authorityRef: normalizeString(agency.authorityRef),
+          principal: normalizeString(agency.principal),
+          source: derived.source,
+          reason: derived.reason,
+        });
+      } else {
+        unresolved.push({
+          eventIndex,
+          rowIndex: -1,
+          authority: "native-provenance",
+          reason: derived.reason || structureReason || "missing-event-agency",
+          source: derived.source || "native-unresolved",
+          // The human whose choice it was, when several people play.
+          ...(derived.polity ? { polity: derived.polity } : {}),
+        });
+      }
+    }
+
+    const impacts = withCurrentActionIds(event, knownActionIds);
+    if (!agency && !impacts) return event;
+    return {
+      ...event,
+      ...(agency ? { agency } : {}),
+      ...(impacts ? { impacts } : {}),
+    };
+  });
+
+  return { applied, unresolved, bindings };
 };
 
 const delegatedStructuredSovereignReason = (event) => {
@@ -2988,10 +2236,19 @@ const delegatedStructuredSovereignReason = (event) => {
   return "";
 };
 
+// Whether a name is one of the world's polities, by any of its names. Such a
+// principal is a government, which no non-sovereign authority may stand for.
+const namesKnownPolity = (resolver, value) => {
+  const name = normalizeString(value).toLowerCase();
+  return Boolean(name) && resolver.records.some((record) =>
+    [record.canonical, ...normalizeArray(record.aliases)]
+      .some((alias) => normalizeString(alias).toLowerCase() === name));
+};
+
 // FC5: human control protects fresh sovereign political will, not every event
-// inside the country. The model supplies a proposed class, but native JS checks
-// whether the event actually crosses a sovereign-policy gate before accepting
-// delegated-routine/endogenous-domestic provenance.
+// inside the country. An agency the event carries may class it as
+// delegated-routine or endogenous-domestic; native JS checks whether the event
+// actually crosses a sovereign-policy gate before accepting that.
 const nonSovereignPlayerActivityReason = (event, agency, { world = {}, resolver, playerCanonical }) => {
   const authority = normalizeString(agency?.authority).toLowerCase();
   if (!["delegated-routine", "endogenous-domestic"].includes(authority)) return "";
@@ -3022,7 +2279,7 @@ const nonSovereignPlayerActivityReason = (event, agency, { world = {}, resolver,
     return `endogenous-domestic principalKind must be domestic-process, domestic-actor, organization, or person; received ${principalKind || "(blank)"}`;
   }
 
-  // What the event carries, not the model's authority label (nor its wording),
+  // What the event carries, not the authority label (nor its wording),
   // decides whether a claimed non-sovereign event is the government's choice.
   if (eventMakesStructuredChoiceFor(event, resolver, jurisdiction)) {
     return `${authority} event lists ${jurisdiction} among its actors or sets its strategy; a non-sovereign label cannot authorize that government's choice or a new international commitment`;
@@ -3185,7 +2442,7 @@ const eventAgencyAuthorityReason = (event, {
 
   if (["autonomous", "independent"].includes(agency.authority)) {
     if (agency.authority === "independent" && agency.principalKind === "collective-process"
-        && semanticActorPolities(event, resolver).length >= 2) {
+        && actorPolities(event, resolver).length >= 2) {
       return "independent collective-process provenance cannot disguise a commitment its listed actors chose together";
     }
     // Own-right discretion is not confined to sovereign governments. Membership
@@ -3245,234 +2502,12 @@ const eventAgencyAuthorityReason = (event, {
 export const playerAgencyViolationReason = (event, options = {}) =>
   eventAgencyAuthorityReason(event, { ...options, requireAgency: false });
 
-// The polities a ledger record of the answer names as its parties: an
-// agreement's parties, a relation's two sides, a war's sides.
-const ledgerRecordPolities = (record) => uniqueStrings([
-  ...normalizeArray(record?.parties),
-  ...normalizeArray(record?.sideA),
-  ...normalizeArray(record?.sideB),
-  ...normalizeArray(record?.actors),
-  ...normalizeArray(record?.opponents),
-  record?.a,
-  record?.b,
-].map(normalizeString).filter(Boolean));
 
-const ledgerRecordsOfEvent = (candidate, event, eventIndex) => {
-  const eventId = normalizeString(event?.id);
-  return [candidate?.agreementUpdates, candidate?.relationUpdates, candidate?.warUpdates]
-    .filter(Array.isArray)
-    .flat()
-    .filter((record) => record && typeof record === "object")
-    .filter((record) => (eventId && normalizeArray(record?.eventIds).map(normalizeString).includes(eventId))
-      || (Number.isInteger(eventIndex) && normalizeArray(record?.eventIndexes).map(Number).includes(eventIndex)));
-};
-
-// Whether an event that failed the agency check stands at a human's sovereign
-// boundary (and so is never quietly dropped), read only from what it carries:
-// an agency claiming a human's sovereignty, the human among its actors, an
-// operation on the human's government or polity, a treaty, war or relation
-// record of the answer tied to it with the human as a party, an order of the
-// human's it cites, or the binder's verdict that it was the human's choice.
-// Never from its wording: a world event that names the player's country
-// beside "government" or "approves" is the world's.
-const eventReferencesPlayerSovereignty = (event, {
-  world = {},
-  gameCountry = "",
-  humanCountries = [],
-  actions = [],
-  unresolved = null,
-  candidate = null,
-  eventIndex = -1,
-} = {}) => {
-  const resolver = createWorldActorResolver(world, gameCountry, { humans: otherHumans(gameCountry, humanCountries) });
-  const humans = uniqueStrings([gameCountry, ...normalizeArray(humanCountries)]
-    .map((name) => resolver.canonical(normalizeString(name)))
-    .filter(Boolean));
-  if (!humans.length) return false;
-  const isHuman = (polity) => Boolean(normalizeString(polity)) && humans.some((human) => resolver.equivalent(polity, human));
-  if (humans.some((human) => rawAgencyClaimsPlayerSovereignty(event?.agency, resolver, human))) return true;
-  if (normalizeString(unresolved?.source).includes("player")) return true;
-  if (humans.some((human) => eventMakesStructuredChoiceFor(event, resolver, human))) return true;
-  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-  if (normalizeArray(impacts.politicalActorOps).some((operation) =>
-    isHuman(operation?.polityKey || operation?.polity || operation?.country))) return true;
-  if (normalizeArray(impacts.polityChanges).some((change) =>
-    [change?.code, change?.fromCode, change?.polity, change?.name].some(isHuman))) return true;
-  if (ledgerRecordsOfEvent(candidate, event, eventIndex).some((record) => ledgerRecordPolities(record).some(isHuman))) return true;
-  const queued = currentActionIds(actions);
-  return normalizeArray(impacts.actionIds).some((id) => queued.has(normalizeString(id)));
-};
-
-const provenanceRecordCollections = (candidate) => [
-  candidate?.warUpdates,
-  candidate?.relationUpdates,
-  candidate?.agreementUpdates,
-  candidate?.institutionUpdates,
-  candidate?.storylineUpdates,
-  candidate?.countryStatPatches,
-  candidate?.frontOrders,
-].filter(Array.isArray);
-
-const eventHasCanonicalProvenanceDependencies = (candidate, event, eventIndex) => {
-  if (!event || typeof event !== "object") return true;
-  if (hardImpactKeysForEvent(event).length) return true;
-  if (normalizeArray(event?.impacts?.actionIds).length) return true;
-  if (normalizeString(event?.warId)) return true;
-  if (normalizeArray(event?.storylineIds).length) return true;
-  const eventId = normalizeString(event?.id);
-  if (eventId && normalizeArray(candidate?.boardProvisionalEventIds).map(normalizeString).includes(eventId)) return true;
-  if (eventHasLedgerTrigger(candidate, eventIndex)) return true;
-
-  for (const records of provenanceRecordCollections(candidate)) {
-    for (const record of records) {
-      if (!record || typeof record !== "object") continue;
-      if (eventId && normalizeArray(record?.eventIds).map(normalizeString).includes(eventId)) return true;
-      if (normalizeArray(record?.eventIndexes).map(Number).some((value) => value === eventIndex)) return true;
-    }
-  }
-  return false;
-};
-
-const remapEventIndexesAfterDrop = (candidate, dropIndexes) => {
-  const drops = [...dropIndexes].sort((a, b) => a - b);
-  const remap = (value) => {
-    const index = Number(value);
-    if (!Number.isInteger(index) || index < 0 || dropIndexes.has(index)) return null;
-    return index - drops.filter((drop) => drop < index).length;
-  };
-  for (const records of provenanceRecordCollections(candidate)) {
-    for (const record of records) {
-      if (!record || typeof record !== "object" || !Array.isArray(record.eventIndexes)) continue;
-      record.eventIndexes = record.eventIndexes.map(remap).filter((value) => Number.isInteger(value));
-    }
-  }
-};
-
-export const validateWorldPlayerAgencyPayload = (candidate, {
-  world = {},
-  gameCountry = "",
-  humanCountries = [],
-  actions = [],
-  chats = [],
-  salvageIndependent = false,
-  // World Engine normal-turn mode: semantic events with no canonical ledger/impact
-  // dependencies may be quarantined individually even when they cross the human
-  // sovereign boundary. Dropping the event preserves sovereignty; it does NOT
-  // reinterpret, downgrade, or fabricate authority. Hard/dependent events still
-  // fail closed because removing them could strand canonical state.
-  quarantineIndependentInvalidEvents = false,
-  onQuarantine = null,
-} = {}) => {
-  const binding = bindWorldEventAuthorityRefs(candidate, {
-    world,
-    gameCountry,
-    humanCountries,
-    actions,
-    chats,
-  });
-  if (binding.applied > 0) {
-    const derived = binding.bindings.filter((entry) => entry.authority === "native-provenance").length;
-    console.info(
-      `[OH Native Authority Binder v${NATIVE_AUTHORITY_BINDER_VERSION}] ` +
-      `${binding.applied} native provenance/authority binding(s) applied` +
-      `${derived ? ` (${derived} event provenance record(s) reconstructed natively)` : ""}.`,
-    );
-  }
-
-  const events = normalizeArray(candidate?.events);
-  const dropIndexes = new Set();
-  const droppedAudit = [];
-
-  for (let index = 0; index < events.length; index += 1) {
-    const event = events[index];
-    const reason = eventAgencyAuthorityReason(event, {
-      world,
-      gameCountry,
-      humanCountries,
-      actions,
-      chats,
-      requireAgency: true,
-    });
-    if (!reason) continue;
-
-    const unresolved = binding.unresolved.find((entry) => entry.eventIndex === index);
-    const hardPlayerBoundary = eventReferencesPlayerSovereignty(event, {
-      world,
-      gameCountry,
-      humanCountries,
-      actions,
-      unresolved,
-      candidate,
-      eventIndex: index,
-    });
-
-    const independent = !eventHasCanonicalProvenanceDependencies(candidate, event, index);
-    const mayQuarantine = independent && (
-      quarantineIndependentInvalidEvents ||
-      (salvageIndependent && !hardPlayerBoundary)
-    );
-    if (mayQuarantine) {
-      dropIndexes.add(index);
-      droppedAudit.push({
-        index,
-        id: normalizeString(event?.id),
-        title: normalizeString(event?.title) || "Untitled",
-        reason,
-        resolution: normalizeString(unresolved?.reason),
-        boundary: hardPlayerBoundary ? "player-sovereignty" : "unresolved-provenance",
-      });
-      continue;
-    }
-
-    const binderDetail = unresolved
-      ? ` Native provenance resolution: ${unresolved.reason}; ${unresolved.candidateCount} canonical candidate(s); best semantic score ${Number(unresolved.bestScore || 0).toFixed(2)}.`
-      : "";
-    const prefix = hardPlayerBoundary ? "Player-agency authority violation" : "Event provenance resolution failure";
-    return `${prefix} at $.events[${index}] ("${normalizeString(event?.title) || "Untitled"}"): ${reason}.${binderDetail} ` +
-      (hardPlayerBoundary
-        ? "The human sovereign boundary remains hard; correct the semantic event or bind it to existing player authority."
-        : "Native provenance could not safely establish decision ownership; do not invent opaque authority ids.");
-  }
-
-  if (dropIndexes.size) {
-    candidate.events = events.filter((_, index) => !dropIndexes.has(index));
-    remapEventIndexesAfterDrop(candidate, dropIndexes);
-    console.warn(
-      `[OH Native Event Provenance v${NATIVE_EVENT_PROVENANCE_VERSION}] ` +
-      `quarantined ${dropIndexes.size} independent invalid event(s) after native resolution; keeping the rest of the segment without weakening canonical authority.`,
-      droppedAudit,
-    );
-    if (typeof onQuarantine === "function") onQuarantine(droppedAudit);
-  }
-  return "";
-};
-
-const importanceWeightForQuality = (importance) => {
-  switch (normalizeString(importance).toLowerCase()) {
-    case "critical": return 4;
-    case "major": return 3;
-    case "moderate": return 2;
-    case "minor": return 1;
-    default: return 0;
-  }
-};
-
-const eventHasExplicitActionAuthority = (event) =>
-  normalizeArray(event?.impacts?.actionIds).length > 0;
-
-const lowTrajectoryInstitutionalEvent = (event) => {
-  if (!event || typeof event !== "object") return false;
-  if (deriveWorldTrajectoryValue(event) > 1) return false;
-  if (hardImpactKeysForEvent(event).length) return false;
-  if (normalizeArray(event?.storylineIds).length) return false;
-  if (normalizeString(event?.warId)) return false;
-  if (eventHasExplicitActionAuthority(event)) return false;
-  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  return LOW_TRAJECTORY_INSTITUTIONAL_RE.test(text) ||
-    TRAJECTORY_REPORTING_RE.test(text) ||
-    (ROUTINE_ADMINISTRATIVE_CUE_RE.test(text) && !ADMINISTRATIVE_MATERIAL_OUTCOME_RE.test(text));
-};
-
+// Whether an event is the player's sphere's or the wider world's: the
+// player's when it says it concerns the player (playerRelated) or its
+// structured fields name a player-sphere polity, the wider world's when they
+// name others, unknown when they name none. Its words are never searched for a
+// name.
 export const createWorldEventScopeClassifier = (
   analysis = null,
   { world = {}, gameCountry = "", resolver: sharedResolver = null } = {},
@@ -3494,10 +2529,7 @@ export const createWorldEventScopeClassifier = (
     if (!event || typeof event !== "object") return "unknown";
     if (event?.playerRelated === true) return "player-sphere";
 
-    const text = eventExplorationText(event);
-    const actors = resolver.mentionedPolities(text)
-      .map((actor) => resolver.canonical(actor))
-      .filter(Boolean);
+    const actors = eventPartyPolities(event, resolver);
 
     if (
       actors.some((actor) =>
@@ -3511,98 +2543,13 @@ export const createWorldEventScopeClassifier = (
   };
 };
 
-const applyLowTrajectoryFeedGuard = ({
-  events,
-  priorEvents = [],
-  analysis = null,
-  world = {},
-  game = {},
-  resolver = null,
-} = {}) => {
-  const source = normalizeArray(events);
-  const currentLow = source
-    .map((event, index) => ({ event, index }))
-    .filter(({ event }) => lowTrajectoryInstitutionalEvent(event));
-
-  if (currentLow.length < LOW_TRAJECTORY_BATCH_TRIGGER) {
-    return { events: source, dropped: [], hidden: [] };
-  }
-
-  const recentLowCount = normalizeArray(priorEvents)
-    .slice(-LOW_TRAJECTORY_RECENT_WINDOW)
-    .filter(lowTrajectoryInstitutionalEvent)
-    .length;
-
-  const cap = recentLowCount >= LOW_TRAJECTORY_RECENT_SATURATION ? 1 : 2;
-  if (currentLow.length <= cap) return { events: source, dropped: [], hidden: [] };
-
-  const classifyScope = createWorldEventScopeClassifier(analysis, {
-    world,
-    gameCountry: normalizeString(game?.country),
-    resolver,
-  });
-  const scopeCounts = source.reduce((acc, event) => {
-    const scope = classifyScope(event);
-    acc[scope] = (acc[scope] || 0) + 1;
-    return acc;
-  }, {});
-
-  const ranked = currentLow
-    .map(({ event, index }) => {
-      const scope = classifyScope(event);
-      const scopeCount = scopeCounts[scope] || 0;
-      return {
-        event,
-        index,
-        scope,
-        keepScore:
-          importanceWeightForQuality(event?.importance) * 10 +
-          (event?.notable === true ? 4 : 0) -
-          scopeCount,
-      };
-    })
-    .sort((a, b) =>
-      (b.keepScore - a.keepScore) ||
-      compareGameDates(a.event?.date || "", b.event?.date || "") ||
-      a.index - b.index
-    );
-
-  const keepIndexes = new Set(ranked.slice(0, cap).map((row) => row.index));
-  const lowIndexes = new Set(currentLow.map((row) => row.index));
-  const dropped = [];
-  const hidden = [];
-  const kept = [];
-
-  source.forEach((event, index) => {
-    if (!lowIndexes.has(index) || keepIndexes.has(index)) {
-      kept.push(event);
-      return;
-    }
-    const row = {
-      id: normalizeString(event?.id),
-      title: normalizeString(event?.title),
-      route: "LOW_TRAJECTORY_FEED_SATURATION",
-      reason:
-        `low-trajectory institutional/process card suppressed because this batch contained ${currentLow.length} such cards` +
-        (recentLowCount >= LOW_TRAJECTORY_RECENT_SATURATION
-          ? ` and ${recentLowCount}/${LOW_TRAJECTORY_RECENT_WINDOW} recent cards were already the same low-branch texture`
-          : ""),
-    };
-    dropped.push(row);
-    hidden.push({ event, route: row.route, reason: row.reason });
-  });
-
-  return { events: kept, dropped, hidden };
-};
-
-// The native verdicts that mean the world made the player's own sovereign
-// choice: the player's country is the one acting (or a named party to a joint
-// commitment) and neither a queued order nor a player-authored message backs
-// it. For now the screen only logs them, marked wouldWithhold, and keeps the
-// event: the title-based reading still takes the player's country as the actor
-// in "Poland Comes Under Attack as Russia Declares War" or "Poland Hit as
-// Russia Imposes Sanctions", and dropping those would erase the world acting on
-// the player. Enforce once the logged verdicts show the rule is precise.
+// The native verdicts that mean the world made a person's own sovereign
+// choice: their country is among the event's choosers (its actors, a party to
+// an agreement it starts, the side that starts or joins a war by it, a
+// government whose strategy it rewrites) and neither an order nor a message of
+// theirs backs it. A shared game refuses such an event
+// (HUMAN_SOVEREIGN_REFUSALS). Single player only logs it, marked
+// wouldWithhold, and keeps it: the player has only themselves to answer to.
 const PLAYER_SOVEREIGN_CHOICE_VERDICTS = new Set([
   "player-fresh-sovereign-choice-without-authority",
   "joint-player-sovereign-choice-without-authority",
@@ -3617,76 +2564,36 @@ const playerSovereignChoiceReason = (event, verdict, actions) => {
   return `${verdict.reason}: the human-controlled polity makes a fresh sovereign choice that no queued order or player-authored message authorizes`;
 };
 
-// The rules that judge one event on its own, in the order the screen applies
-// them: a rejection (it cannot have happened) or a visibility rule (it happened,
-// but is too routine for the timeline). The batch rules — the low-trajectory
-// feed guard — need the whole segment and are not here. Shared with the live
-// preview (previewScreenedEvent), so a card marked while the model is still
-// writing is marked by exactly the rule that will judge it when the turn lands.
-// The screen hands in its one identity index for the batch (`resolver`); the
-// preview, judging one card, builds its own.
-// `ordered`: an order to a battlefield rests on this event (nativeFrontLedger.js).
-// It carries no operation of its own, because the front engine works out what
-// comes of the order, so it reads as military news with no consequence when it
-// is the one event the map is about to move on. It is not routine.
-const singleEventScreenVerdict = (event, { world = {}, game = {}, resolver = null, ordered = false } = {}) => {
-  const wartimeReason = falseNonBelligerentWartimeReason(event, world, normalizeString(game?.country), resolver);
-  if (wartimeReason) return { fate: "reject", route: "NON_BELLIGERENT_WARTIME_CAUSALITY", reason: wartimeReason };
-  const routineReason = ordered ? "" : routineMilitaryNoDeltaReason(event);
-  if (routineReason) return { fate: "hide", route: "ROUTINE_MILITARY_PRECURATION", reason: routineReason };
-  const administrativeReason = routineAdministrativeNoDeltaReason(event);
-  if (administrativeReason) return { fate: "hide", route: "ROUTINE_ADMINISTRATIVE_PROCESS", reason: administrativeReason };
-  return null;
-};
+// The reasons the binder gives when an event makes a human polity's own
+// sovereign choice without that human's order or message: the boundary a
+// shared game holds hard (screenGeneratedWorldEvents).
+export const HUMAN_SOVEREIGN_REFUSALS = Object.freeze([...PLAYER_SOVEREIGN_CHOICE_VERDICTS]);
+const HUMAN_SOVEREIGN_REFUSAL_SET = new Set(HUMAN_SOVEREIGN_REFUSALS);
 
-// What the screen will do with one streamed event, before the turn lands: null
-// to keep it, or { fate, route, reason }. Quiet (the screen's log line is for
-// the real pass) and pure. Sanitized the way the screen sanitizes, since a no-op
-// control op stripped there is not an impact that could keep an event. The
-// segment's storyline tags are not known yet, so an event the model later ties
-// to a storyline can still be kept: this is a preview.
-export const previewScreenedEvent = (event, { world = {}, game = {} } = {}) => {
-  if (!event || typeof event !== "object") return null;
-  const sanitized = sanitizeNoOpRegionControlOps(
-    sanitizeDuplicatePolityUpdates(sanitizeProcessOnlyPolityUpdates(event).event, world).event,
-    world,
-  ).event;
-  return singleEventScreenVerdict(sanitized, { world, game });
-};
-
+// The screen of one segment's events before they join the round: each event's
+// agency from what it carries (bindWorldEventAuthorityRefs), a person's
+// country held to that person's own word in a shared game, an agency the
+// authority check refuses withheld, and two sanitizers of operations that
+// would change nothing (a duplicate update of one polity, a contest the map
+// already has). Nothing is kept off the timeline for its words: `hidden`
+// stays empty, for the callers that hand hidden events to the Board.
 export const screenGeneratedWorldEvents = ({
   events = [],
-  priorEvents = [],
   world = {},
   game = {},
   actions = [],
   chats = [],
   analysis = null,
-  // The segment's agreement records, bound to its events by id: the parties
-  // of a treaty an event starts are who made that choice.
+  // The segment's records, bound to its events by id: the parties of a treaty
+  // an event starts and the side that starts or joins a war by it are who
+  // made that choice, and every party of a record tied to it, relations
+  // included, is someone it commits its choosers to.
   agreementUpdates = [],
-  // And its war records: the side that starts or joins a war by an event made
-  // that choice.
   warUpdates = [],
-  // The segment's orders to its battlefields, bound the same way: an event one
-  // rests on is not routine military news.
-  frontOrders = [],
+  relationUpdates = [],
 } = {}) => {
   const kept = [];
   const dropped = [];
-  const orderedEventIds = new Set(normalizeArray(frontOrders)
-    .flatMap((order) => normalizeArray(order?.eventIds).map(normalizeString))
-    .filter(Boolean));
-  // Canonical events kept off the timeline by a VISIBILITY rule (routine,
-  // low-value) are handed on whole: they still happened, and the Board reads
-  // every Canonical event. `dropped` stays the audit of everything removed; a
-  // rejection (the wartime-causality rule) is in `dropped` and never here.
-  const hidden = [];
-  const keepOffTimeline = (event, route, reason) => {
-    dropped.push({ id: normalizeString(event?.id), title: normalizeString(event?.title), route, reason });
-    hidden.push({ event, route, reason });
-  };
-  let strippedPolityUpdates = 0;
   let mergedDuplicatePolityUpdates = 0;
   let strippedNoOpRegionControlOps = 0;
   // What native provenance concluded about each event that involves the player
@@ -3704,13 +2611,7 @@ export const screenGeneratedWorldEvents = ({
   });
 
   for (const original of normalizeArray(events)) {
-    const processSanitized = sanitizeProcessOnlyPolityUpdates(original);
-    strippedPolityUpdates += processSanitized.removed;
-
-    const lineageSanitized = sanitizeDuplicatePolityUpdates(
-      processSanitized.event,
-      world,
-    );
+    const lineageSanitized = sanitizeDuplicatePolityUpdates(original, world);
     mergedDuplicatePolityUpdates += lineageSanitized.merged;
 
     const controlSanitized = sanitizeNoOpRegionControlOps(
@@ -3720,15 +2621,16 @@ export const screenGeneratedWorldEvents = ({
     strippedNoOpRegionControlOps += controlSanitized.removed;
 
     const eventId = normalizeString(controlSanitized.event?.id);
-    const recordsOfEvent = (updates) => (eventId
+    const tiedTo = (updates) => (eventId
       ? normalizeArray(updates)
         .filter((update) => normalizeArray(update?.eventIds).map(normalizeString).includes(eventId))
         .map((update) => ({ ...update, eventIndexes: [] }))
       : []);
     const eventWrapper = {
       events: [controlSanitized.event],
-      agreementUpdates: recordsOfEvent(agreementUpdates),
-      warUpdates: recordsOfEvent(warUpdates),
+      agreementUpdates: tiedTo(agreementUpdates),
+      warUpdates: tiedTo(warUpdates),
+      relationUpdates: tiedTo(relationUpdates),
     };
     const binding = bindWorldEventAuthorityRefs(eventWrapper, {
       world,
@@ -3773,41 +2675,9 @@ export const screenGeneratedWorldEvents = ({
       });
       continue;
     }
-    const verdict = singleEventScreenVerdict(event, {
-      world,
-      game,
-      resolver,
-      ordered: orderedEventIds.has(normalizeString(event?.id)),
-    });
-
-    if (verdict?.fate === "reject") {
-      dropped.push({
-        id: normalizeString(event?.id),
-        title: normalizeString(event?.title),
-        route: verdict.route,
-        reason: verdict.reason,
-      });
-      continue;
-    }
-
-    if (verdict?.fate === "hide") {
-      keepOffTimeline(event, verdict.route, verdict.reason);
-      continue;
-    }
 
     kept.push(event);
   }
-
-  const feedGuard = applyLowTrajectoryFeedGuard({
-    events: kept,
-    priorEvents,
-    analysis,
-    world,
-    game,
-    resolver,
-  });
-  if (feedGuard.dropped.length) dropped.push(...feedGuard.dropped);
-  hidden.push(...feedGuard.hidden);
 
   if (playerVerdicts.length) {
     console.info(
@@ -3817,10 +2687,9 @@ export const screenGeneratedWorldEvents = ({
   }
 
   const result = {
-    events: feedGuard.events,
+    events: kept,
     dropped,
-    hidden,
-    strippedPolityUpdates,
+    hidden: [],
     mergedDuplicatePolityUpdates,
     strippedNoOpRegionControlOps,
     playerVerdicts,
@@ -3831,18 +2700,16 @@ export const screenGeneratedWorldEvents = ({
 
   if (
     dropped.length ||
-    strippedPolityUpdates ||
     mergedDuplicatePolityUpdates ||
     strippedNoOpRegionControlOps
   ) {
     console.info(
       `[OH Native World Integrity v${WORLD_INTEGRITY_VERSION}] ` +
       `kept ${result.events.length}/${normalizeArray(events).length} generated event(s); ` +
-      `dropped ${dropped.length}, stripped ${strippedPolityUpdates} unsupported polity update(s), ` +
+      `dropped ${dropped.length}, ` +
       `merged ${mergedDuplicatePolityUpdates} duplicate polity update(s), ` +
-      `stripped ${strippedNoOpRegionControlOps} no-op control op(s); ${hidden.length} kept off the timeline for the Board.`,
-      // The Hidden events are whole events; `dropped` already names them.
-      { ...result, hidden: hidden.length },
+      `stripped ${strippedNoOpRegionControlOps} no-op control op(s).`,
+      result,
     );
   }
 

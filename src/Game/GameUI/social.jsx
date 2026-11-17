@@ -40,7 +40,6 @@ import {
   POLL_CHOICE_MAX_CHARS,
   SOCIAL_POST_MAX_CHARS,
   compactCount,
-  leaderOf,
   mentionsPlayer,
   newestPostNumber,
   playerAccount,
@@ -466,7 +465,7 @@ const selectPolities = (world) => world?.polityOverrides ?? {};
 // not redraw the panel unless the leader changed.
 const accountOf = (country) => (world) => {
   const account = playerAccount(world, country);
-  return `${account.author}\u0000${account.role}\u0000${leaderOf(world, country)?.name ?? ""}`;
+  return `${account.author}\u0000${account.role}`;
 };
 
 // The tab bar along the foot of the screen, as such apps have it. Search took
@@ -491,7 +490,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   const feed = useRuntimeState("world", selectFeed);
   const polities = useRuntimeState("world", selectPolities);
   const country = toCountryName(game.country) || game.country;
-  const [author, role, leader] = useRuntimeState("world", accountOf(country), country).split("\u0000");
+  const [author, role] = useRuntimeState("world", accountOf(country), country).split("\u0000");
   const turnRunning = useTurnRunning(isOpen);
   const isMobile = useIsMobile();
   const isTouch = useTouchPrimary();
@@ -554,10 +553,11 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   }, [isOpen]);
 
   const flags = useMemo(() => ({ custom: customFlags, polities }), [customFlags, polities]);
-  const posts = useMemo(() => (tab === "search" ? [] : socialFeedView(feed, { tab, country, leader })), [feed, tab, country, leader]);
+  const posts = useMemo(() => (tab === "search" ? [] : socialFeedView(feed, { tab, country })), [feed, tab, country]);
+  // What the skip said each post mentions (socialFeed.js), never its words.
   const mentionCount = useMemo(
-    () => feed.filter((post) => mentionsPlayer(post, { feed, country, leader }) && Number(post.round) >= game.round).length,
-    [feed, country, leader, game.round],
+    () => feed.filter((post) => mentionsPlayer(post, { feed, country }) && Number(post.round) >= game.round).length,
+    [feed, country, game.round],
   );
   const canPost = Boolean(country) && !turnRunning;
   const length = Array.from(draft.trim()).length;

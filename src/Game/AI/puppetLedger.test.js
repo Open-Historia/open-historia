@@ -18,7 +18,8 @@ import { PUPPET_COUP_LOYALTY as WORKSHOP_COUP_LOYALTY } from "../../Editor/scena
 
 // A subordination rides the same compact-line transport as wars, relations and
 // agreements: the model never writes the ledger, it emits lines that must
-// resolve both polities and bind to a real causal event before they persist.
+// resolve both polities before they persist, each tied to the event it names
+// (or to none, and dated by the skip).
 
 const baseWorld = {
   polityOverrides: {
@@ -64,14 +65,16 @@ test("an install line creates the row, bound to its event", () => {
   assert.deepEqual(row.knownTo.map((entry) => entry.polity).sort(), ["Poland", "USSR"]);
 });
 
-test("an unbound line does not persist", () => {
+test("a line tied to no event persists, dated by the skip and citing none", () => {
   const merge = applyPuppetUpdates({
     world: baseWorld,
     updates: "install~USSR~Poland~satellite~40~open~~No event",
     events: [],
+    stopDate: "1945-06-30",
     round: 1,
   });
-  assert.deepEqual(merge.world.puppets, []);
+  assert.deepEqual(merge.dropped, []);
+  assert.deepEqual(merge.world.puppets.map((row) => [row.overlord, row.puppet, row.kind, row.startedDate, row.sourceEventIds]), [["USSR", "Poland", "satellite", "1945-06-30", []]]);
 });
 
 test("a line naming a polity the world does not know is dropped", () => {
@@ -389,6 +392,42 @@ test("a suppressed rising settles it too", () => {
   assert.ok(merge.storylineSeeds.some((line) => line.startsWith("storyline-puppet-poland~resolved~")));
 });
 
+test("puppets named in another script each have a coup Storyline of their own, as their English twins do", () => {
+  // A coup Storyline's id is made from its puppet's name. Cut to a-z and 0-9,
+  // every puppet named in Cyrillic or Chinese had the one id
+  // "storyline-puppet-": after the first, none was ever opened, and a revolt
+  // settled every one of them.
+  const twin = (overlord, [first, second]) => ({
+    polityOverrides: Object.fromEntries([overlord, first, second].map((name) => [name, { code: name, name }])),
+    regionOwnershipOverrides: { r1: overlord, r2: first, r3: second },
+    relations: [],
+    agreements: [],
+    puppets: [
+      { id: "p1", overlord, puppet: first, kind: "satellite", loyalty: 12, secrecy: "open", status: "active" },
+      { id: "p2", overlord, puppet: second, kind: "satellite", loyalty: 10, secrecy: "open", status: "active" },
+    ],
+  });
+  const idOf = (line) => line.split("~")[0];
+  const statusOf = (line) => line.split("~")[1];
+  for (const [overlord, puppets] of [["USSR", ["Poland", "Hungary"]], ["СССР", ["Польша", "Венгрия"]], ["苏联", ["波兰", "匈牙利"]]]) {
+    const world = twin(overlord, puppets);
+    const storyline = (id, puppet) => ({
+      id, kind: "unrest", title: `Resentment in ${puppet}`, status: "active", pressure: 76, momentum: 35,
+      startedDate: "1945-06-28", state: `${puppet} chafes.`, participants: [puppet, overlord],
+    });
+    const ids = apply(world, `loyalty~${overlord}~${puppets[0]}~~12~~1~Grain requisitions bite`).storylineSeeds.map(idOf);
+    assert.equal(ids.length, 2, overlord);
+    assert.notEqual(ids[0], ids[1], `${overlord}: two puppets, one Storyline`);
+    // The first one's is open: the second's is opened all the same.
+    const next = apply({ ...world, storylines: [storyline(ids[0], puppets[0])] }, `loyalty~${overlord}~${puppets[0]}~~11~~1~Worse`);
+    assert.deepEqual(next.storylineSeeds.map(idOf), [ids[1]], `${overlord}: the second puppet's Storyline`);
+    // A revolt settles its own puppet's, and only that.
+    const both = { ...world, storylines: [storyline(ids[0], puppets[0]), storyline(ids[1], puppets[1])] };
+    const settled = apply(both, `revolt~${overlord}~${puppets[0]}~~~~1~The rising`).storylineSeeds.filter((line) => statusOf(line) === "resolved");
+    assert.deepEqual(settled.map(idOf), [ids[0]], `${overlord}: a revolt settles its own puppet's Storyline only`);
+  }
+});
+
 test("annexing a Puppet costs the Overlord standing, and costs more when it was open", () => {
   const seated = (secrecy) => ({
     ...baseWorld,
@@ -504,7 +543,6 @@ test("bootstrap puppets install on day one without a causing event", () => {
     updates: puppetUpdatesFromCanonical([{ kind: "puppet:open", polities: ["Germany", "Slovakia"], category: "satellite", score: 45 }]),
     events: [],
     round: 1,
-    allowUnboundBaseline: true,
   });
   assert.equal(merge.world.puppets.length, 1);
   assert.equal(merge.world.puppets[0].overlord, "Germany");
@@ -623,11 +661,13 @@ test("a skip's install line reaches world.puppets through the segment merge", ()
   assert.deepEqual(world.puppets[0].sourceEventIds, ["e1"]);
 });
 
-// A skip that forgets to tie an install to its event. Relations and agreements
-// have long been matched to the one event that names both parties; a Puppet was
-// thrown away instead. A British Empire session offered Nigeria a Dominion,
-// the model made it a protectorate with no event index, and Nigeria stayed
-// independent while the timeline said three times that it had joined.
+// A skip that forgets to tie an install to its event. A British Empire session
+// offered Nigeria a Dominion, the model made it a protectorate with no event
+// index, and Nigeria stayed independent while the timeline said three times
+// that it had joined. Such a line was then tied to the one event whose words
+// named both countries, and thrown away when none did or two did: in a game
+// written in French, with names the events spell their own way, nearly always.
+// It is the skip's line: applied, dated by the skip, citing no event.
 const dominionWorld = {
   polityOverrides: {
     "British Empire": { code: "British Empire", name: "British Empire" },
@@ -664,10 +704,10 @@ const unboundInstall = () => [{
   note: "Integrated as a self-governing Dominion under the Imperial Development Accord.",
 }];
 
-// What a time skip does with its answer: validate (which repairs bindings),
-// then bind the lines to the events and apply them.
-const skipApplies = (candidate, { allowNativeBinding = true } = {}) => {
-  validateDiplomaticLedgerPayload(candidate, { world: dominionWorld, allowNativeBinding });
+// What a time skip does with its answer: validate, then bind the lines to the
+// events and apply them.
+const skipApplies = (candidate, { authority = "skip" } = {}) => {
+  validateDiplomaticLedgerPayload(candidate, { world: dominionWorld, authority });
   return applyPuppetUpdates({
     world: dominionWorld,
     updates: bindPuppetUpdatesToEvents(decodePuppetUpdates(candidate.puppetUpdates), candidate.events),
@@ -676,39 +716,49 @@ const skipApplies = (candidate, { allowNativeBinding = true } = {}) => {
     round: 46,
   });
 };
+const installed = (merge) => merge.world.puppets.map((row) => [row.overlord, row.puppet, row.kind, row.loyalty, row.startedDate, row.sourceEventIds]);
+const NIGERIA_UNBOUND = [["British Empire", "Nigeria", "protectorate", 85, "2019-08-22", []]];
 
-test("a skip's install with no event is tied to the one event that names both countries", () => {
-  const merge = skipApplies({ events: [ratification, fusionTrial], puppetUpdates: unboundInstall() });
-  assert.deepEqual(merge.dropped, []);
-  assert.equal(merge.world.puppets.length, 1);
-  assert.equal(merge.world.puppets[0].puppet, "Nigeria");
-  assert.equal(merge.world.puppets[0].kind, "protectorate");
-  assert.deepEqual(merge.world.puppets[0].sourceEventIds, ["event-nig-ratify-01"]);
+test("a skip's install with no event is applied, dated by the skip, whatever the events' words say", () => {
+  const twin = { ...ratification, id: "event-nig-ratify-02", title: "British Crown and Nigerian Parliament Ratify Imperial Accession Treaty" };
+  for (const [label, events] of [
+    ["one event names both countries", [ratification, fusionTrial]],
+    ["two events name both countries", [ratification, twin]],
+    ["no event names them", [fusionTrial]],
+  ]) {
+    const merge = skipApplies({ events, puppetUpdates: unboundInstall() });
+    assert.deepEqual(merge.dropped, [], label);
+    assert.deepEqual(installed(merge), NIGERIA_UNBOUND, `${label}: never tied to an event by its words, never dropped`);
+  }
 });
 
-test("compact lines with no event number are repaired the same way", () => {
+test("compact lines with no event number are applied the same way", () => {
   const merge = skipApplies({
     events: [fusionTrial, ratification],
     puppetUpdates: "install~British Empire~Nigeria~protectorate~85~open~~Dominion accord",
   });
-  assert.deepEqual(merge.world.puppets[0].sourceEventIds, ["event-nig-ratify-01"]);
+  assert.deepEqual(installed(merge), NIGERIA_UNBOUND);
 });
 
-test("when two events name both countries equally, the install is not guessed at", () => {
-  const twin = { ...ratification, id: "event-nig-ratify-02", title: "British Crown and Nigerian Parliament Ratify Imperial Accession Treaty" };
-  const merge = skipApplies({ events: [ratification, twin], puppetUpdates: unboundInstall() });
-  assert.deepEqual(merge.world.puppets, []);
-  assert.match(merge.dropped[0].reason, /tied to no event/);
+// The same month written in French: the line is the game's own record, and
+// does what its English twin does.
+test("the same install in a game written in French is the same install", () => {
+  const ratifie = {
+    ...ratification,
+    title: "Le Parlement nigérian ratifie à Abuja l'Accord de développement impérial",
+    description: "L'Assemblée nationale du Nigeria a ratifié l'accord qui fait du Nigeria un Dominion autonome au sein de l'Empire britannique.",
+  };
+  const essai = { ...fusionTrial, title: "Culham fait avancer les essais de stabilisation du plasma du projet Helios", description: "Les chercheurs de Culham ont stabilisé la densité du plasma." };
+  const note = { ...unboundInstall()[0], note: "Intégré comme Dominion autonome en vertu de l'Accord de développement impérial." };
+  assert.deepEqual(installed(skipApplies({ events: [ratifie, essai], puppetUpdates: [note] })), installed(skipApplies({ events: [ratification, fusionTrial], puppetUpdates: unboundInstall() })));
+  const tied = (events) => installed(skipApplies({ events, puppetUpdates: "install~British Empire~Nigeria~protectorate~85~open~1~Dominion" }));
+  assert.deepEqual(tied([ratifie, essai]), tied([ratification, fusionTrial]));
+  assert.deepEqual(tied([ratifie, essai])[0][5], ["event-nig-ratify-01"]);
 });
 
-test("no event naming both countries leaves the install unbound", () => {
-  const merge = skipApplies({ events: [fusionTrial], puppetUpdates: unboundInstall() });
-  assert.deepEqual(merge.world.puppets, []);
-});
-
-test("the GM preview stays fail-closed: an unbound install is not repaired", () => {
-  const merge = skipApplies({ events: [ratification, fusionTrial], puppetUpdates: unboundInstall() }, { allowNativeBinding: false });
-  assert.deepEqual(merge.world.puppets, []);
+test("the GM preview applies an install with no event the same way: nothing is guessed, nothing dropped", () => {
+  const merge = skipApplies({ events: [ratification, fusionTrial], puppetUpdates: unboundInstall() }, { authority: "gm" });
+  assert.deepEqual(installed(merge), NIGERIA_UNBOUND);
 });
 
 test("an install the model already tied to an event keeps that event", () => {

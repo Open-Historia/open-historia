@@ -107,7 +107,8 @@ export const materializeInstitutionalChannel = ({
     id: resolvedChannelId,
     institutionId: canonicalId,
     countries: members,
-    messages: [institutionalSystemMessage(`${institution.name} institutional channel established.`, date)],
+    // Written as the thread shows it: nothing reads these words back.
+    messages: [institutionalSystemMessage(`${institution.name} council opened.`, date)],
     source: "institution",
     status: institution.status === "dissolved" ? "closed" : "open",
     title: institution.name,

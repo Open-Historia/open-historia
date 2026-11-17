@@ -60,6 +60,26 @@ test("the institution-members prompt lists the staged member polities, not array
   assert.doesNotMatch(staged, /\b0 \| 1\b/);
 });
 
+// An institution was dropped from the catalog when its id, name or alias held
+// the English word "member": the "Council of Member States" was lost and the
+// "Conseil des États membres" kept. One institution, one identity, is the
+// catalog prompt's rule; no name is judged by its words.
+test("an institution named with the word member is kept, in English as in any language", async () => {
+  for (const name of ["Council of Member States", "Conseil des États membres", "Совет государств-членов"]) {
+    const result = await generateGeopoliticalInstitutionCatalogJob({
+      scenarioDate: "2014-03-22",
+      polities: ["Avalon", "Borduria"],
+      world: {},
+      callModel: async () => ({ toolInput: { institutionsJson: JSON.stringify([
+        { name, kind: "political_union", foundedDate: "1990-01-01" },
+      ]) } }),
+    });
+    assert.equal(result.accepted, 1, `${name}: ${result.warnings.join("\n")}`);
+    assert.equal(result.institutions[0].name, name);
+    assert.ok(!result.warnings.some((warning) => /membership-shaped/.test(warning)), name);
+  }
+});
+
 test("every Political World geopolitics request carries the scenario's history authority, the catalog's completeness pass included", async () => {
   const historyAuthority = { referenceAllowed: false };
   const prompts = [];

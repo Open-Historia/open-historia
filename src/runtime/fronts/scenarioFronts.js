@@ -29,6 +29,7 @@
 // Pure, and runs in bare node.
 
 import { nameGenerals } from "./command.js";
+import { mintWarId } from "../warRecord.js";
 import { DEPLOY_FORMS } from "./swarms.js";
 import {
   BATTLEFIELD_NAME_MAX,
@@ -122,10 +123,14 @@ const opposed = (war, front) => {
 export const scenarioFrontWars = (fronts, wars, date) => {
   const added = [];
   const ledger = list(wars).filter((war) => clean(war?.status).toLowerCase() !== "ended");
+  // (An id no war of the ledger has held, ended ones included: runtime/warRecord.js.)
+  const taken = new Set(list(wars).map((war) => clean(war?.id)).filter(Boolean));
   fronts.forEach((front, index) => {
     if (!front.war || [...ledger, ...added].some((war) => opposed(war, front))) return;
+    const id = mintWarId(`war-scenario-front-${index + 1}`, taken);
+    taken.add(id);
     added.push({
-      id: `war-scenario-front-${index + 1}`,
+      id,
       title: front.name,
       status: "active",
       sideA: front.sides[0].slice(),

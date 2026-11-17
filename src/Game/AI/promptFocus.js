@@ -142,7 +142,6 @@ export const storylinePowers = (storylines = []) => {
 export const IN_VIEW_REASONS = Object.freeze(new Set([
   "player",
   "player action",
-  "holds land the player's actions name",
   "at war",
   "chat partner",
   "moved by recent events",
@@ -166,7 +165,7 @@ export const splitInView = (ranked = [], { limit = POWERS_IN_VIEW } = {}) => {
   const inView = [];
   const rest = [];
   const must = (entry) => entry.reasons.some((reason) => reason === "player" || reason === "at war"
-    || reason === "player action" || reason === "holds land the player's actions name");
+    || reason === "player action");
   let optional = 0;
   for (const entry of Array.isArray(ranked) ? ranked : []) {
     const reasons = Array.isArray(entry?.reasons) ? entry.reasons : [];

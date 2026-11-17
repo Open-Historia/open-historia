@@ -36,7 +36,8 @@ test("the era, the men a counter stands for, the share of people who can fight a
   const era = withWarSettings(null, { era: 2 });
   assert.equal(era.era, 2);
   assert.equal(withWarSettings(era, { era: null }), null, "automatic again");
-  assert.deepEqual(withWarNumber(null, "menPerCounter", "2k"), { settings: { mechanics: {}, era: null, menPerCounter: 2000, manpowerShare: null, technologyWeight: null, muster: null }, ok: true });
+  assert.deepEqual(withWarNumber(null, "menPerCounter", "2000"), { settings: { mechanics: {}, era: null, menPerCounter: 2000, manpowerShare: null, technologyWeight: null, muster: null }, ok: true });
+  assert.equal(withWarNumber(null, "menPerCounter", "2k").ok, false, "a letter for a thousand is no figure, in any language");
   assert.equal(withWarNumber(null, "menPerCounter", "5,000,000").settings.menPerCounter, 1000000, "held to the most");
   assert.equal(withWarNumber(null, "manpowerShare", "0.5").settings.manpowerShare, 1, "held to the least");
   assert.equal(withWarNumber(null, "manpowerShare", "60%").settings.manpowerShare, 60);

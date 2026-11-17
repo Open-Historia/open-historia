@@ -27,6 +27,7 @@ import {
 } from "../../runtime/gameState.js";
 import { activeWars } from "../../runtime/gameFeatures.js";
 import { wrapLng } from "../../runtime/unitMotion.js";
+import { normalizeUnitTypes, unitTypeOf } from "../../runtime/unitTypes.js";
 import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
@@ -49,6 +50,9 @@ let playerCode = "";
 let round = 1;
 let gameDate = "";
 let allowedUnitTypes = null; // null = all types allowed; else the scenario's whitelist
+// The scenario's own unit types (world.unitTypes, runtime/unitTypes.js): what the Forces panel and the unit card call a
+// unit of one, and the mark they show it with.
+let unitTypes = [];
 let interactionMode = { kind: "idle" }; // idle | deploy | admin-place
 let syncRefCount = 0;
 let syncInstalled = false;
@@ -106,6 +110,9 @@ const effectiveAllowedUnitTypes = () => {
   return (allowedUnitTypes ?? UNIT_TYPES).filter((type) => (wars.air || type !== "air") && (wars.navies || type !== "naval"));
 };
 export const getAllowedUnitTypes = () => effectiveAllowedUnitTypes();
+// The scenario's own unit types, and the one a unit is of (null for an ordinary unit).
+export const getUnitTypes = () => unitTypes;
+export const getUnitTypeOf = (unit) => unitTypeOf(unitTypes, unit);
 // Whether `type` may be deployed under `allowed` (null or empty: any type).
 export const isDeployableType = (type, allowed) =>
   !Array.isArray(allowed) || allowed.length === 0 || allowed.includes(String(type ?? "").trim().toLowerCase());
@@ -135,6 +142,7 @@ const sameUnits = (a, b) => {
     if (
       left.id !== right.id ||
       left.type !== right.type ||
+      left.unitType !== right.unitType ||
       left.ownerCode !== right.ownerCode ||
       left.name !== right.name ||
       left.strength !== right.strength ||
@@ -191,16 +199,19 @@ const adoptWorld = (world, { notify = true } = {}) => {
       : null;
 
   const nextOrders = Array.isArray(world.pendingUnitOrders) ? world.pendingUnitOrders : [];
+  const nextUnitTypes = normalizeUnitTypes(world.unitTypes);
 
   const unitsChanged = !sameUnits(units, nextUnits);
   const typesChanged = !sameAllowedUnitTypes(allowedUnitTypes, nextAllowed);
   const ordersChanged = !sameOrders(pendingOrders, nextOrders);
+  const ownTypesChanged = JSON.stringify(unitTypes) !== JSON.stringify(nextUnitTypes);
 
   if (unitsChanged) units = nextUnits;
   if (typesChanged) allowedUnitTypes = nextAllowed;
   if (ordersChanged) pendingOrders = nextOrders;
+  if (ownTypesChanged) unitTypes = nextUnitTypes;
 
-  const changed = unitsChanged || typesChanged || ordersChanged;
+  const changed = unitsChanged || typesChanged || ordersChanged || ownTypesChanged;
   if (notify && changed) emit();
   return changed;
 };
@@ -394,6 +405,8 @@ export const updateUnitAdmin = async (unitId, patch = {}) => {
         ...unit,
         ...(Object.prototype.hasOwnProperty.call(patch, "name") ? { name: patch.name } : {}),
         ...(Object.prototype.hasOwnProperty.call(patch, "type") ? { type: patch.type } : {}),
+        // (One of the scenario's own unit types by its id, or "" for none: runtime/unitTypes.js.)
+        ...(Object.prototype.hasOwnProperty.call(patch, "unitType") ? { unitType: patch.unitType } : {}),
         ...(Object.prototype.hasOwnProperty.call(patch, "strength") ? { strength: patch.strength } : {}),
         ...(Object.prototype.hasOwnProperty.call(patch, "status") ? { status: patch.status } : {}),
         ...(Object.prototype.hasOwnProperty.call(patch, "lng") ? { lng: patch.lng } : {}),

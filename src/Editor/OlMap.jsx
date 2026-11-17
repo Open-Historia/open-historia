@@ -66,6 +66,7 @@ import ImageCanvasSource from "ol/source/ImageCanvas";
 import { buildPoliticalBoundaryTopology } from "../Game/Map/vnext/politicalBoundaryTopology.js";
 import { buildGroupAreaIndex, deriveGroupAreas } from "../Game/Map/vnext/groupAreas.js";
 import { getMarkerPresentation } from "../Game/Map/vnext/presentationPolicy.js";
+import { isMapFeature, mapFeatureFamily } from "./mapFeatures.js";
 import { loadSeedFeatures, SEEDED_KINDS, seedUrlOf } from "./regionImport.js";
 import { ownersMatchingQuery, regionMatchesQuery } from "./regionSearch.js";
 import { newId } from "./useMapDocument.js";
@@ -376,11 +377,11 @@ const groupOutlineStyle = (color) => {
 };
 
 // A map feature that is not a city (mapFeatures.js): the game's glyph for its
-// kind (presentationPolicy.js), in its holder's colour, faded when it is not in
-// use, and named once close enough.
+// family (presentationPolicy.js), in its holder's colour, faded when it is not
+// in use, and named once close enough.
 const mapFeatureStyleCache = new globalThis.Map();
 const mapFeatureStyle = (feature, zoom, rgb, selected) => {
-  const { glyph } = getMarkerPresentation({ kind: feature.get("kind"), name: feature.get("name"), status: feature.get("status") });
+  const { glyph } = getMarkerPresentation({ kind: feature.get("kind"), family: feature.get("family"), status: feature.get("status") });
   const status = String(feature.get("status") || "active");
   const faded = ["destroyed", "abandoned", "inactive", "planned"].includes(status);
   const color = Array.isArray(rgb) ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${faded ? 0.55 : 1})` : `rgba(226, 222, 205, ${faded ? 0.55 : 1})`;
@@ -3935,7 +3936,8 @@ const OlMap = ({
       if (!Array.isArray(f.coord)) continue;
       const feat = new Feature({ geometry: new Point(fromLonLat(f.coord)) });
       feat.setId(f.id);
-      feat.setProperties({ name: f.name, symbol: f.symbol, type: f.type, owner: f.owner, tags: f.tags, population: f.population || 0, kind: f.kind || "", status: f.status || "" });
+      // `family`: how the game draws a map feature (mapFeatures.js mapFeatureFamily).
+      feat.setProperties({ name: f.name, symbol: f.symbol, type: f.type, owner: f.owner, tags: f.tags, population: f.population || 0, kind: f.kind || "", status: f.status || "", family: isMapFeature(f) ? mapFeatureFamily(f) : "" });
       src.addFeature(feat);
     }
   }, [features]);

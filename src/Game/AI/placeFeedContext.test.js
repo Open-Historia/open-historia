@@ -19,6 +19,18 @@ test("a place is named the way a sentence needs it", () => {
   assert.equal(placeFeedRequest(germany), "Show what people across Germany are posting today.");
 });
 
+// A group's description ends as a sentence in its own script: "。" once had a "." put after it.
+test("a description that ends with any script's terminal keeps it, and one that ends with none is given one", () => {
+  const groupLine = (description) => describePlaceFeedPlace({
+    place: { regionId: "R1", regionName: "Donetsk", polity: "Russia" },
+    region: { owner: "Russia", sovereign: "Russia", controlledByGroup: { name: "Wolves", description } },
+  }).split("\n").find((line) => line.startsWith("On the ground"));
+  assert.equal(groupLine("a militia that runs the checkpoints."), "On the ground it is run by Wolves, which is not a country: a militia that runs the checkpoints.");
+  assert.equal(groupLine("一支控制检查站的民兵。"), "On the ground it is run by Wolves, which is not a country: 一支控制检查站的民兵。");
+  assert.equal(groupLine("¿una milicia?"), "On the ground it is run by Wolves, which is not a country: ¿una milicia?");
+  assert.equal(groupLine("一支控制检查站的民兵"), "On the ground it is run by Wolves, which is not a country: 一支控制检查站的民兵.");
+});
+
 test("a region is described by who holds it, what is in it and what lies beside it", () => {
   const text = describePlaceFeedPlace({
     place: bavaria,

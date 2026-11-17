@@ -19,6 +19,7 @@ import {
   openedThreadOf,
   pendingSharedThread,
   sayRequestFor,
+  SAY_FROM_DRAFT_MAX,
   SAY_RECIPIENTS_MAX,
   SHARED_THREAD_FOLLOW_MS,
   sharedFollowStep,
@@ -41,6 +42,16 @@ test("a thread the host keeps is written into by its id, never opened again", ()
   const asked = sayRequestFor(stored, "And Riga?");
   assert.deepEqual(asked, { thread: "thread-abc-1", to: [], text: "And Riga?" });
   assert.equal(say(asked).ok, true);
+});
+
+test("a line sent from one of the advisor's drafted letters says which, and the host takes it", () => {
+  const stored = { id: "thread-abc-1", countries: [{ name: "Republic of Estonia" }], messages: [] };
+  const asked = sayRequestFor(stored, "Tallinn, we accept.", { fromDraft: "advisor-reply-7#0" });
+  assert.deepEqual(asked, { thread: "thread-abc-1", to: [], text: "Tallinn, we accept.", fromDraft: "advisor-reply-7#0" });
+  assert.equal(say(asked).ok, true);
+  // None to say, none sent: a line typed by hand asks exactly what it always did.
+  assert.equal("fromDraft" in sayRequestFor(stored, "Hello.", { fromDraft: "" }), false);
+  assert.equal(say({ ...asked, fromDraft: "x".repeat(SAY_FROM_DRAFT_MAX + 1) }).ok, false);
 });
 
 test("a line opens a thread with no more countries than the host takes", () => {
@@ -66,8 +77,9 @@ test("every way the diplomacy panel begins a thread in a shared game leaves it p
   const local = consume.indexOf("const newChat = { id: newChatId()");
   assert.ok(shared > 0 && local > shared, "the shared game's branch comes before a thread is made up and saved");
   assert.match(consume.slice(shared, local), /pendingSharedThread\(\[\{ name: country\.name, code \}\]\)[\s\S]*?return prev;/);
-  // A line is sent as the thread asks, and a thread the host opened is followed.
-  assert.match(chat, /requestFromHost\("say", sayRequestFor\(target, text\)\)/);
+  // A line is sent as the thread asks (with the drafted letter it came from,
+  // if any), and a thread the host opened is followed.
+  assert.match(chat, /requestFromHost\("say", sayRequestFor\(target, text, \{ fromDraft \}\)\)/);
   assert.match(chat, /onSharedThreadOpened=\{followThreadFromAck\}/);
 });
 
@@ -118,7 +130,7 @@ test("both shared-game sends shut the composer until the ack and follow a thread
   const group = chat.slice(chat.indexOf("const runGroupTurn = async "), chat.indexOf("setIsLoading(true);\n            // The player's line"));
   assert.match(group, /await sayToHost\(chatOverride \|\| chat, text, nextMessages\);/);
   const submit = chat.slice(chat.indexOf("const submitPlayerText = async "), chat.indexOf("const moment = await readSeenChatMoment(gameDate);"));
-  assert.match(submit, /if \(inSharedGame\(\)\) \{\s*await sayToHost\(chat, text, messagesRef\.current\);\s*return;/);
+  assert.match(submit, /if \(inSharedGame\(\)\) \{\s*await sayToHost\(chat, text, messagesRef\.current, \{ fromDraft \}\);\s*return;/);
   assert.equal((chat.match(/requestFromHost\("say"/g) ?? []).length, 1, "no other path says a line to the host");
   // The composer is only drawn while nothing is loading.
   assert.match(chat, /\) : !isLoading \? \(\s*<div data-diplomacy-composer="modern"/);

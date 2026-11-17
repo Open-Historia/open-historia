@@ -60,3 +60,23 @@ test("the web store refuses what the old prefix check let through", async () => 
   assert.match(result.error, /too large/);
   assert.equal(fake.rows("open-historia-web", "flags").size, 0, "nothing was stored");
 });
+
+test("a flag named in another script has an id of its own, the same on both builds, as its English twin has", async () => {
+  // Cut to a-z and 0-9, every flag named in Cyrillic or Chinese was "flag",
+  // "flag-2", "flag-3"…, whichever came first.
+  const idOn = async (name, byte) => {
+    fake.clear();
+    const dataUrl = `data:image/png;base64,${Buffer.from([0x89, 0x50, 0x4e, 0x47, byte]).toString("base64")}`;
+    const web = await (await handleFlags({ method: "POST", segments: [], body: { name, dataUrl } })).json();
+    const local = desktop.createFlag({ name, dataUrl });
+    assert.equal(web.id, local.id.replace(/-\d+$/, ""), `${name}: one id on both builds`);
+    return web.id;
+  };
+  assert.equal(await idOn("Holy Roman Empire", 11), "holy-roman-empire", "as it always was");
+  for (const [first, second, byte] of [["Prussia", "Bavaria", 12], ["Пруссия", "Бавария", 14], ["普鲁士", "巴伐利亚", 16]]) {
+    const one = await idOn(first, byte);
+    const two = await idOn(second, byte + 1);
+    assert.notEqual(one, two, first);
+    assert.notEqual(one, "flag", first);
+  }
+});

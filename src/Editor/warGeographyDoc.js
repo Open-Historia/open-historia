@@ -112,7 +112,8 @@ export const seasonsOfClimate = (climate) => {
       if (chance > 0) weather[state] = Math.round(chance * 100);
     }
     const freezes = key === "winter" && (known === "polar" || known === "continental");
-    return { name, start, end, weather, effects: freezes ? { freezes: true } : {} };
+    // Which world season it is (warGeography.js SEASON_KINDS): how the map tints it.
+    return { name, kind: key, start, end, weather, effects: freezes ? { freezes: true } : {} };
   });
 };
 

@@ -65,6 +65,22 @@ export const SOCIAL_POSTS_PER_SKIP = 30;
 export const SOCIAL_POST_KINDS = Object.freeze(["player", "voice", "everyday"]);
 const KIND_SET = new Set(SOCIAL_POST_KINDS);
 
+// How far a post carries, as the time skip says it of the one who wrote it
+// (its `reach`), in whatever language the post is in:
+//   leader     a head of state or government, a monarch
+//   official   another office: a minister, a general, a lawmaker, a diplomat
+//   famous     a star, a household name
+//   ordinary   a private person
+// and none for everyone else, a voice with a following: a journalist, an
+// analyst, an activist (postEngagement). A post written before the skip said
+// any has none either.
+export const SOCIAL_POST_REACH = Object.freeze(["leader", "official", "famous", "ordinary"]);
+const REACH_SET = new Set(SOCIAL_POST_REACH);
+
+// The polities a post speaks of or to, as the time skip names them (its
+// `mentions`), each the map's exact name: what the Mentions tab reads.
+export const MAX_POST_MENTIONS = 6;
+
 const POST_ID = /^p(\d{1,7})$/;
 const postNumber = (id) => {
   const match = POST_ID.exec(clean(id));
@@ -206,6 +222,10 @@ export const normalizeSocialPost = (raw) => {
   };
   const quote = clean(raw.quote);
   if (postNumber(quote) && quote !== id) post.quote = quote;
+  // Only when the skip said them, so a post without saves exactly as before.
+  if (kind !== "player" && REACH_SET.has(clean(raw.reach))) post.reach = clean(raw.reach);
+  const mentions = [...new Set(list(raw.mentions).map((name) => clip(name, COUNTRY_LIMIT)).filter(Boolean))].slice(0, MAX_POST_MENTIONS);
+  if (kind !== "player" && mentions.length) post.mentions = mentions;
   // Whose seat wrote a player's post: in a shared game, which person's country.
   if (kind === "player" && clean(raw.by)) post.by = clip(raw.by, COUNTRY_LIMIT);
   // Only a player asks a poll.
@@ -311,13 +331,14 @@ export const withPlayerPost = (world, { by = "", text = "", quote = "", date = "
 
 // --- What a time skip wrote --------------------------------------------------------
 
-// Not a person: a country, a government or a people. The skip is asked for
-// people (socialFeedPromptBlock); a post signed by one of these is left out.
-const NOT_A_PERSON = /^(?:the\s+)?(?:government|ministry|people|citizens|player|state|republic|kingdom|empire|nation)\b|\b(?:government|ministry)\s+of\b/i;
-
+// The skip is asked for people, never a country, a government or a people
+// (socialFeedPromptBlock): that is the prompt's to say, in any language. What
+// the game checks is what it can know exactly: an author is a name, and not
+// one of the world's polities by its exact name (case and spacing aside). An
+// English word list used to drop "Government of Italy" and let "Gouvernement
+// italien" through.
 const plausibleAuthor = (author, known) => {
   if (!author || author.length > AUTHOR_LIMIT || !/\p{L}/u.test(author)) return false;
-  if (NOT_A_PERSON.test(author)) return false;
   // A country is not a person.
   return !known.has(fold(author));
 };
@@ -356,6 +377,11 @@ export const readSkipPosts = (raw, { feed = [], from = "", to = "", round = 0, k
 
   // First what each post says, by its place in the answer (1-based).
   const read = new Map();
+  // A post the skip wrote again word for word: one it was shown in [Social
+  // Media], or one it wrote twice. A post has no id until the game gives it
+  // one below, so its words are all there is to know it by. Whole texts equal
+  // but for case and spacing, never a likeness, so it is the same in every
+  // language and never drops a post that says something else.
   const seenTexts = new Set(kept.map((post) => fold(post.text)));
   list(raw).forEach((entry, index) => {
     if (read.size >= SOCIAL_POSTS_PER_SKIP || !isRecord(entry)) return;
@@ -381,6 +407,9 @@ export const readSkipPosts = (raw, { feed = [], from = "", to = "", round = 0, k
       text,
       date,
       kind: entry.offTopic === true || entry.everyday === true ? "everyday" : "voice",
+      reach: entry.reach,
+      // The map's exact spelling of each, and none it does not have.
+      mentions: list(entry.mentions).map((name) => exactPolity(name, byFold)).filter(Boolean),
       quote,
       place: index + 1,
     });
@@ -421,24 +450,28 @@ const seeded = (text) => {
   return (hash >>> 0) / 4294967296;
 };
 
-const HIGH_OFFICE = /\b(?:president|prime minister|premier|chancellor|king|queen|emperor|empress|sultan|emir|shah|tsar|czar|pope|supreme leader|general secretary|head of state|monarch|leader of)\b/i;
-const OFFICE = /\b(?:minister|secretary|senator|governor|general|admiral|ambassador|spokes(?:man|woman|person)|chair(?:man|woman)?|mayor|commander|party|parliament|deputy|mp|congress)\b/i;
+// The likes a post of each reach draws before luck: a leader's as many as a
+// player's (the player posts as their country's leader), and a voice with a
+// following's (no reach) 9,000.
+const REACH_LIKES = Object.freeze({ leader: 180000, official: 24000, famous: 90000, ordinary: 400 });
+const VOICE_LIKES = 9000;
 
-// How far a post carries: the reach of who wrote it, a little luck, and the
-// people who quoted it. Shown under a post as counts; nothing in the game reads
-// them. A player's post has none until a time skip has passed over it: the
-// world answers with the next one.
+// How far a post carries: the reach the skip gave who wrote it, a little luck,
+// and the people who quoted it. Shown under a post as counts; nothing in the
+// game reads them. A player's post has none until a time skip has passed over
+// it: the world answers with the next one. A post with no reach carries as a
+// voice with a following, and one about everyday things the skip gave no
+// reach (one written before it said any) as a star's or a private person's,
+// by the luck of its id.
 export const postEngagement = (post, feed = [], round = 0) => {
   const quotes = list(feed).filter((entry) => entry?.quote === post?.id).length;
   if (!post || (post.kind === "player" && Number(round) <= Number(post.round))) return { quotes, reposts: 0, likes: 0 };
-  const role = `${post.role || ""}`;
-  const reach = post.kind === "player" || HIGH_OFFICE.test(role)
-    ? 180000
-    : OFFICE.test(role)
-      ? 24000
-      : post.kind === "everyday"
-        ? (seeded(`${post.id}:celebrity`) < 0.5 ? 90000 : 400)
-        : 9000;
+  const reach = post.kind === "player"
+    ? REACH_LIKES.leader
+    : REACH_LIKES[post.reach]
+      ?? (post.kind === "everyday"
+        ? (seeded(`${post.id}:celebrity`) < 0.5 ? REACH_LIKES.famous : REACH_LIKES.ordinary)
+        : VOICE_LIKES);
   const luck = 0.25 + seeded(post.id) * 1.5;
   const likes = Math.round(reach * luck * (1 + quotes * 0.35));
   const reposts = Math.round(likes * (0.08 + seeded(`${post.id}:r`) * 0.14));
@@ -456,28 +489,29 @@ export const compactCount = (value) => {
 
 const same = (left, right) => Boolean(fold(left)) && fold(left) === fold(right);
 
-// Does this post speak to or of the player: does it quote one of theirs, or
-// name their country or their leader? Not the player's own posts.
-export const mentionsPlayer = (post, { feed = [], country = "", leader = "" } = {}) => {
+// Does this post speak to or of the player: does it quote one of theirs, or is
+// their country among the polities the skip said it mentions (exact names, case
+// and spacing aside)? Never read from the post's words: "Niger" inside
+// "Nigeria" counted, and "la France" never did. Not the player's own posts.
+export const mentionsPlayer = (post, { feed = [], country = "" } = {}) => {
   if (!post || (post.kind === "player" && same(post.by || post.country, country))) return false;
   const quoted = post.quote ? findPost(feed, post.quote) : null;
   if (quoted?.kind === "player" && same(quoted.by || quoted.country, country)) return true;
-  const text = fold(post.text);
-  return [country, leader].map(fold).some((name) => name.length >= 3 && text.includes(name));
+  return list(post.mentions).some((name) => same(name, country));
 };
 
 // The feed as one of the app's tabs shows it, newest first:
 //   all       every post
 //   country   posts by people of the player's country
-//   mentions  posts that quote the player or name their country or leader
+//   mentions  posts that quote the player or mention their country
 //   mine      the player's own
 export const SOCIAL_TABS = Object.freeze(["all", "country", "mentions", "mine"]);
-export const socialFeedView = (feed, { tab = "all", country = "", leader = "" } = {}) => {
+export const socialFeedView = (feed, { tab = "all", country = "" } = {}) => {
   const posts = normalizeSocialFeed(feed);
   const keep = (post) => {
     if (tab === "mine") return post.kind === "player" && same(post.by || post.country, country);
     if (tab === "country") return same(post.country, country);
-    if (tab === "mentions") return mentionsPlayer(post, { feed: posts, country, leader });
+    if (tab === "mentions") return mentionsPlayer(post, { feed: posts, country });
     return true;
   };
   return posts
@@ -533,6 +567,9 @@ const pollLine = (poll) => {
 // about the world as it stands. `date` the game's day.
 // i18n-ignore: the model's instructions, never shown.
 export const ROSTRA_REFRESH_POSTS = "8 to 12";
+// What a post's reach and mentions are, said where its other fields are.
+// i18n-ignore: the model's instructions, never shown.
+const POST_REACH_AND_MENTIONS = "reach (leader: a head of state or government; official: another office holder; famous: a star; ordinary: a private person; left out for anyone else, such as a journalist or an analyst), mentions (the exact map names of the polities it speaks of or to, or empty)";
 // i18n-ignore: the model's instructions, never shown.
 export const rostraRefreshRules = ({ players = [], date = "" } = {}) => {
   const people = list(players).map(clean).filter(Boolean);
@@ -542,7 +579,7 @@ export const rostraRefreshRules = ({ players = [], date = "" } = {}) => {
     "  • The people who make the news: heads of state and government, ministers, generals, party leaders, journalists, analysts, chief executives, activists. Each writes in their own voice, under their real name where history gives one.",
     "  • Quote one another where someone would: a rival answering a rival, a journalist picking a statement apart (quote: \"#2\" for the 2nd post of your own list).",
     "  • Exactly one post about nothing in world affairs: a celebrity, a sports star or an ordinary person talking about everyday things (offTopic: true).",
-    `Each post: author (a person's full name, never a country, a government or a people), role (their office or what they do), country (the exact map name of the polity they belong to, or empty), date (YYYY-MM-DD), text (at most ${SOCIAL_POST_MAX_CHARS} characters, written as that person would post it), quote (empty, or "#n" for an earlier post of your list).`,
+    `Each post: author (a person's full name, never a country, a government or a people), role (their office or what they do), country (the exact map name of the polity they belong to, or empty), date (YYYY-MM-DD), text (at most ${SOCIAL_POST_MAX_CHARS} characters, written as that person would post it), quote (empty, or "#n" for an earlier post of your list), ${POST_REACH_AND_MENTIONS}.`,
     `Never write a post as the leader of ${playerNames}, or as anyone who speaks for ${people.length > 1 ? "their governments" : "its government"}: those posts are the player's to write. Their opposition, press and people may post.`,
   ].join("\n");
 };
@@ -567,9 +604,9 @@ export const placeRostraLines = (feed, { country = "" } = {}) => {
 
 // The posts the skip is shown, most important first: every post of the
 // player's of the last two rounds, then the answers to them, then the newest
-// of those in high office, then the newest of everyone else, at most
-// SOCIAL_PROMPT_POSTS. The block keeps them in this order while they fit in
-// SOCIAL_PROMPT_CHARS, and lists what it kept oldest first.
+// of leaders (by the reach the skip gave them), then the newest of everyone
+// else, at most SOCIAL_PROMPT_POSTS. The block keeps them in this order while
+// they fit in SOCIAL_PROMPT_CHARS, and lists what it kept oldest first.
 export const promptPosts = (feed, { round = 0 } = {}) => {
   const posts = normalizeSocialFeed(feed);
   const newestFirst = [...posts].reverse();
@@ -582,7 +619,7 @@ export const promptPosts = (feed, { round = 0 } = {}) => {
   const playerIds = new Set(playersPosts.map((post) => post.id));
   playersPosts.slice(0, 10).forEach(take);
   newestFirst.filter((post) => post.quote && playerIds.has(post.quote)).slice(0, 8).forEach(take);
-  newestFirst.filter((post) => post.kind !== "everyday" && HIGH_OFFICE.test(post.role)).slice(0, 6).forEach(take);
+  newestFirst.filter((post) => post.kind !== "everyday" && post.reach === "leader").slice(0, 6).forEach(take);
   newestFirst.forEach(take);
   return [...picked.values()];
 };
@@ -624,7 +661,7 @@ export const socialFeedPromptBlock = ({ feed = [], players = [], round = 0 } = {
     everyday
       ? "  • And exactly one post about nothing in world affairs: a celebrity, a sports star or an ordinary person talking about everyday things (offTopic: true)."
       : "  • No post about everyday things this time: every post is about world affairs.",
-    `Each post: author (a person's full name, never a country, a government or a people), role (their office or what they do), country (the exact map name of the polity they belong to, or empty), date (YYYY-MM-DD inside the period), text (at most ${SOCIAL_POST_MAX_CHARS} characters, written as that person would post it, in the language the events are written in), quote (the id of the post it quotes, from the list above or "#2" for the 2nd post of your own list, else empty).`,
+    `Each post: author (a person's full name, never a country, a government or a people), role (their office or what they do), country (the exact map name of the polity they belong to, or empty), date (YYYY-MM-DD inside the period), text (at most ${SOCIAL_POST_MAX_CHARS} characters, written as that person would post it, in the language the events are written in), quote (the id of the post it quotes, from the list above or "#2" for the 2nd post of your own list, else empty), ${POST_REACH_AND_MENTIONS}.`,
     `Never write a post as the leader of ${playerNames}, or as anyone who speaks for ${people.length > 1 ? "their governments" : "its government"}: those posts are the player's to write. Their opposition, press and people may post.`,
     ...(polls.length ? [
       `Write pollResults: the player's open ${polls.length === 1 ? "poll" : "polls"} (${polls.map((post) => post.id).join(", ")}), as the public of the leader's country voted on ${polls.length === 1 ? "it" : "them"} during this period. For each: poll (its id), shares (the percentage of voters who chose each choice, whole numbers in the choices' order, adding up to 100), votes (how many people voted, as many as would answer such a poll there) and consensus (one sentence: what the public said and why).`,

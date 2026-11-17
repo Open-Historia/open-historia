@@ -17,13 +17,16 @@ import { buildPromptSnapshot, changedSinceSnapshot, neighbourPowers, splitInView
 import { IDLE_BACKGROUND_LIMIT, rankRelevantPolities } from "./idlePoliticalDiplomacyContext.js";
 import { HISTORY_TIERS, hasHistoryTiers, renderCanonFacts, renderHistoryTiers } from "../../runtime/historyTiers.js";
 import { waterTypeIds } from "../../runtime/regionTypes.js";
+import { describeUnitTypesForPrompt, normalizeUnitTypes, unitTypeOf } from "../../runtime/unitTypes.js";
 import { isPendingAction, selectFocusPowers } from "./regionFocus.js";
 import { filterChatsVisibleTo } from "./chatVisibility.js";
 import { buildForcePostureText } from "./forcePosture.js";
 import { regionNamer, unitHandles } from "./nameRefs.js";
 import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
-import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
+import { deriveProjectFlags, isPlayerProject, isProjectOpen } from "../../runtime/projects.js";
+import { describeEffects, estimateProjectFinish } from "../../runtime/projectEngine.js";
+import { readableFigure } from "../../runtime/statsBackend.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 import { compareGameDates, compareGameDatesNewestFirst, diffGameDays, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
 import { difficultyPassage } from "../../runtime/difficulty.js";
@@ -1126,14 +1129,21 @@ export const UNITS_SUMMARY_LIMIT = 60;
 // The most units of powers out of view a skip names, by name and type.
 export const UNITS_BRIEF_LIMIT = 240;
 
-const unitSummaryRow = (unit, handles) => {
+// What a unit is, as the AI reads it: its kind, or one of the scenario's own unit types by name with the kind it is
+// (runtime/unitTypes.js): "Dragon (air)".
+const unitKindOf = (unit, types) => {
+  const type = types?.length ? unitTypeOf(types, unit) : null;
+  return type ? `${type.name} (${normalizeString(unit.type) || type.base})` : normalizeString(unit.type);
+};
+
+const unitSummaryRow = (unit, handles, types = null) => {
   const lat = Number(unit.lat);
   const lng = Number(unit.lng);
   const coords = Number.isFinite(lat) && Number.isFinite(lng)
     ? `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}`
     : "unknown location";
   const detail = [
-    `${unit.type}`,
+    `${types?.length ? unitKindOf(unit, types) : unit.type}`,
     `owner ${unit.ownerCode}`,
     `${unit.strength}% of established strength`,
     unit.posture ? `posture ${unit.posture}` : `status ${unit.status}`,
@@ -1146,25 +1156,25 @@ const unitSummaryRow = (unit, handles) => {
 // fields said once (UNITS_TABLE_HEADER), and a field left out where it says
 // what it would say of most units (full strength, idle).
 export const UNITS_TABLE_HEADER = "By owner; each unit: name: type[, strength when under 100%][, posture or status when not idle]; what it is; lat, lng";
-const unitTableRow = (unit, handles) => {
+const unitTableRow = (unit, handles, types = null) => {
   const lat = Number(unit.lat);
   const lng = Number(unit.lng);
   const where = Number.isFinite(lat) && Number.isFinite(lng) ? `${lat.toFixed(2)}, ${lng.toFixed(2)}` : "location unknown";
   const strength = Number(unit.strength);
   const state = normalizeString(unit.posture) || (normalizeString(unit.status) && normalizeString(unit.status) !== "idle" ? normalizeString(unit.status) : "");
   const head = [
-    normalizeString(unit.type) || "unit",
+    (types?.length ? unitKindOf(unit, types) : normalizeString(unit.type)) || "unit",
     Number.isFinite(strength) && strength !== 100 ? `${Math.round(strength)}%` : "",
     state,
   ].filter(Boolean).join(", ");
   return `- ${handles.get(unit.id) || unit.name}: ${head}${unit.covert ? " [unconfirmed]" : ""}; ${normalizeString(unit.composition) ? `${normalizeString(unit.composition)}; ` : ""}${where}`;
 };
-const unitTable = (units, handles) => {
+const unitTable = (units, handles, types = null) => {
   const byOwner = new Map();
   for (const unit of units) {
     const owner = normalizeString(unit.ownerCode) || "unknown";
     if (!byOwner.has(owner)) byOwner.set(owner, []);
-    byOwner.get(owner).push(unitTableRow(unit, handles));
+    byOwner.get(owner).push(unitTableRow(unit, handles, types));
   }
   return [UNITS_TABLE_HEADER, ...[...byOwner].flatMap(([owner, rows]) => [`${owner}:`, ...rows])];
 };
@@ -1176,7 +1186,15 @@ const unitTable = (units, handles) => {
 // used to keep the first sixty in storage order, so the player's newest
 // formations vanished and orders naming them went unanswered. A list that fits
 // keeps its saved order.
-export const buildUnitsSummaryText = (world, {
+// And the scenario's own unit types follow its units, each in a line (runtime/unitTypes.js
+// describeUnitTypesForPrompt): what a "Dragon" in the list is, and who may raise one.
+export const buildUnitsSummaryText = (world, options = {}) => {
+  const types = normalizeUnitTypes(world?.unitTypes);
+  const text = unitsSummaryBody(world, options, types);
+  return types.length ? `${text}\n\n${describeUnitTypesForPrompt(types)}` : text;
+};
+
+const unitsSummaryBody = (world, {
   player = "",
   actions = [],
   chats = [],
@@ -1185,7 +1203,7 @@ export const buildUnitsSummaryText = (world, {
   // A time skip's powers in view (buildPromptFocus), lower-case: their units in
   // full, every other unit by name and type in a line per owner.
   inView = null,
-} = {}) => {
+} = {}, types = []) => {
   const units = normalizeArray(world?.units);
   if (units.length === 0) return "No military units are currently deployed on the map.";
   let ordered = units;
@@ -1217,7 +1235,7 @@ export const buildUnitsSummaryText = (world, {
     const full = viewed.slice(0, limit);
     const shownFull = new Set(full);
     const brief = ordered.filter((unit) => !shownFull.has(unit));
-    const lines = full.length ? unitTable(full, handles) : [];
+    const lines = full.length ? unitTable(full, handles, types) : [];
     if (brief.length) {
       const byOwner = new Map();
       let named = 0;
@@ -1225,7 +1243,7 @@ export const buildUnitsSummaryText = (world, {
         if (named >= UNITS_BRIEF_LIMIT) break;
         const owner = normalizeString(unit.ownerCode) || "unknown";
         if (!byOwner.has(owner)) byOwner.set(owner, []);
-        byOwner.get(owner).push(`${handles.get(unit.id) || unit.name} (${unit.type})`);
+        byOwner.get(owner).push(`${handles.get(unit.id) || unit.name} (${types.length ? unitKindOf(unit, types) : unit.type})`);
         named += 1;
       }
       lines.push(`${full.length ? "Other formations" : "Formations"}, by owner (powers not in play this turn; each is on the map):`);
@@ -1236,7 +1254,7 @@ export const buildUnitsSummaryText = (world, {
     return lines.join("\n");
   }
   const omitted = Math.max(0, units.length - limit);
-  const rows = ordered.slice(0, limit).map((unit) => unitSummaryRow(unit, handles));
+  const rows = ordered.slice(0, limit).map((unit) => unitSummaryRow(unit, handles, types));
   if (omitted > 0) {
     rows.push(omitted === 1
       ? "[1 more unit omitted; it remains on the map]"
@@ -1248,26 +1266,21 @@ export const buildUnitsSummaryText = (world, {
 // Phase 10.1: persistent physical world, bounded object attention. The save keeps
 // every marker; an individual AI task sees only a compact, deterministic subset that
 // is causally/recently relevant plus a rotating background sample. No extra AI call.
+//
+// Relevant by the records alone: a structure a recent event built or changed
+// (its sourceEventIds), one a recent event names among its places, one whose
+// owner is a party to a live war, a running storyline, a queued order or the
+// chat at hand. Its name and its owner's were looked for in the prose of all
+// those, and their words compared with an English stoplist: a structure named
+// in another language than the story was never brought forward, and an
+// English word in common brought forward the wrong one.
 const MARKER_ATTENTION_OPEN_STATUSES = new Set(["planned", "under_construction", "damaged"]);
-const MARKER_ATTENTION_STOP_WORDS = new Set([
-  "about", "after", "again", "against", "along", "another", "because", "before", "being",
-  "between", "current", "during", "event", "forces", "from", "government", "have", "into",
-  "major", "marker", "military", "more", "over", "polity", "should", "state", "their",
-  "there", "these", "they", "this", "through", "under", "with", "world",
-]);
 
+// A name as the records write it, with case and spacing folded and nothing else.
 const markerAttentionKey = (value) => normalizeString(value)
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .toLowerCase();
-
-// Words of any script: a structure the model named in Russian or Chinese used
-// to have no words here, and nothing the story said could bring it forward.
-const markerAttentionTokens = (value) => new Set(
-  markerAttentionKey(value)
-    .split(/[^\p{L}\p{M}\p{N}]+/u)
-    .filter((token) => token.length >= 4 && !MARKER_ATTENTION_STOP_WORDS.has(token)),
-);
+  .normalize("NFKC")
+  .toLowerCase()
+  .replace(/\s+/g, " ");
 
 const markerStableHash = (value) => {
   let hash = 2166136261;
@@ -1300,60 +1313,46 @@ const buildMarkerAttentionEvidence = (bundle, { chat = null } = {}) => {
   const world = bundle.world && typeof bundle.world === "object" ? bundle.world : {};
   const recentEvents = normalizeEvents(bundle.events).slice(-12);
   const recentEventIds = new Set(recentEvents.map((event) => normalizeString(event.id)).filter(Boolean));
-  const pieces = [];
-
+  // The structures recent events name among their places (AI/eventPlaces.js).
+  const namedStructures = new Set();
   for (const event of recentEvents) {
-    pieces.push(normalizeString(event.title), compactMarkerNote(event.description, 420));
+    for (const place of normalizeArray(event.places)) {
+      if (normalizeString(place?.kind).toLowerCase() === "structure") namedStructures.add(markerAttentionKey(place?.name));
+    }
   }
+  // The powers this turn is about, as the records name them.
+  const focusOwners = new Set();
+  const addOwners = (names) => {
+    for (const name of normalizeArray(names)) focusOwners.add(markerAttentionKey(name));
+  };
   for (const storyline of normalizeArray(world.storylines).filter((entry) =>
     ["active", "dormant"].includes(normalizeString(entry?.status).toLowerCase())).slice(0, 20)) {
-    pieces.push(
-      normalizeString(storyline.title),
-      compactMarkerNote(storyline.state || storyline.summary || storyline.note, 260),
-      ...normalizeArray(storyline.participants).slice(0, 8).map(normalizeString),
-    );
+    addOwners(normalizeArray(storyline.participants).slice(0, 8));
   }
   for (const war of normalizeArray(world.wars).filter((entry) =>
     ["active", "ceasefire"].includes(normalizeString(entry?.status).toLowerCase())).slice(0, 12)) {
-    pieces.push(
-      normalizeString(war.title || war.name || war.id),
-      compactMarkerNote(war.note || war.summary, 220),
-      ...normalizeArray(war.sideA).slice(0, 8).map(normalizeString),
-      ...normalizeArray(war.sideB).slice(0, 8).map(normalizeString),
-    );
+    addOwners([...normalizeArray(war.sideA).slice(0, 8), ...normalizeArray(war.sideB).slice(0, 8)]);
   }
-  // Queued orders only: an answered one is status "resolved", and ten of those
-  // would otherwise fill the window ahead of the fortress still being built.
+  // Queued orders only: an answered one is status "resolved".
   for (const action of normalizeActions(bundle.actions).filter(isPendingAction).slice(-10)) {
-    pieces.push(
-      normalizeString(action.title),
-      compactMarkerNote(action.description || action.rawInput || action.text, 320),
-    );
+    addOwners([...normalizeArray(action.invitees), ...normalizeArray(action.participants)]);
   }
-
   const normalizedChat = chat && typeof chat === "object" ? normalizeChats([chat])[0] : null;
   if (normalizedChat) {
-    pieces.push(...normalizeArray(normalizedChat.countries).slice(0, 8)
-      .map((country) => normalizeString(country?.name || country?.polityKey || country?.code)));
-    for (const message of normalizeArray(normalizedChat.messages).slice(-6)) {
-      pieces.push(normalizeString(message?.speaker), compactMarkerNote(message?.message || message?.text, 320));
-    }
+    addOwners(normalizeArray(normalizedChat.countries).slice(0, 8)
+      .map((country) => country?.name || country?.polityKey || country?.code));
   }
-
-  const focusText = pieces.filter(Boolean).join("\n");
-  return {
-    focusKey: markerAttentionKey(focusText),
-    focusTokens: markerAttentionTokens(focusText),
-    recentEventIds,
-  };
+  namedStructures.delete("");
+  focusOwners.delete("");
+  return { recentEventIds, namedStructures, focusOwners };
 };
 
 export const MARKERS_TABLE_HEADER = "Each: name: kind, owner[, status when not active]; lat, lng[; dates][ — what it is]";
 export const buildMarkersSummaryText = (
   worldLike,
   {
-    focusKey = "",
-    focusTokens = new Set(),
+    namedStructures = new Set(),
+    focusOwners = new Set(),
     limit = 16,
     recentEventIds = new Set(),
     seed = "",
@@ -1365,24 +1364,13 @@ export const buildMarkersSummaryText = (
 
   const boundedLimit = Math.max(1, Math.min(60, Math.trunc(Number(limit) || 16)));
   const scored = markers.map((marker, index) => {
-    const names = [marker.name, ...normalizeArray(marker.aliases)].map(normalizeString).filter(Boolean);
-    const nameKeys = names.map(markerAttentionKey).filter(Boolean);
-    const blob = [marker.name, ...normalizeArray(marker.aliases), marker.kind, marker.ownerCode, marker.note]
-      .map(normalizeString).filter(Boolean).join(" ");
-    const markerTokens = markerAttentionTokens(blob);
+    const nameKeys = [marker.name, ...normalizeArray(marker.aliases)].map(markerAttentionKey).filter(Boolean);
     let score = 0;
 
     if (MARKER_ATTENTION_OPEN_STATUSES.has(normalizeString(marker.status).toLowerCase())) score += 260;
     if (normalizeArray(marker.sourceEventIds).some((eventId) => recentEventIds.has(normalizeString(eventId)))) score += 300;
-    if (focusKey && nameKeys.some((nameKey) => nameKey.length >= 4 && focusKey.includes(nameKey))) score += 520;
-    if (focusKey && normalizeString(marker.ownerCode) && focusKey.includes(markerAttentionKey(marker.ownerCode))) score += 55;
-
-    let overlaps = 0;
-    for (const token of markerTokens) {
-      if (focusTokens.has(token)) overlaps += 1;
-      if (overlaps >= 6) break;
-    }
-    score += overlaps * 34;
+    if (nameKeys.some((nameKey) => namedStructures.has(nameKey))) score += 520;
+    if (normalizeString(marker.ownerCode) && focusOwners.has(markerAttentionKey(marker.ownerCode))) score += 55;
 
     // This changes with the simulation round/task seed, creating a tiny rotating
     // awareness lane for stable objects that are not currently in the foreground.
@@ -1485,202 +1473,94 @@ export const buildPlannedActionsWithIdsText = (actions) => {
 
 // The Projects & Operations board (world.projects), written out for the model.
 //
-// Tiered, because this text rides EVERY advisor message and EVERY jump prompt.
-// Written flat, one full paragraph per project, a real 44-project board cost
-// ~5,300 tokens a call — which is not just expensive, it crowds the campaign
-// history out of the same context window. Three tiers instead:
+// This rides every advisor message and every time skip, so each entry is ONE
+// compact row, by name (never an id: a name is how every op finds an entry):
 //
-//   1. Open projects, in full, most recently touched first, capped at
-//      FULL_DETAIL_PROJECTS. This is what the model reasons WITH.
-//   2. Every remaining open project, one compact line.
-//   3. Closed projects, one compact line, so the model knows they exist and does
-//      not re-open them.
+//   - "Taranto Naval Base" · ours · 45% · done ~2027-03-01 · 120 million a month · funding normal · active
 //
-// Crucially every project appears in some tier WITH ITS ID, because the directive
-// tells the model to copy ids verbatim and an op naming something absent from
-// this list is dropped. Truncating the list outright would quietly make the
-// omitted projects uneditable.
-//
-// Ids are printed with every entry, and the directives insist they be copied
-// verbatim, because the alternative is the model inventing one and its update
-// landing on nothing (applyProjectOps drops an op whose target does not exist —
-// far better than spawning a phantom project from a typo).
-//
-// Also prints what the ENGINE derived rather than what the model last said:
-// overdue, and rounds since the last update. That is the nudge that gets a
-// neglected programme moved along, and it cannot be argued with — it is a
-// function of the calendar, not of anyone's memory.
-const FULL_DETAIL_PROJECTS = 20;
-// Finished and abandoned entries are named, newest first, up to this many; the
-// rest are counted. A long campaign closed 110 and listed every one, id and
-// all, on every skip: 13,000 characters of entries the model is only told not
-// to re-open.
+// what the engine knows of it (runtime/projectEngine.js): its progress, when it
+// should be done at the pace it is going, what it costs, how it is funded, and
+// its status with the reason a stalled one stands still. `compact` (a time skip)
+// stops there; otherwise (the advisor) each row is followed by what it is for,
+// its next checkpoint, what it will do when done, and the last line on it.
+// Finished and abandoned entries are named, newest first, up to `closedLimit`,
+// so they are not opened again; the rest are counted.
 export const CLOSED_PROJECTS_LISTED = 15;
 
-// `compact` (a time skip): an open entry without its tags, which steer the
-// panel's filters and nothing a skip decides.
-export const buildProjectsSummaryText = (world, game, { compact = false, closedLimit = CLOSED_PROJECTS_LISTED } = {}) => {
-  const projects = normalizeArray(world?.projects);
+const projectMoney = (value) => {
+  const amount = Number(value);
+  if (!(amount > 0)) return "nothing";
+  return readableFigure(amount);
+};
+
+export const buildProjectsSummaryText = (world, game, { compact = false, closedLimit = CLOSED_PROJECTS_LISTED, publicOnly = false } = {}) => {
+  // The public timeline is not an omniscient knowledge channel: private work
+  // is still simulated but must not be named automatically in its narrative.
+  const projects = normalizeArray(world?.projects).filter((project) =>
+    !publicOnly || (normalizeString(project?.secrecy).toLowerCase() || "public") === "public");
   if (projects.length === 0) {
     return "No projects or operations are being tracked yet.";
   }
 
   const gameDate = normalizeString(game?.gameDate);
-  const round = Number(game?.round) || 0;
-  // game.country can still be a bare GADM code — the country picker writes the
-  // option's `code`, which on a stock scenario is "GBR" — while a project's
-  // ownerCode has already been through toCountryName ("United Kingdom"). Comparing
-  // the two raw told the model "run by United Kingdom" about the player's OWN
-  // programme. Same canonicalisation buildTerritoryText below already does.
+  // game.country can still be a bare GADM code ("GBR") while an owner has been
+  // through toCountryName ("United Kingdom").
   const player = toCountryName(normalizeString(game?.country));
-  const OPEN = new Set(["proposed", "active", "stalled", "paused"]);
-
-  // Do not label it twice: half of these are already called "Operation X" or
-  // "Project Y", and 'Operation "Operation Kingfisher"' reads like a mistake.
-  const titleOf = (project) => {
-    const label = project.kind === "operation" ? "Operation" : "Project";
-    return project.name.toLowerCase().startsWith(`${label.toLowerCase()} `)
-      ? `"${project.name}"`
-      : `${label} "${project.name}"`;
-  };
-
-  // The board's own predicate, not a second comparison that agrees with it today.
-  // It used to be an inline lowercase compare here and a different one in
-  // projects.js, which is exactly how the panel's Mine/Foreign filter and what the
-  // model is told about the same project come to disagree.
   const isOurs = (project) => isPlayerProject(project, player);
-
-  const ownerOf = (project) => {
-    const owner = normalizeString(project.ownerCode);
-    // Said in words the directive can point at, because "run by Germany" was being
-    // read as a label rather than a limit: the model would cheerfully mark a rival's
-    // programme high priority or close it because the player asked it to.
-    return isOurs(project) ? "ours" : `run by ${owner} — THEIRS, not ours`;
+  const ownerOf = (project) => (isOurs(project) ? "ours" : normalizeString(project.ownerCode));
+  const statusOf = (project) => {
+    const status = normalizeString(project.status) || "active";
+    if (status === "stalled") return `stalled: ${normalizeString(project.stallReason) || "blocked"}`;
+    if (status === "active" && project.established) return "running";
+    return status;
   };
-
-  // Printed ONLY when it is not normal, and only on the player's OWN work.
-  //
-  // "priority: normal" on twenty entries spends the model's attention teaching it
-  // that the field means nothing; the two exceptional values are the whole signal.
-  // And priority means "how much of MY attention does this get", which nobody has
-  // over another government's programme — while a board written before the panel
-  // enforced that can still carry a High stamped on a rival's shipyard. Printing
-  // that would tell the model to chase a foreign programme on the player's behalf,
-  // which is the confusion this whole pass exists to end.
-  const priorityNote = (project) => {
-    if (!isOurs(project)) return "";
-    if (project.priority === "high") return " [HIGH PRIORITY]";
-    if (project.priority === "low") return " [low priority]";
-    return "";
+  const finishOf = (project) => {
+    if (project.ongoing) return project.established ? "runs on" : "ongoing";
+    const status = normalizeString(project.status);
+    if (status === "complete") return `done ${normalizeString(project.completedAt) || ""}`.trim();
+    if (!isProjectOpen(project)) return "";
+    const date = normalizeString(project.targetDate) || estimateProjectFinish(project, { world, projects, host: player, date: gameDate });
+    return date ? `done ~${date}` : "no finish in sight";
   };
-
-  const timelineOf = (project) => {
-    const timeline = describeTimeline(project, gameDate);
-    return timeline ? `${timeline}.` : "";
+  const row = (project) => {
+    const flags = [
+      project.secrecy && project.secrecy !== "public" ? project.secrecy : "",
+      project.verification === "doubted" ? "doubted" : "",
+    ].filter(Boolean);
+    return `- "${project.name}" · ${ownerOf(project)} · ${Math.floor(Number(project.progress) || 0)}% · ${finishOf(project) || "-"}`
+      + ` · ${projectMoney(project.plan?.monthlyCost)} a month · funding ${normalizeString(project.funding) || "normal"} · ${statusOf(project)}`
+      + `${flags.length ? ` [${flags.join("; ")}]` : ""}`;
   };
-
-  const warningsOf = (project, flags) => [
-    flags.overdue ? "OVERDUE" : "",
-    flags.milestoneMissed ? "a milestone has slipped" : "",
-    flags.stale ? "no progress reported recently" : "",
-    project.secrecy !== "public" ? project.secrecy : "",
-  ].filter(Boolean);
-
-  const full = (project) => {
-    const flags = deriveProjectFlags(project, gameDate, round);
-    const timeline = timelineOf(project);
-    const next = flags.nextMilestone
-      ? `Next: ${flags.nextMilestone.title}${flags.nextMilestone.date ? ` (${flags.nextMilestone.date})` : ""}.`
-      : "";
-    const roundsSince = round > 0 && project.updatedRound > 0 ? round - project.updatedRound : 0;
-    const warnings = warningsOf(project, flags);
+  const detail = (project) => {
+    const flags = deriveProjectFlags(project);
+    const effects = describeEffects(project.plan?.effects, { owner: normalizeString(project.ownerCode) || player });
+    const yields = describeEffects(project.plan?.yields, { owner: normalizeString(project.ownerCode) || player });
     return [
-      `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}%${compact ? "" : " complete"}.`,
-      project.summary,
-      !compact && project.tags.length ? `Tags: ${project.tags.join(", ")}.` : "",
-      timeline,
-      next,
-      project.lastUpdate ? `Last reported: ${project.lastUpdate}` : "",
-      roundsSince > 0 ? `Last updated ${roundsSince} round${roundsSince === 1 ? "" : "s"} ago.` : "",
-      warnings.length ? `[${warnings.join("; ")}]` : "",
-    ].filter(Boolean).join(" ");
+      normalizeString(project.summary),
+      flags.nextMilestone ? `Next checkpoint: ${flags.nextMilestone.title} at ${flags.nextMilestone.atProgress}%.` : "",
+      effects ? `When done: ${effects}.` : "",
+      yields ? `Every month it runs: ${yields}.` : "",
+      project.lastUpdate ? `Last: ${normalizeString(project.lastUpdate)}` : "",
+    ].filter(Boolean).map((line) => `  ${line}`).join("\n");
   };
 
-  // Everything the model needs to ADDRESS a project and judge whether it needs
-  // touching, minus the prose it only needs to reason about one in depth.
-  const compactLine = (project) => {
-    const flags = deriveProjectFlags(project, gameDate, round);
-    const warnings = warningsOf(project, flags);
-    const next = flags.nextMilestone
-      ? ` Next: ${flags.nextMilestone.title}${flags.nextMilestone.date ? ` (${flags.nextMilestone.date})` : ""}.`
-      : "";
-    return `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}%.`
-      + `${next}${warnings.length ? ` [${warnings.join("; ")}]` : ""}`;
-  };
-
-  // A stalled project has had its news: it stalled. It waits on the player now,
-  // apart from the running ones and off the work list below. The White Harbor
-  // fishing boats stalled in April and a skip still reported "no keel laid"
-  // every few weeks, because the work list asked about them every time.
-  const stalled = projects.filter((project) => project.status === "stalled");
-  const open = projects.filter((project) => OPEN.has(project.status) && project.status !== "stalled");
-  const closed = projects.filter((project) => !OPEN.has(project.status));
-  // Most recently touched first, so the detail budget goes to live work.
-  const ranked = [...open].sort((a, b) =>
-    normalizeString(b.updatedAt).localeCompare(normalizeString(a.updatedAt)));
-  const detailed = ranked.slice(0, FULL_DETAIL_PROJECTS);
-  const brief = ranked.slice(FULL_DETAIL_PROJECTS);
-
-  const sections = detailed.length > 0 ? [detailed.map(full).join("\n")] : [];
-  if (brief.length > 0) {
-    sections.push(`Also running (same rules apply — use these ids to update them):\n${brief.map(compactLine).join("\n")}`);
-  }
-  if (stalled.length > 0) {
-    sections.push(`Stalled, waiting on the player — leave these alone: no event and no projectOps about them, unless an order this period names one (then use its id):\n${stalled.map(compactLine).join("\n")}`);
+  const open = projects.filter(isProjectOpen);
+  const closed = projects.filter((project) => !isProjectOpen(project));
+  // The player's own first, then the rest, each most recently touched first.
+  const ranked = [...open].sort((a, b) => Number(isOurs(b)) - Number(isOurs(a))
+    || normalizeString(b.updatedAt).localeCompare(normalizeString(a.updatedAt)));
+  const sections = [];
+  if (ranked.length) {
+    sections.push(ranked.map((project) => (compact ? row(project) : [row(project), detail(project)].filter(Boolean).join("\n"))).join("\n"));
   }
   if (closed.length > 0) {
-    const newest = [...closed].sort((a, b) =>
-      normalizeString(b.updatedAt).localeCompare(normalizeString(a.updatedAt)));
+    const newest = [...closed].sort((a, b) => normalizeString(b.updatedAt).localeCompare(normalizeString(a.updatedAt)));
     const listed = newest.slice(0, Math.max(0, closedLimit));
     const more = closed.length - listed.length;
-    sections.push(`Finished or abandoned — do not re-open these:\n${listed.map(compactLine).join("\n")}`
-      + (more > 0 ? `\nand ${more} more finished or abandoned (older; do not start any of them again under a new name)` : ""));
+    sections.push(`Finished or abandoned — never open these again: ${listed.map((project) => `"${project.name}" (${ownerOf(project)}, ${normalizeString(project.status)})`).join("; ")}`
+      + (more > 0 ? `; and ${more} more` : "")
+      + ".");
   }
-
-  // The engine's own verdict on what has gone quiet, restated at the END as a
-  // short work list.
-  //
-  // The per-project [OVERDUE; no progress reported recently] tags above have been
-  // there all along and were being read as decoration: they sit inside a
-  // twenty-project wall of prose, each qualifying a different entry, and not one
-  // of them ASKS for anything. This does, and the jump directive points straight
-  // at it with the four acceptable answers. Nothing new is judged here — it is
-  // the same derived flags, and that is the point: this is the calendar talking,
-  // and it cannot be argued with the way a written status can.
-  const needsAttention = ranked.filter((project) => {
-    const flags = deriveProjectFlags(project, gameDate, round);
-    return flags.overdue || flags.milestoneMissed || flags.stale;
-  });
-  if (needsAttention.length > 0) {
-    const rows = needsAttention.map((project) => {
-      const flags = deriveProjectFlags(project, gameDate, round);
-      const why = [
-        flags.overdue ? `target date passed ${Math.abs(flags.daysToTarget)} days ago` : "",
-        flags.milestoneMissed ? "a milestone slipped" : "",
-        flags.stale
-          ? `nothing reported for ${Math.max(round - project.updatedRound, STALE_ROUNDS)} rounds`
-          : "",
-      ].filter(Boolean).join(", ");
-      // A foreign entry on this list is not a decision the player makes — it is a
-      // question about what the OTHER power has been doing while nobody looked, and
-      // the answer is a report, not an order. Marked so the directive's four
-      // answers are read in that register.
-      const whose = isOurs(project) ? "" : " (THEIRS — report what has become of it; it is not the player's to decide)";
-      return `- [id ${project.id}] ${project.name}${priorityNote(project)}${whose} — ${why}.`;
-    });
-    sections.push(`Needs a decision this jump:\n${rows.join("\n")}`);
-  }
-
   return sections.join("\n\n");
 };
 
@@ -1873,7 +1753,6 @@ const rankFocusEntries = (regions, world, bundle, { playerName, actorNames = [],
     wars: normalizeArray(world.wars),
     claimants: world.regionClaimants ?? {},
     ownerOfRegion: (regionId) => ownerById.get(String(regionId)) ?? "",
-    regions,
     ...signals,
   });
   const entries = ranked.map((entry) => ({ ...entry, regions: groups.get(entry.label.toLowerCase())?.regions ?? 0 }));
@@ -2148,7 +2027,12 @@ const TIERED_TERRITORY_REGIONS = 120;
 // and count, as before. `regions`: the rendered catalog, whose `country` is a
 // region's owner on the scenario's map.
 const ONE_LINE_NAMES = 3;
-const ALLIANCE_TYPES = /alliance|defen[cs]e|military|security|mutual/i;
+// Exact values of the ledgers' enums (nativeDiplomaticDirector.js
+// AGREEMENT_TYPE_VALUES and AGREEMENT_STATUS_VALUES, runtime/warRecord.js
+// WAR_STATUSES), never words found in them. An alliance is what the map's
+// stance colours call one (runtime/diplomaticStance.js).
+const ALLIANCE_AGREEMENT_TYPES = new Set(["alliance", "mutual_defense", "military_cooperation"]);
+const enumValue = (value) => normalizeString(value).toLowerCase();
 export const buildOneLineDetail = (world, regions, { polityNames = {}, bakedAliases = buildOwnerAliasMap(world?.polityOverrides) } = {}) => {
   const fold = (value) => normalizeString(value).toLowerCase();
   const overrides = world?.regionOwnershipOverrides ?? {};
@@ -2186,8 +2070,8 @@ export const buildOneLineDetail = (world, regions, { polityNames = {}, bakedAlia
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 2)
     .map(([other, count]) => say(count, other));
-  const activeWars = normalizeArray(world?.wars).filter((war) => !/ended|concluded|closed/i.test(String(war?.status ?? "")));
-  const agreements = normalizeArray(world?.agreements).filter((entry) => !normalizeString(entry?.status) || /active|in force/i.test(entry.status));
+  const activeWars = normalizeArray(world?.wars).filter((war) => enumValue(war?.status) !== "ended");
+  const agreements = normalizeArray(world?.agreements).filter((entry) => !enumValue(entry?.status) || enumValue(entry.status) === "active");
   const treaties = normalizeArray(world?.peaceTreaties);
   return (label) => {
     const names = namesOf(label);
@@ -2209,7 +2093,7 @@ export const buildOneLineDetail = (world, regions, { polityNames = {}, bakedAlia
       const parties = normalizeArray(entry?.parties).map(normalizeString);
       if (!parties.some(is)) continue;
       const others = parties.filter((name) => name && !is(name));
-      if (ALLIANCE_TYPES.test(`${entry?.type ?? ""}`)) for (const name of others) { if (!allies.includes(name)) allies.push(name); }
+      if (ALLIANCE_AGREEMENT_TYPES.has(enumValue(entry?.type))) for (const name of others) { if (!allies.includes(name)) allies.push(name); }
       else if (normalizeString(entry?.title)) pacts.push(`${normalizeString(entry.title)}${others.length ? ` with ${listed(others)}` : ""}`);
     }
     if (allies.length) parts.push(`allied with ${listed(allies)}`);
@@ -3109,7 +2993,10 @@ export const buildPromptContext = async (bundle, {
     result.plannedActionsWithIds = buildPlannedActionsWithIdsText(bundle.actions);
   }
   if (wants("projectsSummary")) {
-    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game, { compact: SKIP_TASKS.has(taskKey) });
+    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game, {
+      compact: SKIP_TASKS.has(taskKey),
+      publicOnly: SKIP_TASKS.has(taskKey),
+    });
   }
 
   const worldBeforeRoundOne =

@@ -340,13 +340,14 @@ export const difficultyPriorityBlock = (value) => {
 // nothing about how things go for the player. Every other task the game sends
 // (and any it gains later) opens with the priority block.
 //   translation                  puts finished text into another language
-//   geographyResolver            matches a place name to a region of the map
 //   eventConsolidator            folds finished history into the history document
 //   timelineCurator              takes repeats and filler off a finished timeline
 //   descriptionToAction          words the player's own order; its outcome is the skip's
 //   demandCheck                  reads whether a reply made or answered a demand
 //   placeFeed                    writes what people are saying in a place (Rostra's Search)
 //   rostraFeed                   writes Rostra's first posts (its empty feed's Refresh)
+//   projectPlan                  plans a project the player names: what it would honestly take;
+//                                what then becomes of it is the projects engine's
 //   warRoom                      the player's own generals speaking: they advise and take
 //                                orders, and what comes of an order is the front engine's
 //   pregameHistory               the history before the game starts, with no player in it
@@ -355,13 +356,13 @@ export const difficultyPriorityBlock = (value) => {
 //   scenarioTranslation          a scenario's own text in other languages, in the Workshop
 export const TASKS_WITHOUT_DIFFICULTY = Object.freeze(new Set([
   "translation",
-  "geographyResolver",
   "eventConsolidator",
   "timelineCurator",
   "descriptionToAction",
   "demandCheck",
   "placeFeed",
   "rostraFeed",
+  "projectPlan",
   "warRoom",
   "pregameHistory",
   "politicalWorldGeneration",

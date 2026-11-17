@@ -20,6 +20,7 @@
 
 import { normalizeMilitaryStats } from "./militaryStats.js";
 import { populationFigureOf } from "./populationFigure.js";
+import { firstSentence } from "../../server/sentences.js";
 
 export const GROUP_NAME_MAX = 80;
 export const GROUP_DESCRIPTION_MAX = 1200;
@@ -144,18 +145,22 @@ export const groupRegions = (groupAreas) => {
 
 // ---- the AI's operations ------------------------------------------------------
 
-const OP_ALIASES = {
-  create: "create", add: "create", new: "create", found: "create", form: "create",
-  update: "update", modify: "update", edit: "update", rename: "update", describe: "update", recolor: "update", recolour: "update",
-  dissolve: "dissolve", erase: "dissolve", delete: "dissolve", remove: "dissolve", disband: "dissolve", destroy: "dissolve",
-  take: "take", control: "take", seize: "take", expand: "take", spread: "take", occupy: "take", claim: "take",
-  release: "release", lose: "release", withdraw: "release", retreat: "release", abandon: "release", shrink: "release",
-};
 export const GROUP_OP_KINDS = ["create", "update", "dissolve", "take", "release"];
+const GROUP_OP_SET = new Set(GROUP_OP_KINDS);
+
+// The op exactly as one of GROUP_OP_KINDS (the schema offers no other), its
+// case and spacing aside; "" for any other word, and the op is then left out.
+// A table of English words for them read "claim" and "occupy" as take, a
+// region taken by a group that only claimed it, while the same op written in
+// any other language was dropped (the owner, 2026-11-13: no keywording).
+export const groupOpKind = (value) => {
+  const op = fold(value);
+  return GROUP_OP_SET.has(op) ? op : "";
+};
 
 export const normalizeGroupOp = (entry) => {
   if (!isRecord(entry)) return null;
-  const op = OP_ALIASES[fold(entry.op ?? entry.operation)] ?? "";
+  const op = groupOpKind(entry.op ?? entry.operation);
   const name = normalizeGroupName(entry.name ?? entry.group ?? entry.groupName);
   if (!op || !name) return null;
   const list = Array.isArray(entry.regionIds) ? entry.regionIds
@@ -266,10 +271,11 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
 // area, which an op on it needs, and its description is cut to its first
 // sentence; the groups in view come first.
 export const GROUP_BRIEF_DESCRIPTION = 160;
+// Its first sentence of 21 characters or more, in any script (server/sentences.js).
 export const briefDescription = (text, max = GROUP_BRIEF_DESCRIPTION) => {
   const flat = String(text ?? "").replace(/\s+/g, " ").trim();
   if (flat.length <= max) return flat;
-  const sentence = /^(.{20,}?[.!?])\s/.exec(flat)?.[1] ?? "";
+  const sentence = firstSentence(flat, { min: 21 });
   if (sentence && sentence.length <= max) return sentence;
   return `${flat.slice(0, max - 1).replace(/\s+\S*$/, "")}…`;
 };

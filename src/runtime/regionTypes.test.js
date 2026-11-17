@@ -24,10 +24,12 @@ import { TYPE_FILL_STATE, withTypeFillOpacity } from "../Game/Map/regionTypePain
 import { DEFAULT_TYPES } from "../Editor/useMapDocument.js";
 
 const land = DEFAULT_TYPES[0];
+// A sea as the Workshop saves one: its Water switch on.
 const sea = {
   ...land,
   id: "sea",
   name: "Sea",
+  water: true,
   overrideColor: [20, 60, 140],
   opacity: 0.275,
   passable: false,
@@ -142,24 +144,25 @@ test("the AI is told a type's movement and placement rules, naming its regions",
   assert.match(regionTypeRules([{ ...sea, water: false }], many.slice(0, 1)), /impassable/);
 });
 
-test("a type is water by the Workshop's switch, or by its name where nobody has set one", () => {
-  // Ocean, sea, water, lake: one or many, alone or among other words, in any case.
-  for (const name of ["Ocean", "Sea", "Water", "Lake", "Oceans", "Seas", "Waters", "Lakes", "Deep Ocean", "Open Water", "sea zone", "THE GREAT LAKE", "Inland sea (shallow)"]) {
-    assert.equal(isWaterType({ ...land, id: "x", name }), true, name);
+test("a type is water by the Workshop's switch alone, whatever its name and in whatever language", () => {
+  // Switched on, it is water; its name says nothing either way.
+  for (const name of ["Sea", "Mer", "Meer", "Море", "海", "Mar Tenebroso", "Sea of Grass", ""]) {
+    assert.equal(isWaterType({ ...land, id: "x", name, water: true }), true, name || "(no name)");
   }
-  // A word that only has one of them inside it is not.
-  for (const name of ["Land", "Coastal", "Seaside", "Lakeland", "Waterfront", "Oceania", "Swamp", "Mountains", "Research", ""]) {
+  // Not switched on (never set, or set off), it is land: "Sea" no more than "Mer".
+  for (const name of ["Sea", "Ocean", "Lake", "Deep Ocean", "Mer", "Océan", "Meer", "Lac", "Море", "海", "Land", ""]) {
     assert.equal(isWaterType({ ...land, id: "x", name }), false, name || "(no name)");
+    assert.equal(isWaterType({ ...land, id: "x", name, water: false }), false, name || "(no name)");
   }
-  // The switch is the last word, either way.
-  assert.equal(isWaterType({ ...land, id: "x", name: "Mar Tenebroso", water: true }), true);
-  assert.equal(isWaterType({ ...land, id: "x", name: "Sea of Grass", water: false }), false);
+  // Only the switch itself counts, not a word or a number standing in for it.
+  assert.equal(isWaterType({ ...land, id: "x", name: "Sea", water: "true" }), false);
+  assert.equal(isWaterType({ ...land, id: "x", name: "Sea", water: 1 }), false);
   assert.equal(isWaterType(null), false);
   // The Workshop's own two types are land.
   assert.deepEqual(DEFAULT_TYPES.map(isWaterType), [false, false]);
   // The ids of a map's water types, and the switch kept through a clean-up of the types.
   const types = [land, sea, { ...land, id: "lake", name: "Lake" }, { ...land, id: "mar", name: "Mar", water: true }, { ...land, id: "grass", name: "Sea of Grass", water: false }];
-  assert.deepEqual([...waterTypeIds(types)].sort(), ["lake", "mar", "sea"]);
-  assert.deepEqual([...waterTypeIds(normalizeRegionTypes(types))].sort(), ["lake", "mar", "sea"]);
+  assert.deepEqual([...waterTypeIds(types)].sort(), ["mar", "sea"]);
+  assert.deepEqual([...waterTypeIds(normalizeRegionTypes(types))].sort(), ["mar", "sea"]);
   assert.deepEqual([...waterTypeIds(null)], []);
 });

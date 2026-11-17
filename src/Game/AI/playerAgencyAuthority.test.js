@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import {
   playerAgencyViolationReason,
   screenGeneratedWorldEvents,
-  validateWorldPlayerAgencyPayload,
 } from "./nativeWorldIntegrity.js";
-import { JUMP_FORWARD_SCHEMA } from "./gameplaySchemas.js";
+import { readFileSync } from "node:fs";
+import { GAMEPLAY_TOOLS, JUMP_FORWARD_SCHEMA, withEventActors } from "./gameplaySchemas.js";
 import { normalizeEventAgency } from "../../runtime/eventAgency.js";
 
 const world = {
@@ -164,7 +164,7 @@ test("the exact old Latvia legislation event is blocked because its authority ow
     agency: agency({ principal: "Latvian Parliament", principalKind: "domestic-actor" }),
   });
   assert.match(
-    validateWorldPlayerAgencyPayload({ events: [candidate] }, { world, gameCountry: game.country, actions: [] }),
+    playerAgencyViolationReason(candidate, { world, gameCountry: game.country, actions: [] }),
     /autonomous sovereign authority/i,
   );
 });
@@ -379,23 +379,44 @@ test("active war can own a consequence without being a generic permission token 
   assert.match(playerAgencyViolationReason(warAsPermission, { world, gameCountry: game.country, actions: [] }), /cannot grant fresh sovereign discretion/i);
 });
 
-test("strict generated-payload validation fails closed only when native provenance remains unresolved", () => {
-  const candidate = event({ agency: undefined });
-  assert.match(
-    validateWorldPlayerAgencyPayload({ events: [candidate] }, { world, gameCountry: game.country, actions: [] }),
-    /missing valid structural agency provenance/i,
-  );
+// The neutral default: an event that names no one deciding it, cites no order
+// and belongs to no process has no agency, and stands as written. Nothing is
+// guessed for it from its words.
+test("an event with nothing structured keeps no agency and stands, in English or not", () => {
+  for (const [title, description] of [
+    ["Cerulean Protocol Enters Force", "The government chooses the new Cerulean Protocol."],
+    ["Cerulean protokols stājas spēkā", "Valdība izvēlas jauno Cerulean protokolu."],
+  ]) {
+    const quiet = { ...world, storylines: [], wars: [] };
+    const screened = screenGeneratedWorldEvents({ events: [event({ title, description, agency: undefined })], world: quiet, game, actions: [] });
+    assert.equal(screened.events.length, 1, title);
+    assert.equal(screened.events[0].agency, undefined, title);
+    assert.deepEqual(screened.dropped, []);
+  }
 });
 
-test("normal jump schema leaves agency native while keeping Beta action ids model-visible", () => {
+test("normal jump schema leaves agency native, keeps action ids, and asks who decided after the load-bearing fields", () => {
   const jumpEvent = JUMP_FORWARD_SCHEMA.properties.events.items;
   assert.equal(jumpEvent.properties.agency, undefined);
   assert.ok(jumpEvent.properties.impacts.properties.actionIds);
-  // Latest Beta deliberately keeps the event schema lean for request-budget and
-  // context-window efficiency. Native provenance therefore cannot depend on an
-  // optional model-authored actors list being present.
-  assert.equal(jumpEvent.properties.actors, undefined);
+  // Who decided an event is the model's to say (nativeWorldIntegrity.js reads
+  // it instead of the event's words). Optional, and after warId, combatants
+  // and impacts: a field sent before combatants once had Gemini leave them
+  // empty (withEventAudience).
+  assert.equal(jumpEvent.properties.actors.type, "array");
+  assert.equal(jumpEvent.properties.actors.items.type, "string");
   assert.deepEqual(jumpEvent.required, ["date", "title", "description"]);
+  // The lean contract has no room for it in a shared game's host
+  // (foldedSkipSent.test.js); every other game is sent it.
+  const lean = GAMEPLAY_TOOLS.jumpForward;
+  assert.equal("actors" in lean.schema.properties.events.items.properties, false);
+  assert.equal(withEventActors(lean, false), lean);
+  const sent = Object.keys(withEventActors(lean).schema.properties.events.items.properties);
+  for (const loadBearing of ["warId", "combatants", "impacts"]) {
+    assert.ok(sent.indexOf("actors") > sent.indexOf(loadBearing), `actors comes after ${loadBearing}`);
+  }
+  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.match(gameplay, /const decided = withEventActors\(tool, !hostingSharedGame\(\)\);/);
 });
 
 test("event agency normalization preserves the structural provenance contract", () => {

@@ -18,13 +18,14 @@
 // Pure, and loads in plain Node.
 
 import { describeBonds } from "../../runtime/alliances.js";
-import { REPARATIONS_SHARE_CAP, REPARATIONS_YEARS_CAP, TERMS_LINE_EXAMPLE, describeReparation, describeTerms, normalizePeaceOffers, normalizePeaceTreaties, normalizeReparations } from "../../runtime/peaceTerms.js";
+import { REPARATIONS_SHARE_CAP, REPARATIONS_YEARS_CAP, TERMS_FORM, describeReparation, describeTerms, normalizePeaceOffers, normalizePeaceTreaties, normalizeReparations } from "../../runtime/peaceTerms.js";
 import { normalizeWarWeariness, wearinessWord } from "../../runtime/warWeariness.js";
 import { normalizeCallsToArms } from "../../runtime/alliances.js";
 import { WAR_STATS_MAX, buildWarStatsBlock } from "./warStatsPrompt.js";
 
 export const PEACE_BLOCK_HEADING = "[War Weariness, Peace and Alliances]";
-export const PEACE_BLOCK_MAX = 2600 + WAR_STATS_MAX;
+// (The rules took 250 more once terms were taught in the game's own form: the room for the rest is as it was.)
+export const PEACE_BLOCK_MAX = 2850 + WAR_STATS_MAX;
 export const WEARY_TOLD_FROM = 20;
 // How many turns back an offer turned down is still told.
 export const DECLINED_TOLD_ROUNDS = 3;
@@ -36,11 +37,11 @@ const fold = (value) => clean(value).toLowerCase();
 const list = (value) => (Array.isArray(value) ? value : []);
 
 const ALLIANCE_RULE = "Alliances bind, and the game acts on them. When a war begins, the country it was begun against is joined, as the period ends and by the game itself, by those bound to defend it: the other parties of an active alliance or mutual defence agreement, the guarantor of a guarantee, and the full members of a security alliance or defence pact it belongs to. Write no join for them. An ally that will not come breaks the treaty: tell that in an event and end or suspend the agreement in the same answer, and the game takes it off the breaker's reputation. A country a person plays is asked by the game and answers for itself.";
-const WEARY_RULE = "The game keeps how weary of its war each country is, from 0 (fresh) to 100 (spent): it rises with time, the men called up, ground lost and a blockade. Tell it at home, the more the higher: shortages, strikes, desertion, a government pressed to end the war. Its armies recover more slowly for it; the game does that.";
+const WEARY_RULE = "The game keeps how weary of its war each country is, from 0 (fresh) to 100 (spent): it rises with time, the men called up, ground lost and a blockade. Tell it at home, the more the higher: shortages, strikes, desertion, a government pressed to end the war. Its armies recover more slowly for it; the game does that. Once its wars are over it falls away, a little every month: a country at peace that is still weary is recovering from the war it fought, not fighting one.";
 const PEACE_RULE = [
-  `A war can end on terms: who keeps the ground ("as held": each side keeps what it holds; "restored": the old borders) and whether one side pays the other reparations, a share of its economy a year (at most ${Math.round(REPARATIONS_SHARE_CAP * 100)}%) for some years (at most ${REPARATIONS_YEARS_CAP}); and whatever else the two agree: one of them annexed whole, regions ceded by their names on the map, one made the other's puppet (puppet state, protectorate or client state), and any other condition in words. The game carries out a peace on terms, but never decides one: whether a country wants peace, when, and on what terms is yours to judge, from its figures under [War Situation] and its own interests and character. A weary or losing country may still fight on, and a strong one may still want peace.`,
+  `A war can end on terms: who keeps the ground, whether one side pays the other reparations, a share of its economy a year (at most ${Math.round(REPARATIONS_SHARE_CAP * 100)}%) for some years (at most ${REPARATIONS_YEARS_CAP}), and whatever else the two agree: one of them annexed whole, regions ceded, one made the other's puppet, any other condition. The game carries out a peace on terms, but never decides one: whether a country wants peace, when, and on what terms is yours to judge, from its figures under [War Situation] and its own interests and character. A weary or losing country may still fight on, and a strong one may still want peace.`,
   "A country nobody plays that offers a player peace does it in a letter: an entry of diplomaticOutreach from that country to the player, its leader's own words in openingMessage, with peaceOffer holding the terms (territory; reparationsPayer empty when nobody pays, else the payer with reparationsPercent and reparationsYears; moreTerms for any other term, written as in a peaceTreaties line). The player accepts or declines it in that chat. Write no event that the peace was made: it is made when the player accepts.",
-  `Two countries nobody plays that make peace in this period: a line in ${PEACE_TREATIES_FIELD} for each, offering country | accepting country | terms, the terms as "as held; Borduria pays 2% for 5 years", "restored; none" or "${TERMS_LINE_EXAMPLE}", and an event that tells it. The game ends the war on those terms, so write no warUpdates end for it.`,
+  `Two countries nobody plays that make peace in this period: a line in ${PEACE_TREATIES_FIELD} for each, offering country | accepting country | terms, the terms ${TERMS_FORM}, and an event that tells it. The game ends the war on those terms, so write no warUpdates end for it.`,
   `A war a player fights ends only by a peace that player makes or accepts: never end it yourself, nor write a ceasefire in it, nor take a player's country out of it, and tell no peace, armistice or surrender in it. A player's order to end their war is their offer of peace: write its end as a warUpdates line that names by number the event carrying the order out (that event lists the order in impacts.actionIds), the event telling the offer being made, and the game puts it to the other side, the war going on until that side accepts. Its government may accept in this same answer: a line in ${PEACE_TREATIES_FIELD}, the player's country | the accepting country | the terms offered, and an event that tells it. To bring a player to peace, a country offers it in a letter. When an event of yours ends a war between countries nobody plays any other way, say its terms in the event.`,
 ].join(" ");
 
@@ -69,13 +70,18 @@ export const buildPeaceBlock = ({ world = {}, game = {}, players = [], max = PEA
     const sides = [list(war.sideA), list(war.sideB)].map((members) => members.map(clean).filter(Boolean));
     return sides.flatMap((members, index) => (members.some((member) => human.some((name) => fold(name) === fold(member))) ? sides[1 - index] : []));
   });
-  const situation = buildWarStatsBlock({ world, countries: [...human, ...enemiesOfPlayers, ...fighting], max: WAR_STATS_MAX });
+  const situationCountries = [...human, ...enemiesOfPlayers, ...fighting];
 
   const lines = [PEACE_BLOCK_HEADING];
   if (bonds.length > 0 || wars.length > 0) lines.push(ALLIANCE_RULE);
   if (wars.length > 0 || weary.length > 0) lines.push(WEARY_RULE);
   if (wars.length > 0 || treaties.length > 0) lines.push(PEACE_RULE);
-  const room = () => max - lines.join("\n").length;
+  // Peace terms, calls to arms and alliance obligations are authoritative
+  // turn instructions. Keep their existing priority; size the optional war
+  // figures to the room they actually leave, instead of constructing a full
+  // WAR_STATS_MAX block and silently dropping it when it won't fit.
+  let warReserve = 0;
+  const room = () => max - lines.join("\n").length - warReserve;
   const section = (title, rows) => {
     if (rows.length === 0 || room() < title.length + 40) return;
     lines.push(title);
@@ -94,9 +100,18 @@ export const buildPeaceBlock = ({ world = {}, game = {}, players = [], max = PEA
   section("Calls to arms that wait for a player's answer (theirs to give):", calls.map((call) => `${call.ally} is called on to defend ${call.defender} against ${call.attackers.join(" and ") || "its attacker"}${call.via.title ? `, under ${call.via.title}` : ""}.`));
   section("Reparations being paid (the game moves the money; tell what paying them does to the country):", owed.map((entry) => `${describeReparation(entry)}.`));
   section("Bound to defend:", bonds.map((line) => `${line}.`));
+  const situationRoom = Math.min(WAR_STATS_MAX, Math.max(0, room() - 1));
+  const situation = situationRoom > 0 ? buildWarStatsBlock({ world, countries: situationCountries, max: situationRoom }) : "";
+  // Reserve for the war block before lower-priority weariness summaries.
+  warReserve = situation && situation.length <= situationRoom ? situation.length + 1 : 0;
   // (Countries at war have theirs in the situation below; the rest are told here.)
-  const toldBelow = new Set(situation ? fighting.map(fold) : []);
-  section("War weariness:", weary.filter((entry) => !toldBelow.has(fold(entry.country))).slice(0, 12).map((entry) => `${entry.country} ${Math.round(entry.value)}, ${wearinessWord(entry.value)}`));
-  if (situation && situation.length + 1 <= room()) lines.push(situation);
+  const toldBelow = new Set(fighting.filter((country) => warReserve > 0 && situation.includes(`\n${country}:\n`)).map(fold));
+  // (At war or at peace by the ledger: a country whose wars are over is told as recovering, so a figure left from a
+  // war ended long ago is never read as one still being fought; issue #1000, weary 47 twenty months after its surrender.)
+  const atWar = new Set(fighting.map(fold));
+  const wearyLine = (entry) => `${entry.country} ${Math.round(entry.value)}, ${wearinessWord(entry.value)}`;
+  section("War weariness, at war:", weary.filter((entry) => atWar.has(fold(entry.country)) && !toldBelow.has(fold(entry.country))).slice(0, 12).map(wearyLine));
+  section("War weariness, at peace and recovering from the war they fought:", weary.filter((entry) => !atWar.has(fold(entry.country))).slice(0, 12).map(wearyLine));
+  if (warReserve > 0) lines.push(situation);
   return lines.join("\n");
 };

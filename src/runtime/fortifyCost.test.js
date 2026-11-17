@@ -77,7 +77,7 @@ test("a country's treasury, its people and its share of them fit to serve are re
   };
   const world = {
     countryStats: sheets,
-    polityOverrides: { Ruritania: { name: "Kingdom of Ruritania", population: "3.5 million" } },
+    polityOverrides: { Ruritania: { name: "Kingdom of Ruritania", population: "3,500,000" } },
     groups: { "Free Company": { population: 12000 } },
     warSettings: { manpowerShare: 20 },
   };

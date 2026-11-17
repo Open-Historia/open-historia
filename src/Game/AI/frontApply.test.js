@@ -328,7 +328,10 @@ test("every other place that applies events is one the engine has no part in", (
     // applySimulationResult (the engine runs before it; a round stopped by
     // Intervene, a held turn and a kept one all come through it again), the
     // Game Master's Apply (no time passes: what it changes on a battlefield the
-    // engine takes up at its next run) and the idle pulse (no time passes).
+    // engine takes up at its next run), the idle pulse (no time passes) and the
+    // The projects engine's completions now cross the strict, isolated
+    // projectTerritorySettlement boundary. The event writer is injected into
+    // that adapter, so gameplay has one fewer DIRECT invocation.
     "Game/AI/gameplay.js:3",
     // A peace made on terms (makePeace): the ground the two sides hold of each
     // other's is ceded or handed back. No time passes; the war it ends is
@@ -342,12 +345,25 @@ test("every other place that applies events is one the engine has no part in", (
     // The world as seen while a turn is revealed: the same replay as the reveal's.
     "runtime/gameState.js:1",
   ]);
+  // Project territory still reaches the same authoritative event writer,
+  // through a fail-closed adapter that runs before the turn can be persisted.
+  const projectAdapter = read("../../runtime/projectTerritorySettlement.js");
+  assert.match(gameplay, /await settleProjectTerritoryWorld\(/);
+  assert.match(projectAdapter, /const settled = applyWorldImpacts\(/);
   // The Game Master's Apply and the idle pulse pass no game time.
   const gmAt = gameplay.indexOf("export const applyGameMasterPreview = async");
   assert.match(gameplay.slice(gameplay.lastIndexOf("\n\n", gmAt), gmAt), /There is no AI call, no turn\s*\n\/\/ simulation, no date advance and no round increment\./);
   const gmApply = gameplay.slice(gameplay.indexOf("const impactMerge = applyEventImpactsToWorld({", gmAt));
   assert.equal(gmApply.slice(0, gmApply.indexOf("});")).includes("motion"), false, "its events are applied where they stand, with no days between them");
   assert.match(functionBody("applyIdlePulseUnitOps"), /\/\/ fromDate === toDate, so no unit travels/);
+  // The projects engine's completions pass the days of a turn the front engine
+  // has already run: it is called only from applySimulationResult, after
+  // applyTurnFronts, and its events are applied with no motion of their own.
+  assert.equal(gameplay.split("await runProjectsEngine(").length - 1, 1, "the projects engine runs in one place");
+  const apply = functionBody("applySimulationResult");
+  assert.ok(apply.indexOf("const turnFronts = await applyTurnFronts({") > 0 && apply.indexOf("const turnFronts = await applyTurnFronts({") < apply.indexOf("const projectsRun = await runProjectsEngine({"), "after the front engine, in the same apply");
+  assert.match(functionBody("runProjectsEngine"), /await settleProjectTerritoryWorld\(\{/);
+  assert.match(projectAdapter, /applyWorldImpacts\(\{\s*colors, events, world, motion: null,/);
   // A long skip's segments are joined before anything is applied: one apply, one run.
   assert.equal(gameplay.split("await applySimulationResult(").length - 1 + gameplay.split("=> applySimulationResult(").length - 1, 5, "the skip, a kept skip, a held board, Intervene and a Scene");
 });

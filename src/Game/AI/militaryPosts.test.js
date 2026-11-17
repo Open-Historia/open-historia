@@ -13,16 +13,21 @@ import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./mi
 const calais = [1.86, 50.95];
 const lille = [3.06, 50.63];
 
-test("a garrison unit, and a base or fort of any wording, is a military post; a port or a hospital is not", () => {
+// A garrison by its unit type, a structure by its family: never by the words of its kind or name, which are the
+// story's own and in its language (the owner, 2026-11-13: no keywording anywhere).
+test("a garrison unit, and a structure of the military family, is a military post; nothing is read from words", () => {
     assert.equal(isMilitaryPost({ type: "garrison" }, "unit"), true);
     assert.equal(isMilitaryPost({ type: "armor" }, "unit"), false);
-    for (const kind of ["garrison", "military base", "forward operating base", "airbase", "fort", "outpost", "barracks"]) {
-        assert.equal(isMilitaryPost({ kind, name: "Somewhere" }, "marker"), true, kind);
+    assert.equal(isMilitaryPost({ kind: "forward operating base", name: "Djibo FOB", family: "military" }, "marker"), true);
+    assert.equal(isMilitaryPost({ kind: "base d'opérations avancée", name: "FOB de Djibo", family: "Military" }, "marker"), true, "the French twin by its family, as the English");
+    for (const family of ["infrastructure", "diplomatic", "settlement", ""]) {
+        assert.equal(isMilitaryPost({ kind: "port", name: "Somewhere", family }, "marker"), false, family);
     }
-    assert.equal(isMilitaryPost({ kind: "structure", name: "Djibo FOB" }, "marker"), true, "the name can say it too");
-    for (const kind of ["port", "hospital", "embassy", "factory"]) {
+    // Words alone, in English or any other language, make no post.
+    for (const kind of ["garrison", "military base", "forward operating base", "fort", "base militaire", "Militärstützpunkt", "военная база"]) {
         assert.equal(isMilitaryPost({ kind, name: "Somewhere" }, "marker"), false, kind);
     }
+    assert.equal(isMilitaryPost({ kind: "structure", name: "Djibo FOB" }, "marker"), false);
 });
 
 test("a post on its owner's own land needs nobody to deploy it", () => {

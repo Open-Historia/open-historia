@@ -127,6 +127,22 @@ test("an invented polity focuses the regions it actually holds", () => {
   near(deriveEventFocusBounds(event, makeContext(world)), [[-10.2, 51.4], [-6.0, 54.2]]);
 });
 
+// Names were folded to a-z, so a polity named in any other script was the
+// empty key: its land was never found, and its operations moved no camera.
+test("a polity named in another script focuses its land, as its English twin does", () => {
+  for (const [name, written] of [["Free Ireland", "FREE IRELAND"], ["Свободная Ирландия", "СВОБОДНАЯ ИРЛАНДИЯ"], ["自由爱尔兰", "自由爱尔兰"]]) {
+    const world = {
+      polityOverrides: { [name]: { code: name, name } },
+      regionOwnershipOverrides: { "IRL.4_1": name, "IRL.7_1": name },
+    };
+    const event = { title: "Proclamation", description: "", impacts: { polityChanges: [{ code: written }] } };
+    near(deriveEventFocusBounds(event, makeContext(world)), [[-10.2, 51.4], [-6.0, 54.2]]);
+  }
+  // A name with no letters or digits is no polity's.
+  const world = { polityOverrides: { "Россия": { code: "Россия", name: "Россия" } }, regionOwnershipOverrides: { "IRL.4_1": "Россия" } };
+  assert.equal(resolvePolityBounds("—", makeContext(world)), null);
+});
+
 // ---- Group B: an event's words never move the camera ------------------------
 // The camera used to read the title and the description for any name the map
 // has. Whole-word matching kept "Mali" out of "Somalia"; it could do nothing

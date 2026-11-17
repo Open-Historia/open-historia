@@ -21,8 +21,8 @@ import {
 const ANSWER = [
   "Eastern Ukraine~Russia~spearhead~north~2,3~city: Kharkiv~~major",
   "Eastern Ukraine~Ukraine~dig in~all",
-  "Eastern Ukraine~Russia~attack~Centre~4",
-  "Western Front~Germany~RETREAT~the south~~region: Alsace~repulsed~Total",
+  "Eastern Ukraine~Russia~Advance~Centre~4",
+  "Western Front~Germany~FALL BACK~south~~region: Alsace~repulsed~Total",
 ].join("\n");
 
 test("a full line and a short one are both read; the last three fields may be left off", () => {
@@ -45,23 +45,39 @@ test("a full line and a short one are both read; the last three fields may be le
   assert.equal(FRONT_ORDERS_FIELD, "frontOrders");
 });
 
-test("words a model is likely to write fold onto the engine's own; a place stays as written", () => {
-  const order = (word) => decodeFrontOrders(`A~B~${word}~all`)[0].order;
-  assert.equal(order("Offensive"), "advance");
-  assert.equal(order("blitzkrieg"), "blitz");
-  assert.equal(order("entrench"), "dig in");
-  assert.equal(order("retreat."), "fall back");
+// The orders, results, efforts and sector words are the rules' own (frontPrompt.js), case and spacing aside.
+// Nothing a model might write instead is read as one of them, in English or in another language: the record
+// says why it was left out, and the next answer writes the word the rules give (the owner, 2026-11-13).
+test("only the engine's own words are read; a near miss in any language is left out and said; a place stays as written", () => {
+  const read = (word) => decodeFrontOrders(`A~B~${word}~all`)[0];
+  assert.equal(read("Advance").order, "advance");
+  assert.equal(read("DIG IN").order, "dig in");
+  assert.equal(read("fall back.").order, "fall back");
   // To withdraw is to leave the battlefield, an order of its own: not to fall back along it.
-  assert.equal(order("withdraw."), "withdraw");
-  assert.equal(order("Pull out"), "withdraw");
-  assert.equal(order("evacuate"), "withdraw");
-  assert.equal(order("pincer"), "encircle");
-  assert.equal(normalizeFrontSector("Center"), "centre");
-  assert.equal(normalizeFrontSector("north-east"), "northeast");
-  assert.equal(normalizeFrontSector(""), "all");
+  assert.equal(read("withdraw.").order, "withdraw");
+  for (const word of ["Offensive", "blitzkrieg", "entrench", "retreat", "Pull out", "evacuate", "pincer", "attack", "storm"]) {
+    assert.equal(read(word).order, "", word);
+    assert.match(read(word).problem, /is not an order/, word);
+  }
+  // The French, German and Russian twins of those English words are treated exactly as they are.
+  for (const word of ["attaque", "repli", "Vorstoß", "Rückzug", "наступление", "отступление"]) {
+    assert.equal(read(word).order, "", word);
+    assert.match(read(word).problem, /is not an order/, word);
+  }
+  assert.equal(normalizeFrontSector("Centre"), "centre");
+  assert.equal(normalizeFrontSector(" NORTHEAST "), "northeast");
+  assert.equal(normalizeFrontSector(""), "all", "a blank sector is the whole line");
   assert.equal(normalizeFrontSector("  city: Izium "), "city: Izium");
-  assert.equal(decodeFrontOrders("A~B~advance~all~~~fell~")[0].result, "captured");
-  assert.equal(decodeFrontOrders("A~B~advance~all~~~~all-out")[0].effort, "total");
+  // Anything else is a place on the line, kept as written for the engine to find (or say it found none).
+  assert.equal(normalizeFrontSector("north-east"), "north-east");
+  assert.equal(normalizeFrontSector("the whole line"), "the whole line");
+  assert.equal(normalizeFrontSector("nord-est"), "nord-est");
+  assert.equal(decodeFrontOrders("A~B~advance~all~~~captured~")[0].result, "captured");
+  assert.equal(decodeFrontOrders("A~B~advance~all~~~fell~")[0].result, "", "a word for a result is no result");
+  assert.equal(decodeFrontOrders("A~B~advance~all~~~tombée~")[0].result, "");
+  assert.equal(decodeFrontOrders("A~B~advance~all~~~~Total")[0].effort, "total");
+  assert.equal(decodeFrontOrders("A~B~advance~all~~~~all-out")[0].effort, "", "a word for an effort is no effort: the order stands at the usual one");
+  assert.equal(decodeFrontOrders("A~B~advance~all~~~~maximal")[0].effort, "");
 });
 
 test("prose where records go is ignored, and a record nothing can be done with says why", () => {
@@ -81,10 +97,11 @@ test("prose where records go is ignored, and a record nothing can be done with s
   // An assault names what is attacked: a city, a structure or a formation. Without one it is no order.
   const assaults = decodeFrontOrders([
     "Eastern Ukraine~Russia~assault~all~2~city: Mariupol",
-    "Eastern Ukraine~Russia~storm~south~3~structure: Azovstal works",
-    "Eastern Ukraine~Ukraine~take~all~~unit: 1st Guards Tank Army~~total",
+    "Eastern Ukraine~Russia~Assault~south~3~structure: Azovstal works",
+    "Eastern Ukraine~Ukraine~assault~all~~unit: 1st Guards Tank Army~~total",
     "Eastern Ukraine~Russia~assault~all~4",
-    "Eastern Ukraine~Russia~outflank~north~5~city: Izium",
+    "Eastern Ukraine~Russia~flank~north~5~city: Izium",
+    "Eastern Ukraine~Russia~storm~south~3~structure: Azovstal works",
   ].join("\n"));
   assert.deepEqual(assaults.map((entry) => [entry.order, entry.objective, entry.problem ?? ""]), [
     ["assault", "city: Mariupol", ""],
@@ -92,6 +109,7 @@ test("prose where records go is ignored, and a record nothing can be done with s
     ["assault", "unit: 1st Guards Tank Army", ""],
     ["assault", "", "an assault has to name what is attacked"],
     ["flank", "city: Izium", ""],
+    ["", "structure: Azovstal works", "\"storm\" is not an order"],
   ]);
 });
 

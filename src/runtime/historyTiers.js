@@ -19,23 +19,25 @@
 // gives each tier its own share of the prompt. A save from before keeps its
 // document as the first era until a fold writes years.
 //
+// Sizes are counted in characters, as the prompt is given them. They were
+// counted in words split on spaces: a paragraph in Chinese, Japanese or Thai,
+// which put no spaces between their words, was one word, so every year a fold
+// wrote in those languages was refused as "too thin" and its eras as a stub.
+//
 // Import-free: the world normaliser, the fold and the prompt all read it.
 
 const norm = (value) => String(value ?? "").trim();
 const flat = (value) => norm(value).replace(/\s+/g, " ");
-const words = (value) => (flat(value) ? flat(value).split(" ").length : 0);
+const chars = (value) => flat(value).length;
 const whole = (value) => (Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : NaN);
 
 export const HISTORY_TIERS = Object.freeze({
   // The newest game years kept as a paragraph each; older ones roll into eras.
   yearsKept: 3,
-  // Above this many words the eras are condensed by the next fold.
-  eraWordBudget: 1200,
   // The most canon facts the save keeps (oldest superseded ones go first).
   canonMost: 400,
-  // A paragraph shorter than this is not taken.
-  minParagraphWords: 12,
-  // What each tier is given of the prompt, in characters.
+  // What each tier is given of the prompt, in characters. Eras longer than
+  // their share are condensed by the next fold, so the prompt shows them all.
   canonChars: 5000,
   eraChars: 4500,
   yearChars: 6500,
@@ -122,13 +124,13 @@ export const hasHistoryTiers = (document) =>
 
 // ---- what a fold's answer gives ------------------------------------------------
 
-// Each tier of a fold's answer, entry by entry: what is malformed or too thin
-// is left out, and said so; what is good is taken. `span` is the years the
-// folded material covers ([first, last]); a year paragraph outside it (by more
-// than a year) is not about this material and is left out. `eraWords` is how
-// many words the campaign's eras have: a revision of them that would keep less
-// than a third is a stub, not a condensation, and is left out.
-export const judgeHistoryTiers = (answer, { span = null, eraWords = 0 } = {}) => {
+// Each tier of a fold's answer, entry by entry: what is malformed is left out,
+// and said so; what is good is taken. `span` is the years the folded material
+// covers ([first, last]); a year paragraph outside it (by more than a year) is
+// not about this material and is left out. `eraChars` is how many characters
+// the campaign's eras have: a revision of them that would keep less than a
+// third is a stub, not a condensation, and is left out.
+export const judgeHistoryTiers = (answer, { span = null, eraChars = 0 } = {}) => {
   const source = answer && typeof answer === "object" && !Array.isArray(answer) ? answer : {};
   const notes = [];
   const [first, last] = Array.isArray(span) && span.length === 2 && span.every(Number.isFinite) ? span : [-Infinity, Infinity];
@@ -136,8 +138,8 @@ export const judgeHistoryTiers = (answer, { span = null, eraWords = 0 } = {}) =>
   for (const raw of Array.isArray(source.years) ? source.years : []) {
     const year = whole(raw?.year);
     const text = norm(raw?.text);
-    if (!Number.isFinite(year) || words(text) < HISTORY_TIERS.minParagraphWords) {
-      notes.push(`a year paragraph${Number.isFinite(year) ? ` for ${year}` : ""} was too thin to take`);
+    if (!Number.isFinite(year) || !text) {
+      notes.push(`a year paragraph${Number.isFinite(year) ? ` for ${year} had no text` : " had no year"}`);
       continue;
     }
     if (year < first - 1 || year > last + 1) {
@@ -148,10 +150,10 @@ export const judgeHistoryTiers = (answer, { span = null, eraWords = 0 } = {}) =>
   }
   let eras = null;
   if (Array.isArray(source.eras) && source.eras.length) {
-    const taken = normalizeHistoryEras(source.eras).filter((era) => words(era.text) >= HISTORY_TIERS.minParagraphWords);
-    const written = taken.reduce((sum, era) => sum + words(era.text), 0);
-    if (taken.length && written >= eraWords / 3) eras = taken;
-    else notes.push(`the eras came back at ${written} words against the ${eraWords} the campaign has, and are left as they were`);
+    const taken = normalizeHistoryEras(source.eras);
+    const written = taken.reduce((sum, era) => sum + chars(era.text), 0);
+    if (taken.length && written >= eraChars / 3) eras = taken;
+    else notes.push(`the eras came back at ${written} characters against the ${eraChars} the campaign has, and are left as they were`);
   }
   const canon = [];
   for (const raw of Array.isArray(source.canon) ? source.canon : []) {
@@ -201,14 +203,15 @@ export const mergeHistoryTiers = (document, { years = [], eras = null } = {}, { 
   return { eras: currentEras, years: currentYears };
 };
 
-// A document from before the tiers counts its text: mergeHistoryTiers makes it
-// the first era, so a fold's eras answer is judged against it. Counted as 0, a
-// stub of eras the model wrote unasked replaced it whole (a 1939 campaign's
-// first year and more, 2026-11-10).
-export const eraWordCount = (document) => {
+// How long the campaign's eras are, in characters. A document from before the
+// tiers counts its text: mergeHistoryTiers makes it the first era, so a fold's
+// eras answer is judged against it. Counted as 0, a stub of eras the model
+// wrote unasked replaced it whole (a 1939 campaign's first year and more,
+// 2026-11-10).
+export const eraCharCount = (document) => {
   const eras = normalizeHistoryEras(document?.eras);
-  if (!eras.length && !normalizeHistoryYears(document?.years).length) return words(document?.text);
-  return eras.reduce((sum, era) => sum + words(era.text), 0);
+  if (!eras.length && !normalizeHistoryYears(document?.years).length) return chars(document?.text);
+  return eras.reduce((sum, era) => sum + chars(era.text), 0);
 };
 
 // ---- what the prompt is shown --------------------------------------------------

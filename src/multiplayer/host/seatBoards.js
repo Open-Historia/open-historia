@@ -20,6 +20,7 @@
 // object, when there is nothing to change.
 
 import { isProjectOpen } from "../../runtime/projects.js";
+import { sameName } from "../../../server/nameKey.js";
 
 // The game's board holds this many entries (gameState.js PROJECT_BOARD_LIMIT);
 // lending stops short of it, so the skip has room to open new ones.
@@ -34,21 +35,34 @@ const isRecord = (value) => Boolean(value) && typeof value === "object" && !Arra
 const boardsOf = (world) => (isRecord(world?.seatBoards) ? world.seatBoards : {});
 const idsAtHome = (world) => new Set(Object.values(boardsOf(world)).flatMap((board) => list(board).map((row) => clean(row?.id))).filter(Boolean));
 
-// The game's own board without anything a player's board also holds.
+// Borrowed IDs are explicitly tracked while a shared skip runs. Without this
+// record, an ID collision in a guest's own board could erase a completely
+// unrelated host project when settleBoards searched by ID alone.
+const loansOf = (world) => (isRecord(world?.projectSeatLoans) ? world.projectSeatLoans : {});
+const matchesHome = (world, id, country) => Object.entries(boardsOf(world)).some(([owner, board]) =>
+  sameName(owner, country) && list(board).some((row) => clean(row?.id) === id));
+
+// The game's own board without the entries WE actually lent to it. Never
+// confuse a legitimate host record with a guest's unrelated matching ID.
 export const settleBoards = (world) => {
-  const home = idsAtHome(world);
-  if (!home.size) return world;
-  const own = list(world?.projects).filter((row) => !home.has(clean(row?.id)));
-  return own.length === list(world?.projects).length ? world : { ...world, projects: own };
+  const loans = loansOf(world);
+  const borrowed = new Set(Object.entries(loans)
+    .filter(([id, country]) => id && clean(country) && matchesHome(world, id, country))
+    .map(([id]) => id));
+  if (!Object.keys(loans).length) return world;
+  const own = list(world?.projects).filter((row) => !borrowed.has(clean(row?.id)));
+  const { projectSeatLoans: unused, ...rest } = world;
+  return { ...rest, projects: own };
 };
 
 // Before the skip. `humans` are the countries people play, `host` the host's own.
 export const lendBoards = (world, { host = "", humans = [] } = {}) => {
   const settled = settleBoards(world);
   const own = list(settled?.projects);
-  const names = new Set(own.map((row) => fold(row?.name)));
+  const ids = new Set(own.map((row) => clean(row?.id)).filter(Boolean));
   let room = BOARD_LIMIT - ROOM_KEPT_FOR_THE_SKIP - own.length;
   const lent = [];
+  const loans = {};
   for (const [country, board] of Object.entries(boardsOf(settled))) {
     if (same(country, host) || !list(humans).some((human) => same(human, country))) continue;
     for (const row of list(board)) {
@@ -56,14 +70,17 @@ export const lendBoards = (world, { host = "", humans = [] } = {}) => {
       if (!isRecord(row) || !clean(row.id) || !isProjectOpen(row)) continue;
       // Its own work only; a blank owner is the board's own country.
       if (clean(row.ownerCode) && !same(row.ownerCode, country)) continue;
-      // The game's board keeps one entry of a name.
-      if (!fold(row.name) || names.has(fold(row.name))) continue;
-      names.add(fold(row.name));
+      // Stable project IDs, not titles, own identity. Different countries
+      // (and one country) may legitimately run same-named projects.
+      const id = clean(row.id);
+      if (!id || ids.has(id)) continue;
+      ids.add(id);
+      loans[id] = clean(country);
       lent.push({ ...row, ownerCode: clean(country) });
       room -= 1;
     }
   }
-  return lent.length ? { ...settled, projects: [...own, ...lent] } : settled;
+  return lent.length ? { ...settled, projects: [...own, ...lent], projectSeatLoans: loans } : settled;
 };
 
 // After the skip, finished or not. `hostHad` are the ids that were on the
@@ -71,14 +88,16 @@ export const lendBoards = (world, { host = "", humans = [] } = {}) => {
 // services had on file about anyone).
 export const returnBoards = (world, { host = "", humans = [], hostHad = new Set() } = {}) => {
   const boards = boardsOf(world);
+  const loans = loansOf(world);
   const after = new Map(list(world?.projects).map((row) => [clean(row?.id), row]));
   const taken = new Set();
+  const homeIds = idsAtHome(world);
   const home = {};
   let changed = false;
   for (const [country, board] of Object.entries(boards)) {
     home[country] = list(board).map((row) => {
       const id = clean(row?.id);
-      const moved = id ? after.get(id) : null;
+      const moved = id && sameName(loans[id], country) ? after.get(id) : null;
       if (!moved) return row;
       taken.add(id);
       changed = true;
@@ -90,7 +109,7 @@ export const returnBoards = (world, { host = "", humans = [], hostHad = new Set(
   // person's own new work, from their own orders: it starts on their board.
   for (const row of list(world?.projects)) {
     const id = clean(row?.id);
-    if (!id || taken.has(id) || hostHad.has(id)) continue;
+    if (!id || taken.has(id) || hostHad.has(id) || homeIds.has(id)) continue;
     const owner = list(humans).find((human) => !same(human, host) && same(human, row?.ownerCode));
     if (!owner) continue;
     const key = Object.keys(home).find((country) => same(country, owner)) ?? clean(owner);
@@ -98,6 +117,7 @@ export const returnBoards = (world, { host = "", humans = [], hostHad = new Set(
     taken.add(id);
     changed = true;
   }
-  if (!changed) return world;
-  return { ...world, projects: list(world.projects).filter((row) => !taken.has(clean(row?.id))), seatBoards: home };
+  const { projectSeatLoans: unused, ...rest } = world;
+  if (!changed && !Object.keys(loans).length) return world;
+  return { ...rest, projects: list(world.projects).filter((row) => !taken.has(clean(row?.id))), seatBoards: home };
 };

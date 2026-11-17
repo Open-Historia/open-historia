@@ -58,6 +58,63 @@ test("malformed JSON in a closed fence is dropped, and the fence is still stripp
   assert.ok(!rest.includes("not json"));
 });
 
+// 2026-11-13: Boris's correction cited a literal ```actions token in prose,
+// before the real JSON fence. The old extractor started inside that sentence,
+// swallowed the real opening fence, and rejected otherwise valid proposals.
+test("inline example of actions syntax cannot steal a later real Action block", () => {
+  const body = '[{"title":"GNCCN Emergency Activation","text":"Coordinate the network","kind":"action"}]';
+  const reply = [
+    "I failed to provide the ` ```actions ` block earlier.",
+    "The planned queue no longer shows the old Action.",
+    "",
+    fence("actions", body),
+    "The mandate awaits approval.",
+  ].join("\n");
+  const result = extractFencedJson(reply, "actions", { streaming: true });
+  assert.deepEqual(result.json, [{ title: "GNCCN Emergency Activation", text: "Coordinate the network", kind: "action" }]);
+  assert.match(result.rest, /failed to provide/);
+  assert.match(result.rest, /mandate awaits approval/);
+  assert.equal(result.reason, "");
+});
+
+test("inline and blockquoted mentions of actions cannot become execution blocks", () => {
+  const reply = "I need a ```actions block.\n> ```actions\nUse an actual standalone code fence.";
+  for (const streaming of [false, true]) {
+    const result = extractFencedJson(reply, "actions", { streaming });
+    assert.equal(result.json, null);
+    assert.equal(result.rest, reply);
+  }
+});
+
+test("streaming malformed blocks report parse failure without warning on every re-render", () => {
+  const malformed = fence("actions", '{ "title": "missing array"');
+  const warnings = [];
+  const prior = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    for (let i = 0; i < 80; i += 1) {
+      const partial = extractFencedJson(malformed, "actions", { streaming: true });
+      assert.equal(partial.json, null);
+      assert.match(partial.reason, /invalid JSON/);
+    }
+    assert.deepEqual(warnings, [], "the live bubble must not log the same failure on every render");
+    const complete = extractFencedJson(malformed, "actions");
+    assert.equal(complete.json, null);
+    assert.match(complete.reason, /invalid JSON/);
+    assert.equal(warnings.length, 2, "final parse logs the failure and one excerpt only");
+  } finally {
+    console.warn = prior;
+  }
+});
+
+test("project mentions cannot swallow a later formal projects block", () => {
+  const reply = "There is no ```projects submission yet.\n"
+    + fence("projects", '[{"op":"create","name":"Technical review","summary":"Safety"}]');
+  const result = extractFencedJson(reply, "projects", { salvageTruncated: true });
+  assert.deepEqual(result.json, [{ op: "create", name: "Technical review", summary: "Safety" }]);
+  assert.match(result.rest, /no ```projects submission yet/);
+});
+
 // The bug this module exists for. A long board runs out of tokens partway
 // through the array, so there is an opening fence and no closing one: the strict
 // regex does not match, the block is neither applied nor stripped, and the raw
@@ -266,16 +323,9 @@ test("a fully valid batch is untouched by any of this", () => {
 // list misses is not a dropped op — it is a SILENT one: the block fails to parse,
 // this says "not a projects block", and the player gets no "Board not fully
 // updated" warning at all. cancelled/shelve/fail/failed/drop were all missing.
+// The engine accepts the board's own ops alone, in every language alike.
 test("looksLikeProjectOps knows every verb the engine accepts", () => {
-  const verbs = [
-    "create", "start", "launch", "open", "add",
-    "update", "progress", "edit",
-    "milestone",
-    "complete", "finish", "completed",
-    "cancel", "cancelled", "abandon", "shelve",
-    "fail", "failed",
-    "remove", "delete", "drop",
-  ];
+  const verbs = ["create", "update", "milestone", "complete", "cancel", "fail", "remove"];
   for (const verb of verbs) {
     assert.equal(
       looksLikeProjectOps(`[{"op":"${verb}","name":"Project Leviathan"}]`),
@@ -283,8 +333,12 @@ test("looksLikeProjectOps knows every verb the engine accepts", () => {
       `verb "${verb}" would have failed silently`,
     );
   }
-  // Still not fooled by a verb from a different op family, or by prose.
+  // Still not fooled by a verb from a different op family, or by prose; and an
+  // English synonym is no more a board op than a French one.
   assert.equal(looksLikeProjectOps('[{"op":"spawn","name":"1st Fleet"}]'), false);
+  for (const verb of ["launch", "lancer", "abandon", "abandonner"]) {
+    assert.equal(looksLikeProjectOps(`[{"op":"${verb}","name":"Project Leviathan"}]`), false, verb);
+  }
   assert.equal(looksLikeProjectOps('[{"op":"fail"}]'), false, "an op with nothing to target is not a board change");
 });
 

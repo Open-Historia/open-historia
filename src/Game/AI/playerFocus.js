@@ -35,39 +35,30 @@ export const normalizePlayerFocus = (value) => {
 // --- Player events ---
 //
 // Anything involving the player's polity: what it does, what is done to it or
-// said about it (the simulator's playerRelated mark, or its name in the words),
-// and what happens inside its territory — the regions and cities it holds and
-// the polities it absorbed, so riots in Lahore are the British Empire's even
-// when the event never names it. Whole words, case and accents folded, in any
-// script: kept to a-z and 0-9, a name in Cyrillic or Arabic folded to nothing,
-// so a Project named in the player's language never spared its event from the
-// filler filter, and one owned by a polity so named read as the player's own.
+// said about it, and what happens inside its territory, so riots in Lahore are
+// the British Empire's even when the event never names it. The simulator says
+// which by marking the event playerRelated (the directive below tells it to),
+// and the mark is all that is counted. The player's names and the names of the
+// places it holds used to be looked for in the event's words too: a game told
+// in Chinese has no spaces to find a name between, a name in another case or
+// language ("Россия", "России") was another word, and "Georgia" the US state
+// read as the country. The same period counted differently in every language.
+export const isPlayerEvent = (event) => event?.playerRelated === true;
+
+// A name or a title, case, accents and spacing aside, for the exact comparisons
+// below (whose Project, whose war, which order was given already); never for
+// finding a name in prose.
 const fold = (value) => ` ${asText(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, " ").trim()} `;
-
-// Shorter names match too much ("Ob", "Uri"); the polity's own names are
-// allowed down to three letters, as the world share counts them.
-const TERRITORY_NAME_MIN = 4;
-
-export const createPlayerEventTest = ({ playerNames = [], territoryNames = [] } = {}) => {
-  const needles = [
-    ...playerNames.map(fold).filter((needle) => needle.trim().length >= 3),
-    ...territoryNames.map(fold).filter((needle) => needle.trim().length >= TERRITORY_NAME_MIN),
-  ];
-  const unique = [...new Set(needles)];
-  return (event) => {
-    if (event?.playerRelated === true) return true;
-    const text = fold(`${asText(event?.title)} ${asText(event?.description)}`);
-    return unique.some((needle) => text.includes(needle));
-  };
-};
 
 // --- What the player has going on ---
 //
 // Everything a jump could write a Player event about, for its window:
 //   order       a queued order                         — must be answered
-//   milestone   a pending or slipped milestone due by the window's end
-//               — must be answered; one due in the month after is a lead-up
-//   target      an open Project's target date by the window's end — must be answered
+//   milestone   a checkpoint of one of the player's Projects the engine
+//               reaches in the window (projectEngine.js, the period's
+//               forecast) — must be told
+//   target      one of the player's Projects the engine completes, sets up or
+//               stalls in the window — must be told
 //   storyline   an unresolved Storyline the player is part of
 //   war         a war the player is in
 //   relation    a relation with the player that moved recently
@@ -75,19 +66,11 @@ export const createPlayerEventTest = ({ playerNames = [], territoryNames = [] } 
 //   consequence one of the player's own recent events, so it can be followed through
 // `required` marks what the jump must give an outcome; the rest is what the
 // player's share may be drawn from. Only the player's own Board entries count.
-const LEAD_UP_DAYS = 30;
 const RECENT_DAYS = 60;
 const CHAT_MEMORY_DAYS = 90;
 const MAX_CONSEQUENCES = 3;
-// Entries whose dates a jump is asked to answer. A paused entry is deliberately
-// absent: its dates are not being worked towards, so neither its milestones nor
-// its target date belong in what the player "has going on". Its milestones can
-// still slip (SLIPPABLE_PROJECT_STATUSES), because a date passes whether or not
-// anyone is working. The Board's own isProjectOpen is a different question — what
-// still counts as running — and projects.js owns that one.
-const PACED_PROJECT_STATUSES = new Set(["proposed", "active", "stalled"]);
-const SLIPPABLE_PROJECT_STATUSES = new Set([...PACED_PROJECT_STATUSES, "paused"]);
-const UNREACHED_MILESTONE_STATUSES = new Set(["pending", "slipped"]);
+// What the engine decided for a Project this period that the jump must tell.
+const TOLD_OUTCOMES = new Set(["milestone", "complete", "established", "stall"]);
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const nameKey = (value) => fold(value).trim();
@@ -109,11 +92,14 @@ const isPlayersEntry = (project, playerKeys) => {
 
 export const collectPlayerMaterial = ({
   playerNames = [],
-  isPlayerEvent = () => false,
+  isPlayerEvent: playersEvent = isPlayerEvent,
   originDate = "",
   targetDate = "",
   actions = [],
   projects = [],
+  // The period's outcomes, as the engine forecast them (projectEngine.js
+  // tickProjects): what happens to the Projects is decided, and the jump tells it.
+  projectOutcomes = [],
   storylines = [],
   wars = [],
   relations = [],
@@ -139,27 +125,26 @@ export const collectPlayerMaterial = ({
     items.push({ kind: "order", id: asText(action.id), label: owner ? `(${owner}) ${label}` : label, overdue: action.overdue === true, required: true });
   }
 
-  for (const project of asArray(projects)) {
-    if (!PACED_PROJECT_STATUSES.has(asText(project?.status) || "active") || !isPlayersEntry(project, playerKeys)) continue;
+  for (const outcome of asArray(projectOutcomes)) {
+    if (!TOLD_OUTCOMES.has(asText(outcome?.type))) continue;
+    const project = asArray(projects).find((entry) => asText(entry?.name) === asText(outcome.project));
+    if (!project || !isPlayersEntry(project, playerKeys)) continue;
     const name = asText(project.name);
-    for (const milestone of asArray(project.milestones)) {
-      if (!UNREACHED_MILESTONE_STATUSES.has(asText(milestone?.status) || "pending")) continue;
-      const due = within(milestone.date, null, end);
-      const leadUp = !due && end !== null && within(milestone.date, end + 1, end + LEAD_UP_DAYS);
-      if (!due && !leadUp) continue;
-      items.push({
-        kind: "milestone",
-        id: asText(milestone.id),
-        projectId: asText(project.id),
-        projectName: name,
-        label: `${name}: ${asText(milestone.title)} (${asText(milestone.date)})`,
-        date: asText(milestone.date),
-        required: due,
-      });
-    }
-    if (!project.ongoing && within(project.targetDate, null, end)) {
-      items.push({ kind: "target", id: asText(project.id), projectId: asText(project.id), projectName: name, label: `${name}: target date ${asText(project.targetDate)}`, date: asText(project.targetDate), required: true });
-    }
+    const date = asText(outcome.date);
+    const label = outcome.type === "milestone"
+      ? `${name}: reaches "${asText(outcome.milestone)}" on ${date}`
+      : outcome.type === "complete" ? `${name}: completed on ${date}`
+        : outcome.type === "established" ? `${name}: set up and running from ${date}`
+          : `${name}: stalls for want of funds on ${date}`;
+    items.push({
+      kind: outcome.type === "milestone" ? "milestone" : "target",
+      id: `${asText(project.id)}:${outcome.type}:${asText(outcome.milestone)}`,
+      projectId: asText(project.id),
+      projectName: name,
+      label,
+      date,
+      required: true,
+    });
   }
 
   for (const storyline of asArray(storylines)) {
@@ -186,7 +171,7 @@ export const collectPlayerMaterial = ({
   }
 
   const consequences = asArray(recentEvents)
-    .filter((event) => within(event?.date, recentFrom, origin) && isPlayerEvent(event))
+    .filter((event) => within(event?.date, recentFrom, origin) && playersEvent(event))
     .slice(-MAX_CONSEQUENCES);
   for (const event of consequences) {
     items.push({ kind: "consequence", id: asText(event.id), label: asText(event.title), date: asText(event.date), required: false });
@@ -208,19 +193,19 @@ export const PLAYER_FOCUS_MIN_EVENTS = 3;
 
 // null when the minimum is met or does not apply; otherwise what to tell the
 // simulator at the top of its next turn. Never a reason to ask again.
-export const playerFocusShortfall = (events, { focus, isPlayerEvent = () => false, material = [], playerName = "" } = {}) => {
+export const playerFocusShortfall = (events, { focus, isPlayerEvent: playersEvent = isPlayerEvent, material = [], playerName = "" } = {}) => {
   const list = asArray(events);
   if (list.length < PLAYER_FOCUS_MIN_EVENTS) return null;
   const level = levelOf(focus);
   const needed = Math.min(Math.ceil((list.length * level.share) / 100), asArray(material).length);
-  const have = list.filter((event) => isPlayerEvent(event)).length;
+  const have = list.filter((event) => playersEvent(event)).length;
   if (have >= needed) return null;
   const player = asText(playerName) || "the player's polity";
   return {
     needed,
     have,
-    text: `${have} of your ${list.length} events involved ${player}; the player's focus (${level.label}) asks for at least ${needed} while ${player} has this much going on. `
-      + `Give ${player}'s orders, Projects, wars, Storylines and recent events their consequences before reaching for distant news.`,
+    text: `${have} of your ${list.length} events ${have === 1 ? "was" : "were"} marked playerRelated; the player's focus (${level.label}) asks for at least ${needed} while ${player} has this much going on. `
+      + `Give ${player}'s orders, Projects, wars, Storylines and recent events their consequences before reaching for distant news, and mark each such event playerRelated.`,
   };
 };
 
@@ -233,61 +218,14 @@ export const playerFocusShortfall = (events, { focus, isPlayerEvent = () => fals
 // A queued entry no event could ever cite is settled by the engine instead: a
 // Deploy request, which the unit engine accepts, and a chat request, which is
 // answered by the conversation opening. Only an ordinary order needs an event.
-export const actionNeedsEvent = (action) => asText(action?.kind) !== "chat" && !action?.unitRevert;
-
-// An order the jump plainly carried out but forgot to cite. The model wrote
-// "British Crown Ratifies the Nigerian Imperial Accession Treaty" for the order
-// "Finalize and Ratify the Nigerian Imperial Accession Treaty" without its id;
-// the order stayed overdue, the next jump was told to answer it, and the treaty
-// was ratified five times over two months. A Player event that carries the
-// order's own subject — most of the distinctive words of its title — is taken
-// as the answer and cites it, so settleOrders resolves it the first time.
 //
-// Conservative on purpose: only a Player event that cites no order at all, only
-// when the title has at least three distinctive words and the event carries most
-// of them, and each order goes to the one event that matches it best.
-const ORDER_VERB_WORDS = new Set([
-  "enact", "authorize", "authorise", "establish", "launch", "finalize", "finalise",
-  "convene", "order", "begin", "initiate", "create", "formally", "officially",
-  "immediately", "approve", "direct", "start", "issue",
-]);
-const ORDER_STEM_LENGTH = 5;
-const ORDER_MIN_STEMS = 3;
-const ORDER_MIN_SHARE = 0.6;
-
-const stemsOf = (text, excluded) => new Set(
-  fold(text).trim().split(" ")
-    .filter((word) => word.length >= 4 && !ORDER_VERB_WORDS.has(word) && !excluded.has(word))
-    .map((word) => word.slice(0, ORDER_STEM_LENGTH)),
-);
-
-export const citeNarratedOrders = (actions, events, { isPlayerEvent = () => false, playerNames = [] } = {}) => {
-  const list = asArray(events);
-  const cited = new Set(list.flatMap((event) => asArray(event?.impacts?.actionIds)).map(asText).filter(Boolean));
-  // The player's own name is in every Player event; it says nothing about which order.
-  const excluded = new Set(playerNames.flatMap((name) => fold(name).trim().split(" ")).filter(Boolean));
-  const orders = asArray(actions).filter((action) =>
-    asText(action?.status) === "planned" && actionNeedsEvent(action) && asText(action?.id) && !cited.has(asText(action.id)));
-  const answers = new Map();
-  for (const order of orders) {
-    const wanted = stemsOf(order.title, excluded);
-    if (wanted.size < ORDER_MIN_STEMS) continue;
-    let best = null;
-    list.forEach((event, index) => {
-      if (asArray(event?.impacts?.actionIds).length || !isPlayerEvent(event)) return;
-      const have = stemsOf(`${asText(event?.title)} ${asText(event?.description)}`, excluded);
-      const shared = [...wanted].filter((stem) => have.has(stem)).length;
-      const share = shared / wanted.size;
-      if (shared < ORDER_MIN_STEMS || share < ORDER_MIN_SHARE) return;
-      if (!best || share > best.share) best = { index, share };
-    });
-    if (best) answers.set(best.index, [...(answers.get(best.index) || []), asText(order.id)]);
-  }
-  if (!answers.size) return list;
-  return list.map((event, index) => (answers.has(index)
-    ? { ...event, impacts: { ...(event?.impacts || {}), actionIds: answers.get(index) } }
-    : event));
-};
+// Never by an event's words. An event that shared most of an order's longer
+// words used to be given its id (citeNarratedOrders, gone 2026-11-13): in
+// English it closed whichever order shared the most words, the wrong one among
+// orders about the same treaty or the same fleet, and in Chinese, Japanese or
+// any inflected language it never matched at all. An order told without its id
+// is carried over as overdue, and the next skip is told to answer it by id.
+export const actionNeedsEvent = (action) => asText(action?.kind) !== "chat" && !action?.unitRevert;
 
 export const settleOrders = (actions, events, { round } = {}) => {
   const answered = new Set(asArray(events).flatMap((event) => asArray(event?.impacts?.actionIds)).map(asText).filter(Boolean));
@@ -312,6 +250,9 @@ export const settleOrders = (actions, events, { round } = {}) => {
 // out in the last two skips. The advisor re-queued orders word for word when the
 // player only asked how things stood; a second copy is not a second order. An
 // order settled before rounds were recorded cannot be dated, so it never blocks.
+// The whole title, compared exactly (case, accents and spacing aside), never a
+// share of its words: a new entry carries no id of the order it repeats (one
+// that names an existing id is an edit of that order, advisorBlocks.js).
 export const repeatedOrder = (actions, title, { round } = {}) => {
   const wanted = fold(title).replace(/\s+/g, " ").trim();
   if (!wanted) return null;
@@ -322,39 +263,29 @@ export const repeatedOrder = (actions, title, { round } = {}) => {
     && (asText(action?.status) === "planned" || (asText(action?.status) === "resolved" && recent(action)))) || null;
 };
 
-// --- After the jump: milestones ---
-//
-// A milestone the jump reached its date on without an outcome is marked
-// slipped: late, not yet reached, and still something the next jump must
-// answer. The Board shows it as such rather than a stale pending date.
-export const slipPassedMilestones = (projects, { date = "" } = {}) => {
-  const today = dayNumber(date);
-  if (today === null) return projects;
-  const passed = (milestone) => (asText(milestone?.status) || "pending") === "pending"
-    && dayNumber(milestone?.date) !== null && dayNumber(milestone.date) <= today;
-  return asArray(projects).map((project) => {
-    if (!SLIPPABLE_PROJECT_STATUSES.has(asText(project?.status) || "active")) return project;
-    if (!asArray(project?.milestones).some(passed)) return project;
-    return { ...project, milestones: project.milestones.map((milestone) => (passed(milestone) ? { ...milestone, status: "slipped" } : milestone)) };
-  });
-};
-
 // --- The filler filter ---
 //
-// An event that answers one of the player's orders, or that names a Project
-// with a milestone or target due in the window, is exactly what the player
-// asked the jump for. The filler filter may not remove it, however routine it
-// reads; the rest of the player's events are judged as usual.
-export const createSpareTest = (material) => {
-  const dueProjects = [...new Set(asArray(material)
-    .filter((item) => item?.required && item.projectName)
-    .map((item) => fold(item.projectName))
-    .filter((needle) => needle.trim().length >= 3))];
+// An event that answers one of the player's orders (its actionIds), or that
+// tells of a Project the engine moves this period (one of its
+// board ops addresses that Project, by its id or by the board's own name for
+// it, as the board's ops find an entry: projects.js opTargetsEntry), is exactly
+// what the player asked the jump for. The filler filter may not remove it,
+// however routine it reads; the rest of the player's events are judged as
+// usual. A Project's name found in the event's words used to spare it too,
+// which a telling in another language or another case of the name never did.
+// `boardOpsOf(event)`: the board ops an event carried. A folded skip has lifted
+// them off its events by the time the filter runs (gameplay.js
+// foldedTurnReview), so the caller looks them up; by default, the event's own.
+export const createSpareTest = (material, { boardOpsOf = (event) => asArray(event?.impacts?.projectOps) } = {}) => {
+  const due = asArray(material).filter((item) => item?.required && asText(item.projectId));
+  const dueIds = new Set(due.map((item) => asText(item.projectId)));
+  const dueNames = new Set(due.map((item) => asText(item.projectName).toLowerCase()).filter(Boolean));
+  const movesDueProject = (op) => dueIds.has(asText(op?.projectId || op?.id))
+    || dueNames.has(asText(op?.name).toLowerCase());
   return (event) => {
     if (asArray(event?.impacts?.actionIds).length) return true;
-    if (!dueProjects.length) return false;
-    const text = fold(`${asText(event?.title)} ${asText(event?.description)}`);
-    return dueProjects.some((needle) => text.includes(needle));
+    if (!dueIds.size) return false;
+    return asArray(boardOpsOf(event)).some(movesDueProject);
   };
 };
 
@@ -390,7 +321,6 @@ const MATERIAL_HEADINGS = {
   relation: "Relations",
   chat: "Diplomatic threads",
   consequence: "Recent events to follow through",
-  milestone: "Coming up",
 };
 
 // `ordersAbove`: the prompt lists the orders with their ids and words already
@@ -411,6 +341,7 @@ export const buildPlayerFocusDirective = ({ focus, worldShare = 0, material = []
   const lines = [
     heading,
     `At least ${playerShare}% of this period's events should be Player events — anything ${player} does, anything done to or said about ${player}, and anything that happens inside ${player}'s territory — but never more than the ${items.length} thing${items.length === 1 ? "" : "s"} listed below gives reason for. `
+      + `Mark every Player event playerRelated: that mark is what the engine counts. `
       + `The share is a minimum only as far as the items below allow, not a quota to fill: never invent business for ${player} to reach it, and when these run out the world fills the period within its usual number of events.`,
   ];
   if (orders.length) {
@@ -418,13 +349,13 @@ export const buildPlayerFocusDirective = ({ focus, worldShare = 0, material = []
     for (const order of orders) lines.push(`- [${order.id}]${ordersAbove ? "" : ` ${order.label}`}${order.overdue ? " (OVERDUE: carried over unanswered from the last period; answer it first)" : ""}`);
   }
   if (due.length) {
-    lines.push("", `DUE THIS PERIOD — each gets an outcome in an event that names the Project exactly: reached, slipped or missed. Never leave a date behind with nothing said.`);
+    lines.push("", `DECIDED THIS PERIOD — what the engine has already worked out for ${player}'s Projects: tell each in an event on its date that names the Project exactly. It happens as listed; never say otherwise.`);
     for (const item of due) lines.push(`- ${item.label}`);
   }
   const grouped = new Map();
   for (const item of optional) grouped.set(item.kind, [...(grouped.get(item.kind) ?? []), item]);
   if (grouped.size) {
-    lines.push("", `ALSO GOING ON — draw ${player}'s share from these, following through on what earlier events set in motion. A milestone coming up may get a lead-up event; it does not need one.`);
+    lines.push("", `ALSO GOING ON — draw ${player}'s share from these, following through on what earlier events set in motion.`);
     for (const [kind, group] of grouped) lines.push(`${MATERIAL_HEADINGS[kind] ?? kind}: ${group.map((item) => item.label).join("; ")}`);
   }
   return lines.join("\n");

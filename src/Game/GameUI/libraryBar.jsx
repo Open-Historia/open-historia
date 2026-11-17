@@ -57,7 +57,9 @@ import PrehistoryPanel from "./PrehistoryPanel.jsx";
 import ScenarioFrontsPanel from "./ScenarioFrontsPanel.jsx";
 import ScenarioWarSettings from "./ScenarioWarSettings.jsx";
 import ScenarioMilitaryPanel from "./ScenarioMilitaryPanel.jsx";
+import ScenarioUnitTypes from "./ScenarioUnitTypes.jsx";
 import { compactWarSettings } from "./scenarioWarSettings.js";
+import { formUnitTypes, savedUnitTypes, withRenamedUnitTypeOwners } from "./scenarioUnitTypes.js";
 import { militaryDefaultsFor } from "../../Editor/militaryForm.js";
 import ScenarioMusicPanel, { ScenarioMusicCredits } from "./ScenarioMusicPanel.jsx";
 import { normalizeScenarioMusic } from "../../runtime/scenarioMusic.js";
@@ -65,6 +67,7 @@ import ScenarioLanguagesPanel from "./ScenarioLanguagesPanel.jsx";
 import { normalizeScenarioLanguages } from "../../../server/scenarioLanguages.js";
 const PoliticalWorldAuthoringPanel = lazy(() => import("./PoliticalWorldAuthoringPanel.jsx"));
 const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
+const ProjectRecoveryDialog = lazy(() => import("./ProjectRecoveryDialog.jsx"));
 import { isFeatureEnabled, normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
@@ -79,6 +82,7 @@ import { zipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 import { SCENARIO_LICENSE_FILE, SCENARIO_LICENSE_TEXT, SCENARIO_LICENSE_URL } from "../../runtime/scenarioLicense.js";
 import { formatGameDateShort } from "../../runtime/gameDates.js";
 import { getStoredLanguage } from "../../runtime/i18n.js";
+import { ECONOMIC_DISPLAY_CURRENCIES, normalizeEconomicDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
@@ -599,6 +603,7 @@ const buildScenarioEditorState = (details) => {
     eyebrow: scenario.eyebrow ?? "",
     features: normalizeFeatureSettings(scenario.features),
     gameDate: game.gameDate ?? "",
+    economicDisplayCurrency: normalizeEconomicDisplayCurrency(game.economicDisplayCurrency),
     heroSubtitle: scenario.heroSubtitle ?? "",
     heroTitle: scenario.heroTitle ?? "",
     language: game.language ?? world.language ?? "English",
@@ -612,11 +617,14 @@ const buildScenarioEditorState = (details) => {
     labelHaloColor: world.labelHaloColor ?? "",
     labelTextColor: world.labelTextColor ?? "",
     simulationRules: world.simulationRules ?? "",
+    projectFundingMode: world.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy",
     startingTimelineText: world.startingTimelineText ?? "",
     subtitle: scenario.subtitle ?? "",
     // How its wars are fought (the Fronts tab: ScenarioWarSettings.jsx), compact:
     // null for a scenario that sets nothing (scenarioWarSettings.js).
     warSettings: compactWarSettings(world.warSettings),
+    // Its own unit types (the Features tab, under Wars: ScenarioUnitTypes.jsx); [] for none.
+    unitTypes: formUnitTypes(world),
   };
 };
 
@@ -634,6 +642,7 @@ const buildGameEditorState = (details) => {
     features: normalizeFeatureOverrides(gameMeta.features),
     scenarioFeatures: normalizeFeatureSettings(details?.scenario?.features),
     gameDate: game.gameDate ?? "",
+    economicDisplayCurrency: normalizeEconomicDisplayCurrency(game.economicDisplayCurrency),
     heroSubtitle: gameMeta.heroSubtitle ?? "",
     heroTitle: gameMeta.heroTitle ?? "",
     language: game.language ?? world.language ?? "English",
@@ -1345,7 +1354,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
 // face of the card. Three verbs compete for width with Play, and Play is the one a
 // player came to press; the other three are occasional, and none of them is
 // destructive, which is why Archive stays out here on its own.
-const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete = null, onEdit, onExport }) => {
+const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete = null, onEdit, onExport, onRecover }) => {
   const cardImageUrl = game.coverImageUrl || DEFAULT_SCENARIO_COVER;
   const touch = useTouchPrimary();
   const isMobile = useIsMobile();
@@ -1399,6 +1408,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
   const cardMenuItems = [
     ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
     ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
+    ["Recover Projects…", () => { setCardMenuOpen(false); onRecover(game); }, false],
     [game.archived ? "Unarchive" : "Archive", () => { setCardMenuOpen(false); onArchive(game); }, false],
     // Offered everywhere, the Android app included: runtime/saveFile.js saves
     // the zip into Downloads/Open Historia there (runtime/native/fileSave.js).
@@ -2344,6 +2354,33 @@ const EditorDrawer = ({
                 <label style={fieldLabelStyle}>Language</label>
                 <input style={inputStyle} value={formState.language} onChange={(event) => onChange("language", event.target.value)} />
               </div>
+              <div>
+                <label style={fieldLabelStyle}>{kind === "scenario" ? "Default GDP display currency" : "GDP display currency"}</label>
+                <select style={inputStyle} value={formState.economicDisplayCurrency || "USD"} onChange={(event) => onChange("economicDisplayCurrency", event.target.value)}>
+                  {ECONOMIC_DISPLAY_CURRENCIES.map(({ code, name, symbol }) => (
+                    <option key={code} value={code}>{name} ({code}, {symbol})</option>
+                  ))}
+                </select>
+                <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", lineHeight: 1.4, marginTop: "0.35rem" }}>
+                  {kind === "scenario" ? "Suggested for new campaigns; players can override it." : "This campaign only."} GDP numbers remain in canonical 2026 USD.
+                </div>
+              </div>
+              {kind === "scenario" && (
+                <div>
+                  <label style={fieldLabelStyle}>Projects funding basis</label>
+                  <select
+                    style={inputStyle}
+                    value={formState.projectFundingMode || "gdp-proxy"}
+                    onChange={(event) => onChange("projectFundingMode", event.target.value)}
+                  >
+                    <option value="gdp-proxy">Estimated national GDP allowance</option>
+                    <option value="nonmonetary">Non-monetary time and effort</option>
+                  </select>
+                  <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", lineHeight: 1.4, marginTop: "0.35rem" }}>
+                    GDP allowance is an estimate, not treasury cash. Non-monetary scenarios advance projects by time and capacity without recording financial payments; no GDP is required.
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           {kind === "scenario" && (
@@ -2488,7 +2525,8 @@ const EditorDrawer = ({
       )}
 
       {/* The Features tab. Under Wars, on a scenario, what was its War tab: how its wars are fought
-          (ScenarioWarSettings.jsx, part of the form, which Save below writes); every country's military
+          (ScenarioWarSettings.jsx, part of the form, which Save below writes); its own unit types
+          (ScenarioUnitTypes.jsx, part of the form too); every country's military
           figures, rated by the AI against the others twenty to a request (ScenarioMilitaryPanel.jsx, saved
           batch by batch); and the fronts it begins with (ScenarioFrontsPanel.jsx, with a Save of its own). */}
       {editorSection === "features" && (
@@ -2500,6 +2538,11 @@ const EditorDrawer = ({
                   value={formState.warSettings ?? null}
                   gameDate={formState.gameDate}
                   onChange={(next) => onChange("warSettings", next)}
+                />
+                <ScenarioUnitTypes
+                  value={formState.unitTypes ?? []}
+                  countries={countryOptions.map((option) => option.code)}
+                  onChange={(next) => onChange("unitTypes", next)}
                 />
                 <ScenarioMilitaryPanel
                   details={details}
@@ -2793,6 +2836,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [editorSection, setEditorSection] = useState("overview");
   const [promptSectionKey, setPromptSectionKey] = useState("leader");
   const [isBusy, setIsBusy] = useState(false);
+  // Save-owner maintenance, accessible even when an over-cap old save cannot
+  // be normalized into a live world. Never a gameplay/foreign-intel view.
+  const [projectRecoveryGame, setProjectRecoveryGame] = useState(null);
   const assetFileInputsRef = useRef({});
   const importScenarioInputRef = useRef(null);
   const importGameInputRef = useRef(null);
@@ -2905,7 +2951,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
 
   // Create the game from the scenario with the starting country and difficulty
   // the player chose in the two-step picker, and go straight into it.
-  const startGameForCountry = async (scenario, countryCode, difficulty) => {
+  const startGameForCountry = async (scenario, countryCode, difficulty, displayCurrency) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerColors(null); setPickerBackground(null);
     setEditorError(null);
@@ -2945,7 +2991,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // Create a game led by a player-invented faction. It is written into the game's
   // OWN world/colors/flags — a game carries its own copies and falls back to the
   // scenario only for what it doesn't set, so the scenario is never touched.
-  const startGameForFaction = async (scenario, faction, difficulty) => {
+  const startGameForFaction = async (scenario, faction, difficulty, displayCurrency) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerColors(null); setPickerBackground(null);
     setEditorError(null);
@@ -2959,7 +3005,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         // The faction's name from the first moment the game is active (the
         // opening cover reads it); the save below writes it again once the
         // faction is in the world it resolves against.
-        gamePatch: { country: faction.name, ...(difficulty ? { difficulty } : null) },
+        gamePatch: { country: faction.name, ...(difficulty ? { difficulty } : null), economicDisplayCurrency: normalizeEconomicDisplayCurrency(displayCurrency) },
         setActive: true,
       });
       gameId = details.game.id;
@@ -3016,7 +3062,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // carries everything keyed by the player (flag, colour, diplomacy, orders), the
   // group the area the map draws and what the story knows the player is. Written
   // into the game's own world, like a faction, so the scenario is never touched.
-  const startGameForGroup = async (scenario, group, difficulty) => {
+  const startGameForGroup = async (scenario, group, difficulty, displayCurrency) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerColors(null); setPickerBackground(null);
     setEditorError(null);
@@ -3028,7 +3074,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       const details = await createGame({
         name: `${name} — ${scenario.name}`,
         scenarioId: scenario.id,
-        gamePatch: { country: name, ...(difficulty ? { difficulty } : null) },
+        gamePatch: { country: name, ...(difficulty ? { difficulty } : null), economicDisplayCurrency: normalizeEconomicDisplayCurrency(displayCurrency) },
         setActive: true,
       });
       gameId = details.game.id;
@@ -3096,6 +3142,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setPickerGroups([]);
     setBypassWarning(null);
     setCountryPicker(scenario);
+    setPickerEconomicCurrency("USD");
     // A community basemap the import could not download is tried again (once a
     // session), and shown in the picker when it lands.
     retryMissingBasemap(scenario).then((retry) => {
@@ -3105,6 +3152,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       .then(([allCountries, details]) => {
         if (!isCurrent()) return;
         if (promptsBypassLimit(details?.data?.prompts)) setBypassWarning(scenario);
+        setPickerEconomicCurrency(normalizeEconomicDisplayCurrency(details?.data?.game?.economicDisplayCurrency));
         setCountryOptions(buildScenarioCountryOptions(
           details?.data?.world,
           [...getBaseCountryOptions(), ...allCountries],
@@ -3770,6 +3818,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             ...currentGame,
             country: editorState.country,
             gameDate: editorState.gameDate,
+            ...(editorState.economicDisplayCurrency !== normalizeEconomicDisplayCurrency(currentGame.economicDisplayCurrency)
+              ? { economicDisplayCurrency: editorState.economicDisplayCurrency }
+              : {}),
             language: editorState.language,
             startDate: editorState.gameDate || currentGame.startDate || "",
           },
@@ -3792,12 +3843,17 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             labelTextColor: editorState.labelTextColor,
             language: editorState.language,
             simulationRules: editorState.simulationRules,
+            projectFundingMode: editorState.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy",
             startingTimelineText: editorState.startingTimelineText,
             // How its wars are fought (runtime/warSettings.js). A scenario that
             // never set any is written none; one whose author took every
             // setting back has its old ones cleared.
             ...(editorState.warSettings || currentWorld.warSettings !== undefined
               ? { warSettings: compactWarSettings(editorState.warSettings) }
+              : {}),
+            // Its own unit types (runtime/unitTypes.js): written only once it has had some.
+            ...(savedUnitTypes(editorState.unitTypes).length > 0 || currentWorld.unitTypes !== undefined
+              ? { unitTypes: savedUnitTypes(editorState.unitTypes) }
               : {}),
           },
         });
@@ -3828,7 +3884,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         // while turns are played, and writing back the game.json and world.json
         // it loaded rolled back the date, round, borders, units and polities.
         const baseline = buildGameEditorState(editorDetails);
-        const gamePatch = changedFields(editorState, baseline, ["country", "gameDate", "language"]);
+        const gamePatch = changedFields(editorState, baseline, ["country", "gameDate", "language", "economicDisplayCurrency"]);
         const worldPatch = changedFields(editorState, baseline, [
           "labelFont",
           "labelHaloColor",
@@ -4058,8 +4114,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // suggestion's map changes beside it (src/Editor/SuggestionReviewPanel.jsx).
   // `gameDate` and `warSettings` are the scenario's as its editor holds them,
   // saved or not (the world's settings where it holds none): what a country's
-  // military figures left empty stand for in the Workshop.
-  const openMapEditorFor = (scenario, world = {}, { review = null, gameDate = "", warSettings } = {}) => {
+  // military figures left empty stand for in the Workshop. `unitTypes` likewise:
+  // the unit types a unit placed there may be of.
+  const openMapEditorFor = (scenario, world = {}, { review = null, gameDate = "", warSettings, unitTypes } = {}) => {
     const isCurrent = mapEditorRequest.begin();
     setMapEditorScenario(scenario);
     setMapEditorSeed(null);
@@ -4140,6 +4197,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         customCities: Boolean(world.customCities),
         // The scenario's starting units, so the Units panel edits what the game starts with.
         units: Array.isArray(world.units) ? world.units : [],
+        // Its own unit types, which a unit placed there may be of (runtime/unitTypes.js).
+        unitTypes: savedUnitTypes(unitTypes === undefined ? world.unitTypes : unitTypes),
         // Its structures, edited as map features that are not cities.
         markers: Array.isArray(world.markers) ? world.markers : [],
         // Its puppet states, for the Countries panel.
@@ -4195,6 +4254,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // Step two of the new-game dialog: the chosen country waits here while the
   // player picks a difficulty.
   const [difficultyPick, setDifficultyPick] = useState(null);
+  const [pickerEconomicCurrency, setPickerEconomicCurrency] = useState("USD");
   // Which opening of the picker its loads belong to (handleScenarioPlay).
   const [pickerRequest] = useState(createLatestRequest);
 
@@ -4203,6 +4263,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setCountryPicker(null);
     setPlayGameId(null);
     setDifficultyPick(null);
+    setPickerEconomicCurrency("USD");
     setCustomRegionData(null);
     setPickerOwnerOverrides(null);
     setPickerColors(null);
@@ -4354,7 +4415,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     if (editorKind === "scenario" && editorDetails?.scenario?.id === scenarioId) {
       const drawerGame = editorDetails.data?.game ?? {};
       setEditorDetails(savedScenarioDetails);
-      setEditorState((current) => followSavedFields(current, drawerGame, savedScenarioDetails?.data?.game, ["country", "gameDate"]));
+      // (And the countries its unit types name follow the Workshop's renames, as the world's did.)
+      setEditorState((current) => {
+        const followed = followSavedFields(current, drawerGame, savedScenarioDetails?.data?.game, ["country", "gameDate"]);
+        return followed && Array.isArray(renames) && renames.length > 0 && Array.isArray(followed.unitTypes)
+          ? { ...followed, unitTypes: withRenamedUnitTypeOwners(followed.unitTypes, renames) }
+          : followed;
+      });
     }
 
     await uploadScenarioAsset(
@@ -4568,18 +4635,18 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     const draft = difficultyPick;
     setDifficultyPick(null);
     if (draft?.faction) {
-      startGameForFaction(countryPicker, draft.faction, difficultyId);
+      startGameForFaction(countryPicker, draft.faction, difficultyId, pickerEconomicCurrency);
       return;
     }
     if (draft?.group) {
-      startGameForGroup(countryPicker, draft.group, difficultyId);
+      startGameForGroup(countryPicker, draft.group, difficultyId, pickerEconomicCurrency);
       return;
     }
     const countryCode = draft?.countryCode || "";
     if (playGameId) {
       choosePlayCountry(countryCode, difficultyId);
     } else {
-      startGameForCountry(countryPicker, countryCode, difficultyId);
+      startGameForCountry(countryPicker, countryCode, difficultyId, pickerEconomicCurrency);
     }
   };
 
@@ -4937,6 +5004,19 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     <div style={{ display: "flex", flexDirection: "column" }}>
                       <span data-no-translate>{difficultyPick.group.name}</span>
                       <span style={{ fontSize: "0.68rem", color: "rgba(255,255,255,0.45)", fontWeight: 400 }}>Selected Group</span>
+                    </div>
+                  </div>
+                )}
+                {!playGameId && (
+                  <div style={{ marginBottom: "0.85rem" }}>
+                    <label style={{ color: "rgba(255,255,255,0.72)", display: "block", fontSize: "0.76rem", fontWeight: 700, marginBottom: "0.35rem" }}>GDP display currency</label>
+                    <select aria-label="GDP display currency" value={pickerEconomicCurrency} onChange={(event) => setPickerEconomicCurrency(event.target.value)} style={{ ...inputStyle, width: "100%" }}>
+                      {ECONOMIC_DISPLAY_CURRENCIES.map(({ code, name, symbol }) => (
+                        <option key={code} value={code}>{name} ({code}, {symbol})</option>
+                      ))}
+                    </select>
+                    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", marginTop: "0.35rem", lineHeight: 1.4 }}>
+                      Display only · fixed 2026 reference rates. The simulation keeps USD accounting; you can change this later.
                     </div>
                   </div>
                 )}
@@ -5482,7 +5562,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   {continueGames.length > 0 && (
                     <MenuRow description="Pick up exactly where you left off." icon="▶" title="Continue Playing">
                       {continueGames.map((game) => (
-                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} />
+                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} onRecover={setProjectRecoveryGame} />
                       ))}
                     </MenuRow>
                   )}
@@ -5513,7 +5593,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                         child either way, so an empty view still says so. */}
                     {loaded
                       ? browsedGames.map((game) => (
-                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} />
+                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} onRecover={setProjectRecoveryGame} />
                       ))
                       : <MenuCardSkeletons count={isMobile ? 3 : 8} kind="game" width={SHELF_CARD_WIDTH} />}
                   </LibraryCollection>
@@ -5599,6 +5679,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         </Suspense>
       )}
 
+      {menuOpen && projectRecoveryGame && (
+        <Suspense fallback={null}>
+          <ProjectRecoveryDialog
+            game={projectRecoveryGame}
+            onClose={() => setProjectRecoveryGame(null)}
+          />
+        </Suspense>
+      )}
+
       <EditorDrawer
         details={editorDetails}
         editorError={editorError || error}
@@ -5622,6 +5711,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         onOpenMapEditor={() => openMapEditorFor(editorDetails?.scenario || null, editorDetails?.data?.world ?? {}, {
           gameDate: editorState?.gameDate ?? editorDetails?.data?.game?.gameDate ?? "",
           warSettings: editorState?.warSettings,
+          unitTypes: editorState?.unitTypes,
         })}
         communityCard={drawerScenario ? (
           <ScenarioCommunityCard

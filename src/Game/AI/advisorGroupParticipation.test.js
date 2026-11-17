@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { directlyAddressedAdvisorIds, selectAdvisorGroupSpeakers, renderAdvisorGroupHistory, OPTIONAL_GROUP_SPEECH_STANDARD } from "./advisorGroupMeetings.js";
+import { selectAdvisorGroupSpeakers, renderAdvisorGroupHistory, OPTIONAL_GROUP_SPEECH_STANDARD } from "./advisorGroupMeetings.js";
 import { parseAdvisorGroupBatch, groupSpeakerBatches, advisorBatchOutputContract, buildAdvisorSharedBatchPrompt } from "./advisorGroupBatching.js";
 import { createAdvisorContact, createAdvisorGroup, advisorMessagesFor, replaceAdvisorThread } from "../../runtime/advisorThreads.js";
 import { stageAdvisorGroupBatch } from "../GameUI/advisorGroupOrders.js";
@@ -30,8 +30,8 @@ test("both generation modes default optional members to silence without suppress
   ];
   const memberIds = invited.map((person) => person.id);
   const closingMessage = "Thank you, colleagues, for your attention. Viktor - IT adjusted your connection. Marco?";
-  assert.deepEqual(directlyAddressedAdvisorIds(memberIds, closingMessage, invited, "Chief"), [memberIds[0]]);
-  assert.deepEqual(selectAdvisorGroupSpeakers(memberIds, [{ role: "user", text: closingMessage }], closingMessage, invited, "Chief")[0], memberIds[0]);
+  // Everyone is asked; each decides whether to speak (the order rotates by turn).
+  assert.deepEqual(selectAdvisorGroupSpeakers(memberIds, [{ role: "user", text: closingMessage }]), memberIds);
 
   // The prompt's example must NOT bias every optional member toward speaking.
   const scaffold = advisorBatchOutputContract(memberIds).replies;
@@ -73,40 +73,36 @@ test("individual group request uses the same optional-speech threshold, not a un
   assert.doesNotMatch(group, /Respond now as/);
 });
 
-test("first-name direct address promotes Viktor, but keeps other advisors eligible to challenge him", () => {
-  const addressed = directlyAddressedAdvisorIds(ids, question, contacts, "Dmitri Orlov");
-  assert.deepEqual(addressed, ["advisor-viktor-001"]);
-  assert.deepEqual(selectAdvisorGroupSpeakers(ids, [{ role: "user", text: question }], question, contacts, "Dmitri Orlov"), ids);
-  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Gusev, are you serious?", contacts, "Orlov"), [ids[0]]);
-  assert.deepEqual(directlyAddressedAdvisorIds(ids, "The word Viktorious is not a person's name", contacts, "Orlov"), []);
-});
-
-test("the same generic rule applies to unrelated names, countries and scripts", () => {
+// The speaking order used to put a member the player named first, by parsing
+// the message for names after English greetings and "and": a Russian greeting
+// or a declined name moved nobody. The order is the turn's rotation now, the
+// same whatever the message says and in whatever language; each member reads
+// the question and decides whether it is theirs.
+test("a name in the player's message does not reorder the speakers, in any language", () => {
+  for (const text of [question, "Gusev, are you serious?", "The word Viktorious is not a person's name"]) {
+    assert.deepEqual(selectAdvisorGroupSpeakers(ids, [{ role: "user", text }]), ids, text);
+  }
   const others = [
     { id: "advisor-anna", name: "Anna Ozola", title: "Minister" },
     { id: "advisor-sara", name: "Sara Jensen", title: "Minister" },
     { id: "advisor-irina", name: "Ирина Белова", title: "Minister" },
   ];
   const otherIds = others.map((person) => person.id);
-  const input = [{ role: "user", text: "Ирина, does the transport plan work?" }];
-  assert.deepEqual(directlyAddressedAdvisorIds(otherIds, input[0].text, others, "Chief"), [otherIds[2]]);
-  assert.deepEqual(selectAdvisorGroupSpeakers(otherIds, input, input[0].text, others, "Chief"), [otherIds[2], otherIds[0], otherIds[1]]);
-  assert.deepEqual(selectAdvisorGroupSpeakers(otherIds, input, input[0].text, others, "Chief")[0], otherIds[2]);
-  assert.deepEqual(directlyAddressedAdvisorIds(otherIds, "Anna, what is your view?", others, "Chief"), [otherIds[0]]);
-  // Ambiguous first names are never inferred into the wrong stable ID.
-  const colliding = [...others, { id: "advisor-anna2", name: "Anna Smith", title: "Minister" }];
-  assert.deepEqual(directlyAddressedAdvisorIds(colliding.map((p) => p.id), "Anna, answer this", colliding, "Chief"), []);
+  for (const text of ["Irina, does the transport plan work?", "Ирина, транспортный план работает?", "Привет, Ирина! Как дела с планом?"]) {
+    assert.deepEqual(selectAdvisorGroupSpeakers(otherIds, [{ role: "user", text }]), otherIds, text);
+  }
+});
+
+test("the order rotates by one each turn the player speaks", () => {
+  const turns = (count) => Array.from({ length: count }, (_, index) => ({ role: "user", text: `Question ${index}` }));
+  assert.deepEqual(selectAdvisorGroupSpeakers(ids, turns(1)), ids);
+  assert.deepEqual(selectAdvisorGroupSpeakers(ids, turns(2)), [ids[1], ids[2], ids[0]]);
+  assert.deepEqual(selectAdvisorGroupSpeakers(ids, turns(3)), [ids[2], ids[0], ids[1]]);
 });
 
 test("third-person name references and possessives never require unrelated group members", () => {
   const input = "Marina - your proposed Action conflicts in name with Boris's proposed Action.";
-  const direct = [ids[1]];
-  assert.deepEqual(directlyAddressedAdvisorIds(ids, input, contacts, "Orlov"), direct);
-  assert.deepEqual(selectAdvisorGroupSpeakers(ids, [{ role: "user", text: input }], input, contacts, "Orlov")[0], direct[0]);
-  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Marina, I believe Boris has already queued his Action.", contacts, "Orlov"), direct);
-  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Boris's proposal conflicts with the previous plan.", contacts, "Orlov"), []);
-  assert.deepEqual(directlyAddressedAdvisorIds(ids, "I discussed Boris's proposal with Marina yesterday.", contacts, "Orlov"), []);
-  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Boris and Marina are preparing a report.", contacts, "Orlov"), []);
+  assert.deepEqual(selectAdvisorGroupSpeakers(ids, [{ role: "user", text: input }]), ids, "everyone is asked; none is required");
   const payload = { replies: [
     { speakerId: ids[0], pass: true, text: "" },
     { speakerId: ids[1], pass: false, text: "I will rename the administrative Action." },
@@ -116,24 +112,15 @@ test("third-person name references and possessives never require unrelated group
   assert.deepEqual(records.map((row) => row.silent === true), [true, false, true]);
 });
 
-test("group direct address recognizes leading name lists and trailing vocatives", () => {
-  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Viktor and Marina, please review this.", contacts, "Orlov"), [ids[0], ids[1]]);
-  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Viktor, Marina, and Boris - please review this.", contacts, "Orlov"), ids);
-  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Please, Boris, explain the treaty.", contacts, "Orlov"), [ids[2]]);
-  assert.deepEqual(directlyAddressedAdvisorIds(ids, "What is your assessment, Boris?", contacts, "Orlov"), [ids[2]]);
-  assert.deepEqual(directlyAddressedAdvisorIds(ids, "Marina, can you check that? Boris, please check the diplomatic section.", contacts, "Orlov"), [ids[1], ids[2]]);
-});
-
 test("resume allows remaining dissenters and does not retry completed speaker decisions", () => {
   const initial = [{ role: "user", text: question }];
-  assert.deepEqual(selectAdvisorGroupSpeakers(ids, initial, question, contacts, "Orlov"), ids);
+  assert.deepEqual(selectAdvisorGroupSpeakers(ids, initial), ids);
   const answered = [...initial, { role: "advisor", speakerId: ids[0], text: "Sure" }];
-  assert.deepEqual(selectAdvisorGroupSpeakers(ids, answered, question, contacts, "Orlov"), [ids[1], ids[2]]);
+  assert.deepEqual(selectAdvisorGroupSpeakers(ids, answered), [ids[1], ids[2]]);
   const declined = [...answered, { role: "advisor", speakerId: ids[1], silent: true, text: "" }];
-  assert.deepEqual(selectAdvisorGroupSpeakers(ids, declined, question, contacts, "Orlov"), [ids[2]]);
-  const generalQuestion = "What should we do about the fiscal deficit?";
-  const general = [{ role: "user", text: generalQuestion }];
-  assert.deepEqual(selectAdvisorGroupSpeakers(ids, general, generalQuestion, contacts, "Orlov"), ids);
+  assert.deepEqual(selectAdvisorGroupSpeakers(ids, declined), [ids[2]]);
+  const general = [{ role: "user", text: "What should we do about the fiscal deficit?" }];
+  assert.deepEqual(selectAdvisorGroupSpeakers(ids, general), ids);
 });
 
 test("shared batches allow direct addressees to pass without blocking independent dissent", () => {
@@ -183,7 +170,7 @@ test("silence survives save/reload, remains invisible to subsequent model transc
   const transcript = renderAdvisorGroupHistory(recalled, contacts, "Orlov");
   assert.match(transcript, /Viktor, are you mad/);
   assert.doesNotMatch(transcript, /Boris Bondarev/);
-  assert.deepEqual(selectAdvisorGroupSpeakers(ids, recalled, question, contacts, "Orlov"), []);
+  assert.deepEqual(selectAdvisorGroupSpeakers(ids, recalled), []);
   assert.throws(() => replaceAdvisorThread(saved, groupId, messages.map((row) =>
     row.silent ? { ...row, actionProposals: [{ id: "forged" }] } : row
   )), /silent group participant cannot/);

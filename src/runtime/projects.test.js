@@ -6,26 +6,20 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  DUE_SOON_DAYS,
   PROJECT_SORTS,
-  STALE_ROUNDS,
-  advanceRecurringDate,
   boardEntriesConcernedByEvent,
   boardPassCarriers,
   materiallyChangedEntryIds,
-  unassessedHighPriorityEntries,
-  normalizeMilestoneRepeat,
   collectProjectTags,
-  deriveNextMilestone,
   deriveProjectFlags,
-  describeTimeline,
   filterProjects,
   canPlayerDirect,
+  isKnownToPlayer,
   isProjectClosed,
   isProjectOpen,
   isForeignProject,
   isPlayerProject,
-  signedDaysBetween,
+  nextMilestoneOf,
   sortProjects,
   describeDoubtedForPrompt,
   doubtedAwaitingFreshSource,
@@ -61,95 +55,6 @@ const project = (overrides = {}) => ({
   ...overrides,
 });
 
-test("signedDaysBetween keeps the sign, unlike daysBetweenDates", () => {
-  assert.equal(signedDaysBetween("1963-01-01", "1963-01-31"), 30);
-  assert.equal(signedDaysBetween("1963-01-31", "1963-01-01"), -30);
-  assert.equal(signedDaysBetween("1963-01-01", "1963-01-01"), 0);
-});
-
-test("signedDaysBetween refuses prose dates and reads any real day, BC included", () => {
-  // Prose scenario dates must yield no flags rather than nonsense ones.
-  assert.equal(signedDaysBetween("1200 BCE", "1963-01-01"), null);
-  assert.equal(signedDaysBetween("1963-01-01", "December 31, 1963"), null);
-  assert.equal(signedDaysBetween("", "1963-01-01"), null);
-  // Spellings of one real day are read (runtime/gameDates.js), and a year
-  // before AD 1 is a negative year, so an ancient scenario gets its flags too.
-  assert.equal(signedDaysBetween("1963-1-1", "1963-01-01"), 0);
-  assert.equal(signedDaysBetween("-0218-03-01", "-0218-03-31"), 30);
-  assert.equal(signedDaysBetween("-0001-12-31", "0001-01-01"), 1);
-});
-
-test("deriveNextMilestone prefers the earliest dated pending milestone", () => {
-  const next = deriveNextMilestone(project({
-    milestones: [
-      { id: "m1", title: "Keel laid", date: "1962-03-01", status: "done", note: "" },
-      { id: "m2", title: "Fitting out", date: "1964-02-01", status: "pending", note: "" },
-      { id: "m3", title: "Sea trials", date: "1963-11-04", status: "pending", note: "" },
-    ],
-  }));
-  assert.equal(next.title, "Sea trials");
-});
-
-test("deriveNextMilestone returns null once everything is done", () => {
-  assert.equal(deriveNextMilestone(project({
-    milestones: [{ id: "m1", title: "Keel laid", date: "1962-03-01", status: "done", note: "" }],
-  })), null);
-});
-
-test("overdue fires only while the project is still running", () => {
-  const late = project({ targetDate: "1963-01-01" });
-  assert.equal(deriveProjectFlags(late, "1964-01-01").overdue, true);
-  assert.equal(deriveProjectFlags(late, "1962-01-01").overdue, false);
-  // A finished project is never overdue, however far past its target date.
-  assert.equal(deriveProjectFlags(project({ targetDate: "1963-01-01", status: "complete" }), "1970-01-01").overdue, false);
-  assert.equal(deriveProjectFlags(project({ targetDate: "1963-01-01", status: "cancelled" }), "1970-01-01").overdue, false);
-});
-
-test("dueSoon spans exactly the look-ahead window", () => {
-  const withMilestone = (date) => project({ nextMilestone: { title: "Sea trials", date, note: "" } });
-  assert.equal(deriveProjectFlags(withMilestone("1963-01-31"), "1963-01-01").dueSoon, true);
-  assert.equal(deriveProjectFlags(withMilestone("1963-01-01"), "1963-01-01").dueSoon, true);
-  // One day past the window.
-  assert.equal(deriveProjectFlags(withMilestone("1963-02-01"), "1963-01-01").dueSoon, false);
-  assert.equal(DUE_SOON_DAYS, 30);
-});
-
-test("a milestone that slipped is flagged separately from an overdue project", () => {
-  const flags = deriveProjectFlags(project({
-    targetDate: "1970-01-01",
-    milestones: [{ id: "m1", title: "Sea trials", date: "1963-01-01", status: "pending", note: "" }],
-  }), "1964-01-01");
-  assert.equal(flags.milestoneMissed, true);
-  assert.equal(flags.overdue, false, "the programme still has years to run");
-});
-
-test("a milestone the engine marked slipped is still next, and still flagged late", () => {
-  const slipped = project({
-    targetDate: "1970-01-01",
-    milestones: [
-      { id: "m1", title: "Sea trials", date: "1963-01-01", status: "slipped", note: "" },
-      { id: "m2", title: "Commissioning", date: "1965-01-01", status: "pending", note: "" },
-    ],
-  });
-  assert.equal(deriveNextMilestone(slipped).title, "Sea trials");
-  assert.equal(deriveProjectFlags(slipped, "1963-02-01").milestoneMissed, true);
-});
-
-test("stale covers both an explicit stall and simple neglect", () => {
-  assert.equal(deriveProjectFlags(project({ status: "stalled" }), "1963-01-01").stale, true);
-  assert.equal(deriveProjectFlags(project({ updatedRound: 4 }), "1963-01-01", 4 + STALE_ROUNDS).stale, true);
-  assert.equal(deriveProjectFlags(project({ updatedRound: 4 }), "1963-01-01", 5).stale, false);
-  // Round 0 means "we were not told the round" — never guess a project is stale.
-  assert.equal(deriveProjectFlags(project({ updatedRound: 4 }), "1963-01-01", 0).stale, false);
-});
-
-test("undateable projects get no date-derived flags", () => {
-  const flags = deriveProjectFlags(project({ targetDate: "", startedAt: "", milestones: [] }), "1963-01-01");
-  assert.equal(flags.overdue, false);
-  assert.equal(flags.dueSoon, false);
-  assert.equal(flags.daysToTarget, null);
-});
-
 test("sortProjects keeps running work above finished work under every sort", () => {
   const list = [
     project({ id: "done", name: "Aardvark", status: "complete", progress: 100, updatedAt: "2026-09-09T00:00:00.000Z" }),
@@ -161,19 +66,21 @@ test("sortProjects keeps running work above finished work under every sort", () 
 });
 
 test("sortProjects orders by each key", () => {
-  const a = project({ id: "a", name: "Alpha", progress: 10, updatedAt: "2026-01-01T00:00:00.000Z", nextMilestone: { title: "x", date: "1970-01-01", note: "" } });
-  const b = project({ id: "b", name: "Bravo", progress: 90, updatedAt: "2026-05-05T00:00:00.000Z", nextMilestone: { title: "y", date: "1963-01-01", note: "" } });
+  const a = project({ id: "a", name: "Alpha", progress: 10, updatedAt: "2026-01-01T00:00:00.000Z", targetDate: "1970-01-01", plan: { monthlyCost: 5 } });
+  const b = project({ id: "b", name: "Bravo", progress: 90, updatedAt: "2026-05-05T00:00:00.000Z", targetDate: "1963-01-01", plan: { monthlyCost: 50 } });
   assert.equal(sortProjects([a, b], "updated")[0].id, "b");
   assert.equal(sortProjects([a, b], "progress")[0].id, "b");
-  assert.equal(sortProjects([a, b], "milestone")[0].id, "b");
+  assert.equal(sortProjects([a, b], "finish")[0].id, "b");
+  assert.equal(sortProjects([a, b], "cost")[0].id, "b");
   assert.equal(sortProjects([b, a], "name")[0].id, "a");
   assert.equal(sortProjects([a, b], "status")[0].id, "a", "equal status falls back to name");
+  assert.deepEqual(PROJECT_SORTS.map((sort) => sort.key), ["updated", "finish", "progress", "cost", "name", "status"]);
 });
 
-test("sortProjects puts undated milestones last, not first", () => {
-  const dated = project({ id: "dated", name: "Zulu", nextMilestone: { title: "x", date: "1963-01-01", note: "" } });
-  const undated = project({ id: "undated", name: "Alpha", nextMilestone: null, milestones: [] });
-  assert.equal(sortProjects([undated, dated], "milestone")[0].id, "dated");
+test("sortProjects puts a project with no expected finish last, not first", () => {
+  const dated = project({ id: "dated", name: "Zulu", targetDate: "1963-01-01" });
+  const undated = project({ id: "undated", name: "Alpha", targetDate: "" });
+  assert.equal(sortProjects([undated, dated], "finish")[0].id, "dated");
 });
 
 test("sortProjects does not mutate its input", () => {
@@ -214,7 +121,7 @@ test("filterProjects searches the fields a player would type at", () => {
     name: "Project Leviathan",
     summary: "Autonomous ship programme.",
     tags: ["naval"],
-    nextMilestone: { title: "Sea trials", date: "1963-11-04", note: "" },
+    plan: { milestones: [{ id: "m1", title: "Sea trials", atProgress: 70 }] },
   })];
   for (const query of ["leviathan", "AUTONOMOUS", "naval", "sea trials"]) {
     assert.equal(filterProjects(list, { query }).length, 1, `query "${query}" found nothing`);
@@ -244,25 +151,6 @@ test("collectProjectTags returns the live vocabulary, most used first", () => {
   assert.deepEqual(tags, ["military", "naval", "political"]);
 });
 
-test("describeTimeline says how much time is left, or how much was lost", () => {
-  assert.equal(describeTimeline(project({ targetDate: "1963-02-01" }), "1963-01-01"), "1962-03-01 → 1963-02-01 (31d left)");
-  assert.equal(describeTimeline(project({ targetDate: "1962-12-01" }), "1963-01-01"), "1962-03-01 → 1962-12-01 (31d overdue)");
-  assert.equal(describeTimeline(project({ targetDate: "" }), "1963-01-01"), "Began 1962-03-01");
-  assert.equal(describeTimeline(project({ startedAt: "", targetDate: "" }), "1963-01-01"), "");
-});
-
-test("every helper tolerates junk without throwing", () => {
-  // These run against whatever a save happens to contain; a malformed entry must
-  // degrade, never crash the panel.
-  assert.equal(deriveNextMilestone(null), null);
-  assert.equal(deriveProjectFlags(null, "").overdue, false);
-  assert.deepEqual(sortProjects(null), []);
-  assert.deepEqual(filterProjects(null, {}), []);
-  assert.deepEqual(collectProjectTags(null), []);
-  assert.equal(describeTimeline(null, ""), "");
-  assert.deepEqual(filterProjects([null, undefined], {}), []);
-});
-
 // ---- open vs closed, the Closed view's definition ---------------------------
 // The panel's Closed toggle, its count, and the sort all have to agree on what
 // "closed" means. They used to each carry their own inline list of statuses.
@@ -276,7 +164,7 @@ test("isProjectClosed is exactly the complement of isProjectOpen", () => {
 
 test("closed means finished, failed or cancelled — nothing else", () => {
   assert.deepEqual(
-    ["proposed", "active", "stalled", "paused", "complete", "failed", "cancelled"]
+    ["planning", "active", "stalled", "paused", "complete", "failed", "cancelled"]
       .filter((status) => isProjectClosed(project({ status }))),
     ["complete", "failed", "cancelled"],
   );
@@ -291,111 +179,7 @@ test("an entry with no status at all counts as running", () => {
 
 // ---- overdue, audited ------------------------------------------------------
 
-test("overdue fires the day AFTER the target, not on it", () => {
-  const p = project({ targetDate: "2035-06-01" });
-  assert.equal(deriveProjectFlags(p, "2035-05-31").overdue, false);
-  assert.equal(deriveProjectFlags(p, "2035-06-01").overdue, false, "still has the day it is due");
-  assert.equal(deriveProjectFlags(p, "2035-06-02").overdue, true);
-});
-
-test("overdue never fires for a closed project", () => {
-  for (const status of ["complete", "failed", "cancelled"]) {
-    assert.equal(deriveProjectFlags(project({ targetDate: "2020-01-01", status }), "2040-01-01").overdue, false, status);
-  }
-});
-
-test("overdue does fire for every running status, paused included", () => {
-  for (const status of ["proposed", "active", "stalled", "paused"]) {
-    assert.equal(deriveProjectFlags(project({ targetDate: "2020-01-01", status }), "2040-01-01").overdue, true, status);
-  }
-});
-
-test("an ongoing effort is never overdue, however old", () => {
-  const p = project({ targetDate: "", ongoing: true, startedAt: "1900-01-01" });
-  const flags = deriveProjectFlags(p, "2040-01-01");
-  assert.equal(flags.overdue, false);
-  assert.equal(flags.ongoing, true);
-});
-
-test("ongoing does not suppress a missed milestone", () => {
-  const flags = deriveProjectFlags(project({
-    ongoing: true, targetDate: "",
-    milestones: [{ id: "m", title: "Quarterly review", date: "2030-01-01", status: "pending", note: "" }],
-  }), "2040-01-01");
-  assert.equal(flags.overdue, false, "no end date to be late against");
-  assert.equal(flags.milestoneMissed, true, "but a slipped checkpoint still matters");
-});
-
-test("describeTimeline says ongoing rather than showing a bare start date", () => {
-  assert.equal(describeTimeline(project({ ongoing: true, targetDate: "" }), "2033-01-01"), "Began 1962-03-01 · ongoing");
-  assert.equal(describeTimeline(project({ ongoing: true, targetDate: "", startedAt: "" }), "2033-01-01"), "Ongoing");
-});
-
 // ---- recurring milestones --------------------------------------------------
-
-test("advanceRecurringDate steps each cadence", () => {
-  assert.equal(advanceRecurringDate("2033-06-01", "annual", "2033-06-01"), "2034-06-01");
-  assert.equal(advanceRecurringDate("2033-06-01", "biennial", "2033-06-01"), "2035-06-01");
-  assert.equal(advanceRecurringDate("2033-01-15", "quarterly", "2033-01-15"), "2033-04-15");
-  assert.equal(advanceRecurringDate("2033-01-15", "monthly", "2033-01-15"), "2033-02-15");
-  assert.equal(advanceRecurringDate("2033-01-01", "weekly", "2033-01-01"), "2033-01-08");
-});
-
-test("a month-end date clamps rather than overflowing, and recovers after", () => {
-  // A drill on the 31st must not skip February or slide to March 3rd.
-  assert.equal(advanceRecurringDate("2033-01-31", "monthly", "2033-01-31"), "2033-02-28");
-  assert.equal(advanceRecurringDate("2033-01-31", "monthly", "2033-02-28"), "2033-03-31");
-  assert.equal(advanceRecurringDate("2032-01-31", "monthly", "2032-01-31"), "2032-02-29", "leap year");
-});
-
-test("a commitment missed for years catches up past the clock", () => {
-  assert.equal(advanceRecurringDate("2020-06-01", "annual", "2033-01-01"), "2033-06-01");
-  // And keeps its day of the year rather than drifting to when it was noticed.
-  assert.ok(advanceRecurringDate("2020-06-01", "annual", "2033-09-20").endsWith("-06-01"));
-});
-
-test("a weekly checkpoint marked done weeks late rolls past the clock on its weekday", () => {
-  // 2033-01-03 is a Monday; marked done a month and a half later.
-  assert.equal(advanceRecurringDate("2033-01-03", "weekly", "2033-02-20"), "2033-02-21");
-  // Exactly on a later occurrence: the next one, strictly after.
-  assert.equal(advanceRecurringDate("2033-01-03", "weekly", "2033-02-21"), "2033-02-28");
-  // Across a month end and a year end.
-  assert.equal(advanceRecurringDate("2032-12-29", "weekly", "2033-01-10"), "2033-01-12");
-  // Missed for more than a decade still lands ahead of the clock.
-  // 2000-01-03 and 2033-09-19 are both Mondays.
-  assert.equal(advanceRecurringDate("2000-01-03", "weekly", "2033-09-20"), "2033-09-26");
-  // A floor before the date still rolls one week.
-  assert.equal(advanceRecurringDate("2033-01-03", "weekly", "2032-12-01"), "2033-01-10");
-  // BC dates step the same way.
-  assert.equal(advanceRecurringDate("-0044-03-01", "weekly", "-0044-03-15"), "-0044-03-22");
-});
-
-test("advanceRecurringDate refuses what it cannot compute", () => {
-  assert.equal(advanceRecurringDate("2033-06-01", ""), "", "not recurring");
-  assert.equal(advanceRecurringDate("1200 BCE", "annual"), "", "non-Gregorian");
-  assert.equal(advanceRecurringDate("", "annual"), "");
-  assert.equal(advanceRecurringDate("2033-13-45", "annual"), "", "impossible date");
-});
-
-test("normalizeMilestoneRepeat accepts the synonyms a model reaches for", () => {
-  for (const [input, expected] of [
-    ["annual", "annual"], ["yearly", "annual"], ["Annually", "annual"], ["every year", "annual"],
-    ["quarter", "quarterly"], ["month", "monthly"], ["week", "weekly"], ["biannual", "biennial"],
-  ]) {
-    assert.equal(normalizeMilestoneRepeat(input), expected, `"${input}"`);
-  }
-  assert.equal(normalizeMilestoneRepeat("fortnightly"), "", "an unsupported cadence is not guessed at");
-  assert.equal(normalizeMilestoneRepeat(""), "");
-});
-
-test("deriveNextMilestone carries the recurrence through to the card", () => {
-  const next = deriveNextMilestone(project({
-    nextMilestone: null,
-    milestones: [{ id: "m", title: "Annual drill", date: "2034-06-01", status: "pending", note: "", repeat: "annual", completedCount: 2 }],
-  }));
-  assert.equal(next.repeat, "annual");
-  assert.equal(next.completedCount, 2);
-});
 
 // --- priority sort ----------------------------------------------------------
 //
@@ -404,49 +188,6 @@ test("deriveNextMilestone carries the recurrence through to the card", () => {
 // on it, so the sort has to make it visible.
 
 const byPriority = (list) => sortProjects(list, "priority").map((entry) => entry.id);
-
-test("sortProjects: priority orders high, then normal, then low", () => {
-  const list = [
-    project({ id: "low", name: "C", priority: "low" }),
-    project({ id: "high", name: "A", priority: "high" }),
-    project({ id: "normal", name: "B", priority: "normal" }),
-  ];
-  assert.deepEqual(byPriority(list), ["high", "normal", "low"]);
-});
-
-// Open work outranks closed work under EVERY sort — a board whose first screen is
-// finished projects is not telling you anything, and a high-priority thing that
-// has already been cancelled is not the most urgent item on it.
-test("sortProjects: an abandoned high-priority project still sorts below live work", () => {
-  const list = [
-    project({ id: "dead", name: "A", priority: "high", status: "cancelled" }),
-    project({ id: "live", name: "B", priority: "low", status: "active" }),
-  ];
-  assert.deepEqual(byPriority(list), ["live", "dead"]);
-});
-
-// A save written before the field existed has no priority at all. It must read as
-// normal — sorting those to either end would reshuffle a board the player has
-// never touched.
-test("sortProjects: a project with no priority sorts as normal", () => {
-  const noField = project({ id: "legacy", name: "B" });
-  delete noField.priority;
-  const list = [
-    project({ id: "low", name: "C", priority: "low" }),
-    noField,
-    project({ id: "high", name: "A", priority: "high" }),
-  ];
-  assert.deepEqual(byPriority(list), ["high", "legacy", "low"]);
-});
-
-// The panel renders its sort menu by mapping PROJECT_SORTS, so a comparator with
-// no entry here is a dead sort nobody can reach.
-test("PROJECT_SORTS offers every comparator, priority included", () => {
-  assert.ok(PROJECT_SORTS.some((entry) => entry.key === "priority"));
-  for (const entry of PROJECT_SORTS) {
-    assert.ok(entry.label, "every sort needs a label for the menu");
-  }
-});
 
 // --- whose project it is ----------------------------------------------------
 
@@ -459,6 +200,18 @@ test("owner identity ignores case, accents and punctuation", () => {
   assert.equal(isPlayerProject(own, "Côte d'Ivoire"), true);
   assert.equal(isPlayerProject(project({ ownerCode: "  SPAIN  " }), "Spain"), true);
   assert.equal(isPlayerProject(project({ ownerCode: "Ruritania" }), "Spain"), false);
+});
+
+// Under the old a-z fold every name in another script folded to nothing, and a
+// name that folded to nothing counted as blank: a programme owned by "中国"
+// landed on the player's own Board, with the player's levers on it. Blank is
+// the text itself, and a name in any script is that name.
+test("an owner named in another script is that owner, never the player", () => {
+  assert.equal(isPlayerProject(project({ ownerCode: "中国" }), "France"), false);
+  assert.equal(isForeignProject(project({ ownerCode: "Россия" }), "France"), true);
+  assert.equal(isPlayerProject(project({ ownerCode: "РОССИЯ" }), "Россия"), true, "the player's own, in another case");
+  assert.equal(isPlayerProject(project({ ownerCode: "中国" }), "中国"), true);
+  assert.equal(isPlayerProject(project({ ownerCode: "!!!" }), "France"), false, "a name with no letters is nobody's, not the player's");
 });
 
 // A blank owner has always meant the player: the model is not made to restate
@@ -749,121 +502,64 @@ test("a recalled agent closes its own operation, never the intelligence it repor
 
 // --- Which Board entries an event concerns ---------------------------------
 //
-// The engine's own answer, so a major event about a Board entry can pass the
-// world director's consequence check provisionally without the model tagging
-// anything. The board pass later proves or disproves it.
+// The open entries the event's own board ops address, by id or by the name the
+// Board gives them: what the event says it did to the Board, never what its
+// words resemble. Read by the world director's consequence check and by the
+// board pass's reasons.
 
-const concerned = (event, board, options) =>
-  boardEntriesConcernedByEvent(event, board, options).map((entry) => entry.id);
+const concerned = (event, board) =>
+  boardEntriesConcernedByEvent(event, board).map((entry) => entry.id);
+const moving = (title, ...ops) => ({ title, description: "", impacts: { projectOps: ops } });
 
-test("an event naming a Board entry exactly concerns it", () => {
+test("an event concerns the Board entries its own board ops address, by id or by the Board's name", () => {
+  const board = [
+    project({ id: "westbird", name: "Project Westbird", summary: "Agent recruitment drive." }),
+    project({ id: "kingfisher", name: "Operation Kingfisher", summary: "Covert missile trials." }),
+  ];
+  assert.deepEqual(concerned(moving("Recruiters busy", { op: "update", projectId: "westbird", progress: 40 }), board), ["westbird"]);
+  assert.deepEqual(concerned(moving("A test succeeds", { op: "milestone", name: "operation kingfisher", milestone: { title: "First flight", status: "done" } }), board), ["kingfisher"], "the Board's own name, case aside");
+  assert.deepEqual(concerned(moving("Both move", { op: "update", projectId: "kingfisher" }, { op: "update", projectId: "westbird" }), board), ["westbird", "kingfisher"], "in the Board's order");
+});
+
+test("an event's words never make it concern an entry, in any language", () => {
   const board = [project({ id: "westbird", name: "Project Westbird", summary: "Agent recruitment drive." })];
-  assert.deepEqual(
-    concerned({ title: "Project Westbird recruits its first cell", description: "" }, board),
-    ["westbird"],
-  );
+  // Named outright in its words, the entry is still not what the event did.
+  assert.deepEqual(concerned({ title: "Project Westbird recruits its first cell", description: "" }, board), []);
+  assert.deepEqual(concerned({ title: "Le projet Westbird recrute sa première cellule", description: "" }, board), []);
+  // And the French telling of the same op concerns it exactly as the English one.
+  const op = { op: "update", projectId: "westbird", progress: 45 };
+  assert.deepEqual(concerned(moving("Project Westbird recruits its first cell", op), board), ["westbird"]);
+  assert.deepEqual(concerned(moving("Le projet Westbird recrute sa première cellule", op), board), ["westbird"]);
 });
 
-test("the generic word in a Board entry's name is never what matches", () => {
-  const board = [project({ id: "kingfisher", name: "Operation Kingfisher", summary: "Covert missile trials." })];
-  assert.deepEqual(concerned({ title: "Kingfisher's first test succeeds", description: "" }, board), ["kingfisher"]);
-  assert.deepEqual(
-    concerned({ title: "A new operation begins in the north", description: "" }, board),
-    [],
-    "'operation' says what kind of thing it is, not which one",
-  );
-});
-
-test("a paraphrase matches through the owner and the summary's distinctive words", () => {
-  const board = [project({
-    id: "simurgh",
-    name: "Project Simurgh",
-    ownerCode: "Iran",
-    summary: "Offensive cyber capability against Gulf infrastructure.",
-  })];
-  assert.deepEqual(
-    concerned({ title: "Iranian offensive cyber units field new hardware", description: "" }, board),
-    ["simurgh"],
-  );
-});
-
-test("naming the owner alone is not enough", () => {
-  const board = [project({ id: "simurgh", name: "Project Simurgh", ownerCode: "Iran", summary: "Offensive cyber capability." })];
-  assert.deepEqual(concerned({ title: "Iran holds parliamentary elections", description: "" }, board), []);
-});
-
-test("the owner decides between Board entries the words cannot tell apart", () => {
+test("a Board kept in another script is addressed by its ids and names, whatever the event says", () => {
+  // Two entries from a player's log (2026-10-05, the game in Russian), and one in Chinese.
   const board = [
-    project({ id: "fr", name: "Naval Expansion Programme", ownerCode: "France", summary: "Capital ship construction." }),
-    project({ id: "de", name: "Naval Expansion Programme", ownerCode: "Germany", summary: "Capital ship construction." }),
+    project({ id: "leviathan", name: "Проект Левиафан", summary: "Ключевая военно-морская программа." }),
+    project({ id: "fortress", name: "Проект Береговая Крепость", summary: "Строительство оборонительных рубежей." }),
+    project({ id: "dragon", name: "蛟龙计划", summary: "深海载人潜水器研制。" }),
   ];
-  assert.deepEqual(
-    concerned({ title: "Germany lays down the second phase of its naval expansion", description: "" }, board),
-    ["de"],
-  );
-  assert.deepEqual(
-    concerned({ title: "Naval expansion strains shipyards", description: "" }, board).sort(),
-    ["de", "fr"],
-    "an event that names neither owner keeps both",
-  );
+  assert.deepEqual(concerned(moving("Установлен энергетический блок", { op: "update", projectId: "leviathan" }), board), ["leviathan"]);
+  assert.deepEqual(concerned(moving("Работы ускорены", { op: "update", name: "проект береговая крепость" }), board), ["fortress"]);
+  assert.deepEqual(concerned(moving("蛟龙计划完成首次下潜", { op: "milestone", name: "蛟龙计划", milestone: { title: "首次下潜", status: "done" } }), board), ["dragon"]);
+  assert.deepEqual(concerned({ title: "“蛟龙计划”完成首次下潜", description: "" }, board), [], "its name in the words alone is nothing");
 });
 
-test("an owner is named only at the start of a word", () => {
-  const board = [
-    project({ id: "oman", name: "Port Expansion", ownerCode: "Oman", summary: "Deep-water harbour works." }),
-    project({ id: "ro", name: "Port Expansion", ownerCode: "Romania", summary: "Deep-water harbour works." }),
-  ];
-  assert.deepEqual(
-    concerned({ title: "Romania's port expansion reaches the breakwater", description: "" }, board),
-    ["ro"],
-    "Romania must not read as naming Oman",
-  );
-});
-
-test("closed Board entries never match, and an empty Board matches nothing", () => {
-  const event = { title: "Project Westbird is wound up", description: "" };
+test("closed Board entries never match, an op naming nothing on the Board matches nothing, and an empty Board matches nothing", () => {
+  const event = moving("Project Westbird is wound up", { op: "cancel", projectId: "w" });
   for (const status of ["complete", "failed", "cancelled"]) {
     assert.deepEqual(concerned(event, [project({ id: "w", name: "Project Westbird", status })]), [], status);
   }
+  assert.deepEqual(concerned(moving("x", { op: "update", projectId: "elsewhere", name: "Project Elsewhere" }), [project({ id: "w", name: "Project Westbird" })]), []);
+  assert.deepEqual(concerned(moving("x", { op: "create", name: "Project Nova", summary: "A new programme." }), [project({ id: "w", name: "Project Westbird" })]), [], "a new entry is not one on the Board");
   assert.deepEqual(concerned(event, []), []);
   assert.deepEqual(concerned(event, undefined), []);
+  assert.deepEqual(concerned({ title: "No ops" }, [project({ id: "w" })]), []);
 });
 
-test("foreign Board entries match like the player's own", () => {
+test("foreign Board entries are addressed like the player's own", () => {
   const board = [project({ id: "rival", name: "Project Leviathan", ownerCode: "Germany" })];
-  assert.deepEqual(concerned({ title: "Leviathan hull launched at Kiel", description: "" }, board), ["rival"]);
-});
-
-test("accents are folded away, not turned into word breaks", () => {
-  const board = [project({ id: "qc", name: "Projet Québec", ownerCode: "Canada", summary: "Hydro-électricité du Nord." })];
-  assert.deepEqual(concerned({ title: "Quebec project advances", description: "" }, board), ["qc"]);
-});
-
-test("a Board kept in another script is matched by its own words", () => {
-  // Two entries from a player's log (2026-10-05, the game in Russian). Folded
-  // to a-z0-9, nothing on this Board had a word, so no event ever concerned an
-  // entry on it, and a miss here is a retried segment.
-  const board = [
-    project({ id: "leviathan", name: "Проект Левиафан", summary: "Ключевая военно-морская программа по созданию сверхмощного корабля, обеспечивающего доминирование в Черном море." }),
-    project({ id: "fortress", name: "Проект Береговая Крепость", summary: "Строительство и модернизация оборонительных рубежей на южном побережье (особенно вокруг Крыма)." }),
-  ];
-  assert.deepEqual(
-    concerned({ title: "Проект Левиафан: установлен энергетический блок", description: "Сборочные работы перешли на новый этап." }, board),
-    ["leviathan"],
-    "named exactly",
-  );
-  assert.deepEqual(
-    concerned({ title: "Строительство оборонительных рубежей на южном побережье ускорено", description: "" }, board),
-    ["fortress"],
-    "described by the summary's own words",
-  );
-  assert.deepEqual(concerned({ title: "Парламент принял бюджет", description: "" }, board), []);
-
-  // A name in Chinese is matched where quotation marks or punctuation set it
-  // apart; inside an unbroken sentence it is part of one long word.
-  const chinese = [project({ id: "dragon", name: "蛟龙计划", summary: "深海载人潜水器研制。" })];
-  assert.deepEqual(concerned({ title: "“蛟龙计划”完成首次下潜", description: "" }, chinese), ["dragon"]);
-  assert.deepEqual(concerned({ title: "蛟龙计划完成首次下潜", description: "" }, chinese), []);
+  assert.deepEqual(concerned(moving("Hull launched at Kiel", { op: "update", projectId: "rival", progress: 70 }), board), ["rival"]);
 });
 
 // --- Where the board pass's ops go ------------------------------------------
@@ -939,40 +635,77 @@ test("only an event's own ops stamp it into an entry's activity, never a fallbac
   );
 });
 
-test("a material change is a new entry, a status or progress change, or a checkpoint reached or missed", () => {
-  const before = [project({ id: "w", progress: 40, status: "active", milestones: [{ id: "m1", title: "First cell", date: "1963-03-01", status: "pending" }] })];
-  const changed = (patch) => materiallyChangedEntryIds(before, [{ ...before[0], ...patch }]);
+// ---- what the engine's board says of an entry ---------------------------------
 
-  assert.deepEqual(changed({ lastUpdate: "Recruiters are busy." }), [], "words alone are not a change");
-  assert.deepEqual(changed({ progress: 40 }), [], "restating the figure is not a change");
-  assert.deepEqual(changed({ progress: 55 }), ["w"]);
-  assert.deepEqual(changed({ status: "stalled" }), ["w"]);
-  assert.deepEqual(changed({ milestones: [{ id: "m1", title: "First cell", date: "1963-03-01", status: "done" }] }), ["w"]);
-  assert.deepEqual(changed({ milestones: [{ id: "m1", title: "First cell", date: "1963-04-01", status: "pending" }] }), [], "re-dating is not reaching");
-  assert.deepEqual(materiallyChangedEntryIds(before, [...before, project({ id: "k", name: "Project Kestrel" })]), ["k"]);
+test("the next checkpoint is the first one neither reached nor missed", () => {
+  const entry = project({ plan: { milestones: [
+    { id: "m1", title: "Keel laid", atProgress: 20, reached: true, reachedAt: "1963-01-01" },
+    { id: "m2", title: "Launch", atProgress: 50, missed: false },
+    { id: "m3", title: "Sea trials", atProgress: 80 },
+  ] } });
+  assert.deepEqual(nextMilestoneOf(entry), { title: "Launch", atProgress: 50 });
+  assert.equal(nextMilestoneOf(project({ plan: { milestones: [{ title: "Done", atProgress: 10, reached: true }] } })), null);
+  assert.equal(nextMilestoneOf(project({ plan: null })), null);
 });
 
-test("a recurring checkpoint that rolled over counts as reached", () => {
-  const drill = { id: "m1", title: "Annual drill", date: "1963-06-01", status: "pending", repeat: "annual", completedCount: 2 };
-  const before = [project({ id: "w", milestones: [drill] })];
-  assert.deepEqual(
-    materiallyChangedEntryIds(before, [{ ...before[0], milestones: [{ ...drill, date: "1964-06-01", completedCount: 3 }] }]),
-    ["w"],
-  );
+test("the card's flags are the engine's: stalled and why, underfunded, planning, running", () => {
+  const stalled = deriveProjectFlags(project({ status: "stalled", stallReason: "funds" }));
+  assert.equal(stalled.stalled, true);
+  assert.equal(stalled.stallReason, "funds");
+  assert.equal(deriveProjectFlags(project({ paidShare: 0.5 })).underfunded, true);
+  assert.equal(deriveProjectFlags(project({ paidShare: 1 })).underfunded, false);
+  assert.equal(deriveProjectFlags(project({ status: "planning" })).planning, true);
+  assert.equal(deriveProjectFlags(project({ established: true, ongoing: true })).running, true);
+  assert.equal(deriveProjectFlags(project({ status: "complete", paidShare: 0 })).underfunded, false, "a closed entry is never underfunded");
 });
 
-test("the turn log can name a HIGH PRIORITY Board entry the board pass did not assess", () => {
-  const board = [
-    project({ id: "a", name: "Project Westbird", priority: "high" }),
-    project({ id: "b", name: "Project Kestrel", priority: "high" }),
-    project({ id: "c", name: "Project Osprey", priority: "normal" }),
-    project({ id: "d", name: "Project Heron", priority: "high", status: "complete" }),
-    project({ id: "e", name: "Project Leviathan", priority: "high", ownerCode: "Germany" }),
-  ];
-  const ops = [{ op: "update", name: "project westbird", lastUpdate: "No material change this period, because funds are frozen." }];
-  assert.deepEqual(
-    unassessedHighPriorityEntries(board, ops, { playerCountry: "France" }).map((entry) => entry.id),
-    ["b"],
-    "only the player's own open HIGH PRIORITY work; a stale stamp on a rival's entry is not the player's dial",
+test("every helper tolerates junk without throwing", () => {
+  for (const junk of [null, undefined, {}, 5, "x"]) {
+    assert.doesNotThrow(() => deriveProjectFlags(junk));
+    assert.doesNotThrow(() => nextMilestoneOf(junk));
+    assert.doesNotThrow(() => isKnownToPlayer(junk, "France"));
+  }
+  assert.deepEqual(sortProjects(null), []);
+  assert.deepEqual(filterProjects(undefined), []);
+});
+
+test("the player knows a project abroad that is public, that an agent told of, that was on the board before, or that their services have a view on", () => {
+  const abroad = (overrides) => project({ ownerCode: "Germany", secrecy: "covert", ...overrides });
+  assert.equal(isKnownToPlayer(project({ ownerCode: "" }), "France"), true, "their own, always");
+  assert.equal(isKnownToPlayer(abroad({ secrecy: "public" }), "France"), true);
+  assert.equal(isKnownToPlayer(abroad({}), "France"), false, "a covert one nobody told of runs unseen");
+  assert.equal(isKnownToPlayer(abroad({ secrecy: "restricted" }), "France"), false);
+  assert.equal(isKnownToPlayer(abroad({ linkedSpyIds: ["spy-1"] }), "France"), true);
+  assert.equal(isKnownToPlayer(abroad({ known: true }), "France"), true);
+  assert.equal(isKnownToPlayer(abroad({ verification: "doubted" }), "France"), true);
+});
+
+test("a material change is a new entry, a status or progress change, a plan given, a setback recorded or a checkpoint reached", () => {
+  const base = project({ id: "a", plan: { milestones: [{ id: "m1", title: "Keel", atProgress: 20 }] }, adjustments: [] });
+  assert.deepEqual(materiallyChangedEntryIds([], [base]), ["a"]);
+  assert.deepEqual(materiallyChangedEntryIds([base], [{ ...base, lastUpdate: "Words only." }]), []);
+  assert.deepEqual(materiallyChangedEntryIds([base], [{ ...base, status: "cancelled" }]), ["a"]);
+  assert.deepEqual(materiallyChangedEntryIds([base], [{ ...base, progress: 70 }]), ["a"]);
+  assert.deepEqual(materiallyChangedEntryIds([base], [{ ...base, adjustments: [{ kind: "setback", days: 30, round: 2 }] }]), ["a"]);
+  assert.deepEqual(materiallyChangedEntryIds([base], [{ ...base, plan: { milestones: [{ id: "m1", title: "Keel", atProgress: 20, reached: true }] } }]), ["a"]);
+  assert.deepEqual(materiallyChangedEntryIds([{ ...base, plan: null, status: "planning" }], [base]), ["a"], "a plan given is a change");
+});
+
+test("a covert operation an agent IS opens with a plan of its own: set up in a month, at no cost", () => {
+  const [create] = spyOperationOps([{ id: "spy-1", owner: "France", target: "Germany", status: "active" }], [], { date: "1938-01-01", playerPolity: "France" });
+  assert.equal(create.op, "create");
+  assert.equal(create.ongoing, true);
+  assert.deepEqual(create.plan, { durationDays: 30, monthlyCost: 0, ongoing: true, milestones: [], effects: [], yields: [] });
+});
+
+test("doubt stalls what a compromised agent sourced, as blocked, so the engine stops working it", () => {
+  const ops = spyIntelDoubtOps(
+    [{ id: "spy-1", owner: "France", target: "Germany", status: "active", suspected: true }],
+    [project({ id: "g", ownerCode: "Germany", linkedSpyIds: ["spy-1"] })],
+    { playerPolity: "France", date: "1938-02-01" },
   );
+  assert.equal(ops.length, 1);
+  assert.equal(ops[0].status, "stalled");
+  assert.equal(ops[0].stallReason, "blocked");
+  assert.equal(ops[0].verification, "doubted");
 });

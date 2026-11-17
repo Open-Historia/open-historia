@@ -4,9 +4,9 @@
   Paste this into the SignPath project (Artifact configurations); SignPath reads
   it from there, not from the repository. docs/code-signing.md has the steps.
 
-  One configuration serves both signing requests the release workflows send
-  (.github/workflows/desktop-installer.yml and desktop-beta.yml). Each request is
-  a GitHub artifact, which SignPath receives as a zip:
+  One configuration serves both signing requests each Windows release workflow
+  sends (.github/workflows/desktop-installer.yml and desktop-beta.yml). Each
+  request is a GitHub artifact, which SignPath receives as a zip:
 
     1. the packed app's own programs, taken from release/win-unpacked:
          Open Historia.exe (or Open Historia Beta.exe) at the root, and the
@@ -17,10 +17,21 @@
   Only files built from this repository are signed. Electron's own DLLs stay
   as Electron ships them (SignPath Foundation: upstream binaries are not ours
   to sign), and they are not in the request at all.
+
+  SignPath Foundation requires every signed file's metadata to be set and
+  enforced: the product name is the project's name, and the product version is
+  the same in every file of a build. The workflow passes that build's version
+  (package.json's, stamped by the workflow) as the `version` parameter, and it
+  checks the files itself before sending them (scripts/check-signing-metadata.ps1).
+  The Windows beta is packed with the product name "Open Historia" for this
+  (electron-builder.beta-win.yml); its program and install are still the beta's.
 -->
 <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
   <zip-file>
-    <pe-file-set>
+    <pe-file-set product-name="Open Historia" product-version="${version}">
       <!-- The app (request 1) or the installer (request 2): exactly one program at the root. -->
       <include path="*.exe" min-matches="1" max-matches="1" />
       <!-- The system speech program; none in the installer request. -->

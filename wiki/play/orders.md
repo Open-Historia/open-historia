@@ -128,9 +128,9 @@ one the game can turn into a concrete change.
   city"* reaches them in the same skip: the period is fought again with it before the events are
   written, so the events tell the war as it went with your order. That costs one request more,
   and only in a skip where an order commands troops. The War Room commands them directly.
-- **Annexation.** An order to annex a region or a country, answered by an event that says the
-  annexation is done but carries no change to the map, moves the region or the whole country to
-  you all the same.
+- **Annexation.** An order to annex a region or a country moves it to you when the event that
+  carries it out records the change to the map. The map follows what an event records, never its
+  wording, in any language: an annexation told in words alone leaves the border where it was.
 - **Your agents.** An agent already in place takes its own orders — what to collect on, and
   operations such as sabotage or recruiting a source — from the **Intelligence** tab of the
   Diplomacy panel, each with its odds of success and its risk of capture shown first. See

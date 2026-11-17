@@ -260,6 +260,8 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   const warFigures = [];
   // Who each occupation outliving its war goes to (runtime/occupationSettlements.js), a line a region.
   const occupationSettlements = [];
+  // How each war ended without an outcome on record (runtime/warEndings.js): each segment answer, as written.
+  const warEndings = [];
   // The polities the model says would try to plant an agent in the player
   // (gameplay.js espionageCandidatesAgainst): their names, once each; null when
   // no segment answered it at all.
@@ -287,6 +289,7 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
     warFigures.push(...asLedgerRecords(payload.warFigures));
     if (payload.occupationSettlements && typeof payload.occupationSettlements === "object" && !Array.isArray(payload.occupationSettlements)) occupationSettlements.push(payload.occupationSettlements);
     else occupationSettlements.push(...asLedgerRecords(payload.occupationSettlements));
+    if (payload.warEndings && typeof payload.warEndings === "object" && !Array.isArray(payload.warEndings)) warEndings.push(payload.warEndings);
     socialPosts.push(...asArray(payload.socialPosts));
     pollResults.push(...asArray(payload.pollResults));
     if (typeof payload.spiesOnPlayer === "string" || Array.isArray(payload.spiesOnPlayer)) {
@@ -317,6 +320,7 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
     peaceTreaties,
     warFigures,
     occupationSettlements,
+    warEndings,
     socialPosts,
     pollResults,
     summary: summaries.join("\n\n"),

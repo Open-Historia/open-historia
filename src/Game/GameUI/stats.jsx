@@ -1,5 +1,5 @@
 /*! Open Historia — national stats pane © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
@@ -12,6 +12,7 @@ import { showEventOnTimeline, warTimelineEventId, warTimelineEventOpensWar } fro
 import { isPolityLandless, readGameData, readWorldStateView, writeWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
+import { economicDisplayUnitLabel, formatEconomicDisplayValue, getActiveEconomicDisplayCurrency, setActiveEconomicDisplayCurrency, subscribeEconomicDisplayCurrency } from "../../runtime/economicDisplayCurrency.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { resolveChosenPolityFlag, resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { buildHistoricalTrackingCandidateRows, buildHistoricalTrackingIndex, historyMetricValue, historyMetricPath, historyMetricChange, historySamplesInRange } from "./statsHistoricalTracking.js";
@@ -60,8 +61,9 @@ import {
     readCustomStatNumber,
     hasRecordedCustomStatValues,
 } from "../../runtime/statsSheet.js";
-import { formatCustomStatValue } from "./customStatFormatting.js";
+import { customGdpSourceCurrency, formatCustomStatValue } from "./customStatFormatting.js";
 import { onMemoryPressure } from "../../runtime/memoryPressure.js";
+import { nameInitials } from "../../../server/nameKey.js";
 
 // Sheets are regenerated when the game date moves; within a date they persist
 // across reloads so flipping between countries stays instant.
@@ -125,13 +127,12 @@ const needsLegacyComponentCapAudit = (value) =>
     value.territorialComponents.length === 64 &&
     populationCalibrationVersion(value) < COUNTRY_STATS_POPULATION_CALIBRATION_VERSION;
 
-// 8B.2.18 start-state migration. Old full-component sheets can be structurally valid
-// yet have a bad national scale because hundreds of province estimates or one opaque
-// whole-polity anchor were used. Rebuild those once through bounded regional calibration
-// automatically ONLY at Round One/start date. Mature alternate-history campaigns are
-// never silently re-anchored; they keep their persisted canon unless the user asks for
-// a hard audit.
-const needsStartPopulationCalibrationAudit = (value, player) => Boolean(
+// A complete authored scenario stat sheet is canonical even if it predates
+// bounded causal calibration. At the scenario start, a missing version stamp
+// triggers only a NATIVE territorial-coverage verification. The generator
+// returns matching sheets with zero AI calls and zero mutations, while still
+// repairing actual mismatches, including the older 64-component truncation.
+const needsStartStatsCoverageVerification = (value, player) => Boolean(
     value &&
     player?.startDate &&
     player?.date === player.startDate &&
@@ -247,14 +248,8 @@ const formatCompactNumber = (value, { digits = 1 } = {}) => {
 };
 
 const formatPopulation = (value) => formatCompactNumber(value);
-const formatEuroTotal = (value) => {
-    const text = formatCompactNumber(value);
-    return text === "—" ? text : `€${text}`;
-};
-const formatEuroPerCapita = (value) => {
-    const number = Number(value);
-    return Number.isFinite(number) ? `€${Math.round(number).toLocaleString()}` : "—";
-};
+const formatDollarTotal = (value) => formatEconomicDisplayValue(value, getActiveEconomicDisplayCurrency(), { compact: true });
+const formatDollarPerCapita = (value) => formatEconomicDisplayValue(value, getActiveEconomicDisplayCurrency(), { perCapita: true });
 const formatPercent = (value, { signed = false } = {}) => {
     const number = Number(value);
     if (!Number.isFinite(number)) return "—";
@@ -270,7 +265,8 @@ const customMetricUnit = (stat) => [
     String(stat?.suffix || ""),
 ].join(":");
 
-const customMetricUnitLabel = (stat) => {
+const customMetricUnitLabel = (stat, displayCurrency) => {
+    if (customGdpSourceCurrency(stat)) return economicDisplayUnitLabel(displayCurrency);
     if (stat?.kind === "index") return "Index · 0–100";
     if (stat?.kind === "percentage") return stat?.suffix || "Percent";
     const display = [stat?.prefix, stat?.suffix].filter(Boolean).join(" … ");
@@ -306,8 +302,8 @@ const IndexMetricCard = ({ icon = "", label, value, color = "#a1a1aa" }) => {
     );
 };
 
-const CustomStatCard = ({ stat, value }) => {
-    const formatted = formatCustomStatValue(stat, value);
+const CustomStatCard = ({ stat, value, displayCurrency }) => {
+    const formatted = formatCustomStatValue(stat, value, { economicDisplayCurrency: displayCurrency });
     if (stat.kind === "index") {
         return <IndexMetricCard icon={stat.icon} label={stat.label} value={value} color={stat.color || "#a1a1aa"} />;
     }
@@ -330,7 +326,7 @@ const CustomStatCard = ({ stat, value }) => {
 const LIVE_INTELLIGENCE_STAT_KEYS = Object.freeze(["intelligenceService"]);
 
 // `hiddenKeys`: stat keys not to draw. A section left with nothing is skipped.
-const CustomStatsSheet = ({ definition, sheet, hiddenKeys = [] }) => {
+const CustomStatsSheet = ({ definition, sheet, hiddenKeys = [], displayCurrency }) => {
     const values = sheet?.customStats || {};
     const sections = definition.sections
         .map((section) => ({ ...section, stats: section.stats.filter((stat) => !hiddenKeys.includes(stat.key)) }))
@@ -344,7 +340,7 @@ const CustomStatsSheet = ({ definition, sheet, hiddenKeys = [] }) => {
                     </div>
                     <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(auto-fit, minmax(min(12rem, 100%), 1fr))" }}>
                         {section.stats.map((stat) => (
-                            <CustomStatCard key={stat.key} stat={stat} value={values[stat.key]} />
+                            <CustomStatCard key={stat.key} stat={stat} value={values[stat.key]} displayCurrency={displayCurrency} />
                         ))}
                     </div>
                 </React.Fragment>
@@ -481,7 +477,6 @@ const canonicalPolityKey = (value, world) => {
         const resolved = resolvePolityIdentity(raw, world, {
             allowUnknown: true,
             requireActive: false,
-            allowCoreMatch: true,
             allowStockBase: true,
         });
         if (cleanText(resolved?.resolved)) return cleanText(resolved.resolved);
@@ -548,13 +543,10 @@ const agreementStatusTone = (status) => {
 
 const warStatusTone = (status) => (lowerText(status) === "active" ? "#f87171" : "#fbbf24");
 
-// A war the engine opened from a battle the model narrated records that fact as
-// its cause (nativeWarLedger.js reconcileCombatWarState), which is bookkeeping,
-// not a reason a player can read.
-const warCauseForDisplay = (cause) => {
-    const text = cleanText(cause);
-    return /^native bootstrap\b/i.test(text) ? "" : text;
-};
+// A war's cause as its record keeps it. The engine's own bookkeeping note,
+// which an old save may hold for a war it opened from a battle, is cleared
+// where the record is read (runtime/warRecord.js), so nothing here reads it.
+const warCauseForDisplay = (cause) => cleanText(cause);
 
 const RelationMeter = ({ score, tone }) => {
     const value = Math.max(-100, Math.min(100, Number(score) || 0));
@@ -1064,7 +1056,7 @@ const phoneSheetStyle = {
 // ---------------------------------------------------------------------------
 // 8B.3 — Advanced Statistics
 // ---------------------------------------------------------------------------
-const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
+const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null, displayCurrency = "USD") => {
     if (definition?.custom) {
         return definition.sections.map((section) => ({
             key: section.key,
@@ -1074,9 +1066,9 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
                 key: stat.key,
                 label: stat.label,
                 unit: customMetricUnit(stat),
-                unitLabel: customMetricUnitLabel(stat),
+                unitLabel: customMetricUnitLabel(stat, displayCurrency),
                 color: stat.color || "#a1a1aa",
-                format: (value) => formatCustomStatValue(stat, value),
+                format: (value) => formatCustomStatValue(stat, value, { economicDisplayCurrency: displayCurrency }),
                 bounded01: stat.kind === "index" || (Number(stat.minimum) === 0 && Number(stat.maximum) === 100),
                 nonNegative: Number.isFinite(Number(stat.minimum)) && Number(stat.minimum) >= 0,
             })),
@@ -1088,8 +1080,8 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
             label: "Headline economy",
             icon: "◈",
             metrics: [
-                { key: "gdp", label: "GDP", unit: "gdp", color: "#34d399", format: formatEuroTotal },
-                { key: "gdpPerCapita", label: "GDP per capita", unit: "gdpPerCapita", color: "#e7e7e9", format: formatEuroPerCapita },
+                { key: "gdp", label: "GDP", unit: "gdp", color: "#34d399", format: formatDollarTotal },
+                { key: "gdpPerCapita", label: "GDP per capita", unit: "gdpPerCapita", color: "#e7e7e9", format: formatDollarPerCapita },
                 { key: "population", label: "Population", unit: "population", color: "#94a3b8", format: formatPopulation },
             ],
         },
@@ -1134,13 +1126,18 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
 };
 
 const ADVANCED_UNIT_LABELS = {
-    gdp: "GDP · 2026-EUR equivalent",
-    gdpPerCapita: "GDP per capita · 2026-EUR equivalent",
+    gdp: "GDP",
+    gdpPerCapita: "GDP per capita",
     population: "Population",
     economicPercent: "Percent",
     index: "Index · 0–100",
     sector: "Share of GDP · %",
 };
+
+const advancedUnitLabel = (unit) =>
+    unit === "gdp" || unit === "gdpPerCapita"
+        ? `${ADVANCED_UNIT_LABELS[unit]} · ${economicDisplayUnitLabel(getActiveEconomicDisplayCurrency())}`
+        : ADVANCED_UNIT_LABELS[unit] || "Value";
 
 const formatHistoryDate = (value, { compact = false } = {}) => {
     const text = String(value || "");
@@ -1277,7 +1274,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false,
                     const right = index === validSamples.length - 1 ? width - pad.right : (x + next) / 2;
                     return <rect key={`hit-${sample.date}`} x={left} y={pad.top} width={Math.max(2, right - left)} height={plotHeight} fill="transparent" onMouseEnter={() => setHoverIndex(index)} onMouseMove={() => setHoverIndex(index)} onMouseLeave={() => setHoverIndex(null)} />;
                 })}
-                <text x={pad.left} y="18" fill="rgba(255,255,255,0.38)" fontSize="11" fontWeight="700" letterSpacing="1">{metrics[0]?.unitLabel || ADVANCED_UNIT_LABELS[unit] || "Value"}</text>
+                <text x={pad.left} y="18" fill="rgba(255,255,255,0.38)" fontSize="11" fontWeight="700" letterSpacing="1">{metrics[0]?.unitLabel || advancedUnitLabel(unit)}</text>
             </svg>
             {hovered && (
                 <div style={{ backgroundColor: "rgba(16,16,18,0.96)", border: "1px solid rgba(148,163,184,0.22)", borderRadius: "10px", boxShadow: "0 12px 35px rgba(0,0,0,0.35)", left: `min(calc(${((hoverX / width) * 100).toFixed(2)}% + 10px), calc(100% - 190px))`, padding: "0.55rem 0.65rem", pointerEvents: "none", position: "absolute", top: "1.1rem", width: "180px", zIndex: 2 }}>
@@ -1311,6 +1308,7 @@ const AdvancedStatsModal = ({
     persistentCount,
     indexRows,
     statSheetDefinition,
+    displayCurrency,
 }) => {
     const [metricKeys, setMetricKeys] = useState(["gdp"]);
     const [range, setRange] = useState("all");
@@ -1321,8 +1319,8 @@ const AdvancedStatsModal = ({
     const touch = useTouchPrimary();
     const fit = isMobile || touch;
     const metricGroups = useMemo(
-        () => advancedMetricGroupsFor(indexRows, statSheetDefinition),
-        [indexRows, statSheetDefinition],
+        () => advancedMetricGroupsFor(indexRows, statSheetDefinition, displayCurrency),
+        [indexRows, statSheetDefinition, displayCurrency],
     );
     const metricsByKey = useMemo(() => Object.fromEntries(
         metricGroups.flatMap((group) => group.metrics.map((metric) => [metric.key, metric])),
@@ -1405,7 +1403,7 @@ const AdvancedStatsModal = ({
                         <div style={{ alignItems: "flex-start", display: "flex", flexWrap: "wrap", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.35rem" }}>
                             <div>
                                 <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.82rem", fontWeight: 850 }}>{selectedMetrics.map((metric) => metric.label).join(" · ")}</div>
-                                <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.64rem", marginTop: "0.15rem" }}>{selectedMetrics[0]?.unitLabel || ADVANCED_UNIT_LABELS[selectedUnit] || "Value"}</div>
+                                <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.64rem", marginTop: "0.15rem" }}>{selectedMetrics[0]?.unitLabel || advancedUnitLabel(selectedUnit)}</div>
                             </div>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
                                 {selectedMetrics.map((metric) => <span key={metric.key} style={{ alignItems: "center", color: "rgba(255,255,255,0.58)", display: "inline-flex", fontSize: "0.63rem", gap: "0.3rem" }}><span style={{ backgroundColor: metric.color, borderRadius: "999px", height: "7px", width: "7px" }} />{metric.label}</span>)}
@@ -1431,9 +1429,9 @@ const AdvancedStatsModal = ({
                                         : String(metric.unit || "").startsWith("custom:")
                                             ? `${delta > 0 ? "+" : ""}${metric.format(delta)}`
                                             : metric.unit === "gdp"
-                                                ? formatEuroTotal(delta)
+                                                ? formatDollarTotal(delta)
                                                 : metric.unit === "gdpPerCapita"
-                                                    ? formatEuroPerCapita(delta)
+                                                    ? formatDollarPerCapita(delta)
                                                     : metric.unit === "population"
                                                         ? formatCompactNumber(delta)
                                                         : `${delta > 0 ? "+" : ""}${Math.round(delta * 10) / 10}${metric.unit === "index" ? "" : " pp"}`;
@@ -1509,16 +1507,16 @@ const STOCK_COUNTRY_NAMES = Object.values(COUNTRY_NAMES);
 
 const RANKING_ROWS_FIRST = 25;
 
-const formatRankingValue = (metric, value) => {
-    if (metric.stat) return formatCustomStatValue(metric.stat, value);
-    if (metric.kind === "money") return formatEuroTotal(value);
-    if (metric.kind === "money each") return formatEuroPerCapita(value);
+const formatRankingValue = (metric, value, displayCurrency) => {
+    if (metric.stat) return formatCustomStatValue(metric.stat, value, { economicDisplayCurrency: displayCurrency });
+    if (metric.kind === "money") return formatDollarTotal(value);
+    if (metric.kind === "money each") return formatDollarPerCapita(value);
     if (metric.kind === "index") return String(Math.round(value));
     if (metric.kind === "weight") return formatMilitaryPower(value);
     return formatCompactNumber(value);
 };
 
-const RankingSection = ({ world, definition, index, playerCode, targetCountry, onPick, flags, touch }) => {
+const RankingSection = ({ world, definition, index, playerCode, targetCountry, onPick, flags, touch, displayCurrency }) => {
     const [metricKey, setMetricKey] = useState("");
     const [showAll, setShowAll] = useState(false);
     const metrics = useMemo(
@@ -1615,7 +1613,7 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
                                 {flagUrl ? <img alt="" src={bundledFlagUrl(flagUrl)} style={{ display: "block", height: "100%", objectFit: "contain", width: "100%" }} /> : null}
                             </span>
                             <span data-no-translate className="oh-country-ranking-name">{row.label}</span>
-                            <span data-no-translate className="oh-country-ranking-value">{formatRankingValue(metric, row.value)}</span>
+                            <span data-no-translate className="oh-country-ranking-value">{formatRankingValue(metric, row.value, displayCurrency)}</span>
                         </button>
                     );
                 })}
@@ -1644,6 +1642,7 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
 // Stats button); `onConsumeTarget` is called once it has been taken.
 const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }) => {
     const { activeGameId, runtimeScenario, token: libraryToken } = useLibraryState();
+    const displayCurrency = useSyncExternalStore(subscribeEconomicDisplayCurrency, getActiveEconomicDisplayCurrency);
     const [player, setPlayer] = useState({ code: "", date: "", startDate: "", round: 0, gameKey: "game" });
     const [targetCountry, setTargetCountry] = useState("");
     // A requested polity that arrived before the game was read: the first
@@ -1776,6 +1775,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
 
         const applyGame = (game) => {
             if (cancelled || !game) return;
+            setActiveEconomicDisplayCurrency(game.economicDisplayCurrency);
             const code = String(game?.country || "").trim();
             const requested = requestedTargetRef.current;
             requestedTargetRef.current = "";
@@ -1882,8 +1882,9 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 const persisted = world?.countryStats?.[code];
                 const persistedIsValid = persisted && isDisplayableStatSheet(persisted, statSheetDefinition);
                 const persistedNeedsCapAudit = !statSheetDefinition.custom && persistedIsValid && needsLegacyComponentCapAudit(persisted);
-                const persistedNeedsPopulationAudit = !statSheetDefinition.custom && persistedIsValid && needsStartPopulationCalibrationAudit(persisted, player);
-                const persistedNeedsNativeAudit = persistedNeedsCapAudit || persistedNeedsPopulationAudit;
+                const persistedNeedsCoverageCheck = !statSheetDefinition.custom && persistedIsValid &&
+                    needsStartStatsCoverageVerification(persisted, player);
+                const persistedNeedsNativeAudit = persistedNeedsCapAudit || persistedNeedsCoverageCheck;
                 if (persistedIsValid && !persistedNeedsNativeAudit) {
                     rememberSheet(cacheKey, { date: player.date, sheet: persisted });
                     setState({ status: "ready", sheet: persisted, error: "" });
@@ -1901,7 +1902,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 cached &&
                 isDisplayableStatSheet(cached.sheet, statSheetDefinition) &&
                 (statSheetDefinition.custom || !needsLegacyComponentCapAudit(cached.sheet)) &&
-                (statSheetDefinition.custom || !needsStartPopulationCalibrationAudit(cached.sheet, player))
+                (statSheetDefinition.custom || !needsStartStatsCoverageVerification(cached.sheet, player))
             ) {
                 const sheet = mergeStatSheet(cached.sheet, aiOverride);
                 rememberSheet(cacheKey, { date: player.date, sheet });
@@ -1948,7 +1949,8 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 if (statsLoadRef.current.sequence !== sequence || controller.signal.aborted) return;
                 const pendingUsable = pending &&
                     isDisplayableStatSheet(pending, statSheetDefinition) &&
-                    (statSheetDefinition.custom || (!needsLegacyComponentCapAudit(pending) && !needsStartPopulationCalibrationAudit(pending, player)));
+                    (statSheetDefinition.custom || (!needsLegacyComponentCapAudit(pending) &&
+                        !needsStartStatsCoverageVerification(pending, player)));
                 if (pendingUsable) {
                     const sheet = finalizeCountryStatSheet(pending);
                     rememberSheet(cacheKey, { date: player.date, sheet });
@@ -2294,7 +2296,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
         identityIndex: polityIndex?.identityIndex,
     };
     const flagUrl = (suppressDerivedFlag ? resolveChosenPolityFlag(flagArgs) : resolvePolityFlag(flagArgs)).imageUrl;
-    const initials = String(targetCountry).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??";
+    const initials = nameInitials(targetCountry);
 
     const breakdown = useMemo(() => {
         const raw = sheet?.gdpBreakdown ?? {};
@@ -2314,15 +2316,17 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
     const hasOtherTerritories = Number.isFinite(otherPopulation) && otherPopulation > 0;
     const wholePerCapita = Number(sheet?.economy?.gdpPerCapita);
     const corePerCapita = Number(sheet?.economy?.coreGdpPerCapita);
-    const displayedPerCapita = hasOtherTerritories && Number.isFinite(corePerCapita)
-        ? corePerCapita
-        : wholePerCapita;
+    // The headline GDP is whole-polity, so its per-capita headline must have
+    // the SAME denominator. Core productivity remains visible as secondary data.
+    const displayedPerCapita = Number.isFinite(wholePerCapita)
+        ? wholePerCapita
+        : corePerCapita;
     const populationScope = hasOtherTerritories
         ? `Core/integrated ${formatPopulation(corePopulation)} · Other territories ${formatPopulation(otherPopulation)}`
         : "";
-    const capitaScope = hasOtherTerritories
-        ? `Core/integrated · Whole polity ${formatEuroPerCapita(wholePerCapita)}`
-        : "Whole polity";
+    const capitaScope = hasOtherTerritories && Number.isFinite(corePerCapita)
+        ? `Whole polity · Core/integrated ${formatDollarPerCapita(corePerCapita)}`
+        : Number.isFinite(wholePerCapita) ? "Whole polity" : "Core/integrated";
 
     return (
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
@@ -2491,6 +2495,23 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             </div>
 
             <div className="oh-country-content" data-view={statsView}>
+            {/* Only a real Statistics hold needs a visible notice. Routine
+                progression dates and mechanics do not belong between the
+                country identity and its navigation tabs. */}
+            {statsView === "economy" && sheet?.continuity?.progressionBlocked && (
+                <div role="status" style={{
+                    borderLeft: "3px solid #f59e0b",
+                    background: "var(--oh-ui-overlay-card, rgba(245,158,11,0.08))",
+                    borderRadius: "6px",
+                    color: "var(--oh-ui-text, rgba(255,255,255,0.82))",
+                    fontSize: "0.73rem",
+                    lineHeight: 1.45,
+                    marginTop: "0.8rem",
+                    padding: "0.6rem 0.8rem",
+                }}>
+                    Territory changed: refresh this country's Stats to update its geographic baseline before automatic progression resumes.
+                </div>
+            )}
             {statsView === "politics" && (
                 <PoliticalOverview
                     profile={publicPoliticalProfile}
@@ -2544,6 +2565,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                     onPick={setTargetCountry}
                     flags={customFlags}
                     touch={touch}
+                    displayCurrency={displayCurrency}
                 />
             )}
 
@@ -2562,6 +2584,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                     definition={statSheetDefinition}
                     sheet={sheet}
                     hiddenKeys={intelligence !== null ? LIVE_INTELLIGENCE_STAT_KEYS : []}
+                    displayCurrency={displayCurrency}
                     />
                     </>
                 ) : (
@@ -2610,13 +2633,13 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "1fr 1fr" }}>
                 <EconomyCard
                 label="GDP"
-                value={formatEuroTotal(sheet.economy?.gdp)}
-                sub={`Growth ${formatPercent(sheet.economy?.gdpGrowth, { signed: true })} · 2026-EUR eq.`}
+                value={formatDollarTotal(sheet.economy?.gdp)}
+                sub={`Growth ${formatPercent(sheet.economy?.gdpGrowth, { signed: true })} · ${economicDisplayUnitLabel(displayCurrency)}`}
                 tone="#34d399"
                 />
                 <EconomyCard
                 label="GDP/capita"
-                value={formatEuroPerCapita(displayedPerCapita)}
+                value={formatDollarPerCapita(displayedPerCapita)}
                 sub={capitaScope}
                 tone="#e7e7e9"
                 />
@@ -2632,7 +2655,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 </div>
                 {sheet.economy?.currency && (
                     <div style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.66rem", marginTop: "0.45rem" }}>
-                    Domestic currency: <span data-no-translate>{sheet.economy.currency}</span> · GDP accounting shown in 2026-EUR-equivalent values.
+                    Domestic currency: <span data-no-translate>{sheet.economy.currency}</span> · GDP display: {economicDisplayUnitLabel(displayCurrency)}. Canonical calculations remain in USD.
                     </div>
                 )}
 
@@ -2707,6 +2730,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             persistentCount={historyState.persistentCount}
             indexRows={indexRows}
             statSheetDefinition={statSheetDefinition}
+            displayCurrency={displayCurrency}
             />
         )}
         </div>

@@ -34,7 +34,7 @@
 //   no-welcome      the connection opens and the host never lets us in
 //   clock           the relays refused what we sent for its time stamp: this
 //                   computer's clock is wrong (signaling/nostr.js
-//                   CLOCK_REFUSAL), so the host never heard us
+//                   refusedForClock), so the host never heard us
 //   host-closed     the host closed the game
 //   gave-up         a player who was in could not get back
 

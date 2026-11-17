@@ -24,7 +24,12 @@ const clampSupport = (value) => {
   return Math.max(0, Math.min(100, Math.round(number * 10) / 10));
 };
 
-const approximateBasis = (value) => /estimate|approximate/i.test(clean(value));
+// A figure is approximate when the game itself marked it an estimate: the
+// two bases it writes for a share it estimated (politicalWorldGeneratorCore.js
+// and politicalWorldGeneration.js: "generated-estimate", "native-fallback-estimate").
+// Compared exactly, never by the words in a basis.
+const APPROXIMATE_BASES = new Set(["generated-estimate", "native-fallback-estimate"]);
+const approximateBasis = (value) => APPROXIMATE_BASES.has(clean(value).toLocaleLowerCase());
 
 const partyKey = (party, index = 0) => clean(party?.id || party?.name) || `party-${index}`;
 
@@ -62,12 +67,14 @@ const publicPartyRow = (party, index) => {
     leader: officeholderName(party.leader),
     ruling: party.ruling === true,
     coalition: party.coalition === true,
+    residual: party.residual === true,
     color: clean(party.color),
     // What the Politics tab kept apart, the Political World's now (politicalActors.js).
     nameNative: clean(party.nameNative),
     shortNameNative: clean(party.shortNameNative),
     ideologyFamily: clean(party.ideologyFamily),
     subideology: clean(party.subideology),
+    politicalPosition: clean(party.politicalPosition),
     role: clean(party.role),
     seats: Number.isFinite(Number(party.seats)) && party.seats !== null && party.seats !== "" ? Math.max(0, Math.round(Number(party.seats))) : null,
     founded: clean(party.founded),
@@ -163,9 +170,11 @@ export const buildPoliticalPartyLandscape = (
   ).sort((left, right) => (Number(right.support) || 0) - (Number(left.support) || 0) || left.name.localeCompare(right.name));
 
   const supported = rows.filter((party) => Number.isFinite(party.support) && party.support > 0);
-  if (!supported.length) return { parties: rows, slices: [], totalKnownSupport: 0, isApproximate: false };
+  if (!supported.length) return { parties: rows, listEntries: rows, slices: [], totalKnownSupport: 0, isApproximate: false };
 
-  const explicitOther = supported.find((party) => /^(other|others|other parties|independent|independents)$/i.test(party.name));
+  // The roster's own catch-all row joins the residual slice: the one it marks
+  // residual, never one found by an English name ("Other", "Independents").
+  const explicitOther = supported.find((party) => party.residual === true);
   const namedCandidates = supported.filter((party) => party !== explicitOther);
   const keep = [];
   const grouped = [];
@@ -219,8 +228,17 @@ export const buildPoliticalPartyLandscape = (
     chartPercent: Math.max(0, (party.support / chartTotal) * 100),
   }));
 
+  // Chart slices may be compact, but every named canonical party remains
+  // individually inspectable in the detailed list. Only genuinely unrecorded
+  // support receives a synthetic residual row.
+  const listEntries = remainder > 0.05 ? [
+    ...rows,
+    { id: "__unmapped_support__", name: "Other political support",
+      isOther: true, members: [], support: remainder, unlistedSupport: remainder },
+  ] : rows;
   return {
     parties: rows,
+    listEntries,
     slices: boundedSlices,
     totalKnownSupport: Math.round(Math.min(100, knownSupport) * 10) / 10,
     isApproximate: supported.some((party) => party.supportApproximate),
@@ -467,7 +485,7 @@ export const buildPoliticalLandscape = (publicPoliticalProfile, options = {}) =>
     return {
       ...meta,
       ...landscape,
-      entries: landscape.slices.length ? landscape.slices : landscape.parties,
+      entries: landscape.listEntries,
       totalKnownPercent: landscape.totalKnownSupport,
       hasQuantitativeValues: landscape.slices.length > 0,
     };
@@ -516,7 +534,7 @@ export const buildPoliticalLandscapeViews = (publicPoliticalProfile, options = {
       ...POLITICAL_LANDSCAPE_META.electoral,
       representation: meta.representation,
       ...data,
-      entries: data.slices.length ? data.slices : data.parties,
+      entries: data.listEntries,
       totalKnownPercent: data.totalKnownSupport,
       hasQuantitativeValues: data.slices.length > 0,
     };

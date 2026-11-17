@@ -25,6 +25,7 @@
 
 import { attritionReport } from "./attrition.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateYear } from "../gameDates.js";
+import { MAX_WAR_SIDE_MEMBERS, mintWarId } from "../warRecord.js";
 import { waterTypeIds } from "../regionTypes.js";
 import { ADVANCE_KM_PER_DAY, OVERLAND_KM_PER_DAY, eraOf, yearInEra } from "../unitMotion.js";
 import { arenaFor } from "./arena.js";
@@ -103,11 +104,21 @@ import { buildWorldGrid, kmBetween, measureOptions, placeAlong, worldSheetKey } 
 const clean = (value, max = 120) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max).trim();
 const fold = (value) => clean(value).toLowerCase();
 
-const memberList = (value) => {
+// A war's members as its record lists them, each once: the whole of each side
+// (runtime/warRecord.js MAX_WAR_SIDE_MEMBERS). The engine used to keep the
+// first eight of each side, in the order the record happened to list them,
+// and a ninth member was a country outside the war: its land a wall, its
+// border no contact, so whether a front opened at all hung on the order the
+// coalition was written in (the owner, 2026-11-13). A battlefield seats as
+// many a side (MAX_SIDE_MEMBERS: a troop's owner is kept in eight bits once a
+// side passes eight, codec.js), so every member of a war fights on its
+// battlefields with troops of its own; it seated eight, and a ninth member's
+// land there was a wall.
+const memberList = (value, limit = MAX_WAR_SIDE_MEMBERS) => {
   const members = [];
   for (const entry of Array.isArray(value) ? value : []) {
     const name = clean(entry);
-    if (name && !members.some((member) => fold(member) === fold(name)) && members.length < MAX_SIDE_MEMBERS) members.push(name);
+    if (name && !members.some((member) => fold(member) === fold(name)) && members.length < limit) members.push(name);
   }
   return members;
 };
@@ -266,6 +277,34 @@ const warSideOf = (run, war, id) => {
   if (group >= 0) return group;
   const owner = name ? sideOf(run.groupOwnerOf(name)) : -1;
   return owner >= 0 ? owner : sideOf(run.controllerOf(id));
+};
+
+// Who of a side of a war is seated on a battlefield, in order, should a side
+// ever hold more members than a battlefield seats (MAX_SIDE_MEMBERS; a war's
+// side holds no more today, runtime/warRecord.js): a country a person plays
+// first, then the members holding the most of the battlefield's ground, then
+// the larger armies, then by name. Never the order the war's record lists
+// them in. A side that fits is seated as it stands.
+const seatOrder = (run, arena, members) => {
+  const list = memberList(members);
+  if (list.length <= MAX_SIDE_MEMBERS) return list;
+  const played = new Set((Array.isArray(run.input?.players) ? run.input.players : []).map(fold));
+  const ground = new Map(list.map((name) => [fold(name), 0]));
+  if (arena?.ids) {
+    for (let region = 1; region < arena.ids.length; region += 1) {
+      const id = arena.ids[region];
+      const group = run.groupOf(id);
+      const owner = group ? run.groupOwnerOf?.(group) : "";
+      const holder = group && ground.has(fold(group)) ? group : owner && ground.has(fold(owner)) ? owner : run.controllerOf(id);
+      const key = fold(holder);
+      if (ground.has(key)) ground.set(key, ground.get(key) + (Number(arena.cells?.[region]) || 0));
+    }
+  }
+  const army = (name) => (run.mech?.military ? landWorth(run.militaryOf(name)) : 0);
+  return list
+    .map((name) => ({ name, played: played.has(fold(name)) ? 1 : 0, ground: ground.get(fold(name)) || 0, army: army(name) }))
+    .sort((a, b) => b.played - a.played || b.ground - a.ground || b.army - a.army || (fold(a.name) < fold(b.name) ? -1 : fold(a.name) > fold(b.name) ? 1 : 0))
+    .map((entry) => entry.name);
 };
 
 // ---- battlefields opening and closing ------------------------------------------
@@ -469,7 +508,8 @@ const examineWar = (run, war, day) => {
     const frame = frameForContact(contact, map);
     const arena = frame ? arenaFor(run.cache, map, frame, run.input.regionTypes) : null;
     if (!arena) continue;
-    const battle = openBattle(run, { name: "", warId: war.id, sides: war.sides, frame, arena, day });
+    const sides = war.sides.map((members) => seatOrder(run, arena, members).slice(0, MAX_SIDE_MEMBERS));
+    const battle = openBattle(run, { name: "", warId: war.id, sides, frame, arena, day });
     if (!battle) continue;
     battle.name = nameFor(run, battle);
     battle.autoNamed = true;
@@ -747,7 +787,7 @@ const syncWithWar = (run, battle) => {
     const theirs = war.sides[battleSide(battle, side)];
     const left = battle.sides[side].filter((member) => !theirs.some((name) => fold(name) === fold(member)));
     if (left.length > 0) leaveBattle(run, battle, left);
-    joinBattle(run, battle, side, theirs);
+    joinBattle(run, battle, side, seatOrder(run, battle.arena, theirs));
   }
   battle.status = war.status === "ceasefire" ? "frozen" : "active";
 };
@@ -795,8 +835,12 @@ const attackOpensWar = (run, attacker, defender, day, serious = true) => {
     return run.wars.get(clean(moment.warId)) ?? null;
   }
   if (!serious) return null;
-  const id = `war-${slugOf(attacker)}-${slugOf(defender)}-${date}`;
-  if (run.wars.has(id)) return run.wars.get(id).status === "active" ? run.wars.get(id) : null;
+  let id = `war-${slugOf(attacker)}-${slugOf(defender)}-${date}`;
+  // An id a war that is over already holds is that war's for good: this one is a
+  // new war under an id of its own (runtime/warRecord.js). It used to be refused,
+  // and the attack opened nothing.
+  if (run.wars.has(id) && run.wars.get(id).status !== "ended") return run.wars.get(id).status === "active" ? run.wars.get(id) : null;
+  if (run.wars.has(id)) id = mintWarId(id, new Set(run.wars.keys()));
   run.wars.set(id, { id, title: "", status: "active", sides: [[clean(attacker)], [clean(defender)]], began: date });
   run.starts.push({ day, date, warId: id, attacker: clean(attacker), defender: clean(defender) });
   examineWar(run, run.wars.get(id), day);
@@ -1698,7 +1742,7 @@ const applyWarMoment = (run, moment, day) => {
       if (names.length === 0) return;
     }
     for (const name of names) {
-      if (!war.sides.some((members) => members.some((member) => fold(member) === fold(name))) && war.sides[side].length < MAX_SIDE_MEMBERS) war.sides[side].push(name);
+      if (!war.sides.some((members) => members.some((member) => fold(member) === fold(name))) && war.sides[side].length < MAX_WAR_SIDE_MEMBERS) war.sides[side].push(name);
     }
     for (const battle of mine()) {
       joinBattle(run, battle, battleSide(battle, side), names);

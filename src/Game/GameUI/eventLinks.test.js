@@ -129,7 +129,7 @@ test("the regions a group moves into are linked, after the ones the event fought
       regionControlOps: [{ op: "contest", regionId: "UKR.5_1", actorCode: "Romania", fromCode: "Ukraine" }],
       groupOps: [
         { op: "take", name: "Green Cells", regionIds: ["IRL.4_1", "no-such-region"] },
-        { op: "spread", group: "Green Cells", regionId: "IRL.7_1" },
+        { op: "take", group: "Green Cells", regionId: "IRL.7_1" },
       ],
     },
   };
@@ -139,6 +139,12 @@ test("the regions a group moves into are linked, after the ones the event fought
     "region:Connacht",
     "region:Kerry",
   ]);
+  // A word that is no group op (groups.js GROUP_OP_KINDS) moves no group, in any
+  // language: "spread" no more than "étendre".
+  for (const op of ["spread", "étendre"]) {
+    const spread = { title: "A quiet spread", impacts: { groupOps: [{ op, group: "Green Cells", regionId: "IRL.7_1" }] } };
+    assert.deepEqual(summary(deriveEventLinks(spread, context)), [], op);
+  }
 });
 
 test("every link carries a frame to fly to, and a place the map cannot find is left out", () => {

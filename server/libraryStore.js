@@ -1,6 +1,7 @@
 /*! Open Historia — portions (regions.geojson scenario asset + custom-map seeding) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import fs from "fs";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "./gameFeatures.js";
+import { assertEconomicDisplayCurrencyChoice } from "./economicDisplayCurrency.js";
 import { layOutScenarioBundle } from "./mapProjection.js";
 import path from "path";
 import url from "url";
@@ -18,6 +19,7 @@ const DIST_DIR = path.join(PROJECT_ROOT, "dist");
 const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
 import { DATA_DIR as SERVER_DATA_DIR } from "./dataDir.js";
 import { coarsenFeatureCollection } from "./coarseGeometry.js";
+import { nameId } from "./nameId.js";
 import {
   createTiledBasemap,
   findBasemapMetaByHash,
@@ -543,6 +545,9 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "ownBasemaps",
   "canonModelVersion",
   "canonContext",
+  // Explicit scenario Projects funding basis. Non-monetary scenarios need no
+  // modern GDP metric and do not invent a cash ledger.
+  "projectFundingMode",
   "customCities",
   "customGeometry",
   "customRegions",
@@ -579,6 +584,8 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "scenarioFronts",
   // How the scenario's wars are fought (src/runtime/warSettings.js).
   "warSettings",
+  // Its own unit types (src/runtime/unitTypes.js).
+  "unitTypes",
   // What the scenario draws on its map for war (src/runtime/warGeography.js).
   "terrainAreas",
   "fortifications",
@@ -728,12 +735,15 @@ const invalidateCatalogs = (writtenPath = null) => {
   }
 };
 
+// A scenario's or a game's id, from what it was asked to be called, by the
+// game's one rule for an id made from a name (nameId.js): a Latin name keeps its
+// slug, a name in another script is its own hash instead of the hour it was made.
 const normalizeId = (rawValue, prefix) => {
-  const value = String(rawValue ?? "")
+  const value = nameId(rawValue, (name) => String(name ?? "")
   .trim()
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-+|-+$/g, "");
+  .replace(/^-+|-+$/g, ""));
 
   return value || `${prefix}-${Date.now().toString(36)}`;
 };
@@ -2406,6 +2416,7 @@ const createGame = ({
 } = {}) => {
   ensureGameStore();
 
+  assertEconomicDisplayCurrencyChoice(gamePatch);
   const resolvedGameId = ensureUniqueId(id || name || "game", "game");
   const gameDir = getGameDirectory(resolvedGameId);
   // Refused before anything is on disk: a game made to be opened at once.
@@ -2547,6 +2558,8 @@ const updateScenario = (scenarioId, body = {}) => {
     world,
     worldPatch,
   } = body ?? {};
+  assertEconomicDisplayCurrencyChoice(game);
+  assertEconomicDisplayCurrencyChoice(gamePatch);
   ensureScenarioStore();
 
   if (!fs.existsSync(getScenarioDirectory(scenarioId))) {
@@ -2666,6 +2679,8 @@ const updateGame = (
     worldPatch,
   } = {},
 ) => {
+  assertEconomicDisplayCurrencyChoice(game);
+  assertEconomicDisplayCurrencyChoice(gamePatch);
   ensureGameStore();
 
   if (!fs.existsSync(getGameDirectory(gameId))) {

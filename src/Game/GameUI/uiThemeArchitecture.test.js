@@ -63,7 +63,14 @@ test("Actions, Projects and diplomatic conversation chrome consume tokens while 
   assert.match(diplomacy, /data-diplomacy-composer="modern"[\s\S]*?background: isInstitutionCouncil \? "transparent" : "var\(--oh-ui-header,/);
   assert.match(diplomacy, /color-mix\(in srgb, \$\{accentColor\} 4%, var\(--oh-ui-surface,/);
   // These colors encode game meaning and must not be derived from user accent.
-  assert.match(projects, /if \(flags\.overdue\) return "#ef4444";/);
-  assert.match(projects, /if \(flags\.stale \|\| flags\.milestoneMissed\) return "#f59e0b";/);
-  assert.match(projects, /if \(project\.status === "complete"\) return "#22d3ee";/);
+  // The Projects panel's status badges and progress bars: fixed colours, no theme token among them.
+  const tones = projects.slice(projects.indexOf("const STATUS_TONES = {"), projects.indexOf("\n};", projects.indexOf("const STATUS_TONES = {")));
+  assert.match(tones, /stalled: \{ label: "Stalled", color: "#fbbf24",/);
+  assert.match(tones, /complete: \{ label: "Complete", color: "#86efac",/);
+  assert.match(tones, /failed: \{ label: "Failed", color: "#f87171",/);
+  assert.doesNotMatch(tones, /var\(--oh-ui/);
+  const progress = projects.slice(projects.indexOf("const progressColor = (project) => {"), projects.indexOf("\n};", projects.indexOf("const progressColor = (project) => {")));
+  assert.match(progress, /if \(project\.status === "complete"\) return "#86efac";/);
+  assert.match(progress, /if \(project\.status === "stalled"\) return "#f59e0b";/);
+  assert.doesNotMatch(progress, /var\(--oh-ui/);
 });

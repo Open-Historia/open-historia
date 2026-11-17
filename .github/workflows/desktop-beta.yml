@@ -112,10 +112,15 @@ jobs:
           # build simply cannot be produced anywhere but macOS.
           - os: windows-latest
             args: --win
+            # The product name "Open Historia", so SignPath Foundation can sign it;
+            # its program, folder, shortcuts and saves stay the beta's own.
+            config: electron-builder.beta-win.yml
           - os: macos-latest
             args: --mac
+            config: electron-builder.beta.yml
           - os: ubuntu-latest
             args: --linux
+            config: electron-builder.beta.yml
     runs-on: ${{ matrix.os }}
     # A build takes 3 to 15 minutes; a hang stops here instead of at six hours.
     # A signed Windows build waits on two manual SignPath approvals as well.
@@ -182,6 +187,9 @@ jobs:
         run: |
           node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='0.0.${{ github.run_number }}';p.name='open-historia-beta';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
           node -p "require('./package.json').name+' '+require('./package.json').version"
+          # The product version every signed file must carry
+          # (.signpath/artifact-configuration.xml).
+          echo "APP_VERSION=0.0.${{ github.run_number }}" >> "$GITHUB_ENV"
 
       # (The tests ran in the `test` job above, on this same commit.)
 
@@ -207,7 +215,7 @@ jobs:
       # productName, icon, artifact names and update feed. It REPLACES package.json's
       # `build` block rather than extending it.
       - name: Build the installer
-        run: node scripts/package-desktop.mjs ${{ matrix.args }} --config electron-builder.beta.yml --publish never
+        run: node scripts/package-desktop.mjs ${{ matrix.args }} --config ${{ matrix.config }} --publish never
         env:
           # electron-builder itself never signs: Windows is signed by SignPath in
           # the steps below, macOS has no certificate. Without this it tries to
@@ -219,6 +227,20 @@ jobs:
       # app's own programs are signed first, the installer is rebuilt around them
       # and signed in turn, latest.yml is rewritten for the signed installer, and
       # the update chunks below are cut from the signed app.
+      # electron-builder's resource editor writes the program's product version
+      # as four numbers (0.0.N.0); every signed file must say the build's own 0.0.N.
+      - name: Write the program's product version as the build's
+        if: env.SIGNPATH_ENABLED == 'true'
+        shell: bash
+        run: node scripts/set-product-version.mjs --version "$APP_VERSION" "release/win-unpacked/Open Historia Beta.exe"
+
+      # SignPath enforces this too; checking first fails in seconds instead of
+      # after an approval.
+      - name: Check the programs' product name and version
+        if: env.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: ./scripts/check-signing-metadata.ps1 -Version $env:APP_VERSION -Path release/win-unpacked -Include '*.exe' -Unpacked
+
       - name: Collect the app's programs for signing
         id: unsigned-app
         if: env.SIGNPATH_ENABLED == 'true'
@@ -243,6 +265,9 @@ jobs:
           project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
           signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
           artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          # The artifact configuration's ${version}: every signed file must say it.
+          parameters: |
+            version: "${{ env.APP_VERSION }}"
           github-artifact-id: ${{ steps.unsigned-app.outputs.artifact-id }}
           wait-for-completion: true
           wait-for-completion-timeout-in-seconds: 3600
@@ -256,9 +281,14 @@ jobs:
       # --prepackaged packs the folder as it is (see desktop-installer.yml).
       - name: Rebuild the installer around the signed app
         if: env.SIGNPATH_ENABLED == 'true'
-        run: node scripts/package-desktop.mjs --win --prepackaged release/win-unpacked --config electron-builder.beta.yml --publish never
+        run: node scripts/package-desktop.mjs --win --prepackaged release/win-unpacked --config electron-builder.beta-win.yml --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Check the installer's product name and version
+        if: env.SIGNPATH_ENABLED == 'true'
+        shell: pwsh
+        run: ./scripts/check-signing-metadata.ps1 -Version $env:APP_VERSION -Path release -Include 'Open-Historia-Beta-Setup.exe'
 
       - name: Collect the installer for signing
         id: unsigned-installer
@@ -281,6 +311,9 @@ jobs:
           project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
           signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
           artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          # The artifact configuration's ${version}: every signed file must say it.
+          parameters: |
+            version: "${{ env.APP_VERSION }}"
           github-artifact-id: ${{ steps.unsigned-installer.outputs.artifact-id }}
           wait-for-completion: true
           wait-for-completion-timeout-in-seconds: 3600

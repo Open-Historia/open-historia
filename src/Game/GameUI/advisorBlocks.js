@@ -325,11 +325,17 @@ export const excerptAroundError = (body, message, radius = 140) => {
 // Returns `reason` describing why nothing came back, so the UI can say something
 // better than "it didn't work" and a bug report has something to go on.
 export const extractFencedJson = (text, lang, { salvageTruncated = false, streaming = false } = {}) => {
-  const regex = new RegExp("```" + lang + "\\s*([\\s\\S]*?)```");
+  // Markdown fences are block constructs, not arbitrary backtick runs in
+  // prose. An advisor can mention \`\`\`actions when explaining a past error;
+  // interpreting that inline mention as the opener consumes the *real* block
+  // later in the reply and silently discards otherwise valid proposals.
+  const opening = "(^|\\r?\\n)[ \\t]{0,3}```" + lang + "[ \\t]*\\r?\\n";
+  const closing = "^[ \\t]{0,3}```[ \\t]*(?:\\r?\\n|$)";
+  const regex = new RegExp(opening + "([\\s\\S]*?)" + closing, "m");
   const match = text.match(regex);
 
   if (match) {
-    const body = match[1];
+    const body = match[2];
     let json = null;
     let reason = "";
     let dropped = 0;
@@ -359,25 +365,29 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false, stream
         excerpt = excerptAroundError(body, err.message);
         if (json === null) {
           reason = `invalid JSON (${err.message})`;
-          console.warn(`[advisor] malformed \`\`\`${lang} block, dropping it:`, err.message);
-          console.warn(`[advisor] the block that failed:\n${body.slice(0, 2000)}`);
+          // Streaming bubbles reparse after every fragment. Report the completed
+          // failure at finalization, not once per incoming token.
+          if (!streaming) {
+            console.warn(`[advisor] malformed \`\`\`${lang} block, dropping it:`, err.message);
+            console.warn(`[advisor] the block that failed:\n${body.slice(0, 2000)}`);
+          }
         } else {
           // Something was recovered, but say how much was not: silently importing
           // eight of ten and implying ten is worse than importing eight and saying so.
           dropped = Math.max(0, recoverOpsElementwise(body).dropped);
-          console.warn(`[advisor] repaired a malformed \`\`\`${lang} block (${err.message})`);
+          if (!streaming) console.warn(`[advisor] repaired a malformed \`\`\`${lang} block (${err.message})`);
         }
       }
     }
-    return { rest: text.replace(regex, ""), json, truncated: false, reason, dropped, excerpt };
+    return { rest: text.replace(regex, (_matched, precedingBreak) => precedingBreak), json, truncated: false, reason, dropped, excerpt };
   }
 
   if (!salvageTruncated && !streaming) return { rest: text, json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
 
-  const openRegex = new RegExp("```" + lang + "\\s*");
+  const openRegex = new RegExp(opening, "m");
   const open = text.match(openRegex);
   if (!open) return { rest: text, json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
-  if (streaming) return { rest: text.slice(0, open.index), json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
+  if (streaming) return { rest: text.slice(0, open.index + open[1].length), json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
 
   // Everything after the opening fence is the (incomplete) payload. Report
   // `truncated` even when the repair works, so the caller can tell the player the
@@ -389,7 +399,7 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false, stream
     console.warn(`[advisor] the block that failed:\n${body.slice(0, 2000)}`);
   }
   return {
-    rest: text.slice(0, open.index),
+    rest: text.slice(0, open.index + open[1].length),
     json,
     truncated: true,
     reason: json === null ? "cut off before any entry finished" : "",
@@ -404,20 +414,21 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false, stream
 // with nothing salvageable, JSON too broken to repair, valid JSON whose every op
 // was rejected — all look identical to the player: a wall of JSON in the chat (or
 // a reply that just stops) and a board that never changes.
-// Kept in step with normalizeProjectOp's verb list BY HAND — the two live in
-// different modules (this one is deliberately import-free so its tests run in a
-// bare checkout) and nothing can check them against each other. A verb missing
-// here is not a dropped op; it is a SILENT one: the block fails to parse, this
-// says "not a projects block", and the player gets no "Board not fully updated"
-// warning at all. cancelled/shelve/fail/failed/drop were all missing.
+// The board's own ops, kept in step with normalizeProjectOp BY HAND — the two
+// live in different modules (this one is deliberately import-free so its tests
+// run in a bare checkout). A verb missing here is not a dropped op; it is a
+// SILENT one: the block fails to parse, this says "not a projects block", and
+// the player gets no "Board not fully updated" warning at all. Only the board's
+// words: the English synonyms once accepted (start, launch, finish, abandon)
+// went on 2026-11-13, as no other language's ever were.
 const PROJECT_OP_VERBS = [
-  "create", "start", "launch", "open", "add",
-  "update", "progress", "edit",
+  "create",
+  "update",
   "milestone",
-  "complete", "finish", "completed",
-  "cancel", "cancelled", "abandon", "shelve",
-  "fail", "failed",
-  "remove", "delete", "drop",
+  "complete",
+  "cancel",
+  "fail",
+  "remove",
 ].join("|");
 
 export const looksLikeProjectOps = (text) => {

@@ -98,7 +98,8 @@ test("a sea drawn as regions: ships sail it, no army marches across it, and it i
   // touch in the middle, and nothing else lies between the two countries.
   const realm = { A: "Aland", B: "Borduria", a: { owner: "Aland", typeId: "sea" }, b: { owner: "Borduria", typeId: "sea" }, o: { owner: "", typeId: "sea" } };
   const world = syntheticMap({ layout: ["oooooooooooo", "oAAAaabbBBBo", "oAAAaabbBBBo", "oAAAaabbBBBo", "oooooooooooo"], legend: realm, west: 20, north: 54, step: 1, cities, key: "pirate seas" });
-  const sea = [{ id: "sea", name: "Sea" }];
+  // The sea as the Workshop saves one: its Water switch on.
+  const sea = [{ id: "sea", name: "Sea", water: true }];
   const { transports } = convoy();
   // At war across the water: with the sea known as sea, their waters touching opens no battlefield.
   assert.deepEqual(run(world, { days: 5, regionTypes: sea }).battlefields, []);
@@ -121,10 +122,15 @@ test("a sea drawn as regions: ships sail it, no army marches across it, and it i
   const dry = run(world, { transports, days: 6, regionTypes: [{ id: "sea", name: "Sea", water: false }], arenas: new Map() });
   assert.ok(["refused", "returned"].includes(dry.transports[0].status), dry.transports[0].status);
   assert.equal(dry.voyages.some((voyage) => voyage.k === "landed"), false);
-  // A lake, an ocean or plain water by name does as well as a sea.
-  for (const name of ["Ocean", "Water", "Lake"]) {
-    const other = run(world, { transports, days: 6, regionTypes: [{ id: "sea", name }], arenas: new Map() });
-    assert.deepEqual(other.transports.map((transport) => transport.status), ["landed"], name);
+  // Whatever it is called, in whatever language, the switch alone makes it water:
+  // switched on it is sailed, never switched it is dry land, "Sea" no more than "Mer".
+  for (const name of ["Ocean", "Mer", "Lac"]) {
+    const sailed = run(world, { transports, days: 6, regionTypes: [{ id: "sea", name, water: true }], arenas: new Map() });
+    assert.deepEqual(sailed.transports.map((transport) => transport.status), ["landed"], name);
+  }
+  for (const name of ["Sea", "Mer"]) {
+    const unswitched = run(world, { transports, days: 6, regionTypes: [{ id: "sea", name }], arenas: new Map() });
+    assert.ok(["refused", "returned"].includes(unswitched.transports[0].status), `${name}: ${unswitched.transports[0].status}`);
   }
 });
 

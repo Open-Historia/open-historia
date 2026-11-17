@@ -18,6 +18,7 @@
 import { HEX_ID, NAME, bool, int, json, list, literal, num, obj, str } from "../protocol/validate.js";
 import { SETTINGS_SCHEMA } from "../host/settings.js";
 import { POLL_CHOICES_MAX, POLL_CHOICE_MAX_CHARS, SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
+import { SAY_FROM_DRAFT_MAX } from "../client/sharedThreads.js";
 
 // A host and its players must speak the same game: raised whenever these
 // messages or the views (host/projection.js) change in a way an older player's
@@ -35,7 +36,9 @@ import { POLL_CHOICES_MAX, POLL_CHOICE_MAX_CHARS, SOCIAL_POST_MAX_CHARS } from "
 // before would offer no way to post, and a host from before would refuse one.
 // 8: a Rostra post can be a poll (the "post" request's `choices`), which a host
 // from before would refuse.
-export const SHARED_GAME_VERSION = "8";
+// 9: a line may say which of the advisor's drafted letters it was sent from
+// (the "say" request's `fromDraft`), which a host from before would refuse.
+export const SHARED_GAME_VERSION = "9";
 
 // What of the institutions a player's screen may ask the host for: the game's
 // own institution functions, run on the host for the asker's country
@@ -130,10 +133,13 @@ export const PLAYER_REQUESTS = Object.freeze({
   // the asker's to name.
   institution: obj({ t: literal("institution"), id: REQUEST_ID, call: str(16, { enum: INSTITUTION_CALLS }), args: json(6) }),
   // Diplomacy: into a thread the player is in, or to open one with `to`.
+  // `fromDraft`: the id of the advisor's drafted letter the line was sent from
+  // (client/sharedThreads.js), kept on the line so the draft says it went.
   say: obj({
     t: literal("say"), id: REQUEST_ID, thread: str(120, { nullable: true }),
     to: list(COUNTRY, 8), text: str(SAY_MAX_CHARS, { min: 1 }),
-  }),
+    fromDraft: str(SAY_FROM_DRAFT_MAX),
+  }, ["fromDraft"]),
 });
 
 const SEAT = obj({

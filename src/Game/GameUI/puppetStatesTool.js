@@ -6,9 +6,9 @@
 // Console transaction's puppetUpdates are, so a hand-made row obeys the same
 // rules as an AI-made one: exact polity names, one overlord, no chains, land to
 // stand on, MAX_PUPPETS, reveal one-way, the reputation an annexation costs.
-// Only the causal event is waived (allowUnboundBaseline), as for a scenario's
-// starting rows: the hand edit is the cause, and the next time skip is told of
-// it (noteGmChange("puppets", …)).
+// It names no causal event, as a scenario's starting rows name none, and is
+// dated by the game's date: the hand edit is the cause, and the next time skip
+// is told of it (noteGmChange("puppets", …)).
 //
 // Annex ends the arrangement here and nothing more: the land moves through the
 // Annex Country tool's own transfer, called by the panel after this succeeds.
@@ -101,7 +101,6 @@ export const applyGmPuppetChange = (world, change = {}, { regionCatalog = [], da
     events: [],
     stopDate: clean(date),
     round: Number(round) || 0,
-    allowUnboundBaseline: true,
     regionCatalog,
   });
   const [refused] = list(merge.dropped);

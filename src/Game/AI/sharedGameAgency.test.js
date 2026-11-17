@@ -68,19 +68,39 @@ test("an order keeps the polity that gave it through the game's normalizer; sing
 });
 
 test("a second person's country never makes a sovereign choice they did not order", () => {
-  const war = event("Russia declares war on Estonia", "The Russian government declares war on the Republic of Estonia.");
-  const warUpdates = warStart(war.id, [RUSSIA], ["Republic of Estonia"]);
-  const screened = screen(shared, [war], { warUpdates });
-  assert.equal(screened.events.length, 0);
-  assert.match(refusedFor(screened)[0]?.reason ?? "", /Russian Federation is played by a person/);
+  for (const [title, description] of [
+    ["Russia declares war on Estonia", "The Russian government declares war on the Republic of Estonia."],
+    ["Россия объявляет войну Эстонии", "Правительство России объявляет войну Эстонской Республике."],
+  ]) {
+    const war = event(title, description);
+    const warUpdates = warStart(war.id, [RUSSIA], ["Republic of Estonia"]);
+    const screened = screen(shared, [war], { warUpdates });
+    assert.equal(screened.events.length, 0, title);
+    assert.match(refusedFor(screened)[0]?.reason ?? "", /Russian Federation is played by a person/);
 
-  // Ordered by the person who plays Russia, it stands.
-  const ordered = screen(shared, [war], { warUpdates, actions: [order("b-war", "Declare war on Estonia", RUSSIA)] });
-  assert.equal(ordered.events.length, 1);
-  assert.deepEqual(ordered.events[0].impacts.actionIds, ["b-war"]);
+    // Ordered by the person who plays Russia, and the event cites that order: it stands.
+    const ordered = screen(shared, [event(title, description, { impacts: { actionIds: ["b-war"] } })], { warUpdates, actions: [order("b-war", "Declare war on Estonia", RUSSIA)] });
+    assert.equal(ordered.events.length, 1, title);
+    assert.deepEqual(ordered.events[0].impacts.actionIds, ["b-war"]);
+    assert.equal(ordered.events[0].agency.authority, "player-order");
 
-  // In single player Russia is the AI's, and the same event is the world's to write.
-  assert.equal(screen(solo, [war], { warUpdates }).events.length, 1);
+    // In single player Russia is the AI's, and the same event is the world's to write.
+    assert.equal(screen(solo, [war], { warUpdates }).events.length, 1);
+  }
+});
+
+// The host never refuses an event for want of proof from its prose: an order
+// counts when the event cites it, whatever either says, and an event that
+// names no person's country as deciding is the world's.
+test("a person's ordered event stands on its citation alone, in any language", () => {
+  const sanctions = (title) => event(title, "", { actors: [RUSSIA], impacts: { actionIds: ["b-sanctions"] } });
+  const actions = [order("b-sanctions", "Impose sanctions on Estonia", RUSSIA)];
+  for (const title of ["Russia imposes sanctions on Estonia", "Россия вводит санкции против Эстонии", "俄罗斯对爱沙尼亚实施制裁"]) {
+    const screened = screen(shared, [sanctions(title)], { actions });
+    assert.equal(screened.events.length, 1, title);
+    assert.deepEqual(refusedFor(screened), []);
+    assert.equal(screened.events[0].agency.sovereignActors[0].authorityRef, "b-sanctions");
+  }
 });
 
 // A player's report: a world event was filed "Not recorded: the game could
@@ -97,8 +117,8 @@ test("a world event naming a person's country with decision-sounding words is re
 });
 
 test("one person's order never stands in for another's choice", () => {
-  // The event lists Russia as the one acting.
-  const sanctions = event("Russia imposes sanctions on Estonia", "The Russian government imposes new sanctions on Estonian exports.", { actors: [RUSSIA] });
+  // The event lists Russia as the one acting, and cites the order it answers.
+  const sanctions = event("Russia imposes sanctions on Estonia", "The Russian government imposes new sanctions on Estonian exports.", { actors: [RUSSIA], impacts: { actionIds: ["a-sanctions"] } });
   // Latvia's player ordered it, not Russia's.
   const screened = screen(shared, [sanctions], { actions: [order("a-sanctions", "Get Russia to impose sanctions on Estonia")] });
   assert.equal(screened.events.length, 0);
@@ -127,27 +147,67 @@ test("one person's order never stands in for another's choice", () => {
 });
 
 test("a treaty between two people's countries needs each of them to have agreed", () => {
-  const treaty = event("Latvia and Russia sign a border treaty", "Latvia and Russia sign a treaty fixing the Latgale border.");
+  const treaty = (actionIds) => event("Latvia and Russia sign a border treaty", "Latvia and Russia sign a treaty fixing the Latgale border.", { impacts: { actionIds } });
   const latviaOrder = order("a-treaty", "Sign a border treaty with Russia fixing the Latgale border");
-  const agreementUpdates = agreementStart(treaty.id, [LATVIA, RUSSIA]);
-  const refused = screen(shared, [treaty], { actions: [latviaOrder], agreementUpdates });
+  const russiaOrder = order("b-treaty", "Accept Latvia's border treaty", RUSSIA);
+  const agreementUpdates = agreementStart(treaty([]).id, [LATVIA, RUSSIA]);
+  const refused = screen(shared, [treaty(["a-treaty"])], { actions: [latviaOrder, russiaOrder], agreementUpdates });
   assert.equal(refused.events.length, 0);
   assert.match(refusedFor(refused)[0].reason, /Russian Federation is played by a person/);
 
-  // Russia's player said yes in the negotiation: now both sides chose it.
-  const chats = [{
-    id: "chat-border",
-    countries: [RUSSIA],
-    messages: [{ id: "msg-russia-yes", role: "user", speaker: RUSSIA, text: "We will sign the border treaty with Latvia fixing the Latgale border." }],
-  }];
-  const agreed = screen(shared, [treaty], { actions: [latviaOrder], chats, agreementUpdates });
+  // Russia's player agreed by an order of their own, which the event cites:
+  // now both sides chose it.
+  const agreed = screen(shared, [treaty(["a-treaty", "b-treaty"])], { actions: [latviaOrder, russiaOrder], agreementUpdates });
   assert.equal(agreed.events.length, 1);
   const rows = agreed.events[0].agency.sovereignActors;
   assert.deepEqual(rows.map((row) => [row.polity, row.authority, row.authorityRef]), [
     [LATVIA, "player-order", "a-treaty"],
-    [RUSSIA, "player-commitment", "msg-russia-yes"],
+    [RUSSIA, "player-order", "b-treaty"],
   ]);
-  assert.deepEqual(agreed.events[0].impacts.actionIds, ["a-treaty"]);
+  assert.deepEqual(agreed.events[0].impacts.actionIds, ["a-treaty", "b-treaty"]);
+
+  // A person's message is their word to the governments they wrote to: a
+  // thread is one person's with governments the AI plays, so it never speaks
+  // to another person's country.
+  const chats = [{
+    id: "chat-border",
+    player: RUSSIA,
+    countries: [{ name: "Republic of Estonia" }],
+    messages: [{ id: "msg-russia-yes", role: "user", speaker: RUSSIA, text: "We will sign the border treaty with Latvia." }],
+  }];
+  assert.equal(screen(shared, [treaty(["a-treaty"])], { actions: [latviaOrder], chats, agreementUpdates }).events.length, 0);
+});
+
+// A treaty with a government the AI plays, agreed in the person's own thread
+// with that government: the person wrote to every other party, which is the
+// word the engine reads. What the message said is the model's to have read
+// when it wrote the treaty, in any language.
+test("a person's message to the other party of a treaty is their consent to it", () => {
+  const estonia = "Republic of Estonia";
+  const thread = (country, speaker, text) => [{
+    id: "chat-tallinn",
+    player: speaker === LATVIA ? "" : speaker,
+    countries: [{ name: country }],
+    messages: [{ id: "msg-yes", role: "user", speaker, text }],
+  }];
+  for (const [title, words] of [
+    ["Latvia and Estonia sign a border treaty", "We will sign the border treaty."],
+    ["Latvija un Igaunija paraksta robežlīgumu", "Mēs parakstīsim robežlīgumu."],
+  ]) {
+    const treaty = event(title, "");
+    const agreementUpdates = agreementStart(treaty.id, [LATVIA, estonia]);
+    const agreed = screen(shared, [treaty], { chats: thread(estonia, LATVIA, words), agreementUpdates });
+    assert.equal(agreed.events.length, 1, title);
+    assert.deepEqual(agreed.events[0].agency.sovereignActors.map((row) => [row.polity, row.authority, row.authorityRef]), [
+      [LATVIA, "player-commitment", "msg-yes"],
+      [estonia, "autonomous", ""],
+    ]);
+    // Without a word to Estonia, the treaty is not Latvia's to have signed.
+    assert.equal(screen(shared, [treaty], { agreementUpdates }).events.length, 0, title);
+    assert.equal(screen(shared, [treaty], { chats: thread(RUSSIA, LATVIA, words), agreementUpdates }).events.length, 0, `${title}: written to another government`);
+    // Russia's player writing to Estonia is no word of Latvia's.
+    assert.equal(screen(shared, [treaty], { chats: thread(estonia, RUSSIA, words), agreementUpdates }).events.length, 0, `${title}: another person's message`);
+  }
 });
 
 test("a message counts only for its speaker; with several people a bare user role is nobody's word", () => {
@@ -173,7 +233,7 @@ test("the world still acts on people's countries: an AI's choice against one, an
   const aiSanctions = event("Estonia imposes sanctions on Russia", "The Estonian government imposes new sanctions on Russian exports.");
   assert.equal(screen(shared, [aiSanctions]).events.length, 1);
 
-  const annexation = event("Russia annexes the Latgale border districts of Latvia", "Moscow annexes the Latgale border districts of Latvia.");
+  const annexation = event("Russia annexes the Latgale border districts of Latvia", "Moscow annexes the Latgale border districts of Latvia.", { actors: [RUSSIA], impacts: { actionIds: ["b-annex"] } });
   const screened = screen(shared, [annexation], { actions: [order("b-annex", "Annex the Latgale border districts of Latvia", RUSSIA)] });
   assert.equal(screened.events.length, 1);
   assert.deepEqual(screened.events[0].impacts.actionIds, ["b-annex"]);

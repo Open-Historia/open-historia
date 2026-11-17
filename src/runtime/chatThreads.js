@@ -144,6 +144,8 @@ export const normalizeChatEvent = (entry, index = 0) => {
             // The catch-up the player's message was sent with
             // (AI/conversationCatchUp.js buildThreadCatchUp).
             ...(asText(entry.catchUp) ? { catchUp: asText(entry.catchUp), ...(asText(entry.catchUpLabel) ? { catchUpLabel: asText(entry.catchUpLabel) } : {}) } : {}),
+            // The advisor's drafted letter a player's line was sent from (GameUI/advisorDrafts.js).
+            ...(asText(entry.fromDraft) ? { fromDraft: asText(entry.fromDraft) } : {}),
         };
     }
     if (kind === "reaction") {
@@ -289,6 +291,7 @@ export const eventsFromLegacyChat = (chat) => {
             eventId: asText(message?.eventId),
             catchUp: asText(message?.catchUp),
             catchUpLabel: asText(message?.catchUpLabel),
+            fromDraft: asText(message?.fromDraft),
         });
         // Reactions were a map on the message; each becomes its own event.
         const reactions = message?.reactions && typeof message.reactions === "object" ? message.reactions : {};
@@ -359,6 +362,7 @@ export const projectChatThread = (events) => {
                 heardBy: members.map((member) => member.name),
                 ...(event.eventId ? { eventId: event.eventId } : {}),
                 ...(event.catchUp ? { catchUp: event.catchUp, ...(event.catchUpLabel ? { catchUpLabel: event.catchUpLabel } : {}) } : {}),
+                ...(event.fromDraft ? { fromDraft: event.fromDraft } : {}),
             };
             messages.push(message);
             messageById.set(event.id, message);
@@ -580,6 +584,7 @@ export const withUnloggedMessages = (events, messages, { threadId = "" } = {}) =
             eventId: asText(message?.eventId),
             catchUp: asText(message?.catchUp),
             catchUpLabel: asText(message?.catchUpLabel),
+            fromDraft: asText(message?.fromDraft),
         });
     }
     return additions.length ? normalizeChatEvents([...log, ...additions]) : log;

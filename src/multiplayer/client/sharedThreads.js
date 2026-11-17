@@ -28,11 +28,22 @@ export const pendingSharedThread = (countries, { now = Date.now } = {}) => ({
 
 export const isPendingSharedThread = (chat) => Boolean(chat?.pendingShared);
 
+// The longest id of an advisor's drafted letter a line may carry (game/messages.js "say" `fromDraft`).
+export const SAY_FROM_DRAFT_MAX = 160;
+
 // What a line said in `chat` asks of the host: a pending thread is opened with
-// its countries, any other is written into by its id.
-export const sayRequestFor = (chat, text) => (isPendingSharedThread(chat)
-  ? { thread: null, to: (Array.isArray(chat.countries) ? chat.countries : []).map(nameOf).filter(Boolean).slice(0, SAY_RECIPIENTS_MAX), text }
-  : { thread: clean(chat?.id), to: [], text });
+// its countries, any other is written into by its id. `fromDraft`: the id of
+// the advisor's drafted letter the line was sent from (GameUI/advisorDrafts.js),
+// which the host keeps on the line.
+export const sayRequestFor = (chat, text, { fromDraft = "" } = {}) => {
+  const draft = clean(fromDraft).slice(0, SAY_FROM_DRAFT_MAX);
+  return {
+    ...(isPendingSharedThread(chat)
+      ? { thread: null, to: (Array.isArray(chat.countries) ? chat.countries : []).map(nameOf).filter(Boolean).slice(0, SAY_RECIPIENTS_MAX), text }
+      : { thread: clean(chat?.id), to: [], text }),
+    ...(draft ? { fromDraft: draft } : {}),
+  };
+};
 
 // The thread the host opened for a pending one, from the answer to its first
 // line (the ack's `result`), or "" when the host did not say (a host from

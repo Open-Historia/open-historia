@@ -31,6 +31,7 @@ import {
   OPTIONAL_GAME_BUNDLE_KEYS, BUILT_IN_SCENARIO_IDS, missingBasemapField, scenarioMusicField, scenarioLanguagesField,
 } from "./models.js";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../../server/gameFeatures.js";
+import { assertEconomicDisplayCurrencyChoice } from "../economicDisplayCurrency.js";
 // Imported, not mirrored: server/ownerMigration.js is pure ESM with no node
 // imports, so Vite bundles it into the web build. One implementation of the
 // resolver rather than two hand-kept copies that drift.
@@ -1369,6 +1370,8 @@ const sweepKeptMusicIfDropped = async (before, record) => {
 const updateScenario = (id, body = {}) => serializeByKey(`scenario-write:${id}`, () => updateScenarioNow(id, body));
 
 const updateScenarioNow = async (id, body = {}) => {
+  assertEconomicDisplayCurrencyChoice(body.game);
+  assertEconomicDisplayCurrencyChoice(body.gamePatch);
   const record = await getScenario(id);
   if (!record) throw new Error(`Scenario not found: ${id}`);
   const musicBefore = musicOfRecord(record);
@@ -1456,6 +1459,7 @@ const deleteScenario = async (id) => {
 
 // --- Game mutations -------------------------------------------------------
 const createGame = async (body = {}) => {
+  assertEconomicDisplayCurrencyChoice(body.gamePatch);
   const id = await ensureUniqueId(body.id || body.name || "game", "game");
   const record = emptyGameRecord(id);
   const baseRecord = (await getScenario(DEFAULT_SCENARIO_ID)) ?? await defaultScenarioSeedRecord();
@@ -1520,6 +1524,8 @@ const createGame = async (body = {}) => {
 };
 
 const updateGame = async (id, body = {}) => {
+  assertEconomicDisplayCurrencyChoice(body.game);
+  assertEconomicDisplayCurrencyChoice(body.gamePatch);
   // "Import & play" points a game whose map was missing at the scenario it just
   // imported, which may have been given a different id. Server twin: only ever
   // at a scenario held here, checked before anything is written.

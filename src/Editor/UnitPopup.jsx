@@ -6,10 +6,16 @@
 // Inline editor for a unit placed in the Workshop, anchored where the map was
 // clicked — the units a scenario starts with (world.units, source "scenario").
 // Mirrors CityPopup: Escape/Enter closes, Delete removes.
+//
+// Its kind may also be one of the scenario's own unit types (runtime/unitTypes.js,
+// set in the Scenario Editor under Wars): those its owner may field, below the
+// kinds. A unit of one is of that type's base kind.
 
 import { useEffect, useRef, useState } from "react";
 import { panelSurface, inputStyle, pillButton } from "./editorStyles.js";
 import { UNIT_TYPES } from "../runtime/gameState.js";
+import { mayFieldUnitType } from "../runtime/unitTypes.js";
+import { uiString } from "../runtime/translator.js";
 
 const TYPE_LABELS = {
   infantry: "Infantry",
@@ -19,6 +25,10 @@ const TYPE_LABELS = {
   artillery: "Artillery",
   garrison: "Garrison",
 };
+const UNIT_TYPES_GROUP_LABEL = "Unit types";
+// A select's value for one of the scenario's own unit types, apart from the kinds.
+// i18n-ignore
+const OWN_TYPE = "own:";
 
 const clampStrength = (value) => {
   const n = Number(value);
@@ -26,7 +36,7 @@ const clampStrength = (value) => {
   return Math.max(1, Math.min(100, Math.round(n)));
 };
 
-const UnitPopup = ({ unit, x, y, isNew, polities = [], onChange, onDelete, onClose }) => {
+const UnitPopup = ({ unit, x, y, isNew, polities = [], unitTypes = [], onChange, onDelete, onClose }) => {
   const nameRef = useRef(null);
   // The strength as typed, for the unit it was typed for. Clamping each
   // keystroke made an emptied box read 1 at once, so 75 could not be typed
@@ -53,6 +63,14 @@ const UnitPopup = ({ unit, x, y, isNew, polities = [], onChange, onDelete, onClo
   const left = Math.max(8, Math.min(x - 20, (window.innerWidth || 1200) - 300));
   const top = Math.max(8, Math.min(y + 14, (window.innerHeight || 800) - 330));
   const ownerKnown = polities.some((p) => p.key === unit.ownerCode);
+  // The scenario's own unit types this unit may be: those its owner may field, and the one it is.
+  const ownType = unitTypes.find((type) => type.id === unit.unitType) ?? null;
+  const ownTypes = unitTypes.filter((type) => type === ownType || mayFieldUnitType(type, unit.ownerCode));
+  const kind = ownType ? `${OWN_TYPE}${ownType.id}` : unit.type || "infantry";
+  const pickKind = (value) => {
+    const picked = value.startsWith(OWN_TYPE) ? unitTypes.find((type) => `${OWN_TYPE}${type.id}` === value) : null;
+    onChange(picked ? { type: picked.base, unitType: picked.id } : { type: value, unitType: "" });
+  };
 
   return (
     <div
@@ -79,10 +97,17 @@ const UnitPopup = ({ unit, x, y, isNew, polities = [], onChange, onDelete, onClo
       />
 
       <div style={{ display: "flex", gap: 6 }}>
-        <select value={unit.type || "infantry"} onChange={(e) => onChange({ type: e.target.value })} style={{ ...inputStyle, padding: "5px 6px", flex: 1 }} aria-label="Unit type">
+        <select value={kind} onChange={(e) => pickKind(e.target.value)} style={{ ...inputStyle, padding: "5px 6px", flex: 1 }} aria-label="Unit type">
           {UNIT_TYPES.map((type) => (
             <option key={type} value={type}>{TYPE_LABELS[type] || type}</option>
           ))}
+          {ownTypes.length > 0 && (
+            <optgroup label={uiString(UNIT_TYPES_GROUP_LABEL)}>
+              {ownTypes.map((type) => (
+                <option key={type.id} value={`${OWN_TYPE}${type.id}`} data-no-translate="">{type.icon ? `${type.icon} ${type.name}` : type.name}</option>
+              ))}
+            </optgroup>
+          )}
         </select>
         <label style={{ display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", color: "rgba(255,255,255,0.7)" }}>
           <span style={{ fontSize: 10.5, fontWeight: 700 }}>Strength</span>

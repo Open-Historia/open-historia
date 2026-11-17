@@ -94,7 +94,7 @@ test("the player, every power at war and every power the orders name are in view
   const ranked = selectFocusPowers({
     owners: [{ key: "Ruritania", label: "Ruritania", regions: 3 }, { key: "Faraway", label: "Faraway", regions: 2 }, ...warring, ...bystanders],
     player: "Ruritania",
-    actions: [{ status: "planned", title: "Send an envoy", text: "Send an envoy to Faraway." }],
+    actions: [{ status: "planned", title: "Send an envoy", text: "Send an envoy to Faraway.", invitees: ["Faraway"] }],
     wars: [{ status: "active", sideA: warring.slice(0, 20).map((entry) => entry.label), sideB: warring.slice(20).map((entry) => entry.label) }],
     neighbours: bystanders.slice(0, 50).map((entry) => entry.label),
   });
