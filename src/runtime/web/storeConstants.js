@@ -75,6 +75,8 @@ export const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "ownBasemaps",
   "canonModelVersion",
   "canonContext",
+  // Mirror the desktop scenario-to-campaign funding basis.
+  "projectFundingMode",
   "customCities",
   "customGeometry",
   "customRegions",

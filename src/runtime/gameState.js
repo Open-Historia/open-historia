@@ -38,6 +38,7 @@ import {
   mergeTickedBoard,
   normalizeAdjustment,
   normalizeProjectPlan,
+  projectFundingMode,
   resolveFunding,
   roundProgress,
   sheetOf,
@@ -4332,6 +4333,9 @@ export const normalizeWorldState = (world) => {
     // and no colour — and where the renamed polity is the PLAYER'S, it is their own
     // programme sitting in the Foreign column with both of its controls gone. Idempotent,
     // so a board already correct reads back unchanged.
+    // Explicit scenario rule, not an inferred GDP datum or a second fiscal
+    // ledger. Non-monetary work consumes time/capacity and records no payments.
+    projectFundingMode: projectFundingMode(nextWorld),
     projects: normalizeProjects(nextWorld.projects).map((project) => {
       const owner = resolveOwner(project.ownerCode);
       return owner === project.ownerCode ? project : { ...project, ownerCode: owner };

@@ -616,6 +616,7 @@ const buildScenarioEditorState = (details) => {
     labelHaloColor: world.labelHaloColor ?? "",
     labelTextColor: world.labelTextColor ?? "",
     simulationRules: world.simulationRules ?? "",
+    projectFundingMode: world.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy",
     startingTimelineText: world.startingTimelineText ?? "",
     subtitle: scenario.subtitle ?? "",
     // How its wars are fought (the Fronts tab: ScenarioWarSettings.jsx), compact:
@@ -2362,6 +2363,22 @@ const EditorDrawer = ({
                   {kind === "scenario" ? "Suggested for new campaigns; players can override it." : "This campaign only."} GDP numbers remain in canonical 2026 USD.
                 </div>
               </div>
+              {kind === "scenario" && (
+                <div>
+                  <label style={fieldLabelStyle}>Projects funding basis</label>
+                  <select
+                    style={inputStyle}
+                    value={formState.projectFundingMode || "gdp-proxy"}
+                    onChange={(event) => onChange("projectFundingMode", event.target.value)}
+                  >
+                    <option value="gdp-proxy">Estimated national GDP allowance</option>
+                    <option value="nonmonetary">Non-monetary time and effort</option>
+                  </select>
+                  <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", lineHeight: 1.4, marginTop: "0.35rem" }}>
+                    GDP allowance is an estimate, not treasury cash. Non-monetary scenarios advance projects by time and capacity without recording financial payments; no GDP is required.
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           {kind === "scenario" && (
@@ -3821,6 +3838,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             labelTextColor: editorState.labelTextColor,
             language: editorState.language,
             simulationRules: editorState.simulationRules,
+            projectFundingMode: editorState.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy",
             startingTimelineText: editorState.startingTimelineText,
             // How its wars are fought (runtime/warSettings.js). A scenario that
             // never set any is written none; one whose author took every

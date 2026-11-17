@@ -64,7 +64,8 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "labelTextColor", "language", "lastJumpMode", "lastJumpTargetDate", "mapCredit", "markers",
   "ownBasemaps", "ownerCodes", "ownerSchema", "polityOverrides", "powerStatus", "regionClaimants",
   "regionOwnershipOverrides", "regionRenames", "regionSovereigntyOverrides", "settledRegionClaims",
-  "simulationRules", "startingTimelineText", "unitSystem", "wars", "agreements",
+  // Scenario funding BASIS is public; no financial ledger is disclosed.
+  "projectFundingMode", "simulationRules", "startingTimelineText", "unitSystem", "wars", "agreements",
   // Transporters are seen as fleets are: what crosses the sea is not hidden.
   "transports",
   // And what an event's strike looked like: every map plays it.

@@ -189,6 +189,7 @@ import {
   worldProjectGate,
 } from "../../runtime/projectEngine.js";
 import { publicProjectOutcomes } from "../../runtime/projectDisclosure.js";
+import { settleProjectTerritoryWorld } from "../../runtime/projectTerritorySettlement.js";
 import { filterBoundLedgerUpdatesToKeptEvents, keepWarRecordsBeyondEvents } from "./ledgerEventBinding.js";
 import { giveSegmentEventIds, pinLedgersToEvents } from "./ledgerPins.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
@@ -8782,33 +8783,23 @@ const runProjectsEngine = async ({ baseWorld, world, colors, fromDate, toDate, h
   let nextColors = colors;
   const renamedPolities = [];
   if (released.territory.length) {
-    const containers = released.territory.map((entry, index) => ({
-      event: { title: entry.project },
-      impacts: { regionTransfers: entry.regionTransfers.map((transfer) => ({ ...transfer })), regionClaims: entry.regionClaims.map((claim) => ({ ...claim })), groupOps: [] },
-      path: `projects[${index}]`,
-    }));
-    try {
-      const unresolved = await resolveRegionTransfers(containers, nextWorld, { renderedRegions: createRenderedRegionsReader() });
-      for (const entry of normalizeArray(unresolved)) {
-        console.warn(`[projects] "${normalizeString(entry?.label)}" was not found on the map; that part of a project's completion was left out.`);
-      }
-      const events = released.territory.map((entry, index) => ({
-        id: `project-done-${index}-${normalizeString(entry.date)}`,
-        date: entry.date,
-        title: entry.project,
-        description: "",
-        impacts: { polityChanges: entry.polityChanges, regionTransfers: containers[index].impacts.regionTransfers, regionClaims: containers[index].impacts.regionClaims },
-      }));
-      const catalog = regionCatalog && events.some((event) => event.impacts.regionTransfers.length)
-        ? await regionCatalog()
-        : null;
-      const merged = applyEventImpactsToWorld({ colors: nextColors, events, world: nextWorld, motion: null, round, boardOnlyEventIds: events.map((event) => event.id), regionCatalog: catalog });
-      nextWorld = merged.world;
-      nextColors = merged.colors;
-      renamedPolities.push(...normalizeArray(merged.renamedPolities));
-    } catch (error) {
-      console.warn("[projects] a completed project's territory could not be applied; the rest of the turn stands.", error);
-    }
+    // Project completion effects have already been latched in nextWorld. The
+    // map mutation must be part of the SAME unwritten turn: a failed region
+    // resolution or rejected legal transfer holds the turn, never publishes
+    // stats/effectsAppliedAt while losing the intended territorial result.
+    const settled = await settleProjectTerritoryWorld({
+      entries: released.territory,
+      world: nextWorld,
+      colors: nextColors,
+      round,
+      resolveTransfers: resolveRegionTransfers,
+      readCatalog: regionCatalog,
+      applyWorldImpacts: applyEventImpactsToWorld,
+      renderedRegions: createRenderedRegionsReader(),
+    });
+    nextWorld = settled.world;
+    nextColors = settled.colors;
+    renamedPolities.push(...normalizeArray(settled.renamedPolities));
   }
   const told = advanced.outcomes.filter((outcome) => outcome.type !== "yield");
   if (told.length || released.applied.length) {

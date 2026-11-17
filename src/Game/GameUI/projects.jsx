@@ -467,7 +467,7 @@ const Milestones = ({ plan }) => {
 
 // ---- one card --------------------------------------------------------------
 
-const ProjectCard = memo(({ project, eventTitles, expanded, busy, playerCountry, playerLandless, ownerFlags, ownerNames, finish, planning, onToggleExpand, onAskAdvisor, onShowOnMap, onSetFunding, onSetSecrecy, onAbandon, onPlan }) => {
+const ProjectCard = memo(({ project, fundingMode, eventTitles, expanded, busy, playerCountry, playerLandless, ownerFlags, ownerNames, finish, planning, onToggleExpand, onAskAdvisor, onShowOnMap, onSetFunding, onSetSecrecy, onAbandon, onPlan }) => {
   const flags = deriveProjectFlags(project);
   const open = isProjectOpen(project);
   const mine = isPlayerProject(project, playerCountry);
@@ -576,13 +576,17 @@ const ProjectCard = memo(({ project, eventTitles, expanded, busy, playerCountry,
         </div>
       )}
 
-      {project.plan && (open || Number(project.spent) > 0) && (
+      {project.plan && fundingMode === "nonmonetary" && (
+        <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.7rem", marginTop: "0.45rem" }}>
+          {uiString("Time and effort only; no financial payments recorded")}
+        </div>
+      )}
+      {project.plan && fundingMode !== "nonmonetary" && (open || Number(project.spent) > 0) && (
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.45rem", fontSize: "0.7rem", color: "rgba(255,255,255,0.65)" }}>
-          {/* What it costs now, at its funding; a closed one costs nothing more. */}
-          {open && <span>{uiString("{{amount}} a month", { amount: formatMoney(dailyCostOf(project) * DAYS_PER_MONTH) })}</span>}
-          {Number(project.spent) > 0 && <span>{uiString("{{amount}} spent", { amount: formatMoney(project.spent) })}</span>}
+          {open && <span>{uiString("Planned cost: {{amount}} per month", { amount: formatMoney(dailyCostOf(project) * DAYS_PER_MONTH) })}</span>}
+          {Number(project.spent) > 0 && <span>{uiString("Actually paid to date: {{amount}}", { amount: formatMoney(project.spent) })}</span>}
           {flags.underfunded && (
-            <Pill color="#fbbf24" bg="rgba(245,158,11,0.14)" title={uiString("The budget paid {{share}}% of what it was due last period", { share: Math.round(Number(project.paidShare) * 100) })}>
+            <Pill color="#fbbf24" bg="rgba(245,158,11,0.14)" title={uiString("Received {{share}}% of planned funding last period", { share: Math.round(Number(project.paidShare) * 100) })}>
               {uiString("Underfunded")}
             </Pill>
           )}
@@ -702,7 +706,7 @@ const ProjectCard = memo(({ project, eventTitles, expanded, busy, playerCountry,
 
 // ---- a new project: a name, a goal, one request for its plan ------------------------
 
-const PlanCard = ({ draft, owner, busy, onStart, onDiscard }) => (
+const PlanCard = ({ draft, owner, fundingMode, busy, onStart, onDiscard }) => (
   <div style={{ ...cardStyle, border: `1px solid ${ACCENT_EDGE}`, marginTop: "0.55rem" }}>
     <div style={{ alignItems: "baseline", display: "flex", gap: "0.4rem" }}>
       <span aria-hidden="true">{draft.kind === "operation" ? "⚔" : "🔬"}</span>
@@ -711,7 +715,7 @@ const PlanCard = ({ draft, owner, busy, onStart, onDiscard }) => (
     {draft.summary && (
       <p style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.75rem", lineHeight: 1.45, margin: "0.35rem 0 0" }}>{draft.summary}</p>
     )}
-    <PlanFacts plan={draft.plan} owner={owner} />
+    <PlanFacts plan={draft.plan} owner={owner} costShown={fundingMode === "nonmonetary"} />
     <Milestones plan={draft.plan} />
     <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.65rem" }}>
       <button type="button" className="oh-tap-row" disabled={busy} style={{ ...accentButtonStyle, opacity: busy ? 0.5 : 1 }} onClick={onStart}>
@@ -724,7 +728,7 @@ const PlanCard = ({ draft, owner, busy, onStart, onDiscard }) => (
   </div>
 );
 
-const NewProject = ({ owner, onStarted, writeOps }) => {
+const NewProject = ({ owner, fundingMode, onStarted, writeOps }) => {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [goal, setGoal] = useState("");
@@ -838,7 +842,7 @@ const NewProject = ({ owner, onStarted, writeOps }) => {
           <option value="covert">{uiString("Covert")}</option>
         </select>
       </label>
-      {draft && <PlanCard draft={draft} owner={owner} busy={saving} onStart={start} onDiscard={() => { setDraft(null); }} />}
+      {draft && <PlanCard draft={draft} owner={owner} fundingMode={fundingMode} busy={saving} onStart={start} onDiscard={() => { setDraft(null); }} />}
       {error && <div style={{ color: "#fca5a5", fontSize: "0.7rem" }}>{error}</div>}
     </div>
   );
@@ -1228,6 +1232,7 @@ const TagMenu = ({ maxHeight, onClear, onOpenChange, onToggle, open, selected, t
 const selectProjects = (world) => (Array.isArray(world?.projects) ? world.projects : []);
 const selectPolities = (world) => world?.polityOverrides ?? {};
 const selectCountryStats = (world) => world?.countryStats ?? {};
+const selectProjectFundingMode = (world) => world?.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy";
 const selectGameStamp = (game) => ({
   country: game?.country || "",
   gameDate: String(game?.gameDate ?? ""),
@@ -1246,6 +1251,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const projects = useRuntimeState("world", selectProjects);
   const polityOverrides = useRuntimeState("world", selectPolities);
   const countryStats = useRuntimeState("world", selectCountryStats);
+  const projectFundingMode = useRuntimeState("world", selectProjectFundingMode);
   const { country, gameDate, round } = useRuntimeState("game", selectGameStamp);
   const [eventTitles, setEventTitles] = useState(() => new Map());
   const [hasLoaded, setHasLoaded] = useState(false);
@@ -1364,7 +1370,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
 
   // The player's budget and when each project should be done at the pace it is
   // going (projectEngine.js), worked out here from the world as it stands.
-  const engineWorld = useMemo(() => ({ countryStats, projects }), [countryStats, projects]);
+  const engineWorld = useMemo(() => ({ countryStats, projects, projectFundingMode }), [countryStats, projects, projectFundingMode]);
   const means = useMemo(() => ownerMeans(engineWorld, playerCountry, projects, playerCountry), [engineWorld, playerCountry, projects]);
   const finishes = useMemo(() => new Map(visible.map((project) => [
     project.id,
@@ -1468,6 +1474,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
     <ProjectCard
       key={project.id}
       project={project}
+      fundingMode={means.mode}
       eventTitles={eventTitles}
       expanded={expandedId === project.id}
       onToggleExpand={toggleExpand}
@@ -1494,14 +1501,25 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
         : { display: "contents" }}
       >
       <div style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", flexDirection: "column", gap: "0.5rem", padding: "0.6rem 1rem 0.7rem" }}>
-        <NewProject owner={playerCountry} writeOps={writeOps} onStarted={() => setShowClosed(false)} />
-        {means.budget !== null && (
-          <div style={{ color: "rgba(255,255,255,0.5)", display: "flex", flexWrap: "wrap", fontSize: "0.68rem", gap: "0.6rem" }}>
-            <span>{uiString("Project budget {{amount}} a month", { amount: formatMoney(means.budget) })}</span>
-            <span>{uiString("{{amount}} committed", { amount: formatMoney(means.committed) })}</span>
-            {means.covered < 1 && <span style={{ color: "#fbbf24" }}>{uiString("Over budget: projects are paid in part")}</span>}
-          </div>
-        )}
+        <NewProject owner={playerCountry} fundingMode={means.mode} writeOps={writeOps} onStarted={() => setShowClosed(false)} />
+        <div
+          style={{ color: "rgba(255,255,255,0.5)", display: "flex", flexWrap: "wrap", fontSize: "0.68rem", gap: "0.6rem" }}
+          title={means.mode === "nonmonetary"
+            ? uiString("Projects consume time and capacity, without claiming money or a national treasury.")
+            : uiString("The project allowance is an estimate from GDP, budget balance and public debt. Spending is not reconciled to a national treasury.")}
+        >
+          {means.mode === "nonmonetary" ? (
+            <span>{uiString("Non-monetary project funding: time and capacity only; no GDP or cash payments required")}</span>
+          ) : means.budget === null ? (
+            <span style={{ color: "#fbbf24" }}>{uiString("No native GDP baseline: paid projects cannot receive funding until assessed")}</span>
+          ) : (
+            <>
+              <span>{uiString("Estimated project allowance: {{amount}} per month", { amount: formatMoney(means.budget) })}</span>
+              <span>{uiString("Planned monthly commitments: {{amount}}", { amount: formatMoney(means.committed) })}</span>
+              {means.covered < 1 && <span style={{ color: "#fbbf24" }}>{uiString("Underfunded: planned costs exceed allowance")}</span>}
+            </>
+          )}
+        </div>
         {known.length > 0 && (
           <>
             <div style={{ position: "relative" }}>
