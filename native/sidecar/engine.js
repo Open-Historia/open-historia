@@ -397,3 +397,14 @@ export * as advisorGroupMeetings from "../../src/Game/AI/advisorGroupMeetings.js
 export * as advisorGroupSettings from "../../src/Game/AI/advisorGroupSettings.js";
 export * as groupTelemetry from "../../src/Game/AI/groupTelemetry.js";
 export * as rostraLooks from "../../src/Game/GameUI/rostraLooks.js";
+export * as econCurrency from "../../src/runtime/economicDisplayCurrency.js";
+export * as countryCapabilities from "../../src/runtime/countryCapabilities.js";
+export * as countryEditorStats from "../../src/Game/GameUI/countryEditorStats.js";
+export * as unitTypes from "../../src/runtime/unitTypes.js";
+export * as scenarioUnitTypes from "../../src/Game/GameUI/scenarioUnitTypes.js";
+export * as markerFamily from "../../src/runtime/markerFamily.js";
+export * as gmMapFeatureKinds from "../../src/Game/GameUI/mapFeatureKinds.js";
+export * as dayOneFacts from "../../src/runtime/scenarioPrehistoryDayOne.js";
+export * as canonicalAgreements from "../../src/runtime/scenarioCanonicalAgreements.js";
+export * as politicsSuggestionPresentation from "../../src/Game/GameUI/politicsSuggestionPresentation.js";
+export * as nameKey from "../../server/nameKey.js";
