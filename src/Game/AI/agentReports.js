@@ -65,3 +65,21 @@ export const agentsReportingWithSkip = ({ agents = [], filed = {}, round = 0, or
         .slice(0, Math.max(0, Math.round(Number(limit) || 0)))
         .map((entry) => entry.spy);
 };
+
+// The same, when the skip has several spymasters (a shared game: every player's
+// agents report, runtime/spycraft.js spymastersOf). Each spymaster's agents in
+// their own order, against their own file (`filedOf`), taken in turn: one of
+// each before a second of any, up to the limit, so no player's service waits on
+// another's.
+export const spymastersReportingWithSkip = ({ spymasters = [], agentsOf, filedOf, round = 0, originDate = "", limit = SKIP_AGENT_REPORT_LIMIT } = {}) => {
+    const most = Math.max(0, Math.round(Number(limit) || 0));
+    const queues = (Array.isArray(spymasters) ? spymasters : [])
+        .map((owner) => agentsReportingWithSkip({ agents: agentsOf(owner), filed: filedOf(owner), round, originDate, limit: most }));
+    const picked = [];
+    for (let turn = 0; picked.length < most && queues.some((queue) => turn < queue.length); turn += 1) {
+        for (const queue of queues) {
+            if (turn < queue.length && picked.length < most) picked.push(queue[turn]);
+        }
+    }
+    return picked;
+};

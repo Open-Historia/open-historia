@@ -18,7 +18,7 @@
 import { cancelOperation, deploySpy, expelSpy, normalizeSpies, orderOperation, recallSpy, setCoverStory, setSpyFocus, turnSpy } from "../../runtime/spycraft.js";
 import { spyOperationOps } from "../../runtime/projects.js";
 import { applyProjectOpsToWorld } from "../../runtime/gameState.js";
-import { isSeal, newSeal } from "../../runtime/spySeal.js";
+import { withSealFor } from "../../runtime/spySeal.js";
 
 export const AGENT_OPS = Object.freeze(["deploy", "recall", "expel", "turn", "story", "focus", "mission"]);
 export const COVER_STORY_MAX_CHARS = 300;
@@ -65,7 +65,8 @@ export const agentOrderFor = (world, board, seat, { op, target, spy, story } = {
     // The game's own words for why not (spycraft.js): shown to the player as they are.
     return { error: clean(refusal?.message) || "The order could not be carried out." };
   }
-  const withSpies = { ...world, spies: next, spySeal: isSeal(world?.spySeal) ? world.spySeal : newSeal() };
+  // The seal the asker's agents' traffic will be sealed with: its own (runtime/spySeal.js sealOf).
+  const withSpies = withSealFor({ ...world, spies: next }, me, { gameCountry: host });
   // The asker's own agents on the asker's own board.
   const ops = spyOperationOps(next, list(board), { date, playerPolity: me });
   const nextBoard = ops.length

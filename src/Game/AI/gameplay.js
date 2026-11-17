@@ -326,13 +326,13 @@ import {
   isProjectOpen,
   spyProvenanceOps,
 } from "../../runtime/projects.js";
-import { activeSpies, applySpyOps, spyServicesOf, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
+import { activeSpies, applySpyOps, spyServicesOf, espionageBrief, intelligenceOf, interceptTableOf, isIntelligenceRated, mapInterceptTables, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, redactText, resolveEspionage, signalClarity, spymastersOf, withInterceptTable } from "../../runtime/spycraft.js";
 import { assertPoliticalLandscapeConsistency, describeElectionsDue, normalizePoliticalLandscape } from "../../runtime/politics.js";
 import { foldLandscapeIntoActor, partiesCompiled } from "../../runtime/politicalLandscapeFold.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
 import { frontOrderLinesBlock } from "./frontPrompt.js";
 import { collectionOrders, covertOperationsBlock, untracedTargets } from "./covertOperationsDirective.js";
-import { agentsReportingWithSkip } from "./agentReports.js";
+import { spymastersReportingWithSkip } from "./agentReports.js";
 import {
   FOLDED_SKIP_SCHEMA_BUDGET,
   assignAgentReports,
@@ -346,7 +346,7 @@ import {
 } from "./foldedSkip.js";
 import { geminiDeclaredChars } from "./geminiAnswer.js";
 import { buildIdleConversationBrief, idleThreadChangedSince } from "../../runtime/idleConversationContext.js";
-import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment, spySealingWorks } from "../../runtime/spySeal.js";
+import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealOf, sealPoliticalAssessment, spySealingWorks, withSealFor } from "../../runtime/spySeal.js";
 import {
   buildActionHistoryText,
   buildDetailedChatHistoryText,
@@ -1778,20 +1778,28 @@ const regionTypesBlock = (rules) => {
 // The agents whose reports ride on a folded skip (prepareFoldedSkip): the rules
 // are the spyIntercept template's, the brief under each agent is the one its own
 // request would have carried.
+// i18n-ignore: the model's briefing, never shown.
 const buildFoldedAgentReportsBlock = (jobs, playerName) => {
   const list = normalizeArray(jobs);
   if (!list.length) return "";
-  const player = normalizeString(playerName) || "the player's polity";
+  // Whose service each agent is (a shared game has one per player): one
+  // government is named as it always was; several, each with its agents.
+  const ownerOf = (job) => normalizeString(job?.owner) || normalizeString(playerName);
+  const owners = list.map(ownerOf).filter((owner, index, all) => owner && all.findIndex((other) => regionKey(other) === regionKey(owner)) === index);
+  const one = owners.length <= 1;
+  const player = one ? (owners[0] || "the player's polity") : "";
+  const service = one ? `${player}'s service has agents in place` : `The services of ${owners.join(", ")} have agents in place`;
+  const ownGovernment = one ? player : "the agent's own government";
   return [
     "[Agents' Reports]",
-    `${player}'s service has agents in place whose reports are due. After the events, file one entry in ${AGENT_REPORTS_FIELD} for each agent listed here, and for no one else: `
+    `${service} whose reports are due. After the events, file one entry in ${AGENT_REPORTS_FIELD} for each agent listed here, and for no one else: `
       + "what that agent intercepted of its target's PRIVATE diplomatic traffic with OTHER polities during this period, consistent with the events you have just written. "
       + "Treat the records in this prompt as ground truth and write what the target actually said in private to its counterparts: intentions, terms, threats, promises, doubts, never public statements or press lines. "
-      + `Each report gives \`agent\`, its agent's key copied exactly from this list ("${list[0].key}"), and 2 to 4 exchanges. Each exchange has a counterpart (never the target itself, never ${player}), a date within the period, `
-      + `a short subject, and 2 to 6 alternating messages, each with its speaker (the target or the counterpart) and its text in that leader's own voice. Where ${player} is discussed, show what the target really thinks of it. `
+      + `Each report gives \`agent\`, its agent's key copied exactly from this list ("${list[0].key}"), and 2 to 4 exchanges. Each exchange has a counterpart (never the target itself, never ${ownGovernment}), a date within the period, `
+      + `a short subject, and 2 to 6 alternating messages, each with its speaker (the target or the counterpart) and its text in that leader's own voice. Where ${ownGovernment} is discussed, show what the target really thinks of it. `
       + "A politicalAssessment, where the agent's brief allows one, has a summary of the target leadership's decision posture and 1 to 6 findings, each a short topic and its assessment, in prose: never raw numbers or field names.",
     ...list.map((job) => [
-      `${job.key}: the agent inside ${job.name}.`,
+      one ? `${job.key}: the agent inside ${job.name}.` : `${job.key}: ${ownerOf(job)}'s agent inside ${job.name}.`,
       job.disinformation,
       job.brief,
     ].filter(Boolean).join("\n")),
@@ -8495,7 +8503,7 @@ export const rollBackToSnapshot = async (index = 0) => {
     const restoredReports = normalizeWorldState(s.world ?? {}).reports;
     await mutateInterceptsState((filed) => {
       const base = snapshotIntercepts ?? filed;
-      const reconciled = withoutOrphanedDocuments(base, restoredReports);
+      const reconciled = mapInterceptTables(base, (table) => withoutOrphanedDocuments(table, restoredReports));
       return snapshotIntercepts || reconciled !== base ? reconciled : null;
     });
     // The flags as they were, when an undone turn renamed a polity and moved its
@@ -9574,6 +9582,11 @@ const applySimulationResult = async ({
   worldWithImpacts.spies = espionage.spies;
   // A spy in the world needs a seal for what it will report under.
   if (!isSeal(worldWithImpacts.spySeal) && espionage.spies.length) worldWithImpacts.spySeal = newSeal();
+  // And each other player's agents, a seal of that player's own (a shared game:
+  // runtime/spySeal.js sealOf), so no player holds a key to another's traffic.
+  for (const owner of spymastersOf(baseGame)) {
+    if (activeSpies(worldWithImpacts, owner).length) worldWithImpacts = withSealFor(worldWithImpacts, owner, { gameCountry: normalizeString(baseGame.country) });
+  }
   const espionageEventIds = [];
   // A PUBLIC exposure is not just prose: it lands in the relation ledger as an
   // event-linked deterioration of the pair, the same way ordinary diplomacy does.
@@ -9994,6 +10007,22 @@ const applySimulationResult = async ({
   });
   if (reportDeliveries.some((delivery) => delivery.channel === "intelligence")) {
     worldWithImpacts = { ...worldWithImpacts, reports: markIntercepted(worldWithImpacts.reports, reportDeliveries, documentPlayer) };
+  }
+  // Every other player's agents steal too (a shared game): a copy one takes is
+  // marked as that player's and filed in that player's own table. A letter or a
+  // published paper reaches each player in its view (multiplayer/host/
+  // projection.js), so only what was stolen is planned for them here.
+  const seatThefts = [];
+  for (const owner of spymastersOf(baseGame).filter((name) => regionKey(name) !== regionKey(documentPlayer))) {
+    const stolen = planReportDeliveries({
+      before: normalizeArray(baseWorld.reports),
+      after: normalizeArray(worldWithImpacts.reports),
+      player: owner,
+      agents: activeSpies(worldWithImpacts, owner).filter((spy) => spy.status === "active"),
+    }).filter((delivery) => delivery.channel === "intelligence").map((delivery) => ({ ...delivery, owner }));
+    if (!stolen.length) continue;
+    worldWithImpacts = { ...worldWithImpacts, reports: markIntercepted(worldWithImpacts.reports, stolen, owner) };
+    seatThefts.push(...stolen);
   }
   if (reportDeliveries.length) {
     logDebugEvent("turn", `Documents delivered: ${reportDeliveries.map((delivery) => `"${delivery.report.title}" by ${delivery.channel}`).join("; ")}.`, undefined, { verbose: true });
@@ -10454,7 +10483,7 @@ const applySimulationResult = async ({
   // used to, a request apiece.
   if (review) await fileReviewedAgentReports(review, { campaignId });
   // And what the player's agents stole this turn, beside their traffic.
-  await fileStolenDocuments(reportDeliveries, { world: nextWorld, game: nextGame, lastEventId: lastTurnEventId, campaignId });
+  await fileStolenDocuments([...reportDeliveries, ...seatThefts], { world: nextWorld, game: nextGame, lastEventId: lastTurnEventId, campaignId });
   // And the advisor flags each new paper in its conversation.
   await postDocumentNotices(reportDeliveries, { lastEventId: lastTurnEventId, date: nextGame.gameDate, campaignId });
 
@@ -13194,17 +13223,22 @@ export const generateWarRoomReply = async ({ battlefield, message, signal } = {}
 // has spies from before seals existed. Minted inside the write queue: two
 // callers that each found no seal used to mint two, and whatever the losing one
 // sealed could never be opened again.
-const ensureSpySeal = async () => {
+// The seal `owner`'s traffic is sealed with (runtime/spySeal.js sealOf): the
+// game country's when no owner is named, made the first time it is needed.
+const ensureSpySeal = async ({ owner = "", gameCountry = "" } = {}) => {
   const cached = normalizeWorldState(await readWorldState({ force: false }));
-  if (isSeal(cached.spySeal)) return cached.spySeal;
-  let spySeal = null;
+  const known = sealOf(cached, owner, { gameCountry });
+  if (known) return known;
+  let spySeal = "";
   await mutateWorldState((latest) => {
-    if (isSeal(latest.spySeal)) {
-      spySeal = latest.spySeal;
+    const held = sealOf(latest, owner, { gameCountry });
+    if (held) {
+      spySeal = held;
       return null;
     }
-    spySeal = newSeal();
-    return { ...latest, spySeal };
+    const next = withSealFor(latest, owner, { gameCountry });
+    spySeal = sealOf(next, owner, { gameCountry });
+    return next;
   });
   return spySeal;
 };
@@ -13293,9 +13327,20 @@ const buildCollectedPoliticalSignals = (world, polity, { clarity = 0, seed = "" 
 //
 // `sharedVariables` lets several agents share one build of the template
 // variables; only the target and the disinformation line differ between them.
+// A spymaster's own Projects board: the game country's is the world's, each
+// other player's is kept by its seat (multiplayer/host/gameHost.js withSeatBoard).
+const spymasterBoard = (world, owner, gameCountry) => {
+  if (!normalizeString(owner) || regionKey(owner) === regionKey(gameCountry)) return normalizeArray(world?.projects);
+  const boards = world?.seatBoards && typeof world.seatBoards === "object" && !Array.isArray(world.seatBoards) ? world.seatBoards : {};
+  const key = Object.keys(boards).find((name) => regionKey(name) === regionKey(owner));
+  return key ? normalizeArray(boards[key]) : [];
+};
+
+// The brief is written from the agent's own government's side: in a shared
+// game every player's agents report, and each is its owner's (spy.owner).
 const prepareSpyReport = async (bundle, spy, { sharedVariables = null } = {}) => {
   const name = normalizeString(spy?.target);
-  const player = normalizeString(bundle.game?.country);
+  const player = normalizeString(spy?.owner) || normalizeString(bundle.game?.country);
   // A turned agent still "reports" — what the target wants believed. The same
   // task writes the lie; the player is not told which kind they are reading.
   const disinformation = spy.status === "turned"
@@ -13310,7 +13355,7 @@ const prepareSpyReport = async (bundle, spy, { sharedVariables = null } = {}) =>
   // months about rail corridors and rare earths while the question that cost the
   // player an agent went unanswered. Appended to the user message rather than put
   // in the prompt template, so it reaches campaigns whose prompts are frozen.
-  const openQuestions = normalizeArray(bundle.world?.projects)
+  const openQuestions = spymasterBoard(bundle.world, player, bundle.game?.country)
     .filter((project) => project.verification === "doubted"
       && isProjectOpen(project)
       && regionKey(project.ownerCode) === regionKey(name))
@@ -13372,24 +13417,28 @@ const prepareSpyReport = async (bundle, spy, { sharedVariables = null } = {}) =>
 const storeSpyReport = async (bundle, spy, payload, { campaignId = "" } = {}) => {
   if (leftCampaign(campaignId)) return null;
   const name = normalizeString(spy?.target);
+  // Whose report it is: the agent's own government (runtime/spycraft.js
+  // interceptTableOf), the game's country in single player.
+  const gameCountry = normalizeString(bundle.game?.country);
+  const owner = normalizeString(spy?.owner) || gameCountry;
   const reportId = newSpyReportId();
   const exchanges = normalizeArray(payload?.exchanges)
     // The schema forbids it, but a model that names the target or the player as
     // the counterpart has produced a chat the player already has or nonsense.
     .filter((exchange) => {
       const counterpart = regionKey(exchange?.counterpart);
-      return counterpart && counterpart !== regionKey(name) && counterpart !== regionKey(bundle.game?.country);
+      return counterpart && counterpart !== regionKey(name) && counterpart !== regionKey(owner);
     })
     .map((exchange, index) => ({
       ...exchange,
       id: `${reportId}:${index}`,
     }));
   // Stored sealed: the file, the network reply and the React tree hold ciphertext.
-  const seal = isSeal(bundle.world?.spySeal) ? bundle.world.spySeal : await ensureSpySeal();
+  const seal = sealOf(bundle.world, owner, { gameCountry }) || await ensureSpySeal({ owner, gameCountry });
   const sealed = await Promise.all(exchanges.map((exchange) => sealExchange(seal, exchange)));
 
   const rawPoliticalAssessment = normalizePoliticalIntelligenceAssessment(payload?.politicalAssessment);
-  const player = normalizeString(bundle.game?.country);
+  const player = owner;
   const clarity = signalClarity(intelligenceOf(bundle.world, player), intelligenceOf(bundle.world, name));
   const politicalAssessment = rawPoliticalAssessment
     ? normalizePoliticalIntelligenceAssessment({
@@ -13411,7 +13460,7 @@ const storeSpyReport = async (bundle, spy, payload, { campaignId = "" } = {}) =>
   // for a different target.
   let entry = null;
   await mutateInterceptsState((latest) => {
-    const current = normalizeIntercepts(latest);
+    const current = normalizeIntercepts(interceptTableOf(latest, owner, { gameCountry }));
     // Each report replaces the agent's traffic, but not stolen documents already on file.
     const stolen = normalizeArray(current[name]?.exchanges).filter(isDocumentExchange).slice(0, STOLEN_DOCUMENTS_KEPT);
     entry = {
@@ -13423,7 +13472,7 @@ const storeSpyReport = async (bundle, spy, payload, { campaignId = "" } = {}) =>
       exchanges: [...stolen, ...sealed],
       ...(sealedPoliticalAssessment ? { politicalAssessment: sealedPoliticalAssessment } : {}),
     };
-    return { ...current, [name]: entry };
+    return withInterceptTable(latest, owner, { ...current, [name]: entry }, { gameCountry });
   });
   return entry;
 };
@@ -13438,28 +13487,37 @@ const fileStolenDocuments = async (deliveries, { world, game, lastEventId = "", 
   const stolen = normalizeArray(deliveries).filter((delivery) => delivery?.channel === "intelligence");
   if (!stolen.length || !stillCampaign(campaignId)) return;
   try {
-    const seal = isSeal(world?.spySeal) ? world.spySeal : await ensureSpySeal();
+    // Each copy sealed with its own government's seal (runtime/spySeal.js sealOf).
+    const gameCountry = normalizeString(game?.country);
+    const seals = new Map();
+    const sealFor = async (owner) => {
+      if (!seals.has(owner)) seals.set(owner, sealOf(world, owner, { gameCountry }) || await ensureSpySeal({ owner, gameCountry }));
+      return seals.get(owner);
+    };
     // Sealed first, outside the write queue; filed into the file as it is now.
     const prepared = [];
     for (const delivery of stolen) {
+      const owner = normalizeString(delivery.owner) || gameCountry;
       const key = normalizeString(delivery.agentTarget || delivery.target);
       // Shown in the Spies tab once the reveal reaches the event it came with.
       const exchange = documentExchange(delivery, { date: game?.gameDate, eventId: deliveryEventId(delivery, lastEventId) });
-      prepared.push({ key, id: exchange.id, sealed: await sealExchange(seal, exchange) });
+      prepared.push({ owner, key, id: exchange.id, sealed: await sealExchange(await sealFor(owner), exchange) });
     }
     assertCampaignUnchanged(campaignId, activeCampaignId(), "report");
     await mutateInterceptsState((latest) => {
-      const next = { ...normalizeIntercepts(latest) };
+      let file = latest;
       let filed = false;
-      for (const { key, id, sealed } of prepared) {
+      for (const { owner, key, id, sealed } of prepared) {
+        const next = { ...normalizeIntercepts(interceptTableOf(file, owner, { gameCountry })) };
         const entry = next[key] ?? { gatheredAt: normalizeString(game?.gameDate), round: Number(game?.round) || 0, planted: false, exchanges: [] };
         if (entry.exchanges.some((existing) => existing.id === id)) continue;
         const documents = entry.exchanges.filter(isDocumentExchange);
         const traffic = entry.exchanges.filter((existing) => !isDocumentExchange(existing));
         next[key] = { ...entry, exchanges: [sealed, ...documents].slice(0, STOLEN_DOCUMENTS_KEPT).concat(traffic) };
+        file = withInterceptTable(file, owner, next, { gameCountry });
         filed = true;
       }
-      return filed ? next : null;
+      return filed ? file : null;
     });
   } catch (error) {
     console.warn("[spycraft] a stolen document could not be filed:", error?.message || error);
@@ -16564,16 +16622,20 @@ const prepareFoldedSkip = async ({ bundle, originDate, variables, campaignId }) 
   const boardShown = true;
   const board = normalizeArray(bundle.world?.projects);
   const espionage = isActiveFeatureEnabled("espionage");
-  const filed = board.length || espionage
-    ? normalizeIntercepts(await readInterceptsState({ force: false }).catch(() => ({})))
+  const file = board.length || espionage
+    ? await readInterceptsState({ force: false }).catch(() => ({}))
     : {};
+  const filed = normalizeIntercepts(interceptTableOf(file, playerCountry, { gameCountry: playerCountry }));
   const doubted = board.length
     ? doubtedAwaitingFreshSource(normalizeSpies(bundle.world?.spies), board, { playerPolity: playerCountry, intercepts: filed })
     : [];
+  // Every spymaster's agents (a shared game: every player's), each against its
+  // own table, taken in turn (agentReports.js spymastersReportingWithSkip).
   const agents = espionage
-    ? agentsReportingWithSkip({
-      agents: activeSpies(world, playerCountry),
-      filed,
+    ? spymastersReportingWithSkip({
+      spymasters: spymastersOf(bundle.game),
+      agentsOf: (owner) => activeSpies(world, owner),
+      filedOf: (owner) => normalizeIntercepts(interceptTableOf(file, owner, { gameCountry: playerCountry })),
       round: (Number(bundle.game?.round) || 1) + 1,
       originDate: normalizeString(originDate),
     })
@@ -16583,7 +16645,7 @@ const prepareFoldedSkip = async ({ bundle, originDate, variables, campaignId }) 
     try {
       // No template variables: the skip's own prompt is the agent's context.
       const prepared = await prepareSpyReport(bundle, spy, { sharedVariables: {} });
-      agentJobs.push({ key: `agent_${index + 1}`, spy, name: prepared.name, disinformation: prepared.disinformation, brief: prepared.brief });
+      agentJobs.push({ key: `agent_${index + 1}`, spy, owner: normalizeString(spy?.owner) || playerCountry, name: prepared.name, disinformation: prepared.disinformation, brief: prepared.brief });
     } catch (error) {
       // One agent's brief failing costs that agent this skip's report.
       console.warn(`[spycraft] the brief for the agent in ${normalizeString(spy?.target)} could not be built; it reports next skip.`, error?.message || error);

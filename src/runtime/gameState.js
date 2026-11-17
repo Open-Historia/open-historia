@@ -4324,6 +4324,17 @@ export const normalizeWorldState = (world) => {
           .slice(0, 64),
       ),
     } : {}),
+    // And each such player's seal for its own agents' traffic (spySeal.js
+    // sealOf), by country. world.spySeal stays the game country's. Only a world
+    // that has the key keeps it.
+    ...(Object.prototype.hasOwnProperty.call(nextWorld, "seatSeals") ? {
+      seatSeals: Object.fromEntries(
+        Object.entries(nextWorld.seatSeals && typeof nextWorld.seatSeals === "object" && !Array.isArray(nextWorld.seatSeals) ? nextWorld.seatSeals : {})
+          .map(([country, seal]) => [normalizeOptionalString(country), String(seal ?? "")])
+          .filter(([country, seal]) => country && /^[0-9a-f]{64}$/i.test(seal))
+          .slice(0, 64),
+      ),
+    } : {}),
     cityRenames: Object.fromEntries(
       Object.entries(nextWorld.cityRenames && typeof nextWorld.cityRenames === "object" ? nextWorld.cityRenames : {})
         .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])
@@ -5059,7 +5070,7 @@ export const readGameStateBundle = async ({ force = false } = {}) => {
 // What of the finished world belongs to no turn: the Game Master's standing
 // facts and log, the seal, what each leader has been shown, the player's goal.
 // The world as seen keeps today's.
-const STATE_OUTSIDE_THE_TURN = ["simulationReminders", "gmChanges", "spySeal", "chatKnowledgeCursors", "playerGoals"];
+const STATE_OUTSIDE_THE_TURN = ["simulationReminders", "gmChanges", "spySeal", "seatSeals", "chatKnowledgeCursors", "playerGoals"];
 
 // The campaign as the player has been shown it (runtime/unseenEvents.js). While
 // a skip is being revealed the save already holds all of it, and whatever

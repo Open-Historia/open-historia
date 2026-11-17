@@ -307,6 +307,7 @@ const NEW_UPDATES = [
           "Demands between an overlord and its puppet now work in a shared game: made and answered from their cards, and an AI government's answer is checked as in a game played alone.",
           "You can call a vote in a group conversation of a shared game and vote in one, as in a game played alone. Each country votes once, for itself.",
           "Orders your advisor proposes can be approved and cancelled in a shared game, and an AI suggestion you queue shows as queued. When the host turns an order down, the Actions panel says why.",
+          "Every player's agents now report and steal documents in a shared game, not only the host's. What your agents bring back is yours alone.",
         ],
       },
       {

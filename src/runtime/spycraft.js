@@ -734,6 +734,68 @@ export const normalizeIntercepts = (raw) => {
   return out;
 };
 
+// ONE TABLE PER SPYMASTER. Single player has one spymaster, the game's own
+// country, and its table (above) is the file itself. In a shared game every
+// player's agents report, and what an agent brings back is its owner's alone:
+// each other player's table is kept beside the game country's, under
+// SEAT_INTERCEPTS by country, as world.seatBoards keeps their Projects boards
+// beside world.projects. A reserved member, never a target: it holds no
+// traffic, so normalizeIntercepts leaves it out of a table, and single player's
+// file never has one. The host's projection gives each player its own table as
+// its whole file (multiplayer/host/projection.js): the secret is kept by who
+// is sent what. `gameCountry`: the game's own country, whose table is the top.
+export const SEAT_INTERCEPTS = "@seats";
+const sameSpymaster = (left, right) => String(left ?? "").trim().toLowerCase() === String(right ?? "").trim().toLowerCase();
+const isTable = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const ownTable = (file) => {
+  const { [SEAT_INTERCEPTS]: _seats, ...table } = isTable(file) ? file : {};
+  return table;
+};
+const seatTables = (file) => (isTable(file?.[SEAT_INTERCEPTS]) ? file[SEAT_INTERCEPTS] : {});
+
+// `owner`'s table as the file holds it (normalizeIntercepts reads it, as it
+// read the whole file).
+export const interceptTableOf = (file, owner, { gameCountry = "" } = {}) => {
+  if (!String(owner ?? "").trim() || sameSpymaster(owner, gameCountry)) return ownTable(file);
+  const seats = seatTables(file);
+  const key = Object.keys(seats).find((name) => sameSpymaster(name, owner));
+  return key && isTable(seats[key]) ? seats[key] : {};
+};
+
+// The file with `owner`'s table replaced; every other table as it was.
+export const withInterceptTable = (file, owner, table, { gameCountry = "" } = {}) => {
+  const seats = seatTables(file);
+  const next = ownTable(table);
+  if (!String(owner ?? "").trim() || sameSpymaster(owner, gameCountry)) {
+    return Object.keys(seats).length ? { ...next, [SEAT_INTERCEPTS]: seats } : next;
+  }
+  const others = Object.fromEntries(Object.entries(seats).filter(([name]) => !sameSpymaster(name, owner)));
+  const kept = Object.keys(next).length ? { ...others, [String(owner).trim()]: next } : others;
+  const own = ownTable(file);
+  return Object.keys(kept).length ? { ...own, [SEAT_INTERCEPTS]: kept } : own;
+};
+
+// Every table of the file put through `change` (a table in, a table out; the
+// same table back when nothing changed). The file itself back when none did.
+export const mapInterceptTables = (file, change) => {
+  const own = ownTable(file);
+  const nextOwn = change(own);
+  let changed = nextOwn !== own;
+  const seats = {};
+  for (const [owner, table] of Object.entries(seatTables(file))) {
+    const next = change(isTable(table) ? table : {});
+    if (next !== table) changed = true;
+    if (isTable(next) && Object.keys(next).length) seats[owner] = next;
+  }
+  if (!changed) return file;
+  const base = isTable(nextOwn) ? nextOwn : {};
+  return Object.keys(seats).length ? { ...base, [SEAT_INTERCEPTS]: seats } : base;
+};
+
+// The spymasters of a game: its own country, and in a shared game's engine
+// every other country a person plays (runtime/humanPolities.js).
+export const spymastersOf = (game) => humanCountriesOf(game);
+
 // ---- what the AI is told ------------------------------------------------------------
 
 // The simulator's view: everything, uncensored, both directions. Handed to the

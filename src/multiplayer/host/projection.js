@@ -29,8 +29,9 @@
 // - How good a country's intelligence service is, is exact only for its own
 //   government: everyone else is sent an estimate, to the nearest ten.
 // - Agreements carry no secrecy flag yet, so every treaty is public.
-// - Scenes and intercepts are single-player features still keyed to the host's
-//   seat; other seats get none of them.
+// - Scenes are a single-player feature still keyed to the host's seat; other
+//   seats get none. Each player's agents' traffic is its own (runtime/
+//   spycraft.js interceptTableOf), with its own seal (runtime/spySeal.js sealOf).
 // - The AI's suggested orders are each device's own, asked with that player's
 //   own key and kept on that device (client/seatWrites.js): no view carries any.
 //   The advice the week itself brings each player (world.seatAdvice) is theirs
@@ -45,6 +46,8 @@ import { battlefieldsForViewer } from "../../runtime/fronts/view.js";
 import { polityMatches, spyAsSeenBy, viewerAudience } from "../../Game/AI/audience.js";
 import { eventNamesPolity } from "../../runtime/eventConcerns.js";
 import { formerNamesOf } from "./foundings.js";
+import { interceptTableOf } from "../../runtime/spycraft.js";
+import { sealOf } from "../../runtime/spySeal.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLocaleLowerCase();
@@ -116,7 +119,7 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
 export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   "actionSuggestions", "chargedRefusals", "chatKnowledgeCursors", "consolidatedHistory",
   "gmAudit", "gmChanges", "historyDocument", "idlePulseTick", "lastJumpSummary", "naviesRaised", "notes",
-  "pendingEventOutreach", "politicalSimulation", "seatBoards", "simulationReminders",
+  "pendingEventOutreach", "politicalSimulation", "seatBoards", "seatSeals", "simulationReminders",
   "storylines",
   // What the last time skip's prompt read (runtime/promptSnapshot.js).
   "promptSnapshot", "promptReference",
@@ -136,7 +139,7 @@ export const HOST_ONLY_WORLD_KEYS = Object.freeze([
 // The host seat's single-player features (a scene in progress, the key its own
 // intercepts are sealed with): its own view only.
 const HOST_SEAT_WORLD_KEYS = Object.freeze([
-  "activeInteractive", "interactiveOffer", "lastInteractiveOfferRound", "spySeal",
+  "activeInteractive", "interactiveOffer", "lastInteractiveOfferRound",
   // Which countries' sheets a skip refreshes is the host's setting, on the
   // host's AI key.
   "countryStatsTracking",
@@ -304,7 +307,7 @@ const FILTERED_WORLD_KEYS = Object.freeze({
   },
 });
 
-export const FILTERED_WORLD_KEY_NAMES = Object.freeze([...Object.keys(FILTERED_WORLD_KEYS), ...HOST_SEAT_WORLD_KEYS]);
+export const FILTERED_WORLD_KEY_NAMES = Object.freeze([...Object.keys(FILTERED_WORLD_KEYS), ...HOST_SEAT_WORLD_KEYS, "spySeal"]);
 
 // `hiddenEventIds`: the events this viewer is not shown (eventsHiddenFrom), so
 // a turn's record does not count them either.
@@ -314,6 +317,11 @@ export const projectWorld = (world, viewer, { host = "", hiddenEventIds = new Se
   for (const key of PUBLIC_WORLD_KEYS) if (full[key] !== undefined) out[key] = full[key];
   for (const [key, filter] of Object.entries(FILTERED_WORLD_KEYS)) out[key] = filter(full, viewer, { host, hiddenEventIds, readers });
   if (same(host, viewer)) for (const key of HOST_SEAT_WORLD_KEYS) if (full[key] !== undefined) out[key] = full[key];
+  // The seal of the viewer's own agents' traffic, which its intercepts view is
+  // sealed with (runtime/spySeal.js sealOf): the host's for the host, each other
+  // player's its own. Never another's.
+  const seal = sealOf(full, viewer, { gameCountry: host });
+  if (seal) out.spySeal = seal;
   return copy(out);
 };
 
@@ -514,7 +522,9 @@ export const projectForViewer = ({ world, game, events, chat, actions, intercept
     // (advisorDesk.js): made for this view, never stored.
     chat: copy([...projectChats(chat, seat, { host }), ...[advisorThreadFor({ world, events }, seat, { readers, shown })].filter(Boolean)]),
     actions: copy(ownActions),
-    intercepts: same(host, seat) && isRecord(intercepts) ? copy(intercepts) : {},
+    // The viewer's own agents' traffic, its own table of the file
+    // (runtime/spycraft.js interceptTableOf): never another player's.
+    intercepts: copy(interceptTableOf(isRecord(intercepts) ? intercepts : {}, seat, { gameCountry: host })),
     colors: copy(isRecord(colors) ? colors : {}),
     flags: copy(isRecord(flags) ? flags : {}),
   };
