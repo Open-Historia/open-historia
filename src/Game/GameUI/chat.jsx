@@ -368,6 +368,159 @@ const FlagImg = ({ url, alt = "", size = "1em", width, height }) => {
     );
 };
 
+// Distinct diplomatic channel avatar for single or multi-country participant groups:
+const GroupFlagAvatar = ({ countries = [], flagUrlMap = {}, size = "normal", unread = false }) => {
+    if (!countries.length) return null;
+    const isHeader = size === "header";
+
+    if (countries.length === 1) {
+        const country = countries[0];
+        const url = flagUrlMap[country.name] ?? null;
+        const avatarSize = isHeader ? "2.35rem" : "2.05rem";
+        return (
+            <div
+                title={country.name}
+                style={{
+                    position: "relative",
+                    width: avatarSize,
+                    height: avatarSize,
+                    flexShrink: 0,
+                    display: "inline-flex",
+                }}
+            >
+                <div
+                    style={{
+                        width: "100%",
+                        height: "100%",
+                        borderRadius: "50%",
+                        overflow: "hidden",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        boxShadow: "0 0 0 2px rgba(255,255,255,0.16), 0 3px 8px rgba(0,0,0,0.55)",
+                        background: "rgba(24,28,38,0.95)",
+                    }}
+                >
+                    {url ? (
+                        <img
+                            src={bundledFlagUrl(url)}
+                            alt={country.name}
+                            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                        />
+                    ) : (
+                        <span style={{ fontSize: isHeader ? "1.1rem" : ".95rem" }}>{FALLBACK_FLAG_EMOJI}</span>
+                    )}
+                </div>
+                {unread && (
+                    <span
+                        aria-hidden="true"
+                        style={{
+                            position: "absolute",
+                            top: "-1px",
+                            right: "-1px",
+                            width: ".55rem",
+                            height: ".55rem",
+                            borderRadius: "50%",
+                            background: "#38bdf8",
+                            border: "2px solid rgba(18,22,32,0.95)",
+                            boxShadow: "0 0 6px rgba(56,189,248,0.75)",
+                            zIndex: 10,
+                        }}
+                    />
+                )}
+            </div>
+        );
+    }
+
+    const avatarSize = isHeader ? "1.95rem" : "1.7rem";
+    const primary = countries.slice(0, 2);
+    const extra = countries.length - 2;
+
+    return (
+        <div style={{
+            display: "inline-flex",
+            alignItems: "center",
+            position: "relative",
+            flexShrink: 0,
+            paddingRight: extra > 0 ? ".35rem" : ".15rem",
+        }}>
+            {primary.map((country, index) => {
+                const url = flagUrlMap[country.name] ?? null;
+                return (
+                    <span
+                        key={`${country.name}-${index}`}
+                        title={country.name}
+                        style={{
+                            width: avatarSize,
+                            height: avatarSize,
+                            borderRadius: "50%",
+                            overflow: "hidden",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            marginLeft: index > 0 ? "-.58rem" : 0,
+                            zIndex: index === 0 ? 2 : 1,
+                            boxShadow: "0 0 0 2.5px rgba(18,22,32,0.95), 0 3px 8px rgba(0,0,0,0.55)",
+                            background: "rgba(24,28,38,0.95)",
+                            flexShrink: 0,
+                        }}
+                    >
+                        {url ? (
+                            <img
+                                src={bundledFlagUrl(url)}
+                                alt={country.name}
+                                style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                            />
+                        ) : (
+                            <span style={{ fontSize: isHeader ? ".9rem" : ".78rem" }}>{FALLBACK_FLAG_EMOJI}</span>
+                        )}
+                    </span>
+                );
+            })}
+            {extra > 0 && (
+                <span
+                    data-no-translate
+                    style={{
+                        marginLeft: "-.42rem",
+                        zIndex: 3,
+                        background: "rgba(43,193,243,0.25)",
+                        border: "1.5px solid rgba(18,22,32,0.95)",
+                        color: "#2bc1f3",
+                        borderRadius: "999px",
+                        fontSize: ".6rem",
+                        fontWeight: 800,
+                        padding: "0 .32rem",
+                        height: "1.05rem",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        boxShadow: "0 2px 4px rgba(0,0,0,0.4)",
+                    }}
+                >
+                    +{extra}
+                </span>
+            )}
+            {unread && (
+                <span
+                    aria-hidden="true"
+                    style={{
+                        position: "absolute",
+                        top: "-1px",
+                        right: extra > 0 ? ".2rem" : "-1px",
+                        width: ".55rem",
+                        height: ".55rem",
+                        borderRadius: "50%",
+                        background: "#38bdf8",
+                        border: "2px solid rgba(18,22,32,0.95)",
+                        boxShadow: "0 0 6px rgba(56,189,248,0.75)",
+                        zIndex: 10,
+                    }}
+                />
+            )}
+        </div>
+    );
+};
+
 // ── Nation colors (from colors.json, same source as WorldMap) ─────────────────
 const countryAccentColor = (name) => {
     const colors = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#94a3b8","#ec4899"];
@@ -2336,13 +2489,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     // .72rem apart left a phone's thread title under 60px.
                     gap: isTouch ? ".35rem" : ".72rem", padding: isTouch ? ".35rem 1rem" : ".72rem 1rem", borderBottom: "1px solid var(--oh-ui-line, rgba(255,255,255,.07))", background: "var(--oh-ui-header, rgba(15,15,18,.26))", flexShrink: 0 }}>
                 <button className="oh-tap" onClick={onBack} aria-label="Back to diplomacy" style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,.58)", display: "flex", padding: ".26rem", borderRadius: 7 }}><BackIcon /></button>
-                <div style={{ display: "inline-flex", alignItems: "center", minWidth: headerCountries.length > 1 ? "2.5rem" : "1.55rem", paddingRight: headerCountries.length > 1 ? ".2rem" : 0, flexShrink: 0 }}>
-                    {headerCountries.map((country, index) => (
-                        <span key={`${country.name}-${country.code || index}`} style={{ display: "inline-flex", marginLeft: index ? "-.38rem" : 0, zIndex: headerCountries.length - index, filter: "drop-shadow(0 1px 2px rgba(0,0,0,.45))" }}>
-                            <FlagImg url={headerFlagUrls[country.name] ?? null} alt={country.name} width="1.5rem" height="1rem" />
-                        </span>
-                    ))}
-                </div>
+                <GroupFlagAvatar countries={headerCountries} flagUrlMap={headerFlagUrls} size="header" />
                 <div style={{ flex: 1, minWidth: 0 }}>
                     {isEditingTitle ? (
                         <div style={{ display: "flex", alignItems: "center", gap: ".35rem" }}>
@@ -2928,7 +3075,7 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
     const lastDate = chatLastGameDate(chat);
     const lastMsg = chat.messages?.at(-1);
     const rawPreview = String(lastMsg?.text || "No messages yet").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
-    const preview = rawPreview.slice(0, 96) + (rawPreview.length > 96 ? "…" : "");
+    const preview = rawPreview;
     const speaker = lastMsg?.role === "leader" || (lastMsg?.speaker && lastMsg?.role !== "user") ? String(lastMsg?.speaker || "") : "";
     const channelMeta = counterparts.length > 1 ? `${counterparts.length + (playerCountry ? 1 : 0)}-party channel` : "Direct channel";
     const chatMarker = counterparts.map((country) => puppetMarkers[country.name]?.label).find(Boolean) || "";
@@ -2936,48 +3083,118 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
     return (
         <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => { setHovered(false); setConfirming(false); }} style={{ position: "relative" }}>
         <button data-diplomacy-thread-row="modern" className="oh-diplomacy-inbox-row" onClick={onClick} style={{
-            width: "100%", padding: canHover ? ".79rem 3rem .79rem .9rem" : ".79rem 6.7rem .79rem .9rem", borderRadius: 10,
-            border: `1px solid ${selected || hovered ? "var(--oh-ui-accent, rgba(133,203,230,.5))" : unread ? "var(--oh-ui-line, rgba(96,165,250,.15))" : "var(--oh-ui-line, rgba(255,255,255,.07))"}`,
-            background: selected ? "var(--oh-ui-active, rgba(96,165,250,.16))" : hovered ? "var(--oh-ui-hover, rgba(255,255,255,.065))" : unread ? "var(--oh-ui-overlay-card, rgba(59,130,246,.035))" : "var(--oh-ui-overlay-card, rgba(255,255,255,.025))",
-            display: "flex", alignItems: "center", gap: ".78rem", cursor: "pointer",
+            width: "100%", padding: canHover ? ".82rem 5.8rem .82rem .95rem" : ".82rem 5.8rem .82rem .95rem", borderRadius: 10,
+            border: `1px solid ${selected || hovered ? "var(--oh-ui-accent, rgba(133,203,230,.5))" : unread ? "var(--oh-ui-line, rgba(96,165,250,.2))" : "var(--oh-ui-line, rgba(255,255,255,.07))"}`,
+            background: selected ? "var(--oh-ui-active, rgba(96,165,250,.16))" : hovered ? "var(--oh-ui-hover, rgba(255,255,255,.07))" : unread ? "var(--oh-ui-overlay-card, rgba(59,130,246,.045))" : "var(--oh-ui-overlay-card, rgba(255,255,255,.025))",
+            display: "flex", alignItems: "center", gap: ".88rem", cursor: "pointer",
             transition: "background .15s, border-color .15s",
-            fontFamily: "sans-serif", textAlign: "left", boxShadow: hovered ? "0 6px 18px rgba(0,0,0,.12)" : "none",
+            fontFamily: "sans-serif", textAlign: "left", boxShadow: hovered ? "0 6px 18px rgba(0,0,0,.15)" : "none",
         }}>
-            <div style={{ width: ".52rem", flexShrink: 0, display: "flex", justifyContent: "center" }} aria-hidden="true">
-                {unread && <div style={{ width: ".46rem", height: ".46rem", borderRadius: "50%", background: "#60a5fa", boxShadow: "0 0 0 3px rgba(96,165,250,.08)" }} />}
-            </div>
-            <div style={{ display: "inline-flex", alignItems: "center", flexShrink: 0, minWidth: previewCountries.length > 1 ? "2.65rem" : "1.45rem", paddingRight: previewCountries.length > 1 ? ".25rem" : 0 }}>
-                {previewCountries.map((country, index) => (
-                    <span key={`${country.name}-${country.code || index}`} style={{ display: "inline-flex", marginLeft: index ? "-.38rem" : 0, zIndex: previewCountries.length - index, filter: "drop-shadow(0 1px 2px rgba(0,0,0,.4))" }}>
-                        <FlagImg url={flagUrlMap[country.name] ?? null} alt={country.name} width="1.42rem" height=".96rem" />
-                    </span>
-                ))}
-            </div>
+            <GroupFlagAvatar countries={previewCountries} flagUrlMap={flagUrlMap} size="normal" unread={unread} />
             <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: ".48rem", minWidth: 0 }}>
-                    <div style={{ flex: 1, minWidth: 0, fontSize: ".84rem", fontWeight: unread ? 740 : 650, color: unread ? "#fff" : "rgba(255,255,255,.9)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{names}</div>
-                    <span className="oh-diplomacy-row-date">{lastDate ? formatGameDateReadable(lastDate) : "New"}</span>
+                <div style={{ fontSize: ".88rem", fontWeight: unread ? 750 : 650, color: unread ? "#fff" : "rgba(255,255,255,.94)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", letterSpacing: "0.01em" }}>
+                    {names}
                 </div>
-                <div className="oh-diplomacy-row-subject">{threadSubject || (chatMarker || channelMeta)}</div>
-                <div className="oh-diplomacy-row-preview">
-                    {speaker && counterparts.length > 1 && <span style={{ fontWeight: 650 }}>{speaker}: </span>}{preview}
+                <div style={{ display: "flex", alignItems: "center", gap: ".35rem", marginTop: ".22rem" }}>
+                    {threadSubject ? (
+                        <span style={{
+                            fontSize: ".69rem",
+                            fontWeight: 650,
+                            color: "var(--oh-ui-accent, #2bc1f3)",
+                            background: "rgba(43,193,243,0.12)",
+                            border: "1px solid rgba(43,193,243,0.25)",
+                            borderRadius: "4px",
+                            padding: "0.06rem 0.38rem",
+                            letterSpacing: "0.01em",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            maxWidth: "92%",
+                        }}>
+                            {threadSubject}
+                        </span>
+                    ) : (
+                        <span style={{
+                            fontSize: ".65rem",
+                            fontWeight: 650,
+                            color: "rgba(255,255,255,0.52)",
+                            letterSpacing: "0.03em",
+                            textTransform: "uppercase",
+                        }}>
+                            {channelMeta}
+                        </span>
+                    )}
+                    {chatMarker && (
+                        <span style={{
+                            fontSize: ".63rem",
+                            fontWeight: 700,
+                            color: "rgba(255,255,255,0.78)",
+                            background: "rgba(255,255,255,0.08)",
+                            border: "1px solid rgba(255,255,255,0.12)",
+                            borderRadius: "4px",
+                            padding: "0.06rem 0.32rem",
+                        }}>
+                            {chatMarker}
+                        </span>
+                    )}
+                </div>
+                <div style={{
+                    marginTop: ".22rem",
+                    color: unread ? "rgba(255,255,255,0.72)" : "rgba(255,255,255,0.48)",
+                    fontSize: ".74rem",
+                    lineHeight: 1.35,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                }}>
+                    {speaker && counterparts.length > 1 && <span style={{ fontWeight: 650, color: "rgba(255,255,255,0.88)" }}>{speaker}: </span>}{preview}
                 </div>
             </div>
         </button>
-        <div style={{ position: "absolute", top: "50%", right: ".72rem", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: ".28rem" }}>
-            {!showActions && <span aria-hidden="true" style={{ color: "rgba(255,255,255,.2)", fontSize: "1rem", lineHeight: 1 }}>›</span>}
-            {showActions && (
-                <>
-                <button className="oh-tap" onClick={e => { e.stopPropagation(); onToggleRead?.(); }} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"}
-                style={{ display: "flex", alignItems: "center", background: "var(--oh-ui-overlay-strong, rgba(24,24,27,.86))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,.08))", cursor: "pointer", color: "var(--oh-ui-accent, rgba(96,165,250,.78))", padding: ".3rem", borderRadius: 7, lineHeight: 1 }}>
-                    <EnvelopeIcon filled={unread} />
-                </button>
-                <button className="oh-tap" onClick={e => { e.stopPropagation(); if (confirming) onDelete(); else setConfirming(true); }} title={confirming ? "Click again to delete this chat" : "Delete chat"} aria-label={confirming ? "Confirm deleting this chat" : "Delete chat"}
-                style={{ display: "flex", alignItems: "center", gap: ".28rem", background: confirming ? "rgba(239,68,68,.18)" : "var(--oh-ui-overlay-strong, rgba(24,24,27,.86))", border: `1px solid ${confirming ? "rgba(239,68,68,.55)" : "rgba(255,255,255,.08)"}`, cursor: "pointer", color: confirming ? "#fca5a5" : "rgba(239,68,68,.68)", fontSize: ".68rem", fontWeight: 650, padding: confirming ? ".3rem .48rem" : ".3rem", borderRadius: 7, lineHeight: 1 }}>
-                    {confirming ? "Delete?" : <TrashIcon />}
-                </button>
-                </>
-            )}
+        <div style={{
+            position: "absolute",
+            top: ".82rem",
+            right: ".85rem",
+            bottom: ".82rem",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-end",
+            justifyContent: "space-between",
+            pointerEvents: "none",
+        }}>
+            <span className="oh-diplomacy-row-date" style={{
+                lineHeight: 1.2,
+                fontSize: ".66rem",
+                fontWeight: 650,
+                color: unread ? "var(--oh-ui-accent, #60a5fa)" : "rgba(255,255,255,0.48)",
+                letterSpacing: "0.02em",
+            }}>
+                {lastDate ? formatGameDateReadable(lastDate) : "New"}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: ".28rem", pointerEvents: "auto" }}>
+                {!showActions && <span aria-hidden="true" style={{ color: "rgba(255,255,255,.22)", fontSize: "1.05rem", lineHeight: 1, paddingRight: ".15rem" }}>›</span>}
+                {showActions && (
+                    <div style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: ".24rem",
+                        background: "rgba(18,22,32,0.92)",
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        borderRadius: "8px",
+                        padding: "2px",
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.45)",
+                    }}>
+                        <button className="oh-tap" onClick={e => { e.stopPropagation(); onToggleRead?.(); }} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"}
+                        style={{ display: "flex", alignItems: "center", justifyContent: "center", background: unread ? "rgba(96,165,250,.2)" : "transparent", border: "none", cursor: "pointer", color: unread ? "#93c5fd" : "rgba(255,255,255,.65)", padding: ".3rem", borderRadius: 6, lineHeight: 1, transition: "all .12s" }}>
+                            <EnvelopeIcon filled={unread} />
+                        </button>
+                        <button className="oh-tap" onClick={e => { e.stopPropagation(); if (confirming) onDelete(); else setConfirming(true); }} title={confirming ? "Click again to delete this chat" : "Delete chat"} aria-label={confirming ? "Confirm deleting this chat" : "Delete chat"}
+                        style={{ display: "flex", alignItems: "center", gap: ".24rem", background: confirming ? "rgba(239,68,68,.25)" : "transparent", border: "none", cursor: "pointer", color: confirming ? "#fca5a5" : "rgba(239,68,68,.75)", fontSize: ".68rem", fontWeight: 700, padding: confirming ? ".3rem .48rem" : ".3rem", borderRadius: 6, lineHeight: 1, transition: "all .12s" }}>
+                            {confirming ? "Delete?" : <TrashIcon />}
+                        </button>
+                    </div>
+                )}
+            </div>
         </div>
         </div>
     );
