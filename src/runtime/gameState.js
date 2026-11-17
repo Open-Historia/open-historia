@@ -6292,7 +6292,26 @@ export const applyProjectOutcomesToWorld = ({ world, outcomes = [], date = "", r
   const nextWorld = normalizeWorldState(world);
   const applied = [];
   const territory = [];
-  const findProject = (name) => nextWorld.projects.findIndex((project) => project.name === name);
+  const findProject = (outcome) => {
+    const projectId = normalizeOptionalString(outcome?.projectId);
+    const owner = normalizeOptionalString(outcome?.owner) || normalizeOptionalString(host);
+    const matchesOwner = (project) => {
+      const actual = normalizeOptionalString(project.ownerCode) || normalizeOptionalString(host);
+      return !owner || Boolean(actual && samePolityName(actual, owner));
+    };
+    // Native tick outcomes carry canonical project IDs. A stale/mismatched ID
+    // must never silently fall back to a same-title project.
+    if (projectId) return nextWorld.projects.findIndex((project) =>
+      project.id === projectId && matchesOwner(project));
+    // Older serialized/hand-authored outcomes have no ID. Only an unambiguous
+    // title *within the intended polity* is safe to apply.
+    const title = normalizeOptionalString(outcome?.project);
+    if (!title || !owner) return -1;
+    const matches = nextWorld.projects
+      .map((project, index) => ({ project, index }))
+      .filter(({ project }) => project.name === title && matchesOwner(project));
+    return matches.length === 1 ? matches[0].index : -1;
+  };
   const resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
   const relationOf = (a, b) => nextWorld.relations.findIndex((entry) => (samePolityName(entry.a, a) && samePolityName(entry.b, b)) || (samePolityName(entry.a, b) && samePolityName(entry.b, a)));
 
@@ -6333,7 +6352,7 @@ export const applyProjectOutcomesToWorld = ({ world, outcomes = [], date = "", r
   };
 
   for (const outcome of normalizeArray(outcomes)) {
-    const index = findProject(outcome?.project);
+    const index = findProject(outcome);
     if (index === -1) continue;
     const project = nextWorld.projects[index];
     const owner = normalizeOptionalString(project.ownerCode) || normalizeOptionalString(host);

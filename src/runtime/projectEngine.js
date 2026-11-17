@@ -593,7 +593,7 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
         project.status = "active";
         project.stallReason = "";
         project.starvedDays = 0;
-        outcomes.push({ type: "resume", date, project: project.name, owner });
+        outcomes.push({ type: "resume", date, projectId: project.id, project: project.name, owner });
         project.spent = round2((Number(project.spent) || 0) + paid);
         note(paidThisPeriod, index, paid);
         note(dueThisPeriod, index, due);
@@ -631,7 +631,7 @@ const advanceOne = (project, { date, share, capacity, owner, outcomes, due }) =>
     if (project.starvedDays >= STALL_AFTER_DAYS) {
       project.status = "stalled";
       project.stallReason = "funds";
-      outcomes.push({ type: "stall", date, project: project.name, owner, reason: "funds" });
+      outcomes.push({ type: "stall", date, projectId: project.id, project: project.name, owner, reason: "funds" });
       return;
     }
   } else {
@@ -647,7 +647,7 @@ const advanceOne = (project, { date, share, capacity, owner, outcomes, due }) =>
       project.yieldShare = 0;
       if (asArray(plan.yields).length && monthShare > 0) {
         project.lastYieldAt = date;
-        outcomes.push({ type: "yield", date, project: project.name, owner, yields: plan.yields, share: monthShare });
+        outcomes.push({ type: "yield", date, projectId: project.id, project: project.name, owner, yields: plan.yields, share: monthShare });
       }
     }
     return;
@@ -659,7 +659,7 @@ const advanceOne = (project, { date, share, capacity, owner, outcomes, due }) =>
     if (milestone.reached || milestone.missed || after + REACHED < milestone.atProgress) continue;
     milestone.reachedAt = date;
     milestone.reached = true;
-    outcomes.push({ type: "milestone", date, project: project.name, owner, milestone: milestone.title });
+    outcomes.push({ type: "milestone", date, projectId: project.id, project: project.name, owner, milestone: milestone.title });
   }
   if (after + REACHED < 100) return;
   project.progress = 100;
@@ -667,12 +667,12 @@ const advanceOne = (project, { date, share, capacity, owner, outcomes, due }) =>
     project.established = true;
     project.yieldDays = 0;
     project.yieldShare = 0;
-    outcomes.push({ type: "established", date, project: project.name, owner, effects: asArray(plan.effects) });
+    outcomes.push({ type: "established", date, projectId: project.id, project: project.name, owner, effects: asArray(plan.effects) });
     return;
   }
   project.status = "complete";
   project.completedAt = date;
-  outcomes.push({ type: "complete", date, project: project.name, owner, effects: asArray(plan.effects) });
+  outcomes.push({ type: "complete", date, projectId: project.id, project: project.name, owner, effects: asArray(plan.effects) });
 };
 
 // When a project should be done, from `from`, at the work a day it moves at
