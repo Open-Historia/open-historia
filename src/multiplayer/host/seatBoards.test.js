@@ -36,9 +36,10 @@ test("before a skip each other player's own open work stands on the game's board
   const lent = lendBoards(world(), who);
   assert.deepEqual(names(lent.projects), [
     "Riga port/", `Tallinn shipyard/${ESTONIA}`,
-    `Northern Fleet refit/${RUSSIA}`, `Arctic rail link/${RUSSIA}`,
+    `Northern Fleet refit/${RUSSIA}`, `Arctic rail link/${RUSSIA}`, `riga PORT/${RUSSIA}`,
   ]);
-  // Not lent: finished work, what its services know of others, and a name the game's board already has.
+  // Not lent: finished work or intelligence about another owner's projects.
+  // Distinct IDs with an identical title are legitimately lent.
   assert.deepEqual(lent.seatBoards, world().seatBoards, "nothing leaves home while it is out");
 });
 
@@ -102,4 +103,74 @@ test("the game's board is never lent past its room", () => {
   crowded.projects = Array.from({ length: 107 }, (_, n) => project(`lv-${n}`, `Host project ${n}`));
   const lent = lendBoards(crowded, who);
   assert.equal(lent.projects.length, 108, "one more fits under the room kept for the skip itself");
+});
+
+test("distinct project IDs with the same title are lent regardless of host or foreign owner", () => {
+  const record = world();
+  record.seatBoards[RUSSIA] = [
+    project("ru-a", "Riga port"),
+    project("ru-b", "Riga port"),
+    project("ru-c", "Tallinn shipyard", RUSSIA),
+  ];
+  const lent = lendBoards(record, who);
+  assert.deepEqual(lent.projects.map((row) => row.id), [
+    "lv-1", "lv-on-ee", "ru-a", "ru-b", "ru-c",
+  ], "a title is not canonical identity and cannot hide another seat's work");
+  const after = returnBoards(lent, { ...who, hostHad: new Set(["lv-1", "lv-on-ee"]) });
+  assert.deepEqual(after.seatBoards[RUSSIA].map((row) => row.id), ["ru-a", "ru-b", "ru-c"]);
+  assert.deepEqual(after.projects.map((row) => row.id), ["lv-1", "lv-on-ee"]);
+});
+
+test("lending never inserts a colliding stable project ID into the host board", () => {
+  const record = world();
+  record.seatBoards[RUSSIA].unshift(project("lv-1", "Unrelated foreign title"));
+  const lent = lendBoards(record, who);
+  assert.equal(lent.projects.filter((row) => row.id === "lv-1").length, 1);
+  assert.equal(lent.projects.find((row) => row.id === "lv-1").ownerCode, "");
+  assert.deepEqual(record.seatBoards[RUSSIA][0], project("lv-1", "Unrelated foreign title"), "other seat's record stays untouched");
+});
+
+test("borrowed IDs survive a normalized save and return to the correct seat after the round", async () => {
+  const { normalizeWorldState } = await import("../../runtime/gameState.js");
+  const lent = lendBoards(world(), who);
+  const normalized = normalizeWorldState(lent);
+  assert.deepEqual(normalized.projectSeatLoans, {
+    "ru-1": RUSSIA, "ru-2": RUSSIA, "ru-same": RUSSIA,
+  });
+  // The actual turn writer normalizes world.json before saving it. The loan
+  // manifest must survive so returnBoards cannot mistake a host ID for a loan.
+  const after = returnBoards(normalized, { ...who, hostHad: new Set(["lv-1", "lv-on-ee"]) });
+  assert.deepEqual(after.projects.map((row) => row.id), ["lv-1", "lv-on-ee"]);
+  assert.ok(!Object.hasOwn(after, "projectSeatLoans"), "temporary host bookkeeping is removed");
+  assert.ok(after.seatBoards[RUSSIA].some((row) => row.id === "ru-same"));
+});
+
+test("an interrupted normalized skip restores the host by only removing recorded borrowed IDs", async () => {
+  const { normalizeWorldState } = await import("../../runtime/gameState.js");
+  const before = world();
+  const lent = normalizeWorldState(lendBoards(before, who));
+  const recovered = settleBoards(lent);
+  assert.deepEqual(recovered.projects.map((row) => row.id), before.projects.map((row) => row.id));
+  assert.ok(!Object.hasOwn(recovered, "projectSeatLoans"));
+  assert.deepEqual(lendBoards(recovered, who).projects.map((row) => row.id),
+    lent.projects.map((row) => row.id));
+});
+
+test("a guest's matching ID cannot erase its unrelated host namesake during interrupted-skip recovery", () => {
+  const before = world();
+  before.seatBoards[RUSSIA].unshift(project("lv-1", "Unrelated foreign title"));
+  const lent = lendBoards(before, who);
+  const recovered = settleBoards(lent);
+  assert.equal(recovered.projects.find((row) => row.id === "lv-1")?.ownerCode, "");
+  assert.equal(recovered.projects.find((row) => row.id === "lv-1")?.name, "Riga port");
+});
+
+test("the multiplayer projection never exposes temporary project loan bookkeeping", async () => {
+  const { projectWorld } = await import("./projection.js");
+  const lent = lendBoards(world(), who);
+  assert.ok(Object.keys(lent.projectSeatLoans).length > 0);
+  for (const viewer of [LATVIA, RUSSIA, ESTONIA]) {
+    const visible = projectWorld(lent, viewer, { host: LATVIA });
+    assert.equal(visible.projectSeatLoans, undefined);
+  }
 });

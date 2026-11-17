@@ -1493,8 +1493,11 @@ const projectMoney = (value) => {
   return readableFigure(amount);
 };
 
-export const buildProjectsSummaryText = (world, game, { compact = false, closedLimit = CLOSED_PROJECTS_LISTED } = {}) => {
-  const projects = normalizeArray(world?.projects);
+export const buildProjectsSummaryText = (world, game, { compact = false, closedLimit = CLOSED_PROJECTS_LISTED, publicOnly = false } = {}) => {
+  // The public timeline is not an omniscient knowledge channel: private work
+  // is still simulated but must not be named automatically in its narrative.
+  const projects = normalizeArray(world?.projects).filter((project) =>
+    !publicOnly || (normalizeString(project?.secrecy).toLowerCase() || "public") === "public");
   if (projects.length === 0) {
     return "No projects or operations are being tracked yet.";
   }
@@ -2990,7 +2993,10 @@ export const buildPromptContext = async (bundle, {
     result.plannedActionsWithIds = buildPlannedActionsWithIdsText(bundle.actions);
   }
   if (wants("projectsSummary")) {
-    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game, { compact: SKIP_TASKS.has(taskKey) });
+    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game, {
+      compact: SKIP_TASKS.has(taskKey),
+      publicOnly: SKIP_TASKS.has(taskKey),
+    });
   }
 
   const worldBeforeRoundOne =

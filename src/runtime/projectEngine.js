@@ -357,6 +357,12 @@ export const normalizeProjectPlan = (value) => {
 // ---- an owner's means -------------------------------------------------------
 
 // A country's sheet by its name, case and accents aside; null for none.
+// Scenario-level funding BASIS, not a treasury ledger. A non-monetary scenario
+// deliberately models projects as time/effort without creating cash or GDP.
+// The default is an estimated GDP allowance; no AI can switch the basis.
+export const projectFundingMode = (world) =>
+  world?.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy";
+
 export const sheetOf = (world, owner) => {
   const sheets = isRecord(world?.countryStats) ? world.countryStats : {};
   if (!asText(owner)) return null;
@@ -365,9 +371,9 @@ export const sheetOf = (world, owner) => {
   return key ? sheets[key] : null;
 };
 
-// What an owner has for its projects a month, in its sheet's currency; null
-// where its economy is not known (its projects are then paid in full: nothing
-// is known, and nothing is held back).
+// What an owner has for its projects per month in the native GDP unit.
+// Null means UNASSESSED, never zero GDP or unlimited money; funded work
+// cannot claim payments until the authoritative economic baseline exists.
 export const monthlyProjectBudget = (sheet) => {
   const gdp = finite(sheet?.economy?.gdp);
   if (!(gdp > 0)) return null;
@@ -534,11 +540,15 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
   }
 
   // Each owner's projects, in board order, with its means for the period.
+  // Explicit non-monetary scenarios never book money; time/capacity govern work.
+  const nonmonetary = projectFundingMode(world) === "nonmonetary";
   const owners = new Map();
   board.forEach((project, index) => {
     if (!isRecord(project) || !ticks(project)) return;
     const owner = projectOwnerOf(project, host);
-    const key = owner.toLowerCase();
+    // Use the same polity identity fold as sheetOf and ownerMeans. Otherwise
+    // aliases of one country create multiple independent daily funding pools.
+    const key = nameKey(owner);
     if (!owners.has(key)) {
       const sheet = sheetOf(world, owner);
       const monthly = monthlyProjectBudget(sheet);
@@ -554,7 +564,9 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
   for (let day = 1; day <= days; day += 1) {
     const date = addGameDays(fromDate, day);
     for (const { owner, daily, capacity, indexes } of owners.values()) {
-      let pool = daily === null ? Infinity : daily;
+      // Unknown GDP is not proof of unlimited public funds. With no assessed
+      // allowance only work explicitly costing zero may advance.
+      let pool = nonmonetary ? Infinity : daily === null ? 0 : daily;
       const working = indexes.filter((index) => {
         const project = board[index];
         return isOpen(project) && asText(project.status) === "active";
@@ -573,7 +585,7 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
         const project = board[index];
         const due = dailyCostOf(project);
         const share = shareOf.get(index) ?? 1;
-        const paid = due * share;
+        const paid = nonmonetary ? 0 : due * share;
         project.spent = round2((Number(project.spent) || 0) + paid);
         note(paidThisPeriod, index, paid);
         note(dueThisPeriod, index, due);
@@ -586,16 +598,16 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
         if (asText(project.status) !== "stalled" || asText(project.stallReason) !== "funds") continue;
         const due = dailyCostOf(project);
         if (due > 0 && pool < due * RESUME_SHARE) continue;
-        const paid = Math.min(due, pool);
+        const paid = nonmonetary ? 0 : Math.min(due, pool);
         pool = Math.max(0, pool - paid);
         project.status = "active";
         project.stallReason = "";
         project.starvedDays = 0;
-        outcomes.push({ type: "resume", date, project: project.name, owner });
+        outcomes.push({ type: "resume", date, projectId: project.id, project: project.name, owner });
         project.spent = round2((Number(project.spent) || 0) + paid);
         note(paidThisPeriod, index, paid);
         note(dueThisPeriod, index, due);
-        advanceOne(project, { date, share: due > 0 ? paid / due : 1, capacity, owner, outcomes, due });
+        advanceOne(project, { date, share: nonmonetary ? 1 : due > 0 ? paid / due : 1, capacity, owner, outcomes, due });
       }
     }
   }
@@ -608,7 +620,7 @@ export const tickProjects = ({ projects = [], world = {}, fromDate = "", toDate 
   // board ("underfunded"), and when it should be done at the rate it ended on.
   for (const [index, due] of dueThisPeriod) {
     const project = board[index];
-    project.paidShare = due > 0 ? round2(within((paidThisPeriod.get(index) ?? 0) / due, 0, 1)) : 1;
+    project.paidShare = nonmonetary ? 1 : due > 0 ? round2(within((paidThisPeriod.get(index) ?? 0) / due, 0, 1)) : 1;
   }
   for (const { capacity, indexes } of owners.values()) {
     for (const index of indexes) {
@@ -629,7 +641,7 @@ const advanceOne = (project, { date, share, capacity, owner, outcomes, due }) =>
     if (project.starvedDays >= STALL_AFTER_DAYS) {
       project.status = "stalled";
       project.stallReason = "funds";
-      outcomes.push({ type: "stall", date, project: project.name, owner, reason: "funds" });
+      outcomes.push({ type: "stall", date, projectId: project.id, project: project.name, owner, reason: "funds" });
       return;
     }
   } else {
@@ -645,7 +657,7 @@ const advanceOne = (project, { date, share, capacity, owner, outcomes, due }) =>
       project.yieldShare = 0;
       if (asArray(plan.yields).length && monthShare > 0) {
         project.lastYieldAt = date;
-        outcomes.push({ type: "yield", date, project: project.name, owner, yields: plan.yields, share: monthShare });
+        outcomes.push({ type: "yield", date, projectId: project.id, project: project.name, owner, yields: plan.yields, share: monthShare });
       }
     }
     return;
@@ -657,7 +669,7 @@ const advanceOne = (project, { date, share, capacity, owner, outcomes, due }) =>
     if (milestone.reached || milestone.missed || after + REACHED < milestone.atProgress) continue;
     milestone.reachedAt = date;
     milestone.reached = true;
-    outcomes.push({ type: "milestone", date, project: project.name, owner, milestone: milestone.title });
+    outcomes.push({ type: "milestone", date, projectId: project.id, project: project.name, owner, milestone: milestone.title });
   }
   if (after + REACHED < 100) return;
   project.progress = 100;
@@ -665,12 +677,12 @@ const advanceOne = (project, { date, share, capacity, owner, outcomes, due }) =>
     project.established = true;
     project.yieldDays = 0;
     project.yieldShare = 0;
-    outcomes.push({ type: "established", date, project: project.name, owner, effects: asArray(plan.effects) });
+    outcomes.push({ type: "established", date, projectId: project.id, project: project.name, owner, effects: asArray(plan.effects) });
     return;
   }
   project.status = "complete";
   project.completedAt = date;
-  outcomes.push({ type: "complete", date, project: project.name, owner, effects: asArray(plan.effects) });
+  outcomes.push({ type: "complete", date, projectId: project.id, project: project.name, owner, effects: asArray(plan.effects) });
 };
 
 // When a project should be done, from `from`, at the work a day it moves at
@@ -685,7 +697,7 @@ export const expectedFinish = (project, { from = "", capacity = 1, share = 1 } =
 };
 
 // What one owner's projects cost and have, now: its monthly budget (null where
-// unknown), what its running projects are due a month at their funding, the
+// unassessed), what its running projects are due a month at their funding, the
 // share of that the budget covers, and its capacity. For the board and the
 // planner's prompt.
 export const ownerMeans = (world, owner, projects = [], host = "") => {
@@ -694,10 +706,12 @@ export const ownerMeans = (world, owner, projects = [], host = "") => {
   const committed = asArray(projects)
     .filter((project) => isRecord(project) && ticks(project) && sameName(projectOwnerOf(project, host), owner))
     .reduce((sum, project) => sum + dailyCostOf(project) * DAYS_PER_MONTH, 0);
+  const mode = projectFundingMode(world);
   return {
-    budget,
-    committed,
-    covered: budget === null || committed <= 0 ? 1 : within(budget / committed, 0, 1),
+    mode,
+    budget: mode === "nonmonetary" ? null : budget,
+    committed: mode === "nonmonetary" ? 0 : committed,
+    covered: mode === "nonmonetary" || committed <= 0 ? 1 : budget === null ? 0 : within(budget / committed, 0, 1),
     capacity: capacityOf(sheet),
   };
 };
