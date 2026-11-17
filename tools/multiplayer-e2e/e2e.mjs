@@ -544,10 +544,11 @@ try {
     await tab.eval(`(() => { window.__e2e.type(document.querySelector('input[placeholder="Search countries..."]'), ${JSON.stringify(name)}); return true; })()`);
     // The list filters as the search changes, which on a busy machine takes a
     // while: the tile is waited for, then clicked.
-    await until(tab, `(() => { const picker = ${PICKER}; return Boolean(picker) && [...picker.querySelectorAll('button')].some((b) => b.textContent.trim() === ${JSON.stringify(name)}); })()`, 15000);
-    const clicked = await tab.eval(`(() => { const picker = ${PICKER}; const tile = picker && [...picker.querySelectorAll('button')].find((b) => b.textContent.trim() === ${JSON.stringify(name)}); if (tile) tile.click(); return Boolean(tile); })()`);
-    // A picked tile wears a check mark before its name (chat.jsx CountryTile).
-    const picked = await until(tab, `(() => { const picker = ${PICKER}; return Boolean(picker) && [...picker.querySelectorAll('button')].some((b) => b.textContent.trim() === ${JSON.stringify(`✓${name}`)}); })()`, 10000);
+    const TILE = `[...picker.querySelectorAll('button[aria-pressed]')].find((b) => b.title === ${JSON.stringify(name)})`;
+    await until(tab, `(() => { const picker = ${PICKER}; return Boolean(picker) && Boolean(${TILE}); })()`, 15000);
+    const clicked = await tab.eval(`(() => { const picker = ${PICKER}; const tile = picker && ${TILE}; if (tile) tile.click(); return Boolean(tile); })()`);
+    // A picked tile says so (chat.jsx CountryTile, aria-pressed).
+    const picked = await until(tab, `(() => { const picker = ${PICKER}; const tile = picker && ${TILE}; return Boolean(tile) && tile.getAttribute('aria-pressed') === 'true'; })()`, 10000);
     if (!picked) {
       await shoot(tab, "x-country-not-picked");
       const named = await tab.eval(`[...document.querySelectorAll('button')].filter((b) => b.textContent.trim() === ${JSON.stringify(name)}).map((b) => (b.closest('[class], [style]')?.parentElement?.textContent || '').replace(/\\s+/g, ' ').slice(0, 120))`).catch(() => []);
@@ -573,11 +574,11 @@ try {
   const threadRows = (tab) => tab.eval("[...document.querySelectorAll('[data-diplomacy-thread-row]')].map((row) => row.textContent.replace(/\\s+/g, ' ').trim())");
   const toolsBeforeTalk = sentTools.length;
   await toggleChats(host);
-  await until(host, "window.__e2e.buttons('Start New Chat').length > 0", 15000);
-  await host.eval("window.__e2e.click('Start New Chat')");
+  await until(host, "window.__e2e.buttons('+ New diplomatic channel').length > 0", 15000);
+  await host.eval("window.__e2e.click('+ New diplomatic channel')");
   await until(host, `Boolean(document.querySelector('input[placeholder="Search countries..."]'))`, 15000);
   await pickCountry(host, GUEST_COUNTRY);
-  await host.eval("window.__e2e.click('Chat with 1 country')");
+  await host.eval("window.__e2e.click('Start conversation')");
   await sayInOpenThread(host, LINE_FROM_HOST);
   const holds = (line) => `window.__e2e.view('chat').then((chats) => JSON.stringify(chats).includes(${JSON.stringify(line)}))`;
   const lineReached = await until(guest, holds(LINE_FROM_HOST), 20000);
@@ -619,12 +620,12 @@ try {
   const backToList = (tab) => tab.eval(`(() => { const b = document.querySelector('button[aria-label="Back to diplomacy"]'); if (b) b.click(); return Boolean(b); })()`);
   const rosterOf = (body) => body.split("\n").filter((line) => line.includes("-controlled")).map((line) => line.trim());
   await backToList(host);
-  await until(host, "window.__e2e.buttons('Start New Chat').length > 0", 15000);
-  await host.eval("window.__e2e.click('Start New Chat')");
+  await until(host, "window.__e2e.buttons('+ New diplomatic channel').length > 0", 15000);
+  await host.eval("window.__e2e.click('+ New diplomatic channel')");
   await until(host, `Boolean(document.querySelector('input[placeholder="Search countries..."]'))`, 15000);
   await pickCountry(host, GUEST_COUNTRY);
   await pickCountry(host, AI_COUNTRY);
-  await host.eval("window.__e2e.click('Chat with 2 countries')");
+  await host.eval("window.__e2e.click('Start conversation')");
   const askedBeforeTable = chatBodies.length;
   await sayInOpenThread(host, LINE_TO_TABLE);
   const aiAnswered = await until(guest, holds(LINE_FROM_AI), 45000);
@@ -957,11 +958,11 @@ try {
   await sleep(500);
   await backToList(guest);
   await clickButton(guest, "(text) => text.startsWith('Contacts')");
-  await until(guest, "window.__e2e.buttons('Start New Chat').length > 0", 15000);
-  await guest.eval("window.__e2e.click('Start New Chat')");
+  await until(guest, "window.__e2e.buttons('+ New diplomatic channel').length > 0", 15000);
+  await guest.eval("window.__e2e.click('+ New diplomatic channel')");
   await until(guest, `Boolean(document.querySelector('input[placeholder="Search countries..."]'))`, 15000);
   await pickCountry(guest, AI_COUNTRY);
-  await guest.eval("window.__e2e.click('Chat with 1 country')");
+  await guest.eval("window.__e2e.click('Start conversation')");
   await sayInOpenThread(guest, LINE_TO_AI);
   const ownReplyShown = await until(guest, `document.body.textContent.includes(${JSON.stringify(LINE_FROM_GUESTS_AI)})`, 60000);
   const ownTable = tableWith(await chatsOf(), LINE_TO_AI);
