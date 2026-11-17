@@ -359,7 +359,9 @@ test("the skip fights its period before it asks, and the turn it writes says so"
   assert.match(skip, /const foughtBefore = await forecastTurnFronts\(\{\s*world: bundle\.world,\s*game: bundle\.game,\s*campaignId: activeCampaignId\(\),\s*toDate: targetDate,\s*requestedDays: safeDays,/);
   assert.match(skip, /const frontsForecast = foughtBefore \? \{ \.\.\.foughtBefore \} : null;/);
   assert.ok(skip.indexOf("await forecastTurnFronts(") < skip.indexOf("const jumpContext = {"));
-  assert.match(skip, /variables: frontsForecast \? \{ \.\.\.variables, frontsForecast \} : variables,/);
+  // Beside the projects engine's own forecast; with no period fought there is no key at all, so the prompt reads null.
+  assert.match(skip, /variables: \{ \.\.\.variables, projectsForecast, \.\.\.\(frontsForecast \? \{ frontsForecast \} : \{\}\) \},/);
+  assert.ok(skip.indexOf("const frontsForecast = foughtBefore") < skip.indexOf("const jumpContext = {"));
   assert.match(gameplay, /const fronts = frontsLiveBlock\(world, game, variables\.frontsForecast \?\? null, \{ orderLines: !rulesAbove \}\);/);
   // The turn carries whether it was, so that a turn kept and applied later is applied the same way.
   assert.match(gameplay, /frontsForetold: Boolean\(context\.variables\?\.frontsForecast\),/);
