@@ -114,7 +114,7 @@ test("the time skip asks, files and steals for every player's agents, each into 
   assert.match(gameplay, /spymastersReportingWithSkip\(\{\s*spymasters: spymastersOf\(bundle\.game\),\s*agentsOf: \(owner\) => activeSpies\(world, owner\),\s*filedOf: \(owner\) => normalizeIntercepts\(interceptTableOf\(file, owner, \{ gameCountry: playerCountry \}\)\)/);
   assert.match(gameplay, /agentJobs\.push\(\{ key: `agent_\$\{index \+ 1\}`, spy, owner: normalizeString\(spy\?\.owner\) \|\| playerCountry,/);
   // Briefed from its own government's side.
-  assert.match(gameplay, /const prepareSpyReport = async \(bundle, spy, \{ sharedVariables = null \} = \{\}\) => \{\n  const name = normalizeString\(spy\?\.target\);\n  const player = normalizeString\(spy\?\.owner\) \|\| normalizeString\(bundle\.game\?\.country\);/);
+  assert.match(gameplay, /const prepareSpyReport = async \(bundle, spy, \{ sharedVariables = null \} = \{\}\) => \{\n {2}const name = normalizeString\(spy\?\.target\);\n {2}const player = normalizeString\(spy\?\.owner\) \|\| normalizeString\(bundle\.game\?\.country\);/);
   assert.match(gameplay, /const openQuestions = spymasterBoard\(bundle\.world, player, bundle\.game\?\.country\)/);
   // Filed into its own table, sealed with its own seal.
   const store = gameplay.slice(gameplay.indexOf("const storeSpyReport = async"), gameplay.indexOf("// How many stolen documents an agent's file keeps"));
