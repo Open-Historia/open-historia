@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyCountryStatPatchToWorld, applyEventImpactsToWorld, applyProjectOps } from "./gameState.js";
+import { applyCountryStatPatchToWorld, applyEventImpactsToWorld, applyProjectOps, applyProjectOutcomesToWorld } from "./gameState.js";
 import { normalizeCountryStatSheet } from "./countryStats.js";
 
 const sheet = () => normalizeCountryStatSheet({
@@ -195,9 +195,11 @@ test("an explicitly unowned map polygon must not assign its base geography a fic
   assert.equal(after.countryStats.Borduria.continuity.progressionBlocked, true);
 });
 
-test("the project onComplete transfer also identifies a stock-map donor", () => {
-  const before = world();
-  delete before.regionOwnershipOverrides["region-A"];
+// A project's territory is released by the projects engine after the turn's
+// events (gameState.js applyProjectOutcomesToWorld), and moved through the event
+// path as gameplay.js runProjectsEngine does: one board-only event per project,
+// with the active map's catalog.
+const projectCession = (before, regionCatalog) => {
   before.projects = applyProjectOps([], [{
     op: "create",
     name: "Settlement",
@@ -205,17 +207,41 @@ test("the project onComplete transfer also identifies a stock-map donor", () => 
     status: "active",
     onComplete: { regionTransfers: [{ regionId: "region-A", toCode: "Borduria" }] },
   }]);
-  const after = applyEventImpactsToWorld({
+  const released = applyProjectOutcomesToWorld({
     world: before,
-    events: [event("complete-settlement", "2026-07-01", {
-      projectOps: [{ op: "complete", name: "Settlement" }],
-    })],
-    regionCatalog: [{ id: "region-A", country: "Geographic Aland", bakedOwner: "Aland" }],
-    motion: { originDate: "2026-01-01", statsToDate: "2027-01-01", round: 2 },
+    outcomes: [{ type: "complete", project: "Settlement", date: "2026-07-01" }],
+    date: "2026-07-01",
+    host: "Aland",
+  });
+  const events = released.territory.map((entry, index) => event(`project-done-${index}`, entry.date, {
+    polityChanges: entry.polityChanges, regionTransfers: entry.regionTransfers, regionClaims: entry.regionClaims,
+  }));
+  assert.equal(events.length, 1, "the completion releases its territory");
+  return applyEventImpactsToWorld({
+    world: released.world,
+    events,
+    motion: null,
+    boardOnlyEventIds: events.map((entry) => entry.id),
+    regionCatalog,
   }).world;
+};
+
+test("a completed project's cession also identifies a stock-map donor", () => {
+  const before = world();
+  delete before.regionOwnershipOverrides["region-A"];
+  const after = projectCession(before, [{ id: "region-A", country: "Geographic Aland", bakedOwner: "Aland" }]);
   assert.equal(after.regionOwnershipOverrides["region-A"], "Borduria");
   assert.equal(after.countryStats.Aland.continuity.progressionBlocked, true);
   assert.equal(after.countryStats.Borduria.continuity.progressionBlocked, true);
+});
+
+test("a completed project's cession refuses a map region absent from an explicit authoritative catalog", () => {
+  const before = world();
+  delete before.regionOwnershipOverrides["region-A"];
+  assert.throws(
+    () => projectCession(before, [{ id: "some-other-region", country: "Aland", bakedOwner: "Aland" }]),
+    /no matching region in the authoritative map catalog/,
+  );
 });
 
 test("a missing authoritative region refuses time-advancing legal transfer without mutating the source world", () => {

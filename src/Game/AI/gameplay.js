@@ -8767,7 +8767,12 @@ const projectsForecastText = (outcomes) => describeOutcomes(outcomes);
 // The engine's turn (see applySimulationResult): the tick, the effects it
 // releases, and the territory a completion moves, found on the map by name and
 // enacted through the event path like any other border change.
-const runProjectsEngine = async ({ baseWorld, world, colors, fromDate, toDate, host, round }) => {
+//   regionCatalog  an async reader of the active map's region catalog: a cession
+//                  whose donor holds the region only on the map itself (no World
+//                  override) has its legal title settled from it, as an event's is
+//                  (gameState.js applyEventImpactsToWorld), and a region it does
+//                  not list is refused rather than guessed.
+const runProjectsEngine = async ({ baseWorld, world, colors, fromDate, toDate, host, round, regionCatalog = null }) => {
   const advanced = advanceProjectsInWorld({ baseWorld, world, fromDate, toDate, host, round });
   if (!advanced.days) return { world, colors, renamedPolities: [] };
   const released = applyProjectOutcomesToWorld({ world: advanced.world, outcomes: advanced.outcomes, date: toDate, round, host });
@@ -8792,7 +8797,10 @@ const runProjectsEngine = async ({ baseWorld, world, colors, fromDate, toDate, h
         description: "",
         impacts: { polityChanges: entry.polityChanges, regionTransfers: containers[index].impacts.regionTransfers, regionClaims: containers[index].impacts.regionClaims },
       }));
-      const merged = applyEventImpactsToWorld({ colors: nextColors, events, world: nextWorld, motion: null, round, boardOnlyEventIds: events.map((event) => event.id) });
+      const catalog = regionCatalog && events.some((event) => event.impacts.regionTransfers.length)
+        ? await regionCatalog()
+        : null;
+      const merged = applyEventImpactsToWorld({ colors: nextColors, events, world: nextWorld, motion: null, round, boardOnlyEventIds: events.map((event) => event.id), regionCatalog: catalog });
       nextWorld = merged.world;
       nextColors = merged.colors;
       renamedPolities.push(...normalizeArray(merged.renamedPolities));
@@ -9215,22 +9223,17 @@ const applySimulationResult = async ({
   // The World stores sparse region overrides; a first legal cession can leave
   // its donor entirely in the rendered map's baked political ownership. The
   // resolver already primes this compact catalog when resolving region IDs.
-  // Also cover a Project's stored onComplete transfer, released inside the
-  // reducer rather than repeated in the event (including a project opened and
-  // completed in this event batch). The catalog remains a conditional read.
+  // A Project's territory is not released on this path: the projects engine
+  // moves it after the events (runProjectsEngine), and asks for the same
+  // catalog there. The catalog remains a conditional read.
   const hasUnrecordedLegalOwner = (transfers, world) => normalizeArray(transfers)
     .some((transfer) => {
       const id = normalizeString(transfer?.regionId);
       return id && !world?.regionSovereigntyOverrides?.[id]
         && !world?.regionOwnershipOverrides?.[id];
     });
-  const eventProjectOps = freshEvents.flatMap((event) => normalizeArray(event?.impacts?.projectOps));
-  const projectMayTransfer = eventProjectOps.length > 0 && (
-    eventProjectOps.some((op) => hasUnrecordedLegalOwner(op?.onComplete?.regionTransfers, baseWorld))
-    || normalizeArray(baseWorld?.projects).some((project) => hasUnrecordedLegalOwner(project?.onComplete?.regionTransfers, baseWorld))
-  );
   const needsSeedLegalOwners = ["jump", "auto"].includes(result.mode)
-    && (projectMayTransfer || freshEvents.some((event) => hasUnrecordedLegalOwner(event?.impacts?.regionTransfers, baseWorld)));
+    && (freshEvents.some((event) => hasUnrecordedLegalOwner(event?.impacts?.regionTransfers, baseWorld)));
   let statsRegionCatalog = null;
   const ensureStatsRegionCatalog = async () => {
     if (statsRegionCatalog) return statsRegionCatalog;
@@ -9873,17 +9876,6 @@ const applySimulationResult = async ({
         .filter((carrier) => carrier.onTimeline)
         .flatMap((carrier) => carrier.ops.map((op) => ({ ...op, eventIndex: carrier.eventIndex }))));
 
-      // Project completions in this second pass can release title transfers
-      // absent from the turn's event impacts. Give that reducer the SAME map
-      // evidence, even if the first pass did not need it.
-      const boardMayTransferTitle = carriers.length > 0 && (
-        carriers.some((carrier) => normalizeArray(carrier?.ops)
-          .some((op) => hasUnrecordedLegalOwner(op?.onComplete?.regionTransfers, worldWithImpacts)))
-        || normalizeArray(worldWithImpacts.projects)
-          .some((project) => hasUnrecordedLegalOwner(project?.onComplete?.regionTransfers, worldWithImpacts))
-      );
-      if (boardMayTransferTitle) await ensureStatsRegionCatalog();
-
       // Applied one event at a time, provisional events judged on the Board
       // itself (boardPassApply.js says how).
       const boardPass = applyBoardCarriers({
@@ -9957,6 +9949,7 @@ const applySimulationResult = async ({
     toDate: nextGame.gameDate,
     host: projectsHost(baseGame),
     round: nextGame.round,
+    regionCatalog: ensureStatsRegionCatalog,
   });
   worldWithImpacts = projectsRun.world;
   nextColors = projectsRun.colors;
