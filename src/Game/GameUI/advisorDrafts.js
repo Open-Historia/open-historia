@@ -33,14 +33,6 @@ export const extractBlockquotes = (text) => {
     return quotes.filter(Boolean);
 };
 
-// Pairs each ```senddraft entry with the blockquote holding its actual text.
-// `sourceText` is the reply as it stood right before the senddraft fence was
-// stripped, so the drafted letters are the LAST blockquotes in it — the
-// directive puts the fence immediately after them. Aligning from the end
-// rather than from index 0 is what makes that safe: the advisor also quotes
-// the player (or its own earlier line) mid-reply, and pairing forwards would
-// hand a draft the wrong body — silently sending the wrong letter to a live
-// diplomacy thread, which is worse than dropping the button.
 // Markdown out, plain prose in.
 //
 // The advisor writes its letters in markdown, because everything else it says is
@@ -84,126 +76,107 @@ export const toPlainText = (value) => String(value ?? "")
     .replace(/\\([\\`*_{}[\]()#+\-.!~>])/g, "$1")
     .trim();
 
-// New replies delimit each whole letter with numbered markers. The body remains
-// readable Markdown, and senddraft holds ONLY validated recipient metadata.
-// Canonicalize blank physical lines to quoted blank lines, so each multi-
-// paragraph letter is one visible quote and one atomic composer payload.
-// Malformed markers fail closed; they never fall back to positional pairing.
-export const prepareAdvisorDraftLetters = (sourceText, draftCount) => {
-    const source = String(sourceText ?? "");
-    const lines = source.split("\n");
-    if (!lines.some((line) => line.includes("[[draft:") || line.includes("[[/draft:"))) {
-        return { text: source, quoteIndices: null, error: "" };
-    }
-    const fail = (why) => ({ text: source, quoteIndices: null, error: "draft boundaries " + why });
+// WHICH QUOTE HOLDS EACH LETTER. A letter of several paragraphs is often
+// written as several quotes with blank lines between them (the 1912 Tangier
+// reply: two letters in 13 quotes), and pairing recipients with the last N
+// quotes handed Britain its closing line and Spain its signature. So the
+// letters are found first, then paired:
+//   - marked: the advisor puts each letter between [[draft:N]] and
+//     [[/draft:N]] lines (ADVISOR_MESSAGE_DRAFT_DIRECTIVE in AI/main.jsx), N in
+//     recipient order. A marker that is malformed, nested, out of order or
+//     unclosed, a letter with unquoted lines in it, or a count that is not
+//     the recipients' pairs nothing: guessing would send a letter to the wrong
+//     government;
+//   - unmarked (a model that wrote none, a reply saved before them): quotes
+//     with only blank lines between them are one letter, and the last N
+//     letters are the N recipients', in order. Two letters with nothing but a
+//     blank line between them read as one, so there are fewer letters than
+//     recipients and nothing is paired.
+// The text comes back as it is shown: markers gone, each letter one quote.
+// { text, quoteIndices (into extractBlockquotes(text), one a recipient, or
+// null when none can be paired), marked, problem ("" when they can) }.
+const MARKER = /^\[\[(\/?)draft:(\d+)\]\]$/;
+const isMarker = (line) => MARKER.test(line.trim());
+const isQuote = (line) => /^>/.test(line);
+
+export const draftLetters = (sourceText, count) => {
+    const lines = String(sourceText ?? "").split("\n");
+    const marked = lines.some((line) => line.includes("[[draft:") || line.includes("[[/draft:"));
+    const shown = () => lines.filter((line) => !isMarker(line)).join("\n");
+    const none = (problem) => ({ text: shown(), quoteIndices: null, marked, problem });
+    if (!count) return { text: shown(), quoteIndices: [], marked, problem: "" };
+    if (!marked) return unmarkedLetters(lines, count);
+
     const output = [];
     const quoteIndices = [];
-    let active = null;
+    let letter = null;
     for (const line of lines) {
-        const marker = /^\[\[(\/?)draft:(\d+)\]\]$/.exec(line.trim());
+        const marker = MARKER.exec(line.trim());
         if (!marker) {
-            if (line.includes("[[draft:") || line.includes("[[/draft:")) return fail("contained an invalid marker");
-            if (active) active.body.push(line);
-            else output.push(line);
+            if (line.includes("[[draft:") || line.includes("[[/draft:")) return none("had a draft marker that was not on a line of its own");
+            (letter ?? output).push(line);
             continue;
         }
         const number = Number(marker[2]);
         if (!marker[1]) {
-            if (active || number !== quoteIndices.length + 1 || number > draftCount) {
-                return fail("were nested, duplicated, or out of recipient order");
-            }
-            active = { number, body: [] };
+            if (letter || number !== quoteIndices.length + 1) return none("had draft markers nested or out of order");
+            letter = [];
             continue;
         }
-        if (!active || active.number !== number) return fail("did not close the matching letter");
-        const body = [...active.body];
-        while (body.length && !body[0].trim()) body.shift();
-        while (body.length && !body.at(-1).trim()) body.pop();
-        if (!body.length || body.some((entry) => entry.trim() && !entry.startsWith(">"))) {
-            return fail("contained missing or unquoted letter text");
+        if (!letter || number !== quoteIndices.length + 1) return none("closed a letter that was not open");
+        const body = letter.join("\n").trim().split("\n");
+        if (!body.some((entry) => entry.replace(/^>\s?/, "").trim()) || body.some((entry) => entry.trim() && !isQuote(entry))) {
+            return none(`had letter ${number} empty or with unquoted lines in it`);
         }
-        const normalized = body.map((entry) => entry.trim() ? entry : ">").join("\n");
-        if (!extractBlockquotes(normalized).length || !toPlainText(normalized)) {
-            return fail("contained an empty letter");
-        }
-        // Force a quote boundary, even after unrelated quotes in the prose.
-        if (output.at(-1) !== "") output.push("");
+        // One quote, the blank lines between its paragraphs quoted, set apart from what is around it.
+        if (output.length && output.at(-1).trim()) output.push("");
         quoteIndices.push(extractBlockquotes(output.join("\n")).length);
-        output.push(normalized, "");
-        active = null;
+        output.push(...body.map((entry) => (entry.trim() ? entry : ">")), "");
+        letter = null;
     }
-    if (active || quoteIndices.length !== draftCount) {
-        return fail("were incomplete or did not match the recipient count");
-    }
-    return { text: output.join("\n"), quoteIndices, error: "" };
+    if (letter) return none(`left letter ${quoteIndices.length + 1} open`);
+    if (quoteIndices.length !== count) return none(`marked ${quoteIndices.length} letter(s) for ${count} recipient(s)`);
+    return { text: output.join("\n"), quoteIndices, marked, problem: "" };
 };
 
-// Legacy replies have no native letter IDs. An extra quote separated from the
-// chosen final-N quotes by ONLY blank lines may be a previous paragraph of the
-// SAME letter. Never guess that it is another recipient's whole letter.
-const ambiguousLegacyDrafts = (sourceText, count) => {
-    const lines = String(sourceText ?? "").split("\n");
-    const runs = [];
-    let start = -1;
-    for (let i = 0; i <= lines.length; i += 1) {
-        if (i < lines.length && /^>/.test(lines[i])) {
-            if (start < 0) start = i;
-        } else if (start >= 0) {
-            if (lines.slice(start, i).some((line) => /^>\s*\S/.test(line))) {
-                runs.push({ start, end: i - 1 });
-            }
-            start = -1;
-        }
-    }
-    // With no quoted letters the existing per-entry diagnostics are precise;
-    // nothing can be handed off. With some but too few, pairing is unsafe.
-    if (runs.length > 0 && runs.length < count) return "had fewer quoted letters than recipients";
-    // In an unmarked reply, blank lines cannot distinguish two letters from
-    // two paragraphs of one letter. Inspect BOTH the preceding fragment and
-    // the chosen quote run; prose between distinct letters is unambiguous.
-    const selected = runs.slice(-count);
-    if (runs.length > count) {
-        const previous = runs[runs.length - count - 1];
-        if (lines.slice(previous.end + 1, selected[0].start).every((line) => !line.trim())) {
-            return "were ambiguous: unmarked multi-paragraph quotes cannot be paired safely";
-        }
-    }
-    for (let index = 1; index < selected.length; index += 1) {
-        if (lines.slice(selected[index - 1].end + 1, selected[index].start)
-            .every((line) => !line.trim())) {
-            return "were ambiguous: distinct letters have no reliable boundary";
-        }
-    }
-    return "";
+const unmarkedLetters = (lines, count) => {
+    // A blank line between two quoted lines is a paragraph break inside one letter.
+    const filled = lines.map((line, index) => {
+        if (line.trim()) return line;
+        const before = lines.slice(0, index).findLast((entry) => entry.trim());
+        const after = lines.slice(index + 1).find((entry) => entry.trim());
+        return before !== undefined && after !== undefined && isQuote(before) && isQuote(after) ? ">" : line;
+    });
+    const text = filled.join("\n");
+    const found = extractBlockquotes(text).length;
+    const quoteIndices = Array.from({ length: count }, (_, index) => found - count + index);
+    // (No letter at all: each entry says so for itself, below.)
+    return found >= count || found === 0
+        ? { text, quoteIndices, marked: false, problem: "" }
+        : { text, quoteIndices: null, marked: false, problem: `held ${found} letter(s) for ${count} recipient(s)` };
 };
 
-// `problems`, when given, collects a sentence for every entry that got no
-// button, for the advisor's receipt (advisorBlocks.js describeReplyProblems).
-export const buildMessageDrafts = (draftsRaw, sourceText, problems = [], quoteIndices = null) => {
-    const allQuotes = extractBlockquotes(sourceText);
-    // A marked letter is authoritative. A duplicate JSON text field must not
-    // silently replace the visible body with different words in the composer.
-    if (Array.isArray(quoteIndices) && draftsRaw.some((entry, index) => {
-        const explicit = String(entry?.text ?? "").trim();
-        return explicit && toPlainText(explicit) !== toPlainText(allQuotes[quoteIndices[index]] ?? "");
-    })) {
-        problems.push("marked letter text conflicted with duplicate senddraft text; no Send shortcuts were offered");
+// `letters`: draftLetters' answer for the reply, or the reply's text (read with
+// draftLetters here). `problems`, when given, collects a sentence for every
+// entry that got no button, for the advisor's receipt (advisorBlocks.js
+// describeReplyProblems).
+export const buildMessageDrafts = (draftsRaw, letters, problems = []) => {
+    const read = typeof letters === "string" ? draftLetters(letters, draftsRaw.length) : letters;
+    const quotes = extractBlockquotes(read.text);
+    // A "text" field in the JSON is an older reply's letter (before they were
+    // read from the quote). It stands on its own in an unmarked reply; a
+    // marked letter is the one the player sees, and a JSON text saying
+    // something else pairs nothing.
+    const written = (draft) => String(draft?.text ?? "").trim();
+    const standsAlone = !read.marked && draftsRaw.every(written);
+    if (!read.quoteIndices && !standsAlone) {
+        problems.push(`the reply ${read.problem}, so no diplomatic draft got a button`);
         return [];
     }
-    if (!Array.isArray(quoteIndices) && !draftsRaw.every((entry) => String(entry?.text ?? "").trim())) {
-        const ambiguity = ambiguousLegacyDrafts(sourceText, draftsRaw.length);
-        if (ambiguity) {
-            problems.push("the diplomatic drafts " + ambiguity + "; no Send shortcuts were offered");
-            return [];
-        }
+    if (read.marked && draftsRaw.some((draft, index) => written(draft) && toPlainText(written(draft)) !== toPlainText(quotes[read.quoteIndices[index]]))) {
+        problems.push("a draft's JSON text differs from its marked letter, so no diplomatic draft got a button");
+        return [];
     }
-    // Where the paired run starts within allQuotes — the same end-alignment the
-    // slice below performs, kept as a number so each draft can say WHICH
-    // blockquote it belongs under. The Send button is rendered directly beneath
-    // that quote, and the filter at the end of this function can drop entries,
-    // so the position within the returned array is not a reliable answer.
-    const offset = Math.max(0, allQuotes.length - draftsRaw.length);
-    const indices = quoteIndices ?? draftsRaw.map((_, index) => offset + index);
     return draftsRaw
         .map((draft, index) => {
             const targetType = String(draft?.targetType || "private").trim().toLowerCase();
@@ -220,14 +193,12 @@ export const buildMessageDrafts = (draftsRaw, sourceText, problems = [], quoteIn
             if (targetType === "institution-council" && !institutionId && !threadId) return drop("named no institutionId or threadId");
             if (targetType === "institution-lifecycle" && ((!institutionId && !threadId) || (!caseId && !threadId))) return drop("named no caseId and institutionId, or threadId");
             if (!["private", "institution-council", "institution-lifecycle"].includes(targetType)) return drop(`had the targetType "${targetType}", which is not private, institution-council or institution-lifecycle`);
-            // A "text" field is still honored if present — older saved messages
-            // have one, and an explicit value beats the positional guess.
+            // The quote the Send button is drawn under (the filter below can drop
+            // entries, so the position in the returned list is no answer).
+            const quoteIndex = read.quoteIndices ? read.quoteIndices[index] : Math.max(0, quotes.length - draftsRaw.length) + index;
             // Plain text: this string goes into the diplomacy composer, which
             // renders the player's own messages verbatim.
-            const quoteIndex = indices[index];
-            const text = toPlainText(Array.isArray(quoteIndices)
-                ? allQuotes[quoteIndex] || ""
-                : String(draft?.text ?? "").trim() || allQuotes[quoteIndex] || "");
+            const text = toPlainText(written(draft) && !read.marked ? written(draft) : quotes[quoteIndex] || "");
             if (!text) return drop("had no > blockquote holding its letter just before the block");
             return {
                 targetType,

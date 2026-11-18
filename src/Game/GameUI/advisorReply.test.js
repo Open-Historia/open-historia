@@ -29,7 +29,7 @@ test("December 1912 Tangier: fragmented unmarked multi-letter reply fails closed
   ].join("\n\n");
   const parsed = parseAdvisorReply(raw);
   assert.deepEqual(parsed.messageDrafts, []);
-  assert.match(parsed.draftProblems.join(" "), /ambiguous|unmarked|boundar/i);
+  assert.match(parsed.draftProblems.join(" "), /held 1 letter.s. for 2 recipient/);
   assert.match(parsed.text, /Monsieur l'Ambassadeur/);
   assert.match(parsed.text, /Yours faithfully/);
 });
@@ -91,7 +91,7 @@ test("marked letter and conflicting legacy JSON text must never disagree in the 
   ].join("\n");
   const parsed = parseAdvisorReply(raw);
   assert.deepEqual(parsed.messageDrafts, []);
-  assert.match(parsed.draftProblems.join(" "), /conflict|mismatch/i);
+  assert.match(parsed.draftProblems.join(" "), /JSON text differs from its marked letter/);
   assert.match(parsed.text, /entire approved British note/);
 });
 
@@ -523,4 +523,27 @@ test("an order the advisor already gave is not queued again, and the advisor is 
   assert.deepEqual(next.map((action) => action.title), ["Raise taxes", "Deploy request: 3rd Army", "Deploy request: 1st Fleet", "Build roads"]);
   assert.deepEqual(items.map((item) => item.title), ["Build roads"]);
   assert.match(problems[0], /"Raise taxes" is already queued \(a1\)/);
+});
+
+// One recipient: nothing to pair, so an unmarked letter of several paragraphs is
+// read whole (a model that writes no markers still gets its button).
+test("an unmarked letter of several paragraphs to one recipient keeps its button, whole", () => {
+  const parsed = parseAdvisorReply([
+    "Here is the note:", "",
+    "> Your Majesty,", "", "> First paragraph.", "", "> Yours, the Ambassador", "",
+    fence("senddraft", JSON.stringify([{ country: "Kingdom of Spain" }])),
+  ].join("\n"));
+  assert.deepEqual(parsed.draftProblems, []);
+  assert.deepEqual(parsed.messageDrafts.map((draft) => [draft.country, draft.text, draft.quoteIndex]), [
+    ["Kingdom of Spain", "Your Majesty,\n\nFirst paragraph.\n\nYours, the Ambassador", 0],
+  ]);
+  assert.deepEqual(splitAtBlockquotes(parsed.text).filter((part) => part.type === "quote").length, 1, "shown as one quote");
+});
+
+test("draft markers never reach the screen, with or without a senddraft block", () => {
+  assert.equal(parseAdvisorReply("Intro\n[[draft:1]]\n> Hi\n[[/draft:1]]\nDone.").text, "Intro\n> Hi\nDone.");
+  const broken = parseAdvisorReply(["[[draft:1]]", "> A letter.", fence("senddraft", JSON.stringify([{ country: "Spain" }]))].join("\n"));
+  assert.deepEqual(broken.messageDrafts, []);
+  assert.match(broken.draftProblems.join(" "), /left letter 1 open/);
+  assert.doesNotMatch(broken.text, /\[\[/);
 });

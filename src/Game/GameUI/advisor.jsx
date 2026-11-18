@@ -845,9 +845,10 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
             onDraftMessage={canDraft ? onDraftMessage : undefined}
             />
         )}
+        {/* What went wrong in detail is the advisor's to read (its receipt); the player is told what it means for them. */}
         {Array.isArray(draftProblems) && draftProblems.length > 0 && !msg.streaming && (
             <div role="alert" style={{ color: "#fca5a5", fontSize: "0.72rem", marginTop: "0.5rem" }}>
-                Some diplomatic drafts could not be prepared safely: {draftProblems.join(" ")}
+                Some letters drafted here have no Draft button: they could not be matched to their recipients safely. Ask the advisor to draft them again.
             </div>
         )}
         {chartConfig && <AdvisorChart config={chartConfig} />}

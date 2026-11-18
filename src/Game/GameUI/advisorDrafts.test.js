@@ -130,7 +130,7 @@ test("legacy adjacent quotes with no letter boundary cannot silently target sepa
   const drafts = buildMessageDrafts([{ country: "British Empire" }, { country: "Kingdom of Spain" }],
     "> First paragraph of an unknown letter.\n\n> Second paragraph or another letter.", problems);
   assert.deepEqual(drafts, []);
-  assert.match(problems.join(" "), /ambiguous/);
+  assert.match(problems.join(" "), /held 1 letter.s. for 2 recipient/);
 });
 
 test("legacy quoted letters separated by actual prose remain available", () => {
@@ -148,7 +148,7 @@ test("one quoted body for two recipient entries fails closed", () => {
   const drafts = buildMessageDrafts([{ country: "British Empire" }, { country: "Kingdom of Spain" }],
     "> Only one note.", problems);
   assert.deepEqual(drafts, []);
-  assert.match(problems.join(" "), /fewer/);
+  assert.match(problems.join(" "), /held 1 letter.s. for 2 recipient/);
 });
 
 test("an explicit text field still wins, as older saved messages rely on", () => {
