@@ -1138,9 +1138,38 @@ test("the post-turn settlement closes a guest's ballot in an institution the hos
     assert.deepEqual(settled.closed.map((entry) => [entry.institutionId, entry.status]), [["council", "passed"]]);
     const council = settled.chats.find((chat) => chat.institutionId === "council");
     assert.equal(council?.player, "B", "its Council is the guest's, not the host's");
+    // The outcome is the guest's by the people it names, never the game country's own mark (FOLLOWUPS A8): the
+    // host's view reads `playerRelated` as the host's own, and the host cast no ballot in it.
+    const outcome = settled.events.at(-1);
+    assert.equal(outcome.playerRelated, false);
+    assert.deepEqual(outcome.concerns, ["B"]);
   } finally {
     setHostingSharedGame(false);
   }
+});
+
+// FOLLOWUPS A8, a guest's own business: the host runs it for the guest's seat, and its event was the host's own.
+test("an institution event is the game country's own only where the game country is in it, whoever acts", async () => {
+  const { setHostingSharedGame } = await import("./humanPolities.js");
+  const close = (people) => {
+    // (The ballots as the record holds them: who cast them is what the mark reads.)
+    let world = vote(open().world, "B", "yes", "npc").world;
+    world = vote(world, "C", "yes").world;
+    return applyInstitutionGovernanceCommand({
+      world, chats: [], events: [], institutionId: "council", playerCountry: "B", date: "2000-01-06", people,
+      command: { type: "close-voting", proposalId: "p1", implementWhenPassed: false },
+    }).events.at(-1);
+  };
+  setHostingSharedGame(true, { host: "A" });
+  try {
+    const guests = close(["B", "A"]);
+    assert.equal(guests.playerRelated, false, "the host cast no ballot in it");
+    assert.deepEqual(guests.concerns, ["B"], "the guest's, by the people it names");
+  } finally {
+    setHostingSharedGame(false);
+  }
+  // Single player: the acting country is the player, as it always was.
+  assert.equal(close(null).playerRelated, true);
 });
 
 test("a passed vote never enrols a person who did not seek it, whichever seat is acting", () => {

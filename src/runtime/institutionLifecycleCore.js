@@ -25,7 +25,7 @@ import { resolvePolityIdentity } from "./polityIdentity.js";
 import { addGameDays, compareGameDatesNewestFirst, diffGameDays, isGameDate } from "./gameDates.js";
 import { stableAsciiId } from "./stableId.js";
 import { lookedUp } from "./worldLookups.js";
-import { ownedByPerson } from "./humanPolities.js";
+import { ownedByPerson, sharedGameHostCountry } from "./humanPolities.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -206,7 +206,9 @@ const lifecycleEventDescription = (action, { founder, polity, name, reason }) =>
 };
 
 // `playerRelated` is the game country's mark (single player's player, the
-// host's seat in a shared game). Each other player's screen marks an event its
+// host's seat in a shared game), whoever acts: a guest's own business, which
+// the host runs for the guest's seat, was the host's own event on the host's
+// screen (FOLLOWUPS A8). Each other player's screen marks an event its
 // own by the polities the event says it concerns (runtime/eventConcerns.js,
 // multiplayer/host/projection.js), and a lifecycle event said none: a guest's
 // accession or withdrawal was "about the player" for the host alone (the
@@ -216,6 +218,7 @@ const lifecycleEvent = ({ institution, action, polity = "", actor = "", date = "
   const persons = list(people).length > 1
     ? unique([polity, actor].filter((name) => clean(name) && list(people).some((person) => samePolity(person, name))))
     : [];
+  const gameCountry = sharedGameHostCountry() || playerCountry;
   const subject = polity || institution?.name || "Institution";
   const title = lifecycleEventTitle(action, subject, institution.name);
   const description = lifecycleEventDescription(action, { founder: actor || polity || "A founding government", polity, name: institution.name, reason });
@@ -231,7 +234,7 @@ const lifecycleEvent = ({ institution, action, polity = "", actor = "", date = "
     kind: "diplomacy",
     tags: ["Diplomacy", "Politics", "Institutions"],
     notable: ["founded", "joined", "left", "expelled", "dissolved"].includes(action),
-    playerRelated: samePolity(polity, playerCountry) || samePolity(actor, playerCountry),
+    playerRelated: samePolity(polity, gameCountry) || samePolity(actor, gameCountry),
     ...(persons.length ? { concerns: persons } : {}),
     source: "institution-lifecycle",
     agency: {

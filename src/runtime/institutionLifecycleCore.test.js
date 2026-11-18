@@ -1004,6 +1004,35 @@ test("no AI or native authority decides for any person, and a seat decides only 
   }), /another sovereign government/);
 });
 
+// FOLLOWUPS A8: the host runs a guest's own institution business for the guest's seat, and the event it wrote was
+// marked "the player's" by the acting seat, which the host's view reads as the host's own.
+test("a guest's own lifecycle business is the guest's event, not the host's own", async () => {
+  const { applyInstitutionLifecycleImpactBatchCore } = await import("./institutionLifecycleCore.js");
+  const { setHostingSharedGame } = await import("./humanPolities.js");
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: HOST, date: "2014-08-20",
+    command: { type: "found", founder: "Republic of Estonia", authority: "npc", name: "Northern Security Compact", minimumFoundingMembers: 1 },
+  });
+  const id = founded.institution.id;
+  const invited = applyInstitutionLifecycleImpactBatchCore({
+    world: founded.world, playerCountry: HOST, people: PEOPLE, date: "2014-08-21",
+    ops: [{ op: "invite", actorPolity: "Republic of Estonia", institutionId: id, targetPolity: GUEST, requestedStatus: "member" }],
+  });
+  const guestCase = Object.values(invited.world.institutions.byId[id].lifecycleCases).find((entry) => entry.polity === GUEST);
+  const answer = () => applyInstitutionLifecycleCommandCore({
+    world: invited.world, playerCountry: GUEST, people: PEOPLE, date: "2014-08-23",
+    command: { type: "respond", institutionId: id, caseId: guestCase.id, actorPolity: GUEST, decision: "reject", authority: "player" },
+  }).events.at(-1);
+  setHostingSharedGame(true, { host: HOST });
+  try {
+    const event = answer();
+    assert.equal(event.playerRelated, false, "the host is not in it");
+    assert.deepEqual(event.concerns, [GUEST], "the guest's, by the people it names");
+  } finally {
+    setHostingSharedGame(false);
+  }
+});
+
 test("an AI's invitation of a guest opens the guest's own thread, and the host's stays the host's", async () => {
   const { applyInstitutionLifecycleImpactBatchCore } = await import("./institutionLifecycleCore.js");
   const { setHostingSharedGame } = await import("./humanPolities.js");

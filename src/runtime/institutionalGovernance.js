@@ -26,7 +26,7 @@ import {
 import { findInstitutionalChannel, materializeInstitutionalChannel } from "./institutionalChannels.js";
 import { getPoliticalProfile } from "./politicalActors.js";
 import { askHostForInstitution, institutionsGoToHost } from "./sharedInstitutions.js";
-import { humanCountriesWith } from "./humanPolities.js";
+import { humanCountriesWith, sharedGameHostCountry } from "./humanPolities.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -865,12 +865,16 @@ const outcomeEventDescription = (status, { name, title, yes, no, abstain, veto, 
 // The proposal types whose ballot is a major event.
 const MAJOR_PROPOSAL_TYPES = new Set(["charter-amendment", "accession", "agreement", "treaty"]);
 
-// `playerRelated` is the acting seat's mark, as single player's always was.
-// Every other player's screen marks an event its own by the polities it says it
-// concerns (runtime/eventConcerns.js, multiplayer/host/projection.js), and an
-// outcome said none: a ballot a guest cast was "about the player" for one name
-// alone (the review of 2026-11-18, simulation 6). Where several people play
-// (`people`), it names the people who cast a ballot. With one, nothing is added.
+// `playerRelated` is the game country's mark: single player's player, and the
+// host's own seat in a shared game, which is how the host's view reads it
+// (multiplayer/host/projection.js projectEvents). Marked by the acting seat,
+// a ballot a guest cast, closed for that guest by the post-turn settlement or
+// by the guest's own vote, was the host's own event on the host's screen
+// (FOLLOWUPS A8). Every other player's screen marks an event its own by the
+// polities it says it concerns (runtime/eventConcerns.js), and an outcome said
+// none: a ballot a guest cast was "about the player" for one name alone (the
+// review of 2026-11-18, simulation 6). Where several people play (`people`),
+// it names the people who cast a ballot. With one, nothing is added.
 const proposalOutcomeEvent = ({ institution, proposal, outcome, date = "", playerCountry = "", people = null } = {}) => {
   if (!institution || !proposal || !outcome) return null;
   const persons = peopleOf(people, playerCountry);
@@ -907,7 +911,8 @@ const proposalOutcomeEvent = ({ institution, proposal, outcome, date = "", playe
   // summary: an English word list ("defence", "troop", "sanction") made a vote
   // military and major, and the same vote written in French was neither.
   const major = MAJOR_PROPOSAL_TYPES.has(lower(proposal.type));
-  const playerBallot = Object.values(proposal?.voting?.ballots || {}).some((ballot) => lower(ballot?.polity) === lower(playerCountry));
+  const gameCountry = sharedGameHostCountry() || playerCountry;
+  const playerBallot = Object.values(proposal?.voting?.ballots || {}).some((ballot) => lower(ballot?.polity) === lower(gameCountry));
   return {
     id: proposalOutcomeEventId(institution, proposal),
     date: clean(date || proposal?.voting?.closedDate),
