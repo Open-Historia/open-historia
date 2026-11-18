@@ -177,19 +177,33 @@ func _run() -> void:
 	await _until(func() -> bool: return not panel.pickable_loading, 30.0)
 	await _wait(0.3)
 	_check("the selector lists countries without the player", panel.pickable.size() > 10 and panel.pickable.all(func(entry: Variant) -> bool: return str((entry as Dictionary).get("name", "")) != "France"), "%d countries" % panel.pickable.size())
+	var directory := panel._modal
+	_check("the directory reads as in the browser", directory.kicker_label.text == "Diplomatic directory" and directory.kicker_label.uppercase and directory.title_label.text == "New diplomatic channel" and directory.subtitle_label.text == "Choose one or more governments for your correspondence." and directory._confirm_text.text == "Choose a recipient" and directory.confirm_button.disabled, directory.title_label.text)
+	_check("the directory counts every country it offers", directory.results_count.text == "%d of %d" % [directory.unique_countries().size(), directory.unique_countries().size()], directory.results_count.text)
 	await _shoot("chat-2a-selector")
-	panel._modal_search.text = "ger"
-	panel._render_modal_grid()
+	directory.search.text = "ger"
+	directory._render_grid()
 	await _wait(0.2)
+	var found := _labels(directory.grid)
+	_check("a search finds every name holding the words", found.has("Germany") and found.has("Algeria") and found.has("Niger") and not found.has("Italy"), ", ".join(found))
+	_check("the count says how many of how many", directory.results_count.text == "%d of %d" % [directory.filtered().size(), directory.unique_countries().size()], directory.results_count.text)
 	await _shoot("chat-2b-selector-search")
-	panel._modal_search.text = ""
+	directory.search.text = "federal republic of g"
+	directory._render_grid()
+	found = _labels(directory.grid)
+	_check("a country's formal name finds it, as the game's own aliases say", found.has("Germany") and not found.has("Nigeria"), ", ".join(found))
+	directory.search.text = "fe"
+	directory._render_grid()
+	_check("aliases are read only from three letters on", not _labels(directory.grid).has("Germany"))
+	directory.search.text = ""
 	for wanted in ["Germany", "Italy"]:
 		for entry in panel.pickable:
 			if str(entry.get("name", "")) == wanted:
-				panel.selected.append({"name": wanted, "code": str(entry.get("code", ""))})
-	panel._render_modal()
+				directory.selected.append({"name": wanted, "code": str(entry.get("code", "")), "flag": str(entry.get("flag", ""))})
+	directory.render()
 	await _wait(0.3)
-	_check("the confirm button counts the selection", panel._modal_start.text == "Chat with 2 countries", panel._modal_start.text)
+	_check("the confirm button starts the conversation once someone is chosen", directory._confirm_text.text == "Start conversation" and directory._confirm_arrow.visible and not directory.confirm_button.disabled, directory._confirm_text.text)
+	_check("each recipient is a chip that removes it", directory.chips.get_child_count() == 2 and directory.count_badge.text == "2")
 	await _shoot("chat-2-new-chat-modal")
 	panel._close_selector()
 	await _wait(0.3)
@@ -318,6 +332,7 @@ func _run() -> void:
 	panel.conversation._composer.text = ""
 	panel.leave_active()
 	await _wait(0.3)
+	await _correspondence()
 
 	panel._set_view("institutions")
 	await _wait(1.5)
@@ -457,6 +472,89 @@ func _close_notice() -> void:
 		await _frames(3)
 
 
+func _find_chat_with(country_name: String) -> String:
+	for chat in panel.open_chats():
+		var countries: Array = (chat as Dictionary).get("countries", [])
+		if countries.size() == 1 and str((countries[0] as Dictionary).get("name", "")) == country_name:
+			return str((chat as Dictionary).get("id", ""))
+	return ""
+
+
+func _correspondence() -> void:
+	await panel.open_target({"targetType": "private", "country": "Germany", "name": "Germany", "fromDraft": "advisor-reply-check#0"}, "Chancellor, France proposes a meeting of our finance ministers.")
+	await _until(func() -> bool: return panel.conversation_visible() and panel.conversation._composer.text.begins_with("Chancellor"), 10.0)
+	var view := panel.conversation
+	_check("an advisor's draft arrives with its own id", view.draft_from == "advisor-reply-check#0", view.draft_from)
+	view._composer.text = ""
+	view._composer.text_changed.emit()
+	_check("an emptied composer holds no draft any more", view.draft_from.is_empty())
+	view.apply_draft("Chancellor, France proposes a meeting of our finance ministers.", "advisor-reply-check#0")
+	view._composer.text = "Chancellor, France proposes a meeting of our finance ministers in Paris."
+	view._composer.text_changed.emit()
+	view.submit_from_composer()
+	await _until(func() -> bool: return not view.loading and view.messages.size() >= 3, 60.0)
+	await _wait(0.6)
+	var sent := {}
+	for message in view.messages:
+		if str((message as Dictionary).get("role", "")) == "user":
+			sent = message
+	_check("the letter sent from the draft, edited, carries the draft's id", str(sent.get("fromDraft", "")) == "advisor-reply-check#0", JSON.stringify(sent).left(160))
+	var germany := view.chat_id
+	await panel.reload()
+	await _until(func() -> bool: return not panel.inbox_order.is_empty() and str(panel.inbox_order[0]) == germany, 10.0)
+	_check("the thread just written in comes first", not panel.inbox_order.is_empty() and str(panel.inbox_order[0]) == germany, str(panel.inbox_order.slice(0, 3)))
+	_check("its place is kept as the thread's own activity count", int(panel.find_chat(germany).get("activityOrdinal", 0)) > 0, str(panel.find_chat(germany).get("activityOrdinal", 0)))
+	_check("the open conversation keeps the inbox beside it on a wide panel", panel.split_shown() and panel._sidebar_list.get_child_count() >= 2, "%s / %d" % [str(panel.split_shown()), panel._sidebar_list.get_child_count()])
+	_check("the sidebar heading reads as in the browser", _labels(panel._sidebar).has("Foreign affairs") and _labels(panel._sidebar).has("Correspondence") and _labels(panel._sidebar).has("Governments and diplomatic channels") and panel._sidebar_search.placeholder_text == "Search contacts or subjects")
+	await _wait(0.3)
+	await _shoot("chat-24-split-correspondence")
+	panel.leave_active()
+	await _wait(0.4)
+	var fillers := ["Portugal", "Belgium", "Netherlands", "Austria", "Poland", "Sweden", "Norway", "Denmark", "Greece", "Ireland"]
+	for index in range(fillers.size()):
+		var day := "2015-12-%02d" % (10 + index)
+		await main.engine.request("chat.create", {"chat": {"id": "chat-filler-%d" % index, "countries": [{"name": fillers[index]}], "status": "open", "messages": [{"id": "filler-%d" % index, "role": "user", "speaker": "France", "text": "Our note to %s on the coming summit." % fillers[index], "time": day}]}})
+	await panel.reload()
+	await _until(func() -> bool: return panel.inbox_order.size() >= 12, 10.0)
+	await _wait(0.4)
+	var labels := _labels(panel._list_box)
+	_check("rows say the date of their last letter, never sorted under date headers", labels.has("1 January 2016") or labels.has("4 January 2016") or labels.has("2 January 2016"), ", ".join(labels.slice(0, 12)))
+	_check("the inbox heading counts the conversations", panel._inbox_count.text == "%d conversations" % panel.searched_chats().size(), panel._inbox_count.text)
+	await _shoot("chat-25-inbox")
+	panel._on_contact_query("iberian")
+	await _wait(0.2)
+	_check("a search keeps the threads whose subject or government holds the words", panel.searched_chats().size() == 1 and panel._inbox_count.text == "1 conversations", panel._inbox_count.text)
+	await _shoot("chat-26-inbox-search")
+	panel._on_contact_query("zzzz")
+	await _wait(0.2)
+	_check("a search that finds nothing says so", _labels(panel._list_box).has("No matching correspondence."))
+	panel._on_contact_query("")
+	await _wait(0.3)
+	var last_id := str(panel.inbox_order.back())
+	panel._list_scroll.scroll_vertical = 400
+	await _frames(3)
+	_check("reading older letters holds the list where it is", not panel.held_inbox.is_empty(), str(panel._list_scroll.scroll_vertical))
+	var held_order := panel.inbox_order.duplicate()
+	var target := panel.find_chat(last_id)
+	var grown: Array = (target.get("messages", []) as Array).duplicate()
+	grown.append({"id": "late-letter", "role": "user", "speaker": "France", "text": "A late word on the summit.", "time": "2016-01-04"})
+	await main.engine.request("chat.patch", {"id": last_id, "set": {"messages": grown}, "promote": true})
+	await panel.reload()
+	await _until(func() -> bool: return panel.inbox_has_new_activity(), 10.0)
+	await _frames(3)
+	_check("a new letter does not move the list while it is held", panel.inbox_order == held_order, str(panel.inbox_order.slice(0, 3)))
+	_check("it offers to return to the latest", panel.inbox_has_new_activity() and (panel._activity_top.get_parent() as Control).visible and panel._activity_top.text == "↑ New activity — return to latest")
+	await _shoot("chat-27-inbox-new-activity")
+	panel.reveal_latest_inbox()
+	await _until(func() -> bool: return panel.held_inbox.is_empty() and not panel.inbox_order.is_empty() and str(panel.inbox_order[0]) == last_id, 10.0)
+	_check("returning to the latest puts the newest letter first", str(panel.inbox_order[0]) == last_id and not (panel._activity_top.get_parent() as Control).visible, str(panel.inbox_order.slice(0, 3)))
+	for index in range(fillers.size()):
+		panel.delete_chat("chat-filler-%d" % index)
+	panel._mark_all_read()
+	await panel.reload()
+	await _wait(0.3)
+
+
 func _group_diplomacy() -> void:
 	await _close_notice()
 	panel.leave_active()
@@ -491,16 +589,16 @@ func _group_diplomacy() -> void:
 	panel._open_selector("add")
 	await _until(func() -> bool: return not panel.pickable_loading, 30.0)
 	await _wait(0.3)
-	var listed := _labels(panel._modal_grid)
-	_check("Add Country lists the countries not yet in the conversation", panel._modal_title.text == "Add Countries to Chat" and not listed.has("Spain") and not listed.has("Italy") and listed.has("Portugal"), panel._modal_title.text)
+	var listed := _labels(panel._modal.grid)
+	_check("Add Country lists the countries not yet in the conversation", panel._modal.title_label.text == "Add Countries to Chat" and not listed.has("Spain") and not listed.has("Italy") and listed.has("Portugal"), panel._modal.title_label.text)
 	for entry in panel.pickable:
 		if str(entry.get("name", "")) == "Portugal":
-			panel.selected.append({"name": "Portugal", "code": str(entry.get("code", ""))})
-	panel._render_modal()
+			panel._modal.selected.append({"name": "Portugal", "code": str(entry.get("code", ""))})
+	panel._modal.render()
 	await _wait(0.2)
-	_check("the confirm button says what it adds", panel._modal_start.text == "Add 1 country", panel._modal_start.text)
+	_check("the confirm button says what it adds", panel._modal._confirm_text.text == "Add 1 country", panel._modal._confirm_text.text)
 	await _shoot("chat-6d-add-country")
-	panel._modal_start.pressed.emit()
+	panel._modal.confirm_button.pressed.emit()
 	await _until(func() -> bool: return view.countries().size() == 3, 10.0)
 	await _wait(0.4)
 	_check("the country joins the conversation", view.countries().size() == 3 and view._subtitle.text == "4-party diplomatic channel" and _labels(view._tag_flow).has("Portugal"), view._subtitle.text)
@@ -509,7 +607,7 @@ func _group_diplomacy() -> void:
 	await _wait(0.3)
 	panel._open_selector()
 	await _wait(0.2)
-	_check("the new chat selector is titled as before", panel._modal_title.text == "Start New Diplomatic Chat")
+	_check("the new chat selector is the diplomatic directory again", panel._modal.title_label.text == "New diplomatic channel" and panel._modal.kicker_label.text == "Diplomatic directory")
 	panel._close_selector()
 	await _wait(0.3)
 

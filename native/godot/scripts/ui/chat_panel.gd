@@ -8,6 +8,9 @@ signal active_chat_changed(chat_id: String)
 signal world_changed
 
 const PANEL_MAX_WIDTH := 928.0
+const WIDE_MAX_WIDTH := 1088.0
+const SPLIT_MIN_WIDTH := 752.0
+const DIRECTORY := preload("res://scripts/ui/diplomacy_directory.gd")
 const PANEL_MAX_HEIGHT := 800.0
 const PANEL_MIN_HEIGHT := 384.0
 const PHONE_MIN_HEIGHT := 160.0
@@ -19,8 +22,6 @@ const WINDOW_STEP := 40
 const SAFETY_POLL_SECONDS := 30.0
 const INSTITUTIONS_VIEW := "res://scripts/ui/institutions_view.gd"
 const INTELLIGENCE_VIEW := "res://scripts/ui/intelligence_view.gd"
-const BLUE := Color("#3b82f6")
-const BLUE_HOVER := Color("#2563eb")
 const BLUE_SOFT := Color("#60a5fa")
 const SKY := Color("#93c5fd")
 const SKY_PALE := Color("#bfdbfe")
@@ -77,7 +78,14 @@ var load_failed := false
 var save_failed := false
 var retrying := false
 var unread: Dictionary = {}
-var display_order: Array = []
+var inbox_order: Array = []
+var inbox_canonical: Array = []
+var inbox_latest := 0
+var inbox_dates: Dictionary = {}
+var held_inbox: Dictionary = {}
+var contact_query := ""
+var _inbox_serial := 0
+var _loaded_signature := ""
 var snapshot_taken := false
 var unread_only := false
 var view_key := "chats"
@@ -91,7 +99,6 @@ var pickable: Array = []
 var pickable_loading := false
 var selector_open := false
 var selector_mode := "start"
-var selected: Array = []
 var list_hover := ""
 var list_confirm := ""
 var visible_council := ""
@@ -131,25 +138,27 @@ var _mark_all: Button
 var _list_scroll: ScrollContainer
 var _list_box: VBoxContainer
 var _footer: PanelContainer
+var _search_header: PanelContainer
+var _inbox_count: Label
+var _inbox_search: LineEdit
+var _activity_top: Button
+var _split: HBoxContainer
+var _sidebar: PanelContainer
+var _sidebar_search: LineEdit
+var _sidebar_count: Label
+var _sidebar_activity: Button
+var _sidebar_scroll: ScrollContainer
+var _sidebar_list: VBoxContainer
 var _institutions_host: VBoxContainer
 var _intelligence_host: VBoxContainer
 var _institutions_view: Control
 var _intelligence_view: Control
-var _modal: PanelContainer
-var _modal_title: Label
-var _modal_subtitle: Label
-var _modal_selected_label: Label
-var _modal_selected_flow: HFlowContainer
-var _modal_search: LineEdit
-var _modal_scroll: ScrollContainer
-var _modal_grid: GridContainer
-var _modal_loading: Label
-var _modal_start: Button
+var _modal: DIRECTORY
 var _modal_tween: Tween
 
 
 func _init() -> void:
-	super._init("Diplomacy", "Conversations, institutions and statecraft", "bottom", PANEL_MAX_WIDTH)
+	super._init("Diplomacy", "Conversations, institutions and statecraft", "bottom", max_width())
 	set_tint(UiTheme.pick("overlay", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95)))
 	radius = 16.0
 	_material.set_shader_parameter("radius", 16.0)
@@ -165,8 +174,7 @@ func _init() -> void:
 	_build_late_notice()
 	_build_workspace()
 	conversation = Conversation.new(self, false)
-	conversation.visible = false
-	_content.add_child(conversation)
+	_build_split()
 	_build_modal()
 	var dots := Timer.new()
 	dots.wait_time = 0.5
@@ -202,6 +210,7 @@ func _ready() -> void:
 func _on_theme_changed() -> void:
 	set_tint(UiTheme.pick("overlay", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95)))
 	_material.set_shader_parameter("border_color", UiTheme.pick("line", Color(1, 1, 1, 0.1)))
+	_style_inbox()
 	if is_open() and engine:
 		refresh()
 
@@ -278,6 +287,7 @@ func open_chat(country: String, draft_text := "") -> void:
 
 
 func open_target(target: Dictionary, draft_text := "") -> void:
+	var from_draft := t(target.get("fromDraft", "")) if not draft_text.is_empty() else ""
 	var target_type := t(target.get("targetType", "private")).to_lower()
 	var target_name := t(target.get("name", target.get("country", "")))
 	var institution_id := t(target.get("institutionId", ""))
@@ -316,7 +326,7 @@ func open_target(target: Dictionary, draft_text := "") -> void:
 			held_unread = ""
 			set_read_state(shown_chat(exact), true)
 			if not draft_text.is_empty():
-				draft = {"chat_id": t(exact.get("id", "")), "text": draft_text}
+				draft = {"chat_id": t(exact.get("id", "")), "text": draft_text, "from": from_draft}
 			if target_type == "institution-council":
 				active = {}
 				conversation_unmounted()
@@ -349,7 +359,7 @@ func open_target(target: Dictionary, draft_text := "") -> void:
 		if t(chat.get("status", "")) != "closed" and t(chat.get("institutionId", "")).is_empty() and t(chat.get("lifecycleInstitutionId", "")).is_empty() and countries.size() == 1 and t(d(countries[0]).get("name", "")).to_lower() == target_name.to_lower():
 			view_key = "chats"
 			if not draft_text.is_empty():
-				draft = {"chat_id": t(chat.get("id", "")), "text": draft_text}
+				draft = {"chat_id": t(chat.get("id", "")), "text": draft_text, "from": from_draft}
 			set_active(chat)
 			return
 	if shared_game:
@@ -358,19 +368,19 @@ func open_target(target: Dictionary, draft_text := "") -> void:
 			return
 		view_key = "chats"
 		if not draft_text.is_empty():
-			draft = {"chat_id": t(pending.get("id", "")), "text": draft_text}
+			draft = {"chat_id": t(pending.get("id", "")), "text": draft_text, "from": from_draft}
 		set_active(pending)
 		return
 	var created := {"id": new_chat_id(), "countries": [{"name": target_name, "code": code}], "messages": [], "status": "open"}
 	chats.push_front(created)
-	persist("chat.create", {"chat": created})
+	_create_chat(created)
 	view_key = "chats"
 	if not draft_text.is_empty():
-		draft = {"chat_id": t(created.get("id", "")), "text": draft_text}
+		draft = {"chat_id": t(created.get("id", "")), "text": draft_text, "from": from_draft}
 	set_active(created)
 
 
-func open_thread(chat_id: String, draft_text := "") -> void:
+func open_thread(chat_id: String, draft_text := "", from_draft := "") -> void:
 	var id := chat_id.strip_edges()
 	if id.is_empty():
 		return
@@ -394,15 +404,15 @@ func open_thread(chat_id: String, draft_text := "") -> void:
 	if found.is_empty():
 		return
 	if not t(found.get("institutionId", "")).is_empty() and not is_lifecycle(found):
-		await open_target({"targetType": "institution-council", "institutionId": t(found.get("institutionId", "")), "threadId": id}, draft_text)
+		await open_target({"targetType": "institution-council", "institutionId": t(found.get("institutionId", "")), "threadId": id, "fromDraft": from_draft}, draft_text)
 		return
 	if is_lifecycle(found):
-		await open_target({"targetType": "institution-lifecycle", "institutionId": t(found.get("lifecycleInstitutionId", "")), "threadId": id}, draft_text)
+		await open_target({"targetType": "institution-lifecycle", "institutionId": t(found.get("lifecycleInstitutionId", "")), "threadId": id, "fromDraft": from_draft}, draft_text)
 		return
 	held_unread = ""
 	set_read_state(shown_chat(found), true)
 	view_key = "chats"
-	draft = {"chat_id": id, "text": draft_text}
+	draft = {"chat_id": id, "text": draft_text, "from": from_draft}
 	set_active(found)
 
 
@@ -423,7 +433,7 @@ func render_council(channel_id: String) -> Control:
 		channel = {"id": id, "institutionId": "pending", "countries": [], "messages": []}
 	view.show_chat(channel)
 	if t(draft.get("chat_id", "")) == id:
-		view.apply_draft(t(draft.get("text", "")))
+		view.apply_draft(t(draft.get("text", "")), t(draft.get("from", "")))
 		draft = {}
 	return view
 
@@ -435,7 +445,12 @@ func _process(_delta: float) -> void:
 	if not is_equal_approx(inset, _placed_inset):
 		_placed_inset = inset
 		var viewport := get_viewport_rect().size
-		offset_right = PANEL_LEFT + minf(PANEL_MAX_WIDTH, viewport.x - 16.0 - inset)
+		offset_right = PANEL_LEFT + minf(max_width(), viewport.x - 16.0 - inset)
+		_fit_split()
+
+
+static func max_width() -> float:
+	return PANEL_MAX_WIDTH if UI.phone() else WIDE_MAX_WIDTH
 
 
 func _right_inset() -> float:
@@ -453,7 +468,7 @@ func _right_inset() -> float:
 func _place(open_state: bool, animate: bool) -> void:
 	var viewport := get_viewport_rect().size if is_inside_tree() else Vector2(1440, 900)
 	_placed_inset = _right_inset() if is_inside_tree() else 0.0
-	var width := minf(PANEL_MAX_WIDTH, viewport.x - 16.0 - _placed_inset)
+	var width := minf(max_width(), viewport.x - 16.0 - _placed_inset)
 	var height := maxf(PANEL_MIN_HEIGHT, minf(PANEL_MAX_HEIGHT, viewport.y - 128.0))
 	var left := PANEL_LEFT
 	var open_bottom := PANEL_BOTTOM
@@ -462,7 +477,7 @@ func _place(open_state: bool, animate: bool) -> void:
 		_placed_inset = 0.0
 		left = PANEL_LEFT + safe.x
 		open_bottom = PANEL_BOTTOM + safe.w
-		width = minf(PANEL_MAX_WIDTH, viewport.x - 24.0 - safe.x - safe.z)
+		width = minf(max_width(), viewport.x - 24.0 - safe.x - safe.z)
 		height = maxf(PHONE_MIN_HEIGHT, minf(PANEL_MAX_HEIGHT, viewport.y - 164.0 - safe.y - safe.w))
 	anchor_left = 0.0
 	anchor_right = 0.0
@@ -470,6 +485,7 @@ func _place(open_state: bool, animate: bool) -> void:
 	anchor_bottom = 1.0
 	offset_left = left
 	offset_right = left + width
+	_fit_split()
 	var bottom := open_bottom if open_state else PANEL_CLOSED_BOTTOM
 	var target_top := -bottom - height
 	var target_bottom := -bottom
@@ -498,6 +514,12 @@ func _on_opened() -> void:
 func _on_closed() -> void:
 	snapshot_taken = false
 	unread_only = false
+	held_inbox = {}
+	contact_query = ""
+	if _inbox_search:
+		_inbox_search.text = ""
+	if _sidebar_search:
+		_sidebar_search.text = ""
 	active_chat_changed.emit("")
 	_recompute_badge(true)
 
@@ -528,7 +550,11 @@ func _reset_for_game() -> void:
 	conversation_unmounted()
 	chats = []
 	unread = {}
-	display_order = []
+	inbox_order = []
+	inbox_canonical = []
+	inbox_dates = {}
+	held_inbox = {}
+	_loaded_signature = ""
 	snapshot_taken = false
 	loaded = false
 	roster_loaded = false
@@ -587,16 +613,17 @@ func _apply_load(data: Dictionary) -> void:
 	elif load_failed:
 		_adopt_recovered(a(stored))
 	else:
-		_sync(a(stored))
+		_sync(a(stored), t(data.get("signature", "")))
 	loaded = true
 	_update_tab_visibility()
 	_fetch_flags()
 	_after_data_change(unseen_changed)
 
 
-func _sync(saved: Array) -> void:
-	if loaded and _signature(saved) == _signature(chats):
+func _sync(saved: Array, signature: String) -> void:
+	if loaded and not signature.is_empty() and signature == _loaded_signature:
 		return
+	_loaded_signature = signature
 	if not active.is_empty():
 		for chat in saved:
 			if t(chat.get("id", "")) == t(active.get("id", "")) and a(chat.get("messages", [])).size() > a(active.get("messages", [])).size():
@@ -631,6 +658,7 @@ func _after_data_change(unseen_changed := false) -> void:
 	_propagate_chats(unseen_changed)
 	mark_active_read()
 	_recompute_badge()
+	refresh_inbox()
 	_late_check()
 	_follow_step()
 	_show_notice()
@@ -690,9 +718,6 @@ func _take_snapshot() -> void:
 		for chat in all_open:
 			if is_unread(chat, seen):
 				unread[t(chat.get("id", ""))] = true
-	display_order = []
-	for chat in sort_by_recency(open_chats()):
-		display_order.append(t(chat.get("id", "")))
 	snapshot_taken = true
 	_send_unread_to_institutions()
 
@@ -773,9 +798,26 @@ func on_messages_update(chat_id: String, messages: Array) -> void:
 		var updated_active: Dictionary = active.duplicate()
 		updated_active["messages"] = messages
 		active = updated_active
-	persist("chat.patch", {"id": chat_id, "set": {"messages": messages}})
+	_promote(chat_id, messages)
 	_refresh_council_props(chat_id)
 	mark_active_read()
+
+
+func _promote(chat_id: String, messages: Array) -> void:
+	if not engine or load_failed:
+		return
+	_local_edits += 1
+	var reply := await engine.request("chat.patch", {"id": chat_id, "set": {"messages": messages}, "promote": true})
+	var failed: bool = reply.get("ok", false) != true
+	if failed != save_failed:
+		save_failed = failed
+		_show_notice()
+	if failed:
+		return
+	for entry in a(d(reply.get("result", {})).get("chats", [])):
+		if t(d(entry).get("id", "")) == chat_id:
+			_adopt_ordinal(chat_id, d(entry).get("activityOrdinal"))
+	refresh_inbox()
 
 
 func on_thread_update(chat_id: String, update: Dictionary, committed := false) -> void:
@@ -982,13 +1024,6 @@ func seen_totals(list: Array) -> Dictionary:
 	for chat in list:
 		totals[t(chat.get("id", ""))] = a(chat.get("messages", [])).size()
 	return totals
-
-
-func _signature(list: Array) -> String:
-	var parts: PackedStringArray = []
-	for chat in list:
-		parts.append("%s:%s:%d" % [t(chat.get("id", "")), t(chat.get("status", "")), a(chat.get("messages", [])).size()])
-	return "|".join(parts)
 
 
 func _restyle_header() -> void:
@@ -1288,11 +1323,11 @@ func pending_shared_thread(countries: Array) -> Dictionary:
 	return d(reply.get("result", {})) if reply.get("ok", false) else {}
 
 
-func say_to_host(target: Dictionary, text: String) -> Dictionary:
+func say_to_host(target: Dictionary, text: String, from_draft := "") -> Dictionary:
 	if engine == null:
 		return {"kind": "refused", "error": ""}
 	var thread := {"id": t(target.get("id", "")), "countries": a(target.get("countries", [])), "pendingShared": target.get("pendingShared", false) == true}
-	var reply := await engine.request("multiplayer.say", {"chat": thread, "text": text})
+	var reply := await engine.request("multiplayer.say", {"chat": thread, "text": text, "fromDraft": from_draft})
 	if not reply.get("ok", false):
 		return {"kind": "refused", "error": str(reply.get("error", ""))}
 	return d(reply.get("result", {}))
@@ -1368,6 +1403,23 @@ func _build_workspace() -> void:
 	_workspace = VBoxContainer.new()
 	_workspace.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_workspace.add_theme_constant_override("separation", 0)
+	_search_header = PanelContainer.new()
+	var header_column := VBoxContainer.new()
+	header_column.add_theme_constant_override("separation", 8)
+	var heading_row := HBoxContainer.new()
+	heading_row.add_theme_constant_override("separation", 10)
+	var heading := UI.label("Recent correspondence", 11, Color(1, 1, 1, 0.5), 800, "Arial", 1)
+	heading.uppercase = true
+	heading.name = "Heading"
+	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	heading_row.add_child(heading)
+	_inbox_count = UI.label("", 11, Color("#91c9e7"), 800)
+	heading_row.add_child(_inbox_count)
+	header_column.add_child(heading_row)
+	_inbox_search = _search_input("Search governments or subjects")
+	header_column.add_child(_inbox_search)
+	_search_header.add_child(header_column)
+	_workspace.add_child(_search_header)
 	_filter_bar = PanelContainer.new()
 	var filter_style := StyleBoxFlat.new()
 	filter_style.bg_color = Color(0, 0, 0, 0)
@@ -1395,10 +1447,17 @@ func _build_workspace() -> void:
 	filter_row.add_child(_mark_all)
 	_filter_bar.add_child(filter_row)
 	_workspace.add_child(_filter_bar)
+	var activity_margin := MarginContainer.new()
+	for side in [["margin_left", 16], ["margin_right", 16], ["margin_top", 6], ["margin_bottom", 2]]:
+		activity_margin.add_theme_constant_override(side[0], side[1])
+	_activity_top = _activity_button()
+	activity_margin.add_child(_activity_top)
+	activity_margin.visible = false
+	_workspace.add_child(activity_margin)
 	_list_scroll = ScrollContainer.new()
 	_list_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_list_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_list_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	_thin_scroll(_list_scroll)
+	_list_scroll.get_v_scroll_bar().value_changed.connect(_on_inbox_scroll)
 	var list_margin := MarginContainer.new()
 	list_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	list_margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -1411,20 +1470,7 @@ func _build_workspace() -> void:
 	list_margin.add_child(_list_box)
 	_list_scroll.add_child(list_margin)
 	_workspace.add_child(_list_scroll)
-	_footer = PanelContainer.new()
-	var footer_style := StyleBoxFlat.new()
-	footer_style.bg_color = Color(0, 0, 0, 0)
-	footer_style.border_color = UiTheme.pick("line", Color(1, 1, 1, 0.07))
-	footer_style.border_width_top = 1
-	footer_style.content_margin_left = 16
-	footer_style.content_margin_right = 16
-	footer_style.content_margin_top = 12
-	footer_style.content_margin_bottom = 12
-	_footer.add_theme_stylebox_override("panel", footer_style)
-	var start := solid_button("Start New Chat", 14, Color(1, 1, 1, 0.85), 500, UiTheme.pick("line", Color(1, 1, 1, 0.07)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 10)
-	start.custom_minimum_size.y = 43
-	start.pressed.connect(_open_selector)
-	_footer.add_child(start)
+	_footer = _sidebar_footer()
 	_workspace.add_child(_footer)
 	_institutions_host = VBoxContainer.new()
 	_institutions_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -1435,6 +1481,295 @@ func _build_workspace() -> void:
 	_intelligence_host.visible = false
 	_workspace.add_child(_intelligence_host)
 	_content.add_child(_workspace)
+	_style_inbox()
+
+
+func _build_split() -> void:
+	_split = HBoxContainer.new()
+	_split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_split.add_theme_constant_override("separation", 0)
+	_split.visible = false
+	_sidebar = PanelContainer.new()
+	_sidebar.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 0)
+	var heading := PanelContainer.new()
+	heading.name = "SidebarHeading"
+	var heading_column := VBoxContainer.new()
+	heading_column.add_theme_constant_override("separation", 5)
+	var kicker := UI.label("Foreign affairs", 10, Color("#91c9e7"), 850, "Arial", 1)
+	kicker.uppercase = true
+	kicker.name = "Kicker"
+	heading_column.add_child(kicker)
+	var title := UI.label("Correspondence", 17, Color("#f4f4f5"), 850)
+	title.name = "Title"
+	heading_column.add_child(title)
+	var subtitle := UI.label("Governments and diplomatic channels", 11, Color(1, 1, 1, 0.52))
+	subtitle.name = "Subtitle"
+	heading_column.add_child(subtitle)
+	heading.add_child(heading_column)
+	column.add_child(heading)
+	var controls := PanelContainer.new()
+	controls.name = "SidebarControls"
+	var controls_column := VBoxContainer.new()
+	controls_column.add_theme_constant_override("separation", 8)
+	_sidebar_search = _search_input("Search contacts or subjects")
+	controls_column.add_child(_sidebar_search)
+	var count_row := HBoxContainer.new()
+	count_row.add_theme_constant_override("separation", 4)
+	var recent := UI.label("Recent activity", 11, Color(1, 1, 1, 0.5), 800, "Arial", 1)
+	recent.uppercase = true
+	recent.name = "Recent"
+	count_row.add_child(recent)
+	_sidebar_count = UI.label("", 11, Color("#91c9e7"), 800, "Arial", 1)
+	count_row.add_child(_sidebar_count)
+	controls_column.add_child(count_row)
+	_sidebar_activity = _activity_button()
+	_sidebar_activity.visible = false
+	controls_column.add_child(_sidebar_activity)
+	controls.add_child(controls_column)
+	column.add_child(controls)
+	_sidebar_scroll = ScrollContainer.new()
+	_sidebar_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_thin_scroll(_sidebar_scroll)
+	_sidebar_scroll.get_v_scroll_bar().value_changed.connect(_on_inbox_scroll)
+	var list_margin := MarginContainer.new()
+	list_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for side in [["margin_left", 8], ["margin_right", 8], ["margin_top", 9], ["margin_bottom", 9]]:
+		list_margin.add_theme_constant_override(side[0], side[1])
+	_sidebar_list = VBoxContainer.new()
+	_sidebar_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_sidebar_list.add_theme_constant_override("separation", 5)
+	list_margin.add_child(_sidebar_list)
+	_sidebar_scroll.add_child(list_margin)
+	column.add_child(_sidebar_scroll)
+	column.add_child(_sidebar_footer())
+	_sidebar.add_child(column)
+	_split.add_child(_sidebar)
+	conversation.visible = true
+	_split.add_child(conversation)
+	_content.add_child(_split)
+	_style_sidebar()
+	_fit_split()
+
+
+func _fit_split() -> void:
+	if _sidebar == null:
+		return
+	var width := offset_right - offset_left
+	var was := _sidebar.visible
+	_sidebar.visible = width > SPLIT_MIN_WIDTH
+	_sidebar.custom_minimum_size.x = clampf(width * 0.34, 264.0, 336.0)
+	if _sidebar.visible and not was and conversation != null and conversation_visible():
+		_render_sidebar()
+
+
+func split_shown() -> bool:
+	return conversation_visible() and _sidebar != null and _sidebar.visible
+
+
+func _thin_scroll(target: ScrollContainer) -> void:
+	target.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	target.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER if UI.phone() else ScrollContainer.SCROLL_MODE_AUTO
+	var bar := target.get_v_scroll_bar()
+	bar.custom_minimum_size.x = 8
+	bar.add_theme_stylebox_override("scroll", StyleBoxEmpty.new())
+	bar.add_theme_stylebox_override("scroll_focus", StyleBoxEmpty.new())
+	bar.add_theme_stylebox_override("grabber", UI.box(Color(1, 1, 1, 0.22), Color(0, 0, 0, 0), 999, 0))
+	bar.add_theme_stylebox_override("grabber_highlight", UI.box(Color(1, 1, 1, 0.32), Color(0, 0, 0, 0), 999, 0))
+	bar.add_theme_stylebox_override("grabber_pressed", UI.box(Color(1, 1, 1, 0.32), Color(0, 0, 0, 0), 999, 0))
+
+
+func _search_input(placeholder: String) -> LineEdit:
+	var input := LineEdit.new()
+	input.placeholder_text = placeholder
+	input.tooltip_text = ""
+	input.custom_minimum_size.y = 33
+	input.add_theme_font_override("font", UI.font(500))
+	input.add_theme_font_size_override("font_size", 12)
+	if UI.phone():
+		input.set_meta("oh_tap_exempt", true)
+	input.text_changed.connect(_on_contact_query)
+	input.focus_entered.connect(_style_inbox)
+	input.focus_exited.connect(_style_inbox)
+	return input
+
+
+func _style_search_input(input: LineEdit) -> void:
+	var focused := input.has_focus()
+	var style := UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.055)), UiTheme.pick("accent", Color("#91c9e7")) if focused else UiTheme.pick("line", Color(1, 1, 1, 0.13)), 9, 1, Vector4(12, 0, 12, 0))
+	if focused:
+		style.shadow_color = UiTheme.pick("active", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.16))
+		style.shadow_size = 2
+	for state in ["normal", "focus", "read_only"]:
+		input.add_theme_stylebox_override(state, style)
+	input.add_theme_color_override("font_color", UiTheme.pick("text", Color("#f4f4f5")))
+	input.add_theme_color_override("font_placeholder_color", UiTheme.pick("muted", Color(1, 1, 1, 0.36)))
+	input.add_theme_color_override("caret_color", UiTheme.pick("text", Color("#f4f4f5")))
+
+
+func _activity_button() -> Button:
+	var button := Button.new()
+	button.text = "↑ New activity — return to latest"
+	button.focus_mode = Control.FOCUS_NONE
+	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	button.add_theme_font_override("font", UI.font(750))
+	button.add_theme_font_size_override("font_size", 11)
+	button.pressed.connect(reveal_latest_inbox)
+	return button
+
+
+func _new_chat_button() -> Button:
+	var button := Button.new()
+	button.text = "+ New diplomatic channel"
+	button.focus_mode = Control.FOCUS_NONE
+	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.custom_minimum_size.y = 36
+	button.add_theme_font_override("font", UI.font(750))
+	button.add_theme_font_size_override("font_size", 12)
+	button.pressed.connect(_open_selector)
+	return button
+
+
+func _sidebar_footer() -> PanelContainer:
+	var footer := PanelContainer.new()
+	footer.name = "NewChatFooter"
+	footer.add_child(_new_chat_button())
+	return footer
+
+
+func _style_footer(footer: PanelContainer, rounded_left: bool, rounded_right: bool) -> void:
+	var style := UI.box(Color(0, 0, 0, 0), UiTheme.pick("line", Color(1, 1, 1, 0.09)), 0, 0, Vector4(11, 10, 11, 10))
+	style.border_width_top = 1
+	style.corner_radius_bottom_left = 16 if rounded_left else 0
+	style.corner_radius_bottom_right = 16 if rounded_right else 0
+	footer.add_theme_stylebox_override("panel", style)
+	var button := footer.get_child(0) as Button
+	var accent := UiTheme.pick("accent", Color("#91c9e7"))
+	var normal := UI.box(UiTheme.pick("active", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.14)), UiTheme.pick("line", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.3)), 9, 1, Vector4(10, 10, 10, 10))
+	var lit := UI.box(UiTheme.pick("hover", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.22)), UiTheme.pick("line", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.3)), 9, 1, Vector4(10, 10, 10, 10))
+	for state in ["normal", "focus", "disabled"]:
+		button.add_theme_stylebox_override(state, normal)
+	for state in ["hover", "pressed", "hover_pressed"]:
+		button.add_theme_stylebox_override(state, lit)
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+		button.add_theme_color_override(state, accent)
+
+
+func _style_activity(button: Button) -> void:
+	var normal := UI.box(UiTheme.pick("active", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.15)), UiTheme.pick("line", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.2)), 8, 1, Vector4(10, 7, 10, 7))
+	for state in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
+		button.add_theme_stylebox_override(state, normal)
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+		button.add_theme_color_override(state, UiTheme.pick("accent", Color("#91c9e7")))
+
+
+func _style_inbox() -> void:
+	if _search_header == null:
+		return
+	var header_style := UI.box(Color(0, 0, 0, 0), UiTheme.pick("line", Color(1, 1, 1, 0.08)), 0, 0, Vector4(16, 12, 16, 9))
+	header_style.border_width_bottom = 1
+	_search_header.add_theme_stylebox_override("panel", header_style)
+	(_search_header.find_child("Heading", true, false) as Label).add_theme_color_override("font_color", UiTheme.pick("muted", Color(1, 1, 1, 0.5)))
+	_inbox_count.add_theme_color_override("font_color", UiTheme.pick("accent", Color("#91c9e7")))
+	_style_search_input(_inbox_search)
+	_style_activity(_activity_top)
+	_style_footer(_footer, true, true)
+	if _sidebar:
+		_style_sidebar()
+
+
+func _style_sidebar() -> void:
+	var side_style := UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.026)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 0, 0)
+	side_style.border_width_right = 1
+	side_style.corner_radius_top_left = 16
+	side_style.corner_radius_bottom_left = 16
+	_sidebar.add_theme_stylebox_override("panel", side_style)
+	var heading := _sidebar.find_child("SidebarHeading", true, false) as PanelContainer
+	var heading_style := UI.box(Color(0, 0, 0, 0), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 0, 0, Vector4(15, 16, 15, 12))
+	heading_style.border_width_bottom = 1
+	heading.add_theme_stylebox_override("panel", heading_style)
+	(heading.find_child("Kicker", true, false) as Label).add_theme_color_override("font_color", UiTheme.pick("accent", Color("#91c9e7")))
+	(heading.find_child("Title", true, false) as Label).add_theme_color_override("font_color", UiTheme.pick("text", Color("#f4f4f5")))
+	(heading.find_child("Subtitle", true, false) as Label).add_theme_color_override("font_color", UiTheme.pick("muted", Color(1, 1, 1, 0.52)))
+	var controls := _sidebar.find_child("SidebarControls", true, false) as PanelContainer
+	var controls_style := UI.box(Color(0, 0, 0, 0), UiTheme.pick("line", Color(1, 1, 1, 0.08)), 0, 0, Vector4(11, 10, 11, 10))
+	controls_style.border_width_bottom = 1
+	controls.add_theme_stylebox_override("panel", controls_style)
+	(controls.find_child("Recent", true, false) as Label).add_theme_color_override("font_color", UiTheme.pick("muted", Color(1, 1, 1, 0.5)))
+	_sidebar_count.add_theme_color_override("font_color", UiTheme.pick("accent", Color("#91c9e7")))
+	_style_search_input(_sidebar_search)
+	_style_activity(_sidebar_activity)
+	_style_footer(_sidebar.find_child("NewChatFooter", true, false) as PanelContainer, true, false)
+
+
+func _on_contact_query(text: String) -> void:
+	contact_query = text
+	if _inbox_search and _inbox_search.text != text:
+		_inbox_search.text = text
+	if _sidebar_search and _sidebar_search.text != text:
+		_sidebar_search.text = text
+	render_list()
+
+
+func _on_inbox_scroll(value: float) -> void:
+	if value <= 24.0:
+		if not held_inbox.is_empty():
+			held_inbox = {}
+			refresh_inbox()
+	elif value > 100.0 and held_inbox.is_empty():
+		held_inbox = {"ids": inbox_canonical.duplicate(), "ordinal": inbox_latest}
+
+
+func reveal_latest_inbox() -> void:
+	held_inbox = {}
+	_list_scroll.scroll_vertical = 0
+	if _sidebar_scroll:
+		_sidebar_scroll.scroll_vertical = 0
+	refresh_inbox()
+
+
+func inbox_has_new_activity() -> bool:
+	if held_inbox.is_empty():
+		return false
+	if inbox_latest > int(held_inbox.get("ordinal", 0)):
+		return true
+	var held_ids := a(held_inbox.get("ids", []))
+	var first_now: Variant = inbox_canonical[0] if not inbox_canonical.is_empty() else null
+	var first_held: Variant = held_ids[0] if not held_ids.is_empty() else null
+	return first_now != first_held
+
+
+func refresh_inbox() -> void:
+	if not engine:
+		return
+	_inbox_serial += 1
+	var serial := _inbox_serial
+	var rows: Array = []
+	for chat in open_chats():
+		var times: Array = []
+		for message in a(chat.get("messages", [])):
+			times.append(t(d(message).get("time", "")))
+		var row := {"id": t(chat.get("id", "")), "times": times}
+		var ordinal: Variant = chat.get("activityOrdinal")
+		if typeof(ordinal) == TYPE_INT or typeof(ordinal) == TYPE_FLOAT:
+			row["activityOrdinal"] = int(ordinal)
+		rows.append(row)
+	var args := {"chats": rows}
+	if not held_inbox.is_empty():
+		args["held"] = a(held_inbox.get("ids", []))
+	var reply := await engine.request("chat.inbox", args)
+	if serial != _inbox_serial or not reply.get("ok", false):
+		return
+	var result := d(reply.get("result", {}))
+	inbox_order = a(result.get("shown", []))
+	inbox_canonical = a(result.get("canonical", []))
+	inbox_latest = int(result.get("latest", 0))
+	inbox_dates = d(result.get("dates", {}))
+	if is_open() and current_view() == "chats":
+		render_list()
 
 
 func _show_surface() -> void:
@@ -1442,7 +1777,7 @@ func _show_surface() -> void:
 	_header_margin.visible = not showing
 	_header_rule.visible = not showing
 	_workspace.visible = not showing
-	conversation.visible = showing
+	_split.visible = showing
 
 
 func conversation_visible() -> bool:
@@ -1469,11 +1804,14 @@ func render_all() -> void:
 	_note_open_conversation()
 	if conversation_visible():
 		conversation.refresh_chrome()
+		render_list()
 		return
 	var view := current_view()
+	_search_header.visible = view == "chats"
 	_filter_bar.visible = view == "chats" and not open_chats().is_empty()
 	_list_scroll.visible = view == "chats"
 	_footer.visible = view == "chats"
+	(_activity_top.get_parent() as Control).visible = view == "chats" and inbox_has_new_activity()
 	_institutions_host.visible = view == "institutions"
 	_intelligence_host.visible = view == "spy"
 	if view == "chats":
@@ -1482,18 +1820,40 @@ func render_all() -> void:
 
 func _ordered_chats() -> Array:
 	var open := open_chats()
-	var ordered_ids := {}
-	for id in display_order:
-		ordered_ids[id] = true
+	var by_id := {}
+	for chat in open:
+		by_id[t(chat.get("id", ""))] = chat
+	var placed := {}
+	for id in inbox_order:
+		placed[t(id)] = true
 	var out: Array = []
 	for chat in open:
-		if not ordered_ids.has(t(chat.get("id", ""))):
+		if not placed.has(t(chat.get("id", ""))):
 			out.append(chat)
-	for id in display_order:
-		for chat in open:
-			if t(chat.get("id", "")) == id:
-				out.append(chat)
-				break
+	for id in inbox_order:
+		if by_id.has(t(id)):
+			out.append(by_id[t(id)])
+	return out
+
+
+func searched_chats() -> Array:
+	var out: Array = []
+	var query := contact_query.strip_edges().to_lower()
+	for chat in _ordered_chats():
+		if unread_only and not unread.has(t(chat.get("id", ""))):
+			continue
+		if not query.is_empty():
+			var found := t(chat.get("title", "")).to_lower().contains(query)
+			for country in a(chat.get("countries", [])):
+				var entry := d(country)
+				var value := t(entry.get("name", ""))
+				if value.is_empty():
+					value = t(entry.get("code", ""))
+				if value.to_lower().contains(query):
+					found = true
+			if not found:
+				continue
+		out.append(chat)
 	return out
 
 
@@ -1501,6 +1861,9 @@ func render_list() -> void:
 	if not _list_box:
 		return
 	_style_tabs()
+	if conversation_visible():
+		_render_sidebar()
+		return
 	var open := open_chats()
 	_filter_bar.visible = current_view() == "chats" and not open.is_empty()
 	var unread_total := unread.size()
@@ -1512,30 +1875,35 @@ func render_list() -> void:
 	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
 		_unread_chip.add_theme_color_override(state, SKY if unread_only else Color(1, 1, 1, 0.6))
 	_mark_all.visible = unread_total > 0
+	var rows := searched_chats()
+	_inbox_count.text = "%d conversations" % rows.size()
+	(_activity_top.get_parent() as Control).visible = current_view() == "chats" and inbox_has_new_activity()
 	clear(_list_box)
 	_pulse_labels = _pulse_labels.filter(func(entry: Variant) -> bool: return is_instance_valid(entry))
 	if generating_now:
 		_list_box.add_child(_generating_banner())
-	var ordered := _ordered_chats()
-	var rows: Array = []
-	for chat in ordered:
-		if not unread_only or unread.has(t(chat.get("id", ""))):
-			rows.append(chat)
 	if open.is_empty():
 		_list_box.add_child(_empty_list("No diplomatic conversations yet.\nStart one below."))
 		return
 	if rows.is_empty():
-		_list_box.add_child(_empty_list("No unread chats — you're all caught up."))
+		_list_box.add_child(_empty_list("No matching correspondence." if not contact_query.is_empty() else "No unread chats — you're all caught up."))
 		return
-	var last_label := ""
-	var first := true
 	for chat in rows:
-		var label := _group_label(chat)
-		if first or label != last_label:
-			_list_box.add_child(_group_header(label))
-			last_label = label
-			first = false
 		_list_box.add_child(_chat_row(chat))
+
+
+func _render_sidebar() -> void:
+	if _sidebar == null or not _sidebar.visible:
+		return
+	var rows := searched_chats()
+	_sidebar_count.text = "· %d" % rows.size()
+	_sidebar_activity.visible = inbox_has_new_activity()
+	clear(_sidebar_list)
+	var active_id := t(active.get("id", ""))
+	for chat in rows:
+		_sidebar_list.add_child(_chat_row(chat, t(chat.get("id", "")) == active_id))
+	if rows.is_empty():
+		_sidebar_list.add_child(UI.label("No matching correspondence.", 11, UiTheme.pick("muted", Color(1, 1, 1, 0.52))))
 
 
 func _dot_texture() -> Texture2D:
@@ -1558,14 +1926,6 @@ func _empty_list(message: String) -> Control:
 	return holder
 
 
-func _group_header(label_text: String) -> Control:
-	var margin := MarginContainer.new()
-	for side in [["margin_left", 2], ["margin_right", 2], ["margin_top", 5], ["margin_bottom", 0]]:
-		margin.add_theme_constant_override(side[0], side[1])
-	margin.add_child(UI.label(label_text.to_upper(), 11, Color(1, 1, 1, 0.4), 700, "Arial", 1))
-	return margin
-
-
 func _generating_banner() -> Control:
 	var banner := PanelContainer.new()
 	banner.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("line", Color(1, 1, 1, 0.08)), Color(1, 1, 1, 0.15), 10, 1, Vector4(13, 10, 13, 10)))
@@ -1586,14 +1946,19 @@ func _generating_banner() -> Control:
 	return banner
 
 
-func _chat_row(chat: Dictionary) -> Control:
+func _chat_row(chat: Dictionary, selected := false) -> Control:
 	var id := t(chat.get("id", ""))
 	var is_new := unread.has(id)
 	var counterparts := counterparts_of(a(chat.get("countries", [])))
 	var preview_countries := counterparts.slice(0, 4)
-	var title := t(chat.get("title", ""))
+	var title := summarize(counterparts)
 	if title.is_empty():
-		title = summarize(counterparts)
+		title = t(chat.get("title", ""))
+	if title.is_empty():
+		title = "Diplomatic contact"
+	var stored_title := t(chat.get("title", ""))
+	var subject := stored_title if not stored_title.is_empty() and stored_title != title else ""
+	var last_date := t(inbox_dates.get(id, ""))
 	var messages := a(chat.get("messages", []))
 	var last := d(messages.back()) if not messages.is_empty() else {}
 	var raw_preview := collapse(t(last.get("text", "")).replace("**", ""))
@@ -1610,22 +1975,26 @@ func _chat_row(chat: Dictionary) -> Control:
 		if not t(found.get("label", "")).is_empty():
 			marker = t(found.get("label", ""))
 			break
+	if subject.is_empty():
+		subject = marker if not marker.is_empty() else meta
 	var hovered := list_hover == id
 	var touch := UI.phone()
 	var confirming := list_confirm == id
 	var row := PanelContainer.new()
 	row.mouse_filter = Control.MOUSE_FILTER_PASS
 	row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	var border := UiTheme.pick("accent", Color(1, 1, 1, 0.13)) if hovered else (UiTheme.pick("line", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.15)) if is_new else UiTheme.pick("line", Color(1, 1, 1, 0.07)))
-	var bg := UiTheme.pick("line", Color(1, 1, 1, 0.065)) if hovered else (UiTheme.pick("overlay_card", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.035)) if is_new else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.025)))
-	row.add_theme_stylebox_override("panel", UI.box(bg, border, 12, 1))
+	var border := UiTheme.pick("accent", Color(133 / 255.0, 203 / 255.0, 230 / 255.0, 0.5)) if selected or hovered else (UiTheme.pick("line", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.15)) if is_new else UiTheme.pick("line", Color(1, 1, 1, 0.07)))
+	var bg := UiTheme.pick("active", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.16)) if selected else (UiTheme.pick("hover", Color(1, 1, 1, 0.065)) if hovered else (UiTheme.pick("overlay_card", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.035)) if is_new else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.025))))
+	var row_style := UI.box(bg, border, 10, 1)
+	if hovered:
+		row_style.shadow_color = Color(0, 0, 0, 0.12)
+		row_style.shadow_size = 9
+		row_style.shadow_offset = Vector2(0, 6)
+	row.add_theme_stylebox_override("panel", row_style)
 	var margin := MarginContainer.new()
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	for side in [["margin_left", 14], ["margin_right", 107 if touch else 48], ["margin_top", 12], ["margin_bottom", 12]]:
+	for side in [["margin_left", 14], ["margin_right", 107 if touch else 48], ["margin_top", 13], ["margin_bottom", 13]]:
 		margin.add_theme_constant_override(side[0], side[1])
-	if hovered:
-		margin.add_theme_constant_override("margin_top", 11)
-		margin.add_theme_constant_override("margin_bottom", 13)
 	var content := HBoxContainer.new()
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_theme_constant_override("separation", 12)
@@ -1649,7 +2018,7 @@ func _chat_row(chat: Dictionary) -> Control:
 	var texts := VBoxContainer.new()
 	texts.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	texts.add_theme_constant_override("separation", 3)
+	texts.add_theme_constant_override("separation", 0)
 	var top := HBoxContainer.new()
 	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	top.add_theme_constant_override("separation", 8)
@@ -1658,31 +2027,34 @@ func _chat_row(chat: Dictionary) -> Control:
 	name_label.clip_text = true
 	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	top.add_child(name_label)
-	var meta_label := UI.label((marker if not marker.is_empty() else meta).to_upper(), 9, Color(234 / 255.0, 179 / 255.0, 8 / 255.0, 0.9) if not marker.is_empty() else Color(1, 1, 1, 0.25), 400, "Arial", 1)
-	meta_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	top.add_child(meta_label)
+	var date_label := UI.label(last_date if not last_date.is_empty() else "New", 9, UiTheme.pick("muted", Color(1, 1, 1, 0.46)), 650)
+	date_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top.add_child(date_label)
 	texts.add_child(top)
+	var ink := UiTheme.pick("text", Color(1, 1, 1, 0.7))
+	var subject_label := UI.label(subject, 11, Color(ink.r, ink.g, ink.b, ink.a * 0.68), 650)
+	subject_label.clip_text = true
+	subject_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	texts.add_child(spaced(subject_label, 3))
+	var muted := UiTheme.pick("muted", Color(1, 1, 1, 0.48))
 	var preview_label := RichTextLabel.new()
 	preview_label.bbcode_enabled = true
-	preview_label.fit_content = true
 	preview_label.scroll_active = false
 	preview_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	preview_label.clip_contents = true
 	preview_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	preview_label.add_theme_font_override("normal_font", UI.font(400))
-	preview_label.add_theme_font_override("bold_font", UI.font(600))
+	preview_label.add_theme_font_override("bold_font", UI.font(650))
 	preview_label.add_theme_font_size_override("normal_font_size", 12)
 	preview_label.add_theme_font_size_override("bold_font_size", 12)
-	preview_label.add_theme_color_override("default_color", Color(1, 1, 1, 0.59) if is_new else Color(1, 1, 1, 0.38))
+	preview_label.add_theme_color_override("default_color", muted)
 	var prefix := ""
 	if not speaker.is_empty() and counterparts.size() > 1:
-		prefix = "[color=#ffffff80][b]%s: [/b][/color]" % escape(speaker)
+		prefix = "[b]%s: [/b]" % escape(speaker)
 	preview_label.text = prefix + escape(preview)
-	preview_label.custom_minimum_size.y = 16
-	if touch:
-		preview_label.fit_content = false
-		preview_label.custom_minimum_size.y = 17
-	texts.add_child(preview_label)
+	preview_label.fit_content = false
+	preview_label.custom_minimum_size.y = 17
+	texts.add_child(spaced(preview_label, 3))
 	content.add_child(texts)
 	margin.add_child(content)
 	row.add_child(margin)
@@ -1764,53 +2136,12 @@ func _render_list_deferred() -> void:
 	await get_tree().process_frame
 	_list_render_queued = false
 	var offset := _list_scroll.scroll_vertical
+	var side_offset := _sidebar_scroll.scroll_vertical if _sidebar_scroll else 0
 	render_list()
 	await get_tree().process_frame
 	_list_scroll.scroll_vertical = offset
-
-
-func _group_label(chat: Dictionary) -> String:
-	if a(chat.get("messages", [])).is_empty():
-		return "New"
-	var raw := _last_parsed_time(chat)
-	if raw.is_empty():
-		return "Undated"
-	return js_local_date_label(raw)
-
-
-func _last_parsed_time(chat: Dictionary) -> String:
-	var messages := a(chat.get("messages", []))
-	for index in range(messages.size() - 1, -1, -1):
-		var raw := t(d(messages[index]).get("time", ""))
-		if not raw.is_empty() and js_date_ms(raw) != null:
-			return raw
-	return ""
-
-
-func sort_by_recency(list: Array) -> Array:
-	var keyed: Array = []
-	for index in range(list.size()):
-		var chat: Dictionary = list[index]
-		var kind := 0
-		var ms := 0.0
-		if not a(chat.get("messages", [])).is_empty():
-			var raw := _last_parsed_time(chat)
-			if raw.is_empty():
-				kind = 2
-			else:
-				kind = 1
-				ms = float(js_date_ms(raw))
-		keyed.append({"chat": chat, "kind": kind, "ms": ms, "index": index})
-	keyed.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
-		if int(left["kind"]) != int(right["kind"]):
-			return int(left["kind"]) < int(right["kind"])
-		if int(left["kind"]) == 1 and float(left["ms"]) != float(right["ms"]):
-			return float(left["ms"]) > float(right["ms"])
-		return int(left["index"]) < int(right["index"]))
-	var out: Array = []
-	for entry in keyed:
-		out.append(entry["chat"])
-	return out
+	if _sidebar_scroll:
+		_sidebar_scroll.scroll_vertical = side_offset
 
 
 func open_chat_from_list(chat: Dictionary) -> void:
@@ -1825,7 +2156,7 @@ func set_active(chat: Dictionary) -> void:
 	if conversation_visible():
 		conversation.show_chat(active)
 		if t(draft.get("chat_id", "")) == t(active.get("id", "")):
-			conversation.apply_draft(t(draft.get("text", "")))
+			conversation.apply_draft(t(draft.get("text", "")), t(draft.get("from", "")))
 			draft = {}
 	else:
 		conversation_unmounted()
@@ -1884,14 +2215,18 @@ func leave_active() -> void:
 func _open_selector(mode := "start") -> void:
 	selector_open = true
 	selector_mode = mode
-	_modal_title.text = "Add Countries to Chat" if mode == "add" else "Start New Diplomatic Chat"
-	_modal_subtitle.text = "Select one or more countries to join this diplomatic group" if mode == "add" else "Select countries to invite to the conversation"
-	selected = []
-	_modal_search.text = ""
+	if mode == "add":
+		_modal.configure({
+			"title": "Add Countries to Chat",
+			"subtitle": "Select one or more countries to join this diplomatic group",
+			"confirm_label": _add_label,
+		})
+	else:
+		_modal.configure({})
+	_modal.set_countries([], mode != "add")
 	_modal.visible = true
 	_animate_modal(true)
 	pickable_loading = true
-	_render_modal()
 	if not roster_loaded:
 		_load_roster()
 	var reply := await engine.request("chat.countries", {"player": player})
@@ -1903,7 +2238,20 @@ func _open_selector(mode := "start") -> void:
 			if not flags.has(entry_name) and not t(entry.get("flag", "")).is_empty():
 				flags[entry_name] = {"flag": t(entry.get("flag", "")), "accent": ""}
 	if selector_open:
-		_render_modal()
+		_modal.set_countries(_selector_countries(), false)
+
+
+func _add_label(count: int) -> String:
+	return "Add %d %s" % [count, "country" if count == 1 else "countries"]
+
+
+func _selector_countries() -> Array:
+	if selector_mode != "add" or conversation == null:
+		return pickable
+	var members := {}
+	for member in conversation.countries():
+		members[t(d(member).get("name", "")).to_lower()] = true
+	return pickable.filter(func(entry: Variant) -> bool: return not members.has(t(d(entry).get("name", "")).to_lower()))
 
 
 func _load_roster() -> void:
@@ -1941,6 +2289,17 @@ func _animate_modal(showing: bool) -> void:
 			_modal.modulate.a = 1.0)
 
 
+func _on_directory_confirmed(chosen: Array) -> void:
+	if chosen.is_empty():
+		return
+	if selector_mode == "add":
+		_close_selector()
+		if conversation and not conversation.chat_id.is_empty():
+			conversation.add_members(chosen)
+		return
+	_start_chat(chosen)
+
+
 func _start_chat(chosen: Array) -> void:
 	var countries: Array = []
 	for entry in chosen:
@@ -1954,248 +2313,52 @@ func _start_chat(chosen: Array) -> void:
 		return
 	var created := {"id": new_chat_id(), "countries": countries, "messages": [], "status": "open"}
 	chats.push_front(created)
-	persist("chat.create", {"chat": created})
+	_create_chat(created)
 	selector_open = false
 	_modal.visible = false
 	set_active(created)
 
 
+func _create_chat(created: Dictionary) -> void:
+	if not engine or load_failed:
+		return
+	_local_edits += 1
+	var reply := await engine.request("chat.create", {"chat": created})
+	var failed: bool = reply.get("ok", false) != true
+	if failed != save_failed:
+		save_failed = failed
+		_show_notice()
+	if failed:
+		return
+	_adopt_ordinal(t(created.get("id", "")), d(reply.get("result", {})).get("activityOrdinal"))
+	refresh_inbox()
+
+
+func _adopt_ordinal(chat_id: String, ordinal: Variant) -> void:
+	if typeof(ordinal) != TYPE_INT and typeof(ordinal) != TYPE_FLOAT:
+		return
+	for index in range(chats.size()):
+		if t(chats[index].get("id", "")) == chat_id:
+			var updated: Dictionary = chats[index].duplicate()
+			updated["activityOrdinal"] = int(ordinal)
+			chats[index] = updated
+	if t(active.get("id", "")) == chat_id:
+		var touched: Dictionary = active.duplicate()
+		touched["activityOrdinal"] = int(ordinal)
+		active = touched
+
+
 func _build_modal() -> void:
-	_modal = PanelContainer.new()
-	_modal.add_theme_stylebox_override("panel", UI.box(Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.98), Color(0, 0, 0, 0), 16, 0))
-	_modal.mouse_filter = Control.MOUSE_FILTER_STOP
+	_modal = DIRECTORY.new()
 	_modal.visible = false
-	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 0)
-	var head := MarginContainer.new()
-	for side in [["margin_left", 20], ["margin_right", 20], ["margin_top", 18], ["margin_bottom", 10]]:
-		head.add_theme_constant_override(side[0], side[1])
-	var head_column := VBoxContainer.new()
-	head_column.add_theme_constant_override("separation", 0)
-	var title_row := HBoxContainer.new()
-	var titles := VBoxContainer.new()
-	titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	titles.add_theme_constant_override("separation", 3)
-	_modal_title = UI.label("Start New Diplomatic Chat", 17, UI.WHITE, 700)
-	titles.add_child(_modal_title)
-	_modal_subtitle = UI.label("Select countries to invite to the conversation", 12, Color(1, 1, 1, 0.4))
-	titles.add_child(_modal_subtitle)
-	title_row.add_child(titles)
-	var close := text_button("✕", 18, Color(1, 1, 1, 0.5), UI.WHITE, 400, UiTheme.pick("line", Color(1, 1, 1, 0.08)))
-	close.tooltip_text = "Close"
-	close.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	close.pressed.connect(_close_selector)
-	UI.tap_size(close)
-	title_row.add_child(close)
-	head_column.add_child(title_row)
-	head_column.add_child(gap(14))
-	var selected_box := PanelContainer.new()
-	selected_box.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 10, 1, Vector4(14, 10, 14, 10)))
-	var selected_column := VBoxContainer.new()
-	selected_column.add_theme_constant_override("separation", 3)
-	_modal_selected_label = UI.label("Selected Countries (0):", 13, Color(1, 1, 1, 0.8), 600)
-	selected_column.add_child(_modal_selected_label)
-	_modal_selected_flow = HFlowContainer.new()
-	_modal_selected_flow.add_theme_constant_override("h_separation", 6)
-	_modal_selected_flow.add_theme_constant_override("v_separation", 3)
-	selected_column.add_child(_modal_selected_flow)
-	selected_box.add_child(selected_column)
-	head_column.add_child(selected_box)
-	head_column.add_child(gap(12))
-	_modal_search = LineEdit.new()
-	_modal_search.placeholder_text = "Search countries..."
-	_modal_search.custom_minimum_size.y = 36
-	if UI.phone():
-		_modal_search.set_meta("oh_tap_exempt", true)
-	_modal_search.add_theme_stylebox_override("normal", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 10, 1, Vector4(35, 0, 14, 0)))
-	_modal_search.add_theme_stylebox_override("focus", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), Color(1, 1, 1, 0.25), 10, 1, Vector4(35, 0, 14, 0)))
-	_modal_search.add_theme_font_override("font", UI.font(400))
-	_modal_search.add_theme_font_size_override("font_size", 13)
-	_modal_search.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.35))
-	_modal_search.text_changed.connect(func(_text: String) -> void: _render_modal_grid())
-	var search_icon := icon_rect("search", 13, Color(1, 1, 1, 0.35))
-	search_icon.position = Vector2(12, 11)
-	_modal_search.add_child(search_icon)
-	head_column.add_child(_modal_search)
-	head.add_child(head_column)
-	column.add_child(head)
-	_modal_scroll = ScrollContainer.new()
-	_modal_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_modal_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_modal_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
-	var grid_margin := MarginContainer.new()
-	grid_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for side in [["margin_left", 16], ["margin_right", 16], ["margin_top", 8], ["margin_bottom", 8]]:
-		grid_margin.add_theme_constant_override(side[0], side[1])
-	var grid_column := VBoxContainer.new()
-	grid_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_modal_loading = UI.label("Loading countries…", 13, Color(1, 1, 1, 0.35))
-	_modal_loading.add_theme_font_override("font", italic_font())
-	_modal_loading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	grid_column.add_child(_modal_loading)
-	_modal_grid = GridContainer.new()
-	_modal_grid.columns = 3
-	_modal_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_modal_grid.add_theme_constant_override("h_separation", 8)
-	_modal_grid.add_theme_constant_override("v_separation", 8)
-	grid_column.add_child(_modal_grid)
-	grid_margin.add_child(grid_column)
-	_modal_scroll.add_child(grid_margin)
-	column.add_child(_modal_scroll)
-	var foot := PanelContainer.new()
-	var foot_style := StyleBoxFlat.new()
-	foot_style.bg_color = Color(0, 0, 0, 0)
-	foot_style.border_color = UiTheme.pick("line", Color(1, 1, 1, 0.07))
-	foot_style.border_width_top = 1
-	foot_style.content_margin_left = 16
-	foot_style.content_margin_right = 16
-	foot_style.content_margin_top = 12
-	foot_style.content_margin_bottom = 12
-	foot.add_theme_stylebox_override("panel", foot_style)
-	var foot_row := HBoxContainer.new()
-	foot_row.add_theme_constant_override("separation", 8)
-	var cancel := solid_button("Cancel", 14, Color(1, 1, 1, 0.8), 500, UiTheme.pick("hover", Color(1, 1, 1, 0.06)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), UiTheme.pick("line", Color(1, 1, 1, 0.1)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 10)
-	cancel.custom_minimum_size.y = 42
-	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	cancel.size_flags_stretch_ratio = 1.0
-	cancel.pressed.connect(_close_selector)
-	foot_row.add_child(cancel)
-	_modal_start = Button.new()
-	_modal_start.focus_mode = Control.FOCUS_NONE
-	_modal_start.custom_minimum_size.y = 42
-	_modal_start.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_modal_start.size_flags_stretch_ratio = 2.0
-	_modal_start.add_theme_font_override("font", UI.font(600))
-	_modal_start.add_theme_font_size_override("font_size", 14)
-	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_disabled_color", "font_hover_pressed_color", "font_focus_color"]:
-		_modal_start.add_theme_color_override(state, UI.WHITE)
-	_modal_start.pressed.connect(func() -> void:
-		if selected.is_empty():
-			return
-		if selector_mode == "add":
-			var chosen := selected.duplicate()
-			_close_selector()
-			if conversation and not conversation.chat_id.is_empty():
-				conversation.add_members(chosen)
-			return
-		_start_chat(selected))
-	foot_row.add_child(_modal_start)
-	foot.add_child(foot_row)
-	column.add_child(foot)
-	_modal.add_child(column)
+	_modal.flag_maker = _directory_flag
+	_modal.confirmed.connect(_on_directory_confirmed)
+	_modal.cancelled.connect(_close_selector)
 	add_child(_modal)
 
 
-func _render_modal() -> void:
-	_modal_selected_label.text = "Selected Countries (%d):" % selected.size()
-	clear(_modal_selected_flow)
-	if selected.is_empty():
-		_modal_selected_flow.add_child(UI.label("No countries selected yet", 12, Color(1, 1, 1, 0.35)))
-	else:
-		for index in range(selected.size()):
-			var entry: Dictionary = selected[index]
-			var chip := HBoxContainer.new()
-			chip.add_theme_constant_override("separation", 4)
-			chip.add_child(flag_box(t(entry.get("name", "")), Vector2(12, 12)))
-			chip.add_child(UI.label(t(entry.get("name", "")) + ("," if index < selected.size() - 1 else ""), 12, Color(1, 1, 1, 0.35)))
-			_modal_selected_flow.add_child(chip)
-	var count := selected.size()
-	_modal_start.text = ("Add %d %s" if selector_mode == "add" else "Chat with %d %s") % [count, "country" if count == 1 else "countries"]
-	var enabled := count > 0
-	_modal_start.disabled = not enabled
-	_modal_start.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if enabled else Control.CURSOR_FORBIDDEN
-	var normal := UI.box(Color(1, 1, 1, 0.28) if enabled else Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.3), Color(0, 0, 0, 0), 10, 0)
-	var hover := UI.box(BLUE_HOVER if enabled else Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.3), Color(0, 0, 0, 0), 10, 0)
-	_modal_start.add_theme_stylebox_override("normal", normal)
-	_modal_start.add_theme_stylebox_override("focus", normal)
-	_modal_start.add_theme_stylebox_override("disabled", normal)
-	_modal_start.add_theme_stylebox_override("hover", hover)
-	_modal_start.add_theme_stylebox_override("pressed", hover)
-	_modal_start.add_theme_stylebox_override("hover_pressed", hover)
-	_render_modal_grid()
-
-
-func _render_modal_grid() -> void:
-	_modal_loading.visible = pickable_loading
-	clear(_modal_grid)
-	var query := _modal_search.text.to_lower()
-	var names_seen := {}
-	if selector_mode == "add" and conversation:
-		for member in conversation.countries():
-			names_seen[t(d(member).get("name", "")).to_lower()] = true
-	for entry in pickable:
-		var entry_name := t(entry.get("name", ""))
-		if entry_name.is_empty() or names_seen.has(entry_name.to_lower()):
-			continue
-		names_seen[entry_name.to_lower()] = true
-		if not query.is_empty() and not entry_name.to_lower().contains(query):
-			continue
-		_modal_grid.add_child(_country_tile(entry))
-
-
-func _country_tile(entry: Dictionary) -> Control:
-	var entry_name := t(entry.get("name", ""))
-	var chosen := false
-	for item in selected:
-		if t(item.get("name", "")) == entry_name:
-			chosen = true
-	var tile := Button.new()
-	tile.focus_mode = Control.FOCUS_NONE
-	tile.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	tile.custom_minimum_size = Vector2(0, 88)
-	tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var normal := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.18) if chosen else Color(1, 1, 1, 0.04), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6) if chosen else UiTheme.pick("line", Color(1, 1, 1, 0.07)), 10, 1)
-	var hover := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.18) if chosen else UiTheme.pick("line", Color(1, 1, 1, 0.07)), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6) if chosen else Color(1, 1, 1, 0.15), 10, 1)
-	for state in ["normal", "focus", "disabled"]:
-		tile.add_theme_stylebox_override(state, normal)
-	for state in ["hover", "pressed", "hover_pressed"]:
-		tile.add_theme_stylebox_override(state, hover)
-	var stack := VBoxContainer.new()
-	stack.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	stack.alignment = BoxContainer.ALIGNMENT_CENTER
-	stack.add_theme_constant_override("separation", 6)
-	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var flag_holder := CenterContainer.new()
-	flag_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	flag_holder.add_child(flag_box(entry_name, Vector2(37, 26), t(entry.get("flag", ""))))
-	stack.add_child(flag_holder)
-	var short_name := entry_name.left(11) + "…" if entry_name.length() > 12 else entry_name
-	var caption := UI.label(short_name, 12, Color(1, 1, 1, 0.8))
-	caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	stack.add_child(caption)
-	tile.add_child(stack)
-	if chosen:
-		var check := PanelContainer.new()
-		check.add_theme_stylebox_override("panel", UI.box(BLUE, Color(0, 0, 0, 0), 7, 0))
-		check.custom_minimum_size = Vector2(14, 14)
-		check.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var mark := UI.label("✓", 9, UI.WHITE, 700)
-		mark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		mark.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		check.add_child(mark)
-		check.anchor_left = 1.0
-		check.anchor_right = 1.0
-		check.offset_left = -19
-		check.offset_right = -5
-		check.offset_top = 5
-		check.offset_bottom = 19
-		tile.add_child(check)
-	tile.pressed.connect(func() -> void:
-		var kept: Array = []
-		var removed := false
-		for item in selected:
-			if t(item.get("name", "")) == entry_name:
-				removed = true
-			else:
-				kept.append(item)
-		if not removed:
-			kept.append({"name": entry_name, "code": t(entry.get("code", ""))})
-		selected = kept
-		var offset := _modal_scroll.scroll_vertical
-		_render_modal()
-		await get_tree().process_frame
-		_modal_scroll.scroll_vertical = offset)
-	return tile
+func _directory_flag(country_name: String, path: String, box_size: Vector2) -> Control:
+	return flag_box(country_name, box_size, path)
 
 
 func _fetch_flags() -> void:
@@ -3211,6 +3374,7 @@ class Conversation extends VBoxContainer:
 	var peace_said := ""
 	var peace_sending := false
 	var editing_title := false
+	var draft_from := ""
 	var _peace_loading := false
 	var _peace_again := false
 	var _peace_accepted: Dictionary = {}
@@ -3576,6 +3740,7 @@ class Conversation extends VBoxContainer:
 		else:
 			ChatPanel.style_text_edit(_composer, 14, Color(9 / 255.0, 9 / 255.0, 12 / 255.0, 0.58), UiTheme.pick("line", Color(1, 1, 1, 0.12)), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6), 12, Vector4(12, 9, 12, 9))
 		_composer.text_changed.connect(fit_composer)
+		_composer.text_changed.connect(_forget_emptied_draft)
 		_composer.gui_input.connect(_on_composer_input)
 		row.add_child(_composer)
 		_send = Button.new()
@@ -3755,8 +3920,9 @@ class Conversation extends VBoxContainer:
 		panel.engine.request("chat.history", args)
 
 
-	func apply_draft(text: String) -> void:
+	func apply_draft(text: String, from := "") -> void:
 		_composer.text = text
+		draft_from = from
 		fit_composer()
 		if not is_inside_tree():
 			return
@@ -4097,7 +4263,7 @@ class Conversation extends VBoxContainer:
 		if embedded:
 			style = UI.box(ChatPanel.GREY_RAISED if has_text else Color(1, 1, 1, 0.04), ChatPanel.GREY_BORDER_STRONG, 10, 1, Vector4(11, 0, 11, 0))
 		else:
-			style = UI.box(ChatPanel.BLUE if has_text else Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.3), Color(0, 0, 0, 0), 10, 0)
+			style = UI.box(UiTheme.pick("active", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.24)) if has_text else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), Color(0, 0, 0, 0), 10, 0)
 		for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
 			_send.add_theme_stylebox_override(state, style)
 		_send.disabled = not has_text
@@ -4121,10 +4287,17 @@ class Conversation extends VBoxContainer:
 				submit_from_composer()
 
 
+	func _forget_emptied_draft() -> void:
+		if _composer.text.strip_edges().is_empty():
+			draft_from = ""
+
+
 	func submit_from_composer() -> void:
 		var text := _composer.text.strip_edges()
 		if text.is_empty() or loading:
 			return
+		var from_draft := draft_from
+		draft_from = ""
 		_composer.text = ""
 		fit_composer()
 		var as_demand := they_are() == "puppet" and make_demand
@@ -4136,17 +4309,17 @@ class Conversation extends VBoxContainer:
 			await submit_player_text(text, func(message_id: String, time: String) -> void:
 				var reply := await panel.engine.request("chat.demandMake", {"id": id, "player": panel.player, "target": target, "text": text, "useOpen": true, "messageId": message_id, "time": time, "messages": messages_ref})
 				panel.adopt_chat_result(reply, id)
-				render_messages(false))
+				render_messages(false), "", from_draft)
 		else:
-			await submit_player_text(text)
+			await submit_player_text(text, Callable(), "", from_draft)
 
 
-	func submit_player_text(text: String, on_sent := Callable(), forced_id := "") -> void:
+	func submit_player_text(text: String, on_sent := Callable(), forced_id := "", from_draft := "") -> void:
 		if text.is_empty() or loading:
 			return
 		await cut_in()
 		if panel.shared_game:
-			await _say_to_host(chat, text, messages_ref)
+			await _say_to_host(chat, text, messages_ref, from_draft)
 			return
 		var id := chat_id
 		var reply := await panel.engine.request("chat.catchup", {"chat": chat, "messages": messages_ref, "player": panel.player, "gameDate": panel.game_date})
@@ -4158,6 +4331,8 @@ class Conversation extends VBoxContainer:
 			date = panel.game_date
 		var message_id := forced_id if not forced_id.is_empty() else ChatPanel.thread_id("msg")
 		var message := {"id": message_id, "role": "user", "speaker": panel.player, "text": text, "time": date}
+		if not from_draft.is_empty():
+			message["fromDraft"] = from_draft
 		if not ChatPanel.t(catch_up.get("text", "")).is_empty():
 			message["catchUp"] = ChatPanel.t(catch_up.get("text", ""))
 			message["catchUpLabel"] = ChatPanel.t(catch_up.get("label", ""))
@@ -4182,13 +4357,13 @@ class Conversation extends VBoxContainer:
 		await fetch_leader_response(counterpart, text)
 
 
-	func _say_to_host(target: Dictionary, text: String, base: Array) -> void:
+	func _say_to_host(target: Dictionary, text: String, base: Array, from_draft := "") -> void:
 		var id := chat_id
 		loading = true
 		update_composer()
 		render_messages(true)
 		var waiting := false
-		var outcome: Dictionary = await panel.say_to_host(target, text)
+		var outcome: Dictionary = await panel.say_to_host(target, text, from_draft)
 		match ChatPanel.t(outcome.get("kind", "")):
 			"refused":
 				if id == chat_id:
@@ -5280,7 +5455,7 @@ class Conversation extends VBoxContainer:
 		var width := _scroll.size.x - (24.0 if embedded else 36.0)
 		if width <= 0.0:
 			var viewport := get_viewport_rect().size if is_inside_tree() else Vector2(1440, 900)
-			width = minf(ChatPanel.PANEL_MAX_WIDTH, viewport.x - 16.0) - 36.0
+			width = minf(ChatPanel.max_width(), viewport.x - 16.0) - 36.0
 		return width
 
 
@@ -5288,8 +5463,7 @@ class Conversation extends VBoxContainer:
 		var raw := ChatPanel.t(message.get("text", ""))
 		if raw.is_empty():
 			return null
-		var established := RegEx.create_from_string("(?i)\\s+institutional channel established\\.?$")
-		var text := established.sub(raw, " council opened.") if established.search(raw) else raw
+		var text := raw
 		var holder := CenterContainer.new()
 		var box := PanelContainer.new()
 		box.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.035), ChatPanel.GREY_BORDER, 8, 1, Vector4(9, 5, 9, 5)))
@@ -5313,9 +5487,9 @@ class Conversation extends VBoxContainer:
 		var is_error := role == "error"
 		var speaker_name := ChatPanel.t(message.get("speaker", ""))
 		var text := str(message.get("text", ""))
-		var max_width := area * (0.82 if is_error else 0.7)
+		var max_width := area * (0.82 if is_error else 0.84)
 		if not is_error:
-			max_width = minf(max_width, 672.0)
+			max_width = minf(max_width, 704.0)
 		var row := HBoxContainer.new()
 		row.alignment = BoxContainer.ALIGNMENT_END if is_player else BoxContainer.ALIGNMENT_BEGIN
 		row.add_theme_constant_override("separation", 6)
@@ -5343,8 +5517,10 @@ class Conversation extends VBoxContainer:
 		var bubble := PanelContainer.new()
 		bubble.mouse_filter = Control.MOUSE_FILTER_PASS
 		var accent := panel.accent_for(speaker_name, ChatPanel.t(message.get("code", "")))
-		var bg := UiTheme.pick("active", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.92))
-		var border := Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.2)
+		var ui_accent := UiTheme.pick("accent", Color("#91c9e7"))
+		var bg := ui_accent.lerp(UiTheme.pick("surface", Color("#22252b")), 0.87)
+		bg.a = 1.0
+		var border := Color(ui_accent, 0.29)
 		if is_error:
 			bg = Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.16)
 			border = Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.3)
@@ -5352,7 +5528,7 @@ class Conversation extends VBoxContainer:
 			var base := UiTheme.pick("surface", Color(35 / 255.0, 35 / 255.0, 39 / 255.0, 0.96))
 			var alpha := 0.04 + 0.96 * base.a
 			bg = Color((accent.r * 0.04 + base.r * 0.96 * base.a) / alpha, (accent.g * 0.04 + base.g * 0.96 * base.a) / alpha, (accent.b * 0.04 + base.b * 0.96 * base.a) / alpha, alpha)
-			border = UiTheme.pick("line", Color(1, 1, 1, 0.08))
+			border = UiTheme.pick("line", Color(1, 1, 1, 0.09))
 		var style := UI.box(bg, border, 13, 1, Vector4(0, 0, 0, 0))
 		if is_player:
 			style.corner_radius_bottom_right = 3
@@ -5378,6 +5554,20 @@ class Conversation extends VBoxContainer:
 			stripe_style.anti_aliasing = true
 			stripe.add_theme_stylebox_override("panel", stripe_style)
 			bubble.add_child(stripe)
+		elif is_player:
+			var player_stripe := Panel.new()
+			player_stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			var player_style := StyleBoxFlat.new()
+			player_style.draw_center = false
+			player_style.border_width_left = 2
+			player_style.border_color = ui_accent
+			player_style.corner_radius_top_left = 13
+			player_style.corner_radius_top_right = 13
+			player_style.corner_radius_bottom_right = 3
+			player_style.corner_radius_bottom_left = 13
+			player_style.anti_aliasing = true
+			player_stripe.add_theme_stylebox_override("panel", player_style)
+			bubble.add_child(player_stripe)
 		var natural := 0.0
 		if not is_error:
 			inner.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED

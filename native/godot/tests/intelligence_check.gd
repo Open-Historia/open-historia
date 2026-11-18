@@ -172,18 +172,22 @@ func _run() -> void:
 	await intel._start_choosing()
 	await _wait(1.5)
 	_check("the deploy picker lists countries", intel._candidates.size() > 10, "%d candidates" % intel._candidates.size())
-	_check("the picker reads as React's", _shows(intel, "Deploy a Network") and _shows(intel, "Choose a target") and _shows(intel, "No target chosen yet") and _shows(intel, "Search countries..."))
+	_check("the picker is the diplomatic directory for one target", _shows(intel, "Target directory") and _shows(intel, "Deploy a Network") and _shows(intel, "Choose a target") and _shows(intel, "No target chosen yet") and _shows(intel, "Search countries...") and intel._overlay.kicker_label.uppercase)
 	await _shoot("intel-04-picker")
-	intel._pick_query = "Germ"
-	intel._pick = "Germany"
-	for entry: Variant in intel._candidates:
-		if str((entry as Dictionary).get("name", "")) == "Germany":
-			intel._pick_flag = str((entry as Dictionary).get("flag", ""))
-	intel._render_picker()
+	intel._overlay.search.text = "Germ"
+	intel._overlay._render_grid()
+	for wanted in ["Italy", "Germany"]:
+		for entry: Variant in intel._candidates:
+			if str((entry as Dictionary).get("name", "")) == wanted:
+				await intel._overlay.toggle(entry)
+	_check("one target at a time: a second pick replaces the first", intel._overlay.selected.size() == 1 and str((intel._overlay.selected[0] as Dictionary).get("name", "")) == "Germany", JSON.stringify(intel._overlay.selected))
 	await _wait(0.4)
-	_check("choosing a target arms Deploy the network", _shows(intel, "Deploy the network"))
+	_check("choosing a target arms Deploy the network", _shows(intel, "Deploy the network") and not intel._overlay.confirm_button.disabled)
 	await _shoot("intel-05-picker-chosen")
-	await intel._confirm_deploy()
+	intel._overlay.confirm_button.pressed.emit()
+	var deadline := Time.get_ticks_msec() + 15000
+	while int(intel._model.get("activeNetworks", 0)) != 1 and Time.get_ticks_msec() < deadline:
+		await process_frame
 	await _wait(0.3)
 	_check("the network is deployed", int(intel._model.get("activeNetworks", 0)) == 1, intel._error)
 	_check("the dossier opens on Germany", intel._section == "countries" and str(intel._model.get("selected", "")) == "Germany")

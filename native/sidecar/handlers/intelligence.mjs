@@ -468,7 +468,16 @@ export const register = (ctx) => {
         .filter((country) => !spies.some((spy) => sameCountry(spy.target, country.name)));
       const rows = engine.countryList.dedupeByName(candidates);
       const flags = await Promise.all(rows.map((country) => flagFor(country)));
-      return plain(rows.map((country, index) => ({ name: asText(country.name), code: asText(country.code), flag: flags[index] })));
+      const aliasesByCode = new Map();
+      for (const [alias, code] of Object.entries(engine.officialCountryAliases || {})) {
+        if (!aliasesByCode.has(code)) aliasesByCode.set(code, []);
+        aliasesByCode.get(code).push(alias);
+      }
+      const aliasesOf = (country) => {
+        const code = engine.wsPolityIdentity.resolveStockCountryCode(asText(country.code) || asText(country.name));
+        return code ? aliasesByCode.get(code) || [] : [];
+      };
+      return plain(rows.map((country, index) => ({ name: asText(country.name), code: asText(country.code), flag: flags[index], aliases: aliasesOf(country) })));
     },
     "intelligence.intercept": async ({ target = "", exchangeId = "", read = false } = {}) => {
       const { world, intercepts, player } = await readState();

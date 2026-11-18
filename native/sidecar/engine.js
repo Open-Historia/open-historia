@@ -408,4 +408,8 @@ export * as dayOneFacts from "../../src/runtime/scenarioPrehistoryDayOne.js";
 export * as canonicalAgreements from "../../src/runtime/scenarioCanonicalAgreements.js";
 export * as politicsSuggestionPresentation from "../../src/Game/GameUI/politicsSuggestionPresentation.js";
 export * as nameKey from "../../server/nameKey.js";
+export * as chatInboxOrder from "../../src/runtime/chatInboxOrder.js";
+export * as advisorActionCompleteness from "../../src/Game/GameUI/advisorActionCompleteness.js";
+export * as interactiveCompletion from "../../src/Game/AI/interactiveCompletion.js";
+export { default as officialCountryAliases } from "../../src/runtime/generated/officialCountryAliases.js";
 export * as wsPresentation from "../../src/Game/Map/vnext/presentationPolicy.js";

@@ -21,6 +21,7 @@ export const register = (ctx) => {
   const copy = (value) => JSON.parse(JSON.stringify(value ?? null));
   const gs = engine.gameState;
   const threads = engine.chatThreads;
+  const inbox = engine.chatInboxOrder;
   const dates = engine.gameDates;
   const lifecycle = engine.institutionLifecycle;
   const demands = engine.chDemandCheck;
@@ -412,6 +413,7 @@ export const register = (ctx) => {
       ]);
       return {
         chats: chats === null ? null : copy(chats),
+        signature: chats === null ? "" : inbox.chatInboxSignature(chats),
         unseen: [...unseen].map(String),
         player,
         gameDate,
@@ -458,21 +460,65 @@ export const register = (ctx) => {
       ]);
       const pickable = engine.countryList.pickableCountries(list(names), { holders, world })
         .filter((country) => ![country?.name, country?.code].some((value) => same(value, player)));
+      const aliasesByCode = new Map();
+      for (const [alias, code] of Object.entries(engine.officialCountryAliases || {})) {
+        if (!aliasesByCode.has(code)) aliasesByCode.set(code, []);
+        aliasesByCode.get(code).push(alias);
+      }
+      const aliasesOf = (country) => {
+        const code = engine.wsPolityIdentity.resolveStockCountryCode(clean(country.code) || clean(country.name));
+        return code ? aliasesByCode.get(code) || [] : [];
+      };
       return {
         all: list(names).map((country) => ({ name: clean(country?.name), code: clean(country?.code) })),
         countries: engine.countryList.dedupeByName(pickable).map((country) => ({
           name: clean(country.name),
           code: clean(country.code),
           flag: fileForImage(resolveFlagUrl({ name: clean(country.name), code: clean(country.code) }, flagWorld, customFlags)),
+          aliases: aliasesOf(country),
         })),
       };
     },
-    "chat.create": async ({ chat }) => mutate((chats) => [chat, ...chats]),
+    "chat.create": async ({ chat }) => {
+      let ordinal = 0;
+      const result = await mutate((chats) => {
+        ordinal = inbox.chatActivityOrdinal(chat) || inbox.nextChatActivityOrdinal(chats);
+        return [{ ...chat, activityOrdinal: ordinal }, ...chats];
+      });
+      return { ...result, activityOrdinal: ordinal };
+    },
+    "chat.inbox": async ({ chats = [], held = null } = {}) => {
+      const rows = list(chats).map((chat) => ({
+        id: clean(chat?.id),
+        ...(Number.isSafeInteger(chat?.activityOrdinal) ? { activityOrdinal: chat.activityOrdinal } : {}),
+        messages: list(chat?.times).map((time) => ({ time: String(time ?? "") })),
+      }));
+      const canonical = inbox.sortChatsForInbox(rows);
+      const shown = Array.isArray(held) ? inbox.holdChatsInListOrder(canonical, held) : canonical;
+      const labels = {};
+      for (const row of rows) {
+        let last = "";
+        for (let i = row.messages.length - 1; i >= 0; i -= 1) {
+          const value = row.messages[i].time.trim();
+          if (dates.parseGameDate(value)) {
+            last = value;
+            break;
+          }
+        }
+        labels[row.id] = last ? dates.formatGameDateReadable(last) : "";
+      }
+      return {
+        canonical: canonical.map((chat) => chat.id),
+        shown: shown.map((chat) => chat.id),
+        latest: inbox.nextChatActivityOrdinal(rows) - 1,
+        dates: labels,
+      };
+    },
     "chat.close": async ({ id }) => mutate((chats) => patchChat(chats, id, (chat) => ({ ...chat, status: "closed" }))),
-    "chat.patch": async ({ id, set = {}, cursors: knowledge = null }) => {
+    "chat.patch": async ({ id, set = {}, cursors: knowledge = null, promote = false }) => {
       const messages = Array.isArray(set.messages) ? set.messages : null;
       if (messages?.at(-1)?.role === "user") recentOutgoing.set(String(id), Date.now());
-      const result = await mutate((chats) => patchChat(chats, id, (chat) => ({
+      const result = await mutate((chats) => patchChat(promote && messages ? inbox.promoteChatActivity(chats, id, messages) : chats, id, (chat) => ({
         ...chat,
         ...set,
         ...("title" in set ? { title: set.title || chat.title } : {}),

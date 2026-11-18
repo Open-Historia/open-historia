@@ -482,11 +482,11 @@ export const register = (ctx) => {
     },
     "multiplayer.remaining": async () => Number(shared.sharedRemainingMs()) || 0,
     "multiplayer.thread.pending": async ({ countries = [] } = {}) => plain(engine.mpThreads.pendingSharedThread(list(countries))),
-    "multiplayer.say": async ({ chat = null, text = "" } = {}) => {
+    "multiplayer.say": async ({ chat = null, text = "", fromDraft = "" } = {}) => {
       const target = chat && typeof chat === "object" ? chat : {};
       let answer;
       try {
-        answer = await bridge.requestFromHost("say", engine.mpThreads.sayRequestFor(target, String(text ?? "")));
+        answer = await bridge.requestFromHost("say", engine.mpThreads.sayRequestFor(target, String(text ?? ""), { fromDraft: String(fromDraft ?? "") }));
       } catch (error) {
         answer = { ok: false, error: error?.message || "" };
       }

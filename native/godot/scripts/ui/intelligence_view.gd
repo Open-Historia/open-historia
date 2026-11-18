@@ -11,6 +11,7 @@ const OPERATION_PLACEHOLDERS := {
 	"operation": "What the agent should do",
 }
 const MOBILE_WIDTH := 700.0
+const DIRECTORY := preload("res://scripts/ui/diplomacy_directory.gd")
 const PANEL_BG := Color(1, 1, 1, 0.025)
 const PANEL_BORDER := Color(1, 1, 1, 0.08)
 const GREY_TEXT := Color("#e7e7ea")
@@ -23,8 +24,6 @@ const GREEN_TEXT := Color("#86efac")
 const AMBER_TEXT := Color("#fde68a")
 const GREEN_DOT := Color("#4ade80")
 const ZINC := Color("#e4e4e7")
-const BLUE := Color("#3b82f6")
-const BLUE_HOVER := Color("#2563eb")
 const GLYPHS := {
 	"back": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M19 12H5M12 5l-7 7 7 7'/></svg>",
 	"search": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><path d='m21 21-4.35-4.35'/></svg>",
@@ -47,9 +46,6 @@ var _choosing := false
 var _candidates: Array = []
 var _candidates_loading := false
 var _pick := ""
-var _pick_code := ""
-var _pick_flag := ""
-var _pick_query := ""
 var _story_draft := {}
 var _order_draft := {}
 var _saved_flash := ""
@@ -64,13 +60,7 @@ var _top: VBoxContainer
 var _body: VBoxContainer
 var _scroll: ScrollContainer
 var _country_list: VBoxContainer
-var _overlay: PanelContainer
-var _pick_grid: GridContainer
-var _pick_scroll: ScrollContainer
-var _pick_chosen: HBoxContainer
-var _pick_confirm: Button
-var _pick_confirm_hovered := false
-var _pick_confirm_touched := false
+var _overlay: DIRECTORY
 
 
 func _init() -> void:
@@ -1500,9 +1490,6 @@ func _start_choosing() -> void:
 		return
 	_choosing = true
 	_pick = ""
-	_pick_code = ""
-	_pick_flag = ""
-	_pick_query = ""
 	_candidates = []
 	_candidates_loading = true
 	_render_picker()
@@ -1510,8 +1497,8 @@ func _start_choosing() -> void:
 	_candidates_loading = false
 	if reply.get("ok", false):
 		_candidates = reply.get("result", [])
-	if _choosing:
-		_fill_pick_grid()
+	if _choosing and _overlay and is_instance_valid(_overlay):
+		_overlay.set_countries(_candidates, false)
 
 
 func _close_overlay() -> void:
@@ -1519,9 +1506,6 @@ func _close_overlay() -> void:
 	if _overlay and is_instance_valid(_overlay):
 		var leaving := _overlay
 		_overlay = null
-		_pick_grid = null
-		_pick_confirm = null
-		_pick_chosen = null
 		if leaving.is_inside_tree():
 			var tween := leaving.create_tween()
 			tween.tween_property(leaving, "modulate:a", 0.0, 0.15)
@@ -1532,14 +1516,11 @@ func _close_overlay() -> void:
 
 func _render_picker() -> void:
 	var host := _host_panel()
-	var fresh := _overlay == null or not is_instance_valid(_overlay)
-	if fresh:
-		_overlay = PanelContainer.new()
-		var radius := 16
-		if host is GlassPanel:
-			radius = int((host as GlassPanel).radius)
-		_overlay.add_theme_stylebox_override("panel", UI.box(Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.98), Color(0, 0, 0, 0), radius))
-		_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	if _overlay == null or not is_instance_valid(_overlay):
+		_overlay = DIRECTORY.new()
+		_overlay.flag_maker = _directory_flag
+		_overlay.confirmed.connect(_on_directory_confirmed)
+		_overlay.cancelled.connect(_cancel_choosing)
 		if host:
 			host.add_child(_overlay)
 		else:
@@ -1547,237 +1528,34 @@ func _render_picker() -> void:
 			_overlay.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		_overlay.modulate.a = 0.0
 		_overlay.create_tween().tween_property(_overlay, "modulate:a", 1.0, 0.15)
-	else:
-		_clear(_overlay)
-	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 0)
-	var head := MarginContainer.new()
-	head.add_theme_constant_override("margin_left", _sp(1.25))
-	head.add_theme_constant_override("margin_right", _sp(1.25))
-	head.add_theme_constant_override("margin_top", _sp(1.1))
-	head.add_theme_constant_override("margin_bottom", _sp(0.6))
-	var head_column := _column(0)
-	var title_row := _row(8)
-	var titles := _column(_sp(0.2))
-	titles.add_child(_text("Deploy a Network", 1.05, UI.WHITE, 700))
-	titles.add_child(_wrap("Choose a country for a persistent HUMINT network", 0.78, Color(1, 1, 1, 0.4)))
-	title_row.add_child(titles)
-	var close := _button("✕", {
-		"ink": Color(1, 1, 1, 0.5), "hover_ink": UI.WHITE, "hover_bg": Color(1, 1, 1, 0.08),
-		"size": 1.1, "weight": 400, "pad": Vector4(_sp(0.3), _sp(0.1), _sp(0.3), _sp(0.1)), "radius": 6,
-		"font": _symbol_font(400),
+	var corner := 16
+	if host is GlassPanel:
+		corner = int((host as GlassPanel).radius)
+	_overlay.configure({
+		"title": "Deploy a Network",
+		"subtitle": "Choose a country for a persistent HUMINT network",
+		"selected_label": "Target",
+		"empty_label": "No target chosen yet",
+		"confirm_label": _deploy_label,
+		"single": true,
+		"corner": corner,
 	})
-	close.tooltip_text = "Close"
-	close.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	close.pressed.connect(_cancel_choosing)
-	title_row.add_child(close)
-	head_column.add_child(title_row)
-	head_column.add_child(_gap(_sp(0.85)))
-	var chosen := _panel(Vector4(_sp(0.9), _sp(0.65), _sp(0.9), _sp(0.65)), Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.1), 10)
-	var chosen_column := _column(_sp(0.2))
-	chosen_column.add_child(_text("Target:", 0.8, Color(1, 1, 1, 0.8), 600))
-	_pick_chosen = _row(_sp(0.25))
-	chosen_column.add_child(_pick_chosen)
-	chosen.add_child(chosen_column)
-	head_column.add_child(chosen)
-	head_column.add_child(_gap(_sp(0.75)))
-	var search_frame := PanelContainer.new()
-	var search_normal := UI.box(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.12), 10, 1, Vector4(_sp(0.75), 0, _sp(0.85), 0))
-	var search_focus := UI.box(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.25), 10, 1, Vector4(_sp(0.75), 0, _sp(0.85), 0))
-	search_frame.add_theme_stylebox_override("panel", search_normal)
-	var search_row := _row(_sp(0.45))
-	var lens := TextureRect.new()
-	lens.texture = _glyph("search", 13, Color(1, 1, 1, 0.35))
-	lens.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
-	lens.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	lens.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	search_row.add_child(lens)
-	var search := LineEdit.new()
-	search.placeholder_text = "Search countries..."
-	search.text = _pick_query
-	search.flat = true
-	search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	search.custom_minimum_size.y = _sp(0.55) * 2 + _px(0.82) + 6
-	search.add_theme_font_override("font", UI.font(400))
-	search.add_theme_font_size_override("font_size", _px(0.82))
-	search.add_theme_color_override("font_color", UI.WHITE)
-	search.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.45))
-	search.add_theme_color_override("caret_color", UI.WHITE)
-	search.focus_entered.connect(func() -> void: search_frame.add_theme_stylebox_override("panel", search_focus))
-	search.focus_exited.connect(func() -> void: search_frame.add_theme_stylebox_override("panel", search_normal))
-	search.text_changed.connect(func(text: String) -> void:
-		_pick_query = text
-		_fill_pick_grid())
-	search_row.add_child(search)
-	search_frame.add_child(search_row)
-	head_column.add_child(search_frame)
-	head.add_child(head_column)
-	column.add_child(head)
-	_pick_scroll = ScrollContainer.new()
-	_style_scroll(_pick_scroll)
-	_pick_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var grid_margin := MarginContainer.new()
-	grid_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid_margin.add_theme_constant_override("margin_left", _sp(1.0))
-	grid_margin.add_theme_constant_override("margin_right", _sp(1.0))
-	grid_margin.add_theme_constant_override("margin_top", _sp(0.5))
-	grid_margin.add_theme_constant_override("margin_bottom", _sp(0.5))
-	_pick_grid = _grid(3, _sp(0.5), _sp(0.5))
-	grid_margin.add_child(_pick_grid)
-	_pick_scroll.add_child(grid_margin)
-	column.add_child(_pick_scroll)
-	column.add_child(_rule(0.07))
-	var foot := MarginContainer.new()
-	foot.add_theme_constant_override("margin_left", _sp(1.0))
-	foot.add_theme_constant_override("margin_right", _sp(1.0))
-	foot.add_theme_constant_override("margin_top", _sp(0.75))
-	foot.add_theme_constant_override("margin_bottom", _sp(0.75))
-	var footer := _row(_sp(0.5))
-	var cancel := _button("Cancel", {
-		"bg": Color(1, 1, 1, 0.06), "hover_bg": Color(1, 1, 1, 0.1), "border": Color(1, 1, 1, 0.12),
-		"ink": Color(1, 1, 1, 0.8), "size": 0.85, "weight": 500, "pad": Vector4(_sp(0.65), _sp(0.65), _sp(0.65), _sp(0.65)), "radius": 10,
-	})
-	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	cancel.size_flags_stretch_ratio = 1.0
-	cancel.pressed.connect(_cancel_choosing)
-	footer.add_child(cancel)
-	_pick_confirm = Button.new()
-	_pick_confirm.focus_mode = Control.FOCUS_NONE
-	_pick_confirm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_pick_confirm.size_flags_stretch_ratio = 2.0
-	_pick_confirm.add_theme_font_override("font", UI.font(600))
-	_pick_confirm.add_theme_font_size_override("font_size", _px(0.85))
-	for name: String in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
-		_pick_confirm.add_theme_color_override(name, UI.WHITE)
-	_pressable(_pick_confirm)
-	_pick_confirm_hovered = false
-	_pick_confirm_touched = false
-	_pick_confirm.mouse_entered.connect(func() -> void:
-		_pick_confirm_hovered = true
-		if not _pick.is_empty():
-			_pick_confirm_touched = true
-		_update_pick_confirm())
-	_pick_confirm.mouse_exited.connect(func() -> void:
-		_pick_confirm_hovered = false
-		_update_pick_confirm())
-	_pick_confirm.pressed.connect(_confirm_deploy)
-	footer.add_child(_pick_confirm)
-	foot.add_child(footer)
-	column.add_child(foot)
-	_overlay.add_child(column)
-	_update_pick_confirm()
-	_fill_pick_grid()
+	_overlay.set_countries(_candidates, _candidates_loading)
 
 
-func _update_pick_confirm() -> void:
-	if _pick_confirm == null or not is_instance_valid(_pick_confirm):
+func _deploy_label(count: int) -> String:
+	return "Choose a target" if count == 0 else "Deploy the network"
+
+
+func _directory_flag(_country_name: String, path: String, box: Vector2) -> Control:
+	return _flag_rect(path, box)
+
+
+func _on_directory_confirmed(chosen: Array) -> void:
+	if chosen.is_empty():
 		return
-	var has_pick := not _pick.is_empty()
-	_pick_confirm.text = "Deploy the network" if has_pick else "Choose a target"
-	var bg := Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.3)
-	if has_pick:
-		bg = BLUE_HOVER if _pick_confirm_hovered else (BLUE if _pick_confirm_touched else Color(1, 1, 1, 0.28))
-	var style := UI.box(bg, Color(0, 0, 0, 0), 10, 0, Vector4(_sp(0.65), _sp(0.65), _sp(0.65), _sp(0.65)))
-	for state: String in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
-		_pick_confirm.add_theme_stylebox_override(state, style)
-	_pick_confirm.disabled = not has_pick
-	_pick_confirm.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if has_pick else Control.CURSOR_FORBIDDEN
-	if _pick_chosen and is_instance_valid(_pick_chosen):
-		_clear(_pick_chosen)
-		if has_pick:
-			var size := maxi(8, roundi(_px(0.78) * 0.9))
-			_pick_chosen.add_child(_flag_rect(_pick_flag, Vector2(size, size)))
-			_pick_chosen.add_child(_text(_pick, 0.78, Color(1, 1, 1, 0.35)))
-		else:
-			_pick_chosen.add_child(_text("No target chosen yet", 0.78, Color(1, 1, 1, 0.35)))
-
-
-func _fill_pick_grid() -> void:
-	if _pick_grid == null or not is_instance_valid(_pick_grid):
-		return
-	_clear(_pick_grid)
-	if _candidates_loading:
-		_pick_grid.columns = 1
-		var loading := _italic("Loading countries…", 0.82, Color(1, 1, 1, 0.35))
-		loading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_pick_grid.add_child(loading)
-		return
-	_pick_grid.columns = 3
-	var needle := _pick_query.to_lower()
-	var tiles: Array[Dictionary] = []
-	for entry: Variant in _candidates:
-		var country: Dictionary = entry
-		var name := str(country.get("name", ""))
-		if not needle.is_empty() and name.to_lower().find(needle) < 0:
-			continue
-		var selected := name == _pick
-		var pad := Vector4(_sp(0.4), 0, _sp(0.4), 0)
-		var normal := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.18) if selected else Color(1, 1, 1, 0.04), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6) if selected else Color(1, 1, 1, 0.07), 10, 1, pad)
-		var hover := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.18) if selected else Color(1, 1, 1, 0.07), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6) if selected else Color(1, 1, 1, 0.15), 10, 1, pad)
-		var code := str(country.get("code", ""))
-		var flag_path := str(country.get("flag", ""))
-		var tile := _clickable(normal, func() -> void:
-			if _pick == name:
-				_pick = ""
-				_pick_code = ""
-				_pick_flag = ""
-			else:
-				_pick = name
-				_pick_code = code
-				_pick_flag = flag_path
-			_update_pick_confirm()
-			_fill_pick_grid(), hover)
-		tile.custom_minimum_size.y = _sp(5.5)
-		tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var column := VBoxContainer.new()
-		column.alignment = BoxContainer.ALIGNMENT_CENTER
-		column.add_theme_constant_override("separation", _sp(0.35))
-		column.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var flag_slot := CenterContainer.new()
-		flag_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		flag_slot.custom_minimum_size = Vector2(_sp(2.3), _sp(1.6))
-		column.add_child(flag_slot)
-		var short := name if name.length() <= 12 else name.substr(0, 11) + "…"
-		var caption := _text(short, 0.72, Color(1, 1, 1, 0.8))
-		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		column.add_child(caption)
-		tile.add_child(column)
-		if selected:
-			var corner := MarginContainer.new()
-			corner.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			corner.add_theme_constant_override("margin_top", _sp(0.3) - 1)
-			corner.add_theme_constant_override("margin_right", _sp(0.3) - _sp(0.4))
-			var badge := PanelContainer.new()
-			badge.add_theme_stylebox_override("panel", UI.box(BLUE, Color(0, 0, 0, 0), 999))
-			badge.custom_minimum_size = Vector2(14, 14)
-			badge.size_flags_horizontal = Control.SIZE_SHRINK_END
-			badge.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-			badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			var tick := UI.label("✓", _px(0.55), UI.WHITE, 700)
-			tick.add_theme_font_override("font", _symbol_font(700))
-			tick.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			tick.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-			badge.add_child(tick)
-			corner.add_child(badge)
-			tile.add_child(corner)
-		_pick_grid.add_child(tile)
-		tiles.append({"slot": flag_slot, "path": flag_path})
-	_load_flags(tiles)
-
-
-func _load_flags(tiles: Array[Dictionary]) -> void:
-	var grid := _pick_grid
-	var count := 0
-	for tile: Dictionary in tiles:
-		if grid != _pick_grid or not is_instance_valid(grid):
-			return
-		var slot: CenterContainer = tile["slot"]
-		if not is_instance_valid(slot):
-			return
-		slot.add_child(_flag_rect(str(tile["path"]), Vector2(_sp(2.3), _sp(1.6))))
-		count += 1
-		if count % 12 == 0:
-			await get_tree().process_frame
+	_pick = str((chosen[0] as Dictionary).get("name", ""))
+	_confirm_deploy()
 
 
 func _cancel_choosing() -> void:

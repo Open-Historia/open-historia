@@ -123,7 +123,9 @@ func _chat() -> void:
 	_check(_widest_right(panel) <= rect.end.x + 0.5, "the contacts screen fits the panel (rightmost %.1f)" % _widest_right(panel))
 	var footer: Control = panel.get("_footer")
 	var start := footer.get_child(0) as Button
-	_check(start.size.y >= UI.PHONE_TAP - 0.5, "Start New Chat is a 44 px target")
+	_check(start.text == "+ New diplomatic channel" and _screen_rect(start).end.x <= rect.end.x + 0.5, "the new-channel button reads as in the browser and fits (%s)" % start.text)
+	var search: LineEdit = panel.get("_inbox_search")
+	_check(search.is_visible_in_tree() and search.placeholder_text == "Search governments or subjects" and _screen_rect(search).end.x <= rect.end.x + 0.5, "the inbox search sits under its heading and fits")
 	var close := _find_tooltip(panel, "Close diplomacy panel")
 	_check(close != null and close.size.x >= UI.PHONE_TAP - 0.5 and close.size.y >= UI.PHONE_TAP - 0.5, "the panel's close button is a 44 px target")
 	for key in ["chats", "institutions", "spy"]:
@@ -136,7 +138,7 @@ func _chat() -> void:
 	await _wait(0.8)
 	await _shoot("pc-chat-new")
 	_check(_widest_right(panel._modal) <= rect.end.x + 0.5, "the new-chat picker fits the panel (rightmost %.1f)" % _widest_right(panel._modal))
-	_check(panel._modal_grid.columns == 3, "the picker shows three countries a row (%d)" % panel._modal_grid.columns)
+	_check(panel._modal.grid.columns == 1, "the directory shows one country a row, as the browser does at this width (%d)" % panel._modal.grid.columns)
 	panel._close_selector()
 	await _wait(0.4)
 
@@ -144,6 +146,7 @@ func _chat() -> void:
 	await _until(func() -> bool: return panel.conversation_visible(), 10.0)
 	await _wait(0.8)
 	var view := panel.conversation
+	_check(not panel.split_shown(), "a phone shows the conversation alone, with the inbox one step back")
 	await _shoot("pc-chat-thread")
 	_check(_widest_right(view) <= rect.end.x + 0.5, "the thread fits the panel (rightmost %.1f)" % _widest_right(view))
 	for tip in ["Back to diplomacy", "Edit group title", "Add country to conversation", "Close conversation"]:
