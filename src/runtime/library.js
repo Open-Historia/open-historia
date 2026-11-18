@@ -1,7 +1,7 @@
 /*! Open Historia — portions (scenario-map editor seeding) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { useSyncExternalStore } from "react";
 import { announceGameOpening, setReadinessGame } from "./mapReadiness.js";
-import { enterGame } from "./gameEntry.js";
+import { enterGame, hasEnteredGame } from "./gameEntry.js";
 import {
   JSON_URLS,
   readJson,
@@ -188,8 +188,10 @@ const applyLibraryCatalog = (catalog) => {
   const every = Array.isArray(catalog?.games) ? catalog.games.map((game) => withSharedGameEntry(withOpenGameCountry(game))) : [];
   // A shared game's stand-in (server/sharedGameStandIn.js) is never one of the
   // player's games: the list leaves it out. While its shared game is open it is
-  // still the game the page runs on, so the active game is found among all.
-  const games = every.filter((game) => !game.standIn);
+  // still the game the page runs on, so the active game is found among all,
+  // and it is listed too: its card's Current is the guest's way back into the
+  // shared game from the menu, as the host's own game's card is the host's.
+  const games = every.filter((game) => !game.standIn || game.id === sharedGameEntry?.gameId);
   const scenarios = Array.isArray(catalog?.scenarios) ? catalog.scenarios : [];
   const activeGameId = catalog?.activeGameId ?? games[0]?.id ?? null;
   const selectedScenarioId = catalog?.selectedScenarioId ?? scenarios[0]?.id ?? null;
@@ -660,7 +662,17 @@ export const saveGame = async (gameId, payload, { refresh = true, forSharedGame 
 
 // `enter: false`: the game is made the active one and not opened (the page is
 // about to load again, as when a shared game closes, runtime/standInGames.js).
+// The open shared game's own game (the host's campaign, a guest's stand-in) is
+// the one Current on its card goes back into from the menu: nothing is
+// switched, the page enters the game it already runs. It was refused as any
+// other game was ("Leave the shared game first"), and Current did nothing.
 export const activateGame = async (gameId, { forSharedGame = false, enter = true } = {}) => {
+  if (!forSharedGame && sharedGameEntry && String(gameId ?? "") === sharedGameEntry.gameId) {
+    // (Its map is up already when the menu was only opened over it.)
+    if (enter && !hasEnteredGame()) announceGameOpening(gameId);
+    if (enter) enterGame();
+    return libraryState;
+  }
   assertNoSharedGame({ forSharedGame });
   if (!forSharedGame && isStandInGame(gameId)) throw new Error(STAND_IN_CLOSED);
   // The loading screen comes up now, not when the new UI mounts a round trip
