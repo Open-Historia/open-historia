@@ -65,6 +65,7 @@ import { landingNotice, tellLandings } from "./landings.js";
 import { votesAwaited } from "./tableTurn.js";
 import { withAdvisorChanges } from "../game/advisorChanges.js";
 import { advisorOfSeat, withSeatAdvisor } from "../../runtime/seatAdvisors.js";
+import { createRequestWaits } from "./requestWaits.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
 // The answers a device's requests were given, kept so that one sent again (the
@@ -403,6 +404,9 @@ export const createGameHost = ({
     return pushWanted;
   };
   const queue = createWorldQueue({ onSettled: () => { void schedulePush(); } });
+  // A request that waits for the round being resolved is said to at once, and
+  // its page waits for its answer (host/requestWaits.js).
+  const waits = createRequestWaits({ tell: (device, message) => answerDevice(device, message), thinking: THINKING });
 
   // The session as it stands, saved with the game (host/sessionRecord.js) at
   // once, one write at a time, once for however many changes asked while one
@@ -703,6 +707,7 @@ export const createGameHost = ({
       const message = roundMessage(status);
       for (const connection of connections.values()) send(connection, message);
       onStatus({ lobby: lobbyFor(null), round: status });
+      if (status.phase === "resolving") waits.roundBegan();
       // Where the rounds are is saved with the game, to be taken up there again.
       if (roundToPlan(status) !== savedRound) {
         savedRound = roundToPlan(status);
@@ -2125,6 +2130,7 @@ export const createGameHost = ({
       if (mine.has(id)) {
         const earlier = mine.get(id);
         if (earlier) send(connection, earlier);
+        else waits.again(connection.device, id);
         return;
       }
       mine.set(id, null);
@@ -2154,6 +2160,7 @@ export const createGameHost = ({
           if (needsSeat && acting?.device !== connection.device) return `You no longer play ${seat.country}.`;
           return handler(connection, message, acting);
         };
+        if (id && !AT_ONCE.has(message.t)) waits.begin({ device: connection.device, id, t: message.t, resolving: round.status().phase === "resolving" });
         const outcome = await (AT_ONCE.has(message.t) || THINKING.has(message.t) ? apply() : queue.run(message.t, apply));
         if (outcome && typeof outcome === "object") {
           error = clean(outcome.error).slice(0, 300);
@@ -2165,6 +2172,7 @@ export const createGameHost = ({
       }
     }
     if (id) {
+      waits.end(connection.device, id);
       const ack = { t: "ack", id, ok: !error, error: error || null, ...(result && !error ? { result } : {}) };
       mine.set(id, ack);
       answerDevice(connection.device, ack);

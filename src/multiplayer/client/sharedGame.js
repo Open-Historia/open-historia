@@ -27,7 +27,7 @@ import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/te
 import { planGameWrite, planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
-import { setSharedGamePeople, setSharedGameRole, setSharedGameSettings, setSharedRequester, setSharedRoundBase, setSharedRoundDays, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
+import { setSharedGamePeople, setSharedGameRole, setSharedGameSettings, setSharedRequester, setSharedRequestsHeld, setSharedRoundBase, setSharedRoundDays, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
 import { roundBaseOf } from "./roundBase.js";
 import { createRoundPayer } from "./roundPayer.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
@@ -302,6 +302,8 @@ const makeClient = (send) => createGameClient({
   },
   // A request of the round this device is to pay for, in its turn.
   onPay: (message) => roundPayer.receive(message),
+  // What of this page's requests waits for the round being resolved, for the screens that asked.
+  onHeld: (kinds) => setSharedRequestsHeld(kinds),
 });
 
 const startViews = () => {
@@ -610,8 +612,8 @@ export const joinSharedGame = async ({ token, name } = {}) => {
 
 // --- Playing ---------------------------------------------------------------------
 
-export const sharedRequest = (t, fields = {}, options = {}) => (current?.client
-  ? current.client.request(t, fields, options)
+export const sharedRequest = (t, fields = {}) => (current?.client
+  ? current.client.request(t, fields)
   : Promise.resolve({ ok: false, error: "Not in a shared game." }));
 // The game's own panels reach the host through the bridge.
 setSharedRequester(sharedRequest);
@@ -687,6 +689,7 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   setSharedRoundBase(null);
   setSharedRoundDays(0);
   setSharedGameSettings(null);
+  setSharedRequestsHeld([]);
   // This device's own features again, and its own language.
   setSharedGameFeatures(null);
   setWorldLanguage("");

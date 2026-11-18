@@ -56,6 +56,38 @@ test("an unanswered request gives up with a reason, and leaving answers every on
   assert.equal((await client.request("ready", { value: true })).error, "Not connected to a shared game.");
 });
 
+test("a request the host holds for the round has no deadline: it waits for its answer, and the screens are told what waits", async () => {
+  // Each screen used to set its own deadline, blind to the round: 30 seconds
+  // for an institution, and the player was told it failed while the host
+  // applied it when the round landed (the review of 2026-11-18, door 1).
+  const clock = manualTimers();
+  const sent = [];
+  const held = [];
+  const client = createGameClient({ send: (message) => sent.push(message), timers: clock.timers, onHeld: (kinds) => held.push(kinds) });
+  const founding = client.request("institution", { call: "lifecycle", args: { command: { type: "found", name: "Baltic Pact" } } });
+  const other = client.request("ready", { value: true });
+  client.receive({ t: "held", id: sent[0].id });
+  client.receive({ t: "held", id: sent[0].id });
+  assert.deepEqual(held, [["institution"]], "said once");
+  // However long the round takes.
+  clock.fireAll();
+  assert.deepEqual(await other, { ok: false, error: "The host did not answer." }, "one not held still has the one deadline every request has");
+  let settled = false;
+  void founding.then(() => { settled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, "still waiting");
+  client.receive({ t: "ack", id: sent[0].id, ok: true, error: null, result: { institutionId: "baltic-pact" } });
+  assert.deepEqual(await founding, { ok: true, error: "", result: { institutionId: "baltic-pact" } });
+  assert.deepEqual(held.at(-1), [], "nothing waits any more");
+  // A deadline a screen still asks for is not one: every request waits alike.
+  const asked = client.request("sheet", { country: "Estonia" }, { timeoutMs: 1 });
+  client.receive({ t: "held", id: sent.at(-1).id });
+  clock.fireAll();
+  client.receive({ t: "ack", id: sent.at(-1).id, ok: true, error: null });
+  assert.equal((await asked).ok, true);
+  client.close();
+});
+
 test("the lobby, the round and notices are kept; views go to the page; the countdown runs on the player's own clock", () => {
   let t = 1000;
   const views = [];

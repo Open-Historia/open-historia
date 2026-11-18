@@ -88,12 +88,26 @@ export const setSharedGameSettings = (settings) => {
   for (const listener of [...roleListeners]) listener();
 };
 
+// The kinds of this page's requests ("institution", "sheet", ...) the host has
+// said wait for the round being resolved (host/requestWaits.js): a screen still
+// waiting for one says what it waits for, instead of seeming stuck. Empty in no
+// shared game. For useSyncExternalStore, with the role's subscription.
+let held = NOBODY;
+export const sharedRequestsHeld = () => held;
+export const setSharedRequestsHeld = (kinds) => {
+  const next = [...new Set((Array.isArray(kinds) ? kinds : []).map((kind) => String(kind ?? "")).filter(Boolean))].sort();
+  if (next.length === held.length && next.every((kind, at) => kind === held[at])) return;
+  held = next.length ? Object.freeze(next) : NOBODY;
+  for (const listener of [...roleListeners]) listener();
+};
+
 export const setSharedRequester = (request) => {
   requester = typeof request === "function" ? request : null;
 };
 
-// { ok, error }; never rejects. `options.timeoutMs` for a request the host
-// answers only once its own AI has (a stat sheet).
-export const requestFromHost = (t, fields = {}, options = {}) => (requester
-  ? requester(t, fields, options)
+// { ok, error }; never rejects. Every request waits for its answer alike
+// (client/gameClient.js REQUEST_WAIT_MS): a screen gives none a deadline of its
+// own, which the round being resolved made a lie.
+export const requestFromHost = (t, fields = {}) => (requester
+  ? requester(t, fields)
   : Promise.resolve({ ok: false, error: "Not in a shared game." }));

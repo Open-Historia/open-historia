@@ -38,7 +38,7 @@ import { PeaceControls, ReparationsNote } from "./warAndPeace.jsx";
 import { WarReportsList } from "./afterAction.jsx";
 import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
-import { sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { sharedGameRole, sharedRequestsHeld, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
     appendCountryStatHistorySample,
@@ -1647,6 +1647,10 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
     // In a shared game a sheet once written stands, for everyone: its figures
     // move only as the rounds move them, so there is nothing to read again.
     const sharedGame = Boolean(useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole));
+    // A sheet asked of the host while a round is resolved waits for the round
+    // (host/requestWaits.js): said as the world finishing its update, not left
+    // to look stuck.
+    const heldRequests = useSyncExternalStore(subscribeSharedGameRole, sharedRequestsHeld, sharedRequestsHeld);
     const [player, setPlayer] = useState({ code: "", date: "", startDate: "", round: 0, gameKey: "game" });
     const [targetCountry, setTargetCountry] = useState("");
     // A requested polity that arrived before the game was read: the first
@@ -2541,7 +2545,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
 
             {statsView === "economy" && !statSheetDefinitionError && state.status === "loading" && (
                 <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.82rem", marginTop: "1rem" }}>
-                {state.waiting ? "Waiting for the world to finish updating, then compiling national statistics…" : "Compiling national statistics…"}
+                {state.waiting || heldRequests.includes("sheet") ? "Waiting for the world to finish updating, then compiling national statistics…" : "Compiling national statistics…"}
                 </p>
             )}
 

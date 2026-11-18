@@ -21,7 +21,14 @@ const NOTICES_KEPT = 20;
 // sent while a round is resolved waits for the round: minutes, with a slow
 // model. A request is not given up on while the host is there, and goes again
 // with the same id after a reconnect (`resend`); this is only for a host that
-// is gone without a word.
+// is gone without a word. One the host has said waits for the round ("held",
+// host/requestWaits.js) has no deadline at all: it is answered once the round
+// has landed, however long that takes.
+//
+// The same for every request. Screens used to set their own, shorter ones (30
+// seconds for an institution's business, five minutes for a stat sheet), blind
+// to the round: the screen said "The host did not answer." and the host applied
+// the request when the round landed, and a player who did it again did it twice.
 export const REQUEST_WAIT_MS = 20 * 60 * 1000;
 
 export const createGameClient = ({
@@ -32,6 +39,10 @@ export const createGameClient = ({
   // device to pay for ({ t: "pay", job, round, call }), or the host's word that
   // it no longer waits for one ({ t: "payStop", job }) (client/roundPayer.js).
   onPay = () => {},
+  // The kinds of this page's requests the host holds for the round being
+  // resolved now (["institution", "sheet"]), whenever that changes: the screens
+  // say what they wait for (client/sharedGameBridge.js sharedRequestsHeld).
+  onHeld = () => {},
   now = () => Date.now(),
   timers = globalThis,
   requestTimeoutMs = REQUEST_WAIT_MS,
@@ -41,9 +52,10 @@ export const createGameClient = ({
   let roundAt = 0;
   let notices = [];
   let closed = false;
-  const pending = new Map(); // request id → { resolve, timer, message }
+  const pending = new Map(); // request id → { resolve, timer, message, held }
 
   const changed = () => onChange({ lobby, round, notices });
+  const heldNow = () => [...pending.values()].filter((entry) => entry.held).map((entry) => entry.message.t);
 
   const settle = (id, result) => {
     const entry = pending.get(id);
@@ -51,6 +63,7 @@ export const createGameClient = ({
     pending.delete(id);
     timers.clearTimeout(entry.timer);
     entry.resolve(result);
+    if (entry.held) onHeld(heldNow());
   };
 
   return {
@@ -69,6 +82,15 @@ export const createGameClient = ({
         case "ack":
           settle(message.id, { ok: message.ok, error: message.error || "", ...(message.result ? { result: message.result } : {}) });
           break;
+        case "held": {
+          // Taken, and waiting for the round being resolved: no deadline from here.
+          const entry = pending.get(message.id);
+          if (!entry || entry.held) break;
+          entry.held = true;
+          timers.clearTimeout(entry.timer);
+          onHeld(heldNow());
+          break;
+        }
         case "notice":
           notices = [...notices, { ...message, at: now() }].slice(-NOTICES_KEPT);
           changed();
@@ -86,9 +108,9 @@ export const createGameClient = ({
     },
 
     // A request to the host; resolves { ok, error } when the host answers, or
-    // with an error when it does not answer in time (`timeoutMs`, for the few
-    // the host answers only once its own AI has: a stat sheet). Never rejects.
-    request(t, fields = {}, { timeoutMs = requestTimeoutMs } = {}) {
+    // with an error when a host gone without a word never does
+    // (REQUEST_WAIT_MS, the same for every request). Never rejects.
+    request(t, fields = {}) {
       if (closed) return Promise.resolve({ ok: false, error: "Not connected to a shared game." });
       const id = toHex(randomBytes(8));
       const message = { t, id, ...fields };
@@ -96,8 +118,8 @@ export const createGameClient = ({
       const checked = schema ? validate(schema, message) : { ok: false, error: `unknown request ${t}` };
       if (!checked.ok) return Promise.resolve({ ok: false, error: checked.error });
       return new Promise((resolve) => {
-        const timer = timers.setTimeout(() => settle(id, { ok: false, error: "The host did not answer." }), timeoutMs);
-        pending.set(id, { resolve, timer, message: checked.value });
+        const timer = timers.setTimeout(() => settle(id, { ok: false, error: "The host did not answer." }), requestTimeoutMs);
+        pending.set(id, { resolve, timer, message: checked.value, held: false });
         try {
           // Not sent while the connection is down: it goes with `resend` once
           // the connection is back.

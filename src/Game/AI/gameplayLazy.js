@@ -141,12 +141,11 @@ export const ensureIntelligenceRated = hostQuietly(async (...args) => (await gam
 // device rates those left to it as single player does, twenty to a request, and hands the figures to the host
 // ("ownRatings") instead of writing them. It was not done at all on a page, so the ranking of a shared game stayed
 // empty (the gap audit of 2026-11-18). Nobody waits on it: what fails settles with nothing.
-const RATINGS_ANSWER_MS = 10 * 60 * 1000;
 const ratingsFromHost = async (targets, options = {}) => {
   const countries = [...new Set((Array.isArray(targets) ? targets : []).map((name) => String(name ?? "").trim()).filter(Boolean))].slice(0, RATINGS_ASKED_MOST);
   if (!countries.length) return null;
   try {
-    const answer = await requestFromHost("ratings", { countries }, { timeoutMs: RATINGS_ANSWER_MS });
+    const answer = await requestFromHost("ratings", { countries });
     const left = answer.ok && answer.result?.answer === "own" && Array.isArray(answer.result.countries) ? answer.result.countries : [];
     if (!left.length) return null;
     return await (await gameplay()).ensureMilitaryFigures(left, {
@@ -180,8 +179,9 @@ export const readOpenedIntercepts = async (...args) => (await gameplay()).readOp
 // if the country still has none. No key leaves this device. A sheet once
 // written stands: nothing is read again in a shared game, so there is no
 // reassessment to ask the host for. A refusal is thrown with the host's
-// reason, as any failed reading is, and the Stats pane shows it.
-const SHEET_ANSWER_MS = 5 * 60 * 1000;
+// reason, as any failed reading is, and the Stats pane shows it. The host's
+// answer is waited for however long it takes, as every request's is
+// (client/gameClient.js): one asked while a round is resolved waits for it.
 const aborted = () => new DOMException("Stats panel/selection changed.", "AbortError");
 const sheetOnOwnKey = async (country, signal) => {
   let assessment = null;
@@ -201,7 +201,7 @@ const sheetOnOwnKey = async (country, signal) => {
         sheet,
         continuity: continuity ?? null,
         rating: Number.isFinite(rating) ? Math.max(0, Math.min(100, Math.round(rating))) : null,
-      }, { timeoutMs: SHEET_ANSWER_MS });
+      });
       if (!sent.ok) throw new Error(sent.error || "The host did not take the stat sheet.");
       return sheet;
     },
@@ -209,7 +209,7 @@ const sheetOnOwnKey = async (country, signal) => {
 };
 const sheetFromHost = async ({ code, name, signal } = {}) => {
   const country = String(code || name || "").trim();
-  const answer = await requestFromHost("sheet", { country }, { timeoutMs: SHEET_ANSWER_MS });
+  const answer = await requestFromHost("sheet", { country });
   if (signal?.aborted) throw aborted();
   if (!answer.ok) throw new Error(answer.error || "The host did not write the stat sheet.");
   if (answer.result?.answer === "own") await sheetOnOwnKey(country, signal);
@@ -231,7 +231,6 @@ export const pendingCountryStatSheet = async (...args) => (await gameplay()).pen
 // shared game the record is the host's: the page asks ("parties"), and the
 // host fills them in on its AI or leaves them to this device's own key, as a
 // stat sheet; then the record comes with the view. Once filled in they stand.
-const PARTIES_ANSWER_MS = 5 * 60 * 1000;
 const politicalActorIn = (world, name) => {
   const byPolity = world?.politicalActors?.byPolity ?? {};
   const key = Object.keys(byPolity).find((entry) => entry.toLowerCase() === String(name ?? "").trim().toLowerCase());
@@ -239,14 +238,14 @@ const politicalActorIn = (world, name) => {
 };
 const partiesFromHost = async (target, { signal } = {}) => {
   const country = String(target ?? "").trim();
-  const answer = await requestFromHost("parties", { country }, { timeoutMs: PARTIES_ANSWER_MS });
+  const answer = await requestFromHost("parties", { country });
   if (signal?.aborted) throw new DOMException("Stats panel/selection changed.", "AbortError");
   if (!answer.ok) throw new Error(answer.error || "The host did not fill in the parties.");
   if (answer.result?.answer === "own") {
     await (await gameplay()).assessPoliticalLandscape(country, {
       signal,
       commit: async ({ entry }) => {
-        const sent = await requestFromHost("ownParties", { country, landscape: entry }, { timeoutMs: PARTIES_ANSWER_MS });
+        const sent = await requestFromHost("ownParties", { country, landscape: entry });
         if (!sent.ok) throw new Error(sent.error || "The host did not take the parties.");
         return null;
       },

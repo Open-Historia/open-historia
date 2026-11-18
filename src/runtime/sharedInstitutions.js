@@ -35,8 +35,11 @@ const threadFromView = async (id, { readChats = () => readChatsState({ force: tr
 // `call` and `args`: game/messages.js INSTITUTION_CALLS. Resolves what the
 // screens read of the game's own results ({ institution, proposal,
 // createdChat, channel }), or throws the host's reason.
-export const askHostForInstitution = async (call, args = {}, { timeoutMs = 30_000, ...options } = {}) => {
-  const answer = await requestFromHost("institution", { call, args }, { timeoutMs });
+// The host's answer is waited for however long it takes: one asked while a
+// round is resolved waits for the round (host/requestWaits.js), and a deadline
+// of its own here told the player it failed, then the host did it.
+export const askHostForInstitution = async (call, args = {}, options = {}) => {
+  const answer = await requestFromHost("institution", { call, args });
   if (!answer?.ok) throw new Error(answer?.error || "The host did not do that.");
   const made = answer.result ?? {};
   const chat = await threadFromView(clean(made.chatId), options);

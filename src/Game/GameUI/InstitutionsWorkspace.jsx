@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { institutionLogoUrl } from "../../runtime/institutionLogos.js";
 import { INSTITUTION_KINDS } from "../../runtime/institutions.js";
 import { commitInstitutionLifecycleCommand, ensureInstitutionLifecycleNegotiationChat, institutionLifecycleCasesForPolity } from "../../runtime/institutionLifecycle.js";
@@ -26,6 +26,7 @@ import { useBackToClose } from "../../runtime/backToClose.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import { institutionMembershipDisplayLabel } from "./institutionMembershipPresentation.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
+import { sharedRequestsHeld, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLowerCase();
@@ -395,6 +396,12 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
   const compact = useIsMobile();
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  // In a shared game, business asked while a round is resolved waits for the
+  // round (host/requestWaits.js): said while the button waits, so nobody takes
+  // the wait for a failure and does it twice.
+  const heldRequests = useSyncExternalStore(subscribeSharedGameRole, sharedRequestsHeld, sharedRequestsHeld);
+  const waitsForRound = Boolean(busy) && heldRequests.includes("institution");
+  const roundNote = waitsForRound ? <div data-institution-waits-for-round="true" style={{ margin: ".5rem 1rem 0", padding: ".45rem .6rem", borderRadius: 8, background: "rgba(255,255,255,.04)", border: "1px solid var(--oh-grey-border)", color: "rgba(255,255,255,.7)", fontSize: ".62rem", flexShrink: 0 }}>{"The host does this as soon as the round being resolved has landed."}</div> : null;
   const [proposalTitle, setProposalTitle] = useState("");
   const [proposalSummary, setProposalSummary] = useState("");
   const [foundingOpen, setFoundingOpen] = useState(false);
@@ -715,6 +722,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
         {pending > 0 && <SmallPill tone="live">{pending} awaiting you</SmallPill>}
         <button className="oh-tap-row" type="button" onClick={() => { setFoundingOpen(true); setError(""); }} style={{ marginLeft: "auto", border: "1px solid var(--oh-grey-border-strong)", borderRadius: 8, background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", padding: ".32rem .58rem", fontSize: ".64rem", fontWeight: 780, cursor: "pointer" }}>＋ Found institution</button>      </div>
       {error && <div style={{ margin: ".5rem 1rem 0", padding: ".45rem .6rem", borderRadius: 8, background: "rgba(239,68,68,.08)", border: "1px solid rgba(239,68,68,.2)", color: "#fca5a5", fontSize: ".62rem", flexShrink: 0 }}>{error}</div>}
+      {roundNote}
       {foundingOpen ? <FoundInstitutionForm value={founding} onChange={setFounding} onCancel={() => setFoundingOpen(false)} onSubmit={foundInstitution} busy={busy === "found"} polities={allPolities} /> : <div style={{ flex: 1, overflowY: "auto", padding: ".75rem 1rem", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(15rem,1fr))", alignContent: "start", gap: ".55rem" }}>
         {rows.length ? rows.map((row) => { const channel = channelByInstitution.get(clean(row.institution.id)); return <InstitutionRow key={row.institution.id} row={row} unread={channel ? unreadIds.has(String(channel.id)) : false} onClick={() => { setSelectedId(row.institution.id); setSection("overview"); setError(""); }} />; }) : <div style={{ gridColumn: "1 / -1", margin: "auto", color: "rgba(255,255,255,.3)", fontSize: ".78rem", textAlign: "center", padding: "2rem" }}>{showAll ? "No institutions exist in this world yet." : "Your government is not part of any institution and has no pending invitation or application."}</div>}
       </div>}
@@ -736,6 +744,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
     <div data-institution-facts="persistent" style={{ padding: compact ? ".4rem .7rem .45rem" : ".65rem 1rem .7rem", flexShrink: 0 }}><Facts view={selectedView} compact={compact} /></div>
     {/* On a phone the sections are one row that scrolls sideways, not three rows of wrapped tabs. */}
     <div data-institution-tabs="persistent" style={{ display: "flex", flexWrap: compact ? "nowrap" : "wrap", overflowX: compact ? "auto" : undefined, gap: ".08rem", padding: compact ? "0 .45rem" : "0 .78rem", borderBottom: "1px solid rgba(255,255,255,.06)", flexShrink: 0, ...(compact ? { scrollbarWidth: "none", WebkitOverflowScrolling: "touch" } : {}) }}>{tabs.map(([key, label]) => <button className="oh-tap-row" key={key} onClick={() => key === "council" && selectedRow.member ? openCouncil() : setSection(key)} disabled={key === "council" && Boolean(busy)} style={{ flex: "0 0 auto", whiteSpace: "nowrap", border: 0, borderBottom: `2px solid ${section === key ? "rgba(231,231,234,.72)" : "transparent"}`, background: "transparent", color: section === key ? "var(--oh-grey-text)" : "rgba(255,255,255,.52)", padding: ".58rem .68rem .62rem", fontSize: ".68rem", fontWeight: 730, cursor: key === "council" && busy ? "wait" : "pointer" }}>{key === "council" && busy === "council" ? "Opening…" : label}</button>)}</div>    {error && <div style={{ margin: ".5rem 1rem 0", padding: ".45rem .6rem", borderRadius: 8, background: "rgba(239,68,68,.08)", border: "1px solid rgba(239,68,68,.2)", color: "#fca5a5", fontSize: ".62rem", flexShrink: 0 }}>{error}</div>}
+    {roundNote}
     {section === "council" && selectedPendingActions > 0 && <button className="oh-tap-row" type="button" onClick={() => setSection("agenda")} style={{ margin: ".55rem 1rem 0", padding: ".58rem .7rem", display: "flex", alignItems: "center", gap: ".7rem", border: "1px solid rgba(245,158,11,.28)", borderRadius: 10, background: "rgba(245,158,11,.08)", color: "#fde68a", cursor: "pointer", textAlign: "left", flexShrink: 0 }}>
       <span style={{ flex: 1 }}><span style={{ display: "block", fontSize: ".59rem", fontWeight: 850, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(253,230,138,.7)" }}>Action required</span><span style={{ display: "block", marginTop: ".12rem", fontSize: ".62rem", fontWeight: 700 }}>{selectedPendingBallots ? `${selectedPendingBallots} ballot${selectedPendingBallots === 1 ? "" : "s"} awaiting you` : ""}{selectedPendingBallots && selectedPendingAmendments ? " · " : ""}{selectedPendingAmendments ? `${selectedPendingAmendments} amendment review${selectedPendingAmendments === 1 ? "" : "s"}` : ""}</span></span>
       <strong style={{ fontSize: ".64rem" }}>Review agenda →</strong>    </button>}

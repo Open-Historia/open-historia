@@ -13648,6 +13648,7 @@
  "The host did not take the reply.",
  "The host did not take the stat sheet.",
  "The host did not write the stat sheet.",
+ "The host does this as soon as the round being resolved has landed.",
  "The host has banned this device from the game.",
  "The host has closed the game.",
  "The host has not sent the new conversation yet. It will appear here when it does.",

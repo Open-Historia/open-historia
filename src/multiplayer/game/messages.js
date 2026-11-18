@@ -493,6 +493,9 @@ export const HOST_MESSAGES = Object.freeze({
   // `result`: what the host made for the request, by id (an institution, a
   // proposal, a thread), which the asker's screen goes on to show.
   ack: obj({ t: literal("ack"), id: REQUEST_ID, ok: bool(), error: str(300, { nullable: true }), result: json(3) }, ["result"]),
+  // A request taken that waits for the round being resolved (host/requestWaits.js):
+  // its answer (`ack`) comes once the round has landed, however long that takes.
+  held: obj({ t: literal("held"), id: REQUEST_ID }),
   notice: obj({ t: literal("notice"), level: str(8, { enum: ["info", "warn"] }), text: str(500) }),
   // The player's own view of the game's documents; only the ones that changed
   // since the view numbered `base`, whole (every one, when `base` is 0). `rev`

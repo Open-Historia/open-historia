@@ -1902,7 +1902,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 if (lifecycleResponseRequested && !text) {
                     setIsLoading(true);
                     try {
-                        await askHostForInstitution("hearing", { thread: String((chatOverride || chat).id) }, { timeoutMs: 180_000 });
+                        await askHostForInstitution("hearing", { thread: String((chatOverride || chat).id) });
                     } catch (error) {
                         pushMessages([...nextMessages, { role: "error", speaker: "System", text: error?.message || "The host did not take the message.", time: gameDate }]);
                     } finally {
@@ -4391,7 +4391,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                     ...current.filter((entry) => entry.key !== key),
                     { key, institutionId: id, proposalId: proposal, kind: mode },
                 ]);
-                const shared = await askHostForInstitution("council", { institutionId: id, proposalId: proposal, kind: mode, comment: String(playerComment || "").trim() }, { timeoutMs: 180_000 });
+                const shared = await askHostForInstitution("council", { institutionId: id, proposalId: proposal, kind: mode, comment: String(playerComment || "").trim() });
                 adoptInstitutionalResult(shared);
                 return shared;
             }

@@ -1162,7 +1162,7 @@ export const commitInstitutionalPlayerVoteRequest = async ({
 } = {}) => {
   // In a shared game the host does this, for this player (sharedInstitutions.js).
   // A charter without a voting rule is given one there first, by the host's AI.
-  if (institutionsGoToHost()) return askHostForInstitution("voteRequest", { institutionId, proposalId }, { timeoutMs: 120_000 });
+  if (institutionsGoToHost()) return askHostForInstitution("voteRequest", { institutionId, proposalId });
   let result = null;
   const committed = await mutateCanonicalTurnState(({ world, chats, events, game }) => {
     const player = clean(playerCountry || game?.country);

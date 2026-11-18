@@ -1572,6 +1572,56 @@ test("an order given while a round is resolved waits behind it and is the next r
   assert.equal(s.ack(s.guest, id(6)).ok, true);
 });
 
+test("a request that waits for the round being resolved is said to at once, and answered once the round has landed", async () => {
+  // A guest pressed Found while the world moved: after the screen's own 30
+  // seconds it read "The host did not answer.", and when the round landed the
+  // host founded it, so a second press founded it twice (the review of
+  // 2026-11-18, door 1). The host now says at once that the request waits, and
+  // the page waits for its answer.
+  let release;
+  let thinking;
+  const s = setup({
+    holdResolve: new Promise((resolve) => { release = resolve; }),
+    // An institution's business asks the AI first and writes after: here it is
+    // still thinking when the round begins.
+    institution: async () => {
+      await new Promise((resolve) => { thinking = resolve; });
+      return { institutionId: "baltic-pact" };
+    },
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const founding = s.host.receive(s.guest, { t: "institution", id: id(2), call: "lifecycle", args: { command: { type: "found", name: "Baltic Pact" } } });
+  await s.clock.flush();
+  assert.deepEqual(s.to(s.guest, "held"), [], "nothing holds it yet");
+  await s.request(s.hostPlayer, { t: "ready", id: id(3), value: true });
+  await s.request(s.guest, { t: "ready", id: id(4), value: true });
+  assert.equal(s.to(s.guest, "round").at(-1).phase, "resolving");
+  assert.deepEqual(s.to(s.guest, "held").map((message) => message.id), [id(2)], "the round began while it was thinking: what it writes waits");
+  assert.equal(s.to(s.guest, "held").every((message) => validate(HOST_MESSAGES.held, message).ok), true);
+  assert.deepEqual(s.to(s.hostPlayer, "held"), [], "a ready is answered at once, never held");
+  // Asked while the round is resolved: said at once.
+  const order = s.host.receive(s.guest, { t: "order", id: id(5), text: "Hold the line at Pskov" });
+  await s.clock.flush();
+  assert.deepEqual(s.to(s.guest, "held").map((message) => message.id), [id(2), id(5)]);
+  assert.equal(s.ack(s.guest, id(5)), undefined, "and answered only once it is applied");
+  // The page reconnected and sent it again: told again on its new connection.
+  s.host.leave(s.guest);
+  const back = { ...s.guest, id: "p-guest-2" };
+  s.host.join(back);
+  await s.request(back, { t: "order", id: id(5), text: "Hold the line at Pskov" });
+  assert.deepEqual(s.to(back, "held").map((message) => message.id), [id(5)]);
+  release();
+  thinking();
+  await Promise.all([founding, order]);
+  await s.clock.flush();
+  assert.equal(s.ack(back, id(5)).ok, true);
+  assert.equal(s.ack(back, id(2)).ok, true);
+  assert.equal(s.to(back, "held").length, 1, "each is said once");
+});
+
 test("a request sent again after a reconnect is applied once, and answered as the first time", async () => {
   const s = setup();
   s.host.join(s.hostPlayer);
