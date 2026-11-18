@@ -14,6 +14,7 @@ import { LANGUAGES, readingLanguageName } from "../../runtime/i18n.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { keptSettingsOf } from "../host/sessionRecord.js";
 import { hostSharedGame, joinSharedGame, useSharedGame } from "../client/sharedGame.js";
+import { PLAYER_NAME_MAX, cleanPlayerName, rememberPlayerName, rememberedPlayerName } from "../client/playerName.js";
 import { sharedRoundAnswerer, sharedRoundRefusal } from "../../Game/AI/providerConfig.js";
 import { STAND_IN_NOT_SHARED } from "../../runtime/standInGames.js";
 import PublicLobbies from "./PublicLobbies.jsx";
@@ -40,21 +41,9 @@ const note = { color: "rgba(255,255,255,0.55)", fontSize: "0.78rem", lineHeight:
 const errorText = { color: "#fca5a5", fontSize: "0.82rem", margin: "0.7rem 0 0" };
 const grid = { display: "grid", gap: "0.85rem", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))" };
 
-const NAME_KEY = "oh:mp:name";
-const rememberedName = () => {
-  try {
-    return localStorage.getItem(NAME_KEY) || "";
-  } catch {
-    return "";
-  }
-};
-const rememberName = (name) => {
-  try {
-    localStorage.setItem(NAME_KEY, name);
-  } catch {
-    // not remembered
-  }
-};
+// The name a player is shown as, kept on this device (client/playerName.js).
+const rememberedName = () => rememberedPlayerName();
+const rememberName = (name) => rememberPlayerName(name);
 
 // The settings whose field below says what is wrong with it; anything else
 // wrong is said above the button.
@@ -79,12 +68,12 @@ const InviteBar = ({ onEnterGame }) => {
 
   const join = async (event) => {
     event.preventDefault();
-    if (!code.trim() || shared.mode !== "off") return;
+    if (!code.trim() || !cleanPlayerName(name) || shared.mode !== "off") return;
     setError("");
     try {
       rememberName(name);
       // A bad code is refused here, with the menu still showing why.
-      await joinSharedGame({ token: code, name: name || "Player" });
+      await joinSharedGame({ token: code, name: cleanPlayerName(name) });
       onEnterGame?.();
     } catch (failure) {
       setError(String(failure?.message || failure));
@@ -99,11 +88,14 @@ const InviteBar = ({ onEnterGame }) => {
         <Field title="Invite code" style={{ flex: "3 1 16rem" }}>
           <input data-no-translate style={input} value={code} onChange={(event) => setCode(event.target.value)} placeholder="oh1-…" spellCheck={false} autoComplete="off" />
         </Field>
-        <Field title="Your name" style={{ flex: "1 1 9rem" }}>
-          <input style={input} value={name} maxLength={40} onChange={(event) => setName(event.target.value)} placeholder="Player" />
+        {/* The name every player in the game sees for this player: asked
+            here, kept on this device (client/playerName.js). */}
+        <Field title="Your name in the game" style={{ flex: "1 1 9rem" }}>
+          <input data-no-translate style={input} value={name} maxLength={PLAYER_NAME_MAX} onChange={(event) => setName(event.target.value)} placeholder="Pick a name" autoComplete="nickname" required />
         </Field>
-        <button type="submit" style={{ ...primary, minHeight: "2.75rem" }} disabled={!code.trim() || shared.mode !== "off"}>Join</button>
+        <button type="submit" style={{ ...primary, minHeight: "2.75rem" }} disabled={!code.trim() || !cleanPlayerName(name) || shared.mode !== "off"}>Join</button>
       </div>
+      <p style={{ ...note, marginTop: "0.5rem" }}>Every player in the game sees you by this name. It is kept on this device for next time.</p>
       {/* Who learns a joiner's address, as the code has it: the host (the
           connection is direct, transport/peer.js), the relays its page opens
           sockets to and the two STUN servers it asks for its own address
@@ -193,7 +185,7 @@ const HostPanel = ({ onClose, onEnterGame }) => {
     setError("");
     try {
       rememberName(name);
-      await hostSharedGame({ settings, name: name || "Host" });
+      await hostSharedGame({ settings, name: cleanPlayerName(name) || "Host" });
       onClose?.();
       onEnterGame?.();
     } catch (failure) {
@@ -222,7 +214,7 @@ const HostPanel = ({ onClose, onEnterGame }) => {
           {ai.refusal ? <p style={errorText}>{ai.refusal}</p> : null}
           {!ai.refusal && ai.answerer?.passedAgent ? <p style={note}>{`Your own Agent does not answer a shared game: its rounds go to ${ai.answerer.label}.`}</p> : null}
           <div style={grid}>
-            <Field title="Your name"><input style={input} value={name} maxLength={40} onChange={(event) => setName(event.target.value)} placeholder="Host" /></Field>
+            <Field title="Your name in the game"><input data-no-translate style={input} value={name} maxLength={PLAYER_NAME_MAX} onChange={(event) => setName(event.target.value)} placeholder="Host" autoComplete="nickname" /></Field>
             <Field title="Lobby name" problem={problemOf("name")}><input style={input} value={settings.name} maxLength={60} onChange={update("name")} /></Field>
             <Field title={`Players: ${settings.seats}`} hint={`Up to ${SEATS_AVAILABLE_NOW} for now; up to ${MAX_SEATS} is coming later.`}>
               <input type="range" min={2} max={MAX_SEATS} value={settings.seats} onChange={(event) => setSettings((previous) => ({ ...previous, seats: Math.min(SEATS_AVAILABLE_NOW, Number(event.target.value)) }))} style={{ width: "100%" }} />
