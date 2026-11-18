@@ -1649,9 +1649,11 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             const completion = await completeAdvisorActionReply({
                 reply: rawReply,
                 canPropose: canProposeActions,
-                check: () => checkAdvisorActionCompleteness({
+                allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
+                check: ({ delivered }) => checkAdvisorActionCompleteness({
                     playerRequest: text,
                     advisorReply: parseAdvisorReply(rawReply).text,
+                    delivered,
                 }),
             });
             if (leftCampaign()) return;
