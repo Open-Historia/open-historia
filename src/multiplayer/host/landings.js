@@ -113,7 +113,8 @@ export const landingEvents = (before, after, { date = "", ownerOf } = {}) => {
   const peaces = normalizePeaceTreaties(after?.peaceTreaties).filter((entry) => !hadPeace.has(entry.id));
   const signedBefore = new Set(normalizeTreatyOffers(before?.treatyOffers).filter((offer) => offer.status === "signed").map((offer) => offer.id));
   const signed = normalizeTreatyOffers(after?.treatyOffers).filter((offer) => offer.status === "signed" && !signedBefore.has(offer.id));
-  const moved = bordersMoved(before, after, { ownerOf });
+  // (Only a peace moves borders: a world with none made is not read region by region.)
+  const moved = peaces.length ? bordersMoved(before, after, { ownerOf }) : { regionTransfers: [], regionControlOps: [] };
   const between = (treaty, entry) => {
     const sides = list(treaty.sides).map((members) => new Set(list(members).map(fold)));
     return sides.length === 2 && [entry.fromCode, entry.toCode].every((name) => sides.some((side) => side.has(fold(name))));
