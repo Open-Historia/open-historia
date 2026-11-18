@@ -731,6 +731,8 @@ const PROSE_FILES = [
   "src/multiplayer/client/joinProgress.js", "src/multiplayer/client/gameClient.js",
   "src/multiplayer/client/remoteRuntime.js", "src/multiplayer/client/sharedGame.js",
   "src/multiplayer/client/sharedGameBridge.js", "src/multiplayer/host/gameHost.js",
+  // A guest cut off from its host, what the host's game is still busy with, who plays what.
+  "src/multiplayer/client/hostGone.js", "src/multiplayer/ui/hostBusy.js", "src/multiplayer/client/seatRoster.js",
   "src/multiplayer/host/institutions.js", "src/multiplayer/host/agents.js", "src/multiplayer/host/forces.js",
   "src/multiplayer/host/featureGates.js",
   "src/multiplayer/host/orderCap.js",

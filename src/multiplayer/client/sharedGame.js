@@ -27,7 +27,7 @@ import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/te
 import { UNROUTED_NOTICE, planGameWrite, planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges, unroutedRefusal } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
-import { setSharedAdvisorRefusal, setSharedGamePeople, setSharedGameRole, setSharedGameSettings, setSharedNotices, setSharedRequester, setSharedRequestsHeld, setSharedRoundBase, setSharedRoundDays, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
+import { setSharedAdvisorRefusal, setSharedGamePeople, setSharedGameRole, setSharedGameSeats, setSharedGameSettings, setSharedNotices, setSharedRequester, setSharedRequestsHeld, setSharedRoundBase, setSharedRoundDays, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
 import { roundBaseOf } from "./roundBase.js";
 import { createRoundPayer } from "./roundPayer.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
@@ -326,7 +326,8 @@ const makeClient = (send, { maxMessageChars = Infinity } = {}) => createGameClie
     // And the rules of the game every screen says (who pays for what, the Game Master).
     if (lobby?.settings) setSharedGameSettings(lobby.settings);
     // And who plays which country: a seat a person's device holds (game/messages.js SEAT `held`), not one they watch.
-    if (lobby) setSharedGamePeople((Array.isArray(lobby.seats) ? lobby.seats : []).filter((seat) => seat?.held === true && seat?.status !== "watching").map((seat) => seat.country));
+    // Who plays what, with their names: the map's stars, the region card and the game menu's Players (sharedGameBridge.js).
+    if (lobby) setSharedGameSeats(lobby.seats);
     // And how far each round moves the world, which the Timeline panel shows in place of its skips.
     if (lobby?.settings) setSharedRoundDays(lobby.settings.daysPerRound);
     set({
@@ -755,6 +756,7 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   set({ ...IDLE });
   setSharedGameRole("");
   setSharedGamePeople([]);
+  setSharedGameSeats([]);
   setSharedNotices([]);
   setSharedRoundBase(null);
   setSharedRoundDays(0);

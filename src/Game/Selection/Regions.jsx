@@ -1,5 +1,5 @@
 /*! Open Historia — portions (era polity names/flags + intel briefing) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, getPrimedScenarioRegionCatalog, resolveCountryDisplayName } from "../../runtime/assets.js";
@@ -24,6 +24,8 @@ import { clampAnchoredCardTop, isSameRegionSelection, regionControlStatus, useCa
 import { regionInfoFor } from "./regionInfo.js";
 import { getWorldPlaceIndex } from "../../runtime/placeSearch.js";
 import { resolveRegionName } from "../../runtime/regionNameFixes.js";
+import { sharedGameSeats, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { playerSeatFor } from "../../multiplayer/client/seatRoster.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -360,6 +362,9 @@ const RegionPopup = () => {
     // a card with no viewer is the player's own overlord described to them as a
     // stranger's business. The panel is suppressed until this is known.
     const [playerCountry, setPlayerCountry] = useState(_playerCountry);
+    // A shared game's seats, for "Played by" (client/seatRoster.js); empty in
+    // single player, so the card is unchanged there.
+    const sharedSeats = useSyncExternalStore(subscribeSharedGameRole, sharedGameSeats, sharedGameSeats);
     useEffect(() => {
         let cancelled = false;
         // The cached read, not a forced one: this is the same game.json every
@@ -681,6 +686,11 @@ const RegionPopup = () => {
         ? livePuppetsFor(worldState, playerCountry).filter((row) => row.overlord === controllerKey)
         : [];
     const puppetPreview = heldPuppets.slice(0, 2);
+    // The person who plays this country in a shared game, by any name the
+    // card knows it under (the host keys a seat by the canonical one).
+    const playerSeat = isUnclaimed || !sharedSeats.length
+        ? null
+        : playerSeatFor(sharedSeats, toCountryName(controllerCode), controllerKey, displayCountry);
     const remainingPuppets = heldPuppets.length - puppetPreview.length;
     // Wider on a touch screen that still anchors the card at the tap (a tablet,
     // a phone on its side): the finger-sized buttons took 140 of the header's
@@ -823,6 +833,18 @@ const RegionPopup = () => {
         {!isUnclaimed && <IconBtn title="Country intel (AI)" onClick={handleToggleStats}>{"\u24D8"}</IconBtn>}
         </div>
         </div>
+
+        {playerSeat && (
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "5px", fontSize: "11px", lineHeight: 1.35, minWidth: 0 }}>
+            <span aria-hidden="true" style={{ color: "#2bc1f3", flexShrink: 0 }}>{"★"}</span>
+            <span style={{ color: "rgba(255,255,255,0.55)", flexShrink: 0 }}>Played by</span>
+            {playerSeat.name
+                ? <span data-no-translate style={{ color: "rgba(255,255,255,0.92)", fontWeight: 700, minWidth: 0, overflowWrap: "anywhere", unicodeBidi: "isolate" }}>{playerSeat.name}</span>
+                : <span style={{ color: "rgba(255,255,255,0.92)", fontWeight: 700 }}>a player</span>}
+            {playerSeat.you && <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}>(you)</span>}
+            {playerSeat.host && <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0 }}>(host)</span>}
+            </div>
+        )}
 
         {subordination && (
             <div style={{ marginTop: "7px", padding: "7px 9px", borderRadius: "9px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.13)", borderLeft: "2px solid rgba(255,255,255,0.3)" }}>

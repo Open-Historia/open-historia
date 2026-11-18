@@ -53,7 +53,9 @@ import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
 import { PromptLimitNotice } from "./promptLimitNotice.jsx";
 import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
 import { MAP_SETTING_KEYS, useMapSettingDefaultOn } from "../../runtime/mapSettings.js";
-import { inSharedGame, sharedGameRole, sharedGameSettings, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, sharedGameRole, sharedGameSeats, sharedGameSettings, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
+import GameMenuDropdown from "./GameMenuDropdown.jsx";
+import { gameMenuItems } from "./gameMenuItems.js";
 import { OWN_AGENT_LINE, ownAiUsesOf } from "../../multiplayer/costRules.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
@@ -452,6 +454,11 @@ const Main = ({
   // played on the host's key, with nothing to set up.
   const sharedRole = useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole);
   const sharedRules = useSyncExternalStore(subscribeSharedGameRole, sharedGameSettings, sharedGameSettings);
+  // Who plays what, for the corner button's Players (GameMenuDropdown.jsx);
+  // empty in single player, where the button opens the game menu at once.
+  const sharedSeats = useSyncExternalStore(subscribeSharedGameRole, sharedGameSeats, sharedGameSeats);
+  const [isGameMenuDropOpen, setIsGameMenuDropOpen] = useState(false);
+  const closeGameMenuDrop = useCallback(() => setIsGameMenuDropOpen(false), []);
   // What counts as set up is what this game asks of this device's AI. A guest's
   // is asked for what no Agent answers (its suggestions, Plan it, the generals,
   // Search, the sheets it opens, its turn to pay): a list of Agents alone was
@@ -998,10 +1005,28 @@ const Main = ({
       <SettingsButton
         topOffset={TOP_BAR_OFFSET}
         hidden={isSettingsOpen || warRoomShown}
+        expanded={gameMenuItems({ seats: sharedSeats }).length ? isGameMenuDropOpen : undefined}
         onToggle={() => {
+          // A shared game: the drop-down, with the game menu as its first item.
+          if (gameMenuItems({ seats: sharedSeats }).length) {
+            setIsGameMenuDropOpen((open) => !open);
+            return;
+          }
           setSettingsScope("game");
           setSettingsInitialSection(null);
           setIsSettingsOpen(!isSettingsOpen);
+        }}
+      />
+      <GameMenuDropdown
+        open={isGameMenuDropOpen && !isSettingsOpen && !warRoomShown}
+        seats={sharedSeats}
+        role={sharedRole}
+        top={`calc(${TOP_BAR_OFFSET} + ${isMobile ? "3.2rem" : "2.85rem"} + 0.35rem)`}
+        onClose={closeGameMenuDrop}
+        onOpenGameMenu={() => {
+          setSettingsScope("game");
+          setSettingsInitialSection(null);
+          setIsSettingsOpen(true);
         }}
       />
       <Presence open={isSettingsOpen} leaveMs={260}>

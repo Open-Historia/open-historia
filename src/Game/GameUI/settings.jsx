@@ -1784,14 +1784,19 @@ const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
 // in the glass finish and with the menu glyph.
 // `hidden` while the menu is open: the menu grows out of this button and
 // shrinks back into it, so the button itself steps aside meanwhile.
-const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => {
+// `expanded`, in a shared game, says whether its drop-down is open
+// (GameMenuDropdown.jsx); undefined where the button opens the menu itself.
+const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false, expanded }) => {
     const isMobile = useIsMobile();
     return (
         <button
         type="button"
         aria-label="Open game menu"
         title="Game menu"
+        aria-haspopup={expanded === undefined ? undefined : "menu"}
+        aria-expanded={expanded}
         data-oh-theme-hud=""
+        data-oh-game-menu-button=""
         onClick={onToggle}
         style={{
             ...baseStyle,

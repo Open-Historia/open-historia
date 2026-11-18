@@ -94,6 +94,8 @@ import PolityTextLayer, {
   isPolityTextPtr1Enabled,
 } from "./labels/PolityTextLayer.jsx";
 import { buildPolityTextPtr1Records } from "./labels/polityTextRecords.js";
+import { withPlayerStars } from "./labels/playerStars.js";
+import { sharedGamePeople, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import { POLITY_TEXT_MAX_ZOOM } from "./labels/polityTextLayout.js";
 import {
   buildOwnershipPresentationDelta,
@@ -720,10 +722,18 @@ const WorldMap = ({ isGlobe = false }) => {
   // receives compact ready-to-render point/line collections; no polygon fitting
   // or territorial geometry work is allowed in React.
   const useLivePolityLabels = polityLabelCollections.labelData.features.length > 0;
-  const ptr1PolityTextRecords = useMemo(() => buildPolityTextPtr1Records({
+  const workerPolityTextRecords = useMemo(() => buildPolityTextPtr1Records({
     ptrLabelData: polityLabelCollections.ptrLabelData,
     labelData: polityLabelCollections.labelData,
   }), [polityLabelCollections.ptrLabelData, polityLabelCollections.labelData]);
+  // In a shared game the label of a country a person plays wears a star
+  // (labels/playerStars.js). The list changes only when the seats do, and in
+  // single player it is empty and the records go through untouched.
+  const sharedPeople = useSyncExternalStore(subscribeSharedGameRole, sharedGamePeople, sharedGamePeople);
+  const ptr1PolityTextRecords = useMemo(
+    () => withPlayerStars(workerPolityTextRecords, sharedPeople),
+    [workerPolityTextRecords, sharedPeople],
+  );
   const ptr1PolityTextRequested = Boolean(
     ptr1PolityTextEnabled
     && worldKnown
