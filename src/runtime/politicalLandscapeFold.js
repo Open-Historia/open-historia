@@ -66,6 +66,12 @@ const namesOf = (party) => [party?.name, party?.shortName, party?.abbreviation, 
   .map(fold)
   .filter(Boolean);
 
+// Whether a polity's Political World record has its parties filled in: their
+// ideologies, seats or roles (the Politics view's Compile parties). In a shared
+// game a record filled in stands, as a stat sheet does.
+export const partiesCompiled = (actor) => (Array.isArray(actor?.parties) ? actor.parties : [])
+  .some((party) => party?.ideologyFamily || Number.isFinite(party?.seats) || party?.role);
+
 // One compiled landscape (politics.js normalizePoliticalLandscape) folded into a
 // polity's Political World record, or a new record for a polity with none. The
 // record comes back as it was given (null for none) when there is nothing to fold.

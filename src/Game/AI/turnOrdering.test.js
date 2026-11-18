@@ -74,9 +74,10 @@ test("the board runs BEFORE anything is written", () => {
 test("covert operations are synced to the board before the board is asked about them", () => {
   // Otherwise the model is shown an entry describing an agent that was caught a
   // moment ago, and asked to reason about it as though it were still in place.
-  const sync = at("spyOperationOps(", "the covert-operation sync");
+  // (Every service's, each on its own board: runtime/agentBoards.js.)
+  const sync = at("syncBoardsWithAgents(", "the covert-operation sync");
   const board = at("if (projects) {", "the projects/board call");
-  assert.ok(sync < board, "spyOperationOps must run before the board task sees the entries");
+  assert.ok(sync < board, "syncBoardsWithAgents must run before the board task sees the entries");
 });
 
 // --- The Board reads every Canonical event ----------------------------------

@@ -1,6 +1,6 @@
 /*! Open Historia — portions (reasoning-effort toggle persistence) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { logDebugEvent, logSettingMessage, setDebugLogContext } from "../../runtime/debugLog.js";
-import { entryStatus } from "./fallbackRunner.js";
+import { SHARED_GAME_NEEDS_AI_MESSAGE, SHARED_GAME_AGENT_MESSAGE, entryStatus } from "./fallbackRunner.js";
 import { FORMER_TASK_KEYS, readUnderTaskKey } from "./formerTaskKeys.js";
 import { BACKGROUND_REQUEST, SKIP_SPENDERS, spenderBase } from "./requestBudget.js";
 
@@ -722,6 +722,45 @@ export function agentHasEntryBelow(at = Date.now()) {
 
 export function isFallbackListConfigured() {
     return getResolvedFallbackList().some(entryIsConfigured);
+}
+
+// Whether the list can answer the calls nobody starts as one of an Agent's
+// kinds: AI suggestions, Plan it, Improve, Assess progress, the generals,
+// Rostra Search, a stat sheet, a shared round. An Agent Connection answers
+// none of them (entryServesCall), so a list of Agents alone is set up for what
+// its player starts and answers with /answer, and nothing else. In single
+// player that is the time skip, and isFallbackListConfigured counts it ready; a
+// shared game's guest is asked for its own AI for everything else (the
+// follow-ups of 2026-11-18, C1: an Agent alone was counted ready, and the
+// guest was never asked).
+export function fallbackListAnswersGameCalls(list = getResolvedFallbackList()) {
+    return (Array.isArray(list) ? list : []).some((entry) => entryIsConfigured(entry) && entryServesCall(entry, {}));
+}
+
+// Whether the list holds the player's own Agent at all.
+export function fallbackListHasAgent(list = getResolvedFallbackList()) {
+    return (Array.isArray(list) ? list : []).some((entry) => entry?.provider === AGENT_PROVIDER);
+}
+
+// What answers a shared game's rounds, which the host's engine window asks
+// (multiplayer/host/engineMain.js): the first entry of the list that serves a
+// round and has what its provider needs, or null. An Agent Connection answers
+// nothing there (entryServesCall: a shared game never waits on one player's
+// terminal; #1042), so a list of Agents alone cannot host: every round failed
+// once the lobby was open. `passedAgent`: an Agent stands above that entry, and
+// the rounds go past it to this one.
+export function sharedRoundAnswerer(list = getResolvedFallbackList()) {
+    const entries = Array.isArray(list) ? list : [];
+    const at = entries.findIndex((entry) => entryServesCall(entry, { spender: "jump", sharedGame: true }) && entryIsConfigured(entry));
+    if (at < 0) return null;
+    return { label: entries[at].label, passedAgent: entries.slice(0, at).some((entry) => entry?.provider === AGENT_PROVIDER) };
+}
+
+// Why a list cannot host a shared game, in its own words, or "" when it can.
+export { SHARED_GAME_NEEDS_AI_MESSAGE, SHARED_GAME_AGENT_MESSAGE };
+export function sharedRoundRefusal(list = getResolvedFallbackList()) {
+    if (sharedRoundAnswerer(list)) return "";
+    return (Array.isArray(list) ? list : []).some((entry) => entry?.provider === AGENT_PROVIDER) ? SHARED_GAME_AGENT_MESSAGE : SHARED_GAME_NEEDS_AI_MESSAGE;
 }
 
 const saveConnections = (connections) => {

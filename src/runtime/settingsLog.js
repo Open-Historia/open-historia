@@ -35,6 +35,7 @@ import {
 } from "../Game/AI/providerConfig.js";
 import { isRatingEnabled, isTelemetryEnabled } from "../Game/AI/telemetry.js";
 import { requestDay, requestSettings } from "../Game/AI/requestBudget.js";
+import { readStatsRefreshEvery } from "../Game/AI/statsRefresh.js";
 import { readAdvisorGroupSettings } from "../Game/AI/advisorGroupSettings.js";
 import { deviceProfileForLog } from "./deviceProfile.js";
 import { presenceAllowed, presenceAvailable } from "./discordPresence.js";
@@ -197,6 +198,8 @@ registerSettingsSnapshot("AI requests", () => {
         ["Background requests a day, at most", String(day.backgroundCap)],
         // Outside that cap while on (requestBudget.js UNCAPPED_BACKGROUND_TASKS).
         ["Countries write to me between time skips", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.idleDiplomacy))],
+        // A background request after the skips it falls due on (Game/AI/statsRefresh.js), under that cap.
+        ["Keep stat sheets up to date", readStatsRefreshEvery() ? `every ${readStatsRefreshEvery()} time skip(s)` : "off"],
         ["Individual AI responses in group chats", onOff(groupAi.individual)],
         ["Advisors per AI request", String(groupAi.effectiveBatchSize) + (groupAi.individual ? " (individual mode; saved batch setting " + groupAi.batchSize + ")" : "")],
         ["Used today", `${day.noLimit ? day.used : `${day.used} of ${day.limit}`} (background ${day.background}, refused by rate limit ${day.refused}, failed ${day.failed})`],

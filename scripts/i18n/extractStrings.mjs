@@ -732,8 +732,18 @@ const PROSE_FILES = [
   "src/multiplayer/client/remoteRuntime.js", "src/multiplayer/client/sharedGame.js",
   "src/multiplayer/client/sharedGameBridge.js", "src/multiplayer/host/gameHost.js",
   "src/multiplayer/host/institutions.js", "src/multiplayer/host/agents.js", "src/multiplayer/host/forces.js",
+  "src/multiplayer/host/featureGates.js",
+  "src/multiplayer/host/orderCap.js",
   "src/multiplayer/host/engineMain.js", "src/multiplayer/host/settings.js", "src/multiplayer/host/advisorDesk.js",
   "src/multiplayer/signaling/publicServers.js",
+  // Who pays for what, the host's answers a round, the Game Master and the round's payer.
+  "src/multiplayer/costRules.js", "src/multiplayer/host/hostAnswers.js", "src/multiplayer/host/gameMaster.js",
+  "src/multiplayer/host/roundPayers.js", "src/multiplayer/client/roundPayer.js",
+  // A peace or a treaty players make between rounds: its event, which the host
+  // writes in the world's language from the packs (host/worldWords.js), and its notice.
+  "src/multiplayer/host/landings.js",
+  // The round bar's words, split out of the overlay so node can test them.
+  "src/multiplayer/ui/roundBar.js",
   // The local server's refusals the Workshop, the hub and Settings show.
   "server/tiledBasemaps.js", "server/musicLibrary.js", "server/flagValidation.js", "server/polityRename.js",
   "server/hubProvenance.js", "server/officialBasemaps.js", "server/hubCache.js", "server/basemapStore.js",

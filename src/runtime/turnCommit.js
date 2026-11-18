@@ -80,6 +80,11 @@ export const restorePointsFor = (snapshots, { round } = {}) => {
 
 export const NO_RESTORE_POINT_NOTE = "The last turn has no restore point.";
 
+// A round of a shared game is every player's: the host does not undo it alone,
+// in the game or after it stopped being shared ("get rid of undoing a round",
+// the owner, 2026-11-15). Its restore point is marked when it is captured.
+export const SHARED_ROUND_NOTE = "That turn was a round of a shared game: it is not undone alone.";
+
 // Said with the turn when its restore point could not be saved, so the player
 // hears it now rather than when an Undo is refused.
 export const RESTORE_POINT_NOT_SAVED_NOTE = "This turn was saved, but its restore point was not, so it cannot be undone.";
@@ -87,10 +92,12 @@ export const RESTORE_POINT_NOT_SAVED_NOTE = "This turn was saved, but its restor
 // Why the restore point at `index` of restorePointsFor's list may not be
 // restored, or "" when it may: it is not the start of the turn `index + 1`
 // turns ago (a turn in between saved none, so restoring it would take back
-// more turns than the player asked), or it was captured in another campaign.
+// more turns than the player asked), it was captured in another campaign, or it
+// is the start of a shared game's round (SHARED_ROUND_NOTE).
 export const restorePointProblem = (snapshots, { round, campaignId = "", index = 0 } = {}) => {
   const snapshot = Array.isArray(snapshots) ? snapshots[index] : null;
   if (!snapshot) return NO_RESTORE_POINT_NOTE;
+  if (snapshot.shared === true) return SHARED_ROUND_NOTE;
   if (campaignChanged(snapshot.campaignId, campaignId)) return NO_RESTORE_POINT_NOTE;
   const current = roundOf(round);
   const at = roundOf(snapshot.round);

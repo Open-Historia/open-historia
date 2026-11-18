@@ -16,23 +16,82 @@ import { PLAYER_REQUESTS } from "../game/messages.js";
 import { validate } from "../protocol/validate.js";
 
 const NOTICES_KEPT = 20;
+// How long a request waits for the host's answer. The host answers once it has
+// applied it, and applies everything in one order (host/worldQueue.js), so one
+// sent while a round is resolved waits for the round: minutes, with a slow
+// model. A request is not given up on while the host is there, and goes again
+// with the same id after a reconnect (`resend`); this is only for a host that
+// is gone without a word. One the host has said waits for the round ("held",
+// host/requestWaits.js) has no deadline at all: it is answered once the round
+// has landed, however long that takes.
+//
+// The same for every request. Screens used to set their own, shorter ones (30
+// seconds for an institution's business, five minutes for a stat sheet), blind
+// to the round: the screen said "The host did not answer." and the host applied
+// the request when the round landed, and a player who did it again did it twice.
+export const REQUEST_WAIT_MS = 20 * 60 * 1000;
+
+// A request this page built that the host would not take is never sent, and the
+// player is told why in words; the schema's ("$.text: longer than 2000") went
+// into a letter's error bubble as they were. The schemas hold the limits
+// (game/messages.js), and the screens read the same ones: a text longer than a
+// request carries is refused whole, never cut (the review of 2026-11-18, door 4).
+//
+// The page's check is the host's whole check, not part of it: the schema, and
+// the size the host's session reads a message to (protocol/codec.js
+// PLAYER_MESSAGE_MAX_CHARS, `maxMessageChars` here). One the schema took and the
+// session did not was sent, dropped there with a strike, and never answered:
+// twenty minutes later the screen said "The host did not answer.". And a
+// request the connection itself could not carry said the codec's English
+// ("A 3500000-character message is over the … limit."). What the check found,
+// in the schema's or the codec's terms, goes to the diagnostics log (`log`) and
+// stays on the answer as `detail`; the player reads words (the follow-ups of
+// 2026-11-18, C4).
+export const tooLongWords = (most) => `Too long for a shared game: ${most} characters at most.`;
+export const TOO_LARGE_WORDS = "Too large to send to the host in one go: make it shorter, then send it again.";
+const UNSENT_WORDS = "This could not be sent to the host.";
+const unsentWords = (checked) => (checked.longest ? tooLongWords(checked.longest) : UNSENT_WORDS);
+// The length of a message as the host's session measures it: its JSON text.
+const textLength = (message) => {
+  try {
+    return JSON.stringify(message).length;
+  } catch {
+    return Infinity;
+  }
+};
 
 export const createGameClient = ({
   send,
   applyView = () => false,
   onChange = () => {},
+  // With settings.payment "cycle": a request of the round the host sent this
+  // device to pay for ({ t: "pay", job, round, call }), or the host's word that
+  // it no longer waits for one ({ t: "payStop", job }) (client/roundPayer.js).
+  onPay = () => {},
+  // The kinds of this page's requests the host holds for the round being
+  // resolved now (["institution", "sheet"]), whenever that changes: the screens
+  // say what they wait for (client/sharedGameBridge.js sharedRequestsHeld).
+  onHeld = () => {},
+  // The most a message may be where it is read (a guest's: the host's session,
+  // protocol/codec.js PLAYER_MESSAGE_MAX_CHARS; the host's own screen talks to
+  // its engine with no such limit).
+  maxMessageChars = Infinity,
+  // A line for the diagnostics log: why a request was not sent, in the terms of
+  // whatever refused it.
+  log = () => {},
   now = () => Date.now(),
   timers = globalThis,
-  requestTimeoutMs = 30_000,
+  requestTimeoutMs = REQUEST_WAIT_MS,
 } = {}) => {
   let lobby = null;
   let round = null;
   let roundAt = 0;
   let notices = [];
   let closed = false;
-  const pending = new Map(); // request id → { resolve, timer }
+  const pending = new Map(); // request id → { resolve, timer, message, held }
 
   const changed = () => onChange({ lobby, round, notices });
+  const heldNow = () => [...pending.values()].filter((entry) => entry.held).map((entry) => entry.message.t);
 
   const settle = (id, result) => {
     const entry = pending.get(id);
@@ -40,6 +99,7 @@ export const createGameClient = ({
     pending.delete(id);
     timers.clearTimeout(entry.timer);
     entry.resolve(result);
+    if (entry.held) onHeld(heldNow());
   };
 
   return {
@@ -58,12 +118,25 @@ export const createGameClient = ({
         case "ack":
           settle(message.id, { ok: message.ok, error: message.error || "", ...(message.result ? { result: message.result } : {}) });
           break;
+        case "held": {
+          // Taken, and waiting for the round being resolved: no deadline from here.
+          const entry = pending.get(message.id);
+          if (!entry || entry.held) break;
+          entry.held = true;
+          timers.clearTimeout(entry.timer);
+          onHeld(heldNow());
+          break;
+        }
         case "notice":
           notices = [...notices, { ...message, at: now() }].slice(-NOTICES_KEPT);
           changed();
           break;
         case "view":
-          applyView({ rev: message.rev, docs: message.docs });
+          applyView({ epoch: message.epoch, rev: message.rev, base: message.base, docs: message.docs, sums: message.sums });
+          break;
+        case "pay":
+        case "payStop":
+          onPay(message);
           break;
         default:
           break;
@@ -71,24 +144,72 @@ export const createGameClient = ({
     },
 
     // A request to the host; resolves { ok, error } when the host answers, or
-    // with an error when it does not answer in time (`timeoutMs`, for the few
-    // the host answers only once its own AI has: a stat sheet). Never rejects.
-    request(t, fields = {}, { timeoutMs = requestTimeoutMs } = {}) {
+    // with an error when a host gone without a word never does
+    // (REQUEST_WAIT_MS, the same for every request). Never rejects.
+    request(t, fields = {}) {
       if (closed) return Promise.resolve({ ok: false, error: "Not connected to a shared game." });
       const id = toHex(randomBytes(8));
       const message = { t, id, ...fields };
       const schema = PLAYER_REQUESTS[t];
       const checked = schema ? validate(schema, message) : { ok: false, error: `unknown request ${t}` };
-      if (!checked.ok) return Promise.resolve({ ok: false, error: checked.error });
-      return new Promise((resolve) => {
-        const timer = timers.setTimeout(() => settle(id, { ok: false, error: "The host did not answer." }), timeoutMs);
-        pending.set(id, { resolve, timer });
+      const unsent = (error, detail) => {
         try {
+          log(`a "${t}" request was not sent to the host: ${detail}`);
+        } catch {
+          // the log is no reason for the player not to be told
+        }
+        return { ok: false, error, detail };
+      };
+      if (!checked.ok) return Promise.resolve(unsent(unsentWords(checked), checked.error));
+      const length = textLength(checked.value);
+      // i18n-ignore: the log's words, never shown to a player.
+      if (length > maxMessageChars) return Promise.resolve(unsent(TOO_LARGE_WORDS, `its text is ${length} characters, over the ${maxMessageChars} a message to the host may be`));
+      return new Promise((resolve) => {
+        const timer = timers.setTimeout(() => settle(id, { ok: false, error: "The host did not answer." }), requestTimeoutMs);
+        pending.set(id, { resolve, timer, message: checked.value, held: false });
+        try {
+          // Not sent while the connection is down: it goes with `resend` once
+          // the connection is back.
           send(checked.value);
         } catch (error) {
-          settle(id, { ok: false, error: String(error?.message || error) });
+          // The connection could not carry it (the codec's own limit): said in
+          // words, its own kept for the log.
+          const answer = unsent(UNSENT_WORDS, String(error?.message || error));
+          settle(id, answer);
         }
       });
+    },
+
+    // Every request not yet answered, again, with its own id: after a
+    // reconnect. The host applies a request once whatever it is sent, and
+    // answers one it has applied with the answer it gave (host/gameHost.js).
+    resend() {
+      if (closed) return 0;
+      let sent = 0;
+      for (const entry of pending.values()) {
+        try {
+          send(entry.message);
+          sent += 1;
+        } catch {
+          // still down: the next reconnect sends it
+        }
+      }
+      return sent;
+    },
+
+    // A word to the host that is not a request: nothing answers it (the
+    // "viewed" message). Checked like any request; false if it was not sent.
+    notify(message) {
+      if (closed) return false;
+      const schema = PLAYER_REQUESTS[message?.t];
+      const checked = schema ? validate(schema, message) : { ok: false };
+      if (!checked.ok) return false;
+      try {
+        send(checked.value);
+        return true;
+      } catch {
+        return false;
+      }
     },
 
     // Time left in the round's current phase, counted down from when the host

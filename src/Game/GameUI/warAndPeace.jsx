@@ -19,9 +19,10 @@
 //                      to accept or decline when it was made to them; their
 //                      own terms, waiting for the other side's leader, when
 //                      they put them.
-//   PeaceTermsForm     in the chat with an enemy nobody plays: the player's own
-//                      terms, which the chat sends as a message for that
-//                      enemy's leader to answer.
+//   PeaceTermsForm     in the chat with an enemy: the player's own terms,
+//                      which the chat sends as a message for that enemy's
+//                      leader to answer, or, for an enemy another player plays,
+//                      for that player to take or decline.
 //   PeaceControls      under each of the player's wars in the Stats pane's
 //                      Diplomacy tab: how weary each side is, and Propose
 //                      peace, which opens the chat with the enemy.
@@ -47,22 +48,24 @@ const refusalText = (error) => {
   if (error === "not-open") return "This is no longer open.";
   if (error === "not-yours") return "This is not yours to answer.";
   if (error === "played") return "That side is led by another player: make peace with them in a chat.";
+  if (error === "crossed") return "Another player fights on against you in this war, so no peace can take you out of it yet.";
   if (error === "no-war") return "That war is over.";
   if (error === "not-in-war") return "You are not in that war.";
   return clean(error) || "That could not be done.";
 };
 
 // Sends one answer: to the host of a shared game, else to the game itself.
-//   where   for "propose": { chatId, messageId }, the thread and the message that put the terms
+//   where   for "propose": { chatId, messageId, to }, the thread and the message that put the terms, and the
+//           country they are put to (another player is put them by name)
 // Resolves { ok, error, accepted, to, offerId }.
 export const sendPeaceAnswer = async (op, ref, terms = null, where = {}) => {
   if (isSimulationBusy()) return { ok: false, error: TURN_RUNNING_NOTE, accepted: false, to: "" };
   try {
     if (inSharedGame()) {
-      const answer = await requestFromHost("peace", { op, ref, terms: terms ?? {} });
+      const answer = await requestFromHost("peace", { op, ref, terms: terms ?? {}, ...(clean(where.to) ? { to: clean(where.to) } : {}) });
       return { ok: answer.ok === true, error: answer.ok ? "" : clean(answer.error), accepted: answer.ok === true && (op === "accept" || op === "honour"), to: "" };
     }
-    return await answerDiplomacy({ op, ref, terms, chatId: clean(where.chatId), messageId: clean(where.messageId) });
+    return await answerDiplomacy({ op, ref, terms, to: clean(where.to), chatId: clean(where.chatId), messageId: clean(where.messageId) });
   } catch (error) {
     return { ok: false, error: clean(error?.message) || "That could not be done.", accepted: false, to: "" };
   }
@@ -152,8 +155,10 @@ export const CallToArmsCard = ({ call, viewer }) => {
   );
 };
 
+// (Accepted: peace is made between the two. A country another player fights on beside may stay in the war:
+// AI/warAndPeace.js leavingByPeace.)
 const OFFER_STATUS_TEXT = Object.freeze({
-  accepted: "Accepted: the war is over",
+  accepted: "Accepted: peace is made",
   declined: "Declined",
   lapsed: "No longer on the table",
 });
@@ -240,14 +245,16 @@ export const termsFromForm = ({ viewer = "", enemy = "", ground = TERRITORY_REST
   };
 };
 
-// The player's own terms, put to an enemy nobody plays in the chat with it.
-// The chat sends them as the player's message; that enemy's leader answers in
-// its reply (AI/warAndPeace.js answerPeaceProposal).
+// The player's own terms, put to an enemy in the chat with it. The chat sends
+// them as the player's message; that enemy's leader answers in its reply
+// (AI/warAndPeace.js answerPeaceProposal), or the player who plays it takes or
+// declines them on their card (`person`).
 //   viewer, enemy   the player's country and the enemy's
+//   person          the enemy is another player's country
 //   busy            the chat is waiting on a reply
 //   onSend          (terms) => Promise<string>: "" once they were put, else why not
 //   onCancel        closes the form
-export const PeaceTermsForm = ({ viewer, enemy, busy = false, onSend, onCancel }) => {
+export const PeaceTermsForm = ({ viewer, enemy, person = false, busy = false, onSend, onCancel }) => {
   const [territory, setTerritory] = useState(TERRITORY_RESTORED);
   const [money, setMoney] = useState("none");
   const [country, setCountry] = useState("free");
@@ -267,7 +274,7 @@ export const PeaceTermsForm = ({ viewer, enemy, busy = false, onSend, onCancel }
   return (
     <div data-peace-terms-form="true" style={{ marginBottom: ".5rem", padding: ".55rem .62rem", border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, background: "rgba(255,255,255,.03)", display: "flex", flexDirection: "column", gap: ".38rem" }}>
       <div style={{ fontSize: ".56rem", fontWeight: 820, color: "var(--oh-grey-text)" }}>Propose peace</div>
-      <div style={{ fontSize: ".51rem", lineHeight: 1.35, color: "rgba(255,255,255,.38)" }}>Your terms are sent in this chat. Their leader answers them in the reply: accepts, declines or offers other terms.</div>
+      <div style={{ fontSize: ".51rem", lineHeight: 1.35, color: "rgba(255,255,255,.38)" }}>{person ? "Your terms are sent in this chat, where they accept or decline them." : "Your terms are sent in this chat. Their leader answers them in the reply: accepts, declines or offers other terms."}</div>
       <select aria-label="The ground" value={territory} onChange={(event) => setTerritory(event.target.value)} style={fieldStyle}>
         <option value={TERRITORY_RESTORED}>The old borders: every region goes back</option>
         <option value={TERRITORY_AS_HELD}>Each side keeps the ground it holds</option>

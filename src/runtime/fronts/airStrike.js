@@ -129,8 +129,10 @@ export const AIR_CITY_GDP = 0.002;
 export const AIR_CITY_SHARE = 0.02;
 export const WEARINESS_BOMBED = 8;
 // The most strikes a country may have waiting, all the world may, and the world keeps told; and for how many rounds.
+// Each country keeps its own (normalizeAirStrikeOrders): only people order strikes, so the world's bound is
+// sixteen countries' worth, a bound on what a save says and never one country's orders pushing out another's.
 export const AIR_STRIKE_ORDERS_MOST = 12;
-export const AIR_STRIKE_ORDERS_KEPT = 64;
+export const AIR_STRIKE_ORDERS_KEPT = AIR_STRIKE_ORDERS_MOST * 16;
 export const AIR_STRIKES_KEPT_MOST = 40;
 export const AIR_STRIKE_ROUNDS_KEPT = 3;
 
@@ -169,12 +171,25 @@ const radiusField = (value) => {
 
 // ---- what is kept --------------------------------------------------------------------------
 
+// A front's air arm (fronts/airStrikeOps.js airArmsOf) is each of its countries' own, so its id names the
+// country as well as the front: it was "air-arm:<front>" for every country on it, so two countries' strikes
+// on one front took each other's place, and one flew with the other's arm (the gap audit of 2026-11-18). The
+// country is told by a short tag of its name, so the id stays within a unit id's length.
+// i18n-ignore: a key prefix.
+export const AIR_ARM_UNIT = "air-arm:";
+const armTag = (country) => hashSeed(fold(country)).toString(36);
+export const airArmId = (battlefield, country) => `${AIR_ARM_UNIT}${clean(battlefield, 80)}#${armTag(country)}`;
+// An order for an arm, as its id now is: one kept from before the arm named its country is its owner's.
+const armUnitOf = (unit, owner) => (!unit.startsWith(AIR_ARM_UNIT) || unit.endsWith(`#${armTag(owner)}`)
+  ? unit
+  : airArmId(unit.slice(AIR_ARM_UNIT.length), owner));
+
 // One strike waiting to be flown, or null for what is not one.
 export const normalizeAirStrikeOrder = (raw) => {
   if (!raw || typeof raw !== "object") return null;
   const id = clean(raw.id, 48);
-  const unit = clean(raw.unit, 160);
   const owner = clean(raw.owner);
+  const unit = armUnitOf(clean(raw.unit, 160), owner);
   const kind = AIR_STRIKE_KINDS.includes(raw.kind) ? raw.kind : "";
   if (!id || !unit || !owner || !kind || !finite(raw.lng) || !finite(raw.lat) || Math.abs(Number(raw.lat)) > 90) return null;
   return {
@@ -195,7 +210,8 @@ export const normalizeAirStrikeOrder = (raw) => {
   };
 };
 
-// world.airStrikeOrders: one a unit, the last given.
+// world.airStrikeOrders: one a unit, the last given, and each country's own last AIR_STRIKE_ORDERS_MOST. (The
+// world kept its last 64 whoever gave them, so six players' orders pushed out each other's oldest, unsaid.)
 export const normalizeAirStrikeOrders = (value) => {
   const byUnit = new Map();
   for (const raw of list(value)) {
@@ -204,7 +220,13 @@ export const normalizeAirStrikeOrders = (value) => {
     byUnit.delete(order.unit);
     byUnit.set(order.unit, order);
   }
-  return [...byUnit.values()].slice(-AIR_STRIKE_ORDERS_KEPT);
+  const counted = new Map();
+  const kept = [...byUnit.values()].reverse().filter((order) => {
+    const n = (counted.get(fold(order.owner)) ?? 0) + 1;
+    counted.set(fold(order.owner), n);
+    return n <= AIR_STRIKE_ORDERS_MOST;
+  });
+  return kept.reverse().slice(-AIR_STRIKE_ORDERS_KEPT);
 };
 
 const readHits = (value) => list(value).map((hit) => ({ country: clean(hit?.country), n: whole(hit?.n), lost: whole(hit?.lost), ...(hit?.own === true ? { own: true } : {}) }))

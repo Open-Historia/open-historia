@@ -10,6 +10,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { buildGovernmentPartyPresentation, buildPoliticalLandscapeViews } from "../../runtime/politicalPresentation.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { PARTY_ROLE_LABELS, findIdeology } from "../../runtime/politics.js";
+import { partiesCompiled } from "../../runtime/politicalLandscapeFold.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value.map(clean).filter(Boolean) : (clean(value) ? [clean(value)] : []));
@@ -432,9 +433,12 @@ const GovernmentOverview = ({ profile, fallbackGovernment, fallbackLeader }) => 
 
 // Fill in a country's parties (their seats, roles and ideologies, the legislature and the next election), or read
 // them afresh: one AI request, on the player's asking (onCompile).
-const PartiesCompile = ({ profile, onCompile, compiling = false, error = "" }) => {
+// `once`: a shared game, where parties filled in stand for everyone, as a stat sheet does: there is nothing to read
+// again.
+const PartiesCompile = ({ profile, onCompile, compiling = false, error = "", once = false }) => {
   if (typeof onCompile !== "function") return null;
-  const detailed = (Array.isArray(profile?.parties) ? profile.parties : []).some((party) => party?.ideologyFamily || Number.isFinite(party?.seats) || party?.role);
+  const detailed = partiesCompiled(profile);
+  if (detailed && once) return null;
   return (
     <div className="oh-country-politics-secondary" style={{ ...card, marginTop: "0.65rem", padding: "0.6rem 0.78rem" }}>
       {compiling && <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem" }}>Compiling the government and parties…</div>}
@@ -561,7 +565,7 @@ const IntelligenceAssessment = ({ intelligence }) => {
   );
 };
 
-export default function PoliticalOverview({ profile, fallbackGovernment = "", fallbackLeader = "", intelligence = null, institutions = [], onCompile = null, compiling = false, compileError = "" }) {
+export default function PoliticalOverview({ profile, fallbackGovernment = "", fallbackLeader = "", intelligence = null, institutions = [], onCompile = null, compiling = false, compileError = "", compileOnce = false }) {
   const views = useMemo(() => buildPoliticalLandscapeViews(profile), [profile]);
   const polityKey = clean(profile?.polityKey || profile?.name);
   const [viewChoice, setViewChoice] = useState({ polityKey: "", value: "" });
@@ -587,7 +591,7 @@ export default function PoliticalOverview({ profile, fallbackGovernment = "", fa
   return (
     <div className="oh-country-politics-page" style={{ marginTop: "0.85rem" }}>
       <GovernmentOverview profile={profile} fallbackGovernment={fallbackGovernment} fallbackLeader={fallbackLeader} />
-      <PartiesCompile profile={profile} onCompile={onCompile} compiling={compiling} error={compileError} />
+      <PartiesCompile profile={profile} onCompile={onCompile} compiling={compiling} error={compileError} once={compileOnce} />
 
       {landscape?.entries.length > 0 && (
         <section className="oh-country-landscape" style={{ ...card, marginTop: "1.05rem", padding: "0.72rem 0.78rem" }}>

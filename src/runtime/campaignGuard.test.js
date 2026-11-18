@@ -7,6 +7,7 @@
 // destroying it, and leaving the campaign that generated the turn at its start.
 
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import { assertCampaignUnchanged, campaignChanged, campaignSwitchMessage } from "./campaignGuard.js";
@@ -46,4 +47,15 @@ test("surrounding whitespace is not a different campaign", () => {
 
 test("the wording can name what was refused", () => {
   assert.match(campaignSwitchMessage("a", "b", "game-master change"), /This game-master change was generated/);
+});
+
+// A shared game is another world in front of the page (its documents are the host's view): a writer that began in
+// the page's own game and finishes after a shared game began is refused by this same check, as one that began in
+// another campaign is: its world is not the view's, and its save would be dropped there.
+test("a writer begun in the page's own game does not land in a shared game begun meanwhile, nor the other way", () => {
+  assert.equal(campaignChanged("game-1", "shared:game-1"), true);
+  assert.equal(campaignChanged("shared:game-1", "game-1"), true);
+  assert.equal(campaignChanged("shared:game-1", "shared:game-1"), false);
+  const gameplay = fs.readFileSync(new URL("../Game/AI/gameplay.js", import.meta.url), "utf8");
+  assert.match(gameplay, /const id = String\(getLibraryState\(\)\?\.activeGameId \?\? ""\)\.trim\(\);\s*return id && inSharedGame\(\) \? `shared:\$\{id\}` : id;/);
 });

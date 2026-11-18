@@ -113,3 +113,14 @@ test("a skip's standing rules carry the board's rules, always, folded where its 
   const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
   assert.ok(source.includes("`${JUMP_PROJECTS_RULES_HEADING}\\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) && variables?.foldedBoard !== false })}`,"));
 });
+
+// A belief (runtime/projectEngine.js isBelief) is no country's work, only what the
+// board's service was made to believe by material planted on its turned agent. The
+// world is told so, so that it never tells it as happening; the player's own tasks
+// (the advisor, the planner) see it as their service does.
+test("the world's tasks are told which entries are beliefs; the player's own tasks never", () => {
+  const board = { projects: [project("Dragon eggs", { ownerCode: "House Targaryen", secrecy: "covert", belief: true, linkedSpyIds: ["spy-1"] })] };
+  assert.match(buildProjectsSummaryText(board, GAME, { compact: true, beliefsTold: true }), /"Dragon eggs" · House Targaryen · .* \[covert; NOT REAL: planted on House Stark's service, which believes it\]/);
+  assert.doesNotMatch(buildProjectsSummaryText(board, GAME, { compact: true }), /NOT REAL|planted/);
+  assert.doesNotMatch(buildProjectsSummaryText(board, GAME), /NOT REAL|planted/);
+});

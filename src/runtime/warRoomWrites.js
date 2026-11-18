@@ -20,6 +20,8 @@
 // Runs under bare node: the world store and the ops both do.
 
 import { inSharedGame, requestFromHost } from "../multiplayer/client/sharedGameBridge.js";
+import { JSON_URLS, readJson } from "./assets.js";
+import { frontCitiesOf } from "./frontCities.js";
 import { applyAirStrikeOp, cleanAirStrikeOp } from "./fronts/airStrikeOps.js";
 import { applyFortifyOp, cleanFortifyOp } from "./fronts/fortifyOps.js";
 import { applyWarRoomOp, cleanWarRoomOp } from "./fronts/warRoomOps.js";
@@ -64,21 +66,27 @@ export const sendWarRoomOp = async (op, { turnRunning = () => false } = {}) => {
 // map (runtime/warRoomChart.js: where the sea is, whose the ground is), which
 // the caller reads (`readChart`, resolving with a chart or null) and which is
 // asked for only where this page writes the world itself: the host of a shared
-// game reads its own.
-const sendHeldToMap = async (sent, { request, apply, needsChart }, { turnRunning, readChart }) => {
+// game reads its own. So are a city struck and how many live in it, read here
+// from the map's cities (`needsCities`; runtime/frontCities.js) as the world
+// has them when the op is written.
+const sendHeldToMap = async (sent, { request, apply, needsChart, needsCities = false }, { turnRunning, readChart }) => {
   if (inSharedGame()) {
     const answer = await requestFromHost(request, { op: sent });
     if (!answer.ok) throw new Error(answer.error || "The host did not take that.");
     return;
   }
   if (turnRunning()) throw new Error(TURN_RUNNING_REFUSAL);
-  const chart = needsChart ? await Promise.resolve().then(readChart).catch(() => null) : null;
+  const [chart, cityMap] = await Promise.all([
+    needsChart ? Promise.resolve().then(readChart).catch(() => null) : null,
+    needsCities ? readJson(JSON_URLS.citiesGeojson, { defaultValue: null }).catch(() => null) : null,
+  ]);
   // (The map can take a moment to read: a turn may have begun meanwhile.)
   if (turnRunning()) throw new Error(TURN_RUNNING_REFUSAL);
   const game = await readGameData();
   let refusal = "";
   await mutateWorldState((world) => {
-    const result = apply(world, sent, { player: game?.country, date: game?.gameDate || game?.startDate, round: game?.round, chart });
+    const cities = cityMap ? frontCitiesOf(cityMap, world, game) : null;
+    const result = apply(world, sent, { player: game?.country, date: game?.gameDate || game?.startDate, round: game?.round, chart, cities });
     if (result.error) {
       refusal = result.error;
       return null;
@@ -103,10 +111,12 @@ export const sendFleetOp = async (op, { turnRunning = () => false, readChart = a
 };
 
 // An air strike for one of the player's air units, or its strike called off. The map is read for a city struck:
-// whose the ground is. (None in a scenario without air units: the Wars feature.)
+// whose the ground is, and the city itself with how many live there. (None in a scenario without air units: the
+// Wars feature.)
 export const sendAirStrikeOp = async (op, { turnRunning = () => false, readChart = async () => null } = {}) => {
   const sent = cleanAirStrikeOp(op);
   if (!sent) throw new Error("Nothing was asked.");
   const apply = (world, given, context) => applyAirStrikeOp(world, given, { ...context, air: activeWars().air });
-  await sendHeldToMap(sent, { request: "airstrike", apply, needsChart: sent.op === "airstrike" && sent.kind === "city" }, { turnRunning, readChart });
+  const city = sent.op === "airstrike" && sent.kind === "city";
+  await sendHeldToMap(sent, { request: "airstrike", apply, needsChart: city, needsCities: city }, { turnRunning, readChart });
 };

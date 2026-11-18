@@ -79,6 +79,9 @@ export const RECEIPT_PLAYER_TEXTS = Object.freeze({
   reportEmpty: "A report was not written: it carried no document.",
   reportNoHolders: "The report \"{{title}}\" was not written: none of the governments meant to hold it is a country on this map.",
   projectUnnamed: "A project was not opened: it had no name.",
+  // Said without its reason, which is a secret of a service's (gameplay.js:
+  // a programme planted on a service whose agent was never turned).
+  projectNotOpened: "A project was not opened: nothing in the world bears it out.",
   projectChangeNoProject: "A change to a project was not applied: it did not say which project.",
   projectChangeUnknown: "A change to the project \"{{name}}\" was not applied: nothing on the board has that name.",
   schemaTruncatedOne: "1 item beyond the allowed length was left out of the answer.",

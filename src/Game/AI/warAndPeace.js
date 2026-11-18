@@ -30,12 +30,16 @@
 //
 // BETWEEN TURNS a person answers: an offer of peace (acceptPeaceOffer,
 // declinePeaceOffer), a call to arms (answerCallToArms), or puts terms of
-// their own to an enemy nobody plays (proposePeace), which its leader answers
-// in the chat (answerPeaceProposal).
+// their own (proposePeace) to an enemy nobody plays, which its leader answers
+// in the chat (answerPeaceProposal), or to another person, who takes or
+// declines them as any offer.
 //
 // A PEACE MADE (makePeace) ends the war in the ledger, settles the ground the
 // two sides hold of each other's as its terms say, begins any reparations, and
-// is kept (world.peaceTreaties) for the next period's story to tell.
+// is kept (world.peaceTreaties) for the next period's story to tell. A person's
+// peace is their own country's: with another person in the war who did not
+// make it, it is a separate peace, and the war goes on for the rest
+// (leavingByPeace).
 //
 // Everything here takes a world and returns one: nothing is read or written
 // but what it is handed, so the same turn applied twice is the same world.
@@ -53,6 +57,7 @@ import {
   normalizeTerms,
   offerFromAi,
   openOfferBetween,
+  peaceOfferId,
   reparationsDue,
   reparationsOf,
   treatyFromSkip,
@@ -60,6 +65,7 @@ import {
   withTurnPeaceOffers,
 } from "../../runtime/peaceTerms.js";
 import { startingWearinessOf } from "../../runtime/militaryStats.js";
+import { withTurnTreatyOffers } from "../../runtime/treatyOffers.js";
 import { landWeightsOf } from "../../runtime/militaryPower.js";
 import { populationFigureOf } from "../../runtime/populationFigure.js";
 import { normalizeWarWeariness, wearinessGoingIn, wearinessOf, withTurnWeariness } from "../../runtime/warWeariness.js";
@@ -196,9 +202,13 @@ export const withTreatyBroken = (world, { ally, via }, { date = "", round = 0 } 
 // What a peace does to the ground: for every region one side of the war holds
 // and that is lawfully the other's, a cession to whoever holds it ("as held")
 // or its return to whose it is ("restored"). As an event's impacts.
-export const peaceImpacts = (world, war, territory) => {
+//   leaving   a separate peace's countries (leavingByPeace): only the ground
+//             between them and the side they fought is settled, and what the
+//             others hold of each other's is theirs to fight over still
+export const peaceImpacts = (world, war, territory, { leaving = null } = {}) => {
   const sides = sidesOf(war).map((members) => new Set(members.map(fold)));
   const sideOf = (name) => (sides[0].has(fold(name)) ? 0 : sides[1].has(fold(name)) ? 1 : -1);
+  const leavers = leaving ? new Set(list(leaving).map(fold)) : null;
   const ownership = record(world?.regionOwnershipOverrides);
   const note = `Peace: ${clean(war?.title) || clean(war?.id)}`;
   const regionTransfers = [];
@@ -208,6 +218,7 @@ export const peaceImpacts = (world, war, territory) => {
     const from = sideOf(sovereign);
     const to = sideOf(holder);
     if (!holder || from < 0 || to < 0 || from === to) continue;
+    if (leavers && !leavers.has(fold(sovereign)) && !leavers.has(fold(holder))) continue;
     if (territory === TERRITORY_AS_HELD) {
       regionTransfers.push({ regionId, fromCode: clean(sovereign), toCode: holder, basis: "treaty", note });
     } else {
@@ -327,27 +338,60 @@ const withImpacts = (world, impacts, { id = "", date = "", round = 0, descriptio
   }).world;
 };
 
-// A world with a war ended on terms.
+// WHO A PEACE TAKES OUT OF ITS WAR. A person's war ends only by that person's
+// own peace (playersWarsHold.js), and in a shared game "each country making its
+// own peace while the war goes on for the rest" (the owner, 2026-11-15). One
+// person's taking an offer ended the war for every person on their side, and
+// handed back the land the others had taken: they were never asked.
+// A peace with no other person in its war ends the war, as it always has, and
+// the countries the AI plays on both sides follow it. With another person in it
+// who did not make it, it is a separate peace: of the two who made it, each a
+// person plays leaves the war, unless a person who did not make it fights on
+// against it (that war is still theirs to end too); a country the AI plays
+// fights on with the rest. Returns null for the war's end, or the countries
+// that leave it: none when no peace can be made yet without another person's.
+const leavingByPeace = (war, { from = "", to = "", players = [] } = {}) => {
+  const played = new Set(list(players).map(fold).filter(Boolean));
+  const parties = new Set([fold(from), fold(to)]);
+  const sides = sidesOf(war);
+  const others = sides.map((members) => members.filter((member) => played.has(fold(member)) && !parties.has(fold(member))));
+  if (others[0].length === 0 && others[1].length === 0) return null;
+  const leaving = [];
+  for (const party of [from, to]) {
+    if (!played.has(fold(party))) continue;
+    const side = sides.findIndex((members) => members.some((member) => fold(member) === fold(party)));
+    if (side < 0 || others[1 - side].length > 0) continue;
+    leaving.push(sides[side].find((member) => fold(member) === fold(party)));
+  }
+  return leaving;
+};
+
+// A world with a war ended on terms, or with the countries a separate peace
+// takes out of it gone from it (leavingByPeace).
 //   warId        the war
 //   from, to     who offered, and who took it
 //   terms        { territory, reparations, annexed?, cessions?, puppet?, conditions? }
 //   date, round  when
 //   by           how it came about: "offer" (a person took one), "proposal" (a
 //                person's own terms were taken), "settled" (two countries nobody plays)
+//   players      the countries people play
 //   regions      the map's region catalog, for the regions annexed or ceded by
 //                name (termsImpacts): with none, only regions the world itself
 //                hands out are found
-// The same world when the war is not being fought.
-export const makePeace = (world, { warId = "", from = "", to = "", terms = null, date = "", round = 0, by = "offer", regions = [] } = {}) => {
+// The same world when the war is not being fought, or when nobody can leave it
+// yet.
+export const makePeace = (world, { warId = "", from = "", to = "", terms = null, date = "", round = 0, by = "offer", players = [], regions = [] } = {}) => {
   const war = list(world?.wars).find((entry) => clean(entry?.id) === clean(warId));
   if (!war || !settleable(war)) return world;
+  const leaving = leavingByPeace(war, { from, to, players });
+  if (leaving && leaving.length === 0) return world;
   let read = normalizeTerms(terms);
   const turn = Math.max(0, Math.round(figure(round)));
   // Peace terms already have the active map's region catalog; pass its baked
   // owner into the same native title/Stats guard used by time skips. With no
   // verified catalog, preserve the existing world-only compatibility path.
   const regionCatalog = Array.isArray(regions) && regions.length ? regions : null;
-  let next = withImpacts(world, peaceImpacts(world, war, read.territory), { id: `peace-${clean(warId)}-${clean(date)}`, date, round: turn, description: "The ground as the peace settles it.", regionCatalog });
+  let next = withImpacts(world, peaceImpacts(world, war, read.territory, { leaving }), { id: `peace-${clean(warId)}-${clean(date)}`, date, round: turn, description: "The ground as the peace settles it.", regionCatalog });
   if (read.annexed || read.cessions) {
     const moved = termsImpacts(next, read, { from, to, regions, note: `Peace: ${clean(war?.title) || clean(warId)}` });
     next = withImpacts(next, moved.impacts, { id: `peace-terms-${clean(warId)}-${clean(date)}`, date, round: turn, description: "The land the peace's terms hand over.", regionCatalog });
@@ -363,23 +407,40 @@ export const makePeace = (world, { warId = "", from = "", to = "", terms = null,
   // (warAndPeace.test.js has the ledger doing so) is the same war, and its
   // battlefields fought on after the peace that ended the other.
   const ended = new Set([clean(warId), ...twinWarsOf(world, war).map((entry) => clean(entry.id))]);
+  // (A separate peace: those who made it leave, and the war goes on for the rest.)
+  const op = leaving ? { op: "leave", actors: leaving } : { op: "end", actors: [] };
   next = applyWarUpdates({
     world: next,
-    updates: [...ended].map((id) => ({ id, op: "end", actors: [], opponents: [], eventIds: [], baselineDate: clean(date), note: `Peace: ${describeTerms(read)}` })),
+    updates: [...ended].map((id) => ({ id, ...op, opponents: [], eventIds: [], baselineDate: clean(date), note: `Peace: ${describeTerms(read)}` })),
     events: [],
     stopDate: clean(date),
     round: turn,
     limit: Infinity,
   }).world;
   const [sideA, sideB] = sidesOf(war);
-  const treaty = { id: `treaty:${clean(warId)}:${clean(date)}`, warId: clean(warId), title: clean(war.title) || clean(warId), date: clean(date), round: turn, from: clean(from), to: clean(to), sides: [sideA, sideB], terms: read, by: ["offer", "proposal", "settled"].includes(by) ? by : "offer" };
+  const treaty = {
+    id: `treaty:${clean(warId)}:${clean(date)}${leaving ? `:${leaving.map(fold).join("+")}` : ""}`,
+    warId: clean(warId),
+    title: clean(war.title) || clean(warId),
+    date: clean(date),
+    round: turn,
+    from: clean(from),
+    to: clean(to),
+    sides: [sideA, sideB],
+    ...(leaving ? { left: leaving } : {}),
+    terms: read,
+    by: ["offer", "proposal", "settled"].includes(by) ? by : "offer",
+  };
+  const leavers = new Set(list(leaving).map(fold));
+  // What was offered in that war is answered by its ending; by a separate peace, only what was offered to or by
+  // those who left, and the calls to arms for them.
+  const answered = (entry, ...names) => ended.has(clean(entry?.warId)) && entry.status === "open" && (!leaving || names.some((name) => leavers.has(fold(name))));
   return {
     ...next,
     reparations: normalizeReparations([...list(next.reparations), ...reparationsOf(read, { warId, date })]),
     peaceTreaties: normalizePeaceTreaties([...list(next.peaceTreaties).filter((entry) => entry?.id !== treaty.id), treaty]),
-    // Whatever was offered in that war is answered by its ending.
-    peaceOffers: normalizePeaceOffers(list(next.peaceOffers).map((offer) => (ended.has(clean(offer?.warId)) && offer.status === "open" ? { ...offer, status: "lapsed", answeredRound: turn } : offer))),
-    callsToArms: normalizeCallsToArms(list(next.callsToArms).map((call) => (ended.has(clean(call?.warId)) && call.status === "open" ? { ...call, status: "lapsed", answeredRound: turn } : call))),
+    peaceOffers: normalizePeaceOffers(list(next.peaceOffers).map((offer) => (answered(offer, offer.from, offer.to) ? { ...offer, status: "lapsed", answeredRound: turn } : offer))),
+    callsToArms: normalizeCallsToArms(list(next.callsToArms).map((call) => (answered(call, call.defender, call.ally) ? { ...call, status: "lapsed", answeredRound: turn } : call))),
   };
 };
 
@@ -544,12 +605,14 @@ export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "
     }
     // (A person's own offer accepted by the country it was put to: their peace, on their terms.)
     const { accepts, ...treaty } = checked.treaty;
-    next = makePeace(next, { ...treaty, date, round: turn, by: accepts ? "proposal" : "settled", regions });
+    next = makePeace(next, { ...treaty, date, round: turn, by: accepts ? "proposal" : "settled", players, regions });
     if (accepts) next = { ...next, peaceOffers: normalizePeaceOffers(list(next.peaceOffers).map((offer) => (offer?.id === accepts ? { ...offer, status: "accepted", answeredRound: turn } : offer))) };
   }
   next = endWarsOnPuppets(next, { date, round: turn });
   next = endConqueredWars(next, { held: holdings, date, round: turn });
   next = { ...next, peaceOffers: withTurnPeaceOffers(next.peaceOffers, { wars: next.wars, round: turn }) };
+  // (And a treaty one player put to another lapses when it stood too long, or the two went to war: treatyOffers.js.)
+  if (Array.isArray(next.treatyOffers) && next.treatyOffers.length) next = { ...next, treatyOffers: withTurnTreatyOffers(next.treatyOffers, { wars: next.wars, round: turn }) };
   return next;
 };
 
@@ -638,11 +701,14 @@ export const turnDays = (baseGame, nextGame) => {
 
 // ---- a person's answers -------------------------------------------------------------------
 
-// A world with an offer of peace taken: the war ends on its terms. The same world when the offer is not open.
-export const acceptPeaceOffer = (world, offerId, { date = "", round = 0, regions = [] } = {}) => {
+// A world with an offer of peace taken: the war ends on its terms, or, with
+// another person in it, the taker leaves it (makePeace). The same world when
+// the offer is not open.
+//   players   the countries people play
+export const acceptPeaceOffer = (world, offerId, { date = "", round = 0, players = [], regions = [] } = {}) => {
   const offer = normalizePeaceOffers(world?.peaceOffers).find((entry) => entry.id === clean(offerId, 80));
   if (!offer || offer.status !== "open") return world;
-  const made = makePeace(world, { warId: offer.warId, from: offer.from, to: offer.to, terms: offer.terms, date, round, by: "offer", regions });
+  const made = makePeace(world, { warId: offer.warId, from: offer.from, to: offer.to, terms: offer.terms, date, round, by: "offer", players, regions });
   if (made === world) return world;
   return { ...made, peaceOffers: normalizePeaceOffers(list(made.peaceOffers).map((entry) => (entry.id === offer.id ? { ...entry, status: "accepted", answeredRound: Math.max(1, Math.round(figure(round))) } : entry))) };
 };
@@ -664,31 +730,39 @@ export const declinePeaceOffer = (world, offerId, { round = 0 } = {}) => {
 //   chatId, messageId   the thread and the message that carry it
 // Returns { world, offer, reason }: `reason` says why nothing was offered ("" when it was).
 export const offerPeace = (world, { from = "", to = "", terms = null, players = [], date = "", round = 0, source = "skip", chatId = "", messageId = "" } = {}) => {
-  const made = offerFromAi({ from, to, terms, wars: world?.wars, players, round, date, source, chatId, messageId });
+  const made = offerFromAi({ from, to, terms, wars: world?.wars, players, round, date, source, chatId, messageId, offers: world?.peaceOffers });
   if (!made.offer) return { world, offer: null, reason: made.reason };
   return { world: { ...world, peaceOffers: withOffer(world?.peaceOffers, made.offer) }, offer: made.offer, reason: "" };
 };
 
 // A person puts terms to the other side of a war. Nothing is decided here: the
-// terms wait, open, for the leader of the other side's first country to answer
-// in the chat (answerPeaceProposal).
+// terms wait, open, for an answer. A side the AI plays answers through its
+// first country, whose leader answers in the chat (answerPeaceProposal). A
+// person is put terms by name, and takes or declines them as any offer: "offers
+// between players, each country making its own peace" (the owner, 2026-11-15).
 //   from      the country proposing (a person's)
-//   players   the countries people play: a side with one of them on it is theirs to answer, and is not answered here
+//   to        the country they are put to: a person on the other side, by name; for a side the AI plays, its first
+//   players   the countries people play
 //   chatId, messageId   the thread and the person's message that put them, where known
-// Returns { world, offer, to, reason }: `reason` says why nothing happened ("" when the terms were put).
-export const proposePeace = (world, { warId = "", from = "", terms = null, players = [], date = "", round = 0, chatId = "", messageId = "" } = {}) => {
+// Returns { world, offer, to, reason }: `reason` says why nothing happened ("" when the terms were put): "played"
+// for terms put to the AI on a side a person leads, "crossed" for a peace nobody could leave the war by
+// (leavingByPeace: another person fights on against each of the two).
+export const proposePeace = (world, { warId = "", from = "", to: named = "", terms = null, players = [], date = "", round = 0, chatId = "", messageId = "" } = {}) => {
   const war = list(world?.wars).find((entry) => clean(entry?.id) === clean(warId));
   if (!war || !settleable(war)) return { world, offer: null, to: "", reason: "no-war" };
   const sides = sidesOf(war);
   const mine = sides.findIndex((members) => members.some((member) => fold(member) === fold(from)));
   if (mine < 0) return { world, offer: null, to: "", reason: "not-in-war" };
-  const to = sides[1 - mine][0];
   const played = new Set(list(players).map(fold));
-  if (!to || sides[1 - mine].some((member) => played.has(fold(member)))) return { world, offer: null, to: to ?? "", reason: "played" };
+  const person = clean(named) ? sides[1 - mine].find((member) => fold(member) === fold(named) && played.has(fold(member))) : null;
+  const to = person ?? sides[1 - mine][0];
+  if (!to || (!person && played.has(fold(to)))) return { world, offer: null, to: to ?? "", reason: "played" };
+  const leaving = leavingByPeace(war, { from, to, players });
+  if (leaving && leaving.length === 0) return { world, offer: null, to, reason: person ? "crossed" : "played" };
   const turn = Math.max(0, Math.round(figure(round)));
   const own = sides[mine].find((member) => fold(member) === fold(from)) ?? clean(from);
   const [offer] = normalizePeaceOffers([{
-    id: `peace:${clean(warId)}:${fold(own)}:${turn}`,
+    id: peaceOfferId(world?.peaceOffers, { warId, from: own, round: turn }),
     warId: clean(warId),
     from: own,
     to,
@@ -721,7 +795,7 @@ export const answerPeaceProposal = (world, { from = "", to = "", verdict = null,
   const marked = (offers, status) => normalizePeaceOffers(list(offers).map((entry) => (entry?.id === put.id ? { ...entry, status, answeredRound: turn } : entry)));
   if (word === "accept") {
     if (!put) return { world, outcome: "", reason: "nothing put" };
-    const made = makePeace(world, { warId: put.warId, from: put.from, to: put.to, terms: put.terms, date, round, by: "proposal", regions });
+    const made = makePeace(world, { warId: put.warId, from: put.from, to: put.to, terms: put.terms, date, round, by: "proposal", players, regions });
     if (made === world) return { world, outcome: "", reason: "no-war" };
     return { world: { ...made, peaceOffers: marked(made.peaceOffers, "accepted") }, outcome: "peace", reason: "" };
   }
@@ -766,14 +840,15 @@ export const answerCallToArms = (world, callId, honour, { date = "", round = 0 }
 // One thing a person does about a war between turns, whoever's screen it came from.
 //   op        "accept" | "decline" (an offer of peace, by its id), "honour" | "refuse"
 //             (a call to arms, by its id), "propose" (terms of their own, for a war by
-//             its id, which wait for the other side's leader to answer in the chat)
+//             its id, which wait for the other side to answer: proposePeace)
 //   ref       the offer's, call's or war's id
+//   to        for "propose": the country the terms are put to (a person's, by name)
 //   country   who is doing it: the offer or call must be theirs
 // Returns { world, error, accepted, to, offerId }: `error` is a word for why
 // nothing was done ("" when something was), `accepted` whether an offer or a
 // call was taken, `offerId` the terms a "propose" put.
 //   chatId, messageId   for "propose": the thread and the message that put the terms
-export const playerDiplomacy = (world, { op = "", ref = "", terms = null, country = "", players = [], date = "", round = 0, chatId = "", messageId = "", regions = [] } = {}) => {
+export const playerDiplomacy = (world, { op = "", ref = "", terms = null, to = "", country = "", players = [], date = "", round = 0, chatId = "", messageId = "", regions = [] } = {}) => {
   const who = fold(country);
   const nothing = (error) => ({ world, error, accepted: false, to: "" });
   if (!who) return nothing("nobody");
@@ -781,7 +856,10 @@ export const playerDiplomacy = (world, { op = "", ref = "", terms = null, countr
     const offer = normalizePeaceOffers(world?.peaceOffers).find((entry) => entry.id === clean(ref, 80));
     if (!offer || offer.status !== "open") return nothing("not-open");
     if (fold(offer.to) !== who) return nothing("not-yours");
-    const next = op === "accept" ? acceptPeaceOffer(world, offer.id, { date, round, regions }) : declinePeaceOffer(world, offer.id, { round });
+    // Terms a person put are taken only while that person plays their country
+    // (multiplayer/host/foundings.js withSeatLetGo lapses a let-go player's).
+    if (op === "accept" && offer.source === "player" && !list(players).some((name) => fold(name) === fold(offer.from))) return nothing("maker-gone");
+    const next = op === "accept" ? acceptPeaceOffer(world, offer.id, { date, round, players, regions }) : declinePeaceOffer(world, offer.id, { round });
     return next === world ? nothing("not-open") : { world: next, error: "", accepted: op === "accept", to: offer.from };
   }
   if (op === "honour" || op === "refuse") {
@@ -791,7 +869,7 @@ export const playerDiplomacy = (world, { op = "", ref = "", terms = null, countr
     return { world: answerCallToArms(world, call.id, op === "honour", { date, round }), error: "", accepted: op === "honour", to: call.defender };
   }
   if (op === "propose") {
-    const put = proposePeace(world, { warId: ref, from: country, terms, players, date, round, chatId, messageId });
+    const put = proposePeace(world, { warId: ref, from: country, to, terms, players, date, round, chatId, messageId });
     return { world: put.world, error: put.reason, accepted: false, to: put.to, offerId: put.offer?.id ?? "" };
   }
   return nothing("unknown");

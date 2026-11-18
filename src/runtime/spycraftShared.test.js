@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { resolveEspionage } from "./spycraft.js";
+import { applySpyOps, resolveEspionage, spyServicesOf } from "./spycraft.js";
 
 const FRANCE = "France"; // the player (the host's seat)
 const GERMANY = "Germany"; // a second person
@@ -105,4 +105,30 @@ test("a public exposure stays public", () => {
       if (/has expelled/.test(event.description)) assert.equal("audience" in event, false);
     }
   }
+});
+
+// "A guest's written order to place or recall an agent is carried out for the host" (the shared-games
+// investigation, 2026-11-15): every spy order a skip carried was run for the host's service. Each is now the service
+// of the player whose order it carried out, or whom the event names as acting on a player's order.
+test("a spy order is run for the service of the player whose order it carried out, and nobody's when none is named", () => {
+  const orders = [{ id: "o-fr", text: "plant an agent in Rome" }, { id: "o-de", ownerCode: GERMANY, text: "plant an agent in Lisbon" }];
+  const game = { country: FRANCE };
+  const players = [FRANCE, GERMANY];
+  const event = (id, ops, extra = {}) => ({ id, impacts: { spyOps: ops, actionIds: [], ...extra.impacts }, ...(extra.agency ? { agency: extra.agency } : {}) });
+  const services = spyServicesOf([
+    event("e1", [{ op: "deploy", target: "Portugal" }], { impacts: { actionIds: ["o-de"] } }),
+    event("e2", [{ op: "deploy", target: ITALY }], { impacts: { actionIds: ["o-fr"] } }),
+    event("e3", [{ op: "recall", target: "Spain" }], { agency: { principal: GERMANY, principalKind: "polity", authority: "player-order" } }),
+    event("e4", [{ op: "deploy", target: "Austria" }]),
+    event("e5", [{ op: "deploy", target: "Greece" }], { impacts: { actionIds: ["o-fr", "o-de"] } }),
+  ], { game, actions: orders, players });
+  assert.deepEqual([...services.byService.keys()], [GERMANY, FRANCE]);
+  assert.deepEqual(services.byService.get(GERMANY).map((op) => op.target), ["Portugal", "Spain"]);
+  assert.deepEqual(services.byService.get(FRANCE).map((op) => op.target), [ITALY]);
+  assert.equal(services.unowned, 2, "one naming no player, one naming two: nobody's");
+  // Run for its own service, the guest's agent is the guest's.
+  const placed = applySpyOps({ spies: [] }, services.byService.get(GERMANY).slice(0, 1), { date: "1938-02-01", playerPolity: GERMANY });
+  assert.deepEqual(placed.spies.map((agent) => [agent.owner, agent.target]), [[GERMANY, "Portugal"]]);
+  // With one player in the game every order is theirs, as before.
+  assert.deepEqual([...spyServicesOf([event("e4", [{ op: "deploy", target: "Austria" }])], { game, actions: orders, players: [FRANCE] }).byService.keys()], [FRANCE]);
 });

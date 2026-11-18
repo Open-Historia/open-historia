@@ -129,12 +129,15 @@ test("a skip kept for its campaign goes on under the cap it was given", () => {
 
 test("the skip's code reads the mode where it gives the cap, the rounds and the directive", () => {
   const gameplay = source("./gameplay.js");
-  assert.match(gameplay, /const unlimited = unlimitedRequests\(\);\n\s*const pieces = [^\n]+\n\s*const budget = createJumpBudget\(\{ cap: jumpRequestCap\(\{ segments: pieces, unlimited \}\), only: SKIP_SPENDERS \}\);/);
-  assert.match(gameplay, /\? Math\.min\(carriedRoundCount\(lookupCarry\) \+ budget\.free, lookupRoundLimit\(\{ unlimited: unlimitedRequests\(\) \}\)\)/);
-  assert.match(gameplay, /const activeLookupDirective = \(\) => \(unlimitedRequests\(\)\n\s*\? lookupDirective\(\{ rounds: lookupRoundLimit\(\{ unlimited: true \}\) \}\)\n\s*: LOOKUP_DIRECTIVE\);/);
+  // A skip reads the mode of whoever's key pays for it (skipRules): this device's, or a shared round's payer's.
+  assert.match(gameplay, /const skipRules = \(\) => carriedSkipRules\(\) \?\? \{\n\s*unlimited: unlimitedRequests\(\),/);
+  assert.match(gameplay, /const \{ unlimited \} = skipRules\(\);\n(?:[^\n]*\n){1,3}?\s*const pieces = [^\n]+\n\s*const budget = createJumpBudget\(\{ cap: jumpRequestCap\(\{ segments: pieces, unlimited \}\), only: SKIP_SPENDERS \}\);/);
+  assert.match(gameplay, /\? Math\.min\(carriedRoundCount\(lookupCarry\) \+ budget\.free, lookupRoundLimit\(\{ unlimited: skipRules\(\)\.unlimited \}\)\)/);
+  assert.match(gameplay, /const activeLookupDirective = \(unlimited = unlimitedRequests\(\)\) => \(unlimited\n\s*\? lookupDirective\(\{ rounds: lookupRoundLimit\(\{ unlimited: true \}\) \}\)\n\s*: LOOKUP_DIRECTIVE\);/);
+  assert.match(gameplay, /blocks\.push\(activeLookupDirective\(skipRules\(\)\.unlimited\)\);/);
   assert.equal(gameplay.includes("${LOOKUP_DIRECTIVE}"), false, "every task's directive goes through the mode");
   assert.equal(/blocks\.push\(LOOKUP_DIRECTIVE\)/.test(gameplay), false);
-  assert.match(gameplay, /const leanLookups = lookups && unlimitedRequests\(\);/);
+  assert.match(gameplay, /const leanLookups = lookups && \(spending \? spending\.unlimited === true : unlimitedRequests\(\)\);/);
   const main = source("./main.jsx");
   assert.match(main, /const defaultLookupRounds = \(\) => lookupRoundLimit\(\{ unlimited: unlimitedRequests\(\) \}\);/);
   assert.equal(/\bDEFAULT_LOOKUP_ROUNDS\b/.test(main), false);

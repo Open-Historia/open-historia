@@ -523,6 +523,8 @@ export const describeReplyProblems = (message) => {
   switch (String(message.projectsProblem ?? "")) {
     case "partial": problems.push(`in your projects block, ${detail || "some entries were malformed and skipped"}`); break;
     case "unusable": problems.push(`your projects block could not be used: ${detail || "nothing in it applied"}`); break;
+    // In a shared game: the host's own reason for not taking it.
+    case "refused": problems.push(`the host of this shared game refused your projects block, so nothing in it applied: ${detail || "it gave no reason"}`); break;
     case "truncated": problems.push("your projects block was cut off by the reply's length limit, so its last entries may be missing"); break;
     case "truncated-empty": problems.push("your projects block was cut off before any entry finished, so nothing on the board changed"); break;
     default: break;

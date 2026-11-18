@@ -20,6 +20,8 @@ import { HOLDER_SIDE_A, HOLDER_SIDE_B } from "../../runtime/fronts/constants.js"
 import { describePlans, hasDoubleAgent, knownPlans, plansOf, withOperationOrders, withWatch } from "../../runtime/fronts/plans.js";
 import { normalizeBattlefield } from "../../runtime/fronts/record.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
+import { isBelief } from "../../runtime/projects.js";
+import { seatBoardInSkip } from "../../runtime/seatBoards.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLowerCase();
@@ -28,14 +30,16 @@ const isRecord = (value) => Boolean(value) && typeof value === "object" && !Arra
 
 // Every Board of the game as one list, each entry with its owner written out:
 // an entry with none is its Board's own country's (the host's, or a seat's).
+// A seat's entry lent to a skip's board is counted once, at home as the skip
+// has it (seatBoards.js seatBoardInSkip); a belief is nobody's work (isBelief).
 export const boardsOf = (world, game) => {
   const entries = [];
   const host = clean(game?.country);
-  for (const entry of asArray(world?.projects)) if (isRecord(entry)) entries.push(clean(entry.ownerCode) ? entry : { ...entry, ownerCode: host });
+  for (const entry of asArray(world?.projects)) if (isRecord(entry) && !clean(entry.lentFrom) && !isBelief(entry)) entries.push(clean(entry.ownerCode) ? entry : { ...entry, ownerCode: host });
   const seats = isRecord(world?.seatBoards) ? world.seatBoards : {};
-  for (const [country, board] of Object.entries(seats)) {
+  for (const country of Object.keys(seats)) {
     if (fold(country) === fold(host)) continue;
-    for (const entry of asArray(board)) {
+    for (const entry of seatBoardInSkip(world, country)) {
       // A seat's Board holds its own entries and what it knows of others'; the
       // host's list already has the latter where they are the host's own.
       if (isRecord(entry) && !clean(entry.ownerCode)) entries.push({ ...entry, ownerCode: clean(country) });

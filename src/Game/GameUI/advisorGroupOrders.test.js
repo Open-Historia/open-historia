@@ -117,6 +117,18 @@ test("a failed cabinet Project mutation is reported and never shown as applied",
   assert.match(message.projectsDetail, /world is read-only/);
 });
 
+test("a shared game's host refusing a cabinet member's Projects is said as the host's, in its words", async () => {
+  const { hostRefusal } = await import("./advisorProjectRouting.js");
+  const message = await route("```projects\n[{\"op\":\"create\",\"name\":\"Emergency Heating\"}]\n```", {
+    mutateWorldState: async () => { throw hostRefusal("That is not one of your own programmes."); },
+    applyProjectOpsToWorld: () => { throw new Error("should never run"); },
+  });
+  assert.equal(message.projectsProblem, "refused");
+  assert.equal(message.projectsDetail, "That is not one of your own programmes.");
+  const { describeReplyProblems } = await import("./advisorBlocks.js");
+  assert.deepEqual(describeReplyProblems(message), ["the host of this shared game refused your projects block, so nothing in it applied: That is not one of your own programmes."]);
+});
+
 test("group order parsing rejects civilian, foreign and retired speakers before any Project mutation", async () => {
   let called = false;
   for (const recipient of [

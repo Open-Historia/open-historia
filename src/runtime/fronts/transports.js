@@ -51,8 +51,13 @@ export const TRANSPORT_ORDERS = Object.freeze({ ship: "sea", rail: "land", airli
 export const TRANSPORT_LOAD_USUAL = 8;
 export const TRANSPORT_STATUSES = Object.freeze(["ordered", "moving", "landed", "lost", "refused", "returned"]);
 export const TRANSPORT_ENDED = Object.freeze(["landed", "lost", "refused", "returned"]);
-// The most transporters a world keeps, the most formations one dispatch carries, and the most who hunt one.
-export const MAX_TRANSPORTS = 24;
+// The most transporters one country has out at once (ordered or under way), the most a world keeps, the most
+// formations one dispatch carries, and the most who hunt one. The bound is each country's own: it was the world's
+// (twenty out of twenty-four kept), so one country's convoys, or the story's, left another none to send, and in a
+// shared game "too many are out" counted the convoys only ordered, which the asker cannot see (the review of
+// 2026-11-18, wars 4). The world keeps enough for eight countries to have theirs out, and those just ended.
+export const TRANSPORTS_OUT_MOST = 20;
+export const MAX_TRANSPORTS = 8 * (TRANSPORTS_OUT_MOST + 4);
 export const TRANSPORT_LOAD_MOST = 40;
 export const TRANSPORT_HUNTERS_MOST = 6;
 // What a transporter's speed and one carrier's load may be, whoever says them.
@@ -266,7 +271,7 @@ export const orderTransport = (transports, spec = {}, { date = "", year = null }
   const named = clean(spec.kind, 40);
   const said = Math.round(Number(spec.speed) || 0);
   if (!usual && !(named && said > 0)) return { error: "not-yet" };
-  if (kept.filter(isUnderWay).length >= MAX_TRANSPORTS - 4) return { error: "too-many" };
+  if (kept.filter((entry) => isUnderWay(entry) && fold(entry.owner) === fold(spec.owner)).length >= TRANSPORTS_OUT_MOST) return { error: "too-many" };
   const record = normalizeTransport({
     id: nextTransportId(kept),
     medium,

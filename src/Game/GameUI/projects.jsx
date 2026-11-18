@@ -54,6 +54,7 @@ import { TAG_SEARCH_FROM, searchTags, stepTagFocus, tickedFirst } from "./projec
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { nameInitials } from "../../../server/nameKey.js";
 import { planProject } from "../AI/gameplayLazy.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
 // The card seeds are whole sentences, one per variant, handed over in the
 // interface's language (uiString): a kind or an owner glued in as a word would
@@ -467,7 +468,7 @@ const Milestones = ({ plan }) => {
 
 // ---- one card --------------------------------------------------------------
 
-const ProjectCard = memo(({ project, fundingMode, eventTitles, expanded, busy, playerCountry, playerLandless, ownerFlags, ownerNames, finish, planning, onToggleExpand, onAskAdvisor, onShowOnMap, onSetFunding, onSetSecrecy, onAbandon, onPlan }) => {
+const ProjectCard = memo(({ project, fundingMode, eventTitles, expanded, busy, error = "", playerCountry, playerLandless, ownerFlags, ownerNames, finish, planning, onToggleExpand, onAskAdvisor, onShowOnMap, onSetFunding, onSetSecrecy, onAbandon, onPlan }) => {
   const flags = deriveProjectFlags(project);
   const open = isProjectOpen(project);
   const mine = isPlayerProject(project, playerCountry);
@@ -683,6 +684,9 @@ const ProjectCard = memo(({ project, fundingMode, eventTitles, expanded, busy, p
           >
             {confirmingAbandon ? "Confirm abandon?" : "Abandon"}
           </button>
+          {/* Why a change of funding, or an abandon, did not happen: the host's
+              reason in a shared game, a failed save alone. */}
+          {error && <div role="alert" style={{ color: "#fca5a5", flexBasis: "100%", fontSize: "0.68rem" }}>{error}</div>}
         </div>
       )}
 
@@ -1285,6 +1289,13 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const [pendingId, setPendingId] = useState("");
   const [planningId, setPlanningId] = useState("");
   const [planError, setPlanError] = useState("");
+  // A change of funding or an abandon that did not happen, on its own card:
+  // { id, text }. It was swallowed, and the card simply stayed as it was, the
+  // host's reason unsaid (the review of 2026-11-18, door 7).
+  const [cardError, setCardError] = useState({ id: "", text: "" });
+  const failedOn = useCallback((project, failure) => {
+    setCardError({ id: project.id, text: String(failure?.message || failure || "").trim() || uiString("The host did not take that.") });
+  }, []);
 
   const isMobile = useIsMobile();
   const isTouch = useTouchPrimary();
@@ -1386,7 +1397,15 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
 
   // The board's player-authored writes, through the door that lets a government
   // touch its own programmes only (actor "player").
+  // In a shared game the host applies them to this player's own board, by the
+  // same door (multiplayer/game/messages.js "projectOps"); a refusal is thrown
+  // like any failed write.
   const writeOps = useCallback(async (ops) => {
+    if (inSharedGame()) {
+      const answer = await requestFromHost("projectOps", { ops, by: "panel" });
+      if (!answer?.ok) throw new Error(answer?.error || uiString("The host did not take that."));
+      return;
+    }
     // Shared canonical queue: read the latest world *inside* the mutation.
     // This serializes Projects edits with other page writers and the Stats
     // worker handoff, and rejects a queued edit after a campaign switch.
@@ -1399,7 +1418,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
         round,
         world,
       });
-      if (refusedProjectIds.length > 0) throw new Error("Project change refused: not authorized or the board is full.");
+      if (refusedProjectIds.length > 0) throw new Error(uiString("Project change refused: not authorized or the board is full."));
       return nextWorld;
     });
   }, [gameDate, playerCountry, round]);
@@ -1407,38 +1426,44 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const setFunding = useCallback(async (project, funding) => {
     if (project.funding === funding) return;
     setPendingId(project.id);
+    setCardError({ id: "", text: "" });
     try {
       await writeOps([{ op: "update", projectId: project.id, name: project.name, funding }]);
-    } catch {
-      // A failed write leaves the board as it was; the poll re-reads it.
+    } catch (failure) {
+      // A failed write leaves the board as it was; the poll re-reads it. Why is said on the card.
+      failedOn(project, failure);
     } finally {
       setPendingId("");
     }
-  }, [writeOps]);
+  }, [writeOps, failedOn]);
 
   const setSecrecy = useCallback(async (project, secrecy) => {
     if (project.secrecy === secrecy) return;
     setPendingId(project.id);
+    setCardError({ id: "", text: "" });
     try {
       await writeOps([{ op: "update", projectId: project.id, name: project.name, secrecy }]);
     } catch (failure) {
-      setPlanError(String(failure?.message || failure || "").trim());
+      // As above.
+      failedOn(project, failure);
     } finally {
       setPendingId("");
     }
-  }, [writeOps]);
+  }, [writeOps, failedOn]);
 
   // op cancel, never remove: the entry stays under Closed with the progress it reached.
   const abandonProject = useCallback(async (project) => {
     setPendingId(project.id);
+    setCardError({ id: "", text: "" });
     try {
       await writeOps([{ op: "cancel", projectId: project.id, name: project.name, note: uiString("Abandoned by the player.") }]);
-    } catch {
+    } catch (failure) {
       // As above.
+      failedOn(project, failure);
     } finally {
       setPendingId("");
     }
-  }, [writeOps]);
+  }, [writeOps, failedOn]);
 
   // A project the advisor opened without a plan: one request plans it, and it starts.
   const planEntry = useCallback(async (project) => {
@@ -1483,6 +1508,7 @@ const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
       expanded={expandedId === project.id}
       onToggleExpand={toggleExpand}
       busy={pendingId === project.id}
+      error={cardError.id === project.id ? cardError.text : ""}
       planning={planningId === project.id}
       playerCountry={playerCountry}
       playerLandless={playerLandless}

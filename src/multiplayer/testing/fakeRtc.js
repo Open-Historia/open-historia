@@ -8,7 +8,11 @@
 
 const later = (fn) => setTimeout(fn, 0);
 
-export const createFakeRtcNetwork = () => {
+// `backlog`: a channel that backs up as a real one does. Each send adds its
+// text to the channel's bufferedAmount and goes out a moment later, the
+// buffer draining as it does (with "bufferedamountlow" when it falls under the
+// threshold): a sender that pauses on a full buffer is then really paused.
+export const createFakeRtcNetwork = ({ backlog = false } = {}) => {
   const connections = new Map();
   let counter = 0;
   // "" | "failed" (both ends are told after a moment, as ICE tells them) |
@@ -28,9 +32,20 @@ export const createFakeRtcNetwork = () => {
     send(text) {
       if (this.readyState !== "open") throw new Error("channel not open");
       const target = this.other;
-      later(() => {
+      if (!backlog) {
+        later(() => {
+          if (target?.readyState === "open") target.onmessage?.({ data: text });
+        });
+        return;
+      }
+      // Out in order, one tick per frame, the buffer emptying as they go.
+      this.bufferedAmount += text.length;
+      this.queue = (this.queue ?? Promise.resolve()).then(() => new Promise((resolve) => later(() => {
+        this.bufferedAmount = Math.max(0, this.bufferedAmount - text.length);
         if (target?.readyState === "open") target.onmessage?.({ data: text });
-      });
+        if (this.bufferedAmount <= (this.bufferedAmountLowThreshold ?? 0)) this.onbufferedamountlow?.({});
+        resolve();
+      })));
     }
 
     close() {

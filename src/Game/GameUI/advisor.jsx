@@ -1,5 +1,5 @@
 /*! Open Historia — portions (drawer close/slide + mobile layout) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useSyncExternalStore } from "react";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, sendAdvisorGroupMessage, startChat, loadHistory, checkAdvisorActionCompleteness } from "../AI/main.jsx";
 import { completedSilentGroupTurnIndices } from "../AI/advisorGroupMeetings.js";
@@ -12,7 +12,7 @@ import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from ".
 import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
 import { uiString } from "../../runtime/translator.js";
-import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, mutateWorldState, normalizeActionEntry, readAdvisorMessages, viewAsSeen } from "../../runtime/gameState.js";
+import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, mutateWorldState, normalizeActionEntry, readActionsState, readAdvisorMessages, viewAsSeen } from "../../runtime/gameState.js";
 import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorGroupForReply, advisorGroups, advisorMessagesFor, advisorOfficeStatus, advisorRecipientType, archiveAdvisorContact, archiveAdvisorGroup, createAdvisorGroup, reviseAdvisorGroup, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, reorderAdvisorContact, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile, withSavedActionReceipts } from "../../runtime/advisorThreads.js";
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
@@ -45,7 +45,7 @@ import { commitInstitutionLifecycleCommand } from "../../runtime/institutionLife
 import { getLibraryState } from "../../runtime/library.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
 import { TURN_RUNNING_NOTE, assertNoTurnRunning, isSimulationBusy } from "../AI/simulationStatus.js";
-import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, requestFromHost, sharedAdvisorRefusal, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
 Chart.register(...registerables);
 
@@ -211,7 +211,9 @@ const AdvisorProjectsProblem = ({ kind, detail, excerpt, onRetry }) => {
             ? "That reply was cut off before a single entry finished, so nothing could be added. Ask again for a shorter batch — around ten at a time works."
             : kind === "partial"
                 ? "Most of that batch went on the board. A few entries were written in a way that could not be read and were skipped — ask for those again."
-                : "The advisor tried to change the board but its instructions could not be read, so nothing was applied. Asking again usually fixes it.";
+                : kind === "refused"
+                    ? "The host did not take these changes to the board, so they were not applied. The host's reason:"
+                    : "The advisor tried to change the board but its instructions could not be read, so nothing was applied. Asking again usually fixes it.";
 
     return (
         <div style={{ marginTop: "0.75rem", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.35)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
@@ -1127,6 +1129,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const [hasBootstrapped, setHasBootstrapped] = useState(false);
     const [loadFailed, setLoadFailed] = useState(false);
     const [saveFailed, setSaveFailed] = useState(false);
+    // In a shared game the host keeps this conversation with the player's seat:
+    // a change it did not keep is said here, with its reason, until one is kept.
+    const hostRefusal = useSyncExternalStore(subscribeSharedGameRole, sharedAdvisorRefusal, sharedAdvisorRefusal);
     const [storageRetrying, setStorageRetrying] = useState(false);
     useEffect(() => {
         onAdvisorSaveResult = (ok) => setSaveFailed(!ok);
@@ -1601,18 +1606,24 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                             || Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 14)),
                     });
                     if (leftCampaign()) throw new Error("Campaign changed before group Project validation.");
+                    // In a shared game the host may refuse a speaker's changes:
+                    // said on that speaker's reply, the replies kept.
+                    const refusedBySpeaker = new Map();
                     const projectsBySpeaker = await applyAdvisorGroupProjectBatch({
                         entries: staged.map((record) => ({
                             speakerId: record.speakerId, proposal: record.projectOps,
                         })),
                         gameDate, round: gameRound, mutateWorldState, applyProjectOpsToWorld,
+                        onRefused: (speakerId, reason) => refusedBySpeaker.set(speakerId, reason),
                     });
                     const at = new Date().toISOString();
                     const completed = staged.map(({ projectOps, ...record }) => {
                         const summary = projectsBySpeaker.get(record.speakerId);
+                        const refused = refusedBySpeaker.get(record.speakerId);
                         return {
                             ...record, time: askedOn, at,
                             ...(summary?.length ? { projectsSummary: summary } : {}),
+                            ...(refused ? { projectsProblem: "refused", projectsDetail: refused } : {}),
                         };
                     });
                     if (leftCampaign()) throw new Error("Campaign changed before saving group replies.");
@@ -1687,6 +1698,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 dropped: projectsDropped, excerpt: projectsExcerpt } =
                 extractFencedJson(reply, "projects", { salvageTruncated: true });
             const canApplyProjects = canAdvisorApplyProjectOps(threadId, recipient);
+            // In a shared game the host's refusal, in its words: it was told as
+            // a reply whose entries named no project on the board.
+            let projectsRefusal = "";
             const projectsSummary = canApplyProjects
                 ? await applyAdvisorProjectProposal({
                     proposal: projectsProposal,
@@ -1695,7 +1709,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                     mutateWorldState,
                     applyProjectOpsToWorld,
                 }).catch((error) => {
-                    console.error("Failed to apply advisor-proposed projects:", error);
+                    if (error?.refusedByHost) projectsRefusal = String(error.message || "");
+                    else console.error("Failed to apply advisor-proposed projects:", error);
                     return null;
                 }) : null;
             // Every way this can fail used to look identical to the player: a wall
@@ -1704,6 +1719,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // "Some of it landed" is its own outcome, and the most common one now
             // that a single malformed entry no longer costs the batch.
             const projectsProblem = !canApplyProjects ? ""
+                : projectsRefusal ? "refused"
                 : projectsSummary
                     ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
                     : (looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
@@ -1711,7 +1727,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // read them": the block parsed fine and every op named a project that
             // does not exist. Telling them apart is the difference between "ask
             // again" and "it is trying to update something that was never opened".
-            const projectsDetail = projectsProblem === "partial"
+            const projectsDetail = projectsProblem === "refused" ? projectsRefusal
+                : projectsProblem === "partial"
                 ? `${projectsDropped} entr${projectsDropped === 1 ? "y was" : "ies were"} malformed and skipped.`
                 : projectsProblem === "unusable"
                     ? (projectsReason || "every entry referred to a project that is not on the board")
@@ -1882,6 +1899,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 threadId, messageId, proposalId,
                 readAdvisorMessages, mutateActionsState, mutateAdvisorState,
                 sharedGame: inSharedGame(),
+                readActions: () => readActionsState({ force: true }),
+                requestFromHost,
                 assertReady: assertNoTurnRunning,
             });
             if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
@@ -1924,6 +1943,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 normalizeAction: normalizeActionEntry,
                 repeatOf: (queue, title) => repeatedOrder(queue, title, { round: Number(round) || 0 }),
                 sharedGame: inSharedGame(),
+                readActions: () => readActionsState({ force: true }),
+                requestFromHost,
                 assertReady: assertNoTurnRunning,
             });
             if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
@@ -2252,6 +2273,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             <StorageProblemNotice title="Could not load your conversation with the advisor." detail="Nothing new is saved until it loads." onRetry={retryLoad} retrying={storageRetrying} retryIcon={<RetryIcon />} />
         ) : saveFailed ? (
             <StorageProblemNotice title="Your latest messages were not saved." detail="They are kept here until a save works." onRetry={retrySave} retrying={storageRetrying} retryIcon={<RetryIcon />} />
+        ) : hostRefusal ? (
+            <StorageProblemNotice title="The host did not keep your latest change to this conversation." detail={hostRefusal} />
         ) : null}
 
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>

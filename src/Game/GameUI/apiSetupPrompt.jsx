@@ -369,7 +369,11 @@ const groupedProviders = () => {
 };
 
 // `initialChoice` opens straight on one choice's steps (the tests draw each).
-export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missing = "an API key", onConfigure, onDismiss, initialChoice = null }) => {
+// `lead`: what to say first instead, where the game's own words are another's
+// (a shared game's guest, whose AI does what that game's rules leave it).
+// `note`: a sentence of its own after the lead, so that each is translated
+// whole (a guest whose list holds only its own Agent is told why it is asked).
+export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missing = "an API key", onConfigure, onDismiss, initialChoice = null, lead = "", note = "" }) => {
   const [choice, setChoice] = useState(SETUP_CHOICES.includes(initialChoice) ? initialChoice : null);
   const [provider, setProvider] = useState(() => providerFor(initialChoice));
   const [apiKey, setApiKey] = useState("");
@@ -422,10 +426,17 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
 
   const chooser = (
     <>
-      <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.8rem", lineHeight: 1.55, marginTop: "0.5rem" }}>
-        Open Historia writes every turn, advisor reply and diplomatic message with an AI model, and {providerLabel} has {missing} missing.
-        Until it is set, time skips fall back to canned events and the advisor cannot answer.
-      </div>
+      {lead ? (
+        <>
+          <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.8rem", lineHeight: 1.55, marginTop: "0.5rem" }}>{lead}</div>
+          {note ? <div data-setup-note="" style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.8rem", lineHeight: 1.55, marginTop: "0.4rem" }}>{note}</div> : null}
+        </>
+      ) : (
+        <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.8rem", lineHeight: 1.55, marginTop: "0.5rem" }}>
+          Open Historia writes every turn, advisor reply and diplomatic message with an AI model, and {providerLabel} has {missing} missing.
+          Until it is set, time skips fall back to canned events and the advisor cannot answer.
+        </div>
+      )}
       <div
         style={{
           display: "grid",

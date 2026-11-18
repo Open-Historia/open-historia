@@ -8,18 +8,67 @@ import {
   advisorRecipientType,
 } from "../../runtime/advisorThreads.js";
 import { planApprovedAdvisorAction, planCancelApprovedAdvisorAction, recordAdvisorActionReceipt } from "./advisorActionReview.js";
+import { ORDER_TITLE_MAX } from "../../multiplayer/game/messages.js";
+
+// What the host is asked for an approved proposal or a cancellation, in a
+// shared game: an order by the proposal's own id (the host queues it once,
+// however often it is asked, so a lost answer can be asked again), a queued
+// order given other words, or one withdrawn.
+export const hostRequestForProposal = (proposal, { cancel = false } = {}) => {
+  if (cancel) return ["unorder", { order: proposal.actionId }];
+  if (proposal.operation === "create") {
+    // The words go whole: a proposal longer than the host's order takes is
+    // refused in words (client/gameClient.js), never cut. Its title is a label,
+    // cut as the game cuts one, also when it is taken from the words.
+    return ["order", {
+      text: proposal.text || proposal.title,
+      title: String(proposal.title || proposal.text || "").slice(0, ORDER_TITLE_MAX),
+      ref: proposal.actionId,
+      source: "advisor",
+      kind: proposal.kind === "chat" ? "chat" : "action",
+    }];
+  }
+  if (proposal.operation === "edit") {
+    return ["reword", { order: proposal.targetId, ...(proposal.title ? { title: proposal.title } : {}), ...(proposal.text ? { text: proposal.text } : {}) }];
+  }
+  return ["unorder", { order: proposal.targetId }];
+};
+
+// The Actions queue an approval changes. In single player it is the game's
+// own, written under its lock. In a shared game it is the host's: the plan is
+// made on the queue as the player's view holds it, and the change is asked of
+// the host, whose answer is the write. The same plan, the same refusals.
+const changeQueue = async ({ sharedGame, readActions, requestFromHost, mutateActionsState, assertReady }, plan, request) => {
+  if (!sharedGame) {
+    let planned = null;
+    await mutateActionsState((current) => {
+      assertReady();
+      planned = plan(current);
+      return planned?.changed ? planned.next : null;
+    });
+    return planned;
+  }
+  if (typeof readActions !== "function" || typeof requestFromHost !== "function") {
+    throw new Error("The shared game's queue could not be reached.");
+  }
+  const current = await readActions();
+  assertReady();
+  const planned = plan(Array.isArray(current) ? current : []);
+  if (planned?.changed) {
+    const [kind, fields] = request;
+    const answer = await requestFromHost(kind, fields);
+    if (!answer?.ok) throw new Error(answer?.error || "The host did not take that.");
+  }
+  return planned;
+};
 
 // Identity and recipient authority are re-read from persisted Advisor state
 // before both approvals and cancellations. The displayed card is not authority.
+// In a shared game the Advisor conversation is the seat's, which the host keeps
+// and the view holds (runtime/seatAdvisors.js): read the same way.
 const readReviewedProposal = async ({
-  threadId, messageId, proposalId, readAdvisorMessages, sharedGame,
+  threadId, messageId, proposalId, readAdvisorMessages,
 }) => {
-  // Host request "order" currently accepts text only, with no stable proposal
-  // ID/acknowledged Action ID. Retrying after a lost ack could issue twice.
-  // Refuse instead of presenting a false idempotency guarantee in multiplayer.
-  if (sharedGame) {
-    throw new Error("Advisor Action review in shared games needs host-backed proposal IDs. Queue through the Actions panel for now.");
-  }
   const saved = await readAdvisorMessages({ force: true });
   if (!Array.isArray(saved)) throw new Error("The Advisor conversation could not be read.");
   const group = advisorGroups(saved).find((item) => item.id === threadId);
@@ -95,23 +144,23 @@ export const approveAdvisorAction = async ({
   normalizeAction,
   repeatOf,
   sharedGame = false,
+  readActions = null,
+  requestFromHost = null,
   assertReady = () => {},
 } = {}) => {
   const { message, proposal } = await readReviewedProposal({
-    threadId, messageId, proposalId, readAdvisorMessages, sharedGame,
+    threadId, messageId, proposalId, readAdvisorMessages,
   });
   // Cancelled creates can be re-queued with their original deterministic ID.
   // A receipt for an edit/remove stays a terminal, acknowledged operation.
   const previous = message.actionReceipts?.[proposalId];
   if (previous && previous.status !== "cancelled") return previous;
 
-
-  let planned = null;
-  await mutateActionsState((current) => {
-    assertReady();
-    planned = planApprovedAdvisorAction(current, proposal, normalizeAction, { repeatOf });
-    return planned.changed ? planned.next : null;
-  });
+  const planned = await changeQueue(
+    { sharedGame, readActions, requestFromHost, mutateActionsState, assertReady },
+    (current) => planApprovedAdvisorAction(current, proposal, normalizeAction, { repeatOf }),
+    hostRequestForProposal(proposal),
+  );
   if (!planned) throw new Error("The Action mutation did not produce an accepted result.");
   // A queue write completed (or the same deterministic Action ID already
   // exists). Only now are we allowed to stamp a receipt on the message.
@@ -133,29 +182,32 @@ export const cancelApprovedAdvisorAction = async ({
   mutateActionsState,
   mutateAdvisorState,
   sharedGame = false,
+  readActions = null,
+  requestFromHost = null,
   assertReady = () => {},
 } = {}) => {
   const { message, proposal } = await readReviewedProposal({
-    threadId, messageId, proposalId, readAdvisorMessages, sharedGame,
+    threadId, messageId, proposalId, readAdvisorMessages,
   });
   if (proposal.operation !== "create") {
     throw new Error("Only a newly queued Advisor Action can be cancelled from its proposal card.");
   }
   const previous = message.actionReceipts?.[proposalId];
-  let planned = null;
   let alreadyCancelled = false;
-  await mutateActionsState((current) => {
-    assertReady();
-    if (!Array.isArray(current) || !current.some((order) => order?.id === proposal.actionId)) {
-      if (previous?.status === "cancelled") {
-        alreadyCancelled = true;
-        return null;
+  const planned = await changeQueue(
+    { sharedGame, readActions, requestFromHost, mutateActionsState, assertReady },
+    (current) => {
+      if (!Array.isArray(current) || !current.some((order) => order?.id === proposal.actionId)) {
+        if (previous?.status === "cancelled") {
+          alreadyCancelled = true;
+          return null;
+        }
+        throw new Error("This Action is no longer queued. Check the Actions panel.");
       }
-      throw new Error("This Action is no longer queued. Check the Actions panel.");
-    }
-    planned = planCancelApprovedAdvisorAction(current, proposal);
-    return planned.next;
-  });
+      return planCancelApprovedAdvisorAction(current, proposal);
+    },
+    hostRequestForProposal(proposal, { cancel: true }),
+  );
   if (alreadyCancelled) return previous;
   if (!planned) throw new Error("The Action cancellation did not produce an accepted result.");
   // Removing the queued Action must precede recording cancellation. A failed

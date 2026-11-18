@@ -5,7 +5,7 @@ import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { onRegionSelected, onOceanClicked, dismissRegionPopup } from "../Selection/Regions";
 import { onUnitSelected, dismissUnitPopup } from "../Selection/Units";
 import { onFeatureSelected, dismissFeaturePopup } from "../Selection/Features";
-import { saveSettledStructure } from "../../runtime/structurePlacement.js";
+import { SETTLE_NOT_SAVED, saveSettledStructure } from "../../runtime/structurePlacement.js";
 import {
   getInteractionMode,
   setInteractionMode,
@@ -1175,11 +1175,16 @@ const WorldMap = ({ isGlobe = false }) => {
     const clicked = event.lngLat?.wrap?.() ?? event.lngLat;
 
     // Move on an approximately placed structure's popup (Selection/Features.jsx):
-    // it goes where the player clicks, sea included, and is settled.
+    // it goes where the player clicks, sea included, and is settled. One the
+    // host refused (a shared game: onto another's land) stays armed and says
+    // why in the Forces banner, for another tap, as a deploy does.
     if (mode.kind === "structure-place") {
-      void saveSettledStructure(mode.markerId, { lng: event.lngLat.lng, lat: event.lngLat.lat })
-        .catch((error) => logDebugEvent("warn", "[map] Moving the structure failed.", error));
       clearInteractionMode();
+      void saveSettledStructure(mode.markerId, { lng: clicked.lng, lat: clicked.lat })
+        .catch((error) => {
+          logDebugEvent("warn", "[map] Moving the structure failed.", error);
+          if (getInteractionMode().kind === "idle") setInteractionMode({ ...mode, error: String(error?.message || "") || SETTLE_NOT_SAVED });
+        });
       return;
     }
 

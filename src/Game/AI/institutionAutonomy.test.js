@@ -212,3 +212,49 @@ test("autonomous ballot work services an accession ballot even when the human is
   assert.equal(work[0].institutionId, "un");
   assert.deepEqual(work[0].actors, ["Republic of Lithuania", "Republic of Estonia"]);
 });
+
+// A shared game: the ballot pass ran for the host's country alone and listed
+// every other member as an AI voter, guests among them; a guest's call to vote
+// told the model the host "MUST" vote (the gap audit of 2026-11-18, D5a). The
+// people are never AI voters, and every person's institutions are in the one
+// request.
+test("no person is an AI voter, and every person's institutions are in the one post-turn pass", () => {
+  const HOST = "Republic of Latvia";
+  const GUEST = "Kingdom of Sweden";
+  const people = [HOST, GUEST];
+  const world = twoCouncils();
+  // An institution the guest is in and the host is not.
+  world.institutions.byId["arctic-forum"] = {
+    id: "arctic-forum", name: "Arctic Forum", status: "active",
+    members: [{ polity: GUEST, status: "member" }, { polity: "Kingdom of Norway", status: "member" }],
+    proposals: { a1: { id: "a1", title: "Icebreakers", status: "voting", voting: { openedDate: "2014-06-01", eligibleVoters: [GUEST, "Kingdom of Norway"], ballots: {} } } },
+  };
+  assert.deepEqual(unresolvedNpcVotersForProposal(world.institutions.byId["nordic-council"], world.institutions.byId["nordic-council"].proposals.p1, people), [], "the guest votes for itself");
+  const work = collectAutonomousInstitutionBallotWork(world, people);
+  const rows = work.map((item) => [item.institutionId, item.proposalId, item.actors, item.person]);
+  assert.ok(rows.every(([, , actors]) => !actors.includes(HOST) && !actors.includes(GUEST)), "no person is ever listed");
+  assert.deepEqual(rows.find(([id]) => id === "arctic-forum"), ["arctic-forum", "a1", ["Kingdom of Norway"], GUEST], "the guest's own institution, written for the guest");
+  assert.equal(rows.some(([id]) => id === "nordic-council"), false, "its only AI voter left is a person");
+  assert.equal(rows.find(([id]) => id === "baltic-union")[3], HOST);
+  // A guest calling a vote: the host is a person, never a government that "MUST" vote.
+  const called = institutionBallotWorkForProposal(world, "nordic-council", "p1", [GUEST, HOST]);
+  assert.equal(called, null);
+  const baltic = institutionBallotWorkForProposal(world, "baltic-union", "p2", [GUEST, HOST]);
+  assert.equal(baltic.actors.includes(HOST), false);
+  assert.doesNotMatch(autonomousInstitutionBallotDirective(work), new RegExp(`governments that have not yet recorded a ballot: [^\\n]*(${HOST}|${GUEST})`));
+});
+
+test("one person's institutions do not crowd another's out of the bounded pass", () => {
+  const institution = (id, members) => ({
+    id, name: id, status: "active", members: members.map((polity) => ({ polity, status: "member" })),
+    proposals: { v: { id: `${id}-v`, title: "A vote", status: "voting", voting: { openedDate: "2014-01-01", eligibleVoters: members, ballots: {} } } },
+  });
+  const world = { institutions: { schemaVersion: 1, byId: {
+    h1: institution("h1", ["Host", "A"]), h2: institution("h2", ["Host", "B"]), h3: institution("h3", ["Host", "C"]),
+    g1: institution("g1", ["Guest", "D"]),
+  } } };
+  const work = collectAutonomousInstitutionBallotWork(world, ["Host", "Guest"], { maxInstitutions: 2 });
+  assert.deepEqual(work.map((item) => [item.institutionId, item.person]), [["h1", "Host"], ["g1", "Guest"]]);
+  // Single player is as it was: the player's alone, in the ledger's order.
+  assert.deepEqual(collectAutonomousInstitutionBallotWork(world, "Host", { maxInstitutions: 2 }).map((item) => item.institutionId), ["h1", "h2"]);
+});

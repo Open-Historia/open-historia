@@ -55,6 +55,23 @@ test("the model is shown the player's figures and its enemies', with the rule fo
   assert.match(MILITARY_CHANGE_RULE, /a decade of determined rearmament twenty or more/);
 });
 
+// Rule 9 of a shared game (the review of 2026-11-18, simulation 4): the host's figures and its enemies' alone were
+// shown, so a guest who rearmed for years never moved a figure unless it was at war with the host.
+test("with several people each player's figures are shown, then their enemies, one of each in turn; with one, as before", () => {
+  const world = {
+    wars: [
+      { id: "w", status: "active", sideA: ["Russia", "Belarus"], sideB: ["Ukraine"] },
+      { id: "x", status: "active", sideA: ["Poland"], sideB: ["Lithuania"] },
+      { id: "y", status: "active", sideA: ["Ukraine"], sideB: ["Poland"] },
+    ],
+  };
+  const lines = describeMilitaryStanding(world, "Ukraine", { people: ["Ukraine", "Poland"] }).split("\n").map((row) => row.split(":")[0]);
+  assert.deepEqual(lines, ["- Ukraine (a player's)", "- Poland (a player's)", "- Russia", "- Lithuania", "- Belarus"]);
+  assert.equal(describeMilitaryStanding(world, "Ukraine", { people: ["Ukraine", "Poland"], most: 1 }).split("\n").length, 3);
+  for (const one of [[], ["Ukraine"], ["ukraine"]]) assert.equal(describeMilitaryStanding(world, "Ukraine", { people: one }), describeMilitaryStanding(world, "Ukraine"));
+  assert.match(describeMilitaryStanding(world, "Ukraine"), /^- Ukraine \(the player's\): /);
+});
+
 test("the time skip, the actions and the interactive prompts carry it, and the variable is built for them", () => {
   const gameplay = read("../Game/AI/gameplay.js");
   assert.match(gameplay, /if \(militaryStanding\) blocks\.push\(`\[Military Strength\]\\n\$\{militaryStanding\}\\n\$\{MILITARY_CHANGE_RULE\}`\);/);

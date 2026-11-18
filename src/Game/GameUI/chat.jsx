@@ -1,5 +1,5 @@
 /*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, isTouchPrimary, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -11,6 +11,7 @@ import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { SharedGameRefusal, answerPeaceInChat, checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
 import { CallToArmsCard, PeaceOfferCard, PeaceTermsForm, sendPeaceAnswer } from "./warAndPeace.jsx";
+import { TreatyForm, TreatyOfferCard, sendTreaty, treatyOffersForThread } from "./treaties.jsx";
 import { describeTerms, warBetween } from "../../runtime/peaceTerms.js";
 import { peaceOffersForThread, placePeaceOffers } from "./peacePlacement.js";
 import { createPlayerPollEvent, eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
@@ -65,8 +66,12 @@ import { commitInstitutionalPlayerMessage } from "../../runtime/institutionalGov
 import { buildPlayerPoliticalKnowledgeView } from "../../runtime/politicalKnowledge.js";
 import { commitInstitutionLifecycleCommand, institutionLifecycleCasesForPolity, institutionLifecycleConversationState, institutionPortfolioForPolity } from "../../runtime/institutionLifecycle.js";
 import { buildLifecycleReplyRevealPlan } from "./institutionLifecyclePresentation.js";
-import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame, requestFromHost, sharedGamePeople, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import { afterSharedSay, followSharedThread, pendingSharedThread, sayRequestFor, sharedFollowStep } from "../../multiplayer/client/sharedThreads.js";
+import { ownReplyAsked } from "../../multiplayer/client/ownReplies.js";
+import { SAY_MAX_CHARS } from "../../multiplayer/game/messages.js";
+import { answerOnThisDevice, dismissOwnReply, retryOwnReply, useOwnReply } from "./ownTableReplies.js";
+import SharedThreadNotes from "./SharedThreadNotes.jsx";
 import { askHostForInstitution } from "../../runtime/sharedInstitutions.js";
 import { setOpenConversation } from "../../runtime/openConversation.js";
 import { chatInboxSignature, holdChatsInListOrder, nextChatActivityOrdinal, promoteChatActivity, sortChatsForInbox } from "../../runtime/chatInboxOrder.js";
@@ -939,15 +944,19 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
 // written (runtime/institutionalChannels.js writes the opening as "<name>
 // council opened."). Its words are never matched: the opening used to be found
 // by its English wording and reworded here.
-const InstitutionRecord = ({ msg }) => {
+// `label`: what kind of record it is; none for a line of a thread between two
+// people that nobody speaks (a call to arms from a defender a person plays, a
+// paper another player's government passed: AI/sharedLetters.js sharedNoteOf).
+const InstitutionRecord = ({ msg, label = "Institution record" }) => {
     const text = String(msg?.text ?? "").trim();
     if (!text) return null;
     return (
         <div style={{ display: "flex", justifyContent: "center", padding: ".12rem .75rem" }}>
             <div style={{ maxWidth: "76%", display: "inline-flex", alignItems: "center", gap: ".45rem", border: "1px solid var(--oh-grey-border)", background: "rgba(255,255,255,.035)", borderRadius: 8, padding: ".34rem .58rem", color: "rgba(255,255,255,.58)", fontSize: ".6rem", lineHeight: 1.35 }}>
                 <span aria-hidden="true" style={{ color: "rgba(231,231,234,.72)", fontSize: ".72rem" }}>◇</span>
-                <span style={{ color: "rgba(231,231,234,.72)", fontSize: ".52rem", fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Institution record</span>
-                <span>{text}</span>
+                {label && <span style={{ color: "rgba(231,231,234,.72)", fontSize: ".52rem", fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{label}</span>}
+                {/* A line between two people may be a whole paper: its paragraphs kept. */}
+                <span data-no-translate={label ? undefined : ""} style={label ? undefined : { fontSize: ".72rem", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{text}</span>
             </div>
         </div>
     );
@@ -978,6 +987,19 @@ const GroupThinkingBubble = ({ count = 0 }) => (
     </div>
     </div>
 );
+
+// Why a reply this device was writing in a shared game stopped
+// (multiplayer/client/ownReplies.js): the words the thread shows for it.
+const ownReplyProblem = (job) => {
+    // With why, when the device's own AI gave one: on a device with no AI set
+    // up that reason ("no API key … Fix it in Settings → AI") is what the
+    // player needs to read. A paragraph of its own, so each is found in a pack.
+    if (job?.why === "unreachable") return ["The AI could not be reached, so nobody at the table answered.", job.error].filter(Boolean).join("\n\n");
+    if (job?.why === "silent") return "Nobody at the table chose to answer.";
+    if (job?.why === "refused") return job.error || "The host did not take the reply.";
+    if (job?.why === "late") return "Your message has not come back from the host yet, so nobody has answered it.";
+    return job?.error || "The reply could not be written.";
+};
 
 const LifecycleThinkingBubble = ({ count = 0 }) => (
     <div data-lifecycle-group-thinking="true" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
@@ -1178,6 +1200,7 @@ const NO_PEACE_ROWS = Object.freeze([]);
 const selectPeaceOffers = (world) => (Array.isArray(world?.peaceOffers) ? world.peaceOffers : NO_PEACE_ROWS);
 const selectCallsToArms = (world) => (Array.isArray(world?.callsToArms) ? world.callsToArms : NO_PEACE_ROWS);
 const selectWars = (world) => (Array.isArray(world?.wars) ? world.wars : NO_PEACE_ROWS);
+const selectTreatyOffers = (world) => (Array.isArray(world?.treatyOffers) ? world.treatyOffers : NO_PEACE_ROWS);
 
 const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onSharedThreadOpened = null, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", draftFrom = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, onInstitutionBusinessOpened, embeddedInstitution = false, puppetMarkers = {}, availableCountries = [] }) => {    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
@@ -1215,7 +1238,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     // Not in a shared game: the host keeps every thread, and a vote is nothing
     // a player can ask it for yet. Called here, it ran the table on this
     // screen, which a shared game refuses, and Retry ran it again.
-    const canCallChatVote = isGroup && !isInstitutional && !isLifecycleConversation && !inSharedGame();
+    const canCallChatVote = isGroup && !isInstitutional && !isLifecycleConversation;
     const playerLifecycleCase = useMemo(() => {
         if (!isLifecycleConversation || !playerCountry) return null;
         const wanted = new Set((Array.isArray(chat?.lifecycleCaseIds) ? chat.lifecycleCaseIds : []).map((id) => String(id || "").trim()));
@@ -1251,7 +1274,26 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     const unseen = useUnseenEventIds();
     const [visibleMessageLimit, setVisibleMessageLimit] = useState(CHAT_INITIAL_RENDER_WINDOW);
     const [isLoading, setIsLoading]             = useState(false);
+    // A shared game whose host has each player's own device answer for the
+    // AI's governments (ownTableReplies.js): the reply this device is writing
+    // for this thread, or what stopped it. Not `isLoading`: the thread goes on
+    // taking the host's view meanwhile, the player's own line first of all.
+    const ownReply = useOwnReply(chat.id);
+    const writingOwnReply = ownReply?.status === "writing";
+    // Like any Retry, this one is for the thread's last line: once the thread
+    // has moved past it, what stopped that answer is dropped. (A line the view
+    // never brought is not in the thread to move past.)
+    useEffect(() => {
+        if (ownReply?.status !== "stopped" || ownReply.why === "late") return;
+        const last = messages.at(-1);
+        if (last?.id && String(last.id) !== ownReply.line) dismissOwnReply(chat.id);
+    }, [ownReply, messages, chat.id]);
+    // In a shared game, the thread's newest line the host keeps: what the host
+    // said of it shows under it (SharedThreadNotes.jsx) until the thread moves on.
+    const lastThreadLine = [...messages].reverse().find((message) => message?.id && message?.role !== "error") ?? null;
     const [playerInput, setPlayerInput]         = useState("");
+    // The composer of a shared game, whose lines the host takes (handlePlayerSubmit).
+    const sharedComposer = inSharedGame();
     const draftFromRef = useRef("");
     const [pollComposerOpen, setPollComposerOpen] = useState(false);
     const [pollQuestion, setPollQuestion] = useState("");
@@ -1353,6 +1395,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     const warsAll = useRuntimeState("world", selectWars);
     const peaceCounterpart = oneOnOne && !isAdvisorDesk ? counterparts[0] ?? null : null;
     const peaceWar = peaceCounterpart ? warBetween(warsAll, playerCountry, peaceCounterpart.name) : null;
+    // (In a shared game the enemy may be another player's country: they take or decline the terms themselves.)
+    const sharedPeople = useSyncExternalStore(subscribeSharedGameRole, sharedGamePeople, sharedGamePeople);
+    const peaceWithPerson = Boolean(peaceCounterpart) && sharedPeople.some((name) => name.toLowerCase() === String(peaceCounterpart.name ?? "").trim().toLowerCase());
     const threadOffers = useMemo(() => peaceOffersForThread({
         offers: peaceOffersAll,
         player: playerCountry,
@@ -1376,6 +1421,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     const myOpenTerms = threadOffers.some((offer) => offer.status === "open" && String(offer.from).trim().toLowerCase() === String(playerCountry ?? "").trim().toLowerCase());
     const canProposePeace = Boolean(peaceWar) && !myOpenTerms;
     const [peaceFormOpen, setPeaceFormOpen] = useState(false);
+    // TREATIES, in the one-on-one chat between two players of a shared game (treaties.jsx): the treaties between them
+    // at the foot of the thread, and Treaty in the composer while they are not at war and none waits.
+    const treatyOffersAll = useRuntimeState("world", selectTreatyOffers);
+    const threadTreaties = useMemo(() => (peaceWithPerson
+        ? treatyOffersForThread({ offers: treatyOffersAll, player: playerCountry, counterpart: peaceCounterpart?.name ?? "" })
+        : []), [peaceWithPerson, treatyOffersAll, playerCountry, peaceCounterpart]);
+    const canProposeTreaty = peaceWithPerson && !peaceWar && !threadTreaties.some((offer) => offer.status === "open");
+    const [treatyFormOpen, setTreatyFormOpen] = useState(false);
     const [demandBusy, setDemandBusy] = useState(false);
     const newThreadId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -1400,10 +1453,21 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         });
     };
 
+    // In a shared game a conversation's name and its countries are everyone's in it: the host keeps them, and the
+    // next view brings the change (the "thread" request). Said here when it would not.
+    const askHostForThread = async (fields) => {
+        const answer = await requestFromHost("thread", { thread: String(chat.id), ...fields });
+        if (!answer.ok) pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: answer.error || "The host did not take that.", time: gameDate }]);
+    };
+
     const handleSaveTitle = (nextTitle) => {
         const trimmed = (nextTitle ?? titleDraft).trim();
         setIsEditingTitle(false);
         if (!trimmed || trimmed === displayThreadTitle) return;
+        if (inSharedGame()) {
+            void askHostForThread({ op: "rename", title: trimmed });
+            return;
+        }
         appendThreadEvents([{
             id: newThreadId("title"),
             kind: "title_changed",
@@ -1416,6 +1480,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     const handleAddMembers = (newSelected) => {
         setShowAddMemberModal(false);
         if (!newSelected?.length) return;
+        if (inSharedGame()) {
+            void askHostForThread({ op: "add", members: newSelected.map((country) => country.name).filter(Boolean) });
+            return;
+        }
         const joinEvents = newSelected.map((country) => ({
             id: newThreadId("join"),
             kind: "member_joined",
@@ -1546,6 +1614,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (!scroller) return;
             scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
         }, [presentedMessageCount, isLoading, typingNext]);
+        // The same when this device starts writing a reply in a shared game, or
+        // stops with something to say about it (ownTableReplies.js): the bubble
+        // is under the last line.
+        useEffect(() => {
+            const scroller = messagesScrollRef.current;
+            if (!scroller || !ownReply) return;
+            scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+        }, [ownReply]);
 
         const pushMessages = (updated) => {
             messagesRef.current = updated;
@@ -1680,6 +1756,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (isPlayerCountry(country)) {
                 return;
             }
+            // In a shared game the host says who answers a line (sayToHost,
+            // answerAgainOnHost): a reply written here is the host's never.
+            if (inSharedGame()) {
+                await answerAgainOnHost(playerMessage);
+                return;
+            }
             setIsLoading(true);
             setSpeakingCountry(country);
             // The player's message as stored: the catch-up it was sent with
@@ -1763,19 +1845,25 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // host. A pending thread the host opened is followed until the view
         // brings it, and stays shut till then; one it did not name leaves for the
         // list, where it arrives.
-        const sayToHost = async (target, text, baseMessages, { fromDraft = "" } = {}) => {
+        const sayToHost = async (target, text, baseMessages, { fromDraft = "", demand = null, poll = null } = {}) => {
             setIsLoading(true);
             let waiting = false;
             try {
                 let answer;
                 try {
-                    answer = await requestFromHost("say", sayRequestFor(target, text, { fromDraft }));
+                    answer = await requestFromHost("say", sayRequestFor(target, text, { fromDraft, demand, poll }));
                 } catch (error) {
                     answer = { ok: false, error: error?.message || "" };
                 }
                 const outcome = afterSharedSay(target, answer);
+                // The host left the answer to this device (the lobby's
+                // "Countries the AI plays answer with" setting): it is written
+                // here, on this player's own AI, and the host is sent the words.
+                const own = ownReplyAsked(target, answer);
+                if (own) void answerOnThisDevice({ ...own, text, playerCountry });
                 if (outcome.kind === "refused") {
                     pushMessages([...baseMessages, { role: "error", speaker: "System", text: outcome.error || "The host did not take the message.", time: gameDate }]);
+                    return false;
                 } else if (outcome.kind === "follow" && onSharedThreadOpened) {
                     waiting = true;
                     onSharedThreadOpened(outcome.thread);
@@ -1783,8 +1871,34 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     waiting = true;
                     onBack?.();
                 }
+                // Taken: the composer may let go of it (handlePlayerSubmit).
+                return true;
             } finally {
                 if (!waiting) setIsLoading(false);
+            }
+        };
+
+        // A Retry in a shared game: the host has the governments answer this
+        // player's last line again, on its own AI or, by its setting, on this
+        // device's, which then writes it as it writes any (ownTableReplies.js).
+        // `text`: that line, for this device's model.
+        const answerAgainOnHost = async (text) => {
+            setIsLoading(true);
+            try {
+                let answer;
+                try {
+                    answer = await requestFromHost("answer", { thread: String(chat.id ?? "") });
+                } catch (error) {
+                    answer = { ok: false, error: error?.message || "" };
+                }
+                if (!answer?.ok) {
+                    pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: answer?.error || "The host did not take that.", time: gameDate }]);
+                    return;
+                }
+                const own = ownReplyAsked(chat, answer);
+                if (own) void answerOnThisDevice({ ...own, text: String(text ?? ""), playerCountry });
+            } finally {
+                setIsLoading(false);
             }
         };
 
@@ -1792,13 +1906,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             // In a shared game the host's computer runs every table: a line is
             // sent to it, as a typed one is (submitPlayerText), and anything
             // else is the host's to start. A Retry from an older error bubble
-            // comes here too, and it ran the table on this screen again.
+            // asks the host instead (handleRetry, answerAgainOnHost).
             if (inSharedGame()) {
                 // A hearing's governments answering it: the host's to run, on its AI key.
                 if (lifecycleResponseRequested && !text) {
                     setIsLoading(true);
                     try {
-                        await askHostForInstitution("hearing", { thread: String((chatOverride || chat).id) }, { timeoutMs: 180_000 });
+                        await askHostForInstitution("hearing", { thread: String((chatOverride || chat).id) });
                     } catch (error) {
                         pushMessages([...nextMessages, { role: "error", speaker: "System", text: error?.message || "The host did not take the message.", time: gameDate }]);
                     } finally {
@@ -1979,6 +2093,19 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             setPollError("");
             cutIn();
             const line = `I call a vote: ${pollEvent.question}`;
+            // In a shared game the host calls it with the line (the "say"
+            // request's `poll`), and the governments at the table answer it there.
+            // The vote's form is cleared once the host has taken it: one refused
+            // stays to be changed and called again, as a letter does.
+            if (inSharedGame()) {
+                const taken = await submitPlayerText(line, { poll: { question: pollEvent.question, options: pollEvent.options.map((option) => option.label) } });
+                if (taken === true) {
+                    setPollComposerOpen(false);
+                    setPollQuestion("");
+                    setPollOptionsText("Yes\nNo\nAbstain");
+                }
+                return;
+            }
             const current = chatRef.current ?? chat;
             const existing = current.events?.length
                 ? current.events
@@ -2021,6 +2148,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (!poll?.id || !optionId) return;
             const already = Object.keys(poll.votes ?? {}).some((voter) => voter.toLowerCase() === String(playerCountry ?? "").toLowerCase());
             if (already) return;
+            // In a shared game the host keeps the vote (the "vote" request); a refusal is said in the thread.
+            if (inSharedGame()) {
+                void requestFromHost("vote", { thread: String(chat.id), poll: String(poll.id), option: String(optionId) }).then((answer) => {
+                    if (!answer.ok) pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: answer.error || "The host did not take that.", time: gameDate }]);
+                });
+                return;
+            }
             const events = [
                 ...(chat.events?.length ? chat.events : eventsFromLegacyChat({ ...chat, messages: messagesRef.current })),
                 { id: `vote-${poll.id}-${playerCountry}`, kind: "poll_vote_cast", time: gameDate, by: playerCountry, pollId: poll.id, optionId },
@@ -2034,12 +2168,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // the thread's log AND said, as a line from the player, so the other side
         // answers it the way it answers anything typed — and that answer is then
         // checked in turn. Only a refusal costs the Puppet anything.
+        // In a shared game the host enters the move with the line (the "say"
+        // request's `demand`): the thread's log is the host's.
         const answerDemand = async (demand, answer, text = "") => {
             const event = playerAnswerEvent({ demand, player: playerCountry, answer, text, time: gameDate, idFor: newThreadId });
             if (!event) return;
+            const shared = inSharedGame();
             setDemandBusy(true);
             try {
-                appendThreadEvents([event]);
+                if (!shared) appendThreadEvents([event]);
                 // A change of mind says so, or the other side reads the
                 // acceptance as coming out of nowhere.
                 const reconsidered = demand.status === "refused";
@@ -2051,7 +2188,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         : uiString("We accept: {{summary}}.", { summary: demand.summary }))
                     : answer === "refused" ? uiString("We refuse this demand.")
                         : (reconsidered ? uiString("We have reconsidered. {{text}}", { text }) : text);
-                await submitPlayerText(line);
+                await submitPlayerText(line, shared ? { demand: { op: "answer", demandId: demand.id, answer, ...(answer === "alternative" ? { text } : {}) } } : {});
             } finally {
                 setDemandBusy(false);
             }
@@ -2060,10 +2197,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         const acceptAlternative = async (demand) => {
             const event = playerAnswerEvent({ demand, player: playerCountry, answer: "alternative_accepted", time: gameDate, idFor: newThreadId });
             if (!event) return;
+            const shared = inSharedGame();
             setDemandBusy(true);
             try {
-                appendThreadEvents([event]);
-                await submitPlayerText(uiString("We accept your alternative: {{alternative}}.", { alternative: demand.alternative }));
+                if (!shared) appendThreadEvents([event]);
+                await submitPlayerText(uiString("We accept your alternative: {{alternative}}.", { alternative: demand.alternative }),
+                    shared ? { demand: { op: "answer", demandId: demand.id, answer: "alternative_accepted" } } : {});
             } finally {
                 setDemandBusy(false);
             }
@@ -2075,6 +2214,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             setDemandBusy(true);
             try {
                 await submitPlayerText(revised || uiString("No. The demand stands: {{summary}}.", { summary: demand.summary }), {
+                    demand: { op: "make", text: revised },
                     onSent: ({ messageId, time }) => appendThreadEvents([playerDemandEvent({
                         player: playerCountry,
                         target: demand.target,
@@ -2097,25 +2237,40 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         const proposePeaceHere = async (terms) => {
             if (!peaceWar || isLoading) return "no-war";
             const messageId = newThreadId("msg");
-            const put = await sendPeaceAnswer("propose", peaceWar.id, terms, { chatId: chat.id, messageId });
+            const put = await sendPeaceAnswer("propose", peaceWar.id, terms, { chatId: chat.id, messageId, to: peaceCounterpart?.name });
             if (!put.ok) return put.error || "That could not be done.";
             setPeaceFormOpen(false);
             await submitPlayerText(uiString("We propose peace on these terms: {{terms}}.", { terms: describeTerms(terms) }), { id: messageId });
             return "";
         };
 
+        // A treaty put to the other player (TreatyForm): its card comes with the host's view. Resolves "" once it is
+        // put, else why not.
+        const proposeTreatyHere = async ({ type, title, terms }) => {
+            const why = await sendTreaty("propose", { to: peaceCounterpart?.name ?? "", type, ...(title ? { title } : {}), ...(terms ? { terms } : {}) });
+            if (!why) setTreatyFormOpen(false);
+            return why;
+        };
+
         const handlePlayerSubmit = async () => {
             const text = playerInput.trim();
-            if (!text || isLoading) return;
+            if (!text || isLoading || writingOwnReply) return;
             const fromDraft = draftFromRef.current;
             draftFromRef.current = "";
-            setPlayerInput("");
+            // In a shared game the line is the host's to take: the composer
+            // keeps it until it is taken, and one refused (too long, say: the
+            // host takes what game/messages.js SAY_MAX_CHARS allows) stays to be
+            // changed and sent again. It was cleared first, and a refused letter
+            // was gone with it (the review of 2026-11-18, door 4).
+            const shared = inSharedGame();
+            if (!shared) setPlayerInput("");
             // "Make this a demand" — only offered to an Overlord writing to its
             // own Puppet, and only for this one message.
             const asDemand = canDemand && makeDemand;
             setMakeDemand(false);
-            await submitPlayerText(text, {
+            const taken = await submitPlayerText(text, {
                 fromDraft,
+                ...(asDemand ? { demand: { op: "make" } } : {}),
                 // Rejecting an alternative from the card is demanding again; so is
                 // this. Either replaces whatever demand was still in play.
                 onSent: asDemand
@@ -2130,6 +2285,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     })].filter(Boolean))
                     : null,
             });
+            if (!shared) return;
+            // Taken: the box lets go of it, unless the player has written on meanwhile.
+            if (taken === true) setPlayerInput((current) => (current.trim() === text ? "" : current));
+            else draftFromRef.current = fromDraft;
         };
 
         // Sends a line as the player and gets the table's answer: the composer's
@@ -2139,8 +2298,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // `id`: the message's own, when something already points at it (the
         // player's terms of peace, kept with the war, name it).
         // `fromDraft`: the id of the advisor's drafted letter the line was sent from.
-        const submitPlayerText = async (text, { onSent = null, id = "", fromDraft = "" } = {}) => {
-            if (!text || isLoading) return;
+        // `demand`: in a shared game, the demand the line makes or answers, which the host enters with it.
+        const submitPlayerText = async (text, { onSent = null, id = "", fromDraft = "", demand = null, poll = null } = {}) => {
+            if (!text || isLoading || writingOwnReply) return;
             // Speaking while the table is still talking cuts it off.
             cutIn();
             // In a shared game the host keeps every thread and answers for the AI
@@ -2150,8 +2310,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             // view holds it; a host that does not say which it opened leaves the
             // player at the list, where it arrives.
             if (inSharedGame()) {
-                await sayToHost(chat, text, messagesRef.current, { fromDraft });
-                return;
+                return sayToHost(chat, text, messagesRef.current, { fromDraft, demand, poll });
             }
             // What the world did since this thread last spoke, told to the
             // leaders with the player's line and kept on it (AI/conversationCatchUp.js
@@ -2239,6 +2398,16 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (isLoading) return;
             const retry = messagesRef.current[index]?.retry;
             if (!retry) return;
+            // In a shared game the host keeps the thread and says who answers:
+            // it is asked to have the governments answer the player's last line
+            // again, and no line is sent (host/gameHost.js "answer"). Here a
+            // group Retry sent the line a second time, and a one-on-one one
+            // asked this player's own key for a reply the host never took.
+            if (inSharedGame()) {
+                pushMessages(messagesRef.current.filter((_, i) => i !== index));
+                await answerAgainOnHost(retry.group ? retry.text : retry.playerMessage);
+                return;
+            }
             if (retry.group) {
                 // The table's turn again, answering the player's line as it
                 // stands in the thread: no second copy of it is added.
@@ -2445,6 +2614,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     {showDateSeparator && <ChatDateSeparator value={msg.time} />}
                     {isInstitutional && (msg.role === "system" || String(msg.speaker || "").toLowerCase() === "system")
                         ? <InstitutionRecord msg={msg} />
+                        : msg.role === "system" && !String(msg.speaker || "").trim()
+                        ? <InstitutionRecord msg={msg} label="" />
                         : <MessageBubble msg={msg} compact={compact} showTime={!groupedWithNext}
                             onRetry={msg.retry && !isLoading && index === messages.length - 1 ? () => handleRetry(index) : undefined} />}
                     {(demandsByMessage.get(msg.id) ?? []).map(renderDemandCard)}
@@ -2463,7 +2634,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     playerCountry={playerCountry}
                     // A vote cast here would stay on this screen: the host keeps
                     // the thread in a shared game, and takes no votes yet.
-                    onVote={inSharedGame() ? null : (optionId) => handlePlayerVote(poll, optionId)}
+                    onVote={(optionId) => handlePlayerVote(poll, optionId)}
                 />
             ))}
             {/* A demand whose message is older than the window, or which was
@@ -2471,6 +2642,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 foot of the thread rather than nowhere. */}
             {strandedDemands.map(renderDemandCard)}
             {strandedPeace.map(renderPeaceCard)}
+            {threadTreaties.map((offer) => <TreatyOfferCard key={offer.id} offer={offer} viewer={playerCountry} />)}
             {threadCalls.stranded.map((call) => <CallToArmsCard key={call.id} call={call} viewer={playerCountry} />)}
             {isLoading && lifecycleGroupThinking
                 ? <LifecycleThinkingBubble count={lifecycleState.responseCases.length || countries.length} />
@@ -2480,6 +2652,23 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             {!isLoading && typingNext && (
                 <TypingBubble speaker={typingNext.speaker} code={typingNext.code} label="Typing" hint="Send a message now to cut in: what is still to come will not be said." />
             )}
+            {/* A shared game where this device answers for the AI's governments:
+                the reply being written here, or why it stopped, with Retry (the
+                same line again: no second copy of it is said). */}
+            {writingOwnReply && !isLoading && (ownReply.governments.length > 1
+                ? <GroupThinkingBubble count={ownReply.governments.length} />
+                : <TypingBubble speaker={ownReply.governments[0]} code={countries.find((country) => country.name === ownReply.governments[0])?.code} />)}
+            {ownReply?.status === "stopped" && (
+                <MessageBubble msg={{ role: "error", speaker: "System", text: ownReplyProblem(ownReply), time: gameDate }} showTime={false}
+                    onRetry={() => { void retryOwnReply(chat.id); }} />
+            )}
+            {/* A shared game: the host's word about the newest line here (nobody
+                answers it this round, its player is away, the host's AI could
+                not answer it), with Retry for a failure. */}
+            {inSharedGame() && lastThreadLine ? (
+                <SharedThreadNotes thread={String(chat.id ?? "")} lastLine={String(lastThreadLine.id)} busy={isLoading}
+                    onRetry={() => { void answerAgainOnHost(String(lastThreadLine.text ?? "")); }} />
+            ) : null}
             <div ref={messagesEndRef} />
             </div>
 
@@ -2541,10 +2730,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         ))}
                     </div>
                 )}
-                {canProposePeace && peaceFormOpen && <PeaceTermsForm viewer={playerCountry} enemy={peaceCounterpart?.name} busy={isLoading} onSend={proposePeaceHere} onCancel={() => setPeaceFormOpen(false)} />}
+                {canProposePeace && peaceFormOpen && <PeaceTermsForm viewer={playerCountry} enemy={peaceCounterpart?.name} person={peaceWithPerson} busy={isLoading} onSend={proposePeaceHere} onCancel={() => setPeaceFormOpen(false)} />}
+                {canProposeTreaty && treatyFormOpen && <TreatyForm busy={isLoading} onSend={proposeTreatyHere} onCancel={() => setTreatyFormOpen(false)} />}
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     {canProposePeace && (
                         <button type="button" className="oh-tap" onClick={() => setPeaceFormOpen((open) => !open)} aria-pressed={peaceFormOpen} title={`Propose peace to ${peaceCounterpart?.name}`} style={{ background: peaceFormOpen ? "rgba(43,193,243,.16)" : "rgba(255,255,255,0.05)", border: `1px solid ${peaceFormOpen ? "rgba(43,193,243,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: peaceFormOpen ? "#2bc1f3" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Peace</button>
+                    )}
+                    {canProposeTreaty && (
+                        <button type="button" className="oh-tap" onClick={() => setTreatyFormOpen((open) => !open)} aria-pressed={treatyFormOpen} title="Propose a treaty" style={{ background: treatyFormOpen ? "rgba(43,193,243,.16)" : "rgba(255,255,255,0.05)", border: `1px solid ${treatyFormOpen ? "rgba(43,193,243,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: treatyFormOpen ? "#2bc1f3" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Treaty</button>
                     )}
                     {canCallChatVote && (
                         <button type="button" className="oh-tap" onClick={() => { setPollComposerOpen((open) => !open); setPollError(""); }} aria-pressed={pollComposerOpen} title="Call a binding conversational vote in this group chat" style={{ background: pollComposerOpen ? "rgba(59,130,246,.2)" : "rgba(255,255,255,0.05)", border: `1px solid ${pollComposerOpen ? "rgba(96,165,250,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: pollComposerOpen ? "#bfdbfe" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Vote</button>
@@ -2563,6 +2756,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     ref={composerRef}
                     placeholder={canDemand && makeDemand ? `Your demand of ${countries[0]?.name}…` : isInstitutionCouncil ? "Address the council…" : isLifecycleConversation ? "Address the accession table…" : "Send a diplomatic message…"}
                     rows={1} value={playerInput}
+                    // A shared game's line is held to what the host's request
+                    // takes (game/messages.js), the box and the request alike.
+                    maxLength={sharedComposer ? SAY_MAX_CHARS : undefined}
                     enterKeyHint="enter"
                     onChange={e => setPlayerInput(e.target.value)}
                     onKeyDown={e => { if (isComposerSendKey(e, { touch: isTouch })) { e.preventDefault(); handlePlayerSubmit(); } }}
@@ -2582,7 +2778,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     style={{ backgroundColor: playerInput.trim() ? (isInstitutionCouncil ? "var(--oh-grey-raised)" : "var(--oh-ui-active, rgba(96,165,250,.24))") : (isInstitutionCouncil ? "rgba(255,255,255,.04)" : "var(--oh-ui-overlay-card, rgba(255,255,255,.05))"), border: isInstitutionCouncil ? "1px solid var(--oh-grey-border-strong)" : "none", borderRadius: "10px", minWidth: isInstitutionCouncil ? "4.3rem" : isTouch ? "2.75rem" : "2.5rem", height: "2.5rem", padding: isInstitutionCouncil ? "0 .7rem" : 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: isInstitutionCouncil ? ".66rem" : "1rem", fontWeight: 800, color: "white", transition: "background-color 0.2s" }}
                     >{isInstitutionCouncil ? "Send ↗" : <SendIcon />}</button>
                 </div>
-                <div style={{ marginTop: ".28rem", fontSize: isInstitutionCouncil ? ".5rem" : ".54rem", color: "rgba(255,255,255,.26)" }}>Enter to send · Shift+Enter for a new line</div>
+                <div style={{ marginTop: ".28rem", fontSize: isInstitutionCouncil ? ".5rem" : ".54rem", color: "rgba(255,255,255,.26)" }}><span>Enter to send · Shift+Enter for a new line</span>{sharedComposer && playerInput.length > SAY_MAX_CHARS * 0.8 ? <span aria-live="polite">{` · ${playerInput.length}/${SAY_MAX_CHARS}`}</span> : null}</div>
                 </div>
             ) : null}
 
@@ -4228,7 +4424,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                     ...current.filter((entry) => entry.key !== key),
                     { key, institutionId: id, proposalId: proposal, kind: mode },
                 ]);
-                const shared = await askHostForInstitution("council", { institutionId: id, proposalId: proposal, kind: mode, comment: String(playerComment || "").trim() }, { timeoutMs: 180_000 });
+                const shared = await askHostForInstitution("council", { institutionId: id, proposalId: proposal, kind: mode, comment: String(playerComment || "").trim() });
                 adoptInstitutionalResult(shared);
                 return shared;
             }
@@ -4339,6 +4535,18 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // control any more: two buttons that both close a chat only invited the
     // question of which one really deleted it.
     const handleDeleteChat = (id) => {
+        // In a shared game it is closed for everyone in it, by the host (the "thread" request); a refusal is said
+        // in the conversation, which stays.
+        if (inSharedGame()) {
+            void requestFromHost("thread", { op: "close", thread: String(id) }).then((answer) => {
+                if (answer.ok) return;
+                setChats((prev) => prev.map((chat) => (sameChatId(chat.id, id)
+                    ? { ...chat, messages: [...(chat.messages ?? []), { role: "error", speaker: "System", text: answer.error || "The host did not take that.", time: gameDate }] }
+                    : chat)));
+            });
+            if (sameChatId(activeChat?.id, id)) setActiveChat(null);
+            return;
+        }
         setChats(prev => {
             const updated = prev.map(chat => sameChatId(chat.id, id) ? { ...chat, status: "closed" } : chat);
             persistChats(updated);

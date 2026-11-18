@@ -22,10 +22,14 @@ import { useTurnRunning } from "./useTurnRunning.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { orderRequestFor } from "../../multiplayer/client/sharedOrders.js";
+import { ORDER_MAX_CHARS } from "../../multiplayer/game/messages.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
-import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
+import { queuedActionIds, seatAdviceKey, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
+import { refusedOrdersKey } from "./overdueOrders.js";
+import { filedFateLabel } from "../../runtime/filedEvents.js";
 import { ProjectsBoard, ProjectsTabIcon } from "./projects.jsx";
 import { isKnownToPlayer, isProjectOpen } from "../../runtime/projects.js";
 import {
@@ -185,7 +189,9 @@ const movesUnit = (action) => Boolean(action?.unitRevert) && (action.status ?? "
 // while a turn runs, because deleting it moves the unit back, and the turn's
 // world write would put the unit where it was. Other orders can: the turn reads
 // the queue again before it writes it.
-const ActionItem = ({ action, onDelete, locked = false }) => {
+// `refusal`: { fate, note } when the last time skip wrote an event for this
+// order and the engine kept it off the timeline (overdueOrders.js).
+const ActionItem = ({ action, onDelete, locked = false, refusal = null }) => {
     const [hovered, setHovered] = React.useState(false);
     // The ✕ appears with the pointer over the row. Nothing hovers on a touch
     // screen, so there it is always shown, or an order could never be deleted.
@@ -239,6 +245,14 @@ const ActionItem = ({ action, onDelete, locked = false }) => {
         >
         {normalized.kind} • {normalized.status}
         </div>
+        {/* Carried over unanswered (AI/playerFocus.js settleOrders): said, with
+            why its event was refused when it was, and the ✕ withdraws it. */}
+        {normalized.overdue && (
+            <div style={{ color: "rgba(253,186,116,0.9)", fontSize: "0.7rem", lineHeight: "1.45", marginTop: "0.25rem" }}>
+            <div>Overdue: the last time skip gave this order no outcome. The next one answers it first.</div>
+            {refusal?.note && <div>{`${filedFateLabel(refusal.fate)}: ${refusal.note}`}</div>}
+            </div>
+        )}
         </div>
         <button
         type="button"
@@ -325,6 +339,9 @@ const SuggestionCard = ({ topic, onQueue, queuedIds }) => (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
     {topic.actions.map((action) => {
         const isQueued = queuedIds?.has(action.id);
+        // An order that is one sentence (an advisor's, actionSuggestions.js
+        // seatAdviceTopic) is its own title: said once.
+        const title = action.title && action.title !== action.text ? action.title : "";
         return (
             <button
             key={action.id}
@@ -343,9 +360,11 @@ const SuggestionCard = ({ topic, onQueue, queuedIds }) => (
                 textAlign: "left",
             }}
             >
-            <div style={{ fontSize: "0.76rem", fontWeight: 700 }}>
-            {isQueued ? `✓ Queued — ${action.title}` : action.title}
-            </div>
+            {(title || isQueued) && (
+                <div style={{ fontSize: "0.76rem", fontWeight: 700 }}>
+                {isQueued ? (title ? `✓ Queued — ${title}` : "✓ Queued") : title}
+                </div>
+            )}
             <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.74rem", lineHeight: "1.45", marginTop: "0.18rem" }}>
             {action.text}
             </div>
@@ -502,9 +521,14 @@ const StandingGoal = ({ country, round, gameDate, isOpen, open = true, onToggle 
         setError("");
         try {
             // In a shared game the host keeps the goal: it is asked to.
+            // Its refusal is said here in the host's words: it was replaced by
+            // "could not be saved. Try again." whatever the host said.
             if (inSharedGame()) {
                 const answer = await requestFromHost("goal", { text: String(text || "").trim() });
-                if (!answer.ok) throw new Error(answer.error);
+                if (!answer.ok) {
+                    setError(answer.error || "The goal could not be saved. Try again.");
+                    return;
+                }
                 setEditing(false);
                 return;
             }
@@ -829,6 +853,17 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     // The suggestions the game saved on the world (a time skip clears them), so
     // reopening the panel shows them again without spending a request.
     const suggestions = useRuntimeState("world", selectSavedSuggestions);
+    // And in a shared game, the orders the round's own time skip brought from
+    // this player's advisor, which cost nothing (actionSuggestions.js
+    // seatAdviceTopic): first, as one more card.
+    const sharedGame = inSharedGame();
+    const adviceKey = useRuntimeState(
+        "world",
+        (world) => (sharedGame ? seatAdviceKey(world, game.country, game.round) : "null"),
+        `${sharedGame}|${game.country}|${game.round}`,
+    );
+    const advice = React.useMemo(() => JSON.parse(adviceKey || "null"), [adviceKey]);
+    const shownSuggestions = React.useMemo(() => (advice ? [advice, ...suggestions] : suggestions), [advice, suggestions]);
     const [hasRequestedSuggestions, setHasRequestedSuggestions] = React.useState(false);
     // Why the last press of the suggestions button got no list at all, and, when
     // it got the canned one instead, what the AI did (for the report button).
@@ -852,7 +887,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     React.useEffect(() => {
         writeGoalOpen(browserStorage(), layout.goalOpen);
     }, [layout.goalOpen]);
-    const showSuggested = hasRequestedSuggestions || isSuggesting || suggestions.length > 0;
+    const showSuggested = hasRequestedSuggestions || isSuggesting || shownSuggestions.length > 0;
     // The height the player dragged the panel to (null: the default), kept too.
     const panelRef = React.useRef(null);
     const [panelHeight, setPanelHeight] = React.useState(() => readPanelHeight(browserStorage()));
@@ -884,7 +919,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         // its own drawer) used to be invisible here until the panel was closed and
         // reopened. The store publishes those writes. Signature-gated so a
         // republish with no real change doesn't reset hover state on every row.
-        const actionsSignature = (list) => list.map((a) => `${a.id}:${a.title}:${a.text}:${a.status}`).join("|");
+        // (Overdue too: a skip that answers an order leaves the rest as they
+        // were in every other way, and the mark is what changed.)
+        const actionsSignature = (list) => list.map((a) => `${a.id}:${a.title}:${a.text}:${a.status}:${a.overdue === true ? "overdue" : ""}`).join("|");
         const unsubscribe = subscribeRuntime("actions", (saved) => {
             if (cancelled || !Array.isArray(saved)) return;
             setActions((prev) => (actionsSignature(saved) === actionsSignature(prev) ? prev : saved));
@@ -929,6 +966,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
 
     // A card's order already in the queue shows as queued, restored cards too.
     const queuedSuggestionIds = React.useMemo(() => queuedActionIds(actions), [actions]);
+    // Why the last skip's event for an overdue order was refused, by its id.
+    const refusedKey = useRuntimeState("world", refusedOrdersKey);
+    const refusedOrders = React.useMemo(() => JSON.parse(refusedKey || "{}"), [refusedKey]);
 
     const submittedActions = React.useMemo(
         () =>
@@ -958,11 +998,13 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             // In a shared game an order is the host's to queue; its answer comes
             // back in the next view.
             if (inSharedGame()) {
-                const answer = await requestFromHost("order", { text: nextAction.text || trimmed });
+                const answer = await requestFromHost("order", orderRequestFor(nextAction, trimmed));
+                // Refused: the order stays in the box, and the host's reason is said.
                 if (!answer.ok) {
-                    console.warn("[actions] the host refused the order:", answer.error);
+                    setSaveError(answer.error || ORDER_NOT_SAVED);
                     return;
                 }
+                setSaveError("");
                 logDebugEvent("action", `Order sent to the host: ${nextAction.title || nextAction.text || "(untitled)"}`);
                 setInputValue("");
                 return;
@@ -1025,7 +1067,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     const handleDelete = async (index) => {
         const removed = actions[index];
         if (inSharedGame()) {
-            await requestFromHost("unorder", { order: String(removed?.id || "") });
+            const answer = await requestFromHost("unorder", { order: String(removed?.id || "") });
+            setSaveError(answer.ok ? "" : answer.error || ORDER_NOT_REMOVED);
             return;
         }
         if (movesUnit(removed) && isSimulationBusy()) return;
@@ -1058,7 +1101,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         }
 
         if (inSharedGame()) {
-            const answer = await requestFromHost("order", { text: queuedAction.text || queuedAction.title });
+            // By the card's own id, so the card says it is queued and a second
+            // press queues nothing more.
+            const answer = await requestFromHost("order", orderRequestFor(queuedAction));
+            setSaveError(answer.ok ? "" : answer.error || ORDER_NOT_SAVED);
             if (!answer.ok) return;
         } else if (!(await persistActions([...actions, queuedAction]))) {
             // Not saved: the card stays unqueued, so it can be tried again.
@@ -1302,7 +1348,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                 <>
                 {showSuggested && (
                     <div style={sectionStyle(suggestedOpen)}>
-                    <SectionHeader title="Suggested Actions" count={suggestions.length} open={suggestedOpen} onToggle={() => dispatchLayout({ type: "toggle", showSuggested })} />
+                    <SectionHeader title="Suggested Actions" count={shownSuggestions.length} open={suggestedOpen} onToggle={() => dispatchLayout({ type: "toggle", showSuggested })} />
                     {suggestedOpen && (
                         <div style={{ ...listStyle, gap: "0.5rem" }}>
                         {suggestionError && !isSuggesting && (
@@ -1320,7 +1366,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                             The AI gave no usable suggestions, so these are generic ones.
                             </AiFailureNote>
                         )}
-                        {suggestions.map((topic) => (
+                        {shownSuggestions.map((topic) => (
                             <SuggestionCard key={topic.id} topic={topic} onQueue={handleQueueSuggestion} queuedIds={queuedSuggestionIds} />
                         ))}
                         </div>
@@ -1353,7 +1399,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                         </p>
                     )}
                     {submittedActions.map(({ normalized, originalIndex }) => (
-                        <ActionItem key={normalized.id || originalIndex} action={normalized} locked={turnRunning && movesUnit(normalized)} onDelete={() => handleDelete(originalIndex)} />
+                        <ActionItem key={normalized.id || originalIndex} action={normalized} refusal={refusedOrders[normalized.id] ?? null} locked={turnRunning && movesUnit(normalized)} onDelete={() => handleDelete(originalIndex)} />
                     ))}
                     </div>
                 )}
@@ -1395,6 +1441,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         className="actions-composer"
         // A phone's keyboard has no Shift+Enter to speak of.
         placeholder={isTouch ? "Enter your action…" : "Enter your action…  (Shift+Enter for a new line)"}
+        // In a shared game an order is held to what the host's request takes
+        // (game/messages.js), the box and the request alike; single player's
+        // are free text.
+        maxLength={sharedGame ? ORDER_MAX_CHARS : undefined}
         value={inputValue}
         enterKeyHint="enter"
         onChange={(event) => setInputValue(event.target.value)}
@@ -1451,6 +1501,11 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         >
         {isImproving ? <StopIcon /> : <SparkleIcon />}
         </button>
+        {sharedGame && inputValue.length > ORDER_MAX_CHARS * 0.8 ? (
+            <span aria-live="polite" style={{ bottom: "0.2rem", color: inputValue.length > ORDER_MAX_CHARS ? "#fca5a5" : "rgba(255,255,255,0.45)", fontSize: "0.55rem", pointerEvents: "none", position: "absolute", right: "0.4rem" }}>
+            {`${inputValue.length}/${ORDER_MAX_CHARS}`}
+            </span>
+        ) : null}
         </div>
 
         <button

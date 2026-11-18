@@ -82,6 +82,9 @@ export const settleProjectTerritoryWorld = async ({
   readCatalog = null,
   applyWorldImpacts,
   renderedRegions = null,
+  // async ({ entries, containers, world }) => void: may narrow each
+  // container's regionTransfers and each entry's polityChanges by rule.
+  keepTerritory = null,
 } = {}) => {
   if (!asArray(entries).length) return { world, colors, renamedPolities: [] };
   if (typeof resolveTransfers !== "function" || typeof applyWorldImpacts !== "function") {
@@ -99,7 +102,17 @@ export const settleProjectTerritoryWorld = async ({
   const unresolved = await resolveTransfers(containers, world, { renderedRegions });
   assertProjectTerritoryResolved(entries, containers, unresolved);
 
-  const events = entries.map((entry, index) => ({
+  // What a rule (not a failure) leaves out — a region or polity a person plays
+  // is theirs to give — is settled here, after the resolution was verified
+  // whole and before the world is written; what it keeps is then checked as
+  // applied like everything else.
+  let plan = entries.map((entry) => ({ ...entry, polityChanges: asArray(entry.polityChanges) }));
+  if (typeof keepTerritory === "function") {
+    await keepTerritory({ entries: plan, containers, world });
+    plan = plan.map((entry) => ({ ...entry, polityChanges: asArray(entry.polityChanges) }));
+  }
+
+  const events = plan.map((entry, index) => ({
     id: `project-done-${index}-${label(entry.date)}`,
     date: entry.date,
     title: entry.project,

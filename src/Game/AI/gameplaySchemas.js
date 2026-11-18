@@ -719,14 +719,25 @@ const projectSecrecySchema = {
   description: "public if openly known, restricted if known only inside government, covert if deniable and secret.",
   enum: ["public", "restricted", "covert"],
 };
-// Only the two VERDICTS are offered. "doubted" is stamped by the engine when the
-// agent an entry came from turns out to be compromised, and is absent from this
-// enum on purpose.
+// The verdict on doubted intelligence is the engine's now (runtime/projects.js
+// spyVerdictOps): it knows what was real, since a planted programme is a
+// belief. Asked of the model, its "refuted" came with "fail it too", which
+// ended an AI country's real work. Still accepted where an answer is checked,
+// so a habit costs no retry; left out of a skip's contract
+// (FOLDED_PROJECT_OP_OMITS), said to be left out where it is still offered;
+// and the board takes it from nobody but the engine (gameState.js
+// ENGINE_PATCHABLE_FIELDS).
 const projectVerificationSchema = {
   type: "string",
-  description: "Only for an entry shown as doubted, once a fresh agent is in place: confirmed if it is real, refuted if it never was (fail it too).",
+  description: "Leave out: the game settles doubted intelligence itself.",
   enum: ["confirmed", "refuted"],
 };
+// A programme that exists only in material planted on a service through its
+// turned agent: that service's belief, never its owner's work
+// (runtime/projectEngine.js isBelief).
+const projectBelievedBySchema = textSchema(
+  "create only, and only for a programme that is NOT real: the country whose service was fed it through its turned agent.",
+);
 
 // ONE flat op, discriminated by `op`: the friendliest shape for Gemini and for
 // small local models. normalizeProjectOp (runtime/gameState.js) reads it, a
@@ -755,6 +766,7 @@ const projectOpSchema = {
     overrun: { type: "integer", description: "setback only: how much dearer it becomes a month, in per cent (1-50)." },
     lastUpdate: textSchema("One present-tense sentence on what this event did to it. Shown to the player."),
     note: textSchema("cancel or fail: how it ended."),
+    believedBy: projectBelievedBySchema,
     verification: projectVerificationSchema,
     focus: {
       type: "object",
@@ -1069,7 +1081,8 @@ const jumpImpactsSchema = {
 // boardPassApply.js withEventFocus; gameState.js applyProjectOutcomesToWorld)
 // rather than at coordinates of its own: some 950 characters of a contract held under the
 // size Gemini takes (foldedSkipSent.test.js).
-const FOLDED_PROJECT_OP_OMITS = new Set(["newName", "tags", "note", "focus", "approach"]);
+// And the verdict on doubted intelligence, the engine's (projectVerificationSchema).
+const FOLDED_PROJECT_OP_OMITS = new Set(["newName", "tags", "note", "focus", "approach", "verification"]);
 const FOLDED_EFFECT_KEEPS = new Set(["type", "stat", "change", "country", "name", "kind", "region", "claim"]);
 const foldedEffectSchema = {
   ...projectEffectSchema,

@@ -59,9 +59,9 @@ test.afterEach(() => {
   }
 });
 
-const world = ({ seats = 4, hostLimits = {}, hostNow, relayOptions = {} } = {}) => {
+const world = ({ seats = 4, hostLimits = {}, hostNow, relayOptions = {}, backlog = false, hostOptions = {} } = {}) => {
   const relays = createFakeRelayNetwork(relayOptions);
-  const rtc = createFakeRtcNetwork();
+  const rtc = createFakeRtcNetwork({ backlog });
   const channelFactory = (options) => createNostrChannel({ ...options, relays: RELAYS, WebSocketImpl: relays.WebSocket });
   const peerFactory = (options) => createPeer({ ...options, RTCPeerConnectionImpl: rtc.RTCPeerConnection });
   const hostKey = createIdentity();
@@ -76,6 +76,7 @@ const world = ({ seats = 4, hostLimits = {}, hostNow, relayOptions = {} } = {}) 
     onStatus: (status) => { events.status = status; },
     ...(hostNow ? { now: hostNow } : {}),
     limits: { beaconIntervalMs: 200, pingIntervalMs: 100_000, ...hostLimits },
+    ...hostOptions,
   }));
   const join = (name, { token = invite.token, device = createIdentity(), version = VERSION, ...extra } = {}) => {
     const log = { states: [], messages: [], room: null };
@@ -120,6 +121,20 @@ test("the seats are a limit: the next player is told the game is full", async ()
   const third = setup.join("Cleo");
   assert.ok(await until(() => third.client.state === "rejected"));
   assert.equal(third.log.states.at(-1).reason, "full");
+  setup.host.stop();
+});
+
+test("the game says who has room: a player whose device holds a seat comes in when a newcomer is told the game is full", async () => {
+  // As the game counts its players (host/gameHost.js roomFor): Ana's device
+  // holds a seat, and every seat is held.
+  const ana = createIdentity();
+  const setup = world({ seats: 1, hostOptions: { roomFor: (device) => device === ana.id, openSeats: () => 0 } });
+  setup.host.start();
+  const stranger = setup.join("Ben");
+  assert.ok(await until(() => stranger.client.state === "rejected"));
+  assert.equal(stranger.log.states.at(-1).reason, "full");
+  const back = setup.join("Ana", { device: ana });
+  assert.ok(await until(() => back.client.state === "connected"));
   setup.host.stop();
 });
 
@@ -264,15 +279,30 @@ test("a large message arrives whole, both ways", async () => {
   setup.host.send(player.client.player, { t: "blob", data });
   assert.ok(await until(() => player.log.messages.length === 1, 5000));
   assert.equal(player.log.messages[0].data.length, data.length);
-  // From a player, anything up to the host's limit for one (a Projects board
-  // at its fullest is the largest thing a player sends).
-  player.client.send({ t: "blob", data: "orders ".repeat(50_000) });
+  // From a player, anything up to the host's limit for one (the answer its own
+  // AI gave to a round it pays for is the largest thing a player sends).
+  player.client.send({ t: "blob", data: "orders ".repeat(300_000) });
   assert.ok(await until(() => setup.events.messages.length === 1, 5000));
-  assert.equal(setup.events.messages[0].message.data.length, 350_000);
+  assert.equal(setup.events.messages[0].message.data.length, 2_100_000);
   // And nothing larger: a message over the limit never arrives.
-  player.client.send({ t: "blob", data: "orders ".repeat(100_000) });
+  player.client.send({ t: "blob", data: "orders ".repeat(500_000) });
   await wait(400);
   assert.equal(setup.events.messages.length, 1);
+  setup.host.stop();
+});
+
+// A paying device's answer to a round is the largest message a player sends, in many frames: the rate is of
+// messages, so its frames are no flood, and its player is not struck or removed (the review of 2026-11-18).
+test("a large message in many frames is one message to the rate limit", async () => {
+  const setup = world({ hostLimits: { messagesPerSecond: 5, messageBurst: 10, strikesToRemove: 5 } });
+  setup.host.start();
+  const player = setup.join("Ana");
+  assert.ok(await until(() => player.client.state === "connected"));
+  player.client.send({ t: "blob", data: "orders ".repeat(300_000) });
+  assert.ok(await until(() => setup.events.messages.length === 1, 5000));
+  player.client.send({ t: "chat", text: "and still here" });
+  assert.ok(await until(() => setup.events.messages.length === 2, 2000));
+  assert.equal(player.client.state, "connected");
   setup.host.stop();
 });
 
@@ -417,5 +447,46 @@ test("a host whose clock is an hour behind is told nobody can find its lobby", a
   const setup = world({ relayOptions: { ephemeralMaxAgeSeconds: 60 }, hostNow: () => Date.now() - 3_600_000 });
   setup.host.start();
   assert.ok(await until(() => setup.events.status?.clockRefused === true), JSON.stringify(setup.events.status));
+  setup.host.stop();
+});
+
+// A view of the world is megabytes, sent as many frames, paused whenever the
+// channel's buffer is full. A small message sent meanwhile went out between its
+// frames and arrived first; the page then dropped the large one as older, and
+// never had the world. Each end now sends one message at a time.
+test("a small message never overtakes a large one on its way, either way", async () => {
+  const setup = world({ backlog: true });
+  setup.host.start();
+  const player = setup.join("Ana");
+  assert.ok(await until(() => player.client.state === "connected"));
+  // Under the test schema's 3 MB, and well over the 1 MiB that pauses a send.
+  const data = "map ".repeat(700_000);
+  setup.host.send(player.client.player, { t: "blob", data });
+  setup.host.send(player.client.player, { t: "blob", data: "small" });
+  assert.ok(await until(() => player.log.messages.length === 2, 20_000));
+  assert.deepEqual(player.log.messages.map((message) => message.data.length), [data.length, 5], "the large one first, whole");
+  // And from a player to the host.
+  const order = "orders ".repeat(40_000);
+  player.client.send({ t: "blob", data: order });
+  player.client.send({ t: "blob", data: "small" });
+  assert.ok(await until(() => setup.events.messages.length === 2, 20_000));
+  assert.deepEqual(setup.events.messages.map((entry) => entry.message.data.length), [order.length, 5]);
+  setup.host.stop();
+});
+
+test("a flood of offers keeps nobody of the game out, and a newcomer over the limit is told the host is busy", async () => {
+  // The per-device limit is by a key a joiner makes for itself: fresh keys spent what everyone together may ask,
+  // and a seated player coming back waited without a word (the review of 2026-11-18, security S12).
+  const seated = createIdentity();
+  const lines = [];
+  const setup = world({ seats: 4, hostLimits: { offersPerMinute: 1 }, hostOptions: { knows: (device) => device === seated.id, log: (text) => lines.push(text) } });
+  setup.host.start();
+  const first = setup.join("Ana");
+  assert.ok(await until(() => first.client.state === "connected"));
+  const flood = setup.join("Ben");
+  assert.ok(await until(() => lines.some((line) => /told to try again/.test(line))), "the newcomer over the limit is denied, busy");
+  const back = setup.join("Cleo", { device: seated });
+  assert.ok(await until(() => back.client.state === "connected"), "a player of the game is let through");
+  assert.notEqual(flood.client.state, "connected");
   setup.host.stop();
 });

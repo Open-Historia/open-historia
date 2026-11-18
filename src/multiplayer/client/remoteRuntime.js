@@ -18,20 +18,37 @@
 //
 // What stays this device's own: the map's files (from a local copy of the same
 // scenario: the stand-in game this device opens for the shared one), the
-// library, the settings, and the advisor's conversation, which is the player's
-// private exchange with their own adviser on their own AI key.
+// library and the settings. The advisor's conversation is the player's private
+// exchange with their own adviser on their own AI key, and the host keeps it
+// with their seat (runtime/seatAdvisors.js), so it is there on any device and
+// after a new invite code: it comes in the view, and a save of it is asked of
+// the host (client/sharedGame.js, game/advisorChanges.js).
 //
 // Installed once at start-up in every build, after the website's own /api
 // router (runtime/web/router.js) so it sees each request first. It does nothing
 // until a shared game begins, and single player never notices it.
 
-// Documents that come from the host. The first five are the game itself: a
-// screen that asks for one before the first view arrives waits for it.
-export const VIEW_KEYS = Object.freeze(["world", "game", "events", "chat", "actions", "intercepts", "colors", "flags"]);
-const REQUIRED_KEYS = new Set(["world", "game", "events", "chat", "actions"]);
+import { VIEW_KEYS, VIEW_PARTS } from "../game/messages.js";
+import { EMPTY_DIGEST, digestDoc } from "../protocol/digest.js";
+
+// Documents that come from the host (game/messages.js). The first five are the
+// game itself: a screen that asks for one before the first view arrives waits
+// for it.
+export { VIEW_KEYS };
+const REQUIRED_KEYS = new Set(["world", "game", "events", "chat", "actions", "advisor"]);
 const VIEW_KEY_SET = new Set(VIEW_KEYS);
+// The parts the host sends apart from their document (game/messages.js
+// VIEW_PARTS), by the document they belong in: [view key, field].
+const PARTS_OF = new Map();
+for (const [part, { of, key }] of Object.entries(VIEW_PARTS)) PARTS_OF.set(of, [...(PARTS_OF.get(of) ?? []), [part, key]]);
 // The rollback archive is the host's; a player has none.
 const HOST_ONLY_KEYS = new Set(["snapshots", "snapshotsIndex"]);
+// The map's own documents, read from this device's copy of the host's scenario
+// (checked against the host's map when the player joined, client/standIn.js):
+// read as ever, never written while the game is shared, or this screen alone
+// would draw another world from then on (runtime/library.js SHARED_MAP_HELD
+// holds the library's own doors the same way).
+const MAP_KEYS = new Set(["regionsGeojson", "citiesGeojson", "backgroundData", "ownBasemapsData"]);
 
 let installed = false;
 let current = null;
@@ -47,13 +64,25 @@ const isRecord = (value) => Boolean(value) && typeof value === "object" && !Arra
 // A document as the page holds it: the host's view, with this device's own
 // fields laid over it.
 const heldDoc = (session, key) => {
-  const view = session.docs.get(key);
+  // A save this page has asked the host for, shown until the host's next view
+  // of that document (overlay).
+  if (session.overlays.has(key)) return session.overlays.get(key);
+  // With the parts the host sends apart from it laid back in (VIEW_PARTS).
+  let view = session.docs.get(key);
+  const parts = PARTS_OF.get(key);
+  if (parts && isRecord(view)) {
+    view = { ...view };
+    for (const [part, field] of parts) if (session.docs.has(part)) view[field] = session.docs.get(part);
+  }
   const own = session.patches.get(key);
   return own && isRecord(view) ? { ...view, ...own } : view;
 };
 const publishHeld = (session, keys) => {
   const entries = [];
-  for (const key of keys) {
+  // A part that arrived is shown in the document it belongs in, which is the
+  // one every screen reads: a part is no document of the page's own.
+  const parents = keys.map((key) => VIEW_PARTS[key]?.of).filter(Boolean);
+  for (const key of new Set([...keys, ...parents].filter((key) => !VIEW_PARTS[key]))) {
     const url = session.docs.has(key) ? session.urlFor?.(key) : "";
     if (url) entries.push({ url, value: heldDoc(session, key) });
   }
@@ -138,6 +167,7 @@ export const installRemoteRuntime = ({ target = globalThis, waitMs = 20_000 } = 
     if (HOST_ONLY_KEYS.has(key)) {
       return method === "GET" || method === "HEAD" ? jsonResponse([]) : refusal("In a shared game, only the host can roll back.");
     }
+    if (MAP_KEYS.has(key) && method !== "GET" && method !== "HEAD") return refusal("In a shared game, the map is the host's and is not changed here.");
     if (!VIEW_KEY_SET.has(key)) return originalFetch(input, init);
 
     if (method === "GET" || method === "HEAD") {
@@ -157,8 +187,17 @@ export const installRemoteRuntime = ({ target = globalThis, waitMs = 20_000 } = 
     let answer;
     try {
       answer = session.onWrite?.({ key, wanted: await bodyOf(input, init), held: heldDoc(session, key) });
-    } catch {
-      // a hook that fell over changes nothing: the page still holds its view
+    } catch (error) {
+      // A save the hook refuses (client/seatWrites.js unroutedRefusal: one
+      // holding a change no request carries) fails as a save: its screen is
+      // told, never answered "saved". Every screen is shown the document as the
+      // page holds it, which is the truth: the host's, with whatever of the save
+      // was this device's own (the AI's suggestions) kept.
+      if (error?.refusal && current === session) {
+        publishHeld(session, [key]);
+        return refusal(String(error.message || "In a shared game, this change was not sent to the host."));
+      }
+      // a hook that fell over otherwise changes nothing: the page still holds its view
     }
     if (current !== session) return refusal("The shared game ended.");
     // A writer that asked for no echo caches what it sent, not this answer: it
@@ -177,23 +216,61 @@ export const installRemoteRuntime = ({ target = globalThis, waitMs = 20_000 } = 
 // document's current URL (JSON_URLS[key]); both are passed in so this module
 // stays free of the page's runtime and testable on its own.
 export const startRemoteRuntime = ({ publish, urlFor, onWrite } = {}) => {
-  const session = { docs: new Map(), patches: new Map(), saves: new Map(), rev: -1, waiters: new Set(), publish, urlFor, onWrite };
+  // `epoch` and `rev`: the view held now, by the host's name and number for
+  // it; `sums`: what each held document adds up to (protocol/digest.js).
+  const session = { docs: new Map(), patches: new Map(), overlays: new Map(), saves: new Map(), epoch: "", rev: 0, sums: new Map(), waiters: new Set(), publish, urlFor, onWrite };
   current = session;
+  const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+  // Whether a view may be shown: { ok: true, sums } with each document's
+  // digest as the page would hold it, or { ok: false, reason }:
+  //   "repeat"  a view already shown (nothing to do);
+  //   "gap"     it follows a view this page never had (another connection's,
+  //             or one lost on the way);
+  //   "digest"  what the page would hold does not add up to the host's;
+  //   "ended"   the shared game is over.
+  const check = (view) => {
+    if (current !== session) return { ok: false, reason: "ended" };
+    const docs = view?.docs;
+    if (!docs || typeof docs !== "object" || !view.sums || typeof view.sums !== "object") return { ok: false, reason: "gap" };
+    const whole = view.base === 0;
+    if (view.epoch === session.epoch && view.rev <= session.rev) return { ok: false, reason: "repeat" };
+    if (!whole && (view.epoch !== session.epoch || view.base !== session.rev)) return { ok: false, reason: "gap" };
+    const sums = new Map();
+    for (const key of VIEW_KEYS) {
+      const sum = has(docs, key) ? digestDoc(docs[key]) : whole ? EMPTY_DIGEST : session.sums.get(key) ?? EMPTY_DIGEST;
+      if (sum !== view.sums[key]) return { ok: false, reason: "digest", key };
+      sums.set(key, sum);
+    }
+    return { ok: true, sums };
+  };
   return {
-    // A view from the host: only the documents that changed, whole. An older
-    // view than the one already shown is ignored.
-    apply({ rev, docs }) {
-      if (current !== session || !(rev > session.rev) || !docs || typeof docs !== "object") return false;
-      session.rev = rev;
+    check: (view) => {
+      const verdict = check(view);
+      return verdict.ok ? { ok: true } : verdict;
+    },
+    // A view from the host: the documents that changed since the view it
+    // follows, whole, or every one. Shown only if it passes `check`; returns
+    // the verdict. A document the view sends as null is one the player does
+    // not hold (an optional one falls back to this device's own again).
+    apply(view) {
+      const verdict = check(view);
+      if (!verdict.ok) return verdict;
+      const { docs } = view;
       const arrived = [];
-      for (const key of Object.keys(docs)) {
-        if (!VIEW_KEY_SET.has(key)) continue;
-        session.docs.set(key, docs[key]);
+      for (const key of VIEW_KEYS) {
+        if (!has(docs, key) && view.base !== 0) continue;
+        const value = has(docs, key) ? docs[key] : null;
+        if (value === null) session.docs.delete(key);
+        else session.docs.set(key, value);
+        session.overlays.delete(key);
         arrived.push(key);
       }
+      session.epoch = view.epoch;
+      session.rev = view.rev;
+      session.sums = verdict.sums;
       publishHeld(session, arrived);
-      for (const check of [...session.waiters]) if (check()) session.waiters.delete(check);
-      return true;
+      for (const waiter of [...session.waiters]) if (waiter()) session.waiters.delete(waiter);
+      return { ok: true };
     },
     // This device's own fields of a document, laid over every view of it from
     // here on: `fields` are merged in, and one given as undefined is taken out
@@ -210,11 +287,27 @@ export const startRemoteRuntime = ({ publish, urlFor, onWrite } = {}) => {
       else session.patches.delete(key);
       if (!quiet) publishHeld(session, [key]);
     },
+    // A whole document as this page has just saved it and asked the host for
+    // (a document the host keeps for this seat: the advisor's conversation),
+    // shown until the host's next view of it arrives, or `dropOverlay` when
+    // the host refused it. The view, not this, is what the host holds.
+    overlay(key, value, { quiet = true } = {}) {
+      if (current !== session || !VIEW_KEY_SET.has(key)) return;
+      session.overlays.set(key, value);
+      if (!quiet) publishHeld(session, [key]);
+    },
+    dropOverlay(key) {
+      if (current !== session || !session.overlays.delete(key)) return;
+      publishHeld(session, [key]);
+    },
     // A document as the page holds it now.
     held: (key) => (current === session ? heldDoc(session, key) : undefined),
     has: (key) => current === session && session.docs.has(key),
     get rev() {
       return current === session ? session.rev : -1;
+    },
+    get epoch() {
+      return current === session ? session.epoch : "";
     },
   };
 };

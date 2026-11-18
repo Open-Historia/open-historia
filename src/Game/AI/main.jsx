@@ -13,10 +13,11 @@ import {
     resolveTaskFallbackEntries,
     providerSupportsModelDiscovery,
     saveRecentModel,
+    sharedRoundAnswerer,
     updateEntry,
 } from "./providerConfig.js";
-import { formatResetTime, runWithFallback } from "./fallbackRunner.js";
-import { BACKGROUND_REQUEST, PLAYER_REQUEST, lookupRoundLimit, requestLedger, savingRequests, unlimitedRequests } from "./requestBudget.js";
+import { fallbackAvailability, formatResetTime, runWithFallback } from "./fallbackRunner.js";
+import { BACKGROUND_REQUEST, PLAYER_REQUEST, lookupRoundLimit, noRequestLimit, requestLedger, savingRequests, unlimitedRequests } from "./requestBudget.js";
 import { requestActivity } from "./requestActivity.js";
 import { agentClient } from "./agentConnection.js";
 import { onSimulationsIdle } from "./simulationStatus.js";
@@ -133,7 +134,7 @@ import {
 } from "./toolTurns.js";
 import { GROUP_LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
 import { audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
-import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import {
     buildPromptContext,
     formatDateReadable,
@@ -172,6 +173,7 @@ import { describeWarsForAdvisor } from "./advisorWars.js";
 import { describeLeaderStanding, describeOurFigures, describeTerritoryForConversation } from "./standingContext.js";
 import { OWN_WARS_HEADING, buildWarStatsBlock, describePeaceTalk } from "./warStatsPrompt.js";
 import { beginAiRequestScope } from "./aiRequestControl.js";
+import { answerOf, carriedCall, failureOf, payProfileOf, payerCallOf } from "./roundCarrier.js";
 
 // A time skip the player's Agent was answering is over once the game stops
 // simulating, so the Agent's `/skip` stops too (ADR 0008).
@@ -2971,6 +2973,18 @@ export async function callAI(systemPrompt, history, opts = {}) {
     if (directive) {
         systemPrompt = `${systemPrompt}\n\n${directive}`;
     }
+    // A shared round another player's device pays for (multiplayer/host/
+    // settings.js payment "cycle"): each request of the round's skip goes, as
+    // it was built here, to that device, which carries it to its own AI; its
+    // answer comes back in a provider's shape, with the rest of this call's
+    // contract (roundCarrier.js CALL_CONTRACT: lookup rounds counted and kept,
+    // the output limit, the failure's kind). No key leaves any device, and none
+    // of this one's providers is asked.
+    const carried = carriedCall({ systemPrompt, history, opts: providerOpts, lookups, spender, onRequest: observeRequest, debugSink });
+    if (carried) {
+        logDebugEvent("ai-call", `${logLabel || "AI call"}: carried to the device of the player who pays this round.`, { promptChars: systemPrompt.length }, { verbose: true });
+        return carried;
+    }
 
     const { entries, preferredEntryId } = resolveTaskFallbackEntries(providerOpts.taskKey);
     // Named for where the call STARTS; the answer names who actually answered.
@@ -3262,6 +3276,55 @@ export async function callAI(systemPrompt, history, opts = {}) {
     }
 }
 
+// A shared round's request the host sent this device to pay for, on its own AI
+// (multiplayer/host/roundPayers.js, the owner's decision 14): carried as the
+// host built it, and its answer handed back as it came (roundCarrier.js). A
+// lookup the model asks for is answered by the host (`execute`). Nothing of it
+// is written on this device; the host applies the answer.
+// `onRequest` hears the status of every provider response it causes, which the
+// host's skip reads as it reads its own (a contract the provider refused);
+// `onActivity` each piece of the answer and `onRound` each lookup round begun,
+// which the host's deadline and the round's budget count. This device's own
+// settings hold the request, whatever it was sent: no lookups where its own are
+// off, no more rounds than its own allow. A failure is thrown with its kind
+// (`payFailure`), which is all the host is told: the provider's words stay here.
+export async function carryRoundRequest(call, { execute = null, signal = null, onRequest = null, onActivity = null, onRound = null } = {}) {
+    const limits = {
+        lookups: !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
+        rounds: lookupRoundLimit({ unlimited: unlimitedRequests() }),
+    };
+    const { systemPrompt, history, opts, sink, carry } = payerCallOf(call, { execute, signal, onRequest, onActivity, onRound, limits });
+    try {
+        const result = await callAI(systemPrompt, history, opts);
+        // The answer is judged on the host: this device's record of the call is done.
+        attachAttemptOutcome(sink.record, { ok: true });
+        return answerOf(result, { sink, carry });
+    } catch (error) {
+        attachAttemptOutcome(sink.record, { ok: false });
+        const failed = error instanceof Error ? error : new Error(String(error));
+        failed.payFailure = failureOf(error);
+        throw failed;
+    }
+}
+
+// What this device states about paying for a shared round, with no key
+// (roundCarrier.js payProfileOf; the host passes over a device that cannot):
+// whether its list can answer a round now (an entry that serves one, set up and
+// not Spent, Unusable or busy: an Agent never answers a shared round), and its
+// own settings that decide what a round spends on its key.
+export function roundPayProfile() {
+    const list = getResolvedFallbackList();
+    const serving = list.filter((entry) => entryServesCall(entry, { spender: "jump", sharedGame: true }));
+    const ready = Boolean(sharedRoundAnswerer(list)) && fallbackAvailability({ entries: serving, store: fallbackStateStore }).canAnswer;
+    return payProfileOf({
+        ready,
+        noRequestLimit: noRequestLimit(),
+        lookups: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
+        segmented: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
+        declares: geminiDeclaresTaskFunction("jumpForward"),
+    });
+}
+
 let promptPack = normalizePromptPack({});
 let promptsReady = null;
 let promptsReadyKey = "";
@@ -3503,7 +3566,7 @@ You can change the board directly from this conversation, with no separate confi
 - Open a project for the player, once they have clearly decided to start it (an unambiguous commitment is enough; a question is not): {"op":"create","name":"<a name>","summary":"<what it is for>","kind":"project","tags":["naval"],"plan":{"durationDays":540,"monthlyCost":120000000,"milestones":[{"title":"Keel laid","atProgress":30}],"effects":[{"type":"stat","stat":"military.sea","change":4}]}}. kind is "operation" for a military, intelligence or covert undertaking; add "secrecy":"covert" for something deniable. Write the plan as [How a Plan Is Written] says. Without a plan it opens as planning, and the player plans it from the Projects tab.
 - Fund one of the player's projects when they ask: {"op":"update","name":"<its exact name>","funding":"none | low | normal | high"}.
 - Call off one of the player's projects when they ask: {"op":"cancel","name":"<its exact name>","note":"How it ended."}.
-- Say what has become of any entry: {"op":"update","name":"<its exact name>","lastUpdate":"One sentence."}; and settle a doubted foreign entry, once a fresh agent is in place, with "verification":"confirmed" or "refuted".
+- Say what has become of any entry: {"op":"update","name":"<its exact name>","lastUpdate":"One sentence."}. A doubted foreign entry is settled by itself once a fresh agent has reported: never give it a verdict.
 That is all you can do to the board. You never move a project's progress, complete it, or set it back: the engine runs it, and only the world's events set a project back. You never open another country's project: the world opens those, in its time skips. Proactively RECOMMEND projects in prose during strategy discussions; a recommendation is not a board change. Never reopen an abandoned effort unless the player explicitly asks.
 
 [How a Plan Is Written]

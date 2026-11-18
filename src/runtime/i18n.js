@@ -253,7 +253,8 @@ export const chatTextDirection = () => {
 
 // Appended to every AI system prompt (see callAI) so replies arrive in the
 // player's language natively instead of being machine-translated after.
-export const languageDirective = (code = getStoredLanguage(), { force = false } = {}) => {
+// In a shared game the world's language (setWorldLanguage below), on every call.
+export const languageDirective = (code = worldLanguage || getStoredLanguage(), { force = false } = {}) => {
   if (code === DEFAULT_LANGUAGE && !force) {
     return "";
   }
@@ -276,7 +277,7 @@ export const languageDirective = (code = getStoredLanguage(), { force = false } 
 // messages" clause, which also stops a conversation drifting once one reply
 // slips) makes the chat-language setting actually hold, English included.
 export const chatLanguageDirective = () => {
-  const code = resolveChatLanguage();
+  const code = worldLanguage || resolveChatLanguage();
   const directive = languageDirective(code, { force: true });
   if (!directive) {
     return "";
@@ -293,7 +294,31 @@ export const chatLanguageDirective = () => {
 // so an Arabic player's prompt told the model "English" three times and Arabic
 // once, and the suggested actions came back in English (2026-10-29).
 // `chat`: the advisor and the leaders, who answer in the chat language.
+// A shared game's world is written in one language, a rule of the game the
+// host sets in the lobby (multiplayer/host/settings.js `language`; the owner,
+// 2026-11-18). While a game is shared it outranks what each device reads in,
+// for every request the game makes on any screen: one device's interface
+// language wrote the host's world, another's its own replies, and the world
+// came out in several. Each player translates on their own device. "" when no
+// game is shared.
+let worldLanguage = "";
+export const setWorldLanguage = (code) => {
+  const wanted = String(code ?? "").trim();
+  worldLanguage = LANGUAGES.some((entry) => entry.code === wanted) ? wanted : "";
+};
+export const worldLanguageCode = () => worldLanguage;
+
+// The code of the language this device writes a game in, by the rule below:
+// what a shared game's host offers as its world language.
+export const writingLanguageCode = (saveLanguage = "") => {
+  const code = getStoredLanguage();
+  if (code && code !== DEFAULT_LANGUAGE) return code;
+  const saved = String(saveLanguage ?? "").trim().toLowerCase();
+  return LANGUAGES.find((entry) => entry.code === saved || entry.name.toLowerCase() === saved || entry.native.toLowerCase() === saved)?.code || DEFAULT_LANGUAGE;
+};
+
 export const readingLanguageName = (saveLanguage = "", { chat = false } = {}) => {
+  if (worldLanguage) return languageDisplayName(worldLanguage);
   const code = chat ? resolveChatLanguage() : getStoredLanguage();
   if (code && code !== DEFAULT_LANGUAGE) return languageDisplayName(code);
   const saved = typeof saveLanguage === "string" ? saveLanguage.trim() : "";

@@ -9,9 +9,15 @@
 
 import React, { useEffect, useState } from "react";
 import { useLibraryState } from "../../runtime/library.js";
-import { MAX_SEATS, SEATS_AVAILABLE_NOW, DEFAULT_SETTINGS } from "../host/settings.js";
+import { MAX_SEATS, POSTS_PER_ROUND_MAX, SEATS_AVAILABLE_NOW, DEFAULT_SETTINGS, settingsProblems } from "../host/settings.js";
+import { LANGUAGES, readingLanguageName } from "../../runtime/i18n.js";
+import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { keptSettingsOf } from "../host/sessionRecord.js";
 import { hostSharedGame, joinSharedGame, useSharedGame } from "../client/sharedGame.js";
+import { sharedRoundAnswerer, sharedRoundRefusal } from "../../Game/AI/providerConfig.js";
+import { STAND_IN_NOT_SHARED } from "../../runtime/standInGames.js";
 import PublicLobbies from "./PublicLobbies.jsx";
+import { HostCostFields, HostCostSummary } from "./HostCostFields.jsx";
 
 const card = {
   background: "var(--oh-ui-surface, #12141a)",
@@ -50,11 +56,17 @@ const rememberName = (name) => {
   }
 };
 
-const Field = ({ title, children, hint, style }) => (
+// The settings whose field below says what is wrong with it; anything else
+// wrong is said above the button.
+const FIELDS_WITH_PROBLEMS = Object.freeze(["name", "roundMinutes", "countdownSeconds", "daysPerRound", "leaverGraceMinutes", "postsPerRound"]);
+
+// `problem`: why the game would refuse what is in it (host/settings.js settingsProblems).
+const Field = ({ title, children, hint, problem, style }) => (
   <label style={{ display: "block", ...style }}>
     <span style={label}>{title}</span>
     {children}
     {hint ? <span style={{ ...note, display: "block", marginTop: "0.35rem" }}>{hint}</span> : null}
+    {problem ? <span role="alert" style={{ ...errorText, display: "block", marginTop: "0.35rem" }}>{problem}</span> : null}
   </label>
 );
 
@@ -105,16 +117,53 @@ const InviteBar = ({ onEnterGame }) => {
   );
 };
 
+// What answers a shared game's rounds on this computer (AI/providerConfig.js):
+// an Agent Connection never does, so a list of Agents alone cannot host, and
+// one above a key is passed over.
+const readAi = () => ({ refusal: sharedRoundRefusal(), answerer: sharedRoundAnswerer() });
+
 // "Host a lobby": the game this player has open, shared.
 const HostPanel = ({ onClose, onEnterGame }) => {
   const { activeGame } = useLibraryState();
   const shared = useSharedGame();
-  // A stand-in of an earlier shared game is named "Shared game: …": its lobby is not.
-  const [settings, setSettings] = useState({ ...DEFAULT_SETTINGS, name: String(activeGame?.name || "").replace(/^(?:shared game:\s*)+/i, "").trim() || DEFAULT_SETTINGS.name });
+  // The lobby is named after the game shared, as it is named. A stand-in says
+  // what it is by its record (server/sharedGameStandIn.js) and is never hosted;
+  // a copy a guest kept from before stand-ins said so is an ordinary game of
+  // theirs, named as they have it. Its name was matched against the English
+  // words "Shared game:" to drop them, which is no way to decide anything (the
+  // review of 2026-11-18, door 8).
+  const [settings, setSettings] = useState({ ...DEFAULT_SETTINGS, name: String(activeGame?.name || "").trim() || DEFAULT_SETTINGS.name });
   const [name, setName] = useState(rememberedName);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [desktop, setDesktop] = useState(null);
+  // Read again whenever the Fallback list changes.
+  const [ai, setAi] = useState(readAi);
+  useEffect(() => {
+    const refresh = () => setAi(readAi());
+    window.addEventListener("ai:fallback-changed", refresh);
+    return () => window.removeEventListener("ai:fallback-changed", refresh);
+  }, []);
+  // A shared game's stand-in shows a game this device joined: never one to share.
+  const standIn = Boolean(activeGame?.standIn);
+  // The settings this game kept the last time it was shared (host/sessionRecord.js
+  // keptSettingsOf): the form starts from them, so its rules are shown, never
+  // quietly reset to the defaults (the gap audit of 2026-11-18).
+  const [kept, setKept] = useState(false);
+  useEffect(() => {
+    let live = true;
+    const campaign = String(activeGame?.id || "");
+    if (!campaign) return undefined;
+    readJson(JSON_URLS.shared, { defaultValue: {}, force: true })
+      .then((record) => {
+        const settingsKept = keptSettingsOf(record, { campaign });
+        if (!live || !settingsKept) return;
+        setSettings(settingsKept);
+        setKept(true);
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [activeGame?.id]);
 
   useEffect(() => {
     let live = true;
@@ -125,10 +174,19 @@ const HostPanel = ({ onClose, onEnterGame }) => {
     return () => { live = false; };
   }, []);
 
+  // A number field the host clears stays empty (it was made 0 at once), and
+  // what it holds is checked below as the game would check it.
   const update = (key) => (event) => {
-    const value = event.target.type === "checkbox" ? event.target.checked : event.target.type === "range" || event.target.type === "number" ? Number(event.target.value) : event.target.value;
+    const { type, checked, value: raw } = event.target;
+    const value = type === "checkbox" ? checked : type === "range" || type === "number" ? (String(raw).trim() === "" ? "" : Number(raw)) : raw;
     setSettings((previous) => ({ ...previous, [key]: value }));
   };
+  // What the game would refuse, each under its own field, in words; the lobby
+  // cannot be opened until there is none. (The engine refuses the same, in the
+  // same words: host/settings.js normalizeSettings.)
+  const problems = settingsProblems(settings);
+  const problemOf = (key) => problems.find((problem) => problem.key === key)?.text || "";
+  const otherProblems = problems.filter((problem) => !FIELDS_WITH_PROBLEMS.includes(problem.key));
 
   const open = async () => {
     setBusy(true);
@@ -150,21 +208,26 @@ const HostPanel = ({ onClose, onEnterGame }) => {
       <h3 style={heading}>Host a lobby</h3>
       <p style={lead}>
         Your lobby is the game you have open. You keep playing your own country; players you send the invite code to take others.
-        Your computer runs the game and pays for its AI with your key.
+        Your computer runs the game; who pays for its AI is yours to choose below, and every player is told.
       </p>
       {desktop === false && !import.meta.env?.DEV ? (
         <p style={note}>Hosting needs the desktop app. You can still join lobbies from here.</p>
       ) : !activeGame ? (
         <p style={note}>Open a game first (the Games tab), then come back to host it.</p>
+      ) : standIn ? (
+        <p style={note}>{STAND_IN_NOT_SHARED}</p>
       ) : (
         <>
+          {kept ? <p style={note}>These are this game&apos;s settings from the last time it was shared.</p> : null}
+          {ai.refusal ? <p style={errorText}>{ai.refusal}</p> : null}
+          {!ai.refusal && ai.answerer?.passedAgent ? <p style={note}>{`Your own Agent does not answer a shared game: its rounds go to ${ai.answerer.label}.`}</p> : null}
           <div style={grid}>
             <Field title="Your name"><input style={input} value={name} maxLength={40} onChange={(event) => setName(event.target.value)} placeholder="Host" /></Field>
-            <Field title="Lobby name"><input style={input} value={settings.name} maxLength={60} onChange={update("name")} /></Field>
+            <Field title="Lobby name" problem={problemOf("name")}><input style={input} value={settings.name} maxLength={60} onChange={update("name")} /></Field>
             <Field title={`Players: ${settings.seats}`} hint={`Up to ${SEATS_AVAILABLE_NOW} for now; up to ${MAX_SEATS} is coming later.`}>
               <input type="range" min={2} max={MAX_SEATS} value={settings.seats} onChange={(event) => setSettings((previous) => ({ ...previous, seats: Math.min(SEATS_AVAILABLE_NOW, Number(event.target.value)) }))} style={{ width: "100%" }} />
             </Field>
-            <Field title="Round length (minutes)"><input type="number" style={input} min={1} max={10080} value={settings.roundMinutes} onChange={update("roundMinutes")} /></Field>
+            <Field title="Round length (minutes)" problem={problemOf("roundMinutes")}><input type="number" style={input} min={1} max={10080} step={1} value={settings.roundMinutes} onChange={update("roundMinutes")} /></Field>
             <Field title="Ready share to start the countdown" hint="When this share of players is ready, the countdown starts.">
               <select style={input} value={String(settings.readyThreshold)} onChange={(event) => setSettings((previous) => ({ ...previous, readyThreshold: Number(event.target.value) }))}>
                 <option value={String(0.5)}>Half</option>
@@ -173,10 +236,35 @@ const HostPanel = ({ onClose, onEnterGame }) => {
                 <option value={String(1)}>Everyone</option>
               </select>
             </Field>
-            <Field title="Countdown (seconds)"><input type="number" style={input} min={0} max={3600} value={settings.countdownSeconds} onChange={update("countdownSeconds")} /></Field>
-            <Field title="Game time per round (days)"><input type="number" style={input} min={1} max={3650} value={settings.daysPerRound} onChange={update("daysPerRound")} /></Field>
-            <Field title="A leaver's country waits (minutes)" hint="Then the AI plays it until they come back."><input type="number" style={input} min={0} max={1440} value={settings.leaverGraceMinutes} onChange={update("leaverGraceMinutes")} /></Field>
+            <Field title="Countdown (seconds)" problem={problemOf("countdownSeconds")}><input type="number" style={input} min={0} max={3600} step={1} value={settings.countdownSeconds} onChange={update("countdownSeconds")} /></Field>
+            <Field title="Game time per round (days)" problem={problemOf("daysPerRound")}><input type="number" style={input} min={1} max={3650} step={1} value={settings.daysPerRound} onChange={update("daysPerRound")} /></Field>
+            <Field title="A leaver's country waits (minutes)" hint="Then the AI plays it until they come back." problem={problemOf("leaverGraceMinutes")}><input type="number" style={input} min={0} max={1440} step={1} value={settings.leaverGraceMinutes} onChange={update("leaverGraceMinutes")} /></Field>
+            {/* Rostra, the social network: how many posts each player may make
+                in a round (host/settings.js `postsPerRound`). */}
+            <Field title="Rostra posts a player may make each round" problem={problemOf("postsPerRound")}><input type="number" style={input} min={1} max={POSTS_PER_ROUND_MAX} step={1} value={settings.postsPerRound} onChange={update("postsPerRound")} /></Field>
+            {/* Who answers a player's message to a country the AI plays
+                (host/settings.js `replies`). No key is ever sent: with "own"
+                each player's device writes the answer itself. */}
+            <Field title="Countries the AI plays answer with" hint={settings.replies === "own" ? "Every player needs an AI set up on their own device." : undefined}>
+              <select style={input} value={settings.replies} onChange={update("replies")}>
+                <option value="host">Your AI key</option>
+                <option value="own">Each player&apos;s own AI key</option>
+              </select>
+            </Field>
+            {/* The language the world is written in, a rule of the game
+                (host/settings.js `language`): every player's requests write
+                in it, and each translates on their own device. */}
+            <Field title="The world is written in" hint="Players who read another language translate it on their own device.">
+              <select style={input} value={settings.language || ""} onChange={update("language")}>
+                <option value="">{`The language you play in (${readingLanguageName(activeGame?.language || "")})`}</option>
+                {LANGUAGES.map((entry) => <option key={entry.code} value={entry.code}>{entry.native === entry.name ? entry.name : `${entry.native} (${entry.name})`}</option>)}
+              </select>
+            </Field>
+            {/* Who pays for each round, the host's answers a round, and the Game Master. */}
+            <HostCostFields settings={settings} setSettings={setSettings} />
           </div>
+          <HostCostSummary settings={settings} />
+          {otherProblems.map((problem) => <p key={problem.key} role="alert" style={errorText}>{problem.text}</p>)}
           <label style={{ alignItems: "center", color: "rgba(255,255,255,0.8)", display: "flex", fontSize: "0.85rem", gap: "0.5rem", marginTop: "0.9rem" }}>
             <input type="checkbox" checked={settings.allowMidGameJoin} onChange={update("allowMidGameJoin")} />
             Players may join a game already under way, taking a country the AI plays
@@ -187,8 +275,8 @@ const HostPanel = ({ onClose, onEnterGame }) => {
         </>
       )}
       <div style={{ display: "flex", gap: "0.6rem", marginTop: "1rem" }}>
-        {activeGame && (desktop !== false || import.meta.env?.DEV) ? (
-          <button type="button" style={primary} disabled={busy || shared.mode !== "off"} onClick={open}>
+        {activeGame && !standIn && (desktop !== false || import.meta.env?.DEV) ? (
+          <button type="button" style={primary} disabled={busy || shared.mode !== "off" || Boolean(ai.refusal) || problems.length > 0} onClick={open}>
             {busy ? "Opening…" : "Open the lobby"}
           </button>
         ) : null}

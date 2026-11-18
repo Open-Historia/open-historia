@@ -38,6 +38,7 @@ import { PeaceControls, ReparationsNote } from "./warAndPeace.jsx";
 import { WarReportsList } from "./afterAction.jsx";
 import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
+import { inSharedGame, sharedGameRole, sharedRequestsHeld, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
     appendCountryStatHistorySample,
@@ -1550,8 +1551,14 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
         return countries.map((country) => country.key).filter((key) => !ranked.has(key) || (lookup !== null && wantsRating(lookup(key))));
     }, [metric?.key, ranking, countries, world]);
     const unratedKey = unrated.join("|");
+    // What a shared game's host said it did not rate, and why (gameplayLazy.js ratingsFromHost): the ranking stayed
+    // part empty with nothing to say for it (the review of 2026-11-18, wars 9).
+    const [ratingRefused, setRatingRefused] = useState("");
     useEffect(() => {
-        if (unrated.length > 0) void ensureMilitaryFigures(unrated, { reason: "the military ranking" });
+        if (unrated.length > 0) {
+            void ensureMilitaryFigures(unrated, { reason: "the military ranking" })
+                .then((outcome) => setRatingRefused(String(outcome?.refused ?? "")), () => {});
+        }
         // (Asked again only when the list changes.)
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [unratedKey]);
@@ -1634,6 +1641,9 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
                     {" "}<span data-no-translate>({ranking.rows.length}/{ranking.total})</span>
                 </p>
             )}
+            {metric.key === "military" && ratingRefused && unrated.length > 0 && (
+                <p role="status" style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.7rem", lineHeight: 1.45, marginTop: "0.5rem" }}>{ratingRefused}</p>
+            )}
         </div>
     );
 };
@@ -1643,6 +1653,13 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
 const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }) => {
     const { activeGameId, runtimeScenario, token: libraryToken } = useLibraryState();
     const displayCurrency = useSyncExternalStore(subscribeEconomicDisplayCurrency, getActiveEconomicDisplayCurrency);
+    // In a shared game a sheet once written stands, for everyone: its figures
+    // move only as the rounds move them, so there is nothing to read again.
+    const sharedGame = Boolean(useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole));
+    // A sheet asked of the host while a round is resolved waits for the round
+    // (host/requestWaits.js): said as the world finishing its update, not left
+    // to look stuck.
+    const heldRequests = useSyncExternalStore(subscribeSharedGameRole, sharedRequestsHeld, sharedRequestsHeld);
     const [player, setPlayer] = useState({ code: "", date: "", startDate: "", round: 0, gameKey: "game" });
     const [targetCountry, setTargetCountry] = useState("");
     // A requested polity that arrived before the game was read: the first
@@ -2213,7 +2230,12 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 setHistoryState({ status: "ready", samples, error: "", recoveredCount, persistentCount });
 
                 const persistedSeries = persistent[targetCountry] || [];
-                if (JSON.stringify(persistedSeries) !== JSON.stringify(stored)) {
+                // In a shared game the history is the host's world's, which its
+                // own rounds add to, and the restore points are the host's: this
+                // page recovers nothing to keep. Its save of the field went
+                // nowhere and was answered "saved" (the review of 2026-11-18,
+                // door 3); the chart above shows what the view holds.
+                if (!inSharedGame() && JSON.stringify(persistedSeries) !== JSON.stringify(stored)) {
                     try {
                         // Re-read immediately before the best-effort migration write so
                         // opening a chart cannot put a stale pre-turn world object back
@@ -2251,7 +2273,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
     }, [active, advancedOpen, targetCountry, player.date, player.round, state.sheet]);
 
     const sheet = state.sheet;
-    const refreshMenuStep = refreshMenu.target === targetCountry && statsView === "economy" && state.status !== "loading"
+    const refreshMenuStep = refreshMenu.target === targetCountry && statsView === "economy" && state.status !== "loading" && !sharedGame
         ? refreshMenu.step
         : "";
     // Header identity can safely use the already-loaded canonical world's shallow
@@ -2396,7 +2418,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 </div>
             )}
             </div>
-            {statsView === "economy" && state.status !== "loading" && (
+            {statsView === "economy" && state.status !== "loading" && !sharedGame && (
                 <button
                 type="button"
                 className="oh-tap"
@@ -2520,6 +2542,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                     intelligence={currentPoliticalKnowledge?.intelligence || null}
                     institutions={worldSnapshot ? institutionPortfolioForPolity(worldSnapshot, targetCountry, { viewerPolity: player.code }) : []}
                     onCompile={worldSnapshot ? partiesCompile.compile : null}
+                    compileOnce={sharedGame}
                     compiling={partiesCompile.busy}
                     compileError={partiesCompile.error}
                 />
@@ -2536,7 +2559,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
 
             {statsView === "economy" && !statSheetDefinitionError && state.status === "loading" && (
                 <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.82rem", marginTop: "1rem" }}>
-                {state.waiting ? "Waiting for the world to finish updating, then compiling national statistics…" : "Compiling national statistics…"}
+                {state.waiting || heldRequests.includes("sheet") ? "Waiting for the world to finish updating, then compiling national statistics…" : "Compiling national statistics…"}
                 </p>
             )}
 

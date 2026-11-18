@@ -38,6 +38,8 @@ const ALLOWED = {
     // alpha: mergeChatKnowledgeCursors reads and writes inside the queue itself.
     "writeWorldState": 2, "writeJson(actions)": 1, "writeJson(advisor)": 1, "writeJson(chat)": 2,
     "writeJson(events)": 1, "writeJson(game)": 1, "writeJson(intercepts)": 1, "writeJson(world)": 1,
+    // The shared game's session: its one write is the seam's own (RUNTIME_DOCUMENTS.shared).
+    "writeJson(shared)": 1,
   },
   // The turn's commit and the rollback's restore replace the canonical state on
   // purpose, under the busy lock (the jump re-reads the chats); the rollback

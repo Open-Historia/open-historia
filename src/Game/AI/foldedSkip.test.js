@@ -173,8 +173,10 @@ test("a skip shown no board does not keep the board's ops over a rider with a jo
 
 test("a refused folded skip no longer turns folding off for the session", () => {
   assert.equal(gameplaySource.includes("foldedSkipRefused"), false);
-  assert.match(gameplaySource, /let foldedSkipCeiling = FOLDED_SKIP_SCHEMA_BUDGET;/);
+  // One ceiling for whoever answers the skip: this device, or a shared round's payer (skipRules `who`).
+  assert.match(gameplaySource, /const foldedSkipCeilingFor = \(who = ""\) => foldedSkipCeilings\.get\(who\) \?\? FOLDED_SKIP_SCHEMA_BUDGET;/);
   const body = functionBody("runJumpSegments");
+  assert.match(body, /const foldedSkipCeiling = foldedSkipCeilingFor\(spending\.who\);/);
   assert.match(body, /ceiling: foldedSkipCeiling,/);
   assert.match(body, /waited: skipRidersWaiting,/);
   assert.match(body, /skipRidersWaiting = ridersThatWaited\(fit\.leftOut, \{ historyDue: Boolean\(dueHistoryJob\) \}\);/);
@@ -186,13 +188,15 @@ test("a refused folded skip no longer turns folding off for the session", () => 
   // With the lookup functions the request declares beside it, the same set the
   // skip is asked with, where Gemini is asked for a call of the function (a
   // player's log, 2026-11-10: refused at 28,894 with 25 of them beside it).
-  assert.match(body, /const declaredBeside = geminiDeclaresTaskFunction\(skipTaskKey, \{ watched: Boolean\(showEvents\) \}\)\s*\n\s*\? normalizeArray\(withFrontOrderFunction\(buildTaskLookups\(segmentBundle\), frontOrderCall\(context\)\)\?\.tools\)\s*\n\s*: \[\];/);
-  assert.match(body, /lookups: withFrontOrderFunction\(buildTaskLookups\(segmentBundle\), frontOrderCall\(context\)\),/);
+  // Whose Gemini it is, and whether the lookups are on, are whoever pays for the skip's (skipRules).
+  assert.match(body, /const declaredBeside = \(spending\.declares \?\? geminiDeclaresTaskFunction\(skipTaskKey, \{ watched: Boolean\(showEvents\) \}\)\)\s*\n\s*\? normalizeArray\(withFrontOrderFunction\(buildTaskLookups\(segmentBundle, \{ enabled: spending\.lookups \}\), frontOrderCall\(context\)\)\?\.tools\)\s*\n\s*: \[\];/);
+  assert.match(body, /lookups: withFrontOrderFunction\(buildTaskLookups\(segmentBundle, \{ enabled: skipRules\(\)\.lookups \}\), frontOrderCall\(context\)\),/);
   assert.match(gameplaySource, /const skipDeclaredChars = \(tool, beside = \[\]\) => geminiDeclaredChars\(\[tool, \.\.\.beside\]\);/);
   assert.match(functionBody("runJsonTask"), /const ratedTool = taskToolFor\(taskKey, statContract, variables\);/);
   // And the prompt asks for nothing the function leaves out.
   assert.match(body, /foldedBoard: riders\.board,/);
-  assert.match(body, /foldedBoardDoubts: riders\.board \?/);
+  // (No doubted entries to settle: the engine settles them, runtime/agentBoards.js.)
+  assert.doesNotMatch(body, /foldedBoardDoubts/);
   assert.match(body, /foldedHistoryField: riders\.history,/);
   // A fold left out was never asked: it waits, and is no failure of the skip.
   assert.match(functionBody("foldedTurnReview"), /const fold = state\.foldedHistoryCarried \? \(state\.foldedPrep\?\.history \?\? null\) : null;/);
@@ -438,7 +442,7 @@ test("a refused folded request is asked again the old way, and only a refusal is
   const retry = body.slice(body.indexOf("if (refused) {"), body.indexOf("const { generation: segmentGeneration"));
   assert.match(retry, /state\.folded = false;/);
   assert.match(retry, /answer = await askSegment\(false\);/);
-  assert.match(retry, /if \(answer\.generation\?\.source !== "fallback"\) \{\n\s*foldedSkipCeiling = ceilingAfterRefusal\(foldedSkipCeiling, state\.foldedChars\);/, "the ceiling drops only once the old way has worked");
+  assert.match(retry, /if \(answer\.generation\?\.source !== "fallback"\) \{\n[^\n]*\n\s*const who = skipRules\(\)\.who;\n\s*foldedSkipCeilings\.set\(who, ceilingAfterRefusal\(foldedSkipCeilingFor\(who\), state\.foldedChars\)\);/, "the ceiling drops only once the old way has worked, for whoever answered it");
   assert.ok(retry.indexOf("state.folded = false;") < retry.indexOf("answer = await askSegment(false);"));
   // A segment whose function carries no rider sends the lean contract, so
   // there is no folded request to refuse.
@@ -504,7 +508,8 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
   const requests = functionBody("createJumpRequests");
   assert.match(requests, /createJumpBudget\(\{ cap: jumpRequestCap\(\{ segments: pieces, unlimited \}\), only: SKIP_SPENDERS \}\);/);
   // Unlimited requests raises the cap (requestBudget.js); it never takes it away.
-  assert.match(requests, /const unlimited = unlimitedRequests\(\);/);
+  // By whoever's key pays for the skip (skipRules): this device's switch, or a shared round's payer's.
+  assert.match(requests, /const \{ unlimited \} = skipRules\(\);/);
   assert.equal(/createJumpBudget\(\{(?![^}]*cap:)/.test(gameplaySource), false, "every budget has a cap");
   assert.match(requests, /budget\.reserve\("jump", pieces\);/, "every segment keeps its own request");
   // There is no upkeep after a skip to keep a request for: the Stats refresh
@@ -521,7 +526,7 @@ test("function calling inside a skip spends the skip's budget: a round is a requ
   const task = functionBody("runJsonTask");
   // What the budget has free, and never past the mode's own limit (three, or
   // six with Unlimited requests on).
-  assert.match(task, /const lookupRounds = budget && Array\.isArray\(lookups\?\.tools\) && lookups\.tools\.length\s*\n\s*\? Math\.min\(carriedRoundCount\(lookupCarry\) \+ budget\.free, lookupRoundLimit\(\{ unlimited: unlimitedRequests\(\) \}\)\)\s*\n\s*: null;/);
+  assert.match(task, /const lookupRounds = budget && Array\.isArray\(lookups\?\.tools\) && lookups\.tools\.length\s*\n\s*\? Math\.min\(carriedRoundCount\(lookupCarry\) \+ budget\.free, lookupRoundLimit\(\{ unlimited: skipRules\(\)\.unlimited \}\)\)\s*\n\s*: null;/);
   assert.match(task, /maxRounds: Number\.isInteger\(lookups\.maxRounds\) \? Math\.min\(lookups\.maxRounds, lookupRounds\) : lookupRounds/);
   assert.match(task, /budget\?\.take\(`\$\{spender \|\| taskKey\}Lookup`\);/, "recorded as it is made");
   // Decided after the attempt's own request is taken, so `free` is what is left.

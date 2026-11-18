@@ -22,7 +22,7 @@ import { toCountryName } from "../../runtime/ownerNames.js";
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../runtime/politicalKnowledge.js";
 import { normalizeInstitutions } from "../../runtime/institutions.js";
-import { isProjectOpen } from "../../runtime/projects.js";
+import { isBelief, isProjectOpen } from "../../runtime/projects.js";
 import { describeEffects } from "../../runtime/projectEngine.js";
 import { gameDateDayNumber } from "../../runtime/gameDates.js";
 import { livePuppetsFor } from "../../runtime/puppets.js";
@@ -941,12 +941,18 @@ const projectBrief = (project, regionRef = writtenRegion) => {
     ...(array(plan?.effects).length ? { effects: describeEffects(plan.effects, { owner: clean(project?.ownerCode) }) } : {}),
     lastUpdate: clean(project?.lastUpdate).slice(0, 300),
     ...(mapEffects.length ? { onComplete: mapEffects.slice(0, 12) } : {}),
+    // No country's work, only what the board's service was made to believe
+    // (runtime/projectEngine.js isBelief): only the narrator is shown one.
+    ...(isBelief(project) ? { notReal: "planted on the service whose board it is: nobody works on it" } : {}),
   };
 };
-// One board entry as `audience` may know it, or null. See list_projects.
+// One board entry as `audience` may know it, or null. See list_projects. A
+// belief is known to the narrator and its believer's board alone: never to the
+// country it is about, which runs no such thing.
 const projectAsSeenBy = (audience, project, player) => {
   if (!project || typeof project !== "object") return null;
   if (isSimulationAudience(audience)) return project;
+  if (isBelief(project)) return null;
   const owner = clean(project.ownerCode || project.owner) || clean(player);
   if (owner && audienceIncludes(audience, owner)) return project;
   const secrecy = clean(project.secrecy).toLowerCase() || "public";
@@ -1350,10 +1356,12 @@ export const executeLookup = (context, name, args = {}) => {
       const chat = wanted ? threads.find((entry) => clean(entry?.id) === wanted) : threads[0];
       const listed = threads.slice(0, 12).map(chatThreadBrief);
       if (!chat) return { with: owner, threads: listed, messages: [], hint: `No thread "${wanted}" with this power. Use an id from threads.` };
+      // A government's words a player's own device wrote, in a shared game, say so (promptContext.js).
       const messages = array(chat.messages).slice(-limit).map((message) => ({
         from: clean(message?.speaker || message?.role || message?.from),
         date: clean(message?.gameDate || message?.date || message?.time),
         text: clean(message?.text || message?.content).slice(0, 600),
+        ...(clean(message?.writtenBy) ? { note: `${clean(message.writtenBy)}'s player's own AI wrote these words: they bind ${clean(message?.speaker || message?.from)} to nothing until a round says so.` } : {}),
       }));
       return {
         with: owner,

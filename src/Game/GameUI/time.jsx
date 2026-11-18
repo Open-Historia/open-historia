@@ -85,7 +85,7 @@ import {
     turnRecordId,
 } from "./turnReveal.js";
 import { prehistoryHasContent } from "../../runtime/scenarioPrehistory.js";
-import { SHARED_ROUND_LANDED, inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { SHARED_ROUND_LANDED, inSharedGame, requestFromHost, sharedRoundBase, sharedRoundDays, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 import { rememberSkipLength, scheduleFrontsPrethink, stopFrontsPrethink } from "../AI/frontPrethink.js";
 
 dayjs.extend(advancedFormat);
@@ -1541,6 +1541,11 @@ const TimelineSkipPanel = ({
     progressLabel,
     progressStartedAt = 0,
     sceneInProgress = false,
+    // In a shared game: { days } each round moves the world. Time moves there
+    // only by the host's rounds, so the panel shows the round in place of skip
+    // lengths no page of a shared game can run (each answered with a line of
+    // text before).
+    sharedRound = null,
     topOffset,
     undoCount,
 }) => {
@@ -1570,6 +1575,9 @@ const TimelineSkipPanel = ({
     const customLanding = Number.isFinite(customDays) && customDays > 0
         ? jumpLandingLabel(currentDate, customDays)
         : "";
+    // Where a shared game's round lands, by the same rule (the host's skip is of
+    // the round's days).
+    const lands = sharedRound?.days > 0 ? jumpLandingLabel(currentDate, sharedRound.days) : "";
     // A length typed in is thought through while the player decides, a moment after the typing stops, in the land
     // war's own worker; typing again calls it off and begins again (AI/frontPrethink.js). Only at a war: with none
     // there is nothing to think through, and nothing is run.
@@ -1677,6 +1685,22 @@ const TimelineSkipPanel = ({
         {formatGameDateReadable(currentDate, "M/D/YYYY") || dayjs(currentDate).format("M/D/YYYY")}
         </div>
 
+        {sharedRound ? (
+            <>
+            <div style={{ background: "rgba(255,255,255,0.1)", height: "1.25rem", width: "2px" }} />
+            <div style={{ background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.04))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))", borderRadius: "12px", color: "rgba(255,255,255,0.78)", display: "grid", fontSize: "0.74rem", gap: "0.35rem", lineHeight: 1.45, padding: "0.6rem 0.7rem", textAlign: "center", width: "12.5rem" }}>
+            {sharedRound.days > 0 && (
+                <div style={{ color: "#e4e4e7", fontWeight: 700 }}>
+                {sharedRound.days === 1
+                    ? `Each round moves the world 1 day: this one lands on ${lands}.`
+                    : `Each round moves the world ${sharedRound.days} days: this one lands on ${lands}.`}
+                </div>
+            )}
+            <div>In a shared game the host's timer ends each round, or enough players pressing Ready on the round bar at the top.</div>
+            </div>
+            </>
+        ) : (
+        <>
         {jumpOptions.map((opt) => (
             <React.Fragment key={opt.label}>
             <div style={{ background: "rgba(255,255,255,0.1)", height: "1.25rem", width: "2px" }} />
@@ -1795,6 +1819,8 @@ const TimelineSkipPanel = ({
             </div>
         )}
         <RequestsTodayCaption />
+        </>
+        )}
         </div>
 
         {/* The events are in the Events panel; this is for a player who came back to cancel.
@@ -2529,6 +2555,9 @@ const DateWidget = ({
     const [liveRange, setLiveRange] = useState({ from: "", to: "" });
     // The pre-jump world the live reveal stages onto. Null when no skip is running.
     const [liveStageBase, setLiveStageBase] = useState(null);
+    // A shared game's rounds, which the Timeline panel shows in place of its
+    // skips (multiplayer/client/sharedGameBridge.js): the days each moves the world.
+    const sharedDays = React.useSyncExternalStore(subscribeSharedGameRole, sharedRoundDays, sharedRoundDays);
     // Cards the player has opened, by headline, so one opened mid-skip survives
     // the validated turn replacing the preview.
     const [openMapChanges, setOpenMapChanges] = useState(() => new Set());
@@ -3753,9 +3782,13 @@ const DateWidget = ({
     useEffect(() => {
         if (liveStageBase) landedBaseRef.current = { world: liveStageBase, from: liveRange.from };
     }, [liveStageBase, liveRange.from]);
+    // Or, for a round a shared game's host resolved, the world as this page
+    // held it before the round landed (multiplayer/client/roundBase.js): the
+    // page has no restore point of its own, and the host ran the skip.
     const landedBaseFor = (record) => {
         const kept = landedBaseRef.current;
-        return kept?.world && record?.fromDate && kept.from === record.fromDate ? kept.world : null;
+        if (kept?.world && record?.fromDate && kept.from === record.fromDate) return kept.world;
+        return sharedRoundBase(record);
     };
     // The land war of a turn being written, fought before its story (foreseenFronts.js).
     const [foreseen, setForeseen] = useState(() => foreseenFronts());
@@ -3925,6 +3958,7 @@ const DateWidget = ({
         progressLabel={jumpProgress}
         progressStartedAt={progressStartedAt}
         sceneInProgress={sceneInProgress}
+        sharedRound={sharedDays > 0 || inSharedGame() ? { days: sharedDays } : null}
         topOffset={topOffset}
         undoCount={undoCount}
         />

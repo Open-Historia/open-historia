@@ -13,9 +13,20 @@
 // Plain data in, plain data out: { world, actions } or { error }.
 
 import { normalizeUnitEntry } from "../../runtime/gameState.js";
+// Orders carried over unanswered are not this round's, but they wait (host/orderCap.js).
+import { orderCapRefusal } from "./orderCap.js";
+// The sea off a country's own land, as a structure may be moved to it.
+import { STRUCTURE_SEA_KM } from "../../runtime/structurePlacement.js";
 
-// The plan's ceiling for a person's formations (the AI's own cap is the
-// engine's, gameState.js MAX_UNITS_PER_POLITY).
+// The plan's ceiling for the formations a person raises (the AI's own cap is
+// the engine's, gameState.js MAX_UNITS_PER_POLITY). It counts only what the
+// player raised (source "player": deployFor's own, which the skip confirms and
+// keeps so) and that still stands: the formations a country came with, those
+// the story raised for it and those it holds on a battlefield are its own, and
+// are not the player's to count against. Counting every formation of the
+// country, a well-armed one could never raise one, while single player has no
+// ceiling at all (the gap audit of 2026-11-18). How many the world lets stand
+// is the skip's to judge by the country's manpower.
 export const MAX_UNITS_PER_PLAYER = 15;
 export const UNIT_NAME_MAX_CHARS = 80;
 export const UNIT_COMPOSITION_MAX_CHARS = 200;
@@ -41,17 +52,39 @@ const orderAction = (text, { id, owner, at, unitRevert }) => ({
 
 const deployable = (type, allowed) => !Array.isArray(allowed) || allowed.length === 0 || allowed.includes(clean(type).toLowerCase());
 
+// Where a person may raise a formation, held to the host's own map (runtime/
+// warRoomChart.js chartOf, `chart`): on land their country holds now, its own
+// or taken, or out to sea within STRUCTURE_SEA_KM of it, as a structure is
+// moved. Any point on Earth was taken, another player's capital included, and
+// the skip confirms whatever it does not turn down (the review of 2026-11-18,
+// wars 11). "" when it may, else why not. Single player places a formation
+// where its player clicks, as it always has.
+export const DEPLOY_REFUSED = Object.freeze({
+  chart: "The map could not be read to see whose ground that is: try again.",
+  ground: "A formation is raised on land your country holds, or at sea off it.",
+});
+export const deployPlaceRefusal = (owner, lng, lat, chart) => {
+  if (!chart || typeof chart.holds !== "function") return DEPLOY_REFUSED.chart;
+  const held = chart.holds(owner, lng, lat);
+  if (held === true) return "";
+  if (held === false) return DEPLOY_REFUSED.ground;
+  const offShore = typeof chart.sea === "function" && chart.sea(lng, lat)
+    && typeof chart.landNear === "function" && chart.landNear(owner, lng, lat, STRUCTURE_SEA_KM);
+  return offShore ? "" : DEPLOY_REFUSED.ground;
+};
+
 // Raise a formation: it stands on the map as pending, with the Deploy request
-// that asks the time skip to confirm it, move it or turn it down.
-export const deployFor = ({ world, actions }, seat, request, { orderId, unitId, at, maxOrders = Infinity } = {}) => {
+// that asks the time skip to confirm it, move it or turn it down. `chart`: the
+// host's map, which the place is held to (deployPlaceRefusal).
+export const deployFor = ({ world, actions }, seat, request, { orderId, unitId, at, maxOrders = Infinity, chart = null } = {}) => {
   const owner = clean(seat);
   const type = clean(request?.type).toLowerCase();
   if (!owner) return { error: "Take a country first." };
   if (!deployable(type, world?.allowedUnitTypes)) return { error: "This scenario does not allow that kind of unit." };
-  const mine = list(world?.units).filter((unit) => same(unit?.ownerCode, owner) && clean(unit?.status) !== "defeated");
-  if (mine.length >= MAX_UNITS_PER_PLAYER) return { error: `A player fields at most ${MAX_UNITS_PER_PLAYER} formations. Stand one down first.` };
-  const queued = list(actions).filter((action) => same(action?.ownerCode, owner) && planned(action));
-  if (queued.length >= maxOrders) return { error: `At most ${maxOrders} orders a round.` };
+  const raised = list(world?.units).filter((unit) => same(unit?.ownerCode, owner) && clean(unit?.source) === "player" && clean(unit?.status) !== "defeated");
+  if (raised.length >= MAX_UNITS_PER_PLAYER) return { error: `A player raises at most ${MAX_UNITS_PER_PLAYER} formations of their own. Stand one of them down first.` };
+  const capped = orderCapRefusal(actions, owner, maxOrders);
+  if (capped) return { error: capped };
   const strength = Math.max(1, Math.min(100, Math.round(Number(request?.strength) || 100)));
   const name = clean(request?.name).slice(0, UNIT_NAME_MAX_CHARS);
   const composition = clean(request?.composition).slice(0, UNIT_COMPOSITION_MAX_CHARS);
@@ -70,6 +103,8 @@ export const deployFor = ({ world, actions }, seat, request, { orderId, unitId, 
     updatedAt: at,
   });
   if (!unit || unit.type !== type) return { error: "That is not a place on the map, or not a kind of unit." };
+  const misplaced = deployPlaceRefusal(owner, unit.lng, unit.lat, chart);
+  if (misplaced) return { error: misplaced };
   // i18n-ignore: the order as the model reads it.
   const text =
     `Deploy request: ${name || type} (${type}, strength ${strength}% of establishment` +
@@ -102,8 +137,8 @@ export const disbandFor = ({ world, actions }, seat, unitId, { orderId, at, maxO
         !(action?.unitRevert?.remove && clean(action.unitRevert.unitId) === id && planned(action) && same(action.ownerCode, owner))),
     };
   }
-  const queued = list(actions).filter((action) => same(action?.ownerCode, owner) && planned(action));
-  if (queued.length >= maxOrders) return { error: `At most ${maxOrders} orders a round.` };
+  const capped = orderCapRefusal(actions, owner, maxOrders);
+  if (capped) return { error: capped };
   // i18n-ignore: the order as the model reads it.
   const text = `Disband order: ${unit.name} (${unit.type}, owner ${unit.ownerCode}) is decommissioned and stood down.`;
   return {

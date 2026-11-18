@@ -91,9 +91,13 @@ export const buildPeaceBlock = ({ world = {}, game = {}, players = [], max = PEA
       lines.push(line);
     }
   };
-  section("Peace made by the game or a player since the last period (the war is already ended in the ledger: tell each early in this answer as an event, write no warUpdates for it, and tell no fighting in that war after it; the land its terms hand over has passed already, and the conditions after its and: are yours to carry out in this answer):", treaties.map((treaty) => `${treaty.title || treaty.warId}: ${treaty.from} and ${treaty.to} made peace on ${treaty.date}; ${describeTerms(treaty.terms)}.`));
-  // (A player's own offer is answered by the government it was put to, in this answer; one to a player, by the player.)
-  const byPlayer = (offer) => human.some((name) => fold(name) === fold(offer.from));
+  section("Peace made by the game or a player since the last period (the war is already ended in the ledger: tell each early in this answer as an event, write no warUpdates for it, and tell no fighting in that war after it; the land its terms hand over has passed already, and the conditions after its and: are yours to carry out in this answer):", treaties.filter((treaty) => !treaty.left).map((treaty) => `${treaty.title || treaty.warId}: ${treaty.from} and ${treaty.to} made peace on ${treaty.date}; ${describeTerms(treaty.terms)}.`));
+  // (A separate peace: those who made it left a war that goes on for the rest, warAndPeace.js leavingByPeace.)
+  section("Separate peace made since the last period (whoever left the war is already out of it in the ledger, and the war goes on for the rest: tell each early in this answer as an event, write no warUpdates for it, and tell no fighting between a country that left and the side it fought; the land its terms hand over has passed already, and the conditions after its and: are yours to carry out in this answer):", treaties.filter((treaty) => treaty.left).map((treaty) => `${treaty.title || treaty.warId}: ${treaty.from} and ${treaty.to} made peace on ${treaty.date}, and ${treaty.left.join(" and ")} left the war; ${describeTerms(treaty.terms)}.`));
+  // (A player's own offer is answered by the government it was put to, in this answer; one to a player, by the player,
+  // whoever made it.)
+  const played = (name) => human.some((other) => fold(other) === fold(name));
+  const byPlayer = (offer) => played(offer.from) && !played(offer.to);
   section(`Offers of peace a player has made (the answer is the government's they were put to, in this period: to accept, a line in ${PEACE_TREATIES_FIELD}, the player's country | the accepting country | the terms offered, and an event that tells it; to refuse, an event that tells it and no line):`, offers.filter(byPlayer).map((offer) => `${offer.from} has offered ${offer.to} peace: ${describeTerms(offer.terms)}.`));
   section("Offers of peace that wait for an answer (the answer is theirs: write none, and the war goes on meanwhile):", offers.filter((offer) => !byPlayer(offer)).map((offer) => `${offer.from} has offered ${offer.to} peace: ${describeTerms(offer.terms)}.`));
   section("Offers of peace turned down lately:", declined.map((offer) => `${offer.to} turned down ${offer.from}'s offer of peace (${describeTerms(offer.terms)}).`));

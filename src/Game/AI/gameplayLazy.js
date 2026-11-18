@@ -16,6 +16,7 @@
 // first turn does not also pay the download.
 
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { RATINGS_ASKED_MOST } from "../../multiplayer/game/messages.js";
 import { readWorldStateView } from "../../runtime/gameState.js";
 
 let modulePromise = null;
@@ -111,6 +112,14 @@ export const setAsideActiveInteractive = hostOnly(async (...args) => (await game
 // --- Chat and diplomacy -----------------------------------------------------
 // One request acts for every AI participant in a thread (AI/chatActions.js).
 export const runChatActionBatch = hostOnly(async (...args) => (await gameplay()).runChatActionBatch(...args));
+// A shared game whose host has each player's own device answer for the
+// governments the AI plays (multiplayer/host/settings.js `replies: "own"`):
+// what they say to the player's line, asked with the player's own key from
+// what the player's own screen holds. It writes nothing and carries nothing
+// out: the words go to the host, which is where a shared game's rules apply
+// (host/gameHost.js "reply"). So it runs on a page playing a shared game,
+// which is the only place it is asked.
+export const writeTableReply = async (...args) => (await gameplay()).writeTableReply(...args);
 export const checkDemandReply = hostQuietly(async (...args) => (await gameplay()).checkDemandReply(...args));
 export const ensureCountryAssessed = hostQuietly(async (...args) => (await gameplay()).ensureCountryAssessed(...args));
 export const processPendingEventOutreach = hostOnly(async (...args) => (await gameplay()).processPendingEventOutreach(...args));
@@ -127,19 +136,86 @@ export const applyGameMasterPreview = hostOnly(async (...args) => (await gamepla
 // --- Stats and intelligence -------------------------------------------------
 export const ensureIntelligenceRated = hostQuietly(async (...args) => (await gameplay()).ensureIntelligenceRated(...args));
 // The figures of the countries the game needs and has none for, rated against the others (militaryRating.js).
-export const ensureMilitaryFigures = hostQuietly(async (...args) => (await gameplay()).ensureMilitaryFigures(...args));
+// In a shared game they are the host's to keep, as a stat sheet is: the page asks ("ratings"), and the host rates
+// them on its own AI or, by its setting (the owner's decision 3), leaves them to this device's own key; then this
+// device rates those left to it as single player does, twenty to a request, and hands the figures to the host
+// ("ownRatings") instead of writing them. It was not done at all on a page, so the ranking of a shared game stayed
+// empty (the gap audit of 2026-11-18). Nobody waits on it: what fails settles with nothing, but what the host says
+// it did not rate settles with its words ({ refused }), for the pane to show (the review of 2026-11-18, wars 9).
+
+const ratingsFromHost = async (targets, options = {}) => {
+  const countries = [...new Set((Array.isArray(targets) ? targets : []).map((name) => String(name ?? "").trim()).filter(Boolean))].slice(0, RATINGS_ASKED_MOST);
+  if (!countries.length) return null;
+  try {
+    const answer = await requestFromHost("ratings", { countries });
+    if (!answer.ok) return answer.error ? { refused: String(answer.error) } : null;
+    const left = answer.ok && answer.result?.answer === "own" && Array.isArray(answer.result.countries) ? answer.result.countries : [];
+    if (!left.length) return null;
+    return await (await gameplay()).ensureMilitaryFigures(left, {
+      ...options,
+      commit: async (read) => {
+        const ratings = read.map(({ name, military, population }) => ({
+          country: name,
+          ...(military ? { military } : {}),
+          ...(Number(population) > 0 ? { population: Number(population) } : {}),
+        }));
+        const sent = await requestFromHost("ownRatings", { ratings });
+        if (!sent.ok) throw new Error(sent.error || "The host did not take the figures.");
+      },
+    });
+  } catch {
+    return null;
+  }
+};
+export const ensureMilitaryFigures = async (...args) => (inSharedGame()
+  ? ratingsFromHost(...args)
+  : (await gameplay()).ensureMilitaryFigures(...args));
 export const readOpenedIntercepts = async (...args) => (await gameplay()).readOpenedIntercepts(...args);
-// A stat sheet is the game's own record, so in a shared game the host writes
-// it, on the host's AI key: the page asks (the host answers once it is
-// written, which takes as long as the model does) and reads the sheet out of
-// its next view. A refusal is thrown with the host's reason, as any failed
-// reading is, and the Stats pane shows it.
-const SHEET_ANSWER_MS = 5 * 60 * 1000;
-const sheetFromHost = async ({ code, name, forceReassess = false, signal } = {}) => {
+// A stat sheet is the game's own record, so in a shared game the host keeps
+// it: the page asks for a country's figures and reads the sheet out of its next
+// view. Whose AI writes them is the host's setting (settings.replies), as for
+// the messages to governments the AI plays. The host's own: the host answers
+// once it has written the sheet, which takes as long as the model does. Each
+// player's own: the host answers that this device is to write it, and the
+// game's own reading runs here, on this device's AI key and from what its view
+// holds, and hands the finished sheet to the host ("ownSheet"), which takes it
+// if the country still has none. No key leaves this device. A sheet once
+// written stands: nothing is read again in a shared game, so there is no
+// reassessment to ask the host for. A refusal is thrown with the host's
+// reason, as any failed reading is, and the Stats pane shows it. The host's
+// answer is waited for however long it takes, as every request's is
+// (client/gameClient.js): one asked while a round is resolved waits for it.
+const aborted = () => new DOMException("Stats panel/selection changed.", "AbortError");
+const sheetOnOwnKey = async (country, signal) => {
+  let assessment = null;
+  const view = await readWorldStateView({ force: true }).catch(() => null);
+  const rated = Number.isFinite(Number(view?.intelligence?.[country]));
+  await (await gameplay()).generateCountryStatSheet({
+    code: country,
+    name: country,
+    signal,
+    // The service's first rating comes in the same request, as on the host.
+    ...(rated ? {} : { rateIntelligence: true, onIntelligenceRating: (value) => { assessment = value; } }),
+    commit: async ({ sheet, continuity }) => {
+      if (signal?.aborted) throw aborted();
+      const rating = Number(assessment?.intelligence);
+      const sent = await requestFromHost("ownSheet", {
+        country,
+        sheet,
+        continuity: continuity ?? null,
+        rating: Number.isFinite(rating) ? Math.max(0, Math.min(100, Math.round(rating))) : null,
+      });
+      if (!sent.ok) throw new Error(sent.error || "The host did not take the stat sheet.");
+      return sheet;
+    },
+  });
+};
+const sheetFromHost = async ({ code, name, signal } = {}) => {
   const country = String(code || name || "").trim();
-  const answer = await requestFromHost("sheet", { country, fresh: forceReassess === true }, { timeoutMs: SHEET_ANSWER_MS });
-  if (signal?.aborted) throw new DOMException("Stats panel/selection changed.", "AbortError");
+  const answer = await requestFromHost("sheet", { country });
+  if (signal?.aborted) throw aborted();
   if (!answer.ok) throw new Error(answer.error || "The host did not write the stat sheet.");
+  if (answer.result?.answer === "own") await sheetOnOwnKey(country, signal);
   // The sheet comes with the view the host sends right after its answer.
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const world = await readWorldStateView({ force: true }).catch(() => null);
@@ -154,11 +230,65 @@ export const generateCountryStatSheet = async (...args) => (inSharedGame()
   : (await gameplay()).generateCountryStatSheet(...args));
 // Settles with that reading's sheet (or null), or at once with null when none is running.
 export const pendingCountryStatSheet = async (...args) => (await gameplay()).pendingCountryStatSheet(...args);
-// A briefing on a country, in prose: asked with the player's own key from what
-// the player's own screen holds, and written nowhere. A page playing a shared
-// game asks it like any other.
-export const assessPoliticalLandscape = async (...args) => (await gameplay()).assessPoliticalLandscape(...args);
-export const assessGoalProgress = async (...args) => (await gameplay()).assessGoalProgress(...args);
+// A country's parties filled in, kept in its Political World record. In a
+// shared game the record is the host's: the page asks ("parties"), and the
+// host fills them in on its AI or leaves them to this device's own key, as a
+// stat sheet; then the record comes with the view. Once filled in they stand.
+const politicalActorIn = (world, name) => {
+  const byPolity = world?.politicalActors?.byPolity ?? {};
+  const key = Object.keys(byPolity).find((entry) => entry.toLowerCase() === String(name ?? "").trim().toLowerCase());
+  return key ? byPolity[key] : null;
+};
+const partiesFromHost = async (target, { signal } = {}) => {
+  const country = String(target ?? "").trim();
+  const answer = await requestFromHost("parties", { country });
+  if (signal?.aborted) throw new DOMException("Stats panel/selection changed.", "AbortError");
+  if (!answer.ok) throw new Error(answer.error || "The host did not fill in the parties.");
+  if (answer.result?.answer === "own") {
+    await (await gameplay()).assessPoliticalLandscape(country, {
+      signal,
+      commit: async ({ entry }) => {
+        const sent = await requestFromHost("ownParties", { country, landscape: entry });
+        if (!sent.ok) throw new Error(sent.error || "The host did not take the parties.");
+        return null;
+      },
+    });
+  }
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const actor = politicalActorIn(await readWorldStateView({ force: true }).catch(() => null), country);
+    if (actor) return actor;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return null;
+};
+export const assessPoliticalLandscape = async (...args) => (inSharedGame()
+  ? partiesFromHost(...args)
+  : (await gameplay()).assessPoliticalLandscape(...args));
+// How far the player's goal has come: read on this device's own key, and in a
+// shared game kept with the player's goal by the host ("goalProgress"), which
+// only this player sees.
+export const assessGoalProgress = async (options = {}) => (inSharedGame()
+  ? (await gameplay()).assessGoalProgress({
+    ...options,
+    commit: async ({ goalText, reading }) => {
+      const sent = await requestFromHost("goalProgress", { goal: goalText, reading: goalReadingForHost(reading) });
+      if (!sent.ok) throw new Error(sent.error || "The host did not keep that reading.");
+      return { progress: reading.progress };
+    },
+  })
+  : (await gameplay()).assessGoalProgress(options));
+// A goal's reading as the "goalProgress" request carries it (game/messages.js).
+const goalReadingForHost = (reading) => {
+  const lines = (value, most) => (Array.isArray(value) ? value : []).map((line) => String(line ?? "").trim().slice(0, 400)).filter(Boolean).slice(0, most);
+  const progress = Number(reading?.progress);
+  return {
+    progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : 0,
+    summary: String(reading?.summary ?? "").trim().slice(0, 600),
+    achieved: lines(reading?.achieved, 5),
+    obstacles: lines(reading?.obstacles, 4),
+    nextSteps: lines(reading?.nextSteps, 3),
+  };
+};
 export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);
 // Rostra's empty feed: one request for its first posts, written into the
 // feed (gameplay.js generateRostraPosts).
@@ -178,8 +308,20 @@ export const generatePlaceFeed = async (...args) => (await gameplay()).generateP
 // is where a shared game's rules apply.
 export const generateWarRoomReply = async (...args) => (await gameplay()).generateWarRoomReply(...args);
 // The war room: which routes drawn on a battlefield go into a country outside
-// its war. Read from the map, with no request made and nothing written.
-export const warRoomRouteAttacks = async (...args) => (await gameplay()).warRoomRouteAttacks(...args);
+// its war. Read from the map, with no request made and nothing written. The
+// figures of a country found there are wanted for the war: single player reads
+// them; in a shared game they are the host's to keep, as the Stats pane's are,
+// asked of the host by its setting ("ratings"), never read into this page's
+// copy, where they were written on this device's key and never sent (the
+// review of 2026-11-18, wars 9).
+export const warRoomRouteAttacks = async (...args) => {
+  const run = (await gameplay()).warRoomRouteAttacks;
+  if (!inSharedGame()) return run(...args);
+  const found = await run({ ...(args[0] ?? {}), ask: false });
+  const attacked = [...found.values()].flat();
+  if (attacked.length > 0) void ratingsFromHost(attacked, { reason: "a route drawn into its country" });
+  return found;
+};
 // The war room: the way each transporter deployed there would take. Read from
 // the map, with no request made and nothing written.
 export const warRoomTransportWays = async (...args) => (await gameplay()).warRoomTransportWays(...args);

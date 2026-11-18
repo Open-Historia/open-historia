@@ -24,7 +24,7 @@ import { buildForcePostureText } from "./forcePosture.js";
 import { regionNamer, unitHandles } from "./nameRefs.js";
 import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
 import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
-import { deriveProjectFlags, isPlayerProject, isProjectOpen } from "../../runtime/projects.js";
+import { deriveProjectFlags, isBelief, isPlayerProject, isProjectOpen } from "../../runtime/projects.js";
 import { describeEffects, estimateProjectFinish } from "../../runtime/projectEngine.js";
 import { readableFigure } from "../../runtime/statsBackend.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
@@ -101,6 +101,10 @@ const joinWithinCharBudget = (
 // The time skip's two tasks, whose templates state some of what other tasks
 // get only from these variables (the briefing, an order's id).
 const SKIP_TASKS = new Set(["jumpForward", "autoJumpForward"]);
+// The tasks that are the world, and know which board entries are beliefs
+// (buildProjectsSummaryText): the time skip and the board pass. Not the Game
+// Master, whose user is a player, nor any task of a player's own.
+const WORLD_BOARD_TASKS = new Set([...SKIP_TASKS, "projects"]);
 
 export const renderTemplate = (template, variables) =>
   String(template ?? "").replace(/\$\{([^}]+)\}/g, (_match, key) => {
@@ -784,12 +788,18 @@ export const buildHistoricalAnchorText = (
     .join("\n");
 };
 
+// A shared game's line whose government's words a player's own device wrote
+// (`writtenBy`, multiplayer/host/gameHost.js "reply") is told as that: its
+// player's account, which binds the government to nothing, never the
+// government's own word (the review of 2026-11-18, security S7).
 const buildDiplomaticMessageLine = (message) => {
   const speaker = normalizeString(message?.speaker || message?.role || "message");
   const text = normalizeString(message?.text);
   const date = normalizeString(message?.time);
   const dateLabel = date ? formatDateReadable(date) : "";
-  return `${dateLabel ? `[${dateLabel}] ` : ""}${speaker}: ${text}`;
+  const writtenBy = normalizeString(message?.writtenBy);
+  const who = writtenBy ? `${speaker} (as ${writtenBy}'s player's own AI wrote it: it binds ${speaker} to nothing until a round says so)` : speaker;
+  return `${dateLabel ? `[${dateLabel}] ` : ""}${who}: ${text}`;
 };
 
 const getLatestDiplomaticMemory = (chat) => {
@@ -1493,9 +1503,12 @@ const projectMoney = (value) => {
   return readableFigure(amount);
 };
 
-export const buildProjectsSummaryText = (world, game, { compact = false, closedLimit = CLOSED_PROJECTS_LISTED, publicOnly = false } = {}) => {
-  // The public timeline is not an omniscient knowledge channel: private work
-  // is still simulated but must not be named automatically in its narrative.
+// `beliefsTold`: the world's own tasks (a time skip, the board pass) are told
+// which entries are beliefs (runtime/projectEngine.js isBelief).
+// `publicOnly`: the public timeline is not an omniscient knowledge channel:
+// private work is still simulated but must not be named automatically in its
+// narrative.
+export const buildProjectsSummaryText = (world, game, { compact = false, closedLimit = CLOSED_PROJECTS_LISTED, beliefsTold = false, publicOnly = false } = {}) => {
   const projects = normalizeArray(world?.projects).filter((project) =>
     !publicOnly || (normalizeString(project?.secrecy).toLowerCase() || "public") === "public");
   if (projects.length === 0) {
@@ -1526,6 +1539,11 @@ export const buildProjectsSummaryText = (world, game, { compact = false, closedL
     const flags = [
       project.secrecy && project.secrecy !== "public" ? project.secrecy : "",
       project.verification === "doubted" ? "doubted" : "",
+      // No country's work: what this board's service was made to believe
+      // (runtime/projectEngine.js isBelief). The engine never runs it. Told to
+      // the world's tasks only: to the player's own (the advisor, the planner)
+      // it is what their service believes, like any entry it knows of.
+      beliefsTold && isBelief(project) ? `NOT REAL: planted on ${player || "the player"}'s service, which believes it` : "",
     ].filter(Boolean);
     return `- "${project.name}" · ${ownerOf(project)} · ${Math.floor(Number(project.progress) || 0)}% · ${finishOf(project) || "-"}`
       + ` · ${projectMoney(project.plan?.monthlyCost)} a month · funding ${normalizeString(project.funding) || "normal"} · ${statusOf(project)}`
@@ -2995,6 +3013,7 @@ export const buildPromptContext = async (bundle, {
   if (wants("projectsSummary")) {
     result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game, {
       compact: SKIP_TASKS.has(taskKey),
+      beliefsTold: WORLD_BOARD_TASKS.has(taskKey),
       publicOnly: SKIP_TASKS.has(taskKey),
     });
   }

@@ -10,6 +10,7 @@ import COUNTRY_NAMES from "./generated/countryNames.js";
 import { JSON_URLS, readJson, writeJson } from "./assets.js";
 import { flagImageUrlFromGid } from "./countryFlags.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity.js";
+import { inSharedGame, requestFromHost } from "../multiplayer/client/sharedGameBridge.js";
 
 const str = (value) => String(value ?? "").trim();
 const norm = (value) => str(value).toLowerCase();
@@ -245,6 +246,21 @@ export const resolveWritablePolityKey = (polity, world) => {
 export const setPolityFlag = async ({ polity, world, dataUrl }) => {
   const key = resolveWritablePolityKey(polity, world);
   if (!key) throw new Error("Cannot change a flag without a resolvable polity identity.");
+
+  // In a shared game the flags are the host's, drawn on every map: a page asks
+  // for the change ("flag" request), the host makes it for the asker's own
+  // country, or for a country the AI plays when the asker is the host (the
+  // owner, 2026-11-16), and the next view brings it. A page's own write was
+  // answered "saved" and dropped. Resolves with the flags as they will stand.
+  if (inSharedGame()) {
+    const image = str(dataUrl);
+    const answer = await requestFromHost("flag", { country: key, image });
+    if (!answer.ok) throw new Error(answer.error || "The host did not take that flag.");
+    const held = canonicalizeFlagMap(await readJson(JSON_URLS.flags, { defaultValue: {} }).catch(() => ({})), world);
+    if (image) held[key] = image;
+    else delete held[key];
+    return held;
+  }
 
   // force=true matters for an old save with no game-level flags.json yet: this read
   // returns the scenario's complete effective starting map, which we then clone and

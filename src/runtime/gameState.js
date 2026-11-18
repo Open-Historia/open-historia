@@ -8,6 +8,7 @@ import { normalizeNaviesRaised, normalizeSeaBattles } from "./naval/record.js";
 import { normalizeBlockades } from "./naval/blockade.js";
 import { normalizeCallsToArms } from "./alliances.js";
 import { normalizePeaceOffers, normalizePeaceTreaties, normalizeReparations } from "./peaceTerms.js";
+import { normalizeTreatyOffers } from "./treatyOffers.js";
 import { normalizeWarWeariness } from "./warWeariness.js";
 import { MAX_WAR_SIDE_MEMBERS, normalizeWarRecord, normalizeWarRecords, referencedWarIds } from "./warRecord.js";
 import { normalizeWarResources } from "./warResources.js";
@@ -36,6 +37,7 @@ import {
   STALL_REASONS,
   boundPlanForOwner,
   boundStatChange,
+  isBelief,
   legacyPlanFor,
   mergeTickedBoard,
   normalizeAdjustment,
@@ -355,6 +357,9 @@ export const WORLD_DEFAULTS = {
   peaceOffers: [],
   reparations: [],
   peaceTreaties: [],
+  // Treaties one country a person plays put to another (treatyOffers.js), waiting to be signed or answered; one
+  // signed is an agreement of world.agreements.
+  treatyOffers: [],
   // Alliances coming due (alliances.js): who was called on to defend whom in
   // which war, and what they answered.
   callsToArms: [],
@@ -789,6 +794,9 @@ const normalizeChatMessage = (message, index = 0) => {
   // The advisor's drafted letter a player's message was sent from (the
   // composer stamps its id: GameUI/advisorDrafts.js sentLetterDate).
   const fromDraft = normalizeOptionalString(message.fromDraft).slice(0, 160);
+  // In a shared game, the country whose player's own device wrote a
+  // government's words (runtime/chatThreads.js keeps it in the log).
+  const writtenBy = normalizeOptionalString(message.writtenBy).slice(0, 200);
 
   return {
     code: normalizeOptionalString(message.code),
@@ -805,6 +813,7 @@ const normalizeChatMessage = (message, index = 0) => {
     ...(eventId ? { eventId } : {}),
     ...(catchUp ? { catchUp, ...(catchUpLabel ? { catchUpLabel } : {}) } : {}),
     ...(fromDraft ? { fromDraft } : {}),
+    ...(writtenBy ? { writtenBy } : {}),
   };
 };
 
@@ -874,11 +883,16 @@ export const normalizeChatEntry = (entry, index = 0) => {
   // (multiplayer/host/projection.js threadOwner). Single player's threads name
   // nobody: they are the player's.
   const owner = normalizeOptionalString(entry.player);
+  // A shared game's conversation between people, retired for a country whose
+  // seat was let go (multiplayer/host/foundings.js withSeatLetGo): the next
+  // player of that country is not shown it. Single player's threads have none.
+  const retiredFor = normalizeArray(entry.retiredFor).map(normalizeOptionalString).filter(Boolean).slice(0, 16);
 
   return {
     countries: projected?.countries?.length ? projected.countries : countries,
     id: normalizeOptionalString(entry.id) || generateId(`chat-${index}`),
     ...(owner ? { player: owner } : {}),
+    ...(retiredFor.length ? { retiredFor } : {}),
     ...(institutionId ? { institutionId } : {}),
     ...(lifecycleInstitutionId ? { lifecycleInstitutionId } : {}),
     ...(lifecycleCaseIds.length ? { lifecycleCaseIds } : {}),
@@ -1923,14 +1937,29 @@ const PROJECT_KIND_SET = new Set(["project", "operation"]);
 // Whether an entry sourced from a spy can still be trusted. "" is the ordinary
 // case and covers everything the player learned openly.
 //
-// "doubted" is ENGINE-ONLY and is not in the schema, so no model can emit it: it
-// is stamped when the agent an entry was sourced from turns out to be compromised
-// (projects.js spyIntelDoubtOps). "confirmed" and "refuted" are the model's to
-// give, and only once a FRESH agent is in that polity.
+// All three are ENGINE-ONLY. "doubted" is stamped when the agent an entry was
+// sourced from turns out to be compromised (projects.js spyIntelDoubtOps);
+// "confirmed" and "refuted" once a FRESH agent of the knower's has reported from
+// that polity, by whether the entry is real work or a belief (spyVerdictOps).
 const PROJECT_VERIFICATIONS = ["", "doubted", "confirmed", "refuted"];
 const PROJECT_VERIFICATION_SET = new Set(PROJECT_VERIFICATIONS);
 
 const PROJECT_SECRECY_SET = new Set(["public", "restricted", "covert"]);
+
+// Another government's knowledge of an entry, by knower: its agents' ids and
+// its analysts' view (projects.js agentKnowledgeChanges). { knownBy } or none.
+const normalizeProjectKnowledge = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const knownBy = {};
+  for (const [name, known] of Object.entries(value).slice(0, 32)) {
+    const knower = normalizeOptionalString(name);
+    if (!knower || !known || typeof known !== "object") continue;
+    const spyIds = normalizeIdList(known.spyIds, 12);
+    const verification = PROJECT_VERIFICATION_SET.has(normalizeOptionalString(known.verification)) ? normalizeOptionalString(known.verification) : "";
+    if (spyIds.length || verification) knownBy[knower] = { spyIds, ...(verification ? { verification } : {}) };
+  }
+  return Object.keys(knownBy).length ? { knownBy } : {};
+};
 
 // The board's closed values are read exactly, case and spacing aside, and a word
 // that is none of them is LEFT OUT: the value it would have set stays as it was,
@@ -2064,13 +2093,12 @@ export const normalizeProjectEntry = (entry, index = 0, { ownerScope = "" } = {}
   if (status === "paused" && funding !== "none") funding = "none";
 
   // Why it stands still. A stall the old board's model declared was words, and
-  // the engine now owns the clock: such an entry works again, except where the
-  // intelligence it rests on is in doubt.
+  // the engine now owns the clock: such an entry works again. So does one
+  // stalled because another government's analysts doubted their source
+  // ("blocked"): the doubt was theirs, and it stopped the owner's own work for
+  // good (projects.js spyIntelDoubtOps no longer writes it).
   let stallReason = STALL_REASONS.includes(normalizeOptionalString(entry.stallReason)) ? normalizeOptionalString(entry.stallReason) : "";
-  if (status === "stalled" && !stallReason) {
-    if (verification === "doubted") stallReason = "blocked";
-    else status = "active";
-  }
+  if (status === "stalled" && (!stallReason || stallReason === "blocked")) status = "active";
   if (status !== "stalled") stallReason = "";
 
   const ongoing = plan ? plan.ongoing === true : entry.ongoing === true || entry.ongoing === "true";
@@ -2142,6 +2170,17 @@ export const normalizeProjectEntry = (entry, index = 0, { ownerScope = "" } = {}
     // (an agent told of it, or the board had it before the engine): the
     // panel's "Known projects abroad" (projects.js isKnownToPlayer).
     known: entry.known === true || (fromBefore && Boolean(normalizeOptionalString(entry.ownerCode || entry.owner || entry.code))),
+    // What other governments' services know of it, each its own (projects.js
+    // knowledgeOf), and, only in a time skip's own copy of the world, whose
+    // board it was lent from (runtime/seatBoards.js lendBoards).
+    ...normalizeProjectKnowledge(entry.knownBy),
+    ...(normalizeOptionalString(entry.lentFrom) ? { lentFrom: normalizeOptionalString(entry.lentFrom) } : {}),
+    // No country's work but what its board's government was made to believe by
+    // material planted on its turned agent (projectEngine.js isBelief), and,
+    // only in the time skip that opened it, whose service that is
+    // (runtime/seatBoards.js returnBoards takes it home).
+    ...(entry.belief === true ? { belief: true } : {}),
+    ...(normalizeOptionalString(entry.believedBy) ? { believedBy: normalizeOptionalString(entry.believedBy) } : {}),
     focus: normalizeProjectCoords(entry.focus),
     // kw5-units: how an operation's troops attack its focus (runtime/fronts/plans.js
     // operationsOn), one of OPERATION_APPROACHES; absent on every other entry, and
@@ -2161,6 +2200,10 @@ export const normalizeProjectEntry = (entry, index = 0, { ownerScope = "" } = {}
 // *active* work. Do not invent an archive, discard IDs, or bypass the 120-row
 // live-board invariant. Reject the mutation with a typed, actionable error;
 // the original save remains intact for a deliberate lossless migration.
+// What other players lent a time skip's own copy of the board (lentFrom,
+// runtime/seatBoards.js) is theirs, goes home with the turn and is never
+// stored here: it counts toward no cap. Counted, it took the room of the
+// board's own history, or was itself left out of the skip.
 export class ProjectBoardOverflowError extends RangeError {
   constructor(count, active) {
     super(`Project board limit ${MAX_PROJECTS} exceeded: ${count} records (${active} active). No projects were discarded. The original save must be migrated before continuing.`);
@@ -2173,10 +2216,11 @@ export class ProjectBoardOverflowError extends RangeError {
 }
 
 const capProjectList = (list) => {
-  if (list.length > MAX_PROJECTS) {
+  const kept = list.filter((project) => !project.lentFrom);
+  if (kept.length > MAX_PROJECTS) {
     throw new ProjectBoardOverflowError(
-      list.length,
-      list.filter((project) => PROJECT_OPEN_STATUSES.has(project.status)).length,
+      kept.length,
+      kept.filter((project) => PROJECT_OPEN_STATUSES.has(project.status)).length,
     );
   }
   return list;
@@ -2286,6 +2330,10 @@ const PROJECT_FIELD_ALIASES = {
   note: ["note"],
   plan: ["plan"],
   funding: ["funding"],
+  // A time skip's create of a programme that exists only in material planted
+  // on a service: that service (projectEngine.js isBelief). Never a
+  // restatement's to add to an entry that exists.
+  believedBy: ["believedBy"],
 };
 
 // A plain ARRAY, not a Set: normalized ops are persisted inside events.json and
@@ -2304,9 +2352,9 @@ const listProvidedFields = (source) => {
 //             nobody plays, the planner's, the advisor's), or with none: it
 //             then waits in "planning" for one;
 //   update    what it IS (summary, tags, secrecy, a new name, the lastUpdate
-//             line, a verdict on doubted intelligence), how it is funded, or
-//             the plan of one still planning. Never its progress, status or
-//             dates: those are the engine's;
+//             line), how it is funded, or the plan of one still planning.
+//             Never its progress, status or dates, nor what anyone knows of
+//             it (a verdict on doubted intelligence): those are the engine's;
 //   setback   an event set it back: days of work lost (at most
 //             SETBACK_DAYS_MOST) and a cost overrun (at most
 //             OVERRUN_PERCENT_MOST %), taking hold from the next period;
@@ -2330,12 +2378,24 @@ const normalizeProjectOp = (entry) => {
 
   if (op === "create") {
     // The payload may be nested under `project` or inlined on the op itself.
-    const source = entry.project && typeof entry.project === "object" ? entry.project : entry;
+    // What other governments know of an entry, and where a skip lent it from,
+    // are never a create's to say (the engine keeps both).
+    const { knownBy: _knownBy, lentFrom: _lentFrom, ...source } = entry.project && typeof entry.project === "object" ? entry.project : entry;
     // A create opens an entry with no progress of its own and no plan it has not
-    // been given: "planning" when it carries none.
+    // been given: "planning" when it carries none. It carries what a government
+    // gives a new effort (PROJECT_FIELD_ALIASES), its id, and nothing of what the
+    // engine records of one under way: never that it is set up already, done,
+    // paid or yielding, nor a completion of its own that moves a border or a
+    // polity (onComplete is a save's from before the engine). It was read with
+    // the reader of the board's own saved entries, so a writer's create that
+    // said so was a programme set up from its first day, or one that dissolved
+    // a country when it completed (the review of 2026-11-18).
+    const given = Object.fromEntries(["id", "priority", ...Object.values(PROJECT_FIELD_ALIASES).flat()]
+      .filter((key) => source[key] !== undefined)
+      .map((key) => [key, source[key]]));
     const planned = normalizeProjectPlan(source.plan);
     const project = normalizeProjectEntry({
-      ...source,
+      ...given,
       progress: 0,
       status: planned ? "active" : "planning",
       plan: planned,
@@ -2384,11 +2444,13 @@ const normalizeProjectOp = (entry) => {
 // through an explicit `newName`.
 const PROJECT_PATCHABLE_FIELDS = [
   "kind", "summary", "secrecy", "lastUpdate", "note", "focus", "approach",
-  "linkedUnitIds", "linkedMarkerIds", "verification", "linkedSpyIds",
+  "linkedUnitIds", "linkedMarkerIds", "linkedSpyIds",
 ];
-// And what only the engine's own ops may set (spyIntelDoubtOps stalls an
-// entry whose intelligence is in doubt): applyProjectOps ctx.engine.
-const ENGINE_PATCHABLE_FIELDS = ["status", "stallReason", "known"];
+// And what only the engine's own ops may set: applyProjectOps ctx.engine. (A
+// doubt about where intelligence came from is never a stall: it is the
+// knower's, projects.js spyIntelDoubtOps; and so is the verdict on it,
+// spyVerdictOps, which the model gave until the engine knew what was real.)
+const ENGINE_PATCHABLE_FIELDS = ["status", "stallReason", "known", "verification"];
 
 const patchedAlias = (patch, field) => {
   const aliases = PROJECT_FIELD_ALIASES[field] ?? [field];
@@ -2501,7 +2563,7 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
         const existing = next[existingIndex];
         const merged = { ...existing };
         for (const field of op.provided ?? []) {
-          if (field === "name" || field === "ownerCode") continue;
+          if (field === "name" || field === "ownerCode" || field === "believedBy") continue;
           if (field === "plan") {
             if (existing.status === "planning" && op.project.plan) Object.assign(merged, withPlan({ ...existing, plan: op.project.plan }), { status: "active", startedAt: existing.startedAt || date });
             continue;
@@ -2523,7 +2585,8 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
       }
       // Reject a new entry while the canonical board is full. Never report a
       // successful create that a later normalization will silently evict.
-      if (next.length >= MAX_PROJECTS) {
+      // (What other players lent the skip counts toward no cap: capProjectList.)
+      if (next.filter((project) => !project.lentFrom).length >= MAX_PROJECTS) {
         onRefusal(op.project.id, "project board is full");
         continue;
       }
@@ -2565,13 +2628,6 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
         const planned = normalizeProjectPlan(patch.plan);
         if (planned) Object.assign(merged, withPlan({ ...merged, plan: planned }), { status: "active", startedAt: current.startedAt || date });
       }
-      // A confirmed doubt takes the blocked entry up again; a refuted one is
-      // for the model to fail with it.
-      if (engine && merged.status === "stalled" && !STALL_REASONS.includes(normalizeOptionalString(merged.stallReason))) merged.stallReason = "blocked";
-      if (normalizeOptionalString(patch.verification) === "confirmed" && current.status === "stalled" && current.stallReason === "blocked") {
-        merged.status = "active";
-        merged.stallReason = "";
-      }
       const normalized = renormalize(merged, index);
       if (!normalized) continue;
       next = next.map((project, i) => (i === index ? touch(normalized) : project));
@@ -2579,8 +2635,8 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
     }
 
     if (op.op === "setback" || op.op === "boost") {
-      // Only on work the engine is still doing.
-      if (!PROJECT_OPEN_STATUSES.has(current.status) || !current.plan) continue;
+      // Only on work the engine is still doing (a belief is nobody's work).
+      if (!PROJECT_OPEN_STATUSES.has(current.status) || !current.plan || isBelief(current)) continue;
       const adjustment = { ...op.adjustment, round: round > 0 ? round : op.adjustment.round, date: date || op.adjustment.date, ...(op.note ? { note: op.note } : {}) };
       const normalized = renormalize({
         ...current,
@@ -4463,6 +4519,46 @@ export const normalizeWorldState = (world) => {
           .slice(0, 64),
       ),
     } : {}),
+    // And what a shared game's other players still see of each fleet a player
+    // ordered since the last skip (multiplayer/host/onlyOrdered.js
+    // withFleetOrdered): as it stood before, on the date it was ordered, and
+    // what the order made of it. What is only ordered stays private. Only a
+    // world that has the key keeps it.
+    ...(Object.prototype.hasOwnProperty.call(nextWorld, "seenFleetPostures") && nextWorld.seenFleetPostures && typeof nextWorld.seenFleetPostures === "object" && !Array.isArray(nextWorld.seenFleetPostures) ? {
+      seenFleetPostures: Object.fromEntries(Object.entries(nextWorld.seenFleetPostures)
+        .filter(([id, seen]) => normalizeOptionalString(id) && seen && typeof seen === "object")
+        .slice(0, 2000)
+        .map(([id, seen]) => [normalizeOptionalString(id), {
+          posture: normalizeOptionalString(seen.posture),
+          status: normalizeOptionalString(seen.status),
+          updatedAt: normalizeOptionalString(seen.updatedAt),
+          since: normalizeOptionalString(seen.since),
+          ordered: { posture: normalizeOptionalString(seen.ordered?.posture), status: normalizeOptionalString(seen.ordered?.status) },
+        }])),
+    } : {}),
+    // And what those players left waiting while nobody shares the game
+    // (multiplayer/host/heldSeats.js): their orders, threads and secret
+    // events, kept as they were, read by nothing until the session is taken
+    // up again. Only a world that has the key keeps it.
+    ...(Object.prototype.hasOwnProperty.call(nextWorld, "seatsHeld") && nextWorld.seatsHeld && typeof nextWorld.seatsHeld === "object" && !Array.isArray(nextWorld.seatsHeld) ? {
+      seatsHeld: {
+        orders: normalizeArray(nextWorld.seatsHeld.orders).filter((row) => row && typeof row === "object").slice(-4000),
+        threads: normalizeArray(nextWorld.seatsHeld.threads).filter((row) => row && typeof row === "object").slice(-1000),
+        events: normalizeArray(nextWorld.seatsHeld.events).filter((row) => row?.event && typeof row.event === "object").slice(-4000),
+        turns: normalizeArray(nextWorld.seatsHeld.turns).filter((row) => row && typeof row === "object" && Array.isArray(row.orders)).slice(-400),
+      },
+    } : {}),
+    // And each such player's seal for its own agents' traffic (spySeal.js
+    // sealOf), by country. world.spySeal stays the game country's. Only a world
+    // that has the key keeps it.
+    ...(Object.prototype.hasOwnProperty.call(nextWorld, "seatSeals") ? {
+      seatSeals: Object.fromEntries(
+        Object.entries(nextWorld.seatSeals && typeof nextWorld.seatSeals === "object" && !Array.isArray(nextWorld.seatSeals) ? nextWorld.seatSeals : {})
+          .map(([country, seal]) => [normalizeOptionalString(country), String(seal ?? "")])
+          .filter(([country, seal]) => country && /^[0-9a-f]{64}$/i.test(seal))
+          .slice(0, 64),
+      ),
+    } : {}),
     cityRenames: Object.fromEntries(
       Object.entries(nextWorld.cityRenames && typeof nextWorld.cityRenames === "object" ? nextWorld.cityRenames : {})
         .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])
@@ -4511,6 +4607,7 @@ export const normalizeWorldState = (world) => {
     peaceOffers: normalizePeaceOffers(nextWorld.peaceOffers),
     reparations: normalizeReparations(nextWorld.reparations),
     peaceTreaties: normalizePeaceTreaties(nextWorld.peaceTreaties),
+    treatyOffers: normalizeTreatyOffers(nextWorld.treatyOffers),
     callsToArms: normalizeCallsToArms(nextWorld.callsToArms),
     puppets: normalizeWorldPuppets(nextWorld.puppets, diplomaticIdentityWorld),
     storylines: normalizeWorldStorylines(nextWorld.storylines),
@@ -5085,6 +5182,14 @@ const RUNTIME_DOCUMENTS = {
     read: () => readInterceptsState({ force: true }),
     write: (value, options) => writeInterceptsState(value, options),
   },
+  // A shared game's session (multiplayer/host/sessionRecord.js): who plays
+  // which country, kept with the campaign. Written by the host's engine window
+  // alone, in the host's own order; here so it is never written into a campaign
+  // that is no longer the open one.
+  shared: {
+    read: () => readJson(JSON_URLS.shared, { defaultValue: {}, force: true }),
+    write: (value, options) => writeJson(JSON_URLS.shared, value && typeof value === "object" && !Array.isArray(value) ? value : {}, options),
+  },
   // The advisor's conversation: written by its panel, by document notices and
   // by a rollback, so all three meet here too.
   advisor: {
@@ -5127,6 +5232,7 @@ export const mutateActionsState = (mutator, options) => mutateRuntimeDocument("a
 export const mutateGameData = (mutator, options) => mutateRuntimeDocument("game", mutator, options);
 export const mutateInterceptsState = (mutator, options) => mutateRuntimeDocument("intercepts", mutator, options);
 export const mutateAdvisorState = (mutator, options) => mutateRuntimeDocument("advisor", mutator, options);
+export const mutateSharedSessionState = (mutator, options) => mutateRuntimeDocument("shared", mutator, options);
 
 // A write another thread performs, run while this page's write queue is held.
 // The country-stats worker reads world.json, merges one sheet in and PUTs the
@@ -5188,7 +5294,7 @@ export const readGameStateBundle = async ({ force = false } = {}) => {
 // What of the finished world belongs to no turn: the Game Master's standing
 // facts and log, the seal, what each leader has been shown, the player's goal.
 // The world as seen keeps today's.
-const STATE_OUTSIDE_THE_TURN = ["simulationReminders", "gmChanges", "spySeal", "chatKnowledgeCursors", "playerGoals"];
+const STATE_OUTSIDE_THE_TURN = ["simulationReminders", "gmChanges", "spySeal", "seatSeals", "chatKnowledgeCursors", "playerGoals"];
 
 // The campaign as the player has been shown it (runtime/unseenEvents.js). While
 // a skip is being revealed the save already holds all of it, and whatever
@@ -6246,6 +6352,16 @@ export const applyEventImpactsToWorld = ({
   };
 };
 
+// A create without the believer it named (applyProjectOpsToWorld: a belief is a
+// time skip's alone to open).
+const withoutBelief = (raw) => {
+  if (!raw || typeof raw !== "object" || projectOpKind(raw) !== "create") return raw;
+  const { believedBy: _believedBy, ...op } = raw;
+  if (!raw.project || typeof raw.project !== "object") return op;
+  const { believedBy: _nested, ...project } = raw.project;
+  return { ...op, project };
+};
+
 // A plan held to its owner's means, against a world's sheets: what every door
 // that opens or plans a project passes to applyProjectOps as `boundPlan`. A
 // blank owner is `host`, the country a blank owner means.
@@ -6264,10 +6380,12 @@ const projectPlanBounder = (world, host = "") => (plan, owner) => {
 //             with its plan, plan one still planning, fund it, call it off;
 //   "ai"      the advisor: it may open the player's own work (with a plan, or
 //             to be planned), fund or call off the player's own, and report on
-//             any entry (its lastUpdate, a verdict on doubted intelligence). It
-//             is not the world: no setback or breakthrough, and no project of
-//             another country's (those the world opens, in a time skip);
-//   "engine"  the engine's own ops, which may also set a status.
+//             any entry (its lastUpdate). It is not the world: no setback or
+//             breakthrough, and no project of another country's (those the
+//             world opens, in a time skip);
+//   "engine"  the engine's own ops, which may also set a status and a verdict.
+// A belief (projectEngine.js isBelief) is a time skip's alone to open: a create
+// through here that names one is opened as ordinary work of its own owner.
 // Anything refused comes back in refusedProjectIds (or, for a create, nothing
 // lands) rather than throwing.
 export const applyProjectOpsToWorld = ({
@@ -6281,7 +6399,7 @@ export const applyProjectOpsToWorld = ({
 }) => {
   const nextWorld = normalizeWorldState(world);
   const resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
-  const resolved = normalizeArray(ops).map((raw) => resolveProjectOpOwner(raw, resolveOwner));
+  const resolved = normalizeArray(ops).map((raw) => resolveProjectOpOwner(withoutBelief(raw), resolveOwner));
   const refused = new Set();
   const player = normalizeOptionalString(playerCountry);
   const isPlayersOwn = (owner) => !normalizeOptionalString(owner) || samePolityName(owner, player);

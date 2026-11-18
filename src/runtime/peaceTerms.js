@@ -57,6 +57,7 @@
 
 import { PUPPET_KINDS, puppetKindLabel } from "./puppets.js";
 import { MAX_WAR_SIDE_MEMBERS, keepOpenRows } from "./warRecord.js";
+import { fillSlots } from "./phraseBook.js";
 
 export const TERRITORY_AS_HELD = "as held";
 export const TERRITORY_RESTORED = "restored";
@@ -224,20 +225,38 @@ export const cessionsByReceiver = (cessions) => {
   return [...by.values()];
 };
 
-// Terms in a line, for the story and for whoever reads the game.
-export const describeTerms = (terms) => {
+// Terms as their parts, each written by `words` (the English below unless
+// given): `say(pattern, values)` fills a whole pattern, `word(text)` a fixed
+// piece, `list(names)` names in a list. A host writes a peace two players make
+// in the language of their world with them (multiplayer/host/worldWords.js),
+// from the same patterns the language packs translate.
+const ENGLISH_TERMS_WORDS = Object.freeze({ say: fillSlots, word: (text) => text, list: listed });
+export const termsInWords = (terms, words = ENGLISH_TERMS_WORDS) => {
+  const { say, word, list: names } = { ...ENGLISH_TERMS_WORDS, ...words };
   const read = normalizeTerms(terms);
-  const ground = read.territory === TERRITORY_AS_HELD ? "each side keeps the ground it holds" : "every region goes back to whose it was before the war";
+  const ground = read.territory === TERRITORY_AS_HELD ? word("each side keeps the ground it holds") : word("every region goes back to whose it was before the war");
   const payment = read.reparations;
-  const parts = [read.annexed ? `${read.annexed.country} is annexed: all its land passes to ${read.annexed.by || "the other side"}` : ground];
-  for (const { to, regions } of cessionsByReceiver(read.cessions)) parts.push(`${listed(regions)} ${regions.length === 1 ? "passes" : "pass"} to ${to}`);
-  if (read.puppet) parts.push(`${read.puppet.subject} becomes ${read.puppet.overlord ? `${read.puppet.overlord}'s` : "the other side's"} ${puppetKindLabel(read.puppet.kind)}`);
+  const parts = [read.annexed ? say("{{country}} is annexed: all its land passes to {{value}}", { country: read.annexed.country, value: read.annexed.by || word("the other side") }) : ground];
+  for (const { to, regions } of cessionsByReceiver(read.cessions)) parts.push(say(regions.length === 1 ? "{{listed}} passes to {{to}}" : "{{listed}} pass to {{to}}", { listed: names(regions), to }));
+  if (read.puppet) {
+    const kind = word(puppetKindLabel(read.puppet.kind));
+    parts.push(read.puppet.overlord
+      ? say("{{subject}} becomes {{overlord}}'s {{puppetKindLabel}}", { subject: read.puppet.subject, overlord: read.puppet.overlord, puppetKindLabel: kind })
+      : say("{{subject}} becomes the other side's {{puppetKindLabel}}", { subject: read.puppet.subject, puppetKindLabel: kind }));
+  }
   parts.push(payment
-    ? `${payment.payer} pays ${payment.receiver} reparations of ${round(payment.share * 100, 1)}% of its economy a year for ${payment.years} ${payment.years === 1 ? "year" : "years"}`
-    : "nobody pays reparations");
-  if (read.conditions) parts.push(`and: ${read.conditions.join("; ")}`);
-  return parts.join("; ");
+    ? say(payment.years === 1
+      ? "{{payer}} pays {{receiver}} reparations of {{round}}% of its economy a year for {{years}} year"
+      : "{{payer}} pays {{receiver}} reparations of {{round}}% of its economy a year for {{years}} years", {
+      payer: payment.payer, receiver: payment.receiver, round: round(payment.share * 100, 1), years: payment.years,
+    })
+    : word("nobody pays reparations"));
+  if (read.conditions) parts.push(say("and: {{conditions}}", { conditions: read.conditions.join("; ") }));
+  return parts;
 };
+
+// Terms in a line, for the story and for whoever reads the game.
+export const describeTerms = (terms) => termsInWords(terms).join("; ");
 
 /// ---- offers ---------------------------------------------------------------------------------
 
@@ -432,6 +451,21 @@ export const withTurnPeaceOffers = (offers, { wars = [], round = 0 } = {}) => {
   });
 };
 
+// An offer's id: its war, who makes it and the round, unique among the
+// world's offers (`offers`). One maker's offers to two people in one war and
+// round had the same id, and the second took the first's place without a word:
+// Russia's terms to Latvia were gone once it put terms to Estonia, and Latvia's
+// answer was "This is not yours to answer." (the review of 2026-11-18, wars 7).
+// The first keeps the id it always had; another is numbered after it. Made by
+// the host when it applies the request (rule 8), so every screen reads the same.
+const OFFER_ID_MOST = 80;
+export const peaceOfferId = (offers, { warId = "", from = "", round = 0 } = {}) => {
+  const taken = new Set(list(offers).map((entry) => clean(entry?.id, OFFER_ID_MOST)));
+  const base = clean(`peace:${clean(warId)}:${fold(from)}:${Math.max(0, Math.round(figure(round)))}`, OFFER_ID_MOST - 4);
+  if (!taken.has(base)) return base;
+  for (let serial = 2; ; serial += 1) if (!taken.has(`${base}:${serial}`)) return `${base}:${serial}`;
+};
+
 // An offer of peace an AI makes a person, checked: a war between the AI's
 // country and the person's, the AI's side played by nobody, the person's
 // country played. Returns { offer } or { reason } in words.
@@ -441,7 +475,8 @@ export const withTurnPeaceOffers = (offers, { wars = [], round = 0 } = {}) => {
 //   players      the countries people play
 //   source       who made it (OFFER_SOURCES)
 //   chatId, messageId   where it was made, where that is known
-export const offerFromAi = ({ from = "", to = "", terms = null, wars = [], players = [], round = 0, date = "", source = "skip", chatId = "", messageId = "" } = {}) => {
+//   offers       the world's offers, which its id is unique among (peaceOfferId)
+export const offerFromAi = ({ from = "", to = "", terms = null, wars = [], players = [], round = 0, date = "", source = "skip", chatId = "", messageId = "", offers = [] } = {}) => {
   const played = new Set(list(players).map(fold).filter(Boolean));
   if (!clean(from) || !clean(to)) return { reason: "nobody named" };
   if (!played.has(fold(to))) return { reason: `${clean(to)} is played by nobody` };
@@ -451,7 +486,7 @@ export const offerFromAi = ({ from = "", to = "", terms = null, wars = [], playe
   if (theirs.some((member) => played.has(fold(member)))) return { reason: `${clean(from)}'s side is led by a person` };
   const now = Math.max(0, Math.round(figure(round)));
   const offer = normalizePeaceOffer({
-    id: `peace:${clean(war.id)}:${fold(from)}:${now}`,
+    id: peaceOfferId(offers, { warId: war.id, from, round: now }),
     warId: war.id,
     from: clean(from),
     to: clean(to),
@@ -641,6 +676,8 @@ export const normalizePeaceTreaties = (value) => {
       from: clean(raw.from),
       to: clean(raw.to),
       sides: [0, 1].map((side) => list(raw.sides?.[side]).map((name) => clean(name)).filter(Boolean).slice(0, MAX_WAR_SIDE_MEMBERS)),
+      // A separate peace (warAndPeace.js leavingByPeace): who it took out of a war that goes on.
+      ...(list(raw.left).some((name) => clean(name)) ? { left: list(raw.left).map((name) => clean(name)).filter(Boolean).slice(0, MAX_WAR_SIDE_MEMBERS) } : {}),
       terms: normalizeTerms(raw.terms),
       by: TREATY_WAYS.includes(raw.by) ? raw.by : "offer",
     });
