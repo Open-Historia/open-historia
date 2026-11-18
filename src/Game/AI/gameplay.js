@@ -198,7 +198,8 @@ import { formalAgendaProposals } from "./formalAgenda.js";
 import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.js";
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
 import { openingSpeaker } from "./chatSpeaker.js";
-import { sharedLetterOf } from "./sharedLetters.js";
+import { sharedDocumentNoteOf, sharedLetterDropped, sharedLetterOf, sharedNoteOf } from "./sharedLetters.js";
+import { advisorOfSeat, withSeatAdvisor } from "../../runtime/seatAdvisors.js";
 import { tableSeats } from "./tableSeats.js";
 import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { OUTPUT_LIMIT_MESSAGE, REASONING_ONLY_MESSAGE, REASONING_ONLY_NOTE, UNPARSEABLE_STRUCTURED_TEXT_MESSAGE, isUnreachableError } from "./providerErrors.js";
@@ -566,7 +567,7 @@ import { gmChangesForRound, normalizeReminders, recordGmChange, renderGmChangeNa
 import { describeGoalForSimulation, describeGoalForSuggestions, describeGoalsForSimulation, playerGoalEntryOf, playerGoalOf, withGoalProgress } from "../../runtime/playerGoal.js";
 import { createSkipPhases, describeReviewJobs, formatSkipPhases } from "./skipPhases.js";
 import { createStreamedEventReader } from "./streamedEvents.js";
-import { deliveryEventId, documentExchange, documentNote, documentNotices, isDocumentExchange, markIntercepted, planReportDeliveries, withoutOrphanedDocuments, withoutOrphanedNotices } from "../../runtime/reportDelivery.js";
+import { deliveryEventId, documentExchange, documentNotices, isDocumentExchange, markIntercepted, planReportDeliveries, withoutOrphanedDocuments, withoutOrphanedNotices } from "../../runtime/reportDelivery.js";
 import { unseenEvents, withoutUnseenMessages } from "../../runtime/unseenEvents.js";
 import { canRewindInteractiveTo, isSceneInProgress, openInteractive, recordInteractiveBeat, rewindInteractive } from "./interactiveRewind.js";
 import { chooseInteractiveOffer, offeredEvent } from "../../runtime/interactiveOffer.js";
@@ -10016,40 +10017,32 @@ const applySimulationResult = async ({
     worldWithImpacts = await rekeyRenamedPolities(worldWithImpacts, projectsRun.renamedPolities);
   }
 
-  // The documents that changed hands this turn, delivered to the player the way
+  // The documents that changed hands this turn, delivered to each player the way
   // a government receives them (runtime/reportDelivery.js): a letter into the
   // thread with its sender (below, with the other notes), a copy stolen by an
   // agent into that agent's intercepts (filed after the write), a published text
   // or the player's own paper onto its event (time.jsx reads those from the
-  // file). A stolen copy is marked in the file for the narrator.
-  const documentPlayer = normalizeString(baseGame.country);
-  const reportDeliveries = planReportDeliveries({
-    before: normalizeArray(baseWorld.reports),
-    after: normalizeArray(worldWithImpacts.reports),
-    player: documentPlayer,
-    agents: activeSpies(worldWithImpacts, documentPlayer).filter((spy) => spy.status === "active"),
-  });
-  if (reportDeliveries.some((delivery) => delivery.channel === "intelligence")) {
-    worldWithImpacts = { ...worldWithImpacts, reports: markIntercepted(worldWithImpacts.reports, reportDeliveries, documentPlayer) };
-  }
-  // Every other player's agents steal too (a shared game): a copy one takes is
-  // marked as that player's and filed in that player's own table. A letter or a
-  // published paper reaches each player in its view (multiplayer/host/
-  // projection.js), so only what was stolen is planned for them here.
-  const seatThefts = [];
-  for (const owner of spymastersOf(baseGame).filter((name) => regionKey(name) !== regionKey(documentPlayer))) {
-    const stolen = planReportDeliveries({
+  // file), and the advisor's notice of each (postDocumentNotices). A stolen copy
+  // is marked in the file for the narrator. Planned for every player: the
+  // game's own country, and in a shared game every other person's in turn
+  // (spymastersOf), each delivery marked with whose it is. A letter addressed
+  // to a guest used to be planned for the host's seat alone, and raised nothing
+  // on the guest's screen (the gap audit of 2026-11-18).
+  const reportDeliveries = [];
+  for (const owner of spymastersOf(baseGame)) {
+    const planned = planReportDeliveries({
       before: normalizeArray(baseWorld.reports),
       after: normalizeArray(worldWithImpacts.reports),
       player: owner,
       agents: activeSpies(worldWithImpacts, owner).filter((spy) => spy.status === "active"),
-    }).filter((delivery) => delivery.channel === "intelligence").map((delivery) => ({ ...delivery, owner }));
-    if (!stolen.length) continue;
-    worldWithImpacts = { ...worldWithImpacts, reports: markIntercepted(worldWithImpacts.reports, stolen, owner) };
-    seatThefts.push(...stolen);
+    }).map((delivery) => ({ ...delivery, owner }));
+    if (planned.some((delivery) => delivery.channel === "intelligence")) {
+      worldWithImpacts = { ...worldWithImpacts, reports: markIntercepted(worldWithImpacts.reports, planned, owner) };
+    }
+    reportDeliveries.push(...planned);
   }
   if (reportDeliveries.length) {
-    logDebugEvent("turn", `Documents delivered: ${reportDeliveries.map((delivery) => `"${delivery.report.title}" by ${delivery.channel}`).join("; ")}.`, undefined, { verbose: true });
+    logDebugEvent("turn", `Documents delivered: ${reportDeliveries.map((delivery) => `"${delivery.report.title}" to ${delivery.owner} by ${delivery.channel}`).join("; ")}.`, undefined, { verbose: true });
   }
 
   // Now and then a time skip offers one of its events to be played out as an
@@ -10113,17 +10106,30 @@ const applySimulationResult = async ({
 
   // In a shared game (runtime/humanPolities.js) a thread the turn opens is
   // written to one of the people, and its opening lines are the AI's
-  // (sharedLetterOf): the person it names in `to`, the host's own player when it
-  // names none. A country a person plays is never one of the governments
+  // (sharedLetterOf): the person it names in `to`, and nobody's when it names
+  // no person. A country a person plays is never one of the governments
   // speaking in it: that person writes their own lines.
   const people = humanCountriesOf(baseGame);
   const routed = (chatLike) => sharedLetterOf(chatLike, { people, host: baseGame.country });
-  const opening = async (chatLike, linkEventId, options) => {
-    const letter = routed(chatLike);
+  // A letter, a note the engine files between two people (a line nobody
+  // speaks, sharedLetters.js sharedNoteOf) or a document for a player, built in
+  // its reader's own thread. A thread names its owner when it is not the
+  // host's (multiplayer/host/projection.js).
+  const filed = async (letter, linkEventId, options) => {
     if (!letter) return null;
     const built = await buildGeneratedChat(letter.chat, linkEventId, worldWithImpacts, { ...options, playerName: letter.to });
-    // A thread names its owner when it is not the host's (multiplayer/host/projection.js).
     return built && letter.owner ? { ...built, player: letter.owner } : built;
+  };
+  const opening = async (chatLike, linkEventId, options) => {
+    const letter = routed(chatLike);
+    if (!letter) {
+      // A letter to no person is nobody's (sharedLetters.js): it used to go to the host.
+      if (sharedLetterDropped(chatLike, { people }) === "unaddressed") {
+        logDebugEvent("turn", `A letter named no player in \`to\` and was not sent: "${normalizeString(chatLike?.title) || "untitled"}" from ${normalizeString(chatLike?.speaker) || "an unnamed government"}.`);
+      }
+      return null;
+    }
+    return filed(letter, linkEventId, options);
   };
 
   for (const event of freshEvents) {
@@ -10183,6 +10189,16 @@ const applySimulationResult = async ({
   // old save) and one whose message could not be sent when it opened. Until it has one the player cannot have heard
   // it, and its silence breaks no treaty (alliances.js callsForTurn); from the turn it is asked (askedRound) it stands
   // CALL_STANDS_ROUNDS turns.
+  // The call a defender a person plays makes of its ally, as a line of the
+  // thread between the two, read by both: in the game's language, and in
+  // nobody's voice.
+  const callToArmsBetweenPeople = ({ defender, ally, enemy, treaty }) => (enemy
+    ? (treaty
+      ? uiString("{{defender}} has been attacked by {{enemy}}. Under {{treaty}}, it calls on {{ally}} to come to its defence.", { defender, ally, enemy, treaty })
+      : uiString("{{defender}} has been attacked by {{enemy}}, and calls on its ally {{ally}} to come to its defence.", { defender, ally, enemy }))
+    : (treaty
+      ? uiString("{{defender}} has been attacked. Under {{treaty}}, it calls on {{ally}} to come to its defence.", { defender, ally, treaty })
+      : uiString("{{defender}} has been attacked, and calls on its ally {{ally}} to come to its defence.", { defender, ally })));
   for (const call of normalizeArray(worldWithImpacts?.callsToArms)) {
     if (call?.status !== "open" || normalizeString(call.messageId)) continue;
     if (!people.some((person) => regionKey(person) === regionKey(call.ally))) continue;
@@ -10197,15 +10213,28 @@ const applySimulationResult = async ({
         ? uiString("We have been attacked. Under {{treaty}}, we call on you to come to our defence.", { treaty })
         : uiString("We have been attacked. As our ally, we call on you to come to our defence."));
     const messageId = `msg-call-${nameId(call.id, (id) => regionKey(id).replace(/[^a-z0-9]+/g, "-"))}`;
-    const nextChat = await opening({
-      countries: [call.defender],
-      to: call.ally,
-      speaker: call.defender,
-      title: uiString("A call for help"),
-      openingMessage: ask,
-      openingMessageId: messageId,
-      source: "call-to-arms",
-    }, "", { revealWith: lastTurnEventId });
+    // A defender a person plays speaks for itself: the call is a line of the
+    // thread between the two that nobody speaks (sharedLetters.js sharedNoteOf),
+    // under which its ally answers. It was never sent: no government was left
+    // to write it (the gap audit of 2026-11-18).
+    const defenderPlayed = people.length > 1 && people.some((person) => regionKey(person) === regionKey(call.defender));
+    const nextChat = defenderPlayed
+      ? await filed(sharedNoteOf({
+        from: call.defender,
+        to: call.ally,
+        title: uiString("A call for help"),
+        source: "call-to-arms",
+        message: { id: messageId, text: callToArmsBetweenPeople({ defender: normalizeString(call.defender), ally: normalizeString(call.ally), enemy, treaty }) },
+      }, { people, host: baseGame.country }), "", { revealWith: lastTurnEventId })
+      : await opening({
+        countries: [call.defender],
+        to: call.ally,
+        speaker: call.defender,
+        title: uiString("A call for help"),
+        openingMessage: ask,
+        openingMessageId: messageId,
+        source: "call-to-arms",
+      }, "", { revealWith: lastTurnEventId });
     if (!nextChat) continue;
     nextChats.unshift(nextChat);
     generatedChats.unshift(nextChat);
@@ -10216,12 +10245,13 @@ const applySimulationResult = async ({
   // A document the player now holds with other governments is filed in the
   // thread with them, spoken by its sender — folded like any note, so a thread
   // already open is where it lands.
+  // Each player's in their own thread: with the governments the AI plays that
+  // hold it, or as a line between two people when another player's government
+  // passed it (sharedLetters.js sharedDocumentNoteOf); single player's as ever.
   for (const delivery of reportDeliveries.filter((entry) => entry.channel === "diplomacy")) {
     const revealWith = deliveryEventId(delivery, lastTurnEventId);
-    const nextChat = await buildGeneratedChat(documentNote(delivery, { eventId: revealWith }), normalizeString(delivery.report.sourceEventId), worldWithImpacts, {
-      playerName: baseGame.country,
-      revealWith,
-    });
+    const note = sharedDocumentNoteOf(delivery, { eventId: revealWith, people, host: baseGame.country });
+    const nextChat = await filed(note, normalizeString(delivery.report.sourceEventId), { revealWith });
     if (nextChat) { nextChats.unshift(nextChat); generatedChats.push(nextChat); }
   }
 
@@ -10507,9 +10537,9 @@ const applySimulationResult = async ({
   // used to, a request apiece.
   if (review) await fileReviewedAgentReports(review, { campaignId });
   // And what the player's agents stole this turn, beside their traffic.
-  await fileStolenDocuments([...reportDeliveries, ...seatThefts], { world: nextWorld, game: nextGame, lastEventId: lastTurnEventId, campaignId });
+  await fileStolenDocuments(reportDeliveries, { world: nextWorld, game: nextGame, lastEventId: lastTurnEventId, campaignId });
   // And the advisor flags each new paper in its conversation.
-  await postDocumentNotices(reportDeliveries, { lastEventId: lastTurnEventId, date: nextGame.gameDate, campaignId });
+  await postDocumentNotices(reportDeliveries, { lastEventId: lastTurnEventId, date: nextGame.gameDate, campaignId, gameCountry: normalizeString(baseGame.country) });
 
   return {
     actions: actionsToWrite,
@@ -13548,21 +13578,34 @@ const fileStolenDocuments = async (deliveries, { world, game, lastEventId = "", 
   }
 };
 
-// The advisor's notices of the papers this turn put in the government's hands
-// (reportDelivery.js documentNotices), appended to its conversation; the panel
-// merges them in whenever the file changes. One per paper, so re-applying a turn
-// (Intervene) posts nothing twice. Never costs the turn.
-const postDocumentNotices = async (deliveries, { lastEventId = "", date = "", campaignId = "" } = {}) => {
-  const notices = documentNotices(deliveries, { lastEventId, date });
+// The advisor's notices of the papers this turn put in each government's hands
+// (reportDelivery.js documentNotices), appended to that player's conversation:
+// the game's own country's is the file, as single player's is, and in a shared
+// game every other seat's is kept with it (runtime/seatAdvisors.js), so a
+// guest's advisor flags the guest's papers. The panel merges them in whenever
+// the file changes. One per paper, so re-applying a turn (Intervene) posts
+// nothing twice. Never costs the turn. `gameCountry`: the game's own country.
+const postDocumentNotices = async (deliveries, { lastEventId = "", date = "", campaignId = "", gameCountry = "" } = {}) => {
+  const byOwner = new Map();
+  for (const delivery of normalizeArray(deliveries)) {
+    const owner = normalizeString(delivery?.owner) || normalizeString(gameCountry);
+    byOwner.set(owner, [...(byOwner.get(owner) ?? []), delivery]);
+  }
+  const notices = [...byOwner].map(([owner, list]) => [owner, documentNotices(list, { lastEventId, date })]).filter(([, list]) => list.length);
   if (!notices.length || !stillCampaign(campaignId)) return;
   try {
     assertCampaignUnchanged(campaignId, activeCampaignId(), "notice");
     // The conversation as it is at write time. A read that fails throws inside
     // the queue rather than posting the notices over an empty conversation.
-    await mutateAdvisorState((list) => {
-      const posted = new Set(list.filter((message) => message?.role === "notice").map((message) => message.id));
-      const fresh = notices.filter((notice) => !posted.has(notice.id));
-      return fresh.length ? [...list, ...fresh] : null;
+    await mutateAdvisorState((file) => {
+      let next = file;
+      for (const [owner, list] of notices) {
+        const mine = advisorOfSeat(next, owner, { gameCountry });
+        const posted = new Set(mine.filter((message) => message?.role === "notice").map((message) => message.id));
+        const fresh = list.filter((notice) => !posted.has(notice.id));
+        if (fresh.length) next = withSeatAdvisor(next, owner, [...mine, ...fresh], { gameCountry });
+      }
+      return next === file ? null : next;
     });
   } catch (error) {
     console.warn("[advisor] a new paper could not be flagged:", error?.message || error);

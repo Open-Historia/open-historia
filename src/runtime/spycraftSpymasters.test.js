@@ -121,9 +121,10 @@ test("the time skip asks, files and steals for every player's agents, each into 
   assert.match(store, /const owner = normalizeString\(spy\?\.owner\) \|\| gameCountry;/);
   assert.match(store, /const seal = sealOf\(bundle\.world, owner, \{ gameCountry \}\) \|\| await ensureSpySeal\(\{ owner, gameCountry \}\);/);
   assert.match(store, /return withInterceptTable\(latest, owner, \{ \.\.\.current, \[name\]: entry \}, \{ gameCountry \}\);/);
-  // Stolen by every player's agents, each copy its owner's.
-  assert.match(gameplay, /for \(const owner of spymastersOf\(baseGame\)\.filter\(\(name\) => regionKey\(name\) !== regionKey\(documentPlayer\)\)\) \{/);
-  assert.match(gameplay, /await fileStolenDocuments\(\[\.\.\.reportDeliveries, \.\.\.seatThefts\]/);
+  // Delivered to and stolen by every player's government, each copy its owner's.
+  assert.match(gameplay, /for \(const owner of spymastersOf\(baseGame\)\) \{\n {4}const planned = planReportDeliveries\(\{/);
+  assert.match(gameplay, /\}\)\.map\(\(delivery\) => \(\{ \.\.\.delivery, owner \}\)\);/);
+  assert.match(gameplay, /await fileStolenDocuments\(reportDeliveries,/);
   const steal = gameplay.slice(gameplay.indexOf("const fileStolenDocuments = async"), gameplay.indexOf("// The advisor's notices of the papers this turn put"));
   assert.match(steal, /sealExchange\(await sealFor\(owner\), exchange\)/);
   assert.match(steal, /file = withInterceptTable\(file, owner, next, \{ gameCountry \}\);/);

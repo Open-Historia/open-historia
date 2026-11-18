@@ -110,6 +110,10 @@ test("the simulator is told who plays only when several people do", async () => 
   assert.match(directive, /Where two players' polities meet each other .* it favours neither/);
   // A secret's outcome is marked for those who know of it, and the answer's events can carry that mark.
   assert.match(directive, /lists in its audience the polities that know of it/);
+  // Each player is written to, unprompted, in the round's one request: the cap on new chats is each player's, and a
+  // letter is to one player by name or it is not sent (AI/sharedLetters.js).
+  assert.match(directive, /that many may be written to EACH player/);
+  assert.match(directive, /A letter that names no player in `to` is not sent\./);
   const { JUMP_FORWARD_TOOL } = await import("./gameplaySchemas.js");
   assert.equal(JUMP_FORWARD_TOOL.schema.properties.events.items.properties.audience.type, "array");
 });

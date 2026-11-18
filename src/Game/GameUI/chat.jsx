@@ -942,15 +942,19 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
 // written (runtime/institutionalChannels.js writes the opening as "<name>
 // council opened."). Its words are never matched: the opening used to be found
 // by its English wording and reworded here.
-const InstitutionRecord = ({ msg }) => {
+// `label`: what kind of record it is; none for a line of a thread between two
+// people that nobody speaks (a call to arms from a defender a person plays, a
+// paper another player's government passed: AI/sharedLetters.js sharedNoteOf).
+const InstitutionRecord = ({ msg, label = "Institution record" }) => {
     const text = String(msg?.text ?? "").trim();
     if (!text) return null;
     return (
         <div style={{ display: "flex", justifyContent: "center", padding: ".12rem .75rem" }}>
             <div style={{ maxWidth: "76%", display: "inline-flex", alignItems: "center", gap: ".45rem", border: "1px solid var(--oh-grey-border)", background: "rgba(255,255,255,.035)", borderRadius: 8, padding: ".34rem .58rem", color: "rgba(255,255,255,.58)", fontSize: ".6rem", lineHeight: 1.35 }}>
                 <span aria-hidden="true" style={{ color: "rgba(231,231,234,.72)", fontSize: ".72rem" }}>◇</span>
-                <span style={{ color: "rgba(231,231,234,.72)", fontSize: ".52rem", fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Institution record</span>
-                <span>{text}</span>
+                {label && <span style={{ color: "rgba(231,231,234,.72)", fontSize: ".52rem", fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{label}</span>}
+                {/* A line between two people may be a whole paper: its paragraphs kept. */}
+                <span data-no-translate={label ? undefined : ""} style={label ? undefined : { fontSize: ".72rem", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{text}</span>
             </div>
         </div>
     );
@@ -2587,6 +2591,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     {showDateSeparator && <ChatDateSeparator value={msg.time} />}
                     {isInstitutional && (msg.role === "system" || String(msg.speaker || "").toLowerCase() === "system")
                         ? <InstitutionRecord msg={msg} />
+                        : msg.role === "system" && !String(msg.speaker || "").trim()
+                        ? <InstitutionRecord msg={msg} label="" />
                         : <MessageBubble msg={msg} compact={compact} showTime={!groupedWithNext}
                             onRetry={msg.retry && !isLoading && index === messages.length - 1 ? () => handleRetry(index) : undefined} />}
                     {(demandsByMessage.get(msg.id) ?? []).map(renderDemandCard)}
