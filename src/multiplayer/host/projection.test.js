@@ -591,3 +591,24 @@ test("a line ordered since the last skip is its owner's; once time has passed ev
   assert.deepEqual(projectForViewer(docs, LATVIA).world.fortifications.map((entry) => entry.id).sort(), ["ru-old", "ru-rising"]);
   assert.deepEqual(projectForViewer(docs, RUSSIA).world.fortifications.map((entry) => entry.id).sort(), ["ru-new", "ru-old", "ru-rising"]);
 });
+
+// An invited player was sent only an institution's public face, no case: its
+// hearing and its Institutions tab had nothing to accept (the gap audit of
+// 2026-11-18, D5c). A case is its subject's and its opener's to see in full.
+test("a country an institution's case is about, or that opened it, sees that case; its business stays the members'", () => {
+  const docs = state();
+  docs.world.institutions.byId["baltic-council"].lifecycleCases = {
+    "invite-ru": { id: "invite-ru", kind: "invitation", status: "pending", polity: RUSSIA, initiatedBy: LATVIA, requestedStatus: "member", reason: "CANARY-RU-INVITE" },
+    "apply-ru": { id: "apply-ru", kind: "application", status: "pending-approval", polity: "Republic of Poland", initiatedBy: RUSSIA, reason: "CANARY-RU-SPONSORS" },
+    "invite-pl": { id: "invite-pl", kind: "invitation", status: "pending", polity: "Republic of Poland", initiatedBy: ESTONIA, reason: "CANARY-PL-INVITE" },
+  };
+  const ru = projectForViewer(docs, RUSSIA).world.institutions.byId["baltic-council"];
+  assert.deepEqual(Object.keys(ru.lifecycleCases).sort(), ["apply-ru", "invite-ru"]);
+  assert.equal(ru.lifecycleCases["invite-ru"].reason, "CANARY-RU-INVITE", "in full");
+  assert.equal(ru.proposals, undefined, "the members' business is theirs");
+  const lv = projectForViewer(docs, LATVIA).world.institutions.byId["baltic-council"];
+  assert.equal(Object.keys(lv.lifecycleCases).length, 3, "a member sees every case");
+  // A country with no case there sees none.
+  docs.world.institutions.byId["baltic-council"].lifecycleCases = { "invite-pl": docs.world.institutions.byId["baltic-council"].lifecycleCases["invite-pl"] };
+  assert.equal(projectForViewer(docs, RUSSIA).world.institutions.byId["baltic-council"].lifecycleCases, undefined);
+});

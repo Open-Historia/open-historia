@@ -334,13 +334,23 @@ const FILTERED_WORLD_KEYS = Object.freeze({
     return { ...ledger, byPolity };
   },
 
-  // A member sees its institution's business; everyone sees what it is.
+  // A member sees its institution's business; everyone sees what it is; and a
+  // country an institution's case is about, or that opened it, sees that case
+  // in full: an invited player was sent no case, so its hearing and its
+  // Institutions tab offered nothing to accept.
   institutions: (world, viewer) => {
     const ledger = isRecord(world.institutions) ? world.institutions : {};
     const byId = {};
     for (const [id, institution] of Object.entries(isRecord(ledger.byId) ? ledger.byId : {})) {
       if (!isRecord(institution)) continue;
-      byId[id] = isMember(institution, viewer) ? institution : pick(institution, PUBLIC_INSTITUTION_KEYS);
+      if (isMember(institution, viewer)) {
+        byId[id] = institution;
+        continue;
+      }
+      const shown = pick(institution, PUBLIC_INSTITUTION_KEYS);
+      const cases = Object.entries(isRecord(institution.lifecycleCases) ? institution.lifecycleCases : {})
+        .filter(([, entry]) => isRecord(entry) && (polityMatches(entry.polity, viewer) || polityMatches(entry.initiatedBy, viewer)));
+      byId[id] = cases.length ? { ...shown, lifecycleCases: Object.fromEntries(cases) } : shown;
     }
     return { ...ledger, byId };
   },

@@ -21,7 +21,7 @@ import { collectFoundedPolities, foundingPolityChange } from "../../runtime/poli
 import { describeBasisAction, describeUnknownBasis, sameRegionChange, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
 import { GROUP_OP_KINDS, PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, findGroupKey, groupOpKind, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
-import { hostingSharedGame, humanCountriesOf, orderOwner } from "../../runtime/humanPolities.js";
+import { hostingSharedGame, humanCountriesOf, humanCountriesWith, orderOwner } from "../../runtime/humanPolities.js";
 import { uiString } from "../../runtime/translator.js";
 import { withTurnSeaBattles } from "../../runtime/naval/record.js";
 import { withFrontFortifications } from "../../runtime/warGeography.js";
@@ -7974,6 +7974,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         world: lifecycleValidationWorld,
         chats: lifecycleValidationChats,
         playerCountry,
+        people: normalizeArray(players ?? [playerCountry]),
         date: normalizeString(event?.date),
         ops: [operation],
         authority: institutionLifecycleAuthority,
@@ -9444,6 +9445,9 @@ const applySimulationResult = async ({
       world: impactedWorld,
       chats: nextChats,
       playerCountry: nextGame.country || baseGame.country,
+      // Every person, not the host alone: no skip accepts, applies or
+      // withdraws for a guest's country, and its invitation is theirs.
+      people: humanCountriesOf(nextGame),
       date: event.date || nextGame.gameDate,
       ops: lifecycleOps,
     });
@@ -15242,9 +15246,12 @@ export const refinePlayerAction = async (rawInput, { persist = true, signal } = 
 //
 // Who acts is settled HERE, natively: the AI participants of this thread. The
 // model is told the roster is authoritative and may never act for the human.
-const institutionGovernancePrompt = (world, institutionId, playerCountry = "") => {
+// `people`: the countries humans play (humanPolities.js humanCountriesWith),
+// or one name; the model is told of every one, not of the one asking alone.
+const institutionGovernancePrompt = (world, institutionId, people = "") => {
   const institution = resolveInstitutionRecord(world, institutionId);
   if (!institution) return "";
+  const humans = normalizeArray(Array.isArray(people) ? people : [people]).map(normalizeString).filter(Boolean);
   // Open business first, most recent activity first, then a few recently
   // settled proposals so members do not table them again (formalAgenda.js).
   const { open: proposals, closed: closedProposals } = formalAgendaProposals(institution.proposals);
@@ -15282,7 +15289,9 @@ const institutionGovernancePrompt = (world, institutionId, playerCountry = "") =
     + `This thread is the formal channel of ${institution.name} (${institution.id}).\n`
     + (identityLines ? `${identityLines}\n` : "")
     + `Canonical members: ${members || "none"}.\n`
-    + `The human-controlled polity is ${playerCountry || "the player"}. NEVER use an institution_* action for it.\n`
+    + (humans.length > 1
+      ? `The human-controlled polities are ${humans.join(", ")}. NEVER use an institution_* action for any of them.\n`
+      : `The human-controlled polity is ${humans[0] || "the player"}. NEVER use an institution_* action for it.\n`)
     + `Speech, reactions and create_poll/poll_vote are conversation only. They DO NOT create proposals, amendments, legal ballots, membership changes or binding institutional outcomes.\n`
     + `Do not use add_member/remove_member in this channel: membership belongs to the institution ledger.\n`
     + `Use institution_lodge_proposal only when an AI member genuinely tables new formal business. When an eligible AI member has clearly advanced a concrete, actionable institutional proposal in Council, especially when another member or the player endorses it or asks to make it official, table it NOW in this same turn with institution_lodge_proposal instead of merely promising to draft it later. Example pattern: an AI member says "we propose X", the Council engages with X, and the player says "make it official"; that same AI sponsor should lodge X alongside any conversational reply. Keep sponsorship with the AI polity that actually originated the proposal; player endorsement does not transfer authorship to the player. Vague commentary, repetition, or an idea already represented on the formal agenda stays speech only. Lodging puts business on the agenda for debate; do NOT jump straight to a ballot unless the exact sponsor also genuinely submits the existing proposal and native rules permit it.\n`
@@ -15346,6 +15355,9 @@ export const runChatActionBatch = async ({
   const bundle = useCanonicalState ? { ...readBundle, savedGame: readBundle.game, unseen: new Set() } : readBundle;
   const unseen = bundle.unseen ?? new Set();
   const player = normalizeString(playerCountry) || normalizeString(bundle.game?.country);
+  // Who writes now is `player`; the people are every country humans play
+  // (runtime/humanPolities.js), whom no institution business is ever done for.
+  const people = humanCountriesWith(bundle.savedGame || bundle.game, player);
   const stored = normalizeChats([chat])[0];
   if (!stored) return { events: [], applied: [], rejected: [], actions: [] };
   // An institution's table votes and decides in its answer: never words alone.
@@ -15360,7 +15372,7 @@ export const runChatActionBatch = async ({
     normalizeArray(stored.lifecycleCaseIds).length,
   );
   const formalInstitutionPrompt = stored.institutionId && !lifecycleGovernanceThread
-    ? institutionGovernancePrompt(bundle.world, stored.institutionId, player)
+    ? institutionGovernancePrompt(bundle.world, stored.institutionId, people)
     : "";
   const lifecycleDecisionContext = stored.lifecycleInstitutionId && normalizeArray(stored.lifecycleCaseIds).length
     ? buildInstitutionLifecycleDecisionContext(bundle.world, {
@@ -15368,13 +15380,14 @@ export const runChatActionBatch = async ({
       caseIds: stored.lifecycleCaseIds,
       actorPolities: normalizeArray(stored.countries).map((country) => normalizeString(country?.name)).filter(Boolean),
       playerCountry: player,
+      people,
     })
     : null;
   const institutionLifecyclePrompt = lifecycleDecisionContext?.text || "";
   const autonomousBallotWork = formalBusinessRequested && stored.institutionId && !lifecycleGovernanceThread
     ? (normalizeString(institutionProposalId)
-      ? institutionBallotWorkForProposal(bundle.world, stored.institutionId, institutionProposalId, player, { maxVoters: 48 })
-      : collectAutonomousInstitutionBallotWork(bundle.world, player, { maxInstitutions: 8, maxVotersPerInstitution: 32 })
+      ? institutionBallotWorkForProposal(bundle.world, stored.institutionId, institutionProposalId, people, { maxVoters: 48 })
+      : collectAutonomousInstitutionBallotWork(bundle.world, people, { maxInstitutions: 8, maxVotersPerInstitution: 32 })
         .find((entry) => regionKey(entry.institutionId) === regionKey(stored.institutionId)) || null)
     : null;
   const autonomousBallotActors = new Set(normalizeArray(autonomousBallotWork?.actors).map(regionKey).filter(Boolean));
@@ -15839,7 +15852,10 @@ export const runPostTurnInstitutionBallots = async ({
   const player = normalizeString(playerCountry) || normalizeString(bundle.game?.country);
   if (!player) return { attempted: 0, applied: 0, results: [] };
   const time = normalizeString(date) || normalizeString(bundle.game?.gameDate);
-  const work = collectAutonomousInstitutionBallotWork(bundle.world, player, { maxInstitutions: 4, maxVotersPerInstitution: 32, maxBallots: 48 });
+  // Every person's institutions, in this one request: after a skip the AI
+  // members voted only in the host's, and a guest's ballots stood open.
+  const people = humanCountriesWith(bundle.game, player);
+  const work = collectAutonomousInstitutionBallotWork(bundle.world, people, { maxInstitutions: 4, maxVotersPerInstitution: 32, maxBallots: 48 });
   const results = [];
   let applied = 0;
   let answered = false;
@@ -15865,6 +15881,7 @@ export const runPostTurnInstitutionBallots = async ({
         chatParticipants: [
           ...actors.map((name) => `- ${name} — AI-controlled: you act for it`),
           `- ${player} — HUMAN-controlled (the player): never speak or act for it`,
+          ...people.slice(1).map((name) => `- ${name} — HUMAN-controlled (another player): never speak or act for it; it answers for itself`),
         ].join("\n"),
         chatHistory: "(no conversation: this is a ballot-only pass)",
         CHAT_OPEN_POLLS: "",
@@ -15879,7 +15896,7 @@ export const runPostTurnInstitutionBallots = async ({
           politicalDecisionSet.text
             ? `[PRIVATE POLITICAL DECISION CONTEXT - ENGINE DATA]\n${politicalDecisionSet.text}\n\nUse each actor capsule only for that actor. Do not reveal one participant's private politics to another merely because this combined request contains both.`
             : "",
-          ...institutionIds.map((id) => institutionGovernancePrompt(bundle.world, id, player)),
+          ...institutionIds.map((id) => institutionGovernancePrompt(bundle.world, id, people)),
           "Return this turn's actions as JSON only.",
         ].filter(Boolean).join("\n\n"),
         variables,
@@ -15894,7 +15911,8 @@ export const runPostTurnInstitutionBallots = async ({
         try {
           const committed = await commitInstitutionalChatGovernanceBatch({
             institutionId,
-            playerCountry: player,
+            // Written for the person whose institution it is (its Council theirs).
+            playerCountry: work.find((item) => item.institutionId === institutionId)?.person || player,
             date: time,
             chatEvents: [],
             formalActions,
@@ -18612,7 +18630,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     // being saved.
     requests: createJumpRequests({
       segments: segmentCount,
-      reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(bundle.world, bundle.game?.country || "", { maxInstitutions: 1 }).length > 0,
+      reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(bundle.world, humanCountriesOf(bundle.game), { maxInstitutions: 1 }).length > 0,
     }),
     phases,
   };
@@ -18647,7 +18665,7 @@ export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } =
     state.requests = {
       ...createJumpRequests({
         segments: Math.max(1, context.segmentDays.length - state.nextSegment),
-        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, context.bundle?.game?.country || "", { maxInstitutions: 1 }).length > 0,
+        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, humanCountriesOf(context.bundle?.game), { maxInstitutions: 1 }).length > 0,
       }),
       used: spentSoFar.used,
       refused: spentSoFar.refused,
@@ -18688,7 +18706,7 @@ export const retryPendingChecksJump = async ({ onProgress, signal, withoutFailed
     state.requests = {
       ...createJumpRequests({
         segments: 1,
-        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, context.bundle?.game?.country || "", { maxInstitutions: 1 }).length > 0,
+        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, humanCountriesOf(context.bundle?.game), { maxInstitutions: 1 }).length > 0,
       }),
       used: spentSoFar.used,
       refused: spentSoFar.refused,
@@ -18790,7 +18808,7 @@ export const retryHeldPlayerEvents = async ({ keep = false, onEvents, onProgress
     state.requests = {
       ...createJumpRequests({
         segments: 1,
-        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, context.bundle?.game?.country || "", { maxInstitutions: 1 }).length > 0,
+        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, humanCountriesOf(context.bundle?.game), { maxInstitutions: 1 }).length > 0,
       }),
       used: spentSoFar.used,
       refused: spentSoFar.refused,

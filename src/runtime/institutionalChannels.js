@@ -15,6 +15,7 @@ import {
   resolveInstitutionRecord,
 } from "./institutions.js";
 import { askHostForInstitution, institutionsGoToHost } from "./sharedInstitutions.js";
+import { ownedByPerson } from "./humanPolities.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -103,7 +104,9 @@ export const materializeInstitutionalChannel = ({
   world = { ...world, institutions };
 
   const members = institutionChannelParticipants(world, canonicalId);
-  const base = existingByInstitution || normalizeChatEntry({
+  // A Council opened for a person is theirs (humanPolities.js ownedByPerson):
+  // the post-turn ballots of a guest's institution opened it as the host's.
+  const base = existingByInstitution || normalizeChatEntry(ownedByPerson({
     id: resolvedChannelId,
     institutionId: canonicalId,
     countries: members,
@@ -112,7 +115,7 @@ export const materializeInstitutionalChannel = ({
     source: "institution",
     status: institution.status === "dissolved" ? "closed" : "open",
     title: institution.name,
-  });
+  }, playerCountry));
   if (!base) throw new Error(`Could not materialize institutional channel for ${institution.name}.`);
 
   const channel = normalizeChatEntry({

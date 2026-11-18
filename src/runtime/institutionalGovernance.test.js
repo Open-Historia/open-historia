@@ -1050,3 +1050,92 @@ test("unambiguous amendment-id repair never weakens sponsor authority", async ()
   assert.match(result.rejected[0].reason, /not a current sponsor authorized to resolve amendment/i);
   assert.equal(result.world.institutions.byId.council.proposals["regional-connectivity"].amendments[0].status, "proposed");
 });
+
+// A shared game: "the player" was one name, the seat acting now, so the AI
+// could cast a guest's ballot, a ballot closed without a guest's vote, and
+// after a skip a guest's institutions were never settled (the gap audit of
+// 2026-11-18, D5a). `people` are every country humans play; the seat acting
+// is `playerCountry`. Single player passes no people and is as it was.
+const sharedVote = (world, polity, choice, { actor = "A", people = ["A", "D"], authority = "npc" } = {}) => castInstitutionProposalVote({
+  world, institutionId: "council", proposalId: "p1", polity, choice, date: "2000-01-05",
+  government: "Gov", playerCountry: actor, people, authority,
+});
+
+test("no model casts any person's ballot, and a seat casts only its own", () => {
+  const rule = { ...simpleRule, eligibleStatuses: ["member", "observer"] };
+  const { world } = open(rule);
+  assert.throws(() => sharedVote(world, "D", "yes"), /cannot cast the player's/i, "the guest's ballot is the guest's");
+  assert.throws(() => sharedVote(world, "D", "yes", { authority: "player" }), /cannot cast another polity/i, "and not the host's to cast");
+  assert.equal(sharedVote(world, "D", "no", { actor: "D", authority: "player" }).ballot.choice, "no");
+  assert.equal(sharedVote(world, "B", "yes").ballot.choice, "yes", "a government the AI plays still votes");
+  // Single player: D is the AI's.
+  assert.equal(vote(world, "D", "yes", "npc").ballot.choice, "yes");
+});
+
+test("a ballot waits for every person, not only the seat acting now", async () => {
+  const { institutionBallotSettlement } = await import("./institutionalGovernance.js");
+  let world = vote(open().world, "A", "yes").world;
+  world = vote(world, "C", "yes").world;
+  const settle = (people) => institutionBallotSettlement({ institution: world.institutions.byId.council, proposal: world.institutions.byId.council.proposals.p1, playerCountry: "A", people });
+  assert.deepEqual(settle(null), { close: true, reason: "decided" }, "single player: B is the AI's, and cannot change it");
+  assert.deepEqual(settle(["A", "B"]), { close: false, reason: "" }, "B is a person: it has not voted yet");
+});
+
+test("the Council's one request votes for no person at the table, whatever name the model gives it", async () => {
+  const { applyInstitutionalChatGovernanceBatch } = await import("./institutionalGovernance.js");
+  const { world } = open();
+  const result = applyInstitutionalChatGovernanceBatch({
+    world, chats: [], events: [], institutionId: "council", playerCountry: "A", people: ["A", "B Republic"], date: "2000-01-05",
+    formalActions: [
+      { type: "institution_vote", actorName: "B", proposalId: "p1", voteChoice: "yes" },
+      { type: "institution_vote", actorName: "B Republic", proposalId: "p1", voteChoice: "yes" },
+      { type: "institution_vote", actorName: "C Republic", proposalId: "p1", voteChoice: "no" },
+    ],
+  });
+  assert.deepEqual(result.rejected.map((entry) => entry.reason.match(/human-controlled/i)?.[0]), ["human-controlled", "human-controlled"]);
+  assert.deepEqual(Object.keys(result.world.institutions.byId.council.proposals.p1.voting.ballots), ["C"]);
+});
+
+test("the post-turn settlement closes a guest's ballot in an institution the host is not in, written for the guest", async () => {
+  const { settleInstitutionBallotsCore } = await import("./institutionalGovernance.js");
+  const { setHostingSharedGame } = await import("./humanPolities.js");
+  const base = makeWorld(simpleRule);
+  base.institutions.byId.council.members = base.institutions.byId.council.members.filter((member) => member.polity !== "A")
+    .map((member) => ({ ...member, status: "member" }));
+  let made = createInstitutionProposal({ world: base, institutionId: "council", date: "2000-01-01", proposal: { id: "p1", title: "Joint Program", type: "program", createdBy: "B" } });
+  made = transitionInstitutionProposal({ world: made.world, institutionId: "council", proposalId: "p1", status: "debate", date: "2000-01-02" });
+  made = transitionInstitutionProposal({ world: made.world, institutionId: "council", proposalId: "p1", status: "formalized", date: "2000-01-03" });
+  made = openInstitutionProposalVoting({ world: made.world, institutionId: "council", proposalId: "p1", date: "2000-01-04" });
+  const cast = (world, polity, authority) => castInstitutionProposalVote({ world, institutionId: "council", proposalId: "p1", polity, choice: "yes", date: "2000-01-05", playerCountry: authority === "player" ? polity : "A", people: ["A", "B"], authority }).world;
+  let world = cast(made.world, "B", "player");
+  world = cast(world, "C", "npc");
+  world.institutions.byId.council.proposals.p1.voting.asked = { D: 2 };
+  // Single player (the host's institutions alone) never reached it.
+  assert.equal(settleInstitutionBallotsCore({ world, playerCountry: "A", date: "2000-02-01" }).closed.length, 0);
+  setHostingSharedGame(true, { host: "A" });
+  try {
+    const settled = settleInstitutionBallotsCore({ world, chats: [], events: [], playerCountry: "A", people: ["A", "B"], date: "2000-02-01" });
+    assert.deepEqual(settled.closed.map((entry) => [entry.institutionId, entry.status]), [["council", "passed"]]);
+    const council = settled.chats.find((chat) => chat.institutionId === "council");
+    assert.equal(council?.player, "B", "its Council is the guest's, not the host's");
+  } finally {
+    setHostingSharedGame(false);
+  }
+});
+
+test("a passed vote never enrols a person who did not seek it, whichever seat is acting", () => {
+  let result = open(simpleRule, {
+    type: "accession",
+    consequences: [{ id: "admit-d", kind: "institution-membership", op: "join", polity: "D", status: "member" }],
+  });
+  result.world.institutions.byId.council.proposals.p1.createdBy = "B";
+  result.world.institutions.byId.council.proposals.p1.sponsorPolities = ["B"];
+  result.world.institutions.byId.council.proposals.p1.status = "passed";
+  const implement = (people) => applyInstitutionGovernanceCommand({
+    world: structuredClone(result.world), chats: [], institutionId: "council", playerCountry: "A", people, date: "2000-01-07",
+    command: { type: "implement", proposalId: "p1" },
+  });
+  assert.equal(implement(["A", "D"]).proposal.implementation.status, "blocked", "D is a person and never asked");
+  assert.match(implement(["A", "D"]).proposal.implementation.pending[0].blockedReason, /explicit player/i);
+  assert.equal(implement(null).proposal.implementation.status, "complete", "single player: D is the AI's");
+});

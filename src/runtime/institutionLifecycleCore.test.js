@@ -917,3 +917,126 @@ test("the invitation picker is given observers, marked with what they hold, and 
   assert.equal(institutionMayRequestMembership(institution, "Republic of Lithuania"), false);
   assert.equal(institutionMayRequestMembership(institution, "Russian Federation"), false);
 });
+
+// A shared game: the host's skip and a hearing's answer spared the acting seat
+// alone, so the AI could accept, apply or withdraw for a guest; an AI's
+// invitation of a guest opened no thread; and the model was told of one human
+// (the gap audit of 2026-11-18, D5b, D5c). `people` are every country humans
+// play; `playerCountry` the seat acting. Single player passes no people.
+const HOST = "Republic of Latvia";
+const GUEST = "Republic of Lithuania";
+const PEOPLE = [HOST, GUEST];
+
+test("no AI or native authority decides for any person, and a seat decides only for itself", async () => {
+  const { applyInstitutionLifecycleImpactBatchCore } = await import("./institutionLifecycleCore.js");
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: HOST, date: "2014-08-20",
+    command: { type: "found", founder: "Republic of Estonia", authority: "npc", name: "Northern Security Compact", minimumFoundingMembers: 1 },
+  });
+  const id = founded.institution.id;
+  // The skip, run for the host: it may invite the guest...
+  const invited = applyInstitutionLifecycleImpactBatchCore({
+    world: founded.world, playerCountry: HOST, people: PEOPLE, date: "2014-08-21",
+    ops: [{ op: "invite", actorPolity: "Republic of Estonia", institutionId: id, targetPolity: GUEST, requestedStatus: "member" }],
+  });
+  assert.equal(invited.rejected.length, 0);
+  const guestCase = Object.values(invited.world.institutions.byId[id].lifecycleCases).find((entry) => entry.polity === GUEST);
+  // ...but never answer for it, nor apply or withdraw in its name.
+  const refused = applyInstitutionLifecycleImpactBatchCore({
+    world: invited.world, playerCountry: HOST, people: PEOPLE, date: "2014-08-22",
+    ops: [
+      { op: "respond", actorPolity: GUEST, institutionId: id, caseId: guestCase.id, decision: "accept" },
+      { op: "apply", actorPolity: GUEST, institutionId: id, requestedStatus: "observer" },
+    ],
+  });
+  assert.equal(refused.applied.length, 0);
+  assert.ok(refused.rejected.every((entry) => /sovereign player/i.test(entry.reason)), JSON.stringify(refused.rejected));
+  // In single player the same answer is an AI government's to give.
+  const single = applyInstitutionLifecycleImpactBatchCore({
+    world: invited.world, playerCountry: HOST, date: "2014-08-22",
+    ops: [{ op: "respond", actorPolity: GUEST, institutionId: id, caseId: guestCase.id, decision: "reject" }],
+  });
+  assert.equal(single.applied.length, 1);
+  // A hearing's model answer: the same.
+  const { applyInstitutionLifecycleChatBatchCore } = await import("./institutionLifecycleCore.js");
+  const hearing = applyInstitutionLifecycleChatBatchCore({
+    world: invited.world, chats: [], events: [], playerCountry: HOST, people: PEOPLE, date: "2014-08-22", institutionId: id,
+    lifecycleActions: [{ actorName: GUEST, caseId: guestCase.id, decision: "accept" }],
+  });
+  assert.equal(hearing.applied.length, 0);
+  // The guest answers its own, with its own authority; the host cannot answer it with the player's.
+  const own = applyInstitutionLifecycleCommandCore({
+    world: invited.world, playerCountry: GUEST, people: PEOPLE, date: "2014-08-23",
+    command: { type: "respond", institutionId: id, caseId: guestCase.id, actorPolity: GUEST, decision: "reject", authority: "player" },
+  });
+  assert.equal(own.lifecycleCase.status, "rejected");
+  assert.throws(() => applyInstitutionLifecycleCommandCore({
+    world: invited.world, playerCountry: HOST, people: PEOPLE, date: "2014-08-23",
+    command: { type: "respond", institutionId: id, caseId: guestCase.id, actorPolity: GUEST, decision: "accept", authority: "player" },
+  }), /another sovereign government/);
+});
+
+test("an AI's invitation of a guest opens the guest's own thread, and the host's stays the host's", async () => {
+  const { applyInstitutionLifecycleImpactBatchCore } = await import("./institutionLifecycleCore.js");
+  const { setHostingSharedGame } = await import("./humanPolities.js");
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: HOST, date: "2014-08-20",
+    command: { type: "found", founder: "Republic of Estonia", authority: "npc", name: "Northern Security Compact", minimumFoundingMembers: 1 },
+  });
+  const invite = (target, people) => applyInstitutionLifecycleImpactBatchCore({
+    world: founded.world, playerCountry: HOST, people, date: "2014-08-21",
+    ops: [{ op: "invite", actorPolity: "Republic of Estonia", institutionId: founded.institution.id, targetPolity: target, requestedStatus: "member" }],
+  });
+  assert.equal(invite(GUEST, null).createdChats.length, 0, "single player: an invitation between AI governments is theirs");
+  setHostingSharedGame(true, { host: HOST });
+  try {
+    const [guests] = invite(GUEST, PEOPLE).createdChats;
+    assert.equal(guests?.player, GUEST, "the guest's own");
+    assert.deepEqual(guests.countries.map((entry) => entry.name), ["Republic of Estonia"]);
+    assert.equal(guests.messages[0].role, "leader");
+    const [hosts] = invite(HOST, PEOPLE).createdChats;
+    assert.equal(hosts.player, undefined, "a thread that names no owner is the host's");
+  } finally {
+    setHostingSharedGame(false);
+  }
+});
+
+test("a guest's accession hearing is built for the guest when another seat acts, and the model is told of every person", () => {
+  const founded = foundBaltic([]);
+  const institutionId = founded.institution.id;
+  const world = structuredClone(founded.world);
+  world.institutions.byId[institutionId] = {
+    ...world.institutions.byId[institutionId],
+    status: "active",
+    members: [
+      { polity: "Republic of Estonia", status: "member", role: "leader", sinceDate: "2014-08-20" },
+      { polity: GUEST, status: "member", role: "member", sinceDate: "2014-08-20" },
+    ],
+    leaders: ["Republic of Estonia"],
+  };
+  // The AI's application, written while the host acts: the guest, a member, sits at its hearing.
+  const applied = applyInstitutionLifecycleCommandCore({
+    world, chats: [], events: [], playerCountry: HOST, people: PEOPLE, date: "2014-09-05",
+    command: { type: "apply", institutionId, polity: "Republic of Poland", requestedStatus: "member", authority: "npc" },
+  });
+  assert.ok(applied.createdChat, "a hearing for the member who is a person");
+  assert.ok(applied.createdChat.countries.some((entry) => entry.name === GUEST));
+  const single = applyInstitutionLifecycleCommandCore({
+    world, chats: [], events: [], playerCountry: HOST, date: "2014-09-05",
+    command: { type: "apply", institutionId, polity: "Republic of Poland", requestedStatus: "member", authority: "npc" },
+  });
+  assert.equal(single.createdChat, null, "single player: the host is no member, and nothing of it is the host's");
+  // An invitation awaiting its answer, as a hearing's model is asked of it.
+  const invited = applyInstitutionLifecycleCommandCore({
+    world, chats: [], events: [], playerCountry: HOST, people: PEOPLE, date: "2014-09-05",
+    command: { type: "invite", institutionId, initiatedBy: "Republic of Estonia", polity: "Republic of Poland", requestedStatus: "member", authority: "npc" },
+  });
+  const context = buildInstitutionLifecycleDecisionContext(invited.world, {
+    institutionId, caseIds: [invited.lifecycleCase.id], actorPolities: ["Republic of Poland"], playerCountry: HOST, people: PEOPLE,
+  });
+  assert.match(context.text, new RegExp(`Human-controlled polities: ${HOST}, ${GUEST}\\.`));
+  const one = buildInstitutionLifecycleDecisionContext(invited.world, {
+    institutionId, caseIds: [invited.lifecycleCase.id], actorPolities: ["Republic of Poland"], playerCountry: HOST,
+  });
+  assert.match(one.text, new RegExp(`Human-controlled polity: ${HOST}\\.`));
+});

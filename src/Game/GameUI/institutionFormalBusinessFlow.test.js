@@ -83,7 +83,8 @@ test("gameplay separates opening debate from interactive native ballots and targ
   const source = read("../AI/gameplay.js");
   assert.match(source, /institutionDebateRequested = false/);
   assert.match(source, /formalBusinessInteractive = false/);
-  assert.match(source, /institutionBallotWorkForProposal\(bundle\.world, stored\.institutionId, institutionProposalId, player/);
+  // For the AI's governments alone: never a person's ballot (humanPolities.js humanCountriesWith).
+  assert.match(source, /institutionBallotWorkForProposal\(bundle\.world, stored\.institutionId, institutionProposalId, people/);
   assert.match(source, /interactiveInstitutionBallotDirective\(autonomousBallotWork\)/);
   assert.match(source, /do NOT lodge a duplicate and do NOT submit it for voting yet/);
 });

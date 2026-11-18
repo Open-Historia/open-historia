@@ -22,6 +22,7 @@ import {
   ensureInstitutionLifecycleNegotiationChatCore,
 } from "./institutionLifecycleCore.js";
 import { askHostForInstitution, institutionsGoToHost } from "./sharedInstitutions.js";
+import { humanCountriesWith } from "./humanPolities.js";
 
 export {
   advanceInstitutionLifecycleCore,
@@ -52,6 +53,8 @@ export const commitInstitutionLifecycleCommand = async ({
       chats: normalizeChats(chats),
       events: normalizeEvents(events),
       playerCountry: player,
+      // Who acts is the seat; no one decides for any other person.
+      people: humanCountriesWith(game, player),
       date: moment,
       command: { ...command, authority: command?.authority || "player" },
     });
@@ -126,6 +129,8 @@ export const commitInstitutionLifecycleChatBatch = async ({
       chats: nextChats,
       events: normalizeEvents(events),
       playerCountry: player,
+      // The model answers for the AI's governments alone: none of the people.
+      people: humanCountriesWith(game, player),
       date: moment,
       institutionId,
       lifecycleActions,
