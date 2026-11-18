@@ -19,7 +19,9 @@ test("while a game is shared, only its engine window writes it, or its scenario"
   assert.equal(refused({ scenarioId: "fault-lines" }), HOSTED_GAME_WRITE_REFUSED, "the map it is played on, in the Workshop");
   assert.equal(refused({ gameId: "another-game" }), "", "another game is not the shared one");
   assert.equal(refused({ scenarioId: "another-scenario" }), "");
-  assert.equal(refused({ gameId: "game-baltic", key: "advisor" }), "", "the host's own adviser stays the host screen's");
+  // The adviser's conversation too: the engine keeps it with each seat, and a screen's save of it is a request.
+  assert.equal(refused({ gameId: "game-baltic", key: "advisor" }), HOSTED_GAME_WRITE_REFUSED, "the host's screen writes no adviser beside the engine");
+  assert.equal(refused({ gameId: "game-baltic", key: "advisor" }, CREDENTIAL), "");
 });
 
 test("nothing is refused when no game is shared, and nothing is let through without a credential to match", () => {

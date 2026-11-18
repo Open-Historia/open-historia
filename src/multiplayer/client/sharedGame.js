@@ -42,6 +42,7 @@ import { describeClock, offsetClock, readSignalingClock } from "./clock.js";
 import { loadDeviceIdentity } from "../identity.js";
 import { parseInvite } from "../invite.js";
 import { HOST_MESSAGES, SHARED_GAME_VERSION } from "../game/messages.js";
+import { advisorChangesOf } from "../game/advisorChanges.js";
 
 const IDLE = Object.freeze({
   mode: "off", // off | opening | lobby | playing | ended
@@ -164,6 +165,22 @@ const ownWrite = ({ key, wanted, held }) => {
   // normalizer rounds out read as one the player changed.
   const before = asThePageSavesIt(key, held);
   const after = asThePageSavesIt(key, wanted);
+  // The advisor's conversation is the host's to keep with this seat
+  // (runtime/seatAdvisors.js): what the save changed is asked of the host
+  // (game/advisorChanges.js), and shown here at once until the host's next view
+  // of it; a refusal puts it back, and is said.
+  if (key === "advisor") {
+    const changes = advisorChangesOf(before, after);
+    if (!changes) return before;
+    owner.runtime.overlay("advisor", after);
+    void sharedRequest("advisor", changes).then((answer) => {
+      if (answer?.ok || current !== owner) return;
+      owner.runtime.dropOverlay("advisor");
+      logDebugEvent("shared game", `the host did not keep a change to the advisor's conversation: ${answer?.error || "no answer"}`, undefined, { problem: true });
+      notify(`Your advisor's conversation was not saved: ${answer?.error || "the host did not answer."}`);
+    });
+    return after;
+  }
   // A change no door takes is said, not passed for saved (seatWrites.js unroutedChanges).
   const unrouted = unroutedChanges(key, before, after);
   if (unrouted.length) {

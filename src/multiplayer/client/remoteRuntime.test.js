@@ -191,15 +191,14 @@ test("a save that repeats without end is stopped", async () => {
   assert.equal((await target.fetch("/api/runtime/json/actions?v=token", { method: "PUT", body: "[]" })).status, 200);
 });
 
-test("what is this device's own passes through: the advisor, the map's files, the library, other origins", async () => {
+test("what is this device's own passes through: the map's files, the library, other origins", async () => {
   startRemoteRuntime({ publish: () => {}, urlFor });
   network.length = 0;
-  await target.fetch("/api/runtime/json/advisor?v=token", { method: "PUT", body: "[]" });
   await target.fetch("/api/runtime/json/regionsGeojson?v=token");
   await target.fetch("/api/runtime/pmtiles/regions?v=token");
   await target.fetch("/api/library");
   await target.fetch("https://relay.example/x");
-  assert.equal(network.length, 5);
+  assert.equal(network.length, 4);
   // The map's files are read from this device's copy, checked against the host's map when it joined, and never
   // written while the game is shared: that screen alone would draw another world from then on.
   network.length = 0;
@@ -209,6 +208,42 @@ test("what is this device's own passes through: the advisor, the map's files, th
     assert.match((await answer.json()).error, /the map is the host's/);
   }
   assert.equal(network.length, 0, "nothing reached this device's own files");
+  stopRemoteRuntime();
+});
+
+test("the advisor's conversation is the host's: served from the view, a save shown at once until the host's next view of it", async () => {
+  // It was this device's own, kept in the stand-in game: lost with a new invite code or on another device.
+  const shownTo = [];
+  const saves = [];
+  const runtime = startRemoteRuntime({
+    publish: (entries) => shownTo.push(...entries),
+    urlFor,
+    onWrite: ({ key, wanted }) => {
+      saves.push(key);
+      runtime.overlay(key, wanted);
+      return wanted;
+    },
+  });
+  network.length = 0;
+  // Never this device's copy: before the first view a read waits for the host's.
+  const early = await target.fetch("/api/runtime/json/advisor?v=token");
+  assert.equal(early.status, 503);
+  const views = viewsFrom("e1");
+  runtime.apply(views.next({ ...GAME, advisor: [{ role: "user", text: "Kept by the host." }] }));
+  assert.deepEqual((await body(await target.fetch("/api/runtime/json/advisor?v=token"))).json, [{ role: "user", text: "Kept by the host." }]);
+  // A save goes to the hook, and is what the page reads until the host's next view of it.
+  const saved = [{ role: "user", text: "Kept by the host." }, { role: "user", text: "Asked now." }];
+  await target.fetch("/api/runtime/json/advisor?v=token", { method: "PUT", body: JSON.stringify(saved) });
+  assert.deepEqual(saves, ["advisor"]);
+  assert.deepEqual(runtime.held("advisor"), saved);
+  runtime.apply(views.next({ ...GAME, advisor: [...saved, { role: "advisor", text: "Answered." }] }));
+  assert.equal(runtime.held("advisor").length, 3, "the host's view replaces it");
+  // Refused: put back as the view has it, and the page is shown so.
+  runtime.overlay("advisor", []);
+  runtime.dropOverlay("advisor");
+  assert.equal(runtime.held("advisor").length, 3);
+  assert.ok(shownTo.some((entry) => entry.url === urlFor("advisor")));
+  assert.equal(network.length, 0, "nothing of it reached this device's own store");
   stopRemoteRuntime();
 });
 

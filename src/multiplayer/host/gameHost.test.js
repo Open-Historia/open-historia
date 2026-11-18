@@ -27,6 +27,8 @@ import { SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
 import { ownReplyAsked } from "../client/ownReplies.js";
 import { pendingSharedThread } from "../client/sharedThreads.js";
 import { sessionFromRecord } from "./sessionRecord.js";
+import { advisorChangesOf } from "../game/advisorChanges.js";
+import { advisorOfSeat } from "../../runtime/seatAdvisors.js";
 import { PAYER_GONE_MS } from "./roundPayers.js";
 import { carriedRequestOf } from "../../Game/AI/roundCarrier.js";
 import { createInstitutionDesk } from "./institutions.js";
@@ -39,8 +41,11 @@ const createClock = (start = 1_000_000) => {
   let t = start;
   let nextId = 1;
   const pending = new Map();
+  // Everything the host has under way settles: a turn of the event loop runs every microtask queued before it,
+  // and the ones those queue, so how many awaits a round's path has never decides what a test sees (twenty
+  // microtask turns stopped being enough as rounds came to do more). The host's own timers are this clock's.
   const flush = async () => {
-    for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    for (let i = 0; i < 3; i += 1) await new Promise((resolve) => setImmediate(resolve));
   };
   const schedule = (fn, ms, every) => {
     const id = nextId++;
@@ -86,6 +91,8 @@ const createStore = () => {
     intercepts: {},
     colors: {},
     flags: {},
+    // The host's own advisor conversation, every other seat's kept beside it (runtime/seatAdvisors.js).
+    advisor: [{ role: "user", text: "Riga asks its advisor." }],
   };
   const update = (key) => async (fn) => {
     const next = await fn(structuredClone(docs[key]));
@@ -104,6 +111,7 @@ const createStore = () => {
     updateChats: update("chat"),
     updateWorld: update("world"),
     updateGame: update("game"),
+    updateAdvisor: update("advisor"),
     // The world and the queue together, as one commit (and the event log with them).
     updateForces: async (fn) => {
       const next = await fn({ world: structuredClone(docs.world), actions: structuredClone(docs.actions), game: structuredClone(docs.game), events: structuredClone(docs.events) });
@@ -1337,6 +1345,44 @@ test("a Retry asks the host for the governments' answer to the player's last lin
   assert.deepEqual(s.ack(s.guest, id(8)).result, { answer: "own", line: "m-ru-2", governments: [ESTONIA] });
   await s.request(s.guest, { t: "reply", id: id(9), thread: thread().id, line: "m-ru-2", lines: [{ speaker: ESTONIA, text: "Narva stays ours." }] });
   assert.equal(s.ack(s.guest, id(9)).ok, true);
+});
+
+test("the advisor's conversation is the seat's: kept by the host, written by it alone, in that seat's view only", async () => {
+  // It lived in each guest's local stand-in, lost with a new invite code or on another device, and the host's file had
+  // two writers, its screen and its engine (the gap audit of 2026-11-18).
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  assert.deepEqual(s.shown(s.guest).advisor, [], "a guest's own, empty at first; never the host's");
+  assert.deepEqual(s.shown(s.hostPlayer).advisor, [{ role: "user", text: "Riga asks its advisor." }]);
+  // The guest's screen saves a line and its advisor's answer: what changed, asked of the host.
+  const asked = [{ role: "user", text: "Moscow asks." }, { role: "advisor", id: "reply-1", text: "Moscow is told." }];
+  const changes = advisorChangesOf([], asked);
+  await s.request(s.guest, { t: "advisor", id: id(2), ...changes });
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  assert.deepEqual(s.shown(s.guest).advisor.map((entry) => entry.text), ["Moscow asks.", "Moscow is told."]);
+  assert.deepEqual(s.shown(s.hostPlayer).advisor, [{ role: "user", text: "Riga asks its advisor." }], "the host's is as it was");
+  assert.equal(JSON.stringify(s.to(s.hostPlayer, "view")).includes("Moscow asks."), false, "and no view of the host's carries the guest's");
+  // The host's own screen saves through the same door: the file itself is the host's conversation.
+  const hostHad = s.shown(s.hostPlayer).advisor;
+  await s.request(s.hostPlayer, { t: "advisor", id: id(3), ...advisorChangesOf(hostHad, [...hostHad, { role: "user", text: "Riga again." }]) });
+  assert.deepEqual(advisorOfSeat(s.store.docs.advisor, LATVIA, { gameCountry: LATVIA }).map((entry) => entry.text), ["Riga asks its advisor.", "Riga again."]);
+  // The same device on a new connection (another invite code, a reconnect) is sent it whole.
+  const again = { id: "p-guest-2", device: "device-guest", name: "Guest" };
+  s.host.leave(s.guest);
+  s.host.join(again);
+  await s.clock.flush();
+  assert.deepEqual(s.shown(again).advisor.map((entry) => entry.text), ["Moscow asks.", "Moscow is told."]);
+  // What does not hold is refused with the reason, and nothing is written.
+  await s.request(again, { t: "advisor", id: id(4), threads: [{ thread: "advisor-nobody-1", keep: 0, messages: [{ role: "user", text: "Hello?" }], clear: false }] });
+  assert.match(s.ack(again, id(4)).error, /unknown Advisor conversation/);
+  // A seat let go takes its player's counsel with it: the next player of that country starts with none.
+  s.host.control.kick(RUSSIA);
+  await s.clock.flush();
+  assert.deepEqual(advisorOfSeat(s.store.docs.advisor, RUSSIA, { gameCountry: LATVIA }), []);
+  assert.deepEqual(advisorOfSeat(s.store.docs.advisor, LATVIA, { gameCountry: LATVIA }).length, 2);
 });
 
 test("an order keeps the id its screen gave it: queued once, never another's, given other words or withdrawn by its owner", async () => {

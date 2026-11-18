@@ -9,6 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { SEAT_KEYED_WORLD_RECORDS, formerNamesOf, groundHeldBy, seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
+import { advisorOfSeat, withSeatAdvisor } from "../../runtime/seatAdvisors.js";
 
 const BURGHERS = "The Free Townsmen of Gullhaven";
 const HILL = "Hill folk";
@@ -93,6 +94,12 @@ test("every record the game keeps for a seat follows it, its agents' traffic too
   // The host's own table is the file's top, and follows game.country without moving.
   const host = withSeatMoved({ intercepts: { France: { exchanges: [] } } }, { from: HILL, to: "Hill Kingdom", host: true });
   assert.deepEqual(host.intercepts, { France: { exchanges: [] } });
+  // And its advisor's conversation (runtime/seatAdvisors.js); the host's is the file itself, which follows game.country.
+  const counsel = withSeatAdvisor([{ role: "user", text: "France asks." }], HILL, [{ role: "user", text: "The hills ask." }]);
+  const followed = withSeatMoved({ advisor: counsel }, { from: HILL, to: "Hill Kingdom", host: false });
+  assert.deepEqual(advisorOfSeat(followed.advisor, "Hill Kingdom").map((entry) => entry.text), ["The hills ask."]);
+  assert.deepEqual(advisorOfSeat(followed.advisor, HILL), []);
+  assert.equal(withSeatMoved({ advisor: counsel }, { from: HILL, to: "Hill Kingdom", host: true }).advisor, counsel);
 });
 
 // A founder played its new country with none of its army: the formations, their standing orders and the strikes it
@@ -230,4 +237,10 @@ test("a seat let go takes its person's own with it, and leaves its government's 
   assert.deepEqual(out.world.seatBoards[HILL], [{ id: "p" }], "the government's board stays");
   assert.equal(out.world.seatSeals[HILL], "a".repeat(64), "and its service's seal");
   assert.deepEqual(out.chats.map((chat) => chat.status ?? "open"), ["closed", "closed", "open"], "its letters with people closed; with the AI's governments, the state's");
+  // Its player's counsel goes with them: the next player of the country starts their own.
+  const counsel = withSeatAdvisor(withSeatAdvisor([{ role: "user", text: "Host asks." }], HILL, [{ role: "user", text: "The hills ask." }]), BURGHERS, [{ role: "user", text: "Burghers ask." }]);
+  const advisor = withSeatLetGo({ advisor: counsel }, { country: HILL, people: [HILL, BURGHERS] }).advisor;
+  assert.deepEqual(advisorOfSeat(advisor, HILL), []);
+  assert.deepEqual(advisorOfSeat(advisor, BURGHERS).map((entry) => entry.text), ["Burghers ask."]);
+  assert.deepEqual(advisorOfSeat(advisor, "").map((entry) => entry.text), ["Host asks."]);
 });

@@ -24,6 +24,7 @@
 
 import { interceptTableOf, withInterceptTable } from "../../runtime/spycraft.js";
 import { AIR_ARM_UNIT, airArmId } from "../../runtime/fronts/airStrike.js";
+import { withSeatAdvisor, withSeatAdvisorMoved } from "../../runtime/seatAdvisors.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const same = (left, right) => Boolean(clean(left)) && clean(left).toLocaleLowerCase() === clean(right).toLocaleLowerCase();
@@ -132,14 +133,15 @@ const revertMoved = (action, from, to) => (isRecord(action?.unitRevert?.restore)
 // What was the old seat's goes with it: its queued orders, every record the
 // world keeps for it (SEAT_KEYED_WORLD_RECORDS), what its government commands
 // (SEAT_COMMANDED_ROWS) and what it built on ground now the new country's
-// (SEAT_GROUND_ROWS, `onNewGround`), the threads it speaks in, and its agents'
+// (SEAT_GROUND_ROWS, `onNewGround`), the threads it speaks in, its agents'
 // traffic (a guest's table of the intercepts file, runtime/spycraft.js; the
-// host's table is the game country's, which follows game.country). What
-// concerns the country and not the seat (its treaties, threads others opened
-// with it) stays the country's. What it already did stays done by it: when the
-// host's seat moves, the host's orders that named no owner are written down as
-// the old name's.
-export const withSeatMoved = ({ actions, world, chats, intercepts }, { from, to, host = false, onNewGround = () => false }) => ({
+// host's table is the game country's, which follows game.country), and its
+// advisor's conversation (a guest's of the advisor file, runtime/seatAdvisors.js;
+// the host's is the file, which follows game.country too). What concerns the
+// country and not the seat (its treaties, threads others opened with it) stays
+// the country's. What it already did stays done by it: when the host's seat
+// moves, the host's orders that named no owner are written down as the old name's.
+export const withSeatMoved = ({ actions, world, chats, intercepts, advisor }, { from, to, host = false, onNewGround = () => false }) => ({
   actions: list(actions).map((action) => {
     const planned = clean(action?.status || "planned") === "planned";
     if (planned) return same(action?.ownerCode, from) ? revertMoved({ ...action, ownerCode: to }, from, to) : action;
@@ -161,6 +163,7 @@ export const withSeatMoved = ({ actions, world, chats, intercepts }, { from, to,
     : world,
   chats: list(chats).map((chat) => (same(chat?.player, from) ? { ...chat, player: to } : chat)),
   intercepts: host || !isRecord(intercepts) ? intercepts : withInterceptTable(withInterceptTable(intercepts, from, {}), to, interceptTableOf(intercepts, from)),
+  advisor: host || !Array.isArray(advisor) ? advisor : withSeatAdvisorMoved(advisor, from, to),
 });
 
 // A seat let go (the host takes the country back, or lets its player change
@@ -168,14 +171,15 @@ export const withSeatMoved = ({ actions, world, chats, intercepts }, { from, to,
 // what is its own (its board, its agents and what they brought back, its seal)
 // for whoever plays it next. The person's own: the orders they queued and had
 // not seen carried out (withdrawn, as their own "unorder" would), their
-// standing goal, the advice a round brought them, and their conversations
+// standing goal, the advice a round brought them, their advisor's conversation
+// (the person's own counsel, runtime/seatAdvisors.js), and their conversations
 // with other people, which are closed. Everything was keyed by the country, so
 // a newcomer read the last player's private letters and inherited their orders,
 // which the next skip carried out in the newcomer's name (the gap audit of
 // 2026-11-18). `people`: the countries people play, the let-go one included.
 // Returns the documents changed and the orders withdrawn (for the map's undo).
 export const PERSONAL_SEAT_RECORDS = Object.freeze(["playerGoals", "seatAdvice"]);
-export const withSeatLetGo = ({ actions, world, chats }, { country, people = [] } = {}) => {
+export const withSeatLetGo = ({ actions, world, chats, advisor }, { country, people = [] } = {}) => {
   const others = list(people).filter((name) => !same(name, country));
   const withdrawn = list(actions).filter((action) => same(action?.ownerCode, country) && clean(action?.status || "planned") === "planned");
   const between = (chat) => {
@@ -199,6 +203,8 @@ export const withSeatLetGo = ({ actions, world, chats }, { country, people = [] 
     chats: chats === undefined ? undefined : list(chats).map((chat) => (between(chat) && !list(chat?.retiredFor).some((name) => same(name, country))
       ? { ...chat, status: "closed", retiredFor: [...list(chat?.retiredFor), clean(country)] }
       : chat)),
+    // (A seat let go is never the host's, whose conversation is the file itself.)
+    advisor: Array.isArray(advisor) ? withSeatAdvisor(advisor, country, []) : advisor,
   };
 };
 

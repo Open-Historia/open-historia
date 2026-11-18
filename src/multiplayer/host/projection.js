@@ -49,6 +49,7 @@ import { formerNamesOf } from "./foundings.js";
 import { settleBoards } from "./seatBoards.js";
 import { interceptTableOf } from "../../runtime/spycraft.js";
 import { sealOf } from "../../runtime/spySeal.js";
+import { advisorOfSeat } from "../../runtime/seatAdvisors.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLocaleLowerCase();
@@ -593,7 +594,7 @@ export const projectActions = (actions, viewer, { host = "" } = {}) => list(acti
   (clean(action?.ownerCode) ? same(action.ownerCode, viewer) : same(host, viewer)));
 
 // Every document of one player's view, in the single-player shape.
-export const projectForViewer = ({ world, game, events, chat, actions, intercepts, colors, flags } = {}, viewer) => {
+export const projectForViewer = ({ world, game, events, chat, actions, intercepts, colors, flags, advisor } = {}, viewer) => {
   const host = clean(game?.country);
   const seat = clean(viewer);
   if (!seat) throw new TypeError("projectForViewer needs the viewer's polity.");
@@ -616,5 +617,9 @@ export const projectForViewer = ({ world, game, events, chat, actions, intercept
     intercepts: copy(interceptTableOf(isRecord(intercepts) ? intercepts : {}, seat, { gameCountry: host })),
     colors: copy(isRecord(colors) ? colors : {}),
     flags: copy(isRecord(flags) ? flags : {}),
+    // The viewer's own advisor conversation, which the host keeps with its seat
+    // (runtime/seatAdvisors.js): never another's. None when the host could not
+    // read the file, so the page shows no empty conversation in its place.
+    advisor: Array.isArray(advisor) ? copy(advisorOfSeat(advisor, seat, { gameCountry: host })) : null,
   };
 };

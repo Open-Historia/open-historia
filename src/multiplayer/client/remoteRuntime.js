@@ -18,8 +18,11 @@
 //
 // What stays this device's own: the map's files (from a local copy of the same
 // scenario: the stand-in game this device opens for the shared one), the
-// library, the settings, and the advisor's conversation, which is the player's
-// private exchange with their own adviser on their own AI key.
+// library and the settings. The advisor's conversation is the player's private
+// exchange with their own adviser on their own AI key, and the host keeps it
+// with their seat (runtime/seatAdvisors.js), so it is there on any device and
+// after a new invite code: it comes in the view, and a save of it is asked of
+// the host (client/sharedGame.js, game/advisorChanges.js).
 //
 // Installed once at start-up in every build, after the website's own /api
 // router (runtime/web/router.js) so it sees each request first. It does nothing
@@ -32,7 +35,7 @@ import { EMPTY_DIGEST, digestDoc } from "../protocol/digest.js";
 // game itself: a screen that asks for one before the first view arrives waits
 // for it.
 export { VIEW_KEYS };
-const REQUIRED_KEYS = new Set(["world", "game", "events", "chat", "actions"]);
+const REQUIRED_KEYS = new Set(["world", "game", "events", "chat", "actions", "advisor"]);
 const VIEW_KEY_SET = new Set(VIEW_KEYS);
 // The rollback archive is the host's; a player has none.
 const HOST_ONLY_KEYS = new Set(["snapshots", "snapshotsIndex"]);
@@ -57,6 +60,9 @@ const isRecord = (value) => Boolean(value) && typeof value === "object" && !Arra
 // A document as the page holds it: the host's view, with this device's own
 // fields laid over it.
 const heldDoc = (session, key) => {
+  // A save this page has asked the host for, shown until the host's next view
+  // of that document (overlay).
+  if (session.overlays.has(key)) return session.overlays.get(key);
   const view = session.docs.get(key);
   const own = session.patches.get(key);
   return own && isRecord(view) ? { ...view, ...own } : view;
@@ -190,7 +196,7 @@ export const installRemoteRuntime = ({ target = globalThis, waitMs = 20_000 } = 
 export const startRemoteRuntime = ({ publish, urlFor, onWrite } = {}) => {
   // `epoch` and `rev`: the view held now, by the host's name and number for
   // it; `sums`: what each held document adds up to (protocol/digest.js).
-  const session = { docs: new Map(), patches: new Map(), saves: new Map(), epoch: "", rev: 0, sums: new Map(), waiters: new Set(), publish, urlFor, onWrite };
+  const session = { docs: new Map(), patches: new Map(), overlays: new Map(), saves: new Map(), epoch: "", rev: 0, sums: new Map(), waiters: new Set(), publish, urlFor, onWrite };
   current = session;
   const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
   // Whether a view may be shown: { ok: true, sums } with each document's
@@ -234,6 +240,7 @@ export const startRemoteRuntime = ({ publish, urlFor, onWrite } = {}) => {
         const value = has(docs, key) ? docs[key] : null;
         if (value === null) session.docs.delete(key);
         else session.docs.set(key, value);
+        session.overlays.delete(key);
         arrived.push(key);
       }
       session.epoch = view.epoch;
@@ -257,6 +264,19 @@ export const startRemoteRuntime = ({ publish, urlFor, onWrite } = {}) => {
       if (Object.keys(own).length) session.patches.set(key, own);
       else session.patches.delete(key);
       if (!quiet) publishHeld(session, [key]);
+    },
+    // A whole document as this page has just saved it and asked the host for
+    // (a document the host keeps for this seat: the advisor's conversation),
+    // shown until the host's next view of it arrives, or `dropOverlay` when
+    // the host refused it. The view, not this, is what the host holds.
+    overlay(key, value, { quiet = true } = {}) {
+      if (current !== session || !VIEW_KEY_SET.has(key)) return;
+      session.overlays.set(key, value);
+      if (!quiet) publishHeld(session, [key]);
+    },
+    dropOverlay(key) {
+      if (current !== session || !session.overlays.delete(key)) return;
+      publishHeld(session, [key]);
     },
     // A document as the page holds it now.
     held: (key) => (current === session ? heldDoc(session, key) : undefined),

@@ -83,8 +83,11 @@ export const SHARED_GAME_VERSION = "15";
 
 // The documents a player's view holds: the game itself first (a screen that
 // asks for one before the first view arrives waits for it), then the three a
-// page may fall back to its own copy of until the host sends them.
-export const VIEW_KEYS = Object.freeze(["world", "game", "events", "chat", "actions", "intercepts", "colors", "flags"]);
+// page may fall back to its own copy of until the host sends them, then the
+// player's advisor conversation, which the host keeps with the seat
+// (runtime/seatAdvisors.js): never this device's own copy, which a new invite
+// code or another device lost.
+export const VIEW_KEYS = Object.freeze(["world", "game", "events", "chat", "actions", "intercepts", "colors", "flags", "advisor"]);
 // A view's connection, as the host names it.
 const EPOCH = str(24, { min: 1, pattern: /^[0-9a-z]+$/ });
 const REV = int(0, 2 ** 40);
@@ -103,6 +106,15 @@ export const THREAD_MEMBERS_MAX = 12;
 // long one government's words may be, and how many lines one reply may hold.
 export const REPLY_MAX_CHARS = 6000;
 export const REPLY_MAX_LINES = 8;
+
+// What one "advisor" request may carry (game/advisorChanges.js): the
+// conversations it changes, the new lines of each, the conversation's people
+// (its ministers, characters, group chats and the chief's profile), and the
+// receipts of the host's answers to the advisor's proposals.
+export const ADVISOR_THREADS_MAX = 8;
+export const ADVISOR_LINES_MAX = 64;
+export const ADVISOR_RECORDS_MAX = 200;
+export const ADVISOR_RECEIPTS_MAX = 32;
 
 // What of the institutions a player's screen may ask the host for: the game's
 // own institution functions, run on the host for the asker's country
@@ -335,6 +347,15 @@ export const PLAYER_REQUESTS = Object.freeze({
     // createPlayerPollEvent): its question and its choices.
     poll: obj({ question: str(POLL_QUESTION_MAX_CHARS, { min: 1 }), options: list(str(POLL_LABEL_MAX_CHARS, { min: 1 }), POLL_OPTION_LIMIT) }),
   }, ["fromDraft", "demand", "poll"]),
+  // The player's own advisor conversation, changed (game/advisorChanges.js):
+  // what its save changed, never the conversation whole. The host keeps it
+  // with the seat (runtime/seatAdvisors.js) and is its one writer.
+  advisor: obj({
+    t: literal("advisor"), id: REQUEST_ID,
+    records: list(json(6), ADVISOR_RECORDS_MAX),
+    threads: list(obj({ thread: str(100, { min: 1 }), keep: int(0, 1_000_000), messages: list(json(10), ADVISOR_LINES_MAX), clear: bool() }), ADVISOR_THREADS_MAX),
+    receipts: list(obj({ thread: str(100, { min: 1 }), message: str(140, { min: 1 }), proposal: str(16, { min: 1 }), receipt: json(3) }), ADVISOR_RECEIPTS_MAX),
+  }, ["records", "threads", "receipts"]),
   // A Retry from an error bubble: the governments at a thread answer the
   // asker's own last line there again, which is still unanswered. No line is
   // sent; the ack says who writes the answer, as "say"'s does.

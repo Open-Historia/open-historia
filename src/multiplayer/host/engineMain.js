@@ -20,12 +20,14 @@ import { setPolityFlag } from "../../runtime/polityFlags.js";
 import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
 import {
   mutateActionsState,
+  mutateAdvisorState,
   mutateCanonicalTurnState,
   mutateChatsState,
   mutateGameData,
   mutateInterceptsState,
   mutateSharedSessionState,
   mutateWorldState,
+  readAdvisorMessages,
   readChatsState,
   readGameStateBundle,
   readWorldState,
@@ -115,11 +117,14 @@ const captureConsole = () => {
 // writers (gameState.js mutate*), so a request never races a turn.
 const store = {
   read: async () => {
-    const [bundle, intercepts, colors, flags] = await Promise.all([
+    const [bundle, intercepts, colors, flags, advisor] = await Promise.all([
       readGameStateBundle({ force: true }),
       readJson(JSON_URLS.intercepts, { defaultValue: {}, force: true }),
       readJson(JSON_URLS.colors, { defaultValue: {}, force: true }),
       readJson(JSON_URLS.flags, { defaultValue: {}, force: true }),
+      // Every seat's advisor conversation (runtime/seatAdvisors.js); null when
+      // it could not be read, which no view shows as an empty one.
+      readAdvisorMessages({ force: true }).catch(() => null),
     ]);
     return {
       world: bundle.world,
@@ -130,6 +135,7 @@ const store = {
       intercepts,
       colors,
       flags,
+      advisor,
     };
   },
   updateActions: (fn) => mutateActionsState(fn),
@@ -138,6 +144,10 @@ const store = {
   updateGame: (fn) => mutateGameData(fn),
   // The agents' traffic, one table per spymaster (runtime/spycraft.js).
   updateIntercepts: (fn) => mutateInterceptsState(fn),
+  // Every seat's advisor conversation, the host's own the file itself
+  // (runtime/seatAdvisors.js): this window is its one writer while the game
+  // is shared, as of the rest (server/oneWriter.js).
+  updateAdvisor: (fn) => mutateAdvisorState(fn),
   // The world and the order queue changed together or not at all (a formation
   // and the order that tells the skip of it; a peace and the event that tells
   // it, host/landings.js): one commit, as a turn's own is.

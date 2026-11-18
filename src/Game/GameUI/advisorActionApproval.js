@@ -60,7 +60,8 @@ const changeQueue = async ({ sharedGame, readActions, requestFromHost, mutateAct
 
 // Identity and recipient authority are re-read from persisted Advisor state
 // before both approvals and cancellations. The displayed card is not authority.
-// The Advisor conversation is the device's own, in a shared game too.
+// In a shared game the Advisor conversation is the seat's, which the host keeps
+// and the view holds (runtime/seatAdvisors.js): read the same way.
 const readReviewedProposal = async ({
   threadId, messageId, proposalId, readAdvisorMessages,
 }) => {

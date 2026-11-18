@@ -62,6 +62,8 @@ import { featureRefusal } from "./featureGates.js";
 import { regionOwnerNow } from "../../runtime/gmAnnex.js";
 import { landingNotice, tellLandings } from "./landings.js";
 import { votesAwaited } from "./tableTurn.js";
+import { withAdvisorChanges } from "../game/advisorChanges.js";
+import { advisorOfSeat, withSeatAdvisor } from "../../runtime/seatAdvisors.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
 // The answers a device's requests were given, kept so that one sent again (the
@@ -731,6 +733,10 @@ export const createGameHost = ({
       await store.updateWorld((world) => withSeatMoved({ world }, { ...move, onNewGround: groundHeldBy(chart, move.to) }).world);
       await store.updateChats((chats) => withSeatMoved({ chats }, move).chats);
       await store.updateIntercepts?.((intercepts) => withSeatMoved({ intercepts }, move).intercepts);
+      await store.updateAdvisor?.((advisor) => {
+        const moved = withSeatMoved({ advisor }, move).advisor;
+        return moved === advisor ? null : moved;
+      });
       log("info", move.why === "founded" ? "a seat followed its people to the country they founded" : "a seat followed its country to its new name", { from: move.from, to: move.to });
       // Told to the player whose seat moved; everyone sees the lobby change.
       const device = seats.list().find((seat) => same(seat.country, move.to))?.device;
@@ -780,8 +786,9 @@ export const createGameHost = ({
 
   // A seat let go (host/foundings.js withSeatLetGo): the person's own queued
   // orders withdrawn, and what each moved on the map undone in the same write,
-  // as their own "unorder" would; their goal and advice cleared; their
-  // conversations with other people closed. `people`: who played what before.
+  // as their own "unorder" would; their goal, advice and advisor's
+  // conversation cleared; their conversations with other people closed.
+  // `people`: who played what before.
   const seatLetGo = async (country, people) => {
     await store.updateForces(({ world, actions }) => {
       const out = withSeatLetGo({ actions, world }, { country, people });
@@ -794,7 +801,11 @@ export const createGameHost = ({
       const out = withSeatLetGo({ chats }, { country, people });
       return JSON.stringify(out.chats) === JSON.stringify(list(chats)) ? null : out.chats;
     });
-    log("info", "a seat was let go: its player's own orders, goal, advice and conversations with people went with them", { country });
+    await store.updateAdvisor?.((advisor) => {
+      const out = withSeatLetGo({ advisor }, { country, people }).advisor;
+      return JSON.stringify(out) === JSON.stringify(advisor) ? null : out;
+    });
+    log("info", "a seat was let go: its player's own orders, goal, advice, advisor and conversations with people went with them", { country });
   };
   // Outside an entry (a host control): one of its own, in the queue's order.
   const letSeatGo = (country, people) => queue.run("seat-let-go", () => seatLetGo(country, people))
@@ -1347,6 +1358,27 @@ export const createGameHost = ({
       tellEveryone(landed);
       round.touch(seat.country);
       return refusal;
+    },
+    // The seat's own advisor conversation, changed as its screen saved it
+    // (game/advisorChanges.js): kept with the seat (runtime/seatAdvisors.js),
+    // the host's own as the file itself, and written here alone. It lived in
+    // each guest's local stand-in, lost with a new invite code or on another
+    // device, and the host's file had two writers: its screen and this engine,
+    // which flags each new paper in it (the gap audit of 2026-11-18). It is
+    // private counsel, so it may change at any time, and is in no one's view
+    // but the seat's.
+    advisor: async (connection, { records, threads, receipts }, seat) => {
+      if (typeof store.updateAdvisor !== "function") return "Your advisor's conversation is not kept here.";
+      try {
+        await store.updateAdvisor((file) => {
+          const own = advisorOfSeat(file, seat.country, { gameCountry: hostCountry });
+          const next = withAdvisorChanges(own, { records, threads, receipts });
+          return JSON.stringify(next) === JSON.stringify(own) ? null : withSeatAdvisor(file, seat.country, next, { gameCountry: hostCountry });
+        });
+      } catch (failure) {
+        return clean(failure?.message || failure).slice(0, 300) || "Your advisor's conversation could not be saved.";
+      }
+      return "";
     },
     goal: async (connection, { text }, seat) => {
       // The game's own rule for a standing goal (runtime/playerGoal.js).

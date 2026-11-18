@@ -11,9 +11,12 @@
 // network. Before, only a switch of the open game was refused, and a reloaded
 // host page wrote the shared game beside its engine, each from what it had read.
 //
-// One document stays the host screen's: the adviser's conversation, the host's
-// private exchange with its own adviser, which the engine never writes
-// (src/multiplayer/client/remoteRuntime.js).
+// No document stays the host screen's. The adviser's conversation did, and had
+// two writers: the screen saved it, and the engine flagged each new paper in
+// it. It is kept with each seat by the engine now, which every screen's save of
+// it is asked of (src/runtime/seatAdvisors.js, src/multiplayer/client/
+// remoteRuntime.js), so a screen writing it beside the engine is refused like
+// any other write. The set stays for a document that is ever a screen's alone.
 //
 // Pure, so it is tested without a server.
 
@@ -21,7 +24,7 @@ import crypto from "node:crypto";
 
 export const ENGINE_CREDENTIAL_HEADER = "x-oh-engine";
 export const HOSTED_GAME_WRITE_REFUSED = "This game is being shared: while it is, only the shared game itself changes it. Stop sharing to change it here.";
-export const SCREEN_OWN_DOCUMENTS = Object.freeze(new Set(["advisor"]));
+export const SCREEN_OWN_DOCUMENTS = Object.freeze(new Set([]));
 
 // Constant-time, so the credential cannot be guessed a character at a time.
 const matches = (offered, credential) => {
