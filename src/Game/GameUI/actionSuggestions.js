@@ -62,7 +62,6 @@ export const seatAdviceTopic = (world, country, round) => {
         // The advisor's name and office are the AI's, in the world's language.
         title: name ? [name, office].filter(Boolean).join(", ") : "Your advisor",
         description: "Orders your advisor would have you give this round.",
-        advice: true,
         actions: suggestions.map((text, index) => ({
             id: `advice-${tag}-${number}-${index + 1}`,
             kind: "action",
