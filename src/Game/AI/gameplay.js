@@ -201,6 +201,7 @@ import { openingSpeaker } from "./chatSpeaker.js";
 import { sharedDocumentNoteOf, sharedLetterDropped, sharedLetterOf, sharedNoteOf } from "./sharedLetters.js";
 import { advisorOfSeat, withSeatAdvisor } from "../../runtime/seatAdvisors.js";
 import { tableSeats } from "./tableSeats.js";
+import { spiesOnPlayersOf, whoSpiesBlock } from "./spiesOnPlayers.js";
 import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { OUTPUT_LIMIT_MESSAGE, REASONING_ONLY_MESSAGE, REASONING_ONLY_NOTE, UNPARSEABLE_STRUCTURED_TEXT_MESSAGE, isUnreachableError } from "./providerErrors.js";
 import { isCancelAllAbort } from "./aiRequestControl.js";
@@ -2955,8 +2956,8 @@ const WHAT_CHATS_BIND_HEADING = "[What Chats Bind]";
 const WHAT_CHATS_BIND = "What earlier chats agreed, promised, threatened or declared, and what still binds. Carry each through when its time comes: an agreed meeting, withdrawal or hand-over happens on its date, or an event says why it did not; a declared intention is acted on or visibly dropped; a credible threat is answered by the power it threatens, before its deadline. Where a summary and the exact words differ, follow the words, and a later pleasantry does not cancel an earlier threat or promise. A proposal nobody accepted is not an agreement.";
 const TAKING_GROUND_BLOCK = `[Taking Ground]
 An army may take a region in this period wherever what has led up to it makes that likely, or where history took it at this time and nothing in this game has turned that aside. Tell it in the event that takes it, and put the region in the taker's hands on that event: a regionControlOps control entry, basis occupation, the region by name. Move the formation that took it there in the same event when it has one on the map. A region is taken only where enough of the taker's troops stand near it, more for a larger region: where too few do, move them up first, in an earlier event, or the region stays where it was. From that event's date the map follows: the taker's nearest troops stand in the region, and the other side's fall back out of it. Only that entry moves the map: a region an event says was taken, with no entry for it, stays with its holder.`;
-const whoSpiesOnThePlayerBlock = (spiedOn) => `[Who Spies on the Player]
-Write spiesOnPlayer: the polities, by exact name and comma-separated, that would really try to place an agent in ${spiedOn} this period. Choose them as the world stands: enemies and rivals, powers with a real stake in ${spiedOn}'s affairs, a patron keeping watch on a client. A polity with no reason to, no reach, or no intelligence service to speak of sends nobody. An empty string when none would.`;
+// [Who Spies on the Player], or with several people playing [Who Spies on the
+// Players], one line each (spiesOnPlayers.js whoSpiesBlock).
 
 // ---- A time skip's standing rules ---------------------------------------------
 // Everything a skip is told about how its answer is recorded that no turn of a
@@ -3006,7 +3007,7 @@ const buildJumpStaticRules = async (variables = {}) => {
     `${WHAT_CHATS_BIND_HEADING}\n${WHAT_CHATS_BIND} A thread's standing memory comes with its latest words below.`,
     // (Telling only the transports the Wars feature has on: FRONT_ORDER_LINES_BLOCK with all of them.)
     frontsOn() ? frontOrderLinesBlock(transportMediaOn()) : "",
-    espionage && spiedOn ? whoSpiesOnThePlayerBlock(spiedOn) : "",
+    espionage && spiedOn ? whoSpiesBlock(humanCountriesOf(game)) : "",
     espionage ? buildSpyOrdersDirective(playerName) : "",
   ].filter(Boolean).join("\n\n");
 };
@@ -3230,15 +3231,31 @@ ${pending}`);
   if (board) blocks.push(board);
 
   if (isActiveFeatureEnabled("espionage")) {
+    // Every player's service: its agents, the agents inside it and what it has
+    // read (spycraft.js espionageBrief), each from its own table of the
+    // intercepts file and its own seal. Only the host's was told, so a guest
+    // who turned an agent changed nothing the world saw (the gap audit of
+    // 2026-11-18, E4). Single player's is the one brief, as before.
     try {
-      const brief = espionageBrief(world, await readOpenedIntercepts(), {
-        playerPolity: normalizeString(game?.country),
-        hiddenTargets: normalizeArray(variables.covertHiddenTargets),
-      });
-      if (brief) {
-        blocks.push(`[Espionage]
+      const spymasters = spymastersOf(game);
+      const briefs = [];
+      for (const owner of spymasters) {
+        const own = regionKey(owner) === regionKey(game?.country);
+        const brief = espionageBrief(world, await readOpenedIntercepts({ owner, gameCountry: normalizeString(game?.country) }), {
+          playerPolity: owner,
+          // The covert operations the skip plans are the game country's (planCovertOperations).
+          hiddenTargets: own ? normalizeArray(variables.covertHiddenTargets) : [],
+        });
+        if (brief) briefs.push(spymasters.length > 1 ? `${owner}'s service:\n${brief}` : brief);
+      }
+      if (briefs.length) {
+        blocks.push(spymasters.length > 1
+          ? `[Espionage]
+Known to you, not to the players, each of whose services sees only what it can decode. Let it shape events: a polity with an agent inside another acts on what it stole, a polity fed a planted story believes it, an expulsion sours relations. Never reveal in an event that an agent has been turned until it is discovered.
+${briefs.join("\n\n")}`
+          : `[Espionage]
 Known to you, not to the player, whose service sees only what it can decode. Let it shape events: a polity with an agent inside another acts on what it stole, a polity fed a planted story believes it, an expulsion sours relations. Never reveal in an event that an agent has been turned until it is discovered.
-${brief}`);
+${briefs[0]}`);
       }
     } catch {
       /* no espionage context this turn */
@@ -3249,7 +3266,7 @@ ${brief}`);
     // seems like spys are coming from random countries, instead make it so the ai makes them come from sources that
     // make sense" (the owner, 2026-10-28). The game rolls only for the polities named here (spycraft.js).
     const spiedOn = normalizeString(game?.country);
-    if (spiedOn && !rulesAbove) blocks.push(whoSpiesOnThePlayerBlock(spiedOn));
+    if (spiedOn && !rulesAbove) blocks.push(whoSpiesBlock(humanCountriesOf(game)));
   }
 
   // The Political World's elections that fall due (runtime/politics.js describeElectionsDue): the Politics tab's
@@ -9554,6 +9571,14 @@ const applySimulationResult = async ({
   // shared game, only polities the ledgers set against that person: never every
   // polity on the map, which sent agents from places with no reason to.
   const spiesNamed = Array.isArray(result.spiesOnPlayer) ? result.spiesOnPlayer : null;
+  // With several people playing the skip names each one's would-be spies, a
+  // line a player (spiesOnPlayers.js): a player it gave no line keeps the
+  // ledgers' rivals, as every guest did before.
+  const spiedPeople = humanCountriesOf(baseGame);
+  const spiesNamedFor = spiedPeople.length > 1 ? spiesOnPlayersOf(result.spiesOnPlayerText, spiedPeople) : null;
+  const namedAgainst = (person) => (spiesNamedFor
+    ? [...spiesNamedFor].find(([player]) => regionKey(player) === regionKey(person))?.[1] ?? null
+    : spiesNamed);
   const NAMED_SPY_KEENNESS = 0.5;
   const espionageCandidatesAgainst = (playerLedgerPolity, named = null) => [...new Set([
     ...(named ?? [
@@ -9585,8 +9610,8 @@ const applySimulationResult = async ({
     if (named) hostility = Math.max(hostility, NAMED_SPY_KEENNESS);
     return { polity, hostility, hostile: hostility >= 0.75 };
   }).filter((candidate) => named || candidate.hostility > 0);
-  const espionageCandidatesFor = (person) => espionageCandidatesAgainst(canonicalEspionagePolity(person));
-  const espionageCandidates = espionageCandidatesAgainst(canonicalEspionagePolity(baseGame.country), spiesNamed);
+  const espionageCandidatesFor = (person) => espionageCandidatesAgainst(canonicalEspionagePolity(person), namedAgainst(person));
+  const espionageCandidates = espionageCandidatesAgainst(canonicalEspionagePolity(baseGame.country), namedAgainst(baseGame.country));
   // With espionage switched off for this game nothing is rolled: the agents
   // already in the world stay where they are, silent, and no new one arrives.
   const espionage = isActiveFeatureEnabled("espionage")
@@ -13643,19 +13668,23 @@ export const gatherIntelligence = async (target, { signal, requestKind, campaign
 
 // Everything the player's agents have brought back, opened — for the simulator
 // and the renderer only. Never written anywhere.
-export const readOpenedIntercepts = async () => {
+// `owner`: whose service's table, the game country's by default (`gameCountry`,
+// spycraft.js interceptTableOf), opened with that service's own seal
+// (spySeal.js sealOf). A player's view holds its own as the game country's.
+export const readOpenedIntercepts = async ({ owner = "", gameCountry = "" } = {}) => {
   const world = normalizeWorldState(await readWorldState({ force: false }));
-  const intercepts = normalizeIntercepts(await readInterceptsState({ force: false }));
-  if (!isSeal(world.spySeal)) return intercepts;
+  const intercepts = normalizeIntercepts(interceptTableOf(await readInterceptsState({ force: false }), owner, { gameCountry }));
+  const seal = sealOf(world, owner, { gameCountry });
+  if (!isSeal(seal)) return intercepts;
   const out = {};
   for (const [target, entry] of Object.entries(intercepts)) {
     const reportId = entry.reportId || `${target}:${entry.round || 0}:${entry.gatheredAt || "legacy"}`;
     const politicalAssessment = entry.politicalAssessment
-      ? await openPoliticalAssessment(world.spySeal, reportId, entry.politicalAssessment)
+      ? await openPoliticalAssessment(seal, reportId, entry.politicalAssessment)
       : null;
     out[target] = {
       ...entry,
-      exchanges: await Promise.all(entry.exchanges.map((exchange) => openExchange(world.spySeal, exchange))),
+      exchanges: await Promise.all(entry.exchanges.map((exchange) => openExchange(seal, exchange))),
       ...(politicalAssessment ? { politicalAssessment } : {}),
     };
   }
@@ -18418,6 +18447,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     puppetUpdates: merged.puppetUpdates,
     frontOrders: merged.frontOrders,
     spiesOnPlayer: merged.spiesOnPlayer,
+    // As written, a line a player when several play (spiesOnPlayers.js).
+    spiesOnPlayerText: merged.spiesOnPlayerText,
     // The peaces two countries nobody plays made, a line each (peaceTerms.js readTreatyLines).
     peaceTreaties: merged.peaceTreaties,
     // The figures the war needs of the countries that fight, a line a country (warFiguresPrompt.js).
