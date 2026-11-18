@@ -50,6 +50,7 @@ import { settleBoards } from "./seatBoards.js";
 import { interceptTableOf } from "../../runtime/spycraft.js";
 import { sealOf } from "../../runtime/spySeal.js";
 import { advisorOfSeat } from "../../runtime/seatAdvisors.js";
+import { VIEW_PARTS } from "../game/messages.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLocaleLowerCase();
@@ -604,8 +605,18 @@ export const projectForViewer = ({ world, game, events, chat, actions, intercept
   const readers = formerNamesOf(game, seat);
   const seenEvents = projectEvents(events, seat, { ownOrderIds, host, readers, unitOwner: (id) => owners.get(clean(id)) || "" });
   const shown = new Set(list(seenEvents).map((event) => clean(event?.id)));
+  // The world's parts sent as documents of their own (game/messages.js
+  // VIEW_PARTS): Rostra's feed, which a post changes and nothing else does.
+  const seenWorld = projectWorld(world ?? {}, seat, { host, readers, hiddenEventIds: eventsHiddenFrom(events, readers), actions, date: clean(game?.gameDate) });
+  const parts = {};
+  for (const [part, { of, key }] of Object.entries(VIEW_PARTS)) {
+    if (of !== "world") continue;
+    parts[part] = seenWorld[key] === undefined ? null : seenWorld[key];
+    delete seenWorld[key];
+  }
   return {
-    world: projectWorld(world ?? {}, seat, { host, readers, hiddenEventIds: eventsHiddenFrom(events, readers), actions, date: clean(game?.gameDate) }),
+    ...parts,
+    world: seenWorld,
     game: copy({ ...(isRecord(game) ? game : {}), country: seat }),
     events: copy(seenEvents),
     // Their advisor's conversation, with the secrets their government keeps

@@ -211,6 +211,24 @@ test("what is this device's own passes through: the map's files, the library, ot
   stopRemoteRuntime();
 });
 
+test("Rostra's feed comes as a document of its own, and every screen reads it in the world, shown when it alone changes", async () => {
+  // Every post changed the world, and the whole world went to every player (the gap audit of 2026-11-18).
+  const shownTo = [];
+  const runtime = startRemoteRuntime({ publish: (entries) => shownTo.push(...entries.map((entry) => entry.url)), urlFor });
+  const views = viewsFrom("e1");
+  runtime.apply(views.next({ ...GAME, feed: [{ id: "p1", text: "Hello." }] }));
+  assert.deepEqual(runtime.held("world").socialFeed, [{ id: "p1", text: "Hello." }]);
+  assert.deepEqual((await body(await target.fetch("/api/runtime/json/world?v=token"))).json.socialFeed, [{ id: "p1", text: "Hello." }]);
+  assert.equal(runtime.held("world").units[0], 1, "the rest of the world as the host sent it");
+  shownTo.length = 0;
+  const next = views.next({ ...GAME, feed: [{ id: "p1", text: "Hello." }, { id: "p2", text: "Again." }] });
+  assert.deepEqual(Object.keys(next.docs), ["feed"], "the host sends the feed alone");
+  assert.equal(runtime.apply(next).ok, true);
+  assert.deepEqual(shownTo, [urlFor("world")], "and the page shows the world it is read in");
+  assert.equal(runtime.held("world").socialFeed.length, 2);
+  stopRemoteRuntime();
+});
+
 test("the advisor's conversation is the host's: served from the view, a save shown at once until the host's next view of it", async () => {
   // It was this device's own, kept in the stand-in game: lost with a new invite code or on another device.
   const shownTo = [];

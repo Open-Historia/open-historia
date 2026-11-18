@@ -87,7 +87,14 @@ export const SHARED_GAME_VERSION = "15";
 // player's advisor conversation, which the host keeps with the seat
 // (runtime/seatAdvisors.js): never this device's own copy, which a new invite
 // code or another device lost.
-export const VIEW_KEYS = Object.freeze(["world", "game", "events", "chat", "actions", "intercepts", "colors", "flags", "advisor"]);
+export const VIEW_KEYS = Object.freeze(["world", "game", "events", "chat", "actions", "intercepts", "colors", "flags", "advisor", "feed"]);
+// A part of a document sent as a document of its own, so that what changes it
+// often re-sends only it: Rostra's feed (world.socialFeed), which every post
+// changed, and with it the whole world, to every player (the gap audit of
+// 2026-11-18). The host leaves it out of the view's world (host/projection.js),
+// and the page lays it back into the world every screen reads
+// (client/remoteRuntime.js): view key -> { of: the document, key: its field }.
+export const VIEW_PARTS = Object.freeze({ feed: Object.freeze({ of: "world", key: "socialFeed" }) });
 // A view's connection, as the host names it.
 const EPOCH = str(24, { min: 1, pattern: /^[0-9a-z]+$/ });
 const REV = int(0, 2 ** 40);

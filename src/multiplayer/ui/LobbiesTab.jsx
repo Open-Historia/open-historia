@@ -9,7 +9,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useLibraryState } from "../../runtime/library.js";
-import { MAX_SEATS, SEATS_AVAILABLE_NOW, DEFAULT_SETTINGS } from "../host/settings.js";
+import { MAX_SEATS, POSTS_PER_ROUND_MAX, SEATS_AVAILABLE_NOW, DEFAULT_SETTINGS } from "../host/settings.js";
 import { LANGUAGES, readingLanguageName } from "../../runtime/i18n.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { keptSettingsOf } from "../host/sessionRecord.js";
@@ -219,6 +219,9 @@ const HostPanel = ({ onClose, onEnterGame }) => {
             <Field title="Countdown (seconds)"><input type="number" style={input} min={0} max={3600} value={settings.countdownSeconds} onChange={update("countdownSeconds")} /></Field>
             <Field title="Game time per round (days)"><input type="number" style={input} min={1} max={3650} value={settings.daysPerRound} onChange={update("daysPerRound")} /></Field>
             <Field title="A leaver's country waits (minutes)" hint="Then the AI plays it until they come back."><input type="number" style={input} min={0} max={1440} value={settings.leaverGraceMinutes} onChange={update("leaverGraceMinutes")} /></Field>
+            {/* Rostra, the social network: how many posts each player may make
+                in a round (host/settings.js `postsPerRound`). */}
+            <Field title="Rostra posts a player may make each round"><input type="number" style={input} min={1} max={POSTS_PER_ROUND_MAX} value={settings.postsPerRound} onChange={update("postsPerRound")} /></Field>
             {/* Who answers a player's message to a country the AI plays
                 (host/settings.js `replies`). No key is ever sent: with "own"
                 each player's device writes the answer itself. */}

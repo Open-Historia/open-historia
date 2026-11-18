@@ -26,7 +26,7 @@ import { createWorldQueue } from "./worldQueue.js";
 import { SEAT_STATUS, createSeatBook } from "./seats.js";
 import { groundHeldBy, seatFoundings, seatSuccessions, withSeatLetGo, withSeatMoved } from "./foundings.js";
 import { sessionRecordOf } from "./sessionRecord.js";
-import { REPLY_MODES, gameMasterAllowed, roundSettingsOf } from "./settings.js";
+import { DEFAULT_SETTINGS, REPLY_MODES, gameMasterAllowed, roundSettingsOf } from "./settings.js";
 import { createHostAnswers, hostAnswersSpent, hostTurnsSpent } from "./hostAnswers.js";
 import { createRoundPayers } from "./roundPayers.js";
 import { GAME_MASTER_COMMAND_MAX, gameMasterEntryOf, gameMasterNotice, keptGameMasterLog, withGameMasterEntry } from "./gameMaster.js";
@@ -38,7 +38,7 @@ import { livePuppetsFor } from "../../runtime/puppets.js";
 import { validate } from "../protocol/validate.js";
 import { digestText } from "../protocol/digest.js";
 import { withGoalProgress, withPlayerGoal } from "../../runtime/playerGoal.js";
-import { withPlayerPost } from "../../runtime/socialFeed.js";
+import { normalizeSocialFeed, withPlayerPost } from "../../runtime/socialFeed.js";
 import { applyProjectOpsToWorld, normalizeProjects } from "../../runtime/gameState.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
 import { ordersThisRound } from "./orderCap.js";
@@ -1388,11 +1388,25 @@ export const createGameHost = ({
     },
     // A post on Rostra (runtime/socialFeed.js), written as the leader of the
     // seat's own country by the game's own rule, and dated by the game. It is
-    // public: every view carries the feed.
+    // public: every view carries the feed, a document of its own, so a post
+    // re-sends the feed and not the world (game/messages.js VIEW_PARTS). As
+    // many a round as the host allows each player (settings.postsPerRound):
+    // the feed keeps its newest posts, and one player posting without end
+    // pushed everyone else's out of it.
     post: async (connection, { text, quote, choices }, seat) => {
       if (!isActiveFeatureEnabled("socialMedia")) return "This game has no social media.";
+      const allowed = Number(settings.postsPerRound) || DEFAULT_SETTINGS.postsPerRound;
       let refusal = "";
       await store.updateForces(({ world, game }) => {
+        const turn = Number(game?.round) || 0;
+        const posted = normalizeSocialFeed(world?.socialFeed)
+          .filter((entry) => entry.kind === "player" && same(entry.by, seat.country) && (Number(entry.round) || 0) === turn).length;
+        if (posted >= allowed) {
+          refusal = allowed === 1
+            ? "You have made this round's post: post again next round."
+            : `You have made this round's ${allowed} posts: post again next round.`;
+          return null;
+        }
         const made = withPlayerPost(world, {
           by: seat.country,
           text,

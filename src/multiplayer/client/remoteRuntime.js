@@ -28,7 +28,7 @@
 // router (runtime/web/router.js) so it sees each request first. It does nothing
 // until a shared game begins, and single player never notices it.
 
-import { VIEW_KEYS } from "../game/messages.js";
+import { VIEW_KEYS, VIEW_PARTS } from "../game/messages.js";
 import { EMPTY_DIGEST, digestDoc } from "../protocol/digest.js";
 
 // Documents that come from the host (game/messages.js). The first five are the
@@ -37,6 +37,10 @@ import { EMPTY_DIGEST, digestDoc } from "../protocol/digest.js";
 export { VIEW_KEYS };
 const REQUIRED_KEYS = new Set(["world", "game", "events", "chat", "actions", "advisor"]);
 const VIEW_KEY_SET = new Set(VIEW_KEYS);
+// The parts the host sends apart from their document (game/messages.js
+// VIEW_PARTS), by the document they belong in: [view key, field].
+const PARTS_OF = new Map();
+for (const [part, { of, key }] of Object.entries(VIEW_PARTS)) PARTS_OF.set(of, [...(PARTS_OF.get(of) ?? []), [part, key]]);
 // The rollback archive is the host's; a player has none.
 const HOST_ONLY_KEYS = new Set(["snapshots", "snapshotsIndex"]);
 // The map's own documents, read from this device's copy of the host's scenario
@@ -63,13 +67,22 @@ const heldDoc = (session, key) => {
   // A save this page has asked the host for, shown until the host's next view
   // of that document (overlay).
   if (session.overlays.has(key)) return session.overlays.get(key);
-  const view = session.docs.get(key);
+  // With the parts the host sends apart from it laid back in (VIEW_PARTS).
+  let view = session.docs.get(key);
+  const parts = PARTS_OF.get(key);
+  if (parts && isRecord(view)) {
+    view = { ...view };
+    for (const [part, field] of parts) if (session.docs.has(part)) view[field] = session.docs.get(part);
+  }
   const own = session.patches.get(key);
   return own && isRecord(view) ? { ...view, ...own } : view;
 };
 const publishHeld = (session, keys) => {
   const entries = [];
-  for (const key of keys) {
+  // A part that arrived is shown in the document it belongs in, which is the
+  // one every screen reads: a part is no document of the page's own.
+  const parents = keys.map((key) => VIEW_PARTS[key]?.of).filter(Boolean);
+  for (const key of new Set([...keys, ...parents].filter((key) => !VIEW_PARTS[key]))) {
     const url = session.docs.has(key) ? session.urlFor?.(key) : "";
     if (url) entries.push({ url, value: heldDoc(session, key) });
   }

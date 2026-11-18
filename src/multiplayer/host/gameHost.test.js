@@ -18,7 +18,7 @@ import { chosenOrdersOf, generalsOf, talkOf } from "../../runtime/fronts/command
 import { keptPlansOf } from "../../runtime/fronts/plans.js";
 import { syntheticMap } from "../../runtime/fronts/syntheticMap.js";
 import { battlefieldOn } from "../../runtime/fronts/testKit.js";
-import { HOST_MESSAGES, PLAYER_REQUESTS, REPLY_MAX_CHARS, REPLY_MAX_LINES, VIEW_KEYS } from "../game/messages.js";
+import { HOST_MESSAGES, PLAYER_REQUESTS, REPLY_MAX_CHARS, REPLY_MAX_LINES, VIEW_KEYS, VIEW_PARTS } from "../game/messages.js";
 import { validate } from "../protocol/validate.js";
 import { projectForViewer } from "./projection.js";
 import { resolveFeatures, setActiveFeatures } from "../../runtime/gameFeatures.js";
@@ -1640,9 +1640,35 @@ test("a guest's post goes into the feed as its own country's leader, dated by th
   await s.request(s.guest, { t: "post", id: id(4), text: "Quoting nothing.", quote: "p9" });
   assert.match(s.ack(s.guest, id(4)).error, /no longer there/);
   assert.equal(s.store.docs.world.socialFeed.length, 2);
-  // Public: the guest's own view holds both posts.
+  // Public: the guest's own view holds both posts, in the feed's own document: a post re-sends the feed, not the world.
   await s.clock.advance(1000);
-  assert.deepEqual((s.shown(s.guest).world?.socialFeed ?? []).map((entry) => entry.id), ["p1", "p2"]);
+  assert.deepEqual((s.shown(s.guest).feed ?? []).map((entry) => entry.id), ["p1", "p2"]);
+  assert.equal("socialFeed" in s.shown(s.guest).world, false);
+  const before = s.to(s.guest, "view").length;
+  await s.request(s.hostPlayer, { t: "post", id: id(5), text: "Riga again.", quote: "" });
+  const sentNow = s.to(s.guest, "view").slice(before);
+  assert.deepEqual(sentNow.map((view) => Object.keys(view.docs)), [["feed"]]);
+});
+
+test("each player posts on Rostra as often a round as the host allows, and is told when that is done", async () => {
+  // One player could push everything else out of the feed's newest 300 (the gap audit of 2026-11-18).
+  const s = setup({ settings: { postsPerRound: 2 } });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  for (const n of [2, 3, 4]) await s.request(s.guest, { t: "post", id: id(n), text: `Moscow, post ${n}.`, quote: "" });
+  assert.deepEqual([2, 3, 4].map((n) => s.ack(s.guest, id(n)).ok), [true, true, false]);
+  assert.match(s.ack(s.guest, id(4)).error, /this round's 2 posts: post again next round/);
+  // Another player's are their own to make.
+  await s.request(s.hostPlayer, { t: "post", id: id(5), text: "Riga posts.", quote: "" });
+  assert.equal(s.ack(s.hostPlayer, id(5)).ok, true);
+  // The next round, again.
+  s.store.docs.game = { ...s.store.docs.game, round: 2 };
+  await s.request(s.guest, { t: "post", id: id(6), text: "Moscow, next round.", quote: "" });
+  assert.equal(s.ack(s.guest, id(6)).ok, true);
+  assert.equal(normalizeSettings({}).settings.postsPerRound, 5, "five a round unless the host says otherwise");
+  assert.match(normalizeSettings({ postsPerRound: 0 }).error, /postsPerRound/);
 });
 
 test("a post request is held to its shape: words within the limit, a post id or nothing to quote, nothing else", () => {
@@ -2053,6 +2079,8 @@ test("a page that loses a view on the way ends up holding exactly what the host 
     await deliver();
     await deliver();
     const host = heldAfter(s.to(s.guest, "view"));
+    // A part sent apart from its document (VIEW_PARTS: Rostra's feed) is read in it.
+    for (const [part, { of, key }] of Object.entries(VIEW_PARTS)) if (host[of] && host[part] != null) host[of] = { ...host[of], [key]: host[part] };
     for (const key of VIEW_KEYS) assert.deepEqual(page.held(key) ?? null, host[key] ?? null, key);
     assert.ok(page.held("chat").some((chat) => (chat.messages ?? []).some((message) => message.text === "Moscow to Tallinn.")), "the thread opened after the lost view is there");
   } finally {

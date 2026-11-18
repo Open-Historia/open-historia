@@ -34,7 +34,11 @@
 //     (the owner, 2026-11-18: "Host sets it"): every request the game makes,
 //     on any screen, writes in it; each player translates on their own device
 //     (runtime/i18n.js setWorldLanguage). "" is the language the host plays
-//     in, made a code when the game is shared (host/engineMain.js).
+//     in, made a code when the game is shared (host/engineMain.js);
+//   - how many posts each player may make on Rostra, the social network, in a
+//     round (`postsPerRound`): the feed keeps its newest 300, and one player
+//     posting without end pushed everyone else's out of it (the gap audit of
+//     2026-11-18). A post costs no AI request: the round's own reads them.
 // The schema is shared with the players' screens, which show these settings,
 // and is closed like every other message.
 
@@ -54,7 +58,9 @@ export const HOST_ANSWERS_MAX = 50;
 // Keys a record or a lobby from before they existed may lack: read as their
 // default (normalizeSettings), never a reason to refuse the whole of it. A
 // session record whose settings did not read was dropped whole, seats and all.
-const LATER_KEYS = Object.freeze(["hostAnswers"]);
+const LATER_KEYS = Object.freeze(["hostAnswers", "postsPerRound"]);
+// The most Rostra posts the host may allow each player a round.
+export const POSTS_PER_ROUND_MAX = 50;
 // The languages a world can be written in (runtime/i18n.js LANGUAGES), by code.
 export const WORLD_LANGUAGES = Object.freeze(LANGUAGES.map((entry) => entry.code));
 
@@ -75,6 +81,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   replies: "host",
   language: "",
   hostAnswers: 0,
+  postsPerRound: 5,
 });
 
 export const SETTINGS_SCHEMA = obj({
@@ -94,6 +101,7 @@ export const SETTINGS_SCHEMA = obj({
   replies: str(8, { enum: REPLY_MODES }),
   language: str(16, { enum: ["", ...WORLD_LANGUAGES] }),
   hostAnswers: int(0, HOST_ANSWERS_MAX),
+  postsPerRound: int(1, POSTS_PER_ROUND_MAX),
 }, LATER_KEYS);
 
 // Whether the host may use the Game Master in this game (`cheats`).
