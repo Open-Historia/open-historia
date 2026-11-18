@@ -112,6 +112,15 @@ func _receipt_status(index: int) -> String:
 	return str((entry as Dictionary).get("status", "")) if typeof(entry) == TYPE_DICTIONARY else ""
 
 
+func _sent_note() -> String:
+	var note := ""
+	for view in panel.views:
+		for drafted in ((view as Dictionary).get("messageDrafts", []) if (view as Dictionary).get("messageDrafts") is Array else []):
+			if not str((drafted as Dictionary).get("sentNote", "")).is_empty():
+				note = str(drafted["sentNote"])
+	return note
+
+
 func _find_text(node: Node, text: String) -> bool:
 	if node is Label and (node as Label).text == text and (node as Label).is_visible_in_tree():
 		return true
@@ -229,7 +238,7 @@ func _run() -> void:
 	panel = AdvisorPanel.new()
 	main.hud.add_child(panel)
 	panel.setup(main.engine, {"map_view": main.map_view})
-	panel.open_chat.connect(func(country: String, draft: String) -> void: chats.append([country, draft]))
+	panel.open_thread.connect(func(target: Dictionary, draft: String) -> void: chats.append([str(target.get("name", "")), draft, str(target.get("fromDraft", "")), str(target.get("targetType", ""))]))
 	panel.focus_point.connect(func(lng: float, lat: float, zoom: float) -> void: focused.append([lng, lat, zoom]))
 	panel.open_actions.connect(func() -> void: opened_actions += 1)
 	panel.open_projects.connect(func() -> void: opened_projects += 1)
@@ -358,7 +367,8 @@ func _run() -> void:
 		await _scroll_to(draft)
 		draft.pressed.emit()
 		await _frames(2)
-		_check("the letter goes to Diplomacy, not sent", chats.size() == 1 and str(chats[0][0]) == "Germany" and str(chats[0][1]).begins_with("Chancellor, France proposes"))
+		_check("the letter goes to Diplomacy, not sent", chats.size() == 1 and str(chats[0][0]) == "Germany" and str(chats[0][3]) == "private" and str(chats[0][1]).begins_with("Chancellor, France proposes"))
+		_check("the letter carries its draft's own id", chats.size() == 1 and str(chats[0][2]).ends_with("#0") and str(chats[0][2]).begins_with("advisor-reply-"), str(chats[0][2]) if chats.size() == 1 else "")
 		_check("the button says where it went", draft.text == "✓ In Diplomacy — press send there")
 		panel._set_loading(true)
 		panel._set_loading(false)
@@ -369,15 +379,16 @@ func _run() -> void:
 		_check("the button comes back after three seconds", _find_button(panel, "✉️ Draft to Germany") != null)
 		_check("a letter not yet sent says nothing of it", not _find_text(panel, "Already sent to Germany."))
 		var letter := "Chancellor, France proposes that our finance ministers meet before the next summit to agree a common position on the fiscal rules."
-		await main.engine.request("chat.create", {"chat": {"id": "chat-sent-germany", "title": "Germany", "countries": [{"name": "Germany"}], "status": "open", "messages": [{"id": "m-sent-1", "role": "user", "text": letter, "time": "2016-01-04"}]}})
+		var draft_id := str(chats[0][2]) if chats.size() == 1 else ""
+		await main.engine.request("chat.create", {"chat": {"id": "chat-same-words", "title": "Germany", "countries": [{"name": "Germany"}], "status": "open", "messages": [{"id": "m-same-1", "role": "user", "text": letter, "time": "2016-01-03"}]}})
 		await panel._refresh_views()
 		await _frames(3)
-		var note := ""
-		for view in panel.views:
-			for drafted in ((view as Dictionary).get("messageDrafts", []) if (view as Dictionary).get("messageDrafts") is Array else []):
-				if not str((drafted as Dictionary).get("sentNote", "")).is_empty():
-					note = str(drafted["sentNote"])
-		_check("a letter already sent to that country says when it went", note.begins_with("Already sent to Germany on ") and _find_text(panel, note), note)
+		_check("the same words sent without the draft never mark the letter sent", _sent_note().is_empty(), _sent_note())
+		await main.engine.request("chat.create", {"chat": {"id": "chat-sent-germany", "title": "Germany", "countries": [{"name": "Germany"}], "status": "open", "messages": [{"id": "m-sent-1", "role": "user", "text": "Chancellor, an edited version of the letter on the fiscal rules.", "time": "2016-01-04", "fromDraft": draft_id}]}})
+		await panel._refresh_views()
+		await _frames(3)
+		var note := _sent_note()
+		_check("a letter sent from this draft, edited or not, says when it went", note.begins_with("Already sent to Germany on ") and _find_text(panel, note), note)
 		await _shoot("advisor-07b-already-sent")
 
 	var place := _find_button(panel, "📍 Place Brigade de Lorraine here")
@@ -1164,6 +1175,7 @@ func _contacts() -> void:
 	await _chief_identity()
 	await _unsupported_type()
 	await _several_action_fences()
+	await _promised_action_recovered()
 	await _groups()
 
 
@@ -1282,6 +1294,22 @@ func _several_action_fences() -> void:
 	if card:
 		await _scroll_to(card)
 	await _shoot("advisor-28-several-action-fences")
+
+
+func _promised_action_recovered() -> void:
+	await panel._select_recipient("chief")
+	await _frames(3)
+	var before := panel.messages.size()
+	_check("the chief advisor promises an order without its block", await _ask_panel("Draft the promised order to recall our ambassador.", before + 2), str(panel.messages.size()))
+	await _wait(0.6)
+	var reply: Dictionary = panel.messages[panel.messages.size() - 1]
+	var proposals: Array = reply.get("actionProposals", []) if typeof(reply.get("actionProposals")) == TYPE_ARRAY else []
+	_check("the completeness check restores the missing review card", proposals.size() == 1 and JSON.stringify(proposals).contains("Recall the ambassador from Tripoli") and _count_buttons(panel, "Proceed / Queue") >= 1, JSON.stringify(proposals).left(200))
+	_check("the restored order still waits for Proceed", not JSON.stringify(await _doc("actions")).contains("Recall our ambassador from Tripoli for consultations."))
+	var card := _find_button(panel, "Proceed / Queue")
+	if card:
+		await _scroll_to(card)
+	await _shoot("advisor-29-promised-action-recovered")
 
 
 func _group_named(name: String) -> Dictionary:

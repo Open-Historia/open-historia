@@ -3,7 +3,6 @@ extends PanelFrame
 
 signal open_actions
 signal open_projects
-signal open_chat(country: String, draft: String)
 signal open_thread(target: Dictionary, draft: String)
 signal focus_point(lng: float, lat: float, zoom: float)
 signal width_changed(width: float)
@@ -3330,12 +3329,13 @@ func _hand_off(draft: Dictionary) -> void:
 	var target_type := str(draft.get("targetType", "private"))
 	var text := str(draft.get("text", ""))
 	var name := str(draft.get("country", ""))
+	var from_draft := str(draft.get("id", ""))
 	if target_type == "institution-council":
-		open_thread.emit({"targetType": "institution-council", "institutionId": str(draft.get("institutionId", "")), "threadId": str(draft.get("threadId", "")), "name": name if not name.is_empty() else str(draft.get("institutionId", ""))}, text)
+		open_thread.emit({"targetType": "institution-council", "institutionId": str(draft.get("institutionId", "")), "threadId": str(draft.get("threadId", "")), "name": name if not name.is_empty() else str(draft.get("institutionId", "")), "fromDraft": from_draft}, text)
 	elif target_type == "institution-lifecycle":
-		open_thread.emit({"targetType": "institution-lifecycle", "institutionId": str(draft.get("institutionId", "")), "caseId": str(draft.get("caseId", "")), "threadId": str(draft.get("threadId", "")), "name": name if not name.is_empty() else str(draft.get("institutionId", ""))}, text)
+		open_thread.emit({"targetType": "institution-lifecycle", "institutionId": str(draft.get("institutionId", "")), "caseId": str(draft.get("caseId", "")), "threadId": str(draft.get("threadId", "")), "name": name if not name.is_empty() else str(draft.get("institutionId", "")), "fromDraft": from_draft}, text)
 	else:
-		open_chat.emit(name, text)
+		open_thread.emit({"targetType": "private", "country": name, "name": name, "fromDraft": from_draft}, text)
 
 
 func _deploy_action(deployment: Dictionary, message_index: int, placed: bool, row_state: Dictionary) -> Control:

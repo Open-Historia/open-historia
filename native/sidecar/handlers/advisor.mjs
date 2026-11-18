@@ -72,6 +72,18 @@ const STAND_IN_FENCES_REPLY = [
 
 const FENCES_MARK = "each order separately";
 
+const COMPLETENESS_MARK = "[Advisor Action Completeness";
+const PROMISED_MARK = "promised order";
+const STAND_IN_PROMISED_REPLY = [
+  "I have drafted the order to recall our ambassador from Tripoli for consultations. It waits for your Proceed.",
+  "ADVISOR_MEMORY: The player asked for the recall; the order was drafted for review.",
+].join("\n");
+const STAND_IN_RECOVERED_ACTIONS = [
+  "```actions",
+  "[{\"title\":\"Recall the ambassador from Tripoli\",\"text\":\"Recall our ambassador from Tripoli for consultations.\",\"kind\":\"action\"}]",
+  "```",
+].join("\n");
+
 const GROUP_MARK = "[Current Group Chat:";
 const GROUP_PASS_MARK = "say nothing at all";
 const STAND_IN_GROUP_REPLY = [
@@ -429,6 +441,9 @@ export const register = (ctx) => {
 
   if (ctx.standIn) {
     ctx.addStandIn(({ tool, text, body }) => {
+      if (!tool && String(text).includes(COMPLETENESS_MARK)) {
+        return { text: lastUserText(body).toLowerCase().includes(PROMISED_MARK) ? STAND_IN_RECOVERED_ACTIONS : "NO_MISSING_ACTION" };
+      }
       if (!tool && String(text).includes(GROUP_MARK)) {
         const speaker = /You are (.+?), ONE specific participant/.exec(String(text));
         const transcript = String(text).split("[Group Chat Transcript]")[1] ?? "";
@@ -443,7 +458,7 @@ export const register = (ctx) => {
       const asked = lastUserText(body).toLowerCase();
       if (asked.includes(FAIL_MARK)) return null;
       const named = /Your name is (.+?), and your position is/.exec(String(text));
-      const reply = asked.includes(FENCES_MARK) ? STAND_IN_FENCES_REPLY : asked.includes("institution") ? STAND_IN_INSTITUTION_REPLY : STAND_IN_REPLY;
+      const reply = asked.includes(FENCES_MARK) ? STAND_IN_FENCES_REPLY : asked.includes(PROMISED_MARK) ? STAND_IN_PROMISED_REPLY : asked.includes("institution") ? STAND_IN_INSTITUTION_REPLY : STAND_IN_REPLY;
       return { text: named ? `I am ${named[1]}.\n\n${reply}` : reply };
     });
     installStreamingStandIn();
@@ -455,6 +470,9 @@ export const register = (ctx) => {
   };
 
   const readWorld = () => engine.readJson(urls.world, { defaultValue: {}, clone: false }).catch(() => ({}));
+
+  const isCharacter = (saved, thread) => threads.advisorContacts(list(saved)).some((contact) =>
+    contact.id === thread && threads.advisorRecipientType(contact) !== threads.ADVISOR_RECIPIENT_TYPES.MINISTER);
 
   const flags = () => {
     const stored = storage.getItem("oh_debug_log_enabled");
@@ -576,7 +594,10 @@ export const register = (ctx) => {
     if (role === "notice") return noticeView(message, world, unseen ?? unseenOf(world));
     if (role === "advisor") {
       const parsed = engine.advisorReply.parseAdvisorReply(message.text, { allowedUnitTypes: allowedTypesOf(world), streaming: Boolean(message.streaming) });
-      const drafts = parsed.messageDrafts ? parsed.messageDrafts.map((draft) => ({ ...draft, sentNote: sentNote(draft, chats) })) : null;
+      const drafts = parsed.messageDrafts ? parsed.messageDrafts.map((draft, index) => {
+        const own = { ...draft, id: engine.advisorDrafts.draftIdOf(message.id, index) };
+        return { ...own, sentNote: sentNote(own, chats) };
+      }) : null;
       return {
         proposalTargets: proposalTargetsOf(message, actions),
         proposalUpdates: proposalUpdatesOf(message, actions),
@@ -958,7 +979,7 @@ export const register = (ctx) => {
       const saved = await loadMessages();
       const messages = saved === null ? [] : threads.advisorMessagesFor(saved, thread);
       if (restore) {
-        if (saved !== null) engine.aiMain.loadHistory(messages, thread);
+        if (saved !== null) engine.aiMain.loadHistory(messages, thread, { character: isCharacter(saved, thread) });
         else engine.aiMain.startChat(thread);
       }
       storedNotices = noticesOf(saved ?? []);
@@ -983,7 +1004,7 @@ export const register = (ctx) => {
         throw new Error("The selected Advisor recipient no longer exists.");
       }
       const messages = threads.advisorMessagesFor(saved, thread);
-      if (!threads.advisorGroups(saved).some((group) => group.id === thread)) engine.aiMain.loadHistory(messages, thread);
+      if (!threads.advisorGroups(saved).some((group) => group.id === thread)) engine.aiMain.loadHistory(messages, thread, { character: isCharacter(saved, thread) });
       const people = await contactsOf(saved);
       lastContacts = JSON.stringify(people);
       return plain({ messages, views: await viewsOf(messages, thread), ...people });
@@ -1081,7 +1102,8 @@ export const register = (ctx) => {
     },
     "advisor.history": async ({ messages = [], json = "", threadId = CHIEF } = {}) => {
       messages = fromWire(json, messages);
-      engine.aiMain.loadHistory(list(messages), threadOf(threadId));
+      const saved = await gameState.readAdvisorMessages().catch(() => []);
+      engine.aiMain.loadHistory(list(messages), threadOf(threadId), { character: isCharacter(saved, threadOf(threadId)) });
       return true;
     },
     "advisor.views": async ({ messages = [], json = "", threadId = "" } = {}) => plain({ views: await viewsOf(fromWire(json, messages), String(threadId || "")) }),
@@ -1202,18 +1224,38 @@ export const register = (ctx) => {
           console.warn("[advisor] Advisor reply dropped: the campaign was switched while it was being written, so none of its orders or projects were applied.");
           return { dropped: true };
         }
-        const { reply, memory } = engine.advisorMemory.splitAdvisorMemory(raw);
+        const { reply: rawReply, memory } = engine.advisorMemory.splitAdvisorMemory(raw);
+        const minister = thread === CHIEF || threads.advisorRecipientType(recipient) === threads.ADVISOR_RECIPIENT_TYPES.MINISTER;
+        const completion = await engine.advisorActionCompleteness.completeAdvisorActionReply({
+          reply: rawReply,
+          canPropose: minister,
+          check: () => engine.aiMain.checkAdvisorActionCompleteness({
+            playerRequest: question,
+            advisorReply: engine.advisorReply.parseAdvisorReply(rawReply).text,
+          }),
+        });
+        if (leftCampaign()) {
+          console.warn("[advisor] Advisor reply dropped: the campaign was switched while it was being written, so none of its orders or projects were applied.");
+          return { dropped: true };
+        }
+        const reply = completion.reply;
+        engine.debugLog.logDebugEvent("advisor", "Advisor Action completeness reviewed.", {
+          status: completion.status,
+          problem: completion.problem || "(none)",
+        }, { verbose: true });
         const blocks = engine.advisorBlocks;
         const replyId = newReplyId();
         const { actionsProposal, actionBlockProblems, chartProblem, draftProblems, institutionDraftProblems, deployProblems } = engine.advisorReply.parseAdvisorReply(reply, {
           allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
         });
-        const minister = thread === CHIEF || threads.advisorRecipientType(recipient) === threads.ADVISOR_RECIPIENT_TYPES.MINISTER;
         const { proposals: actionProposals, problems: invalidProposals } = minister
           ? engine.advisorActionReview.reviewAdvisorActionProposals(actionsProposal, replyId,
             await engine.readJson(urls.actions, { force: true }))
           : { proposals: [], problems: [] };
-        const actionsProblems = [...(Array.isArray(actionBlockProblems) ? actionBlockProblems : []), ...invalidProposals];
+        const actionsProblems = [
+          ...(completion.problem ? [completion.problem] : []),
+          ...(Array.isArray(actionBlockProblems) ? actionBlockProblems : []), ...invalidProposals,
+        ];
         const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason,
           dropped: projectsDropped, excerpt: projectsExcerpt } = blocks.extractFencedJson(reply, "projects", { salvageTruncated: true });
         const canApplyProjects = engine.advisorProjectRouting.canAdvisorApplyProjectOps(thread, recipient);

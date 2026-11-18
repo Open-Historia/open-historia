@@ -729,7 +729,6 @@ func mount_panels(game: Dictionary) -> void:
 		_add_drawer("advisor", advisor)
 		_hook(advisor, "open_actions", func() -> void: open_actions_tab("actions"))
 		_hook(advisor, "open_projects", func() -> void: open_actions_tab("projects"))
-		_hook(advisor, "open_chat", open_chat)
 		_hook(advisor, "open_thread", func(target: Dictionary, draft: String) -> void:
 			if not panels.has("chat"):
 				return
