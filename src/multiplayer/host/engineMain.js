@@ -35,6 +35,7 @@ import {
 import { filterToRenderedRegions } from "../../Game/AI/promptContext.js";
 import { regionOwnerNow } from "../../runtime/gmAnnex.js";
 import { landingEvents, tellLandings } from "./landings.js";
+import { ENGLISH_WORDS, worldWordsOf } from "./worldWords.js";
 import { setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { discardHeldTurns, endSimulation, enterSimulation } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
@@ -217,6 +218,23 @@ const rotateInvite = (campaign, identity) => {
 // is shared; written at once otherwise.
 let writeInOrder = (label, write) => write();
 
+// What the host's game writes into the world itself (a peace or a treaty
+// between players, host/landings.js), in the world's language
+// (host/worldWords.js): read when the game is shared.
+let worldWords = ENGLISH_WORDS;
+// The pack the game ships for the world's language (public/lang/<code>.json),
+// as this window's own translator reads one; English when there is none.
+const loadWorldWords = async (code) => {
+  const language = clean(code);
+  if (!language || language === "en") return ENGLISH_WORDS;
+  const base = String(import.meta.env?.BASE_URL || "/");
+  const pack = await fetch(`${base.replace(/\/?$/, "/")}lang/${encodeURIComponent(language)}.json`, { cache: "no-cache" })
+    .then((response) => (response.ok ? response.json() : null))
+    .catch(() => null);
+  if (!pack) logDebugEvent("shared game", `no language pack for the world's language (${language}): what the host writes into the world is in English`, undefined, { problem: true });
+  return worldWordsOf(pack, language);
+};
+
 // What the governments at a table decided, written, and a peace it made (a
 // leader took a seat's terms of peace: gameplay.js answerPeaceInChat) told as
 // one two players make between rounds is (host/landings.js): an event on the
@@ -231,7 +249,7 @@ const decidedAndTold = async (write, landed) => {
   const regions = await loadRegionCatalog().then((catalog) => filterToRenderedRegions(catalog, after)).catch(() => []);
   const baked = new Map(list(regions).map((region) => [clean(region?.id), region]));
   await mutateCanonicalTurnState(({ world, events, game }) => {
-    const told = tellLandings({ before, after: world, events, game, ownerOf: (id) => (baked.has(id) ? regionOwnerNow(baked.get(id), {}) : "") });
+    const told = tellLandings({ before, after: world, events, game, ownerOf: (id) => (baked.has(id) ? regionOwnerNow(baked.get(id), {}) : ""), words: worldWords });
     if (!told) return null;
     landed.push(...told.landed);
     return { world: told.world, events: told.events };
@@ -413,6 +431,7 @@ const boot = async () => {
     // lobby so every screen writes in it, this window's requests first.
     const settings = { ...checked.settings, language: checked.settings.language || writingLanguageCode(docs.world?.language || docs.game?.language) };
     setWorldLanguage(settings.language);
+    worldWords = await loadWorldWords(settings.language);
     // The host's own country; it changes if the host's people found one of
     // their own (host/foundings.js).
     let host = clean(docs.game?.country);
@@ -497,7 +516,7 @@ const boot = async () => {
       restored,
       campaignRound: Number(started.game?.round) || 0,
       store,
-      resolveRound: async ({ daysPerRound, signal, carry = null, payer = null }) => {
+      resolveRound: async ({ daysPerRound, signal, onProgress, carry = null, payer = null }) => {
         // Fronts the game began with that could not be built when it opened.
         await openPendingFronts();
         // The game's own lock, waited for and taken in one step: a stat sheet
@@ -519,7 +538,8 @@ const boot = async () => {
           try {
             // Never a canned turn in a shared game: a skip the AI could not
             // write fails, and the round says why (host/round.js).
-            await simulateTimelineJump({ days: daysPerRound, signal, cannedTurn: false });
+            // Each step it is on, for every screen's round bar (gameHost.js onProgress).
+            await simulateTimelineJump({ days: daysPerRound, signal, cannedTurn: false, onProgress });
           } catch (error) {
             // A skip that failed part-way may have held its turn for a Retry (a
             // segment that did not come back, the Projects board). Nobody can
@@ -577,6 +597,7 @@ const boot = async () => {
         await setPolityFlag({ polity: country, world: docs.world, dataUrl: image });
       },
       replyTo,
+      worldWords,
       // The Game Master's command (host/gameMaster.js), as the Cheats panel's
       // console runs one: its preview asked of the host's AI, then applied at
       // once, its fingerprint checked against the world as it stands. The host

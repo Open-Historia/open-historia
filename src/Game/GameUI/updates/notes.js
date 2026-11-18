@@ -282,7 +282,7 @@ const NEW_UPDATES = [
             icon: "people",
             items: [
               "A shared game remembers who plays which country: share it again days later and every player gets their own country back.",
-              "Your country stays yours while you are away: the AI plays it until you return, and the lobby says for how long.",
+              "Your country stays yours while you are away: after the minutes the lobby states, the AI plays it until you return.",
               "Once the game has started, changing country needs the host's say. A player whose country is gone takes a free one or watches.",
               "When the host releases a country, its player's queued orders, goal, advice and private conversations go with them.",
             ],
@@ -365,7 +365,7 @@ const NEW_UPDATES = [
             heading: "Counsel",
             icon: "book",
             items: [
-              "Your advisor remembers your talks on any device, and after a new invite code.",
+              "Your advisor remembers your talks, after a new invite code too.",
               "Your advisor's three suggested orders for each round are under Suggested Actions, and your standing goal guides your own government.",
               "Papers that reach your government arrive in your own correspondence, and your advisor flags each one.",
             ],
@@ -446,7 +446,7 @@ const NEW_UPDATES = [
             icon: "chess",
             items: [
               "Difficulty weighs each player against the countries the AI plays, and never favours one player over another.",
-              "The host refuses an order for anything its game has switched off, and wherever the host refuses you, you see why.",
+              "The host refuses an order for anything its game has switched off, and says why beside it. Its other words to you stay listed under Players.",
               "A structure can be moved only onto its own country's land or the sea off it.",
               "The military ranking and each country's Military card fill in during shared games.",
             ],

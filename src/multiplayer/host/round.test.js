@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createRoundMachine, readyNeeded } from "./round.js";
+import { ROUND_FAILURE_KINDS, cancelledRound, createRoundMachine, readyNeeded } from "./round.js";
 
 // A clock whose timers fire in order as it is advanced, each at its own time.
 const createClock = (start = 1_000_000) => {
@@ -348,12 +348,38 @@ test("a round that fails says why until one lands", async () => {
   round.start();
   round.setReady("a", true);
   await clock.flush();
-  assert.deepEqual(round.status().failure, { round: 1, reason: "The model's quota is used up." });
+  assert.deepEqual(round.status().failure, { round: 1, reason: "The model's quota is used up.", kind: "failed" });
   fail = false;
   round.resolveNow();
   await clock.flush();
   assert.equal(round.status().phase, "revealing");
   assert.equal(round.status().failure, null);
+});
+
+// A cancel read "Round 4 could not be resolved: The host cancelled the round." (the review of 2026-11-18, ui 6):
+// what became of the round is kept with it, and how long one has been resolving is there for the round bar's clock.
+test("a round the host called off is kept as cancelled, not failed, and a round being resolved says for how long", async () => {
+  const clock = createClock();
+  let release = () => {};
+  const round = createRoundMachine({
+    settings: { roundMinutes: 10 },
+    now: clock.now,
+    timers: clock.timers,
+    onResolve: () => new Promise((_resolve, reject) => { release = () => reject(cancelledRound("The host cancelled the round.")); }),
+  });
+  round.setPlayers(["a"]);
+  round.start();
+  assert.equal(round.status().resolvingMs, 0, "nothing is resolving");
+  round.resolveNow();
+  await clock.advance(42_000);
+  assert.equal(round.status().phase, "resolving");
+  assert.equal(round.status().resolvingMs, 42_000);
+  release();
+  await clock.flush();
+  assert.deepEqual(round.status().failure, { round: 1, reason: "The host cancelled the round.", kind: "cancelled" });
+  assert.equal(round.status().phase, "planning");
+  assert.equal(round.status().resolvingMs, 0);
+  assert.deepEqual(ROUND_FAILURE_KINDS, ["failed", "cancelled"]);
 });
 
 // One round number, the campaign's (the gap audit of 2026-11-18). The machine counted from 1 in each sitting while

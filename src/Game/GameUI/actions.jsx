@@ -521,9 +521,14 @@ const StandingGoal = ({ country, round, gameDate, isOpen, open = true, onToggle 
         setError("");
         try {
             // In a shared game the host keeps the goal: it is asked to.
+            // Its refusal is said here in the host's words: it was replaced by
+            // "could not be saved. Try again." whatever the host said.
             if (inSharedGame()) {
                 const answer = await requestFromHost("goal", { text: String(text || "").trim() });
-                if (!answer.ok) throw new Error(answer.error);
+                if (!answer.ok) {
+                    setError(answer.error || "The goal could not be saved. Try again.");
+                    return;
+                }
                 setEditing(false);
                 return;
             }

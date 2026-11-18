@@ -71,6 +71,7 @@ import { afterSharedSay, followSharedThread, pendingSharedThread, sayRequestFor,
 import { ownReplyAsked } from "../../multiplayer/client/ownReplies.js";
 import { SAY_MAX_CHARS } from "../../multiplayer/game/messages.js";
 import { answerOnThisDevice, dismissOwnReply, retryOwnReply, useOwnReply } from "./ownTableReplies.js";
+import SharedThreadNotes from "./SharedThreadNotes.jsx";
 import { askHostForInstitution } from "../../runtime/sharedInstitutions.js";
 import { setOpenConversation } from "../../runtime/openConversation.js";
 import { chatInboxSignature, holdChatsInListOrder, nextChatActivityOrdinal, promoteChatActivity, sortChatsForInbox } from "../../runtime/chatInboxOrder.js";
@@ -1287,6 +1288,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         const last = messages.at(-1);
         if (last?.id && String(last.id) !== ownReply.line) dismissOwnReply(chat.id);
     }, [ownReply, messages, chat.id]);
+    // In a shared game, the thread's newest line the host keeps: what the host
+    // said of it shows under it (SharedThreadNotes.jsx) until the thread moves on.
+    const lastThreadLine = [...messages].reverse().find((message) => message?.id && message?.role !== "error") ?? null;
     const [playerInput, setPlayerInput]         = useState("");
     // The composer of a shared game, whose lines the host takes (handlePlayerSubmit).
     const sharedComposer = inSharedGame();
@@ -2658,6 +2662,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 <MessageBubble msg={{ role: "error", speaker: "System", text: ownReplyProblem(ownReply), time: gameDate }} showTime={false}
                     onRetry={() => { void retryOwnReply(chat.id); }} />
             )}
+            {/* A shared game: the host's word about the newest line here (nobody
+                answers it this round, its player is away, the host's AI could
+                not answer it), with Retry for a failure. */}
+            {inSharedGame() && lastThreadLine ? (
+                <SharedThreadNotes thread={String(chat.id ?? "")} lastLine={String(lastThreadLine.id)} busy={isLoading}
+                    onRetry={() => { void answerAgainOnHost(String(lastThreadLine.text ?? "")); }} />
+            ) : null}
             <div ref={messagesEndRef} />
             </div>
 

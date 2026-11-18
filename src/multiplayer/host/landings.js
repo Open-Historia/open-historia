@@ -24,22 +24,26 @@
 // record of its own.
 //
 // Its words are the host's, in the game's own terms (peaceTerms.js
-// describeTerms, as the war's record and the next skip are told them): no
-// model is asked for them, so a peace costs no request.
+// termsInWords, as the war's record and the next skip are told them): no
+// model is asked for them, so a peace costs no request. They are written in
+// the world's language (`words`, host/worldWords.js), from the patterns the
+// game's language packs translate: they were English in every world.
 //
 // Pure.
 
-import { describeTerms, normalizePeaceTreaties } from "../../runtime/peaceTerms.js";
+import { normalizePeaceTreaties, termsInWords } from "../../runtime/peaceTerms.js";
 import { normalizeTreatyOffers } from "../../runtime/treatyOffers.js";
 import { historyEntryCoversDate } from "../../runtime/manualEventTimeline.js";
 import { compareGameDates, isGameDate } from "../../runtime/gameDates.js";
+import { ENGLISH_WORDS } from "./worldWords.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLowerCase();
 const list = (value) => (Array.isArray(value) ? value : []);
 const record = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
 const sameName = (left, right) => fold(left) === fold(right);
-const capitalized = (text) => (text ? `${text[0].toUpperCase()}${text.slice(1)}` : text);
+// (A capital is the first letter's own; a script without cases is left as it is.)
+const capitalized = (text) => (text ? `${text[0].toLocaleUpperCase()}${text.slice(1)}` : text);
 
 // i18n-ignore: the record's own source and mode.
 export const LANDING_SOURCE = "between-rounds";
@@ -68,17 +72,21 @@ export const bordersMoved = (before, after, { ownerOf = () => "" } = {}) => {
   return { regionTransfers, regionControlOps };
 };
 
-const peaceEvent = (treaty, { date, moved }) => {
+// The terms in one sentence, each part written whole in the world's language.
+const termsSentences = (terms, words) => `${capitalized(termsInWords(terms, words).join("; "))}.`;
+
+const peaceEvent = (treaty, { date, moved, words }) => {
   const parties = [treaty.from, treaty.to].filter(Boolean);
   const war = treaty.title || treaty.warId;
-  const terms = `${capitalized(describeTerms(treaty.terms))}.`;
+  const terms = termsSentences(treaty.terms, words);
   return {
     id: `landing-peace-${treaty.id}`,
     date,
-    title: `Peace between ${parties.join(" and ")}`,
+    // (A treaty of peace always has its two sides: peaceTerms.js normalizePeaceTreaties.)
+    title: words.say("Peace between {{first}} and {{second}}", { first: parties[0] ?? "", second: parties[1] ?? "" }),
     description: treaty.left?.length
-      ? `A separate peace: ${treaty.left.join(" and ")} leave ${war}, which goes on for the rest. ${terms}`
-      : `${war} is over. ${terms}`,
+      ? `${words.say("A separate peace: {{leaving}} leave {{war}}, which goes on for the rest.", { leaving: words.list(treaty.left), war })} ${terms}`
+      : `${words.say("{{war}} is over.", { war })} ${terms}`,
     importance: "major",
     kind: "world",
     tags: ["Diplomacy"],
@@ -89,10 +97,11 @@ const peaceEvent = (treaty, { date, moved }) => {
   };
 };
 
-const treatyEvent = (offer, { date }) => ({
+// (Its title and terms are the two players' own words.)
+const treatyEvent = (offer, { date, words }) => ({
   id: `landing-treaty-${offer.agreementId || offer.id}`,
   date,
-  title: `${offer.from} and ${offer.to} sign a treaty`,
+  title: words.say("{{from}} and {{to}} sign a treaty", { from: offer.from, to: offer.to }),
   description: [offer.title, offer.terms].filter(Boolean).join(": "),
   importance: "minor",
   kind: "world",
@@ -107,7 +116,8 @@ const treatyEvent = (offer, { date }) => ({
 // sides they passed between (the first peace's, where none's).
 //   date      the game's date
 //   ownerOf   the map's own owner of a region the world lists none for
-export const landingEvents = (before, after, { date = "", ownerOf } = {}) => {
+//   words     the world's language (host/worldWords.js worldWordsOf); English if none
+export const landingEvents = (before, after, { date = "", ownerOf, words = ENGLISH_WORDS } = {}) => {
   const day = clean(date);
   const hadPeace = new Set(normalizePeaceTreaties(before?.peaceTreaties).map((entry) => entry.id));
   const peaces = normalizePeaceTreaties(after?.peaceTreaties).filter((entry) => !hadPeace.has(entry.id));
@@ -124,8 +134,8 @@ export const landingEvents = (before, after, { date = "", ownerOf } = {}) => {
     return { regionTransfers: moved.regionTransfers.filter(mine), regionControlOps: moved.regionControlOps.filter(mine) };
   };
   return [
-    ...peaces.map((treaty, at) => peaceEvent(treaty, { date: day, moved: ownMoves(treaty, at) })),
-    ...signed.map((offer) => treatyEvent(offer, { date: day })),
+    ...peaces.map((treaty, at) => peaceEvent(treaty, { date: day, moved: ownMoves(treaty, at), words: words ?? ENGLISH_WORDS })),
+    ...signed.map((offer) => treatyEvent(offer, { date: day, words: words ?? ENGLISH_WORDS })),
   ];
 };
 
@@ -165,9 +175,10 @@ export const withLandingsOnTimeline = (world, landed, { round = 0 } = {}) => {
 };
 
 // What landed, told: the world with its events on the timeline and the event
-// log with them, or null when nothing landed. `game`: its date and round.
-export const tellLandings = ({ before, after, events, game, ownerOf } = {}) => {
-  const landed = landingEvents(before, after, { date: clean(game?.gameDate || game?.startDate), ownerOf })
+// log with them, or null when nothing landed. `game`: its date and round;
+// `words`: the world's language (landingEvents).
+export const tellLandings = ({ before, after, events, game, ownerOf, words } = {}) => {
+  const landed = landingEvents(before, after, { date: clean(game?.gameDate || game?.startDate), ownerOf, words })
     .filter((event) => !list(events).some((known) => clean(known?.id) === event.id));
   if (!landed.length) return null;
   return {

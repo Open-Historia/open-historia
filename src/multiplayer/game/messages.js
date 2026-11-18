@@ -184,7 +184,22 @@ const CARRIED_CALL = obj({
 // What the Game Master changed (host/gameMaster.js), as every lobby carries it.
 export const GAME_MASTER_LOG_MAX = 24;
 export const GAME_MASTER_SUMMARY_MAX = 400;
-const GAME_MASTER_ENTRY = obj({ round: int(0, 1_000_000), date: str(40), summary: str(GAME_MASTER_SUMMARY_MAX, { min: 1 }) });
+// What a notice answers, for the screen where the player acted (HOST_MESSAGES notice).
+export const NOTICE_ABOUT = Object.freeze(["gm", "seat", "thread"]);
+// The countries whose figures one entry names; the rest are counted.
+export const GAME_MASTER_FIGURES_NAMED = 4;
+const COUNT = int(0, 100_000);
+// `changed`: what it touched, counted, as fields (host/gameMaster.js), which
+// each screen says in whole sentences of its own language. They were English
+// pieces glued onto the AI's summary on the host, the same for every player.
+// (The session keeps its log by the same schema: host/sessionRecord.js.)
+export const GAME_MASTER_ENTRY = obj({
+  round: int(0, 1_000_000), date: str(40), summary: str(GAME_MASTER_SUMMARY_MAX, { min: 1 }),
+  changed: obj({
+    events: COUNT, wars: COUNT, relations: COUNT, agreements: COUNT,
+    figures: list(NAME(200), GAME_MASTER_FIGURES_NAMED), moreFigures: COUNT,
+  }),
+}, ["changed"]);
 
 export const PLAYER_REQUESTS = Object.freeze({
   // The lobby.
@@ -482,9 +497,20 @@ export const HOST_MESSAGES = Object.freeze({
     // round lands.
     failed: int(0, 1_000_000),
     failure: str(300),
+    // What became of it: it "failed", or the host "cancelled" it. A cancel
+    // read "could not be resolved: The host cancelled the round."
+    failureKind: str(12, { enum: ["failed", "cancelled"] }),
     // With settings.payment "cycle": the country whose device pays this round.
     payer: COUNTRY,
-  }, ["payer"]),
+    // The host's screen is gone (a reload, its window closed): the round
+    // waits for it, and every screen says so, where it read only "Paused".
+    hostAway: bool(),
+    // While a round is resolved: the skip's step as the host's engine is on it
+    // (Game/AI/skipPhases.js, the words single player shows), and how long the
+    // round has been resolving. A slow model was minutes of one still label.
+    step: obj({ label: str(120, { min: 1 }), detail: str(80) }),
+    elapsedMs: int(0, 30 * 24 * 3600 * 1000),
+  }, ["failureKind", "payer", "hostAway", "step", "elapsedMs"]),
   // With settings.payment "cycle": a request of the round, for the device that
   // pays it to carry to its own AI and answer ("paid"); and the host's word
   // that it no longer waits for one (the round was cancelled or stopped).
@@ -496,7 +522,17 @@ export const HOST_MESSAGES = Object.freeze({
   // A request taken that waits for the round being resolved (host/requestWaits.js):
   // its answer (`ack`) comes once the round has landed, however long that takes.
   held: obj({ t: literal("held"), id: REQUEST_ID }),
-  notice: obj({ t: literal("notice"), level: str(8, { enum: ["info", "warn"] }), text: str(500) }),
+  // A word to the player. Every one is kept and listed under Players
+  // (ui/SharedGameOverlay.jsx); one that answers something the player did says
+  // what (`about`), and the screen where they did it shows it there too:
+  //   "gm"      the Game Master's box (the host's);
+  //   "seat"    the country picker (a change of country, a country gone);
+  //   "thread"  the conversation `thread`, while its line `line` is still the
+  //             newest there (client/threadNotes.js).
+  notice: obj({
+    t: literal("notice"), level: str(8, { enum: ["info", "warn"] }), text: str(500),
+    about: str(8, { enum: NOTICE_ABOUT }), thread: str(120), line: str(160),
+  }, ["about", "thread", "line"]),
   // The player's own view of the game's documents; only the ones that changed
   // since the view numbered `base`, whole (every one, when `base` is 0). `rev`
   // only goes up within an `epoch`, and `sums` is the digest of every document

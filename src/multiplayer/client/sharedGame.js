@@ -27,7 +27,7 @@ import { GENERATION_COMPLETE_EVENT, adoptStoredAiRecord } from "../../Game/AI/te
 import { UNROUTED_NOTICE, planGameWrite, planWorldWrite, revealedTurnOf, suggestionsOutlived, unroutedChanges, unroutedRefusal } from "./seatWrites.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
-import { setSharedAdvisorRefusal, setSharedGamePeople, setSharedGameRole, setSharedGameSettings, setSharedRequester, setSharedRequestsHeld, setSharedRoundBase, setSharedRoundDays, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
+import { setSharedAdvisorRefusal, setSharedGamePeople, setSharedGameRole, setSharedGameSettings, setSharedNotices, setSharedRequester, setSharedRequestsHeld, setSharedRoundBase, setSharedRoundDays, SHARED_ROUND_LANDED } from "./sharedGameBridge.js";
 import { roundBaseOf } from "./roundBase.js";
 import { createRoundPayer } from "./roundPayer.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
@@ -65,6 +65,9 @@ const IDLE = Object.freeze({
   standIn: "",
   // The game's date as this page's view has it (the round bar, ui/SharedGameOverlay.jsx).
   date: "",
+  // When the player last opened the host's notices (under Players): those
+  // since are marked new.
+  noticesReadAt: 0,
   error: "",
 });
 
@@ -123,10 +126,21 @@ const beginRuntime = (onWrite) => startRemoteRuntime({
 });
 
 // What the round bar says: the host's notices (client/gameClient.js) and this
-// page's own, in the order they were said.
-const noticesNow = () => [...(current?.hostNotices ?? []), ...(current?.ownNotices ?? [])]
-  .sort((left, right) => (left.at || 0) - (right.at || 0))
-  .slice(-20);
+// page's own, in the order they were said. Every screen that shows one where it
+// was asked for (a conversation, client/threadNotes.js) reads them too.
+const noticesNow = () => {
+  const notices = [...(current?.hostNotices ?? []), ...(current?.ownNotices ?? [])]
+    .sort((left, right) => (left.at || 0) - (right.at || 0))
+    .slice(-20);
+  setSharedNotices(notices);
+  return notices;
+};
+
+// The player opened the host's notices: none is new any more.
+export const markNoticesRead = () => {
+  const newest = state.notices.at(-1)?.at || 0;
+  if (newest > state.noticesReadAt) set({ noticesReadAt: newest });
+};
 
 // This page's own word to its player. The same thing twice in a row is said once.
 const notify = (text, level = "warn") => {
@@ -707,6 +721,7 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   set({ ...IDLE });
   setSharedGameRole("");
   setSharedGamePeople([]);
+  setSharedNotices([]);
   setSharedRoundBase(null);
   setSharedRoundDays(0);
   setSharedGameSettings(null);

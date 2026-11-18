@@ -739,6 +739,11 @@ const PROSE_FILES = [
   // Who pays for what, the host's answers a round, the Game Master and the round's payer.
   "src/multiplayer/costRules.js", "src/multiplayer/host/hostAnswers.js", "src/multiplayer/host/gameMaster.js",
   "src/multiplayer/host/roundPayers.js", "src/multiplayer/client/roundPayer.js",
+  // A peace or a treaty players make between rounds: its event, which the host
+  // writes in the world's language from the packs (host/worldWords.js), and its notice.
+  "src/multiplayer/host/landings.js",
+  // The round bar's words, split out of the overlay so node can test them.
+  "src/multiplayer/ui/roundBar.js",
   // The local server's refusals the Workshop, the hub and Settings show.
   "server/tiledBasemaps.js", "server/musicLibrary.js", "server/flagValidation.js", "server/polityRename.js",
   "server/hubProvenance.js", "server/officialBasemaps.js", "server/hubCache.js", "server/basemapStore.js",

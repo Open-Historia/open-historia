@@ -58,3 +58,19 @@ test("the record keeps who the host released from which country; one kept before
   const { released: _none, ...older } = record;
   assert.deepEqual(sessionFromRecord(older, { campaign: "game-baltic", hostDevice: "device-host" }).released, []);
 });
+
+// What the Game Master touched is kept as fields of its line (host/gameMaster.js, the review of 2026-11-18, ui 8):
+// the record reads them as every lobby does, or a session with one such line would not be taken up at all.
+test("a Game Master line with what it touched is kept, and the session with it is taken up", () => {
+  const changed = { events: 2, wars: 1, relations: 0, agreements: 0, figures: ["Republic of Estonia"], moreFigures: 0 };
+  const record = sessionRecordOf({
+    campaign: "game-baltic", started: true, round: 4, hostDevice: "device-host", seats: [],
+    gameMaster: [{ round: 3, date: "2014-06-01", summary: "The Narva treaty is signed.", changed }, { round: 2, date: "", summary: "An older line. (1 war changed)" }],
+  });
+  const taken = sessionFromRecord(record, { campaign: "game-baltic", hostDevice: "device-host" });
+  assert.ok(taken, "taken up, seats and all");
+  assert.deepEqual(taken.gameMaster, [
+    { round: 3, date: "2014-06-01", summary: "The Narva treaty is signed.", changed },
+    { round: 2, date: "", summary: "An older line. (1 war changed)" },
+  ]);
+});

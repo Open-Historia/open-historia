@@ -116,6 +116,19 @@ export const setSharedAdvisorRefusal = (text) => {
   for (const listener of [...roleListeners]) listener();
 };
 
+// The host's notices to this player, newest last (client/gameClient.js), for
+// the screens that show the ones about what was done there (a conversation
+// shows those about its own lines: client/threadNotes.js). Empty in no shared
+// game. For useSyncExternalStore, with the role's subscription.
+let notices = NOBODY;
+export const sharedNotices = () => notices;
+export const setSharedNotices = (list) => {
+  const next = Array.isArray(list) && list.length ? Object.freeze([...list]) : NOBODY;
+  if (next.length === notices.length && next.every((entry, at) => entry === notices[at])) return;
+  notices = next;
+  for (const listener of [...roleListeners]) listener();
+};
+
 export const setSharedRequester = (request) => {
   requester = typeof request === "function" ? request : null;
 };

@@ -51,6 +51,12 @@ const clampSettings = (settings) => {
 // How many of `count` players make the share: 2/3 of 3 is 2, of 4 is 3.
 export const readyNeeded = (count, threshold) => (count <= 0 ? 0 : Math.max(1, Math.ceil(count * threshold - 1e-9)));
 
+// A round the host called off, rather than one that failed: what `onResolve`
+// rejects with then. Kept as the failure's `kind`, so every screen says
+// "cancelled" and not "could not be resolved: The host cancelled the round."
+export const ROUND_FAILURE_KINDS = Object.freeze(["failed", "cancelled"]);
+export const cancelledRound = (reason) => Object.assign(new Error(reason), { roundFailure: "cancelled" });
+
 export const createRoundMachine = ({
   settings: initialSettings = {},
   now = () => Date.now(),
@@ -75,7 +81,9 @@ export const createRoundMachine = ({
   let revealEnds = 0;
   let paused = null; // { remaining: { planning, countdown, reveal } } while paused
   // The last round that could not be resolved and why, until one is.
-  let failure = null; // { round, reason }
+  let failure = null; // { round, reason, kind }
+  // When the round being resolved began to be.
+  let resolvingSince = 0;
   let timer = null;
   const present = new Set();
   const ready = new Set();
@@ -113,6 +121,8 @@ export const createRoundMachine = ({
     counted: counted(),
     needed: readyNeeded(counted().length, settings.readyThreshold),
     failure: failure ? { ...failure } : null,
+    // How long the round has been resolving, for the round bar's clock.
+    resolvingMs: phase === "resolving" ? Math.max(0, now() - resolvingSince) : 0,
     settings: { ...settings },
     followsCampaign,
   });
@@ -141,6 +151,7 @@ export const createRoundMachine = ({
 
   const resolve = () => {
     phase = "resolving";
+    resolvingSince = now();
     timers.clearTimeout(timer);
     // Who has read the round through is counted from here: a player is sent
     // the round's events as the last step of resolving it, and one with little
@@ -167,7 +178,11 @@ export const createRoundMachine = ({
           // A round that could not be resolved goes back to planning, with the
           // orders still queued, rather than skipping ahead, and says why.
           early.clear();
-          failure = { round, reason: String(error?.message || error || "").replace(/\s+/g, " ").trim().slice(0, 280) };
+          failure = {
+            round,
+            reason: String(error?.message || error || "").replace(/\s+/g, " ").trim().slice(0, 280),
+            kind: error?.roundFailure === "cancelled" ? "cancelled" : "failed",
+          };
           startPlanning({ sameRound: true });
         },
       );

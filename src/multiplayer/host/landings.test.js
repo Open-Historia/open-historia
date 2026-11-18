@@ -8,11 +8,14 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 import { makePeace } from "../../Game/AI/warAndPeace.js";
-import { TERRITORY_AS_HELD } from "../../runtime/peaceTerms.js";
+import { TERRITORY_AS_HELD, describeTerms, termsInWords } from "../../runtime/peaceTerms.js";
+import { fillSlots } from "../../runtime/phraseBook.js";
 import { answerTreaty, proposeTreaty } from "../../runtime/treatyOffers.js";
 import { LANDING_SOURCE, bordersMoved, landingEvents, landingNotice, tellLandings, withLandingsOnTimeline } from "./landings.js";
+import { worldWordsOf } from "./worldWords.js";
 
 const LATVIA = "Republic of Latvia";
 const RUSSIA = "Russian Federation";
@@ -62,6 +65,35 @@ test("a peace made is told as one event naming its parties, with the borders it 
   assert.equal(event.source, LANDING_SOURCE);
   assert.deepEqual(event.impacts.regionTransfers.map((entry) => [entry.regionId, entry.toCode]).sort(), [["reg-latgale", RUSSIA], ["reg-pskov", LATVIA], ["reg-vidzeme", RUSSIA]]);
   assert.equal(landingNotice(event), `${RUSSIA} and ${LATVIA} have made peace.`);
+});
+
+// They were English whatever the world's language, kept for good among events the AI wrote in it, and left as
+// they are by every screen's translator (the review of 2026-11-18, ui 10). The host writes them from the pack the
+// game ships for the world's language, with the names exactly as the world has them.
+test("a peace and a treaty are written in the world's language, from its pack, the names exact", () => {
+  const pack = JSON.parse(fs.readFileSync(new URL("../../../public/lang/ja.json", import.meta.url), "utf8"));
+  const words = worldWordsOf(pack, "ja");
+  const before = atWar();
+  const after = makePeace(before, { warId: "war-1", from: RUSSIA, to: LATVIA, terms: { territory: TERRITORY_AS_HELD }, date: DATE, round: 5, by: "offer", players: [RUSSIA, LATVIA] });
+  const [event] = landingEvents(before, after, { date: DATE, words });
+  assert.equal(event.title, fillSlots(pack["Peace between {{first}} and {{second}}"], { first: RUSSIA, second: LATVIA }));
+  assert.ok(event.title.includes(RUSSIA) && event.title.includes(LATVIA), "names exactly as the world has them");
+  assert.notEqual(event.title, `Peace between ${RUSSIA} and ${LATVIA}`);
+  // Each part of the terms the pack translates is the pack's.
+  assert.ok(event.description.includes(pack["each side keeps the ground it holds"]), event.description);
+  assert.ok(event.description.includes(pack["nobody pays reparations"]), event.description);
+  assert.deepEqual(event.concerns, [RUSSIA, LATVIA], "its parties are the world's names, whatever the words");
+  const players = [RUSSIA, LATVIA];
+  const put = proposeTreaty({}, { from: RUSSIA, to: LATVIA, type: "non_aggression", title: "The Riga Pact", terms: "Neither attacks the other.", players, date: DATE, round: 5 });
+  const signed = answerTreaty(put.world, { op: "sign", ref: put.offer.id, country: LATVIA, date: DATE, round: 5 });
+  const [treaty] = landingEvents(put.world, signed.world, { date: DATE, words });
+  assert.equal(treaty.title, fillSlots(pack["{{from}} and {{to}} sign a treaty"], { from: RUSSIA, to: LATVIA }));
+  assert.equal(treaty.description, "The Riga Pact: Neither attacks the other.", "the players' own words stay theirs");
+  // A world in English, or one whose language has no pack, is written as before.
+  assert.equal(landingEvents(before, after, { date: DATE, words: worldWordsOf(null, "tlh") })[0].title, `Peace between ${RUSSIA} and ${LATVIA}`);
+  // And so is the story the next skip is told of the terms (peaceTerms.js describeTerms), always in English.
+  assert.equal(describeTerms({ territory: TERRITORY_AS_HELD }), "each side keeps the ground it holds; nobody pays reparations");
+  assert.deepEqual(termsInWords({ territory: TERRITORY_AS_HELD }, words), [pack["each side keeps the ground it holds"], pack["nobody pays reparations"]]);
 });
 
 test("a separate peace says the war goes on for the rest", () => {

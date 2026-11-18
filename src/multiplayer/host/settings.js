@@ -116,9 +116,47 @@ export const SETTINGS_SCHEMA = obj({
 // Whether the host may use the Game Master in this game (`cheats`).
 export const gameMasterAllowed = (settings) => settings?.cheats === "host";
 
+// What is wrong with one setting, in a sentence that names it, its bounds read
+// from the schema itself so the words cannot drift from what is refused. A host
+// who cleared or mistyped a number in "Host a lobby" was refused in the
+// schema's own code ("$.roundMinutes: outside 1..10080").
+const SETTING_PROBLEMS = Object.freeze({
+  name: ({ max }) => `Give the lobby a name of up to ${max} characters.`,
+  seats: ({ min, max }) => `Players must be a whole number from ${min} to ${max}.`,
+  roundMinutes: ({ min, max }) => `Round length must be a whole number of minutes from ${min} to ${max}.`,
+  readyThreshold: () => "Choose the share of players whose being ready starts the countdown.",
+  countdownSeconds: ({ min, max }) => `The countdown must be a whole number of seconds from ${min} to ${max}.`,
+  minPlanningSeconds: ({ min, max }) => `The least planning time must be a whole number of seconds from ${min} to ${max}.`,
+  afkSeconds: ({ min, max }) => `The time before an idle player counts as ready must be a whole number of seconds from ${min} to ${max}.`,
+  daysPerRound: ({ min, max }) => `Game time per round must be a whole number of days from ${min} to ${max}.`,
+  leaverGraceMinutes: ({ min, max }) => `How long a leaver's country waits must be a whole number of minutes from ${min} to ${max}.`,
+  hostAnswers: ({ min, max }) => `The messages your AI answers each player a round must be a whole number from ${min} to ${max}.`,
+  postsPerRound: ({ min, max }) => `Rostra posts a player may make each round must be a whole number from ${min} to ${max}.`,
+});
+const SETTING_CHOICE = "Choose one of the choices offered for every setting.";
+
+// Every setting that would be refused, in the form's order: [{ key, text }].
+// The form shows each under its field; the engine refuses with the first.
+export const settingsProblems = (input = {}) => {
+  const merged = { ...DEFAULT_SETTINGS };
+  for (const key of Object.keys(DEFAULT_SETTINGS)) {
+    if (input && Object.prototype.hasOwnProperty.call(input, key) && input[key] !== undefined) merged[key] = input[key];
+  }
+  if (typeof merged.name === "string") merged.name = merged.name.trim() || DEFAULT_SETTINGS.name;
+  const problems = [];
+  for (const [key, node] of Object.entries(SETTINGS_SCHEMA.props)) {
+    if (validate(node, merged[key]).ok) continue;
+    problems.push({ key, text: SETTING_PROBLEMS[key]?.(node) ?? SETTING_CHOICE });
+  }
+  if (!problems.some((problem) => problem.key === "seats") && Number(merged.seats) > SEATS_AVAILABLE_NOW) {
+    problems.push({ key: "seats", text: `More than ${SEATS_AVAILABLE_NOW} players is coming later.` });
+  }
+  return problems;
+};
+
 // Settings the host typed, made whole and safe: unknown keys are dropped,
-// anything out of range is refused with the reason, and the seats are held to
-// what can be played today.
+// anything out of range is refused with the reason in words (settingsProblems),
+// and the seats are held to what can be played today.
 export const normalizeSettings = (input = {}) => {
   const merged = { ...DEFAULT_SETTINGS };
   for (const key of Object.keys(DEFAULT_SETTINGS)) {
@@ -126,9 +164,12 @@ export const normalizeSettings = (input = {}) => {
   }
   if (typeof merged.name === "string") merged.name = merged.name.trim() || DEFAULT_SETTINGS.name;
   const checked = validate(SETTINGS_SCHEMA, merged);
-  if (!checked.ok) return { ok: false, error: checked.error };
+  if (!checked.ok) {
+    const first = settingsProblems(merged)[0];
+    return { ok: false, error: first?.text || SETTING_CHOICE, key: first?.key ?? "" };
+  }
   if (checked.value.seats > SEATS_AVAILABLE_NOW) {
-    return { ok: false, error: `More than ${SEATS_AVAILABLE_NOW} players is coming later.` };
+    return { ok: false, error: `More than ${SEATS_AVAILABLE_NOW} players is coming later.`, key: "seats" };
   }
   return { ok: true, settings: checked.value };
 };

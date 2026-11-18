@@ -54,7 +54,8 @@ test("a shared round never stops on the host's own \"Stop when my events fail\""
 
 test("a skip that fails in the host's engine leaves no turn held, and the round still hears of the failure", () => {
   const resolve = engine.slice(engine.indexOf("resolveRound: async"));
-  const jump = resolve.indexOf("await simulateTimelineJump({ days: daysPerRound, signal, cannedTurn: false });");
+  // (Its steps go to every screen's round bar: onProgress.)
+  const jump = resolve.indexOf("await simulateTimelineJump({ days: daysPerRound, signal, cannedTurn: false, onProgress });");
   const discard = resolve.indexOf("discardHeldTurns();");
   const rethrown = resolve.indexOf("throw error;", discard);
   assert.ok(jump > -1 && discard > jump, "a held turn is let go when the skip fails");

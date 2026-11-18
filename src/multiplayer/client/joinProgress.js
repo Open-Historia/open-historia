@@ -111,21 +111,29 @@ export const scenarioUnchecked = (name) => `The host's map of "${String(name || 
 export const scenarioMissing = (name) => `The host is playing "${String(name || "a scenario").slice(0, 120)}", and that scenario is not in your library, so its map cannot be shown here. Add it from the Community tab, or import the host's copy of it, then join again.`;
 
 // What the host's screen says about people who are not in the player list yet:
-// [{ text, problem }]. `engine` is the engine window's status
+// [{ text, people?, problem }]. `engine` is the engine window's status
 // (host/engineMain.js report).
+// Each line is a whole sentence of its own (`text`), and the players it names
+// apart from it (`people`, shown after it, as typed: peopleOf): a translator
+// gets the sentence whole, and nobody's name is ever taken for words to
+// translate. The lines were marked never to be translated because of the
+// names in them, the network warnings with them.
+export const peopleOf = (line) => sentence(line?.people);
 export const hostLines = (engine) => {
   const lines = [];
   const stuck = new Set(names(engine?.unreachable));
   const choosing = names(engine?.choosing);
   const joining = names(engine?.joining);
-  if (choosing.length) lines.push({ text: `In the lobby, choosing a country: ${sentence(choosing)}`, problem: false });
-  if (joining.length) {
-    lines.push({ text: `Connecting now: ${sentence(joining.map((name) => (stuck.has(name) ? `${name} (trying again)` : name)))}`, problem: false });
-  }
+  if (choosing.length) lines.push({ text: "In the lobby, choosing a country:", people: choosing, problem: false });
+  const connecting = joining.filter((name) => !stuck.has(name));
+  const again = joining.filter((name) => stuck.has(name));
+  if (connecting.length) lines.push({ text: "Connecting now:", people: connecting, problem: false });
+  if (again.length) lines.push({ text: "Trying again to connect:", people: again, problem: false });
   const gaveUp = [...stuck].filter((name) => !joining.includes(name));
   if (gaveUp.length) {
     lines.push({
-      text: `Could not connect: ${sentence(gaveUp)}. They found this lobby, but no connection between their computer and this one could be opened.`,
+      text: "These players found this lobby, but no connection between their computer and this one could be opened:",
+      people: gaveUp,
       problem: true,
     });
   }

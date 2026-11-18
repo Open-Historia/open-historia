@@ -12,7 +12,8 @@ import React, { useState } from "react";
 import { hostControl } from "../client/sharedGame.js";
 import { HOST_ANSWER_CHOICES, costRulesOf, gameMasterRuleOf, payerLineOf, payersLinesOf } from "../costRules.js";
 import { gameMasterAllowed } from "../host/settings.js";
-import { GAME_MASTER_COMMAND_MAX } from "../host/gameMaster.js";
+import { GAME_MASTER_COMMAND_MAX, gameMasterChangeLines } from "../host/gameMaster.js";
+import { latestNoticeAbout } from "../client/threadNotes.js";
 
 const small = { color: "rgba(255,255,255,0.6)", fontSize: "0.76rem", lineHeight: 1.45 };
 const heading = { ...small, marginBottom: "0.25rem", marginTop: "0.7rem", textTransform: "uppercase" };
@@ -38,11 +39,14 @@ const HostAnswersSetting = ({ settings }) => {
   );
 };
 
-// What the Game Master has changed in this game, newest first: the AI's own words for it.
+// What the Game Master has changed in this game, newest first: the AI's own
+// words for it, then what it touched, each in a whole sentence of this
+// screen's language (host/gameMaster.js gameMasterChangeLines).
 const GameMasterLog = ({ entries }) => (entries ?? []).slice().reverse().map((entry, index) => (
   <div key={`${entry.round}:${index}`} style={{ ...small, marginTop: "0.25rem" }}>
     <span>{entry.date ? `Round ${entry.round}, ${entry.date}:` : `Round ${entry.round}:`}</span>{" "}
     <span style={isolate}>{entry.summary}</span>
+    {gameMasterChangeLines(entry).map((line) => <React.Fragment key={line}>{" "}<span style={isolate}>{line}</span></React.Fragment>)}
   </div>
 ));
 
@@ -69,15 +73,20 @@ export const GameRules = ({ shared }) => {
 export const GameMasterBox = ({ shared }) => {
   const [open, setOpen] = useState(false);
   const [command, setCommand] = useState("");
+  // When the last command was given: what came of it is said here, where it
+  // was given (a notice about the Game Master, game/messages.js `about`).
+  const [sentAt, setSentAt] = useState(0);
   if (shared.role !== "host" || !gameMasterAllowed(shared.lobby?.settings)) return null;
   const busy = shared.engine?.gameMasterBusy === true;
   const resolving = shared.round?.phase === "resolving";
   const send = () => {
     const text = command.trim();
     if (!text || busy || resolving) return;
+    setSentAt(Date.now());
     hostControl("gm", { command: text.slice(0, GAME_MASTER_COMMAND_MAX) });
     setCommand("");
   };
+  const outcome = sentAt && !busy ? latestNoticeAbout(shared.notices, "gm", sentAt) : null;
   if (!open) return <button type="button" style={button} onClick={() => setOpen(true)}>Game Master</button>;
   return (
     <div style={{ display: "flex", flexBasis: "100%", flexDirection: "column", gap: "0.4rem" }}>
@@ -94,6 +103,7 @@ export const GameMasterBox = ({ shared }) => {
         <button type="button" style={button} onClick={() => setOpen(false)}>Close</button>
         <span style={small}>{resolving ? "Not while a round is being resolved." : "It changes the world at once, and every player is told what it changed."}</span>
       </div>
+      {outcome ? <div style={{ ...small, ...isolate, ...(outcome.level === "warn" ? { color: "#fca5a5" } : null) }}>{outcome.text}</div> : null}
     </div>
   );
 };
@@ -106,7 +116,7 @@ export const GameMasterMark = ({ shared }) => {
   const changes = shared.lobby?.gameMaster?.length ?? 0;
   return (
     <span style={{ ...small, border: "1px solid rgba(255,255,255,0.18)", borderRadius: "999px", padding: "0.1rem 0.5rem" }} title="The host may change the world with the Game Master. Every change is told to every player and listed under Players.">
-      {changes ? `Game Master on: ${changes} ${changes === 1 ? "change" : "changes"}` : "Game Master on"}
+      {!changes ? "Game Master on" : changes === 1 ? "Game Master on: 1 change" : `Game Master on: ${changes} changes`}
     </span>
   );
 };

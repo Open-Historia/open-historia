@@ -57,6 +57,7 @@
 
 import { PUPPET_KINDS, puppetKindLabel } from "./puppets.js";
 import { MAX_WAR_SIDE_MEMBERS, keepOpenRows } from "./warRecord.js";
+import { fillSlots } from "./phraseBook.js";
 
 export const TERRITORY_AS_HELD = "as held";
 export const TERRITORY_RESTORED = "restored";
@@ -224,20 +225,38 @@ export const cessionsByReceiver = (cessions) => {
   return [...by.values()];
 };
 
-// Terms in a line, for the story and for whoever reads the game.
-export const describeTerms = (terms) => {
+// Terms as their parts, each written by `words` (the English below unless
+// given): `say(pattern, values)` fills a whole pattern, `word(text)` a fixed
+// piece, `list(names)` names in a list. A host writes a peace two players make
+// in the language of their world with them (multiplayer/host/worldWords.js),
+// from the same patterns the language packs translate.
+const ENGLISH_TERMS_WORDS = Object.freeze({ say: fillSlots, word: (text) => text, list: listed });
+export const termsInWords = (terms, words = ENGLISH_TERMS_WORDS) => {
+  const { say, word, list: names } = { ...ENGLISH_TERMS_WORDS, ...words };
   const read = normalizeTerms(terms);
-  const ground = read.territory === TERRITORY_AS_HELD ? "each side keeps the ground it holds" : "every region goes back to whose it was before the war";
+  const ground = read.territory === TERRITORY_AS_HELD ? word("each side keeps the ground it holds") : word("every region goes back to whose it was before the war");
   const payment = read.reparations;
-  const parts = [read.annexed ? `${read.annexed.country} is annexed: all its land passes to ${read.annexed.by || "the other side"}` : ground];
-  for (const { to, regions } of cessionsByReceiver(read.cessions)) parts.push(`${listed(regions)} ${regions.length === 1 ? "passes" : "pass"} to ${to}`);
-  if (read.puppet) parts.push(`${read.puppet.subject} becomes ${read.puppet.overlord ? `${read.puppet.overlord}'s` : "the other side's"} ${puppetKindLabel(read.puppet.kind)}`);
+  const parts = [read.annexed ? say("{{country}} is annexed: all its land passes to {{value}}", { country: read.annexed.country, value: read.annexed.by || word("the other side") }) : ground];
+  for (const { to, regions } of cessionsByReceiver(read.cessions)) parts.push(say(regions.length === 1 ? "{{listed}} passes to {{to}}" : "{{listed}} pass to {{to}}", { listed: names(regions), to }));
+  if (read.puppet) {
+    const kind = word(puppetKindLabel(read.puppet.kind));
+    parts.push(read.puppet.overlord
+      ? say("{{subject}} becomes {{overlord}}'s {{puppetKindLabel}}", { subject: read.puppet.subject, overlord: read.puppet.overlord, puppetKindLabel: kind })
+      : say("{{subject}} becomes the other side's {{puppetKindLabel}}", { subject: read.puppet.subject, puppetKindLabel: kind }));
+  }
   parts.push(payment
-    ? `${payment.payer} pays ${payment.receiver} reparations of ${round(payment.share * 100, 1)}% of its economy a year for ${payment.years} ${payment.years === 1 ? "year" : "years"}`
-    : "nobody pays reparations");
-  if (read.conditions) parts.push(`and: ${read.conditions.join("; ")}`);
-  return parts.join("; ");
+    ? say(payment.years === 1
+      ? "{{payer}} pays {{receiver}} reparations of {{round}}% of its economy a year for {{years}} year"
+      : "{{payer}} pays {{receiver}} reparations of {{round}}% of its economy a year for {{years}} years", {
+      payer: payment.payer, receiver: payment.receiver, round: round(payment.share * 100, 1), years: payment.years,
+    })
+    : word("nobody pays reparations"));
+  if (read.conditions) parts.push(say("and: {{conditions}}", { conditions: read.conditions.join("; ") }));
+  return parts;
 };
+
+// Terms in a line, for the story and for whoever reads the game.
+export const describeTerms = (terms) => termsInWords(terms).join("; ");
 
 /// ---- offers ---------------------------------------------------------------------------------
 

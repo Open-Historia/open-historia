@@ -341,7 +341,7 @@ test("callAI carries the round's calls once its prompt is whole, the engine inst
   assert.ok(directive > 0 && carried > directive && providers > carried, "after the language directive, before the Fallback list");
   assert.match(main, /export async function carryRoundRequest\(call, \{ execute = null, signal = null, onRequest = null, onActivity = null, onRound = null \} = \{\}\) \{[\s\S]*?payerCallOf\(call, \{ execute, signal, onRequest, onActivity, onRound, limits \}\);[\s\S]*?return answerOf\(result, \{ sink, carry \}\);[\s\S]*?failed\.payFailure = failureOf\(error\);/);
   const engine = fs.readFileSync(new URL("../../multiplayer/host/engineMain.js", import.meta.url), "utf8");
-  assert.match(engine, /const uncarry = carry \? installRoundCarrier\(carry, \{ rules: payer\?\.rules \?\? null, who: payer\?\.device \?\? "" \}\) : \(\) => \{\};\s+try \{[\s\S]*?await simulateTimelineJump\(\{ days: daysPerRound, signal, cannedTurn: false \}\);[\s\S]*?\} finally \{\s+uncarry\(\);/);
+  assert.match(engine, /const uncarry = carry \? installRoundCarrier\(carry, \{ rules: payer\?\.rules \?\? null, who: payer\?\.device \?\? "" \}\) : \(\) => \{\};\s+try \{[\s\S]*?await simulateTimelineJump\(\{ days: daysPerRound, signal, cannedTurn: false, onProgress \}\);[\s\S]*?\} finally \{\s+uncarry\(\);/);
   const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
   const requests = gameplay.slice(gameplay.indexOf("const createJumpRequests = "), gameplay.indexOf("const jumpTaskOptions = "));
   assert.match(requests, /const \{ unlimited \} = skipRules\(\);/);

@@ -9,7 +9,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useLibraryState } from "../../runtime/library.js";
-import { MAX_SEATS, POSTS_PER_ROUND_MAX, SEATS_AVAILABLE_NOW, DEFAULT_SETTINGS } from "../host/settings.js";
+import { MAX_SEATS, POSTS_PER_ROUND_MAX, SEATS_AVAILABLE_NOW, DEFAULT_SETTINGS, settingsProblems } from "../host/settings.js";
 import { LANGUAGES, readingLanguageName } from "../../runtime/i18n.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { keptSettingsOf } from "../host/sessionRecord.js";
@@ -56,11 +56,17 @@ const rememberName = (name) => {
   }
 };
 
-const Field = ({ title, children, hint, style }) => (
+// The settings whose field below says what is wrong with it; anything else
+// wrong is said above the button.
+const FIELDS_WITH_PROBLEMS = Object.freeze(["name", "roundMinutes", "countdownSeconds", "daysPerRound", "leaverGraceMinutes", "postsPerRound"]);
+
+// `problem`: why the game would refuse what is in it (host/settings.js settingsProblems).
+const Field = ({ title, children, hint, problem, style }) => (
   <label style={{ display: "block", ...style }}>
     <span style={label}>{title}</span>
     {children}
     {hint ? <span style={{ ...note, display: "block", marginTop: "0.35rem" }}>{hint}</span> : null}
+    {problem ? <span role="alert" style={{ ...errorText, display: "block", marginTop: "0.35rem" }}>{problem}</span> : null}
   </label>
 );
 
@@ -168,10 +174,19 @@ const HostPanel = ({ onClose, onEnterGame }) => {
     return () => { live = false; };
   }, []);
 
+  // A number field the host clears stays empty (it was made 0 at once), and
+  // what it holds is checked below as the game would check it.
   const update = (key) => (event) => {
-    const value = event.target.type === "checkbox" ? event.target.checked : event.target.type === "range" || event.target.type === "number" ? Number(event.target.value) : event.target.value;
+    const { type, checked, value: raw } = event.target;
+    const value = type === "checkbox" ? checked : type === "range" || type === "number" ? (String(raw).trim() === "" ? "" : Number(raw)) : raw;
     setSettings((previous) => ({ ...previous, [key]: value }));
   };
+  // What the game would refuse, each under its own field, in words; the lobby
+  // cannot be opened until there is none. (The engine refuses the same, in the
+  // same words: host/settings.js normalizeSettings.)
+  const problems = settingsProblems(settings);
+  const problemOf = (key) => problems.find((problem) => problem.key === key)?.text || "";
+  const otherProblems = problems.filter((problem) => !FIELDS_WITH_PROBLEMS.includes(problem.key));
 
   const open = async () => {
     setBusy(true);
@@ -208,11 +223,11 @@ const HostPanel = ({ onClose, onEnterGame }) => {
           {!ai.refusal && ai.answerer?.passedAgent ? <p style={note}>{`Your own Agent does not answer a shared game: its rounds go to ${ai.answerer.label}.`}</p> : null}
           <div style={grid}>
             <Field title="Your name"><input style={input} value={name} maxLength={40} onChange={(event) => setName(event.target.value)} placeholder="Host" /></Field>
-            <Field title="Lobby name"><input style={input} value={settings.name} maxLength={60} onChange={update("name")} /></Field>
+            <Field title="Lobby name" problem={problemOf("name")}><input style={input} value={settings.name} maxLength={60} onChange={update("name")} /></Field>
             <Field title={`Players: ${settings.seats}`} hint={`Up to ${SEATS_AVAILABLE_NOW} for now; up to ${MAX_SEATS} is coming later.`}>
               <input type="range" min={2} max={MAX_SEATS} value={settings.seats} onChange={(event) => setSettings((previous) => ({ ...previous, seats: Math.min(SEATS_AVAILABLE_NOW, Number(event.target.value)) }))} style={{ width: "100%" }} />
             </Field>
-            <Field title="Round length (minutes)"><input type="number" style={input} min={1} max={10080} value={settings.roundMinutes} onChange={update("roundMinutes")} /></Field>
+            <Field title="Round length (minutes)" problem={problemOf("roundMinutes")}><input type="number" style={input} min={1} max={10080} step={1} value={settings.roundMinutes} onChange={update("roundMinutes")} /></Field>
             <Field title="Ready share to start the countdown" hint="When this share of players is ready, the countdown starts.">
               <select style={input} value={String(settings.readyThreshold)} onChange={(event) => setSettings((previous) => ({ ...previous, readyThreshold: Number(event.target.value) }))}>
                 <option value={String(0.5)}>Half</option>
@@ -221,12 +236,12 @@ const HostPanel = ({ onClose, onEnterGame }) => {
                 <option value={String(1)}>Everyone</option>
               </select>
             </Field>
-            <Field title="Countdown (seconds)"><input type="number" style={input} min={0} max={3600} value={settings.countdownSeconds} onChange={update("countdownSeconds")} /></Field>
-            <Field title="Game time per round (days)"><input type="number" style={input} min={1} max={3650} value={settings.daysPerRound} onChange={update("daysPerRound")} /></Field>
-            <Field title="A leaver's country waits (minutes)" hint="Then the AI plays it until they come back."><input type="number" style={input} min={0} max={1440} value={settings.leaverGraceMinutes} onChange={update("leaverGraceMinutes")} /></Field>
+            <Field title="Countdown (seconds)" problem={problemOf("countdownSeconds")}><input type="number" style={input} min={0} max={3600} step={1} value={settings.countdownSeconds} onChange={update("countdownSeconds")} /></Field>
+            <Field title="Game time per round (days)" problem={problemOf("daysPerRound")}><input type="number" style={input} min={1} max={3650} step={1} value={settings.daysPerRound} onChange={update("daysPerRound")} /></Field>
+            <Field title="A leaver's country waits (minutes)" hint="Then the AI plays it until they come back." problem={problemOf("leaverGraceMinutes")}><input type="number" style={input} min={0} max={1440} step={1} value={settings.leaverGraceMinutes} onChange={update("leaverGraceMinutes")} /></Field>
             {/* Rostra, the social network: how many posts each player may make
                 in a round (host/settings.js `postsPerRound`). */}
-            <Field title="Rostra posts a player may make each round"><input type="number" style={input} min={1} max={POSTS_PER_ROUND_MAX} value={settings.postsPerRound} onChange={update("postsPerRound")} /></Field>
+            <Field title="Rostra posts a player may make each round" problem={problemOf("postsPerRound")}><input type="number" style={input} min={1} max={POSTS_PER_ROUND_MAX} step={1} value={settings.postsPerRound} onChange={update("postsPerRound")} /></Field>
             {/* Who answers a player's message to a country the AI plays
                 (host/settings.js `replies`). No key is ever sent: with "own"
                 each player's device writes the answer itself. */}
@@ -249,6 +264,7 @@ const HostPanel = ({ onClose, onEnterGame }) => {
             <HostCostFields settings={settings} setSettings={setSettings} />
           </div>
           <HostCostSummary settings={settings} />
+          {otherProblems.map((problem) => <p key={problem.key} role="alert" style={errorText}>{problem.text}</p>)}
           <label style={{ alignItems: "center", color: "rgba(255,255,255,0.8)", display: "flex", fontSize: "0.85rem", gap: "0.5rem", marginTop: "0.9rem" }}>
             <input type="checkbox" checked={settings.allowMidGameJoin} onChange={update("allowMidGameJoin")} />
             Players may join a game already under way, taking a country the AI plays
@@ -260,7 +276,7 @@ const HostPanel = ({ onClose, onEnterGame }) => {
       )}
       <div style={{ display: "flex", gap: "0.6rem", marginTop: "1rem" }}>
         {activeGame && !standIn && (desktop !== false || import.meta.env?.DEV) ? (
-          <button type="button" style={primary} disabled={busy || shared.mode !== "off" || Boolean(ai.refusal)} onClick={open}>
+          <button type="button" style={primary} disabled={busy || shared.mode !== "off" || Boolean(ai.refusal) || problems.length > 0} onClick={open}>
             {busy ? "Opening…" : "Open the lobby"}
           </button>
         ) : null}

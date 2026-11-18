@@ -16,7 +16,7 @@
 
 import { NAME, bool, int, list, literal, obj, str, validate } from "../protocol/validate.js";
 import { SETTINGS_SCHEMA, normalizeSettings } from "./settings.js";
-import { GAME_MASTER_LOG_MAX, GAME_MASTER_SUMMARY_MAX, HOST_MESSAGES } from "../game/messages.js";
+import { GAME_MASTER_ENTRY, GAME_MASTER_LOG_MAX, HOST_MESSAGES } from "../game/messages.js";
 import { keptGameMasterLog } from "./gameMaster.js";
 
 export const SESSION_RECORD_VERSION = 1;
@@ -68,7 +68,9 @@ const SCHEMA = obj({
   // landed (host/roundPayers.js), so the turns go on where they were.
   lastPayer: str(64),
   // What the Game Master changed in this game (host/gameMaster.js).
-  gameMaster: list(obj({ round: int(0, 1_000_000), date: str(40), summary: str(GAME_MASTER_SUMMARY_MAX, { min: 1 }) }), GAME_MASTER_LOG_MAX),
+  // Each line as every lobby carries it (game/messages.js), what it touched
+  // included: a line the record's schema did not know dropped the whole session.
+  gameMaster: list(GAME_MASTER_ENTRY, GAME_MASTER_LOG_MAX),
 }, ["watching", "changes", "ownLines", "banned", "released", "answers", "followed", "settings", "lastPayer", "gameMaster"]);
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();

@@ -21,7 +21,7 @@
 // through `transport`, and time through `now` and `timers`, so this is tested
 // in node and the same code runs in the host's engine window.
 
-import { createRoundMachine } from "./round.js";
+import { cancelledRound, createRoundMachine } from "./round.js";
 import { DROPPED, createWorldQueue } from "./worldQueue.js";
 import { BOUND_REFUSALS, SEAT_WAITING_MOST, advisorPastBound, createSeatBounds } from "./seatBounds.js";
 import { failureWords, guestFailureWords } from "./failureWords.js";
@@ -120,7 +120,13 @@ const RESYNC_GAP_MS = 2_000;
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 // A word for a player's screen, as long as a notice may be (game/messages.js):
 // one naming two long countries was longer, and would not be sent at all.
-const notice = (level, text) => ({ t: "notice", level, text: clean(text).slice(0, 500) });
+// `about`: what it answers, for the screen where the player acted
+// (game/messages.js notice): { about, thread, line }.
+const notice = (level, text, { about = "", thread = "", line = "" } = {}) => ({
+  t: "notice", level, text: clean(text).slice(0, 500),
+  ...(about ? { about } : {}),
+  ...(about === "thread" && clean(thread) ? { thread: clean(thread).slice(0, 120), ...(clean(line) ? { line: clean(line).slice(0, 160) } : {}) } : {}),
+});
 // Why a seat's treaty was not put or answered (runtime/treatyOffers.js), in its words.
 const TREATY_REFUSALS = Object.freeze({
   nobody: "Say which country the treaty is with.",
@@ -279,6 +285,9 @@ export const createGameHost = ({
   gameMaster = async () => {
     throw new Error("The Game Master is not run here.");
   },
+  // The world's language, for what the host writes into the world itself (a
+  // peace or a treaty between players: host/worldWords.js worldWordsOf); English if none.
+  worldWords = null,
   onStatus = () => {},
   // Seats that followed their people to a country they founded
   // (host/foundings.js): [{ from, to, host }], `host` when it was the host's own
@@ -514,7 +523,9 @@ export const createGameHost = ({
       ...seats.list().map((seat) => ({
         country: seat.country,
         name: clean(seat.name).slice(0, 40),
-        status: seat.status,
+        // The host's own seat is never let go, and its screen may be gone all
+        // the same: its row says so (hostAway).
+        status: seat.device && seat.device === hostSeat.device && hostAway() ? SEAT_STATUS.AWAY : seat.status,
         held: Boolean(seat.device),
         you: Boolean(connection) && seat.device === connection.device,
         // With settings.payment "cycle": whether its device takes its turn to pay.
@@ -560,9 +571,31 @@ export const createGameHost = ({
     needed: status.needed,
     failed: status.failure?.round ?? 0,
     failure: clean(failureSeenBy(status, connection)).slice(0, 300),
+    ...(status.failure ? { failureKind: status.failure.kind === "cancelled" ? "cancelled" : "failed" } : {}),
     // Whose device makes this round's request, with settings.payment "cycle".
     ...(payingCountry(status) && fits(payingCountry(status)) ? { payer: payingCountry(status) } : {}),
+    ...(hostAway() ? { hostAway: true } : {}),
+    // How far the round being resolved has come (resolveRound's onProgress).
+    ...(status.phase === "resolving" ? {
+      elapsedMs: Math.max(0, Math.min(30 * 24 * 3600 * 1000, Math.round(Number(status.resolvingMs) || 0))),
+      ...(roundStep ? { step: roundStep } : {}),
+    } : {}),
   });
+  // The step the round's skip is on, while it is resolved (Game/AI/skipPhases.js
+  // `{ label, detail }`), and every screen told as it moves on.
+  let roundStep = null;
+  const stepOf = (step) => {
+    const label = clean(step?.label).slice(0, 120);
+    return label ? { label, detail: clean(step?.detail).slice(0, 80) } : null;
+  };
+  // The round as it stands, to every screen, when something it shows changed
+  // that the round machine does not know of (the host's screen, the step).
+  // Each screen its own (failureSeenBy: the host's words of a failure are the host's).
+  const announceRound = () => {
+    const status = round.status();
+    for (const connection of connections.values()) send(connection, roundMessage(status, connection));
+    onStatus({ lobby: lobbyFor(null), round: status });
+  };
   // The country whose device pays the round being resolved, or is due to pay
   // the one being planned: the one the host took on itself, or the next in turn.
   const payerFor = (number) => (settings.payment === "cycle"
@@ -573,8 +606,9 @@ export const createGameHost = ({
   // says it, and every round bar whose turn is next.
   const payersChanged = () => {
     broadcastLobby();
-    const message = roundMessage(round.status());
-    for (const connection of connections.values()) send(connection, message);
+    // Each its own: a failure's words are the host's alone (failureSeenBy).
+    const status = round.status();
+    for (const connection of connections.values()) send(connection, roundMessage(status, connection));
   };
 
   // What the host sends is held to the same schemas the players read it by
@@ -602,15 +636,17 @@ export const createGameHost = ({
     onStatus({ lobby: lobbyFor(null), round: round.status() });
   };
   // A word for whoever plays `country`, on every screen of theirs.
-  const tell = (country, level, text) => {
+  // `about`: what it answers (notice).
+  const tell = (country, level, text, about = {}) => {
     for (const connection of connections.values()) {
-      if (same(seatOf(connection)?.country, country)) send(connection, notice(level, text));
+      if (same(seatOf(connection)?.country, country)) send(connection, notice(level, text, about));
     }
   };
   // A word for the player of a seat (its id), whatever its country is called by now.
-  const tellSeat = (id, level, text) => {
+  // `about`: what it answers (notice).
+  const tellSeat = (id, level, text, about = {}) => {
     const device = seats.seatById(id)?.device;
-    if (device) answerDevice(device, notice(level, text));
+    if (device) answerDevice(device, notice(level, text, about));
   };
   // A peace or a treaty that landed between rounds (host/landings.js), said to
   // every screen beside its event: before, only the one who answered knew.
@@ -722,6 +758,9 @@ export const createGameHost = ({
   let hostSeen = false;
   let waitingForHost = false;
   const hostHere = () => [...connections.values()].some(isHost);
+  // Said to every screen (the round's `hostAway`, the host's row under
+  // Players): before, a guest saw "Paused" and a host who looked present.
+  const hostAway = () => hostSeen && !hostHere();
   const holdForHost = () => {
     if (stopped || !hostSeen || waitingForHost || hostHere()) return;
     const status = round.status();
@@ -769,6 +808,7 @@ export const createGameHost = ({
       sessionChanged();
       roundAbort = new AbortController();
       roundCancelled = false;
+      roundStep = null;
       // With settings.payment "cycle", the device whose turn it is pays: the
       // host's own makes the request as ever, and another's is sent the
       // request the engine builds, carries it to its own AI and sends back the
@@ -779,7 +819,14 @@ export const createGameHost = ({
       // The skip is built under the paying device's own settings, as it stated them (no key).
       const paying = carry ? { carry, payer: { device: payer.device, rules: payers.profileOf(payer.device) } } : {};
       try {
-        await resolveRound({ round: number, humanCountries: seats.humanCountries(), daysPerRound: settings.daysPerRound, signal: roundAbort.signal, ...paying });
+        // Each step of the skip, as it starts, on every screen.
+        const onProgress = (step) => {
+          const next = stepOf(step);
+          if (stopped || !next || JSON.stringify(next) === JSON.stringify(roundStep)) return;
+          roundStep = next;
+          announceRound();
+        };
+        await resolveRound({ round: number, humanCountries: seats.humanCountries(), daysPerRound: settings.daysPerRound, signal: roundAbort.signal, onProgress, ...paying });
       } catch (error) {
         // A payer whose device was asked for this round has taken its turn,
         // landed or not: run again, the round is the next payer's. Before, the
@@ -797,7 +844,7 @@ export const createGameHost = ({
           for (const connection of connections.values()) {
             send(connection, notice("info", `The host cancelled round ${number}. Its orders are still queued, and the host can run it again.`));
           }
-          throw new Error("The host cancelled the round.");
+          throw cancelledRound("The host cancelled the round.");
         }
         // Said to everyone, with why: a round that failed used to go back to
         // planning without a word, and fail again twenty minutes later.
@@ -817,6 +864,7 @@ export const createGameHost = ({
         throw error;
       } finally {
         roundAbort = null;
+        roundStep = null;
         payers.begin(null);
       }
       // The next round is the next seat's to pay (saved with the session), and
@@ -888,7 +936,7 @@ export const createGameHost = ({
       if (renamed) changes.set(entry.device, { ...entry, to: renamed.to });
       else if (asked.gone.some((name) => same(name, entry.to))) {
         changes.delete(entry.device);
-        answerDevice(entry.device, notice("info", `${entry.to} is gone, so your request to play it is withdrawn.`));
+        answerDevice(entry.device, notice("info", `${entry.to} is gone, so your request to play it is withdrawn.`, { about: "seat" }));
       }
     }
     const successions = seatSuccessions({
@@ -926,7 +974,7 @@ export const createGameHost = ({
         ? `${move.from} has founded ${move.to}: you now play ${move.to}.`
         : `${move.from} is now called ${move.to}: you play it as before.`;
       for (const connection of connections.values()) {
-        if (device && connection.device === device) send(connection, notice("info", text));
+        if (device && connection.device === device) send(connection, notice("info", text, { about: "seat" }));
       }
     }
     for (const country of successions.gone) {
@@ -940,7 +988,7 @@ export const createGameHost = ({
       changes.delete(seat.device);
       log("info", "a seat's country is gone; its player watches", { country });
       for (const connection of connections.values()) {
-        if (connection.device === seat.device) send(connection, notice("warn", `${country} is gone. You can take any free country under Players, or stay to watch.`));
+        if (connection.device === seat.device) send(connection, notice("warn", `${country} is gone. You can take any free country under Players, or stay to watch.`, { about: "seat" }));
       }
     }
     if (after) {
@@ -1038,7 +1086,7 @@ export const createGameHost = ({
     if (told) {
       answerDevice(device, notice("info", settings.allowMidGameJoin || !seats.started
         ? `The host released you from ${country}. You can take another free country under Players.`
-        : `The host released you from ${country}.`));
+        : `The host released you from ${country}.`, { about: "seat" }));
     }
     await seatsChanged({ inEntry: true });
   };
@@ -1101,26 +1149,31 @@ export const createGameHost = ({
   // key (settings.replies "host", and an institution's table always), in the
   // table's turn (onTable). Someone who writes again while their answer is
   // still waiting is answered once, for all they have written by then. When
-  // the host's AI could not be reached the writer is told, or their line just
-  // went unanswered.
+  // the host's AI could not be reached, or the turn failed, the writer is told,
+  // in the thread under their newest line (`line`) as well: their line used to
+  // go unanswered, with a word for 8 seconds at most, or none.
   // `seat`: the writer's seat (its id, and its country as the line names it).
-  const answerOnHost = (chatId, seat, governments) => {
+  const answerOnHost = (chatId, seat, governments, line = "") => {
     const table = tableOf(chatId);
     const who = seat.id;
+    table.lines ??= new Map();
+    if (clean(line)) table.lines.set(who, clean(line));
     if (table.waiting.has(who)) return;
     table.waiting.add(who);
+    const inThread = () => ({ about: "thread", thread: chatId, line: table.lines?.get(who) ?? "" });
     void inSeatTurn(seat.id, () => onTable(chatId, async () => {
       table.waiting.delete(who);
       const outcome = await replyTo({ chatId, seat: seat.country });
       // (Its writing was an entry in the queue: every view follows on its own,
       // and a peace it made is told by the table's turn, onTable.)
       if (outcome?.unreachable) {
-        tellSeat(seat.id, "warn", `The host's AI could not be reached: ${governments.join(", ")} did not answer. Write again to ask once more.`.slice(0, 500));
+        tellSeat(seat.id, "warn", `The host's AI could not be reached: ${governments.join(", ")} did not answer. Write again to ask once more.`.slice(0, 500), inThread());
       }
       return outcome;
     })).catch((error) => {
       table.waiting.delete(who);
       log("warn", "reply failed", { error: String(error?.message || error) });
+      if (!stopped) tellSeat(seat.id, "warn", "The host could not write the answer to your message. Write again to ask once more.", inThread());
     });
   };
 
@@ -1181,12 +1234,13 @@ export const createGameHost = ({
     // Past what the host's AI gives each player a round (settings.hostAnswers
     // with each player's own AI, settings.answersPerRound with the host's,
     // host/hostAnswers.js): the line stands, and the round reads it. A Retry
-    // (the "answer" request) counts as the line did.
+    // (the "answer" request) counts as the line did. Said under the line, in
+    // its thread (client/threadNotes.js).
     if (!hostAnswerFor(connection, writer, chatId)) {
-      tell(seat, "info", answersSpent());
+      tell(seat, "info", answersSpent(), { about: "thread", thread: chatId, line });
       return { answer: "round" };
     }
-    answerOnHost(chatId, writer, governments);
+    answerOnHost(chatId, writer, governments, line);
     return {};
   };
 
@@ -1204,7 +1258,7 @@ export const createGameHost = ({
         broadcastLobby();
         sessionChanged();
         for (const other of connections.values()) {
-          if (isHost(other)) send(other, notice("info", `${mine.country}'s player asks to play ${wanted}. Allow it or refuse it under Players.`));
+          if (isHost(other)) send(other, notice("info", `${mine.country}'s player asks to play ${wanted}. Allow it or refuse it under Players.`, { about: "seat" }));
         }
         return { error: "", result: { asked: wanted.slice(0, 160) } };
       }
@@ -1633,7 +1687,7 @@ export const createGameHost = ({
           return null;
         }
         const baked = new Map(list(regions).map((region) => [clean(region?.id), region]));
-        const told = tellLandings({ before: world, after: outcome.world, events, game, ownerOf: (id) => (baked.has(id) ? regionOwnerNow(baked.get(id), {}) : "") });
+        const told = tellLandings({ before: world, after: outcome.world, events, game, ownerOf: (id) => (baked.has(id) ? regionOwnerNow(baked.get(id), {}) : ""), words: worldWords ?? undefined });
         landed = told?.landed ?? [];
         return told ? { world: told.world, events: told.events } : { world: outcome.world };
       });
@@ -1661,7 +1715,7 @@ export const createGameHost = ({
         refusal = answer.error ? TREATY_REFUSALS[answer.error] ?? "That could not be done." : "";
         // (Signed after the two went to war, it lapses: that is written, and said.)
         if (answer.world === world) return null;
-        const told = tellLandings({ before: world, after: answer.world, events, game });
+        const told = tellLandings({ before: world, after: answer.world, events, game, words: worldWords ?? undefined });
         landed = told?.landed ?? [];
         return told ? { world: told.world, events: told.events } : { world: answer.world };
       });
@@ -2151,7 +2205,7 @@ export const createGameHost = ({
       if (away.length) {
         tell(seat.country, "info", away.length === 1
           ? `${away[0]}'s player is away, and will read it on coming back.`
-          : `${away.join(", ")}: their players are away, and will read it on coming back.`);
+          : `${away.join(", ")}: their players are away, and will read it on coming back.`, { about: "thread", thread: chatId, line: message.id });
       }
       return Object.keys(result).length ? { error: "", result } : "";
     },
@@ -2386,6 +2440,12 @@ export const createGameHost = ({
       // round waits for its screen to come back.
       if (isHost(connection)) {
         holdForHost();
+        // Every screen says the host's is away (a round the host had paused
+        // itself is not paused again, and said so all the same).
+        if (!stopped) {
+          announceRound();
+          broadcastLobby();
+        }
         return;
       }
       seats.left(connection.device);
@@ -2449,7 +2509,7 @@ export const createGameHost = ({
       // nothing. Resolves whether it changed anything.
       async gameMaster(command) {
         const toHost = (text) => {
-          for (const connection of connections.values()) if (isHost(connection)) send(connection, notice("warn", text));
+          for (const connection of connections.values()) if (isHost(connection)) send(connection, notice("warn", text, { about: "gm" }));
           return false;
         };
         const asked = clean(command).slice(0, GAME_MASTER_COMMAND_MAX);
@@ -2469,7 +2529,7 @@ export const createGameHost = ({
           log("info", "the host used the Game Master", { summary: entry.summary });
           broadcastLobby();
           sessionChanged();
-          for (const connection of connections.values()) send(connection, notice("info", gameMasterNotice(entry)));
+          for (const connection of connections.values()) send(connection, notice("info", gameMasterNotice(entry), { about: "gm" }));
           return true;
         } catch (error) {
           log("warn", "the Game Master changed nothing", { error: String(error?.message || error) });
@@ -2536,7 +2596,7 @@ export const createGameHost = ({
         const found = [...changes.values()].find((entry) => same(changeFrom(entry), asked));
         if (!found) return false;
         const tellPlayer = (text) => {
-          for (const connection of connections.values()) if (connection.device === found.device) send(connection, notice("info", text));
+          for (const connection of connections.values()) if (connection.device === found.device) send(connection, notice("info", text, { about: "seat" }));
         };
         if (op !== "allow") {
           const change = { ...found, from: changeFrom(found) };

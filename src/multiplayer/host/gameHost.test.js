@@ -154,6 +154,8 @@ const setup = (options = {}) => {
     countries: [LATVIA, RUSSIA, ESTONIA],
     store,
     resolveRound: async (info) => {
+      // The steps the engine's skip says it is on (Game/AI/skipPhases.js), as it starts each.
+      for (const step of options.steps ?? []) info.onProgress?.(step);
       // A round held in "resolving" until the test lets it go, or the host calls it off (the engine's own skip
       // honours the round's signal).
       if (options.holdResolve) {
@@ -211,6 +213,7 @@ const setup = (options = {}) => {
     ...(options.gameMaster ? { gameMaster: options.gameMaster } : {}),
     ...(options.onSeatsMoved ? { onSeatsMoved: options.onSeatsMoved } : {}),
     ...(options.countriesOf ? { countriesOf: options.countriesOf } : {}),
+    ...(options.worldWords ? { worldWords: options.worldWords } : {}),
     campaign: options.campaign ?? "",
     ...(options.features ? { features: options.features } : {}),
     ...(options.rules ? { rules: options.rules } : {}),
@@ -1856,7 +1859,7 @@ test("each player posts on Rostra as often a round as the host allows, and is to
   await s.request(s.guest, { t: "post", id: id(6), text: "Moscow, next round.", quote: "" });
   assert.equal(s.ack(s.guest, id(6)).ok, true);
   assert.equal(normalizeSettings({}).settings.postsPerRound, 5, "five a round unless the host says otherwise");
-  assert.match(normalizeSettings({ postsPerRound: 0 }).error, /postsPerRound/);
+  assert.equal(normalizeSettings({ postsPerRound: 0 }).key, "postsPerRound");
 });
 
 test("a post request is held to its shape: words within the limit, a post id or nothing to quote, nothing else", () => {
@@ -2594,6 +2597,84 @@ test("the host cancels a round that hangs; it waits with its orders until the ho
   assert.equal(s.to(s.guest, "round").at(-1).failed, 0);
 });
 
+// The review of 2026-11-18, ui 6, 7 and 15: a cancel read "could not be resolved: The host cancelled the round.";
+// a guest saw "Paused" while the host's screen was gone, and the host's row looked present; and a round being
+// resolved was minutes of one still label.
+test("every screen is told what became of a round, that the host's screen is away, and the step a round being resolved is on", async () => {
+  let release;
+  const s = setup({
+    holdResolve: new Promise((resolve) => { release = resolve; }),
+    steps: [{ label: "Reading the world" }, { label: "Writing the events", detail: "part 1 of 2" }, { label: "Writing the events", detail: "part 1 of 2" }],
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  const planning = s.to(s.guest, "round").at(-1);
+  assert.equal(planning.hostAway, undefined, "the host is here");
+  assert.equal(planning.step, undefined);
+  assert.equal(planning.elapsedMs, undefined, "only a round being resolved has been resolving");
+  // Resolving: each step, once, as the engine starts it, and how long it has been.
+  await playRound(s, [s.hostPlayer, s.guest]);
+  await s.clock.advance(30_000);
+  const steps = s.to(s.guest, "round").filter((message) => message.phase === "resolving" && message.step).map((message) => message.step);
+  assert.deepEqual(steps, [{ label: "Reading the world", detail: "" }, { label: "Writing the events", detail: "part 1 of 2" }], "a step said again is not sent again");
+  // A screen that comes in meanwhile is told the step, and for how long the round has been resolving.
+  const late = { id: "p-late", device: "device-late", name: "Late" };
+  s.host.join(late);
+  await s.clock.flush();
+  assert.deepEqual([s.to(late, "round").at(-1).step, s.to(late, "round").at(-1).elapsedMs], [{ label: "Writing the events", detail: "part 1 of 2" }, 30_000]);
+  assert.equal(s.host.control.cancelRound(), true);
+  await s.clock.flush();
+  const cancelled = s.to(s.guest, "round").at(-1);
+  assert.equal(cancelled.phase, "planning");
+  assert.equal(cancelled.failureKind, "cancelled", "said as cancelled, not as a round that could not be resolved");
+  assert.equal(cancelled.step, undefined, "no step once it is not resolving");
+  for (const message of s.to(s.guest, "round")) assert.equal(validate(HOST_MESSAGES.round, message).ok, true);
+  // The host's screen goes: every screen says so, the round waits, and the host's row says it is away.
+  s.host.leave(s.hostPlayer);
+  await s.clock.flush();
+  assert.equal(s.to(s.guest, "round").at(-1).hostAway, true);
+  assert.equal(s.to(s.guest, "lobby").at(-1).seats.find((seat) => seat.country === LATVIA).status, "away");
+  assert.equal(validate(HOST_MESSAGES.lobby, s.to(s.guest, "lobby").at(-1)).ok, true);
+  // And back.
+  s.host.join({ ...s.hostPlayer, id: "loopback-2" });
+  await s.clock.flush();
+  assert.equal(s.to(s.guest, "round").at(-1).hostAway, undefined);
+  assert.equal(s.to(s.guest, "lobby").at(-1).seats.find((seat) => seat.country === LATVIA).status, "human");
+  // A round that fails is said as failed.
+  release();
+  s.host.control.resolveNow();
+  await s.clock.flush();
+  assert.equal(s.to(s.guest, "round").at(-1).failed, 0, "it landed");
+});
+
+test("what the host says about a line a player wrote names the conversation and the line, for that conversation to show it", async () => {
+  const s = setup({ settings: { replies: "own", hostAnswers: 1 }, replyTo: () => { throw new Error("The table's turn broke."); } });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  s.store.docs.world.wars = [{ id: "war-1", title: "The Narva War", status: "active", sideA: [RUSSIA], sideB: [ESTONIA] }];
+  // The host's AI answers the first, and its turn fails: the writer is told, in the thread, under that line.
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [ESTONIA], text: "Moscow proposes a ceasefire." });
+  await s.clock.flush();
+  const thread = s.store.docs.chat.find((chat) => chat.player === RUSSIA);
+  const first = thread.messages.at(-1).id;
+  const failed = s.to(s.guest, "notice").at(-1);
+  assert.equal(failed.level, "warn");
+  assert.match(failed.text, /The host could not write the answer to your message/);
+  assert.deepEqual([failed.about, failed.thread, failed.line], ["thread", thread.id, first]);
+  assert.equal(validate(HOST_MESSAGES.notice, failed).ok, true);
+  // Past the host's answers this round: said under the second line.
+  await s.request(s.guest, { t: "say", id: id(3), thread: thread.id, to: [], text: "And Narva?" });
+  await s.clock.flush();
+  const second = s.store.docs.chat.find((chat) => chat.id === thread.id).messages.at(-1).id;
+  const spent = s.to(s.guest, "notice").at(-1);
+  assert.match(spent.text, /at most 1 of your messages a round/);
+  assert.deepEqual([spent.about, spent.thread, spent.line], ["thread", thread.id, second]);
+});
+
 test("a seat the host takes back leaves the next player of that country none of the last player's orders, goal or letters", async () => {
   const s = setup();
   s.host.join(s.hostPlayer);
@@ -3025,17 +3106,24 @@ test("the Game Master is the host's, only where the lobby says so: one entry of 
   await ordering;
   assert.ok(s.store.docs.actions.some((action) => action.text === "Hold the line at Pskov"));
   assert.deepEqual(commands, ["Move Estonia's border to the Narva."]);
-  // Every player is told what it changed, and every lobby lists it.
+  // Every player is told what it changed, and every lobby lists it, with what
+  // it touched as fields each screen says in its own words (gameMasterChangeLines).
   for (const player of [s.hostPlayer, s.guest]) {
-    assert.ok(s.to(player, "notice").some((entry) => entry.text === "The host used the Game Master: Estonia's border moved to the Narva. (1 event written; figures set for Republic of Estonia)"));
+    assert.ok(s.to(player, "notice").some((entry) => entry.text === "The host used the Game Master: Estonia's border moved to the Narva." && entry.about === "gm"));
   }
   const lobby = s.to(s.guest, "lobby").at(-1);
   assert.equal(validate(HOST_MESSAGES.lobby, lobby).ok, true);
-  assert.deepEqual(lobby.gameMaster, [{ round: 1, date: "2014-04-01", summary: "Estonia's border moved to the Narva. (1 event written; figures set for Republic of Estonia)" }]);
+  assert.deepEqual(lobby.gameMaster, [{
+    round: 1, date: "2014-04-01", summary: "Estonia's border moved to the Narva.",
+    changed: { events: 1, wars: 0, relations: 0, agreements: 0, figures: ["Republic of Estonia"], moreFigures: 0 },
+  }]);
   assert.equal(lobby.settings.cheats, "host", "every lobby says the Game Master may be used");
-  // One that changes nothing tells the host why, and nobody else anything.
+  // One that changes nothing tells the host why, and nobody else anything:
+  // said about the Game Master, for its box to show where the host gave it.
   assert.equal(await s.host.control.gameMaster("Make it fail."), false);
   assert.match(s.to(s.hostPlayer, "notice").at(-1).text, /The Game Master changed nothing: Canonical state changed/);
+  assert.equal(s.to(s.hostPlayer, "notice").at(-1).about, "gm");
+  assert.equal(validate(HOST_MESSAGES.notice, s.to(s.hostPlayer, "notice").at(-1)).ok, true);
   assert.equal(s.to(s.guest, "notice").some((entry) => /changed nothing/.test(entry.text)), false);
   assert.equal(s.to(s.guest, "lobby").at(-1).gameMaster.length, 1);
   // Never while a round is resolved.
