@@ -71,6 +71,7 @@ import { votesAwaited } from "./tableTurn.js";
 import { withAdvisorChanges } from "../game/advisorChanges.js";
 import { advisorOfSeat, withSeatAdvisor } from "../../runtime/seatAdvisors.js";
 import { createRequestWaits } from "./requestWaits.js";
+import { blindId, blindToken } from "../../runtime/blindIds.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
 // The answers a device's requests were given, kept so that one sent again (the
@@ -193,17 +194,14 @@ export const withSeatBoard = (world, country, projects, { host = "" } = {}) => {
   return { ...world, seatBoards: boards };
 };
 
-let sequence = 0;
-const mintId = (prefix, now) => {
-  sequence += 1;
-  return `${prefix}-${now().toString(36)}-${sequence.toString(36)}`;
-};
+// The ids the host makes (rule 8), random and nothing else (runtime/blindIds.js):
+// they were the host's clock and one counter for everything it made, so two of a
+// player's own ids told it how much every other player had done between them.
+// The callers' second argument (the host's clock) is not read.
+const mintId = (prefix) => blindId(prefix);
 // A connection's name for its views: new for every connection, so a page
 // that reconnects is never asked to follow numbers it has not seen.
-const mintEpoch = (now) => {
-  sequence += 1;
-  return `${now().toString(36)}${sequence.toString(36)}`;
-};
+const mintEpoch = () => blindToken();
 
 export const createGameHost = ({
   transport,
@@ -2352,16 +2350,20 @@ export const createGameHost = ({
     // A request for what the host's game has switched off (host/featureGates.js).
     const switchedOff = featureRefusal(message, features);
     // An entry of the queue, and held to what one player may have waiting in
-    // it and add to it (host/seatBounds.js); the host's own are its own.
+    // it and add to it (host/seatBounds.js); the host's own are its own. Every
+    // other request a device sends is held to a pace as well, whichever door it
+    // comes by: the AI's thinking to the queue's, what is answered at once to
+    // its own (but a page's word on a view, which the host's own sending paces).
     const queued = !AT_ONCE.has(message.t) && !THINKING.has(message.t);
     const bounded = queued && !isHost(connection);
+    const paced = !isHost(connection) && message.t !== "viewed";
     let error = "";
     let result = null;
     if (needsSeat && (!seat || seat.status !== SEAT_STATUS.HUMAN)) error = "Take a country first.";
     else if (!needsSeat && message.t === "viewed" && !viewerOf(connection)) error = "Take a country first.";
     else if (switchedOff) error = switchedOff;
     else if (bounded && queue.waitingOf(connection.device) >= SEAT_WAITING_MOST) error = BOUND_REFUSALS.waiting;
-    else if (bounded && !bounds.admit(connection.device)) error = BOUND_REFUSALS.rate;
+    else if (paced && !(AT_ONCE.has(message.t) ? bounds.admitAtOnce(connection.device) : bounds.admit(connection.device))) error = BOUND_REFUSALS.rate;
     else {
       try {
         // A refusal's words, or { error, result } from a request that made

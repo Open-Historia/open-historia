@@ -19,7 +19,10 @@
 //
 // So the host holds each player to these, every one a refusal with the host's
 // reason (rule 10): what it has waiting in the queue (SEAT_WAITING_MOST) and
-// how fast it may add to it (QUEUE_RATE_PER_SECOND, QUEUE_BURST); what it may
+// how fast it may add to it or to the host's AI's thinking (QUEUE_RATE_PER_SECOND,
+// QUEUE_BURST), and how fast it may send what the host answers at once
+// (AT_ONCE_RATE_PER_SECOND, AT_ONCE_BURST): every request a device sends is
+// held to one of the two, whichever door it comes by; what it may
 // open and write a round (THREADS_PER_ROUND, LINES_PER_ROUND, FLAGS_PER_ROUND);
 // how long its advisor's conversations may grow (ADVISOR_SEAT_BYTES_MOST);
 // and its readings on the host's AI, one at a time (each country's once,
@@ -32,10 +35,23 @@
 // player one round's allowance twice.
 
 // What one player may have waiting in the host's queue at once, and how many it
-// may add a second (a burst of QUEUE_BURST, then QUEUE_RATE_PER_SECOND).
+// may add a second (a burst of QUEUE_BURST, then QUEUE_RATE_PER_SECOND). The
+// requests whose thinking is the host's AI's, outside the queue (a stat sheet,
+// parties, ratings, an institution's business), are held to the same pace.
 export const SEAT_WAITING_MOST = 32;
 export const QUEUE_RATE_PER_SECOND = 2;
 export const QUEUE_BURST = 40;
+// And what a device may send of what the host answers at once, outside the
+// queue: the round's own words (Ready, "I have read the round") and a paying
+// device's ("canPay", "paid", "payLookup", "payAlive"). They were held to
+// nothing but the session's thirty messages a second, judged by device and not
+// by seat, and some make the host do work for it or tell every player (the
+// follow-ups of 2026-11-18, C2). A paying device's own traffic is a handful a
+// round and its lookups one at a time (host/roundPayers.js), well inside this.
+// What a page says of a view ("viewed") is not counted: the host sends views at
+// its own pace, and a word on one turned away would only have it sent again.
+export const AT_ONCE_RATE_PER_SECOND = 10;
+export const AT_ONCE_BURST = 60;
 // What one player may open and write in a round: conversations, lines in them
 // (and a conversation's renaming or its new members), and flag changes.
 export const THREADS_PER_ROUND = 12;
@@ -62,8 +78,24 @@ export const ROUND_LIMITS = Object.freeze({ threads: THREADS_PER_ROUND, lines: L
 const fold = (value) => String(value ?? "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
 
 export const createSeatBounds = ({ now = () => Date.now() } = {}) => {
-  // device → { tokens, at }
-  const buckets = new Map();
+  // A token bucket for each device: a burst is allowed, a stream is not.
+  // Counts the request when it may be sent on.
+  const bucketsOf = (burst, rate) => {
+    // device → { tokens, at }
+    const buckets = new Map();
+    return (device) => {
+      const at = now();
+      const bucket = buckets.get(device) ?? { tokens: burst, at };
+      bucket.tokens = Math.min(burst, bucket.tokens + ((at - bucket.at) / 1000) * rate);
+      bucket.at = at;
+      buckets.set(device, bucket);
+      if (bucket.tokens < 1) return false;
+      bucket.tokens -= 1;
+      return true;
+    };
+  };
+  const queued = bucketsOf(QUEUE_BURST, QUEUE_RATE_PER_SECOND);
+  const atOnce = bucketsOf(AT_ONCE_BURST, AT_ONCE_RATE_PER_SECOND);
   // `${kind}|${seat}` → { round, used }
   const counts = new Map();
   // seat → { tail, waiting }; and what is being read, by what, for everyone.
@@ -71,18 +103,11 @@ export const createSeatBounds = ({ now = () => Date.now() } = {}) => {
   const reading = new Map();
 
   return {
-    // Whether `device` may add another entry to the queue now (a token bucket:
-    // a burst is allowed, a stream is not). Counts the entry when it may.
-    admit(device) {
-      const at = now();
-      const bucket = buckets.get(device) ?? { tokens: QUEUE_BURST, at };
-      bucket.tokens = Math.min(QUEUE_BURST, bucket.tokens + ((at - bucket.at) / 1000) * QUEUE_RATE_PER_SECOND);
-      bucket.at = at;
-      buckets.set(device, bucket);
-      if (bucket.tokens < 1) return false;
-      bucket.tokens -= 1;
-      return true;
-    },
+    // Whether `device` may add another entry to the queue now, or another
+    // request the host's AI thinks about. Counts it when it may.
+    admit: (device) => queued(device),
+    // Whether `device` may send another of what the host answers at once.
+    admitAtOnce: (device) => atOnce(device),
     // Whether `seat` has had all its `kind` (ROUND_LIMITS) in `round`.
     spent(kind, seat, round) {
       const entry = counts.get(`${kind}|${fold(seat)}`);

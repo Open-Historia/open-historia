@@ -13657,6 +13657,7 @@
  "The host and the services that connect you (public relay servers, and Google's and Cloudflare's address-lookup servers) see your network address. The game does not show it to other players, but anyone who has the invite code could find it out.",
  "The host answered, but its computer could not be reached. Trying again (try {{value}})…",
  "The host answered, but no connection between your computer and theirs could be opened. Players connect to the host directly, and one of the two networks does not allow it (some routers, mobile and campus networks, and VPNs).{{whichNetwork}}",
+ "The host answers one lookup at a time: wait for the one asked already.",
  "The host can allow the Game Master in a shared game, and every player sees that it is on.",
  "The host can let players take turns to pay for each round's AI request, each on their own AI.",
  "The host cancelled round {{failed}}. Its orders are still queued.",

@@ -12,7 +12,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { PAYER_GONE_MS, PAY_FAILURE_WORDS, createRoundPayers } from "./roundPayers.js";
+import { LOOKUP_UNDER_WAY, PAYER_GONE_MS, PAY_FAILURE_WORDS, createRoundPayers } from "./roundPayers.js";
 import { CARRIED_PROMPT_MAX } from "../game/messages.js";
 import { PAY_FAILURE_KINDS, carriedRequestOf } from "../../Game/AI/roundCarrier.js";
 
@@ -59,6 +59,10 @@ test("each pays in turn round the table, of those who are here and whose device 
   assert.equal(turn(away), "Republic of Latvia");
   assert.deepEqual(payers.profileOf("device-estonia"), CAN, "what it stated, for the round to be built under");
   assert.equal(payers.profileOf("device-nobody"), null);
+  // Its settings are kept for the round, and are no screen's: only whether it can pay is told everyone (C2).
+  assert.equal(payers.state("device-estonia", { ...CAN, noRequestLimit: true, lookups: false }), false, "no change any screen shows");
+  assert.equal(payers.profileOf("device-estonia").noRequestLimit, true, "kept all the same");
+  assert.equal(payers.state("device-estonia", { ...CAN, ready: false }), true, "whether it takes its turn is");
   // A seat that was let go: the turn goes on from the start.
   const later = createRoundPayers({ lastPayer: "device-gone", timers: fakeTimers() });
   able(later, "device-russia");
@@ -174,6 +178,30 @@ test("a lookup is answered by the engine's own hook with its round, only for the
   await assert.rejects(looking, /The shared game was stopped\./);
   await assert.rejects(plain, /The shared game was stopped\./);
   assert.equal(sent.at(-1).message.t, "payStop");
+});
+
+// The follow-ups of 2026-11-18, C2: the device's model has its calls answered one after another, so the host reads
+// its game for one lookup of a device at a time; a device sending them all at once had them all read together.
+test("a paying device's lookups are answered one at a time", async () => {
+  const sent = [];
+  const payers = createRoundPayers({ send: (device, message) => sent.push({ device, message }), timers: fakeTimers() });
+  const carry = payers.carry({ device: "device-russia", country: "Russian Federation", round: 2 });
+  let release;
+  const reads = [];
+  const looking = carry(request(), { execute: (name) => { reads.push(name); return new Promise((resolve) => { release = () => resolve({ name }); }); } });
+  const job = sent.at(-1).message.job;
+  const first = payers.lookup("device-russia", { job, name: "first", args: {} });
+  const flood = await Promise.all(Array.from({ length: 5 }, (_, n) => payers.lookup("device-russia", { job, name: `more-${n}`, args: {} })));
+  assert.ok(flood.every((answer) => answer === LOOKUP_UNDER_WAY), "refused while one is read");
+  assert.deepEqual(reads, ["first"]);
+  release();
+  assert.deepEqual(await first, { error: "", result: { text: JSON.stringify({ name: "first" }) } });
+  const next = payers.lookup("device-russia", { job, name: "next", args: {} });
+  release();
+  assert.equal((await next).error, "", "the next, once it is answered");
+  assert.deepEqual(reads, ["first", "next"]);
+  payers.stop();
+  await assert.rejects(looking, /stopped/);
 });
 
 test("a payer whose connection drops is waited for, one the host lets go of fails the round at once", async () => {

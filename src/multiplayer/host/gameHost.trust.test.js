@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 
 import { createGameHost } from "./gameHost.js";
 import { normalizeSettings } from "./settings.js";
-import { BOUND_REFUSALS, FLAGS_PER_ROUND, QUEUE_BURST, SEAT_WAITING_MOST } from "./seatBounds.js";
+import { AT_ONCE_BURST, BOUND_REFUSALS, FLAGS_PER_ROUND, QUEUE_BURST, SEAT_WAITING_MOST } from "./seatBounds.js";
 import { PROJECT_REFUSALS } from "./seatProjects.js";
 
 const LATVIA = "Republic of Latvia";
@@ -321,4 +321,79 @@ test("a government's words a player's own device wrote say so, and reach the rou
   const told = buildDetailedChatHistoryText(s.docs.chat);
   assert.ok(told.includes(`${ESTONIA} (as ${RUSSIA}'s player's own AI wrote it: it binds ${ESTONIA} to nothing until a round says so): We cede the province`), told);
   assert.ok(told.includes(`${RUSSIA}: Will you cede Narva`), "a person's own line is as it was");
+});
+
+// --- The follow-ups of 2026-11-18, C2: every door a device sends by is paced --------------------
+
+test("what the host answers at once is held to each device's pace, and a paying device's settings are told no screen", async () => {
+  const s = setup({ settings: { payment: "cycle" } });
+  await s.seated();
+  const lobbies = () => s.to(s.hostPlayer, "lobby").length;
+  const profile = (n, extra = {}) => ({ t: "canPay", id: id(n), ready: true, noRequestLimit: false, lookups: true, segmented: false, declares: false, ...extra });
+  await s.request(s.guest, profile(2));
+  const told = lobbies();
+  // Its settings over and over: each sent every player the lobby and the round again.
+  for (let n = 0; n < 5; n += 1) await s.request(s.guest, profile(3 + n, { noRequestLimit: n % 2 === 0 }));
+  assert.equal(lobbies(), told, "kept for the round, told nobody");
+  await s.request(s.guest, profile(9, { ready: false }));
+  assert.equal(lobbies(), told + 1, "whether it takes its turn is told");
+  // A stream of answers to nothing, judged by device: refused at its pace past the burst.
+  const flood = Array.from({ length: AT_ONCE_BURST }, (_, n) => s.host.receive(s.guest, { t: "paid", id: id(100 + n), job: "pay-1-x", failure: { kind: "other", busy: false }, statuses: [] }));
+  await Promise.all(flood);
+  const answers = Array.from({ length: AT_ONCE_BURST }, (_, n) => s.ack(s.guest, 100 + n).error);
+  assert.equal(answers.filter((error) => error === BOUND_REFUSALS.rate).length, 7, "the burst less the seven it had spent");
+  assert.ok(answers.filter((error) => error !== BOUND_REFUSALS.rate).every((error) => /not waiting for an answer from your device/.test(error)));
+  // Nor is Ready, which tells every screen.
+  await s.request(s.guest, { t: "ready", id: id(200), value: true });
+  assert.equal(s.ack(s.guest, 200).error, BOUND_REFUSALS.rate);
+  // A page's word on a view is never turned away: the host's own sending paces it.
+  const views = s.to(s.guest, "view").length;
+  const view = s.to(s.guest, "view").at(-1);
+  await s.request(s.guest, { t: "viewed", epoch: view.epoch, rev: view.rev, ok: false });
+  assert.equal(s.to(s.guest, "view").length, views + 1, "the gap it reports is mended");
+  // The host's own are its own computer's; and time gives a device its pace back.
+  await s.request(s.hostPlayer, { t: "ready", id: id(201), value: true });
+  assert.equal(s.ack(s.hostPlayer, 201).ok, true);
+  s.step(1000);
+  await s.request(s.guest, { t: "ready", id: id(202), value: true });
+  assert.equal(s.ack(s.guest, 202).ok, true);
+});
+
+test("what the host's AI thinks about for a device is held to the queue's pace", async () => {
+  let finish;
+  const s = setup({
+    host: {
+      compileParties: () => new Promise((resolve) => { finish = resolve; }),
+      hasParties: async () => false,
+    },
+  });
+  await s.seated();
+  // The pick took one of the burst; one reading of one country's parties, however often asked.
+  const burst = Array.from({ length: QUEUE_BURST + 2 }, (_, n) => s.host.receive(s.guest, { t: "parties", id: id(20 + n), country: ESTONIA }));
+  await flush();
+  finish();
+  await Promise.all(burst);
+  const answers = Array.from({ length: QUEUE_BURST + 2 }, (_, n) => s.ack(s.guest, 20 + n));
+  assert.equal(answers.filter((ack) => ack.error === BOUND_REFUSALS.rate).length, 3);
+  assert.equal(answers.filter((ack) => ack.ok).length, QUEUE_BURST - 1);
+});
+
+// --- The follow-ups of 2026-11-18, C7: an id the host makes tells nothing -------------------------
+
+test("the ids the host makes are random: two of a player's own say nothing of what others did between them, or when", async () => {
+  const s = setup();
+  await s.seated();
+  await s.request(s.guest, { t: "order", id: id(2), text: "Hold the line at Pskov." });
+  s.step(60_000);
+  for (let n = 0; n < 5; n += 1) await s.request(s.hostPlayer, { t: "order", id: id(10 + n), text: `Host order ${n}` });
+  await s.request(s.guest, { t: "order", id: id(3), text: "Hold the line at Narva." });
+  const mine = s.docs.actions.filter((action) => /Hold the line/.test(action.text)).map((action) => action.id);
+  assert.equal(mine.length, 2);
+  for (const made of mine) {
+    assert.match(made, /^order-[0-9a-f]{16}$/);
+    assert.equal(made.includes((1_000_000).toString(36)) || made.includes((1_060_000).toString(36)), false, "no clock in it");
+  }
+  // A connection's name for its views is as blind.
+  const epochs = new Set(s.to(s.guest, "view").map((view) => view.epoch));
+  for (const epoch of epochs) assert.match(epoch, /^[0-9a-f]{16}$/);
 });

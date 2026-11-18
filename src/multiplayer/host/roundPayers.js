@@ -48,9 +48,12 @@
 import { HOST_MESSAGES } from "../game/messages.js";
 import { safeParse, validate } from "../protocol/validate.js";
 import { payProfileOf } from "../../Game/AI/roundCarrier.js";
+import { blindToken } from "../../runtime/blindIds.js";
 
 // How long a paying device that dropped is waited for before the round fails.
 export const PAYER_GONE_MS = 60_000;
+// A lookup asked while the host still answers that device's last.
+export const LOOKUP_UNDER_WAY = "The host answers one lookup at a time: wait for the one asked already.";
 
 // What the host says of a failure the paying device reported, by its kind:
 // the host's own words, never the provider's, which go to every player. Whole
@@ -101,7 +104,6 @@ export const createRoundPayers = ({
   const stated = new Map();
   // A request on its way: job → { id, device, country, round, message, hooks, resolve, reject, gone, unlisten }.
   const jobs = new Map();
-  let sequence = 0;
 
   const settle = (job) => {
     if (jobs.get(job.id) !== job) return false;
@@ -132,13 +134,18 @@ export const createRoundPayers = ({
   const canPay = (device, host) => Boolean(device) && (device === host || stated.get(device)?.ready === true);
 
   return {
-    // What a device says of paying (the "canPay" request). True when it changed.
+    // What a device says of paying (the "canPay" request). True when what every
+    // screen shows of it changed: whether it takes its turn (the lobby's seat
+    // `pays`, and who pays the round). Its settings are kept for the round to be
+    // built under, and are no screen's business: every change of them sent every
+    // player the lobby and the round again, so a device sending them over and
+    // over had the host tell everyone at its pace (the follow-ups of 2026-11-18, C2).
     state(device, profile) {
       if (!clean(device)) return false;
       const next = payProfileOf(profile);
       const before = stated.get(device);
       stated.set(device, next);
-      return JSON.stringify(before ?? null) !== JSON.stringify(next);
+      return (before?.ready === true) !== next.ready;
     },
     // Whether a device takes its turn: it said it can (the host's own always can).
     canPay,
@@ -193,8 +200,9 @@ export const createRoundPayers = ({
     carry({ device, country, round, signal = null }) {
       const who = clean(country) || "The paying player";
       return (call, { execute = null, alive = null, onRequest = null, signal: callSignal = null } = {}) => new Promise((resolve, reject) => {
-        sequence += 1;
-        const id = `pay-${round}-${sequence.toString(36)}`;
+        // Blind (runtime/blindIds.js): a count of every request carried, to every
+        // payer, told each payer how many requests the others' rounds had made.
+        const id = `pay-${round}-${blindToken(6)}`;
         const message = { t: "pay", job: id, round, call };
         const checked = validate(HOST_MESSAGES.pay, message);
         if (!checked.ok) {
@@ -272,13 +280,23 @@ export const createRoundPayers = ({
       return "";
     },
     // A lookup the paying device's model asked for, answered from the host's
-    // own game with the function the engine's request declared it with.
+    // own game with the function the engine's request declared it with. One at
+    // a time, as the model's calls are answered on the device (toolTurns.js
+    // answerLookupCalls waits for each): a device sending them all at once had
+    // the host read its game for each at the same time, as many as the session
+    // let through (the follow-ups of 2026-11-18, C2).
     async lookup(device, { job, name, args, round = 1 } = {}) {
       const waiting = waitingFor(device, job);
       if (!waiting) return "That request is not waiting for an answer from your device.";
       if (typeof waiting.hooks.execute !== "function") return "That request looks nothing up.";
-      const response = await waiting.hooks.execute(clean(name), args && typeof args === "object" && !Array.isArray(args) ? args : {}, round);
-      return { error: "", result: { text: JSON.stringify(response ?? null) } };
+      if (waiting.looking) return LOOKUP_UNDER_WAY;
+      waiting.looking = true;
+      try {
+        const response = await waiting.hooks.execute(clean(name), args && typeof args === "object" && !Array.isArray(args) ? args : {}, round);
+        return { error: "", result: { text: JSON.stringify(response ?? null) } };
+      } finally {
+        waiting.looking = false;
+      }
     },
     // The paying device's model is at work on a request (`round`: a lookup round it began).
     alive(device, { job, round = 0 } = {}) {

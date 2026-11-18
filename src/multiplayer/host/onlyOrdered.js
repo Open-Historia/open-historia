@@ -33,6 +33,7 @@
 // Plain data in, plain data out.
 
 import { orderOwner } from "../../runtime/humanPolities.js";
+import { blindFraction } from "../../runtime/blindIds.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLocaleLowerCase();
@@ -62,9 +63,11 @@ export const huntSeenBy = (op, transports, viewer) => {
 
 // --- Ids the host makes ---------------------------------------------------------
 
-// An id that tells nothing: random, from the host's own source (`random`, for
-// tests), and none of `taken`. Short enough for a transporter's (24).
-export const opaqueId = (prefix, taken = [], random = Math.random) => {
+// An id that tells nothing: random, from the platform's cryptographic source
+// (runtime/blindIds.js: Math.random's draws can be counted once its state is
+// worked out from ids seen), or `random` in tests, and none of `taken`. Short
+// enough for a transporter's (24).
+export const opaqueId = (prefix, taken = [], random = blindFraction) => {
   const held = new Set(list(taken).map(clean));
   for (;;) {
     const id = `${prefix}${Math.floor(random() * 36 ** 8).toString(36).padStart(8, "0")}`;

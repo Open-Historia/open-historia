@@ -8,7 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { DROPPED, createWorldQueue } from "./worldQueue.js";
-import { ADVISOR_SEAT_BYTES_MOST, FLAGS_PER_ROUND, QUEUE_BURST, QUEUE_RATE_PER_SECOND, READINGS_WAITING_MOST, advisorPastBound, createSeatBounds } from "./seatBounds.js";
+import { ADVISOR_SEAT_BYTES_MOST, AT_ONCE_BURST, AT_ONCE_RATE_PER_SECOND, FLAGS_PER_ROUND, QUEUE_BURST, QUEUE_RATE_PER_SECOND, READINGS_WAITING_MOST, advisorPastBound, createSeatBounds } from "./seatBounds.js";
 import { failureKindOf, failureWords, guestFailureWords } from "./failureWords.js";
 
 test("the queue counts what each player has waiting, and drops what a player let go of still had waiting", async () => {
@@ -42,6 +42,18 @@ test("a player adds to the queue in a burst, then at a steady rate", () => {
   assert.equal(bounds.admit("device-other"), true, "each player has its own");
   t += 1000;
   assert.equal(Array.from({ length: 5 }, () => bounds.admit("device-guest")).filter(Boolean).length, QUEUE_RATE_PER_SECOND);
+});
+
+// The follow-ups of 2026-11-18, C2: what the host answers at once (a round's payment, Ready) had no pace at all.
+test("what a device sends that the host answers at once has a pace of its own, apart from the queue's", () => {
+  let t = 0;
+  const bounds = createSeatBounds({ now: () => t });
+  for (let n = 0; n < QUEUE_BURST; n += 1) bounds.admit("device-guest");
+  assert.equal(bounds.admit("device-guest"), false, "the queue's is spent");
+  assert.equal(Array.from({ length: AT_ONCE_BURST + 5 }, () => bounds.admitAtOnce("device-guest")).filter(Boolean).length, AT_ONCE_BURST, "the other is its own");
+  assert.equal(bounds.admitAtOnce("device-other"), true, "and each device's");
+  t += 1000;
+  assert.equal(Array.from({ length: AT_ONCE_RATE_PER_SECOND + 5 }, () => bounds.admitAtOnce("device-guest")).filter(Boolean).length, AT_ONCE_RATE_PER_SECOND);
 });
 
 test("what a player opens and writes a round is counted, and each round counts afresh", () => {

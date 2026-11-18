@@ -17,8 +17,11 @@
 // A thread saved before this existed is migrated on read, idempotently: its
 // countries become joins and its messages become message events, in order.
 //
-// DELIBERATELY IMPORT-FREE, like projects.js and reports.js: the rules on plain
-// data, tested on their own.
+// DELIBERATELY IMPORT-FREE, like projects.js and reports.js, but for the
+// import-free id maker (runtime/blindIds.js): the rules on plain data, tested
+// on their own.
+
+import { blindId } from "./blindIds.js";
 
 export const CHAT_EVENT_KINDS = Object.freeze([
     "chat_created",
@@ -75,11 +78,9 @@ const asText = (value) => String(value ?? "").trim();
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const fold = (value) => asText(value).toLowerCase();
 
-let sequence = 0;
-const mintId = (prefix) => {
-    sequence += 1;
-    return `${prefix}-${Date.now().toString(36)}-${sequence.toString(36)}`;
-};
+// Every member of a thread reads its ids: random, so that two of them never
+// tell what else was made between them, or when (runtime/blindIds.js).
+const mintId = (prefix) => blindId(prefix);
 
 // A participant is a name, or {name, code} — the shape chats have always
 // stored. Kept as an object so the projection can hand back what readers expect.
