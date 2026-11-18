@@ -48,6 +48,10 @@ test("the rules a deployment is held to: the scenario's types, a place on the ma
   const busy = state();
   busy.actions = Array.from({ length: 12 }, (_, n) => ({ id: `a-${n}`, status: "planned", text: "x", ownerCode: FRANCE }));
   assert.match(deployFor(busy, FRANCE, ask, ids(1)).error, /At most 12 orders a round/);
+  // Orders the last skip left unanswered (overdue) are not this round's (host/orderCap.js).
+  for (const action of busy.actions.slice(0, 3)) action.overdue = true;
+  assert.equal(deployFor(busy, FRANCE, ask, ids(1)).error, undefined);
+  assert.equal(disbandFor(busy, FRANCE, "fr-1", ids(2)).error, undefined);
 });
 
 test("standing down a formation that was only pending withdraws its request too, and asks nothing of the skip", () => {

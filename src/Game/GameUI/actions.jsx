@@ -27,6 +27,8 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
+import { refusedOrdersKey } from "./overdueOrders.js";
+import { filedFateLabel } from "../../runtime/filedEvents.js";
 import { ProjectsBoard, ProjectsTabIcon } from "./projects.jsx";
 import { isKnownToPlayer, isProjectOpen } from "../../runtime/projects.js";
 import {
@@ -186,7 +188,9 @@ const movesUnit = (action) => Boolean(action?.unitRevert) && (action.status ?? "
 // while a turn runs, because deleting it moves the unit back, and the turn's
 // world write would put the unit where it was. Other orders can: the turn reads
 // the queue again before it writes it.
-const ActionItem = ({ action, onDelete, locked = false }) => {
+// `refusal`: { fate, note } when the last time skip wrote an event for this
+// order and the engine kept it off the timeline (overdueOrders.js).
+const ActionItem = ({ action, onDelete, locked = false, refusal = null }) => {
     const [hovered, setHovered] = React.useState(false);
     // The ✕ appears with the pointer over the row. Nothing hovers on a touch
     // screen, so there it is always shown, or an order could never be deleted.
@@ -240,6 +244,14 @@ const ActionItem = ({ action, onDelete, locked = false }) => {
         >
         {normalized.kind} • {normalized.status}
         </div>
+        {/* Carried over unanswered (AI/playerFocus.js settleOrders): said, with
+            why its event was refused when it was, and the ✕ withdraws it. */}
+        {normalized.overdue && (
+            <div style={{ color: "rgba(253,186,116,0.9)", fontSize: "0.7rem", lineHeight: "1.45", marginTop: "0.25rem" }}>
+            <div>Overdue: the last time skip gave this order no outcome. The next one answers it first.</div>
+            {refusal?.note && <div>{`${filedFateLabel(refusal.fate)}: ${refusal.note}`}</div>}
+            </div>
+        )}
         </div>
         <button
         type="button"
@@ -885,7 +897,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         // its own drawer) used to be invisible here until the panel was closed and
         // reopened. The store publishes those writes. Signature-gated so a
         // republish with no real change doesn't reset hover state on every row.
-        const actionsSignature = (list) => list.map((a) => `${a.id}:${a.title}:${a.text}:${a.status}`).join("|");
+        // (Overdue too: a skip that answers an order leaves the rest as they
+        // were in every other way, and the mark is what changed.)
+        const actionsSignature = (list) => list.map((a) => `${a.id}:${a.title}:${a.text}:${a.status}:${a.overdue === true ? "overdue" : ""}`).join("|");
         const unsubscribe = subscribeRuntime("actions", (saved) => {
             if (cancelled || !Array.isArray(saved)) return;
             setActions((prev) => (actionsSignature(saved) === actionsSignature(prev) ? prev : saved));
@@ -930,6 +944,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
 
     // A card's order already in the queue shows as queued, restored cards too.
     const queuedSuggestionIds = React.useMemo(() => queuedActionIds(actions), [actions]);
+    // Why the last skip's event for an overdue order was refused, by its id.
+    const refusedKey = useRuntimeState("world", refusedOrdersKey);
+    const refusedOrders = React.useMemo(() => JSON.parse(refusedKey || "{}"), [refusedKey]);
 
     const submittedActions = React.useMemo(
         () =>
@@ -1360,7 +1377,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                         </p>
                     )}
                     {submittedActions.map(({ normalized, originalIndex }) => (
-                        <ActionItem key={normalized.id || originalIndex} action={normalized} locked={turnRunning && movesUnit(normalized)} onDelete={() => handleDelete(originalIndex)} />
+                        <ActionItem key={normalized.id || originalIndex} action={normalized} refusal={refusedOrders[normalized.id] ?? null} locked={turnRunning && movesUnit(normalized)} onDelete={() => handleDelete(originalIndex)} />
                     ))}
                     </div>
                 )}

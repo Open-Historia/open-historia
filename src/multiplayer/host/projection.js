@@ -177,6 +177,23 @@ const standingDown = (actions, viewer) => list(actions)
   .map((action) => action?.unitRevert?.restore)
   .filter((unit) => isRecord(unit) && clean(unit.id));
 
+// What became of a turn's events written for the viewer's own orders that the
+// engine kept off the timeline (runtime/filedEvents.js: a card, its fate and
+// why): told to the player whose orders they answered, as single player's
+// Events panel tells its player, and nobody else. Which orders a card answered
+// is what it cites (actionIds), never its words. No player was told why their
+// order's event was refused, the host included (the gap audit of 2026-11-18):
+// the order just came back overdue. A card cites only the viewer's own orders
+// here; the other players' order ids are theirs.
+const filedOrderCards = (cards, ownOrders) => {
+  const own = new Set(list(ownOrders).map((action) => clean(action?.id)).filter(Boolean));
+  if (!own.size) return [];
+  return list(cards).filter(isRecord).flatMap((card) => {
+    const cited = list(card.actionIds).map(clean).filter((id) => own.has(id));
+    return cited.length ? [{ ...card, actionIds: cited }] : [];
+  });
+};
+
 // Filtered keys: each is given the whole world and returns what the viewer may
 // have of that key. `actions`: the order queue, for what is only ordered.
 const FILTERED_WORLD_KEYS = Object.freeze({
@@ -239,22 +256,29 @@ const FILTERED_WORLD_KEYS = Object.freeze({
 
   // The turns as every player's Events panel reads them (GameUI/time.jsx): when
   // each ran and which events it wrote, in the order they are shown, with the
-  // viewer's own orders. The narrator's summary of the turn, the model's raw
-  // answer, the engine's receipt and everyone else's orders stay with the host.
-  simulationHistory: (world, viewer, { host, hiddenEventIds = new Set() }) => list(world.simulationHistory).filter(isRecord).map((entry) => ({
-    date: clean(entry.date),
-    fromDate: clean(entry.fromDate),
-    toDate: clean(entry.toDate),
-    round: Number(entry.round) || 0,
-    mode: clean(entry.mode),
-    source: clean(entry.source) || "ai",
-    eventIds: list(entry.eventIds).map(clean).filter((id) => id && !hiddenEventIds.has(id)),
-    plannedActions: list(entry.plannedActions).filter((action) => (clean(action?.ownerCode)
+  // viewer's own orders, and the events written for those orders that the
+  // engine kept off the timeline, with why (filedOrderCards). The narrator's
+  // summary of the turn, the model's raw answer, the engine's receipt and
+  // everyone else's orders stay with the host.
+  simulationHistory: (world, viewer, { host, hiddenEventIds = new Set() }) => list(world.simulationHistory).filter(isRecord).map((entry) => {
+    const plannedActions = list(entry.plannedActions).filter((action) => (clean(action?.ownerCode)
       ? same(action.ownerCode, viewer)
-      : same(host, viewer))),
-    // Why a turn fell back names the host's model and its provider's error.
-    ...(same(host, viewer) && clean(entry.fallbackReason) ? { fallbackReason: clean(entry.fallbackReason) } : {}),
-  })),
+      : same(host, viewer)));
+    const filed = filedOrderCards(entry.filedEvents, plannedActions);
+    return {
+      date: clean(entry.date),
+      fromDate: clean(entry.fromDate),
+      toDate: clean(entry.toDate),
+      round: Number(entry.round) || 0,
+      mode: clean(entry.mode),
+      source: clean(entry.source) || "ai",
+      eventIds: list(entry.eventIds).map(clean).filter((id) => id && !hiddenEventIds.has(id)),
+      plannedActions,
+      ...(filed.length ? { filedEvents: filed } : {}),
+      // Why a turn fell back names the host's model and its provider's error.
+      ...(same(host, viewer) && clean(entry.fallbackReason) ? { fallbackReason: clean(entry.fallbackReason) } : {}),
+    };
+  }),
 
   // A subordination as the viewer believes it to stand; a covert one only once
   // learned; its loyalty only for the overlord; who else knows, never.

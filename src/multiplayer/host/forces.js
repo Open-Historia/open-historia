@@ -13,6 +13,8 @@
 // Plain data in, plain data out: { world, actions } or { error }.
 
 import { normalizeUnitEntry } from "../../runtime/gameState.js";
+// Orders carried over unanswered are not this round's (host/orderCap.js).
+import { ordersThisRound } from "./orderCap.js";
 
 // The plan's ceiling for a person's formations (the AI's own cap is the
 // engine's, gameState.js MAX_UNITS_PER_POLITY).
@@ -50,8 +52,7 @@ export const deployFor = ({ world, actions }, seat, request, { orderId, unitId, 
   if (!deployable(type, world?.allowedUnitTypes)) return { error: "This scenario does not allow that kind of unit." };
   const mine = list(world?.units).filter((unit) => same(unit?.ownerCode, owner) && clean(unit?.status) !== "defeated");
   if (mine.length >= MAX_UNITS_PER_PLAYER) return { error: `A player fields at most ${MAX_UNITS_PER_PLAYER} formations. Stand one down first.` };
-  const queued = list(actions).filter((action) => same(action?.ownerCode, owner) && planned(action));
-  if (queued.length >= maxOrders) return { error: `At most ${maxOrders} orders a round.` };
+  if (ordersThisRound(actions, owner).length >= maxOrders) return { error: `At most ${maxOrders} orders a round.` };
   const strength = Math.max(1, Math.min(100, Math.round(Number(request?.strength) || 100)));
   const name = clean(request?.name).slice(0, UNIT_NAME_MAX_CHARS);
   const composition = clean(request?.composition).slice(0, UNIT_COMPOSITION_MAX_CHARS);
@@ -102,8 +103,7 @@ export const disbandFor = ({ world, actions }, seat, unitId, { orderId, at, maxO
         !(action?.unitRevert?.remove && clean(action.unitRevert.unitId) === id && planned(action) && same(action.ownerCode, owner))),
     };
   }
-  const queued = list(actions).filter((action) => same(action?.ownerCode, owner) && planned(action));
-  if (queued.length >= maxOrders) return { error: `At most ${maxOrders} orders a round.` };
+  if (ordersThisRound(actions, owner).length >= maxOrders) return { error: `At most ${maxOrders} orders a round.` };
   // i18n-ignore: the order as the model reads it.
   const text = `Disband order: ${unit.name} (${unit.type}, owner ${unit.ownerCode}) is decommissioned and stood down.`;
   return {

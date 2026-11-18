@@ -38,6 +38,7 @@ import { withGoalProgress, withPlayerGoal } from "../../runtime/playerGoal.js";
 import { withPlayerPost } from "../../runtime/socialFeed.js";
 import { applyProjectOpsToWorld, normalizeProjects } from "../../runtime/gameState.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
+import { ordersThisRound } from "./orderCap.js";
 import { agentOrderFor } from "./agents.js";
 import { institutionThreadRefusal } from "./institutions.js";
 import { acceptStructure, canSettleStructure, moveStructure } from "../../runtime/structurePlacement.js";
@@ -833,8 +834,8 @@ export const createGameHost = ({
           else if (clean(held.text) !== body) refusal = "That order is queued already, in other words.";
           return null;
         }
-        const mine = all.filter((action) => same(action?.ownerCode, seat.country) && clean(action?.status || "planned") === "planned");
-        if (mine.length >= MAX_ORDERS_PER_ROUND) {
+        // This round's own: one carried over unanswered is not (host/orderCap.js).
+        if (ordersThisRound(all, seat.country).length >= MAX_ORDERS_PER_ROUND) {
           refusal = `At most ${MAX_ORDERS_PER_ROUND} orders a round.`;
           return null;
         }

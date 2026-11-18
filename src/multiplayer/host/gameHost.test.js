@@ -267,6 +267,29 @@ test("requests are held to the asker's seat and the round's phase, and a repeate
   assert.equal(s.store.docs.actions.filter((action) => action.ownerCode === RUSSIA).length, MAX_ORDERS_PER_ROUND);
 });
 
+test("orders the last skip left unanswered are not this round's: they do not count toward its limit", async () => {
+  const s = setup();
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  // A round ago the skip answered none of these: they stay queued, overdue (AI/playerFocus.js settleOrders).
+  s.store.docs.actions.push(...Array.from({ length: MAX_ORDERS_PER_ROUND }, (_, n) => ({
+    id: `order-ru-old-${n}`, status: "planned", overdue: true, title: `Old ${n}`, text: `Old order ${n}`, ownerCode: RUSSIA,
+  })));
+  for (let n = 0; n < MAX_ORDERS_PER_ROUND; n += 1) await s.request(s.guest, { t: "order", id: id(100 + n), text: `New order ${n}` });
+  assert.ok(Array.from({ length: MAX_ORDERS_PER_ROUND }, (_, n) => s.ack(s.guest, id(100 + n))).every((answer) => answer.ok), "a whole round's orders, however many are overdue");
+  await s.request(s.guest, { t: "order", id: id(200), text: "One more" });
+  assert.match(s.ack(s.guest, id(200)).error, /At most 12 orders a round/, "this round's are still held to the limit");
+  // A formation raised counts the same way (host/forces.js).
+  await s.request(s.guest, { t: "deploy", id: id(201), type: "infantry", lng: 30.3, lat: 59.9 });
+  assert.match(s.ack(s.guest, id(201)).error, /At most 12 orders a round/);
+  // Withdrawn, an overdue order goes like any other.
+  await s.request(s.guest, { t: "unorder", id: id(202), order: "order-ru-old-0" });
+  assert.equal(s.ack(s.guest, id(202)).ok, true);
+  assert.equal(s.store.docs.actions.some((action) => action.id === "order-ru-old-0"), false);
+});
+
 test("diplomacy: a thread belongs to whoever opened it, the AI answers, and no one writes into another's thread", async () => {
   const s = setup();
   s.host.join(s.hostPlayer);

@@ -612,3 +612,29 @@ test("a country an institution's case is about, or that opened it, sees that cas
   docs.world.institutions.byId["baltic-council"].lifecycleCases = { "invite-pl": docs.world.institutions.byId["baltic-council"].lifecycleCases["invite-pl"] };
   assert.equal(projectForViewer(docs, RUSSIA).world.institutions.byId["baltic-council"].lifecycleCases, undefined);
 });
+
+test("an event written for a player's own order and kept off the timeline is told to that player, with why, and to nobody else", () => {
+  const docs = state();
+  const card = (title, actionIds, route = "UNSUPPORTED_REVERSAL") => ({ title, description: `${title}, as written`, date: "2014-03-20", route, actionIds });
+  docs.world.simulationHistory[0].filedEvents = [
+    card("CANARY-RU-REFUSED", ["order-ru-0"]),
+    card("Talks refused", ["order-lv-0"], "EXACT_DUPLICATE"),
+    card("Both at once", ["order-ru-0", "order-lv-0"]),
+    card("CANARY-NOBODYS-ORDER", []),
+  ];
+  const ru = projectForViewer(docs, RUSSIA).world.simulationHistory[0].filedEvents;
+  assert.deepEqual(ru.map((entry) => entry.title), ["CANARY-RU-REFUSED", "Both at once"]);
+  assert.deepEqual(ru[0].actionIds, ["order-ru-0"]);
+  assert.equal(ru[0].fate, "not-recorded");
+  assert.match(ru[0].note, /Contradicts what is already on the record/, "the engine's reason, in the player's words");
+  assert.deepEqual(ru[1].actionIds, ["order-ru-0"], "another player's order id is theirs");
+  const lv = projectForViewer(docs, LATVIA).world.simulationHistory[0].filedEvents;
+  assert.deepEqual(lv.map((entry) => entry.title), ["Talks refused", "Both at once"], "the host's own orders (no owner named) are the host's");
+  const est = projectForViewer(docs, ESTONIA).world.simulationHistory[0];
+  assert.equal("filedEvents" in est, false, "a seat with no order in the turn is told of none");
+  for (const viewer of [RUSSIA, LATVIA, ESTONIA]) {
+    const view = text(projectForViewer(docs, viewer));
+    assert.equal(view.includes("CANARY-NOBODYS-ORDER"), false, "a card that answered nobody's order stays with the host");
+    if (viewer !== RUSSIA) assert.equal(view.includes("CANARY-RU-REFUSED"), false, `${viewer} is not told of another's refused order`);
+  }
+});
