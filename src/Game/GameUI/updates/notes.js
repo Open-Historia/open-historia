@@ -54,6 +54,29 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // After beta 0.0.147 (2026-11-18): the owner's reports of that evening (Start that did nothing, Current that did
+    // nothing, a guest left in a closed game) and his asks (a name to join with, a star on played countries, a
+    // Players menu, the lobby's standing text gone); and the stat sheet refresh moved to Advanced statistics. The
+    // shipped cards keep their words: what changed since is said here.
+    id: "2026-11-shared-games-fixes",
+    kind: "minor",
+    date: "2026-11-19",
+    channel: "beta",
+    banners: [
+      {
+        title: "Shared games, smoother",
+        items: [
+          "Pick the name other players see you by when you join a shared game.",
+          "A star marks every country a person plays; click it to see who, and the game menu has a Players list.",
+          "Start the game works again, and if the host's game is busy the host is told what it waits for.",
+          "Cut off from the host, you see that it is reconnecting; if the host has closed the game, you are taken back to the menu and told why.",
+          "Current on your open shared game takes you back into it, and the lobby shows only what you can do in it.",
+          "The stat sheet refresh is set in a country's Advanced statistics: every 6 months of game time by default, or Off.",
+        ],
+      },
+    ],
+  },
+  {
     // "build C and D, and the host can choose, but no sending api keys" (the owner, 2026-11-15): who answers a player's message to a
     // country the AI plays is the host's choice (multiplayer/host/settings.js `replies`): the host's AI, or each player's own device.
     // "any issues should not be roughly patched or whackamoled, the core of the issue should be fixed archetecturally" (the owner,
@@ -77,7 +100,7 @@ const NEW_UPDATES = [
             icon: "people",
             items: [
               "A shared game remembers who plays which country: share it again days later and every player gets their own country back.",
-              "Your country stays yours while you are away: after the minutes the host sets, the AI plays it until you return.",
+              "Your country stays yours while you are away: after the minutes the lobby states, the AI plays it until you return.",
               "Once the game has started, changing country needs the host's say. A player whose country is gone takes a free one or watches.",
               "A player the host releases cannot take that country back, and their queued orders, goal, advice, letters and open offers go with them.",
             ],
@@ -97,7 +120,7 @@ const NEW_UPDATES = [
             icon: "map",
             items: [
               "Every screen draws the host's map, its seas and projection included, and a copy of the scenario that differs is caught when you join.",
-              "The host's settings, difficulty and the language the world is written in apply to every player.",
+              "The host's settings, difficulty and the language the world is written in apply to every player, and the lobby says what decides each round.",
               "Joining no longer adds a copy of the game to your library, and your library stays as it was while the game is open.",
               "Players on the website and the Android app can join a game hosted on the desktop app again.",
             ],
@@ -109,7 +132,7 @@ const NEW_UPDATES = [
         scene: "ledger",
         title: "Who Pays",
         subtitle: "No key ever leaves your device",
-        lead: "The host decides whose AI does what, and is told plainly what each choice means for every player.",
+        lead: "The host decides whose AI does what, and the lobby says plainly what each choice means for every player.",
         sections: [
           {
             heading: "Answers",
@@ -126,7 +149,7 @@ const NEW_UPDATES = [
             icon: "gear",
             items: [
               "The host can let players take turns to pay for each round's AI request, each on their own AI.",
-              "The host is warned, when choosing it, that the paying player's device sees that round's whole request, every player's orders and secrets included, and could change what happens in it.",
+              "The lobby warns that the paying player's device sees that round's whole request, every player's orders and secrets included, and could change what happens in it.",
               "If the paying player's AI fails or they leave, the round waits: the host can try again or pay for it.",
               "A player whose device has no AI that can pay is passed over, and each player's own AI settings decide what their turn spends.",
             ],
@@ -257,8 +280,7 @@ const NEW_UPDATES = [
   {
     // "readd the background ai for refreshing the stats where you could set how often it runs" and "there should be
     // an off choise in the thing where you pick how often it refreshes" (the owner, 2026-11-18): removed on
-    // 2026-11-09 with the Background AI switch (bb37bd1e6); back with no setting of its own: "JUST IN THE ADVANCED
-    // STATS MENU YOU CAN CHOOSE WHAT INTERVAL IT CHECKS AT AND YOU CAN SET THE INTERVAL TO OFF. BY DEFAULT ITS 6 MONTHS".
+    // 2026-11-09 with the Background AI switch (bb37bd1e6); back as one picker, Off by default.
     id: "2026-11-stats-refresh",
     kind: "minor",
     date: "2026-11-18",
@@ -267,9 +289,9 @@ const NEW_UPDATES = [
       {
         title: "Stat sheets that keep up",
         items: [
-          "Countries' stat sheets keep up with the world again: every 6 months of game time, one background request brings up to date the sheets the news has changed.",
-          "It refreshes up to 6 countries at a time, your own first, and a long time skip still makes at most one such request.",
-          "Choose how often in a country's Advanced statistics: every 3, 6, 12 or 24 months, or Off.",
+          "Settings, AI requests, can keep countries' stat sheets up to date for you: pick Off, after every time skip, or every 2, 3, 5 or 10.",
+          "After a time skip has finished, one background request brings up to date the sheets its news has changed, your own country's first, for up to 6 countries.",
+          "It costs about one request every so many time skips, and stops at the day's cap of requests nobody pressed a button for. Off is the default.",
           "In a shared game it runs only on the host, while the host's AI answers for every player.",
         ],
       },
