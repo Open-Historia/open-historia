@@ -109,3 +109,16 @@ test("what landed is told once: the world with it on the timeline, and the event
   assert.equal(tellLandings({ before, after, events: told.events, game }), null, "an event the log holds is not told again");
   assert.equal(tellLandings({ before, after: before, events: [], game }), null);
 });
+
+// engineMain.js cannot be imported without the whole app, so where it tells what landed is pinned from its source,
+// as engineHolds.test.js pins its other rules: the one commit of the world and the queue carries the event log too,
+// and what the governments at a table decided (a leader taking a seat's terms of peace) is told as a players' is.
+test("the engine's one commit carries the event log, and a table's decisions are told when they make a peace", async () => {
+  const fs = await import("node:fs");
+  const engine = fs.readFileSync(new URL("./engineMain.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(engine, /updateForces: \(fn\) => mutateCanonicalTurnState\(\(\{ world, actions, game, events \}\) => fn\(\{ world, actions, game, events \}\) \|\| null\),/);
+  assert.match(engine, /commit: \(write\) => writeInOrder\("table-decided", \(\) => decidedAndTold\(write, landed\)\),/);
+  const told = engine.slice(engine.indexOf("const decidedAndTold = async"), engine.indexOf("const tableTurn = async"));
+  assert.ok(told.indexOf("readWorldState") < told.indexOf("await write()") && told.indexOf("tellLandings(") > told.indexOf("await write()"), "the world before the decisions, and after");
+  assert.match(engine, /return \{ unreachable: outcome\?\.generation\?\.source === "fallback", landed: list\(outcome\?\.landed\) \};/);
+});

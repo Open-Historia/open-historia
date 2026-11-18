@@ -1628,6 +1628,18 @@ test("when the host's AI cannot be reached, whoever wrote is told, and nobody el
   assert.equal(validate(HOST_MESSAGES.notice, told).ok, true);
 });
 
+test("a peace a leader made in its answer is said to every player, as one two players make is", async () => {
+  // The engine told it as an event (engineMain.js decidedAndTold, host/landings.js); the host says it to everyone.
+  const s = setup({ replyTo: async () => ({ landed: [{ id: "landing-peace-treaty:war-2:2014-04-01", concerns: [ESTONIA, RUSSIA] }] }) });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "say", id: id(2), thread: null, to: [ESTONIA], text: "We accept your terms." });
+  await s.clock.flush();
+  for (const player of [s.hostPlayer, s.guest]) assert.equal(s.to(player, "notice").at(-1).text, `${ESTONIA} and ${RUSSIA} have made peace.`);
+});
+
 test("with each player's own AI, the host leaves the answer to the writer's device and takes its words once, for the AI's governments alone", async () => {
   // (Two answers of the host's AI a round for what only it may answer: the Council's line and the war's below.)
   const s = setup({ settings: { replies: "own", hostAnswers: 2 } });

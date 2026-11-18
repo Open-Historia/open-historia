@@ -15,7 +15,7 @@
 // until then this page waits.
 
 import { getLibraryState, refreshLibraryCatalog } from "../../runtime/library.js";
-import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { setPolityFlag } from "../../runtime/polityFlags.js";
 import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
 import {
@@ -28,7 +28,11 @@ import {
   mutateWorldState,
   readChatsState,
   readGameStateBundle,
+  readWorldState,
 } from "../../runtime/gameState.js";
+import { filterToRenderedRegions } from "../../Game/AI/promptContext.js";
+import { regionOwnerNow } from "../../runtime/gmAnnex.js";
+import { landingEvents, tellLandings } from "./landings.js";
 import { setHostingSharedGame } from "../../runtime/humanPolities.js";
 import { discardHeldTurns, endSimulation, enterSimulation } from "../../Game/AI/simulationStatus.js";
 import { getDebugLogEntries, logDebugEvent, setDebugLogPersistence, subscribeToDebugLog } from "../../runtime/debugLog.js";
@@ -198,20 +202,44 @@ const rotateInvite = (campaign, identity) => {
 // is shared; written at once otherwise.
 let writeInOrder = (label, write) => write();
 
+// What the governments at a table decided, written, and a peace it made (a
+// leader took a seat's terms of peace: gameplay.js answerPeaceInChat) told as
+// one two players make between rounds is (host/landings.js): an event on the
+// timeline with the borders it moved. `landed` gathers the events, for the
+// host to tell every player. Read only when the decisions are written: the
+// world before them, and after.
+const decidedAndTold = async (write, landed) => {
+  const before = await readWorldState({ force: true });
+  const out = await write();
+  const after = await readWorldState({ force: true });
+  if (!landingEvents(before, after).length) return out;
+  const regions = await loadRegionCatalog().then((catalog) => filterToRenderedRegions(catalog, after)).catch(() => []);
+  const baked = new Map(list(regions).map((region) => [clean(region?.id), region]));
+  await mutateCanonicalTurnState(({ world, events, game }) => {
+    const told = tellLandings({ before, after: world, events, game, ownerOf: (id) => (baked.has(id) ? regionOwnerNow(baked.get(id), {}) : "") });
+    if (!told) return null;
+    landed.push(...told.landed);
+    return { world: told.world, events: told.events };
+  });
+  return out;
+};
+
 // One turn of a table for a seat: the AI governments at it answer (or a
 // Council or a hearing does its business, with the flags the chat panel's own
 // turn passes). The model is asked outside the queue; what the governments
 // decided and what they said are written in it, the said added to the thread
-// as it stands then (host/tableTurn.js).
+// as it stands then (host/tableTurn.js). `landed`: a peace it made, told.
 const tableTurn = async ({ chat, seat, ...flags }) => {
   const chatId = clean(chat?.id);
+  const landed = [];
   const outcome = await runChatActionBatch({
     chat,
     playerCountry: seat,
     useCanonicalState: true,
-    commit: (write) => writeInOrder("table-decided", write),
+    commit: (write) => writeInOrder("table-decided", () => decidedAndTold(write, landed)),
     ...flags,
   });
+  if (landed.length && outcome && typeof outcome === "object") outcome.landed = landed;
   if (!turnWritesThread(outcome)) return outcome;
   await writeInOrder("table-said", () => mutateChatsState((current) => list(current).map((entry) => (clean(entry?.id) === clean(chatId)
     ? threadAfterTurn(entry, outcome)
@@ -229,7 +257,7 @@ const replyTo = async ({ chatId, seat }) => {
   const lastLine = [...list(chat.messages)].reverse().find((message) => clean(message?.speaker || message?.code) === clean(seat));
   const outcome = await tableTurn({ chat, seat, playerMessage: clean(lastLine?.text) });
   await checkDemandsAfter({ chatId, seat, lastLine });
-  return { unreachable: outcome?.generation?.source === "fallback" };
+  return { unreachable: outcome?.generation?.source === "fallback", landed: list(outcome?.landed) };
 };
 
 // What the reply did about a demand, in the one-on-one thread between a seat

@@ -832,6 +832,9 @@ export const createGameHost = ({
       table.waiting.delete(who);
       const outcome = await replyTo({ chatId, seat });
       // (Its writing was an entry in the queue: every view follows on its own.)
+      // A peace a leader made in its answer was told as an event (engineMain.js
+      // decidedAndTold), and is said to every player, as one two players make is.
+      tellEveryone(outcome?.landed);
       if (outcome?.unreachable) {
         tell(seat, "warn", `The host's AI could not be reached: ${governments.join(", ")} did not answer. Write again to ask once more.`.slice(0, 500));
       }
