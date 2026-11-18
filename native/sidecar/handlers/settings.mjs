@@ -872,6 +872,42 @@ export const register = (ctx) => {
         : "Player pressed Cancel all AI requests, but none were active.");
       return { cancelled, view: requestsView() };
     },
+    "settings.currency": async () => {
+      const econ = engine.econCurrency;
+      const gameId = clean(libraryState().activeGameId);
+      let code = econ.getActiveEconomicDisplayCurrency();
+      let error = "";
+      if (gameId) {
+        try {
+          const game = await engine.gameState.readGameData({ force: true });
+          econ.setActiveEconomicDisplayCurrency(game?.economicDisplayCurrency);
+          code = econ.getActiveEconomicDisplayCurrency();
+        } catch {
+          error = "Could not load the campaign's currency preference.";
+        }
+      }
+      return {
+        gameId,
+        code,
+        error,
+        options: econ.ECONOMIC_DISPLAY_CURRENCIES.map(({ code: value, name, symbol }) => [value, `${name} (${value}, ${symbol})`]),
+      };
+    },
+    "settings.currency.set": async ({ code = "" } = {}) => {
+      const econ = engine.econCurrency;
+      const gameId = clean(libraryState().activeGameId);
+      if (!gameId) throw new Error("No game is open, so there is nothing to set it on.");
+      const next = econ.normalizeEconomicDisplayCurrency(code);
+      try {
+        await engine.library.saveGame(gameId, { gamePatch: { economicDisplayCurrency: next } });
+      } catch (error) {
+        return { code: econ.getActiveEconomicDisplayCurrency(), error: error?.message || "Could not save the currency preference." };
+      }
+      econ.setActiveEconomicDisplayCurrency(next);
+      logSetting("GDP display currency", next);
+      emit("country.currency", { code: next });
+      return { code: next, error: "" };
+    },
     "settings.focus": async () => focusView(),
     "settings.focus.set": async ({ level = "" } = {}) => {
       await engine.refreshLibraryCatalog({ force: true });

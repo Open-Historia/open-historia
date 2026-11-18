@@ -66,6 +66,8 @@ var _values := {}
 var _fallback := {}
 var _requests := {}
 var _focus := {}
+var _currency := {}
+var _currency_saving := false
 var _diag := {}
 var _network: Variant = null
 var _cache: Variant = null
@@ -554,6 +556,9 @@ func _load_section_data() -> void:
 	match section:
 		"general":
 			_system_reduced = await _system_motion()
+			if _for_game():
+				var currency: Variant = await _req("settings.currency")
+				_currency = currency if typeof(currency) == TYPE_DICTIONARY else {}
 		"sound":
 			_audio = await _req("audio.settings.get")
 			_music = await _req("settings.music")
@@ -1223,11 +1228,16 @@ func _build_general() -> void:
 		if typeof(reply) == TYPE_DICTIONARY:
 			_values = reply
 		_rerender(), false))
-	if not UI.phone():
+	var show_currency := _for_game() and not str(_currency.get("gameId", "")).is_empty()
+	if not UI.phone() or show_currency:
 		var display := _section("Display", "Window and presentation preferences that apply to the game client.")
-		_display_mode(display)
-		_add_toggle(display, "Show the vault door every time", _flag("vault_door_every_time"), func() -> void: _set_flag("vault_door_every_time", not _flag("vault_door_every_time")))
-		_add_toggle_note(display, "On: the vault door appears every time you start the game. Off: only the first time you start it after an update.")
+		if not UI.phone():
+			_display_mode(display)
+		if show_currency:
+			_currency_setting(display)
+		if not UI.phone():
+			_add_toggle(display, "Show the vault door every time", _flag("vault_door_every_time"), func() -> void: _set_flag("vault_door_every_time", not _flag("vault_door_every_time")))
+			_add_toggle_note(display, "On: the vault door appears every time you start the game. Off: only the first time you start it after an update.")
 	_section("Interface appearance", "Choose the colours of the main menu, the panels and the popups.").add_child(ThemeSettings.new())
 	var access := _section("Accessibility", "Reduce automatic camera motion and map animations without changing simulation behavior.")
 	var reduced := _system_reduced or (_flag("map_disable_idle_rotation") and _flag("map_disable_event_camera"))
@@ -1247,6 +1257,44 @@ func _build_general() -> void:
 		_add_settings_helper(privacy, "Discord shows the country you play, the scenario and the in-game date to people who can see your activity. Desktop app only.", 0)
 	else:
 		privacy.add_child(_helper("Nothing to switch off here: this build does not count visits and cannot reach Discord."))
+
+
+func _currency_setting(parent: VBoxContainer) -> void:
+	parent.add_child(UI.label("GDP display currency", _fs(0.77), Color(1, 1, 1, 0.84), 700))
+	_gap(parent, 6.4)
+	var select := _select(_currency.get("options", []), str(_currency.get("code", "USD")), _change_currency)
+	select.custom_minimum_size.y = _fs(2.4)
+	select.disabled = _currency_saving
+	var field := UI.box(UiTheme.pick("hud_bg", Color(18 / 255.0, 18 / 255.0, 20 / 255.0, 0.52)), UiTheme.pick("hud_border", Color(236 / 255.0, 236 / 255.0, 238 / 255.0, 0.17)), 8, 1, Vector4(12, 6, 12, 6))
+	for state in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
+		select.add_theme_stylebox_override(state, field)
+	select.add_theme_font_override("font", UI.font(600))
+	for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		select.add_theme_color_override(name, UI.WHITE)
+	parent.add_child(select)
+	_gap(parent, 6.4)
+	var hint := UI.wrapped("This campaign only. Fixed January 2026 reference rates; changes affect display, not economic simulation or the country's domestic currency.", _fs(0.7), Color(1, 1, 1, 0.55), 600)
+	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_line_height(hint, 1.5, 0.7)
+	parent.add_child(hint)
+	if not str(_currency.get("error", "")).is_empty():
+		_gap(parent, 6.4)
+		parent.add_child(UI.wrapped(str(_currency.get("error", "")), _fs(0.73), ERROR_INK))
+	_gap(parent, 10.4)
+
+
+func _change_currency(value: String) -> void:
+	_currency_saving = true
+	_currency["error"] = ""
+	_rerender()
+	var reply: Variant = await _req("settings.currency.set", {"code": value})
+	_currency_saving = false
+	if typeof(reply) == TYPE_DICTIONARY:
+		_currency["code"] = str((reply as Dictionary).get("code", value))
+		_currency["error"] = str((reply as Dictionary).get("error", ""))
+	else:
+		_currency["error"] = _last_error if not _last_error.is_empty() else "Could not save the currency preference."
+	_rerender()
 
 
 func _display_mode(parent: VBoxContainer) -> void:
