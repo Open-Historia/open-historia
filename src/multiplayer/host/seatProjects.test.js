@@ -197,3 +197,17 @@ test("a structure a seat's plan builds stands on its own ground, held to the hos
   const update = seatProjectOps([{ op: "update", name: "Harbour", patch: { plan: plan(yards()) } }], { board, world: world(), country: guest, mint: ids(), chart });
   assert.deepEqual(update.ops[0].patch.plan.effects, []);
 });
+
+// Who may know of its own programme is a government's to decide (the Projects
+// panel's visibility, gameState.js applyProjectOpsToWorld), a guest's as the host's.
+test("a page's update sets who may know of its own work, and nothing else rides along", () => {
+  const board = [{ id: "p1", name: "Docks", status: "active", funding: "normal", secrecy: "public", plan: { durationDays: 100, monthlyCost: 1 } }];
+  const { ops, refusal } = seatProjectOps([
+    { op: "update", projectId: "p1", name: "Docks", secrecy: "Covert", progress: 100 },
+    { op: "update", name: "Docks", secrecy: "classified" },
+  ], { board, world: world(), country: guest, mint: ids() });
+  assert.deepEqual(ops.map((op) => op.patch), [{ secrecy: "covert" }]);
+  assert.equal(refusal, PROJECT_REFUSALS.story, "a level the game does not have is no change");
+  const { world: next } = applyProjectOpsToWorld({ actor: "player", date: "1900-01-01", ops, playerCountry: guest, world: { projects: board } });
+  assert.deepEqual([next.projects[0].secrecy, next.projects[0].progress], ["covert", 0]);
+});

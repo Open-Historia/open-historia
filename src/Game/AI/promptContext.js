@@ -1505,8 +1505,12 @@ const projectMoney = (value) => {
 
 // `beliefsTold`: the world's own tasks (a time skip, the board pass) are told
 // which entries are beliefs (runtime/projectEngine.js isBelief).
-export const buildProjectsSummaryText = (world, game, { compact = false, closedLimit = CLOSED_PROJECTS_LISTED, beliefsTold = false } = {}) => {
-  const projects = normalizeArray(world?.projects);
+// `publicOnly`: the public timeline is not an omniscient knowledge channel:
+// private work is still simulated but must not be named automatically in its
+// narrative.
+export const buildProjectsSummaryText = (world, game, { compact = false, closedLimit = CLOSED_PROJECTS_LISTED, beliefsTold = false, publicOnly = false } = {}) => {
+  const projects = normalizeArray(world?.projects).filter((project) =>
+    !publicOnly || (normalizeString(project?.secrecy).toLowerCase() || "public") === "public");
   if (projects.length === 0) {
     return "No projects or operations are being tracked yet.";
   }
@@ -3007,7 +3011,11 @@ export const buildPromptContext = async (bundle, {
     result.plannedActionsWithIds = buildPlannedActionsWithIdsText(bundle.actions);
   }
   if (wants("projectsSummary")) {
-    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game, { compact: SKIP_TASKS.has(taskKey), beliefsTold: WORLD_BOARD_TASKS.has(taskKey) });
+    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game, {
+      compact: SKIP_TASKS.has(taskKey),
+      beliefsTold: WORLD_BOARD_TASKS.has(taskKey),
+      publicOnly: SKIP_TASKS.has(taskKey),
+    });
   }
 
   const worldBeforeRoundOne =

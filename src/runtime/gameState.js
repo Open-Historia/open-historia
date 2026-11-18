@@ -23,6 +23,8 @@ import { enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
 import { displayNameMigrations, renamePolityInColors, renamePolityInWorld, samePolityName } from "../../server/polityRename.js";
+import { nameId } from "../../server/nameId.js";
+import { nameKey } from "../../server/nameKey.js";
 import { renameInBattlefields, renameInTransports } from "../../server/battlefieldNames.js";
 import { canPlayerDirect } from "./projects.js";
 import {
@@ -40,6 +42,7 @@ import {
   mergeTickedBoard,
   normalizeAdjustment,
   normalizeProjectPlan,
+  projectFundingMode,
   resolveFunding,
   roundProgress,
   sheetOf,
@@ -2030,7 +2033,23 @@ export const nextProjectMilestone = (project) => {
   return ahead.length ? { title: ahead[0].title, atProgress: ahead[0].atProgress } : null;
 };
 
-export const normalizeProjectEntry = (entry, index = 0) => {
+// Legacy records may lack an ID. A fresh random ID on EVERY world read makes
+// canonical identity unstable, so construct a bounded, script-safe digest of
+// established identifying facts. Do not seed with progress, status or funding:
+// the clock must not change identity as it advances. Distinct otherwise-identical
+// legacy entries get stable occurrence ordinals inside normalizeProjects.
+const legacyProjectSeed = (entry, ownerScope = "") => JSON.stringify([
+  nameKey(entry?.ownerCode || entry?.owner || entry?.code || ownerScope),
+  nameKey(entry?.name || entry?.title || entry?.project),
+  normalizeOptionalString(entry?.createdAt),
+  normalizeOptionalString(entry?.startedAt || entry?.startDate || entry?.began),
+  normalizeOptionalString(entry?.summary || entry?.description),
+]);
+
+const legacyProjectId = (entry, index = 0, ownerScope = "") =>
+  `legacy-project-${nameId(`legacy-project|${legacyProjectSeed(entry, ownerScope)}|${index}`, () => "")}`;
+
+export const normalizeProjectEntry = (entry, index = 0, { ownerScope = "" } = {}) => {
   if (!entry || typeof entry !== "object") return null;
 
   // The name IS the identity here, exactly as it is for markers and polities: it
@@ -2091,7 +2110,7 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     : null;
 
   return {
-    id: normalizeOptionalString(entry.id) || generateId(`project-${index}`),
+    id: normalizeOptionalString(entry.id) || legacyProjectId(entry, index, ownerScope),
     name,
     kind: PROJECT_KIND_SET.has(kind) ? kind : "project",
     // Same owner namespace as units, markers and every other polity-keyed field:
@@ -2153,7 +2172,7 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     known: entry.known === true || (fromBefore && Boolean(normalizeOptionalString(entry.ownerCode || entry.owner || entry.code))),
     // What other governments' services know of it, each its own (projects.js
     // knowledgeOf), and, only in a time skip's own copy of the world, whose
-    // board it was lent from (multiplayer/host/seatBoards.js lendBoards).
+    // board it was lent from (runtime/seatBoards.js lendBoards).
     ...normalizeProjectKnowledge(entry.knownBy),
     ...(normalizeOptionalString(entry.lentFrom) ? { lentFrom: normalizeOptionalString(entry.lentFrom) } : {}),
     // No country's work but what its board's government was made to believe by
@@ -2168,43 +2187,125 @@ export const normalizeProjectEntry = (entry, index = 0) => {
     // an operation that says none is an advance.
     ...(OPERATION_APPROACHES.includes(normalizeOptionalString(entry.approach).toLowerCase()) ? { approach: normalizeOptionalString(entry.approach).toLowerCase() } : {}),
     note: normalizeTextLike(entry.note),
-    createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
-    updatedAt: normalizeOptionalString(entry.updatedAt) || new Date().toISOString(),
+    // Migration cannot assert when a historical project was created or last
+    // touched. Only real creation/update commands stamp the present time.
+    createdAt: normalizeOptionalString(entry.createdAt),
+    updatedAt: normalizeOptionalString(entry.updatedAt),
     updatedRound: Number.isFinite(updatedRound) && updatedRound > 0 ? Math.trunc(updatedRound) : 0,
   };
 };
 
-// What to drop when the board is over its cap: finished work first, oldest by
-// last-touched, and only then anything still running. Survivors keep their order.
+// An old save can contain more than the board can safely carry. Truncation
+// irreversibly deleted projects during every read->write normalization, even
+// *active* work. Do not invent an archive, discard IDs, or bypass the 120-row
+// live-board invariant. Reject the mutation with a typed, actionable error;
+// the original save remains intact for a deliberate lossless migration.
 // What other players lent a time skip's own copy of the board (lentFrom,
 // runtime/seatBoards.js) is theirs, goes home with the turn and is never
-// stored here: it counts toward no cap and is never dropped. Counted, it took
-// the room of the board's own history, or was itself left out of the skip.
+// stored here: it counts toward no cap. Counted, it took the room of the
+// board's own history, or was itself left out of the skip.
+export class ProjectBoardOverflowError extends RangeError {
+  constructor(count, active) {
+    super(`Project board limit ${MAX_PROJECTS} exceeded: ${count} records (${active} active). No projects were discarded. The original save must be migrated before continuing.`);
+    this.name = "ProjectBoardOverflowError";
+    this.code = "PROJECT_BOARD_OVER_CAPACITY";
+    this.limit = MAX_PROJECTS;
+    this.count = count;
+    this.active = active;
+  }
+}
+
 const capProjectList = (list) => {
   const kept = list.filter((project) => !project.lentFrom);
-  if (kept.length <= MAX_PROJECTS) return list;
-
-  const evictionRank = (project) => (PROJECT_OPEN_STATUSES.has(project.status) ? 1 : 0);
-  const doomed = new Set(
-    [...kept]
-      .sort((a, b) => evictionRank(a) - evictionRank(b)
-        || normalizeOptionalString(a.updatedAt).localeCompare(normalizeOptionalString(b.updatedAt)))
-      .slice(0, kept.length - MAX_PROJECTS)
-      .map((project) => project.id),
-  );
-  return list.filter((project) => !doomed.has(project.id));
+  if (kept.length > MAX_PROJECTS) {
+    throw new ProjectBoardOverflowError(
+      kept.length,
+      kept.filter((project) => PROJECT_OPEN_STATUSES.has(project.status)).length,
+    );
+  }
+  return list;
 };
 
-export const normalizeProjects = (projects) =>
-  capProjectList(
-    normalizeArray(projects)
-      .map((entry, index) => normalizeProjectEntry(entry, index))
-      .filter(Boolean)
-      // Deduplicate by name, keeping the FIRST occurrence: two entries for the
-      // same programme are a model restating itself.
-      .filter((entry, index, list) =>
-        list.findIndex((other) => other.name.toLowerCase() === entry.name.toLowerCase()) === index),
-  );
+export class ProjectBoardIdCollisionError extends Error {
+  constructor(projectId) {
+    super(`Project board contains multiple records with the same canonical ID "${projectId}". No records were discarded. Resolve this identity collision before continuing.`);
+    this.name = "ProjectBoardIdCollisionError";
+    this.code = "PROJECT_ID_COLLISION";
+    this.projectId = projectId;
+  }
+}
+
+// Recovery inspection may IDENTIFY all rows of an older board without
+// normalizing it into a playable world. This does not waive the 120-row cap:
+// only normalizeProjects is permitted to feed a canonical game writer.
+export const inspectLegacyProjectEntries = (projects, { ownerScope = "" } = {}) => {
+  const seenLegacy = new Map();
+  const normalized = normalizeArray(projects)
+    .map((entry) => {
+      if (normalizeOptionalString(entry?.id)) return normalizeProjectEntry(entry);
+      const seed = legacyProjectSeed(entry, ownerScope);
+      const ordinal = seenLegacy.get(seed) ?? 0;
+      seenLegacy.set(seed, ordinal + 1);
+      return normalizeProjectEntry(entry, ordinal, { ownerScope });
+    })
+    .filter(Boolean);
+
+  const seenIds = new Set();
+  for (const project of normalized) {
+    if (seenIds.has(project.id)) throw new ProjectBoardIdCollisionError(project.id);
+    seenIds.add(project.id);
+  }
+  return normalized;
+};
+
+export const normalizeProjects = (projects, options) =>
+  capProjectList(inspectLegacyProjectEntries(projects, options));
+
+// Explicitly shelved historical projects retain their COMPLETE source record.
+// This is a separate, bounded recovery shelf, not a second live board. Its
+// contents never tick or spend, and cannot be made active without an available
+// place under the ordinary 120-project cap. Do not flatten it into world.projects.
+export const MAX_PROJECT_RECOVERY_ARCHIVE = 512;
+
+export class ProjectRecoveryArchiveError extends RangeError {
+  constructor(message) {
+    super(message);
+    this.name = "ProjectRecoveryArchiveError";
+    this.code = "PROJECT_RECOVERY_ARCHIVE_INVALID";
+  }
+}
+
+export const normalizeProjectRecoveryArchive = (entries, { activeIds = [] } = {}) => {
+  if (!Array.isArray(entries) || entries.length > MAX_PROJECT_RECOVERY_ARCHIVE) {
+    throw new ProjectRecoveryArchiveError(
+      `Project recovery archive must be an array of at most ${MAX_PROJECT_RECOVERY_ARCHIVE} records; no records were discarded.`,
+    );
+  }
+  const seenIds = new Set(activeIds);
+  return entries.map((entry) => {
+    const id = normalizeOptionalString(entry?.id);
+    const project = entry?.project;
+    if (!id || !project || typeof project !== "object" || Array.isArray(project)
+        || normalizeOptionalString(project.id) !== id || seenIds.has(id)) {
+      throw new ProjectRecoveryArchiveError(
+        `Invalid or duplicate project recovery archive identity "${id || "(missing)"}"; no records were discarded.`,
+      );
+    }
+    seenIds.add(id);
+    // Preserve raw source fields, not just today's normalized project fields:
+    // older exported saves may carry provenance no current UI understands.
+    const board = normalizeOptionalString(entry.board) || "world";
+    if (board !== "world" && !board.startsWith("seat:")) {
+      throw new ProjectRecoveryArchiveError(`Invalid recovery board reference "${board}".`);
+    }
+    return {
+      ...entry,
+      id, board, project,
+      shelvedAt: normalizeOptionalString(entry.shelvedAt),
+      priorStatus: normalizeOptionalString(entry.priorStatus),
+    };
+  });
+};
 
 // The board's size limit, exported so the panel can warn the player as they
 // approach it instead of work quietly vanishing.
@@ -2365,19 +2466,29 @@ const patchedAlias = (patch, field) => {
 // quotes and a label word in front included ('Operation "Standing Watch"').
 const DISPLAYED_PROJECT_TITLE = /^(?:[^\s"«“„]+\s+)?["«“„](.+)["»”“]$/u;
 
-export const findProjectIndexForOp = (list, op) => {
+export const findProjectIndexForOp = (list, op, { owner = null, host = "" } = {}) => {
+  const sameOwner = (project) => {
+    if (owner === null) return true;
+    const actual = normalizeOptionalString(project.ownerCode);
+    const wanted = normalizeOptionalString(owner);
+    return wanted
+      ? Boolean(actual && samePolityName(actual, wanted))
+      : !actual || Boolean(host && samePolityName(actual, host));
+  };
   if (op.projectId) {
     const byId = list.findIndex((project) => project.id === op.projectId);
-    if (byId !== -1) return byId;
+    if (byId !== -1 && sameOwner(list[byId])) return byId;
   }
   if (!op.name) return -1;
-  const wanted = op.name.toLowerCase();
-  const exact = list.findIndex((project) => project.name.toLowerCase() === wanted);
-  if (exact !== -1) return exact;
-  const folded = list.findIndex((project) => samePolityName(project.name, op.name));
-  if (folded !== -1) return folded;
+  // Name-only operations are a compatibility fallback, never an invitation to
+  // mutate the first of several identically named programmes. Create operations
+  // additionally scope the fallback to the intended owner.
   const bare = op.name.trim().match(DISPLAYED_PROJECT_TITLE)?.[1]?.trim();
-  return bare ? list.findIndex((project) => project.name.toLowerCase() === bare.toLowerCase() || samePolityName(project.name, bare)) : -1;
+  const candidates = [op.name, bare].filter(Boolean);
+  const matches = list.map((project, index) => ({ project, index }))
+    .filter(({ project }) => candidates.some((name) => samePolityName(project.name, name)))
+    .filter(({ project }) => sameOwner(project));
+  return matches.length === 1 ? matches[0].index : -1;
 };
 
 // Fold a project op's owner name onto the polity it actually names, before the op
@@ -2407,7 +2518,7 @@ const resolveProjectOpOwner = (raw, resolveOwner) => {
 //   engine                 the engine's own ops (the covert-operation sync and
 //                          the doubt), which may also set a status.
 export const applyProjectOps = (projects, ops, ctx = {}) => {
-  const { date = "", eventId = "", round = 0, engine = false, boundPlan = (plan) => plan } = ctx;
+  const { date = "", eventId = "", round = 0, engine = false, host = "", boundPlan = (plan) => plan, onRefusal = () => {} } = ctx;
   const stamp = new Date().toISOString();
   let next = normalizeProjects(projects);
 
@@ -2442,7 +2553,9 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
     const op = normalizeProjectOp(raw);
     if (!op) continue;
     if (op.op === "create") {
-      const existingIndex = indexOf({ projectId: op.project.id, name: op.project.name });
+      const existingIndex = findProjectIndexForOp(next, {
+        projectId: op.project.id, name: op.project.name,
+      }, { owner: op.project.ownerCode, host });
       if (existingIndex !== -1) {
         // Re-announcing a running project is a restatement, not a second one:
         // only what it said is taken, and never its progress or its course. A
@@ -2459,6 +2572,22 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
         }
         const normalized = renormalize(merged, existingIndex);
         if (normalized) next = next.map((project, index) => (index === existingIndex ? touch(normalized) : project));
+        continue;
+      }
+      // IDs cannot be recycled across owners, and a name-only create must not
+      // guess which of two same-owner entries it is restating.
+      const ambiguousName = next.filter((project) => findProjectIndexForOp(
+        [project], { name: op.project.name }, { owner: op.project.ownerCode, host },
+      ) !== -1).length > 1;
+      if (ambiguousName || next.some((project) => project.id === op.project.id)) {
+        onRefusal(op.project.id, ambiguousName ? "ambiguous project title" : "duplicate project ID");
+        continue;
+      }
+      // Reject a new entry while the canonical board is full. Never report a
+      // successful create that a later normalization will silently evict.
+      // (What other players lent the skip counts toward no cap: capProjectList.)
+      if (next.filter((project) => !project.lentFrom).length >= MAX_PROJECTS) {
+        onRefusal(op.project.id, "project board is full");
         continue;
       }
       next = [...next, touch(withPlan({
@@ -4359,10 +4488,25 @@ export const normalizeWorldState = (world) => {
     // and no colour — and where the renamed polity is the PLAYER'S, it is their own
     // programme sitting in the Foreign column with both of its controls gone. Idempotent,
     // so a board already correct reads back unchanged.
+    // Explicit scenario rule, not an inferred GDP datum or a second fiscal
+    // ledger. Non-monetary work consumes time/capacity and records no payments.
+    projectFundingMode: projectFundingMode(nextWorld),
     projects: normalizeProjects(nextWorld.projects).map((project) => {
       const owner = resolveOwner(project.ownerCode);
       return owner === project.ownerCode ? project : { ...project, ownerCode: owner };
     }),
+    // A recovery shelf exists only after a save owner explicitly shelves work.
+    // Archived rows never enter the live project clock, and each retains its
+    // original source fields for later reinstatement or full game export.
+    ...(Object.prototype.hasOwnProperty.call(nextWorld, "projectRecoveryArchive") ? {
+      projectRecoveryArchive: normalizeProjectRecoveryArchive(nextWorld.projectRecoveryArchive, {
+        activeIds: [
+          ...inspectLegacyProjectEntries(nextWorld.projects).map((entry) => entry.id),
+          ...Object.entries(nextWorld.seatBoards && typeof nextWorld.seatBoards === "object" ? nextWorld.seatBoards : {})
+            .flatMap(([country, board]) => inspectLegacyProjectEntries(board, { ownerScope: country }).map((entry) => entry.id)),
+        ],
+      }),
+    } : {}),
     // A shared game's other boards (multiplayer/host/gameHost.js): every country
     // a second person plays keeps a Projects board of its own here, by country
     // name. world.projects stays the host's, which is single player's. Only a
@@ -4370,7 +4514,7 @@ export const normalizeWorldState = (world) => {
     ...(Object.prototype.hasOwnProperty.call(nextWorld, "seatBoards") ? {
       seatBoards: Object.fromEntries(
         Object.entries(nextWorld.seatBoards && typeof nextWorld.seatBoards === "object" && !Array.isArray(nextWorld.seatBoards) ? nextWorld.seatBoards : {})
-          .map(([country, board]) => [normalizeOptionalString(country), normalizeProjects(board)])
+          .map(([country, board]) => [normalizeOptionalString(country), normalizeProjects(board, { ownerScope: country })])
           .filter(([country, board]) => country && board.length)
           .slice(0, 64),
       ),
@@ -6264,14 +6408,29 @@ export const applyProjectOpsToWorld = ({
     const op = normalizeProjectOp(raw);
     if (!op) return actor === "engine";
     if (actor === "engine") return true;
-    if (op.op === "create") return isPlayersOwn(op.project.ownerCode);
+    if (op.op === "create") {
+      if (!isPlayersOwn(op.project.ownerCode)) return false;
+      const matched = findProjectIndexForOp(nextWorld.projects, {
+        projectId: op.project.id, name: op.project.name,
+      }, { owner: op.project.ownerCode, host: player });
+      // Even an explicit spoofed ID must never make a player's create write
+      // another country's project.
+      if (matched !== -1 && !isPlayersOwn(nextWorld.projects[matched].ownerCode)) {
+        refused.add(nextWorld.projects[matched].id);
+        return false;
+      }
+      return true;
+    }
     if (op.op === "setback" || op.op === "boost") return false;
     const index = findProjectIndexForOp(nextWorld.projects, op);
     if (index === -1) return true;
     const target = nextWorld.projects[index];
     const own = isPlayersOwn(target.ownerCode);
     // What a government does to its own programmes: fund, plan, call off.
-    const steers = op.op === "close" || (op.op === "update" && (op.patch?.funding !== undefined || op.patch?.plan !== undefined));
+    const steers = op.op === "close" || (op.op === "update" && (
+      op.patch?.funding !== undefined || op.patch?.plan !== undefined ||
+      closedValue(PROJECT_SECRECY_SET)(op.patch?.secrecy)
+    ));
     if (actor === "player" && (!canPlayerDirect(target, player) || (op.op === "update" && !steers))) {
       refused.add(target.id);
       return false;
@@ -6283,12 +6442,27 @@ export const applyProjectOpsToWorld = ({
     return true;
   });
 
-  nextWorld.projects = applyProjectOps(nextWorld.projects, allowed, {
+  // A player update may steer funding/planning and secrecy, not smuggle other
+  // canonical fields in alongside an otherwise authorized control.
+  const safeOps = actor === "player" ? allowed.map((raw) => {
+    const op = normalizeProjectOp(raw);
+    if (op?.op !== "update") return raw;
+    const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
+    return {
+      op: "update", projectId: op.projectId, name: op.name,
+      patch: Object.fromEntries(["funding", "plan", "secrecy"]
+        .filter((field) => patch[field] !== undefined).map((field) => [field, patch[field]])),
+    };
+  }) : allowed;
+
+  nextWorld.projects = applyProjectOps(nextWorld.projects, safeOps, {
     date,
     eventId,
     round,
+    host: player,
     engine: actor === "engine",
     boundPlan: projectPlanBounder(nextWorld, player),
+    onRefusal: (id) => refused.add(id),
   });
 
   return { refusedProjectIds: [...refused], world: nextWorld };
@@ -6351,7 +6525,26 @@ export const applyProjectOutcomesToWorld = ({ world, outcomes = [], date = "", r
   const nextWorld = normalizeWorldState(world);
   const applied = [];
   const territory = [];
-  const findProject = (name) => nextWorld.projects.findIndex((project) => project.name === name);
+  const findProject = (outcome) => {
+    const projectId = normalizeOptionalString(outcome?.projectId);
+    const owner = normalizeOptionalString(outcome?.owner) || normalizeOptionalString(host);
+    const matchesOwner = (project) => {
+      const actual = normalizeOptionalString(project.ownerCode) || normalizeOptionalString(host);
+      return !owner || Boolean(actual && samePolityName(actual, owner));
+    };
+    // Native tick outcomes carry canonical project IDs. A stale/mismatched ID
+    // must never silently fall back to a same-title project.
+    if (projectId) return nextWorld.projects.findIndex((project) =>
+      project.id === projectId && matchesOwner(project));
+    // Older serialized/hand-authored outcomes have no ID. Only an unambiguous
+    // title *within the intended polity* is safe to apply.
+    const title = normalizeOptionalString(outcome?.project);
+    if (!title || !owner) return -1;
+    const matches = nextWorld.projects
+      .map((project, index) => ({ project, index }))
+      .filter(({ project }) => project.name === title && matchesOwner(project));
+    return matches.length === 1 ? matches[0].index : -1;
+  };
   const resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
   const relationOf = (a, b) => nextWorld.relations.findIndex((entry) => (samePolityName(entry.a, a) && samePolityName(entry.b, b)) || (samePolityName(entry.a, b) && samePolityName(entry.b, a)));
 
@@ -6392,7 +6585,7 @@ export const applyProjectOutcomesToWorld = ({ world, outcomes = [], date = "", r
   };
 
   for (const outcome of normalizeArray(outcomes)) {
-    const index = findProject(outcome?.project);
+    const index = findProject(outcome);
     if (index === -1) continue;
     const project = nextWorld.projects[index];
     const owner = normalizeOptionalString(project.ownerCode) || normalizeOptionalString(host);

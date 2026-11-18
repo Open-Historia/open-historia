@@ -67,6 +67,7 @@ import ScenarioLanguagesPanel from "./ScenarioLanguagesPanel.jsx";
 import { normalizeScenarioLanguages } from "../../../server/scenarioLanguages.js";
 const PoliticalWorldAuthoringPanel = lazy(() => import("./PoliticalWorldAuthoringPanel.jsx"));
 const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
+const ProjectRecoveryDialog = lazy(() => import("./ProjectRecoveryDialog.jsx"));
 import { isFeatureEnabled, normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
@@ -616,6 +617,7 @@ const buildScenarioEditorState = (details) => {
     labelHaloColor: world.labelHaloColor ?? "",
     labelTextColor: world.labelTextColor ?? "",
     simulationRules: world.simulationRules ?? "",
+    projectFundingMode: world.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy",
     startingTimelineText: world.startingTimelineText ?? "",
     subtitle: scenario.subtitle ?? "",
     // How its wars are fought (the Fronts tab: ScenarioWarSettings.jsx), compact:
@@ -1352,7 +1354,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
 // face of the card. Three verbs compete for width with Play, and Play is the one a
 // player came to press; the other three are occasional, and none of them is
 // destructive, which is why Archive stays out here on its own.
-const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete = null, onEdit, onExport }) => {
+const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete = null, onEdit, onExport, onRecover }) => {
   const cardImageUrl = game.coverImageUrl || DEFAULT_SCENARIO_COVER;
   const touch = useTouchPrimary();
   const isMobile = useIsMobile();
@@ -1406,6 +1408,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
   const cardMenuItems = [
     ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
     ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
+    ["Recover Projects…", () => { setCardMenuOpen(false); onRecover(game); }, false],
     [game.archived ? "Unarchive" : "Archive", () => { setCardMenuOpen(false); onArchive(game); }, false],
     // Offered everywhere, the Android app included: runtime/saveFile.js saves
     // the zip into Downloads/Open Historia there (runtime/native/fileSave.js).
@@ -2362,6 +2365,22 @@ const EditorDrawer = ({
                   {kind === "scenario" ? "Suggested for new campaigns; players can override it." : "This campaign only."} GDP numbers remain in canonical 2026 USD.
                 </div>
               </div>
+              {kind === "scenario" && (
+                <div>
+                  <label style={fieldLabelStyle}>Projects funding basis</label>
+                  <select
+                    style={inputStyle}
+                    value={formState.projectFundingMode || "gdp-proxy"}
+                    onChange={(event) => onChange("projectFundingMode", event.target.value)}
+                  >
+                    <option value="gdp-proxy">Estimated national GDP allowance</option>
+                    <option value="nonmonetary">Non-monetary time and effort</option>
+                  </select>
+                  <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", lineHeight: 1.4, marginTop: "0.35rem" }}>
+                    GDP allowance is an estimate, not treasury cash. Non-monetary scenarios advance projects by time and capacity without recording financial payments; no GDP is required.
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           {kind === "scenario" && (
@@ -2817,6 +2836,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [editorSection, setEditorSection] = useState("overview");
   const [promptSectionKey, setPromptSectionKey] = useState("leader");
   const [isBusy, setIsBusy] = useState(false);
+  // Save-owner maintenance, accessible even when an over-cap old save cannot
+  // be normalized into a live world. Never a gameplay/foreign-intel view.
+  const [projectRecoveryGame, setProjectRecoveryGame] = useState(null);
   const assetFileInputsRef = useRef({});
   const importScenarioInputRef = useRef(null);
   const importGameInputRef = useRef(null);
@@ -3821,6 +3843,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             labelTextColor: editorState.labelTextColor,
             language: editorState.language,
             simulationRules: editorState.simulationRules,
+            projectFundingMode: editorState.projectFundingMode === "nonmonetary" ? "nonmonetary" : "gdp-proxy",
             startingTimelineText: editorState.startingTimelineText,
             // How its wars are fought (runtime/warSettings.js). A scenario that
             // never set any is written none; one whose author took every
@@ -5539,7 +5562,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   {continueGames.length > 0 && (
                     <MenuRow description="Pick up exactly where you left off." icon="▶" title="Continue Playing">
                       {continueGames.map((game) => (
-                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} />
+                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} onRecover={setProjectRecoveryGame} />
                       ))}
                     </MenuRow>
                   )}
@@ -5570,7 +5593,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                         child either way, so an empty view still says so. */}
                     {loaded
                       ? browsedGames.map((game) => (
-                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} />
+                        <GameCard key={game.id} active={game.id === activeGameId} busy={isBusy} game={game} onActivate={handleGameActivate} onArchive={handleGameArchive} onClone={handleGameClone} onDelete={handleGameDelete} onEdit={openGameEditor} onExport={handleGameExport} onRecover={setProjectRecoveryGame} />
                       ))
                       : <MenuCardSkeletons count={isMobile ? 3 : 8} kind="game" width={SHELF_CARD_WIDTH} />}
                   </LibraryCollection>
@@ -5653,6 +5676,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       {menuOpen && historyOpen && (
         <Suspense fallback={null}>
           <UpdateHistory onClose={() => setHistoryOpen(false)} />
+        </Suspense>
+      )}
+
+      {menuOpen && projectRecoveryGame && (
+        <Suspense fallback={null}>
+          <ProjectRecoveryDialog
+            game={projectRecoveryGame}
+            onClose={() => setProjectRecoveryGame(null)}
+          />
         </Suspense>
       )}
 

@@ -324,13 +324,23 @@ export const excerptAroundError = (body, message, radius = 140) => {
 //
 // Returns `reason` describing why nothing came back, so the UI can say something
 // better than "it didn't work" and a bug report has something to go on.
+// Every structured channel an advisor reply carries (advisorReply.js reads each
+// with extractFencedJson): the openers a fused closing fence may run into. One
+// list, so a new channel gets the same recovery (advisorBlocks.test.js checks
+// advisorReply.js reads none outside it).
+export const ADVISOR_FENCE_LANGS = Object.freeze(["chart", "actions", "senddraft", "institutiondraft", "deploy", "projects"]);
+
 export const extractFencedJson = (text, lang, { salvageTruncated = false, streaming = false } = {}) => {
   // Markdown fences are block constructs, not arbitrary backtick runs in
   // prose. An advisor can mention \`\`\`actions when explaining a past error;
   // interpreting that inline mention as the opener consumes the *real* block
   // later in the reply and silently discards otherwise valid proposals.
   const opening = "(^|\\r?\\n)[ \\t]{0,3}```" + lang + "[ \\t]*\\r?\\n";
-  const closing = "^[ \\t]{0,3}```[ \\t]*(?:\\r?\\n|$)";
+  // A provider may fuse a closing fence with the next known structured opener,
+  // e.g. \`\`\`"\`\`\`senddraft. Consume only the closing backticks and
+  // stray quote; extracting the prior block leaves the next opener on its own
+  // line. The complete payload must still pass normal JSON validation.
+  const closing = "^[ \\t]{0,3}```[ \\t]*(?:\\r?\\n|$|[\"'](?=\\r?\\n|$)|[\"']?(?=```(?:" + ADVISOR_FENCE_LANGS.join("|") + ")[ \\t]*\\r?\\n))";
   const regex = new RegExp(opening + "([\\s\\S]*?)" + closing, "m");
   const match = text.match(regex);
 

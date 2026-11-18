@@ -17,6 +17,37 @@ const claimedAction = [
   "The Action awaits your Proceed, mon Premier.",
 ].join("\n");
 
+test("1912 October 14: native naval deployment is reported to the Action checker, not duplicated", async () => {
+  const source = [
+    "The French Northern Squadron is ready for confirmation.",
+    "```deploy",
+    JSON.stringify([{ type: "naval", name: "French Northern Squadron", strength: 85, lng: -4.77, lat: 48.35 }]),
+    "```",
+  ].join("\n");
+  let receipts = null;
+  const result = await completeAdvisorActionReply({
+    reply: source, canPropose: true, allowedUnitTypes: ["naval", "infantry"],
+    check: async ({ delivered }) => { receipts = delivered; return "NO_MISSING_ACTION"; },
+  });
+  assert.deepEqual(receipts, { deployments: 1, projects: 0, diplomaticDrafts: 0, institutionDrafts: 0 });
+  assert.equal(result.status, "none");
+  assert.equal(result.reply, source);
+  assert.equal(result.problem, "");
+  assert.equal(parseAdvisorReply(result.reply).actionsProposal, null);
+});
+
+test("a delivered deployment does not block a separately requested Action check", async () => {
+  const source = "```deploy\n" + JSON.stringify([{ type: "naval", name: "French Northern Squadron", strength: 85, lng: -4.77, lat: 48.35 }]) + "\n```";
+  let calls = 0;
+  const result = await completeAdvisorActionReply({
+    reply: source, canPropose: true, allowedUnitTypes: ["naval"],
+    check: async ({ delivered }) => { calls++; assert.equal(delivered.deployments, 1); return actionBlock; },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.status, "recovered");
+  assert.equal(parseAdvisorReply(result.reply).actionsProposal?.length, 1);
+});
+
 test("May 30 1912: an explicitly promised missing Action can be recovered as a review-only attachment", async () => {
   let calls = 0;
   const result = await completeAdvisorActionReply({

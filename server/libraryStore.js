@@ -553,6 +553,9 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "ownBasemaps",
   "canonModelVersion",
   "canonContext",
+  // Explicit scenario Projects funding basis. Non-monetary scenarios need no
+  // modern GDP metric and do not invent a cash ledger.
+  "projectFundingMode",
   "customCities",
   "customGeometry",
   "customRegions",

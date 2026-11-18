@@ -65,8 +65,16 @@ test("the player's own come first; the advisor also reads what each is for, its 
   assert.doesNotMatch(compact, /Next checkpoint|When done/);
 });
 
-test("a project with no finish date yet is given one from its owner's budget, at the pace it would go", () => {
+test("without a native GDP baseline, an unfunded project's finish date cannot be invented", () => {
   const text = buildProjectsSummaryText({ projects: [project("Catapults", { targetDate: "", progress: 50 })], countryStats: {} }, GAME, { compact: true });
+  assert.match(text, /no finish in sight/);
+});
+
+test("an assessed native GDP baseline permits a forecast based on the actual project allowance", () => {
+  const text = buildProjectsSummaryText({
+    projects: [project("Catapults", { targetDate: "", progress: 50 })],
+    countryStats: { "House Stark": { stability: 50, economy: { gdp: 1.2e12, budgetBalance: 0, publicDebt: 40, gdpGrowth: 0 } } },
+  }, GAME, { compact: true });
   assert.match(text, /done ~0299-04-01/);
 });
 

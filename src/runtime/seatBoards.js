@@ -77,12 +77,34 @@ const freeName = (name, country, names) => {
 // an entry a seat's board also holds, not lent, is a copy of that seat's entry
 // written there before a skip, and goes home as the skip left it (the same as
 // at home, or the skip's later state of it).
+//
+// A copy, not the same id alone: ids are meant to be unique across boards, but
+// one a seat's board shares with an unrelated entry of the game's own (an old
+// save's, an import's) made the game's entry go to that seat, in place of the
+// seat's own. So an entry is taken for a copy only where the lending that left
+// it says so: a beta save's record of what it lent (`projectSeatLoans`, id to
+// seat), else the owner an older lending wrote on every copy, the seat's own
+// country. That record is read here and dropped: nothing lent is stored now.
+const LOANS_KEY = "projectSeatLoans";
 export const settleBoards = (world) => {
-  const homeOf = new Map();
-  for (const [key, board] of Object.entries(boardsOf(world))) for (const row of list(board)) if (clean(row?.id)) homeOf.set(clean(row.id), key);
+  const loans = isRecord(world?.[LOANS_KEY]) ? world[LOANS_KEY] : null;
+  const homesOf = new Map();
+  for (const [key, board] of Object.entries(boardsOf(world))) {
+    for (const row of list(board)) {
+      const id = clean(row?.id);
+      if (id) homesOf.set(id, [...(homesOf.get(id) ?? []), key]);
+    }
+  }
+  const copyOf = (row) => {
+    if (!isRecord(row) || lentFrom(row)) return "";
+    const homes = homesOf.get(clean(row.id)) ?? [];
+    const by = loans ? loans[clean(row.id)] : row.ownerCode;
+    return homes.find((key) => same(key, by)) ?? "";
+  };
   const rows = list(world?.projects);
-  if (!homeOf.size || !rows.some((row) => !lentFrom(row) && homeOf.has(clean(row?.id)))) return world;
-  const marked = { ...world, projects: rows.map((row) => (!lentFrom(row) && homeOf.has(clean(row?.id)) ? { ...row, lentFrom: homeOf.get(clean(row.id)) } : row)) };
+  const { [LOANS_KEY]: _loans, ...rest } = isRecord(world) ? world : {};
+  if (!rows.some(copyOf)) return loans ? rest : world;
+  const marked = { ...rest, projects: rows.map((row) => (copyOf(row) ? { ...row, lentFrom: copyOf(row) } : row)) };
   return returnBoards(marked, { before: marked });
 };
 
@@ -162,7 +184,9 @@ export const returnBoards = (world, { host = "", humans = [], before = null } = 
     }
     const id = clean(row?.id);
     const owner = id && !hostHad.has(id) ? list(humans).find((human) => !same(human, host) && same(human, row?.ownerCode)) : "";
-    if (owner) {
+    // Never a second entry of an id that player's board already holds (an
+    // id names one entry: gameState.js ProjectBoardIdCollisionError).
+    if (owner && !list(home[boardFor(owner)]).some((entry) => clean(entry?.id) === id)) {
       const key = boardFor(owner);
       home[key] = [...list(home[key]), { ...row, ownerCode: "" }];
       changed = true;

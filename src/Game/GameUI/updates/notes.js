@@ -75,6 +75,25 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // A Beta maintenance release for legacy Projects and their saved state.
+    // A recovery operation always creates a separate game: old work is never
+    // silently dropped just to fit the board, and in-play work can be shelved
+    // only with the save owner's explicit choice.
+    id: "2026-11-projects-recovery-safeguards",
+    kind: "minor",
+    date: "2026-11-17",
+    channel: "beta",
+    banners: [{
+      title: "Projects, Safely Preserved",
+      items: [
+        "Recover older campaigns with oversized Projects boards from the Games library, without overwriting your original save.",
+        "Choose which projects to shelve. Their complete records are kept, and you can restore or swap them later.",
+        "Projects from older saves keep stable identities, and shared campaigns no longer mistake two projects with the same name.",
+        "Project budgets now distinguish planned costs from payments, while historical scenarios can use time and effort instead of GDP.",
+      ],
+    }],
+  },
+  {
     // "the diplomatic map is shit, redesign it and make it have full integration with the political world", then "only on
     // alpha for now and ... be a major update" (the owner, 2026-11-15): four views (runtime/diplomaticViews.js), a legend
     // that counts what is shown (GameUI/DiplomaticLegend.jsx), lines from the focus country's capital, kept for each game.

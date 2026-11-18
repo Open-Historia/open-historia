@@ -73,7 +73,8 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "labelTextColor", "language", "lastJumpMode", "lastJumpTargetDate", "mapCredit", "markers",
   "ownBasemaps", "ownerCodes", "ownerSchema", "polityOverrides", "powerStatus", "regionClaimants",
   "regionOwnershipOverrides", "regionRenames", "regionSovereigntyOverrides", "settledRegionClaims",
-  "simulationRules", "startingTimelineText", "unitSystem", "wars", "agreements",
+  // Scenario funding BASIS is public; no financial ledger is disclosed.
+  "projectFundingMode", "simulationRules", "startingTimelineText", "unitSystem", "wars", "agreements",
   // And what an event's strike looked like: every map plays it.
   "strikes",
   // And what the war room's air strikes did: who was struck knows it (runtime/fronts/airStrike.js).
@@ -126,6 +127,11 @@ export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   "actionSuggestions", "chargedRefusals", "chatKnowledgeCursors", "consolidatedHistory",
   "gmAudit", "gmChanges", "historyDocument", "idlePulseTick", "lastJumpSummary", "naviesRaised", "notes",
   "pendingEventOutreach", "politicalSimulation", "seatBoards", "seatSeals", "seenFleetPostures",
+  // A beta save's record of the work its older lending put on the game's
+  // board (runtime/seatBoards.js settleBoards reads it, and drops it).
+  // Projects deliberately shelved by the game owner are save-management
+  // records, not public game intelligence; the archive may contain covert work.
+  "projectSeatLoans", "projectRecoveryArchive",
   "storylines",
   // What a seat's person left waiting while nobody shared the game (heldSeats.js):
   // given back to the game before anything is sent, and never in a view.

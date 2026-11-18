@@ -257,15 +257,24 @@ test("a verdict on doubted intelligence is the engine's alone: the story and the
 
 // What other players lent a time skip's copy of the board is theirs (seatBoards.js):
 // counted, it took the room of the board's own history, or was left out of the skip.
+// Its own entries past the limit are never dropped either: the save is refused
+// whole, for a recovery that loses nothing (projectRecovery.js).
 test("what other players lent a skip counts toward no limit of the board, and is never dropped", () => {
   const own = Array.from({ length: 120 }, (_, n) => ({ id: `h-${n}`, name: `Host ${n}`, plan: PLAN, status: n % 2 ? "complete" : "active" }));
   const lent = [{ id: "g-1", name: "Guest work", ownerCode: "Russia", lentFrom: "Russia", plan: PLAN }];
   const board = normalizeWorldState({ projects: [...own, ...lent] }).projects;
   assert.equal(board.length, 121);
-  const over = normalizeWorldState({ projects: [...own, { id: "h-new", name: "One more", plan: PLAN }, ...lent] }).projects;
-  assert.equal(over.length, 121, "the board's own entries are held to the limit");
-  assert.ok(over.some((row) => row.lentFrom === "Russia"), "the lent entry stays");
-  assert.equal(over.filter((row) => !row.lentFrom && row.status === "complete").length, 59, "a finished entry of its own went");
+  assert.ok(board.some((row) => row.lentFrom === "Russia"), "the lent entry stays");
+  assert.throws(
+    () => normalizeWorldState({ projects: [...own, { id: "h-new", name: "One more", plan: PLAN }, ...lent] }),
+    (error) => error.code === "PROJECT_BOARD_OVER_CAPACITY" && error.count === 121,
+    "the board's own entries are held to the limit, and none is dropped",
+  );
+  // A create on a full board is refused, whatever is lent beside it.
+  const created = applyProjectOps(board, [{ op: "create", name: "One more", plan: PLAN }]);
+  assert.equal(created.length, 121);
+  const roomy = applyProjectOps([...own.slice(1), ...lent], [{ op: "create", name: "One more", plan: PLAN }]);
+  assert.equal(roomy.length, 121, "the lent entry takes no room of the board's own");
 });
 
 // A belief (projectEngine.js isBelief): a programme a service was made to believe

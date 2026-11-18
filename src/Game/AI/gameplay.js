@@ -189,6 +189,8 @@ import {
   tickProjects,
   worldProjectGate,
 } from "../../runtime/projectEngine.js";
+import { publicProjectOutcomes } from "../../runtime/projectDisclosure.js";
+import { settleProjectTerritoryWorld } from "../../runtime/projectTerritorySettlement.js";
 import { filterBoundLedgerUpdatesToKeptEvents, keepWarRecordsBeyondEvents } from "./ledgerEventBinding.js";
 import { giveSegmentEventIds, pinLedgersToEvents } from "./ledgerPins.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
@@ -8862,7 +8864,8 @@ const projectsPeriod = (bundle, toDate, fromDate = normalizeString(bundle?.game?
 });
 
 // What the engine decided for a skip's period, as its prompt is told it.
-const projectsForecastText = (outcomes) => describeOutcomes(outcomes);
+const projectsForecastText = (outcomes, world, host) =>
+  describeOutcomes(publicProjectOutcomes(outcomes, world?.projects, host));
 
 // The engine's turn (see applySimulationResult): the tick, the effects it
 // releases, and the territory a completion moves, found on the map by name and
@@ -8880,50 +8883,44 @@ const runProjectsEngine = async ({ baseWorld, world, colors, fromDate, toDate, h
   let nextColors = colors;
   const renamedPolities = [];
   if (released.territory.length) {
-    const containers = released.territory.map((entry, index) => ({
-      event: { title: entry.project },
-      impacts: { regionTransfers: entry.regionTransfers.map((transfer) => ({ ...transfer })), regionClaims: entry.regionClaims.map((claim) => ({ ...claim })), groupOps: [] },
-      path: `projects[${index}]`,
-    }));
-    try {
-      const unresolved = await resolveRegionTransfers(containers, nextWorld, { renderedRegions: createRenderedRegionsReader() });
-      for (const entry of normalizeArray(unresolved)) {
-        console.warn(`[projects] "${normalizeString(entry?.label)}" was not found on the map; that part of a project's completion was left out.`);
-      }
-      // A region a person holds is that person's to give (cessionsPeopleKeep).
-      if (normalizeArray(people).length) {
-        const peopleCatalog = regionCatalog ? await regionCatalog().catch(() => null) : null;
-        containers.forEach((container, index) => {
-          const { kept, refused } = cessionsPeopleKeep({ transfers: container.impacts.regionTransfers, owner: released.territory[index].owner, people, world: nextWorld, catalog: peopleCatalog });
-          container.impacts.regionTransfers = kept;
-          for (const entry of refused) {
-            logDebugEvent("turn", `"${released.territory[index].project}" would have taken ${normalizeString(entry.regionId)} from ${entry.holder}, which a person plays and did not give: that part of its completion was left out.`, undefined, { problem: true });
-          }
-          // And a person's polity is theirs (polityChangesPeopleKeep).
-          const polities = polityChangesPeopleKeep({ changes: released.territory[index].polityChanges, owner: released.territory[index].owner, people });
-          released.territory[index].polityChanges = polities.kept;
-          for (const entry of polities.refused) {
-            logDebugEvent("turn", `"${released.territory[index].project}" would have changed ${entry.holder}, which a person plays: that part of its completion was left out.`, undefined, { problem: true });
-          }
-        });
-      }
-      const events = released.territory.map((entry, index) => ({
-        id: `project-done-${index}-${normalizeString(entry.date)}`,
-        date: entry.date,
-        title: entry.project,
-        description: "",
-        impacts: { polityChanges: entry.polityChanges, regionTransfers: containers[index].impacts.regionTransfers, regionClaims: containers[index].impacts.regionClaims },
-      }));
-      const catalog = regionCatalog && events.some((event) => event.impacts.regionTransfers.length)
-        ? await regionCatalog()
-        : null;
-      const merged = applyEventImpactsToWorld({ colors: nextColors, events, world: nextWorld, motion: null, round, boardOnlyEventIds: events.map((event) => event.id), regionCatalog: catalog });
-      nextWorld = merged.world;
-      nextColors = merged.colors;
-      renamedPolities.push(...normalizeArray(merged.renamedPolities));
-    } catch (error) {
-      console.warn("[projects] a completed project's territory could not be applied; the rest of the turn stands.", error);
-    }
+    // Project completion effects have already been latched in nextWorld. The
+    // map mutation must be part of the SAME unwritten turn: a failed region
+    // resolution or rejected legal transfer holds the turn, never publishes
+    // stats/effectsAppliedAt while losing the intended territorial result.
+    const settled = await settleProjectTerritoryWorld({
+      entries: released.territory,
+      world: nextWorld,
+      colors: nextColors,
+      round,
+      resolveTransfers: resolveRegionTransfers,
+      readCatalog: regionCatalog,
+      applyWorldImpacts: applyEventImpactsToWorld,
+      renderedRegions: createRenderedRegionsReader(),
+      // A region a person holds is that person's to give (cessionsPeopleKeep),
+      // and a person's polity is theirs (polityChangesPeopleKeep): what they
+      // keep is a rule's refusal, left out of the completion, not a failure.
+      keepTerritory: normalizeArray(people).length
+        ? async ({ entries, containers, world: settling }) => {
+          const peopleCatalog = regionCatalog ? await regionCatalog().catch(() => null) : null;
+          containers.forEach((container, index) => {
+            const entry = entries[index];
+            const { kept, refused } = cessionsPeopleKeep({ transfers: container.impacts.regionTransfers, owner: entry.owner, people, world: settling, catalog: peopleCatalog });
+            container.impacts.regionTransfers = kept;
+            for (const item of refused) {
+              logDebugEvent("turn", `"${entry.project}" would have taken ${normalizeString(item.regionId)} from ${item.holder}, which a person plays and did not give: that part of its completion was left out.`, undefined, { problem: true });
+            }
+            const polities = polityChangesPeopleKeep({ changes: entry.polityChanges, owner: entry.owner, people });
+            entry.polityChanges = polities.kept;
+            for (const item of polities.refused) {
+              logDebugEvent("turn", `"${entry.project}" would have changed ${item.holder}, which a person plays: that part of its completion was left out.`, undefined, { problem: true });
+            }
+          });
+        }
+        : null,
+    });
+    nextWorld = settled.world;
+    nextColors = settled.colors;
+    renamedPolities.push(...normalizeArray(settled.renamedPolities));
   }
   const told = advanced.outcomes.filter((outcome) => outcome.type !== "yield");
   if (told.length || released.applied.length) {
@@ -18771,7 +18768,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   // what the engine decides — checkpoints, completions and their effects, stalls
   // — goes into the prompt, so the events tell what happens to them instead of
   // guessing. The same days are run again when the answer is applied.
-  const projectsForecast = projectsForecastText(projectsPeriod(bundle, targetDate).outcomes);
+  const projectsForecast = projectsForecastText(projectsPeriod(bundle, targetDate).outcomes, bundle.world, projectsHost(bundle.game));
   // Guarantee at least one event per queued action, so each planned action has a
   // slot to resolve into (bounded so a huge queue can't demand absurd counts).
   const plannedActionCount = normalizeActions(bundle.actions).filter((action) => action.status === "planned").length;

@@ -74,7 +74,7 @@ export const peoplesPressureLine = (persons = []) => `For each HUMAN-controlled 
 // The board pass's espionage (gameplay.js, task "projects"): the board it keeps
 // is the game country's, the host's seat, so its brief is that service's. The
 // other players' own entries are lent to that board for the period
-// (multiplayer/host/seatBoards.js) and are no intelligence of the host's.
+// (runtime/seatBoards.js) and are no intelligence of the host's.
 // i18n-ignore: the model's briefing, never shown.
 export const sharedBoardServiceLine = (owner) => {
   const name = clean(owner) || "the host's polity";

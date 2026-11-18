@@ -4352,9 +4352,9 @@ export async function sendMessage(userMessage, options) {
 // A second, bounded provider request verifies an omitted Action proposal
 // without sending the entire campaign prompt again. The UI owns the final
 // parser and native review state; this function creates NO canonical changes.
-export async function checkAdvisorActionCompleteness({ playerRequest, advisorReply } = {}) {
+export async function checkAdvisorActionCompleteness({ playerRequest, advisorReply, delivered } = {}) {
     const result = await callAI(ADVISOR_ACTION_COMPLETION_SYSTEM, [
-        { role: "user", parts: [{ text: buildAdvisorActionCompletionQuestion({ playerRequest, advisorReply }) }] },
+        { role: "user", parts: [{ text: buildAdvisorActionCompletionQuestion({ playerRequest, advisorReply, delivered }) }] },
     ], {
         maxTokens: ADVISOR_ACTION_COMPLETION_MAX_TOKENS,
         taskKey: "advisor", agentKind: "advisor",

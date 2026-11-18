@@ -2,8 +2,10 @@
 // Runs in a BARE CHECKOUT: advisorBlocks.js is import-free on purpose.
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 import {
+  ADVISOR_FENCE_LANGS,
   closeObjectsBeforeList,
   extractFencedJson,
   looksLikeProjectOps,
@@ -13,6 +15,45 @@ import {
 } from "./advisorBlocks.js";
 
 const fence = (lang, body) => "```" + lang + "\n" + body + "\n```";
+
+test("every channel the reply parser reads can follow a fused closing fence", () => {
+  const parser = fs.readFileSync(new URL("./advisorReply.js", import.meta.url), "utf8");
+  const read = [...parser.matchAll(/extractFencedJson\([^,]+,\s*"([a-z]+)"/g)].map((match) => match[1]);
+  assert.ok(read.length >= 6, "the parser's channels were found");
+  for (const lang of new Set(read)) assert.ok(ADVISOR_FENCE_LANGS.includes(lang), `${lang} is missing from ADVISOR_FENCE_LANGS`);
+  for (const lang of ADVISOR_FENCE_LANGS) {
+    const result = extractFencedJson(["```actions", '[{"title":"A"}]', `\`\`\`"\`\`\`${lang}`, "[]", "```"].join("\n"), "actions");
+    assert.deepEqual(result.json, [{ title: "A" }], lang);
+    assert.match(result.rest, new RegExp(`^\`\`\`${lang}\\n`), lang);
+  }
+});
+
+test("1912 Tangier: fused closing and next opening are separated without changing the JSON", () => {
+  const actions = [{ title: "Tangier Protocol Signature and Ratification Coordination", text: "Coordinate signature and ratification." }];
+  const raw = ["Proposed for Proceed.", "```actions", JSON.stringify(actions),
+    '```"```senddraft', '[{"country":"Kingdom of Spain"}]', '```"'].join("\n");
+  const result = extractFencedJson(raw, "actions", { streaming: true });
+  assert.deepEqual(result.json, actions);
+  assert.equal(result.reason, "");
+  assert.match(result.rest, /^Proposed for Proceed\.\n```senddraft\n/m);
+  assert.equal(extractFencedJson(result.rest, "senddraft").json?.[0]?.country, "Kingdom of Spain");
+});
+
+test("fused boundary never salvages an invalid Action body", () => {
+  const raw = ["Proposed for Proceed.", "```actions", '[{"title":"Tangier","text":',
+    '```"```senddraft', '[{"country":"Kingdom of Spain"}]', '```"'].join("\n");
+  const result = extractFencedJson(raw, "actions", { streaming: true });
+  assert.equal(result.json, null);
+  assert.match(result.reason, /invalid JSON/);
+  assert.equal(extractFencedJson(result.rest, "senddraft").json?.[0]?.country, "Kingdom of Spain");
+});
+
+test("a similarly fused but unknown fence cannot close an Action", () => {
+  const source = ["```actions", '[{"title":"Tangier"}]', '```"```arbitrary', "not a structured channel"].join("\n");
+  const result = extractFencedJson(source, "actions", { streaming: true });
+  assert.equal(result.json, null);
+  assert.equal(result.rest, "");
+});
 
 test("extracts a well-formed block and strips it from the prose", () => {
   const reply = `Here is the plan.\n\n${fence("actions", '[{"title":"Do a thing"}]')}\n\nThoughts?`;

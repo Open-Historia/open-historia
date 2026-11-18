@@ -24,8 +24,9 @@
 //            secrecy, tags, focus and plan. Its id is the host's; its dates
 //            are the game's (applyProjectOps dates it as it is applied);
 //            nothing of what the engine records of one under way comes with it;
-//   update   its funding, and the plan of one still planning: what a
-//            government does to its own programmes. Never what the story says
+//   update   its funding, who may know of it (secrecy), and the plan of one
+//            still planning: what a government does to its own programmes
+//            (gameState.js applyProjectOpsToWorld). Never what the story says
 //            of one (lastUpdate, a verdict on intelligence): that is the
 //            world's, in the round's request;
 //   cancel   called off (fail and close are the story's).
@@ -69,6 +70,8 @@ const isRecord = (value) => Boolean(value) && typeof value === "object" && !Arra
 const opOf = (raw) => clean(raw?.op || raw?.action).toLowerCase();
 // The fields a government gives a new effort of its own.
 const CREATE_FIELDS = Object.freeze(["name", "summary", "kind", "secrecy", "tags", "focus"]);
+// Who may know of a programme (gameState.js normalizeProjectEntry).
+const SECRECY_LEVELS = new Set(["public", "restricted", "covert"]);
 
 // Why a page's op was not taken, in the host's words (rule 10).
 export const PROJECT_REFUSALS = Object.freeze({
@@ -209,11 +212,12 @@ export const seatProjectOps = (ops, { board = [], world = {}, country = "", mint
       }
       const plan = isRecord(patch.plan) ? seatPlanOf(patch.plan, { owner: country, world, chart, focus }) : null;
       const funding = clean(patch.funding);
-      if (!funding && !plan) {
+      const secrecy = SECRECY_LEVELS.has(clean(patch.secrecy).toLowerCase()) ? clean(patch.secrecy).toLowerCase() : "";
+      if (!funding && !plan && !secrecy) {
         refuse("story");
         continue;
       }
-      out.push({ op: "update", ...target, patch: { ...(funding ? { funding } : {}), ...(plan ? { plan } : {}) } });
+      out.push({ op: "update", ...target, patch: { ...(funding ? { funding } : {}), ...(secrecy ? { secrecy } : {}), ...(plan ? { plan } : {}) } });
       continue;
     }
     if (op === "cancel") {

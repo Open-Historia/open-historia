@@ -267,3 +267,74 @@ test("in single player a belief stays on the game's board as the player's servic
   assert.deepEqual(home.projects.map((row) => [row.id, row.belief === true, "believedBy" in row]), [["p", false, false], ["b", true, false]]);
   assert.equal("seatBoards" in home, false, "a single-player save never gains the other boards' key");
 });
+
+// Ported from beta's "preserve identity during project seat lending" (thekernely,
+// PR #1047): an id, not a name, is an entry's identity; a seat's entry that
+// shares an id with the game's own never takes its place; and what a skip lends
+// survives the game's own normalizer and comes home to the right board.
+test("distinct entries of one name are all lent, each under a name of its own, and come home under theirs", () => {
+  const record = world();
+  record.seatBoards[RUSSIA] = [
+    project("ru-a", "Riga port"),
+    project("ru-b", "Riga port"),
+    project("ru-c", "Tallinn shipyard", RUSSIA),
+  ];
+  const lent = lendBoards(record, who);
+  assert.deepEqual(lent.projects.map((row) => row.id), ["lv-1", "lv-on-ee", "ru-a", "ru-b", "ru-c"], "a title cannot hide another seat's work");
+  assert.equal(new Set(lent.projects.map((row) => row.name.toLowerCase())).size, lent.projects.length, "the skip can name each one");
+  const home = returnBoards(lent, { ...who, before: lent });
+  assert.deepEqual(home.seatBoards[RUSSIA].map((row) => [row.id, row.name]), [["ru-a", "Riga port"], ["ru-b", "Riga port"], ["ru-c", "Tallinn shipyard"]]);
+  assert.deepEqual(home.projects.map((row) => row.id), ["lv-1", "lv-on-ee"]);
+});
+
+test("a seat's entry with the id of one of the game's own is never lent over it", () => {
+  const record = world();
+  record.seatBoards[RUSSIA].unshift(project("lv-1", "Unrelated foreign title"));
+  const lent = lendBoards(record, who);
+  assert.equal(lent.projects.filter((row) => row.id === "lv-1").length, 1);
+  assert.deepEqual([lent.projects.find((row) => row.id === "lv-1").name, lent.projects.find((row) => row.id === "lv-1").ownerCode], ["Riga port", ""]);
+  assert.deepEqual(record.seatBoards[RUSSIA][0], project("lv-1", "Unrelated foreign title"), "the other seat's record stays untouched");
+});
+
+test("what a skip lends survives the game's normalizer and goes home to the right board", async () => {
+  const { normalizeWorldState } = await import("./gameState.js");
+  const lent = lendBoards(world(), who);
+  const normalized = normalizeWorldState(lent);
+  assert.deepEqual(normalized.projects.filter((row) => row.lentFrom).map((row) => [row.id, row.lentFrom]), [["ru-1", RUSSIA], ["ru-2", RUSSIA], ["ru-same", RUSSIA]]);
+  const home = returnBoards(normalized, { ...who, before: lent });
+  assert.deepEqual(home.projects.map((row) => row.id), ["lv-1", "lv-on-ee"]);
+  assert.equal(home.projects.some((row) => row.lentFrom) || home.seatBoards[RUSSIA].some((row) => row.lentFrom), false);
+  assert.ok(home.seatBoards[RUSSIA].some((row) => row.id === "ru-same" && row.name === "riga PORT"));
+});
+
+test("an older lending's leftovers go home by what that lending recorded, never by a shared id alone", () => {
+  // The game's own entry and a seat's share an id; the game's is no copy (its
+  // owner is not that seat's country), and stays where it is.
+  const clash = world();
+  clash.seatBoards[RUSSIA].unshift(project("lv-1", "Unrelated foreign title"));
+  const kept = settleBoards(clash);
+  assert.equal(kept, clash, "nothing to settle");
+  assert.equal(boardSeenBy(clash, LATVIA, { host: LATVIA }).find((row) => row.id === "lv-1")?.name, "Riga port");
+  // A beta save recorded what it lent (id to seat): that, and only that, goes home.
+  const beta = world();
+  beta.seatBoards[RUSSIA].unshift(project("lv-1", "Unrelated foreign title"));
+  beta.projects.push({ ...project("ru-1", "Northern Fleet refit", RUSSIA), progress: 40 });
+  beta.projectSeatLoans = { "ru-1": RUSSIA };
+  const settled = settleBoards(beta);
+  assert.deepEqual(settled.projects.map((row) => [row.id, row.name]), [["lv-1", "Riga port"], ["lv-on-ee", "Tallinn shipyard"]]);
+  assert.equal(settled.seatBoards[RUSSIA].find((row) => row.id === "ru-1").progress, 40);
+  assert.equal(settled.seatBoards[RUSSIA].find((row) => row.id === "lv-1").name, "Unrelated foreign title");
+  assert.equal("projectSeatLoans" in settled, false, "the record is read and dropped");
+  // An empty record is dropped too, and lending again lends once.
+  const empty = { ...world(), projectSeatLoans: {} };
+  assert.equal("projectSeatLoans" in settleBoards(empty), false);
+  assert.equal(lendBoards(beta, who).projects.filter((row) => row.id === "ru-1").length, 1);
+});
+
+test("no view shows an older lending's record", async () => {
+  const { projectWorld } = await import("../multiplayer/host/projection.js");
+  const beta = { ...world(), projectSeatLoans: { "ru-1": RUSSIA } };
+  for (const viewer of [LATVIA, RUSSIA, ESTONIA]) {
+    assert.equal(projectWorld(beta, viewer, { host: LATVIA }).projectSeatLoans, undefined);
+  }
+});
