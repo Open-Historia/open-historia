@@ -218,6 +218,8 @@ const HELPERS = `
   window.__e2e = {
     buttons: (text) => [...document.querySelectorAll("button")].filter((b) => b.textContent.trim() === text && !b.disabled),
     click: (text) => { const b = window.__e2e.buttons(text)[0]; if (!b) return false; b.click(); return true; },
+    players: () => [...document.querySelectorAll("button[aria-expanded]")].find((b) => /^Players(?![A-Za-z])/.test(b.textContent.trim()) && !b.disabled),
+    clickPlayers: () => { const b = window.__e2e.players(); if (!b) return false; b.click(); return true; },
     type: (el, value) => {
       const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
@@ -541,10 +543,10 @@ try {
   await withHelpers(host);
   await withHelpers(guest);
   // Who plays what, during the game too ("how can I see who is playing?").
-  await guest.eval("window.__e2e.click('Players')");
-  const playersShown = await until(guest, `(() => { const open = [...document.querySelectorAll('button[aria-expanded="true"]')].find((b) => b.textContent.trim() === 'Players'); const bar = open && open.parentElement; return Boolean(bar && bar.textContent.includes(${JSON.stringify(GUEST_COUNTRY)}) && bar.textContent.includes(${JSON.stringify(HOST_COUNTRY)})); })()`, 10000);
+  await guest.eval("window.__e2e.clickPlayers()");
+  const playersShown = await until(guest, `(() => { const open = [...document.querySelectorAll('button[aria-expanded="true"]')].find((b) => /^Players(?![A-Za-z])/.test(b.textContent.trim())); const bar = open && open.parentElement && open.parentElement.parentElement; return Boolean(bar && bar.textContent.includes(${JSON.stringify(GUEST_COUNTRY)}) && bar.textContent.includes(${JSON.stringify(HOST_COUNTRY)})); })()`, 10000);
   check("during the game the round bar's Players shows who plays what", playersShown);
-  await guest.eval("window.__e2e.click('Players')");
+  await guest.eval("window.__e2e.clickPlayers()");
 
   // Two people talk. The host opens a thread with the guest's country and
   // writes; nobody answers for the guest but the guest.
@@ -806,11 +808,12 @@ try {
   }
   const keptProject = (hostFile.projects ?? []).find((project) => project.name === PROJECT);
   const guestScreenWorld = await guest.eval("window.__e2e.view('world')");
-  check("the host's screen opens a project from its Projects panel: the host applies it to its own board, and no other player sees it",
+  const seenByGuest = (guestScreenWorld?.projects ?? []).filter((project) => project?.name === PROJECT);
+  check("the host's screen opens a project from its Projects panel: the host applies it to its own board, and another player sees it only as that country's public work",
     planned && Boolean(keptProject) && Number(keptProject?.progress) === 0
-      && !JSON.stringify(guestScreenWorld).includes(PROJECT)
+      && seenByGuest.every((project) => String(project?.ownerCode ?? "").toLowerCase() === HOST_COUNTRY.toLowerCase())
       && !Object.values(hostFile.seatBoards ?? {}).flat().some((project) => project?.name === PROJECT),
-    JSON.stringify({ planned, kept: Boolean(keptProject), progress: keptProject?.progress, onTheGuestsScreen: JSON.stringify(guestScreenWorld).includes(PROJECT), seatBoards: Object.keys(hostFile.seatBoards ?? {}) }));
+    JSON.stringify({ planned, kept: Boolean(keptProject), progress: keptProject?.progress, seenByGuestAs: seenByGuest.map((project) => project?.ownerCode), seatBoards: Object.keys(hostFile.seatBoards ?? {}) }));
   await host.eval("(() => { const tab = [...document.querySelectorAll('button')].find((b) => b.textContent.trim().startsWith('Actions') && !b.title); if (tab) tab.click(); return true; })()");
 
   // An agent of the guest's own, placed from the Intelligence tab: the host
@@ -983,16 +986,16 @@ try {
     return true;
   })()`);
   const repliesSelect = `[...document.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'own'))`;
-  await host.eval("window.__e2e.click('Players')");
+  await host.eval("window.__e2e.clickPlayers()");
   await until(host, `Boolean(${repliesSelect})`, 10000);
   await host.eval(`(() => { window.__e2e.choose(${repliesSelect}, 'own'); return true; })()`);
-  await guest.eval("window.__e2e.click('Players')");
+  await guest.eval("window.__e2e.clickPlayers()");
   // Under Players, "Who pays" (ui/GameRules.jsx, multiplayer/costRules.js) says it as it now is.
   const guestTold = await until(guest, "document.body.textContent.includes('Your own AI answers your messages to countries the AI plays')", 15000);
   const hostShows = await until(host, `(() => { const select = ${repliesSelect}; return Boolean(select) && select.value === 'own'; })()`, 10000);
   await shoot(host, "3-host-whose-ai-answers");
-  await host.eval("window.__e2e.click('Players')");
-  await guest.eval("window.__e2e.click('Players')");
+  await host.eval("window.__e2e.clickPlayers()");
+  await guest.eval("window.__e2e.clickPlayers()");
   check("the host changes whose AI answers while the game runs, and the guest is told it is now its own", guestTold && hostShows, JSON.stringify({ guestTold, hostShows }));
 
   const engineAskedBefore = (engine.asked ?? []).length;
@@ -1068,7 +1071,7 @@ try {
   // yes (the owner's decision 12): the guest asks under Players, the host is
   // shown who asks, with its hand on the guest's seat beside it (Release, Ban),
   // and refuses.
-  await guest.eval("window.__e2e.click('Players')");
+  await guest.eval("window.__e2e.clickPlayers()");
   const askPicker = `[...document.querySelectorAll('select')].find((s) => s.options[0] && s.options[0].textContent.startsWith('Ask to play another country'))`;
   const canAsk = await until(guest, `Boolean(${askPicker})`, 10000);
   if (canAsk) {
@@ -1077,8 +1080,8 @@ try {
     await guest.eval("window.__e2e.click('Ask the host')");
   }
   const guestAsked = await until(guest, `document.body.textContent.includes(${JSON.stringify(`You asked the host to let you play ${AI_COUNTRY}.`)})`, 20000);
-  const hostAsked = await until(host, "window.__e2e.buttons('Players (1 asking)').length > 0", 20000);
-  await host.eval("window.__e2e.click('Players (1 asking)')");
+  const hostAsked = await until(host, "Boolean(window.__e2e.players()?.textContent.trim().startsWith('Players (1 asking)'))", 20000);
+  await host.eval("window.__e2e.clickPlayers()");
   const askShown = await until(host, `document.body.textContent.includes(${JSON.stringify(`(${GUEST_COUNTRY}) asks to play ${AI_COUNTRY}.`)}) && window.__e2e.buttons('Allow').length > 0 && window.__e2e.buttons('Refuse').length > 0`, 10000);
   const handOnSeat = await host.eval("window.__e2e.buttons('Release').length > 0 && window.__e2e.buttons('Ban').length > 0");
   await shoot(host, "4-host-change-request");
@@ -1087,8 +1090,8 @@ try {
   const keptAs = await until(guest, `document.body.textContent.includes(${JSON.stringify(`The host keeps you as ${GUEST_COUNTRY}.`)})`, 20000);
   const stillPlays = (await guest.eval("window.__e2e.view('game')"))?.country === GUEST_COUNTRY;
   const askGone = await until(host, "window.__e2e.buttons('Allow').length === 0", 10000);
-  await host.eval("window.__e2e.click('Players')");
-  await guest.eval("window.__e2e.click('Players')");
+  await host.eval("window.__e2e.clickPlayers()");
+  await guest.eval("window.__e2e.clickPlayers()");
   check("once the game is under way the guest asks the host to change country, and the host, shown who asks beside Release and Ban, refuses",
     canAsk && guestAsked && hostAsked && askShown && handOnSeat && keptAs && stillPlays && askGone,
     JSON.stringify({ canAsk, guestAsked, hostAsked, askShown, handOnSeat, keptAs, stillPlays, askGone }));
@@ -1132,6 +1135,8 @@ try {
   // is done, so the one being planned is the one a game shared again plans.
   const roundAtStop = Number(await host.eval("(document.body.textContent.match(/Round (\\d+) ·/) || [])[1] || 0"));
   await host.eval("window.__e2e.click('Stop')");
+  await until(host, "window.__e2e.buttons('Stop sharing for everyone').length > 0", 5000);
+  await host.eval("window.__e2e.click('Stop sharing for everyone')");
   const ended = await until(guest, "document.body.textContent.includes('The shared game ended')", 30000);
   check("when the host stops, the guest is told", ended);
   check("and told why: the host closed the game", await until(guest, "document.body.textContent.includes('The host closed the game')", 5000));
@@ -1195,6 +1200,8 @@ try {
   check("the host resumes the game once its players are back", resumed);
 
   await host.eval("window.__e2e.click('Stop')");
+  await until(host, "window.__e2e.buttons('Stop sharing for everyone').length > 0", 5000);
+  await host.eval("window.__e2e.click('Stop sharing for everyone')");
   await until(guest, "document.body.textContent.includes('The shared game ended')", 30000);
 } catch (error) {
   check("the run itself", false, String(error?.stack || error));
