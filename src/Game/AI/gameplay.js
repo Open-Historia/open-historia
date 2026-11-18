@@ -562,7 +562,7 @@ import {
 import { resolveInstitutionRecord } from "../../runtime/institutions.js";
 import { buildOpenInstitutionalMandatesBlock, consumeEventInstitutionMandates } from "../../runtime/institutionalAuthority.js";
 import { gmChangesForRound, normalizeReminders, recordGmChange, renderGmChangeNarration, renderReminders } from "../../runtime/gmChanges.js";
-import { describeGoalForSimulation, describeGoalForSuggestions, playerGoalEntryOf, playerGoalOf, withGoalProgress } from "../../runtime/playerGoal.js";
+import { describeGoalForSimulation, describeGoalForSuggestions, describeGoalsForSimulation, playerGoalEntryOf, playerGoalOf, withGoalProgress } from "../../runtime/playerGoal.js";
 import { createSkipPhases, describeReviewJobs, formatSkipPhases } from "./skipPhases.js";
 import { createStreamedEventReader } from "./streamedEvents.js";
 import { deliveryEventId, documentExchange, documentNote, documentNotices, isDocumentExchange, markIntercepted, planReportDeliveries, withoutOrphanedDocuments, withoutOrphanedNotices } from "../../runtime/reportDelivery.js";
@@ -3967,11 +3967,16 @@ const gmRemindersBlock = async () => {
 const PLAYER_GOAL_TASKS = new Set(["jumpForward", "autoJumpForward", "worldMotionRepair", "worldBreadthRepair"]);
 
 // Read like the reminders: set in the Actions panel, which writes the world.
+// With several people playing (a shared game's skip), `playerPolity` is their
+// names joined, which is nobody's goal: each is told under its own name
+// (playerGoal.js describeGoalsForSimulation). One person, as it always was.
 const playerGoalBlock = async (playerPolity) => {
   const [raw, game] = await Promise.all([
     readJson(JSON_URLS.world, { defaultValue: {}, clone: false }).catch(() => null),
-    playerPolity ? null : readJson(JSON_URLS.game, { defaultValue: {}, clone: false }).catch(() => null),
+    readJson(JSON_URLS.game, { defaultValue: {}, clone: false }).catch(() => null),
   ]);
+  const people = humanCountriesOf(game);
+  if (people.length > 1) return describeGoalsForSimulation(raw, people);
   const player = playerPolity || normalizeString(game?.country);
   return describeGoalForSimulation(playerGoalOf(raw, player), player);
 };

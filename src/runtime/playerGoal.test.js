@@ -49,6 +49,33 @@ test("each reader is told the goal in its own terms, and nothing when there is n
   for (const describe of [describeGoalForAdvisor, describeGoalForSimulation, describeGoalForSuggestions]) assert.equal(describe(""), "");
 });
 
+test("with several people playing, each one's goal reaches the time skip under its own name", async () => {
+  const { describeGoalsForSimulation } = await import("./playerGoal.js");
+  const world = { playerGoals: { France: { text: "Hold the Rhine" }, Spain: { text: "Win back Gibraltar" }, Portugal: { text: "An AI country's goal is nobody's" } } };
+  // One person: exactly the single-player directive, as before.
+  assert.equal(describeGoalsForSimulation(world, ["France"]), describeGoalForSimulation("Hold the Rhine", "France"));
+  assert.equal(describeGoalsForSimulation(world, ["Italy"]), "", "a player with no goal: nothing");
+  // Several: the joined name ("France or Spain") was nobody's, and no goal reached the skip.
+  const both = describeGoalsForSimulation(world, ["France", "spain", "Italy", "France"]);
+  assert.match(both, /^\[The Players' Standing Goals\]\n/);
+  assert.match(both, /\n- France: "Hold the Rhine"/);
+  assert.match(both, /\n- spain: "Win back Gibraltar"/, "named as the game names its player, the goal found however it is cased");
+  assert.doesNotMatch(both, /Italy/, "a player with no goal is left out");
+  assert.doesNotMatch(both, /Portugal|nobody's/, "only the polities people play");
+  assert.match(both, /never creates an action its player did not order/);
+  assert.match(both, /never makes success likelier/);
+  assert.equal(describeGoalsForSimulation(world, ["Italy", "Greece"]), "", "nobody with a goal: nothing");
+  assert.equal(describeGoalsForSimulation(null, ["France", "Spain"]), "");
+});
+
+test("the time skip's goal block is built for everyone a person plays", async () => {
+  // gameplay.js cannot load under bare node: its wiring is read.
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../Game/AI/gameplay.js", import.meta.url), "utf8");
+  const block = source.slice(source.indexOf("const playerGoalBlock = async"), source.indexOf("const runJsonTask = async"));
+  assert.match(block, /const people = humanCountriesOf\(game\);\r?\n\s+if \(people\.length > 1\) return describeGoalsForSimulation\(raw, people\);/);
+});
+
 test("a progress reading is kept with its goal, with the last score for the trend, and dropped when the goal is reworded", async () => {
   const { playerGoalEntryOf, withGoalProgress, withPlayerGoal } = await import("./playerGoal.js");
   const { normalizeWorldState } = await import("./gameState.js");
